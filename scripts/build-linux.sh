@@ -145,4 +145,29 @@ fi
 # Same format as the Windows staging step, so `sha256sum -c` works either way.
 ( cd "$DEST" && sha256sum ./* > SHA256SUMS.txt 2>/dev/null || true )
 
+# And the same manifest schema as scripts/stage-artifacts.mjs. CI runs that
+# script natively on Linux, so without this the local helper and CI disagree and
+# a release carries a manifest for one platform only.
+config_value() {
+  grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$BUILD_DIR/src-tauri/tauri.conf.json" |
+    head -1 | sed 's/.*:[[:space:]]*"\([^"]*\)"$/\1/'
+}
+
+{
+  printf '{\n  "product": "%s",\n  "version": "%s",\n  "os": "linux",\n  "arch": "amd64",\n  "generatedAt": "%s",\n  "files": [\n' \
+    "$(config_value productName)" "$(config_value version)" "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+  first=1
+  for file in "$DEST"/*; do
+    [ -f "$file" ] || continue
+    name=$(basename "$file")
+    [ "$name" = "manifest.json" ] && continue
+    [ "$first" = 1 ] || printf ',\n'
+    first=0
+    printf '    { "name": "%s", "bytes": %s, "sha256": "%s" }' \
+      "$name" "$(stat -c %s "$file")" "$(sha256sum "$file" | cut -d' ' -f1)"
+  done
+  printf '\n  ]\n}\n'
+} > "$DEST/manifest.json"
+say "wrote manifest.json and SHA256SUMS.txt"
+
 say "$copied artefact(s) in bin/linux/amd64"

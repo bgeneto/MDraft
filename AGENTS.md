@@ -17,6 +17,7 @@ scripts exist, and which traps have already cost time.
 - [Code map](#code-map)
 - [Conventions](#conventions)
 - [Releasing](#releasing)
+- [Portable builds](#portable-builds)
 - [Release checklist](#release-checklist)
 
 ## Orientation
@@ -793,6 +794,47 @@ Three things are easy to get wrong here and are worth knowing:
 - **`APPIMAGE_EXTRACT_AND_RUN=1`** is set in the workflow. linuxdeploy, which
   Tauri runs to build the AppImage, is itself an AppImage and needs FUSE, which
   the runners do not have; the variable makes it run by extraction instead.
+- **Release assets share one flat namespace.** Both platforms stage a
+  `SHA256SUMS.txt` and a `manifest.json`, so uploading both silently keeps
+  whichever finished last and discards the other platform's checksums. The first
+  release shipped the Linux checksums alone for exactly this reason. The release
+  job renames them to `SHA256SUMS-<platform>.txt` and `manifest-<platform>.json`
+  before uploading; anything else added later with a platform-independent name
+  needs the same treatment.
+
+## Portable builds
+
+`MDraft-portable.exe` is the ordinary Windows build compiled with one extra config
+file, `src-tauri/tauri.portable.conf.json`. There is no portable code path: the
+config sets `appDirectoriesOverride`, and Tauri applies it to its own path APIs
+(`app_config_dir`, `app_data_dir`, and the webview's data directory) and to
+plugins.
+
+Two things follow from that, and both were verified rather than assumed:
+
+- **`tauri-plugin-window-state` needs no change.** Its source hardcodes
+  `app_config_dir().join(filename)` with no way to set the directory, which looks
+  like it would strand `.window-state.json` in `%APPDATA%`. It does not: the
+  override happens inside `app_config_dir()` itself, below the plugin. A portable
+  run writes `.window-state.json` and `settings.json` into
+  `<exe dir>/app-data/config/` and touches nothing in `%APPDATA%`.
+- **Only `config` is redirected, on purpose.** `data` holds the pandoc download
+  and the webview profile lives in the local data directory; both are large and
+  volatile, and a Dropbox user does not want either synchronised.
+
+`npm run dist` builds the portable variant first, parks it as
+`target/release/<name>-portable.exe`, and then does the ordinary build, because
+both passes write the same `target/release/mdraft.exe` and the staging step must
+still find the ordinary one there. `--no-portable` skips the pass; it is skipped
+automatically on Linux, where the AppImage is already a single self-contained
+file.
+
+`stage-artifacts.mjs` resolves bare binaries by listing `target/release` and
+matching case-insensitively, rather than returning a path it constructed. The
+names it looks for are guesses (`mainBinaryName`, `productName`, the Cargo
+package, each possibly differing in case) and Windows matches them
+case-insensitively while Linux does not, so a constructed path stages fine on one
+platform and fails on the other.
 
 ## Release checklist
 

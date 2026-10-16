@@ -53,6 +53,7 @@ jobs:
             folder: linux/amd64
             artifact: mdraft-linux-amd64
 
+
     steps:
       - uses: actions/checkout@v4
 
@@ -140,8 +141,30 @@ jobs:
         with:
           path: dist
 
-      - name: Show what will be published
-        run: find dist -type f | sort
+      # Both platforms stage a `SHA256SUMS.txt` and a `manifest.json`, and
+      # release assets share one flat namespace -- so uploading both silently
+      # leaves whichever finished last, and the other platform's checksums are
+      # gone. The first release shipped the Linux checksums alone for exactly
+      # this reason. Everything else already has a distinct name.
+      - name: Disambiguate the shared names
+        run: |
+          set -eu
+          mkdir -p release
+          for dir in dist/*/; do
+            platform=$(basename "$dir")
+            platform=${platform#mdraft-}
+            for file in "$dir"*; do
+              [ -f "$file" ] || continue
+              name=$(basename "$file")
+              case "$name" in
+                SHA256SUMS.txt) name="SHA256SUMS-$platform.txt" ;;
+                manifest.json) name="manifest-$platform.json" ;;
+              esac
+              cp "$file" "release/$name"
+            done
+          done
+          echo "Publishing:"
+          ls -la release
 
       - name: Create the release
         uses: softprops/action-gh-release@v2
@@ -151,10 +174,4 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: false
-          files: |
-            dist/**/*.msi
-            dist/**/*.exe
-            dist/**/*.deb
-            dist/**/*.AppImage
-            dist/**/SHA256SUMS.txt
-            dist/**/manifest.json
+          files: release/*
