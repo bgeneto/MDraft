@@ -1,0 +1,1074 @@
+/* ==========================================================================
+   MDraft — application chrome + markdown preview theme
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+  --bg: #ffffff;
+  --fg: #2b2b2b;
+  --muted: #8a8f98;
+  --border: #e7e7e7;
+  --sidebar-bg: #f7f7f8;
+  --active-line: rgba(0, 0, 0, 0.035);
+  --selection: rgba(80, 140, 255, 0.22);
+  --accent: #3b7ddd;
+  --code-bg: rgba(127, 127, 127, 0.1);
+  --selected: #c9c9c9;
+  --sync-highlight: rgba(59, 125, 221, 0.1);
+  --quote-bar: rgba(127, 127, 127, 0.4);
+  --sidebar-w: 244px;
+  --editor-max-width: 860px;
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1e1e1e;
+  --fg: #d6d6d6;
+  --muted: #8b8b8b;
+  --border: #333333;
+  --sidebar-bg: #252526;
+  --active-line: rgba(255, 255, 255, 0.05);
+  --selection: rgba(80, 140, 255, 0.3);
+  --accent: #4c9aff;
+  --code-bg: rgba(255, 255, 255, 0.07);
+  --selected: #3a3d41;
+  --sync-highlight: rgba(76, 154, 255, 0.16);
+  --quote-bar: rgba(200, 200, 200, 0.35);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* --------------------------------------------------------------------------
+   Layout
+   -------------------------------------------------------------------------- */
+
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 5px 1fr;
+  grid-template-rows: 1fr auto;
+  height: 100vh;
+  width: 100vw;
+}
+
+.app.sidebar-hidden {
+  grid-template-columns: 0 0 1fr;
+}
+
+.app.sidebar-hidden .sidebar,
+.app.sidebar-hidden .resizer {
+  display: none;
+}
+
+.app.statusbar-hidden .statusbar {
+  display: none;
+}
+
+.app.mode-source .preview-pane,
+.app.mode-source .splitter,
+.app.mode-preview .editor-pane,
+.app.mode-preview .splitter {
+  display: none;
+}
+
+/* --------------------------------------------------------------------------
+   Sidebar
+   -------------------------------------------------------------------------- */
+
+.sidebar {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.sidebar-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 8px 8px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-tab {
+  flex: 1;
+  padding: 5px 6px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sidebar-tab:hover {
+  background: var(--active-line);
+  color: var(--fg);
+}
+
+.sidebar-tab[aria-selected="true"] {
+  background: var(--code-bg);
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.sidebar-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 0 20px;
+}
+
+.sidebar-empty {
+  padding: 14px 14px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.sidebar-path {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.sidebar-path button {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  padding: 0 2px;
+}
+
+.outline-item {
+  display: block;
+  width: 100%;
+  padding: 3px 12px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.outline-item:hover {
+  background: var(--active-line);
+}
+
+.outline-item.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.entry {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 4px 12px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.entry:hover {
+  background: var(--active-line);
+}
+
+.entry .icon {
+  flex: 0 0 auto;
+  width: 14px;
+  text-align: center;
+  opacity: 0.75;
+}
+
+.entry .label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.entry.dir .label {
+  font-weight: 600;
+}
+
+.recent-item {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 5px 12px;
+}
+
+.recent-item .name {
+  font-size: 12.5px;
+}
+
+.recent-item .dir {
+  color: var(--muted);
+  font-size: 11px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-footer {
+  padding: 6px 12px 12px;
+}
+
+.sidebar-footer button {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.sidebar-footer button:hover {
+  color: var(--accent);
+}
+
+/* --------------------------------------------------------------------------
+   Resizers
+   -------------------------------------------------------------------------- */
+
+.resizer {
+  grid-column: 2;
+  grid-row: 1;
+  cursor: col-resize;
+  background: transparent;
+}
+
+.resizer:hover {
+  background: var(--accent);
+  opacity: 0.35;
+}
+
+.splitter {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: transparent;
+}
+
+.splitter:hover {
+  background: var(--accent);
+  opacity: 0.35;
+}
+
+/* --------------------------------------------------------------------------
+   Panes
+   -------------------------------------------------------------------------- */
+
+.workspace {
+  grid-column: 3;
+  grid-row: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+.pane {
+  flex: 1 1 50%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.editor-pane {
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+}
+
+.app.mode-preview .editor-pane,
+.app.mode-source .preview-pane {
+  border-right: none;
+}
+
+.editor-host {
+  height: 100%;
+}
+
+.editor-host .cm-editor {
+  height: 100%;
+}
+
+.editor-host .cm-scroller {
+  overflow: auto;
+}
+
+.editor-host .cm-content {
+  max-width: var(--editor-max-width);
+  margin: 0 auto;
+}
+
+.preview-pane {
+  overflow: auto;
+  padding: 34px 34px 45vh;
+}
+
+/* --------------------------------------------------------------------------
+   Status bar
+   -------------------------------------------------------------------------- */
+
+.statusbar {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 10px;
+  min-height: 28px;
+  background: var(--sidebar-bg);
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11.5px;
+  user-select: none;
+}
+
+.status-left,
+.status-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.status-item {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-modes {
+  display: flex;
+  gap: 1px;
+}
+
+.status-btn {
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 2px 7px;
+  cursor: pointer;
+}
+
+/* Icon buttons draw an inline SVG rather than a Unicode glyph. At 11.5px the
+   text versions of ⚙ and ◐ render as thin, spindly shapes whose weight does not
+   match the surrounding text, and the emoji presentation is a colour bitmap that
+   differs per platform and cannot follow the theme colour. An SVG in
+   currentColor is crisp at an exact size, inherits hover and dark mode for free,
+   and looks identical on Windows, macOS and Linux. */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 6px;
+}
+
+.icon-btn svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.status-btn:hover {
+  background: var(--active-line);
+  color: var(--fg);
+}
+
+.status-btn.active {
+  background: var(--code-bg);
+  color: var(--fg);
+  font-weight: 600;
+}
+
+/* --------------------------------------------------------------------------
+   Markdown preview
+   -------------------------------------------------------------------------- */
+
+.markdown-body {
+  max-width: var(--editor-max-width);
+  margin: 0 auto;
+  line-height: 1.72;
+  word-wrap: break-word;
+}
+
+.markdown-body > *:first-child {
+  margin-top: 0;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  margin: 1.6em 0 0.6em;
+  line-height: 1.3;
+  font-weight: 650;
+}
+
+.markdown-body h1 {
+  font-size: 1.9em;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.3em;
+}
+
+.markdown-body h2 {
+  font-size: 1.5em;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.25em;
+}
+
+.markdown-body h3 {
+  font-size: 1.25em;
+}
+.markdown-body h4 {
+  font-size: 1.1em;
+}
+.markdown-body h5,
+.markdown-body h6 {
+  font-size: 1em;
+  color: var(--muted);
+}
+
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body table,
+.markdown-body blockquote,
+.markdown-body pre {
+  margin: 0 0 1em;
+}
+
+.markdown-body a,
+.markdown-body .local-link {
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.markdown-body a:hover,
+.markdown-body .local-link:hover {
+  text-decoration: underline;
+}
+
+.markdown-body img {
+  max-width: 100%;
+  height: auto;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.6em;
+}
+
+.markdown-body li + li {
+  margin-top: 0.2em;
+}
+
+.markdown-body li.task-list-item {
+  list-style: none;
+  margin-left: -1.35em;
+}
+
+.markdown-body li.task-list-item input {
+  margin-right: 0.45em;
+}
+
+.markdown-body blockquote {
+  padding: 0.1em 0 0.1em 1em;
+  border-left: 3px solid var(--quote-bar);
+  color: var(--muted);
+}
+
+.markdown-body blockquote > *:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--code-bg);
+  border-radius: 4px;
+  padding: 0.15em 0.35em;
+}
+
+.markdown-body pre {
+  background: var(--code-bg);
+  border-radius: 6px;
+  padding: 12px 14px;
+  overflow: auto;
+}
+
+.markdown-body pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 0.86em;
+  line-height: 1.6;
+}
+
+.markdown-body table {
+  border-collapse: collapse;
+  display: block;
+  overflow: auto;
+  max-width: 100%;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+}
+
+.markdown-body th {
+  background: var(--code-bg);
+  font-weight: 600;
+}
+
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.8em 0;
+}
+
+.markdown-body kbd {
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0.1em 0.4em;
+}
+
+/* Math ------------------------------------------------------------------- */
+
+.math-inline {
+  white-space: nowrap;
+}
+
+.math-display {
+  display: block;
+  margin: 1.15em 0;
+  text-align: center;
+  /* A wide equation scrolls rather than being clipped. Keep the bar thin and
+     low-contrast so it does not read as a design element. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  padding-bottom: 2px;
+}
+
+.math-display::-webkit-scrollbar {
+  height: 6px;
+}
+
+.math-display::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.math-display::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.math-display::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
+/* KaTeX sets its own 1em margin; the wrapper above already owns the spacing, so
+   without this the equation gets roughly double the intended gap. */
+.math-display > .katex-display {
+  margin: 0;
+}
+
+.math-display > .katex-display > .katex {
+  white-space: normal;
+}
+
+.math-error {
+  color: #cc4444;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+/* Mermaid ---------------------------------------------------------------- */
+
+.mermaid {
+  margin: 1.2em 0;
+  text-align: center;
+}
+
+.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.mermaid-error {
+  margin: 1em 0;
+  padding: 10px 12px;
+  border-left: 3px solid #cc4444;
+  background: rgba(204, 68, 68, 0.08);
+  color: #cc4444;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: left;
+  white-space: pre-wrap;
+}
+
+/* CodeMirror search panel ------------------------------------------------ */
+
+.cm-editor .cm-panels {
+  background: var(--sidebar-bg);
+  color: var(--fg);
+  border-bottom: 1px solid var(--border);
+}
+
+.cm-editor .cm-panels input,
+.cm-editor .cm-panels button {
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg);
+}
+
+.cm-editor .cm-panels input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.cm-editor .cm-panels button {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+
+.cm-editor .cm-panels button:hover {
+  background: var(--active-line);
+}
+
+.cm-editor .cm-searchMatch {
+  background: rgba(255, 200, 0, 0.35);
+}
+
+.cm-editor .cm-searchMatch-selected {
+  background: rgba(255, 140, 0, 0.5);
+}
+
+/* --------------------------------------------------------------------------
+   Toast
+   -------------------------------------------------------------------------- */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 46px;
+  transform: translateX(-50%);
+  max-width: 70vw;
+  padding: 8px 16px;
+  border-radius: 6px;
+  background: rgba(30, 30, 30, 0.92);
+  color: #f2f2f2;
+  font-size: 12.5px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.28);
+  z-index: 50;
+  pointer-events: none;
+}
+
+[data-theme="dark"] .toast {
+  background: rgba(240, 240, 240, 0.94);
+  color: #1b1b1b;
+}
+
+/* --------------------------------------------------------------------------
+   Preferences
+   -------------------------------------------------------------------------- */
+
+.prefs-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: var(--bg);
+  overflow: auto;
+}
+
+.prefs-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.prefs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 26px 32px 22px;
+  border-bottom: 1px solid var(--border);
+}
+
+.prefs-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 400;
+}
+
+.prefs-close {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 17px;
+  line-height: 1;
+  padding: 6px 11px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.prefs-close:hover {
+  background: var(--active-line);
+  color: var(--fg);
+}
+
+.prefs-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.prefs-nav {
+  flex: 0 0 252px;
+  padding: 30px 20px 40px;
+}
+
+.prefs-search {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+}
+
+.prefs-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.prefs-sections {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.prefs-section {
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13.5px;
+  padding: 7px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.prefs-section:hover {
+  background: var(--active-line);
+}
+
+.prefs-section[aria-selected="true"] {
+  background: var(--selected);
+  font-weight: 500;
+}
+
+.prefs-content {
+  flex: 1;
+  min-width: 0;
+  max-width: 1040px;
+  padding: 30px 48px 90px;
+}
+
+.prefs-section-title {
+  margin: 0 0 28px;
+  font-size: 27px;
+  font-weight: 400;
+}
+
+.prefs-group {
+  margin: 30px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.prefs-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  min-height: 32px;
+  padding: 4px 0;
+}
+
+.prefs-label {
+  flex: 0 0 232px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 5px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.prefs-help {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  border: 1px solid var(--muted);
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 13px;
+  text-align: center;
+  cursor: help;
+}
+
+.prefs-control {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.prefs-control select,
+.prefs-number input,
+.prefs-row-text input {
+  width: 100%;
+  max-width: 420px;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+}
+
+.prefs-control select:focus,
+.prefs-number input:focus,
+.prefs-row-text input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.prefs-number {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.prefs-number input {
+  width: 92px;
+}
+
+.prefs-number span {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.prefs-button {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--code-bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.prefs-button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.prefs-note {
+  flex: 1 1 auto;
+  max-width: 640px;
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.prefs-row-checkbox .prefs-control input {
+  width: 15px;
+  height: 15px;
+  margin-top: 6px;
+  accent-color: var(--accent);
+}
+
+/* --------------------------------------------------------------------------
+   GitHub alerts
+   -------------------------------------------------------------------------- */
+
+.markdown-body .md-alert {
+  border-left-width: 4px;
+  border-radius: 3px;
+  padding: 8px 14px;
+  color: var(--fg);
+}
+
+.markdown-body .md-alert-title {
+  margin: 0 0 4px;
+  font-weight: 600;
+}
+
+.markdown-body .md-alert-note {
+  border-left-color: #4a90d9;
+  background: rgba(74, 144, 217, 0.09);
+}
+.markdown-body .md-alert-tip {
+  border-left-color: #3fb950;
+  background: rgba(63, 185, 80, 0.09);
+}
+.markdown-body .md-alert-important {
+  border-left-color: #a371f7;
+  background: rgba(163, 113, 247, 0.09);
+}
+.markdown-body .md-alert-warning {
+  border-left-color: #d29922;
+  background: rgba(210, 153, 34, 0.1);
+}
+.markdown-body .md-alert-caution {
+  border-left-color: #f85149;
+  background: rgba(248, 81, 73, 0.09);
+}
+
+/* --------------------------------------------------------------------------
+   Table of contents
+   -------------------------------------------------------------------------- */
+
+.markdown-body .md-toc {
+  margin: 0 0 1.2em;
+  padding: 12px 18px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--code-bg);
+}
+
+.markdown-body .md-toc ul {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+}
+
+.markdown-body .md-toc li {
+  margin: 3px 0;
+}
+
+.markdown-body .md-toc-empty {
+  margin: 0;
+  color: var(--muted);
+}
+
+/* --------------------------------------------------------------------------
+   Split-view position sync
+   -------------------------------------------------------------------------- */
+
+/*
+ * The preview block matching the editor caret. This is deliberately a blink,
+ * not a state: a highlight that stays put reads as markup applied to the
+ * document rather than as a pointer, and the two panes are already side by side
+ * so the correspondence is visible without it. The ring shadow acts as
+ * horizontal padding so the tint does not hug the text.
+ */
+@keyframes sync-blink {
+  0% {
+    background: var(--sync-highlight);
+    box-shadow: 0 0 0 7px var(--sync-highlight);
+  }
+  55% {
+    background: var(--sync-highlight);
+    box-shadow: 0 0 0 7px var(--sync-highlight);
+  }
+  100% {
+    background: transparent;
+    box-shadow: 0 0 0 7px transparent;
+  }
+}
+
+.markdown-body .sync-blink {
+  border-radius: 3px;
+  animation: sync-blink 620ms ease-out 1;
+}
+
+/* Only meaningful with both panes visible. */
+.app.mode-preview .markdown-body .sync-blink,
+.app.mode-source .markdown-body .sync-blink {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .markdown-body .sync-blink {
+    animation: none;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Focus mode
+   -------------------------------------------------------------------------- */
+
+.app.focus-mode {
+  grid-template-columns: 0 0 1fr;
+}
+
+.app.focus-mode .sidebar,
+.app.focus-mode .resizer,
+.app.focus-mode .statusbar {
+  display: none;
+}

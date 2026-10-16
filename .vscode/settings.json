@@ -1,0 +1,29 @@
+{
+  // rust-analyzer runs `cargo check` continuously, and by default it does so
+  // against the same src-tauri/target that `npm run dist` builds into. Cargo
+  // takes an exclusive lock on that directory, so a build started while the
+  // editor is idle-checking stalls on:
+  //
+  //   Blocking waiting for file lock on build directory
+  //
+  // ...and it can wait indefinitely. Giving rust-analyzer its own target
+  // directory costs some disk (the crate graph is compiled twice, once in
+  // target/rust-analyzer) and removes the contention entirely.
+  "rust-analyzer.cargo.targetDir": true,
+
+  // The crate is not at the repository root, so point at it rather than making
+  // rust-analyzer guess between src-tauri/Cargo.toml and the frontend's
+  // package.json.
+  "rust-analyzer.linkedProjects": ["src-tauri/Cargo.toml"],
+
+  // Build output and staged installers are large and not worth indexing.
+  "files.exclude": {
+    "src-tauri/target": true,
+    "bin": true
+  },
+  "search.exclude": {
+    "src-tauri/target": true,
+    "bin": true,
+    "dist": true
+  }
+}
