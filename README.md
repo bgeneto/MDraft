@@ -553,6 +553,21 @@ npm run dist
 Tauri 2 needs no extra tooling for this. It drives the platform's own packagers,
 and downloads what it does not find (WiX for MSI, NSIS for the setup executable).
 
+### Downloads
+
+Pushing a tag builds both platforms and publishes them as a GitHub release:
+
+```bash
+git tag -a v0.1.0 -m "MDraft 0.1.0"
+git push origin master --follow-tags
+```
+
+The release carries the Windows MSI and NSIS setup, the Linux `.deb` and
+AppImage, the bare executables, and `SHA256SUMS.txt` for each platform. The tag
+is checked against the versions in `package.json` and
+`src-tauri/tauri.conf.json` before anything is built, so a release can never be
+labelled one version and contain another.
+
 On Windows that yields **two** installers plus the bare executable:
 
 | File | What it is |

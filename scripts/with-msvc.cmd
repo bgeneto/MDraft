@@ -26,9 +26,15 @@ if not defined VCVARS if exist "%VSROOT%\2022\Community\VC\Auxiliary\Build\vcvar
 if not defined VCVARS if exist "%VSROOT64%\18\BuildTools\VC\Auxiliary\Build\vcvars64.bat" set "VCVARS=%VSROOT64%\18\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
 if not defined VCVARS if exist "%VSROOT64%\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" set "VCVARS=%VSROOT64%\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
 if not defined VCVARS if exist "%VSROOT64%\2022\Community\VC\Auxiliary\Build\vcvars64.bat" set "VCVARS=%VSROOT64%\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
+rem Enterprise and Professional are what the GitHub-hosted Windows runners install.
+rem Without these two the script reports "Could not find vcvars64.bat" and every
+rem CI build fails, even though a complete toolchain is present.
+if not defined VCVARS if exist "%VSROOT64%\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" set "VCVARS=%VSROOT64%\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+if not defined VCVARS if exist "%VSROOT64%\2022\Professional\VC\Auxiliary\Build\vcvars64.bat" set "VCVARS=%VSROOT64%\2022\Professional\VC\Auxiliary\Build\vcvars64.bat"
+if not defined VCVARS if exist "%VSROOT64%\18\Enterprise\VC\Auxiliary\Build\vcvars64.bat" set "VCVARS=%VSROOT64%\18\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
 
 if not defined VCVARS goto :novcvars
-if "%TYT_QUIET%"=="" echo [with-msvc] "%VCVARS%"
+if "%MDRAFT_QUIET%"=="" echo [with-msvc] "%VCVARS%"
 
 call "%VCVARS%" >nul
 if errorlevel 1 goto :vcvarsfailed

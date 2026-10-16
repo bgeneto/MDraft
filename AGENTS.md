@@ -16,6 +16,7 @@ scripts exist, and which traps have already cost time.
 - [Adding a preference, end to end](#adding-a-preference-end-to-end)
 - [Code map](#code-map)
 - [Conventions](#conventions)
+- [Releasing](#releasing)
 - [Release checklist](#release-checklist)
 
 ## Orientation
@@ -137,6 +138,7 @@ rewrite from scratch.
 | `npm run build` | `tsc --noEmit && vite build` | Typecheck plus frontend bundle into `dist/` |
 | `npm run dist` | `scripts/dist.mjs` | Build, bundle and stage into `bin/<os>/<arch>/` |
 | `npm run stage` | `scripts/stage-artifacts.mjs` | Re-stage what is already built |
+| `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
 | `npm run test:rust` | `cargo test` | 38 tests, on Windows and on Linux |
 | `npm run smoke` | `scripts/dom-smoke.mjs` | 59 checks against `samples/feature-tour.md` |
@@ -179,8 +181,9 @@ node scripts\image-paste-test.mjs 9222 "http://127.0.0.1:8791/served.png" "C:\pa
 | `dist.mjs` | `[-- <tauri build args>] [--kill]` | Typechecks, builds the frontend, routes through the MSVC wrapper on Windows, then calls `stage-artifacts.mjs`. Streams output; exits non-zero on any failure. **Refuses to start while a copy of the app is running** (Windows locks a running executable, so cargo cannot replace it) unless `--kill` is given, which closes it first |
 | `stage-artifacts.mjs` | `[--dry-run]` | Copies the binary and every installer into `bin/<os>/<arch>/` with `SHA256SUMS.txt` and `manifest.json`. Fails loudly, naming the path it searched, when it finds no bundles |
 | `build-linux.sh` | `[--bundles deb,appimage] [--build-dir path]` | The whole Linux build inside WSL2 or a container — see [Building for Linux](#building-for-linux) |
-| `with-msvc.cmd` | `<command> [args…]` | Loads `vcvars64.bat` then runs the command. **Required for every cargo or tauri invocation on this host** |
+| `with-msvc.cmd` | `<command> [args…]` | Loads `vcvars64.bat` then runs the command. **Required for every cargo or tauri invocation on this host.** Searches the standard Visual Studio locations, including the Enterprise edition the GitHub runners install |
 | `cargo-vcvars.cmd` | `<cargo args…>` | The same wrapper specialised for cargo: `cargo-vcvars.cmd test --manifest-path src-tauri\Cargo.toml` |
+| `check-version.mjs` | `[tag]` | Asserts `package.json` and `src-tauri/tauri.conf.json` carry the same version, and that a supplied tag (`v0.1.0`, or `GITHUB_REF_NAME`) matches. CI runs it before building anything |
 
 ### Conventions for new test scripts
 
@@ -717,7 +720,7 @@ src-tauri/src/
   documents.rs       file IO, directory listing, startup file
   images.rs          image import: sniffing, sanitiser, dedup, download
   menu.rs            native menu construction and event routing
-scripts/             build helpers and CDP test harnesses — all 14 are in
+scripts/             build helpers and CDP test harnesses — all 15 are in
                      "Repository scripts", and a new one belongs there too
 samples/             fixtures the smoke test asserts against
 docs/sample-files/   real documents used to judge rendering quality
@@ -746,10 +749,56 @@ lifecycle, native menu routing, status bar, and pane sync.
 - **No dead controls.** Unimplemented options are `note` rows.
 - **Relative paths in prose.** Link files by name, not absolute path.
 
+## Releasing
+
+One workflow does everything: `.github/workflows/release.yml`, triggered by
+pushing a tag.
+
+```bash
+git tag -a v0.1.0 -m "MDraft 0.1.0"
+git push origin master --follow-tags
+```
+
+What happens then:
+
+1. **`check-version.mjs` runs first**, before the toolchain is even installed. It
+   fails in seconds if the tag and the two version files disagree, instead of
+   after a twenty-minute build.
+2. **Two build jobs run in parallel**, `windows-latest` and `ubuntu-22.04`,
+   `fail-fast: false` so one platform failing does not hide the other's result.
+   Each runs `npm run dist` and stages into `bin/<os>/<arch>/`.
+3. **Artefacts are uploaded even on failure** (`if: always()`), so a broken build
+   can be downloaded and inspected rather than guessed at.
+4. **A single release job** downloads both and creates the GitHub release. It is
+   deliberately one job: two jobs racing to create the same release means the
+   loser fails with a 422.
+
+No secrets are configured. The release uses the token GitHub provides, which is
+why the workflow asks for `contents: write` — the default token is read-only on
+newer repositories.
+
+`workflow_dispatch` re-runs the build for a tag that is already pushed, for when
+a job failed and the tag should not move.
+
+Three things are easy to get wrong here and are worth knowing:
+
+- **Pushing `.github/workflows/` needs the `workflow` token scope.** A classic
+  PAT with only `repo` is rejected with *"refusing to allow an OAuth App to
+  create or update workflow ... without `workflow` scope"*, and the error names
+  the file rather than the scope.
+- **The Windows runner installs Visual Studio **Enterprise**.** `with-msvc.cmd`
+  searched only `BuildTools` and `Community`, so CI would have failed with
+  *"Could not find vcvars64.bat"* on a runner that has a complete toolchain. The
+  Enterprise and Professional paths are now in the search list.
+- **`APPIMAGE_EXTRACT_AND_RUN=1`** is set in the workflow. linuxdeploy, which
+  Tauri runs to build the AppImage, is itself an AppImage and needs FUSE, which
+  the runners do not have; the variable makes it run by extraction instead.
+
 ## Release checklist
 
 1. Bump `version` in `package.json` **and** `src-tauri/tauri.conf.json` — Tauri
-   reads the latter for the bundle, and the two must agree.
+   reads the latter for the bundle, and the two must agree. `npm run
+   check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
 3. `npm run test:rust` — 38 tests. Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
@@ -772,3 +821,5 @@ lifecycle, native menu routing, status bar, and pane sync.
     `sudo apt install -y ./bin/linux/amd64/*.deb` and launch `mdraft` from
     a WSLg or desktop session. Check the GTK menu bar, the outline, math and the
     status-bar icons.
+11. Tag and push — CI builds both platforms and publishes the release. See
+    [Releasing](#releasing).
