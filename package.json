@@ -12,6 +12,7 @@
     "tauri": "tauri",
     "dist": "node scripts/dist.mjs",
     "stage": "node scripts/stage-artifacts.mjs",
+    "check:version": "node scripts/check-version.mjs",
     "smoke": "node scripts/dom-smoke.mjs",
     "audit": "node scripts/audit-document.mjs",
     "math": "node scripts/math-render-check.mjs",

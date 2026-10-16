@@ -1,0 +1,160 @@
+# Build installers for Windows and Linux, and attach them to a GitHub release.
+#
+# Triggered by pushing a tag like `v0.1.0`. The tag is checked against the
+# versions in package.json and tauri.conf.json before anything is built, so a
+# mislabelled release fails in seconds rather than after twenty minutes.
+#
+# `workflow_dispatch` exists for the case where the tag is already pushed and a
+# build failed: it can be re-run from the Actions tab without moving the tag.
+#
+# No secrets are needed. The release is created with the token GitHub provides
+# to the workflow, which is why `contents: write` is requested explicitly.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+# The default token is read-only in newer repositories; creating a release and
+# uploading assets to it needs write access to the repository contents.
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  # linuxdeploy, which Tauri uses to build the AppImage, is itself an AppImage.
+  # Running it by extraction avoids requiring FUSE, which the runners lack.
+  APPIMAGE_EXTRACT_AND_RUN: "1"
+  # Keep the build quiet about the MSVC environment banner.
+  MDRAFT_QUIET: "1"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Build, once per platform.
+  # ---------------------------------------------------------------------------
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing must not cancel the other: a Windows-only problem
+      # should still leave a Linux release available to inspect.
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows x64
+            folder: windows/amd64
+            artifact: mdraft-windows-amd64
+          - os: ubuntu-22.04
+            label: Linux x64
+            folder: linux/amd64
+            artifact: mdraft-linux-amd64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fails before the toolchain is installed if the tag and the source
+      # disagree, which is the cheapest possible moment to find out. On a manual
+      # dispatch the ref is a branch, so there is no tag to compare against.
+      - name: Check the version matches the tag
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            node scripts/check-version.mjs "${GITHUB_REF_NAME}"
+          else
+            echo "Not a tag build (${GITHUB_REF_TYPE:-unknown}); checking the two files agree."
+            node scripts/check-version.mjs
+          fi
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # Caches the cargo registry and the target directory. Without it every run
+      # recompiles all of Tauri, which dominates the job time.
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Tauri resolves these through pkg-config; there is no vendored copy.
+      - name: Install the Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            patchelf \
+            file
+
+      - name: Install the frontend dependencies
+        run: npm ci
+
+      - name: Run the Rust tests
+        run: npm run test:rust
+
+      # `dist.mjs` typechecks, builds the frontend, drives the platform
+      # toolchain, then stages every artefact into bin/<os>/<arch>/.
+      - name: Build and stage
+        run: npm run dist
+
+      - name: List what was produced
+        shell: bash
+        run: ls -la "bin/${{ matrix.folder }}"
+
+      # Uploaded even when a later step fails, so a broken build can be
+      # inspected instead of guessed at.
+      - name: Keep the artefacts for inspection
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: bin/${{ matrix.folder }}/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # Publish, once, after every platform has built.
+  # ---------------------------------------------------------------------------
+  release:
+    name: Publish the release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    steps:
+      # A single job creates the release. Letting both build jobs create it
+      # races on the first upload, and the loser fails with a 422.
+      - name: Collect every artefact
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Show what will be published
+        run: find dist -type f | sort
+
+      - name: Create the release
+        uses: softprops/action-gh-release@v2
+        with:
+          # GitHub writes the notes from the commits since the previous tag. The
+          # README carries the detail; these are a summary, not the changelog.
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          files: |
+            dist/**/*.msi
+            dist/**/*.exe
+            dist/**/*.deb
+            dist/**/*.AppImage
+            dist/**/SHA256SUMS.txt
+            dist/**/manifest.json
