@@ -1,0 +1,30 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Staged release output, bin/<os>/<arch>/. Reproducible with `npm run dist`.
+bin
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+# Shared on purpose: without it rust-analyzer holds a cargo lock on
+# src-tauri/target and `npm run dist` stalls on "Blocking waiting for file lock".
+!.vscode/settings.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

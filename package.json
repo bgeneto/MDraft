@@ -1,0 +1,49 @@
+{
+  "name": "mdraft",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A Tauri 2 markdown editor in the spirit of Typora",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "dist": "node scripts/dist.mjs",
+    "stage": "node scripts/stage-artifacts.mjs",
+    "smoke": "node scripts/dom-smoke.mjs",
+    "audit": "node scripts/audit-document.mjs",
+    "math": "node scripts/math-render-check.mjs",
+    "syntax": "node scripts/syntax-theme-test.mjs",
+    "export": "node scripts/export-test.mjs",
+    "images": "node scripts/image-paste-test.mjs",
+    "screenshot": "node scripts/screenshot.mjs",
+    "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.9.0",
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/language": "^6.11.4",
+    "@codemirror/language-data": "^6.5.2",
+    "@codemirror/search": "^6.6.0",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/view": "^6.39.1",
+    "@lezer/highlight": "^1.2.1",
+    "@tauri-apps/api": "^2.12.4",
+    "@tauri-apps/plugin-dialog": "^2.8.3",
+    "@tauri-apps/plugin-opener": "^2.7.2",
+    "codemirror": "^6.0.2",
+    "dompurify": "^3.4.17",
+    "highlight.js": "^11.12.0",
+    "katex": "^0.19.0",
+    "marked": "^18.1.1",
+    "mermaid": "^12.2.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  }
+}
