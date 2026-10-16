@@ -563,10 +563,42 @@ git push origin master --follow-tags
 ```
 
 The release carries the Windows MSI and NSIS setup, the Linux `.deb` and
-AppImage, the bare executables, and `SHA256SUMS.txt` for each platform. The tag
-is checked against the versions in `package.json` and
+AppImage, the bare executables, a Windows portable build, and a checksum file for
+each platform. The tag is checked against the versions in `package.json` and
 `src-tauri/tauri.conf.json` before anything is built, so a release can never be
 labelled one version and contain another.
+
+### Portable Windows build
+
+`MDraft-portable.exe` is a single file. Put it anywhere — a USB stick, a Dropbox
+or Nextcloud folder — run it, and it keeps its settings **beside itself** in an
+`app-data` folder it creates next to the executable. Nothing is written to
+`%APPDATA%`, nothing is installed, and no registry key is touched. Delete the
+folder and every trace is gone.
+
+```
+D:\Dropbox\MDraft\MDraft-portable.exe
+D:\Dropbox\MDraft\app-data\config\settings.json
+D:\Dropbox\MDraft\app-data\config\.window-state.json
+```
+
+This is not a special build of the code. It is the ordinary build compiled with
+one extra config file, `src-tauri/tauri.portable.conf.json`, which sets Tauri's
+`appDirectoriesOverride`. Tauri then applies the redirect to its own path APIs and
+to plugins, so the window position follows the executable just as the
+preferences do.
+
+Only the `config` directory moves. Deliberately not the `data` directory, and not
+the webview's cache: those hold the pandoc download (a couple of hundred
+megabytes) and the browser profile, and putting them in a synchronised folder
+would push hundreds of megabytes through Dropbox on every run. If you would
+rather have pandoc travel too, add `"data": "app-data/data"` to the override —
+but do not do it in a folder that syncs.
+
+Because the settings live in the folder, a synchronised folder means **two
+machines editing the same `settings.json`**. That is the point for a USB stick and
+a nuisance for two people sharing a Dropbox account; the file is small and
+last-writer-wins.
 
 On Windows that yields **two** installers plus the bare executable:
 

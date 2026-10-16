@@ -24,16 +24,20 @@
 //! confusing build error into one sentence and a command.
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { copyFileSync, existsSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const passed = process.argv.slice(2);
 const bundleOnly = passed.includes("--no-bundle");
 const killFirst = passed.includes("--kill");
+// The portable variant is Windows-only: on Linux the AppImage is already a
+// single self-contained file, so a second build would add minutes to every run
+// for something the platform hands out anyway.
+const portableWanted = process.platform === "win32" && !passed.includes("--no-portable");
 const forwarded = passed.filter(
-  (arg) => arg !== "--no-bundle" && arg !== "--kill",
+  (arg) => arg !== "--no-bundle" && arg !== "--kill" && arg !== "--no-portable",
 );
 
 const APP = "mdraft";
@@ -155,20 +159,71 @@ the one from target/release — then run this again. Or let this script do it:
 }
 
 const wrapper = join(repoRoot, "scripts", "with-msvc.cmd");
-const tauriArgs = ["tauri", "build", ...forwarded];
+const releaseDir = join(repoRoot, "src-tauri", "target", "release");
 
-const build =
-  process.platform === "win32" && existsSync(wrapper)
-    ? // A .cmd is not a PE image, so it has to go through the command
-      // interpreter. `windowsHide` here is what keeps the entire batch-file
-      // chain — vcvars64.bat, then every .bat MSVC runs — inside one console
-      // that has no window.
-      spawnSync("cmd.exe", ["/c", wrapper, "npx", ...tauriArgs], {
+/** Run the Tauri CLI, through the MSVC wrapper where the host needs it. */
+function tauriBuild(args) {
+  // A .cmd is not a PE image, so it has to go through the command interpreter.
+  // `windowsHide` is what keeps the entire batch-file chain — vcvars64.bat, then
+  // every .bat MSVC runs — inside one console that has no window.
+  return process.platform === "win32" && existsSync(wrapper)
+    ? spawnSync("cmd.exe", ["/c", wrapper, "npx", "tauri", ...args], {
         stdio: "inherit",
         cwd: repoRoot,
         windowsHide: true,
       })
-    : spawnSync("npx", tauriArgs, { stdio: "inherit", cwd: repoRoot });
+    : spawnSync("npx", ["tauri", ...args], { stdio: "inherit", cwd: repoRoot });
+}
+
+/**
+ * Build the portable variant and park it beside the ordinary binary.
+ *
+ * "Portable" is a config file, not a code path: `appDirectoriesOverride` moves
+ * the app's config directory next to the executable, so settings and window
+ * state travel with the file. Nothing in the Rust sources knows about it, and
+ * Tauri applies the override to its own webview data directory and to plugins,
+ * which is why `tauri-plugin-window-state` follows along without changes.
+ *
+ * Only `config` is overridden. Overriding `data` as well would put the pandoc
+ * download — a couple of hundred megabytes — inside the folder, which is exactly
+ * what a Dropbox or Nextcloud user does not want synchronised. The webview's own
+ * cache stays in the local data directory for the same reason.
+ *
+ * This runs BEFORE the ordinary build because both passes write
+ * `target/release/mdraft.exe`, and the staging step must still find the ordinary
+ * one there.
+ */
+function buildPortable() {
+  const config = join(repoRoot, "src-tauri", "tauri.portable.conf.json");
+  if (!existsSync(config)) {
+    console.error(`The portable build needs ${relative(repoRoot, config)}, which is missing.`);
+    process.exit(1);
+  }
+
+  console.log("\n==> building the portable variant");
+  const result = tauriBuild(["build", "--no-bundle", "--config", config]);
+  if (result.error) {
+    console.error(`failed to start the portable build: ${result.error.message}`);
+    process.exit(1);
+  }
+  if (result.status !== 0) {
+    console.error("the portable build failed; see the output above");
+    process.exit(result.status ?? 1);
+  }
+
+  const built = join(releaseDir, "mdraft.exe");
+  if (!existsSync(built)) {
+    console.error(`the portable build produced no ${relative(repoRoot, built)}`);
+    process.exit(1);
+  }
+  const parked = join(releaseDir, "mdraft-portable.exe");
+  copyFileSync(built, parked);
+  console.log(`    parked ${relative(repoRoot, parked)}`);
+}
+
+if (portableWanted && !bundleOnly) buildPortable();
+
+const build = tauriBuild(["build", ...forwarded]);
 
 if (build.error) {
   console.error(`failed to start the build: ${build.error.message}`);

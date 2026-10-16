@@ -70,14 +70,48 @@ const binaryNames = [...new Set(
   ),
 )];
 
-for (const name of binaryNames) {
-  const candidate = [join(releaseDir, `${name}.exe`), join(releaseDir, name)].find(
-    (path) => existsSync(path) && statSync(path).isFile(),
-  );
-  if (candidate) {
-    sources.push(candidate);
-    break;
+/**
+ * Find a bare binary in `target/release`, returning the name it actually has.
+ *
+ * Resolving the real entry rather than returning the constructed path matters
+ * because the names here are guesses — `mainBinaryName`, `productName` and the
+ * Cargo package can each differ in case — and Windows matches them
+ * case-insensitively while Linux does not. Returning the guess would stage a
+ * file spelled one way on Windows and fail outright on the other platform.
+ */
+function findBinary(candidates) {
+  const present = readdirSync(releaseDir);
+  for (const name of candidates) {
+    const wanted = [`${name}.exe`, name].map((file) => file.toLowerCase());
+    const actual = present.find((file) => wanted.includes(file.toLowerCase()));
+    if (actual && statSync(join(releaseDir, actual)).isFile()) return join(releaseDir, actual);
   }
+  return null;
+}
+
+/**
+ * Staged-name overrides, keyed by source path. Only the bare binaries need one:
+ * a bundle already carries the product name and version.
+ */
+const rename = new Map();
+
+const binary = findBinary(binaryNames);if (binary) {
+  sources.push(binary);
+  // Cargo names the file after the package, so it arrives as `mdraft.exe`. The
+  // release should carry the product's name; on Linux a lowercase binary is the
+  // convention, so only Windows is renamed.
+  if (OS === "windows") rename.set(binary, `${productName}.exe`);
+}
+
+// The portable variant, which `dist.mjs` parks here after its own build pass.
+// It is a separate binary rather than a bundle: the only difference is the
+// `appDirectoriesOverride` config it was compiled with, which moves settings and
+// window state next to the executable. Absent when `npm run dist -- --no-portable`
+// was used, or on a platform that does not build one.
+const portable = findBinary(binaryNames.map((name) => `${name}-portable`));
+if (portable) {
+  sources.push(portable);
+  if (OS === "windows") rename.set(portable, `${productName}-portable.exe`);
 }
 
 const skipped = [];
@@ -140,7 +174,7 @@ mkdirSync(destDir, { recursive: true });
 
 const staged = [];
 for (const source of sources) {
-  const name = source.split(/[\\/]/).pop();
+  const name = rename.get(source) ?? source.split(/[\\/]/).pop();
   const target = join(destDir, name);
   copyFileSync(source, target);
   staged.push({ name, bytes: statSync(target).size, sha256: sha256(target) });
