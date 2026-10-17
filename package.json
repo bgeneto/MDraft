@@ -1,7 +1,7 @@
 {
   "name": "mdraft",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "description": "A Tauri 2 markdown editor in the spirit of Typora",
   "license": "MIT",

@@ -111,7 +111,30 @@ export interface Settings {
   showStatusBar: boolean;
   focusMode: boolean;
   typewriterMode: boolean;
+  /** Editor source pane size, in pixels. */
   editorFontSize: number;
+  /**
+   * Font stacks per role, as complete CSS `font-family` values.
+   *
+   * An empty string means "the built-in default for that role", which lives in
+   * `src/fonts.ts`. Storing a stack rather than a family name lets a reader write
+   * `"Source Serif 4", Charter, Georgia, serif` and be understood, and means the
+   * application never has to parse what it publishes.
+   */
+  sourceFont: string;
+  bodyFont: string;
+  headingFont: string;
+  codeFont: string;
+  /** Prose size in the preview, in pixels. The editor has `editorFontSize`. */
+  bodyFontSize: number;
+  /** Programming ligatures in code, both panes. Off by default: `->` is a choice. */
+  ligaturesInCode: boolean;
+  /** Tabular figures in preview tables, so columns of numbers line up. */
+  tabularFigures: boolean;
+  /** Oldstyle figures in prose, where they sit better in running text. */
+  oldstyleFigures: boolean;
+  /** Slashed zero in code, to separate it from capital O. */
+  slashedZero: boolean;
   editorMaxWidth: number;
   syntaxTheme: string;
   recentFiles: string[];

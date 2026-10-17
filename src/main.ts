@@ -16,6 +16,11 @@ import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import * as api from "./api";
 import { REFERENCE, SHORTCUTS, WELCOME } from "./content";
 import { createEditor, type EditorHandle } from "./editor";
+import {
+  embeddedFontCss,
+  installBundledFonts,
+  TYPOGRAPHY_ROLES,
+} from "./fonts";
 import { applyHighlightTheme, highlightThemeCss } from "./highlight-theme";
 import { handleImageDrop, handleImagePaste, type ImageContext } from "./images";
 import {
@@ -161,6 +166,7 @@ function applyLayout(): void {
   editor?.setFocusMode(settings.focusMode);
   editor?.setTypewriter(settings.typewriterMode);
   applySyntaxTheme();
+  applyTypography();
 
   el<HTMLButtonElement>("mode-source").classList.toggle("active", settings.viewMode === "source");
   el<HTMLButtonElement>("mode-split").classList.toggle("active", settings.viewMode === "split");
@@ -178,6 +184,38 @@ function applyLayout(): void {
       String(settings.sidebarTab === tab),
     );
   }
+}
+
+/**
+ * Publish the typography settings as CSS variables.
+ *
+ * Everything — the two panes, the exported documents and the panel's own
+ * specimen — reads the same variables, which is why there is one place that
+ * writes them. An empty font string means "the built-in default for that role",
+ * so the fallback lives in `src/fonts.ts` beside the reasoning for it rather
+ * than being copied into every settings file on disk.
+ */
+function applyTypography(): void {
+  const root = document.documentElement.style;
+  for (const role of TYPOGRAPHY_ROLES) {
+    root.setProperty(role.variable, settings[role.id] || role.fallback);
+  }
+  root.setProperty("--body-size", `${settings.bodyFontSize}px`);
+
+  // Whole property values rather than composed keywords: `font-variant-numeric`
+  // takes a list, and building one from separate booleans is where a stray space
+  // turns a valid declaration into an ignored one.
+  root.setProperty("--prose-figures", settings.oldstyleFigures ? "oldstyle-nums" : "normal");
+  root.setProperty("--table-figures", settings.tabularFigures ? "tabular-nums" : "normal");
+  root.setProperty("--code-figures", settings.slashedZero ? "slashed-zero tabular-nums" : "normal");
+  root.setProperty(
+    "--code-ligatures",
+    settings.ligaturesInCode ? "contextual common-ligatures" : "none",
+  );
+
+  // CodeMirror wraps lines by measuring text, so a new face invalidates what it
+  // measured. Nothing else needs telling: the preview is ordinary CSS.
+  editor?.requestMeasure();
 }
 
 function persist(): void {
@@ -530,9 +568,8 @@ async function reloadFromDisk(): Promise<void> {
 }
 
 /**
- * Render the document the way an exported file needs it: the preview pipeline's
- * HTML, with Mermaid drawn and the article wrapped in `markdown-body` so the
- * stylesheet applies.
+ * Build the article the exports write: the preview pipeline's HTML, with Mermaid
+ * drawn and the article wrapped so the stylesheet applies.
  *
  * Shared by the HTML and PDF exports so the two can never drift apart.
  */
@@ -545,6 +582,34 @@ async function buildExportArticle(): Promise<string> {
   }).html;
   await renderMermaidIn(holder, isDark);
   return `<article class="markdown-body">${holder.innerHTML}</article>`;
+}
+
+/**
+ * The `@font-face` rules an exported document needs, as data URLs.
+ *
+ * Only the families the reader's own stacks name are embedded, so a document
+ * written in one face does not carry four. An empty string means every role is
+ * using a system font, in which case there is nothing to embed and the reader's
+ * machine supplies the face — which is the honest outcome, not a failure.
+ */
+function exportFontCss(): Promise<string> {
+  const stacks = TYPOGRAPHY_ROLES.map((role) => settings[role.id] || role.fallback);
+  return embeddedFontCss(stacks);
+}
+
+/** The typography declarations an exported document must carry. */
+function exportTypographyCss(): string {
+  const declarations = TYPOGRAPHY_ROLES.map(
+    (role) => `${role.variable}:${settings[role.id] || role.fallback}`,
+  );
+  declarations.push(`--body-size:${settings.bodyFontSize}px`);
+  declarations.push(
+    `--prose-figures:${settings.oldstyleFigures ? "oldstyle-nums" : "normal"}`,
+    `--table-figures:${settings.tabularFigures ? "tabular-nums" : "normal"}`,
+    `--code-figures:${settings.slashedZero ? "slashed-zero tabular-nums" : "normal"}`,
+    `--code-ligatures:${settings.ligaturesInCode ? "contextual common-ligatures" : "none"}`,
+  );
+  return `:root{${declarations.join(";")}}`;
 }
 
 /** Basename of the open document, without its extension. */
@@ -569,7 +634,10 @@ async function exportHtml(): Promise<void> {
   try {
     const article = await buildExportArticle();
     const highlightStyle = document.getElementById("hljs-theme")?.textContent ?? "";
+    const fontCss = await exportFontCss();
     const headExtra = [
+      `<style>${fontCss}</style>`,
+      `<style>${exportTypographyCss()}</style>`,
       "<style>",
       highlightStyle,
       ".markdown-body{max-width:none}",
@@ -610,8 +678,16 @@ async function exportPdf(): Promise<void> {
   try {
     const article = await buildExportArticle();
     // The print document is always light, whatever the editor is showing: dark
-    // token colours would print as pale text on white paper.
-    const html = wrapPrintHtml(currentDoc?.name ?? "Untitled", article, highlightThemeCss(false));
+    // token colours would print as pale text on white paper. Its typefaces,
+    // however, are the reader's — embedded, because a browser reading a file in
+    // the temporary directory cannot reach the application's assets.
+    const html = wrapPrintHtml(
+      currentDoc?.name ?? "Untitled",
+      article,
+      highlightThemeCss(false),
+      exportTypographyCss(),
+      await exportFontCss(),
+    );
     const written = await api.printDocument(html, documentStem());
     notice.dismiss();
     toast("Choose “Save as PDF” in the print dialog");
@@ -1372,6 +1448,10 @@ function installChrome(): void {
 }
 
 async function boot(): Promise<void> {
+  // Before the first paint, so the preview is never drawn in a fallback and then
+  // corrected. The faces are local files, so this costs a millisecond.
+  installBundledFonts();
+
   settings = await api.getSettings();
   applyTheme();
 

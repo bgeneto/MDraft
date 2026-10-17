@@ -94,8 +94,21 @@ const PANDOC_INPUT: &str = "-f markdown+tex_math_single_backslash+tex_math_doubl
 /// The text formats pass `--wrap=none`. Pandoc hard-wraps prose at 72 columns by
 /// default, which is wrong for a writing tool: it puts line breaks inside
 /// sentences, so every later edit shows as a spurious diff.
-pub fn default_export_formats() -> Vec<ExportFormat> {
-    let args = |rest: &str| format!("{PANDOC_INPUT} {rest}");
+/// Serde helpers.
+///
+/// The typography font fields default to the empty string rather than to a stack,
+/// because the stacks live in `src/fonts.ts` beside the reasoning for each one.
+/// Empty means "whatever the built-in default for that role is", which is also
+/// what makes a settings file written before a role existed still load.
+fn default_true() -> bool {
+    true
+}
+
+fn default_body_font_size() -> u32 {
+    16
+}
+
+pub fn default_export_formats() -> Vec<ExportFormat> {    let args = |rest: &str| format!("{PANDOC_INPUT} {rest}");
     vec![
         ExportFormat::new(
             "pdf",
@@ -158,6 +171,34 @@ pub struct Settings {
     pub editor_font_size: u32,
     /// Maximum content width in pixels; 0 means full width.
     pub editor_max_width: u32,
+
+    // ---- Preferences: Typography -----------------------------------------
+    //
+    // Each font value is a complete CSS font stack, not a family name, so a
+    // reader can write `"Source Serif 4", Charter, Georgia, serif` and be
+    // understood. The application never parses these; it publishes them as CSS
+    // variables and lets the webview do the cascade. An empty string means
+    // "use the built-in default for that role", which is what keeps an older
+    // settings file working after a role is added.
+    #[serde(default)]
+    pub source_font: String,
+    #[serde(default)]
+    pub body_font: String,
+    #[serde(default)]
+    pub heading_font: String,
+    #[serde(default)]
+    pub code_font: String,
+    /// Prose size in the preview, in pixels. The editor has its own, above.
+    #[serde(default = "default_body_font_size")]
+    pub body_font_size: u32,
+    #[serde(default)]
+    pub ligatures_in_code: bool,
+    #[serde(default = "default_true")]
+    pub tabular_figures: bool,
+    #[serde(default)]
+    pub oldstyle_figures: bool,
+    #[serde(default)]
+    pub slashed_zero: bool,
     /// Editor syntax palette id, or "auto" to follow the application theme.
     pub syntax_theme: String,
     pub recent_files: Vec<String>,
@@ -203,6 +244,16 @@ impl Default for Settings {
             typewriter_mode: false,
             editor_font_size: 16,
             editor_max_width: 980,
+            // Empty means "the built-in default for that role"; see src/fonts.ts.
+            source_font: String::new(),
+            body_font: String::new(),
+            heading_font: String::new(),
+            code_font: String::new(),
+            body_font_size: default_body_font_size(),
+            ligatures_in_code: false,
+            tabular_figures: true,
+            oldstyle_figures: false,
+            slashed_zero: false,
             syntax_theme: "auto".into(),
             recent_files: Vec::new(),
             last_directory: None,
@@ -382,6 +433,27 @@ mod tests {
     }
 
     #[test]
+    fn typography_defaults_are_the_literary_preset() {
+        let s = Settings::default();
+        // Empty means "the built-in default for that role", which lives in
+        // src/fonts.ts beside the reasoning for each stack. Storing the stacks
+        // here would be a second copy to keep in step.
+        assert_eq!(s.source_font, "");
+        assert_eq!(s.body_font, "");
+        assert_eq!(s.heading_font, "");
+        assert_eq!(s.code_font, "");
+        assert_eq!(s.body_font_size, 16);
+        // Off by default, because whether `->` should render as an arrow is a
+        // genuine disagreement and the conservative answer is the plain one.
+        assert!(!s.ligatures_in_code);
+        // On by default, because proportional figures in a table are one of the
+        // few typographic choices with a right answer.
+        assert!(s.tabular_figures);
+        assert!(!s.oldstyle_figures);
+        assert!(!s.slashed_zero);
+    }
+
+    #[test]
     fn missing_fields_fall_back_to_defaults() {
         let parsed: Settings = serde_json::from_str(r#"{"theme":"dark"}"#).unwrap();
         assert_eq!(parsed.theme, "dark");
@@ -394,6 +466,28 @@ mod tests {
         assert_eq!(parsed.image_rule, "assetsFolder");
         assert!(parsed.image_apply_online);
         assert!(!parsed.image_auto_escape);
+    }
+
+    #[test]
+    fn a_settings_file_written_before_typography_existed_still_loads() {
+        // Every typography field is new, so this is the case that matters: a
+        // reader upgrading must not lose their settings or see the application
+        // refuse to start. The font fields default to empty rather than to a
+        // stack, which is what makes "unset" distinguishable from "chosen".
+        let parsed: Settings =
+            serde_json::from_str(r#"{"theme":"dark","editorFontSize":21}"#).unwrap();
+        assert_eq!(parsed.theme, "dark");
+        assert_eq!(parsed.editor_font_size, 21);
+        assert_eq!(parsed.body_font, "");
+        assert_eq!(parsed.body_font_size, 16);
+        // `tabular_figures` is `#[serde(default = "default_true")]`, so the
+        // serde default and the struct default have to agree or an upgrade would
+        // silently change how tables render.
+        assert_eq!(
+            parsed.tabular_figures,
+            Settings::default().tabular_figures,
+            "the serde default for tabular_figures disagrees with Settings::default()"
+        );
     }
 
     #[test]

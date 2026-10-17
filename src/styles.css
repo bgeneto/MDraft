@@ -22,6 +22,28 @@
     Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
+
+  /* ---------------------------------------------------------------------
+     Typography roles.
+
+     Each is overwritten at runtime from the reader's settings; the values here
+     are the fallbacks used before settings load, and they are deliberately the
+     same stacks as the defaults in src/fonts.ts. `--font-ui` is the application
+     chrome and is not configurable — a menu that reflows with the document's
+     typeface is a worse application, not a more flexible one.
+     --------------------------------------------------------------------- */
+  --font-source: var(--font-mono);
+  --font-body: "Source Serif 4", Charter, Georgia, "Times New Roman", serif;
+  --font-heading: "Source Sans 3", Inter, system-ui, "Segoe UI", Arial, sans-serif;
+  --font-code: var(--font-mono);
+  --body-size: 16px;
+
+  /* OpenType features, as complete property values so the runtime can swap a
+     whole keyword in rather than compose one. */
+  --prose-figures: normal;
+  --table-figures: tabular-nums;
+  --code-figures: normal;
+  --code-ligatures: normal;
 }
 
 [data-theme="dark"] {
@@ -432,6 +454,23 @@ body {
   margin: 0 auto;
   line-height: 1.72;
   word-wrap: break-word;
+  font-family: var(--font-body);
+  font-size: var(--body-size);
+  /* Kerning and the standard ligatures are on by default in every modern
+     engine, but a typeface that ships a `kern` table is the reason this
+     application has the setting at all, so it is stated rather than assumed. */
+  font-kerning: normal;
+  font-variant-ligatures: common-ligatures contextual;
+  font-variant-numeric: var(--prose-figures);
+  /* Variable fonts that carry an optical size axis — Source Serif 4 is one —
+     are asked to interpolate it for the size actually in use. */
+  font-optical-sizing: auto;
+}
+
+/* Columns of figures only line up if the figures are tabular, which is a
+   different choice from the one running text wants. */
+.markdown-body table {
+  font-variant-numeric: var(--table-figures);
 }
 
 .markdown-body > *:first-child {
@@ -447,6 +486,8 @@ body {
   margin: 1.6em 0 0.6em;
   line-height: 1.3;
   font-weight: 650;
+  font-family: var(--font-heading);
+  font-variant-numeric: normal;
 }
 
 .markdown-body h1 {
@@ -528,11 +569,16 @@ body {
 }
 
 .markdown-body code {
-  font-family: var(--font-mono);
+  font-family: var(--font-code);
   font-size: 0.88em;
   background: var(--code-bg);
   border-radius: 4px;
   padding: 0.15em 0.35em;
+  /* The two decisions that matter most in code, and the two people disagree
+     about: whether `->` is an arrow, and whether zero is distinguishable from
+     capital O. Both are settings rather than opinions baked into the theme. */
+  font-variant-ligatures: var(--code-ligatures);
+  font-variant-numeric: var(--code-figures);
 }
 
 .markdown-body pre {
@@ -574,7 +620,7 @@ body {
 }
 
 .markdown-body kbd {
-  font-family: var(--font-mono);
+  font-family: var(--font-code);
   font-size: 0.82em;
   border: 1px solid var(--border);
   border-bottom-width: 2px;
@@ -886,7 +932,8 @@ body {
 
 .prefs-control select,
 .prefs-number input,
-.prefs-row-text input {
+.prefs-row-text input,
+.prefs-font-input {
   width: 100%;
   max-width: 420px;
   padding: 6px 9px;
@@ -900,9 +947,56 @@ body {
 
 .prefs-control select:focus,
 .prefs-number input:focus,
-.prefs-row-text input:focus {
+.prefs-row-text input:focus,
+.prefs-font-input:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+/* --------------------------------------------------------------------------
+   Font rows in Preferences
+
+   A typeface cannot be judged from its name, so the specimen is the real
+   control here and the text field is only how it is addressed. It is set at a
+   size close to the document's rather than the panel's, because letterfit and
+   the colour of a paragraph are not visible at 13px.
+   -------------------------------------------------------------------------- */
+
+.prefs-font {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 420px;
+}
+
+.prefs-font-specimen {
+  margin-top: 6px;
+  padding: 9px 11px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  background: var(--code-bg);
+  color: var(--fg);
+  font-size: 17px;
+  line-height: 1.45;
+  /* The specimen must be readable even when the stack resolves to nothing —
+     an empty box would hide the very thing being chosen. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Kerning is the point of the exercise; state it rather than hope for it. */
+  font-kerning: normal;
+  font-variant-ligatures: common-ligatures contextual;
+}
+
+/* The specimen obeys the same switches the document does, so turning code
+   ligatures off visibly changes the sample above the checkbox rather than
+   leaving the reader to wonder whether anything happened. */
+.prefs-font-specimen[data-features="code"] {
+  font-variant-ligatures: var(--code-ligatures);
+  font-variant-numeric: var(--code-figures);
+}
+
+.prefs-font-specimen[data-features="prose"] {
+  font-variant-numeric: var(--prose-figures);
 }
 
 .prefs-number {

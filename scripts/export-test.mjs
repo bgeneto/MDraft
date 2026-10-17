@@ -368,6 +368,35 @@ if (pdfButton === "clicked") {
       !/:root\{color-scheme:dark\}|background:#1e1e1e/.test(html),
       "the print document is forced light regardless of the editor theme",
     );
+
+    // The reader's typefaces have to travel with the file. A browser opening a
+    // document in the temporary directory cannot reach the application's assets,
+    // so a family named in a stack but not embedded is silently substituted —
+    // and the PDF stops matching the preview at the moment the reader had gone
+    // to the trouble of choosing a face.
+    const faces = [
+      ...html.matchAll(/@font-face\{font-family:"([^"]+)"[^}]*?base64,/g),
+    ].map((m) => m[1]);
+    check(
+      faces.length > 0,
+      "the print document embeds the chosen typefaces",
+      faces.length > 0 ? `${faces.length} face(s): ${[...new Set(faces)].join(", ")}` : "none embedded — exports would fall back",
+    );
+    check(
+      !/src:url\("(?!#|data:|\/)/.test(html),
+      "the print document needs no font file from the network or the app",
+    );
+    // A fallback in a stack can never be used once the family ahead of it is
+    // embedded, and carrying it costs hundreds of kilobytes per export.
+    check(
+      !faces.includes("Inter"),
+      "a face that only appears as a fallback is not embedded",
+      faces.includes("Inter") ? "Inter was embedded although Source Sans 3 wins the stack" : "correctly omitted",
+    );
+    check(
+      /--font-body:/.test(html) && /--font-heading:/.test(html),
+      "the export carries the role declarations, not just the faces",
+    );
   }
 
   // Close the browser tab the export opened, so a test run does not leave one

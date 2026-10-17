@@ -728,8 +728,21 @@ export async function renderMermaidIn(root: HTMLElement, isDark: boolean): Promi
  * The document prints itself as soon as it loads, so the user's next action is
  * the one the browser is already asking for — choosing "Save as PDF" as the
  * destination — rather than having to find Ctrl+P first.
+ *
+ * `typographyCss` carries the reader's typeface choices as custom properties and
+ * `fontCss` carries the bundled faces themselves as data URLs. Both are needed:
+ * a family named in a stack means nothing to a browser reading a temporary file,
+ * which cannot reach the application's assets and would quietly substitute a
+ * system font — so the PDF would stop matching the preview exactly when the
+ * reader had gone to the trouble of choosing a face.
  */
-export function wrapPrintHtml(title: string, bodyHtml: string, tokenCss: string): string {
+export function wrapPrintHtml(
+  title: string,
+  bodyHtml: string,
+  tokenCss: string,
+  typographyCss = "",
+  fontCss = "",
+): string {
   return [
     "<!doctype html>",
     '<html lang="en">',
@@ -739,23 +752,33 @@ export function wrapPrintHtml(title: string, bodyHtml: string, tokenCss: string)
     // Without this the mathematics collapses, exactly as it would in the
     // preview: KaTeX needs its layout rules, not just its DOM.
     `<link rel="stylesheet" href="${KATEX_STYLESHEET_URL}">`,
+    fontCss ? `<style>${fontCss}</style>` : "",
     "<style>",
     ":root{color-scheme:light}",
+    typographyCss,
     "html,body{background:#fff}",
     "@page{size:A4;margin:18mm 16mm}",
     "body{max-width:none;margin:0;padding:0;color:#1a1a1a;",
-    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;',
-    "line-height:1.65;font-size:11.5pt}",
+    "font-family:var(--font-body,Georgia,serif);",
+    "line-height:1.65;",
+    // Points rather than pixels: the page is a piece of paper, and the reader's
+    // pixel size was chosen for a screen. 16px at 96dpi is 12pt.
+    "font-size:calc(var(--body-size,16px) * 0.75)}",
+    "font-kerning:normal;font-variant-numeric:var(--prose-figures,normal);",
+    "font-variant-ligatures:common-ligatures contextual;font-optical-sizing:auto}",
     // A heading stranded at the foot of a page, or a table split across two, is
     // the commonest way an otherwise fine printout looks broken.
-    "h1,h2,h3,h4,h5,h6{break-after:avoid;page-break-after:avoid;break-inside:avoid}",
+    "h1,h2,h3,h4,h5,h6{break-after:avoid;page-break-after:avoid;break-inside:avoid;",
+    "font-family:var(--font-heading,inherit);font-variant-numeric:normal}",
     "table,pre,blockquote,figure{break-inside:avoid;page-break-inside:avoid}",
     "img,svg{max-width:100%;break-inside:avoid}",
-    "table{border-collapse:collapse;width:100%}",
+    "table{border-collapse:collapse;width:100%;font-variant-numeric:var(--table-figures,normal)}",
     "th,td{border:1px solid #c8c8c8;padding:5px 9px;text-align:left}",
     "th{background:#f2f2f2}",
     "pre{background:#f6f8fa;padding:10px 12px;border-radius:4px;overflow:visible;white-space:pre-wrap}",
-    "code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.9em}",
+    "code{font-family:var(--font-code,monospace);font-size:.9em;",
+    "font-variant-ligatures:var(--code-ligatures,normal);",
+    "font-variant-numeric:var(--code-figures,normal)}",
     "blockquote{margin:0;padding-left:12px;border-left:3px solid #d0d0d0;color:#444}",
     "a{color:#0b57d0;text-decoration:none}",
     // Long URLs and code lines must wrap rather than be clipped at the margin.
@@ -769,7 +792,9 @@ export function wrapPrintHtml(title: string, bodyHtml: string, tokenCss: string)
     "<script>window.addEventListener('load',function(){window.print()})</script>",
     "</body>",
     "</html>",
-  ].join("\n");
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
 }
 
 /** Wrap rendered body HTML into a standalone document for "Export as HTML". */

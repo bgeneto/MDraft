@@ -64,6 +64,11 @@ export interface EditorHandle {
   /** Install a syntax palette: token colours plus the writing surface. */
   setSyntax(palette: SyntaxPalette): void;
   setFontSize(px: number): void;
+  /**
+   * Re-measure after something outside CodeMirror changed the metrics — a new
+   * typeface, most of all. Line wrapping is computed from measured text.
+   */
+  requestMeasure(): void;
   setFocusMode(on: boolean): void;
   setTypewriter(on: boolean): void;
   openSearch(replace?: boolean): void;
@@ -132,12 +137,23 @@ const focusPlugin = ViewPlugin.fromClass(
 const baseTheme = EditorView.theme({
   "&": { height: "100%" },
   ".cm-scroller": {
-    fontFamily:
-      'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
+    // The family comes from a CSS variable rather than a hardcoded stack, so the
+    // source pane follows the reader's typography setting. CodeMirror writes this
+    // into a stylesheet, so the `var()` reaches the cascade intact — no
+    // compartment and no reconfiguration is needed to change the face, only a
+    // `requestMeasure()` afterwards so it re-measures its line wrapping.
+    fontFamily: "var(--font-source)",
     lineHeight: "1.75",
     padding: "22px 0 45vh",
   },
-  ".cm-content": { padding: "0 28px" },
+  ".cm-content": {
+    padding: "0 28px",
+    // Same two decisions as the preview's code, applied to the source pane, so a
+    // reader who turns ligatures on does not get them in one pane and not the
+    // other.
+    fontVariantLigatures: "var(--code-ligatures)",
+    fontVariantNumeric: "var(--code-figures)",
+  },
   ".cm-gutters": { backgroundColor: "transparent", border: "none" },
   ".cm-activeLineGutter": { backgroundColor: "transparent" },
   ".cm-dim-line": { opacity: "0.28" },
@@ -255,6 +271,15 @@ export function createEditor(host: HTMLElement): EditorHandle {
 
   return {
     view,
+
+    /**
+     * Re-measure after something outside CodeMirror changed the metrics — a new
+     * typeface, most of all. Line wrapping is computed from measured text, so a
+     * face swapped in without this leaves the wrapping of the previous one.
+     */
+    requestMeasure() {
+      view.requestMeasure();
+    },
 
     setDoc(text, resetHistory = false) {
       view.dispatch({

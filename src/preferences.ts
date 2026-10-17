@@ -6,6 +6,12 @@
 //! option that does nothing.
 
 import * as api from "./api";
+import {
+  FONT_SUGGESTIONS,
+  TYPOGRAPHY_PRESETS,
+  TYPOGRAPHY_ROLES,
+  type TypographyPreset,
+} from "./fonts";
 import { PALETTE_OPTIONS } from "./syntax-themes";
 
 export interface PreferencesHost {
@@ -26,8 +32,7 @@ export interface PreferencesHost {
   chooseStyleReference(current: string): Promise<string>;
 }
 
-export interface PreferencesHandle {
-  open(): void;
+export interface PreferencesHandle {  open(): void;
   close(): void;
   toggle(): void;
   isOpen(): boolean;
@@ -72,6 +77,31 @@ type Row =
       set: (value: string) => void;
     }
   | {
+      /**
+       * A `font-family` stack, with a specimen underneath.
+       *
+       * Its own row kind rather than a `text` row because a typeface cannot be
+       * judged from its name: the specimen is the control, and it has to repaint
+       * on every keystroke — which a `text` row deliberately does not do, since
+       * committing per keystroke would redraw the panel and fight the caret.
+       */
+      kind: "font";
+      label: string;
+      help?: string;
+      /** The CSS variable this role publishes, so typing previews live. */
+      variable: string;
+      /** Text picked to expose the decisions the face makes. */
+      sample: string;
+      /**
+       * Which OpenType switches the specimen obeys. Without this the sample
+       * would show the face's ligatures while the setting has them off, and the
+       * reader would conclude the switch does nothing.
+       */
+      features: "code" | "prose";
+      get: () => string;
+      set: (value: string) => void;
+    }
+  | {
       kind: "button";
       label: string;
       help?: string;
@@ -83,6 +113,178 @@ interface Section {
   id: string;
   title: string;
   rows: Row[];
+}
+
+// ---------------------------------------------------------------------------
+// Typography
+// ---------------------------------------------------------------------------
+
+/** The shared `<datalist>` every font field points at. */
+const FONT_LIST_ID = "mdraft-font-list";
+
+/**
+ * Create the font suggestion list once, in the document rather than the panel.
+ *
+ * A `<datalist>` is referenced by id, and the panel is rebuilt on every redraw —
+ * so a list created inside it would be removed and re-added constantly, and the
+ * browser drops the association the moment the element carrying it goes away.
+ */
+function ensureFontList(): void {
+  if (document.getElementById(FONT_LIST_ID)) return;
+  const list = document.createElement("datalist");
+  list.id = FONT_LIST_ID;
+  for (const name of FONT_SUGGESTIONS) {
+    const option = document.createElement("option");
+    // A bare family name is what the datalist matches on; the field itself holds
+    // a whole stack, so the value is offered rather than enforced.
+    option.value = `"${name}"`;
+    list.appendChild(option);
+  }
+  document.body.appendChild(list);
+}
+
+/**
+ * The typography section: presets, then one row per role, then the OpenType
+ * decisions that a family name alone does not express.
+ *
+ * The preset picker exists because choosing type is a pairing problem, not a
+ * font problem. Each preset is a complete system, and the fields below it are
+ * there to be dismantled by someone who already knows what they want.
+ */
+function typographyRows(host: PreferencesHost): Row[] {
+  const s = () => host.settings();
+
+  const rows: Row[] = [
+    {
+      kind: "select",
+      label: "Preset",
+      help: "Sets every field below at once. Changing any field afterwards leaves the preset — nothing is locked.",
+      options: [
+        ...TYPOGRAPHY_PRESETS.map((preset) => [preset.id, preset.label] as [string, string]),
+        // Always present, so the control is never blank: it is what the picker
+        // shows once a field below has been edited away from every preset.
+        ["custom", "Custom (edited by hand)"],
+      ],
+      // The preset is a starting point rather than stored state, so it is
+      // detected from the settings instead of remembered: picking one writes
+      // the values, and the picker then reports whichever set is in force.
+      get: () => activePreset(host)?.id ?? "custom",
+      set: (value) => {
+        const preset = TYPOGRAPHY_PRESETS.find((entry) => entry.id === value);
+        if (preset) host.update(preset.values as Partial<api.Settings>);
+      },
+    },
+    {
+      kind: "note",
+      label: "",
+      text:
+        activePreset(host)?.note ??
+        "Edited by hand, so no preset matches exactly. The four faces below are the ones in use.",
+    },
+    { kind: "heading", label: "Faces" },
+  ];
+
+  for (const role of TYPOGRAPHY_ROLES) {
+    rows.push({
+      kind: "font",
+      label: role.label,
+      help: role.help,
+      variable: role.variable,
+      sample: role.sample,
+      features: role.features,
+      // The resolved stack, so the field always shows what is actually in use
+      // rather than an empty box that means "some default somewhere".
+      get: () => s()[role.id] || role.fallback,
+      set: (value) => {
+        // An empty field is read as "go back to the built-in default": the row
+        // redraws with the default stack in it, which is what someone who just
+        // cleared the box is asking for.
+        host.update({ [role.id]: value.trim() } as Partial<api.Settings>);
+      },
+    });
+  }
+
+  rows.push(
+    {
+      kind: "number",
+      label: "Preview text size",
+      help: "Prose in the preview and in exports. The source pane has its own size under Editor.",
+      min: 11,
+      max: 32,
+      suffix: "px",
+      get: () => s().bodyFontSize,
+      set: (value) => host.update({ bodyFontSize: value }),
+    },
+    {
+      kind: "note",
+      label: "Bundled faces",
+      text:
+        "MDraft ships Source Serif 4, Source Sans 3, Inter and JetBrains Mono under the SIL Open Font License, so those four look the same on every machine and travel inside exported HTML and PDF. Any other family comes from your operating system: it renders here, but a reader without it sees a fallback.",
+    },
+    { kind: "heading", label: "OpenType" },
+    {
+      kind: "checkbox",
+      label: "Ligatures in code",
+      help:
+        "Turns the programming ligatures of faces that have them — JetBrains Mono draws `->`, `=>` and `!=` as single glyphs. Off by default, because whether a source file should look like that is a real disagreement.",
+      get: () => s().ligaturesInCode,
+      set: (value) => host.update({ ligaturesInCode: value }),
+    },
+    {
+      kind: "checkbox",
+      label: "Tabular figures in tables",
+      help:
+        "Gives every digit the same width so columns of numbers line up. Worth leaving on: proportional figures in a table are one of the few typographic choices that is simply wrong.",
+      get: () => s().tabularFigures,
+      set: (value) => host.update({ tabularFigures: value }),
+    },
+    {
+      kind: "checkbox",
+      label: "Oldstyle figures in prose",
+      help:
+        "Figures with ascenders and descenders, so 1,234 sits in running text instead of shouting. Needs a face that has them; Source Serif 4 and Georgia do.",
+      get: () => s().oldstyleFigures,
+      set: (value) => host.update({ oldstyleFigures: value }),
+    },
+    {
+      kind: "checkbox",
+      label: "Slashed zero in code",
+      help: "Distinguishes 0 from capital O. Turns on tabular figures with it, since code is read in columns.",
+      get: () => s().slashedZero,
+      set: (value) => host.update({ slashedZero: value }),
+    },
+    { kind: "heading", label: "Mathematics" },
+    {
+      kind: "note",
+      label: "",
+      text:
+        "Mathematics keeps KaTeX's own Computer Modern, which is a Didone — high contrast, vertical stress. It sits naturally beside the transitional serifs (Source Serif 4, Charter, Georgia) and argues with geometric sans faces. This is not a limitation to be worked around: KaTeX draws radicals, integrals and large delimiters with the KaTeX_Size faces, and no font on your system provides those glyphs, so substituting a family breaks the layout rather than changing the style.",
+    },
+  );
+
+  return rows;
+}
+
+/**
+ * The preset whose values match the settings exactly, if any.
+ *
+ * Compares the *resolved* value for the font fields, because an empty setting
+ * means "the built-in default for that role" — comparing the raw string would
+ * make every fresh installation report "custom", which is precisely backwards.
+ */
+function activePreset(host: PreferencesHost): TypographyPreset | null {
+  const settings = host.settings() as unknown as Record<string, unknown>;
+  const resolve = (key: string): unknown => {
+    const raw = settings[key];
+    const role = TYPOGRAPHY_ROLES.find((entry) => entry.id === key);
+    if (role && (raw === "" || raw === undefined || raw === null)) return role.fallback;
+    return raw;
+  };
+  return (
+    TYPOGRAPHY_PRESETS.find((preset) =>
+      Object.entries(preset.values).every(([key, value]) => resolve(key) === value),
+    ) ?? null
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -604,10 +806,17 @@ function buildSections(host: PreferencesHost): Section[] {
         },
       ],
     },
+    {
+      id: "typography",
+      title: "Typography",
+      rows: typographyRows(host),
+    },
   ];
 }
 
 export function createPreferences(host: PreferencesHost): PreferencesHandle {
+  ensureFontList();
+
   const overlay = document.createElement("div");
   overlay.className = "prefs-overlay";
   overlay.hidden = true;
@@ -737,6 +946,48 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
         render();
       });
       return input;
+    }
+
+    if (row.kind === "font") {
+      const wrap = document.createElement("div");
+      wrap.className = "prefs-font";
+
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "prefs-font-input";
+      input.value = row.get();
+      // The suggestions are the bundled families first, then the faces most
+      // likely to exist on the reader's machine. A datalist is a convenience,
+      // not a constraint: any `font-family` stack can be typed, which is the
+      // only way to express a fallback chain.
+      input.setAttribute("list", FONT_LIST_ID);
+      input.spellcheck = false;
+
+      const specimen = document.createElement("div");
+      specimen.className = "prefs-font-specimen";
+      specimen.textContent = row.sample;
+      specimen.style.fontFamily = input.value;
+      // Show the face as it will actually be used, OpenType switches included.
+      specimen.dataset.features = row.features;
+
+      // Repaint on every keystroke, but do not touch settings: the panel is the
+      // one place where seeing the face immediately is the whole point, and a
+      // write per keystroke would redraw the panel and fight the caret.
+      input.addEventListener("input", () => {
+        const value = input.value.trim() || "inherit";
+        specimen.style.fontFamily = value;
+        // Also live, so the setting can be judged in the document itself and
+        // not only in the one-line specimen.
+        document.documentElement.style.setProperty(row.variable, value);
+      });
+      // Commit on blur/Enter, as every other field does.
+      input.addEventListener("change", () => {
+        row.set(input.value);
+        render();
+      });
+
+      wrap.append(input, specimen);
+      return wrap;
     }
 
     if (row.kind === "button") {
