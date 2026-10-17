@@ -167,9 +167,12 @@ export const TYPOGRAPHY_ROLES: TypographyRole[] = [
     help: "The source pane. Monospaced by default, but any family will work.",
     variable: "--font-source",
     // Chosen to expose the glyphs that decide whether a coding face is usable:
-    // zero against capital O, one against lower-case l and capital I.
+    // zero against capital O, one against lower-case l and capital I, and two
+    // ligatures — `=>` and `->` — that Fira Code and JetBrains Mono draw.
     sample: "const sum = (a1, b0) => a1 + b0; // Il1 O0",
-    fallback: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+    // Fira Code, which is the editor's own face. It is not used in the preview:
+    // its ligatures are drawn for code, and prose set in them reads as code.
+    fallback: '"Fira Code", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
     features: "code",
   },
   {
@@ -313,10 +316,10 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
   {
     id: "superfamily",
     label: "Source superfamily",
-    note: "Source Serif 4 and Source Sans 3, drawn to the same skeleton. The safest pairing here, because the two were designed together.",
+    note: "Source Serif 4 and Source Sans 3, drawn to the same skeleton, with Fira Code in the editor. The two Source faces were designed together, so the pairing cannot clash.",
     values: {
       ...ROLE_DEFAULTS,
-      sourceFont: '"Source Sans 3", ui-monospace, monospace',
+      sourceFont: '"Fira Code", "JetBrains Mono", ui-monospace, monospace',
       bodyFont: '"Source Serif 4", Georgia, serif',
       headingFont: '"Source Sans 3", system-ui, sans-serif',
       bodyFontSize: 17,

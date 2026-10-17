@@ -26,6 +26,8 @@ import {
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
+import type { DocumentLanguage } from "./api";
+import { typstLanguage } from "./typst-language";
 import {
   bracketMatching,
   foldGutter,
@@ -64,6 +66,7 @@ export interface EditorHandle {
   /** Install a syntax palette: token colours plus the writing surface. */
   setSyntax(palette: SyntaxPalette): void;
   setFontSize(px: number): void;
+  setLanguage(kind: DocumentLanguage): void;
   /**
    * Re-measure after something outside CodeMirror changed the metrics — a new
    * typeface, most of all. Line wrapping is computed from measured text.
@@ -165,6 +168,16 @@ export function createEditor(host: HTMLElement): EditorHandle {
   const focusCompartment = new Compartment();
   const historyCompartment = new Compartment();
   const syntaxCompartment = new Compartment();
+/// Which language the buffer is parsed as. A markdown editor that also edits
+/// Typst needs this to be switchable at runtime; a static extension could not be.
+const languageCompartment = new Compartment();
+/// The markdown parser and its keymap. Kept as a value because switching back
+/// from Typst has to reinstall exactly what start-up installed.
+const markdownSupport = markdown({
+  base: markdownLanguage,
+  codeLanguages: languages,
+  addKeymap: true,
+});
 
   const buildHistory = () => history({ minDepth: 400 });
 
@@ -192,7 +205,7 @@ export function createEditor(host: HTMLElement): EditorHandle {
     highlightSelectionMatches(),
     search({ top: true }),
     EditorView.lineWrapping,
-    markdown({ base: markdownLanguage, codeLanguages: languages, addKeymap: true }),
+    languageCompartment.of(markdownSupport),
     keymap.of([
       ...defaultKeymap,
       ...searchKeymap,
@@ -318,6 +331,23 @@ export function createEditor(host: HTMLElement): EditorHandle {
           EditorView.theme({ "&": { fontSize: `${px}px` } }),
         ),
       });
+    },
+
+    setLanguage(kind) {
+      if (kind === "markdown") {
+        view.dispatch({ effects: languageCompartment.reconfigure(markdownSupport) });
+        return;
+      }
+      // The grammar arrives asynchronously; until it does the buffer keeps the
+      // parser it had, which is a moment of wrong colouring rather than a blank
+      // editor.
+      void typstLanguage()
+        .then((language) => {
+          view.dispatch({ effects: languageCompartment.reconfigure(language) });
+        })
+        .catch((error) => {
+          console.warn(`[editor] the Typst grammar could not be loaded: ${error}`);
+        });
     },
 
     setFocusMode(on) {

@@ -36,6 +36,14 @@ function readJson(relative) {
 const packageVersion = readJson("package.json").version;
 const tauriVersion = readJson("src-tauri/tauri.conf.json").version;
 
+// The crate's own version, which `env!("CARGO_PKG_VERSION")` bakes into the
+// binary. It is not what names an installer — tauri.conf.json does that — so it
+// drifts without anything visibly breaking, and it shipped a 0.2.0 build whose
+// User-Agent still said 0.1.0.
+const cargoVersion = /^\s*version\s*=\s*"([^"]+)"/m.exec(
+  readFileSync("src-tauri/Cargo.toml", "utf8"),
+)?.[1];
+
 // An explicit argument wins; otherwise fall back to what GitHub Actions
 // provides, so the same command works locally and in the workflow.
 const tag = process.argv[2] ?? process.env.GITHUB_REF_NAME ?? "";
@@ -44,6 +52,13 @@ const problems = [];
 
 if (!packageVersion) problems.push("package.json has no version");
 if (!tauriVersion) problems.push("src-tauri/tauri.conf.json has no version");
+
+if (packageVersion && cargoVersion && packageVersion !== cargoVersion) {
+  problems.push(
+    `package.json says ${packageVersion} but src-tauri/Cargo.toml says ` +
+      `${cargoVersion}. The crate version is compiled into the binary.`,
+  );
+}
 
 if (packageVersion && tauriVersion && packageVersion !== tauriVersion) {
   problems.push(

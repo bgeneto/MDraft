@@ -8,6 +8,52 @@ import type { Heading } from "./markdown";
 export { extractHeadings };
 export type { Heading };
 
+/**
+ * The headings in a Typst document.
+ *
+ * Typst marks a heading with `=`, one per level, exactly where Markdown uses `#` —
+ * the two languages made the opposite choice. Without this, the outline of a Typst
+ * document would insist the document had no headings at all.
+ *
+ * Only the marker form is scanned. `#heading[...]` is the same thing spelled out,
+ * but it can span lines and carry nested brackets; reading it properly needs the
+ * parser the editor already has, and the marker form is what people write.
+ */
+export function extractTypstHeadings(source: string): Heading[] {
+  const headings: Heading[] = [];
+  const lines = source.split("\n");
+  let insideBlock = false;
+  let marker = "";
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+
+    // Raw blocks are fenced with ``` here too, and a `= ` inside one is a chord
+    // symbol in someone's document, not a heading.
+    const fence = /^\s{0,3}(`{3,})/.exec(line);
+    if (!insideBlock && fence) {
+      insideBlock = true;
+      marker = fence[1];
+      continue;
+    }
+    if (insideBlock) {
+      if (line.trimStart().startsWith(marker)) insideBlock = false;
+      continue;
+    }
+
+    const match = /^\s{0,3}(={1,6})\s+(\S.*?)\s*$/.exec(line);
+    if (!match) continue;
+    // Inline markup is stripped so the outline reads as text.
+    const text = match[2]
+      .replace(/\\(.)/g, "$1")
+      .replace(/[*_`]/g, "")
+      .trim();
+    if (text) headings.push({ level: match[1].length, text, line: i + 1 });
+  }
+
+  return headings;
+}
+
 function element<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className?: string,
@@ -32,9 +78,14 @@ export function renderOutline(
   headings: Heading[],
   activeLine: number,
   onPick: (line: number) => void,
+  typst = false,
 ): void {
   if (headings.length === 0) {
-    emptyState(container, "No headings yet. Start a line with # to build an outline.");
+    // The marker differs between the two languages, so the advice has to.
+    emptyState(
+      container,
+      typst ? "No headings yet. Start a line with = to build an outline." : "No headings yet. Start a line with # to build an outline.",
+    );
     return;
   }
 

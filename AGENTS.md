@@ -148,6 +148,8 @@ rewrite from scratch.
 | `npm run syntax` | `scripts/syntax-theme-test.mjs` | 7 checks that highlighting is real |
 | `npm run export` | `scripts/export-test.mjs` | 30 checks of every export path, against real pandoc |
 | `npm run typography` | `scripts/typography-test.mjs` | 12 checks that each face loads and each OpenType switch changes pixels |
+| `npm run shortcuts` | `scripts/shortcut-test.mjs` | 26 checks that every menu accelerator is registered and that pressing one changes state |
+| `npm run licence` | `scripts/licence-test.mjs` | 4 checks that the bundled typefaces' licences ship inside the application. Run against its own instance: it opens a document |
 | `npm run images` | `scripts/image-paste-test.mjs` | Image paste through the real UI |
 | `npm run screenshot` | `scripts/screenshot.mjs` | PNG of the running window |
 
@@ -165,6 +167,8 @@ All of these need the app already running with CDP enabled (see
 | `syntax-theme-test.mjs` | `[port]` | `samples/feature-tour.md` | Distinct computed token colours, and that switching palette changes them |
 | `export-test.mjs` | `[port] [--install]` | `samples/feature-tour.md` | That pandoc really converts: the bytes of each output are inspected. `--install` additionally exercises the pandoc download, which is why it is opt-in |
 | `typography-test.mjs` | `[port]` | any | Screenshots text with each OpenType feature off and on and compares pixels. Width cannot measure a monospaced face, so nothing narrower would work |
+| `shortcut-test.mjs` | `[port] [document]` | `samples/feature-tour.md` | Presses each accelerator through a synthetic keydown and checks what changed. Also reads the `accelerators` registry, which is the only way to see an accelerator the platform rejected |
+| `licence-test.mjs` | `[port]` | any | Opens *Font licences* and looks for the four OFL texts in the rendered document. Searching the executable cannot answer this: the frontend bundle is compressed inside it |
 | `fetch-fonts.ps1` | `[--work-directory]` | — | Downloads the four bundled families, verifies each archive against a pinned SHA-256 and rewrites `src/assets/fonts/fonts.json`. Only needed to upgrade them; the fonts are committed |
 | `image-paste-test.mjs` | `[port] [imageUrl] [localPath]` | `samples/feature-tour.md` | Clipboard, local and remote image paths, and the markdown that results |
 | `set-palette.mjs` | `[port] [paletteId] [--split]` | `samples/feature-tour.md` | Not a test: drives the palette through the Preferences UI so you can screenshot a theme |
@@ -681,7 +685,42 @@ by running the portable build in an empty folder — settings and window state b
 landed beside the executable and the `%APPDATA%` copies kept their old
 timestamps.
 
-**A font named in a stack is not a font that will render**
+**Tauri 2 never translates menu accelerators on Windows, so the menu lies**
+*Symptom:* the File, Paragraph, Format and View shortcuts do nothing while the
+Edit ones work, and the menu prints "Ctrl+N" beside *New* regardless.
+*Cause:* muda documents that the application's own message loop must call
+`TranslateAcceleratorW` with the menu's `haccel()`. Neither `wry` 0.57, `tao`
+0.37 nor `tauri-runtime-wry` 2.12 calls it — verified by grepping their sources
+for it, which returns nothing but a doc comment in `tao`.
+*The trap inside the trap:* the Edit entries that appear to work are Ctrl+Z/X/C/V/A,
+which are **Chromium's own commands**, handled inside the webview. That makes a
+total failure look like a bug in some menu entries. Ctrl+F and Ctrl+H were dead
+too, and so was clicking the menu itself in that respect.
+*Fix:* the accelerators are collected while the menu is built (a static registry
+filled by the same `item()` helper that registers them) and handed to the
+frontend by the `accelerators` command, which binds them in a capture-phase
+keydown handler. Deriving the list from the menu rather than writing it out twice
+is what keeps the two from drifting. A 250 ms per-id guard stops a command from
+running twice on platforms whose native accelerators do work, such as GTK.
+*Do not test this with CDP input:* `Input.dispatchKeyEvent` injects a synthetic
+DOM event **inside** the webview and never reaches a native accelerator, so such
+a test reports every shortcut broken. The frontend handler is testable that way
+because it *is* DOM; `scripts/shortcut-test.mjs` does exactly that.
+*Assert on the effect, not on `defaultPrevented`:* that flag says only that
+something handled the key, and CodeMirror legitimately claims Ctrl+Z. Three
+assertions failed this way before the axis was changed.
+
+**A test suite that replaces the document breaks the next suite, not itself**
+The licence check opens a built-in document, which is correct behaviour — the
+application asks before discarding — but it left the window holding the licence
+text. `syntax` then failed three assertions about token colours that had nothing
+to do with licences, and it passed in isolation. Attempts to restore the fixture
+from inside the check (clicking a Recent entry, polling for the title) were
+fragile enough to fail twice more. The licence checks live in their own suite
+now. **Run each suite against its own freshly launched instance**; do not batch
+them against one window unless they have been shown to compose.
+
+**A face in a stack is not a face that will render**
 Two separate traps. In an exported document, a family named by name gets a silent
 system fallback, because a browser reading a temporary file cannot reach the
 application's assets — so exports must embed the faces as data URLs. And in an
@@ -689,6 +728,27 @@ embedding pass, only the *first* bundled family in a stack can ever be used: the
 default heading stack is `"Source Sans 3", Inter, …`, and embedding Inter as well
 added nearly a megabyte per export for a face that could not render. Both are
 guarded in `scripts/export-test.mjs`.
+
+**Force-killing the app can corrupt its WebView2 profile, and the next launch dies silently**
+After enough `Stop-Process -Force` cycles the app starts dying on launch with no
+output at all — release builds have no console, so nothing is printed and the
+window never appears. The Application event log shows `Event Name: BEX64`, a
+DEP/buffer-overflow exception, which reads like a native regression and is not
+one. The fix is to delete the WebView2 user-data folder
+(`%LOCALAPPDATA%\<identifier>\EBWebView`, ~80 MB) and relaunch. Diagnose it by
+launching the *previous* binary: if that also fails, the profile is at fault and
+nothing in the change is. Prefer `CloseMainWindow()` over `Stop-Process -Force`
+when a script needs the app gone.
+
+**A file in the repository is not a file in the application**
+Vite bundles only what is imported. The four OFL licence texts were committed
+next to the fonts, documented in the README, and referenced from nothing — so
+every installer shipped the fonts without the licence they are distributed
+under, which is exactly what the SIL Open Font License forbids. They are now
+imported with `?raw` into `content.ts` and shown under *Help › Font Licences*.
+Searching the built executable for the text proves nothing either way: the
+frontend bundle is compressed inside it, so the licence reads as absent even
+when present. Verify in the running application.
 
 **Pane sync: only scrolling may scroll**
 The rule that survived review is that a click never moves the other pane, and

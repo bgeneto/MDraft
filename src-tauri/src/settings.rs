@@ -100,6 +100,11 @@ const PANDOC_INPUT: &str = "-f markdown+tex_math_single_backslash+tex_math_doubl
 /// because the stacks live in `src/fonts.ts` beside the reasoning for each one.
 /// Empty means "whatever the built-in default for that role is", which is also
 /// what makes a settings file written before a role existed still load.
+/// The preview opens on the flowing document, not the printed page.
+fn default_typst_view() -> String {
+    "document".to_string()
+}
+
 fn default_true() -> bool {
     true
 }
@@ -112,7 +117,7 @@ pub fn default_export_formats() -> Vec<ExportFormat> {    let args = |rest: &str
     vec![
         ExportFormat::new(
             "pdf",
-            "PDF (via LaTeX)",
+            "PDF (via Typst)",
             "pdf",
             &args("-s -o ${outputPath} ${pdfEngine}"),
         ),
@@ -197,6 +202,15 @@ pub struct Settings {
     pub tabular_figures: bool,
     #[serde(default)]
     pub oldstyle_figures: bool,
+
+    /// How a `.typ` document is drawn in the preview.
+    ///
+    /// `document` shows the compiler's HTML export — flowing, styled, selectable —
+    /// and `pages` shows the rendered pages. Neither is enough alone: the document
+    /// view cannot express layout, and the page view cannot reflow or be read as
+    /// text. Defaults to `document` because reading is what a preview is for.
+    #[serde(default = "default_typst_view")]
+    pub typst_view: String,
     #[serde(default)]
     pub slashed_zero: bool,
     /// Editor syntax palette id, or "auto" to follow the application theme.
@@ -253,6 +267,7 @@ impl Default for Settings {
             ligatures_in_code: false,
             tabular_figures: true,
             oldstyle_figures: false,
+            typst_view: default_typst_view(),
             slashed_zero: false,
             syntax_theme: "auto".into(),
             recent_files: Vec::new(),
@@ -499,3 +514,4 @@ mod tests {
         assert!(!same_path("/Docs/a.md", "/docs/a.md"));
     }
 }
+
