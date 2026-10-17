@@ -22,6 +22,13 @@ import {
   TYPOGRAPHY_ROLES,
 } from "./fonts";
 import { applyHighlightTheme, highlightThemeCss } from "./highlight-theme";
+import {
+  buildHtmlPrintDocument,
+  createHtmlPreview,
+  type HtmlAccelerator,
+  type HtmlLayout,
+  type HtmlPreviewHandle,
+} from "./html-preview";
 import { handleImageDrop, handleImagePaste, type ImageContext } from "./images";
 import {
   KATEX_STYLESHEET_URL,
@@ -67,6 +74,7 @@ const splitter = el<HTMLDivElement>("splitter");
 // ---------------------------------------------------------------------------
 
 let editor: EditorHandle;
+let htmlPreview: HtmlPreviewHandle;
 let preferences: PreferencesHandle;
 let settings: api.Settings;
 let currentDoc: api.DocumentPayload | null = null;
@@ -79,6 +87,8 @@ let isDark = false;
 let isFullscreen = false;
 let allowClose = false;
 let lastTitle = "";
+/** Menu accelerators the guest is allowed to ask the parent to run. */
+let knownAcceleratorIds = new Set<string>();
 
 /** Debounce for the token estimate; long enough that typing does not queue scans. */
 const TOKEN_COUNT_DELAY_MS = 300;
@@ -331,7 +341,9 @@ function rememberSpelling(word: string): void {
 
 function applySpellcheck(): void {
   editor?.setSpellcheck({
-    enabled: settings.spellcheck !== false,
+    // HTML source is markup; the dictionary's node names are Markdown-shaped and
+    // would underline tags and attribute names.
+    enabled: settings.spellcheck !== false && currentLanguage !== "html",
     language: settings.spellcheckLanguage || "auto",
     words: settings.spellcheckWords ?? [],
   });
@@ -343,6 +355,9 @@ function applyLayout(): void {
   app.classList.remove("mode-source", "mode-split", "mode-preview");
   app.classList.add(`mode-${settings.viewMode}`);
   app.classList.toggle("focus-mode", settings.focusMode);
+  // The HTML guest is a sibling of `#preview`; the class makes the pane
+  // full-bleed and hides the Markdown article without touching its rules.
+  app.classList.toggle("document-html", currentLanguage === "html");
 
   // 0 means "full width" in the settings model.
   const width = settings.editorMaxWidth;
@@ -442,6 +457,7 @@ function applySettingsPatch(patch: Partial<api.Settings>): void {
   const affectsRendering =
     patch.enableMath !== undefined ||
     patch.enableMermaid !== undefined ||
+    patch.htmlPreviewScripts !== undefined ||
     patch.editorMaxWidth !== undefined ||
     patch.syntaxTheme !== undefined;
 
@@ -589,10 +605,13 @@ function refreshStatus(): void {
 let renderTimer = 0;
 let renderToken = 0;
 let lastMappedState: boolean | null = null;
+/** Source line the guest should restore after the next re-render. */
+let htmlRestoreLine: number | null = null;
 
 function scheduleRender(immediate = false): void {
   window.clearTimeout(renderTimer);
-  renderTimer = window.setTimeout(() => void doRender(), immediate ? 0 : 200);
+  const delay = currentLanguage === "html" ? 300 : 200;
+  renderTimer = window.setTimeout(() => void doRender(), immediate ? 0 : delay);
 }
 
 // Object URLs handed to the preview, kept so they can be revoked. A long session
@@ -723,9 +742,30 @@ function typstViewBar(active: string): HTMLElement {
   return bar;
 }
 
+/** Delegate an HTML document to the sandboxed guest. */
+async function renderHtmlPreview(source: string, token: number): Promise<void> {
+  if (!htmlPreview) return;
+  // In Source-only mode there is nothing to draw, and rebuilding the guest
+  // would only restart its scripts.
+  if (settings.viewMode === "source") return;
+  htmlRestoreLine = htmlPreview.layout()?.line ?? editor.topVisibleLine();
+  await htmlPreview.render(
+    source,
+    currentDoc?.directory ?? null,
+    currentDoc?.name ?? "index.html",
+    settings.htmlPreviewScripts !== false,
+  );
+  if (token !== renderToken) return;
+}
+
 async function doRender(): Promise<void> {
   const token = ++renderToken;
   const source = editor.getDoc();
+
+  if (currentLanguage === "html") {
+    await renderHtmlPreview(source, token);
+    return;
+  }
 
   if (currentLanguage === "typst") {
     await renderTypstPreview(source, token);
@@ -816,7 +856,9 @@ function refreshOutline(text = editor.getDoc()): void {
   outlineHeadings =
     language === "typst"
       ? sidebarPanel.extractTypstHeadings(text)
-      : sidebarPanel.extractHeadings(text);
+      : language === "html"
+        ? sidebarPanel.extractHtmlHeadings(text)
+        : sidebarPanel.extractHeadings(text);
   outlineLanguage = language;
   outlineReady = true;
 
@@ -827,7 +869,7 @@ function refreshOutline(text = editor.getDoc()): void {
     (line) => {
       editor.scrollToLine(line);
     },
-    language === "typst",
+    language,
   );
 }
 
@@ -865,7 +907,10 @@ function updateActiveOutline(): void {
  * parser under a user who had just typed the first `=`.
  */
 function languageFor(path: string | null): api.DocumentLanguage {
-  return path !== null && /\.typ$/i.test(path) ? "typst" : "markdown";
+  if (path === null) return "markdown";
+  if (/\.typ$/i.test(path)) return "typst";
+  if (/\.html?$/i.test(path)) return "html";
+  return "markdown";
 }
 
 /**
@@ -876,7 +921,9 @@ function languageFor(path: string | null): api.DocumentLanguage {
  * the first save change how the text that was already typed is read.
  */
 function defaultDocumentLanguage(): api.DocumentLanguage {
-  return settings.defaultExtension === "typ" ? "typst" : "markdown";
+  if (settings.defaultExtension === "typ") return "typst";
+  if (settings.defaultExtension === "html" || settings.defaultExtension === "htm") return "html";
+  return "markdown";
 }
 
 /**
@@ -891,14 +938,27 @@ function documentFilters(): { name: string; extensions: string[] }[] {
     extensions: ["md", "markdown", "mdown", "mkd", "txt"],
   };
   const typst = { name: "Typst", extensions: ["typ"] };
+  const html = { name: "HTML", extensions: ["html", "htm"] };
   const all = { name: "All files", extensions: ["*"] };
-  return defaultDocumentLanguage() === "typst"
-    ? [typst, markdown, all]
-    : [markdown, typst, all];
+  switch (defaultDocumentLanguage()) {
+    case "typst":
+      return [typst, markdown, html, all];
+    case "html":
+      return [html, markdown, typst, all];
+    default:
+      return [markdown, typst, html, all];
+  }
 }
 
 /** The markup of the document currently in the editor. */
 let currentLanguage: api.DocumentLanguage = "markdown";
+
+/** Drop the guest when the editor leaves HTML; start a fresh nonce when it enters. */
+function prepareHtmlPreview(next: api.DocumentLanguage): void {
+  if (!htmlPreview) return;
+  if (next === "html") htmlPreview.reset();
+  else htmlPreview.dispose();
+}
 
 async function adoptDocument(payload: api.DocumentPayload, resetHistory: boolean): Promise<void> {
   currentDoc = payload;
@@ -910,7 +970,9 @@ async function adoptDocument(payload: api.DocumentPayload, resetHistory: boolean
   resetTokenCount();
   resetOutline();
   editor.setDoc(payload.content, resetHistory);
-  currentLanguage = languageFor(payload.path);
+  const nextLanguage = languageFor(payload.path);
+  prepareHtmlPreview(nextLanguage);
+  currentLanguage = nextLanguage;
   editor.setLanguage(currentLanguage);
   sidebarPanel.resetDirectory(payload.directory || null);
   // The backend counted while reading the file, so opening does not send the
@@ -940,6 +1002,7 @@ async function loadUntitled(
   editor.setDoc(content, true);
   // The caller decides: a built-in document is Markdown, a new document follows
   // the default extension so its first Save As does not change its meaning.
+  prepareHtmlPreview(language);
   currentLanguage = language;
   editor.setLanguage(language);
   sidebarPanel.resetDirectory(null);
@@ -1156,6 +1219,26 @@ async function exportHtml(): Promise<void> {
   const target = Array.isArray(chosen) ? chosen[0] : chosen;
 
   try {
+    if (currentLanguage === "html") {
+      // An HTML document is already HTML. Exporting a copy is useful; passing
+      // it through the Markdown renderer would produce a different document.
+      await api.writeDocument(
+        target,
+        editor.getDoc(),
+        currentDoc?.lineEnding ?? "\n",
+        currentDoc?.hadBom ?? false,
+      );
+      toast("Exported HTML");
+      const after = await api.runAfterExport(target);
+      if (after.afterErrors.length > 0) {
+        await message(after.afterErrors.join("\n\n"), {
+          title: "Exported, with a problem",
+          kind: "warning",
+        });
+      }
+      return;
+    }
+
     const article = await buildExportArticle();
     const highlightStyle = document.getElementById("hljs-theme")?.textContent ?? "";
     const fontCss = await exportFontCss();
@@ -1211,6 +1294,19 @@ async function exportHtml(): Promise<void> {
 async function exportPdf(): Promise<void> {
   const notice = toast("Preparing the PDF…", 0);
   try {
+    if (currentLanguage === "html") {
+      // The system browser cannot reach the preview scheme, but it can read a
+      // local file base. The document's own CSS and scripts stay in charge.
+      const html = await buildHtmlPrintDocument(
+        editor.getDoc(),
+        currentDoc?.directory ?? null,
+      );
+      const written = await api.printDocument(html, documentStem());
+      notice.dismiss();
+      toast("Choose “Save as PDF” in the print dialog");
+      console.info(`[export] print document written to ${written}`);
+      return;
+    }
     const article = await buildExportArticle();
     // The print document is always light, whatever the editor is showing: dark
     // token colours would print as pale text on white paper. Its typefaces,
@@ -1510,6 +1606,11 @@ async function typstSetup(): Promise<void> {
 // Menu
 // ---------------------------------------------------------------------------
 
+/** One explanation for the commands that only make sense in Markdown/Typst. */
+function htmlCommandNote(): void {
+  toast("That command is Markdown-only. In HTML, type the tag in the source.", 4200);
+}
+
 const handlers: Record<string, () => void | Promise<void>> = {
   "file.new": async () => {
     if (!(await confirmDiscard())) return;
@@ -1556,47 +1657,121 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "edit.find": () => editor.openSearch(false),
   "edit.replace": () => editor.openSearch(true),
 
-  "para.h1": () => editor.setHeading(1),
-  "para.h2": () => editor.setHeading(2),
-  "para.h3": () => editor.setHeading(3),
-  "para.h4": () => editor.setHeading(4),
-  "para.h5": () => editor.setHeading(5),
-  "para.h6": () => editor.setHeading(6),
-  "para.paragraph": () => editor.setHeading(0),
-  "para.increaseHeading": () => editor.shiftHeading(-1),
-  "para.decreaseHeading": () => editor.shiftHeading(1),
-  "para.quote": () => editor.toggleLinePrefix("> "),
-  "para.codeBlock": () => editor.insertBlockWithCaret("```\n\n```", 4),
-  "para.mathBlock": () => editor.insertBlockWithCaret("$$\n\n$$\n", 3),
-  "para.ul": () => editor.toggleLinePrefix("- "),
-  "para.ol": () => editor.toggleLinePrefix("1. "),
-  "para.task": () => editor.toggleLinePrefix("- [ ] "),
-  "para.taskDone": () => editor.setTaskState("done"),
-  "para.taskTodo": () => editor.setTaskState("todo"),
-  "para.taskPlain": () => editor.setTaskState("plain"),
+  "para.h1": () =>
+    currentLanguage === "html"
+      ? editor.wrapSelection("<h1>", "</h1>", "Heading")
+      : editor.setHeading(1),
+  "para.h2": () =>
+    currentLanguage === "html"
+      ? editor.wrapSelection("<h2>", "</h2>", "Heading")
+      : editor.setHeading(2),
+  "para.h3": () =>
+    currentLanguage === "html"
+      ? editor.wrapSelection("<h3>", "</h3>", "Heading")
+      : editor.setHeading(3),
+  "para.h4": () =>
+    currentLanguage === "html"
+      ? editor.wrapSelection("<h4>", "</h4>", "Heading")
+      : editor.setHeading(4),
+  "para.h5": () =>
+    currentLanguage === "html"
+      ? editor.wrapSelection("<h5>", "</h5>", "Heading")
+      : editor.setHeading(5),
+  "para.h6": () =>
+    currentLanguage === "html"
+      ? editor.wrapSelection("<h6>", "</h6>", "Heading")
+      : editor.setHeading(6),
+  "para.paragraph": () =>
+    currentLanguage === "html"
+      ? editor.wrapSelection("<p>", "</p>", "Paragraph")
+      : editor.setHeading(0),
+  "para.increaseHeading": () =>
+    currentLanguage === "html" ? htmlCommandNote() : editor.shiftHeading(-1),
+  "para.decreaseHeading": () =>
+    currentLanguage === "html" ? htmlCommandNote() : editor.shiftHeading(1),
+  "para.quote": () =>
+    currentLanguage === "html"
+      ? editor.insertBlock("<blockquote>\n\n</blockquote>")
+      : editor.toggleLinePrefix("> "),
+  "para.codeBlock": () =>
+    currentLanguage === "html"
+      ? editor.insertBlockWithCaret("<pre><code></code></pre>", 11)
+      : editor.insertBlockWithCaret("```\n\n```", 4),
+  "para.mathBlock": () =>
+    currentLanguage === "html" ? htmlCommandNote() : editor.insertBlockWithCaret("$$\n\n$$\n", 3),
+  "para.ul": () =>
+    currentLanguage === "html"
+      ? editor.insertBlock("<ul>\n  <li></li>\n</ul>")
+      : editor.toggleLinePrefix("- "),
+  "para.ol": () =>
+    currentLanguage === "html"
+      ? editor.insertBlock("<ol>\n  <li></li>\n</ol>")
+      : editor.toggleLinePrefix("1. "),
+  "para.task": () =>
+    currentLanguage === "html" ? htmlCommandNote() : editor.toggleLinePrefix("- [ ] "),
+  "para.taskDone": () =>
+    currentLanguage === "html" ? htmlCommandNote() : editor.setTaskState("done"),
+  "para.taskTodo": () =>
+    currentLanguage === "html" ? htmlCommandNote() : editor.setTaskState("todo"),
+  "para.taskPlain": () =>
+    currentLanguage === "html" ? htmlCommandNote() : editor.setTaskState("plain"),
   "para.indent": () => editor.indentLines(1),
   "para.outdent": () => editor.indentLines(-1),
   "para.insertBefore": () => editor.insertParagraphBefore(),
   "para.insertAfter": () => editor.insertParagraphAfter(),
   "para.table": () =>
-    editor.insertBlock("| Column | Column |\n| --- | --- |\n| Cell | Cell |"),
-  "para.hr": () => editor.insertBlock("---"),
-  "para.toc": () => editor.insertToc(),
-  "para.yaml": () => editor.insertYamlFrontMatter(),
-  "para.alertNote": () => editor.insertBlock("> [!NOTE]\n> "),
-  "para.alertTip": () => editor.insertBlock("> [!TIP]\n> "),
-  "para.alertImportant": () => editor.insertBlock("> [!IMPORTANT]\n> "),
-  "para.alertWarning": () => editor.insertBlock("> [!WARNING]\n> "),
-  "para.alertCaution": () => editor.insertBlock("> [!CAUTION]\n> "),
+    currentLanguage === "html"
+      ? editor.insertBlock(
+          "<table>\n  <thead>\n    <tr><th>Column</th><th>Column</th></tr>\n  </thead>\n  <tbody>\n    <tr><td>Cell</td><td>Cell</td></tr>\n  </tbody>\n</table>",
+        )
+      : editor.insertBlock("| Column | Column |\n| --- | --- |\n| Cell | Cell |"),
+  "para.hr": () => (currentLanguage === "html" ? editor.insertBlock("<hr>") : editor.insertBlock("---")),
+  "para.toc": () => (currentLanguage === "html" ? htmlCommandNote() : editor.insertToc()),
+  "para.yaml": () => (currentLanguage === "html" ? htmlCommandNote() : editor.insertYamlFrontMatter()),
+  "para.alertNote": () =>
+    currentLanguage === "html" ? htmlCommandNote() : editor.insertBlock("> [!NOTE]\n> "),
+  "para.alertTip": () =>
+    currentLanguage === "html" ? htmlCommandNote() : editor.insertBlock("> [!TIP]\n> "),
+  "para.alertImportant": () =>
+    currentLanguage === "html" ? htmlCommandNote() : editor.insertBlock("> [!IMPORTANT]\n> "),
+  "para.alertWarning": () =>
+    currentLanguage === "html" ? htmlCommandNote() : editor.insertBlock("> [!WARNING]\n> "),
+  "para.alertCaution": () =>
+    currentLanguage === "html" ? htmlCommandNote() : editor.insertBlock("> [!CAUTION]\n> "),
 
-  "format.bold": () => editor.wrapSelection("**", "**", "strong text"),
-  "format.italic": () => editor.wrapSelection("*", "*", "emphasis"),
-  "format.strike": () => editor.wrapSelection("~~", "~~", "strikethrough"),
-  "format.code": () => editor.wrapSelection("`", "`", "code"),
-  "format.link": () => editor.wrapSelection("[", "](https://)", "link text"),
-  "format.image": () => editor.wrapSelection("![", "](./image.png)", "alt text"),
-  "format.math": () => editor.wrapSelection("$", "$", "e^{i\\pi}+1=0"),
+  "format.bold": () =>
+    currentLanguage === "html"
+      ? editor.wrapSelection("<strong>", "</strong>", "strong text")
+      : editor.wrapSelection("**", "**", "strong text"),
+  "format.italic": () =>
+    currentLanguage === "html"
+      ? editor.wrapSelection("<em>", "</em>", "emphasis")
+      : editor.wrapSelection("*", "*", "emphasis"),
+  "format.strike": () =>
+    currentLanguage === "html"
+      ? editor.wrapSelection("<s>", "</s>", "strikethrough")
+      : editor.wrapSelection("~~", "~~", "strikethrough"),
+  "format.code": () =>
+    currentLanguage === "html"
+      ? editor.wrapSelection("<code>", "</code>", "code")
+      : editor.wrapSelection("`", "`", "code"),
+  "format.link": () =>
+    currentLanguage === "html"
+      ? editor.wrapSelection('<a href="https://">', "</a>", "link text")
+      : editor.wrapSelection("[", "](https://)", "link text"),
+  "format.image": () =>
+    currentLanguage === "html"
+      ? editor.insertBlock('<img src="./image.png" alt="alt text">')
+      : editor.wrapSelection("![", "](./image.png)", "alt text"),
+  "format.math": () =>
+    currentLanguage === "html"
+      ? htmlCommandNote()
+      : editor.wrapSelection("$", "$", "e^{i\\pi}+1=0"),
   "format.displayMath": () => {
+    if (currentLanguage === "html") {
+      htmlCommandNote();
+      return;
+    }
     // A selected expression becomes a display equation in place. With nothing
     // selected, insert the block a bare caret is asking for; `wrapSelection`
     // would otherwise put the placeholder in a display box mid-sentence.
@@ -1670,7 +1845,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
         "MDraft",
         `Version ${APP_VERSION}`,
         "",
-        "A Markdown and Typst editor in the spirit of Typora.",
+        "A Markdown, Typst and HTML editor in the spirit of Typora.",
         "",
         "Conceived by Bernhard Enders.",
         "Coded by DeepSeek",
@@ -1996,6 +2171,112 @@ function revealCursorInPreview(): void {
   revealPreviewLine(editor.cursorInfo().line);
 }
 
+/** The guest's anchors are layout positions, not DOM elements in this frame. */
+interface HtmlSyncSegment {
+  editor0: number;
+  editor1: number;
+  preview0: number;
+  preview1: number;
+}
+
+function htmlIndexForLine(anchors: HtmlLayout["anchors"], line: number): number {
+  let index = -1;
+  for (let i = 0; i < anchors.length; i += 1) {
+    if (anchors[i].line <= line) index = i;
+    else break;
+  }
+  return index;
+}
+
+function htmlSegmentFor(layout: HtmlLayout, index: number): HtmlSyncSegment | null {
+  if (index < 0 || index >= layout.anchors.length) return null;
+  const anchor = layout.anchors[index];
+  const editor0 = editor.lineTop(anchor.line);
+  const preview0 = Math.max(0, anchor.top - SYNC_MARGIN);
+
+  if (index + 1 < layout.anchors.length) {
+    const next = layout.anchors[index + 1];
+    return {
+      editor0,
+      preview0,
+      editor1: Math.max(editor0, editor.lineTop(next.line)),
+      preview1: Math.max(preview0, next.top - SYNC_MARGIN),
+    };
+  }
+  return {
+    editor0,
+    preview0,
+    editor1: Math.max(editor0, editor.scrollMax()),
+    preview1: Math.max(preview0, layout.height - layout.client),
+  };
+}
+
+function htmlLineAtTop(layout: HtmlLayout): number {
+  if (layout.anchors.length === 0) return 1;
+  const y = layout.top + SYNC_MARGIN;
+  let line = layout.anchors[0].line;
+  for (const anchor of layout.anchors) {
+    if (anchor.top <= y) line = anchor.line;
+    else break;
+  }
+  return line;
+}
+
+function syncEditorToHtml(): void {
+  if (!settings.syncScroll || settings.viewMode !== "split") return;
+  const layout = htmlPreview.layout();
+  if (!layout || layout.anchors.length < 2) return;
+  const index = Math.max(0, htmlIndexForLine(layout.anchors, editor.topVisibleLine()));
+  const segment = htmlSegmentFor(layout, index);
+  if (!segment) return;
+
+  const target = interpolate(
+    editor.view.scrollDOM.scrollTop,
+    segment.editor0,
+    segment.editor1,
+    segment.preview0,
+    segment.preview1,
+  );
+  const max = Math.max(0, layout.height - layout.client);
+  suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+  htmlPreview.scrollTo(Math.min(max, Math.max(0, target)));
+}
+
+function syncHtmlToEditor(layout: HtmlLayout): void {
+  if (!settings.syncScroll || settings.viewMode !== "split") return;
+  if (layout.anchors.length < 2) return;
+  if (performance.now() < suppressPreviewScrollUntil) return;
+
+  const index = Math.max(0, htmlIndexForLine(layout.anchors, htmlLineAtTop(layout)));
+  const segment = htmlSegmentFor(layout, index);
+  if (!segment) return;
+
+  const target = interpolate(
+    layout.top,
+    segment.preview0,
+    segment.preview1,
+    segment.editor0,
+    segment.editor1,
+  );
+  suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+  editor.scrollToOffset(target);
+}
+
+/** Reveal the caret's block only when it is not already in the guest viewport. */
+function revealHtmlCursor(line: number): void {
+  if (settings.viewMode !== "split" || caretByPointer) return;
+  const layout = htmlPreview.layout();
+  if (!layout || layout.anchors.length < 2) return;
+  const index = htmlIndexForLine(layout.anchors, line);
+  if (index < 0) return;
+  const top = layout.anchors[index].top;
+  const viewTop = layout.top;
+  const viewBottom = layout.top + layout.client;
+  if (top >= viewTop && top <= viewBottom - 40) return;
+  suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+  htmlPreview.scrollToLine(line);
+}
+
 function installPaneSync(): void {
   // Caret in the source -> the preview follows the keyboard, never the pointer.
   //
@@ -2018,6 +2299,10 @@ function installPaneSync(): void {
     updateActiveOutline();
     // A caret we just moved from the preview must not move the preview.
     if (caretCameFromPreview) return;
+    if (currentLanguage === "html") {
+      revealHtmlCursor(info.line);
+      return;
+    }
     if (settings.viewMode !== "split" || !previewLinesMapped) return;
     if (caretByPointer) return;
     suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
@@ -2028,6 +2313,10 @@ function installPaneSync(): void {
   // itself, and moves nothing. No strobe risk: the caret moves on every
   // keystroke, but a click is one discrete action.
   editorPane.addEventListener("click", () => {
+    if (currentLanguage === "html") {
+      if (settings.viewMode === "split") htmlPreview.blink(editor.cursorInfo().line);
+      return;
+    }
     if (settings.viewMode !== "split" || !previewLinesMapped) return;
     blinkAnchor(editor.cursorInfo().line);
   });
@@ -2036,6 +2325,10 @@ function installPaneSync(): void {
   // under the top of the pane. This one follows unconditionally, because that
   // is what keeps the two panes together while the reader scrolls.
   editor.onScroll(() => {
+    if (currentLanguage === "html") {
+      if (performance.now() >= suppressEditorScrollUntil) syncEditorToHtml();
+      return;
+    }
     if (!settings.syncScroll || settings.viewMode !== "split" || !previewLinesMapped) return;
     if (performance.now() < suppressEditorScrollUntil) return;
     alignPreviewToScroll();
@@ -2044,6 +2337,7 @@ function installPaneSync(): void {
   // Click in the preview -> the source reveals that line, and the preview stays
   // exactly where it is so text selection keeps working.
   preview.addEventListener("mousedown", (event) => {
+    if (currentLanguage === "html") return;
     const target = (event.target as HTMLElement).closest<HTMLElement>("[data-line]");
     if (!target) return;
     const line = Number(target.dataset.line);
@@ -2060,8 +2354,10 @@ function installPaneSync(): void {
 
   // Scrolling the preview -> the source follows the same fraction of the block
   // under the sync line. The scrolling element is the pane, not the rendered
-  // document inside it.
+  // document inside it. The HTML guest scrolls internally and reports through
+  // the bridge instead.
   previewPane.addEventListener("scroll", () => {
+    if (currentLanguage === "html") return;
     if (!settings.syncScroll || settings.viewMode !== "split") return;
     if (performance.now() < suppressPreviewScrollUntil) return;
     alignEditorToScroll();
@@ -2333,6 +2629,17 @@ function installShortcuts(shortcuts: api.Shortcut[]): void {
     console.warn(`[shortcuts] could not reproduce ${unparsed.accelerator} for ${unparsed.id}`);
   }
 
+  knownAcceleratorIds = new Set(shortcuts.map((entry) => entry.id));
+  const guestTable: HtmlAccelerator[] = parsed.map((entry) => ({
+    id: entry.id,
+    ctrl: entry.ctrl,
+    alt: entry.alt,
+    shift: entry.shift,
+    meta: entry.meta,
+    keys: [entry.key],
+  }));
+  htmlPreview?.setAccelerators(guestTable);
+
   window.addEventListener(
     "keydown",
     (event) => {
@@ -2345,6 +2652,88 @@ function installShortcuts(shortcuts: api.Shortcut[]): void {
     },
     true,
   );
+}
+
+function handleHtmlLine(line: number): void {
+  if (currentLanguage !== "html" || !Number.isFinite(line)) return;
+  suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+  caretCameFromPreview = true;
+  try {
+    editor.revealLine(line, true, false);
+  } finally {
+    caretCameFromPreview = false;
+  }
+  htmlPreview.blink(line);
+}
+
+/** Map a resolved guest URL back to the document folder, or null. */
+function guestLinkToPath(href: string): string | null {
+  const base = htmlPreview.baseUrl();
+  if (!base || !href.startsWith(base)) return null;
+  let path = href.slice(base.length).split("#")[0].split("?")[0];
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    return null;
+  }
+  path = path.replace(/^\/+/, "");
+  if (!path || path.split("/").some((part) => part === ".." || part === ".")) return null;
+  const directory = currentDoc?.directory;
+  if (!directory) return null;
+  const extension = path.split(".").pop()?.toLowerCase() ?? "";
+  if (!["html", "htm", "md", "markdown", "mkd", "typ"].includes(extension)) return null;
+  return joinDir(directory, path);
+}
+
+function handleHtmlLink(href: string): void {
+  if (/^(https?:|mailto:)/i.test(href)) {
+    void openUrl(href).catch((error) => toast(String(error)));
+    return;
+  }
+  if (/^file:\/\//i.test(href)) {
+    try {
+      const url = new URL(href);
+      let path = decodeURIComponent(url.pathname);
+      if (/^\/[A-Za-z]:/.test(path)) path = path.slice(1);
+      if (path.startsWith("//")) path = path.slice(2);
+      void openPath(path);
+    } catch {
+      toast("That local link could not be opened.");
+    }
+    return;
+  }
+  if (/^(javascript|data|blob):/i.test(href)) return;
+
+  const path = guestLinkToPath(href);
+  if (path) {
+    void openPath(path);
+    return;
+  }
+  if (htmlPreview.baseUrl() && href.startsWith(htmlPreview.baseUrl()!)) {
+    toast("Only documents open in the editor from the preview.");
+  }
+}
+
+function handleHtmlAction(id: string): void {
+  if (!knownAcceleratorIds.has(id)) return;
+  runMenuAction(id);
+}
+
+function handleHtmlReady(layout: HtmlLayout): void {
+  if (currentLanguage !== "html") return;
+  const line = htmlRestoreLine ?? editor.cursorInfo().line;
+  htmlRestoreLine = null;
+  if (layout.anchors.length >= 2) {
+    suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+    htmlPreview.scrollToLine(line);
+  }
+  updateActiveOutline();
+}
+
+function handleHtmlScroll(layout: HtmlLayout): void {
+  if (currentLanguage !== "html") return;
+  if (performance.now() < suppressPreviewScrollUntil) return;
+  syncHtmlToEditor(layout);
 }
 
 async function installDragDrop(): Promise<void> {
@@ -2410,12 +2799,22 @@ function installSystemThemeWatcher(): void {
 // Image paste and drop
 // ---------------------------------------------------------------------------
 
+function htmlImageTag(alt: string, src: string): string {
+  const escape = (value: string) =>
+    value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  return `<img src="${escape(src)}" alt="${escape(alt)}">`;
+}
+
 function imageContext(hasSelection = false): ImageContext {
+  const html = currentLanguage === "html";
   return {
-    settings,
+    // A relative image path is the only kind the preview scheme can reach
+    // without turning an absolute filesystem path into a broken URL.
+    settings: html ? { ...settings, imageUseRelativePath: true } : settings,
     documentPath: currentPath,
     hasSelection,
     insert: (markdown) => editor.insertBlock(markdown),
+    imageSyntax: html ? htmlImageTag : undefined,
     notify: (text, isError = false) => toast(text, isError ? 5200 : 3200),
   };
 }
@@ -2527,6 +2926,15 @@ async function boot(): Promise<void> {
   editor.onCursor(() => {
     refreshStatus();
     updateActiveOutline();
+  });
+
+  htmlPreview = createHtmlPreview(previewPane, {
+    onLine: handleHtmlLine,
+    onLink: (href) => handleHtmlLink(href),
+    onAction: handleHtmlAction,
+    onScroll: handleHtmlScroll,
+    onReady: handleHtmlReady,
+    onError: (message) => toast(message, 6200),
   });
 
   preferences = createPreferences({

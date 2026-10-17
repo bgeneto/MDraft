@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.2.1",
   "type": "module",
-  "description": "A Tauri 2 markdown editor in the spirit of Typora",
+  "description": "A Tauri 2 Markdown, Typst and HTML editor in the spirit of Typora",
   "license": "MIT",
   "scripts": {
     "dev": "vite",
@@ -17,6 +17,7 @@
     "audit": "node scripts/audit-document.mjs",
     "math": "node scripts/math-render-check.mjs",
     "syntax": "node scripts/syntax-theme-test.mjs",
+    "html": "node scripts/html-preview-test.mjs",
     "export": "node scripts/export-test.mjs",
     "typography": "node scripts/typography-test.mjs",
     "shortcuts": "node scripts/shortcut-test.mjs",
@@ -30,6 +31,7 @@
   },
   "dependencies": {
     "@codemirror/commands": "^6.9.0",
+    "@codemirror/lang-html": "^6.4.12",
     "@codemirror/lang-markdown": "^6.5.2",
     "@codemirror/language": "^6.11.4",
     "@codemirror/language-data": "^6.5.2",
@@ -46,7 +48,8 @@
     "highlight.js": "^11.12.0",
     "katex": "^0.19.0",
     "marked": "^18.1.1",
-    "mermaid": "^12.2.0"
+    "mermaid": "^12.2.0",
+    "parse5": "^7.3.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.3",

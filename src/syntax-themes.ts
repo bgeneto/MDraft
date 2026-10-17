@@ -35,6 +35,12 @@ export interface SyntaxPalette {
   url: string;
   code: string;
   quote: string;
+  /**
+   * List content, not the bullet: `@lezer/markdown` tags the whole
+   * `BulletList`/`OrderedList` subtree as `list`, so one bullet can be a whole
+   * paragraph wearing this colour. Kept a muted violet rather than the
+   * palette's keyword red, which reads as an error across a long list item.
+   */
   list: string;
   separator: string;
   marker: string;
@@ -70,7 +76,7 @@ const paper: SyntaxPalette = {
   url: "#0a3069",
   code: "#bc4c00",
   quote: "#57606a",
-  list: "#cf222e",
+  list: "#6e5494",
   separator: "#d0d7de",
   marker: "#98a1ab",
   keyword: "#cf222e",
@@ -100,7 +106,7 @@ const ink: SyntaxPalette = {
   url: "#9ecbff",
   code: "#ffab70",
   quote: "#9aa5b1",
-  list: "#ff7b72",
+  list: "#b5a3d1",
   separator: "#444c56",
   marker: "#7d8590",
   keyword: "#ff7b72",
@@ -137,7 +143,7 @@ const githubDark: SyntaxPalette = {
   link: "#6cb6ff",
   code: "#a5d6ff",
   quote: "#9198a1",
-  list: "#ff7b72",
+  list: "#b5a3d1",
   separator: "#30363d",
   marker: "#6e7681",
 };

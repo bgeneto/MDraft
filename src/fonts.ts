@@ -235,12 +235,28 @@ const ROLE_DEFAULTS: Record<string, string> = Object.fromEntries(
   TYPOGRAPHY_ROLES.map((role) => [role.id, role.fallback]),
 );
 
+/**
+ * The application defaults for the two per-preset reader adjustments.
+ *
+ * These mirror `default_body_font_size()` and `default_math_font_scale()` in
+ * `src-tauri/src/settings.rs`. They are deliberately *not* part of a preset:
+ * Preview text size and Math scale are remembered per preset in
+ * `Settings::preset_overrides`, so an unadjusted preset starts here.
+ */
+export const DEFAULT_BODY_FONT_SIZE = 16;
+export const DEFAULT_MATH_SCALE = 100;
+
 export interface TypographyPreset {
   id: string;
   label: string;
   /** What the preset is for, shown under the picker. */
   note: string;
-  values: Record<string, string | number | boolean>;
+  /**
+   * What identifies the preset: the four font stacks and the OpenType
+   * booleans. Preview text size and Math scale are reader adjustments and are
+   * stored separately, so editing one does not change the active preset.
+   */
+  values: Record<string, string | boolean>;
 }
 
 /**
@@ -266,7 +282,6 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
     note: "The default: no bundled faces. Prose, headings and code use whatever the operating system provides, so nothing is embedded in an export.",
     values: {
       ...ROLE_DEFAULTS,
-      bodyFontSize: 16,
       ligaturesInCode: false,
       tabularFigures: true,
       oldstyleFigures: false,
@@ -283,7 +298,6 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
       bodyFont: '"Source Serif 4", Georgia, serif',
       headingFont: '"Source Sans 3", system-ui, sans-serif',
       codeFont: '"Fira Code", "JetBrains Mono", ui-monospace, monospace',
-      bodyFontSize: 17,
       ligaturesInCode: true,
       tabularFigures: true,
       oldstyleFigures: false,
@@ -300,7 +314,6 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
       bodyFont: '"Source Serif 4", Charter, Georgia, "Times New Roman", serif',
       headingFont: '"Source Sans 3", Inter, system-ui, "Segoe UI", Arial, sans-serif',
       codeFont: '"JetBrains Mono", ui-monospace, monospace',
-      bodyFontSize: 16,
       ligaturesInCode: false,
       tabularFigures: true,
       oldstyleFigures: false,
@@ -310,14 +323,13 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
   {
     id: "literary",
     label: "Literary",
-    note: "Source Serif 4 with oldstyle figures and code ligatures on — figures that sit in running text rather than shout, and a slightly larger measure for long reading. JetBrains Mono sets the code.",
+    note: "Source Serif 4 with oldstyle figures and code ligatures on — figures that sit in running text rather than shout. JetBrains Mono sets the code.",
     values: {
       ...ROLE_DEFAULTS,
       sourceFont: '"JetBrains Mono", ui-monospace, monospace',
       bodyFont: '"Source Serif 4", Charter, Georgia, "Times New Roman", serif',
       headingFont: '"Source Sans 3", Inter, system-ui, "Segoe UI", Arial, sans-serif',
       codeFont: '"JetBrains Mono", ui-monospace, monospace',
-      bodyFontSize: 17,
       ligaturesInCode: true,
       tabularFigures: true,
       oldstyleFigures: true,
@@ -334,7 +346,6 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
       bodyFont: 'Inter, system-ui, "Segoe UI", sans-serif',
       headingFont: 'Inter, system-ui, "Segoe UI", sans-serif',
       codeFont: '"JetBrains Mono", ui-monospace, monospace',
-      bodyFontSize: 16,
       ligaturesInCode: false,
       tabularFigures: true,
       oldstyleFigures: false,

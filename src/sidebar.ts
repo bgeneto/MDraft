@@ -54,6 +54,52 @@ export function extractTypstHeadings(source: string): Heading[] {
   return headings;
 }
 
+/**
+ * The headings in an HTML document.
+ *
+ * A source scan, not a DOM parse: the outline follows what the reader typed,
+ * exactly like the Markdown and Typst outlines. Raw-text elements and comments
+ * are blanked first so an `<h2>` inside a `<script>` string is not a heading,
+ * and the blanking preserves newlines so line numbers stay exact.
+ */
+export function extractHtmlHeadings(source: string): Heading[] {
+  const masked = source
+    .replace(
+      /<(script|style|textarea|title|template)\b[^>]*>[\s\S]*?<\/\1\s*>/gi,
+      (block) => block.replace(/[^\n]/g, " "),
+    )
+    .replace(/<!--[\s\S]*?-->/g, (comment) => comment.replace(/[^\n]/g, " "));
+
+  const headings: Heading[] = [];
+  const pattern = /<(h[1-6])\b[^>]*>([\s\S]*?)<\/\1\s*>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(masked)) !== null) {
+    const text = decodeBasicEntities(match[2].replace(/<[^>]*>/g, " "))
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) continue;
+    const line = masked.slice(0, match.index).split("\n").length;
+    headings.push({ level: Number(match[1][1]), text, line });
+  }
+  return headings;
+}
+
+function decodeBasicEntities(text: string): string {
+  return text
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) =>
+      String.fromCodePoint(parseInt(hex, 16)),
+    )
+    .replace(/&#(\d+);/g, (_, decimal: string) =>
+      String.fromCodePoint(Number(decimal)),
+    );
+}
+
 function element<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className?: string,
@@ -86,14 +132,16 @@ export function renderOutline(
   headings: Heading[],
   activeLine: number,
   onPick: (line: number) => void,
-  typst = false,
+  language: api.DocumentLanguage = "markdown",
 ): void {
   if (headings.length === 0) {
-    // The marker differs between the two languages, so the advice has to.
-    emptyState(
-      container,
-      typst ? "No headings yet. Start a line with = to build an outline." : "No headings yet. Start a line with # to build an outline.",
-    );
+    const message =
+      language === "typst"
+        ? "No headings yet. Start a line with = to build an outline."
+        : language === "html"
+          ? "No headings yet. Add an <h1>–<h6> element to build an outline."
+          : "No headings yet. Start a line with # to build an outline.";
+    emptyState(container, message);
     return;
   }
 
@@ -199,7 +247,7 @@ async function paintDirectory(
   fragment.appendChild(header);
 
   const markdownish = (entry: api.DirEntry) =>
-    ["md", "markdown", "mdown", "mkd", "txt", "text", "json", "yml", "yaml", "toml", ""].includes(
+    ["md", "markdown", "mdown", "mkd", "txt", "text", "html", "htm", "json", "yml", "yaml", "toml", ""].includes(
       entry.ext,
     );
 

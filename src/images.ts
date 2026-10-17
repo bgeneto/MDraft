@@ -80,12 +80,23 @@ export interface ImageContext {
   hasSelection: boolean;
   /** Put markdown at the caret. */
   insert(markdown: string): void;
+  /**
+   * Turn an imported image into the document's syntax.
+   *
+   * The default is Markdown's `![alt](path)`; the HTML preview passes a tag
+   * builder so an image never turns into Markdown inside an HTML document.
+   */
+  imageSyntax?: (alt: string, src: string) => string;
   notify(message: string, isError?: boolean): void;
 }
 
 function altTextFrom(markdownPath: string): string {
   const name = markdownPath.split(/[\\/]/).pop() ?? "image";
   return name.replace(/\.[^.]+$/, "");
+}
+
+function imageMarkup(ctx: ImageContext, alt: string, src: string): string {
+  return ctx.imageSyntax ? ctx.imageSyntax(alt, src) : `![${alt}](${src})`;
 }
 
 async function saveClipboard(blob: Blob, ctx: ImageContext): Promise<void> {
@@ -99,13 +110,13 @@ async function saveClipboard(blob: Blob, ctx: ImageContext): Promise<void> {
   const data = await blobToBase64(blob);
   const hint = `image-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}`;
   const saved = await api.saveClipboardImage(data, hint, ctx.documentPath, options);
-  ctx.insert(`![${altTextFrom(saved.markdownPath)}](${saved.markdownPath})`);
+  ctx.insert(imageMarkup(ctx, altTextFrom(saved.markdownPath), saved.markdownPath));
   ctx.notify(`Image saved to ${saved.markdownPath}`);
 }
 
 async function saveOnline(url: string, ctx: ImageContext): Promise<void> {
   const saved = await api.downloadImage(url, ctx.documentPath, imageOptions(ctx.settings));
-  ctx.insert(`![${altTextFrom(saved.markdownPath)}](${saved.markdownPath})`);
+  ctx.insert(imageMarkup(ctx, altTextFrom(saved.markdownPath), saved.markdownPath));
   // With the keepOriginal rule the command performs no request at all.
   ctx.notify(
     saved.bytes === 0
@@ -116,7 +127,7 @@ async function saveOnline(url: string, ctx: ImageContext): Promise<void> {
 
 async function saveLocal(path: string, ctx: ImageContext): Promise<void> {
   const saved = await api.importImage(path, ctx.documentPath, imageOptions(ctx.settings));
-  ctx.insert(`![${altTextFrom(saved.markdownPath)}](${saved.markdownPath})`);
+  ctx.insert(imageMarkup(ctx, altTextFrom(saved.markdownPath), saved.markdownPath));
   ctx.notify(
     saved.source === "local" && saved.bytes === 0
       ? `Linked to ${saved.markdownPath}`
@@ -200,7 +211,7 @@ export async function handleImageDrop(
   for (const path of images) {
     try {
       const saved = await api.importImage(path, ctx.documentPath, imageOptions(ctx.settings));
-      parts.push(`![${altTextFrom(saved.markdownPath)}](${saved.markdownPath})`);
+      parts.push(imageMarkup(ctx, altTextFrom(saved.markdownPath), saved.markdownPath));
     } catch (error) {
       ctx.notify(String(error), true);
     }

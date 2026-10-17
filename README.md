@@ -1,6 +1,6 @@
 # MDraft
 
-A small, fast editor for **Markdown and Typst**, in the spirit of [Typora](https://typora.io).
+A small, fast editor for **Markdown, Typst and HTML**, in the spirit of [Typora](https://typora.io).
 
 Live preview as you type, mathematics, diagrams, an outline sidebar, a native
 menu, and PDFs typeset by [Typst](https://typst.app) — in an 11 MB download that
@@ -27,6 +27,7 @@ own webview instead of a bundled Chromium, and Rust instead of a Node backend.
 | Math | MathJax | KaTeX 0.19, bundled |
 | Diagrams | Mermaid | Mermaid 12.2 |
 | Typst | — | compiler-driven preview and PDF |
+| HTML | renders it with the document's own CSS and scripts | sandboxed guest document, no app styles |
 | Licensing | paid, per seat | none, ever |
 
 The size is the point of the stack, not a coincidence: there is no browser and no
@@ -78,7 +79,7 @@ for you; nothing is installed system-wide and no administrator rights are needed
 - **Outline sidebar** driven by document headings, plus a folder browser and a
   recent-files list persisted between runs.
 - **Preferences panel** (`Ctrl+,`) laid out like Typora's: search box, vertical
-  sections in the same order — Files, Editor, Image, Markdown, Export,
+  sections in the same order — Files, Editor, Image, Markdown, HTML, Export,
   Appearance, General, Typography — and rows whose controls write straight to
   `settings.json`.
 - **Native menu bar** following Typora's structure (File, Edit, Paragraph,
@@ -94,9 +95,14 @@ for you; nothing is installed system-wide and no administrator rights are needed
   zoom level appears as a percentage chip only while it differs from 100%, and
   clicking it returns to the default size.
 - **Typst as a first-class default**: Preferences › Files › *Default File
-  Extension* offers `.typ`. A new document then starts in Typst mode, Save As
-  suggests `untitled.typ` with the Typst filter selected, and the open/save
-  dialogs put the matching filter first.
+  Extension* offers `.typ` and `.html`. A new document then starts in Typst or
+  HTML mode, Save As suggests the matching extension with the matching filter
+  selected, and the open/save dialogs put that filter first.
+- **HTML as a third native format**: open, edit, save and preview `.html` and
+  `.htm`. The preview is a guest document in a sandboxed iframe served by a
+  private scheme; it keeps the file's own `<style>`, linked CSS, images, media,
+  inline scripts, classic external scripts and ES modules. No app typography or
+  math is applied. See [HTML documents](#html-documents).
 - **GitHub alerts** (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`,
   `[!CAUTION]`) rendered with per-kind colours, and `[TOC]` expanded into links
   to the document's headings.
@@ -113,7 +119,8 @@ for you; nothing is installed system-wide and no administrator rights are needed
   buffer is clean.
 - **Auto save** (opt-in) writing in place every 20 seconds.
 - **Export as HTML** with the rendered body, the active highlight theme and a
-  KaTeX stylesheet link.
+  KaTeX stylesheet link for Markdown/Typst. An HTML document is copied as source.
+  **PDF (Print)** prints either kind through the system browser.
 - **Unsaved-change guards** on close, open, new and reload.
 
 ## Comparison with Typora
@@ -196,7 +203,7 @@ The application also does nothing behind your back:
   permissions;
 - there is exactly **one** outbound code path in Rust: `images::download_image`.
 
-There are two deliberate exceptions, and both require you to act first:
+There are three deliberate exceptions, and each requires you to act first:
 
 1. **Pasting or dropping an image URL downloads that image.** It is the only
    thing in the project that opens a socket. The command refuses any scheme other
@@ -208,6 +215,10 @@ There are two deliberate exceptions, and both require you to act first:
 2. **Export as HTML** writes a `<link>` to the KaTeX stylesheet on jsDelivr into
    the exported file, so that document renders its math when opened in a browser.
    That is a request the reader's browser makes, never the editor.
+3. **An HTML document's own subresources are loaded by WebView2 when you open
+   it.** A document that links a CDN stylesheet, script, font or image makes the
+   request its author asked for. MDraft itself still makes no start-up request
+   and no request of its own while simply showing the document.
 
 Unlike Typora, MDraft is open source and has no licence machinery at all. Typora
 is a paid application and needs a licence to keep working past its trial, so it
@@ -288,15 +299,24 @@ the family is not in the list, rather than being overwritten — but the fallbac
 chain is no longer a second control.
 
 Five presets — **System**, **Serif**, **Classic**, **Literary**, **Technical** —
-set all of it coherently, because the hard part of choosing type is the pairing.
-Every preset is a starting point: the dropdowns beneath it are there to be taken
-apart. Fira Code is the editor and preview-code face of **Serif** only; every
-other preset uses JetBrains Mono, or the system monospace for **System**.
+set the faces and OpenType switches coherently, because the hard part of choosing
+type is the pairing. Every preset is a starting point: the dropdowns beneath it
+are there to be taken apart. Fira Code is the editor and preview-code face of
+**Serif** only; every other preset uses JetBrains Mono, or the system monospace
+for **System**.
 
-**Math scale** is the one percentage in the section: KaTeX sets formulas at 121%
-of the surrounding text, so 100% keeps KaTeX's own ratio and about 83% makes a
-formula match the prose. It travels into exported HTML and the printed PDF along
-with the faces, so the file the reader opens looks like the preview.
+**Preview text size** and **Math scale** are deliberately not part of a preset.
+They are reader adjustments remembered for each preset: set Serif to 19 px and
+83%, visit System and Classic, then come back and both values are still there.
+A preset with no remembered value starts at the application defaults, 16 px and
+100%, so a fresh Serif is 16 px until the reader raises it; from then on the
+value belongs to Serif. Under **Custom (user)** both sizes are global. The active
+pair travels into exported HTML and the printed PDF along with the faces.
+
+Math scale is a percentage: KaTeX sets formulas at 121% of the surrounding text,
+so 100% keeps KaTeX's own ratio and about 83% makes a formula match the prose.
+Changing either size does not leave the preset — they are not part of what
+identifies it.
 
 ### Semibold, not Bold
 
@@ -473,6 +493,46 @@ Programmatic scrolling is wrapped in a 150 ms suppression window in both
 directions, because assigning `scrollTop` fires the same `scroll` event a user
 gesture does; without it the two panes would chase each other.
 
+## HTML documents
+
+An `.html` or `.htm` file is a third native format. It is edited as source and
+previewed as a **guest document**: a sandboxed iframe served by the
+`mdraft-preview` scheme, not an article inside the application's DOM. The
+document's own `<style>`, linked CSS (including Bootstrap, Tailwind or any other
+CDN stylesheet), images, media, inline scripts, classic external scripts and ES
+modules are what the reader sees. MDraft's typography, math and Mermaid pipelines
+do not touch it: an HTML file that wants math loads its own KaTeX or MathJax.
+
+The isolation is deliberate and is covered by `scripts/html-preview-test.mjs`:
+
+- the iframe is `sandbox="allow-scripts allow-forms allow-modals"` and **not**
+  `allow-same-origin`, so its origin is opaque and it cannot read the editor or
+  the IPC bridge;
+- the guest URL uses a nonce host ending in `.invalid`, which Tauri classifies as
+  a remote origin. Even though WebView2 injects the Tauri API into subframes, an
+  `invoke` from the guest does not execute a command; the parent still can;
+- local CSS, images and classic scripts load from the document's folder. ES
+  modules and fonts work through narrow CORS responses. A `fetch()` of local
+  JSON or text is blocked by the preview's CSP, and a `fetch()` of a `.js` file
+  is refused unless the request is the browser's own module load;
+- `Preferences › HTML › Run scripts in the HTML preview` (on by default) blocks
+  the document's scripts when turned off while keeping the preview, CSS, images
+  and scroll sync. The bridge that keeps the panes aligned is trusted app code
+  and keeps running under a nonce-only CSP.
+
+**Open an HTML file from a source you trust.** With scripts on, the document can
+read and execute files in its own folder and can load the network resources it
+references, just like a local page in a browser. It cannot reach the editor,
+files outside its folder or MDraft's commands, but a hostile `.html` in a folder
+of secrets is still a hostile local program. That trust boundary is why the
+scripts switch exists.
+
+The preview's protocol is a scheme handler, not an HTTP server: no socket is
+opened. A guest with no `fetch()` of local data also cannot use
+`localStorage`, cookies, IndexedDB, service workers or Web Workers; documents
+that scroll an inner container instead of the page keep independent panes. A
+re-render reloads the guest, so scripts restart; the visible line is restored.
+
 ## Tested against real documents
 
 `docs/samples/` holds two documents that are much harsher than the built-in
@@ -529,16 +589,17 @@ pandoc formats above them.
 
 | Entry | How it is produced | Needs |
 | --- | --- | --- |
-| **HTML** | MDraft renders it, from the same pipeline that draws the preview | nothing |
-| **PDF (Print)** | MDraft writes the same rendered HTML and your browser prints it, so you choose “Save as PDF” | a browser |
-| *any pandoc format* | pandoc converts the markdown | [pandoc](#installing-pandoc) |
+| **HTML** | For Markdown/Typst, MDraft renders the preview pipeline. For an HTML document, it writes the source as a copy. | nothing |
+| **PDF (Print)** | MDraft writes a print copy and your browser prints it, so you choose “Save as PDF”. An HTML document keeps its own CSS and math library via a local file base. | a browser |
+| *any pandoc format* | pandoc converts the source: Markdown, Typst or HTML (with `-f html`) | [pandoc](#installing-pandoc) |
 
-Both native formats are rendered from the preview's own HTML, which is why they
-match what is on screen down to the table of contents and the GitHub alert
-callouts. The pandoc formats do not: `[TOC]` and `[!NOTE]` are this editor's own
-extensions, and pandoc has no concept of either, so it prints them literally.
-That is the price of a real word-processor file, and it is usually the right
-trade.
+Both native formats are rendered from the preview's own HTML for Markdown and
+Typst, which is why they match what is on screen down to the table of contents
+and the GitHub alert callouts. An HTML document is already a document: the HTML
+export copies its source, and the print copy keeps its own layout and scripts.
+The pandoc formats cannot carry that layout: `[TOC]`, `[!NOTE]`, CSS and scripts
+have no equivalent, and pandoc prints them literally or drops them. That is the
+price of a real word-processor file, and it is usually the right trade.
 
 ### Installing pandoc
 
@@ -874,8 +935,8 @@ than an emoji font Debian does not ship by default.
 `#[cfg(unix)]` variants. Path semantics come from `std::path`, so a single test
 written with `C:\` strings asserts nothing true about Linux while looking like
 coverage — and it hid a real off-by-one in the relative-path expectations until
-the suite was finally run on Linux. `cargo test` passes on both. Windows runs 64
-(one is ignored because it downloads pandoc); Linux runs 62, because the two
+the suite was finally run on Linux. `cargo test` passes on both. Windows runs 74
+(one is ignored because it downloads pandoc); Linux runs 72, because the two
 `ISpellChecker` tests exist only on Windows.
 
 ## Application icon
@@ -951,7 +1012,7 @@ that really is a zip containing `word/document.xml`, an RTF that starts with
 overwrite the document it is reading, that an unknown format is reported rather
 than ignored, and that the PDF print document carries both stylesheets.
 
-Last run against `samples/feature-tour.md` — **85/85 checks passed**:
+Last run against `samples/feature-tour.md` — **90/90 checks passed**:
 
 | Stage | Observed |
 | --- | --- |
@@ -969,14 +1030,16 @@ Last run against `samples/feature-tour.md` — **85/85 checks passed**:
 | Status icons | 3 inline SVG at 16px, all inheriting the theme colour |
 | Math | KaTeX_Main declared and available, fraction rules drawn, radical signs drawn, KaTeX font applied |
 | Math scale | 70% shrinks the formula to 0.7×, 40 and 400 clamp to 70/130, 100% restores it |
+| Preset sizes | System 18/90, fresh Serif 16/100, Serif 19/83, Classic 16/100, back to Serif 19/83 and System 18/90; picker stays on the preset |
 | Status bar | 734 tokens · 404 words · UTF-8 · LF |
-| Preferences | opens, 8 sections, 64 rows, search filters, a toggle rewrites the preview |
+| Preferences | opens, 9 sections, 68 rows, search filters, a toggle rewrites the preview |
 | Pane sync | 37 anchors, monotonic 1 → 126 |
 | ↳ preview click | block at line 21 → caret lands on `Ln 21`, preview scroll unchanged |
 | ↳ source scroll | preview top 22 → 1891 px, no blink left behind |
 | ↳ interpolation | 11-line block tracks at 4+ distinct preview positions at 10/32 px and 40/11 px; reverse drift stays within the local slope |
 | ↳ source click | five clicks down the pane, preview scroll drift 0.15 px, panes stay aligned |
 | Close | WM_CLOSE exits in 500 ms and writes `.window-state.json` |
+| HTML guest | 40/40 checks: sandbox and IPC boundary, linked/inline CSS, local image, inline/classic/module scripts, blocked local fetch, sync, click/blink, outline, scripts-off and the return to Markdown |
 | Console | no errors or warnings |
 
 The sync rows are the interesting ones. They assert that the mapping is exact
@@ -1041,11 +1104,15 @@ index.html                 application shell markup
 docs/ícones/               source archive for the application icon
 docs/samples/         real documents used as rendering fixtures
 samples/feature-tour.md    showcase document / smoke-test fixture
+samples/html-tour/         offline HTML fixture for the guest-preview suite
 src/
   main.ts                  document lifecycle, menu wiring, sidebar, status bar
   api.ts                   typed wrappers over the Rust commands
   editor.ts                CodeMirror 6 setup, focus/typewriter modes, incremental counts, formatting
   `markdown.ts`              markdown -> HTML, math, mermaid, alerts, TOC, images
+  html-preview.ts          sandboxed HTML guest: parse5 splice, iframe, bridge protocol
+  html-bridge.js           guest-side scroll/click/keyboard bridge (inlined, not imported)
+  html-language.ts         lazy CodeMirror HTML grammar
   images.ts                paste, drop and download of images
   preferences.ts           the Preferences panel and its declarative rows
   sidebar.ts               outline extraction and active-marker updates, folder browser, recent files
@@ -1054,6 +1121,7 @@ src/
   styles.css               application chrome and preview theme
 src-tauri/
   src/lib.rs               builder, plugins, menu, command registration
+  src/html_preview.rs      preview scheme, CSP, path confinement (+ tests)
   src/menu.rs              native menu definition
   src/documents.rs         document and filesystem commands (+ tests)
   src/images.rs            image import, sanitising and download (+ tests)
@@ -1062,6 +1130,7 @@ src-tauri/
   capabilities/default.json
 scripts/with-msvc.cmd      MSVC environment wrapper
 scripts/dom-smoke.mjs      CDP smoke test for a running window
+scripts/html-preview-test.mjs CDP test of the sandboxed HTML guest
 scripts/audit-document.mjs CDP render audit for a real document
 scripts/image-paste-test.mjs  CDP test of the image paste paths
 scripts/image-path-paste-test.mjs CDP test of pasting a path into the image template
@@ -1097,8 +1166,28 @@ scripts/screenshot.mjs     CDP screenshot of a running window
 
 ## Known limitations
 
-- Preview rendering is debounced by 200 ms and re-renders the whole preview
-  rather than diffing it.
+- Preview rendering is debounced by 200 ms (300 ms for HTML) and re-renders the
+  whole preview rather than diffing it.
+- **HTML previews run the document's own code.** With scripts on, an HTML file
+  can execute and read files in its own folder and request the network resources
+  it links. It cannot reach the editor, files outside its folder or MDraft's
+  commands, but it is still a local program; turn off *Preferences › HTML › Run
+  scripts in the HTML preview* for untrusted files.
+- **The HTML guest cannot fetch its own data files.** Local JSON/text is blocked
+  by CSP and CORS; `localStorage`, cookies, IndexedDB, service workers and Web
+  Workers are unavailable. ES modules and local web fonts work through narrow
+  CORS responses. A hostile document can execute referenced JavaScript, which is
+  the trust trade-off the scripts switch controls.
+- **HTML inner scrollers do not sync.** A page that scrolls a fixed-height
+  container instead of the window keeps independent panes; clicking still moves
+  the caret.
+- **An HTML re-render restarts its scripts**, because the guest is reloaded to
+  show the new buffer. The visible line is restored; timers and form state are
+  not.
+- **An HTML print copy uses a `file:///` base.** The system browser can read the
+  document's own CSS, images and classic scripts, but local ES modules and fonts
+  may still be subject to its file-origin rules. Pasting a CDN or local asset path
+  into the preview is not the same as embedding it.
 - Sidebar width and the editor/preview split are not persisted between runs.
 - The asset protocol scope is `**` and `csp` is `null` for v1. Both are
   permissive and should be tightened before shipping to third parties.

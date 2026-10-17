@@ -7,6 +7,8 @@
 
 import * as api from "./api";
 import {
+  DEFAULT_BODY_FONT_SIZE,
+  DEFAULT_MATH_SCALE,
   FONT_SUGGESTIONS,
   TYPOGRAPHY_PRESETS,
   TYPOGRAPHY_ROLES,
@@ -197,26 +199,65 @@ function fontOptions(role: TypographyRole, raw: string): [string, string][] {
  */
 function typographyRows(host: PreferencesHost): Row[] {
   const s = () => host.settings();
+  const overrides = () => s().presetOverrides ?? {};
+
+  /**
+   * Remember a size for the active preset, or keep it global under Custom.
+   *
+   * The top-level value is always written: it is what the preview and exports
+   * read. The map entry is what makes the next visit to the same preset restore
+   * the reader's choice.
+   */
+  const updateSize = (key: "bodyFontSize" | "mathFontScale", value: number) => {
+    const preset = activePreset(host);
+    if (!preset) {
+      host.update({ [key]: value } as Partial<api.Settings>);
+      return;
+    }
+    const next = { ...overrides() };
+    next[preset.id] = { ...next[preset.id], [key]: value };
+    host.update({ [key]: value, presetOverrides: next } as Partial<api.Settings>);
+  };
 
   const rows: Row[] = [
     {
       kind: "choices",
       label: "Preset",
       help:
-        "Sets the faces, size and OpenType options below at once. Math scale is independent, so a preset does not move it. Changing any field afterwards leaves the preset — nothing is locked.",
+        "Sets the faces and OpenType options below at once. Preview text size and Math scale are remembered separately for each preset; switching back restores them. Changing a face leaves the preset — nothing is locked.",
       options: [
         ...TYPOGRAPHY_PRESETS.map((preset) => [preset.id, preset.label] as [string, string]),
         // Always present, so the control is never blank: it is what the picker
         // shows once a field below has been edited away from every preset.
         ["custom", "Custom (user)"],
       ],
-      // The preset is a starting point rather than stored state, so it is
-      // detected from the settings instead of remembered: picking one writes
-      // the values, and the picker then reports whichever set is in force.
+      // The preset's identity is detected from its fixed values; the two sizes
+      // are remembered separately in `presetOverrides`. Picking a preset writes
+      // both, and the picker then reports whichever identity is in force.
       get: () => activePreset(host)?.id ?? "custom",
       set: (value) => {
         const preset = TYPOGRAPHY_PRESETS.find((entry) => entry.id === value);
-        if (preset) host.update(preset.values as Partial<api.Settings>);
+        if (!preset) return;
+
+        // The preset being left keeps the sizes the reader gave it. This is
+        // also the lazy migration for a settings file written before
+        // `presetOverrides` existed: the current globals become its entry.
+        const next = { ...overrides() };
+        const current = activePreset(host);
+        if (current) {
+          const entry = { ...next[current.id] };
+          if (entry.bodyFontSize === undefined) entry.bodyFontSize = s().bodyFontSize;
+          if (entry.mathFontScale === undefined) entry.mathFontScale = s().mathFontScale;
+          next[current.id] = entry;
+        }
+
+        const remembered = next[preset.id] ?? {};
+        host.update({
+          ...preset.values,
+          bodyFontSize: remembered.bodyFontSize ?? DEFAULT_BODY_FONT_SIZE,
+          mathFontScale: remembered.mathFontScale ?? DEFAULT_MATH_SCALE,
+          presetOverrides: next,
+        } as Partial<api.Settings>);
       },
     },
     {
@@ -255,23 +296,24 @@ function typographyRows(host: PreferencesHost): Row[] {
     {
       kind: "number",
       label: "Preview text size",
-      help: "Prose in the preview and in exports. The source pane has its own size under Editor.",
+      help:
+        "Prose in the preview and in exports. Remembered for the active preset; under Custom (user) it applies to the current setup.",
       min: 11,
       max: 32,
       suffix: "px",
       get: () => s().bodyFontSize,
-      set: (value) => host.update({ bodyFontSize: value }),
+      set: (value) => updateSize("bodyFontSize", value),
     },
     {
       kind: "number",
       label: "Math scale",
       help:
-        "Scales the mathematics in the preview and in exports. KaTeX draws formulas at 121% of the surrounding text, so about 83% makes them match the prose; 100% leaves KaTeX's own ratio alone.",
+        "Scales the mathematics in the preview and in exports. KaTeX draws formulas at 121% of the surrounding text, so about 83% makes them match the prose; 100% leaves KaTeX's own ratio alone. Remembered for the active preset; under Custom (user) it applies to the current setup.",
       min: 70,
       max: 130,
       suffix: "%",
       get: () => s().mathFontScale,
-      set: (value) => host.update({ mathFontScale: value }),
+      set: (value) => updateSize("mathFontScale", value),
     },
     {
       kind: "note",
@@ -322,6 +364,10 @@ function typographyRows(host: PreferencesHost): Row[] {
  * Compares the *resolved* value for the font fields, because an empty setting
  * means "the built-in default for that role" — comparing the raw string would
  * make every fresh installation report "custom", which is precisely backwards.
+ *
+ * Preview text size and Math scale are deliberately absent from `values`: they
+ * are reader adjustments in `presetOverrides`, so editing one does not make the
+ * active preset look custom.
  */
 function activePreset(host: PreferencesHost): TypographyPreset | null {
   const settings = host.settings() as unknown as Record<string, unknown>;
@@ -610,12 +656,13 @@ function buildSections(host: PreferencesHost): Section[] {
           kind: "select",
           label: "Default File Extension",
           help:
-            "Used for Save As and for a new document. Typst starts the editor in Typst mode; the other choices start in Markdown.",
+            "Used for Save As and for a new document. Typst starts the editor in Typst mode, HTML in HTML mode; the other choices start in Markdown.",
           options: [
             ["md", "Markdown (.md)"],
             ["markdown", "Markdown (.markdown)"],
             ["txt", "Plain text (.txt)"],
             ["typ", "Typst (.typ)"],
+            ["html", "HTML (.html)"],
           ],
           get: () => s().defaultExtension,
           set: (value) => host.update({ defaultExtension: value }),
@@ -817,6 +864,26 @@ function buildSections(host: PreferencesHost): Section[] {
       ],
     },
     {
+      id: "html",
+      title: "HTML",
+      rows: [
+        {
+          kind: "checkbox",
+          label: "Run scripts in the HTML preview",
+          help:
+            "The preview runs in a sandboxed frame. Turning this off blocks the document's scripts while keeping its CSS, images, scroll sync and the preview itself. The bridge that keeps the panes in sync is trusted application code and still runs.",
+          get: () => s().htmlPreviewScripts !== false,
+          set: (value) => host.update({ htmlPreviewScripts: value }),
+        },
+        {
+          kind: "note",
+          label: "Sandbox",
+          text:
+            "An HTML preview behaves like a local page: it may read and run files in its own folder and load the network resources it references. It cannot reach the editor, its files outside that folder, or MDraft's commands. Math and diagram settings above apply to Markdown and Typst; an HTML document uses its own libraries.",
+        },
+      ],
+    },
+    {
       id: "export",
       title: "Export",
       rows: [
@@ -1010,7 +1077,9 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
         button.textContent = label;
         button.setAttribute("aria-pressed", String(value === current));
         button.addEventListener("click", () => {
-          if (value === row.get()) return;
+          // Re-run even when the choice is already active. The preset picker
+          // needs that to restore its remembered sizes after a hand-edited
+          // global value; for every other choice the setter is idempotent.
           row.set(value);
           render();
         });

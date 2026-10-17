@@ -92,11 +92,12 @@ pub struct ExportRequest {
     pub output_path: String,
     /// The document's own path, for `${inputPath}`. Absent for an untitled doc.
     pub input_path: Option<String>,
-    /// `"typst"` when the source is Typst rather than Markdown.
+    /// `"typst"` or `"html"` when the source is not Markdown.
     ///
-    /// The two need different treatment on the way out: Typst has its own
-    /// renderer, which is better than any round trip, and pandoc needs to be told
-    /// to read Typst rather than assume Markdown. Absent means Markdown, so a
+    /// The three need different treatment on the way out: Typst has its own
+    /// renderer, which is better than any round trip; HTML must be read with
+    /// pandoc's HTML reader rather than the Markdown one; and pandoc needs to be
+    /// told which it is instead of assuming. Absent means Markdown, so a
     /// settings file or a caller written before this existed still works.
     #[serde(default)]
     pub language: Option<String>,
@@ -167,12 +168,44 @@ fn expand_token(token: &str, values: &Placeholders) -> Option<String> {
 /// default without editing it — pandoc takes the last occurrence of most
 /// options.
 pub fn build_arguments(format: &ExportFormat, values: &Placeholders) -> Vec<String> {
-    format
-        .arguments
-        .split_whitespace()
-        .chain(format.extra_arguments.split_whitespace())
+    let mut args = expand_argument_text(&format.arguments, values);
+    args.extend(expand_argument_text(&format.extra_arguments, values));
+    args
+}
+
+fn expand_argument_text(text: &str, values: &Placeholders) -> Vec<String> {
+    text.split_whitespace()
         .filter_map(|token| expand_token(token, values))
         .collect()
+}
+
+/// Swap the format's Markdown reader for the HTML one.
+///
+/// The default export arguments carry `-f markdown+…` so a Markdown document
+/// exports with the dialect this editor writes. An HTML source must not be fed
+/// to that reader: pandoc would treat the tags as text. The user's extra
+/// arguments stay last, so an explicit `-f` there still wins.
+fn html_input_arguments(format: &ExportFormat, values: &Placeholders) -> Vec<String> {
+    let mut head = expand_argument_text(&format.arguments, values);
+    let tail = expand_argument_text(&format.extra_arguments, values);
+    let mut index = 0;
+    while index < head.len() {
+        let token = &head[index];
+        if token == "-f" || token == "--from" {
+            let end = (index + 1).min(head.len() - 1);
+            head.drain(index..=end);
+            continue;
+        }
+        if token.starts_with("--from=") {
+            head.remove(index);
+            continue;
+        }
+        index += 1;
+    }
+    head.push("-f".into());
+    head.push("html".into());
+    head.extend(tail);
+    head
 }
 
 // ---------------------------------------------------------------------------
@@ -360,7 +393,11 @@ pub fn export<R: Runtime>(app: &AppHandle<R>, request: &ExportRequest) -> Result
         }
     };
 
-    let mut args = build_arguments(&format, &values);
+    let mut args = if request.language.as_deref() == Some("html") {
+        html_input_arguments(&format, &values)
+    } else {
+        build_arguments(&format, &values)
+    };
     // For any other Format a Typst document is rendered to HTML first and handed
     // to pandoc's HTML reader, which is mature, rather than its Typst reader,
     // which is not: it turns `= Text` into the literal text "= Text", prints
@@ -1135,6 +1172,48 @@ mod tests {
     #[test]
     fn an_empty_arguments_field_produces_nothing_to_run() {
         assert!(build_arguments(&format_with("   ", "  "), &values()).is_empty());
+    }
+
+    #[test]
+    fn html_replaces_the_markdown_reader_and_keeps_the_output_arguments() {
+        let args = html_input_arguments(
+            &format_with(
+                "-f markdown+tex_math_dollars -s -o ${outputPath} --reference-doc=${styleReference}",
+                "",
+            ),
+            &values(),
+        );
+        assert_eq!(args, vec!["-s", "-o", "/out/report.docx", "-f", "html"]);
+        assert!(!args.iter().any(|arg| arg.contains("tex_math_dollars")));
+    }
+
+    #[test]
+    fn html_reader_comes_before_the_users_extra_arguments() {
+        let args = html_input_arguments(
+            &format_with("-f markdown -s -o ${outputPath}", "--from=latex --toc"),
+            &values(),
+        );
+        assert_eq!(
+            args,
+            vec![
+                "-s",
+                "-o",
+                "/out/report.docx",
+                "-f",
+                "html",
+                "--from=latex",
+                "--toc"
+            ]
+        );
+    }
+
+    #[test]
+    fn html_reader_handles_the_long_form_and_a_missing_value() {
+        let args = html_input_arguments(
+            &format_with("--from markdown -s -o ${outputPath} --from", ""),
+            &values(),
+        );
+        assert_eq!(args, vec!["-s", "-o", "/out/report.docx", "-f", "html"]);
     }
 
     #[test]

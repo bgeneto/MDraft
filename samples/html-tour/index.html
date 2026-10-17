@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>HTML Tour</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+      .inline-style { color: rgb(12, 34, 56); }
+      .arrow::after { content: ">"; }
+    </style>
+  </head>
+  <body>
+    <h1 id="top">HTML Tour</h1>
+    <p id="css-marker" class="from-css">Linked CSS should make this green.</p>
+    <p id="inline-marker" class="inline-style">Inline CSS should colour this.</p>
+    <p><img id="local-image" src="image.png" alt="A small local image"></p>
+    <p id="inline-script-marker">inline script did not run</p>
+    <p id="external-marker">external script did not run</p>
+    <p id="module-marker">module did not run</p>
+    <p id="fetch-marker">local fetch not attempted</p>
+    <p id="money">A price of $5 and another of $10 should stay literal.</p>
+    <p id="script-string"></p>
+
+    <h2 id="second">Second section</h2>
+    <p>Paragraph one. Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>
+    <p>Paragraph two. Sed do eiusmod tempor incididunt ut labore et dolore magna.</p>
+    <p>Paragraph three. Ut enim ad minim veniam, quis nostrud exercitation.</p>
+    <p>Paragraph four. Duis aute irure dolor in reprehenderit in voluptate.</p>
+    <p>Paragraph five. Excepteur sint occaecat cupidatat non proident.</p>
+    <p>Paragraph six. Sunt in culpa qui officia deserunt mollit anim.</p>
+    <p>Paragraph seven. Integer posuere erat a ante venenatis dapibus.</p>
+    <p>Paragraph eight. Posuere velit aliquet, cras mattis consectetur.</p>
+    <p>Paragraph nine. Donec ullamcorper nulla non metus auctor fringilla.</p>
+    <p>Paragraph ten. Maecenas faucibus mollis interdum, vestibulum id ligula.</p>
+
+    <h2 id="third">Third section</h2>
+    <p>Paragraph eleven. Curabitur blandit tempus porttitor, nullam quis risus.</p>
+    <p>Paragraph twelve. Eget urna mollis ornare vel eu leo, donec id elit.</p>
+    <p>Paragraph thirteen. Aenean lacinia bibendum nulla sed consectetur.</p>
+    <p>Paragraph fourteen. Fusce dapibus, tellus ac cursus commodo.</p>
+    <p>Paragraph fifteen. Tortor mauris condimentum nibh, ut fermentum.</p>
+    <p>Paragraph sixteen. Massa justo sit amet risus, cras justo odio.</p>
+    <p>Paragraph seventeen. Dapibus ac facilisis in, egestas eget quam.</p>
+    <p>Paragraph eighteen. Vestibulum id ligula porta felis euismod semper.</p>
+    <p>Paragraph nineteen. Cras mattis consectetur purus sit amet fermentum.</p>
+    <p>Paragraph twenty. Aenean eu leo quam, pellentesque ornare sem.</p>
+
+    <p><a id="fragment-link" href="#second">Jump to the second section</a></p>
+    <p><a id="outside-link" href="../outside.txt">A file outside the document folder</a></p>
+
+    <script>
+      document.getElementById("inline-script-marker").textContent = "inline script ran";
+      document.body.dataset.inline = "yes";
+      const markup = "<div class='kept'> > </div>";
+      document.getElementById("script-string").textContent = markup;
+    </script>
+    <script src="app.js"></script>
+    <script type="module" src="module.js"></script>
+  </body>
+</html>

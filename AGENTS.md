@@ -4,6 +4,7 @@ Working guide for this repository: how to build it, test it, debug it, which
 scripts exist, and which traps have already cost time.
 
 - [Orientation](#orientation)
+- [Governance and workflow](#governance-and-workflow)
 - [Recording traps is required](#recording-traps-is-required)
 - [Prerequisites](#prerequisites)
 - [Repository scripts](#repository-scripts)
@@ -22,9 +23,10 @@ scripts exist, and which traps have already cost time.
 
 ## Orientation
 
-A markdown editor: a **Rust/Tauri 2 backend** and a **TypeScript frontend** that
-runs in the platform webview. There is no HTTP server and no Node runtime in the
-shipped application.
+A **Markdown, Typst and HTML** editor: a **Rust/Tauri 2 backend** and a
+**TypeScript frontend** that runs in the platform webview. There is no HTTP
+server and no Node runtime in the shipped application; the HTML preview is an
+in-process URI scheme, not a socket.
 
 The split matters constantly:
 
@@ -35,6 +37,7 @@ The split matters constantly:
 | Settings persistence | Preview rendering, KaTeX, Mermaid, highlight.js |
 | Native menus | Pane sync, sidebar, Preferences panel |
 | Image import and download | Paste and drop handling |
+| HTML preview scheme, CSP, path confinement | HTML guest assembly and bridge |
 
 The frontend **cannot** touch the filesystem. Every file operation is a
 `#[tauri::command]` in Rust, called through the wrappers in `src/api.ts`.
@@ -42,10 +45,58 @@ The frontend **cannot** touch the filesystem. Every file operation is a
 Two rules that are not negotiable, both documented in the README:
 
 1. **No licensing, telemetry, or start-up network activity.** The only outbound
-   request in the codebase is `images::download_image`, reached solely by a user
-   pasting or dropping an image URL.
+   request the application makes itself is `images::download_image`, reached
+   solely by a user pasting or dropping an image URL. An HTML document the reader
+   opens may request the resources its own markup links; that is the document's
+   request, not the application's.
 2. **No dead UI.** If a Typora option is not implemented, the Preferences panel
    shows a note explaining that, never a control that does nothing.
+
+## Governance and workflow
+
+**A plan needs approval before code is edited when any one of these holds:**
+refactoring; an architectural change; more than three files; a public contract
+change — a `#[tauri::command]` name, argument or return shape, its `src/api.ts`
+wrapper, the `settings.json` schema (an existing file must keep loading), the
+markdown dialect existing documents rely on, a menu event name, or the
+`accelerators`/`menu_state` payload a test reads; a new dependency, whether npm,
+cargo or a bundled font; something hard to undo, such as renaming
+`productName`/`identifier` (which moves every install's settings) or rewriting
+the release workflow; or the user asks for a plan.
+
+**No plan — implement directly**, for example: UI copy; CSS; an obvious local JS
+fix; renaming a variable; a typo; a message or validation tweak; a bug confined
+to one file. Do not write a plan, do not ask for approval, and do not run the
+whole `npm test` out of habit: make the smallest change that fixes it, validate
+with the cheapest layer that can catch the mistake, and report what you ran and
+what you skipped.
+
+When the two cases are not obvious, ask in one line — "implement directly, or do
+you want a plan?" — rather than producing a plan out of caution.
+
+When a plan is required:
+
+1. Investigate the relevant code first, read-only.
+2. Write the plan to `docs/plans/YYYY-MM-DD-short-slug.md`, following the
+   template in `docs/plans/README.md`.
+3. **Stop and wait for explicit approval** before implementing anything.
+
+The plan format: context and goal; scope and non-scope; approach and rejected
+alternatives; ordered steps as a checklist; affected files and modules; risks and
+rollback; test and validation strategy; acceptance criteria; open questions;
+status (`draft`, `approved`, `in progress`, `done`). Set the status to `approved`
+when approval arrives: the file, not the conversation, is what a later session
+can read.
+
+While executing: tick the checkboxes, record deviations in the plan itself, and
+never widen the scope without updating it. An approved plan is permission to
+implement its scope — not to skip the [Testing](#testing) layers or the
+[Traps](#traps) discipline. A durable architectural decision — where a
+responsibility lives, a command's shape, a format that outlives the change —
+becomes an ADR in `docs/adr/YYYY-MM-DD-slug.md` (template in
+`docs/adr/README.md`); ADRs are superseded, never rewritten. When the work is
+done, update the status and the documentation the change touched, and leave the
+plan in `docs/plans/` as the record of what was agreed.
 
 ## Recording traps is required
 
@@ -141,13 +192,14 @@ rewrite from scratch.
 | `npm run stage` | `scripts/stage-artifacts.mjs` | Re-stage what is already built |
 | `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
-| `npm run test:rust` | `cargo test` | 64 tests (63 run, one ignored download), on Windows and on Linux |
+| `npm run test:rust` | `cargo test` | 75 tests (74 run, one ignored download), on Windows and on Linux |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. Puts back the working tree and the developer's own settings afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
-| `npm run smoke` | `scripts/dom-smoke.mjs` | 85 checks against `samples/feature-tour.md` |
+| `npm run smoke` | `scripts/dom-smoke.mjs` | 90 checks against `samples/feature-tour.md` |
 | `npm run spellcheck` | `scripts/spellcheck-test.mjs` | Underlines a misspelling, then clears it when spelling is turned off |
 | `npm run audit` | `scripts/audit-document.mjs` | Render metrics for whatever document is loaded |
 | `npm run math` | `scripts/math-render-check.mjs` | 10 checks against the physics paper |
 | `npm run syntax` | `scripts/syntax-theme-test.mjs` | 7 checks that highlighting is real |
+| `npm run html` | `scripts/html-preview-test.mjs` | 40 checks of the sandboxed HTML guest |
 | `npm run export` | `scripts/export-test.mjs` | 34 checks of every export path, against real pandoc |
 | `npm run typography` | `scripts/typography-test.mjs` | 26 checks that each face loads, each OpenType switch changes pixels, and the preset matrix and Semibold weights hold |
 | `npm run shortcuts` | `scripts/shortcut-test.mjs` | 32 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, and that the zoom chip follows the level |
@@ -167,6 +219,7 @@ All of these need the app already running with CDP enabled (see
 | `audit-document.mjs` | `[port] [label]` | any — `label` names it in the output | Block/anchor counts, table and code-fence totals, KaTeX errors, stray `$` in prose |
 | `math-render-check.mjs` | `[port]` | `docs/samples/physrevb_70_035307.md` | That fonts actually load and that fractions and radicals have real geometry |
 | `syntax-theme-test.mjs` | `[port]` | `samples/feature-tour.md` | Distinct computed token colours, and that switching palette changes them |
+| `html-preview-test.mjs` | `[port]` | `samples/html-tour/index.html` | The guest iframe, its sandbox and IPC boundary, local CSS/images/modules, sync, blink, scripts-off, outline and the return to Markdown. It connects to the iframe target as well as the page |
 | `export-test.mjs` | `[port] [--install]` | `samples/feature-tour.md` | That pandoc really converts: the bytes of each output are inspected. `--install` additionally exercises the pandoc download, which is why it is opt-in |
 | `typography-test.mjs` | `[port]` | any | Screenshots text with each OpenType feature off and on and compares pixels, then asserts the preset matrix and the Semibold weights. Width cannot measure a monospaced face, so nothing narrower would work |
 | `shortcut-test.mjs` | `[port] [document]` | `samples/feature-tour.md` | Presses each accelerator through a synthetic keydown and checks what changed. Also reads the `accelerators` registry, which is the only way to see an accelerator the platform rejected |
@@ -374,15 +427,16 @@ hash the pixels.
 
 ## Testing
 
-Seven layers, cheapest first. Run them in this order when changing anything.
+Eight layers, cheapest first. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 64 | Path handling, sanitisers, file IO, settings, token estimate, spellcheck |
-| DOM smoke | `npm run smoke` | 85 | Rendering, pane sync, preferences, math, fonts, status icons |
+| Rust unit | `npm run test:rust` | 75 | Path handling, sanitisers, file IO, settings, token estimate, spellcheck, HTML preview scheme |
+| DOM smoke | `npm run smoke` | 90 | Rendering, pane sync, preferences, math, fonts, status icons |
 | Math | `npm run math` | 10 | Font loading, fraction and radical geometry |
 | Syntax | `npm run syntax` | 7 | Token colours, palette switching |
+| HTML guest | `npm run html` | 40 | Sandbox, IPC boundary, local assets, sync/blink, scripts-off, outline |
 | Close | `.\scripts\test-close.ps1` | 4 | The window really exits and saves its state |
 | Document audit | `npm run audit` | — | Real-world render quality on big files |
 
@@ -859,7 +913,7 @@ binary at `src-tauri\target\debug\deps\mdraft_lib-*.exe` cannot create
 runtime reports as
 `HRESULT(0x800700AA): "The requested resource is in use."` (sometimes
 `0x8007139F`). Neither is profile corruption. Copy the test executable or the app
-to a directory outside the workspace and run it there: all 56 runnable tests pass
+to a directory outside the workspace and run it there: all 74 runnable tests pass
 and the window starts. `cargo test` still has to be invoked from the workspace
 through the MSVC wrapper, so run the executable it produces from `%TEMP%`.
 
@@ -891,13 +945,17 @@ poll `http://127.0.0.1:9222/json/list` for readiness.
 **A second MDraft for a CDP test dies with `HRESULT(0x800700AA)`, even when the exe is outside the workspace**
 WebView2 allows one browser process per user-data folder, and every instance
 defaults to `%LOCALAPPDATA%\io.github.bernh.mdraft\EBWebView`. While another
-MDraft window — including another agent's test instance — is open, launching a
-copy fails with
+MDraft window — including the user's portable build — is open, launching a test
+copy with the same `identifier` fails with
 `failed to create webview: WebView2 error: WindowsError(Error { code: HRESULT(0x800700AA), message: "The requested resource is in use." })`.
-Set `WEBVIEW2_USER_DATA_FOLDER` to a private directory and a distinct
-`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=...` before
-launching the second instance. Verified to run two test instances at once; do
-not kill the other instance or delete the shared profile.
+Setting `WEBVIEW2_USER_DATA_FOLDER` does **not** help: Tauri resolves
+`app_local_data_dir()` and passes that to WebView2, overriding the variable.
+Build a throwaway binary with a different identifier and run it from outside the
+workspace:
+`tauri build --no-bundle --config .tmp-test/tauri.htmltest.conf.json`, where the
+merge sets `identifier` and `productName`. That gives the test its own settings
+and WebView2 profile. Delete `%APPDATA%\<test identifier>` to reset it; do not
+kill the user's instance or delete the shared profile.
 
 **`Page.captureScreenshot` shows the status bar but never the native menu**
 A check mark in the View, File or Themes menu cannot be photographed by CDP and
@@ -939,9 +997,44 @@ breakpoint. The four flags plus a long cursor selection also truncate the word
 and token counts near 1070 px; keep the visible names short (`Type`, `Auto`) and
 the full names in the tooltip.
 
+**The HTML preview iframe loads but every Tauri command from it hangs instead of rejecting**
+A sandboxed iframe with an opaque origin sends `Origin: null`; the IPC custom
+protocol rejects that before ACL, and the postMessage fallback makes the frame's
+URL the IPC source. WebView2 receives the message and the ACL rejects it, but
+Tauri evaluates the response in the **main** frame, so the iframe's promise never
+settles. Do not `await` an `invoke` from the guest in a test; race it with a
+timeout and prove the command did nothing by checking its side effect (the suite
+tries `write_document` to a temp path). The parent's own `invoke` still resolves.
+
+**`http://<nonce>.mdraft-preview.localhost` is routed by wry but is local to Tauri**
+The workaround recognises the host prefix `http://mdraft-preview.`, not a
+subdomain before the protocol name, and Tauri's `is_local_url` strips
+`.localhost` to `mdraft-preview`, which is a registered scheme. That makes the
+guest a **local** ACL origin. Use `http://mdraft-preview.<nonce>.invalid`
+(Windows) or `mdraft-preview://<nonce>.invalid` (elsewhere): wry still routes it,
+and Tauri treats it as remote. Never "fix" a secure-context problem by switching
+to `.localhost`.
+
+**`allow-same-origin` on the HTML guest would make it same-origin with the app after navigation**
+A sandboxed iframe with both `allow-scripts` and `allow-same-origin` can navigate
+itself to the embedder's origin (its `document.referrer` names it), and then
+reach `parent.document` and remove the sandbox. The guest is deliberately opaque;
+local fonts and ES modules get CORS on the preview scheme instead. The preview
+suite asserts `parent.document` throws.
+
+**Modules and fonts fail in the opaque iframe unless the scheme sends CORS**
+An opaque iframe is cross-origin even for its own URL. CSS, images and classic
+scripts load without CORS, but `@font-face` and `<script type="module">` do not.
+Send `Access-Control-Allow-Origin: *` only for font responses and for script
+responses whose `Sec-Fetch-Dest` is `script`; a `fetch()` of a `.js` file is
+`Sec-Fetch-Dest: empty` and must not get the header. WebKit may omit
+`Sec-Fetch-Dest`, which is why the code has an extension fallback and the Linux
+checklist is manual.
+
 ## Adding a preference, end to end
 
-Five files, in this order:
+Five files, in this order — more than three, so a plan comes first; see
+[Governance and workflow](#governance-and-workflow).
 
 1. **`src-tauri/src/settings.rs`** — add the field to the struct and to
    `Default`. `#[serde(rename_all = "camelCase", default)]` means an older
@@ -965,6 +1058,9 @@ src/
   editor.ts          CodeMirror 6 setup, incremental word/line metrics, EditorHandle API
   spellcheck.ts      spelling marks, language detection, suggestion menu
   markdown.ts        markdown → HTML; math extraction, mermaid, alerts, anchors
+  html-preview.ts    sandboxed HTML guest: parse5 splice, iframe, bridge protocol
+  html-bridge.js     guest-side scroll/click/keyboard bridge (inlined, not imported)
+  html-language.ts   lazy CodeMirror HTML grammar
   syntax-themes.ts   editor palettes: token colours and writing surface
   images.ts          paste, drop and download of images
   preferences.ts     the Preferences panel and its declarative rows
@@ -975,6 +1071,7 @@ src/
   styles.css         all styling, light and dark
 src-tauri/src/
   lib.rs             builder, plugin registration, command table
+  html_preview.rs    preview scheme, CSP, path confinement, preview commands (+ tests)
   settings.rs        persisted settings and AppState
   documents.rs       file IO, directory listing, startup file
   images.rs          image import: sniffing, sanitiser, dedup, download
@@ -984,7 +1081,10 @@ src-tauri/src/
 scripts/             build helpers and CDP test harnesses — every one is in
                      "Repository scripts", and a new one belongs there too
 samples/             fixtures the smoke test asserts against
+samples/html-tour/   offline HTML guest fixture
 docs/samples/   real documents used to judge rendering quality
+docs/plans/          one file per approved plan
+docs/adr/            one decision that outlives its change
 docs/ícones/         source archive for the application icon
 ```
 
@@ -1101,11 +1201,11 @@ platform and fails on the other.
    reads the latter for the bundle, and the two must agree. `npm run
    check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
-3. `npm run test:rust` — 64 tests (one ignored: the pandoc download). Run them on Linux too
+3. `npm run test:rust` — 75 tests (one ignored: the pandoc download). Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run math`,
-   `npm run syntax` — 85 + 10 + 7 checks.
+   `npm run syntax` — 90 + 10 + 7 + 40 checks.
 5. `npm run audit` against both `docs/sample-files` documents and compare the
    counts with the table in the README.
 6. `npm run dist` — installers and checksums land in `bin/<os>/<arch>/`.

@@ -2,6 +2,7 @@
 
 mod documents;
 mod export;
+mod html_preview;
 mod images;
 mod menu;
 mod settings;
@@ -15,6 +16,13 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        .manage(html_preview::PreviewStore::default())
+        .register_asynchronous_uri_scheme_protocol(
+            html_preview::SCHEME,
+            |context, request, responder| {
+                html_preview::serve(context.app_handle().clone(), request, responder);
+            },
+        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
@@ -66,6 +74,8 @@ pub fn run() {
             typst::install_typst,
             typst::typst_download_page,
             typst::render_typst,
+            html_preview::set_html_preview,
+            html_preview::clear_html_preview,
         ])
         .build(tauri::generate_context!())
         .expect("error while building the tauri application");

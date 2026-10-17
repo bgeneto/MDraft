@@ -440,6 +440,32 @@ body {
   padding: 34px 34px 45vh;
 }
 
+/* The HTML guest owns the pane. It is an iframe sibling of `#preview`, not a
+   child, so the Markdown article and every rule that styles it stay untouched. */
+.app.document-html .preview-pane {
+  position: relative;
+  overflow: hidden;
+  padding: 0;
+  background: #fff;
+}
+
+.app.document-html #preview {
+  display: none;
+}
+
+.html-preview-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.html-preview-frame.pending {
+  visibility: hidden;
+}
+
 /* --------------------------------------------------------------------------
    Status bar
    -------------------------------------------------------------------------- */
