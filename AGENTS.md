@@ -1144,6 +1144,15 @@ both the document directory and the reader's current directory. The same
 mismatch is invisible on Linux, where both sides start with `/`.
 
 
+**The Linux release job fails with `libhunspell not found` while Windows passes**
+The release workflow's apt list omitted `libhunspell-dev`; `build.rs` probes it
+with pkg-config and panics with `install libhunspell-dev`, so `cargo test` dies
+before any frontend work. `scripts/build-linux.sh` already installed it, which is
+why a local Linux build did not reproduce the CI failure. Add it to the
+workflow's `Install the Linux system libraries` step.
+
+## Adding a preference, end to end
+
 Five files, in this order — more than three, so a plan comes first; see
 [Governance and workflow](#governance-and-workflow).
 
