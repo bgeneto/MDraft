@@ -1,0 +1,55 @@
+= AsciiDoc Tour
+:toc:
+:stem: latexmath
+
+This is AsciiDoc. It has *strong*, _emphasis_, `inline code`, a
+https://example.com[link], and inline math latexmath:[e^{i\pi}+1=0].
+
+NOTE: A note admonition. Asciidoctor renders it as a table cell, and the
+preview resets the Markdown table rules for it.
+
+== Lists
+
+* first item
+* second item
+* [x] a completed task
+* [ ] a pending task
+
+. ordered one
+. ordered two
+
+== Table
+
+[options="header"]
+|===
+| Name | Value
+| Alpha | 1
+| Beta | 2
+|===
+
+== Mathematics
+
+[latexmath]
+++++
+\int_0^1 x^2\,dx = \frac{1}{3}
+++++
+
+== Image
+
+image::html-tour/image.png[The HTML tour image]
+
+== Listing
+
+[source,js]
+----
+const answer = 42;
+console.log(answer);
+----
+
+....
+= Not a heading
+....
+
+== Include
+
+include::asciidoc-include.adoc[]

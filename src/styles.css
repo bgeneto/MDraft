@@ -1024,6 +1024,111 @@ body {
   font-size: 0.9em;
 }
 
+/* AsciiDoc ---------------------------------------------------------------- */
+
+/* The converter emits an admonition as a table. The Markdown table rules above
+   would give every one a border and `display:block`, so reset it here. */
+.markdown-body .admonitionblock > table {
+  display: table;
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0;
+  background: none;
+}
+.markdown-body .admonitionblock > table td {
+  border: 0;
+  padding: 0;
+  vertical-align: top;
+  background: none;
+}
+.markdown-body .admonitionblock > table td.icon {
+  width: 4.5em;
+  text-align: center;
+  padding-right: 0.75em;
+}
+.markdown-body .admonitionblock > table td.icon .title {
+  font-weight: var(--weight-strong);
+  text-transform: uppercase;
+  font-size: 0.78em;
+  letter-spacing: 0.04em;
+}
+.markdown-body .admonitionblock > table td.content {
+  padding: 0.15em 0 0.15em 1em;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+.markdown-body .admonitionblock.note > table td.content { border-left-color: #0969da; }
+.markdown-body .admonitionblock.tip > table td.content { border-left-color: #1a7f37; }
+.markdown-body .admonitionblock.important > table td.content { border-left-color: #8250df; }
+.markdown-body .admonitionblock.warning > table td.content { border-left-color: #9a6700; }
+.markdown-body .admonitionblock.caution > table td.content { border-left-color: #cf222e; }
+.markdown-body .admonitionblock.note > table td.icon .title { color: #0969da; }
+.markdown-body .admonitionblock.tip > table td.icon .title { color: #1a7f37; }
+.markdown-body .admonitionblock.important > table td.icon .title { color: #8250df; }
+.markdown-body .admonitionblock.warning > table td.icon .title { color: #9a6700; }
+.markdown-body .admonitionblock.caution > table td.icon .title { color: #cf222e; }
+
+.markdown-body .checklist {
+  list-style: none;
+  padding-left: 1.4em;
+}
+.markdown-body .checklist > li > p:first-child {
+  margin-left: -1.2em;
+}
+
+.markdown-body .title,
+.markdown-body div.title {
+  font-weight: var(--weight-strong);
+  font-style: italic;
+  margin: 0 0 0.35em;
+}
+
+.markdown-body #toc {
+  border: 1px solid var(--border);
+  background: var(--code-bg);
+  padding: 0.75em 1em;
+  margin: 0 0 1.5em;
+  border-radius: 6px;
+}
+.markdown-body #toc #toctitle {
+  font-weight: var(--weight-strong);
+  text-transform: uppercase;
+  font-size: 0.78em;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.4em;
+}
+.markdown-body #toc ul {
+  list-style: none;
+  padding-left: 0;
+  margin: 0;
+}
+.markdown-body #toc ul ul {
+  padding-left: 1em;
+}
+.markdown-body #toc li {
+  margin: 0.15em 0;
+}
+
+.markdown-body .quoteblock .attribution {
+  text-align: right;
+  font-style: italic;
+  color: var(--muted);
+  margin-top: 0.25em;
+}
+.markdown-body .line-through {
+  text-decoration: line-through;
+}
+.markdown-body .stemblock .content {
+  text-align: center;
+}
+.markdown-body .asciidoc-error {
+  background: #fff2f0;
+  border: 1px solid #ffccc7;
+  border-radius: 6px;
+  padding: 12px 14px;
+  white-space: pre-wrap;
+}
+
 /* Mermaid ---------------------------------------------------------------- */
 
 .mermaid {

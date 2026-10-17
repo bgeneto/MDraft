@@ -185,6 +185,30 @@ for (const format of formats) {
   }
 }
 
+// (3b) An AsciiDoc source uses pandoc's AsciiDoc reader, not the Markdown one.
+{
+  const output = join(workDir, "asciidoc-source.tex");
+  const result = await call("run_export", {
+    request: {
+      formatId: "latex",
+      markdown: "= Export Probe\n\n== A Section\n\nA *strong* word and latexmath:[x^2].\n",
+      outputPath: output,
+      inputPath: null,
+      language: "asciidoc",
+    },
+  });
+  if (!result.ok) {
+    check(false, "an AsciiDoc source exports through the AsciiDoc reader", result.error.split("\n")[0]);
+  } else {
+    const text = readFileSync(output, "utf8");
+    check(
+      text.includes("\\section{A Section}") && text.includes("\\textbf{strong}"),
+      "an AsciiDoc source exports through the AsciiDoc reader",
+      text.split("\n").find((line) => line.includes("section")) ?? "no section",
+    );
+  }
+}
+
 // (4) An export must not be able to clobber the document it is exporting.
 //     Pandoc reads stdin and would happily truncate the source file.
 if (documentPath && documentPath.endsWith(".md")) {

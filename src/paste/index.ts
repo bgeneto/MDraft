@@ -12,8 +12,10 @@ import { inlineText, isBlockFragment, trimBlocks } from "./ir.ts";
 import { readHtml, htmlToText } from "./read-html.ts";
 import { readMarkdown } from "./read-markdown.ts";
 import { readTypst } from "./read-typst.ts";
+import { readAsciidoc } from "./read-asciidoc.ts";
 import { renderMarkdown } from "./render-markdown.ts";
 import { renderTypst } from "./render-typst.ts";
+import { renderAsciidoc } from "./render-asciidoc.ts";
 import { renderHtmlFragment } from "./render-html.ts";
 import { sanitizeHtmlFragment } from "./html-fragment.ts";
 
@@ -160,7 +162,11 @@ async function resolveImages(
 function plainBlock(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
-  return trimmed.includes("\n\n") || /^(?:#{1,6}\s|={1,6}\s|```|~~~|>\s|[-+]\s|\d+[.)]\s|\|)/m.test(trimmed);
+  return (
+    trimmed.includes("\n\n") ||
+    /^(?:#{1,6}\s|={1,6}\s|```|~~~|>\s|[-+]\s|\d+[.)]\s|\|)/m.test(trimmed) ||
+    /^(?:image::|include::|:[\w-]+:|\[.*\]$|\|===)/m.test(trimmed)
+  );
 }
 
 function fallbackText(payload: ClipboardPayload): string {
@@ -174,7 +180,6 @@ function sourceText(payload: ClipboardPayload, source: SourceFormat): string {
   if (source === "markdown") return payload.markdown ?? payload.text ?? "";
   return payload.text ?? "";
 }
-
 /**
  * Convert a clipboard payload for `destination`.
  *
@@ -242,6 +247,7 @@ export async function planPaste(
     let blocks: Block[];
     if (source === "html") blocks = await readHtml(raw);
     else if (source === "markdown") blocks = await readMarkdown(raw);
+    else if (source === "asciidoc") blocks = await readAsciidoc(raw);
     else blocks = await readTypst(raw);
 
     if (countNodes(blocks) > MAX_NODES) {
@@ -261,6 +267,7 @@ export async function planPaste(
     let text: string;
     if (destination === "markdown") text = renderMarkdown(blocks);
     else if (destination === "typst") text = renderTypst(blocks);
+    else if (destination === "asciidoc") text = renderAsciidoc(blocks);
     else text = renderHtmlFragment(blocks);
 
     if (!text.trim()) {

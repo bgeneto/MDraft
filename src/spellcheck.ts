@@ -41,6 +41,10 @@ const ALLOWED = new Set([
   "mermaid",
   "webview2",
   "github",
+  "asciidoc",
+  "asciidoctor",
+  "asciimath",
+  "latexmath",
 ]);
 
 const EN_WORDS = new Set([
@@ -68,6 +72,13 @@ const SKIP_NODES = new Set([
   "HTMLBlock",
   "HTMLTag",
   "Comment",
+  // AsciiDoc stream token names.
+  "monospace",
+  "listing",
+  "literal",
+  "passthrough",
+  "comment",
+  "meta",
 ]);
 
 const spellError = Decoration.mark({ class: "cm-spell-error" });
@@ -298,6 +309,13 @@ function extraSkips(text: string, base: number): Array<[number, number]> {
     /https?:\/\/\S+/g,
     /www\.\S+/g,
     /<[^>\n]{1,200}>/g,
+    // AsciiDoc markup that is not prose.
+    /image::?[^\[\n]*\[[^\]]*\]/g,
+    /(?:include|xref|link|footnote|kbd|btn|menu|latexmath|stem):[^\s\[]*\[[^\]]*\]/g,
+    /^:[A-Za-z0-9_-]+:.*$/gm,
+    /<<[^>\n]+>>/g,
+    /\[\[[^\]\n]+\]\]/g,
+    /^\s{0,3}(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION):/gm,
   ];
   for (const pattern of patterns) {
     pattern.lastIndex = 0;

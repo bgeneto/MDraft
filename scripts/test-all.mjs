@@ -103,6 +103,13 @@ const SUITES = [
     doc: "samples/feature-tour.md",
   },
   {
+    id: "asciidoc",
+    title: "AsciiDoc",
+    kind: "cdp",
+    script: "asciidoc-test.mjs",
+    doc: "samples/asciidoc-tour.adoc",
+  },
+  {
     id: "image-syntax",
     title: "Image syntax in Typst",
     kind: "cdp",

@@ -178,6 +178,10 @@ try {
     `[...document.querySelectorAll(".sidebar-body .entry")].some((e) => (e.title || "").endsWith("typst-tour.typ"))`,
   );
   check(listed, "the folder listing offers a .typ document", "Typst is a first-class format");
+  const listedAsciiDoc = await evaluate(
+    `[...document.querySelectorAll(".sidebar-body .entry")].some((e) => (e.title || "").endsWith("asciidoc-tour.adoc"))`,
+  );
+  check(listedAsciiDoc, "the folder listing offers an .adoc document", "AsciiDoc is a first-class format");
   const opened = await evaluate(
     `(() => {
       const row = [...document.querySelectorAll(".sidebar-body .entry")]

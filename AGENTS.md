@@ -23,7 +23,7 @@ scripts exist, and which traps have already cost time.
 
 ## Orientation
 
-A **Markdown, Typst and HTML** editor: a **Rust/Tauri 2 backend** and a
+A **Markdown, Typst, HTML and AsciiDoc** editor: a **Rust/Tauri 2 backend** and a
 **TypeScript frontend** that runs in the platform webview. There is no HTTP
 server and no Node runtime in the shipped application; the HTML preview is an
 in-process URI scheme, not a socket.
@@ -194,7 +194,7 @@ rewrite from scratch.
 | `npm run stage` | `scripts/stage-artifacts.mjs` | Re-stage what is already built |
 | `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
-| `npm run test:rust` | `cargo test` | 77 tests on Windows (76 run, one ignored download); Linux has 76 total (75 run, one ignored) |
+| `npm run test:rust` | `cargo test` | 79 tests on Windows (78 run, one ignored download); Linux has 78 total (77 run, one ignored) |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. Puts back the working tree and the developer's own settings afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
 | `npm run smoke` | `scripts/dom-smoke.mjs` | 93 checks against `samples/feature-tour.md` |
 | `npm run spellcheck` | `scripts/spellcheck-test.mjs` | Underlines a misspelling, then clears it when spelling is turned off |
@@ -202,14 +202,15 @@ rewrite from scratch.
 | `npm run math` | `scripts/math-render-check.mjs` | 10 checks against the physics paper |
 | `npm run syntax` | `scripts/syntax-theme-test.mjs` | 7 checks that highlighting is real |
 | `npm run html` | `scripts/html-preview-test.mjs` | 42 checks of the sandboxed HTML guest |
-| `npm run export` | `scripts/export-test.mjs` | 34 checks of every export path, against real pandoc |
+| `npm run export` | `scripts/export-test.mjs` | 35 checks of every export path, against real pandoc, including an AsciiDoc source |
 | `npm run typography` | `scripts/typography-test.mjs` | 26 checks that each face loads, each OpenType switch changes pixels, and the preset matrix and Semibold weights hold |
 | `npm run shortcuts` | `scripts/shortcut-test.mjs` | 39 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, that the zoom chip follows the level, and that a new tab keeps the previous buffer's undo |
-| `npm run tabs` | `scripts/document-tabs-test.mjs` | 68 checks of several open documents: sidebar and Recents, `open-files`, caret and scroll per tab, dirty dot, × and middle-click, Ctrl+Tab, the disk poll, Auto Save across tabs, the last tab |
+| `npm run tabs` | `scripts/document-tabs-test.mjs` | 69 checks of several open documents: sidebar and Recents, `open-files`, caret and scroll per tab, dirty dot, × and middle-click, Ctrl+Tab, the disk poll, Auto Save across tabs, the last tab |
+| `npm run asciidoc` | `scripts/asciidoc-test.mjs` | 35 checks of the AsciiDoc preview, source highlighting, outline, preview copy, spellcheck, includes, paste and the default extension |
 | `npm run test:sessions` | `scripts/sessions-test.mjs` | 43 unit checks of `src/sessions.ts`, with no application and no build |
-| `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 51 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
+| `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 72 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
 | `npm run paste` | `scripts/rich-paste-test.mjs` | 23 checks of rich paste through the real UI: destination detection, conversion, preferences, Ctrl+Shift+V, undo |
-| `npm run image:syntax` | `scripts/image-syntax-test.mjs` | 14 checks of bitmap and remote-image handling in Typst, Markdown and HTML, including the Image preference |
+| `npm run image:syntax` | `scripts/image-syntax-test.mjs` | 14 checks of bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, including the Image preference |
 | `npm run licence` | `scripts/licence-test.mjs` | 4 checks that the bundled typefaces' licences ship inside the application. Run against its own instance: it opens a document |
 | `npm run images` | `scripts/image-paste-test.mjs` | Image paste through the real UI |
 | `npm run screenshot` | `scripts/screenshot.mjs` | PNG of the running window |
@@ -223,6 +224,7 @@ All of these need the app already running with CDP enabled (see
 | Script | Arguments | Needs this document | Proves |
 | --- | --- | --- | --- |
 | `dom-smoke.mjs` | `[port]` | `samples/feature-tour.md` | Rendering, pane sync, preferences, search, toggles, math, fonts, status icons, blink behaviour |
+| `asciidoc-test.mjs` | `[port]` | `samples/asciidoc-tour.adoc` | The AsciiDoc preview, title/TOC, KaTeX fraction, source anchors and scroll sync, highlighting, outline, preview copy, spellcheck, include refusal, rich paste, bitmap `image::`, default extension and the Files panel |
 | `audit-document.mjs` | `[port] [label]` | any — `label` names it in the output | Block/anchor counts, table and code-fence totals, KaTeX errors, stray `$` in prose |
 | `math-render-check.mjs` | `[port]` | `docs/samples/physrevb_70_035307.md` | That fonts actually load and that fractions and radicals have real geometry |
 | `syntax-theme-test.mjs` | `[port]` | `samples/feature-tour.md` | Distinct computed token colours, and that switching palette changes them |
@@ -439,21 +441,22 @@ hash the pixels.
 
 ## Testing
 
-Thirteen layers, cheapest first. Run them in this order when changing anything.
+Fourteen layers, cheapest first. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 77 | Path handling, sanitisers, file IO, settings, token estimate, spellcheck, HTML preview scheme |
+| Rust unit | `npm run test:rust` | 79 | Path handling, sanitisers, file IO, settings, token estimate, spellcheck, HTML preview scheme, export reader selection |
 | Session store | `npm run test:sessions` | 43 | Tab order, untitled names, path identity, the neighbour on close — no application needed |
-| Paste conversion | `npm run paste:convert` | 51 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, image syntax |
+| Paste conversion | `npm run paste:convert` | 72 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, image syntax, AsciiDoc |
 | DOM smoke | `npm run smoke` | 93 | Rendering, pane sync, preferences, math, fonts, status icons |
 | Rich paste | `npm run paste` | 23 | The paste event, destination notice, preferences, Ctrl+Shift+V, undo |
-| Image syntax | `npm run image:syntax` | 14 | Bitmap and remote-image handling in Typst, Markdown and HTML, plus the Image preference |
+| Image syntax | `npm run image:syntax` | 14 | Bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, plus the Image preference |
 | Math | `npm run math` | 10 | Font loading, fraction and radical geometry |
 | Syntax | `npm run syntax` | 7 | Token colours, palette switching |
+| AsciiDoc | `npm run asciidoc` | 35 | Preview, title/TOC, math, includes, source highlighting, outline, preview copy, spellcheck, paste, defaults |
 | HTML guest | `npm run html` | 42 | Sandbox, IPC boundary, local assets, sync/blink, scripts-off, outline |
-| Document tabs | `npm run tabs` | 68 | Several open documents, the disk poll, Auto Save across tabs, caret and scroll per tab |
+| Document tabs | `npm run tabs` | 69 | Several open documents, the disk poll, Auto Save across tabs, caret and scroll per tab |
 | Close | `.\scripts\test-close.ps1` | 4 | The window really exits and saves its state |
 | Document audit | `npm run audit` | — | Real-world render quality on big files |
 
@@ -1117,7 +1120,29 @@ a menu command "does nothing", read `#toast` (and `Runtime.exceptionThrown`)
 before touching the handler, and treat a state captured for one document as
 unusable for another.
 
-## Adding a preference, end to end
+**`ERR_PACKAGE_PATH_NOT_EXPORTED` for `@asciidoctor/core/build/browser/index.js`**
+The package's `exports` map exposes only `"."`, so the browser build cannot be
+imported by subpath even though the file exists. Use
+`await import("@asciidoctor/core")` and let Vite's `browser` condition select
+`build/browser/index.js`. The same `exports` map is why a `node_modules` path in
+the import is never the answer.
+
+**The AsciiDoc document title silently disappears from the preview**
+`standalone: false` makes Asciidoctor set `notitle` on the (embedded) document,
+and `convert_embedded` then omits the `<h1>`. The title is in
+`doc.doctitle()`/`doc.header.title` but not in the HTML. Pass
+`attributes: { showtitle: "" }` to `load`; the outline and the source plain-text
+scan still find the title either way, so the symptom is only visible in the
+preview.
+
+**`include::` is refused with "outside the document directory" even though the file is beside the document**
+The browser build reports paths derived from `base_dir` with a leading slash
+before the drive (`/C:/…`), while Rust's `DocumentPayload.directory` uses
+`C:\…`. A naive containment check compares `C:/…` with `/C:/…` and rejects a
+legitimate target. Normalize the form `/C:/` to `C:/` before folding case, on
+both the document directory and the reader's current directory. The same
+mismatch is invisible on Linux, where both sides start with `/`.
+
 
 Five files, in this order — more than three, so a plan comes first; see
 [Governance and workflow](#governance-and-workflow).
@@ -1148,11 +1173,13 @@ src/
   html-preview.ts    sandboxed HTML guest: parse5 splice, iframe, bridge protocol
   html-bridge.js     guest-side scroll/click/keyboard bridge (inlined, not imported)
   html-language.ts   lazy CodeMirror HTML grammar
+  asciidoc-language.ts AsciiDoc stream highlighter
+  asciidoc-preview.ts Asciidoctor load/convert, per-load registry, includes, data-line markers
   syntax-themes.ts   editor palettes: token colours and writing surface
-  image-syntax.ts    the one image markup builder for Markdown, Typst and HTML
+  image-syntax.ts    the one image markup builder for Markdown, Typst, HTML and AsciiDoc
   images.ts          paste, drop and download of images
   paste/             rich paste: IR, destination/source detection, readers,
-                     renderers, HTML sanitizer and image resolution
+                     renderers (AsciiDoc included), HTML sanitizer and image resolution
   preferences.ts     the Preferences panel and its declarative rows
   sidebar.ts         outline (active-marker updates) / file list / recent files
   api.ts             typed wrappers over every Rust command
@@ -1171,6 +1198,7 @@ src-tauri/src/
 scripts/             build helpers and CDP test harnesses — every one is in
                      "Repository scripts", and a new one belongs there too
 samples/             fixtures the smoke test asserts against
+samples/asciidoc-tour.adoc  AsciiDoc fixture and its include
 samples/html-tour/   offline HTML guest fixture
 docs/samples/   real documents used to judge rendering quality
 docs/plans/          one file per approved plan
@@ -1291,11 +1319,12 @@ platform and fails on the other.
    reads the latter for the bundle, and the two must agree. `npm run
    check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
-3. `npm run test:rust` — 76 tests (one ignored: the pandoc download). Run them on Linux too
+3. `npm run test:rust` — 78 runnable tests (one ignored: the pandoc download). Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run math`,
-   `npm run syntax` — 93 + 10 + 7 + 42 checks.
+   `npm run syntax`, `npm run html` and `npm run asciidoc` —
+   93 + 10 + 7 + 42 + 35 checks.
 5. `npm run audit` against both `docs/sample-files` documents and compare the
    counts with the table in the README.
 6. `npm run dist` — installers and checksums land in `bin/<os>/<arch>/`.

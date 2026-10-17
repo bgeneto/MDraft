@@ -1,9 +1,9 @@
 {
   "name": "mdraft",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
-  "description": "A Tauri 2 Markdown, Typst and HTML editor in the spirit of Typora",
+  "description": "A Tauri 2 Markdown, Typst, HTML and AsciiDoc editor in the spirit of Typora",
   "license": "MIT",
   "scripts": {
     "dev": "vite",
@@ -25,8 +25,8 @@
     "test:sessions": "node scripts/sessions-test.mjs",
     "paste:convert": "node scripts/paste-convert-test.mjs",
     "paste": "node scripts/rich-paste-test.mjs",
+    "asciidoc": "node scripts/asciidoc-test.mjs",
     "image:syntax": "node scripts/image-syntax-test.mjs",
-
     "licence": "node scripts/licence-test.mjs",
     "spellcheck": "node scripts/spellcheck-test.mjs",
     "images": "node scripts/image-paste-test.mjs",
@@ -36,6 +36,7 @@
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
+    "@asciidoctor/core": "4.1.1",
     "@codemirror/commands": "^6.9.0",
     "@codemirror/lang-html": "^6.4.12",
     "@codemirror/lang-markdown": "^6.5.2",

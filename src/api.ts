@@ -338,7 +338,7 @@ export const runAfterExport = (path: string) =>
 export const installPandoc = () => invoke<PandocStatus>("install_pandoc");
 
 /** Which markup the buffer holds. */
-export type DocumentLanguage = "markdown" | "typst" | "html";
+export type DocumentLanguage = "markdown" | "typst" | "html" | "asciidoc";
 
 /** One Typst installation, as the backend sees it. */
 export interface TypstStatus {

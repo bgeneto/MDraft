@@ -28,6 +28,7 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import type { DocumentLanguage } from "./api";
+import { asciidocLanguage } from "./asciidoc-language";
 import { htmlLanguage } from "./html-language";
 import { typstLanguage } from "./typst-language";
 import {
@@ -119,13 +120,19 @@ export interface EditorHandle {
   cursorInfo(): CursorInfo;
   setHeading(level: number): void;
   shiftHeading(delta: number): void;
+  /** The AsciiDoc heading commands; `=` is the title, `==` the first section. */
+  setAsciiDocHeading(level: number): void;
+  shiftAsciiDocHeading(delta: number): void;
   toggleLinePrefix(prefix: string): void;
   setTaskState(state: "done" | "todo" | "plain"): void;
+  setAsciiDocTaskState(state: "done" | "todo" | "plain"): void;
   indentLines(delta: number): void;
   insertParagraphBefore(): void;
   insertParagraphAfter(): void;
   insertYamlFrontMatter(): void;
+  insertAsciiDocAttributes(): void;
   insertToc(): void;
+  insertAsciiDocToc(): void;
   insertBlock(text: string): void;
   insertBlockWithCaret(text: string, caretOffset: number): void;
   /**
@@ -517,6 +524,10 @@ const markdownSupport = markdown({
           });
         return;
       }
+      if (kind === "asciidoc") {
+        install(asciidocLanguage());
+        return;
+      }
       // The grammar arrives asynchronously; until it does the buffer keeps the
       // parser it had, which is a moment of wrong colouring rather than a blank
       // editor.
@@ -674,6 +685,28 @@ const markdownSupport = markdown({
       });
     },
 
+    setAsciiDocHeading(level) {
+      transformSelectedLines((line) => {
+        const indent = /^\s*/.exec(line)?.[0] ?? "";
+        const stripped = line.slice(indent.length).replace(/^={1,6}\s+/, "");
+        if (level <= 0) return `${indent}${stripped}`;
+        // `=` is the document title, so Heading 1 is the first section: `==`.
+        const markers = "=".repeat(Math.min(6, Math.max(2, level + 1)));
+        return `${indent}${markers} ${stripped.trimStart()}`;
+      });
+    },
+
+    shiftAsciiDocHeading(delta) {
+      transformSelectedLines((line) => {
+        const indent = /^\s*/.exec(line)?.[0] ?? "";
+        const body = line.slice(indent.length);
+        const match = /^(={1,6})\s+(.*)$/.exec(body);
+        if (!match) return delta < 0 ? `${indent}== ${body}` : line;
+        const next = Math.min(6, Math.max(2, match[1].length + delta));
+        return `${indent}${"=".repeat(next)} ${match[2]}`;
+      });
+    },
+
     toggleLinePrefix(prefix) {
       transformSelectedLines((line) => {
         const indent = /^\s*/.exec(line)?.[0] ?? "";
@@ -692,6 +725,20 @@ const markdownSupport = markdown({
         if (state === "plain") return `${indent}${bare}`;
         const marker = state === "done" ? "[x]" : "[ ]";
         return `${indent}- ${marker} ${bare}`;
+      });
+    },
+
+    /** Rewrite AsciiDoc `* [ ]` / `* [x]` task markers. */
+    setAsciiDocTaskState(state) {
+      transformSelectedLines((line) => {
+        const indent = /^\s*/.exec(line)?.[0] ?? "";
+        const body = line.slice(indent.length);
+        const bare = body
+          .replace(/^\*\s+\[[ xX]\]\s*/, "")
+          .replace(/^\*\s+/, "");
+        if (state === "plain") return `${indent}${bare}`;
+        const marker = state === "done" ? "[x]" : "[ ]";
+        return `${indent}* ${marker} ${bare}`;
       });
     },
 
@@ -746,8 +793,48 @@ const markdownSupport = markdown({
       view.focus();
     },
 
+    insertAsciiDocAttributes() {
+      const text = view.state.doc.toString();
+      const existing = text.search(/^:title:/m);
+      if (existing >= 0) {
+        view.dispatch({
+          selection: { anchor: existing + ":title:".length },
+          scrollIntoView: true,
+        });
+        view.focus();
+        return;
+      }
+      const block = ":title: \n:author: \n\n";
+      view.dispatch({
+        changes: { from: 0, to: 0, insert: block },
+        selection: { anchor: block.indexOf(":title: ") + ":title: ".length },
+        scrollIntoView: true,
+      });
+      view.focus();
+    },
+
     insertToc() {
       insertBlockText("[TOC]");
+    },
+
+    insertAsciiDocToc() {
+      const text = view.state.doc.toString();
+      const existing = text.search(/^:toc:\s*$/m);
+      if (existing >= 0) {
+        view.dispatch({
+          selection: { anchor: existing + ":toc:".length },
+          scrollIntoView: true,
+        });
+        view.focus();
+        return;
+      }
+      const block = ":toc:\n\n";
+      view.dispatch({
+        changes: { from: 0, to: 0, insert: block },
+        selection: { anchor: block.length },
+        scrollIntoView: true,
+      });
+      view.focus();
     },
 
     insertBlock(text) {
@@ -841,6 +928,10 @@ const markdownSupport = markdown({
             "CodeText",
             "ScriptText",
             "StyleText",
+            "monospace",
+            "listing",
+            "literal",
+            "passthrough",
           ].includes(node.name)
         ) {
           return true;
