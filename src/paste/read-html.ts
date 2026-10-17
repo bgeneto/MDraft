@@ -1,0 +1,528 @@
+//! Clipboard HTML into the intermediate representation.
+//!
+//! `parse5` is loaded lazily: the paste core is small, and the browser preview
+//! already pays for the same parser when an HTML document is opened. The tree is
+//! inert — nothing here creates a DOM or executes markup.
+
+import type { Align, Block, Inline, ListItem } from "./ir.ts";
+import { trimBlocks } from "./ir.ts";
+import { splitMath } from "./math.ts";
+
+type AnyNode = any;
+
+const BLOCK_NAMES = new Set([
+  "address",
+  "article",
+  "aside",
+  "blockquote",
+  "center",
+  "details",
+  "dialog",
+  "dir",
+  "div",
+  "dl",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "footer",
+  "form",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "header",
+  "hgroup",
+  "hr",
+  "li",
+  "main",
+  "menu",
+  "nav",
+  "ol",
+  "p",
+  "pre",
+  "section",
+  "summary",
+  "table",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+  "tr",
+  "ul",
+]);
+
+const DROP_NAMES = new Set([
+  "script",
+  "style",
+  "meta",
+  "link",
+  "base",
+  "title",
+  "template",
+  "noscript",
+  "iframe",
+  "object",
+  "embed",
+  "canvas",
+  "svg",
+]);
+
+interface Context {
+  base: string | null;
+}
+
+function name(node: AnyNode): string {
+  return typeof node?.nodeName === "string" ? node.nodeName.toLowerCase() : "";
+}
+
+function children(node: AnyNode): AnyNode[] {
+  return Array.isArray(node?.childNodes) ? node.childNodes : [];
+}
+
+function attr(node: AnyNode, key: string): string | null {
+  for (const entry of node?.attrs ?? []) {
+    if (entry.name.toLowerCase() === key) return entry.value;
+  }
+  return null;
+}
+
+function hasAttr(node: AnyNode, key: string): boolean {
+  return attr(node, key) !== null;
+}
+
+function descend(node: AnyNode, wanted: string): AnyNode | null {
+  for (const child of children(node)) {
+    if (name(child) === wanted) return child;
+    const found = descend(child, wanted);
+    if (found) return found;
+  }
+  return null;
+}
+
+function textContent(node: AnyNode): string {
+  if (name(node) === "#text") return String(node.value ?? "");
+  let out = "";
+  for (const child of children(node)) out += textContent(child);
+  return out;
+}
+
+function hidden(node: AnyNode): boolean {
+  if (hasAttr(node, "hidden")) return true;
+  const style = (attr(node, "style") ?? "").toLowerCase();
+  return /display\s*:\s*none/.test(style) || /visibility\s*:\s*hidden/.test(style);
+}
+
+function cleanText(value: string): string {
+  return value.replace(/\u00a0/g, " ").replace(/[ \t\r\n\f]+/g, " ");
+}
+
+function trimInline(nodes: Inline[]): Inline[] {
+  const out: Inline[] = [];
+  for (const node of nodes) {
+    if (node.kind === "text") {
+      if (!node.value) continue;
+      const previous = out[out.length - 1];
+      if (previous?.kind === "text") previous.value += node.value;
+      else out.push({ ...node });
+    } else {
+      out.push(node);
+    }
+  }
+  if (out[0]?.kind === "text") out[0].value = out[0].value.replace(/^\s+/, "");
+  const last = out[out.length - 1];
+  if (last?.kind === "text") last.value = last.value.replace(/\s+$/, "");
+  return out.filter((node) => node.kind !== "text" || node.value.length > 0);
+}
+
+function hasVisible(nodes: Inline[]): boolean {
+  return nodes.some((node) => node.kind !== "text" || node.value.trim() !== "");
+}
+
+function wrap(kind: "strong" | "em" | "strike" | "sup" | "sub", nodes: Inline[]): Inline[] {
+  const body = trimInline(nodes);
+  return body.length > 0 ? [{ kind, children: body }] : [];
+}
+
+function styleFlags(node: AnyNode): { strong: boolean; em: boolean; strike: boolean; sup: boolean; sub: boolean } {
+  const style = (attr(node, "style") ?? "").toLowerCase();
+  return {
+    strong: /font-weight\s*:\s*(?:bold|bolder|[6-9]\d{2})/.test(style),
+    em: /font-style\s*:\s*(?:italic|oblique)/.test(style),
+    strike: /text-decoration[^;]*line-through/.test(style),
+    sup: /vertical-align\s*:\s*super/.test(style),
+    sub: /vertical-align\s*:\s*sub/.test(style),
+  };
+}
+
+function safeHref(value: string | null): string | null {
+  if (!value) return null;
+  const href = value.trim();
+  if (!href) return null;
+  if (/^(?:javascript|vbscript|data):/i.test(href)) return null;
+  if (/^(?:https?:|mailto:|tel:|#|\/|\.\/|\.\.\/|[a-z0-9_-]+\/)/i.test(href)) return href;
+  return href;
+}
+
+function annotateMath(node: AnyNode): { tex: string | null; display: boolean } {
+  const annotation = descend(node, "annotation");
+  const encoding = annotation ? attr(annotation, "encoding") ?? "" : "";
+  const tex =
+    annotation && /x-tex|tex/i.test(encoding)
+      ? textContent(annotation).trim()
+      : null;
+  const display =
+    /katex-display/.test(attr(node, "class") ?? "") ||
+    (name(node.parentNode) === "span" && /katex-display/.test(attr(node.parentNode, "class") ?? "")) ||
+    /display/.test(attr(node, "mode") ?? "");
+  return { tex, display };
+}
+
+function mathInline(node: AnyNode): Inline[] {
+  const { tex, display } = annotateMath(node);
+  if (tex) return [{ kind: "math", tex, display }];
+  if (name(node) === "script") {
+    const body = textContent(node).trim();
+    return body ? [{ kind: "math", tex: body, display: /display/.test(attr(node, "mode") ?? "") }] : [];
+  }
+  const text = textContent(node).trim();
+  return text ? [{ kind: "text", value: text }] : [];
+}
+
+function largestSrcset(value: string | null): string | null {
+  if (!value) return null;
+  let best: { url: string; width: number } | null = null;
+  for (const part of value.split(",")) {
+    const [url, descriptor] = part.trim().split(/\s+/);
+    if (!url) continue;
+    const width = descriptor?.endsWith("w") ? Number.parseFloat(descriptor) : 0;
+    if (!best || width > best.width) best = { url, width };
+  }
+  return best?.url ?? null;
+}
+
+function imageNode(node: AnyNode, ctx: Context): Inline[] {
+  const raw =
+    attr(node, "src") ??
+    attr(node, "data-src") ??
+    attr(node, "data-original") ??
+    largestSrcset(attr(node, "srcset"));
+  if (!raw || /^cid:/i.test(raw)) return [];
+  if (/^data:/i.test(raw) && raw.length > 4_000_000) return [];
+  const width = Number.parseFloat(attr(node, "width") ?? "");
+  const height = Number.parseFloat(attr(node, "height") ?? "");
+  if ((Number.isFinite(width) && width > 0 && width <= 2) || (Number.isFinite(height) && height > 0 && height <= 2)) {
+    return [];
+  }
+  let src = raw.trim();
+  if (ctx.base && !/^[a-z][a-z0-9+.-]*:/i.test(src) && !src.startsWith("//")) {
+    try {
+      src = new URL(src, ctx.base).href;
+    } catch {
+      /* keep the original reference */
+    }
+  }
+  return [
+    {
+      kind: "image",
+      src,
+      alt: attr(node, "alt") ?? "",
+      title: attr(node, "title") ?? undefined,
+      width: Number.isFinite(width) && width > 0 ? width : undefined,
+      height: Number.isFinite(height) && height > 0 ? height : undefined,
+    },
+  ];
+}
+
+function convertInline(node: AnyNode, ctx: Context): Inline[] {
+  const tag = name(node);
+  if (tag === "#text") {
+    const value = cleanText(String(node.value ?? ""));
+    return value ? splitMath(value) : [];
+  }
+  if (tag === "#comment") return [];
+  if (DROP_NAMES.has(tag) || hidden(node)) return [];
+  if (tag === "br") return [{ kind: "break" }];
+  if (tag === "img") return imageNode(node, ctx);
+  if (tag === "math" || tag === "mjx-container" || (tag === "span" && /katex/.test(attr(node, "class") ?? ""))) {
+    return mathInline(node);
+  }
+  if (tag === "script") {
+    const type = (attr(node, "type") ?? "").toLowerCase();
+    if (/math\/tex/.test(type)) return mathInline(node);
+    return [];
+  }
+  if (tag === "code" || tag === "kbd" || tag === "samp" || tag === "tt") {
+    const value = textContent(node).replace(/\u00a0/g, " ");
+    return value ? [{ kind: "code", value }] : [];
+  }
+  if (tag === "img") return imageNode(node, ctx);
+
+  const kids = trimInline(children(node).flatMap((child) => convertInline(child, ctx)));
+  const flags = styleFlags(node);
+  if (tag === "a") {
+    const href = safeHref(attr(node, "href"));
+    if (href && kids.length > 0) {
+      return [{ kind: "link", href, title: attr(node, "title") ?? undefined, children: kids }];
+    }
+    return kids;
+  }
+  // Google Docs wraps the whole fragment in a bold element whose own style is
+  // normal; treating it as bold would embolden the entire paste.
+  const docsWrapper = /^(b|strong)$/.test(tag) && /^docs-internal-guid/.test(attr(node, "id") ?? "");
+  if (docsWrapper) return kids;
+  if (tag === "strong" || tag === "b" || flags.strong) return wrap("strong", kids);
+  if (tag === "em" || tag === "i" || flags.em) return wrap("em", kids);
+  if (tag === "s" || tag === "strike" || tag === "del" || flags.strike) return wrap("strike", kids);
+  if (tag === "sup" || flags.sup) return wrap("sup", kids);
+  if (tag === "sub" || flags.sub) return wrap("sub", kids);
+  return kids;
+}
+
+function inlineFrom(node: AnyNode, ctx: Context): Inline[] {
+  const tag = name(node);
+  if (BLOCK_NAMES.has(tag)) return [];
+  return trimInline(convertInline(node, ctx));
+}
+
+function codeLanguage(pre: AnyNode): string | null {
+  const candidates = [pre, descend(pre, "code")].filter(Boolean);
+  for (const node of candidates) {
+    const cls = attr(node as AnyNode, "class") ?? "";
+    const match = /(?:language|lang)-([\w+#.-]+)/i.exec(cls);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+function alignOf(node: AnyNode): Align {
+  const direct = (attr(node, "align") ?? "").toLowerCase();
+  if (direct === "left" || direct === "center" || direct === "right") return direct;
+  const match = /text-align\s*:\s*(left|center|right)/i.exec(attr(node, "style") ?? "");
+  if (match) return match[1].toLowerCase() as Align;
+  return null;
+}
+
+function tableBlock(node: AnyNode, ctx: Context): Block[] {
+  const rows: AnyNode[] = [];
+  const collect = (current: AnyNode) => {
+    if (name(current) === "tr") rows.push(current);
+    else for (const child of children(current)) collect(child);
+  };
+  collect(node);
+  if (rows.length === 0) return [];
+
+  const headerCells = children(rows[0]).filter((cell) => name(cell) === "th");
+  const hasHeader = headerCells.length > 0;
+  const aligns: Align[] = [];
+  const converted: Inline[][][] = [];
+  const pendingRowspan: Array<{ column: number; remaining: number }> = [];
+
+  rows.forEach((row, rowIndex) => {
+    const cells = children(row).filter((cell) => name(cell) === "td" || name(cell) === "th");
+    const line: Inline[][] = [];
+    for (const span of pendingRowspan) {
+      if (span.remaining > 0 && span.column === line.length) {
+        line.push([]);
+        span.remaining -= 1;
+      }
+    }
+    for (const cell of cells) {
+      const body = trimInline(children(cell).flatMap((child) => convertInline(child, ctx)));
+      const align = alignOf(cell);
+      const column = line.length;
+      if (aligns[column] === undefined) aligns[column] = align;
+      const colspan = Math.max(1, Math.min(20, Number.parseInt(attr(cell, "colspan") ?? "1", 10) || 1));
+      line.push(body);
+      for (let extra = 1; extra < colspan; extra += 1) line.push([]);
+      const rowspan = Math.max(1, Math.min(20, Number.parseInt(attr(cell, "rowspan") ?? "1", 10) || 1));
+      if (rowspan > 1) pendingRowspan.push({ column, remaining: rowspan - 1 });
+    }
+    if (rowIndex > 0 || hasHeader) converted.push(line);
+    else converted.push(line);
+  });
+
+  if (converted.length === 0) return [];
+  const header = hasHeader ? converted[0] : null;
+  const body = hasHeader ? converted.slice(1) : converted;
+  if (header) header.forEach((_cell, index) => { if (aligns[index] === undefined) aligns[index] = null; });
+  return [{ kind: "table", align: aligns, header, rows: body }];
+}
+
+function listBlock(node: AnyNode, ctx: Context): Block[] {
+  const ordered = name(node) === "ol";
+  const start = ordered ? Number.parseInt(attr(node, "start") ?? "1", 10) : undefined;
+  const items: ListItem[] = [];
+  for (const li of children(node).filter((child) => name(child) === "li")) {
+    const blocks = convertBlocks(children(li), ctx);
+    let task: "done" | "todo" | undefined;
+    for (const input of walk(li)) {
+      if (name(input) === "input" && (attr(input, "type") ?? "").toLowerCase() === "checkbox") {
+        task = hasAttr(input, "checked") ? "done" : "todo";
+      }
+    }
+    if (blocks.length === 0) {
+      const inline = trimInline(children(li).flatMap((child) => convertInline(child, ctx)));
+      if (inline.length > 0) blocks.push({ kind: "paragraph", children: inline });
+    }
+    items.push({ blocks, task });
+  }
+  return [{ kind: "list", ordered, start: Number.isFinite(start) ? start : undefined, items }];
+}
+
+function* walk(node: AnyNode): Generator<AnyNode> {
+  yield node;
+  for (const child of children(node)) yield* walk(child);
+}
+
+function blockNode(node: AnyNode, ctx: Context): Block[] {
+  const tag = name(node);
+  if (tag === "#text" || tag === "#comment") return [];
+  if (DROP_NAMES.has(tag) || hidden(node)) return [];
+  if (/^h[1-6]$/.test(tag)) {
+    const body = trimInline(children(node).flatMap((child) => convertInline(child, ctx)));
+    return body.length > 0 ? [{ kind: "heading", level: Number(tag[1]), children: body }] : [];
+  }
+  if (tag === "p") {
+    const body = trimInline(children(node).flatMap((child) => convertInline(child, ctx)));
+    return hasVisible(body) ? [{ kind: "paragraph", children: body }] : [];
+  }
+  if (tag === "ul" || tag === "ol") return listBlock(node, ctx);
+  if (tag === "blockquote") {
+    const blocks = convertBlocks(children(node), ctx);
+    return blocks.length > 0 ? [{ kind: "quote", blocks }] : [];
+  }
+  if (tag === "pre") {
+    const text = textContent(node).replace(/\u00a0/g, " ").replace(/^\n+|\n+$/g, "");
+    return text ? [{ kind: "code", language: codeLanguage(node), text }] : [];
+  }
+  if (tag === "table") return tableBlock(node, ctx);
+  if (tag === "hr") return [{ kind: "rule" }];
+  if (tag === "figure") {
+    const out = convertBlocks(children(node), ctx);
+    return out;
+  }
+  if (tag === "dl") {
+    const out: Block[] = [];
+    for (const child of children(node)) {
+      if (name(child) === "dt") {
+        const body = trimInline(children(child).flatMap((entry) => convertInline(entry, ctx)));
+        if (body.length) out.push({ kind: "paragraph", children: [{ kind: "strong", children: body }] });
+      } else if (name(child) === "dd") {
+        out.push(...convertBlocks(children(child), ctx));
+      }
+    }
+    return out;
+  }
+  if ((tag === "span" || tag === "div") && /katex-display/.test(attr(node, "class") ?? "")) {
+    const { tex } = annotateMath(node);
+    return tex ? [{ kind: "math", tex }] : [];
+  }
+  if (tag === "math" && /display/.test(attr(node, "display") ?? "")) {
+    const { tex } = annotateMath(node);
+    return tex ? [{ kind: "math", tex }] : [];
+  }
+  // A generic block wrapper: recurse so its paragraphs and lists survive.
+  return convertBlocks(children(node), ctx);
+}
+
+function convertBlocks(nodes: AnyNode[], ctx: Context): Block[] {
+  const out: Block[] = [];
+  let inline: Inline[] = [];
+  const flush = () => {
+    const body = trimInline(inline);
+    inline = [];
+    if (hasVisible(body)) out.push({ kind: "paragraph", children: body });
+  };
+  for (const node of nodes) {
+    const tag = name(node);
+    if (tag === "#text" || tag === "#comment" || !BLOCK_NAMES.has(tag)) {
+      inline.push(...inlineFrom(node, ctx));
+      continue;
+    }
+    flush();
+    out.push(...blockNode(node, ctx));
+  }
+  flush();
+  return out;
+}
+
+function findBase(nodes: AnyNode[]): string | null {
+  for (const node of nodes) {
+    if (name(node) === "base") {
+      const href = attr(node, "href");
+      if (href) return href;
+    }
+    const found = findBase(children(node));
+    if (found) return found;
+  }
+  return null;
+}
+
+function normalizeClipboardHtml(raw: string): string {
+  const start = raw.indexOf("<!--StartFragment-->");
+  const end = raw.indexOf("<!--EndFragment-->");
+  if (start >= 0) {
+    return raw.slice(start + "<!--StartFragment-->".length, end >= 0 ? end : undefined);
+  }
+  // Windows CF_HTML from some applications keeps its byte-offset header.
+  if (/^Version:\d/m.test(raw) && /StartHTML:/m.test(raw)) {
+    const bodyStart = raw.indexOf("<");
+    if (bodyStart > 0) return raw.slice(bodyStart);
+  }
+  return raw;
+}
+
+export async function readHtml(raw: string): Promise<Block[]> {
+  const { parse, parseFragment } = await import("parse5");
+  const html = normalizeClipboardHtml(raw);
+  let nodes: AnyNode[];
+  let base: string | null = null;
+  if (/^\s*(?:<!doctype\b|<html\b|<head\b|<body\b)/i.test(html)) {
+    const doc = parse(html) as AnyNode;
+    const htmlElement = children(doc).find((node) => name(node) === "html");
+    const body = htmlElement ? children(htmlElement).find((node) => name(node) === "body") : null;
+    nodes = children(body ?? htmlElement ?? doc);
+    base = findBase(children(htmlElement ?? doc));
+  } else {
+    const fragment = parseFragment(html) as AnyNode;
+    nodes = children(fragment);
+    base = findBase(nodes);
+  }
+  if (!base) {
+    try {
+      // A browser normally writes absolute URLs; a relative one without a base
+      // cannot be resolved and is kept as-is.
+      base = null;
+    } catch {
+      base = null;
+    }
+  }
+  return trimBlocks(convertBlocks(nodes, { base }));
+}
+
+/** Inline HTML from a Markdown token, parsed with the same rules. */
+export async function readHtmlInline(raw: string): Promise<Inline[]> {
+  const { parseFragment } = await import("parse5");
+  const fragment = parseFragment(raw) as AnyNode;
+  const base = findBase(children(fragment));
+  return trimInline(children(fragment).flatMap((child) => convertInline(child, { base })));
+}
+
+/** Plain text extraction for the last-resort fallback. */
+export function htmlToText(raw: string): string {  return normalizeClipboardHtml(raw)
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(?:p|div|li|h[1-6]|tr|blockquote)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}

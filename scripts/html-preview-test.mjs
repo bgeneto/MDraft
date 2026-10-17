@@ -372,6 +372,37 @@ const back = JSON.parse(
 check("leaving HTML removes the guest iframe", back.iframes === 0, String(back.iframes));
 check("leaving HTML restores the Markdown pane", !back.app.includes("document-html") && back.previewDisplay !== "none");
 
+const parked = JSON.parse(
+  await page.evaluate(`JSON.stringify([...document.querySelectorAll(".doc-tab-name")].map((el) => el.textContent))`),
+);
+check(
+  "leaving HTML keeps the document tab",
+  parked.length === 2 && parked.some((name) => name.includes("index.html")),
+  parked.join(", "),
+);
+await page.evaluate(`
+  [...document.querySelectorAll(".doc-tab")].find((tab) => tab.textContent.includes("index.html")).click();
+  "ok"
+`);
+let nextSrc = "";
+for (let attempt = 0; attempt < 40; attempt += 1) {
+  nextSrc = await page.evaluate(
+    `document.querySelector(".html-preview-frame.active")?.getAttribute("src") || ""`,
+  );
+  if (nextSrc && nextSrc !== active.src) break;
+  await sleep(250);
+}
+if (!nextSrc || nextSrc === active.src) {
+  check("returning to the HTML tab rebuilds the guest", false, nextSrc || "no guest");
+} else {
+  const returned = await frameClient(nextSrc);
+  const marker = await returned.evaluate(
+    `document.getElementById("css-marker") ? getComputedStyle(document.getElementById("css-marker")).color : ""`,
+  );
+  check("returning to the HTML tab rebuilds the guest", marker === "rgb(1, 128, 2)", marker);
+  returned.close();
+}
+
 frame.close();
 page.close();
 

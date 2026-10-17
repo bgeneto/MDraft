@@ -490,12 +490,15 @@ pub fn import_image(
 }
 
 /// Download an image from the web. The only outbound request this app makes,
-/// and only because the user pasted or dropped a URL.
+/// and only because the user pasted/dropped a URL or a rich fragment containing
+/// one. `timeout_ms` lets the rich-paste path cap a single image; the explicit
+/// URL path keeps the 25-second default.
 #[tauri::command]
 pub fn download_image(
     url: String,
     document_path: Option<String>,
     options: ImageOptions,
+    timeout_ms: Option<u64>,
 ) -> Result<SavedImage, String> {
     let target = url.trim();
     if !(target.starts_with("http://") || target.starts_with("https://")) {
@@ -505,8 +508,11 @@ pub fn download_image(
         return Ok(keep_original(url, "remote", &options));
     }
 
+    let timeout = timeout_ms
+        .map(|ms| Duration::from_millis(ms.clamp(1_000, 60_000)))
+        .unwrap_or(DOWNLOAD_TIMEOUT);
     let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(DOWNLOAD_TIMEOUT))
+        .timeout_global(Some(timeout))
         .user_agent("MDraft")
         .build()
         .into();
@@ -1009,7 +1015,7 @@ mod tests {
     #[test]
     fn downloads_refuse_non_http_schemes() {
         for url in ["file:///etc/passwd", "ftp://host/x.png", "data:image/png;base64,AAAA"] {
-            let err = download_image(url.to_string(), None, opts("assetsDir")).unwrap_err();
+            let err = download_image(url.to_string(), None, opts("assetsDir"), None).unwrap_err();
             assert!(err.contains("non-HTTP"), "{url} produced: {err}");
         }
     }

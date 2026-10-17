@@ -7,6 +7,7 @@
   </head>
   <body>
     <div id="app" class="app">
+      <div id="doc-tabs" class="doc-tabs" role="tablist" aria-label="Open documents"></div>
       <aside id="sidebar" class="sidebar">
         <div class="sidebar-tabs" role="tablist">
           <button id="tab-outline" class="sidebar-tab" role="tab" aria-selected="true">Outline</button>
@@ -40,7 +41,7 @@
             <button id="mode-split" class="status-btn" title="Split view">Split</button>
             <button id="mode-preview" class="status-btn" title="Preview only">Preview</button>
           </span>
-          <span class="status-flags" role="group" aria-label="Editor modes">
+          <span class="status-flags" role="group" aria-label="Editor flags">
             <button id="flag-focus" class="status-flag" data-on="false" aria-pressed="false" aria-label="Focus mode: off" title="Focus mode (F8)">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
                 <circle cx="12" cy="12" r="7.5" />
@@ -74,6 +75,14 @@
                 <path d="M7 3v5h8" />
               </svg>
               <span class="flag-label">Auto</span><span class="flag-state">off</span>
+            </button>
+            <button id="flag-spellcheck" class="status-flag" data-on="true" aria-pressed="true" aria-label="Check spelling: on" title="Check spelling">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M2.8 17.5 7.6 5l4.8 12.5" />
+                <path d="M4.7 13.2h5.8" />
+                <path d="m14 14.8 2.4 2.4 4.6-7.2" />
+              </svg>
+              <span class="flag-label">Spell</span><span class="flag-state">on</span>
             </button>
           </span>
           <span id="status-file" class="status-item">Untitled</span>

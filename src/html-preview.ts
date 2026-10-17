@@ -109,7 +109,6 @@ const BLOCK_TAGS = new Set([
 ]);
 
 const SKIP_TAGS = new Set([
-  "head",
   "script",
   "style",
   "textarea",
@@ -165,6 +164,16 @@ export async function buildHtmlPreview(
 
   const walk = (node: any): void => {
     if (!node) return;
+
+    if (node.tagName && addsCrossOrigin(node)) {
+      const startTag = node.sourceCodeLocation?.startTag;
+      if (startTag && Number.isFinite(startTag.endOffset)) {
+        let at = startTag.endOffset - 1;
+        if (at > startTag.startOffset && source[at - 1] === "/") at -= 1;
+        insertions.push({ at, text: ' crossorigin="anonymous"' });
+      }
+    }
+
     if (node.tagName && SKIP_TAGS.has(node.tagName)) return;
 
     if (node.tagName && BLOCK_TAGS.has(node.tagName)) {
@@ -198,6 +207,51 @@ export async function buildHtmlPreview(
     output = output.slice(0, insertion.at) + insertion.text + output.slice(insertion.at);
   }
   return output;
+}
+
+/**
+ * WebKitGTK refuses a local stylesheet, image or classic script from the preview
+ * scheme unless the request is CORS-mode, even when the document did not ask for
+ * `crossorigin`. Mark only the local subresources; a CDN URL is left exactly as
+ * written, because many CDNs do not send CORS headers for images.
+ *
+ * The attribute is added to the preview copy, never to the saved source.
+ */
+function addsCrossOrigin(node: any): boolean {
+  const attrs: Array<{ name: string; value: string }> = node.attrs ?? [];
+  if (attrs.some((attr) => attr.name.toLowerCase() === "crossorigin")) return false;
+
+  const value = (name: string): string | null => {
+    const attr = attrs.find((candidate) => candidate.name.toLowerCase() === name);
+    return attr ? attr.value : null;
+  };
+  const local = (url: string | null): boolean => {
+    if (!url) return false;
+    const trimmed = url.trim();
+    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("//")) return false;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return false;
+    return true;
+  };
+
+  switch (node.tagName) {
+    case "link": {
+      const rel = (value("rel") ?? "").toLowerCase().split(/\s+/);
+      return rel.includes("stylesheet") && local(value("href"));
+    }
+    case "script":
+      return local(value("src"));
+    case "img":
+      return local(value("src")) || local(value("srcset"));
+    case "source":
+      return local(value("src")) || local(value("srcset"));
+    case "video":
+      return local(value("src")) || local(value("poster"));
+    case "audio":
+    case "track":
+      return local(value("src"));
+    default:
+      return false;
+  }
 }
 
 function bridgeMarkup(token: string, nonce: string): string {
@@ -445,28 +499,36 @@ export function createHtmlPreview(
       // A new document gets a new nonce and fresh frames. Do not clear the
       // backend here: the next render overwrites it, and an asynchronous clear
       // racing that write would 404 the new document.
+      // Bump the generation first so a render that is still building the
+      // previous document cannot mount its frame after this tab has gone.
+      generation += 1;
       dropFrames();
       nonce = randomToken();
       guestBase = null;
     },
 
     async render(source, root, filename, scripts) {
-      generation += 1;
+      const mine = ++generation;
+      // Captured now: reset() replaces `nonce` while this build is awaiting,
+      // and a stale render must not publish the old document under the new one.
+      const previewNonce = nonce;
       const bridgeNonce = randomToken();
       const token = randomToken();
       let html: string;
       try {
         html = await buildHtmlPreview(source, token, bridgeNonce);
       } catch (error) {
+        if (mine !== generation) return;
         callbacks.onError(`Could not prepare the HTML preview: ${String(error)}`);
         return;
       }
+      if (mine !== generation) return;
 
       let url: string;
       try {
         url = (
           await api.setHtmlPreview({
-            nonce,
+            nonce: previewNonce,
             bridgeNonce,
             source: html,
             root,
@@ -475,9 +537,11 @@ export function createHtmlPreview(
           })
         ).url;
       } catch (error) {
+        if (mine !== generation) return;
         callbacks.onError(`Could not start the HTML preview: ${String(error)}`);
         return;
       }
+      if (mine !== generation) return;
 
       const next = makeFrame(url, token);
       guestBase = url;
@@ -496,6 +560,7 @@ export function createHtmlPreview(
     },
 
     dispose() {
+      generation += 1;
       dropFrames();
       guestBase = null;
       void api.clearHtmlPreview().catch(() => {});

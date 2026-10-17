@@ -45,8 +45,10 @@ The frontend **cannot** touch the filesystem. Every file operation is a
 Two rules that are not negotiable, both documented in the README:
 
 1. **No licensing, telemetry, or start-up network activity.** The only outbound
-   request the application makes itself is `images::download_image`, reached
-   solely by a user pasting or dropping an image URL. An HTML document the reader
+   request the application makes itself is `images::download_image`, reached by a
+   user pasting or dropping an image URL, or by pasting rich content that contains
+   remote images. Both are user actions; *Preferences › Image* can turn each one
+   off. An HTML document the reader
    opens may request the resources its own markup links; that is the document's
    request, not the application's.
 2. **No dead UI.** If a Typora option is not implemented, the Preferences panel
@@ -192,17 +194,22 @@ rewrite from scratch.
 | `npm run stage` | `scripts/stage-artifacts.mjs` | Re-stage what is already built |
 | `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
-| `npm run test:rust` | `cargo test` | 75 tests (74 run, one ignored download), on Windows and on Linux |
+| `npm run test:rust` | `cargo test` | 77 tests on Windows (76 run, one ignored download); Linux has 76 total (75 run, one ignored) |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. Puts back the working tree and the developer's own settings afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
-| `npm run smoke` | `scripts/dom-smoke.mjs` | 90 checks against `samples/feature-tour.md` |
+| `npm run smoke` | `scripts/dom-smoke.mjs` | 93 checks against `samples/feature-tour.md` |
 | `npm run spellcheck` | `scripts/spellcheck-test.mjs` | Underlines a misspelling, then clears it when spelling is turned off |
 | `npm run audit` | `scripts/audit-document.mjs` | Render metrics for whatever document is loaded |
 | `npm run math` | `scripts/math-render-check.mjs` | 10 checks against the physics paper |
 | `npm run syntax` | `scripts/syntax-theme-test.mjs` | 7 checks that highlighting is real |
-| `npm run html` | `scripts/html-preview-test.mjs` | 40 checks of the sandboxed HTML guest |
+| `npm run html` | `scripts/html-preview-test.mjs` | 42 checks of the sandboxed HTML guest |
 | `npm run export` | `scripts/export-test.mjs` | 34 checks of every export path, against real pandoc |
 | `npm run typography` | `scripts/typography-test.mjs` | 26 checks that each face loads, each OpenType switch changes pixels, and the preset matrix and Semibold weights hold |
-| `npm run shortcuts` | `scripts/shortcut-test.mjs` | 32 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, and that the zoom chip follows the level |
+| `npm run shortcuts` | `scripts/shortcut-test.mjs` | 39 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, that the zoom chip follows the level, and that a new tab keeps the previous buffer's undo |
+| `npm run tabs` | `scripts/document-tabs-test.mjs` | 68 checks of several open documents: sidebar and Recents, `open-files`, caret and scroll per tab, dirty dot, × and middle-click, Ctrl+Tab, the disk poll, Auto Save across tabs, the last tab |
+| `npm run test:sessions` | `scripts/sessions-test.mjs` | 43 unit checks of `src/sessions.ts`, with no application and no build |
+| `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 51 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
+| `npm run paste` | `scripts/rich-paste-test.mjs` | 23 checks of rich paste through the real UI: destination detection, conversion, preferences, Ctrl+Shift+V, undo |
+| `npm run image:syntax` | `scripts/image-syntax-test.mjs` | 14 checks of bitmap and remote-image handling in Typst, Markdown and HTML, including the Image preference |
 | `npm run licence` | `scripts/licence-test.mjs` | 4 checks that the bundled typefaces' licences ship inside the application. Run against its own instance: it opens a document |
 | `npm run images` | `scripts/image-paste-test.mjs` | Image paste through the real UI |
 | `npm run screenshot` | `scripts/screenshot.mjs` | PNG of the running window |
@@ -219,7 +226,7 @@ All of these need the app already running with CDP enabled (see
 | `audit-document.mjs` | `[port] [label]` | any — `label` names it in the output | Block/anchor counts, table and code-fence totals, KaTeX errors, stray `$` in prose |
 | `math-render-check.mjs` | `[port]` | `docs/samples/physrevb_70_035307.md` | That fonts actually load and that fractions and radicals have real geometry |
 | `syntax-theme-test.mjs` | `[port]` | `samples/feature-tour.md` | Distinct computed token colours, and that switching palette changes them |
-| `html-preview-test.mjs` | `[port]` | `samples/html-tour/index.html` | The guest iframe, its sandbox and IPC boundary, local CSS/images/modules, sync, blink, scripts-off, outline and the return to Markdown. It connects to the iframe target as well as the page |
+| `html-preview-test.mjs` | `[port]` | `samples/html-tour/index.html` | The guest iframe, its sandbox and IPC boundary, local CSS/images/modules, sync, blink, scripts-off, outline, the return to Markdown and the HTML tab coming back. It connects to the iframe target as well as the page |
 | `export-test.mjs` | `[port] [--install]` | `samples/feature-tour.md` | That pandoc really converts: the bytes of each output are inspected. `--install` additionally exercises the pandoc download, which is why it is opt-in |
 | `typography-test.mjs` | `[port]` | any | Screenshots text with each OpenType feature off and on and compares pixels, then asserts the preset matrix and the Semibold weights. Width cannot measure a monospaced face, so nothing narrower would work |
 | `shortcut-test.mjs` | `[port] [document]` | `samples/feature-tour.md` | Presses each accelerator through a synthetic keydown and checks what changed. Also reads the `accelerators` registry, which is the only way to see an accelerator the platform rejected |
@@ -228,6 +235,11 @@ All of these need the app already running with CDP enabled (see
 | `image-paste-test.mjs` | `[port] [imageUrl] [localPath]` | `samples/feature-tour.md` | Clipboard, local and remote image paths, and the markdown that results |
 | `image-path-paste-test.mjs` | `[port]` | `samples/feature-tour.md` | Selects the `./image.png` placeholder with the mouse, pastes a relative path beside the document, and checks the text is replaced and the preview loads it |
 | `spellcheck-test.mjs` | `[port]` | `samples/feature-tour.md` | Sets the dictionary to English, types a misspelling, requires the wavy underline, then turns spelling off and requires the mark to be gone |
+| `document-tabs-test.mjs` | `[port]` | `samples/feature-tour.md` | That several documents stay open sanely: a path already open is focused, the caret and both scroll offsets come back, the disk poll reloads a clean inactive tab and leaves a dirty one alone, Auto Save writes every dirty tab, and a large document no longer breaks the next New |
+| `sessions-test.mjs` | — | none — runs without the application | The session store's rules: insertion after the active tab, untitled names, one tab per path under both case rules, the neighbour that takes over on close, wrap-around, and the empty-list invariant |
+| `paste-convert-test.mjs` | — | none — runs without the application | The paste matrix: clipboard and document detection, all reader/renderer pairs, escaping, sanitisation, caps and image syntax |
+| `rich-paste-test.mjs` | `[port]` | `samples/feature-tour.md` | That the paste event converts HTML, leaves Markdown/plain text alone, detects an unsaved Typst/Markdown/HTML buffer, honours Ctrl+Shift+V and the preference, and undoes in one step |
+| `image-syntax-test.mjs` | `[port]` | `samples/typst-tour.typ` | A clipboard bitmap becomes `#image`, a remote image is downloaded or kept according to the Image preference, and the files land in the document's assets folder |
 | `set-palette.mjs` | `[port] [paletteId] [--split]` | `samples/feature-tour.md` | Not a test: drives the palette through the Preferences UI so you can screenshot a theme |
 | `screenshot.mjs` | `[port] [out.png] [setupExpression]` | any | Not a test: captures the window, optionally after running a JS setup string |
 | `test-close.ps1` | `[-Exe path] [-Doc path] [-TimeoutSeconds 12]` | `samples\feature-tour.md` | Launches the release binary, sends WM_CLOSE, and asserts the process exits and writes `.window-state.json` |
@@ -427,16 +439,21 @@ hash the pixels.
 
 ## Testing
 
-Eight layers, cheapest first. Run them in this order when changing anything.
+Thirteen layers, cheapest first. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 75 | Path handling, sanitisers, file IO, settings, token estimate, spellcheck, HTML preview scheme |
-| DOM smoke | `npm run smoke` | 90 | Rendering, pane sync, preferences, math, fonts, status icons |
+| Rust unit | `npm run test:rust` | 77 | Path handling, sanitisers, file IO, settings, token estimate, spellcheck, HTML preview scheme |
+| Session store | `npm run test:sessions` | 43 | Tab order, untitled names, path identity, the neighbour on close — no application needed |
+| Paste conversion | `npm run paste:convert` | 51 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, image syntax |
+| DOM smoke | `npm run smoke` | 93 | Rendering, pane sync, preferences, math, fonts, status icons |
+| Rich paste | `npm run paste` | 23 | The paste event, destination notice, preferences, Ctrl+Shift+V, undo |
+| Image syntax | `npm run image:syntax` | 14 | Bitmap and remote-image handling in Typst, Markdown and HTML, plus the Image preference |
 | Math | `npm run math` | 10 | Font loading, fraction and radical geometry |
 | Syntax | `npm run syntax` | 7 | Token colours, palette switching |
-| HTML guest | `npm run html` | 40 | Sandbox, IPC boundary, local assets, sync/blink, scripts-off, outline |
+| HTML guest | `npm run html` | 42 | Sandbox, IPC boundary, local assets, sync/blink, scripts-off, outline |
+| Document tabs | `npm run tabs` | 68 | Several open documents, the disk poll, Auto Save across tabs, caret and scroll per tab |
 | Close | `.\scripts\test-close.ps1` | 4 | The window really exits and saves its state |
 | Document audit | `npm run audit` | — | Real-world render quality on big files |
 
@@ -455,6 +472,12 @@ application, which no DOM test can survive. It launches the release binary, send
 WM_CLOSE — exactly what the title-bar X sends — and asserts that the process
 exits and that `.window-state.json` was written. Run it after any change to
 `capabilities/default.json`.
+
+It closes a window whose one document is clean. The guard's save-all path —
+several dirty tabs, one native prompt each — needs those prompts answered, which
+CDP cannot do, so that path stays manual. `sessions-test.mjs` covers the store
+invariants the guard relies on (which sessions are in the list, what `remove`
+returns, that the active session is always defined), not the prompts themselves.
 
 ### Running the CDP tests correctly
 
@@ -532,6 +555,15 @@ literals; and a backtick ends a template literal, so use `\x60` or restructure.
 Nested quoting in an inline `node -e "…"`. Write the script to a file instead —
 every non-trivial snippet here lives in `scripts/`.
 
+**`ReplaceFileW EIO (Win32 1175): C:\…\README.md` from the edit tool**
+The file was open in another program that did not grant delete sharing, so
+Windows could not replace it atomically — Notepad++ left open on a file under
+edit is the usual culprit here. Nothing is wrong with the patch or the file.
+Retry the same edit once; the second attempt succeeds as soon as the external
+handle is released. Do not switch to an in-place shell write to work around it:
+it bypasses the tool's read-before-write check and the other program's buffer
+then overflows the change on its next save.
+
 **`document.fonts.check()` is false for a font that exists**
 Web fonts load lazily. `check()` reports whether a face is *active*, not whether
 it is declared. `await document.fonts.load('1em KaTeX_AMS')` first, then check.
@@ -550,6 +582,20 @@ directory from the raw bytes.
 **A pasted URL lands in the document *and* becomes an image**
 `preventDefault()` was called from a promise continuation. The decision must be
 synchronous with the event; only the work may be deferred.
+
+**Typst list items are separated by a top-level `Space`, not by another node in the list**
+The Lezer tree puts `Space "\n"` between sibling `ListItem`s. Treating every
+non-list node as the end of the list produced one list per item, and the Markdown
+renderer then joined them with blank lines. Ignore whitespace-only nodes while a
+list is open (`space.trim() === "" && list && inline.length === 0`), and inspect
+the tree before assuming the list is contiguous.
+
+**A CDP test reading `.cm-content.innerText` sees extra blank lines**
+CodeMirror's content element includes the visual gap between lines, so
+`innerText` does not equal the buffer and a string comparison fails even when the
+paste is correct. Join `[...document.querySelectorAll('.cm-line')].map((line) =>
+line.textContent)` instead; it is the rendered source, in order. The internal
+`cmView` is not exposed by this build, so do not rely on it either.
 
 **`npm run dist` succeeds but `bin/` is empty**
 `stage-artifacts.mjs` exits non-zero with the path it searched when it finds no
@@ -637,6 +683,18 @@ of ~78 KB, and it lists no `dist/` asset at all. A size comparison or a benchmar
 taken from such a binary is worthless — build through `npm run dist` /
 `tauri build`. This is how a "the thin build is 7.9 MB instead of 12.0 MB" claim
 was produced and then had to be retracted.
+
+**`npm test` builds, prints `building ... PASS`, then the new UI is simply absent**
+The suites ran the previous binary. `tauri build` had written
+`Built application at: T:\Temp\cursor-sandbox-cache\...\cargo-target\release\mdraft.exe`
+because the agent sandbox redirects `CARGO_TARGET_DIR` out of `src-tauri\target`.
+`scripts/test-all.mjs` only stages `src-tauri\target\release\mdraft.exe`, so a
+green build line still tests the exe whose timestamp predates the edit. The
+false conclusion was that the feature had not landed: no `.doc-tab`, and
+`file.close` / `file.nextTab` / `file.prevTab` reported `MISSING`. Compare the
+exe's `LastWriteTime` with the source, and search the bytes for a string only
+the new menu has (`Close Tab`). Copy the sandbox binary over
+`src-tauri\target\release\mdraft.exe` before `--no-build`.
 
 **A test that launches the app can leave it running and break the next build**
 This is how the failure above gets manufactured. Any script that starts
@@ -913,7 +971,7 @@ binary at `src-tauri\target\debug\deps\mdraft_lib-*.exe` cannot create
 runtime reports as
 `HRESULT(0x800700AA): "The requested resource is in use."` (sometimes
 `0x8007139F`). Neither is profile corruption. Copy the test executable or the app
-to a directory outside the workspace and run it there: all 74 runnable tests pass
+to a directory outside the workspace and run it there: all 75 runnable tests pass
 and the window starts. `cargo test` still has to be invoked from the workspace
 through the MSVC wrapper, so run the executable it produces from `%TEMP%`.
 
@@ -993,9 +1051,8 @@ the handler through the accelerator registry, and `menu_state` proves the check.
 the restored window was 1770 px wide, but `window.innerWidth` was **1073**, under
 the 1080 px media query, so the labels were hidden and the screenshot looked like
 a CSS bug. Measure `innerWidth` and `devicePixelRatio` over CDP before choosing a
-breakpoint. The four flags plus a long cursor selection also truncate the word
-and token counts near 1070 px; keep the visible names short (`Type`, `Auto`) and
-the full names in the tooltip.
+breakpoint. The five flags plus a long cursor selection also truncate the word
+and token counts near 1070 px; keep the visible names short (`Type`, `Auto`).
 
 **The HTML preview iframe loads but every Tauri command from it hangs instead of rejecting**
 A sandboxed iframe with an opaque origin sends `Origin: null`; the IPC custom
@@ -1022,14 +1079,43 @@ reach `parent.document` and remove the sandbox. The guest is deliberately opaque
 local fonts and ES modules get CORS on the preview scheme instead. The preview
 suite asserts `parent.document` throws.
 
-**Modules and fonts fail in the opaque iframe unless the scheme sends CORS**
-An opaque iframe is cross-origin even for its own URL. CSS, images and classic
-scripts load without CORS, but `@font-face` and `<script type="module">` do not.
-Send `Access-Control-Allow-Origin: *` only for font responses and for script
-responses whose `Sec-Fetch-Dest` is `script`; a `fetch()` of a `.js` file is
-`Sec-Fetch-Dest: empty` and must not get the header. WebKit may omit
-`Sec-Fetch-Dest`, which is why the code has an extension fallback and the Linux
-checklist is manual.
+**On Linux, the HTML preview shows linked CSS unstyled, images as alt text and classic scripts unrun**
+The first Linux launch looked like a parser bug: only `<script type="module">`
+reached the scheme handler. WebKitGTK requires a local stylesheet, image or
+classic script loaded from this custom scheme to be a **CORS-mode** request; a
+plain no-cors `<link>`, `<img>` or `<script src>` is dropped before any network
+request, so the handler never sees it. Modules already are CORS-mode and an
+inline `<style>` hides the CSS failure. The fix has two halves: the preview copy
+adds `crossorigin="anonymous"` to **local** `link[rel=stylesheet]`, `script[src]`,
+`img`, `source`, `video` and `audio` (never to CDN URLs, whose images may not send
+CORS), and `allows_cors` answers static asset kinds even when `Sec-Fetch-Dest` is
+absent. A `fetch()` still reports `Sec-Fetch-Dest: empty` and gets no header, and
+`connect-src` blocks it. Verify with a screenshot, not with the DOM: the source
+pane is correct either way.
+
+**`bin/linux/amd64` offers both the old and the new version after a version bump**
+`build-linux.sh` copies every `.deb`/`.AppImage` it finds under
+`~/.cache/mdraft-build/src-tauri/target/release/bundle/`, and the cache is not
+cleared by the next build, so a 0.2.1 build also shipped the cached 0.1.0 `.deb`
+and AppImage. Delete `bundle/deb` and `bundle/appimage` in the cache before a
+release build, or filter by the current version. Check the printed collection
+list, not just the exit code: the stale files look like successful outputs.
+
+**A tab switch throws `RangeError: Position 30262 is out of range for changeset of length 2532`, and the command silently does nothing**
+The numbers are two different documents: `2532` is the buffer on screen, `30262`
+a position from a larger one. A restored `EditorState` carries CodeMirror's
+`Language.state` parse context, whose `skipped` ranges belong to the document the
+state was captured from; `view.dispatch({changes})` maps them through the new
+change set and `ParseContext.changes` throws when one lies beyond the buffer. The
+symptom is *not* an error: `runMenuAction` catches handler rejections and only
+calls `toast(...)`, so Ctrl+N "does nothing" and the tab appears much later, when
+an unrelated dispatch happens to succeed. No suite saw it because every fixture
+is small. Drop the grammar — `languageCompartment.reconfigure([])` — before
+replacing the buffer and immediately after `view.setState()`, then let
+`setLanguage` install it again for the document on screen. Two habits follow: when
+a menu command "does nothing", read `#toast` (and `Runtime.exceptionThrown`)
+before touching the handler, and treat a state captured for one document as
+unusable for another.
 
 ## Adding a preference, end to end
 
@@ -1055,6 +1141,7 @@ If the setting changes the editor's appearance, call it through
 ```
 src/
   main.ts            shell: document lifecycle, menus, status bar, pane sync
+  sessions.ts        open documents: one session per tab, one EditorState each
   editor.ts          CodeMirror 6 setup, incremental word/line metrics, EditorHandle API
   spellcheck.ts      spelling marks, language detection, suggestion menu
   markdown.ts        markdown → HTML; math extraction, mermaid, alerts, anchors
@@ -1062,7 +1149,10 @@ src/
   html-bridge.js     guest-side scroll/click/keyboard bridge (inlined, not imported)
   html-language.ts   lazy CodeMirror HTML grammar
   syntax-themes.ts   editor palettes: token colours and writing surface
+  image-syntax.ts    the one image markup builder for Markdown, Typst and HTML
   images.ts          paste, drop and download of images
+  paste/             rich paste: IR, destination/source detection, readers,
+                     renderers, HTML sanitizer and image resolution
   preferences.ts     the Preferences panel and its declarative rows
   sidebar.ts         outline (active-marker updates) / file list / recent files
   api.ts             typed wrappers over every Rust command
@@ -1201,11 +1291,11 @@ platform and fails on the other.
    reads the latter for the bundle, and the two must agree. `npm run
    check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
-3. `npm run test:rust` — 75 tests (one ignored: the pandoc download). Run them on Linux too
+3. `npm run test:rust` — 76 tests (one ignored: the pandoc download). Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run math`,
-   `npm run syntax` — 90 + 10 + 7 + 40 checks.
+   `npm run syntax` — 93 + 10 + 7 + 42 checks.
 5. `npm run audit` against both `docs/sample-files` documents and compare the
    counts with the table in the README.
 6. `npm run dist` — installers and checksums land in `bin/<os>/<arch>/`.

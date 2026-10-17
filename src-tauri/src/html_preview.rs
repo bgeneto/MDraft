@@ -12,10 +12,13 @@
 //!    never written beside the user's document.
 //!
 //! The guest iframe is sandboxed without `allow-same-origin`, so its origin is
-//! opaque. That is why fonts and ES modules need CORS on the protocol even
-//! though the document itself is served by the same scheme. CORS is limited to
-//! font responses and to script responses whose `Sec-Fetch-Dest` is `script`;
-//! a `fetch()` of a `.js` file must not be able to read it as text.
+//! opaque. That is why fonts, ES modules and — on WebKitGTK — local stylesheets,
+//! images and classic scripts need CORS on the protocol even though the document
+//! itself is served by the same scheme. The frontend marks those local assets
+//! `crossorigin` in the preview copy; the handler answers with
+//! `Access-Control-Allow-Origin` for static asset kinds. A `fetch()` is still
+//! blocked by `connect-src`, and a request that identifies itself as `empty`
+//! gets no header.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -258,12 +261,13 @@ async fn serve_asset(
   };
 
   let mime = mime_for(&extension);
+  let cors = allows_cors(&extension, request);
   let mut builder = Response::builder()
     .status(StatusCode::OK)
     .header(header::CONTENT_TYPE, mime)
     .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
     .header(header::CACHE_CONTROL, "no-store");
-  if allows_cors(&extension, request) {
+  if cors {
     builder = builder.header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
   }
   let body = if head { Vec::new() } else { bytes };
@@ -388,29 +392,52 @@ fn mime_for(extension: &str) -> &'static str {
   }
 }
 
-/// CORS is needed by an opaque iframe for fonts and ES modules.
+/// CORS is needed by an opaque iframe for fonts, ES modules and WebKitGTK's
+/// static assets.
 ///
-/// It is deliberately not sent for CSS, images, data files or a `fetch()` of a
-/// script. `Sec-Fetch-Dest` is a forbidden request header, so a document cannot
-/// label its own request as a module to read a file as text.
+/// Chromium identifies element requests (`script`, `style`, `image`, `font`) and
+/// gets a header only for those; a `fetch()` reports `empty` and must not read a
+/// local file. WebKitGTK omits the metadata entirely, so static asset kinds are
+/// allowed there. `.json`, `.txt` and other data files never match, and the CSP's
+/// `connect-src` independently blocks a local `fetch()` on every platform.
 fn allows_cors(extension: &str, request: &Request<Vec<u8>>) -> bool {
-  let font = matches!(extension, "woff" | "woff2" | "ttf" | "otf");
-  if font {
-    return true;
-  }
-  if !matches!(extension, "js" | "mjs") {
-    return false;
-  }
+  let static_asset = matches!(
+    extension,
+    "js"
+      | "mjs"
+      | "css"
+      | "woff"
+      | "woff2"
+      | "ttf"
+      | "otf"
+      | "png"
+      | "jpg"
+      | "jpeg"
+      | "gif"
+      | "webp"
+      | "avif"
+      | "bmp"
+      | "ico"
+      | "svg"
+      | "mp3"
+      | "wav"
+      | "ogg"
+      | "mp4"
+      | "webm"
+  );
   match request
     .headers()
     .get("sec-fetch-dest")
     .and_then(|value| value.to_str().ok())
   {
-    Some("script") => true,
-    // WebKitGTK does not always send the Sec-Fetch metadata. Keeping modules
-    // working there costs the ability to hide script text from `fetch`; the
-    // platform is covered by the manual checklist.
-    None => true,
+    Some("script" | "style" | "image" | "font" | "audio" | "video" | "track") => true,
+    // WebKitGTK does not send the Sec-Fetch metadata. It also refuses a
+    // stylesheet, image or classic script from this scheme when the response
+    // carries no CORS header, even though the document asked for it without
+    // `crossorigin`. Allow the static asset kinds there; a `fetch()` is still
+    // blocked by `connect-src`, and `.json`/`.txt` (not in this list) still get
+    // no header.
+    None => static_asset,
     _ => false,
   }
 }
@@ -463,7 +490,10 @@ mod tests {
   #[test]
   fn filename_is_a_basename_and_html_only() {
     assert_eq!(sanitize_filename("notes.html"), "notes.html");
+    #[cfg(windows)]
     assert_eq!(sanitize_filename("a\\b\\notes.HTM"), "notes.HTM");
+    #[cfg(not(windows))]
+    assert_eq!(sanitize_filename("a/b/notes.HTM"), "notes.HTM");
     assert_eq!(sanitize_filename("notes.md"), "index.html");
     assert_eq!(sanitize_filename("../secret.html"), "secret.html");
   }
@@ -497,6 +527,28 @@ mod tests {
     assert_eq!(mime_for("js"), "text/javascript; charset=utf-8");
     assert_eq!(mime_for("woff2"), "font/woff2");
     assert_eq!(mime_for("unknown"), "application/octet-stream");
+  }
+
+  #[test]
+  fn webkit_static_assets_get_cors_without_fetch_metadata() {
+    let bare = Request::builder().body(Vec::new()).unwrap();
+    assert!(allows_cors("css", &bare));
+    assert!(allows_cors("png", &bare));
+    assert!(allows_cors("js", &bare));
+    assert!(!allows_cors("json", &bare));
+
+    let fetch = Request::builder()
+      .header("sec-fetch-dest", "empty")
+      .body(Vec::new())
+      .unwrap();
+    assert!(!allows_cors("css", &fetch));
+    assert!(!allows_cors("js", &fetch));
+
+    let style = Request::builder()
+      .header("sec-fetch-dest", "style")
+      .body(Vec::new())
+      .unwrap();
+    assert!(allows_cors("css", &style));
   }
 
   #[test]

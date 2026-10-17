@@ -101,6 +101,12 @@ fn default_true() -> bool {
     true
 }
 
+fn default_rich_paste_images() -> String {
+    // A pasted page is content the reader asked to bring in; downloading it is
+    // the default, and one select changes it to keeping the URL.
+    "download".to_string()
+}
+
 fn default_body_font_size() -> u32 {
     16
 }
@@ -301,6 +307,18 @@ pub struct Settings {
     pub image_add_dot_slash: bool,
     pub image_auto_escape: bool,
 
+    // ---- Preferences: Paste ----------------------------------------------
+    /// Convert copied HTML/Markdown/Typst into the destination's syntax.
+    ///
+    /// On by default; an older settings file keeps loading because serde fills
+    /// the field with `true` when it is absent.
+    #[serde(default = "default_true")]
+    pub rich_paste: bool,
+    /// "download" | "url": what to do with remote images found in a pasted
+    /// fragment. The explicit paste-an-URL path has its own switch above.
+    #[serde(default = "default_rich_paste_images")]
+    pub rich_paste_images: String,
+
     // ---- Preferences: Export ---------------------------------------------
     /// Pandoc export targets, in the order the menu shows them.
     pub export_formats: Vec<ExportFormat>,
@@ -375,6 +393,8 @@ impl Default for Settings {
             image_use_relative_path: true,
             image_add_dot_slash: true,
             image_auto_escape: false,
+            rich_paste: true,
+            rich_paste_images: default_rich_paste_images(),
 
             export_formats: default_export_formats(),
             after_open_location: false,
@@ -672,6 +692,21 @@ mod tests {
         assert!(s.tabular_figures);
         assert!(!s.oldstyle_figures);
         assert!(!s.slashed_zero);
+        // Rich paste is on, and remote images are downloaded unless the reader
+        // changes that one select.
+        assert!(s.rich_paste);
+        assert_eq!(s.rich_paste_images, "download");
+    }
+
+    #[test]
+    fn rich_paste_settings_round_trip() {
+        let mut settings = Settings::default();
+        settings.rich_paste = false;
+        settings.rich_paste_images = "url".into();
+        let json = serde_json::to_string(&settings).unwrap();
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert!(!back.rich_paste);
+        assert_eq!(back.rich_paste_images, "url");
     }
 
     #[test]
@@ -687,6 +722,8 @@ mod tests {
         assert_eq!(parsed.image_rule, "assetsFolder");
         assert!(parsed.image_apply_online);
         assert!(!parsed.image_auto_escape);
+        assert!(parsed.rich_paste);
+        assert_eq!(parsed.rich_paste_images, "download");
         assert!(parsed.preset_overrides.is_empty());
     }
 

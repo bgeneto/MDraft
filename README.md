@@ -57,6 +57,13 @@ for you; nothing is installed system-wide and no administrator rights are needed
   `./name.assets` folder, a shared `./assets` folder, a custom folder, or keeping
   the original location. Filenames are sanitised, an existing file is never
   overwritten, and the bytes are content-sniffed rather than trusted.
+- **Formatted paste.** Text copied from a browser, Word, Google Docs, Excel,
+  Typora or another editor keeps its structure: headings, bold/italic, code,
+  lists, tables, quotes, links, images and math are converted into the document's
+  own markup. A saved file's extension decides the destination; an unsaved buffer
+  is detected from its content, with the default extension as the fallback for a
+  blank or ambiguous document, and a notice tells you when the two differ.
+  `Ctrl/Cmd+Shift+V` pastes the plain clipboard once.
 - **Export** to HTML and PDF with nothing installed, and to DOCX, ODT,
   LibreOffice, LaTeX, reStructuredText, AsciiDoc, EPUB, RTF, Textile, MediaWiki
   and OPML through pandoc, each format configurable in Preferences. When the
@@ -76,6 +83,10 @@ for you; nothing is installed system-wide and no administrator rights are needed
 - **Mermaid** diagrams from ` ```mermaid ` fences, cached per theme.
 - **Local images** resolve relative to the document being edited, through the
   Tauri asset protocol.
+- **Document tabs** along the top. Several Markdown, Typst and HTML files stay
+  open at once; switching tabs keeps each file's text, caret and undo. The
+  preview is drawn again for the tab you are looking at. The list is not
+  saved when the window closes.
 - **Outline sidebar** driven by document headings, plus a folder browser and a
   recent-files list persisted between runs.
 - **Preferences panel** (`Ctrl+,`) laid out like Typora's: search box, vertical
@@ -89,11 +100,13 @@ for you; nothing is installed system-wide and no administrator rights are needed
   its tabs, the status bar, Focus, Typewriter, Sync Scroll, Auto Save and the
   theme carry native check marks, so the menu states what is on instead of
   leaving it to be inferred.
-- **Mode flags in the status bar**: `Focus`, `Type`, `Sync` and `Auto`, each with
-  an SVG icon and a literal `on`/`off`, and each clickable. The full name and
-  shortcut are in the tooltip; the same state is the check mark in the menu. The
-  zoom level appears as a percentage chip only while it differs from 100%, and
-  clicking it returns to the default size.
+- **Mode flags in the status bar**: `Focus`, `Type`, `Sync`, `Auto` and `Spell`,
+  each with an SVG icon and a literal `on`/`off`, and each clickable. The full
+  name and shortcut are in the tooltip; where the menu has the same setting, it
+  repeats the state as a check mark. `Spell` dims on HTML documents, whose
+  markup is never sent to the dictionary. The zoom level appears as a percentage
+  chip only while it differs from 100%, and clicking it returns to the default
+  size.
 - **Typst as a first-class default**: Preferences › Files › *Default File
   Extension* offers `.typ` and `.html`. A new document then starts in Typst or
   HTML mode, Save As suggests the matching extension with the matching filter
@@ -154,9 +167,10 @@ What does not match, by design:
   `</>` toggle *and* the segmented control, which made two controls look
   selected at once in source mode; the toggle was removed because the segmented
   control states the current mode instead of hiding it behind a toggle. Focus,
-  Typewriter, Sync Scroll and Auto Save are status-bar flags with a literal
-  `on`/`off`, and the same states are check marks in the View, File and Themes
-  menus. The zoom chip follows the same rule: it appears only when the editor
+  Typewriter, Sync Scroll, Auto Save and Check Spelling are status-bar flags
+  with a literal `on`/`off`, and all but spelling also carry a check mark in the
+  View or File menu. The zoom chip follows the same rule: it appears only when
+  the editor
   font size is not 100%, and the theme button swaps its sun for a moon with the
   theme. The status bar also estimates the token count beside the word count: it
   classifies
@@ -205,13 +219,17 @@ The application also does nothing behind your back:
 
 There are three deliberate exceptions, and each requires you to act first:
 
-1. **Pasting or dropping an image URL downloads that image.** It is the only
-   thing in the project that opens a socket. The command refuses any scheme other
-   than `http`/`https`, caps the response at 32 MB with a 25-second timeout, and
+1. **Pasting an image URL, or pasting rich content that contains images, can
+   download them.** It is the only thing in the project that opens a socket. The
+   command refuses any scheme other than `http`/`https`, caps the response at
+   32 MB with a 25-second timeout (the rich path asks for eight), and
    content-sniffs the result so an HTML error page is never saved as a `.png`.
-   Turning off *Preferences › Image › Apply Above Rules to Online Images* removes
-   the path entirely — the URL is then inserted as plain text and nothing is
-   fetched.
+   An explicitly pasted URL is governed by *Apply Above Rules to Online Images*;
+   images inside a pasted fragment are governed by *Remote Images in Pasted Rich
+   Text*, which offers **Download and save** (the default) or **Keep the original
+   URL**. The rich path downloads at most eight images, four at a time, and never
+   fetches stylesheets, scripts or fonts. Turning the relevant option off removes
+   the request entirely — the URL is inserted as-is and nothing is fetched.
 2. **Export as HTML** writes a `<link>` to the KaTeX stylesheet on jsDelivr into
    the exported file, so that document renders its math when opened in a browser.
    That is a request the reader's browser makes, never the editor.
@@ -711,6 +729,12 @@ Format › Image: it selects the inserted `./image.png` with the mouse and paste
 a path that exists beside the document, then checks that the text is replaced
 and the preview loads the image.
 
+`npm run paste:convert` is the pure conversion matrix (no application), `npm run
+paste` drives rich paste through the real UI, and `npm run image:syntax` checks
+bitmap and remote-image handling in a Typst document. `npm test` runs all three
+with the rest of the layers; the CDP ones get their own instance, fixture and
+first-run state.
+
 ## Deliberately out of scope for v1
 
 - WYSIWYG editing. Typora edits the rendered document in place; this version
@@ -897,9 +921,9 @@ Results land in `bin/linux/amd64/` beside the Windows ones, with a
 `SHA256SUMS.txt`:
 
 ```
-MDraft_0.1.0_amd64.deb                6.0 MB   needs libwebkit2gtk-4.1-0, libgtk-3-0
-MDraft_0.1.0_amd64.AppImage         107 MB   self-contained
-mdraft                                 11 MB   the bare binary
+MDraft_0.2.1_amd64.deb                9.3 MB   needs libwebkit2gtk-4.1-0, libgtk-3-0
+MDraft_0.2.1_amd64.AppImage         107 MB   self-contained, when built
+mdraft                                 16 MB   the bare binary
 ```
 
 The script exists because three things need handling that `npm run dist` does not:
@@ -919,7 +943,7 @@ WSLg (Windows 11) provides a real display, so the app runs as an ordinary window
 with a native GTK menu bar:
 
 ```bash
-sudo apt install -y ./bin/linux/amd64/MDraft_0.1.0_amd64.deb
+sudo apt install -y ./bin/linux/amd64/MDraft_0.2.1_amd64.deb
 mdraft ~/notes.md
 ```
 
@@ -927,7 +951,11 @@ Verified on **Debian 13 (trixie)**, running the binary installed from the `.deb`
 the window opens with the GTK menu bar, the outline populates, syntax
 highlighting, KaTeX math and Mermaid diagrams all render, and the SVG status-bar
 icons appear correctly — which is the concrete reason those icons are SVG rather
-than an emoji font Debian does not ship by default.
+than an emoji font Debian does not ship by default. The HTML preview was verified
+on the same build: linked CSS, the local image, inline, classic and module
+scripts all run, `fetch()` is blocked, the page keeps its own styles, and with
+`htmlPreviewScripts` off every document script is blocked while CSS and images
+still load.
 
 ### The tests are platform-aware
 
@@ -935,9 +963,9 @@ than an emoji font Debian does not ship by default.
 `#[cfg(unix)]` variants. Path semantics come from `std::path`, so a single test
 written with `C:\` strings asserts nothing true about Linux while looking like
 coverage — and it hid a real off-by-one in the relative-path expectations until
-the suite was finally run on Linux. `cargo test` passes on both. Windows runs 74
-(one is ignored because it downloads pandoc); Linux runs 72, because the two
-`ISpellChecker` tests exist only on Windows.
+the suite was finally run on Linux. `cargo test` passes on both. Windows runs 75
+(one is ignored because it downloads pandoc); Linux runs 74, because one
+platform-specific path test is absent.
 
 ## Application icon
 
@@ -1012,7 +1040,7 @@ that really is a zip containing `word/document.xml`, an RTF that starts with
 overwrite the document it is reading, that an unknown format is reported rather
 than ignored, and that the PDF print document carries both stylesheets.
 
-Last run against `samples/feature-tour.md` — **90/90 checks passed**:
+Last run against `samples/feature-tour.md` — **93/93 checks passed**:
 
 | Stage | Observed |
 | --- | --- |
@@ -1039,12 +1067,19 @@ Last run against `samples/feature-tour.md` — **90/90 checks passed**:
 | ↳ interpolation | 11-line block tracks at 4+ distinct preview positions at 10/32 px and 40/11 px; reverse drift stays within the local slope |
 | ↳ source click | five clicks down the pane, preview scroll drift 0.15 px, panes stay aligned |
 | Close | WM_CLOSE exits in 500 ms and writes `.window-state.json` |
-| HTML guest | 40/40 checks: sandbox and IPC boundary, linked/inline CSS, local image, inline/classic/module scripts, blocked local fetch, sync, click/blink, outline, scripts-off and the return to Markdown |
+| HTML guest | 42/42 checks: sandbox and IPC boundary, linked/inline CSS, local image, inline/classic/module scripts, blocked local fetch, sync, click/blink, outline, scripts-off, the return to Markdown and the HTML tab coming back |
+| Document tabs | 68/68 checks: a sidebar click adds a tab, a path already open is focused, `open-files`, the caret and both scroll offsets come back, the dirty dot, × on active and inactive tabs, middle-click, Ctrl+Tab, the disk poll on a clean and a dirty inactive tab, Auto Save across tabs, and the last tab |
+| Session store | 43/43 checks, no application needed: insertion after the active tab, untitled names, one tab per path under both case rules, the neighbour that takes over on close, wrap-around, and the empty-list invariant |
 | Console | no errors or warnings |
 
 The sync rows are the interesting ones. They assert that the mapping is exact
 rather than merely monotonic, and that the preview does not move when you click
 inside it — the regression that made text selection impossible.
+
+`npm run tabs` and `npm run test:sessions` cover the document session store and
+the tab strip: the first drives a real window (including opening the repository's
+63 KB `README.md` as the large document that once made the next Ctrl+N throw),
+the second runs the TypeScript module directly under Node, with no build.
 
 `scripts/test-close.ps1` is separate because it has to kill the application:
 closing the window is not something the DOM test can survive.
@@ -1107,13 +1142,16 @@ samples/feature-tour.md    showcase document / smoke-test fixture
 samples/html-tour/         offline HTML fixture for the guest-preview suite
 src/
   main.ts                  document lifecycle, menu wiring, sidebar, status bar
+  sessions.ts              open documents, one tab each
   api.ts                   typed wrappers over the Rust commands
   editor.ts                CodeMirror 6 setup, focus/typewriter modes, incremental counts, formatting
   `markdown.ts`              markdown -> HTML, math, mermaid, alerts, TOC, images
   html-preview.ts          sandboxed HTML guest: parse5 splice, iframe, bridge protocol
   html-bridge.js           guest-side scroll/click/keyboard bridge (inlined, not imported)
   html-language.ts         lazy CodeMirror HTML grammar
+  image-syntax.ts          one image markup builder for Markdown, Typst and HTML
   images.ts                paste, drop and download of images
+  paste/                   rich paste: IR, detection, readers, renderers and images
   preferences.ts           the Preferences panel and its declarative rows
   sidebar.ts               outline extraction and active-marker updates, folder browser, recent files
   highlight-theme.ts       runtime-swappable highlight.js themes
@@ -1146,6 +1184,8 @@ scripts/screenshot.mjs     CDP screenshot of a running window
 | --- | --- |
 | New / Open / Save | `Ctrl+N` / `Ctrl+O` / `Ctrl+S` |
 | Save as | `Ctrl+Shift+S` |
+| Close tab | `Ctrl+W` |
+| Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
 | Preferences | `Ctrl+,` |
 | Strong / Emphasis / Strikethrough | `Ctrl+B` / `Ctrl+I` / `Alt+Shift+5` |
 | Inline code | `Ctrl+Shift+\`` |
@@ -1167,7 +1207,10 @@ scripts/screenshot.mjs     CDP screenshot of a running window
 ## Known limitations
 
 - Preview rendering is debounced by 200 ms (300 ms for HTML) and re-renders the
-  whole preview rather than diffing it.
+  whole preview rather than diffing it. Switching to an HTML tab builds the
+  guest again, so scripts and form state in the preview start over. The source
+  text does not.
+
 - **HTML previews run the document's own code.** With scripts on, an HTML file
   can execute and read files in its own folder and request the network resources
   it links. It cannot reach the editor, files outside its folder or MDraft's

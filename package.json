@@ -21,6 +21,12 @@
     "export": "node scripts/export-test.mjs",
     "typography": "node scripts/typography-test.mjs",
     "shortcuts": "node scripts/shortcut-test.mjs",
+    "tabs": "node scripts/document-tabs-test.mjs",
+    "test:sessions": "node scripts/sessions-test.mjs",
+    "paste:convert": "node scripts/paste-convert-test.mjs",
+    "paste": "node scripts/rich-paste-test.mjs",
+    "image:syntax": "node scripts/image-syntax-test.mjs",
+
     "licence": "node scripts/licence-test.mjs",
     "spellcheck": "node scripts/spellcheck-test.mjs",
     "images": "node scripts/image-paste-test.mjs",

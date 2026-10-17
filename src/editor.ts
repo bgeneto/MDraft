@@ -37,6 +37,7 @@ import {
   indentOnInput,
   indentUnit,
   syntaxHighlighting,
+  syntaxTree,
 } from "@codemirror/language";
 import {
   closeSearchPanel,
@@ -80,14 +81,28 @@ export interface EditorHandle {
   setFontSize(px: number): void;
   setLanguage(kind: DocumentLanguage): void;
   /**
+   * The view's current state, including undo history and the caret.
+   * Scroll position is not part of an EditorState; callers store it beside this.
+   */
+  captureState(): EditorState;
+  /**
+   * Show a state captured earlier. Cancels an in-flight grammar load so a tab
+   * switch cannot paint the previous language over this buffer.
+   */
+  restoreState(state: EditorState, scrollTop: number): void;
+  /**
    * Re-measure after something outside CodeMirror changed the metrics — a new
    * typeface, most of all. Line wrapping is computed from measured text.
    */
   requestMeasure(): void;
   setFocusMode(on: boolean): void;
   setTypewriter(on: boolean): void;
-  /** Underline misspellings, or clear the marks when spelling is off. */
-  setSpellcheck(options: SpellOptions): void;
+  /**
+   * Underline misspellings, or clear the marks when spelling is off.
+   * `force` reconfigures even when the options match the last call: a restored
+   * EditorState can still be carrying the compartment from when its tab was hidden.
+   */
+  setSpellcheck(options: SpellOptions, force?: boolean): void;
   openSearch(replace?: boolean): void;
   closeSearch(): void;
   scrollToLine(line: number): void;
@@ -113,9 +128,16 @@ export interface EditorHandle {
   insertToc(): void;
   insertBlock(text: string): void;
   insertBlockWithCaret(text: string, caretOffset: number): void;
+  /**
+   * Insert pasted text at the selection. A block fragment gets blank lines
+   * around it and reuses the current indentation; inline text replaces the
+   * selection as-is.
+   */
+  insertPasted(text: string, block: boolean): void;
+  /** True when the caret sits inside fenced/raw code or an HTML code element. */
+  inCodeContext(): boolean;
   insertAtTop(text: string): void;
   wrapSelection(before: string, after: string, placeholder: string): void;
-  insertBlock(text: string): void;
   onDocChanged(cb: (text: string) => void): void;
   onCursor(cb: (info: CursorInfo) => void): void;
   onScroll(cb: (info: ScrollInfo) => void): void;
@@ -213,6 +235,9 @@ const markdownSupport = markdown({
   let onScroll: (info: ScrollInfo) => void = () => {};
   let typewriter = false;
   let view: EditorView;
+  // The HTML and Typst grammars arrive in a promise. A tab switch that lands
+  // before that promise resolves must not install the grammar into the new buffer.
+  let languageGeneration = 0;
 
   // One word count per line. A change only touches the lines it spans, so the
   // total is adjusted by the difference instead of rescanning the document.
@@ -418,6 +443,14 @@ const markdownSupport = markdown({
 
     setDoc(text, resetHistory = false) {
       resetSpellLanguage();
+      // The parse state in this state was built for the text being replaced. If
+      // it was carried over from another document, its ranges lie outside this
+      // change and CodeMirror's language field throws while mapping them
+      // ("Position N is out of range for changeset of length M"); the command
+      // that was loading the document dies as a toast and the new tab never
+      // appears. Drop the grammar first — an effects-only transaction maps
+      // nothing — and let setLanguage install one for the new text.
+      view.dispatch({ effects: languageCompartment.reconfigure([]) });
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: text },
         selection: { anchor: 0 },
@@ -466,16 +499,19 @@ const markdownSupport = markdown({
     },
 
     setLanguage(kind) {
+      const generation = ++languageGeneration;
+      const install = (language: Extension) => {
+        if (generation !== languageGeneration) return;
+        view.dispatch({ effects: languageCompartment.reconfigure(language) });
+      };
       if (kind === "markdown") {
-        view.dispatch({ effects: languageCompartment.reconfigure(markdownSupport) });
+        install(markdownSupport);
         return;
       }
       if (kind === "html") {
         // The HTML branch must be explicit: the fallback below is Typst.
         void htmlLanguage()
-          .then((language) => {
-            view.dispatch({ effects: languageCompartment.reconfigure(language) });
-          })
+          .then(install)
           .catch((error) => {
             console.warn(`[editor] the HTML grammar could not be loaded: ${error}`);
           });
@@ -485,12 +521,54 @@ const markdownSupport = markdown({
       // parser it had, which is a moment of wrong colouring rather than a blank
       // editor.
       void typstLanguage()
-        .then((language) => {
-          view.dispatch({ effects: languageCompartment.reconfigure(language) });
-        })
+        .then(install)
         .catch((error) => {
           console.warn(`[editor] the Typst grammar could not be loaded: ${error}`);
         });
+    },
+
+    captureState() {
+      return view.state;
+    },
+
+    restoreState(state, scrollTop) {
+      // Drop a grammar promise that belongs to the buffer we just left.
+      languageGeneration += 1;
+      resetSpellLanguage();
+      // setState does not run the update listener, so the word cache — which
+      // lives beside the view, not in the state — would otherwise keep counting
+      // the previous document.
+      view.setState(state);
+      // The restored state carries the parse context it was captured with. A
+      // document that has since been replaced by another one leaves ranges that
+      // lie outside this buffer, and the next text change throws while mapping
+      // them. Discard it here; displayDoc installs the session's own grammar
+      // afterwards, which parses the document that is actually on screen.
+      view.dispatch({ effects: languageCompartment.reconfigure([]) });
+      rebuildWordCache(view.state.doc);
+      const applyScroll = () => {
+        view.scrollDOM.scrollTop = scrollTop;
+      };
+      applyScroll();
+      // A restored document has only its first screen rendered, so a larger
+      // offset is clamped to the scroll height CodeMirror knows at that moment —
+      // a saved 340 px came back as 298 px, which a test measured. Each frame
+      // renders one more screen, so keep re-applying until the scroller reaches
+      // the saved offset (or stops moving), and once more from the measure's
+      // write phase, because `setState` can queue a measure that resets it.
+      // Keep asserting it for the next few frames. There are two reasons the
+      // assignment does not stick on its own: a restored document renders one
+      // screen at a time, so a larger offset is clamped to the height known so
+      // far (340 px came back as 298 px), and CodeMirror reveals the restored
+      // caret once it measures, which scrolls that offset away again (340 px
+      // came back as 846 px, the caret's line).
+      let frames = 0;
+      const settleScroll = () => {
+        applyScroll();
+        if (++frames < 8) requestAnimationFrame(settleScroll);
+      };
+      settleScroll();
+      view.requestMeasure({ read: () => null, write: applyScroll });
     },
 
     setFocusMode(on) {
@@ -508,9 +586,9 @@ const markdownSupport = markdown({
      * compartment drops the underlines until the next pass, and layout updates
      * call this on every sidebar toggle.
      */
-    setSpellcheck(options: SpellOptions) {
+    setSpellcheck(options: SpellOptions, force = false) {
       const key = `${options.enabled}\0${options.language}\0${options.words.join("\n")}`;
-      if (key === spellKey) return;
+      if (!force && key === spellKey) return;
       spellKey = key;
       view.dispatch({
         effects: spellCompartment.reconfigure(options.enabled ? spellExtension(options) : []),
@@ -689,6 +767,94 @@ const markdownSupport = markdown({
         scrollIntoView: true,
       });
       view.focus();
+    },
+
+    insertPasted(text, block) {
+      const normalized = text
+        .replace(/\r\n?/g, "\n")
+        .replace(/^\n+|\n+$/g, "");
+      if (!normalized) return;
+
+      const state = view.state;
+      const range = state.selection.main;
+      const doc = state.doc;
+      if (!block) {
+        view.dispatch({
+          changes: { from: range.from, to: range.to, insert: normalized },
+          selection: { anchor: range.from + normalized.length },
+          scrollIntoView: true,
+          userEvent: "input.paste",
+        });
+        view.focus();
+        return;
+      }
+
+      const startLine = doc.lineAt(range.from);
+      const endLine = doc.lineAt(range.to);
+      const before = doc.sliceString(startLine.from, range.from);
+      const after = doc.sliceString(range.to, endLine.to);
+      const indent = /^\s*$/.test(before) ? before : "";
+      let insertion = normalized;
+      if (indent) {
+        insertion = insertion
+          .split("\n")
+          .map((line, index) => (index === 0 ? line : `${indent}${line}`))
+          .join("\n");
+      }
+
+      let prefix = "";
+      if (before.trim() !== "") prefix = "\n\n";
+      else if (startLine.from > 0) {
+        const previous = doc.line(startLine.number - 1);
+        if (previous.text.trim() !== "") prefix = "\n";
+      }
+
+      // A block must not swallow the rest of the line. When there is content
+      // after the paste it starts a fresh paragraph; when there is only
+      // whitespace it is discarded.
+      let suffix = "";
+      let to = range.to;
+      if (after.trim() !== "") suffix = "\n\n";
+      else to = endLine.to;
+
+      const insert = `${prefix}${insertion}${suffix}`;
+      view.dispatch({
+        changes: { from: range.from, to, insert },
+        selection: { anchor: range.from + prefix.length + insertion.length },
+        scrollIntoView: true,
+        userEvent: "input.paste",
+      });
+      view.focus();
+    },
+
+    inCodeContext() {
+      let node: any = syntaxTree(view.state).resolveInner(view.state.selection.main.head, -1);
+      for (; node; node = node.parent) {
+        if (
+          [
+            "FencedCode",
+            "CodeBlock",
+            "InlineCode",
+            "Raw",
+            "Code",
+            "CodeBlock",
+            "CodeText",
+            "ScriptText",
+            "StyleText",
+          ].includes(node.name)
+        ) {
+          return true;
+        }
+        if (node.name === "Element") {
+          const open = node.getChild?.("OpenTag");
+          const tag = open?.getChild?.("TagName");
+          if (tag) {
+            const text = view.state.sliceDoc(tag.from, tag.to).toLowerCase();
+            if (["pre", "code", "script", "style", "textarea"].includes(text)) return true;
+          }
+        }
+      }
+      return false;
     },
 
     insertAtTop(text) {

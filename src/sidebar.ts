@@ -246,10 +246,26 @@ async function paintDirectory(
   header.appendChild(element("span", undefined, path));
   fragment.appendChild(header);
 
+  // Documents this editor can open. A format missing from this list is a
+  // document the Files panel cannot reach at all — `typ` was, until a test asked
+  // for a Typst file and the listing did not offer one.
   const markdownish = (entry: api.DirEntry) =>
-    ["md", "markdown", "mdown", "mkd", "txt", "text", "html", "htm", "json", "yml", "yaml", "toml", ""].includes(
-      entry.ext,
-    );
+    [
+      "md",
+      "markdown",
+      "mdown",
+      "mkd",
+      "txt",
+      "text",
+      "html",
+      "htm",
+      "typ",
+      "json",
+      "yml",
+      "yaml",
+      "toml",
+      "",
+    ].includes(entry.ext);
 
   for (const entry of entries) {
     if (!entry.isDir && !markdownish(entry)) continue;
