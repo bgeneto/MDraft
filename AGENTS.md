@@ -819,7 +819,6 @@ scripts/             build helpers and CDP test harnesses — all 15 are in
                      "Repository scripts", and a new one belongs there too
 samples/             fixtures the smoke test asserts against
 docs/sample-files/   real documents used to judge rendering quality
-docs/screenshots/    reference captures of Typora beside this build
 docs/ícones/         source archive for the application icon
 ```
 

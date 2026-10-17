@@ -103,15 +103,6 @@ for you; nothing is installed system-wide and no administrator rights are needed
 
 ## Comparison with Typora
 
-`docs/screenshots/` holds reference captures of the original application next to
-captures of this build, so the two can be compared directly:
-
-| Typora | MDraft |
-| --- | --- |
-| `Screenshot 2026-10-16 133931.png` — Preferences, Files section | `mdraft-preferences-files.png` |
-| Preferences, Image section | `mdraft-preferences-image.png` |
-| `Screenshot 2026-10-16 134041.png` — document open, Paragraph menu expanded | `mdraft-document.png`, `mdraft-split-sync.png` |
-
 What matches: the Preferences layout (search box, vertical sections with the
 active one highlighted, `label → control` rows, `?` help affordances), the menu
 bar's top-level structure, the Paragraph menu's grouping and shortcuts, the
@@ -962,7 +953,6 @@ subsystem, and which traps cost time before.
 
 ```
 index.html                 application shell markup
-docs/screenshots/          reference captures of Typora next to this build
 docs/ícones/               source archive for the application icon
 docs/sample-files/         real documents used as rendering fixtures
 samples/feature-tour.md    showcase document / smoke-test fixture
@@ -1030,8 +1020,8 @@ scripts/screenshot.mjs     CDP screenshot of a running window
   documents will re-render the whole preview on each keystroke pause.
 - Save / Discard is the only choice offered for unsaved changes, because the
   dialog plugin does not expose a three-button prompt.
-- The captures in `docs/screenshots/` come from a DevTools screenshot, so the
-  native menu bar and window frame are not part of them.
+- The screenshots above are DevTools captures of the webview, so the native menu
+  bar and window frame are not part of them.
 - **PDF (Print) hands the document to your browser**, because WebView2 provides
   no print interface of its own: `window.print()` inside the application fires
   its events and then does nothing at all. The browser opens on the print
