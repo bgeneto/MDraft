@@ -272,6 +272,7 @@ export const SHORTCUTS = SHORTCUTS_LINES.join("\n");
 // sitting in the repository is not accompanying anything once the application is
 // installed. Vite bundles only what is imported, so leaving these unimported
 // shipped the fonts without their licence — a compliance gap, not untidiness.
+import firaCodeLicence from "./assets/fonts/licenses/fira-code-OFL.txt?raw";
 import interLicence from "./assets/fonts/licenses/inter-OFL.txt?raw";
 import jetbrainsLicence from "./assets/fonts/licenses/jetbrains-mono-OFL.txt?raw";
 import sourceSansLicence from "./assets/fonts/licenses/source-sans-OFL.txt?raw";
@@ -280,8 +281,8 @@ import sourceSerifLicence from "./assets/fonts/licenses/source-serif-OFL.txt?raw
 const FONT_LICENCE_LINES: string[] = [
   '# Bundled typefaces',
   '',
-  'MDraft compiles four typefaces into the application so the typography does not',
-  'depend on what the machine happens to have installed. All four are under the',
+  'MDraft compiles five typefaces into the application so the typography does not',
+  'depend on what the machine happens to have installed. All five are under the',
   'SIL Open Font License 1.1, which permits bundling inside an application provided',
   'the copyright notice and the licence text travel with the fonts. They follow.',
   '',
@@ -291,6 +292,7 @@ const FONT_LICENCE_LINES: string[] = [
   '| Source Sans 3 | https://github.com/adobe-fonts/source-sans |',
   '| Inter | https://github.com/rsms/inter |',
   '| JetBrains Mono | https://github.com/JetBrains/JetBrainsMono |',
+  '| Fira Code | https://github.com/tonsky/FiraCode |',
   '',
   'The versions, archive checksums and per-file checksums are recorded in',
   '`src/assets/fonts/fonts.json`.',
@@ -310,6 +312,10 @@ const FONT_LICENCE_LINES: string[] = [
   '## JetBrains Mono',
   '',
   jetbrainsLicence,
+  '',
+  '## Fira Code',
+  '',
+  firaCodeLicence,
 ];
 
 export const FONT_LICENCES = FONT_LICENCE_LINES.join("\n");

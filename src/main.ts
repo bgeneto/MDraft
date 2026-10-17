@@ -190,11 +190,11 @@ function applyLayout(): void {
 /**
  * Publish the typography settings as CSS variables.
  *
- * Everything — the two panes, the exported documents and the panel's own
- * specimen — reads the same variables, which is why there is one place that
- * writes them. An empty font string means "the built-in default for that role",
- * so the fallback lives in `src/fonts.ts` beside the reasoning for it rather
- * than being copied into every settings file on disk.
+ * Everything — the two panes and the exported documents — reads the same
+ * variables, which is why there is one place that writes them. An empty font
+ * string means "the built-in default for that role", so the fallback lives in
+ * `src/fonts.ts` beside the reasoning for it rather than being copied into every
+ * settings file on disk.
  */
 function applyTypography(): void {
   const root = document.documentElement.style;
@@ -772,8 +772,15 @@ function exportTypographyCss(): string {
     `--table-figures:${settings.tabularFigures ? "tabular-nums" : "normal"}`,
     `--code-figures:${settings.slashedZero ? "slashed-zero tabular-nums" : "normal"}`,
     `--code-ligatures:${settings.ligaturesInCode ? "contextual common-ligatures" : "none"}`,
+    // The export is a separate document and never loads styles.css, so the
+    // Semibold rule has to travel with the settings it belongs to.
+    "--weight-strong:600",
   );
-  return `:root{${declarations.join(";")}}`;
+  const emphasis =
+    ".markdown-body h1,.markdown-body h2,.markdown-body h3,.markdown-body h4," +
+    ".markdown-body h5,.markdown-body h6,.markdown-body th," +
+    ".markdown-body strong,.markdown-body b{font-weight:var(--weight-strong)}";
+  return `:root{${declarations.join(";")}}\n${emphasis}`;
 }
 
 /** Basename of the open document, without its extension. */
@@ -1860,12 +1867,39 @@ function installChrome(): void {
   );
 }
 
+/**
+ * Carry a reader who chose the old "System only" preset onto the new "System".
+ *
+ * A preset is written into settings when it is picked, so the old values survive
+ * in `settings.json`. The preset used to name Georgia for prose; it is now the
+ * system stack, and without this pass the reader would open the new version on
+ * "Custom (user)" showing the very face the rename was meant to remove.
+ *
+ * The whole font signature is required, not just the body stack: a reader who
+ * typed one of these strings by hand, or mixed it with another stack, has a
+ * custom setting and it is left alone.
+ */
+function migrateLegacySystemPreset(): void {
+  const legacy: Record<(typeof TYPOGRAPHY_ROLES)[number]["id"], string> = {
+    sourceFont: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+    bodyFont: 'Georgia, "Iowan Old Style", "Times New Roman", serif',
+    headingFont: 'system-ui, "Segoe UI", -apple-system, Roboto, sans-serif',
+    codeFont: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+  };
+  if (!TYPOGRAPHY_ROLES.every((role) => settings[role.id] === legacy[role.id])) return;
+
+  // Empty means "the built-in default for this role", which is now System.
+  settings = { ...settings, sourceFont: "", bodyFont: "", headingFont: "", codeFont: "" };
+  persist();
+}
+
 async function boot(): Promise<void> {
   // Before the first paint, so the preview is never drawn in a fallback and then
   // corrected. The faces are local files, so this costs a millisecond.
   installBundledFonts();
 
   settings = await api.getSettings();
+  migrateLegacySystemPreset();
   applyTheme();
 
   editor = createEditor(editorHost);

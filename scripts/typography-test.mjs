@@ -92,6 +92,7 @@ async function shot(style, text) {
       const host = document.getElementById("typo-harness");
       host.textContent = ${JSON.stringify(text)};
       host.style.fontFamily = ${JSON.stringify(style.family)};
+      host.style.fontWeight = ${JSON.stringify(String(style.weight ?? 400))};
       host.style.fontVariantLigatures = ${JSON.stringify(style.ligatures ?? "normal")};
       host.style.fontVariantNumeric = ${JSON.stringify(style.numeric ?? "normal")};
       host.style.fontKerning = ${JSON.stringify(style.kerning ?? "normal")};
@@ -156,6 +157,187 @@ const fallbackShot = await shot({ family: "monospace" }, "Hamburgefonstiv 123");
 check(serifShot !== sansShot, "the serif and the sans render differently");
 check(interShot !== fallbackShot, "Inter renders rather than falling back to monospace");
 check(sansShot !== serifShot && interShot !== sansShot, "Source Sans 3 and Inter are distinct faces");
+
+// ---------------------------------------------------------------------------
+// Semibold instead of Bold
+// ---------------------------------------------------------------------------
+//
+// The face has to exist before the CSS asking for 600 can use it. With only
+// 400 and 700 on disk the browser serves 700, so "Semibold" would silently be
+// the Bold it was meant to replace.
+
+console.log("\n=== Semibold is a real face, and the preview asks for it ===");
+const semibold = await evaluate(`
+  (async () => {
+    const family = (f) => f.family.replace(/^"|"$/g, "");
+    const declared = [...document.fonts].filter((f) => family(f) === "Source Sans 3");
+    let loaded = [];
+    try { loaded = await document.fonts.load('600 36px "Source Sans 3"', "Ag0123"); } catch {}
+    return {
+      sixHundred: declared.filter((f) => f.weight === "600").map((f) => f.style),
+      loaded: loaded.filter((f) => f.weight === "600").length,
+    };
+  })()
+`);
+check(
+  semibold.sixHundred.length >= 2,
+  "Source Sans 3 ships upright and italic Semibold faces",
+  semibold.sixHundred.join(", ") || "none declared",
+);
+check(semibold.loaded >= 1, "the Semibold face loads", `${semibold.loaded} face(s)`);
+
+const semiboldShot = await shot(
+  { family: '"Source Sans 3", sans-serif', weight: 600 },
+  "Hamburgefonstiv 123",
+);
+const boldShot = await shot(
+  { family: '"Source Sans 3", sans-serif', weight: 700 },
+  "Hamburgefonstiv 123",
+);
+check(
+  semiboldShot !== boldShot,
+  "Semibold draws differently from Bold",
+  semiboldShot === boldShot ? "identical pixels — 600 fell back to 700" : "differs",
+);
+
+const weights = await evaluate(`
+  (() => {
+    const host = document.createElement("div");
+    host.className = "markdown-body";
+    host.id = "weight-harness";
+    // Off screen, but laid out: display:none would report no colours.
+    host.style.cssText = "position:fixed;left:-3000px;top:0;width:600px";
+    host.innerHTML = "<h2>Heading</h2><p><strong>Strong</strong></p>"
+      + "<table><tr><th>Head</th></tr></table><hr>";
+    document.body.appendChild(host);
+
+    const styleOf = (selector, property) =>
+      getComputedStyle(host.querySelector(selector))[property];
+    const saved = document.documentElement.dataset.theme;
+    document.documentElement.dataset.theme = "light";
+    const light = {
+      hr: styleOf("hr", "borderTopColor"),
+      heading: styleOf("h2", "borderBottomColor"),
+    };
+    document.documentElement.dataset.theme = "dark";
+    const dark = {
+      hr: styleOf("hr", "borderTopColor"),
+      heading: styleOf("h2", "borderBottomColor"),
+    };
+    if (saved === undefined) delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = saved;
+
+    const out = {
+      strong: styleOf("strong", "fontWeight"),
+      heading: styleOf("h2", "fontWeight"),
+      tableHead: styleOf("th", "fontWeight"),
+      pair: styleOf("strong", "fontFamily"),
+      light,
+      dark,
+    };
+    host.remove();
+    return out;
+  })()
+`);
+
+const rgb = (value) => (value.match(/\d+/g) ?? ["0", "0", "0"]).map(Number);
+const luminance = ([r, g, b]) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+check(weights.strong === "600", "preview strong text is Semibold", weights.strong);
+check(weights.heading === "600", "preview headings are Semibold", weights.heading);
+check(weights.tableHead === "600", "preview table headers are Semibold", weights.tableHead);
+check(
+  luminance(rgb(weights.light.hr)) < luminance(rgb(weights.light.heading)),
+  "the horizontal rule is darker than the rule under a heading",
+  `rule ${weights.light.hr}, heading ${weights.light.heading}`,
+);
+check(
+  weights.light.heading === "rgb(231, 231, 231)" && weights.dark.heading === "rgb(51, 51, 51)",
+  "the rule under titles keeps the panel border colour",
+  `${weights.light.heading} light, ${weights.dark.heading} dark`,
+);
+check(
+  weights.dark.hr !== weights.dark.heading,
+  "the horizontal rule remains distinct in the dark theme",
+  `rule ${weights.dark.hr}, heading ${weights.dark.heading}`,
+);
+
+// ---------------------------------------------------------------------------
+// Presets
+// ---------------------------------------------------------------------------
+//
+// Fira Code is a deliberate choice, not an inherited default: only Serif may
+// name it, and only in the two code roles. Every other preset uses JetBrains
+// Mono, or the system monospace for System.
+
+console.log("\n=== preset matrix ===");
+const presets = await evaluate(`
+  (async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const overlay = document.querySelector(".prefs-overlay");
+    if (!overlay || overlay.hidden) document.getElementById("btn-prefs").click();
+    await sleep(150);
+    [...document.querySelectorAll(".prefs-section")]
+      .find((s) => s.textContent === "Typography").click();
+    await sleep(150);
+
+    // Read the stacks the settings publish, not a control in the panel: each
+    // face is one dropdown now, and a dropdown shows the family rather than the
+    // fallback chain behind it. The variables are what the document renders.
+    const roles = ["--font-source", "--font-body", "--font-heading", "--font-code"];
+    const read = () => ({
+      active: document.querySelector(".prefs-choice.active")?.textContent ?? "",
+      fonts: roles.map((name) => document.documentElement.style.getPropertyValue(name).trim()),
+    });
+    const out = {};
+    for (const label of ["System", "Serif", "Classic", "Literary", "Technical"]) {
+      [...document.querySelectorAll(".prefs-choice")].find((b) => b.textContent === label).click();
+      await sleep(200);
+      out[label] = read();
+    }
+    // Leave the default in force, as a fresh profile would.
+    [...document.querySelectorAll(".prefs-choice")].find((b) => b.textContent === "System").click();
+    await sleep(200);
+    document.querySelector(".prefs-close")?.click();
+    return out;
+  })()
+`);
+
+const namesFira = (name) => presets[name].fonts.some((stack) => stack.includes("Fira Code"));
+check(
+  ["System", "Serif", "Classic", "Literary", "Technical"].every(
+    (name) => presets[name].active === name,
+  ),
+  "every preset reports itself as active when chosen",
+);
+check(
+  presets.System.fonts[0].includes("ui-monospace") &&
+    presets.System.fonts[1] === 'system-ui, "Segoe UI", -apple-system, Roboto, sans-serif' &&
+    presets.System.fonts[2] === 'system-ui, "Segoe UI", -apple-system, Roboto, sans-serif' &&
+    presets.System.fonts[3].includes("ui-monospace"),
+  "System uses the operating system's faces for all four roles",
+  presets.System.fonts.join(" | "),
+);
+check(
+  presets.Serif.fonts[0].includes("Fira Code") && presets.Serif.fonts[3].includes("Fira Code"),
+  "Serif uses Fira Code for the editor and preview code",
+  `${presets.Serif.fonts[0]} | ${presets.Serif.fonts[3]}`,
+);
+check(
+  ["System", "Serif", "Classic", "Literary", "Technical"].filter(namesFira).join(",") === "Serif",
+  "no preset other than Serif names Fira Code",
+  ["System", "Serif", "Classic", "Literary", "Technical"]
+    .filter(namesFira)
+    .join(",") || "none",
+);
+check(
+  ["Classic", "Literary", "Technical"].every(
+    (name) =>
+      presets[name].fonts[0].includes("JetBrains Mono") &&
+      presets[name].fonts[3].includes("JetBrains Mono"),
+  ),
+  "the remaining presets use JetBrains Mono in both code roles",
+);
 
 // Leave nothing behind: the harness sits above the document while it runs.
 await evaluate(`document.getElementById("typo-harness")?.remove()`);

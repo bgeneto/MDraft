@@ -142,12 +142,12 @@ rewrite from scratch.
 | `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
 | `npm run test:rust` | `cargo test` | 38 tests, on Windows and on Linux |
-| `npm run smoke` | `scripts/dom-smoke.mjs` | 59 checks against `samples/feature-tour.md` |
+| `npm run smoke` | `scripts/dom-smoke.mjs` | 61 checks against `samples/feature-tour.md` |
 | `npm run audit` | `scripts/audit-document.mjs` | Render metrics for whatever document is loaded |
 | `npm run math` | `scripts/math-render-check.mjs` | 10 checks against the physics paper |
 | `npm run syntax` | `scripts/syntax-theme-test.mjs` | 7 checks that highlighting is real |
 | `npm run export` | `scripts/export-test.mjs` | 30 checks of every export path, against real pandoc |
-| `npm run typography` | `scripts/typography-test.mjs` | 12 checks that each face loads and each OpenType switch changes pixels |
+| `npm run typography` | `scripts/typography-test.mjs` | 26 checks that each face loads, each OpenType switch changes pixels, and the preset matrix and Semibold weights hold |
 | `npm run shortcuts` | `scripts/shortcut-test.mjs` | 26 checks that every menu accelerator is registered and that pressing one changes state |
 | `npm run licence` | `scripts/licence-test.mjs` | 4 checks that the bundled typefaces' licences ship inside the application. Run against its own instance: it opens a document |
 | `npm run images` | `scripts/image-paste-test.mjs` | Image paste through the real UI |
@@ -166,10 +166,10 @@ All of these need the app already running with CDP enabled (see
 | `math-render-check.mjs` | `[port]` | `docs/sample-files/physrevb_70_035307.md` | That fonts actually load and that fractions and radicals have real geometry |
 | `syntax-theme-test.mjs` | `[port]` | `samples/feature-tour.md` | Distinct computed token colours, and that switching palette changes them |
 | `export-test.mjs` | `[port] [--install]` | `samples/feature-tour.md` | That pandoc really converts: the bytes of each output are inspected. `--install` additionally exercises the pandoc download, which is why it is opt-in |
-| `typography-test.mjs` | `[port]` | any | Screenshots text with each OpenType feature off and on and compares pixels. Width cannot measure a monospaced face, so nothing narrower would work |
+| `typography-test.mjs` | `[port]` | any | Screenshots text with each OpenType feature off and on and compares pixels, then asserts the preset matrix and the Semibold weights. Width cannot measure a monospaced face, so nothing narrower would work |
 | `shortcut-test.mjs` | `[port] [document]` | `samples/feature-tour.md` | Presses each accelerator through a synthetic keydown and checks what changed. Also reads the `accelerators` registry, which is the only way to see an accelerator the platform rejected |
-| `licence-test.mjs` | `[port]` | any | Opens *Font licences* and looks for the four OFL texts in the rendered document. Searching the executable cannot answer this: the frontend bundle is compressed inside it |
-| `fetch-fonts.ps1` | `[--work-directory]` | — | Downloads the four bundled families, verifies each archive against a pinned SHA-256 and rewrites `src/assets/fonts/fonts.json`. Only needed to upgrade them; the fonts are committed |
+| `licence-test.mjs` | `[port]` | any | Opens *Font licences* and looks for the five OFL texts in the rendered document. Searching the executable cannot answer this: the frontend bundle is compressed inside it |
+| `fetch-fonts.ps1` | `[--work-directory]` | — | Downloads the five bundled families, verifies each archive against a pinned SHA-256 and rewrites `src/assets/fonts/fonts.json`. Only needed to upgrade them; the fonts are committed |
 | `image-paste-test.mjs` | `[port] [imageUrl] [localPath]` | `samples/feature-tour.md` | Clipboard, local and remote image paths, and the markdown that results |
 | `set-palette.mjs` | `[port] [paletteId] [--split]` | `samples/feature-tour.md` | Not a test: drives the palette through the Preferences UI so you can screenshot a theme |
 | `screenshot.mjs` | `[port] [out.png] [setupExpression]` | any | Not a test: captures the window, optionally after running a JS setup string |
@@ -376,7 +376,7 @@ Seven layers, cheapest first. Run them in this order when changing anything.
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
 | Rust unit | `npm run test:rust` | 23 | Path handling, sanitisers, file IO, settings |
-| DOM smoke | `npm run smoke` | 59 | Rendering, pane sync, preferences, math, fonts, status icons |
+| DOM smoke | `npm run smoke` | 61 | Rendering, pane sync, preferences, math, fonts, status icons |
 | Math | `npm run math` | 10 | Font loading, fraction and radical geometry |
 | Syntax | `npm run syntax` | 7 | Token colours, palette switching |
 | Close | `.\scripts\test-close.ps1` | 4 | The window really exits and saves its state |
@@ -676,6 +676,17 @@ back identical. `scripts/typography-test.mjs` therefore screenshots each sample
 with the feature off and on and compares pixels; a feature that changes nothing
 on screen fails there.
 
+**`font-weight: 600` silently renders as Bold**
+`font-weight: var(--weight-strong)` with 600 looks correct in the stylesheet and
+computes to `600`, yet draws the 700 face: when a family declares only 400 and
+700, CSS's weight-matching serves the nearest heavier face rather than
+synthesising a lighter one. The rule works only if a Semibold face exists and is
+declared. Source Serif 4 and Inter carry 600 on a variable axis; Source Sans 3 is
+static, so `SourceSans3-Semibold.woff2` and its italic are bundled and listed in
+`fonts.json`. Verify with `document.fonts` (`weight === "600"`) and by comparing
+600 against 700 pixels — not by reading the computed style, which is 600 either
+way.
+
 **`appDirectoriesOverride` reaches below the plugin**
 `tauri-plugin-window-state` hardcodes `app_config_dir().join(filename)` with no
 API to redirect the directory, which makes it look like a portable build would
@@ -740,8 +751,17 @@ launching the *previous* binary: if that also fails, the profile is at fault and
 nothing in the change is. Prefer `CloseMainWindow()` over `Stop-Process -Force`
 when a script needs the app gone.
 
+**The release build dies with `BEX64` while the portable build is open**
+The portable build redirects only the config directory; it shares
+`%LOCALAPPDATA%\io.github.bernh.mdraft\EBWebView` with the ordinary build.
+Starting one while the other runs makes the new process die on launch with the
+same `Event Name: BEX64` signature as profile corruption, and deleting the
+profile fails with `being used by another process`. Close the other MDraft
+window first, then remove `EBWebView` only if the launch still fails. This is
+not a native regression in the binary being tested.
+
 **A file in the repository is not a file in the application**
-Vite bundles only what is imported. The four OFL licence texts were committed
+Vite bundles only what is imported. The OFL licence texts were committed
 next to the fonts, documented in the README, and referenced from nothing — so
 every installer shipped the fonts without the licence they are distributed
 under, which is exactly what the SIL Open Font License forbids. They are now
@@ -939,7 +959,7 @@ platform and fails on the other.
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run math`,
-   `npm run syntax` — 59 + 10 + 7 checks.
+   `npm run syntax` — 61 + 10 + 7 checks.
 5. `npm run audit` against both `docs/sample-files` documents and compare the
    counts with the table in the README.
 6. `npm run dist` — installers and checksums land in `bin/<os>/<arch>/`.

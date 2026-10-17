@@ -341,6 +341,44 @@ check("diagrams removed from preview", toggled.afterOff.svg === 0);
 check("mermaid fences fall back to code", toggled.afterOff.codeBlocks > toggled.afterOn.codeBlocks);
 check("toggle restores diagrams", toggled.afterOn.checked === true && toggled.afterOn.svg >= 2);
 
+// Each face is one dropdown. The old row had a text field for the CSS stack, a
+// second dropdown and a rendered specimen; three controls saying the same
+// thing, with the stack field editable on top of it.
+const faces = await evaluate(`(() => {
+  [...document.querySelectorAll('.prefs-section')]
+    .find((s) => s.textContent === 'Typography').click();
+  const wanted = ['Editor', 'Preview text', 'Preview headings', 'Preview code'];
+  const rows = [...document.querySelectorAll('.prefs-row')].filter((row) => {
+    const label = (row.querySelector('.prefs-label')?.textContent ?? '').replace('?', '').trim();
+    return wanted.includes(label);
+  });
+  return JSON.stringify({
+    labels: rows.map((row) => row.querySelector('.prefs-label')?.textContent?.replace('?', '').trim()),
+    controls: rows.map((row) =>
+      row.querySelectorAll('input, select, textarea, .prefs-font-specimen').length),
+    tags: rows.map((row) => row.querySelector('.prefs-control')?.firstElementChild?.tagName ?? ''),
+    options: rows.map((row) => row.querySelectorAll('select option').length),
+    selected: rows.map((row) => row.querySelector('select')?.selectedOptions[0]?.textContent ?? '')
+  });
+})()`);
+
+console.log("\n=== typography face rows ===");
+console.log(`  labels   ${faces.labels.join(', ')}`);
+console.log(`  controls ${faces.controls.join(', ')}`);
+console.log(`  tags     ${faces.tags.join(', ')}`);
+console.log(`  selected ${faces.selected.join(', ')}`);
+
+check(
+  "one dropdown for each face",
+  faces.labels.length === 4 &&
+    faces.tags.every((tag) => tag === "SELECT") &&
+    faces.controls.every((count) => count === 1),
+);
+check(
+  "face pickers list the faces and keep a selection",
+  faces.options.every((count) => count >= 10) && faces.selected.every(Boolean),
+);
+
 // Close with Escape.
 const closed = await evaluate(`(() => {
   const overlay = document.querySelector('.prefs-overlay');
