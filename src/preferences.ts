@@ -221,7 +221,7 @@ function typographyRows(host: PreferencesHost): Row[] {
       kind: "note",
       label: "Bundled faces",
       text:
-        "MDraft ships Source Serif 4, Source Sans 3, Inter and JetBrains Mono under the SIL Open Font License, so those four look the same on every machine and travel inside exported HTML and PDF. Any other family comes from your operating system: it renders here, but a reader without it sees a fallback.",
+        "The bundled families are under the SIL Open Font License, so they look the same on every machine and travel inside exported HTML and PDF. Any other family comes from your operating system: it renders here, but a reader without it sees a fallback.",
     },
     { kind: "heading", label: "OpenType" },
     {
@@ -254,13 +254,6 @@ function typographyRows(host: PreferencesHost): Row[] {
       help: "Distinguishes 0 from capital O. Turns on tabular figures with it, since code is read in columns.",
       get: () => s().slashedZero,
       set: (value) => host.update({ slashedZero: value }),
-    },
-    { kind: "heading", label: "Mathematics" },
-    {
-      kind: "note",
-      label: "",
-      text:
-        "Mathematics keeps KaTeX's own Computer Modern, which is a Didone — high contrast, vertical stress. It sits naturally beside the transitional serifs (Source Serif 4, Charter, Georgia) and argues with geometric sans faces. This is not a limitation to be worked around: KaTeX draws radicals, integrals and large delimiters with the KaTeX_Size faces, and no font on your system provides those glyphs, so substituting a family breaks the layout rather than changing the style.",
     },
   );
 
@@ -697,13 +690,6 @@ function buildSections(host: PreferencesHost): Section[] {
           help: "Percent-escapes spaces and brackets so the path cannot break the link syntax.",
           get: () => s().imageAutoEscape,
           set: (value) => host.update({ imageAutoEscape: value }),
-        },
-        { kind: "heading", label: "Image Upload Setting" },
-        {
-          kind: "note",
-          label: "Image Uploader",
-          text:
-            "None. Uploading to S3, PicGo, Imgur and similar services is not implemented, and neither is the matching “upload automatically based on YAML settings” option. Images are always written to disk, so a document stays self-contained and nothing leaves the machine except a URL you paste yourself.",
         },
       ],
     },
