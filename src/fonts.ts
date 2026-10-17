@@ -315,7 +315,7 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
   },
   {
     id: "superfamily",
-    label: "Source superfamily",
+    label: "Serif",
     note: "Source Serif 4 and Source Sans 3, drawn to the same skeleton, with Fira Code in the editor. The two Source faces were designed together, so the pairing cannot clash.",
     values: {
       ...ROLE_DEFAULTS,
