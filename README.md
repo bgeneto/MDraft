@@ -226,6 +226,87 @@ nord    surface rgb(46,52,64)      8 distinct token colours
 7/7 checks passed
 ```
 
+## Typography
+
+Four faces are compiled into the application, so the type does not depend on what
+is installed. Nothing is fetched at runtime, and the editor chrome keeps the
+system UI font — a menu that reflows with the document's typeface is a worse
+application, not a more flexible one.
+
+| Role | Default | Why |
+| --- | --- | --- |
+| Preview text | Source Serif 4 | A screen-first serif with a real optical-size axis, true italics and moderate contrast |
+| Preview headings | Source Sans 3 | Adobe drew it as Source Serif's companion: the two share a skeleton |
+| Code, and the editor | JetBrains Mono | Drawn with programming ligatures as a headline feature |
+| Alternative | Inter | More display presence, an unusually complete set of alternates |
+
+*Preferences › Typography* sets each role independently — the source pane and the
+preview's code are separate choices, because a markdown editor has one pane where
+the text is not the document but the instructions for it. Each field takes any
+CSS `font-family` stack, so `Georgia, "Iowan Old Style", serif` is understood, and
+the bundled names are offered as suggestions rather than imposed. A specimen
+under every field repaints as you type, in the face and with the OpenType
+switches that will actually be used.
+
+Five presets — **Default**, **Literary**, **Technical**, **Source superfamily**,
+**System only** — set all of it coherently, because the hard part of choosing type
+is the pairing. Every preset is a starting point: the fields beneath it are there
+to be taken apart.
+
+### OpenType
+
+The settings that a font name cannot express, and that people genuinely disagree
+about:
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| Ligatures in code | off | `->` and `=>` as single glyphs in faces that draw them |
+| Tabular figures in tables | on | Equal-width digits, so columns of numbers line up |
+| Oldstyle figures in prose | off | Figures with ascenders and descenders, sitting in running text |
+| Slashed zero in code | off | Distinguishes `0` from capital `O` |
+
+Kerning and the standard ligatures are stated explicitly rather than left to the
+browser's defaults, and variable fonts are asked to interpolate their optical
+size axis for the size in use.
+
+### Mathematics keeps its own face
+
+KaTeX draws with its own Computer Modern, and that is deliberate rather than
+unfinished. It is a Didone — high contrast, vertical stress — so it sits
+naturally beside a transitional serif such as Source Serif 4, Charter or Georgia,
+and argues with a geometric sans. It cannot simply be swapped: KaTeX renders
+radicals, integrals and large delimiters with its `KaTeX_Size1–4` faces, and no
+operating system supplies those glyphs. Substituting a family breaks the layout
+rather than changing the style.
+
+### Exports carry the fonts
+
+An exported HTML or PDF embeds the faces as data URLs, so it looks the same on a
+machine that has never had them installed. This is not a refinement: a document
+naming a family by name gets a silent fallback, and the PDF would stop matching
+the preview precisely when a face had been chosen. Only the families that
+actually win in a stack are embedded — a fallback can never render, and carrying
+it added nearly a megabyte per export.
+
+The cost is roughly 2 MB for the default set. Choosing *System only* embeds
+nothing, because there is nothing to embed.
+
+### Licences
+
+All four families are under the SIL Open Font License 1.1, which permits bundling
+inside an application provided the copyright notice and licence text travel with
+it. Both do:
+
+- Source Serif 4 — © 2014–2023 Adobe, [adobe-fonts/source-serif](https://github.com/adobe-fonts/source-serif)
+- Source Sans 3 — © 2010–2022 Adobe, [adobe-fonts/source-sans](https://github.com/adobe-fonts/source-sans)
+- Inter — © 2016 The Inter Project Authors, [rsms/inter](https://github.com/rsms/inter)
+- JetBrains Mono — © 2020 The JetBrains Mono Project Authors, [JetBrains/JetBrainsMono](https://github.com/JetBrains/JetBrainsMono)
+
+The licence texts are in [`src/assets/fonts/licenses/`](src/assets/fonts/licenses).
+`src/assets/fonts/fonts.json` records every version, archive SHA-256 and file
+SHA-256, and `scripts/fetch-fonts.ps1` reproduces the set, refusing to extract an
+archive whose hash has changed.
+
 ## Math rendering
 
 Inline `$…$` and display `$$…$$` math is rendered by KaTeX 0.19 with its own

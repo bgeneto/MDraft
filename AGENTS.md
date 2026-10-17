@@ -146,7 +146,8 @@ rewrite from scratch.
 | `npm run audit` | `scripts/audit-document.mjs` | Render metrics for whatever document is loaded |
 | `npm run math` | `scripts/math-render-check.mjs` | 10 checks against the physics paper |
 | `npm run syntax` | `scripts/syntax-theme-test.mjs` | 7 checks that highlighting is real |
-| `npm run export` | `scripts/export-test.mjs` | 26 checks of every export path, against real pandoc |
+| `npm run export` | `scripts/export-test.mjs` | 30 checks of every export path, against real pandoc |
+| `npm run typography` | `scripts/typography-test.mjs` | 12 checks that each face loads and each OpenType switch changes pixels |
 | `npm run images` | `scripts/image-paste-test.mjs` | Image paste through the real UI |
 | `npm run screenshot` | `scripts/screenshot.mjs` | PNG of the running window |
 
@@ -163,6 +164,8 @@ All of these need the app already running with CDP enabled (see
 | `math-render-check.mjs` | `[port]` | `docs/sample-files/physrevb_70_035307.md` | That fonts actually load and that fractions and radicals have real geometry |
 | `syntax-theme-test.mjs` | `[port]` | `samples/feature-tour.md` | Distinct computed token colours, and that switching palette changes them |
 | `export-test.mjs` | `[port] [--install]` | `samples/feature-tour.md` | That pandoc really converts: the bytes of each output are inspected. `--install` additionally exercises the pandoc download, which is why it is opt-in |
+| `typography-test.mjs` | `[port]` | any | Screenshots text with each OpenType feature off and on and compares pixels. Width cannot measure a monospaced face, so nothing narrower would work |
+| `fetch-fonts.ps1` | `[--work-directory]` | — | Downloads the four bundled families, verifies each archive against a pinned SHA-256 and rewrites `src/assets/fonts/fonts.json`. Only needed to upgrade them; the fonts are committed |
 | `image-paste-test.mjs` | `[port] [imageUrl] [localPath]` | `samples/feature-tour.md` | Clipboard, local and remote image paths, and the markdown that results |
 | `set-palette.mjs` | `[port] [paletteId] [--split]` | `samples/feature-tour.md` | Not a test: drives the palette through the Preferences UI so you can screenshot a theme |
 | `screenshot.mjs` | `[port] [out.png] [setupExpression]` | any | Not a test: captures the window, optionally after running a JS setup string |
@@ -655,6 +658,37 @@ export shows `[TOC]` and `[!NOTE]` where the preview shows a table of contents
 and a callout. This is a real fidelity gap, not a bug to fix by argument
 tweaking; the PDF export, which prints the preview's own HTML, does not have it.
 `[TOC]` has a partial answer: add `--toc` in the format's Extra Arguments.
+
+**A monospaced font makes width useless as a measurement**
+Testing that a typography feature works by comparing text widths works for
+proportional faces and silently fails for monospaced ones. Every glyph in a
+monospace face has the same advance by definition, and a programming ligature
+draws one glyph across two cells — so `->` measures identically whether or not it
+is an arrow. `slashed-zero` likewise changes the glyph, never the width.
+`canvas.measureText` is no better: `ctx.font` accepts only
+style/variant/weight/size/family, so `font-variant-numeric` and
+`font-variant-ligatures` are dropped without complaint and every comparison comes
+back identical. `scripts/typography-test.mjs` therefore screenshots each sample
+with the feature off and on and compares pixels; a feature that changes nothing
+on screen fails there.
+
+**`appDirectoriesOverride` reaches below the plugin**
+`tauri-plugin-window-state` hardcodes `app_config_dir().join(filename)` with no
+API to redirect the directory, which makes it look like a portable build would
+strand `.window-state.json` in `%APPDATA%`. It does not: the override is applied
+inside `app_config_dir()` itself, so the plugin follows without a change. Verified
+by running the portable build in an empty folder — settings and window state both
+landed beside the executable and the `%APPDATA%` copies kept their old
+timestamps.
+
+**A font named in a stack is not a font that will render**
+Two separate traps. In an exported document, a family named by name gets a silent
+system fallback, because a browser reading a temporary file cannot reach the
+application's assets — so exports must embed the faces as data URLs. And in an
+embedding pass, only the *first* bundled family in a stack can ever be used: the
+default heading stack is `"Source Sans 3", Inter, …`, and embedding Inter as well
+added nearly a megabyte per export for a face that could not render. Both are
+guarded in `scripts/export-test.mjs`.
 
 **Pane sync: only scrolling may scroll**
 The rule that survived review is that a click never moves the other pane, and

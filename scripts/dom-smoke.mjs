@@ -269,10 +269,10 @@ for (const section of prefs.perSection) {
 
 check("preferences opens", prefs.open);
 check("preferences title", prefs.title === "Preferences");
-check("seven sections", prefs.sectionNames.split(",").length === 7);
+check("eight sections", prefs.sectionNames.split(",").length === 8);
 check(
   "sections named and ordered like Typora",
-  prefs.sectionNames === "Files,Editor,Image,Markdown,Export,Appearance,General",
+  prefs.sectionNames === "Files,Editor,Image,Markdown,Export,Appearance,General,Typography",
 );
 check("first section selected", prefs.activeSection === "Files" && prefs.sectionHeading === "Files");
 check("every section has rows", prefs.emptySections === "");
