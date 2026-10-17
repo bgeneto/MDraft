@@ -266,7 +266,7 @@ the bundled names are offered as suggestions rather than imposed. A specimen
 under every field repaints as you type, in the face and with the OpenType
 switches that will actually be used.
 
-Five presets — **Default**, **Literary**, **Technical**, **Source superfamily**,
+Five presets — **Default**, **Literary**, **Technical**, **Serif**,
 **System only** — set all of it coherently, because the hard part of choosing type
 is the pairing. Every preset is a starting point: the fields beneath it are there
 to be taken apart.
