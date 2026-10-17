@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "MDraft",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "identifier": "io.github.bernh.mdraft",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -36,8 +36,8 @@
     "active": true,
     "targets": "all",
     "category": "Productivity",
-    "shortDescription": "A Markdown, Typst and HTML editor",
-    "longDescription": "A Markdown, Typst and HTML editor in the spirit of Typora: live preview, math, diagrams and syntax highlighting, with PDF typeset by Typst and HTML previews in a sandboxed guest document.",
+    "shortDescription": "A Markdown, Typst, HTML and AsciiDoc editor",
+    "longDescription": "A Markdown, Typst, HTML and AsciiDoc editor in the spirit of Typora: live preview, math, diagrams and syntax highlighting, with PDF typeset by Typst, AsciiDoc includes and a sandboxed HTML guest document.",
       "copyright": "Copyright © 2026 Bernhard Enders",
       "publisher": "Bernhard Enders",
     "icon": [

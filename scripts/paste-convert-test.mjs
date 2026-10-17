@@ -160,6 +160,100 @@ console.log("\n=== Typst to Markdown ===");
   check(text.includes("$$\n") || text.includes("$x^2$"), "equation carried", JSON.stringify(text));
 }
 
+console.log("\n=== HTML and Markdown to AsciiDoc ===");
+{
+  const html = await planPaste(
+    payload(
+      `<h1>Title</h1><p>Hello <strong>world</strong> and <em>you</em>.</p>` +
+        `<ul><li>One</li><li>Two</li></ul>` +
+        `<table><thead><tr><th>A</th><th>B</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table>`,
+    ),
+    "asciidoc",
+  );
+  const htmlText = html?.text ?? "";
+  check(htmlText.includes("== Title"), "h1 becomes an AsciiDoc section", htmlText.split("\n")[0]);
+  check(htmlText.includes("*world*") && htmlText.includes("_you_"), "strong and emphasis");
+  check(htmlText.includes("* One") && htmlText.includes("* Two"), "bullets");
+  check(htmlText.includes("|==="), "table");
+  check(!/<\/?[a-z][^>]*>/i.test(htmlText), "no HTML tags survive");
+
+  const markdown = await planPaste(
+    payload(null, "# Title\n\nSome **bold** and *em* and `code`.\n\n- one\n- two\n\n| A | B |\n|:--|--:|\n| 1 | 2 |"),
+    "asciidoc",
+  );
+  const mdText = markdown?.text ?? "";
+  check(mdText.includes("== Title"), "Markdown heading becomes an AsciiDoc section");
+  check(mdText.includes("*bold*") && mdText.includes("_em_") && mdText.includes("`code`"), "inline syntax");
+  check(mdText.includes("* one") && mdText.includes("* two"), "list");
+  check(mdText.includes("[options=\"header\"]") && mdText.includes("|==="), "header table");
+}
+
+console.log("\n=== AsciiDoc to Markdown and AsciiDoc ===");
+{
+  const source =
+    "= Title\n\n== Section\n\nA *strong* word and latexmath:[x^2].\n\n* one\n* two\n";
+  const destination = resolvePasteDestination({
+    saved: false,
+    language: "markdown",
+    buffer: source,
+  });
+  check(destination.language === "asciidoc", "an AsciiDoc buffer is detected", destination.language);
+
+  const markdown = await planPaste(payload(null, source), "markdown");
+  const text = markdown?.text ?? "";
+  check(text.includes("# Title") && text.includes("## Section"), "titles become Markdown headings", text);
+  check(text.includes("**strong**") && text.includes("$x^2$"), "inline syntax and math survive");
+  check(text.includes("- one") && text.includes("- two"), "bullets become Markdown");
+
+  const same = await planPaste(payload(null, source), "asciidoc");
+  check(same?.text === source && same.converted === false, "AsciiDoc into AsciiDoc is byte-identical");
+
+  const fenced = resolvePasteDestination({
+    saved: false,
+    language: "markdown",
+    buffer: "# Markdown\n\n```asciidoc\n= Not a title\n:toc:\n|===\n```\n",
+  });
+  check(fenced.language !== "asciidoc", "a fenced AsciiDoc example does not classify the document", fenced.language);
+
+  const asciiMath = await planPaste(payload(null, "A $x^2$ formula."), "asciidoc");
+  check(!(asciiMath?.text ?? "").includes("latexmath"), "AsciiMath is not rewritten as TeX");
+  check((asciiMath?.text ?? "").includes("$x^2$"), "AsciiMath is kept as text");
+}
+
+console.log("\n=== AsciiDoc images ===");
+{
+  check(
+    imageSyntaxFor("asciidoc", "Alt", "./a.png") === "image::./a.png[Alt]",
+    "AsciiDoc block image syntax",
+  );
+  check(
+    imageSyntaxFor("asciidoc", "a]b,c", "./a.png") === "image::./a.png[a\\]b\\,c]",
+    "AsciiDoc attribute escaping",
+  );
+
+  const inline = await planPaste(
+    payload(`<p>Before <img src="data:image/png;base64,AAA" alt="shot"> after</p>`),
+    "asciidoc",
+    { resolveImage: async () => ({ src: "./assets/shot.png", alt: "shot" }) },
+  );
+  check(
+    (inline?.text ?? "").includes("image:./assets/shot.png[shot]"),
+    "an image in a sentence uses image:",
+    inline?.text ?? "",
+  );
+
+  const block = await planPaste(
+    payload(`<p><img src="data:image/png;base64,AAA" alt="shot"></p>`),
+    "asciidoc",
+    { resolveImage: async () => ({ src: "./assets/shot.png", alt: "shot" }) },
+  );
+  check(
+    (block?.text ?? "").includes("image::./assets/shot.png[shot]"),
+    "a standalone image uses image::",
+    block?.text ?? "",
+  );
+}
+
 console.log("\n=== same-format and plain passthrough ===");
 {
   const markdown = "# Title\n\nA **bold** line.\n";

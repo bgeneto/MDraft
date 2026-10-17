@@ -656,13 +656,15 @@ function buildSections(host: PreferencesHost): Section[] {
           kind: "select",
           label: "Default File Extension",
           help:
-            "Used for Save As and for a new document. Typst starts the editor in Typst mode, HTML in HTML mode; the other choices start in Markdown.",
+            "Used for Save As and for a new document. Typst starts the editor in Typst mode, HTML in HTML mode, AsciiDoc in AsciiDoc mode; the other choices start in Markdown.",
           options: [
             ["md", "Markdown (.md)"],
             ["markdown", "Markdown (.markdown)"],
             ["txt", "Plain text (.txt)"],
             ["typ", "Typst (.typ)"],
             ["html", "HTML (.html)"],
+            ["adoc", "AsciiDoc (.adoc)"],
+            ["asciidoc", "AsciiDoc (.asciidoc)"],
           ],
           get: () => s().defaultExtension,
           set: (value) => host.update({ defaultExtension: value }),

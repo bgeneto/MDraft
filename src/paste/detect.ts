@@ -12,7 +12,7 @@
 
 import type { DocumentLanguage } from "../api.ts";
 
-export type SourceFormat = "html" | "markdown" | "typst" | "plain";
+export type SourceFormat = "html" | "markdown" | "typst" | "asciidoc" | "plain";
 
 export interface ClipboardPayload {
   html: string | null;
@@ -36,6 +36,11 @@ export interface Detection {
 export function stripNoise(input: string): string {
   return input
     .replace(/^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\1\s*$/gm, " ")
+    .replace(
+      /^ {0,3}(-{4,}|\.{4,}|\+{4,}|\/{4,}|={4,}|\*{4,}|_{4,}|\|={3,})[^\n]*\n[\s\S]*?^ {0,3}\1\s*$/gm,
+      " ",
+    )
+    .replace(/^ {0,3}\/\/.*$/gm, " ")
     .replace(/`[^`\n]*`/g, " ")
     .replace(/<!--[\s\S]*?-->/g, " ");
 }
@@ -85,6 +90,28 @@ export function scoreTypst(raw: string): number {
   return score;
 }
 
+/**
+ * The AsciiDoc score.
+ *
+ * `= ` is deliberately worth the same 4 here as in `scoreTypst`: both mark a
+ * title, so the shared signal cancels in the lead instead of deciding. The
+ * signals below are the ones Typst does not have.
+ */
+export function scoreAsciidoc(raw: string): number {
+  const text = stripNoise(raw);
+  let score = 0;
+  if (/^ {0,3}={1,6}\s+\S/m.test(text)) score += 4;
+  if (/^ {0,3}image::?[^\s\[]*\[/m.test(text)) score += 4;
+  if (/^ {0,3}:[A-Za-z0-9_-]+:\s*\S/m.test(text)) score += 4;
+  if (/^ {0,3}(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION):\s+/m.test(text)) score += 4;
+  if (/^\s*\|===\s*$/m.test(text)) score += 5;
+  if (/\b(?:latexmath|stem):\[/.test(text)) score += 4;
+  if (/^ {0,3}include::/m.test(text)) score += 4;
+  if (/\bxref:/.test(text)) score += 2;
+  if (/^ {0,3}\/\/.*$/m.test(text)) score += 1;
+  return score;
+}
+
 const BLOCK_TAG =
   /^<(?:\!doctype\s+html|html|body|main|article|section|header|footer|div|p|h[1-6]|ul|ol|li|table|blockquote|pre|figure|details)\b/i;
 
@@ -115,14 +142,27 @@ export function detectTextSyntax(
   const html = scoreHtml(raw, mode);
   const markdown = scoreMarkdown(raw);
   const typst = scoreTypst(raw);
+  const asciidoc = scoreAsciidoc(raw);
   const scores: Array<[DocumentLanguage, number]> = [
     ["html", html],
     ["markdown", markdown],
     ["typst", typst],
+    ["asciidoc", asciidoc],
   ];
   scores.sort((a, b) => b[1] - a[1]);
   const [language, score] = scores[0];
   const runnerUp = scores[1][1];
+  // Typst and AsciiDoc both use `= ` for a title. When that shared signal is
+  // the only evidence, keep the pre-AsciiDoc answer: Typst. AsciiDoc has to
+  // lead from a signal Typst does not share.
+  const tied = score === runnerUp;
+  if (
+    tied &&
+    ((language === "typst" && scores[1][0] === "asciidoc") ||
+      (language === "asciidoc" && scores[1][0] === "typst"))
+  ) {
+    return { language: "typst", score, runnerUp };
+  }
   if (score < 4 || score - runnerUp < 2) return null;
   return { language, score, runnerUp };
 }
@@ -152,6 +192,9 @@ export function chooseSource(
   if (destination === "typst" && text && confident?.language === "typst") {
     return { source: "typst", native: true };
   }
+  if (destination === "asciidoc" && text && confident?.language === "asciidoc") {
+    return { source: "asciidoc", native: true };
+  }
   if (destination === "html" && text && confident?.language === "html") {
     // The destination is HTML, but the fragment still needs sanitising.
     return { source: "html", native: false };
@@ -174,7 +217,9 @@ export function chooseSource(
   if (confident) {
     const native =
       confident.language === destination &&
-      (confident.language === "markdown" || confident.language === "typst") &&
+      (confident.language === "markdown" ||
+        confident.language === "typst" ||
+        confident.language === "asciidoc") &&
       payload.text !== null;
     return { source: confident.language === "html" ? "html" : confident.language, native };
   }

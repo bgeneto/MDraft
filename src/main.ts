@@ -14,6 +14,7 @@ import {
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import * as api from "./api";
+import { renderAsciidocPreview } from "./asciidoc-preview";
 import { FONT_LICENCES, REFERENCE, SHORTCUTS, WELCOME } from "./content";
 import { createEditor, type EditorHandle } from "./editor";
 import {
@@ -35,6 +36,7 @@ import { chooseSource, type ClipboardPayload } from "./paste/detect";
 import { resolvePasteDestination, type PasteDestination } from "./paste/detect-document";
 import { planPaste, type ImageRequest, type ResolvedImage } from "./paste/index";
 import {
+  ASCIIDOC_CSS,
   KATEX_STYLESHEET_URL,
   renderMermaidIn,
   renderPreview,
@@ -638,7 +640,8 @@ let pendingPreviewScroll: number | null = null;
 
 function scheduleRender(immediate = false): void {
   window.clearTimeout(renderTimer);
-  const delay = doc.language === "html" ? 300 : 200;
+  const delay =
+    doc.language === "html" ? 300 : doc.language === "asciidoc" ? 250 : 200;
   renderTimer = window.setTimeout(() => void doRender(), immediate ? 0 : delay);
 }
 
@@ -803,6 +806,23 @@ async function doRender(): Promise<void> {
     return;
   }
 
+  if (doc.language === "asciidoc") {
+    const result = await renderAsciidocPreview(source, {
+      baseDir: doc.directory ?? null,
+      math: settings.enableMath,
+      mermaid: settings.enableMermaid,
+      isDark,
+    });
+    if (token !== renderToken) return;
+    preview.innerHTML = result.html;
+    previewLinesMapped = result.linesMapped;
+    rebuildAnchors();
+    if (pendingPreviewScroll === null) revealCursorInPreview();
+    else applyPendingPreviewScroll();
+    updateActiveOutline();
+    return;
+  }
+
   const result = renderPreview(source, {
     baseDir: doc.directory ?? null,
     math: settings.enableMath,
@@ -955,7 +975,9 @@ function refreshOutline(text = editor.getDoc()): void {
       ? sidebarPanel.extractTypstHeadings(text)
       : language === "html"
         ? sidebarPanel.extractHtmlHeadings(text)
-        : sidebarPanel.extractHeadings(text);
+        : language === "asciidoc"
+          ? sidebarPanel.extractAsciidocHeadings(text)
+          : sidebarPanel.extractHeadings(text);
   outlineLanguage = language;
   outlineReady = true;
 
@@ -1007,6 +1029,7 @@ function languageFor(path: string | null): api.DocumentLanguage {
   if (path === null) return "markdown";
   if (/\.typ$/i.test(path)) return "typst";
   if (/\.html?$/i.test(path)) return "html";
+  if (/\.(?:adoc|asciidoc)$/i.test(path)) return "asciidoc";
   return "markdown";
 }
 
@@ -1020,6 +1043,9 @@ function languageFor(path: string | null): api.DocumentLanguage {
 function defaultDocumentLanguage(): api.DocumentLanguage {
   if (settings.defaultExtension === "typ") return "typst";
   if (settings.defaultExtension === "html" || settings.defaultExtension === "htm") return "html";
+  if (settings.defaultExtension === "adoc" || settings.defaultExtension === "asciidoc") {
+    return "asciidoc";
+  }
   return "markdown";
 }
 
@@ -1036,14 +1062,17 @@ function documentFilters(): { name: string; extensions: string[] }[] {
   };
   const typst = { name: "Typst", extensions: ["typ"] };
   const html = { name: "HTML", extensions: ["html", "htm"] };
+  const asciidoc = { name: "AsciiDoc", extensions: ["adoc", "asciidoc"] };
   const all = { name: "All files", extensions: ["*"] };
   switch (defaultDocumentLanguage()) {
     case "typst":
-      return [typst, markdown, html, all];
+      return [typst, markdown, asciidoc, html, all];
     case "html":
-      return [html, markdown, typst, all];
+      return [html, markdown, typst, asciidoc, all];
+    case "asciidoc":
+      return [asciidoc, markdown, typst, html, all];
     default:
-      return [markdown, typst, html, all];
+      return [markdown, typst, html, asciidoc, all];
   }
 }
 
@@ -1411,11 +1440,21 @@ async function reloadFromDisk(): Promise<void> {
  */
 async function buildExportArticle(): Promise<string> {
   const holder = document.createElement("div");
-  holder.innerHTML = renderPreview(editor.getDoc(), {
-    baseDir: doc.directory ?? null,
-    math: settings.enableMath,
-    mermaid: settings.enableMermaid,
-  }).html;
+  if (doc.language === "asciidoc") {
+    const result = await renderAsciidocPreview(editor.getDoc(), {
+      baseDir: doc.directory ?? null,
+      math: settings.enableMath,
+      mermaid: settings.enableMermaid,
+      isDark,
+    });
+    holder.innerHTML = result.html;
+  } else {
+    holder.innerHTML = renderPreview(editor.getDoc(), {
+      baseDir: doc.directory ?? null,
+      math: settings.enableMath,
+      mermaid: settings.enableMermaid,
+    }).html;
+  }
   await renderMermaidIn(holder, isDark);
   return `<article class="markdown-body">${holder.innerHTML}</article>`;
 }
@@ -1458,7 +1497,7 @@ function exportTypographyCss(): string {
   // stay at KaTeX's 1.21em while the preview showed the reader's scale.
   const mathScale =
     ".math-inline,.math-display{font-size:calc(1em * var(--math-scale))}";
-  return `:root{${declarations.join(";")}}\n${emphasis}\n${mathScale}`;
+  return `:root{${declarations.join(";")}}\n${emphasis}\n${mathScale}\n${ASCIIDOC_CSS}`;
 }
 
 /** Basename of the open document, without its extension. */
@@ -1873,6 +1912,265 @@ function htmlCommandNote(): void {
   toast("That command is Markdown-only. In HTML, type the tag in the source.", 4200);
 }
 
+function setHeadingCommand(level: number): void {
+  if (doc.language === "html") {
+    editor.wrapSelection(`<h${level}>`, `</h${level}>`, "Heading");
+    return;
+  }
+  if (doc.language === "asciidoc") {
+    editor.setAsciiDocHeading(level);
+    return;
+  }
+  editor.setHeading(level);
+}
+
+function setParagraphCommand(): void {
+  if (doc.language === "html") {
+    editor.wrapSelection("<p>", "</p>", "Paragraph");
+    return;
+  }
+  if (doc.language === "asciidoc") {
+    editor.setAsciiDocHeading(0);
+    return;
+  }
+  editor.setHeading(0);
+}
+
+function shiftHeadingCommand(delta: number): void {
+  if (doc.language === "html") {
+    htmlCommandNote();
+    return;
+  }
+  if (doc.language === "asciidoc") {
+    editor.shiftAsciiDocHeading(delta);
+    return;
+  }
+  editor.shiftHeading(delta);
+}
+
+function quoteCommand(): void {
+  if (doc.language === "html") {
+    editor.insertBlock("<blockquote>\n\n</blockquote>");
+    return;
+  }
+  if (doc.language === "asciidoc") {
+    editor.insertBlockWithCaret("____\n\n____", 5);
+    return;
+  }
+  editor.toggleLinePrefix("> ");
+}
+
+function codeBlockCommand(): void {
+  if (doc.language === "html") {
+    editor.insertBlockWithCaret("<pre><code></code></pre>", 11);
+    return;
+  }
+  if (doc.language === "asciidoc") {
+    editor.insertBlockWithCaret("----\n\n----", 5);
+    return;
+  }
+  editor.insertBlockWithCaret("```\n\n```", 4);
+}
+
+function mathBlockCommand(): void {
+  if (doc.language === "html") {
+    htmlCommandNote();
+    return;
+  }
+  if (doc.language === "asciidoc") {
+    const block = "[latexmath]\n++++\n\n++++\n";
+    editor.insertBlockWithCaret(block, block.indexOf("\n\n") + 1);
+    return;
+  }
+  editor.insertBlockWithCaret("$$\n\n$$\n", 3);
+}
+
+function listCommand(kind: "ul" | "ol"): void {
+  if (doc.language === "html") {
+    editor.insertBlock(
+      kind === "ul" ? "<ul>\n  <li></li>\n</ul>" : "<ol>\n  <li></li>\n</ol>",
+    );
+    return;
+  }
+  if (doc.language === "asciidoc") {
+    editor.toggleLinePrefix(kind === "ul" ? "* " : ". ");
+    return;
+  }
+  editor.toggleLinePrefix(kind === "ul" ? "- " : "1. ");
+}
+
+function taskCommand(state: "insert" | "done" | "todo" | "plain"): void {
+  if (doc.language === "html") {
+    htmlCommandNote();
+    return;
+  }
+  if (doc.language === "asciidoc") {
+    if (state === "insert") editor.toggleLinePrefix("* [ ] ");
+    else editor.setAsciiDocTaskState(state);
+    return;
+  }
+  if (state === "insert") editor.toggleLinePrefix("- [ ] ");
+  else editor.setTaskState(state);
+}
+
+function tableCommand(): void {
+  if (doc.language === "html") {
+    editor.insertBlock(
+      "<table>\n  <thead>\n    <tr><th>Column</th><th>Column</th></tr>\n  </thead>\n  <tbody>\n    <tr><td>Cell</td><td>Cell</td></tr>\n  </tbody>\n</table>",
+    );
+    return;
+  }
+  if (doc.language === "asciidoc") {
+    editor.insertBlock(
+      '[options="header"]\n|===\n| Column | Column\n\n| Cell | Cell\n|===',
+    );
+    return;
+  }
+  editor.insertBlock("| Column | Column |\n| --- | --- |\n| Cell | Cell |");
+}
+
+function ruleCommand(): void {
+  if (doc.language === "html") editor.insertBlock("<hr>");
+  else if (doc.language === "asciidoc") editor.insertBlock("'''");
+  else editor.insertBlock("---");
+}
+
+function tocCommand(): void {
+  if (doc.language === "html") {
+    htmlCommandNote();
+    return;
+  }
+  if (doc.language === "asciidoc") {
+    editor.insertAsciiDocToc();
+    return;
+  }
+  editor.insertToc();
+}
+
+function frontMatterCommand(): void {
+  if (doc.language === "html") {
+    htmlCommandNote();
+    return;
+  }
+  if (doc.language === "asciidoc") {
+    editor.insertAsciiDocAttributes();
+    toast("AsciiDoc stores the title and author as document attributes.");
+    return;
+  }
+  editor.insertYamlFrontMatter();
+}
+
+function alertCommand(label: string): void {
+  if (doc.language === "html") {
+    htmlCommandNote();
+    return;
+  }
+  if (doc.language === "asciidoc") {
+    editor.insertBlock(`${label}: `);
+    return;
+  }
+  editor.insertBlock(`> [!${label}]\n> `);
+}
+
+function inlineCommand(kind: "bold" | "italic" | "strike" | "code" | "link" | "math"): void {
+  if (doc.language === "html") {
+    switch (kind) {
+      case "bold":
+        editor.wrapSelection("<strong>", "</strong>", "strong text");
+        return;
+      case "italic":
+        editor.wrapSelection("<em>", "</em>", "emphasis");
+        return;
+      case "strike":
+        editor.wrapSelection("<s>", "</s>", "strikethrough");
+        return;
+      case "code":
+        editor.wrapSelection("<code>", "</code>", "code");
+        return;
+      case "link":
+        editor.wrapSelection('<a href="https://">', "</a>", "link text");
+        return;
+      default:
+        htmlCommandNote();
+        return;
+    }
+  }
+  if (doc.language === "asciidoc") {
+    switch (kind) {
+      case "bold":
+        editor.wrapSelection("*", "*", "strong text");
+        return;
+      case "italic":
+        editor.wrapSelection("_", "_", "emphasis");
+        return;
+      case "strike":
+        editor.wrapSelection("[.line-through]#", "#", "strikethrough");
+        return;
+      case "code":
+        editor.wrapSelection("`", "`", "code");
+        return;
+      case "link":
+        editor.wrapSelection("https://[", "]", "link text");
+        return;
+      default:
+        editor.wrapSelection("latexmath:[", "]", "e^{i\\pi}+1=0");
+        return;
+    }
+  }
+  switch (kind) {
+    case "bold":
+      editor.wrapSelection("**", "**", "strong text");
+      return;
+    case "italic":
+      editor.wrapSelection("*", "*", "emphasis");
+      return;
+    case "strike":
+      editor.wrapSelection("~~", "~~", "strikethrough");
+      return;
+    case "code":
+      editor.wrapSelection("`", "`", "code");
+      return;
+    case "link":
+      editor.wrapSelection("[", "](https://)", "link text");
+      return;
+    default:
+      editor.wrapSelection("$", "$", "e^{i\\pi}+1=0");
+  }
+}
+
+function imageCommand(): void {
+  if (doc.language === "html") {
+    editor.insertBlock('<img src="./image.png" alt="alt text">');
+    return;
+  }
+  if (doc.language === "asciidoc") {
+    editor.insertBlock("image::./image.png[alt text]");
+    return;
+  }
+  editor.wrapSelection("![", "](./image.png)", "alt text");
+}
+
+function displayMathCommand(): void {
+  if (doc.language === "html") {
+    htmlCommandNote();
+    return;
+  }
+  if (doc.language === "asciidoc") {
+    if (editor.cursorInfo().selectionLength > 0) {
+      editor.wrapSelection("[latexmath]\n++++\n", "\n++++\n", "");
+    } else {
+      const block = "[latexmath]\n++++\n\n++++\n";
+      editor.insertBlockWithCaret(block, block.indexOf("\n\n") + 1);
+    }
+    return;
+  }
+  if (editor.cursorInfo().selectionLength > 0) {
+    editor.wrapSelection("$$", "$$", "");
+  } else {
+    editor.insertBlockWithCaret("$$\n\n$$\n", 3);
+  }
+}
+
 const handlers: Record<string, () => void | Promise<void>> = {
   "file.new": async () => {
     await loadUntitled("", defaultDocumentLanguage());
@@ -1920,130 +2218,46 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "edit.find": () => editor.openSearch(false),
   "edit.replace": () => editor.openSearch(true),
 
-  "para.h1": () =>
-    doc.language === "html"
-      ? editor.wrapSelection("<h1>", "</h1>", "Heading")
-      : editor.setHeading(1),
-  "para.h2": () =>
-    doc.language === "html"
-      ? editor.wrapSelection("<h2>", "</h2>", "Heading")
-      : editor.setHeading(2),
-  "para.h3": () =>
-    doc.language === "html"
-      ? editor.wrapSelection("<h3>", "</h3>", "Heading")
-      : editor.setHeading(3),
-  "para.h4": () =>
-    doc.language === "html"
-      ? editor.wrapSelection("<h4>", "</h4>", "Heading")
-      : editor.setHeading(4),
-  "para.h5": () =>
-    doc.language === "html"
-      ? editor.wrapSelection("<h5>", "</h5>", "Heading")
-      : editor.setHeading(5),
-  "para.h6": () =>
-    doc.language === "html"
-      ? editor.wrapSelection("<h6>", "</h6>", "Heading")
-      : editor.setHeading(6),
-  "para.paragraph": () =>
-    doc.language === "html"
-      ? editor.wrapSelection("<p>", "</p>", "Paragraph")
-      : editor.setHeading(0),
-  "para.increaseHeading": () =>
-    doc.language === "html" ? htmlCommandNote() : editor.shiftHeading(-1),
-  "para.decreaseHeading": () =>
-    doc.language === "html" ? htmlCommandNote() : editor.shiftHeading(1),
-  "para.quote": () =>
-    doc.language === "html"
-      ? editor.insertBlock("<blockquote>\n\n</blockquote>")
-      : editor.toggleLinePrefix("> "),
-  "para.codeBlock": () =>
-    doc.language === "html"
-      ? editor.insertBlockWithCaret("<pre><code></code></pre>", 11)
-      : editor.insertBlockWithCaret("```\n\n```", 4),
-  "para.mathBlock": () =>
-    doc.language === "html" ? htmlCommandNote() : editor.insertBlockWithCaret("$$\n\n$$\n", 3),
-  "para.ul": () =>
-    doc.language === "html"
-      ? editor.insertBlock("<ul>\n  <li></li>\n</ul>")
-      : editor.toggleLinePrefix("- "),
-  "para.ol": () =>
-    doc.language === "html"
-      ? editor.insertBlock("<ol>\n  <li></li>\n</ol>")
-      : editor.toggleLinePrefix("1. "),
-  "para.task": () =>
-    doc.language === "html" ? htmlCommandNote() : editor.toggleLinePrefix("- [ ] "),
-  "para.taskDone": () =>
-    doc.language === "html" ? htmlCommandNote() : editor.setTaskState("done"),
-  "para.taskTodo": () =>
-    doc.language === "html" ? htmlCommandNote() : editor.setTaskState("todo"),
-  "para.taskPlain": () =>
-    doc.language === "html" ? htmlCommandNote() : editor.setTaskState("plain"),
+  "para.h1": () => setHeadingCommand(1),
+  "para.h2": () => setHeadingCommand(2),
+  "para.h3": () => setHeadingCommand(3),
+  "para.h4": () => setHeadingCommand(4),
+  "para.h5": () => setHeadingCommand(5),
+  "para.h6": () => setHeadingCommand(6),
+  "para.paragraph": () => setParagraphCommand(),
+  "para.increaseHeading": () => shiftHeadingCommand(-1),
+  "para.decreaseHeading": () => shiftHeadingCommand(1),
+  "para.quote": () => quoteCommand(),
+  "para.codeBlock": () => codeBlockCommand(),
+  "para.mathBlock": () => mathBlockCommand(),
+  "para.ul": () => listCommand("ul"),
+  "para.ol": () => listCommand("ol"),
+  "para.task": () => taskCommand("insert"),
+  "para.taskDone": () => taskCommand("done"),
+  "para.taskTodo": () => taskCommand("todo"),
+  "para.taskPlain": () => taskCommand("plain"),
   "para.indent": () => editor.indentLines(1),
   "para.outdent": () => editor.indentLines(-1),
   "para.insertBefore": () => editor.insertParagraphBefore(),
   "para.insertAfter": () => editor.insertParagraphAfter(),
-  "para.table": () =>
-    doc.language === "html"
-      ? editor.insertBlock(
-          "<table>\n  <thead>\n    <tr><th>Column</th><th>Column</th></tr>\n  </thead>\n  <tbody>\n    <tr><td>Cell</td><td>Cell</td></tr>\n  </tbody>\n</table>",
-        )
-      : editor.insertBlock("| Column | Column |\n| --- | --- |\n| Cell | Cell |"),
-  "para.hr": () => (doc.language === "html" ? editor.insertBlock("<hr>") : editor.insertBlock("---")),
-  "para.toc": () => (doc.language === "html" ? htmlCommandNote() : editor.insertToc()),
-  "para.yaml": () => (doc.language === "html" ? htmlCommandNote() : editor.insertYamlFrontMatter()),
-  "para.alertNote": () =>
-    doc.language === "html" ? htmlCommandNote() : editor.insertBlock("> [!NOTE]\n> "),
-  "para.alertTip": () =>
-    doc.language === "html" ? htmlCommandNote() : editor.insertBlock("> [!TIP]\n> "),
-  "para.alertImportant": () =>
-    doc.language === "html" ? htmlCommandNote() : editor.insertBlock("> [!IMPORTANT]\n> "),
-  "para.alertWarning": () =>
-    doc.language === "html" ? htmlCommandNote() : editor.insertBlock("> [!WARNING]\n> "),
-  "para.alertCaution": () =>
-    doc.language === "html" ? htmlCommandNote() : editor.insertBlock("> [!CAUTION]\n> "),
+  "para.table": () => tableCommand(),
+  "para.hr": () => ruleCommand(),
+  "para.toc": () => tocCommand(),
+  "para.yaml": () => frontMatterCommand(),
+  "para.alertNote": () => alertCommand("NOTE"),
+  "para.alertTip": () => alertCommand("TIP"),
+  "para.alertImportant": () => alertCommand("IMPORTANT"),
+  "para.alertWarning": () => alertCommand("WARNING"),
+  "para.alertCaution": () => alertCommand("CAUTION"),
 
-  "format.bold": () =>
-    doc.language === "html"
-      ? editor.wrapSelection("<strong>", "</strong>", "strong text")
-      : editor.wrapSelection("**", "**", "strong text"),
-  "format.italic": () =>
-    doc.language === "html"
-      ? editor.wrapSelection("<em>", "</em>", "emphasis")
-      : editor.wrapSelection("*", "*", "emphasis"),
-  "format.strike": () =>
-    doc.language === "html"
-      ? editor.wrapSelection("<s>", "</s>", "strikethrough")
-      : editor.wrapSelection("~~", "~~", "strikethrough"),
-  "format.code": () =>
-    doc.language === "html"
-      ? editor.wrapSelection("<code>", "</code>", "code")
-      : editor.wrapSelection("`", "`", "code"),
-  "format.link": () =>
-    doc.language === "html"
-      ? editor.wrapSelection('<a href="https://">', "</a>", "link text")
-      : editor.wrapSelection("[", "](https://)", "link text"),
-  "format.image": () =>
-    doc.language === "html"
-      ? editor.insertBlock('<img src="./image.png" alt="alt text">')
-      : editor.wrapSelection("![", "](./image.png)", "alt text"),
-  "format.math": () =>
-    doc.language === "html"
-      ? htmlCommandNote()
-      : editor.wrapSelection("$", "$", "e^{i\\pi}+1=0"),
-  "format.displayMath": () => {
-    if (doc.language === "html") {
-      htmlCommandNote();
-      return;
-    }
-    // A selected expression becomes a display equation in place. With nothing
-    // selected, insert the block a bare caret is asking for; `wrapSelection`
-    // would otherwise put the placeholder in a display box mid-sentence.
-    if (editor.cursorInfo().selectionLength > 0) {
-      editor.wrapSelection("$$", "$$", "");
-    } else {
-      editor.insertBlockWithCaret("$$\n\n$$\n", 3);
-    }
-  },
+  "format.bold": () => inlineCommand("bold"),
+  "format.italic": () => inlineCommand("italic"),
+  "format.strike": () => inlineCommand("strike"),
+  "format.code": () => inlineCommand("code"),
+  "format.link": () => inlineCommand("link"),
+  "format.image": () => imageCommand(),
+  "format.math": () => inlineCommand("math"),
+  "format.displayMath": () => displayMathCommand(),
 
   "themes.system": () => setTheme("system"),
   "themes.light": () => setTheme("light"),
@@ -2640,9 +2854,73 @@ function installPaneSync(): void {
 // Preview link handling
 // ---------------------------------------------------------------------------
 
+/**
+ * Copy the source of the AsciiDoc blocks a preview selection touches.
+ *
+ * A prose destination receives AsciiDoc (`image::` macros included); a word
+ * processor still receives the selection's HTML. `data-line` / `data-line-end`
+ * are what make the source range known; without them the browser's own copy is
+ * left alone.
+ */
+function installPreviewCopy(): void {
+  preview.addEventListener("copy", (event) => {
+    if (doc.language !== "asciidoc") return;
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return;
+    const range = selection.getRangeAt(0);
+    if (!preview.contains(range.commonAncestorContainer)) return;
+
+    const elements = Array.from(preview.querySelectorAll<HTMLElement>("[data-line]"));
+    const intersecting = elements.filter((element) => range.intersectsNode(element));
+    if (intersecting.length === 0) return;
+
+    // A section and its paragraph both carry a line. When both are selected,
+    // the paragraph is what the reader pointed at; keeping the section too
+    // would copy the whole chapter for a sentence.
+    const selected = new Set(intersecting);
+    const blocks = intersecting.filter(
+      (element) =>
+        !Array.from(element.querySelectorAll<HTMLElement>("[data-line]")).some((child) =>
+          selected.has(child),
+        ),
+    );
+
+    const ranges: Array<[number, number]> = [];
+    for (const element of blocks) {
+      const start = Number(element.dataset.line);
+      const end = Number(element.dataset.lineEnd ?? element.dataset.line);
+      if (!Number.isFinite(start)) continue;
+      ranges.push([Math.min(start, end), Math.max(start, end)]);
+    }
+    if (ranges.length === 0) return;
+    ranges.sort((a, b) => a[0] - b[0]);
+    const merged: Array<[number, number]> = [];
+    for (const rangeLines of ranges) {
+      const last = merged[merged.length - 1];
+      if (last && rangeLines[0] <= last[1] + 1) last[1] = Math.max(last[1], rangeLines[1]);
+      else merged.push([...rangeLines]);
+    }
+
+    const source = editor.getDoc().split("\n");
+    const text = merged
+      .map(([start, end]) =>
+        source.slice(Math.max(0, start - 1), Math.min(source.length, end)).join("\n"),
+      )
+      .join("\n\n");
+    if (!text.trim()) return;
+    const clipboard = event.clipboardData;
+    if (!clipboard) return;
+
+    const holder = document.createElement("div");
+    holder.appendChild(range.cloneContents());
+    clipboard.setData("text/plain", text);
+    clipboard.setData("text/html", holder.innerHTML);
+    event.preventDefault();
+  });
+}
+
 function installPreviewClicks(): void {
-  preview.addEventListener("click", (event) => {
-    const target = (event.target as HTMLElement).closest("a, .local-link, .external-link");
+  preview.addEventListener("click", (event) => {    const target = (event.target as HTMLElement).closest("a, .local-link, .external-link");
     if (!target) return;
     const href = target.getAttribute("data-href") ?? "";
     if (!href) return;
@@ -3162,7 +3440,13 @@ async function resolveRichImage(
 }
 
 function languageLabel(language: api.DocumentLanguage): string {
-  return language === "typst" ? "Typst" : language === "html" ? "HTML" : "Markdown";
+  return language === "typst"
+    ? "Typst"
+    : language === "html"
+      ? "HTML"
+      : language === "asciidoc"
+        ? "AsciiDoc"
+        : "Markdown";
 }
 
 async function applyRichPaste(
@@ -3180,7 +3464,13 @@ async function applyRichPaste(
     if (key !== pasteNoticeKey) {
       pasteNoticeKey = key;
       const extension =
-        destination.language === "typst" ? "typ" : destination.language === "html" ? "html" : "md";
+        destination.language === "typst"
+          ? "typ"
+          : destination.language === "html"
+            ? "html"
+            : destination.language === "asciidoc"
+              ? "adoc"
+              : "md";
       toast(
         `Pasted as ${languageLabel(destination.language)}. Save this document as .${extension} to switch the editor.`,
         6200,
@@ -3410,6 +3700,7 @@ async function boot(): Promise<void> {
   installPaneSync();
   installPasteHandlers();
   installPreviewClicks();
+  installPreviewCopy();
   installResizers();
   installSystemThemeWatcher();
 

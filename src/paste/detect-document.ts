@@ -6,7 +6,13 @@
 //! parser; the caller shows a notice when detection disagrees with it.
 
 import type { DocumentLanguage } from "../api.ts";
-import { detectTextSyntax, stripNoise, scoreMarkdown, scoreTypst } from "./detect.ts";
+import {
+  detectTextSyntax,
+  stripNoise,
+  scoreAsciidoc,
+  scoreMarkdown,
+  scoreTypst,
+} from "./detect.ts";
 
 export interface DestinationInput {
   saved: boolean;
@@ -60,7 +66,11 @@ export function resolvePasteDestination(input: DestinationInput): PasteDestinati
     language: input.language,
     detected: false,
     fallback: true,
-    score: Math.max(scoreMarkdown(stripNoise(sample)), scoreTypst(stripNoise(sample))),
+    score: Math.max(
+      scoreMarkdown(stripNoise(sample)),
+      scoreTypst(stripNoise(sample)),
+      scoreAsciidoc(stripNoise(sample)),
+    ),
     runnerUp: 0,
   };
 }

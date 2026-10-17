@@ -92,13 +92,13 @@ pub struct ExportRequest {
     pub output_path: String,
     /// The document's own path, for `${inputPath}`. Absent for an untitled doc.
     pub input_path: Option<String>,
-    /// `"typst"` or `"html"` when the source is not Markdown.
+    /// `"typst"`, `"html"` or `"asciidoc"` when the source is not Markdown.
     ///
-    /// The three need different treatment on the way out: Typst has its own
-    /// renderer, which is better than any round trip; HTML must be read with
-    /// pandoc's HTML reader rather than the Markdown one; and pandoc needs to be
-    /// told which it is instead of assuming. Absent means Markdown, so a
-    /// settings file or a caller written before this existed still works.
+    /// They need different treatment on the way out: Typst has its own
+    /// renderer, which is better than any round trip; HTML and AsciiDoc must be
+    /// read with pandoc's own readers rather than the Markdown one; and pandoc
+    /// needs to be told which it is instead of assuming. Absent means Markdown,
+    /// so a settings file or a caller written before this existed still works.
     #[serde(default)]
     pub language: Option<String>,
 }
@@ -179,13 +179,17 @@ fn expand_argument_text(text: &str, values: &Placeholders) -> Vec<String> {
         .collect()
 }
 
-/// Swap the format's Markdown reader for the HTML one.
+/// Swap the format's Markdown reader for another pandoc reader.
 ///
 /// The default export arguments carry `-f markdown+…` so a Markdown document
-/// exports with the dialect this editor writes. An HTML source must not be fed
-/// to that reader: pandoc would treat the tags as text. The user's extra
-/// arguments stay last, so an explicit `-f` there still wins.
-fn html_input_arguments(format: &ExportFormat, values: &Placeholders) -> Vec<String> {
+/// exports with the dialect this editor writes. An HTML or AsciiDoc source must
+/// not be fed to that reader. The user's extra arguments stay last, so an
+/// explicit `-f` there still wins.
+fn reader_arguments(
+    format: &ExportFormat,
+    values: &Placeholders,
+    reader: &str,
+) -> Vec<String> {
     let mut head = expand_argument_text(&format.arguments, values);
     let tail = expand_argument_text(&format.extra_arguments, values);
     let mut index = 0;
@@ -203,9 +207,17 @@ fn html_input_arguments(format: &ExportFormat, values: &Placeholders) -> Vec<Str
         index += 1;
     }
     head.push("-f".into());
-    head.push("html".into());
+    head.push(reader.into());
     head.extend(tail);
     head
+}
+
+fn html_input_arguments(format: &ExportFormat, values: &Placeholders) -> Vec<String> {
+    reader_arguments(format, values, "html")
+}
+
+fn asciidoc_input_arguments(format: &ExportFormat, values: &Placeholders) -> Vec<String> {
+    reader_arguments(format, values, "asciidoc")
 }
 
 // ---------------------------------------------------------------------------
@@ -393,10 +405,10 @@ pub fn export<R: Runtime>(app: &AppHandle<R>, request: &ExportRequest) -> Result
         }
     };
 
-    let mut args = if request.language.as_deref() == Some("html") {
-        html_input_arguments(&format, &values)
-    } else {
-        build_arguments(&format, &values)
+    let mut args = match request.language.as_deref() {
+        Some("html") => html_input_arguments(&format, &values),
+        Some("asciidoc") => asciidoc_input_arguments(&format, &values),
+        _ => build_arguments(&format, &values),
     };
     // For any other Format a Typst document is rendered to HTML first and handed
     // to pandoc's HTML reader, which is mature, rather than its Typst reader,
@@ -1214,6 +1226,39 @@ mod tests {
             &values(),
         );
         assert_eq!(args, vec!["-s", "-o", "/out/report.docx", "-f", "html"]);
+    }
+
+    #[test]
+    fn asciidoc_replaces_the_markdown_reader_without_the_math_extensions() {
+        let args = asciidoc_input_arguments(
+            &format_with(
+                "-f markdown+tex_math_dollars -s -o ${outputPath} --reference-doc=${styleReference}",
+                "",
+            ),
+            &values(),
+        );
+        assert_eq!(args, vec!["-s", "-o", "/out/report.docx", "-f", "asciidoc"]);
+        assert!(!args.iter().any(|arg| arg.contains("tex_math")));
+    }
+
+    #[test]
+    fn asciidoc_reader_comes_before_the_users_extra_arguments() {
+        let args = asciidoc_input_arguments(
+            &format_with("-f markdown -s -o ${outputPath}", "--from=latex --toc"),
+            &values(),
+        );
+        assert_eq!(
+            args,
+            vec![
+                "-s",
+                "-o",
+                "/out/report.docx",
+                "-f",
+                "asciidoc",
+                "--from=latex",
+                "--toc"
+            ]
+        );
     }
 
     #[test]

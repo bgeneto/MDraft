@@ -5,7 +5,7 @@
 const WELCOME_LINES: string[] = [
   '# Welcome to MDraft',
   '',
-  'A **Tauri 2** editor for Markdown, Typst and HTML in the spirit of Typora. This',
+  'A **Tauri 2** editor for Markdown, Typst, HTML and AsciiDoc in the spirit of Typora. This',
   'document is a live sample: everything below is rendered by the same pipeline',
   'that renders your own Markdown files.',
   '',
@@ -37,6 +37,7 @@ const WELCOME_LINES: string[] = [
   '| Math | yes | KaTeX |',
   '| Diagrams | yes | Mermaid 12 |',
   '| HTML documents | yes | sandboxed own-style preview |',
+  '| AsciiDoc documents | yes | native preview, KaTeX and includes |',
   '| Export HTML | yes | File menu |',
   '',
   '## Code',

@@ -55,6 +55,52 @@ export function extractTypstHeadings(source: string): Heading[] {
 }
 
 /**
+ * The headings in an AsciiDoc document.
+ *
+ * `=` is the document title, `==` the first section. Only the marker form is
+ * scanned, and every delimited block is skipped so a `= ` in a listing, table
+ * or example is not a heading. The inline markup is stripped for the outline.
+ */
+export function extractAsciidocHeadings(source: string): Heading[] {
+  const headings: Heading[] = [];
+  const lines = source.split("\n");
+  const delimiter = /^\s{0,3}(-{4,}|\.{4,}|\+{4,}|\/{4,}|={4,}|\*{4,}|_{4,}|\|={3,}|--)\s*$/;
+  let block: string | null = null;
+
+  const clean = (raw: string): string =>
+    raw
+      .replace(/\\(.)/g, "$1")
+      .replace(/\[\.line-through\]#([^#]*)#/g, "$1")
+      .replace(/(?:https?:\/\/|www\.)\S+\[([^\]]*)\]/g, "$1")
+      .replace(/image::?[^\[]*\[([^\]]*)\]/g, "$1")
+      .replace(/latexmath:\[[^\]]*\]|stem:\[[^\]]*\]/g, "")
+      .replace(/[*_`]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    if (block) {
+      if (trimmed === block) block = null;
+      continue;
+    }
+    const open = delimiter.exec(line);
+    if (open) {
+      block = open[1];
+      continue;
+    }
+    if (/^\s{0,3}\/\//.test(line) || /^\s{0,3}:[A-Za-z0-9_-]+:/.test(line)) continue;
+    const match = /^\s{0,3}(={1,6})\s+(\S.*?)\s*$/.exec(line);
+    if (!match) continue;
+    const text = clean(match[2]);
+    if (text) headings.push({ level: match[1].length, text, line: i + 1 });
+  }
+
+  return headings;
+}
+
+/**
  * The headings in an HTML document.
  *
  * A source scan, not a DOM parse: the outline follows what the reader typed,
@@ -140,7 +186,9 @@ export function renderOutline(
         ? "No headings yet. Start a line with = to build an outline."
         : language === "html"
           ? "No headings yet. Add an <h1>–<h6> element to build an outline."
-          : "No headings yet. Start a line with # to build an outline.";
+          : language === "asciidoc"
+            ? "No headings yet. Start a line with == to build an outline."
+            : "No headings yet. Start a line with # to build an outline.";
     emptyState(container, message);
     return;
   }
@@ -260,6 +308,8 @@ async function paintDirectory(
       "html",
       "htm",
       "typ",
+      "adoc",
+      "asciidoc",
       "json",
       "yml",
       "yaml",

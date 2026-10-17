@@ -1,6 +1,6 @@
 # MDraft
 
-A small, fast editor for **Markdown, Typst and HTML**, in the spirit of [Typora](https://typora.io).
+A small, fast editor for **Markdown, Typst, HTML and AsciiDoc**, in the spirit of [Typora](https://typora.io).
 
 Live preview as you type, mathematics, diagrams, an outline sidebar, a native
 menu, and PDFs typeset by [Typst](https://typst.app) — in an 11 MB download that
@@ -28,6 +28,7 @@ own webview instead of a bundled Chromium, and Rust instead of a Node backend.
 | Diagrams | Mermaid | Mermaid 12.2 |
 | Typst | — | compiler-driven preview and PDF |
 | HTML | renders it with the document's own CSS and scripts | sandboxed guest document, no app styles |
+| AsciiDoc | — | native preview, KaTeX, local includes |
 | Licensing | paid, per seat | none, ever |
 
 The size is the point of the stack, not a coincidence: there is no browser and no
@@ -78,15 +79,21 @@ for you; nothing is installed system-wide and no administrator rights are needed
   modes. Split view is the default and is always kept.
 - **Markdown**: GitHub-flavoured tables, task lists, fenced code with
   `highlight.js` syntax colouring, blockquotes, rules.
+- **AsciiDoc as a fourth native format**: open, edit, save and preview `.adoc`
+  and `.asciidoc`. The preview is Asciidoctor's HTML in the application's own
+  type: admonitions, lists, tables, listings, local images, local `include::`,
+  `:toc:`, KaTeX for `latexmath:[…]`, and the same vertical scroll sync as the
+  other prose formats. The source pane has its own stream highlighter, and the
+  Paragraph/Format menus insert AsciiDoc rather than Markdown.
 - **KaTeX** for `$inline$`, `$$display$$`, `\(…\)` and `\[…\]` — math inside code
   spans and fences is left alone.
 - **Mermaid** diagrams from ` ```mermaid ` fences, cached per theme.
 - **Local images** resolve relative to the document being edited, through the
   Tauri asset protocol.
-- **Document tabs** along the top. Several Markdown, Typst and HTML files stay
-  open at once; switching tabs keeps each file's text, caret and undo. The
-  preview is drawn again for the tab you are looking at. The list is not
-  saved when the window closes.
+- **Document tabs** along the top. Several Markdown, Typst, HTML and AsciiDoc
+  files stay open at once; switching tabs keeps each file's text, caret and
+  undo. The preview is drawn again for the tab you are looking at. The list is
+  not saved when the window closes.
 - **Outline sidebar** driven by document headings, plus a folder browser and a
   recent-files list persisted between runs.
 - **Preferences panel** (`Ctrl+,`) laid out like Typora's: search box, vertical
@@ -107,10 +114,11 @@ for you; nothing is installed system-wide and no administrator rights are needed
   markup is never sent to the dictionary. The zoom level appears as a percentage
   chip only while it differs from 100%, and clicking it returns to the default
   size.
-- **Typst as a first-class default**: Preferences › Files › *Default File
-  Extension* offers `.typ` and `.html`. A new document then starts in Typst or
-  HTML mode, Save As suggests the matching extension with the matching filter
-  selected, and the open/save dialogs put that filter first.
+- **Typst and AsciiDoc as first-class defaults**: Preferences › Files ›
+  *Default File Extension* offers `.typ`, `.html`, `.adoc` and `.asciidoc`. A
+  new document then starts in that mode, Save As suggests the matching
+  extension with the matching filter selected, and the open/save dialogs put
+  that filter first.
 - **HTML as a third native format**: open, edit, save and preview `.html` and
   `.htm`. The preview is a guest document in a sandboxed iframe served by a
   private scheme; it keeps the file's own `<style>`, linked CSS, images, media,
@@ -132,8 +140,9 @@ for you; nothing is installed system-wide and no administrator rights are needed
   buffer is clean.
 - **Auto save** (opt-in) writing in place every 20 seconds.
 - **Export as HTML** with the rendered body, the active highlight theme and a
-  KaTeX stylesheet link for Markdown/Typst. An HTML document is copied as source.
-  **PDF (Print)** prints either kind through the system browser.
+  KaTeX stylesheet link for Markdown, Typst and AsciiDoc. An HTML document is
+  copied as source. **PDF (Print)** prints either kind through the system
+  browser.
 - **Unsaved-change guards** on close, open, new and reload.
 
 ## Comparison with Typora
@@ -607,17 +616,19 @@ pandoc formats above them.
 
 | Entry | How it is produced | Needs |
 | --- | --- | --- |
-| **HTML** | For Markdown/Typst, MDraft renders the preview pipeline. For an HTML document, it writes the source as a copy. | nothing |
+| **HTML** | For Markdown, Typst and AsciiDoc, MDraft renders the preview pipeline. For an HTML document, it writes the source as a copy. | nothing |
 | **PDF (Print)** | MDraft writes a print copy and your browser prints it, so you choose “Save as PDF”. An HTML document keeps its own CSS and math library via a local file base. | a browser |
-| *any pandoc format* | pandoc converts the source: Markdown, Typst or HTML (with `-f html`) | [pandoc](#installing-pandoc) |
+| *any pandoc format* | pandoc converts the source: Markdown, Typst, HTML (with `-f html`) or AsciiDoc (with `-f asciidoc`) | [pandoc](#installing-pandoc) |
 
-Both native formats are rendered from the preview's own HTML for Markdown and
-Typst, which is why they match what is on screen down to the table of contents
-and the GitHub alert callouts. An HTML document is already a document: the HTML
-export copies its source, and the print copy keeps its own layout and scripts.
-The pandoc formats cannot carry that layout: `[TOC]`, `[!NOTE]`, CSS and scripts
-have no equivalent, and pandoc prints them literally or drops them. That is the
-price of a real word-processor file, and it is usually the right trade.
+Both native formats are rendered from the preview's own HTML for Markdown,
+Typst and AsciiDoc, which is why they match what is on screen down to the table
+of contents, the GitHub alert callouts and the AsciiDoc admonitions. An HTML
+document is already a document: the HTML export copies its source, and the
+print copy keeps its own layout and scripts.
+The pandoc formats cannot carry that layout: `[TOC]`, `[!NOTE]`, AsciiDoc
+`:toc:` and AsciiDoc `include::` targets have no equivalent in the intermediate
+document, and pandoc prints them literally or drops them. That is the price of a
+real word-processor file, and it is usually the right trade.
 
 ### Installing pandoc
 
@@ -1036,9 +1047,10 @@ The export suite runs the real thing: it converts the open document through
 pandoc into DOCX, ODT, LaTeX, reStructuredText, AsciiDoc, EPUB, RTF and OPML,
 then reads the bytes back to confirm each file is what it claims to be — a DOCX
 that really is a zip containing `word/document.xml`, an RTF that starts with
-`{\rtf`, LaTeX with `\documentclass`. It also checks that an export cannot
-overwrite the document it is reading, that an unknown format is reported rather
-than ignored, and that the PDF print document carries both stylesheets.
+`{\rtf`, LaTeX with `\documentclass`. It also checks that an AsciiDoc source is
+read with `-f asciidoc` (a `== Section` becomes `\section`), that an export
+cannot overwrite the document it is reading, that an unknown format is reported
+rather than ignored, and that the PDF print document carries both stylesheets.
 
 Last run against `samples/feature-tour.md` — **93/93 checks passed**:
 
@@ -1068,7 +1080,8 @@ Last run against `samples/feature-tour.md` — **93/93 checks passed**:
 | ↳ source click | five clicks down the pane, preview scroll drift 0.15 px, panes stay aligned |
 | Close | WM_CLOSE exits in 500 ms and writes `.window-state.json` |
 | HTML guest | 42/42 checks: sandbox and IPC boundary, linked/inline CSS, local image, inline/classic/module scripts, blocked local fetch, sync, click/blink, outline, scripts-off, the return to Markdown and the HTML tab coming back |
-| Document tabs | 68/68 checks: a sidebar click adds a tab, a path already open is focused, `open-files`, the caret and both scroll offsets come back, the dirty dot, × on active and inactive tabs, middle-click, Ctrl+Tab, the disk poll on a clean and a dirty inactive tab, Auto Save across tabs, and the last tab |
+| Document tabs | 69/69 checks: a sidebar click adds a tab, a path already open is focused, `open-files`, the caret and both scroll offsets come back, the dirty dot, × on active and inactive tabs, middle-click, Ctrl+Tab, the disk poll on a clean and a dirty inactive tab, Auto Save across tabs, and the last tab |
+| AsciiDoc | 35/35 checks: title, paragraphs, admonition table reset, `:toc:`, table, listing highlight, source anchors, include inlining and refusal, local image, KaTeX fraction bar, title/section highlighting, outline, preview copy, spelling, scroll sync, default extension, AsciiDoc paste and bitmap `image::` |
 | Session store | 43/43 checks, no application needed: insertion after the active tab, untitled names, one tab per path under both case rules, the neighbour that takes over on close, wrap-around, and the empty-list invariant |
 | Console | no errors or warnings |
 
@@ -1139,6 +1152,8 @@ index.html                 application shell markup
 docs/ícones/               source archive for the application icon
 docs/samples/         real documents used as rendering fixtures
 samples/feature-tour.md    showcase document / smoke-test fixture
+samples/asciidoc-tour.adoc showcase document / AsciiDoc fixture
+samples/asciidoc-include.adoc  the chapter the AsciiDoc fixture includes
 samples/html-tour/         offline HTML fixture for the guest-preview suite
 src/
   main.ts                  document lifecycle, menu wiring, sidebar, status bar
@@ -1149,9 +1164,11 @@ src/
   html-preview.ts          sandboxed HTML guest: parse5 splice, iframe, bridge protocol
   html-bridge.js           guest-side scroll/click/keyboard bridge (inlined, not imported)
   html-language.ts         lazy CodeMirror HTML grammar
-  image-syntax.ts          one image markup builder for Markdown, Typst and HTML
+  asciidoc-language.ts     AsciiDoc stream highlighter
+  asciidoc-preview.ts      Asciidoctor -> preview HTML, includes, math and source anchors
+  image-syntax.ts          one image markup builder for Markdown, Typst, HTML and AsciiDoc
   images.ts                paste, drop and download of images
-  paste/                   rich paste: IR, detection, readers, renderers and images
+  paste/                   rich paste: IR, detection, readers, renderers and images, AsciiDoc included
   preferences.ts           the Preferences panel and its declarative rows
   sidebar.ts               outline extraction and active-marker updates, folder browser, recent files
   highlight-theme.ts       runtime-swappable highlight.js themes
@@ -1168,6 +1185,8 @@ src-tauri/
   capabilities/default.json
 scripts/with-msvc.cmd      MSVC environment wrapper
 scripts/dom-smoke.mjs      CDP smoke test for a running window
+scripts/asciidoc-test.mjs  CDP test of the AsciiDoc preview, paste, includes and defaults
+scripts/export-test.mjs    CDP test of every pandoc export, including an AsciiDoc source
 scripts/html-preview-test.mjs CDP test of the sandboxed HTML guest
 scripts/audit-document.mjs CDP render audit for a real document
 scripts/image-paste-test.mjs  CDP test of the image paste paths
@@ -1206,10 +1225,27 @@ scripts/screenshot.mjs     CDP screenshot of a running window
 
 ## Known limitations
 
-- Preview rendering is debounced by 200 ms (300 ms for HTML) and re-renders the
-  whole preview rather than diffing it. Switching to an HTML tab builds the
-  guest again, so scripts and form state in the preview start over. The source
-  text does not.
+- Preview rendering is debounced by 200 ms (250 ms for AsciiDoc, 300 ms for
+  HTML) and re-renders the whole preview rather than diffing it. Switching to an
+  HTML tab builds the guest again, so scripts and form state in the preview
+  start over. The source text does not.
+
+- **AsciiDoc is previewed by Asciidoctor.js, not compiled.** The renderer is
+  loaded on first use and kept in the webview; the startup bundle does not
+  contain it. `latexmath` is drawn by KaTeX, but AsciiMath (`stem:[…]` under the
+  default `:stem:`) is left as text. `.asc` and `.ad` are not recognised as
+  AsciiDoc.
+- **AsciiDoc includes are local to the document's folder.** `include::` is read
+  through the same file command as the document, and a target outside that
+  folder (including an absolute path or an HTTP URL) is refused. Include
+  attributes such as `lines`, `tag` and `leveloffset` are not applied, and the
+  file is re-read on every preview pass. A document that includes a large book
+  therefore pays for it on each edit pause.
+- **A pandoc AsciiDoc export does not expand includes and does not fill
+  `:toc:`.** Pandoc's AsciiDoc reader resolves `include::` against its own
+  working directory and emits an empty TOC div; add `--toc` to the format's
+  Extra Arguments for a real table of contents. The native HTML and PDF exports
+  use the preview, so they keep both.
 
 - **HTML previews run the document's own code.** With scripts on, an HTML file
   can execute and read files in its own folder and request the network resources

@@ -496,7 +496,97 @@ function mathNode(entry: { body: string; display: boolean } | undefined): Node {
   return span;
 }
 
-function decorateCodeBlocks(host: HTMLElement, mermaidEnabled = true): void {
+const MATH_IN_TEXT = /\\\(([\s\S]*?)\\\)|\\\[([\s\S]*?)\\\]/g;
+
+/**
+ * Draw the `\(…\)` and `\[…\]` delimiters Asciidoctor leaves in its HTML.
+ *
+ * The Markdown pipeline extracts mathematics from the *source* before `marked`,
+ * so it has no DOM pass to reuse. AsciiDoc's converter emits inline LaTeX as
+ * plain text and display LaTeX inside `.stemblock`; this walks the text nodes
+ * and replaces only those delimiters. `$…$` is deliberately absent: AsciiDoc
+ * puts AsciiMath there, and it is not TeX.
+ */
+export function renderMathIn(host: HTMLElement): number {
+  const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = (node as Text).parentElement;
+      if (!parent || parent.closest("pre, code, script, style, textarea")) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      const text = node.nodeValue ?? "";
+      return /\\[\(\[]/.test(text) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+    },
+  });
+  const nodes: Text[] = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode as Text);
+
+  let count = 0;
+  for (const node of nodes) {
+    const text = node.nodeValue ?? "";
+    MATH_IN_TEXT.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    let last = 0;
+    let replaced = false;
+    const fragment = document.createDocumentFragment();
+    while ((match = MATH_IN_TEXT.exec(text)) !== null) {
+      replaced = true;
+      if (match.index > last) {
+        fragment.appendChild(document.createTextNode(text.slice(last, match.index)));
+      }
+      const display = match[2] !== undefined;
+      fragment.appendChild(
+        mathNode({ body: (display ? match[2] : match[1]) ?? "", display }),
+      );
+      last = MATH_IN_TEXT.lastIndex;
+      count += 1;
+    }
+    if (!replaced) continue;
+    if (last < text.length) fragment.appendChild(document.createTextNode(text.slice(last)));
+    node.parentNode?.replaceChild(fragment, node);
+  }
+  return count;
+}
+
+/**
+ * The AsciiDoc structure the preview stylesheet already applies.
+ *
+ * The HTML and print exports never load `styles.css`; they concatenate their
+ * own rules. This is the copy those wrappers use. The preview keeps its copy in
+ * `src/styles.css`, beside the rest of the preview rules.
+ */
+export const ASCIIDOC_CSS = `
+.admonitionblock > table{display:table;width:100%;border-collapse:collapse;margin:0;background:none}
+.admonitionblock > table tr,.admonitionblock > table td{border:0;background:none}
+.admonitionblock > table td{padding:0;vertical-align:top}
+.admonitionblock > table td.icon{width:4.5em;text-align:center;padding-right:.75em}
+.admonitionblock > table td.icon .title{font-weight:600;text-transform:uppercase;font-size:.78em;letter-spacing:.04em}
+.admonitionblock > table td.content{padding:.15em 0 .15em 1em;border-left:3px solid #d0d0d0;color:#555}
+.admonitionblock.note > table td.content{border-left-color:#0969da}
+.admonitionblock.tip > table td.content{border-left-color:#1a7f37}
+.admonitionblock.important > table td.content{border-left-color:#8250df}
+.admonitionblock.warning > table td.content{border-left-color:#9a6700}
+.admonitionblock.caution > table td.content{border-left-color:#cf222e}
+.admonitionblock.note > table td.icon .title{color:#0969da}
+.admonitionblock.tip > table td.icon .title{color:#1a7f37}
+.admonitionblock.important > table td.icon .title{color:#8250df}
+.admonitionblock.warning > table td.icon .title{color:#9a6700}
+.admonitionblock.caution > table td.icon .title{color:#cf222e}
+.checklist{list-style:none;padding-left:1.4em}
+.checklist > li > p:first-child{margin-left:-1.2em}
+.title,div.title{font-weight:600;font-style:italic;margin:0 0 .35em}
+#toc{border:1px solid #e0e0e0;background:#f7f7f8;padding:.75em 1em;margin:0 0 1.5em;border-radius:6px}
+#toc #toctitle{font-weight:700;text-transform:uppercase;font-size:.78em;letter-spacing:.06em;margin-bottom:.4em}
+#toc ul{list-style:none;padding-left:0;margin:0}
+#toc ul ul{padding-left:1em}
+#toc li{margin:.15em 0}
+.quoteblock .attribution{text-align:right;font-style:italic;color:#666;margin-top:.25em}
+.line-through{text-decoration:line-through}
+.stemblock .content{text-align:center}
+.asciidoc-error{background:#fff2f0;border:1px solid #ffccc7;border-radius:6px;padding:12px 14px;white-space:pre-wrap}
+`;
+
+export function decorateCodeBlocks(host: HTMLElement, mermaidEnabled = true): void {
   for (const pre of Array.from(host.querySelectorAll("pre"))) {
     const code = pre.querySelector("code");
     if (!code) continue;
@@ -530,7 +620,7 @@ function decorateCodeBlocks(host: HTMLElement, mermaidEnabled = true): void {
   }
 }
 
-function decorateLinks(host: HTMLElement, baseDir: string | null): void {
+export function decorateLinks(host: HTMLElement, baseDir: string | null): void {
   for (const img of Array.from(host.querySelectorAll("img"))) {
     const src = img.getAttribute("src");
     if (src) img.setAttribute("src", assetUrl(src, baseDir));
