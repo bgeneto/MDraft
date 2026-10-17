@@ -133,6 +133,25 @@
           "sha256": "3a013466c0eee979fb9d42c2d7a8887cd3645dc8b897cfc5b71781cf982efc5a"
         }
       ]
+    },
+    {
+      "id": "fira-code",
+      "name": "Fira Code",
+      "tag": "6.2",
+      "source": "https://github.com/tonsky/FiraCode",
+      "licence": "OFL-1.1",
+      "licenceFile": "licenses/fira-code-OFL.txt",
+      "archive": "Fira_Code_v6.2.zip",
+      "archiveSha256": "0949915ba8eb24d89fd93d10a7ff623f42830d7c5ffc3ecbf960e4ecad3e3e79",
+      "files": [
+        {
+          "file": "FiraCode-Variable.woff2",
+          "style": "normal",
+          "weight": "300 700",
+          "bytes": 113088,
+          "sha256": "408e876a202f15ea6ee307a70a65cf40ceb222c589a0b17e0a3a371db96dd49f"
+        }
+      ]
     }
   ]
 }

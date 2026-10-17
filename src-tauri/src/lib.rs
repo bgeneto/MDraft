@@ -5,6 +5,7 @@ mod export;
 mod images;
 mod menu;
 mod settings;
+mod typst;
 
 use settings::AppState;
 use tauri::Manager;
@@ -40,6 +41,11 @@ pub fn run() {
             export::run_export,
             export::install_pandoc,
             export::print_document,
+            menu::accelerators,
+            typst::typst_status,
+            typst::install_typst,
+            typst::typst_download_page,
+            typst::render_typst,
         ])
         .build(tauri::generate_context!())
         .expect("error while building the tauri application");

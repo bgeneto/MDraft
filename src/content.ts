@@ -261,3 +261,55 @@ const SHORTCUTS_LINES: string[] = [
 export const WELCOME = WELCOME_LINES.join("\n");
 export const REFERENCE = REFERENCE_LINES.join("\n");
 export const SHORTCUTS = SHORTCUTS_LINES.join("\n");
+
+// ---------------------------------------------------------------------------
+// Font licences
+// ---------------------------------------------------------------------------
+
+// Imported with `?raw` so the text is compiled into the application. That is the
+// point: the SIL Open Font License requires the copyright notice and the licence
+// itself to accompany the fonts when they are redistributed, and a text file
+// sitting in the repository is not accompanying anything once the application is
+// installed. Vite bundles only what is imported, so leaving these unimported
+// shipped the fonts without their licence — a compliance gap, not untidiness.
+import interLicence from "./assets/fonts/licenses/inter-OFL.txt?raw";
+import jetbrainsLicence from "./assets/fonts/licenses/jetbrains-mono-OFL.txt?raw";
+import sourceSansLicence from "./assets/fonts/licenses/source-sans-OFL.txt?raw";
+import sourceSerifLicence from "./assets/fonts/licenses/source-serif-OFL.txt?raw";
+
+const FONT_LICENCE_LINES: string[] = [
+  '# Bundled typefaces',
+  '',
+  'MDraft compiles four typefaces into the application so the typography does not',
+  'depend on what the machine happens to have installed. All four are under the',
+  'SIL Open Font License 1.1, which permits bundling inside an application provided',
+  'the copyright notice and the licence text travel with the fonts. They follow.',
+  '',
+  '| Family | Source |',
+  '| --- | --- |',
+  '| Source Serif 4 | https://github.com/adobe-fonts/source-serif |',
+  '| Source Sans 3 | https://github.com/adobe-fonts/source-sans |',
+  '| Inter | https://github.com/rsms/inter |',
+  '| JetBrains Mono | https://github.com/JetBrains/JetBrainsMono |',
+  '',
+  'The versions, archive checksums and per-file checksums are recorded in',
+  '`src/assets/fonts/fonts.json`.',
+  '',
+  '## Source Serif 4',
+  '',
+  sourceSerifLicence,
+  '',
+  '## Source Sans 3',
+  '',
+  sourceSansLicence,
+  '',
+  '## Inter',
+  '',
+  interLicence,
+  '',
+  '## JetBrains Mono',
+  '',
+  jetbrainsLicence,
+];
+
+export const FONT_LICENCES = FONT_LICENCE_LINES.join("\n");

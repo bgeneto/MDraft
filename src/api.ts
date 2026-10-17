@@ -92,6 +92,14 @@ export interface ExportRequest {
   markdown: string;
   outputPath: string;
   inputPath: string | null;
+  /**
+   * `"typst"` when the source is Typst rather than Markdown.
+   *
+   * The backend needs it twice over: pandoc has to be told to read Typst instead
+   * of assuming Markdown, and a Typst document exported to PDF is rendered by
+   * Typst itself rather than translated through pandoc.
+   */
+  language?: DocumentLanguage;
 }
 
 export interface ExportOutcome {
@@ -135,6 +143,13 @@ export interface Settings {
   oldstyleFigures: boolean;
   /** Slashed zero in code, to separate it from capital O. */
   slashedZero: boolean;
+  /**
+   * How a `.typ` document is drawn: flowing HTML, or the rendered pages.
+   *
+   * Neither is enough alone — the document view cannot express layout, and the
+   * page view cannot reflow or be read as text.
+   */
+  typstView: TypstView;
   editorMaxWidth: number;
   syntaxTheme: string;
   recentFiles: string[];
@@ -231,6 +246,69 @@ export const runExport = (request: ExportRequest) =>
   invoke<ExportOutcome>("run_export", { request });
 
 export const installPandoc = () => invoke<PandocStatus>("install_pandoc");
+
+/** Which markup the buffer holds. */
+export type DocumentLanguage = "markdown" | "typst";
+
+/** One Typst installation, as the backend sees it. */
+export interface TypstStatus {
+  found: boolean;
+  version: string | null;
+  path: string | null;
+  /** "managed" when the application installed it, "path" when it came from PATH. */
+  source: string | null;
+  /** Whether the Install button can do the work here, or only explain. */
+  canInstall: boolean;
+  hint: string;
+  downloadPage: string;
+}
+
+export const typstStatus = () => invoke<TypstStatus>("typst_status");
+export const installTypst = () => invoke<TypstStatus>("install_typst");
+export const openTypstDownloadPage = () => invoke<void>("typst_download_page");
+
+/** How a Typst document is drawn in the preview. */
+export type TypstView = "document" | "pages";
+
+/**
+ * A compiled Typst document.
+ *
+ * `kind` says which shape arrived: `document` carries flowing HTML in `html`,
+ * `pages` carries one SVG per page. Both can carry warnings, and `ignored` names
+ * the constructs the document view had to drop.
+ */
+export interface RenderedTypst {
+  kind: TypstView;
+  html: string | null;
+  css: string | null;
+  pages: string[];
+  warnings: string[];
+  ignored: string[];
+}
+
+/**
+ * Compile a Typst document for the preview.
+ *
+ * The source is sent rather than the path, so unsaved edits show up. `path` only
+ * tells the compiler which directory to treat as the project root, so that
+ * `#image("img/plot.png")` resolves the way it will on export.
+ */
+export const renderTypst = (path: string | null, source: string, mode: TypstView = "document") =>
+  invoke<RenderedTypst>("render_typst", { path, source, mode });
+
+/** One menu accelerator, as the native menu registered it. */
+export interface Shortcut {
+  id: string;
+  accelerator: string;
+}
+
+/**
+ * Every accelerator the menu registered, for the frontend's key handler.
+ *
+ * Read from the menu that was actually built rather than duplicated here, so the
+ * two cannot disagree.
+ */
+export const shortcuts = () => invoke<Shortcut[]>("accelerators");
 
 /**
  * Write a print-ready document and open it in the system browser.

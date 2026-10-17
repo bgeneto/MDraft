@@ -35,9 +35,8 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 const EXPORT_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Pandoc's `PandocPDFProgramNotFoundError`. Measured, not guessed: running
-/// `pandoc -o out.pdf` with no TeX installed exits 47 and prints
-/// "pdflatex not found. Please select a different --pdf-engine or install
-/// pdflatex" on stderr.
+/// `pandoc -o out.pdf` with no engine installed exits 47 and names the engine it
+/// tried on stderr.
 const PANDOC_PDF_PROGRAM_NOT_FOUND: i32 = 47;
 
 /// A plain-language lead-in for an exit code whose meaning is not obvious from
@@ -45,32 +44,14 @@ const PANDOC_PDF_PROGRAM_NOT_FOUND: i32 = 47;
 fn exit_hint(code: Option<i32>) -> Option<&'static str> {
     match code {
         Some(PANDOC_PDF_PROGRAM_NOT_FOUND) => Some(
-            "PDF export needs a LaTeX engine, and none of the ones pandoc knows about were found.\n\
-             Install Tectonic, TinyTeX or MiKTeX, or add --pdf-engine=<path> to this format's \
-             arguments in Preferences › Export, which also lists what was detected.",
+            "PDF export needs Typst, and it was not found.\n\
+             Use Help › Install Typst, or install it yourself from \
+             https://typst.app/open-source/#download — it is a single executable with no \
+             dependencies, and it will be picked up from PATH.",
         ),
         _ => None,
     }
 }
-
-/// PDF engines pandoc can drive, best first.
-///
-/// `xelatex` and `lualatex` come first because they handle Unicode without the
-/// extra `--pdf-engine-opt` juggling that `pdflatex` needs. `tectonic` and
-/// `typst` are single binaries with no TeX distribution behind them, which makes
-/// them the most likely to be present on a machine that has neither.
-const PDF_ENGINES: [&str; 10] = [
-    "xelatex",
-    "lualatex",
-    "tectonic",
-    "typst",
-    "pdflatex",
-    "latexmk",
-    "wkhtmltopdf",
-    "weasyprint",
-    "prince",
-    "context",
-];
 
 // ---------------------------------------------------------------------------
 // Public shapes
@@ -94,7 +75,9 @@ impl PandocStatus {
             path: None,
             version: None,
             source: None,
-            pdf_engine: pdf_engine().map(|p| p.to_string_lossy().into_owned()),
+            // Typst is reported by its own command, so there is nothing to fill in
+            // here that would not duplicate it.
+            pdf_engine: None,
         }
     }
 }
@@ -109,6 +92,14 @@ pub struct ExportRequest {
     pub output_path: String,
     /// The document's own path, for `${inputPath}`. Absent for an untitled doc.
     pub input_path: Option<String>,
+    /// `"typst"` when the source is Typst rather than Markdown.
+    ///
+    /// The two need different treatment on the way out: Typst has its own
+    /// renderer, which is better than any round trip, and pandoc needs to be told
+    /// to read Typst rather than assume Markdown. Absent means Markdown, so a
+    /// settings file or a caller written before this existed still works.
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -208,14 +199,14 @@ fn pandoc_exe() -> &'static str {
 /// On other platforms this is a no-op, because nothing there opens a window for
 /// a child process in the first place.
 #[cfg(windows)]
-fn quiet(command: &mut Command) -> &mut Command {
+pub(crate) fn quiet(command: &mut Command) -> &mut Command {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     command.creation_flags(CREATE_NO_WINDOW)
 }
 
 #[cfg(not(windows))]
-fn quiet(command: &mut Command) -> &mut Command {
+pub(crate) fn quiet(command: &mut Command) -> &mut Command {
     command
 }
 
@@ -243,7 +234,7 @@ fn managed_pandoc<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
 ///
 /// Hand-rolled rather than shelling out to `which`/`where`, because we need the
 /// resolved path to pass to `--pdf-engine` and to show the user.
-fn which(name: &str) -> Option<PathBuf> {
+pub(crate) fn which(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
         if dir.as_os_str().is_empty() {
@@ -257,15 +248,13 @@ fn which(name: &str) -> Option<PathBuf> {
     None
 }
 
-fn pdf_engine() -> Option<PathBuf> {
-    PDF_ENGINES.iter().find_map(|name| {
-        let exe = if cfg!(windows) {
-            format!("{name}.exe")
-        } else {
-            (*name).to_string()
-        };
-        which(&exe)
-    })
+fn pdf_engine<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    // Typst only. The LaTeX route was ten engine names and a multi-gigabyte TeX
+    // distribution behind whichever one was found; Typst is one executable with
+    // no dependencies, it sets better mathematics, and it takes a fraction of the
+    // time. A user who wants another engine can put `--pdf-engine=…` in a
+    // format's arguments and it wins, because extra arguments come last.
+    crate::typst::find_typst(app).map(|found| found.path)
 }
 
 /// Ask a pandoc binary for its version. This is also the liveness check: a
@@ -320,7 +309,7 @@ pub fn status<R: Runtime>(app: &AppHandle<R>) -> PandocStatus {
             version: Some(found.version),
             path: Some(found.path.to_string_lossy().into_owned()),
             source: Some(found.source.into()),
-            pdf_engine: pdf_engine().map(|p| p.to_string_lossy().into_owned()),
+            pdf_engine: pdf_engine(app).map(|p| p.to_string_lossy().into_owned()),
         },
         None => PandocStatus::missing(),
     }
@@ -348,6 +337,18 @@ fn feed_stdin(mut stdin: std::process::ChildStdin, markdown: String) -> std::thr
 pub fn export<R: Runtime>(app: &AppHandle<R>, request: &ExportRequest) -> Result<ExportOutcome, String> {
     let (format, values) = prepare(app, request)?;
 
+    // A Typst document exported to PDF or HTML goes straight to Typst. For PDF
+    // that is the *only* faithful route — pandoc can read Typst and write Typst,
+    // but the round trip keeps the words and loses the page. For HTML it is
+    // simply the better writer.
+    let typst_source = request.language.as_deref() == Some("typst");
+    if typst_source {
+        let ext = format.extension.to_ascii_lowercase();
+        if ext == "pdf" || ext == "html" {
+            return export_typst_direct(app, request, &format, &ext);
+        }
+    }
+
     let (pandoc, _) = match find_pandoc(app) {
         Some(found) => (found.path, found.source),
         None => {
@@ -359,7 +360,38 @@ pub fn export<R: Runtime>(app: &AppHandle<R>, request: &ExportRequest) -> Result
         }
     };
 
-    let args = build_arguments(&format, &values);
+    let mut args = build_arguments(&format, &values);
+    // For any other Format a Typst document is rendered to HTML first and handed
+    // to pandoc's HTML reader, which is mature, rather than its Typst reader,
+    // which is not: it turns `= Text` into the literal text "= Text", prints
+    // `#set page(...)` verbatim and leaks `//` comments into the output. Verified
+    // by exporting this project's own sample — see the note in typst.rs.
+    let mut input_file: Option<PathBuf> = None;
+    if typst_source {
+        let rendered = std::env::temp_dir().join("mdraft-typst").join("export.html");
+        crate::typst::compile_to(
+            app,
+            request.input_path.as_deref(),
+            &request.markdown,
+            "html",
+            &rendered,
+        )?;
+        // Only the body is handed over. Typst writes a complete HTML document, and
+        // pandoc's HTML reader passes anything structural it does not expect — the
+        // doctype, `<head>`, the embedded `<style>` — straight through as raw HTML,
+        // which is how a reStructuredText export ended up full of `<!DOCTYPE html>`.
+        let full = std::fs::read_to_string(&rendered)
+            .map_err(|e| format!("Could not read the rendered document: {e}"))?;
+        let body = crate::typst::between(&full, "<body", "</body>")
+            .ok_or_else(|| "The rendered document had no body.".to_string())?;
+        std::fs::write(&rendered, body)
+            .map_err(|e| format!("Could not prepare the document for pandoc: {e}"))?;
+
+        args.insert(0, rendered.to_string_lossy().into_owned());
+        args.insert(0, "html".to_string());
+        args.insert(0, "-f".to_string());
+        input_file = Some(rendered);
+    }
     if args.is_empty() {
         return Err(format!(
             "The \"{}\" export has no arguments. Set them in Preferences › Export.",
@@ -380,7 +412,14 @@ pub fn export<R: Runtime>(app: &AppHandle<R>, request: &ExportRequest) -> Result
         .stdin
         .take()
         .ok_or_else(|| "Could not open pandoc's input stream.".to_string())?;
-    let writer = feed_stdin(stdin, request.markdown.clone());
+    // The source is only piped when pandoc has no file to read. When it does, the
+    // stream is closed empty so pandoc does not wait on it.
+    let fed = if input_file.is_some() {
+        String::new()
+    } else {
+        request.markdown.clone()
+    };
+    let writer = feed_stdin(stdin, fed);
 
     let output = wait_with_timeout(child, EXPORT_TIMEOUT)?;
     // The writer finishes as soon as pandoc closes its end. Joining keeps the
@@ -417,8 +456,8 @@ pub fn export<R: Runtime>(app: &AppHandle<R>, request: &ExportRequest) -> Result
         // a missing PDF engine is the usual cause. Saying so beats handing the
         // user an empty document.
         return Err(format!(
-            "Pandoc reported success but wrote nothing to {}.\n\nFor PDF this normally means no \
-             LaTeX engine is installed; the Preferences › Export panel lists what was detected.",
+            "Pandoc reported success but wrote nothing to {}.\n\nFor PDF this normally means Typst \
+             is not installed; use Help › Install Typst.",
             target.display()
         ));
     }
@@ -428,6 +467,46 @@ pub fn export<R: Runtime>(app: &AppHandle<R>, request: &ExportRequest) -> Result
         output_path: target.to_string_lossy().into_owned(),
         bytes,
         warnings: stderr,
+        after,
+        after_errors,
+    })
+}
+
+/// Export a Typst document with Typst itself, to PDF or HTML.
+///
+/// The alternative — handing the source to pandoc, which reads Typst and writes
+/// Typst, and then running a PDF engine over that — would round-trip the document
+/// through a translation that keeps the words and loses the page. Typst's own
+/// renderer is the thing that produced the preview, so it is also the thing that
+/// should produce the file.
+fn export_typst_direct<R: Runtime>(
+    app: &AppHandle<R>,
+    request: &ExportRequest,
+    format: &ExportFormat,
+    extension: &str,
+) -> Result<ExportOutcome, String> {
+    let target = PathBuf::from(&request.output_path);
+    crate::typst::compile_to(
+        app,
+        request.input_path.as_deref(),
+        &request.markdown,
+        extension,
+        &target,
+    )?;
+
+    let bytes = std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
+    if bytes == 0 {
+        return Err(format!(
+            "Typst reported success but wrote nothing to {}.",
+            target.display()
+        ));
+    }
+
+    let (after, after_errors) = run_after_actions(app, format, &target);
+    Ok(ExportOutcome {
+        output_path: target.to_string_lossy().into_owned(),
+        bytes,
+        warnings: String::new(),
         after,
         after_errors,
     })
@@ -480,7 +559,7 @@ fn prepare<R: Runtime>(
         input_path: request.input_path.clone().unwrap_or_default(),
         output_path: target.to_string_lossy().into_owned(),
         style_reference: format.style_reference.clone(),
-        pdf_engine: pdf_engine()
+        pdf_engine: pdf_engine(app)
             .map(|p| format!("--pdf-engine={}", p.to_string_lossy()))
             .unwrap_or_default(),
     };

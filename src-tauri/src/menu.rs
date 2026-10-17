@@ -36,7 +36,52 @@ fn plain_label(label: &str) -> String {
     label.replace('&', "&&")
 }
 
+use std::sync::Mutex;
+
+/// Every accelerator the menu actually registered, as `(menu id, accelerator)`.
+///
+/// Collected while the menu is built rather than written out a second time, so
+/// the list the window shows and the list the frontend honours cannot disagree.
+///
+/// Why the frontend needs it at all: **Tauri 2 does not translate menu
+/// accelerators on Windows.** muda documents that the application's message loop
+/// must call `TranslateAcceleratorW` with the menu's `haccel()`, and neither
+/// `wry` 0.57 nor `tao` 0.37 nor `tauri-runtime-wry` 2.12 ever calls it. The
+/// result is a menu that prints "Ctrl+N" beside *New* and does nothing when you
+/// press it — while the Edit entries appear to work only because Ctrl+Z/X/C/V/A
+/// are Chromium's own commands, handled inside the webview. The frontend
+/// therefore binds the shortcuts itself, from this list.
+static ACCELERATORS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+/// The registered accelerators, for the frontend's key handler.
+#[tauri::command]
+pub fn accelerators() -> Vec<Shortcut> {
+    ACCELERATORS
+        .lock()
+        .map(|list| {
+            list.iter()
+                .map(|(id, accelerator)| Shortcut {
+                    id: id.clone(),
+                    accelerator: accelerator.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[derive(serde::Serialize)]
+pub struct Shortcut {
+    pub id: String,
+    pub accelerator: String,
+}
+
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
+    // The menu is rebuilt whenever the export formats change, so the registry is
+    // reset here; appending would accumulate duplicates.
+    if let Ok(mut list) = ACCELERATORS.lock() {
+        list.clear();
+    }
+
     // Accelerator strings are parsed by the platform menu backend; a name it does
     // not recognise would otherwise abort the whole build. Register the item
     // without a shortcut and report it instead.
@@ -49,7 +94,17 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             builder.build(app)
         };
         match attempt(accel) {
-            Ok(built) => Ok(built),
+            Ok(built) => {
+                // Recorded only once the backend accepted it: a rejected string
+                // means the menu carries no shortcut, and the frontend must not
+                // pretend otherwise.
+                if let Some(a) = accel {
+                    if let Ok(mut list) = ACCELERATORS.lock() {
+                        list.push((id.to_string(), a.to_string()));
+                    }
+                }
+                Ok(built)
+            }
             Err(error) if accel.is_some() => {
                 eprintln!(
                     "[menu] accelerator {accel:?} for {id} was rejected ({error}); registering without it"
@@ -244,6 +299,10 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let help = SubmenuBuilder::new(app, "Help")
         .item(&item("help.reference", "Markdown Reference", None)?)
         .item(&item("help.shortcuts", "Keyboard Shortcuts", None)?)
+            .separator()
+            .item(&item("help.licences", "Font Licences", None)?)
+            .separator()
+            .item(&item("help.installTypst", "Install Typst...", None)?)
         .separator()
         .item(&item("help.pandoc", "Install Pandoc…", None)?)
         .separator()

@@ -67,6 +67,20 @@ $archives = @(
     LicenceEntry = "OFL.txt"
     LicenceName = "jetbrains-mono-OFL.txt"
   }
+  # Fira Code, for the editor. The plain release, not the Nerd Font build: the
+  # Nerd Font variant is a mono plus thousands of icon glyphs and costs several
+  # times as much for something this application never draws. What makes Fira
+  # Code worth having is the programming ligatures, and they are in both.
+  @{
+    Id = "fira-code"; Family = "Fira Code"; Tag = "6.2"
+    Repo = "tonsky/FiraCode"
+    Asset = "Fira_Code_v6.2.zip"
+    Sha256 = "0949915ba8eb24d89fd93d10a7ff623f42830d7c5ffc3ecbf960e4ecad3e3e79"
+    # The zip carries no licence file at all; the licence lives in the repository.
+    LicenceUrl = "https://raw.githubusercontent.com/tonsky/FiraCode/6.2/LICENSE"
+    LicenceEntry = $null
+    LicenceName = "fira-code-OFL.txt"
+  }
 )
 
 # Which members to keep, and what to call them. Only the faces the application
@@ -93,6 +107,13 @@ $picks = @{
     @{ Entry = "fonts/webfonts/JetBrainsMono-Bold.woff2";     File = "JetBrainsMono-Bold.woff2";     Style = "normal"; Weight = "700" }
     @{ Entry = "fonts/webfonts/JetBrainsMono-Italic.woff2";   File = "JetBrainsMono-Italic.woff2";   Style = "italic"; Weight = "400" }
     @{ Entry = "fonts/webfonts/JetBrainsMono-BoldItalic.woff2"; File = "JetBrainsMono-BoldItalic.woff2"; Style = "italic"; Weight = "700" }
+  )
+  # One file, not four. The variable build carries the whole 300–700 range for
+  # 110 KB, where Regular plus Bold alone would be 206 KB and still leave the
+  # editor without the intermediate weights. Fira Code has no italics of its own,
+  # so the browser slants the upright — which is what every editor does with it.
+  "fira-code" = @(
+    @{ Entry = "woff2/FiraCode-VF.woff2"; File = "FiraCode-Variable.woff2"; Style = "normal"; Weight = "300 700" }
   )
 }
 

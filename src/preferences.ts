@@ -22,12 +22,14 @@ export interface PreferencesHost {
   exportHtml(): void;
   /** Print the document to PDF through the system browser. */
   exportPdf(): void;
-  openDocumentation(which: "reference" | "shortcuts"): void;
+  openDocumentation(which: "reference" | "shortcuts" | "licences"): void;
   version(): string;
   /** Last known pandoc status, or null before the first check. */
   pandocStatus(): api.PandocStatus | null;
   /** Check for pandoc and offer to install it if it is missing. */
   setupPandoc(): Promise<void>;
+  /** Check for Typst and offer to install it if it is missing. */
+  setupTypst(): Promise<void>;
   /** Ask the user for a reference/style file. Empty string when cancelled. */
   chooseStyleReference(current: string): Promise<string>;
 }
@@ -351,7 +353,7 @@ function exportRows(host: PreferencesHost): Row[] {
             }.${
               status.pdfEngine
                 ? ` PDF export will use ${status.pdfEngine}.`
-                : " No PDF engine was found, so PDF export will fail until a LaTeX engine such as Tectonic, TinyTeX or MiKTeX is installed. Every other format works without one."
+                : " No PDF engine was found. PDF needs Typst — use Help › Install Typst. Every other format works without it."
             }`
           : "Not found. Word, PDF, EPUB and the other formats below need it; HTML does not."
         : "Checking…",
@@ -364,9 +366,22 @@ function exportRows(host: PreferencesHost): Row[] {
     },
     {
       kind: "note",
+      label: "Typst",
+      text:
+        "Typst is what typesets PDFs: a single executable with no dependencies, where the LaTeX route it replaced wanted a TeX distribution of several gigabytes. The same program draws the preview of .typ documents.",
+    },
+    {
+      kind: "button",
+      label: "",
+      text: "Install or check Typst",
+      help: "Downloads the official Typst build into the application's own data folder. Nothing is installed system-wide and no administrator rights are needed.",
+      action: () => host.setupTypst(),
+    },
+    {
+      kind: "note",
       label: "HTML and PDF",
       text:
-        "Both are produced by MDraft from the same pipeline that draws the preview, so neither needs pandoc or LaTeX. PDF is printed by your browser, which is why it asks you to choose “Save as PDF”. Everything below this point is a pandoc format and needs pandoc installed.",
+        "Both are produced by MDraft from the same pipeline that draws the preview, so neither needs pandoc. PDF is printed by your browser, which is why it asks you to choose “Save as PDF”. Everything below this point is a pandoc format and needs pandoc installed; the PDFs it makes are typeset by Typst.",
     },
     { kind: "heading", label: "Formats" },
   ];
@@ -797,6 +812,13 @@ function buildSections(host: PreferencesHost): Section[] {
           label: "",
           text: "Open the Keyboard Shortcuts",
           action: () => host.openDocumentation("shortcuts"),
+        },
+        {
+          kind: "button",
+          label: "",
+          text: "Font licences…",
+          help: "The four bundled typefaces are under the SIL Open Font License 1.1, which requires their copyright notices and licence texts to travel with them wherever they are redistributed. Both are compiled into the application and shown here.",
+          action: () => host.openDocumentation("licences"),
         },
         {
           kind: "note",

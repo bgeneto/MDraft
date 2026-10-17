@@ -1,33 +1,54 @@
 # MDraft
 
-A **Tauri 2** markdown editor in the spirit of [Typora](https://typora.io).
+A small, fast editor for **Markdown and Typst**, in the spirit of [Typora](https://typora.io).
 
-MDraft keeps the *product* shape that makes Typora pleasant — live preview, math,
-diagrams, an outline sidebar, a native menu — and builds it on a current, small
-runtime: the operating system's own webview instead of a bundled browser, and
-Rust instead of a JavaScript backend.
+Live preview as you type, mathematics, diagrams, an outline sidebar, a native
+menu, and PDFs typeset by [Typst](https://typst.app) — in an 11 MB download that
+starts instantly, because there is no browser inside it.
+
+![The main window, with the feature tour open and the preview beside the source](docs/screenshots/readme-main.png)
+
+![Preferences: the Typography section, with a specimen under each font field](docs/screenshots/readme-preferences.png)
+
+## Why this exists
+
+Typora is pleasant because of its *shape*: one pane that shows you the document
+while you write it, not a source window with a preview bolted on. MDraft keeps
+that shape and rebuilds it on a current, small runtime — the operating system's
+own webview instead of a bundled Chromium, and Rust instead of a Node backend.
 
 | Concern | Typora | MDraft |
 | --- | --- | --- |
-| Shell | Electron | Tauri 2.12.4 |
-| Renderer engine | bundled Chromium | OS WebView2 / WKWebView / WebKitGTK |
+| Shell | Electron | Tauri 2.12 |
+| Renderer engine | bundled Chromium | the OS's own webview |
 | Backend | Node.js | Rust 1.91, compiled |
-| Executable size | ~227 MB | 8.5 MB |
-| Installer size | — | 4.5 MB |
+| Executable size | ~227 MB | 11 MB |
 | Editor | a `contenteditable` surface | CodeMirror 6 |
-| Markdown | marked | marked |
-| Math | MathJax | KaTeX 0.19 (Computer Modern, bundled) |
+| Math | MathJax | KaTeX 0.19, bundled |
 | Diagrams | Mermaid | Mermaid 12.2 |
-| Sanitiser | DOMPurify | DOMPurify 3.4 |
+| Typst | — | compiler-driven preview and PDF |
+| Licensing | paid, per seat | none, ever |
 
-The size difference is the point of the stack, not an accident of it: there is no
-browser to ship and no JavaScript runtime to ship. Roughly half of MDraft's 8.5 MB
-arrived with image downloads — `ureq` plus `rustls` and `ring` cost about 1.5 MB.
-Keeping the network stack out would be the single largest size win available.
+The size is the point of the stack, not a coincidence: there is no browser and no
+JavaScript runtime to ship. About 2.3 MB of it is four typefaces compiled in, so
+the typography does not depend on what the machine happens to have installed.
 
-## What works in this first version
+## Getting it
+
+Download the installer for your platform from
+[**Releases**](https://github.com/bgeneto/MDraft/releases). Windows gets an
+`.msi`, a `-setup.exe`, and a **portable** build that is a single `.exe` — put it
+in any folder, including one inside Dropbox or Nextcloud, and its settings are
+written beside it. Linux gets a `.deb`, an AppImage and a plain binary.
+
+PDF export needs [Typst](https://typst.app/open-source/#download), a single
+executable with no dependencies. *Help › Install Typst* fetches and verifies it
+for you; nothing is installed system-wide and no administrator rights are needed.
+
+## What it does
 
 - **Open / save / save as** with native dialogs, drag and drop onto the window,
+
   and `mdraft notes.md` on the command line.
 - **Image paste, drop and download.** Paste a screenshot straight into either
   pane, paste an image URL, paste a path, or drop image files on the window.
@@ -131,9 +152,6 @@ What does not match, by design:
   implements a subset of LaTeX: no `\usepackage`, no numbered `align`, no
   `mhchem` or `siunitx`. MathJax 4 would cover more packages at roughly a
   megabyte more; switching is a deliberate change, not a drop-in.
-- **No image uploader.** Typora's Image section ends with an "Image Uploader"
-  dropdown offering S3, PicGo and friends; this build shows a note explaining
-  that images are always written to disk instead.
 
 ## No licensing, ever
 
@@ -268,16 +286,6 @@ about:
 Kerning and the standard ligatures are stated explicitly rather than left to the
 browser's defaults, and variable fonts are asked to interpolate their optical
 size axis for the size in use.
-
-### Mathematics keeps its own face
-
-KaTeX draws with its own Computer Modern, and that is deliberate rather than
-unfinished. It is a Didone — high contrast, vertical stress — so it sits
-naturally beside a transitional serif such as Source Serif 4, Charter or Georgia,
-and argues with a geometric sans. It cannot simply be swapped: KaTeX renders
-radicals, integrals and large delimiters with its `KaTeX_Size1–4` faces, and no
-operating system supplies those glyphs. Substituting a family breaks the layout
-rather than changing the style.
 
 ### Exports carry the fonts
 

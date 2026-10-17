@@ -14,7 +14,7 @@ import {
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import * as api from "./api";
-import { REFERENCE, SHORTCUTS, WELCOME } from "./content";
+import { FONT_LICENCES, REFERENCE, SHORTCUTS, WELCOME } from "./content";
 import { createEditor, type EditorHandle } from "./editor";
 import {
   embeddedFontCss,
@@ -33,6 +33,7 @@ import {
 import { createPreferences, type PreferencesHandle } from "./preferences";
 import * as sidebarPanel from "./sidebar";
 import { resolvePalette } from "./syntax-themes";
+import { annotateTypstLines } from "./typst-map";
 
 // ---------------------------------------------------------------------------
 // DOM
@@ -312,9 +313,142 @@ function scheduleRender(immediate = false): void {
   renderTimer = window.setTimeout(() => void doRender(), immediate ? 0 : 200);
 }
 
+// Object URLs handed to the preview, kept so they can be revoked. A long session
+// that edits a Typst document hundreds of times would otherwise hold every page
+// it ever drew in memory.
+let typstObjectUrls: string[] = [];
+
+/**
+ * Draw a Typst document by compiling it and showing the pages.
+ *
+ * The pages are the compiler's own output rather than an interpretation of it, so
+ * what is on screen is what the PDF will contain. `currentPath` is passed only as
+ * the project root, so `#image("img/plot.png")` resolves as it will on export; the
+ * text itself is sent, so unsaved edits appear.
+ */
+/**
+ * The preview of a Typst document.
+ *
+ * Two views, and the reason there are two is worth stating plainly. Typst's HTML
+ * export yields plain semantic HTML — the same `h2`, `p`, `code`, `ol`, `table`
+ * and MathML that the Markdown preview already renders — so the pane's type,
+ * colours and width apply to it and the text flows and can be selected. What it
+ * cannot do is layout: page size, `#align`, boxes and page breaks are dropped.
+ * The page view is the compiler's real output and always faithful, but its text is
+ * drawn as outlines, so it neither reflows nor can be read as text.
+ *
+ * The default is the document view: a preview is for reading. The page view is one
+ * click away, and the pane says so when the document view had to drop something.
+ */
+async function renderTypstPreview(source: string, token: number): Promise<void> {
+  const wanted = settings.typstView === "pages" ? "pages" : "document";
+
+  let rendered: api.RenderedTypst;
+  try {
+    rendered = await api.renderTypst(currentPath, source, wanted);
+  } catch (error) {
+    if (token !== renderToken) return;
+    // Shown in place of the preview, not as a toast: a Typst error is about a
+    // line of this document, and the pane is where the document is looked at.
+    for (const url of typstObjectUrls) URL.revokeObjectURL(url);
+    typstObjectUrls = [];
+    preview.innerHTML = "";
+    preview.appendChild(typstViewBar(wanted));
+    const box = document.createElement("pre");
+    box.className = "typst-error";
+    box.textContent = String(error);
+    preview.appendChild(box);
+    previewLinesMapped = false;
+    return;
+  }
+  if (token !== renderToken) return;
+
+  for (const url of typstObjectUrls) URL.revokeObjectURL(url);
+  typstObjectUrls = [];
+  preview.innerHTML = "";
+  preview.appendChild(typstViewBar(rendered.kind));
+
+  if (rendered.kind === "document") {
+    const host = document.createElement("div");
+    // The same class the Markdown preview uses, so every rule that shapes prose,
+    // headings, code, tables and quotes applies to this document too.
+    host.className = "markdown-body typst-document";
+    host.innerHTML = rendered.html ?? "";
+    preview.appendChild(host);
+
+    if (rendered.css) {
+      // The export's stylesheet is mostly MathML alignment inside tables, which
+      // no browser resolves unaided. Kept in one element so it is replaced rather
+      // than accumulated across renders.
+      let style = document.getElementById("typst-export-css") as HTMLStyleElement | null;
+      if (!style) {
+        style = document.createElement("style");
+        style.id = "typst-export-css";
+        document.head.appendChild(style);
+      }
+      style.textContent = rendered.css;
+    }
+    // Typst's HTML export carries no source positions, so the blocks are matched
+    // back to the source by their text — see typst-map.ts. Two anchors are enough
+    // to scroll against, and requiring all of them would disable sync for any
+    // document holding a figure.
+    const mapped = annotateTypstLines(host, source);
+    previewLinesMapped = mapped.mapped >= 2;
+    rebuildAnchors();
+    revealCursorInPreview();
+    updateActiveOutline();
+    return;
+  }
+
+  const host = document.createElement("div");
+  host.className = "typst-preview";
+  rendered.pages.forEach((svg, index) => {
+    const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+    typstObjectUrls.push(url);
+    const page = document.createElement("img");
+    page.className = "typst-page";
+    page.alt = `Page ${index + 1}`;
+    page.src = url;
+    host.appendChild(page);
+  });
+  preview.appendChild(host);
+  // Pages are pictures of pages: there is nothing to map a line onto.
+  previewLinesMapped = false;
+}
+
+/** The Document / Pages switch shown above a Typst preview. */
+function typstViewBar(active: string): HTMLElement {
+  const bar = document.createElement("div");
+  bar.className = "typst-viewbar";
+  const choices: Array<[string, string, string]> = [
+    ["document", "Document", "Flowing text, styled like the Markdown preview"],
+    ["pages", "Pages", "The pages as they will print"],
+  ];
+  for (const [id, label, title] of choices) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "typst-viewbutton" + (id === active ? " active" : "");
+    button.textContent = label;
+    button.title = title;
+    button.addEventListener("click", () => {
+      if (settings.typstView === id) return;
+      settings.typstView = id as api.TypstView;
+      persist();
+      scheduleRender(true);
+    });
+    bar.appendChild(button);
+  }
+  return bar;
+}
+
 async function doRender(): Promise<void> {
   const token = ++renderToken;
   const source = editor.getDoc();
+
+  if (currentLanguage === "typst") {
+    await renderTypstPreview(source, token);
+    return;
+  }
 
   const result = renderPreview(source, {
     baseDir: currentDoc?.directory ?? null,
@@ -351,10 +485,18 @@ function renderSidebar(): void {
   if (!settings.sidebarVisible) return;
 
   if (settings.sidebarTab === "outline") {
-    const headings = sidebarPanel.extractHeadings(editor.getDoc());
-    sidebarPanel.renderOutline(sidebarBody, headings, editor.cursorInfo().line, (line) => {
-      editor.scrollToLine(line);
-    });
+    const headings = languageFor(currentPath) === "typst"
+      ? sidebarPanel.extractTypstHeadings(editor.getDoc())
+      : sidebarPanel.extractHeadings(editor.getDoc());
+    sidebarPanel.renderOutline(
+      sidebarBody,
+      headings,
+      editor.cursorInfo().line,
+      (line) => {
+        editor.scrollToLine(line);
+      },
+      currentPath !== null && /\.typ$/i.test(currentPath),
+    );
     return;
   }
 
@@ -394,7 +536,9 @@ function renderSidebar(): void {
 
 function updateActiveOutline(): void {
   if (settings.sidebarTab !== "outline" || !settings.sidebarVisible) return;
-  const headings = sidebarPanel.extractHeadings(editor.getDoc());
+  const headings = languageFor(currentPath) === "typst"
+      ? sidebarPanel.extractTypstHeadings(editor.getDoc())
+      : sidebarPanel.extractHeadings(editor.getDoc());
   sidebarPanel.renderOutline(sidebarBody, headings, editor.cursorInfo().line, (line) => {
     editor.scrollToLine(line);
   });
@@ -404,6 +548,20 @@ function updateActiveOutline(): void {
 // Document lifecycle
 // ---------------------------------------------------------------------------
 
+/**
+ * Which markup a path holds.
+ *
+ * By extension, because that is the only signal there is: a Typst document and a
+ * Markdown document are both text, and guessing from the contents would flip the
+ * parser under a user who had just typed the first `=`.
+ */
+function languageFor(path: string | null): api.DocumentLanguage {
+  return path !== null && /\.typ$/i.test(path) ? "typst" : "markdown";
+}
+
+/** The markup of the document currently in the editor. */
+let currentLanguage: api.DocumentLanguage = "markdown";
+
 async function adoptDocument(payload: api.DocumentPayload, resetHistory: boolean): Promise<void> {
   currentDoc = payload;
   currentPath = payload.path;
@@ -412,6 +570,8 @@ async function adoptDocument(payload: api.DocumentPayload, resetHistory: boolean
   dirty = false;
 
   editor.setDoc(payload.content, resetHistory);
+  currentLanguage = languageFor(payload.path);
+  editor.setLanguage(currentLanguage);
   sidebarPanel.resetDirectory(payload.directory || null);
 
   applyLayout();
@@ -429,6 +589,9 @@ async function loadUntitled(content: string): Promise<void> {
   dirty = false;
 
   editor.setDoc(content, true);
+  // A built-in document is Markdown, whatever the previous one was.
+  currentLanguage = "markdown";
+  editor.setLanguage("markdown");
   sidebarPanel.resetDirectory(null);
 
   applyLayout();
@@ -524,6 +687,7 @@ async function saveAs(): Promise<boolean> {
     defaultPath: suggested,
     filters: [
       { name: "Markdown", extensions: ["md", "markdown", "mdown", "txt"] },
+      { name: "Typst", extensions: ["typ"] },
       { name: "All files", extensions: ["*"] },
     ],
   });
@@ -758,6 +922,9 @@ async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
       markdown: editor.getDoc(),
       outputPath,
       inputPath: currentPath,
+      // Tells the backend which reader to use, and that a Typst document exported
+      // to PDF is rendered by Typst itself rather than translated through pandoc.
+      language: currentLanguage,
     });
     notice.dismiss();
     toast(`Exported ${basename(outcome.outputPath)}`);
@@ -796,7 +963,7 @@ async function pandocSetup(): Promise<void> {
 
   const engine = status.pdfEngine
     ? `\nPDF engine: ${basename(status.pdfEngine)}`
-    : "\nPDF engine: none found — PDF export needs a LaTeX engine such as Tectonic, TinyTeX or MiKTeX. Every other format works without one.";
+    : "\nPDF engine: none — Typst is not installed, so PDF export is unavailable. Use Help › Install Typst. Every other format works without it.";
 
   if (status.found) {
     await message(
@@ -829,12 +996,81 @@ async function pandocSetup(): Promise<void> {
       `Pandoc ${installed.version ?? ""} is ready.\n\n${installed.path ?? ""}\n\n` +
         (installed.pdfEngine
           ? `PDF export will use ${basename(installed.pdfEngine)}.`
-          : "PDF export still needs a LaTeX engine; every other format works now."),
+          : "PDF export still needs Typst — use Help › Install Typst. Every other format works now."),
       { title: "Pandoc installed", kind: "info" },
     );
   } catch (error) {
     notice.dismiss();
     await message(String(error), { title: "Could not install pandoc", kind: "error" });
+  }
+}
+
+/**
+ * Look for Typst, and offer to fetch it when it is missing.
+ *
+ * Typst is what turns Markdown into PDF, so this is the one extra program the
+ * application really wants. It is a single executable — no TeX distribution, no
+ * package manager, no administrator rights — which is why downloading it is a
+ * reasonable offer rather than an imposition.
+ */
+async function typstSetup(): Promise<void> {
+  let status: api.TypstStatus;
+  try {
+    status = await api.typstStatus();
+  } catch (error) {
+    await message(String(error), { title: "Could not look for Typst", kind: "error" });
+    return;
+  }
+
+  if (status.found) {
+    await message(
+      `Typst ${status.version ?? "(unknown version)"} is ready.\n\n` +
+        `Location: ${status.path}\n` +
+        `Installed by: ${status.source === "managed" ? "MDraft" : "you (found on PATH)"}\n\n` +
+        "PDF export uses it, and .typ documents are previewed with it.",
+      { title: "Typst", kind: "info" },
+    );
+    return;
+  }
+
+  if (!status.canInstall) {
+    const open = await ask(
+      `Typst was not found.\n\n${status.hint}\n\n` +
+        "Open the official download page?",
+      { title: "Install Typst", kind: "info", okLabel: "Open page", cancelLabel: "Cancel" },
+    );
+    if (open) {
+      try {
+        await api.openTypstDownloadPage();
+      } catch (error) {
+        await message(String(error), { title: "Could not open the browser", kind: "error" });
+      }
+    }
+    return;
+  }
+
+  const agreed = await ask(
+    "Typst was not found, so PDF export is unavailable.\n\n" +
+      "MDraft can download the official Typst build and put it in its own data folder. " +
+      "Nothing is installed system-wide, no administrator rights are needed, and removing the " +
+      "folder undoes it.\n\n" +
+      "The download is about 21 MB and unpacks to a single executable.",
+    { title: "Install Typst", kind: "info", okLabel: "Download", cancelLabel: "Cancel" },
+  );
+  if (!agreed) return;
+
+  const notice = toast("Downloading Typst…", 0);
+  try {
+    const installed = await api.installTypst();
+    notice.dismiss();
+    await message(
+      `Typst ${installed.version ?? ""} is ready.\n\n${installed.path ?? ""}\n\n` +
+        "PDF export will use it, and .typ documents can now be previewed.",
+      { title: "Typst installed", kind: "info" },
+    );
+  } catch (error) {
+    notice.dismiss();
+    await message(String(error), { title: "Could not install Typst", kind: "error" });
   }
 }
 
@@ -856,6 +1092,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
       defaultPath: settings.lastDirectory ?? undefined,
       filters: [
         { name: "Markdown", extensions: ["md", "markdown", "mdown", "mkd", "txt"] },
+        { name: "Typst", extensions: ["typ"] },
         { name: "All files", extensions: ["*"] },
       ],
     });
@@ -969,19 +1206,26 @@ const handlers: Record<string, () => void | Promise<void>> = {
 
   "help.reference": () => void showBuiltin(REFERENCE),
   "help.shortcuts": () => void showBuiltin(SHORTCUTS),
+  "help.licences": () => void showBuiltin(FONT_LICENCES),
+  "help.installTypst": () => void typstSetup(),
   "help.pandoc": () => void pandocSetup(),
   "help.about": async () => {
     await message(
       [
         "MDraft",
+        `Version ${APP_VERSION}`,
         "",
-        "A Tauri 2 markdown editor in the spirit of Typora.",
+        "A Markdown and Typst editor in the spirit of Typora.",
+        "",
+        "Made by Bernhard Enders.",
+        "https://github.com/bgeneto/MDraft",
         "",
         "Editor: CodeMirror 6",
         "Markdown: marked + DOMPurify",
         "Math: KaTeX",
         "Diagrams: Mermaid",
         "Highlighting: highlight.js",
+        "PDF: Typst",
       ].join("\n"),
       { title: "About MDraft", kind: "info" },
     );
@@ -1311,25 +1555,193 @@ function installResizers(): void {
 // Native integrations
 // ---------------------------------------------------------------------------
 
-async function installMenuListener(): Promise<void> {
-  await listen<string>("menu", (event) => {
-    const id = event.payload;
-    // The pandoc entries are generated from the user's own format list, so they
-    // cannot be keys in `handlers`. The menu builds them as "export.pandoc.<id>".
-    if (id.startsWith(EXPORT_MENU_PREFIX)) {
-      const formatId = id.slice(EXPORT_MENU_PREFIX.length);
-      const format = settings.exportFormats.find((f) => f.id === formatId);
-      if (!format) {
-        toast("That export format no longer exists.");
-        return;
-      }
-      void exportWithPandoc(format).catch((error) => toast(String(error)));
+/**
+ * Run the action for a menu id, whichever route asked for it.
+ *
+ * Both routes end here on purpose. The native menu fires on platforms whose
+ * message loop translates accelerators — GTK does, Windows does not — and the
+ * keydown handler fires everywhere. On a platform where both work, the same
+ * keystroke would otherwise run the command twice: two tables inserted for one
+ * Ctrl+T, two links for one Ctrl+K. Suppressing a repeat *of the same id* within
+ * 250 ms is enough, because no one presses the same shortcut twice that fast.
+ */
+const lastActionAt = new Map<string, number>();
+
+function runMenuAction(id: string): void {
+  const now = performance.now();
+  const previous = lastActionAt.get(id) ?? 0;
+  if (now - previous < 250) return;
+  lastActionAt.set(id, now);
+
+  // The pandoc entries are generated from the user's own format list, so they
+  // cannot be keys in `handlers`. The menu builds them as "export.pandoc.<id>".
+  if (id.startsWith(EXPORT_MENU_PREFIX)) {
+    const formatId = id.slice(EXPORT_MENU_PREFIX.length);
+    const format = settings.exportFormats.find((f) => f.id === formatId);
+    if (!format) {
+      toast("That export format no longer exists.");
       return;
     }
-    const handler = handlers[id];
-    if (!handler) return;
-    void Promise.resolve(handler()).catch((error) => toast(String(error)));
-  });
+    void exportWithPandoc(format).catch((error) => toast(String(error)));
+    return;
+  }
+
+  const handler = handlers[id];
+  if (!handler) return;
+  void Promise.resolve(handler()).catch((error) => toast(String(error)));
+}
+
+async function installMenuListener(): Promise<void> {
+  await listen<string>("menu", (event) => runMenuAction(event.payload));
+}
+
+/** `event.code` for the punctuation an accelerator can name. */
+const SYMBOL_CODES: Record<string, string> = {
+  Equal: "=",
+  Minus: "-",
+  Comma: ",",
+  Period: ".",
+  Slash: "/",
+  Backslash: "\\",
+  BracketLeft: "[",
+  BracketRight: "]",
+  Backquote: "`",
+  Semicolon: ";",
+  Quote: "'",
+};
+
+/**
+ * The names a keystroke can be matched under.
+ *
+ * Two sources, because one is not enough. `event.key` is what the character is,
+ * which changes under Shift: `Shift+=` reports `"+"`, and `Shift+1` reports
+ * `"!"`. `event.code` is the physical key, unaffected by Shift, so `Equal`
+ * still names the key that was pressed. An accelerator says `CmdOrCtrl+Shift+=`,
+ * so the code is the one that matches it.
+ */
+function keyNames(event: KeyboardEvent): Set<string> {
+  const names = new Set<string>();
+  if (event.key && event.key !== "Unidentified") names.add(event.key.toUpperCase());
+  const code = event.code;
+  if (code.startsWith("Key")) names.add(code.slice(3));
+  else if (code.startsWith("Digit")) names.add(code.slice(5));
+  else if (SYMBOL_CODES[code]) names.add(SYMBOL_CODES[code]);
+  return names;
+}
+
+interface ParsedAccelerator {
+  id: string;
+  ctrl: boolean;
+  alt: boolean;
+  shift: boolean;
+  meta: boolean;
+  key: string;
+}
+
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.userAgent);
+
+/**
+ * Parse an accelerator into what a keystroke has to look like.
+ *
+ * The strings are muda's, which the menu already accepts — this reads the same
+ * syntax rather than introducing a second one.
+ */
+function parseAccelerator(id: string, accelerator: string): ParsedAccelerator | null {
+  const parts = accelerator.split("+");
+  const key = parts.pop();
+  if (!key) return null;
+  const parsed: ParsedAccelerator = {
+    id,
+    ctrl: false,
+    alt: false,
+    shift: false,
+    meta: false,
+    key: key.toUpperCase(),
+  };
+  for (const part of parts) {
+    switch (part.toLowerCase()) {
+      case "cmdorctrl":
+      case "cmdorcontrol":
+      case "commandorctrl":
+      case "commandorcontrol":
+        if (IS_MAC) parsed.meta = true;
+        else parsed.ctrl = true;
+        break;
+      case "ctrl":
+      case "control":
+        parsed.ctrl = true;
+        break;
+      case "shift":
+        parsed.shift = true;
+        break;
+      case "alt":
+      case "option":
+        parsed.alt = true;
+        break;
+      case "cmd":
+      case "command":
+      case "super":
+        parsed.meta = true;
+        break;
+      default:
+        // An unknown modifier means the shortcut cannot be reproduced faithfully;
+        // better to leave it to the platform than to guess.
+        return null;
+    }
+  }
+  return parsed;
+}
+
+function matchesAccelerator(parsed: ParsedAccelerator, event: KeyboardEvent): boolean {
+  // Exact modifier matching. Without it Ctrl+Shift+S would also satisfy Ctrl+S,
+  // and Save As would save the current file instead.
+  if (
+    event.ctrlKey !== parsed.ctrl ||
+    event.altKey !== parsed.alt ||
+    event.shiftKey !== parsed.shift ||
+    event.metaKey !== parsed.meta
+  ) {
+    return false;
+  }
+  return keyNames(event).has(parsed.key);
+}
+
+/**
+ * Bind the menu accelerators to the keyboard.
+ *
+ * Tauri 2 never calls `TranslateAcceleratorW` on Windows, so the menu draws
+ * "Ctrl+N" next to *New* and pressing it does nothing at all. The handful of
+ * shortcuts that seem to work there — Ctrl+Z, Ctrl+X, Ctrl+C, Ctrl+V, Ctrl+A —
+ * are Chromium's, handled inside the webview, which is what makes the failure
+ * look like a bug in some menu entries rather than in the whole accelerator
+ * mechanism.
+ *
+ * The list comes from the menu that was actually built, so the two cannot drift.
+ * Capture phase, so the editor's own keymap does not consume the keystroke first.
+ */
+function installShortcuts(shortcuts: api.Shortcut[]): void {
+  const parsed = shortcuts
+    .map((entry) => parseAccelerator(entry.id, entry.accelerator))
+    .filter((entry): entry is ParsedAccelerator => entry !== null);
+
+  for (const unparsed of shortcuts.filter(
+    (entry) => !parsed.some((candidate) => candidate.id === entry.id),
+  )) {
+    console.warn(`[shortcuts] could not reproduce ${unparsed.accelerator} for ${unparsed.id}`);
+  }
+
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      // An input method composing text owns the keyboard until it finishes.
+      if (event.isComposing || event.keyCode === 229) return;
+      const hit = parsed.find((candidate) => matchesAccelerator(candidate, event));
+      if (!hit) return;
+      event.preventDefault();
+      runMenuAction(hit.id);
+    },
+    true,
+  );
 }
 
 async function installDragDrop(): Promise<void> {
@@ -1479,7 +1891,11 @@ async function boot(): Promise<void> {
     },
     exportHtml: () => void exportHtml(),
     exportPdf: () => void exportPdf(),
-    openDocumentation: (which) => void showBuiltin(which === "reference" ? REFERENCE : SHORTCUTS),
+    setupTypst: () => typstSetup(),
+    openDocumentation: (which) =>
+      void showBuiltin(
+        which === "reference" ? REFERENCE : which === "shortcuts" ? SHORTCUTS : FONT_LICENCES,
+      ),
     version: () => APP_VERSION,
     pandocStatus: () => pandocCache,
     setupPandoc: async () => {
@@ -1512,6 +1928,10 @@ async function boot(): Promise<void> {
   applyLayout();
 
   await installMenuListener();
+  // The accelerators the menu registered, bound to the keyboard. Tauri 2 never
+  // translates them on Windows, so without this the menu advertises shortcuts
+  // that do nothing — see installShortcuts for the whole story.
+  installShortcuts(await api.shortcuts());
   await installDragDrop();
   await installCloseGuard();
   // Look for pandoc in the background: nothing at start-up depends on it, and

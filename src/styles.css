@@ -962,6 +962,78 @@ body {
    the colour of a paragraph are not visible at 13px.
    -------------------------------------------------------------------------- */
 
+/* The Document / Pages switch above a Typst preview. */
+.typst-viewbar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  gap: 2px;
+  justify-content: flex-end;
+  padding: 6px 10px;
+  background: var(--preview-bg, transparent);
+  backdrop-filter: blur(6px);
+}
+
+.typst-viewbutton {
+  padding: 3px 10px;
+  border: 1px solid var(--border, #3a3a3a);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted, #999);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.typst-viewbutton.active {
+  border-color: var(--accent, #4a8cff);
+  color: var(--fg, #ddd);
+}
+
+/* The document view reuses `.markdown-body`, so it inherits the preview's type.
+   Only the spacing above the first block needs resetting: Typst's HTML export
+   starts with a heading, not with the margin the Markdown path expects. */
+.typst-document > *:first-child {
+  margin-top: 0;
+}
+
+/* Typst preview: the compiler's own pages, one below the other. */
+.typst-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 22px 12px 40px;
+}
+
+.typst-page {
+  /* A4 at 96 dpi is 794px wide; capping at that keeps the page from being
+     stretched beyond the size it will print at, while still fitting a narrow
+     pane. */
+  max-width: min(794px, 100%);
+  height: auto;
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 22%);
+}
+
+.typst-error {
+  margin: 0;
+  padding: 16px 18px;
+  color: #ff9a9a;
+  font-family: var(--font-code);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* The page a document prints on is white even when the chrome is dark, so the
+   shadow above is what separates it from the pane. */
+.app.dark .typst-page {
+  box-shadow: 0 1px 6px rgb(0 0 0 / 55%);
+}
+
 .prefs-font {
   flex: 1 1 auto;
   min-width: 0;
