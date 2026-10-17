@@ -217,7 +217,7 @@ function typographyRows(host: PreferencesHost): Row[] {
         ...TYPOGRAPHY_PRESETS.map((preset) => [preset.id, preset.label] as [string, string]),
         // Always present, so the control is never blank: it is what the picker
         // shows once a field below has been edited away from every preset.
-        ["custom", "Custom (edited by hand)"],
+        ["custom", "Custom (user)"],
       ],
       // The preset is a starting point rather than stored state, so it is
       // detected from the settings instead of remembered: picking one writes
@@ -233,7 +233,7 @@ function typographyRows(host: PreferencesHost): Row[] {
       label: "",
       text:
         activePreset(host)?.note ??
-        "Edited by hand, so no preset matches exactly. The four faces below are the ones in use.",
+        "Set by hand, so no preset matches exactly. The four faces below are the ones in use.",
     },
     { kind: "heading", label: "Faces" },
   ];
