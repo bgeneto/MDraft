@@ -26,6 +26,9 @@ docs/screenshots/*
 !docs/screenshots/readme-main.png
 !docs/screenshots/readme-preferences.png
 
+# Remove samples 
+docs/samples/*
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
