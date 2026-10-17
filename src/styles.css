@@ -8,6 +8,10 @@
   --fg: #2b2b2b;
   --muted: #8a8f98;
   --border: #e7e7e7;
+  /* A horizontal rule is a divider, not a frame: it needs enough contrast to
+     read as a line of its own. Deliberately separate from --border, which the
+     rules under h1/h2 share with every panel edge. */
+  --rule: #cfcfcf;
   --sidebar-bg: #f7f7f8;
   --active-line: rgba(0, 0, 0, 0.035);
   --selection: rgba(80, 140, 255, 0.22);
@@ -32,11 +36,17 @@
      chrome and is not configurable — a menu that reflows with the document's
      typeface is a worse application, not a more flexible one.
      --------------------------------------------------------------------- */
-  --font-source: var(--font-mono);
-  --font-body: "Source Serif 4", Charter, Georgia, "Times New Roman", serif;
-  --font-heading: "Source Sans 3", Inter, system-ui, "Segoe UI", Arial, sans-serif;
-  --font-code: var(--font-mono);
+  --font-source: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-body: system-ui, "Segoe UI", -apple-system, Roboto, sans-serif;
+  --font-heading: system-ui, "Segoe UI", -apple-system, Roboto, sans-serif;
+  --font-code: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --body-size: 16px;
+
+  /* Emphatic text uses Semibold, not Bold. This is the one weight the preview,
+     the Typst document view and both native exports share; 700 is still used by
+     the editor and by code, where the extra weight is what makes a token read
+     as syntax rather than prose. */
+  --weight-strong: 600;
 
   /* OpenType features, as complete property values so the runtime can swap a
      whole keyword in rather than compose one. */
@@ -52,6 +62,7 @@
   --fg: #d6d6d6;
   --muted: #8b8b8b;
   --border: #333333;
+  --rule: #4a4a4a;
   --sidebar-bg: #252526;
   --active-line: rgba(255, 255, 255, 0.05);
   --selection: rgba(80, 140, 255, 0.3);
@@ -485,9 +496,18 @@ body {
 .markdown-body h6 {
   margin: 1.6em 0 0.6em;
   line-height: 1.3;
-  font-weight: 650;
+  /* Semibold, not Bold: at heading sizes 700 closes the counters of a text
+     face and reads heavier than the paragraph it introduces. */
+  font-weight: var(--weight-strong);
   font-family: var(--font-heading);
   font-variant-numeric: normal;
+}
+
+/* Emphasis follows the same rule. The browser's default is 700, which for
+   Source Sans 3 means the Bold face even though a Semibold one is bundled. */
+.markdown-body strong,
+.markdown-body b {
+  font-weight: var(--weight-strong);
 }
 
 .markdown-body h1 {
@@ -610,12 +630,12 @@ body {
 
 .markdown-body th {
   background: var(--code-bg);
-  font-weight: 600;
+  font-weight: var(--weight-strong);
 }
 
 .markdown-body hr {
   border: none;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--rule);
   margin: 1.8em 0;
 }
 
@@ -932,8 +952,7 @@ body {
 
 .prefs-control select,
 .prefs-number input,
-.prefs-row-text input,
-.prefs-font-input {
+.prefs-row-text input {
   width: 100%;
   max-width: 420px;
   padding: 6px 9px;
@@ -947,20 +966,10 @@ body {
 
 .prefs-control select:focus,
 .prefs-number input:focus,
-.prefs-row-text input:focus,
-.prefs-font-input:focus {
+.prefs-row-text input:focus {
   outline: none;
   border-color: var(--accent);
 }
-
-/* --------------------------------------------------------------------------
-   Font rows in Preferences
-
-   A typeface cannot be judged from its name, so the specimen is the real
-   control here and the text field is only how it is addressed. It is set at a
-   size close to the document's rather than the panel's, because letterfit and
-   the colour of a paragraph are not visible at 13px.
-   -------------------------------------------------------------------------- */
 
 /* The Document / Pages switch above a Typst preview. */
 .typst-viewbar {
@@ -1061,56 +1070,6 @@ body {
   border-color: var(--accent, #4a8cff);
   background: color-mix(in srgb, var(--accent, #4a8cff) 18%, transparent);
   color: var(--fg, #ddd);
-}
-
-/* The face dropdown beside each font field. */
-.prefs-font-pick {
-  flex: 1 1 100%;
-  max-width: 220px;
-  padding: 4px 8px;
-  border: 1px solid var(--border, #3a3a3a);
-  border-radius: 5px;
-  background: var(--field-bg, #1b1b1b);
-  color: var(--fg, #ddd);
-  font: inherit;
-  font-size: 12.5px;
-}
-
-.prefs-font {
-  flex: 1 1 auto;
-  min-width: 0;
-  max-width: 420px;
-}
-
-.prefs-font-specimen {
-  margin-top: 6px;
-  padding: 9px 11px;
-  border: 1px dashed var(--border);
-  border-radius: 4px;
-  background: var(--code-bg);
-  color: var(--fg);
-  font-size: 17px;
-  line-height: 1.45;
-  /* The specimen must be readable even when the stack resolves to nothing —
-     an empty box would hide the very thing being chosen. */
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  /* Kerning is the point of the exercise; state it rather than hope for it. */
-  font-kerning: normal;
-  font-variant-ligatures: common-ligatures contextual;
-}
-
-/* The specimen obeys the same switches the document does, so turning code
-   ligatures off visibly changes the sample above the checkbox rather than
-   leaving the reader to wonder whether anything happened. */
-.prefs-font-specimen[data-features="code"] {
-  font-variant-ligatures: var(--code-ligatures);
-  font-variant-numeric: var(--code-figures);
-}
-
-.prefs-font-specimen[data-features="prose"] {
-  font-variant-numeric: var(--prose-figures);
 }
 
 .prefs-number {

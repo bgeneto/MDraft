@@ -8,7 +8,7 @@ starts instantly, because there is no browser inside it.
 
 ![The main window, with the feature tour open and the preview beside the source](docs/screenshots/readme-main.png)
 
-![Preferences: the Typography section, with a specimen under each font field](docs/screenshots/readme-preferences.png)
+![Preferences: the Typography section, with one face dropdown per role](docs/screenshots/readme-preferences.png)
 
 ## Why this exists
 
@@ -30,7 +30,7 @@ own webview instead of a bundled Chromium, and Rust instead of a Node backend.
 | Licensing | paid, per seat | none, ever |
 
 The size is the point of the stack, not a coincidence: there is no browser and no
-JavaScript runtime to ship. About 2.3 MB of it is four typefaces compiled in, so
+JavaScript runtime to ship. About 2.5 MB of it is five typefaces compiled in, so
 the typography does not depend on what the machine happens to have installed.
 
 ## Getting it
@@ -237,30 +237,47 @@ nord    surface rgb(46,52,64)      8 distinct token colours
 
 ## Typography
 
-Four faces are compiled into the application, so the type does not depend on what
+Five faces are compiled into the application, so the type does not depend on what
 is installed. Nothing is fetched at runtime, and the editor chrome keeps the
 system UI font — a menu that reflows with the document's typeface is a worse
 application, not a more flexible one.
 
+The default is **System**: prose, headings and code use the operating system's
+own faces, so a fresh document embeds no font at all. The bundled families are
+there for the presets that ask for them.
+
 | Role | Default | Why |
 | --- | --- | --- |
-| Preview text | Source Serif 4 | A screen-first serif with a real optical-size axis, true italics and moderate contrast |
-| Preview headings | Source Sans 3 | Adobe drew it as Source Serif's companion: the two share a skeleton |
-| Code, and the editor | JetBrains Mono | Drawn with programming ligatures as a headline feature |
-| Alternative | Inter | More display presence, an unusually complete set of alternates |
+| Preview text | system-ui | The OS UI face, so the default document needs nothing embedded |
+| Preview headings | system-ui | The same stack as prose: one system face, not a serif pasted beside a sans |
+| Code, and the editor | ui-monospace | The OS programming face, chosen per platform |
+| Bundled | Source Serif 4, Source Sans 3, Inter, JetBrains Mono, Fira Code | A screen-first serif, its superfamily companion, a display sans, and two coding faces |
 
 *Preferences › Typography* sets each role independently — the source pane and the
 preview's code are separate choices, because a markdown editor has one pane where
-the text is not the document but the instructions for it. Each field takes any
-CSS `font-family` stack, so `Georgia, "Iowan Old Style", serif` is understood, and
-the bundled names are offered as suggestions rather than imposed. A specimen
-under every field repaints as you type, in the face and with the OpenType
-switches that will actually be used.
+the text is not the document but the instructions for it. Each role is one
+dropdown: the five bundled families come first, followed by faces likely to be
+installed. The stack behind the choice is kept intact — a setting written by an
+older version or by hand is shown as the face it names, or as a custom entry when
+the family is not in the list, rather than being overwritten — but the fallback
+chain is no longer a second control.
 
-Five presets — **Default**, **Literary**, **Technical**, **Serif**,
-**System only** — set all of it coherently, because the hard part of choosing type
-is the pairing. Every preset is a starting point: the fields beneath it are there
-to be taken apart.
+Five presets — **System**, **Serif**, **Classic**, **Literary**, **Technical** —
+set all of it coherently, because the hard part of choosing type is the pairing.
+Every preset is a starting point: the dropdowns beneath it are there to be taken
+apart. Fira Code is the editor and preview-code face of **Serif** only; every
+other preset uses JetBrains Mono, or the system monospace for **System**.
+
+### Semibold, not Bold
+
+Emphasis, headings and table headers are set in Semibold (600) rather than Bold
+(700) throughout the preview, the Typst document view, exported HTML and the
+printed PDF. Semibold holds its counters at heading sizes and sits closer to the
+body text, while Bold at 700 reads as a different face. Source Serif 4 and Inter
+carry the weight on a variable axis; Source Sans 3 ships a Semibold cut, which is
+why the application bundles one. The editor and code are deliberately excluded:
+syntax highlighting uses 700 because that extra weight is what makes a token
+read as syntax. Mathematics keeps KaTeX's own weights for the same reason.
 
 ### OpenType
 
@@ -287,19 +304,20 @@ the preview precisely when a face had been chosen. Only the families that
 actually win in a stack are embedded — a fallback can never render, and carrying
 it added nearly a megabyte per export.
 
-The cost is roughly 2 MB for the default set. Choosing *System only* embeds
-nothing, because there is nothing to embed.
+The cost is roughly 2 MB for the **Serif** set. The default **System** preset
+embeds nothing, because there is nothing to embed.
 
 ### Licences
 
-All four families are under the SIL Open Font License 1.1, which permits bundling
+All five families are under the SIL Open Font License 1.1, which permits bundling
 inside an application provided the copyright notice and licence text travel with
-it. Both do:
+it. All do:
 
 - Source Serif 4 — © 2014–2023 Adobe, [adobe-fonts/source-serif](https://github.com/adobe-fonts/source-serif)
 - Source Sans 3 — © 2010–2022 Adobe, [adobe-fonts/source-sans](https://github.com/adobe-fonts/source-sans)
 - Inter — © 2016 The Inter Project Authors, [rsms/inter](https://github.com/rsms/inter)
 - JetBrains Mono — © 2020 The JetBrains Mono Project Authors, [JetBrains/JetBrainsMono](https://github.com/JetBrains/JetBrainsMono)
+- Fira Code — © 2014 The Fira Code Project Authors, [tonsky/FiraCode](https://github.com/tonsky/FiraCode)
 
 The licence texts are in [`src/assets/fonts/licenses/`](src/assets/fonts/licenses).
 `src/assets/fonts/fonts.json` records every version, archive SHA-256 and file
@@ -869,7 +887,7 @@ that really is a zip containing `word/document.xml`, an RTF that starts with
 overwrite the document it is reading, that an unknown format is reported rather
 than ignored, and that the PDF print document carries both stylesheets.
 
-Last run against `samples/feature-tour.md` — **59/59 checks passed**:
+Last run against `samples/feature-tour.md` — **61/61 checks passed**:
 
 | Stage | Observed |
 | --- | --- |
@@ -887,7 +905,7 @@ Last run against `samples/feature-tour.md` — **59/59 checks passed**:
 | Status icons | 3 inline SVG at 16px, all inheriting the theme colour |
 | Math | KaTeX_Main declared and available, fraction rules drawn, radical signs drawn, KaTeX font applied |
 | Status bar | 404 words · UTF-8 · LF |
-| Preferences | opens, 7 sections, 36 rows, search filters, a toggle rewrites the preview |
+| Preferences | opens, 8 sections, 36 rows, search filters, a toggle rewrites the preview |
 | Pane sync | 37 anchors, monotonic 1 → 126 |
 | ↳ preview click | block at line 21 → caret lands on `Ln 21`, preview scroll unchanged |
 | ↳ source scroll | preview top 845 → 1559 px, no blink left behind |

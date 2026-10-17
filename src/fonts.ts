@@ -139,17 +139,8 @@ export interface TypographyRole {
   help: string;
   /** The CSS variable the role is published as. */
   variable: string;
-  /** Text that shows the face doing the job it is chosen for. */
-  sample: string;
-  /** Used when the field is empty. */
+  /** Used when the setting is empty. */
   fallback: string;
-  /**
-   * Which set of OpenType switches applies.
-   *
-   * The specimen honours this, so a reader turning code ligatures off does not
-   * see them in the sample and conclude the setting did nothing.
-   */
-  features: "code" | "prose";
 }
 
 /**
@@ -166,48 +157,41 @@ export const TYPOGRAPHY_ROLES: TypographyRole[] = [
     label: "Editor",
     help: "The source pane. Monospaced by default, but any family will work.",
     variable: "--font-source",
-    // Chosen to expose the glyphs that decide whether a coding face is usable:
-    // zero against capital O, one against lower-case l and capital I, and two
-    // ligatures — `=>` and `->` — that Fira Code and JetBrains Mono draw.
-    sample: "const sum = (a1, b0) => a1 + b0; // Il1 O0",
-    // Fira Code, which is the editor's own face. It is not used in the preview:
-    // its ligatures are drawn for code, and prose set in them reads as code.
-    fallback: '"Fira Code", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-    features: "code",
+    // The system monospace, which is what the default "System" preset asks for.
+    // Fira Code is a preset choice, not the fallback: it is the editor face of
+    // the "Serif" preset alone, because its ligatures are drawn for code and a
+    // reader who has not asked for them is better served by a plain monospace.
+    fallback: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
   },
   {
     id: "bodyFont",
     label: "Preview text",
     help: "Prose in the preview, and in exported documents.",
     variable: "--font-body",
-    sample: "Hamburgefonstiv — the quick brown fox jumps over 1,234 lazy dogs.",
-    fallback: '"Source Serif 4", Charter, Georgia, "Times New Roman", serif',
-    features: "prose",
+    // The same stack as the headings, so the default "System" preset reads as
+    // one coherent system face rather than a serif pasted beside a sans.
+    fallback: 'system-ui, "Segoe UI", -apple-system, Roboto, sans-serif',
   },
   {
     id: "headingFont",
     label: "Preview headings",
     help: "Headings in the preview and in exports. A sans beside a serif body is the usual pairing.",
     variable: "--font-heading",
-    sample: "Heading One — Typography & the Art of the Letterform",
-    fallback: '"Source Sans 3", Inter, system-ui, "Segoe UI", Arial, sans-serif',
-    features: "prose",
+    fallback: 'system-ui, "Segoe UI", -apple-system, Roboto, sans-serif',
   },
   {
     id: "codeFont",
     label: "Preview code",
     help: "Fenced and inline code in the preview. The editor has its own setting above.",
     variable: "--font-code",
-    sample: "fn main() { let total: u32 = 1_000; } // 0O 1lI -> =>",
-    fallback: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-    features: "code",
+    fallback: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
   },
 ];
 
 /**
- * Faces offered in the picker, ahead of whatever the reader types.
+ * Faces offered in each picker.
  *
- * The four bundled families come first because they are the only ones guaranteed
+ * The bundled families come first because they are the only ones guaranteed
  * to exist on every machine. The rest are the faces most likely to be present on
  * Windows, macOS and a typical Linux desktop, so the list is useful without
  * pretending to be a system font enumeration — which Tauri does not offer, and
@@ -266,14 +250,20 @@ export interface TypographyPreset {
  * the hard part of choosing type is the pairing, not the individual face. Each
  * one is a defensible answer on its own; the fields below let it be dismantled.
  *
- * The first matches `Settings::default()` exactly, so a fresh installation
- * reports it rather than falling through to "custom".
+ * The System preset matches `Settings::default()` exactly, so a fresh
+ * installation reports it rather than falling through to "custom". It comes
+ * first because that is the default: the application should not depend on a face
+ * the reader's machine may not own until the reader asks for one.
+ *
+ * Fira Code is the editor and preview-code face of the Serif preset only. Every
+ * other preset names JetBrains Mono, or the system monospace for System, so the
+ * ligature-drawing face is a deliberate choice rather than an inherited default.
  */
 export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
   {
-    id: "default",
-    label: "Default",
-    note: "Serif prose, sans headings, tabular figures in tables. Ligatures in code stay off: whether `->` should be an arrow is a real disagreement, and the plain reading is the safe default.",
+    id: "system",
+    label: "System",
+    note: "The default: no bundled faces. Prose, headings and code use whatever the operating system provides, so nothing is embedded in an export.",
     values: {
       ...ROLE_DEFAULTS,
       bodyFontSize: 16,
@@ -284,11 +274,49 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
     },
   },
   {
-    id: "literary",
-    label: "Literary",
-    note: "The default with oldstyle figures and code ligatures on — figures that sit in running text rather than shout, and a slightly larger measure for long reading.",
+    id: "superfamily",
+    label: "Serif",
+    note: "Source Serif 4 and Source Sans 3, drawn to the same skeleton, with Fira Code in the editor and in preview code. The two Source faces were designed together, so the pairing cannot clash.",
     values: {
       ...ROLE_DEFAULTS,
+      sourceFont: '"Fira Code", "JetBrains Mono", ui-monospace, monospace',
+      bodyFont: '"Source Serif 4", Georgia, serif',
+      headingFont: '"Source Sans 3", system-ui, sans-serif',
+      codeFont: '"Fira Code", "JetBrains Mono", ui-monospace, monospace',
+      bodyFontSize: 17,
+      ligaturesInCode: true,
+      tabularFigures: true,
+      oldstyleFigures: false,
+      slashedZero: true,
+    },
+  },
+  {
+    id: "classic",
+    label: "Classic",
+    note: "The original MDraft pairing: Source Serif 4 under Source Sans 3, with JetBrains Mono in the editor and in preview code, and code ligatures off.",
+    values: {
+      ...ROLE_DEFAULTS,
+      sourceFont: '"JetBrains Mono", ui-monospace, monospace',
+      bodyFont: '"Source Serif 4", Charter, Georgia, "Times New Roman", serif',
+      headingFont: '"Source Sans 3", Inter, system-ui, "Segoe UI", Arial, sans-serif',
+      codeFont: '"JetBrains Mono", ui-monospace, monospace',
+      bodyFontSize: 16,
+      ligaturesInCode: false,
+      tabularFigures: true,
+      oldstyleFigures: false,
+      slashedZero: false,
+    },
+  },
+  {
+    id: "literary",
+    label: "Literary",
+    note: "Source Serif 4 with oldstyle figures and code ligatures on — figures that sit in running text rather than shout, and a slightly larger measure for long reading. JetBrains Mono sets the code.",
+    values: {
+      ...ROLE_DEFAULTS,
+      sourceFont: '"JetBrains Mono", ui-monospace, monospace',
+      bodyFont: '"Source Serif 4", Charter, Georgia, "Times New Roman", serif',
+      headingFont: '"Source Sans 3", Inter, system-ui, "Segoe UI", Arial, sans-serif',
+      codeFont: '"JetBrains Mono", ui-monospace, monospace',
       bodyFontSize: 17,
       ligaturesInCode: true,
       tabularFigures: true,
@@ -299,7 +327,7 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
   {
     id: "technical",
     label: "Technical",
-    note: "Inter throughout, lining figures everywhere, and no code ligatures — for reading source rather than prose.",
+    note: "Inter throughout, lining figures everywhere, and no code ligatures — for reading source rather than prose. JetBrains Mono in both code roles.",
     values: {
       ...ROLE_DEFAULTS,
       sourceFont: '"JetBrains Mono", ui-monospace, monospace',
@@ -311,38 +339,6 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
       tabularFigures: true,
       oldstyleFigures: false,
       slashedZero: true,
-    },
-  },
-  {
-    id: "superfamily",
-    label: "Serif",
-    note: "Source Serif 4 and Source Sans 3, drawn to the same skeleton, with Fira Code in the editor. The two Source faces were designed together, so the pairing cannot clash.",
-    values: {
-      ...ROLE_DEFAULTS,
-      sourceFont: '"Fira Code", "JetBrains Mono", ui-monospace, monospace',
-      bodyFont: '"Source Serif 4", Georgia, serif',
-      headingFont: '"Source Sans 3", system-ui, sans-serif',
-      bodyFontSize: 17,
-      ligaturesInCode: true,
-      tabularFigures: true,
-      oldstyleFigures: false,
-      slashedZero: true,
-    },
-  },
-  {
-    id: "system",
-    label: "System only",
-    note: "No bundled faces. Uses whatever the operating system provides, and exports accordingly — nothing is embedded.",
-    values: {
-      sourceFont: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
-      bodyFont: 'Georgia, "Iowan Old Style", "Times New Roman", serif',
-      headingFont: 'system-ui, "Segoe UI", -apple-system, Roboto, sans-serif',
-      codeFont: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
-      bodyFontSize: 16,
-      ligaturesInCode: false,
-      tabularFigures: true,
-      oldstyleFigures: false,
-      slashedZero: false,
     },
   },
 ];

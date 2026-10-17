@@ -769,7 +769,12 @@ export function wrapPrintHtml(
     // A heading stranded at the foot of a page, or a table split across two, is
     // the commonest way an otherwise fine printout looks broken.
     "h1,h2,h3,h4,h5,h6{break-after:avoid;page-break-after:avoid;break-inside:avoid;",
-    "font-family:var(--font-heading,inherit);font-variant-numeric:normal}",
+    "font-family:var(--font-heading,inherit);font-variant-numeric:normal;",
+    "font-weight:var(--weight-strong,600)}",
+    "strong,b{font-weight:var(--weight-strong,600)}",
+    // The divider independent of the one under h1/h2, which uses the table and
+    // panel border colour and must stay lighter than this.
+    "hr{border:none;border-top:1px solid #cfcfcf;margin:1.6em 0}",
     "table,pre,blockquote,figure{break-inside:avoid;page-break-inside:avoid}",
     "img,svg{max-width:100%;break-inside:avoid}",
     "table{border-collapse:collapse;width:100%;font-variant-numeric:var(--table-figures,normal)}",
@@ -822,6 +827,9 @@ export function wrapStandaloneHtml(
     "code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.9em}",
     "table{border-collapse:collapse}th,td{border:1px solid rgba(127,127,127,.35);padding:6px 10px}",
     "blockquote{margin:0;padding-left:14px;border-left:3px solid rgba(127,127,127,.4);opacity:.9}",
+    // The same divider the preview draws: stronger than the panel border, so a
+    // rule in the exported document does not disappear against white or black.
+    `hr{border:none;border-top:1px solid ${isDark ? "#4a4a4a" : "#cfcfcf"};margin:1.6em 0}`,
     "img{max-width:100%}",
     "</style>",
     headExtra,

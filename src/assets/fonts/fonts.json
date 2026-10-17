@@ -46,6 +46,13 @@
           "sha256": "53492fb3a0def77354f166a55d09b63a10855e91c206c7620a81cf56e97f8ec3"
         },
         {
+          "file": "SourceSans3-Semibold.woff2",
+          "style": "normal",
+          "weight": "600",
+          "bytes": 108900,
+          "sha256": "47b9b661b9f395fe7f0d0e119637fba5c8dad97bde3df60066fd24229c0792f4"
+        },
+        {
           "file": "SourceSans3-Bold.woff2",
           "style": "normal",
           "weight": "700",
@@ -58,6 +65,13 @@
           "weight": "400",
           "bytes": 86452,
           "sha256": "4d80b3b801f4c457f1b4adbd3911d8501338e6d282141663770c38d3a2e97859"
+        },
+        {
+          "file": "SourceSans3-SemiboldItalic.woff2",
+          "style": "italic",
+          "weight": "600",
+          "bytes": 85936,
+          "sha256": "552d2d08e719d09413fbfff81f6fa16f153ad87edf6a49d69df9c303fea71ae6"
         },
         {
           "file": "SourceSans3-BoldItalic.woff2",

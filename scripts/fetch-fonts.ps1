@@ -84,9 +84,11 @@ $archives = @(
 )
 
 # Which members to keep, and what to call them. Only the faces the application
-# can actually use: 400 and 700 for families shipped as static weights, and the
-# variable file where one exists, because that carries the whole weight axis and
-# the optical-size axis Source Serif is designed around.
+# can actually use: 400, 600 and 700 for families shipped as static weights, and
+# the variable file where one exists, because that carries the whole weight axis
+# and the optical-size axis Source Serif is designed around. The 600 faces are
+# what make "Semibold instead of Bold" real: with only 400 and 700 on disk, CSS
+# asking for 600 is served 700, which is the bold it was meant to replace.
 $picks = @{
   "source-serif" = @(
     @{ Entry = "source-serif-4.005_WOFF2/VAR/SourceSerif4Variable-Roman.ttf.woff2";  File = "SourceSerif4-Variable-Roman.woff2";  Style = "normal"; Weight = "200 900" }
@@ -94,8 +96,10 @@ $picks = @{
   )
   "source-sans" = @(
     @{ Entry = "WOFF2/TTF/SourceSans3-Regular.ttf.woff2"; File = "SourceSans3-Regular.woff2"; Style = "normal"; Weight = "400" }
+    @{ Entry = "WOFF2/TTF/SourceSans3-Semibold.ttf.woff2"; File = "SourceSans3-Semibold.woff2"; Style = "normal"; Weight = "600" }
     @{ Entry = "WOFF2/TTF/SourceSans3-Bold.ttf.woff2";    File = "SourceSans3-Bold.woff2";    Style = "normal"; Weight = "700" }
     @{ Entry = "WOFF2/TTF/SourceSans3-It.ttf.woff2";      File = "SourceSans3-Italic.woff2";  Style = "italic"; Weight = "400" }
+    @{ Entry = "WOFF2/TTF/SourceSans3-SemiboldIt.ttf.woff2"; File = "SourceSans3-SemiboldItalic.woff2"; Style = "italic"; Weight = "600" }
     @{ Entry = "WOFF2/TTF/SourceSans3-BoldIt.ttf.woff2";  File = "SourceSans3-BoldItalic.woff2"; Style = "italic"; Weight = "700" }
   )
   "inter" = @(

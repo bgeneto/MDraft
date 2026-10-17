@@ -2,7 +2,7 @@
 //
 //   node scripts/licence-test.mjs [port]
 //
-// The four families are under the SIL Open Font License 1.1, which requires the
+// The five families are under the SIL Open Font License 1.1, which requires the
 // copyright notice and the licence text to accompany the fonts wherever they are
 // redistributed. Keeping the texts in the repository does not satisfy that: Vite
 // bundles only what is imported, so for a while every installer shipped the
@@ -88,13 +88,14 @@ if (state.clicked) {
       sans: text.includes('Source Sans'),
       inter: text.includes('The Inter Project Authors'),
       jetbrains: text.includes('JetBrains Mono Project Authors'),
+      fira: text.includes('Fira Code Project Authors'),
       length: text.length,
     });
   })()`);
   const seen = JSON.parse(found);
   check("the licence text itself is present", seen.ofl, `document is ${seen.length} chars`);
-  check("each bundled family is attributed", seen.serif && seen.sans && seen.inter && seen.jetbrains,
-    `serif=${seen.serif} sans=${seen.sans} inter=${seen.inter} jetbrains=${seen.jetbrains}`);
+  check("each bundled family is attributed", seen.serif && seen.sans && seen.inter && seen.jetbrains && seen.fira,
+    `serif=${seen.serif} sans=${seen.sans} inter=${seen.inter} jetbrains=${seen.jetbrains} fira=${seen.fira}`);
 }
 
 console.log("\n=== the Help menu reaches the same document ===");
