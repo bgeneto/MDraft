@@ -29,7 +29,11 @@ import {
   type HtmlLayout,
   type HtmlPreviewHandle,
 } from "./html-preview";
-import { handleImageDrop, handleImagePaste, type ImageContext } from "./images";
+import { handleImageDrop, handleImagePaste, imageOptions, type ImageContext } from "./images";
+import { imageSyntaxFor, needsRelativePath } from "./image-syntax";
+import { chooseSource, type ClipboardPayload } from "./paste/detect";
+import { resolvePasteDestination, type PasteDestination } from "./paste/detect-document";
+import { planPaste, type ImageRequest, type ResolvedImage } from "./paste/index";
 import {
   KATEX_STYLESHEET_URL,
   renderMermaidIn,
@@ -38,6 +42,7 @@ import {
   wrapStandaloneHtml,
 } from "./markdown";
 import { createPreferences, type PreferencesHandle } from "./preferences";
+import { createSessionStore, type Session } from "./sessions";
 import { setInstalledLanguages, setSpellRemember } from "./spellcheck";
 import * as sidebarPanel from "./sidebar";
 import { resolvePalette } from "./syntax-themes";
@@ -77,11 +82,14 @@ let editor: EditorHandle;
 let htmlPreview: HtmlPreviewHandle;
 let preferences: PreferencesHandle;
 let settings: api.Settings;
-let currentDoc: api.DocumentPayload | null = null;
-let currentPath: string | null = null;
-let savedContent = "";
-let dirty = false;
-let diskModifiedMs = 0;
+const sessions = createSessionStore();
+/** The session on screen. Inactive tabs keep their own EditorState. */
+let doc: Session = sessions.active();
+/**
+ * Boot installs the startup file into the first tab. After that, Open and New
+ * add a tab instead of replacing the one the reader is in.
+ */
+let installingStartup = true;
 let isDark = false;
 /** Mirrors the window's fullscreen state, so the menu check can follow it. */
 let isFullscreen = false;
@@ -253,7 +261,7 @@ function setStatusFlag(
   button.setAttribute("aria-label", `${label}: ${on ? "on" : "off"}`);
 }
 
-/** Refresh the four mode flags from the state that also drives the menu. */
+/** Refresh the editor flags from the settings they mirror. */
 function updateStatusFlags(): void {
   setStatusFlag("flag-focus", settings.focusMode, false, "Focus mode", "F8");
   setStatusFlag("flag-typewriter", settings.typewriterMode, false, "Typewriter mode", "F9");
@@ -272,6 +280,18 @@ function updateStatusFlags(): void {
     "Auto Save",
     "",
     "Saves to disk every 20 seconds while there are unsaved changes.",
+  );
+  // HTML source is markup: `applySpellcheck` leaves the dictionary out of it, so
+  // the setting stays on but the flag says it is doing nothing here.
+  setStatusFlag(
+    "flag-spellcheck",
+    settings.spellcheck !== false,
+    doc.language === "html",
+    "Check spelling",
+    "",
+    doc.language === "html"
+      ? "No effect on HTML documents, whose source is markup."
+      : "Underlines words the installed dictionary does not recognise.",
   );
 }
 
@@ -343,7 +363,7 @@ function applySpellcheck(): void {
   editor?.setSpellcheck({
     // HTML source is markup; the dictionary's node names are Markdown-shaped and
     // would underline tags and attribute names.
-    enabled: settings.spellcheck !== false && currentLanguage !== "html",
+    enabled: settings.spellcheck !== false && doc.language !== "html",
     language: settings.spellcheckLanguage || "auto",
     words: settings.spellcheckWords ?? [],
   });
@@ -357,7 +377,7 @@ function applyLayout(): void {
   app.classList.toggle("focus-mode", settings.focusMode);
   // The HTML guest is a sibling of `#preview`; the class makes the pane
   // full-bleed and hides the Markdown article without touching its rules.
-  app.classList.toggle("document-html", currentLanguage === "html");
+  app.classList.toggle("document-html", doc.language === "html");
 
   // 0 means "full width" in the settings model.
   const width = settings.editorMaxWidth;
@@ -477,8 +497,8 @@ function applySettingsPatch(patch: Partial<api.Settings>): void {
 // ---------------------------------------------------------------------------
 
 async function refreshTitle(): Promise<void> {
-  const name = currentDoc?.name ?? "Untitled";
-  const title = `${dirty ? "• " : ""}${name} — MDraft`;
+  const name = doc.name ?? "Untitled";
+  const title = `${doc.dirty ? "• " : ""}${name} — MDraft`;
   if (title === lastTitle) return;
   lastTitle = title;
   document.title = title;
@@ -577,7 +597,7 @@ function refreshStatus(): void {
   const { words, lines, chars } = editor.metrics();
 
   const wordsText = formatCount(words);
-  statusFile.textContent = `${dirty ? "• " : ""}${currentDoc?.name ?? "Untitled"}`;
+  statusFile.textContent = `${doc.dirty ? "• " : ""}${doc.name ?? "Untitled"}`;
   statusWords.textContent = `${wordsText} ${words === 1 ? "word" : "words"}`;
   statusWords.title = `${wordsText} words · ${formatCount(chars)} characters · ${formatCount(lines)} lines`;
   statusCursor.textContent = `Ln ${cursor.line}, Col ${cursor.column}${
@@ -588,12 +608,12 @@ function refreshStatus(): void {
       : ""
   }`;
 
-  if (!currentDoc) {
+  if (!doc.path) {
     statusEncoding.textContent = "UTF-8 · not saved";
   } else {
-    const eol = currentDoc.lineEnding === "\r\n" ? "CRLF" : "LF";
-    statusEncoding.textContent = `UTF-8${currentDoc.hadBom ? " BOM" : ""} · ${eol}${
-      currentDoc.readOnly ? " · read-only" : ""
+    const eol = doc.lineEnding === "\r\n" ? "CRLF" : "LF";
+    statusEncoding.textContent = `UTF-8${doc.hadBom ? " BOM" : ""} · ${eol}${
+      doc.readOnly ? " · read-only" : ""
     }`;
   }
 }
@@ -607,10 +627,18 @@ let renderToken = 0;
 let lastMappedState: boolean | null = null;
 /** Source line the guest should restore after the next re-render. */
 let htmlRestoreLine: number | null = null;
+/** Last scroll offset reported by the HTML guest. The preview pane does not scroll. */
+let htmlScrollTop = 0;
+/**
+ * Scroll to restore after the next preview rebuild. Null means the render may
+ * align the preview to the caret, which is what a keystroke wants and a tab
+ * switch must not do.
+ */
+let pendingPreviewScroll: number | null = null;
 
 function scheduleRender(immediate = false): void {
   window.clearTimeout(renderTimer);
-  const delay = currentLanguage === "html" ? 300 : 200;
+  const delay = doc.language === "html" ? 300 : 200;
   renderTimer = window.setTimeout(() => void doRender(), immediate ? 0 : delay);
 }
 
@@ -623,7 +651,7 @@ let typstObjectUrls: string[] = [];
  * Draw a Typst document by compiling it and showing the pages.
  *
  * The pages are the compiler's own output rather than an interpretation of it, so
- * what is on screen is what the PDF will contain. `currentPath` is passed only as
+ * what is on screen is what the PDF will contain. `doc.path` is passed only as
  * the project root, so `#image("img/plot.png")` resolves as it will on export; the
  * text itself is sent, so unsaved edits appear.
  */
@@ -646,7 +674,7 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
 
   let rendered: api.RenderedTypst;
   try {
-    rendered = await api.renderTypst(currentPath, source, wanted);
+    rendered = await api.renderTypst(doc.path, source, wanted);
   } catch (error) {
     if (token !== renderToken) return;
     // Shown in place of the preview, not as a toast: a Typst error is about a
@@ -660,6 +688,7 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
     box.textContent = String(error);
     preview.appendChild(box);
     previewLinesMapped = false;
+    applyPendingPreviewScroll();
     return;
   }
   if (token !== renderToken) return;
@@ -696,7 +725,8 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
     const mapped = annotateTypstLines(host, source);
     previewLinesMapped = mapped.mapped >= 2;
     rebuildAnchors();
-    revealCursorInPreview();
+    if (pendingPreviewScroll === null) revealCursorInPreview();
+    else applyPendingPreviewScroll();
     updateActiveOutline();
     return;
   }
@@ -715,6 +745,7 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
   preview.appendChild(host);
   // Pages are pictures of pages: there is nothing to map a line onto.
   previewLinesMapped = false;
+  applyPendingPreviewScroll();
 }
 
 /** The Document / Pages switch shown above a Typst preview. */
@@ -751,8 +782,8 @@ async function renderHtmlPreview(source: string, token: number): Promise<void> {
   htmlRestoreLine = htmlPreview.layout()?.line ?? editor.topVisibleLine();
   await htmlPreview.render(
     source,
-    currentDoc?.directory ?? null,
-    currentDoc?.name ?? "index.html",
+    doc.directory ?? null,
+    doc.name ?? "index.html",
     settings.htmlPreviewScripts !== false,
   );
   if (token !== renderToken) return;
@@ -762,18 +793,18 @@ async function doRender(): Promise<void> {
   const token = ++renderToken;
   const source = editor.getDoc();
 
-  if (currentLanguage === "html") {
+  if (doc.language === "html") {
     await renderHtmlPreview(source, token);
     return;
   }
 
-  if (currentLanguage === "typst") {
+  if (doc.language === "typst") {
     await renderTypstPreview(source, token);
     return;
   }
 
   const result = renderPreview(source, {
-    baseDir: currentDoc?.directory ?? null,
+    baseDir: doc.directory ?? null,
     math: settings.enableMath,
     mermaid: settings.enableMermaid,
   });
@@ -795,13 +826,79 @@ async function doRender(): Promise<void> {
 
   // Diagram sizes only settle after mermaid runs, so anchor once it is done.
   rebuildAnchors();
-  revealCursorInPreview();
+  if (pendingPreviewScroll === null) revealCursorInPreview();
+  else applyPendingPreviewScroll();
   updateActiveOutline();
 }
 
 // ---------------------------------------------------------------------------
 // Sidebar
 // ---------------------------------------------------------------------------
+
+/** Draw the document tabs. One document still gets a tab: New and Close need a target. */
+function renderDocTabs(): void {
+  const bar = el<HTMLDivElement>("doc-tabs");
+  bar.replaceChildren(
+    ...sessions.list().map((session) => {
+      const tab = document.createElement("div");
+      tab.className = "doc-tab" + (session.dirty ? " is-dirty" : "");
+      tab.dataset.id = session.id;
+      tab.role = "tab";
+      tab.tabIndex = session.id === doc.id ? 0 : -1;
+      tab.setAttribute("aria-selected", String(session.id === doc.id));
+      tab.title = session.path ?? session.name;
+
+      const name = document.createElement("span");
+      name.className = "doc-tab-name";
+      name.textContent = session.name;
+
+      const mark = document.createElement("span");
+      mark.className = "doc-tab-dirty";
+      mark.title = "Unsaved changes";
+
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "doc-tab-close";
+      close.setAttribute("aria-label", `Close ${session.name}`);
+      close.textContent = "\u00d7";
+
+      tab.append(name, mark, close);
+      return tab;
+    }),
+  );
+  const selected = bar.querySelector<HTMLElement>('[aria-selected="true"]');
+  if (!selected) return;
+  const left = selected.offsetLeft;
+  const right = left + selected.offsetWidth;
+  if (left < bar.scrollLeft) bar.scrollLeft = left;
+  else if (right > bar.scrollLeft + bar.clientWidth) bar.scrollLeft = right - bar.clientWidth;
+}
+
+function installDocTabs(): void {
+  const bar = el<HTMLDivElement>("doc-tabs");
+  bar.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const tab = target.closest<HTMLElement>(".doc-tab");
+    const id = tab?.dataset.id;
+    if (!id) return;
+    if (target.closest(".doc-tab-close")) {
+      void closeSession(id);
+      return;
+    }
+    void activateSession(id);
+  });
+  // Middle-click closes, the same gesture as a browser tab.
+  bar.addEventListener("auxclick", (event) => {
+    if (event.button !== 1) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const id = target.closest<HTMLElement>(".doc-tab")?.dataset.id;
+    if (!id) return;
+    event.preventDefault();
+    void closeSession(id);
+  });
+}
 
 function renderSidebar(): void {
   if (!settings.sidebarVisible) return;
@@ -812,8 +909,8 @@ function renderSidebar(): void {
   }
 
   if (settings.sidebarTab === "files") {
-    if (!sidebarPanel.currentDirectory() && currentDoc?.directory) {
-      sidebarPanel.resetDirectory(currentDoc.directory);
+    if (!sidebarPanel.currentDirectory() && doc.directory) {
+      sidebarPanel.resetDirectory(doc.directory);
     }
     const dir = sidebarPanel.currentDirectory();
     if (!dir) {
@@ -852,7 +949,7 @@ function refreshOutline(text = editor.getDoc()): void {
   // cancels the duplicate that would otherwise rescan 250 ms later.
   window.clearTimeout(outlineTimer);
 
-  const language = languageFor(currentPath);
+  const language = doc.language;
   outlineHeadings =
     language === "typst"
       ? sidebarPanel.extractTypstHeadings(text)
@@ -888,7 +985,7 @@ function scheduleOutlineRefresh(text: string): void {
 
 function updateActiveOutline(): void {
   if (settings.sidebarTab !== "outline" || !settings.sidebarVisible) return;
-  if (!outlineReady || outlineLanguage !== languageFor(currentPath)) {
+  if (!outlineReady || outlineLanguage !== doc.language) {
     refreshOutline();
     return;
   }
@@ -950,90 +1047,167 @@ function documentFilters(): { name: string; extensions: string[] }[] {
   }
 }
 
-/** The markup of the document currently in the editor. */
-let currentLanguage: api.DocumentLanguage = "markdown";
-
 /** Drop the guest when the editor leaves HTML; start a fresh nonce when it enters. */
-function prepareHtmlPreview(next: api.DocumentLanguage): void {
+function syncGuest(next: api.DocumentLanguage): void {
   if (!htmlPreview) return;
   if (next === "html") htmlPreview.reset();
   else htmlPreview.dispose();
 }
 
-async function adoptDocument(payload: api.DocumentPayload, resetHistory: boolean): Promise<void> {
-  currentDoc = payload;
-  currentPath = payload.path;
-  savedContent = payload.content;
-  diskModifiedMs = payload.modifiedMs;
-  dirty = false;
+/** Copy a file read onto a session. The EditorState is left for the caller. */
+function describe(session: Session, payload: api.DocumentPayload): void {
+  session.path = payload.path;
+  session.name = payload.name;
+  session.directory = payload.directory || null;
+  session.language = languageFor(payload.path);
+  session.savedContent = payload.content;
+  session.dirty = false;
+  session.lineEnding = payload.lineEnding;
+  session.hadBom = payload.hadBom;
+  session.lossy = payload.lossy;
+  session.size = payload.size;
+  session.modifiedMs = payload.modifiedMs;
+  session.readOnly = payload.readOnly;
+}
 
+/** Text of a session: the live view when it is on screen, otherwise its snapshot. */
+function textOf(session: Session): string {
+  if (session.id === doc.id && editor) return editor.getDoc();
+  return session.editorState?.doc.toString() ?? session.savedContent;
+}
+
+/**
+ * Remember the on-screen session before another one takes the view.
+ *
+ * EditorState holds the text, the caret and the undo history. Scroll is not in
+ * that state, so it is stored beside it. The preview is rebuilt on the way back
+ * and only its scroll offset is worth keeping.
+ */
+function snapshotDoc(): void {
+  if (!editor) return;
+  doc.editorState = editor.captureState();
+  doc.editorScroll = editor.view.scrollDOM.scrollTop;
+  doc.previewScroll = doc.language === "html" ? htmlScrollTop : previewPane.scrollTop;
+}
+
+/** A render that started for the previous tab must not paint this one. */
+function invalidatePreview(): void {
+  renderToken += 1;
+  window.clearTimeout(renderTimer);
+}
+
+/**
+ * Put `doc` into the single editor. `resetHistory` is true for an open or a new
+ * buffer and false for a reload or Save As, which should stay undoable.
+ */
+async function showInEditor(resetHistory: boolean, tokens: number | null = null): Promise<void> {
+  invalidatePreview();
+  pendingPreviewScroll = null;
+  doc.editorState = null;
+  doc.editorScroll = 0;
+  doc.previewScroll = 0;
   resetTokenCount();
   resetOutline();
-  editor.setDoc(payload.content, resetHistory);
-  const nextLanguage = languageFor(payload.path);
-  prepareHtmlPreview(nextLanguage);
-  currentLanguage = nextLanguage;
-  editor.setLanguage(currentLanguage);
-  sidebarPanel.resetDirectory(payload.directory || null);
+  editor.setDoc(doc.savedContent, resetHistory);
+  syncGuest(doc.language);
+  editor.setLanguage(doc.language);
+  sidebarPanel.resetDirectory(doc.directory);
   // The backend counted while reading the file, so opening does not send the
   // document back over IPC. This also cancels the debounced scan that the
-  // `setDoc` update just scheduled.
-  setTokenCount(payload.tokens);
+  // `setDoc` update just scheduled. A buffer with no count of its own is scanned.
+  if (tokens !== null) setTokenCount(tokens);
+  else scheduleTokenCount(doc.savedContent, true);
 
   applyLayout();
   await refreshTitle();
   refreshStatus();
+  renderDocTabs();
   renderSidebar();
   scheduleRender(true);
 }
 
-async function loadUntitled(
-  content: string,
-  language: api.DocumentLanguage = "markdown",
-): Promise<void> {
-  currentDoc = null;
-  currentPath = null;
-  savedContent = content;
-  diskModifiedMs = 0;
-  dirty = false;
-
-  resetTokenCount();
+/**
+ * Show the session that is already `doc`, from the state captured when it was
+ * hidden. Global chrome is reapplied afterwards: a restored EditorState still
+ * carries the font size and palette from the moment it was snapshotted.
+ */
+async function displayDoc(): Promise<void> {
+  invalidatePreview();
+  pendingPreviewScroll = doc.previewScroll;
+  suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+  suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+  if (doc.editorState) editor.restoreState(doc.editorState, doc.editorScroll);
+  else editor.setDoc(doc.savedContent, false);
+  // The snapshot may have been taken before an async grammar arrived. Installing
+  // the session's language again is a no-op once that grammar is already in the
+  // state, and it repairs the case where it is not.
+  editor.setLanguage(doc.language);
+  syncGuest(doc.language);
+  sidebarPanel.resetDirectory(doc.directory);
   resetOutline();
-  editor.setDoc(content, true);
-  // The caller decides: a built-in document is Markdown, a new document follows
-  // the default extension so its first Save As does not change its meaning.
-  prepareHtmlPreview(language);
-  currentLanguage = language;
-  editor.setLanguage(language);
-  sidebarPanel.resetDirectory(null);
-
   applyLayout();
+  editor.setSpellcheck(
+    {
+      enabled: settings.spellcheck !== false && doc.language !== "html",
+      language: settings.spellcheckLanguage || "auto",
+      words: settings.spellcheckWords ?? [],
+    },
+    true,
+  );
+  resetTokenCount();
+  scheduleTokenCount(editor.getDoc(), true);
   await refreshTitle();
   refreshStatus();
-  scheduleTokenCount(content, true);
+  renderDocTabs();
   renderSidebar();
+  scheduleOutlineRefresh(editor.getDoc());
   scheduleRender(true);
+  editor.focus();
+}
+
+async function activateSession(id: string): Promise<void> {
+  if (id === doc.id) {
+    renderDocTabs();
+    return;
+  }
+  if (!sessions.byId(id)) return;
+  snapshotDoc();
+  doc = sessions.setActive(id);
+  await displayDoc();
 }
 
 function setDirty(next: boolean): void {
-  if (dirty === next) return;
-  dirty = next;
+  if (doc.dirty === next) return;
+  doc.dirty = next;
   void refreshTitle();
   refreshStatus();
+  renderDocTabs();
 }
 
 interface OpenOptions {
-  confirm?: boolean;
   silent?: boolean;
 }
 
 async function openPath(path: string, options: OpenOptions = {}): Promise<void> {
-  const { confirm = true, silent = false } = options;
-  if (confirm && !(await confirmDiscard())) return;
+  const { silent = false } = options;
+  const existing = sessions.findByPath(path);
+  if (existing) {
+    await activateSession(existing.id);
+    return;
+  }
 
   try {
     const payload = await api.readDocument(path);
-    await adoptDocument(payload, true);
+    if (installingStartup) {
+      describe(doc, payload);
+    } else {
+      snapshotDoc();
+      const session = sessions.create();
+      describe(session, payload);
+      sessions.add(session);
+      doc = session;
+    }
+    await showInEditor(true, payload.tokens);
 
     if (settings.recordRecent) {
       settings = await api.addRecent(path).catch(() => settings);
@@ -1053,9 +1227,46 @@ async function openPath(path: string, options: OpenOptions = {}): Promise<void> 
   }
 }
 
-/** Returns true when it is safe to lose the current buffer. */
+async function loadUntitled(
+  content: string,
+  language: api.DocumentLanguage = "markdown",
+  replace = false,
+): Promise<void> {
+  const fill = replace || installingStartup;
+  if (!fill) {
+    snapshotDoc();
+    const session = sessions.create();
+    session.language = language;
+    session.name = sessions.untitledName();
+    session.savedContent = content;
+    session.size = content.length;
+    sessions.add(session);
+    doc = session;
+  } else {
+    doc.path = null;
+    doc.name = "Untitled";
+    doc.directory = null;
+    doc.language = language;
+    doc.savedContent = content;
+    doc.dirty = false;
+    doc.lineEnding = "\n";
+    doc.hadBom = false;
+    doc.lossy = false;
+    doc.size = content.length;
+    doc.modifiedMs = 0;
+    doc.readOnly = false;
+    doc.previewScroll = 0;
+    doc.editorScroll = 0;
+  }
+  // The caller decides the language: a built-in document is Markdown, a new
+  // document follows the default extension so its first Save As does not change
+  // its meaning.
+  await showInEditor(true);
+}
+
+/** Returns true when it is safe to lose the current buffer. Reload uses this. */
 async function confirmDiscard(): Promise<boolean> {
-  if (!dirty) return true;
+  if (!doc.dirty) return true;
   const shouldSave = await ask("This document has unsaved changes. Save them first?", {
     title: "Unsaved changes",
     kind: "warning",
@@ -1064,24 +1275,26 @@ async function confirmDiscard(): Promise<boolean> {
   return save();
 }
 
-async function save(): Promise<boolean> {
-  if (!currentPath) return saveAs();
-  const content = editor.getDoc();
+/** Write one session in place. Untitled sessions are the caller's problem. */
+async function writeSession(session: Session): Promise<boolean> {
+  if (!session.path) return false;
+  const content = textOf(session);
   try {
     const info = await api.writeDocument(
-      currentPath,
+      session.path,
       content,
-      currentDoc?.lineEnding ?? "\n",
-      currentDoc?.hadBom ?? false,
+      session.lineEnding || "\n",
+      session.hadBom,
     );
-    savedContent = content;
-    diskModifiedMs = info.modifiedMs;
-    if (currentDoc) {
-      currentDoc.size = info.size;
-      currentDoc.modifiedMs = info.modifiedMs;
+    session.savedContent = content;
+    session.modifiedMs = info.modifiedMs;
+    session.size = info.size;
+    session.dirty = false;
+    if (session.id === doc.id) {
+      void refreshTitle();
+      refreshStatus();
     }
-    setDirty(false);
-    toast("Saved");
+    renderDocTabs();
     return true;
   } catch (error) {
     await message(String(error), { title: "Could not save", kind: "error" });
@@ -1089,9 +1302,16 @@ async function save(): Promise<boolean> {
   }
 }
 
+async function save(): Promise<boolean> {
+  if (!doc.path) return saveAs();
+  const ok = await writeSession(doc);
+  if (ok) toast("Saved");
+  return ok;
+}
+
 async function saveAs(): Promise<boolean> {
   const suggested =
-    currentPath ??
+    doc.path ??
     (settings.lastDirectory
       ? joinDir(settings.lastDirectory, `untitled.${settings.defaultExtension}`)
       : `untitled.${settings.defaultExtension}`);
@@ -1104,17 +1324,23 @@ async function saveAs(): Promise<boolean> {
   if (!chosen) return false;
 
   const target = Array.isArray(chosen) ? chosen[0] : chosen;
+  const other = sessions.findByPath(target);
+  if (other && other.id !== doc.id && other.dirty) {
+    const replaceOther = await ask(
+      `"${other.name}" is already open with unsaved changes. Close that tab and keep this version?`,
+      { title: "Already open", kind: "warning" },
+    );
+    if (!replaceOther) return false;
+  }
+
   const content = editor.getDoc();
 
   try {
-    await api.writeDocument(
-      target,
-      content,
-      currentDoc?.lineEnding ?? "\n",
-      currentDoc?.hadBom ?? false,
-    );
+    await api.writeDocument(target, content, doc.lineEnding || "\n", doc.hadBom);
+    if (other && other.id !== doc.id) sessions.remove(other.id);
     const payload = await api.readDocument(target);
-    await adoptDocument(payload, false);
+    describe(doc, payload);
+    await showInEditor(false, payload.tokens);
     if (settings.recordRecent) {
       settings = await api.addRecent(target).catch(() => settings);
     }
@@ -1126,15 +1352,51 @@ async function saveAs(): Promise<boolean> {
   }
 }
 
+async function saveSession(session: Session): Promise<boolean> {
+  if (!session.path) {
+    if (session.id !== doc.id) await activateSession(session.id);
+    return saveAs();
+  }
+  return writeSession(session);
+}
+
+async function closeSession(id: string): Promise<void> {
+  const session = sessions.byId(id);
+  if (!session) return;
+  if (session.dirty) {
+    const shouldSave = await ask(`"${session.name}" has unsaved changes. Save them first?`, {
+      title: "Unsaved changes",
+      kind: "warning",
+    });
+    if (shouldSave && !(await saveSession(session))) return;
+  }
+  // The shell always has a buffer. Closing the last tab starts a fresh one.
+  if (sessions.list().length === 1) {
+    await loadUntitled("", defaultDocumentLanguage(), true);
+    return;
+  }
+  const wasActive = session.id === doc.id;
+  const next = sessions.remove(id);
+  if (wasActive && next) {
+    doc = next;
+    await displayDoc();
+    return;
+  }
+  renderDocTabs();
+}
+
 async function reloadFromDisk(): Promise<void> {
-  if (!currentPath) {
+  if (!doc.path) {
     toast("This document has no file on disk yet.");
     return;
   }
-  if (dirty && !(await confirmDiscard())) return;
+  if (doc.dirty && !(await confirmDiscard())) return;
   try {
-    const payload = await api.readDocument(currentPath);
-    await adoptDocument(payload, false);
+    const payload = await api.readDocument(doc.path);
+    const line = editor.cursorInfo().line;
+    describe(doc, payload);
+    await showInEditor(false, payload.tokens);
+    editor.scrollToLine(line);
     toast("Reloaded from disk");
   } catch (error) {
     toast(String(error));
@@ -1150,7 +1412,7 @@ async function reloadFromDisk(): Promise<void> {
 async function buildExportArticle(): Promise<string> {
   const holder = document.createElement("div");
   holder.innerHTML = renderPreview(editor.getDoc(), {
-    baseDir: currentDoc?.directory ?? null,
+    baseDir: doc.directory ?? null,
     math: settings.enableMath,
     mermaid: settings.enableMermaid,
   }).html;
@@ -1201,7 +1463,7 @@ function exportTypographyCss(): string {
 
 /** Basename of the open document, without its extension. */
 function documentStem(): string {
-  return currentDoc?.name.replace(/\.[^.]+$/, "") ?? "untitled";
+  return doc.name.replace(/\.[^.]+$/, "") ?? "untitled";
 }
 
 async function exportHtml(): Promise<void> {
@@ -1219,14 +1481,14 @@ async function exportHtml(): Promise<void> {
   const target = Array.isArray(chosen) ? chosen[0] : chosen;
 
   try {
-    if (currentLanguage === "html") {
+    if (doc.language === "html") {
       // An HTML document is already HTML. Exporting a copy is useful; passing
       // it through the Markdown renderer would produce a different document.
       await api.writeDocument(
         target,
         editor.getDoc(),
-        currentDoc?.lineEnding ?? "\n",
-        currentDoc?.hadBom ?? false,
+        doc.lineEnding ?? "\n",
+        doc.hadBom ?? false,
       );
       toast("Exported HTML");
       const after = await api.runAfterExport(target);
@@ -1253,7 +1515,7 @@ async function exportHtml(): Promise<void> {
     ].join("\n");
 
     const html = wrapStandaloneHtml(
-      currentDoc?.name ?? "Untitled",
+      doc.name ?? "Untitled",
       article,
       isDark,
       headExtra,
@@ -1294,12 +1556,12 @@ async function exportHtml(): Promise<void> {
 async function exportPdf(): Promise<void> {
   const notice = toast("Preparing the PDF…", 0);
   try {
-    if (currentLanguage === "html") {
+    if (doc.language === "html") {
       // The system browser cannot reach the preview scheme, but it can read a
       // local file base. The document's own CSS and scripts stay in charge.
       const html = await buildHtmlPrintDocument(
         editor.getDoc(),
-        currentDoc?.directory ?? null,
+        doc.directory ?? null,
       );
       const written = await api.printDocument(html, documentStem());
       notice.dismiss();
@@ -1313,7 +1575,7 @@ async function exportPdf(): Promise<void> {
     // however, are the reader's — embedded, because a browser reading a file in
     // the temporary directory cannot reach the application's assets.
     const html = wrapPrintHtml(
-      currentDoc?.name ?? "Untitled",
+      doc.name ?? "Untitled",
       article,
       highlightThemeCss(false),
       exportTypographyCss(),
@@ -1385,7 +1647,7 @@ async function syncExportAvailability(): Promise<void> {
 
 /** A sensible default filename for an export of the current document. */
 function exportSuggestion(format: api.ExportFormat): string {
-  const base = currentDoc?.name.replace(/\.[^.]+$/, "") ?? "untitled";
+  const base = doc.name.replace(/\.[^.]+$/, "") ?? "untitled";
   const name = `${base}.${format.extension}`;
   return settings.lastDirectory ? joinDir(settings.lastDirectory, name) : name;
 }
@@ -1434,10 +1696,10 @@ async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
       formatId: format.id,
       markdown: editor.getDoc(),
       outputPath,
-      inputPath: currentPath,
+      inputPath: doc.path,
       // Tells the backend which reader to use, and that a Typst document exported
       // to PDF is rendered by Typst itself rather than translated through pandoc.
-      language: currentLanguage,
+      language: doc.language,
     });
     notice.dismiss();
     toast(`Exported ${basename(outcome.outputPath)}`);
@@ -1613,24 +1875,25 @@ function htmlCommandNote(): void {
 
 const handlers: Record<string, () => void | Promise<void>> = {
   "file.new": async () => {
-    if (!(await confirmDiscard())) return;
     await loadUntitled("", defaultDocumentLanguage());
   },
   "file.open": async () => {
-    if (!(await confirmDiscard())) return;
     const chosen = await openDialog({
       title: "Open Document",
-      multiple: false,
+      multiple: true,
       directory: false,
       defaultPath: settings.lastDirectory ?? undefined,
       filters: documentFilters(),
     });
     if (!chosen) return;
-    const path = Array.isArray(chosen) ? chosen[0] : chosen;
-    await openPath(path, { confirm: false });
+    const paths = Array.isArray(chosen) ? chosen : [chosen];
+    for (const path of paths) await openPath(path);
   },
   "file.save": () => void save(),
   "file.saveAs": () => void saveAs(),
+  "file.close": () => void closeSession(doc.id),
+  "file.nextTab": () => void activateSession(sessions.next().id),
+  "file.prevTab": () => void activateSession(sessions.previous().id),
   "file.autoSave": () => {
     settings.autoSave = !settings.autoSave;
     applyLayout();
@@ -1643,12 +1906,12 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "export.installPandoc": () => void pandocSetup(),
   "export.installTypst": () => void typstSetup(),
   "file.reveal": async () => {
-    if (!currentPath) {
+    if (!doc.path) {
       toast("Save the document first.");
       return;
     }
     try {
-      await revealItemInDir(currentPath);
+      await revealItemInDir(doc.path);
     } catch (error) {
       toast(String(error));
     }
@@ -1658,117 +1921,117 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "edit.replace": () => editor.openSearch(true),
 
   "para.h1": () =>
-    currentLanguage === "html"
+    doc.language === "html"
       ? editor.wrapSelection("<h1>", "</h1>", "Heading")
       : editor.setHeading(1),
   "para.h2": () =>
-    currentLanguage === "html"
+    doc.language === "html"
       ? editor.wrapSelection("<h2>", "</h2>", "Heading")
       : editor.setHeading(2),
   "para.h3": () =>
-    currentLanguage === "html"
+    doc.language === "html"
       ? editor.wrapSelection("<h3>", "</h3>", "Heading")
       : editor.setHeading(3),
   "para.h4": () =>
-    currentLanguage === "html"
+    doc.language === "html"
       ? editor.wrapSelection("<h4>", "</h4>", "Heading")
       : editor.setHeading(4),
   "para.h5": () =>
-    currentLanguage === "html"
+    doc.language === "html"
       ? editor.wrapSelection("<h5>", "</h5>", "Heading")
       : editor.setHeading(5),
   "para.h6": () =>
-    currentLanguage === "html"
+    doc.language === "html"
       ? editor.wrapSelection("<h6>", "</h6>", "Heading")
       : editor.setHeading(6),
   "para.paragraph": () =>
-    currentLanguage === "html"
+    doc.language === "html"
       ? editor.wrapSelection("<p>", "</p>", "Paragraph")
       : editor.setHeading(0),
   "para.increaseHeading": () =>
-    currentLanguage === "html" ? htmlCommandNote() : editor.shiftHeading(-1),
+    doc.language === "html" ? htmlCommandNote() : editor.shiftHeading(-1),
   "para.decreaseHeading": () =>
-    currentLanguage === "html" ? htmlCommandNote() : editor.shiftHeading(1),
+    doc.language === "html" ? htmlCommandNote() : editor.shiftHeading(1),
   "para.quote": () =>
-    currentLanguage === "html"
+    doc.language === "html"
       ? editor.insertBlock("<blockquote>\n\n</blockquote>")
       : editor.toggleLinePrefix("> "),
   "para.codeBlock": () =>
-    currentLanguage === "html"
+    doc.language === "html"
       ? editor.insertBlockWithCaret("<pre><code></code></pre>", 11)
       : editor.insertBlockWithCaret("```\n\n```", 4),
   "para.mathBlock": () =>
-    currentLanguage === "html" ? htmlCommandNote() : editor.insertBlockWithCaret("$$\n\n$$\n", 3),
+    doc.language === "html" ? htmlCommandNote() : editor.insertBlockWithCaret("$$\n\n$$\n", 3),
   "para.ul": () =>
-    currentLanguage === "html"
+    doc.language === "html"
       ? editor.insertBlock("<ul>\n  <li></li>\n</ul>")
       : editor.toggleLinePrefix("- "),
   "para.ol": () =>
-    currentLanguage === "html"
+    doc.language === "html"
       ? editor.insertBlock("<ol>\n  <li></li>\n</ol>")
       : editor.toggleLinePrefix("1. "),
   "para.task": () =>
-    currentLanguage === "html" ? htmlCommandNote() : editor.toggleLinePrefix("- [ ] "),
+    doc.language === "html" ? htmlCommandNote() : editor.toggleLinePrefix("- [ ] "),
   "para.taskDone": () =>
-    currentLanguage === "html" ? htmlCommandNote() : editor.setTaskState("done"),
+    doc.language === "html" ? htmlCommandNote() : editor.setTaskState("done"),
   "para.taskTodo": () =>
-    currentLanguage === "html" ? htmlCommandNote() : editor.setTaskState("todo"),
+    doc.language === "html" ? htmlCommandNote() : editor.setTaskState("todo"),
   "para.taskPlain": () =>
-    currentLanguage === "html" ? htmlCommandNote() : editor.setTaskState("plain"),
+    doc.language === "html" ? htmlCommandNote() : editor.setTaskState("plain"),
   "para.indent": () => editor.indentLines(1),
   "para.outdent": () => editor.indentLines(-1),
   "para.insertBefore": () => editor.insertParagraphBefore(),
   "para.insertAfter": () => editor.insertParagraphAfter(),
   "para.table": () =>
-    currentLanguage === "html"
+    doc.language === "html"
       ? editor.insertBlock(
           "<table>\n  <thead>\n    <tr><th>Column</th><th>Column</th></tr>\n  </thead>\n  <tbody>\n    <tr><td>Cell</td><td>Cell</td></tr>\n  </tbody>\n</table>",
         )
       : editor.insertBlock("| Column | Column |\n| --- | --- |\n| Cell | Cell |"),
-  "para.hr": () => (currentLanguage === "html" ? editor.insertBlock("<hr>") : editor.insertBlock("---")),
-  "para.toc": () => (currentLanguage === "html" ? htmlCommandNote() : editor.insertToc()),
-  "para.yaml": () => (currentLanguage === "html" ? htmlCommandNote() : editor.insertYamlFrontMatter()),
+  "para.hr": () => (doc.language === "html" ? editor.insertBlock("<hr>") : editor.insertBlock("---")),
+  "para.toc": () => (doc.language === "html" ? htmlCommandNote() : editor.insertToc()),
+  "para.yaml": () => (doc.language === "html" ? htmlCommandNote() : editor.insertYamlFrontMatter()),
   "para.alertNote": () =>
-    currentLanguage === "html" ? htmlCommandNote() : editor.insertBlock("> [!NOTE]\n> "),
+    doc.language === "html" ? htmlCommandNote() : editor.insertBlock("> [!NOTE]\n> "),
   "para.alertTip": () =>
-    currentLanguage === "html" ? htmlCommandNote() : editor.insertBlock("> [!TIP]\n> "),
+    doc.language === "html" ? htmlCommandNote() : editor.insertBlock("> [!TIP]\n> "),
   "para.alertImportant": () =>
-    currentLanguage === "html" ? htmlCommandNote() : editor.insertBlock("> [!IMPORTANT]\n> "),
+    doc.language === "html" ? htmlCommandNote() : editor.insertBlock("> [!IMPORTANT]\n> "),
   "para.alertWarning": () =>
-    currentLanguage === "html" ? htmlCommandNote() : editor.insertBlock("> [!WARNING]\n> "),
+    doc.language === "html" ? htmlCommandNote() : editor.insertBlock("> [!WARNING]\n> "),
   "para.alertCaution": () =>
-    currentLanguage === "html" ? htmlCommandNote() : editor.insertBlock("> [!CAUTION]\n> "),
+    doc.language === "html" ? htmlCommandNote() : editor.insertBlock("> [!CAUTION]\n> "),
 
   "format.bold": () =>
-    currentLanguage === "html"
+    doc.language === "html"
       ? editor.wrapSelection("<strong>", "</strong>", "strong text")
       : editor.wrapSelection("**", "**", "strong text"),
   "format.italic": () =>
-    currentLanguage === "html"
+    doc.language === "html"
       ? editor.wrapSelection("<em>", "</em>", "emphasis")
       : editor.wrapSelection("*", "*", "emphasis"),
   "format.strike": () =>
-    currentLanguage === "html"
+    doc.language === "html"
       ? editor.wrapSelection("<s>", "</s>", "strikethrough")
       : editor.wrapSelection("~~", "~~", "strikethrough"),
   "format.code": () =>
-    currentLanguage === "html"
+    doc.language === "html"
       ? editor.wrapSelection("<code>", "</code>", "code")
       : editor.wrapSelection("`", "`", "code"),
   "format.link": () =>
-    currentLanguage === "html"
+    doc.language === "html"
       ? editor.wrapSelection('<a href="https://">', "</a>", "link text")
       : editor.wrapSelection("[", "](https://)", "link text"),
   "format.image": () =>
-    currentLanguage === "html"
+    doc.language === "html"
       ? editor.insertBlock('<img src="./image.png" alt="alt text">')
       : editor.wrapSelection("![", "](./image.png)", "alt text"),
   "format.math": () =>
-    currentLanguage === "html"
+    doc.language === "html"
       ? htmlCommandNote()
       : editor.wrapSelection("$", "$", "e^{i\\pi}+1=0"),
   "format.displayMath": () => {
-    if (currentLanguage === "html") {
+    if (doc.language === "html") {
       htmlCommandNote();
       return;
     }
@@ -1864,7 +2127,6 @@ const handlers: Record<string, () => void | Promise<void>> = {
 };
 
 async function showBuiltin(content: string): Promise<void> {
-  if (!(await confirmDiscard())) return;
   await loadUntitled(content);
   toast("Built-in document — use Save As to keep a copy");
 }
@@ -2161,6 +2423,16 @@ function blinkAnchor(line: number): void {
   }, BLINK_MS);
 }
 
+/** Restore the scroll a tab switch saved, and keep pane sync from fighting it. */
+function applyPendingPreviewScroll(): void {
+  if (pendingPreviewScroll === null) return;
+  const top = pendingPreviewScroll;
+  pendingPreviewScroll = null;
+  suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+  if (doc.language === "html") htmlPreview.scrollTo(top);
+  else previewPane.scrollTop = top;
+}
+
 /** Keep the caret's block in the preview across a re-render, without jumping. */
 function revealCursorInPreview(): void {
   if (settings.viewMode !== "split" || !previewLinesMapped) return;
@@ -2299,7 +2571,7 @@ function installPaneSync(): void {
     updateActiveOutline();
     // A caret we just moved from the preview must not move the preview.
     if (caretCameFromPreview) return;
-    if (currentLanguage === "html") {
+    if (doc.language === "html") {
       revealHtmlCursor(info.line);
       return;
     }
@@ -2313,7 +2585,7 @@ function installPaneSync(): void {
   // itself, and moves nothing. No strobe risk: the caret moves on every
   // keystroke, but a click is one discrete action.
   editorPane.addEventListener("click", () => {
-    if (currentLanguage === "html") {
+    if (doc.language === "html") {
       if (settings.viewMode === "split") htmlPreview.blink(editor.cursorInfo().line);
       return;
     }
@@ -2325,7 +2597,7 @@ function installPaneSync(): void {
   // under the top of the pane. This one follows unconditionally, because that
   // is what keeps the two panes together while the reader scrolls.
   editor.onScroll(() => {
-    if (currentLanguage === "html") {
+    if (doc.language === "html") {
       if (performance.now() >= suppressEditorScrollUntil) syncEditorToHtml();
       return;
     }
@@ -2337,7 +2609,7 @@ function installPaneSync(): void {
   // Click in the preview -> the source reveals that line, and the preview stays
   // exactly where it is so text selection keeps working.
   preview.addEventListener("mousedown", (event) => {
-    if (currentLanguage === "html") return;
+    if (doc.language === "html") return;
     const target = (event.target as HTMLElement).closest<HTMLElement>("[data-line]");
     if (!target) return;
     const line = Number(target.dataset.line);
@@ -2357,7 +2629,7 @@ function installPaneSync(): void {
   // document inside it. The HTML guest scrolls internally and reports through
   // the bridge instead.
   previewPane.addEventListener("scroll", () => {
-    if (currentLanguage === "html") return;
+    if (doc.language === "html") return;
     if (!settings.syncScroll || settings.viewMode !== "split") return;
     if (performance.now() < suppressPreviewScrollUntil) return;
     alignEditorToScroll();
@@ -2394,7 +2666,7 @@ function installPreviewClicks(): void {
     }
 
     // Relative or absolute filesystem path: resolve against the document.
-    const dir = currentDoc?.directory ?? null;
+    const dir = doc.directory ?? null;
     let path = href;
     try {
       path = decodeURI(href);
@@ -2655,7 +2927,7 @@ function installShortcuts(shortcuts: api.Shortcut[]): void {
 }
 
 function handleHtmlLine(line: number): void {
-  if (currentLanguage !== "html" || !Number.isFinite(line)) return;
+  if (doc.language !== "html" || !Number.isFinite(line)) return;
   suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
   caretCameFromPreview = true;
   try {
@@ -2678,7 +2950,7 @@ function guestLinkToPath(href: string): string | null {
   }
   path = path.replace(/^\/+/, "");
   if (!path || path.split("/").some((part) => part === ".." || part === ".")) return null;
-  const directory = currentDoc?.directory;
+  const directory = doc.directory;
   if (!directory) return null;
   const extension = path.split(".").pop()?.toLowerCase() ?? "";
   if (!["html", "htm", "md", "markdown", "mkd", "typ"].includes(extension)) return null;
@@ -2720,7 +2992,13 @@ function handleHtmlAction(id: string): void {
 }
 
 function handleHtmlReady(layout: HtmlLayout): void {
-  if (currentLanguage !== "html") return;
+  if (doc.language !== "html") return;
+  if (pendingPreviewScroll !== null) {
+    htmlRestoreLine = null;
+    applyPendingPreviewScroll();
+    updateActiveOutline();
+    return;
+  }
   const line = htmlRestoreLine ?? editor.cursorInfo().line;
   htmlRestoreLine = null;
   if (layout.anchors.length >= 2) {
@@ -2731,7 +3009,8 @@ function handleHtmlReady(layout: HtmlLayout): void {
 }
 
 function handleHtmlScroll(layout: HtmlLayout): void {
-  if (currentLanguage !== "html") return;
+  htmlScrollTop = layout.top;
+  if (doc.language !== "html") return;
   if (performance.now() < suppressPreviewScrollUntil) return;
   syncHtmlToEditor(layout);
 }
@@ -2742,44 +3021,68 @@ async function installDragDrop(): Promise<void> {
     if (event.payload.type !== "drop" || event.payload.paths.length === 0) return;
     // Images are imported; anything else is opened as a document.
     const remaining = await handleImageDrop(event.payload.paths, imageContext());
-    if (remaining.length > 0) void openPath(remaining[0]);
+    for (const path of remaining) await openPath(path);
   });
 }
 
 async function installCloseGuard(): Promise<void> {
   const win = getCurrentWindow();
   await win.onCloseRequested(async (event) => {
-    if (allowClose || !dirty) return;
+    if (allowClose) return;
+    const dirty = sessions.list().filter((session) => session.dirty);
+    if (dirty.length === 0) return;
     event.preventDefault();
-    const shouldSave = await ask("You have unsaved changes. Save them before closing?", {
-      title: "Unsaved changes",
-      kind: "warning",
-    });
-    if (shouldSave && !(await save())) return;
+    for (const session of dirty) {
+      const shouldSave = await ask(
+        `"${session.name}" has unsaved changes. Save them before closing?`,
+        { title: "Unsaved changes", kind: "warning" },
+      );
+      if (shouldSave && !(await saveSession(session))) return;
+    }
     allowClose = true;
     await win.close();
   });
 }
 
 function installDiskWatcher(): void {
-  window.setInterval(async () => {
-    if (!currentPath || dirty) return;
+  window.setInterval(() => {
+    void reloadChangedSessions();
+  }, 2500);
+}
+
+/** Reload a clean tab whose file changed underneath it. A dirty tab is left alone. */
+async function reloadChangedSessions(): Promise<void> {
+  for (const session of sessions.list()) {
+    if (!session.path || session.dirty) continue;
     try {
-      const stat = await api.statDocument(currentPath);
-      if (!stat.exists || stat.modifiedMs === diskModifiedMs) return;
-      const payload = await api.readDocument(currentPath);
-      if (payload.content === savedContent) {
-        diskModifiedMs = payload.modifiedMs;
-        return;
+      const stat = await api.statDocument(session.path);
+      if (!stat.exists || stat.modifiedMs === session.modifiedMs) continue;
+      const payload = await api.readDocument(session.path);
+      if (payload.content === session.savedContent) {
+        session.modifiedMs = payload.modifiedMs;
+        session.size = payload.size;
+        continue;
       }
-      const cursor = editor.cursorInfo();
-      await adoptDocument(payload, false);
-      editor.scrollToLine(cursor.line);
-      toast("The file changed on disk — reloaded");
+      if (session.id === doc.id) {
+        const line = editor.cursorInfo().line;
+        describe(doc, payload);
+        await showInEditor(false, payload.tokens);
+        editor.scrollToLine(line);
+        toast("The file changed on disk — reloaded");
+      } else {
+        const state = session.editorState;
+        describe(session, payload);
+        if (state) {
+          session.editorState = state.update({
+            changes: { from: 0, to: state.doc.length, insert: payload.content },
+          }).state;
+        }
+        renderDocTabs();
+      }
     } catch {
       /* the file may have vanished; leave the buffer alone */
     }
-  }, 2500);
+  }
 }
 
 function installSystemThemeWatcher(): void {
@@ -2799,34 +3102,119 @@ function installSystemThemeWatcher(): void {
 // Image paste and drop
 // ---------------------------------------------------------------------------
 
-function htmlImageTag(alt: string, src: string): string {
-  const escape = (value: string) =>
-    value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
-  return `<img src="${escape(src)}" alt="${escape(alt)}">`;
-}
-
 function imageContext(hasSelection = false): ImageContext {
-  const html = currentLanguage === "html";
+  const language = doc.language;
   return {
-    // A relative image path is the only kind the preview scheme can reach
-    // without turning an absolute filesystem path into a broken URL.
-    settings: html ? { ...settings, imageUseRelativePath: true } : settings,
-    documentPath: currentPath,
+    // A relative image path is the only kind the HTML guest and the Typst
+    // compiler can reach from the document's own folder.
+    settings: needsRelativePath(language)
+      ? { ...settings, imageUseRelativePath: true }
+      : settings,
+    documentPath: doc.path,
     hasSelection,
-    insert: (markdown) => editor.insertBlock(markdown),
-    imageSyntax: html ? htmlImageTag : undefined,
+    insert: (text) => editor.insertBlock(text),
+    imageSyntax: (alt, src) => imageSyntaxFor(language, alt, src),
     notify: (text, isError = false) => toast(text, isError ? 5200 : 3200),
   };
+}
+
+let plainPastePending = false;
+let pasteNoticeKey = "";
+
+function altFromPath(path: string): string {
+  const name = path.split(/[\\/]/).pop() ?? "image";
+  return name.replace(/\.[^.]+$/, "");
+}
+
+/** The options for an image found inside a pasted fragment. */
+function richImageOptions(language: api.DocumentLanguage): api.ImageOptions {
+  const options = imageOptions(settings);
+  if (needsRelativePath(language)) options.relative = true;
+  // A fragment image has no local original to keep; the select is the switch
+  // that says "do not download", so this path only runs when it says download.
+  if (options.rule === "keepOriginal") options.rule = "assetsFolder";
+  return options;
+}
+
+async function resolveRichImage(
+  image: ImageRequest,
+  language: api.DocumentLanguage,
+): Promise<ResolvedImage | null> {
+  const remote = /^https?:/i.test(image.src);
+  if (remote && settings.richPasteImages === "url") return null;
+  const options = richImageOptions(language);
+
+  if (/^data:/i.test(image.src)) {
+    const saved = await api.saveClipboardImage(image.src, null, doc.path, options);
+    return { src: saved.markdownPath, alt: image.alt || altFromPath(saved.markdownPath) };
+  }
+  if (remote) {
+    const saved = await api.downloadImage(image.src, doc.path, options, 8000);
+    return { src: saved.markdownPath, alt: image.alt || altFromPath(saved.markdownPath) };
+  }
+  if (!settings.imageApplyLocal) return null;
+  if (!/^(?:[A-Za-z]:[\\/]|\/|file:)/i.test(image.src)) return null;
+  const local = image.src.replace(/^file:\/\//i, "");
+  const exists = await api.pathExists(local, doc.path).catch(() => false);
+  if (!exists) return null;
+  const saved = await api.importImage(local, doc.path, options);
+  return { src: saved.markdownPath, alt: image.alt || altFromPath(saved.markdownPath) };
+}
+
+function languageLabel(language: api.DocumentLanguage): string {
+  return language === "typst" ? "Typst" : language === "html" ? "HTML" : "Markdown";
+}
+
+async function applyRichPaste(
+  payload: ClipboardPayload,
+  destination: PasteDestination,
+): Promise<void> {
+  const result = await planPaste(payload, destination.language, {
+    resolveImage: (image) => resolveRichImage(image, destination.language),
+  });
+  if (!result) return;
+  editor.insertPasted(result.text, result.block);
+
+  if (destination.detected && result.converted) {
+    const key = `${doc.id}:${destination.language}`;
+    if (key !== pasteNoticeKey) {
+      pasteNoticeKey = key;
+      const extension =
+        destination.language === "typst" ? "typ" : destination.language === "html" ? "html" : "md";
+      toast(
+        `Pasted as ${languageLabel(destination.language)}. Save this document as .${extension} to switch the editor.`,
+        6200,
+      );
+      return;
+    }
+  }
+  if (result.notices.length > 0) toast(result.notices[0], 5200);
 }
 
 /**
  * Paste listeners run in the capture phase so the event can be consumed before
  * CodeMirror or the browser turns it into text.
  */
-function installImagePaste(): void {
+function installPasteHandlers(): void {
+  // Ctrl/Cmd+Shift+V asks the platform for a plain paste. Do not prevent the
+  // keydown: Chromium handles it and starts its own paste event, which the
+  // handler below lets through untouched.
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey) return;
+      if (event.code !== "KeyV") return;
+      plainPastePending = true;
+      window.setTimeout(() => {
+        plainPastePending = false;
+      }, 2000);
+    },
+    true,
+  );
+
   const handler = (event: ClipboardEvent) => {
     // A paste over the preview targets the block under the pointer: move the
-    // caret there first so the image lands where the user aimed.
+    // caret there first so the content lands where the user aimed.
     const target = event.target as Node | null;
     const element = target as HTMLElement | null;
     const anchor = element?.closest?.<HTMLElement>("[data-line]");
@@ -2845,7 +3233,41 @@ function installImagePaste(): void {
     if (handleImagePaste(event, imageContext(hasSelection))) {
       event.preventDefault();
       event.stopPropagation();
+      return;
     }
+
+    if (plainPastePending) {
+      plainPastePending = false;
+      return;
+    }
+    if (!settings.richPaste) return;
+    if (editor.inCodeContext()) return;
+
+    const clipboard = event.clipboardData;
+    if (!clipboard) return;
+    const payload: ClipboardPayload = {
+      html: clipboard.getData("text/html") || null,
+      markdown: clipboard.getData("text/markdown") || clipboard.getData("text/x-markdown") || null,
+      text: clipboard.getData("text/plain") || null,
+    };
+    if (!payload.html && !payload.markdown && !payload.text) return;
+
+    const destination = resolvePasteDestination({
+      saved: doc.path !== null,
+      language: doc.language,
+      buffer: editor.getDoc(),
+    });
+    const choice = chooseSource(payload, destination.language);
+    // Plain text, or text already in the destination's own syntax, is exactly
+    // what CodeMirror's own paste does; do not interfere with it.
+    if (choice.native || choice.source === "plain") return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    void applyRichPaste(payload, destination).catch((error) => {
+      console.warn(`[paste] ${String(error)}`);
+      toast(`Paste failed: ${String(error)}`, 5200);
+    });
   };
 
   editorPane.addEventListener("paste", handler, { capture: true });
@@ -2878,6 +3300,12 @@ function installChrome(): void {
   ] as const) {
     el<HTMLButtonElement>(button).addEventListener("click", () => runMenuAction(id));
   }
+
+  // Spelling has no menu item to route through, so the flag writes the setting
+  // directly; `applyLayout` is what redraws it and reinstalls the extension.
+  el<HTMLButtonElement>("flag-spellcheck").addEventListener("click", () =>
+    applySettingsPatch({ spellcheck: settings.spellcheck === false }),
+  );
 }
 
 /**
@@ -2917,7 +3345,7 @@ async function boot(): Promise<void> {
 
   editor = createEditor(editorHost);
   editor.onDocChanged((text) => {
-    setDirty(text !== savedContent);
+    setDirty(text !== doc.savedContent);
     refreshStatus();
     scheduleTokenCount(text);
     scheduleRender();
@@ -2978,8 +3406,9 @@ async function boot(): Promise<void> {
   });
 
   installChrome();
+  installDocTabs();
   installPaneSync();
-  installImagePaste();
+  installPasteHandlers();
   installPreviewClicks();
   installResizers();
   installSystemThemeWatcher();
@@ -3011,20 +3440,22 @@ async function boot(): Promise<void> {
   void refreshPandocStatus().then(syncExportAvailability);
   void refreshTypstStatus().then(syncExportAvailability);
   await listen<string[]>("open-files", (event) => {
-    const first = event.payload[0];
-    if (first) void openPath(first);
+    void (async () => {
+      for (const path of event.payload) await openPath(path);
+    })();
   });
 
   const startup = await api.startupFile().catch(() => null);
   if (startup) {
-    await openPath(startup, { confirm: false, silent: true });
+    await openPath(startup, { silent: true });
   } else if (settings.onLaunch === "new") {
     await loadUntitled("", defaultDocumentLanguage());
   } else if (settings.onLaunch === "last" && settings.recentFiles.length > 0) {
-    await openPath(settings.recentFiles[0], { confirm: false, silent: true });
+    await openPath(settings.recentFiles[0], { silent: true });
   } else {
     await loadUntitled(WELCOME);
   }
+  installingStartup = false;
 
   installDiskWatcher();
   installAutoSave();
@@ -3034,11 +3465,19 @@ async function boot(): Promise<void> {
 /** Save in place on a timer when Auto Save is enabled in Preferences. */
 function installAutoSave(): void {
   window.setInterval(() => {
-    if (!settings.autoSave || !dirty || !currentPath) return;
-    if (currentDoc?.readOnly) return;
-    void save().then((ok) => {
-      if (ok) toast("Auto saved", 1400);
-    });
+    if (!settings.autoSave) return;
+    const pending = sessions
+      .list()
+      .filter((session) => session.dirty && session.path && !session.readOnly);
+    if (pending.length === 0) return;
+    void (async () => {
+      let saved = 0;
+      for (const session of pending) {
+        if (await writeSession(session)) saved += 1;
+      }
+      if (saved === 1) toast("Auto saved", 1400);
+      else if (saved > 1) toast(`Auto saved ${saved} files`, 1400);
+    })();
   }, AUTO_SAVE_INTERVAL_MS);
 }
 

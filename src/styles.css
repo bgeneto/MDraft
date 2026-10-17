@@ -109,7 +109,7 @@ body {
 .app {
   display: grid;
   grid-template-columns: var(--sidebar-w) 5px 1fr;
-  grid-template-rows: 1fr auto;
+  grid-template-rows: auto 1fr auto;
   height: 100vh;
   width: 100vw;
 }
@@ -135,12 +135,114 @@ body {
 }
 
 /* --------------------------------------------------------------------------
+   Document tabs
+   -------------------------------------------------------------------------- */
+
+.doc-tabs {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  height: 34px;
+  padding: 4px 6px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--sidebar-bg);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+
+.doc-tabs::-webkit-scrollbar {
+  height: 0;
+}
+
+.doc-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  max-width: 200px;
+  height: 30px;
+  padding: 0 4px 0 10px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.doc-tab:hover {
+  color: var(--fg);
+  background: var(--active-line);
+}
+
+.doc-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.doc-tab[aria-selected="true"] {
+  background: var(--bg);
+  color: var(--fg);
+  border-color: var(--border);
+}
+
+.doc-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-tab-dirty {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--accent);
+  visibility: hidden;
+}
+
+.doc-tab.is-dirty .doc-tab-dirty {
+  visibility: visible;
+}
+
+.doc-tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.doc-tab-close:hover {
+  background: var(--active-line);
+  color: var(--fg);
+}
+
+.doc-tab[aria-selected="true"] .doc-tab-close:hover {
+  background: var(--code-bg);
+}
+
+/* --------------------------------------------------------------------------
    Sidebar
    -------------------------------------------------------------------------- */
 
 .sidebar {
   grid-column: 1;
-  grid-row: 1;
+  grid-row: 2;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -315,7 +417,7 @@ body {
 
 .resizer {
   grid-column: 2;
-  grid-row: 1;
+  grid-row: 2;
   cursor: col-resize;
   background: transparent;
 }
@@ -342,7 +444,7 @@ body {
 
 .workspace {
   grid-column: 3;
-  grid-row: 1;
+  grid-row: 2;
   display: flex;
   min-width: 0;
   min-height: 0;
@@ -472,7 +574,7 @@ body {
 
 .statusbar {
   grid-column: 1 / -1;
-  grid-row: 2;
+  grid-row: 3;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -557,11 +659,11 @@ body {
 /* --------------------------------------------------------------------------
    Status flags
 
-   Focus, Typewriter, Sync Scroll and Auto Save are modes, not commands: a menu
-   item that closes the moment it is clicked cannot tell you whether it is on,
-   and two of these have no visible effect at all. Each flag carries its state in
-   text as well as colour, and is itself the toggle — an indicator that cannot be
-   clicked is another dead end.
+   Focus, Typewriter, Sync Scroll, Auto Save and Check Spelling are states, not
+   commands: a menu item that closes the moment it is clicked cannot tell you
+   whether it is on, and two of these have no visible effect at all. Each flag
+   carries its state in text as well as colour, and is itself the toggle — an
+   indicator that cannot be clicked is another dead end.
 
    The label is dropped before the state: "on"/"off" is the information, the icon
    says which mode it belongs to. Below 760px the group goes away; the View
@@ -621,8 +723,10 @@ body {
   opacity: 0.5;
 }
 
-/* Sync Scroll stays on outside Split but has no effect there. Dim it rather
-   than disable it: clicking it now sets the state for the next split view. */
+/* Sync Scroll stays on outside Split but has no effect there, and Check Spelling
+   stays on in an HTML document, whose source no dictionary is run over. Dim them
+   rather than disable them: clicking one now sets the state for the next
+   document or view. */
 .status-flag[data-inactive="true"] {
   opacity: 0.55;
 }

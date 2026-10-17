@@ -186,7 +186,9 @@ const doc = await evaluate(`(() => {
       };
     })(),
     statusWords: document.getElementById('status-words')?.textContent ?? '',
-    statusEncoding: document.getElementById('status-encoding')?.textContent ?? ''
+    statusEncoding: document.getElementById('status-encoding')?.textContent ?? '',
+    docTabs: document.querySelectorAll('.doc-tab').length,
+    activeTab: document.querySelector('.doc-tab[aria-selected="true"] .doc-tab-name')?.textContent ?? '',
   });
 })()`);
 
@@ -208,6 +210,8 @@ check("no mermaid errors", doc.mermaidErrors === 0);
 check("github alerts", doc.alerts >= 1 && doc.alertTitles >= 1);
 check("table of contents", doc.toc >= 1 && doc.tocLinks >= 5);
 check("outline populated", doc.outlineItems >= 3);
+check("a document tab is shown", doc.docTabs === 1);
+check("the open tab is feature-tour.md", doc.activeTab === "feature-tour.md");
 check("exactly one view mode is active", doc.activeModeButtons === 1);
 check("no duplicate source-mode button", doc.hasLegacySourceButton === false);
 check("status icons are inline SVG", doc.statusIcons.every((icon) => icon.isSvg));
@@ -949,7 +953,7 @@ check(
 
 console.log("\n=== mode flags and the native menu ===");
 
-const FLAGS = ["flag-focus", "flag-typewriter", "flag-sync", "flag-auto-save"];
+const FLAGS = ["flag-focus", "flag-typewriter", "flag-sync", "flag-auto-save", "flag-spellcheck"];
 const menuOf = () => evaluate(`window.__TAURI_INTERNALS__.invoke("menu_state")`);
 const menuChecked = (menu, id) => menu.some((entry) => entry.id === id && entry.checked);
 const menuEnabled = (menu, id) => menu.find((entry) => entry.id === id)?.enabled !== false;
@@ -983,7 +987,7 @@ console.log(
   `  flags     ${flagState.map((f) => `${f.id.replace("flag-", "")}=${f.on}`).join(" ")}`,
 );
 
-check("four mode flags are present", flagState.length === 4 && flagState.every((f) => f.svg));
+check("five editor flags are present", flagState.length === 5 && flagState.every((f) => f.svg));
 check("mode flags are inline SVG at least 16px", flagState.every((f) => f.svg && f.size >= 16));
 check(
   "every flag states on/off and agrees with aria-pressed",
@@ -1075,6 +1079,18 @@ check(
     menuChecked(autoOn.menu, "file.autoSave"),
 );
 await toggle("flag-auto-save");
+
+// Spelling is the one flag with no menu item; the click is the toggle. Read it
+// first so the check holds whatever a previous run left in settings.json.
+const spellBefore = await readFlag("flag-spellcheck");
+const spellToggled = await toggle("flag-spellcheck");
+check(
+  "the Spell flag flips the setting and states the new state",
+  spellToggled.flag.on !== spellBefore.on &&
+    spellToggled.flag.state === (spellToggled.flag.on === "true" ? "on" : "off") &&
+    spellToggled.flag.inactive === "false",
+);
+await toggle("flag-spellcheck");
 
 // ---------------------------------------------------------------------------
 // Report

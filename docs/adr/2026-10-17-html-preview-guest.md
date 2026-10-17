@@ -54,10 +54,13 @@ The HTML document is prepared as a **preview copy** and served by the
 - The response carries a CSP. It allows the guest origin, `https:`, `data:` and
   `blob:` where a document needs them; it excludes the app's asset and IPC
   origins. `connect-src` does not include the guest origin, so a document cannot
-  `fetch()` local data. CORS is sent only for fonts and for script requests whose
-  `Sec-Fetch-Dest` is `script`; a `fetch()` of a `.js` file is not a module load
-  and gets no header. (WebKit may omit `Sec-Fetch-Dest`; the code has an
-  extension fallback and the Linux check is manual.)
+  `fetch()` local data. CORS is sent for fonts and static asset kinds; a request
+  that reports `Sec-Fetch-Dest: empty` (a `fetch()`) gets no header. WebKitGTK
+  omits the metadata and also refuses a no-cors local stylesheet, image or
+  classic script from this scheme, so the preview copy adds
+  `crossorigin="anonymous"` to **local** assets only; CDN URLs are left untouched.
+  The HTML suite covers the Chromium path; a Debian 13/WebKitGTK 2.54 launch
+  with scripts on and off covers the WebKit path.
 - `Preferences › HTML › Run scripts in the HTML preview` (default on) controls the
   document's scripts. Off uses `script-src 'nonce-<bridge>'`: the inline bridge
   still runs, so scroll sync, blink and shortcuts survive, while document
@@ -78,6 +81,11 @@ The HTML document is prepared as a **preview copy** and served by the
 - HTML documents keep their own appearance and scripts, including local CSS,
   images, classic scripts, ES modules and web fonts. A document that links a CDN
   library works as it would in a browser.
+- On WebKitGTK, local CSS, images and classic scripts only load when the request
+  is CORS-mode. The preview copy adds `crossorigin="anonymous"` to those local
+  elements; this is an extra attribute in the preview document, never in the
+  saved source or the print copy. CDN elements are not marked, so an image host
+  without CORS headers keeps working.
 - With scripts on, a hostile document can execute referenced JavaScript and read
   or execute files in its own folder, and it may load network resources it links.
   It cannot reach the editor, the application's commands, or files outside its

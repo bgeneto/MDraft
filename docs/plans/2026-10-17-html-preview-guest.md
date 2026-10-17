@@ -498,8 +498,10 @@ of reach.
     document CSS and a `window.print()`, and no bridge.
   - [x] Manual CDN/Bootstrap check with network: Bootstrap's stylesheet, JS
     global and body font all reached the guest.
-  - [ ] Manual Linux launch. WebKitGTK has no CDP endpoint; this remains a
-    release check, not a Windows regression.
+  - [x] Manual Linux launch: built on Debian 13 under WSL2, launched with
+    WebKitGTK 2.54/WSLg, and screenshotted with scripts on and off. The first
+    launch exposed a WebKitGTK CORS requirement for local CSS/images/classic
+    scripts; fixed and re-verified.
 
 ## Implementation notes and deviations
 
@@ -511,8 +513,11 @@ not needed.
 Measured on this checkout:
 
 - `npm run build` — passes.
-- `cargo test` — **74 passed, 1 ignored** (the ignored test downloads pandoc).
-- `npm test` — **10 layers, 10 passed**: rust 74 passed/1 ignored, smoke 90,
+- `cargo test` — Windows **75 passed, 1 ignored**; Debian/WebKitGTK **74 passed,
+  1 ignored**. The one-test difference is a Windows-only path test; the Linux run
+  found that the filename test itself assumed Windows separators, fixed with a
+  `cfg` branch. (The ignored test downloads pandoc.)
+- `npm test` — **10 layers, 10 passed**: rust 75 passed/1 ignored, smoke 90,
   math 10, syntax 7, html 40, spellcheck 3, shortcuts 32, typography 26, licence
   4, close 4. It built and staged the binary outside the workspace and gave every
   UI suite a fresh instance and port.
@@ -537,9 +542,23 @@ Measured on this checkout:
   the ACL rejection in the main frame. The suite proves no command executed by
   checking an absent write side effect. This is recorded in the plan's security
   section and in the Traps.
-- The only unexercised acceptance item is the manual Linux/WebKitGTK launch;
-  there is no CDP there, and the code paths are platform-neutral apart from the
-  URL scheme form and the `Sec-Fetch-Dest` fallback.
+- The Linux/WebKitGTK launch found a real platform difference: a no-cors
+  `<link>`, `<img>` or classic `<script src>` from `mdraft-preview://` was
+  dropped before the scheme handler saw it, while a module loaded. The preview
+  copy now marks **local** stylesheets, images, scripts and media
+  `crossorigin="anonymous"`, and the handler sends CORS for static asset kinds
+  when WebKit omits `Sec-Fetch-Dest`. The screenshot after the fix shows linked
+  CSS green, the local image, all three scripts and `local fetch blocked`.
+- With `htmlPreviewScripts` off, the same Linux build still loads CSS and the
+  image, and every document script marker reads “did not run”; no script request
+  reaches the handler. The bridge is the only inline script and still starts.
+- The Linux build also rendered the Bootstrap CDN fixture: the primary heading
+  and button are Bootstrap-styled, and the inline script reports
+  `bootstrap JS: object`. CDN URLs were not marked `crossorigin`, so a CDN
+  response without CORS is unaffected.
+- `bin/linux/amd64` now contains only `MDraft_0.2.1_amd64.deb`, `mdraft`,
+  `SHA256SUMS.txt` and `manifest.json`; the stale 0.1.0 artifacts from the cache
+  were removed before the final build.
 
 ## Fallback if the protocol spike fails
 

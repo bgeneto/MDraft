@@ -702,6 +702,14 @@ function buildSections(host: PreferencesHost): Section[] {
       title: "Editor",
       rows: [
         {
+          kind: "checkbox",
+          label: "Convert Rich Text on Paste",
+          help:
+            "Past HTML and Markdown copied from another application are converted into this document's markup. Untick to always paste the clipboard's plain text. Ctrl/Cmd+Shift+V bypasses the conversion once.",
+          get: () => s().richPaste,
+          set: (value) => host.update({ richPaste: value }),
+        },
+        {
           kind: "number",
           label: "Font Size",
           min: 10,
@@ -809,9 +817,21 @@ function buildSections(host: PreferencesHost): Section[] {
           kind: "checkbox",
           label: "Apply Above Rules to Online Images",
           help:
-            "When ticked, pasting an image URL downloads it. When unticked, the URL is inserted as-is and nothing is fetched.",
+            "When ticked, pasting an image URL on its own downloads it. When unticked, the URL is inserted as-is and nothing is fetched. Images inside pasted rich text have their own option below.",
           get: () => s().imageApplyOnline,
           set: (value) => host.update({ imageApplyOnline: value }),
+        },
+        {
+          kind: "select",
+          label: "Remote Images in Pasted Rich Text",
+          help:
+            "Applies to remote images inside formatted text pasted from a browser or another editor. Download and save writes them to the document's assets folder and contacts their hosts; Keep the original URL makes no request. A URL you paste on its own still follows the option above.",
+          options: [
+            ["download", "Download and save"],
+            ["url", "Keep the original URL"],
+          ],
+          get: () => s().richPasteImages,
+          set: (value) => host.update({ richPasteImages: value as "download" | "url" }),
         },
         { kind: "heading", label: "Preferred Image Syntax" },
         {

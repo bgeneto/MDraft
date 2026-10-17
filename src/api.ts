@@ -209,6 +209,11 @@ export interface Settings {
   imageAddDotSlash: boolean;
   imageAutoEscape: boolean;
 
+  /** Convert copied rich text into the document's syntax. */
+  richPaste: boolean;
+  /** What to do with remote images inside a pasted fragment. */
+  richPasteImages: "download" | "url";
+
   exportFormats: ExportFormat[];
 
   /**
@@ -301,7 +306,8 @@ export const downloadImage = (
   url: string,
   documentPath: string | null,
   options: ImageOptions,
-) => invoke<SavedImage>("download_image", { url, documentPath, options });
+  timeoutMs?: number,
+) => invoke<SavedImage>("download_image", { url, documentPath, options, timeoutMs });
 
 export const startupFile = () => invoke<string | null>("startup_file");
 

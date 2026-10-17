@@ -73,11 +73,41 @@ const SUITES = [
     detail: "cargo test",
   },
   {
+    // The only layer that needs neither the application nor a build: the session
+    // store is plain logic, and Node runs the TypeScript module directly.
+    id: "sessions",
+    title: "Session store (unit)",
+    kind: "node",
+    script: "sessions-test.mjs",
+  },
+  {
+    // The conversion matrix: pure logic, the same TypeScript modules the editor
+    // imports, and no application. Node runs them directly.
+    id: "paste-convert",
+    title: "Rich paste conversion (unit)",
+    kind: "node",
+    script: "paste-convert-test.mjs",
+  },
+  {
     id: "smoke",
     title: "DOM smoke",
     kind: "cdp",
     script: "dom-smoke.mjs",
     doc: "samples/feature-tour.md",
+  },
+  {
+    id: "paste",
+    title: "Rich paste",
+    kind: "cdp",
+    script: "rich-paste-test.mjs",
+    doc: "samples/feature-tour.md",
+  },
+  {
+    id: "image-syntax",
+    title: "Image syntax in Typst",
+    kind: "cdp",
+    script: "image-syntax-test.mjs",
+    doc: "samples/typst-tour.typ",
   },
   {
     id: "math",
@@ -123,6 +153,17 @@ const SUITES = [
     title: "Typography",
     kind: "cdp",
     script: "typography-test.mjs",
+    doc: "samples/feature-tour.md",
+  },
+  {
+    // The plan's acceptance criteria and the three list-walking paths: the disk
+    // poll, Auto Save, and the caret/scroll a tab gets back. Needs its own
+    // instance: it opens README.md as the large document and writes temporary
+    // files for the poll and Auto Save.
+    id: "tabs",
+    title: "Document tabs",
+    kind: "cdp",
+    script: "document-tabs-test.mjs",
     doc: "samples/feature-tour.md",
   },
   {
@@ -246,6 +287,12 @@ function printSuites() {
 
 // Runs a program and collects its output. `shell` is only for the .cmd wrappers,
 // which cannot be executed directly on Windows.
+//
+// `stream` echoes as it goes but **still captures**: the layers are parsed from
+// their output (the Rust summary line, the `N/M checks passed` line), and an
+// inherited stdio leaves `out` empty. That made `npm test -- --verbose` report
+// the Rust layer as "cargo test exited 0 without a result line" while cargo had
+// printed a clean pass — a harness false failure blamed on the code.
 function run(file, args, { cwd = repoRoot, env = process.env, stream = false, shell = false } = {}) {
   // A shell needs one command string. Every argument passed here is a literal
   // with no spaces (`cargo`, `build`, `--no-bundle`, a relative .cmd path), so
@@ -259,14 +306,18 @@ function run(file, args, { cwd = repoRoot, env = process.env, stream = false, sh
       env,
       shell,
       windowsHide: true,
-      stdio: stream ? "inherit" : ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";
     let err = "";
-    if (!stream) {
-      child.stdout.on("data", (chunk) => (out += chunk));
-      child.stderr.on("data", (chunk) => (err += chunk));
-    }
+    child.stdout.on("data", (chunk) => {
+      out += chunk;
+      if (stream) process.stdout.write(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      err += chunk;
+      if (stream) process.stderr.write(chunk);
+    });
     child.on("error", (error) => resolve({ code: -1, out, err: `${err}\n${error.message}` }));
     child.on("close", (code) => resolve({ code: code ?? -1, out, err }));
   });
@@ -644,7 +695,9 @@ async function launchApp(suite, port, context, { temp, userData }) {
     stdio: ["ignore", outFd, errFd],
     windowsHide: false,
   });
-  child.on("error", () => {});
+    // Whether the step prints its own line is a human concern, not a reason to
+    // give up the captured copy that the summary is built from.
+    child.on("error", () => {});
   activeApp = child;
   try {
     await waitForCdp(port, child, path.basename(suite.doc));
@@ -654,6 +707,21 @@ async function launchApp(suite, port, context, { temp, userData }) {
     throw error;
   }
   return { child, outFd, errFd };
+}
+
+/** A layer that runs without the application: plain Node against the sources. */
+async function runNodeSuite(suite, options) {
+  const result = await run(process.execPath, [path.join("scripts", suite.script)], {
+    stream: options.verbose,
+  });
+  const output = result.out + result.err;
+  const checks = parseChecks(output) ?? parseCounts(output);
+  const ok = result.code === 0 && (!checks || checks.passed === checks.total);
+  return {
+    ok,
+    detail: checks ? checks.passed + "/" + checks.total + " checks" : "exit " + result.code + ", no check line",
+    output,
+  };
 }
 
 async function runCdpSuite(suite, port, options, context) {
@@ -747,7 +815,7 @@ async function main() {
     const skipped = suites.filter((suite) => suite.kind === "cdp" || suite.kind === "close");
     if (skipped.length) {
       console.log(`note: ${skipped.length} UI layer(s) cannot run on ${process.platform} — WebKitGTK has no CDP endpoint.`);
-      suites = suites.filter((suite) => suite.kind === "rust");
+      suites = suites.filter((suite) => suite.kind === "rust" || suite.kind === "node");
     }
   }
   if (!suites.length) {
@@ -821,6 +889,7 @@ async function main() {
       } else {
         try {
           if (suite.kind === "rust") result = await runRustSuite(options);
+          else if (suite.kind === "node") result = await runNodeSuite(suite, options);
           else if (suite.kind === "close") result = await runCloseSuite(options, context);
           else {
             const port = await findFreePort(portCursor);
@@ -855,8 +924,19 @@ async function main() {
     if (savedUserState.length) restoreUserState(savedUserState);
     if (fixtures.size) restoreFixtures(fixtures);
     if (context) {
-      if (options.keep) console.log(`\nstaging kept at ${context.stage}`);
-      else fs.rmSync(context.stage, { recursive: true, force: true });
+      if (options.keep) {
+        console.log(`\nstaging kept at ${context.stage}`);
+      } else {
+        // A WebView2 profile directory can stay locked for a moment after the
+        // window closes; failing to delete the staging folder is not a test
+        // result, so retry and then say so instead of throwing an EPERM that
+        // hides the summary.
+        try {
+          fs.rmSync(context.stage, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+        } catch (error) {
+          console.log(`\nnote: could not remove the staging folder ${context.stage}: ${error.code ?? error}`);
+        }
+      }
     }
   }
 

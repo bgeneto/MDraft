@@ -121,6 +121,9 @@ for (const [id, expected] of [
   ["file.open", "CmdOrCtrl+O"],
   ["file.save", "CmdOrCtrl+S"],
   ["file.saveAs", "CmdOrCtrl+Shift+S"],
+  ["file.close", "CmdOrCtrl+W"],
+  ["file.nextTab", "CmdOrCtrl+Tab"],
+  ["file.prevTab", "CmdOrCtrl+Shift+Tab"],
   ["edit.find", "CmdOrCtrl+F"],
   ["view.source", "CmdOrCtrl+/"],
 ]) {
@@ -304,9 +307,9 @@ check(
 );
 
 // ---------------------------------------------------------------------------
-console.log("\n=== Ctrl+N, last because it replaces the document ===");
-// The undo above put the text back, so the document is not modified and New will
-// not stop to ask about unsaved changes.
+console.log("\n=== Ctrl+N adds a tab and Ctrl+W closes it ===");
+// The undo above put the text back, so the document is not modified. New no
+// longer replaces that buffer: it opens another tab beside it.
 const cleanBefore = !(await evaluate(`document.title`)).includes("•");
 check(cleanBefore, "the document is clean before New", await evaluate(`document.title`));
 await press({ code: "KeyN", key: "n", ctrl: true });
@@ -316,6 +319,64 @@ check(/untitled/i.test(newTitle), "Ctrl+N starts a new document", newTitle);
 check(
   (await evaluate(`document.querySelector(".cm-content").innerText.replace(/\\u200b/g, "").trim()`)) === "",
   "the new document is empty",
+);
+const tabNames = JSON.parse(
+  await evaluate(`JSON.stringify([...document.querySelectorAll(".doc-tab-name")].map((el) => el.textContent))`),
+);
+check(
+  tabNames.length === 2 && tabNames.some((name) => name.includes("feature-tour")),
+  "Ctrl+N keeps the previous document open",
+  tabNames.join(", "),
+);
+
+const editorText = () =>
+  evaluate(`document.querySelector(".cm-content").innerText.replace(/\\u200b/g, "")`);
+await evaluate(`document.querySelector(".cm-content").focus()`);
+await send("Input.insertText", { text: "OTHER" });
+await sleep(300);
+await evaluate(`
+  [...document.querySelectorAll(".doc-tab")].find((tab) => tab.textContent.includes("feature-tour")).click()
+`);
+await sleep(400);
+const restored = await editorText();
+check(
+  restored.includes("feature tour") && !restored.includes("OTHER"),
+  "switching back restores the previous buffer",
+  restored.slice(0, 80),
+);
+
+await evaluate(`document.querySelector(".cm-content").focus()`);
+await send("Input.insertText", { text: "KEEP" });
+await sleep(300);
+await evaluate(`
+  [...document.querySelectorAll(".doc-tab")].find((tab) => /untitled/i.test(tab.textContent)).click()
+`);
+await sleep(300);
+await evaluate(`
+  [...document.querySelectorAll(".doc-tab")].find((tab) => tab.textContent.includes("feature-tour")).click()
+`);
+await sleep(400);
+await press({ code: "KeyZ", key: "z", ctrl: true });
+await sleep(400);
+const undone = await editorText();
+check(
+  undone.includes("feature tour") && !undone.includes("KEEP"),
+  "undo stays with the tab it belongs to",
+  undone.includes("KEEP") ? "KEEP still present" : "KEEP gone",
+);
+
+await press({ code: "KeyW", key: "w", ctrl: true });
+await sleep(400);
+const afterClose = JSON.parse(
+  await evaluate(`JSON.stringify({
+    tabs: [...document.querySelectorAll(".doc-tab-name")].map((el) => el.textContent),
+    text: document.querySelector(".cm-content").innerText.replace(/\\u200b/g, ""),
+  })`),
+);
+check(
+  afterClose.tabs.length === 1 && afterClose.text.includes("OTHER"),
+  "Ctrl+W closes the active tab and leaves the other",
+  afterClose.tabs.join(", "),
 );
 
 // ---------------------------------------------------------------------------
