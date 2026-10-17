@@ -60,6 +60,24 @@ type Row =
       get: () => string;
       set: (value: string) => void;
     }
+  /**
+   * A fixed set of alternatives, shown as buttons rather than a dropdown.
+   *
+   * Used where choosing an option changes the rest of the panel. A native
+   * `<select>` fires `change` *while its popup is still open*, so rebuilding the
+   * panel in that handler tore the control out from under the interaction and the
+   * choice was lost — the preset picker could not be used at all. Buttons finish
+   * their click before anything is rebuilt, so there is nothing to race against,
+   * and every option is visible without being opened.
+   */
+  | {
+      kind: "choices";
+      label: string;
+      help?: string;
+      options: [string, string][];
+      get: () => string;
+      set: (value: string) => void;
+    }
   | {
       kind: "number";
       label: string;
@@ -100,6 +118,13 @@ type Row =
        * reader would conclude the switch does nothing.
        */
       features: "code" | "prose";
+      /**
+       * The role's built-in stack.
+       *
+       * Kept on the row so the face dropdown can rebuild a complete stack when a
+       * face is picked: the family chosen plus this stack's own fallbacks.
+       */
+      fallback: string;
       get: () => string;
       set: (value: string) => void;
     }
@@ -153,12 +178,39 @@ function ensureFontList(): void {
  * font problem. Each preset is a complete system, and the fields below it are
  * there to be dismantled by someone who already knows what they want.
  */
+/**
+ * The first family named in a `font-family` stack, without its quotes.
+ *
+ * Used to decide which face the dropdown should report for a stack that was typed
+ * by hand, and to rebuild the stack when a face is picked.
+ */
+function firstFamily(stack: string): string {
+  const first = stack.split(",")[0] ?? "";
+  return first.trim().replace(/^["']|["']$/g, "");
+}
+
+/**
+ * A stack that begins with `family` and keeps the role's own fallbacks behind it.
+ *
+ * The tail is what makes the choice safe: a family with nothing behind it renders
+ * as whatever the machine happens to have, and a missing face would fall through
+ * to the browser's default serif in the middle of a code block.
+ */
+function stackWith(family: string, fallback: string): string {
+  const quoted = /\s/.test(family) ? `"${family}"` : family;
+  const tail = fallback
+    .split(",")
+    .map((part) => part.trim())
+    .slice(1);
+  return [quoted, ...tail].join(", ");
+}
+
 function typographyRows(host: PreferencesHost): Row[] {
   const s = () => host.settings();
 
   const rows: Row[] = [
     {
-      kind: "select",
+      kind: "choices",
       label: "Preset",
       help: "Sets every field below at once. Changing any field afterwards leaves the preset — nothing is locked.",
       options: [
@@ -194,6 +246,7 @@ function typographyRows(host: PreferencesHost): Row[] {
       variable: role.variable,
       sample: role.sample,
       features: role.features,
+      fallback: role.fallback,
       // The resolved stack, so the field always shows what is actually in use
       // rather than an empty box that means "some default somewhere".
       get: () => s()[role.id] || role.fallback,
@@ -904,6 +957,26 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       return input;
     }
 
+    if (row.kind === "choices") {
+      const group = document.createElement("div");
+      group.className = "prefs-choices";
+      const current = row.get();
+      for (const [value, label] of row.options) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "prefs-choice" + (value === current ? " active" : "");
+        button.textContent = label;
+        button.setAttribute("aria-pressed", String(value === current));
+        button.addEventListener("click", () => {
+          if (value === row.get()) return;
+          row.set(value);
+          render();
+        });
+        group.appendChild(button);
+      }
+      return group;
+    }
+
     if (row.kind === "select") {
       const select = document.createElement("select");
       for (const [value, label] of row.options) {
@@ -994,7 +1067,36 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
         render();
       });
 
-      wrap.append(input, specimen);
+      // A dropdown of the faces actually available. The datalist above is
+      // invisible until the field is focused, which makes it useless as a way of
+      // discovering what can be picked — and the whole point of this panel is
+      // that someone with no interest in typing a CSS stack can still choose a
+      // face. It sets a complete stack, not a bare name: a family with nothing
+      // behind it falls back to whatever the machine happens to have.
+      const picker = document.createElement("select");
+      picker.className = "prefs-font-pick";
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "Choose a face…";
+      picker.appendChild(placeholder);
+      for (const family of FONT_SUGGESTIONS) {
+        const option = document.createElement("option");
+        option.value = family;
+        option.textContent = family;
+        picker.appendChild(option);
+      }
+      picker.value = FONT_SUGGESTIONS.includes(firstFamily(input.value)) ? firstFamily(input.value) : "";
+      picker.addEventListener("change", () => {
+        const family = picker.value;
+        if (!family) return;
+        input.value = stackWith(family, row.fallback);
+        specimen.style.fontFamily = input.value;
+        document.documentElement.style.setProperty(row.variable, input.value);
+        row.set(input.value);
+        render();
+      });
+
+      wrap.append(input, picker, specimen);
       return wrap;
     }
 
