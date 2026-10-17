@@ -32,7 +32,14 @@ if (-not (Test-Path $exePath)) {
 # A stale state file would make the position check pass for the wrong reason.
 Remove-Item $stateFile -Force -ErrorAction SilentlyContinue
 
-Get-Process mdraft -ErrorAction SilentlyContinue | Stop-Process -Force
+# Only close the binary under test. This used to stop every mdraft process,
+# which is fine on a lone developer machine and destructive on one where another
+# copy is open: that window's unsaved state disappears, and force-killing it can
+# corrupt the WebView2 profile it is using. A copy at a different path cannot be
+# the one this script is about to launch, so it is not this test's business.
+Get-Process mdraft -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -and ($_.Path -ieq $exePath) } |
+    Stop-Process -Force
 Start-Sleep -Milliseconds 500
 
 $failures = 0

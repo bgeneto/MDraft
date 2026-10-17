@@ -12,6 +12,8 @@ use std::time::Duration;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
+use crate::documents;
+
 /// Refuse anything larger than this instead of filling the disk.
 const MAX_DOWNLOAD_BYTES: u64 = 32 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(25);
@@ -441,7 +443,10 @@ pub fn import_image(
     document_path: Option<String>,
     options: ImageOptions,
 ) -> Result<SavedImage, String> {
-    let source = PathBuf::from(&source_path);
+    // A pasted path is relative to the document being edited, not to the
+    // process working directory. Resolve before touching the filesystem, or a
+    // file beside the document is reported as missing.
+    let source = documents::resolve_path(&source_path, document_path.as_deref());
     if !source.is_file() {
         return Err(format!("{source_path} is not a file."));
     }
@@ -930,6 +935,47 @@ mod tests {
         assert_eq!(saved.source, "local");
         assert!(Path::new(&saved.absolute_path).is_file());
         assert!(source.is_file(), "the original must survive the import");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn imports_a_relative_source_against_the_document_folder() {
+        let dir = scratch("import-relative");
+        let doc = dir.join("notes.md");
+        fs::write(&doc, "x").unwrap();
+        fs::write(dir.join("picture.png"), tiny_png()).unwrap();
+
+        let saved = import_image(
+            "picture.png".to_string(),
+            Some(doc.to_string_lossy().to_string()),
+            opts("assetsDir"),
+        )
+        .unwrap();
+
+        assert_eq!(saved.markdown_path, "./assets/picture.png");
+        assert_eq!(saved.source, "local");
+        assert!(Path::new(&saved.absolute_path).is_file());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_relative_kept_image_stays_relative() {
+        let dir = scratch("keep-relative");
+        let doc = dir.join("notes.md");
+        fs::write(&doc, "x").unwrap();
+        fs::write(dir.join("picture.png"), tiny_png()).unwrap();
+
+        let saved = import_image(
+            "./picture.png".to_string(),
+            Some(doc.to_string_lossy().to_string()),
+            opts("keepOriginal"),
+        )
+        .unwrap();
+
+        assert_eq!(saved.markdown_path, "./picture.png");
+        assert_eq!(saved.bytes, 0);
 
         let _ = fs::remove_dir_all(&dir);
     }

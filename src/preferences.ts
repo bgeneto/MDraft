@@ -14,6 +14,10 @@ import {
   type TypographyRole,
 } from "./fonts";
 import { PALETTE_OPTIONS } from "./syntax-themes";
+import {
+  dictionaryOptions,
+  spellcheckAvailabilityNote,
+} from "./spellcheck";
 
 export interface PreferencesHost {
   settings(): api.Settings;
@@ -198,7 +202,8 @@ function typographyRows(host: PreferencesHost): Row[] {
     {
       kind: "choices",
       label: "Preset",
-      help: "Sets every field below at once. Changing any field afterwards leaves the preset — nothing is locked.",
+      help:
+        "Sets the faces, size and OpenType options below at once. Math scale is independent, so a preset does not move it. Changing any field afterwards leaves the preset — nothing is locked.",
       options: [
         ...TYPOGRAPHY_PRESETS.map((preset) => [preset.id, preset.label] as [string, string]),
         // Always present, so the control is never blank: it is what the picker
@@ -256,6 +261,17 @@ function typographyRows(host: PreferencesHost): Row[] {
       suffix: "px",
       get: () => s().bodyFontSize,
       set: (value) => host.update({ bodyFontSize: value }),
+    },
+    {
+      kind: "number",
+      label: "Math scale",
+      help:
+        "Scales the mathematics in the preview and in exports. KaTeX draws formulas at 121% of the surrounding text, so about 83% makes them match the prose; 100% leaves KaTeX's own ratio alone.",
+      min: 70,
+      max: 130,
+      suffix: "%",
+      get: () => s().mathFontScale,
+      set: (value) => host.update({ mathFontScale: value }),
     },
     {
       kind: "note",
@@ -416,8 +432,62 @@ function exportRows(host: PreferencesHost): Row[] {
       text:
         "Both are produced by MDraft from the same pipeline that draws the preview, so neither needs pandoc. PDF is printed by your browser, which is why it asks you to choose “Save as PDF”. Everything below this point is a pandoc format and needs pandoc installed; the PDFs it makes are typeset by Typst.",
     },
-    { kind: "heading", label: "Formats" },
   ];
+
+  // After-export options are global, not per format.
+  //
+  // They used to sit inside the format editor, which made a ticked box apply
+  // only to that one target: it did nothing when the user exported HTML, the
+  // browser-printed PDF, or a different pandoc format. A single block that
+  // every export consults is both what Typora calls the General setting and
+  // what the user expected when reporting the option as broken.
+  const currentSettings = host.settings();
+  rows.push(
+    { kind: "heading", label: "After Export" },
+    {
+      kind: "checkbox",
+      label: "Open the exported file's folder",
+      get: () => host.settings().afterOpenLocation,
+      set: (value) => host.update({ afterOpenLocation: value }),
+    },
+    {
+      kind: "checkbox",
+      label: "Open the exported file",
+      get: () => host.settings().afterOpenFile,
+      set: (value) => host.update({ afterOpenFile: value }),
+    },
+    {
+      kind: "checkbox",
+      label: "Run a command",
+      help:
+        "Runs your own command after a successful export. ${outputPath} is replaced with the file that was written.",
+      get: () => host.settings().afterRunCommand,
+      set: (value) => host.update({ afterRunCommand: value }),
+    },
+  );
+
+  if (currentSettings.afterRunCommand) {
+    rows.push({
+      kind: "text",
+      label: "Command",
+      placeholder: "xdg-open ${outputPath}",
+      get: () => host.settings().afterCommand,
+      set: (value) => host.update({ afterCommand: value }),
+    });
+  }
+
+  rows.push(
+    {
+      // The browser chooses the PDF's path in its own print dialog, so there is
+      // no path for MDraft to reveal or open. Saying so is better than a second
+      // pair of checkboxes that could never be honoured.
+      kind: "note",
+      label: "PDF (Print)",
+      text:
+        "PDF (Print) hands the document to your browser, which asks you where to save it. MDraft never learns that path, so these options do not run for it — they do run for HTML, Typst and every pandoc format.",
+    },
+    { kind: "heading", label: "Formats" },
+  );
 
   if (formats.length === 0) {
     rows.push({
@@ -498,40 +568,6 @@ function exportRows(host: PreferencesHost): Row[] {
     }
 
     rows.push(
-      { kind: "heading", label: "After Export" },
-      {
-        kind: "checkbox",
-        label: "Open the exported file's folder",
-        get: () => current.afterOpenLocation,
-        set: (value) => patchFormat(host, current.id, { afterOpenLocation: value }),
-      },
-      {
-        kind: "checkbox",
-        label: "Open the exported file",
-        get: () => current.afterOpenFile,
-        set: (value) => patchFormat(host, current.id, { afterOpenFile: value }),
-      },
-      {
-        kind: "checkbox",
-        label: "Run a command",
-        help:
-          "Runs your own command after a successful export. ${outputPath} is replaced with the file that was written.",
-        get: () => current.afterRunCommand,
-        set: (value) => patchFormat(host, current.id, { afterRunCommand: value }),
-      },
-    );
-
-    if (current.afterRunCommand) {
-      rows.push({
-        kind: "text",
-        label: "Command",
-        placeholder: "xdg-open ${outputPath}",
-        get: () => current.afterCommand,
-        set: (value) => patchFormat(host, current.id, { afterCommand: value }),
-      });
-    }
-
-    rows.push(
       { kind: "heading", label: "Manage" },
       {
         kind: "button",
@@ -573,11 +609,13 @@ function buildSections(host: PreferencesHost): Section[] {
         {
           kind: "select",
           label: "Default File Extension",
-          help: "Used when Save As is given a name without an extension.",
+          help:
+            "Used for Save As and for a new document. Typst starts the editor in Typst mode; the other choices start in Markdown.",
           options: [
             ["md", "Markdown (.md)"],
             ["markdown", "Markdown (.markdown)"],
             ["txt", "Plain text (.txt)"],
+            ["typ", "Typst (.typ)"],
           ],
           get: () => s().defaultExtension,
           set: (value) => host.update({ defaultExtension: value }),
@@ -665,6 +703,25 @@ function buildSections(host: PreferencesHost): Section[] {
           get: () => s().showStatusBar,
           set: (value) => host.update({ showStatusBar: value }),
         },
+        { kind: "heading", label: "Spelling" },
+        {
+          kind: "checkbox",
+          label: "Check spelling while typing",
+          help: "Underlines words the installed dictionary does not recognise. Code, URLs and mathematics are skipped.",
+          get: () => s().spellcheck,
+          set: (value) => host.update({ spellcheck: value }),
+        },
+        {
+          kind: "select",
+          label: "Dictionary",
+          help: "Automatic needs a few sentences of prose. Only dictionaries installed on this system are listed.",
+          options: dictionaryOptions(s().spellcheckLanguage),
+          get: () => s().spellcheckLanguage,
+          set: (value) => host.update({ spellcheckLanguage: value }),
+        },
+        ...(spellcheckAvailabilityNote()
+          ? [{ kind: "note" as const, label: "", text: spellcheckAvailabilityNote() ?? "" }]
+          : []),
       ],
     },
     {

@@ -31,6 +31,7 @@ import {
   wrapStandaloneHtml,
 } from "./markdown";
 import { createPreferences, type PreferencesHandle } from "./preferences";
+import { setInstalledLanguages, setSpellRemember } from "./spellcheck";
 import * as sidebarPanel from "./sidebar";
 import { resolvePalette } from "./syntax-themes";
 import { annotateTypstLines } from "./typst-map";
@@ -52,9 +53,11 @@ const editorPane = el<HTMLElement>("editor-pane");
 const previewPane = el<HTMLElement>("preview-pane");
 const preview = el<HTMLElement>("preview");
 const statusFile = el<HTMLSpanElement>("status-file");
+const statusTokens = el<HTMLSpanElement>("status-tokens");
 const statusWords = el<HTMLSpanElement>("status-words");
 const statusCursor = el<HTMLSpanElement>("status-cursor");
 const statusEncoding = el<HTMLSpanElement>("status-encoding");
+const statusZoom = el<HTMLButtonElement>("status-zoom");
 const toastEl = el<HTMLDivElement>("toast");
 const resizer = el<HTMLDivElement>("resizer");
 const splitter = el<HTMLDivElement>("splitter");
@@ -72,8 +75,29 @@ let savedContent = "";
 let dirty = false;
 let diskModifiedMs = 0;
 let isDark = false;
+/** Mirrors the window's fullscreen state, so the menu check can follow it. */
+let isFullscreen = false;
 let allowClose = false;
 let lastTitle = "";
+
+/** Debounce for the token estimate; long enough that typing does not queue scans. */
+const TOKEN_COUNT_DELAY_MS = 300;
+let tokenCountTimer = 0;
+/** Drops an estimate that a newer edit has already made stale. */
+let tokenCountRequest = 0;
+
+/**
+ * Headings cached from the last outline rebuild, with the markup they came from.
+ *
+ * Cursor movement only moves the active marker. Scanning the document and
+ * rebuilding hundreds of buttons on every arrow key was the outline's real cost.
+ */
+let outlineHeadings: sidebarPanel.Heading[] = [];
+let outlineLanguage: api.DocumentLanguage | null = null;
+let outlineReady = false;
+let outlineTimer = 0;
+/** Headings are document-shaped, so they can wait for a typing pause. */
+const OUTLINE_REFRESH_DELAY_MS = 250;
 
 const DEFAULT_FONT_SIZE = 16;
 const MIN_FONT = 10;
@@ -81,6 +105,13 @@ const MAX_FONT = 40;
 const AUTO_SAVE_INTERVAL_MS = 20_000;
 /** Scroll alignment window, in ms, after a programmatic pane scroll. */
 const SYNC_SUPPRESS_MS = 150;
+/**
+ * How far below the preview pane's top edge scroll sync puts the aligned block.
+ *
+ * Both directions use the same offset, so mapping forward and back through an
+ * anchor returns to the same source position instead of accumulating a drift.
+ */
+const SYNC_MARGIN = 12;
 /** How long the preview block matching the caret stays lit. */
 const BLINK_MS = 620;
 
@@ -137,9 +168,32 @@ function resolveDark(): boolean {
   return window.matchMedia("(prefers-color-scheme: dark)").matches;
 }
 
+/**
+ * The two theme icons. Swapping the markup rather than keeping both SVGs and
+ * hiding one keeps the button's children to a single visible icon, which is what
+ * the layout and the status-icon test measure.
+ */
+const SUN_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+  <circle cx="12" cy="12" r="4.2" />
+  <path d="M12 2.5v2.3M12 19.2v2.3M2.5 12h2.3M19.2 12h2.3M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6" />
+</svg>`;
+const MOON_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+</svg>`;
+
+/** Draw the icon that names the theme currently in use, not the one a click goes to. */
+function applyThemeButton(): void {
+  const button = el<HTMLButtonElement>("btn-theme");
+  button.innerHTML = isDark ? MOON_ICON : SUN_ICON;
+  const label = isDark ? "Switch to light theme" : "Switch to dark theme";
+  button.title = label;
+  button.setAttribute("aria-label", label);
+}
+
 function applyTheme(): void {
   isDark = resolveDark();
   document.documentElement.dataset.theme = isDark ? "dark" : "light";
+  applyThemeButton();
   applyHighlightTheme(isDark);
   applySyntaxTheme();
 }
@@ -147,6 +201,140 @@ function applyTheme(): void {
 /** The editor keeps its own palette, which may differ from the app theme. */
 function applySyntaxTheme(): void {
   editor?.setSyntax(resolvePalette(settings.syntaxTheme, isDark));
+}
+
+/**
+ * Say a mode changed only when the status bar cannot.
+ *
+ * With the bar visible the flag is the feedback, and a toast on top of it is
+ * noise; with the bar hidden the toast is the only confirmation there is.
+ */
+function announceIfBarHidden(label: string, on: boolean): void {
+  if (!settings.showStatusBar) toast(`${label} ${on ? "on" : "off"}`);
+}
+
+/**
+ * Draw one status flag.
+ *
+ * `on` is the state, `inactive` says the mode has no effect in this view (Sync
+ * Scroll outside Split). Both are written to the DOM rather than kept in a
+ * closure: the CSS owns the appearance, and the attribute makes the state
+ * inspectable by the tests without reading colours.
+ */
+function setStatusFlag(
+  id: string,
+  on: boolean,
+  inactive: boolean,
+  label: string,
+  shortcut = "",
+  hint = "",
+): void {
+  const button = el<HTMLButtonElement>(id);
+  button.dataset.on = String(on);
+  button.dataset.inactive = String(inactive);
+  button.setAttribute("aria-pressed", String(on));
+  const value = button.querySelector<HTMLElement>(".flag-state");
+  if (value) value.textContent = on ? "on" : "off";
+
+  const title = [`${label}${shortcut ? ` (${shortcut})` : ""} — ${on ? "on" : "off"}`];
+  if (hint) title.push(hint);
+  title.push(`Click to turn ${on ? "off" : "on"}.`);
+  button.title = title.join(" ");
+  button.setAttribute("aria-label", `${label}: ${on ? "on" : "off"}`);
+}
+
+/** Refresh the four mode flags from the state that also drives the menu. */
+function updateStatusFlags(): void {
+  setStatusFlag("flag-focus", settings.focusMode, false, "Focus mode", "F8");
+  setStatusFlag("flag-typewriter", settings.typewriterMode, false, "Typewriter mode", "F9");
+  setStatusFlag(
+    "flag-sync",
+    settings.syncScroll,
+    settings.viewMode !== "split",
+    "Sync scroll",
+    "",
+    "Only applies in Split view.",
+  );
+  setStatusFlag(
+    "flag-auto-save",
+    settings.autoSave,
+    false,
+    "Auto Save",
+    "",
+    "Saves to disk every 20 seconds while there are unsaved changes.",
+  );
+}
+
+/**
+ * Show the zoom level only while it differs from the default.
+ *
+ * The menu calls this "Zoom", but what it changes is the editor font size; a
+ * percentage is the unit the menu and the shortcut imply, and the title gives
+ * the pixel value. It is clickable, like every other status-bar indicator.
+ */
+function updateZoomIndicator(): void {
+  const percent = Math.round((settings.editorFontSize / DEFAULT_FONT_SIZE) * 100);
+  const zoomed = settings.editorFontSize !== DEFAULT_FONT_SIZE;
+  statusZoom.hidden = !zoomed;
+  statusZoom.textContent = `${percent}%`;
+  statusZoom.title = `Font size ${settings.editorFontSize}px — click to reset to ${DEFAULT_FONT_SIZE}px`;
+  statusZoom.setAttribute(
+    "aria-label",
+    `Editor font size ${settings.editorFontSize} pixels, ${percent} percent. Click to reset.`,
+  );
+}
+
+/**
+ * Mirror the interface's state onto the native menu's check marks.
+ *
+ * The menu is a native control: it cannot read the DOM, and Rust cannot see
+ * whether the window is fullscreen without asking it. Sending one struct avoids
+ * deriving the same booleans in two places and keeps the menu right after every
+ * change, including the ones made in Preferences. A failure here is cosmetic —
+ * the settings remain the source of truth.
+ */
+function syncMenuState(): void {
+  void (async () => {
+    try {
+      isFullscreen = await getCurrentWindow().isFullscreen();
+    } catch {
+      /* the window may be closing; keep the last known value */
+    }
+    try {
+      await api.setMenuState({
+        viewMode: settings.viewMode,
+        sidebarVisible: settings.sidebarVisible,
+        sidebarTab: settings.sidebarTab,
+        showStatusBar: settings.showStatusBar,
+        focusMode: settings.focusMode,
+        typewriterMode: settings.typewriterMode,
+        syncScroll: settings.syncScroll,
+        theme: settings.theme,
+        autoSave: settings.autoSave,
+        fullscreen: isFullscreen,
+      });
+    } catch {
+      /* cosmetic: the menu is not the source of truth */
+    }
+  })();
+}
+
+function rememberSpelling(word: string): void {
+  const folded = word.replace(/[\u2019\u2018\u02BC]/g, "'").trim();
+  if (!folded) return;
+  if (settings.spellcheckWords.some((entry) => entry.toLowerCase() === folded.toLowerCase())) return;
+  // The list is the reader's, and it is stored in settings.json. Cap it so a
+  // long session of "add" cannot grow the file without bound.
+  const words = [...settings.spellcheckWords, folded].slice(-500);
+  applySettingsPatch({ spellcheckWords: words });
+}
+
+function applySpellcheck(): void {
+  editor?.setSpellcheck({
+    enabled: settings.spellcheck !== false,
+    language: settings.spellcheckLanguage || "auto",
+    words: settings.spellcheckWords ?? [],
+  });
 }
 
 function applyLayout(): void {
@@ -166,6 +354,7 @@ function applyLayout(): void {
   editor?.setFontSize(settings.editorFontSize);
   editor?.setFocusMode(settings.focusMode);
   editor?.setTypewriter(settings.typewriterMode);
+  applySpellcheck();
   applySyntaxTheme();
   applyTypography();
 
@@ -185,6 +374,18 @@ function applyLayout(): void {
       String(settings.sidebarTab === tab),
     );
   }
+
+  // The button does not get the `.active` surface: an open sidebar is already
+  // visible, and a permanently lit button would read as a mode. The attribute
+  // is for assistive technology and for the smoke test.
+  el<HTMLButtonElement>("btn-sidebar").setAttribute(
+    "aria-pressed",
+    String(settings.sidebarVisible),
+  );
+
+  updateStatusFlags();
+  updateZoomIndicator();
+  syncMenuState();
 }
 
 /**
@@ -202,6 +403,9 @@ function applyTypography(): void {
     root.setProperty(role.variable, settings[role.id] || role.fallback);
   }
   root.setProperty("--body-size", `${settings.bodyFontSize}px`);
+  // KaTeX itself draws at 1.21em; this multiplies that ratio. A percentage is
+  // what the reader thinks in, a unitless multiplier is what calc() wants.
+  root.setProperty("--math-scale", String(settings.mathFontScale / 100));
 
   // Whole property values rather than composed keywords: `font-variant-numeric`
   // takes a list, and building one from separate booleans is where a stray space
@@ -228,6 +432,7 @@ function persist(): void {
 function setTheme(mode: api.ThemeMode): void {
   settings.theme = mode;
   applyTheme();
+  syncMenuState();
   persist();
   scheduleRender(true);
 }
@@ -268,20 +473,97 @@ async function refreshTitle(): Promise<void> {
   }
 }
 
-function countWords(text: string): number {
-  const trimmed = text.trim();
-  return trimmed.length === 0 ? 0 : trimmed.split(/\s+/).length;
+/**
+ * One formatter for the counts in the status bar.
+ *
+ * Digit grouping follows the webview's locale; this WebView2 reports en-US, so
+ * the numbers read `148,540`. Built once because `refreshStatus` runs on every
+ * caret move.
+ */
+const countFormat = new Intl.NumberFormat();
+
+function formatCount(value: number): string {
+  return countFormat.format(value);
+}
+
+function showTokenCount(tokens: number): void {
+  statusTokens.textContent = `${formatCount(tokens)} ${tokens === 1 ? "token" : "tokens"}`;
+  statusTokens.title =
+    `Estimated ${formatCount(tokens)} tokens — within about 10% of cl100k and o200k. ` +
+    "No model vocabulary is loaded.";
+  statusTokens.hidden = false;
+}
+
+function clearTokenCount(): void {
+  statusTokens.hidden = true;
+  statusTokens.textContent = "";
+  statusTokens.title = "";
+}
+
+/** Drop a count that belongs to the previous document before loading a new one. */
+function resetTokenCount(): void {
+  window.clearTimeout(tokenCountTimer);
+  tokenCountRequest++;
+  clearTokenCount();
+}
+
+/** Drop headings that belong to the previous document before loading a new one. */
+function resetOutline(): void {
+  window.clearTimeout(outlineTimer);
+  outlineHeadings = [];
+  outlineLanguage = null;
+  outlineReady = false;
+}
+
+/** Install the count that arrived with the document, cancelling a pending scan. */
+function setTokenCount(tokens: number): void {
+  window.clearTimeout(tokenCountTimer);
+  tokenCountRequest++;
+  showTokenCount(tokens);
+}
+
+/**
+ * Ask Rust for an approximate token count, on a debounce.
+ *
+ * A whole-document count is cheap enough to run in the background (4.6 ms per
+ * megabyte), but not free enough to run per keystroke — and sending the buffer
+ * across the IPC boundary has its own cost. Typing a paragraph therefore
+ * produces one scan when the typing pauses, not one per character. The request
+ * counter makes an answer that arrives after a newer edit irrelevant.
+ */
+function scheduleTokenCount(text: string, immediate = false): void {
+  window.clearTimeout(tokenCountTimer);
+  const request = ++tokenCountRequest;
+
+  if (text.length === 0) {
+    showTokenCount(0);
+    return;
+  }
+
+  const run = () => {
+    void api
+      .countTokens(text)
+      .then((tokens) => {
+        if (request === tokenCountRequest) showTokenCount(tokens);
+      })
+      .catch((error) => {
+        if (request !== tokenCountRequest) return;
+        clearTokenCount();
+        console.warn(`[tokens] estimate failed: ${error}`);
+      });
+  };
+
+  tokenCountTimer = window.setTimeout(run, immediate ? 0 : TOKEN_COUNT_DELAY_MS);
 }
 
 function refreshStatus(): void {
-  const text = editor.getDoc();
   const cursor = editor.cursorInfo();
-  const words = countWords(text);
-  const lines = text.length === 0 ? 0 : text.split("\n").length;
+  const { words, lines, chars } = editor.metrics();
 
+  const wordsText = formatCount(words);
   statusFile.textContent = `${dirty ? "• " : ""}${currentDoc?.name ?? "Untitled"}`;
-  statusWords.textContent = `${words} ${words === 1 ? "word" : "words"}`;
-  statusWords.title = `${words} words · ${text.length} characters · ${lines} lines`;
+  statusWords.textContent = `${wordsText} ${words === 1 ? "word" : "words"}`;
+  statusWords.title = `${wordsText} words · ${formatCount(chars)} characters · ${formatCount(lines)} lines`;
   statusCursor.textContent = `Ln ${cursor.line}, Col ${cursor.column}${
     cursor.selectionLength > 0
       ? ` (${cursor.selectionLength} selected${
@@ -485,18 +767,7 @@ function renderSidebar(): void {
   if (!settings.sidebarVisible) return;
 
   if (settings.sidebarTab === "outline") {
-    const headings = languageFor(currentPath) === "typst"
-      ? sidebarPanel.extractTypstHeadings(editor.getDoc())
-      : sidebarPanel.extractHeadings(editor.getDoc());
-    sidebarPanel.renderOutline(
-      sidebarBody,
-      headings,
-      editor.cursorInfo().line,
-      (line) => {
-        editor.scrollToLine(line);
-      },
-      currentPath !== null && /\.typ$/i.test(currentPath),
-    );
+    refreshOutline();
     return;
   }
 
@@ -534,14 +805,52 @@ function renderSidebar(): void {
   });
 }
 
+/** Rebuild the outline list from the current buffer. */
+function refreshOutline(text = editor.getDoc()): void {
+  if (settings.sidebarTab !== "outline" || !settings.sidebarVisible) return;
+  // A document load schedules a refresh and then calls renderSidebar(); this
+  // cancels the duplicate that would otherwise rescan 250 ms later.
+  window.clearTimeout(outlineTimer);
+
+  const language = languageFor(currentPath);
+  outlineHeadings =
+    language === "typst"
+      ? sidebarPanel.extractTypstHeadings(text)
+      : sidebarPanel.extractHeadings(text);
+  outlineLanguage = language;
+  outlineReady = true;
+
+  sidebarPanel.renderOutline(
+    sidebarBody,
+    outlineHeadings,
+    editor.cursorInfo().line,
+    (line) => {
+      editor.scrollToLine(line);
+    },
+    language === "typst",
+  );
+}
+
+/** Headings change with the document, not with every keystroke. */
+function scheduleOutlineRefresh(text: string): void {
+  window.clearTimeout(outlineTimer);
+  outlineTimer = window.setTimeout(() => {
+    if (settings.sidebarTab !== "outline" || !settings.sidebarVisible) {
+      // The cache is for another document state; rebuild when the tab returns.
+      outlineReady = false;
+      return;
+    }
+    refreshOutline(text);
+  }, OUTLINE_REFRESH_DELAY_MS);
+}
+
 function updateActiveOutline(): void {
   if (settings.sidebarTab !== "outline" || !settings.sidebarVisible) return;
-  const headings = languageFor(currentPath) === "typst"
-      ? sidebarPanel.extractTypstHeadings(editor.getDoc())
-      : sidebarPanel.extractHeadings(editor.getDoc());
-  sidebarPanel.renderOutline(sidebarBody, headings, editor.cursorInfo().line, (line) => {
-    editor.scrollToLine(line);
-  });
+  if (!outlineReady || outlineLanguage !== languageFor(currentPath)) {
+    refreshOutline();
+    return;
+  }
+  sidebarPanel.highlightOutline(sidebarBody, outlineHeadings, editor.cursorInfo().line);
 }
 
 // ---------------------------------------------------------------------------
@@ -559,6 +868,35 @@ function languageFor(path: string | null): api.DocumentLanguage {
   return path !== null && /\.typ$/i.test(path) ? "typst" : "markdown";
 }
 
+/**
+ * The markup a new document starts in.
+ *
+ * The default extension is what Save As will suggest, and opening a `.typ` file
+ * switches the parser to Typst. Starting the document the other way would make
+ * the first save change how the text that was already typed is read.
+ */
+function defaultDocumentLanguage(): api.DocumentLanguage {
+  return settings.defaultExtension === "typ" ? "typst" : "markdown";
+}
+
+/**
+ * The file dialog filters, with the default markup's filter first.
+ *
+ * The native dialog selects the first entry, so a reader who chose Typst as the
+ * default should not have to switch away from "Markdown" every time.
+ */
+function documentFilters(): { name: string; extensions: string[] }[] {
+  const markdown = {
+    name: "Markdown",
+    extensions: ["md", "markdown", "mdown", "mkd", "txt"],
+  };
+  const typst = { name: "Typst", extensions: ["typ"] };
+  const all = { name: "All files", extensions: ["*"] };
+  return defaultDocumentLanguage() === "typst"
+    ? [typst, markdown, all]
+    : [markdown, typst, all];
+}
+
 /** The markup of the document currently in the editor. */
 let currentLanguage: api.DocumentLanguage = "markdown";
 
@@ -569,10 +907,16 @@ async function adoptDocument(payload: api.DocumentPayload, resetHistory: boolean
   diskModifiedMs = payload.modifiedMs;
   dirty = false;
 
+  resetTokenCount();
+  resetOutline();
   editor.setDoc(payload.content, resetHistory);
   currentLanguage = languageFor(payload.path);
   editor.setLanguage(currentLanguage);
   sidebarPanel.resetDirectory(payload.directory || null);
+  // The backend counted while reading the file, so opening does not send the
+  // document back over IPC. This also cancels the debounced scan that the
+  // `setDoc` update just scheduled.
+  setTokenCount(payload.tokens);
 
   applyLayout();
   await refreshTitle();
@@ -581,22 +925,29 @@ async function adoptDocument(payload: api.DocumentPayload, resetHistory: boolean
   scheduleRender(true);
 }
 
-async function loadUntitled(content: string): Promise<void> {
+async function loadUntitled(
+  content: string,
+  language: api.DocumentLanguage = "markdown",
+): Promise<void> {
   currentDoc = null;
   currentPath = null;
   savedContent = content;
   diskModifiedMs = 0;
   dirty = false;
 
+  resetTokenCount();
+  resetOutline();
   editor.setDoc(content, true);
-  // A built-in document is Markdown, whatever the previous one was.
-  currentLanguage = "markdown";
-  editor.setLanguage("markdown");
+  // The caller decides: a built-in document is Markdown, a new document follows
+  // the default extension so its first Save As does not change its meaning.
+  currentLanguage = language;
+  editor.setLanguage(language);
   sidebarPanel.resetDirectory(null);
 
   applyLayout();
   await refreshTitle();
   refreshStatus();
+  scheduleTokenCount(content, true);
   renderSidebar();
   scheduleRender(true);
 }
@@ -685,11 +1036,7 @@ async function saveAs(): Promise<boolean> {
   const chosen = await saveDialog({
     title: "Save As",
     defaultPath: suggested,
-    filters: [
-      { name: "Markdown", extensions: ["md", "markdown", "mdown", "txt"] },
-      { name: "Typst", extensions: ["typ"] },
-      { name: "All files", extensions: ["*"] },
-    ],
+    filters: documentFilters(),
   });
   if (!chosen) return false;
 
@@ -767,6 +1114,7 @@ function exportTypographyCss(): string {
     (role) => `${role.variable}:${settings[role.id] || role.fallback}`,
   );
   declarations.push(`--body-size:${settings.bodyFontSize}px`);
+  declarations.push(`--math-scale:${settings.mathFontScale / 100}`);
   declarations.push(
     `--prose-figures:${settings.oldstyleFigures ? "oldstyle-nums" : "normal"}`,
     `--table-figures:${settings.tabularFigures ? "tabular-nums" : "normal"}`,
@@ -780,7 +1128,12 @@ function exportTypographyCss(): string {
     ".markdown-body h1,.markdown-body h2,.markdown-body h3,.markdown-body h4," +
     ".markdown-body h5,.markdown-body h6,.markdown-body th," +
     ".markdown-body strong,.markdown-body b{font-weight:var(--weight-strong)}";
-  return `:root{${declarations.join(";")}}\n${emphasis}`;
+  // The same scaling rule styles.css carries. An exported document has no
+  // stylesheet of its own, and without this the formula in a printed PDF would
+  // stay at KaTeX's 1.21em while the preview showed the reader's scale.
+  const mathScale =
+    ".math-inline,.math-display{font-size:calc(1em * var(--math-scale))}";
+  return `:root{${declarations.join(";")}}\n${emphasis}\n${mathScale}`;
 }
 
 /** Basename of the open document, without its extension. */
@@ -824,6 +1177,17 @@ async function exportHtml(): Promise<void> {
     );
     await api.writeDocument(target, html, "\n", false);
     toast("Exported HTML");
+
+    // HTML never passes through `run_export`, so it asks for the global
+    // after-export options itself. Without this the boxes did nothing for the
+    // one native format that writes a real file.
+    const after = await api.runAfterExport(target);
+    if (after.afterErrors.length > 0) {
+      await message(after.afterErrors.join("\n\n"), {
+        title: "Exported, with a problem",
+        kind: "warning",
+      });
+    }
   } catch (error) {
     await message(String(error), { title: "Could not export", kind: "error" });
   }
@@ -884,6 +1248,9 @@ const EXPORT_MENU_PREFIX = "export.pandoc.";
  */
 let pandocCache: api.PandocStatus | null = null;
 
+/** Typst is needed by the PDF target and by `.typ` previews; PDF is the only export. */
+let typstCache: api.TypstStatus | null = null;
+
 async function refreshPandocStatus(): Promise<void> {
   try {
     pandocCache = await api.pandocStatus();
@@ -893,6 +1260,31 @@ async function refreshPandocStatus(): Promise<void> {
     return;
   }
   preferences?.refresh();
+}
+
+async function refreshTypstStatus(): Promise<void> {
+  try {
+    typstCache = await api.typstStatus();
+  } catch {
+    return;
+  }
+  preferences?.refresh();
+}
+
+/**
+ * Tell the native Export menu which external tools are present.
+ *
+ * A disabled item cannot explain itself after a click, so the Rust side also
+ * annotates its label ("— needs Pandoc"). The answer is stored there too: a
+ * menu rebuild after editing the export formats must not lose it.
+ */
+async function syncExportAvailability(): Promise<void> {
+  if (!pandocCache || !typstCache) return;
+  try {
+    await api.setExportAvailability(pandocCache.found, typstCache.found);
+  } catch {
+    /* cosmetic: the guard before the save dialog still checks the caches */
+  }
 }
 
 /** A sensible default filename for an export of the current document. */
@@ -911,6 +1303,24 @@ function exportSuggestion(format: api.ExportFormat): string {
  * output path is known to be the file that was just written.
  */
 async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
+  // The menu disables formats whose tool is missing, but a stale menu, a
+  // keyboard route or a settings file edited elsewhere must not open a save
+  // dialog for an export that cannot run. Ask before choosing a path.
+  if (!pandocCache) await refreshPandocStatus();
+  if (pandocCache && !pandocCache.found) {
+    toast("Pandoc is not installed — install it before exporting.");
+    await pandocSetup();
+    return;
+  }
+  if (format.id === "pdf") {
+    if (!typstCache) await refreshTypstStatus();
+    if (typstCache && !typstCache.found) {
+      toast("PDF export needs Typst — install it first.");
+      await typstSetup();
+      return;
+    }
+  }
+
   const chosen = await saveDialog({
     title: `Export as ${format.label}`,
     defaultPath: exportSuggestion(format),
@@ -972,7 +1382,12 @@ async function pandocSetup(): Promise<void> {
     ? `\nPDF engine: ${basename(status.pdfEngine)}`
     : "\nPDF engine: none — Typst is not installed, so PDF export is unavailable. Use Help › Install Typst. Every other format works without it.";
 
+  pandocCache = status;
+  preferences?.refresh();
+
   if (status.found) {
+    await refreshTypstStatus();
+    await syncExportAvailability();
     await message(
       `Pandoc ${status.version ?? "(unknown version)"} is ready.\n\n` +
         `Location: ${status.path}\n` +
@@ -999,6 +1414,9 @@ async function pandocSetup(): Promise<void> {
   try {
     const installed = await api.installPandoc();
     notice.dismiss();
+    pandocCache = installed;
+    await refreshTypstStatus();
+    await syncExportAvailability();
     await message(
       `Pandoc ${installed.version ?? ""} is ready.\n\n${installed.path ?? ""}\n\n` +
         (installed.pdfEngine
@@ -1030,6 +1448,10 @@ async function typstSetup(): Promise<void> {
   }
 
   if (status.found) {
+    typstCache = status;
+    preferences?.refresh();
+    await refreshPandocStatus();
+    await syncExportAvailability();
     await message(
       `Typst ${status.version ?? "(unknown version)"} is ready.\n\n` +
         `Location: ${status.path}\n` +
@@ -1070,6 +1492,9 @@ async function typstSetup(): Promise<void> {
   try {
     const installed = await api.installTypst();
     notice.dismiss();
+    typstCache = installed;
+    await refreshPandocStatus();
+    await syncExportAvailability();
     await message(
       `Typst ${installed.version ?? ""} is ready.\n\n${installed.path ?? ""}\n\n` +
         "PDF export will use it, and .typ documents can now be previewed.",
@@ -1088,20 +1513,16 @@ async function typstSetup(): Promise<void> {
 const handlers: Record<string, () => void | Promise<void>> = {
   "file.new": async () => {
     if (!(await confirmDiscard())) return;
-    await loadUntitled("");
+    await loadUntitled("", defaultDocumentLanguage());
   },
   "file.open": async () => {
     if (!(await confirmDiscard())) return;
     const chosen = await openDialog({
-      title: "Open Markdown File",
+      title: "Open Document",
       multiple: false,
       directory: false,
       defaultPath: settings.lastDirectory ?? undefined,
-      filters: [
-        { name: "Markdown", extensions: ["md", "markdown", "mdown", "mkd", "txt"] },
-        { name: "Typst", extensions: ["typ"] },
-        { name: "All files", extensions: ["*"] },
-      ],
+      filters: documentFilters(),
     });
     if (!chosen) return;
     const path = Array.isArray(chosen) ? chosen[0] : chosen;
@@ -1109,9 +1530,17 @@ const handlers: Record<string, () => void | Promise<void>> = {
   },
   "file.save": () => void save(),
   "file.saveAs": () => void saveAs(),
+  "file.autoSave": () => {
+    settings.autoSave = !settings.autoSave;
+    applyLayout();
+    persist();
+    announceIfBarHidden("Auto save", settings.autoSave);
+  },
   "file.reload": () => void reloadFromDisk(),
   "export.html": () => void exportHtml(),
   "export.pdf": () => void exportPdf(),
+  "export.installPandoc": () => void pandocSetup(),
+  "export.installTypst": () => void typstSetup(),
   "file.reveal": async () => {
     if (!currentPath) {
       toast("Save the document first.");
@@ -1167,6 +1596,16 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "format.link": () => editor.wrapSelection("[", "](https://)", "link text"),
   "format.image": () => editor.wrapSelection("![", "](./image.png)", "alt text"),
   "format.math": () => editor.wrapSelection("$", "$", "e^{i\\pi}+1=0"),
+  "format.displayMath": () => {
+    // A selected expression becomes a display equation in place. With nothing
+    // selected, insert the block a bare caret is asking for; `wrapSelection`
+    // would otherwise put the placeholder in a display box mid-sentence.
+    if (editor.cursorInfo().selectionLength > 0) {
+      editor.wrapSelection("$$", "$$", "");
+    } else {
+      editor.insertBlockWithCaret("$$\n\n$$\n", 3);
+    }
+  },
 
   "themes.system": () => setTheme("system"),
   "themes.light": () => setTheme("light"),
@@ -1188,17 +1627,26 @@ const handlers: Record<string, () => void | Promise<void>> = {
     settings.focusMode = !settings.focusMode;
     applyLayout();
     persist();
+    announceIfBarHidden("Focus mode", settings.focusMode);
   },
   "view.typewriter": () => {
     settings.typewriterMode = !settings.typewriterMode;
     applyLayout();
     persist();
-    toast(`Typewriter mode ${settings.typewriterMode ? "on" : "off"}`);
+    announceIfBarHidden("Typewriter mode", settings.typewriterMode);
   },
   "view.syncScroll": () => {
     settings.syncScroll = !settings.syncScroll;
+    applyLayout();
     persist();
-    toast(`Sync scroll ${settings.syncScroll ? "on" : "off"}`);
+    announceIfBarHidden("Sync scroll", settings.syncScroll);
+  },
+  "view.fullscreen": async () => {
+    const window = getCurrentWindow();
+    const next = !(await window.isFullscreen());
+    await window.setFullscreen(next);
+    isFullscreen = next;
+    syncMenuState();
   },
   "view.zoomIn": () => setFontSize(settings.editorFontSize + 1),
   "view.zoomOut": () => setFontSize(settings.editorFontSize - 1),
@@ -1256,6 +1704,10 @@ function setViewMode(mode: api.ViewMode): void {
 }
 
 function setSidebarVisible(visible: boolean): void {
+  if (settings.focusMode) {
+    toast("Focus mode hides the sidebar — press F8 to leave it.");
+    return;
+  }
   settings.sidebarVisible = visible;
   applyLayout();
   persist();
@@ -1263,6 +1715,10 @@ function setSidebarVisible(visible: boolean): void {
 }
 
 function setSidebarTab(tab: api.SidebarTab): void {
+  if (settings.focusMode) {
+    toast("Focus mode hides the sidebar — press F8 to leave it.");
+    return;
+  }
   settings.sidebarTab = tab;
   if (!settings.sidebarVisible) settings.sidebarVisible = true;
   applyLayout();
@@ -1309,20 +1765,106 @@ function rebuildAnchors(): void {
   window.clearTimeout(blinkTimer);
 }
 
-/** Last block that starts at or before `line`. */
-function anchorForLine(line: number): HTMLElement | null {
-  let found: HTMLElement | null = null;
-  for (const anchor of previewAnchors) {
-    if (anchor.line <= line) found = anchor.el;
+/** Index of the last block that starts at or before `line`, or -1. */
+function anchorIndexForLine(line: number): number {
+  let index = -1;
+  for (let i = 0; i < previewAnchors.length; i++) {
+    if (previewAnchors[i].line <= line) index = i;
     else break;
   }
-  return found ?? previewAnchors[0]?.el ?? null;
+  return index;
 }
 
-/** Source line of the block currently sitting at the top of the preview. */
+/** Last block that starts at or before `line`. */
+function anchorForLine(line: number): HTMLElement | null {
+  const index = anchorIndexForLine(line);
+  return index >= 0 ? previewAnchors[index].el : previewAnchors[0]?.el ?? null;
+}
+
+/** Preview block top in scroll-content coordinates, padding included. */
+function previewTop(el: HTMLElement): number {
+  return (
+    previewPane.scrollTop +
+    el.getBoundingClientRect().top -
+    previewPane.getBoundingClientRect().top
+  );
+}
+
+/** The preview scroll offset that puts a block on the sync line. */
+function previewScrollFor(el: HTMLElement): number {
+  return Math.max(0, previewTop(el) - SYNC_MARGIN);
+}
+
+/** One pair of corresponding positions: a block top in both panes. */
+interface SyncSegment {
+  editor0: number;
+  preview0: number;
+  editor1: number;
+  preview1: number;
+}
+
+/** Map `value` from one interval to the other, clamped to its ends. */
+function interpolate(
+  value: number,
+  from0: number,
+  from1: number,
+  to0: number,
+  to1: number,
+): number {
+  if (from1 <= from0) return to0;
+  const t = Math.min(1, Math.max(0, (value - from0) / (from1 - from0)));
+  return to0 + t * (to1 - to0);
+}
+
+/** Where the preview should stop once the last block has been read through. */
+function previewEndFor(el: HTMLElement): number {
+  const pane = previewPane.getBoundingClientRect();
+  const blockBottom =
+    previewPane.scrollTop + el.getBoundingClientRect().bottom - pane.top;
+  const max = Math.max(0, previewPane.scrollHeight - previewPane.clientHeight);
+  // The 45vh bottom padding is for reading the last block at the top, not part
+  // of the document. Mapping into it would scroll the text off screen.
+  return Math.max(
+    previewScrollFor(el),
+    Math.min(max, blockBottom - previewPane.clientHeight),
+  );
+}
+
+/**
+ * The two adjacent sync positions around an anchor index.
+ *
+ * The last anchor uses the editor's scroll end and the bottom of its block as
+ * the second position, so a long final block keeps following instead of
+ * pinning at its first line.
+ */
+function syncSegmentFor(index: number): SyncSegment | null {
+  if (index < 0 || index >= previewAnchors.length) return null;
+  const anchor = previewAnchors[index];
+  const editor0 = editor.lineTop(anchor.line);
+  const preview0 = previewScrollFor(anchor.el);
+
+  if (index + 1 < previewAnchors.length) {
+    const next = previewAnchors[index + 1];
+    return {
+      editor0,
+      preview0,
+      editor1: Math.max(editor0, editor.lineTop(next.line)),
+      preview1: Math.max(preview0, previewScrollFor(next.el)),
+    };
+  }
+
+  return {
+    editor0,
+    preview0,
+    editor1: Math.max(editor0, editor.scrollMax()),
+    preview1: previewEndFor(anchor.el),
+  };
+}
+
+/** Source line of the block at the preview's sync line. */
 function lineAtPreviewTop(): number | null {
   if (previewAnchors.length === 0) return null;
-  const top = previewPane.getBoundingClientRect().top + 1;
+  const top = previewPane.getBoundingClientRect().top + SYNC_MARGIN;
   let current: number | null = null;
   for (const anchor of previewAnchors) {
     if (anchor.el.getBoundingClientRect().top <= top) current = anchor.line;
@@ -1337,7 +1879,62 @@ function alignPreviewToLine(line: number): void {
   if (!el) return;
   const delta = el.getBoundingClientRect().top - previewPane.getBoundingClientRect().top;
   suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
-  previewPane.scrollTop += delta - 12;
+  previewPane.scrollTop += delta - SYNC_MARGIN;
+}
+
+/**
+ * Follow the source between anchors instead of jumping from block to block.
+ *
+ * The old mapping pinned the preview inside every block and jumped at each
+ * boundary. Those steps are the reason a large preview font feels worse: the
+ * step is the whole rendered block. Interpolating between the measured anchor
+ * positions makes the motion continuous, and its slope is the local
+ * `Δpreview / Δeditor` — which already contains both font sizes, wrapped lines
+ * and every image or table between the anchors. No font-size heuristic is
+ * involved, so it stays correct at 11px and at 32px alike.
+ */
+function alignPreviewToScroll(): void {
+  const line = editor.topVisibleLine();
+  const index = Math.max(0, anchorIndexForLine(line));
+  const segment = syncSegmentFor(index);
+  if (!segment) return;
+
+  const target = interpolate(
+    editor.view.scrollDOM.scrollTop,
+    segment.editor0,
+    segment.editor1,
+    segment.preview0,
+    segment.preview1,
+  );
+  const max = Math.max(0, previewPane.scrollHeight - previewPane.clientHeight);
+  suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+  previewPane.scrollTop = Math.min(max, Math.max(0, target));
+}
+
+/**
+ * The same map in reverse, for a reader scrolling the preview.
+ *
+ * It sets only the scroll offset: the caret belongs to the reader, and moving
+ * it here would turn a scroll into a selection. Using the same anchors and the
+ * same margin as `alignPreviewToScroll` makes the two directions inverses, so
+ * a round trip cannot accumulate drift.
+ */
+function alignEditorToScroll(): void {
+  const line = lineAtPreviewTop();
+  if (line === null) return;
+  const index = Math.max(0, anchorIndexForLine(line));
+  const segment = syncSegmentFor(index);
+  if (!segment) return;
+
+  const target = interpolate(
+    previewPane.scrollTop,
+    segment.preview0,
+    segment.preview1,
+    segment.editor0,
+    segment.editor1,
+  );
+  suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+  editor.scrollToOffset(target);
 }
 
 /**
@@ -1435,13 +2032,13 @@ function installPaneSync(): void {
     blinkAnchor(editor.cursorInfo().line);
   });
 
-  // Scrolling the source -> the preview follows the top visible block. This one
-  // aligns unconditionally, because that is what keeps the two panes together
-  // while the reader scrolls.
+  // Scrolling the source -> the preview follows the same fraction of the block
+  // under the top of the pane. This one follows unconditionally, because that
+  // is what keeps the two panes together while the reader scrolls.
   editor.onScroll(() => {
     if (!settings.syncScroll || settings.viewMode !== "split" || !previewLinesMapped) return;
     if (performance.now() < suppressEditorScrollUntil) return;
-    alignPreviewToLine(editor.topVisibleLine());
+    alignPreviewToScroll();
   });
 
   // Click in the preview -> the source reveals that line, and the preview stays
@@ -1461,15 +2058,13 @@ function installPaneSync(): void {
     blinkAnchor(line);
   });
 
-  // Scrolling the preview -> the source follows the top visible block.
-  // The scrolling element is the pane, not the rendered document inside it.
+  // Scrolling the preview -> the source follows the same fraction of the block
+  // under the sync line. The scrolling element is the pane, not the rendered
+  // document inside it.
   previewPane.addEventListener("scroll", () => {
     if (!settings.syncScroll || settings.viewMode !== "split") return;
     if (performance.now() < suppressPreviewScrollUntil) return;
-    const line = lineAtPreviewTop();
-    if (line === null) return;
-    suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
-    editor.revealLine(line, false, false);
+    alignEditorToScroll();
   });
 }
 
@@ -1815,10 +2410,11 @@ function installSystemThemeWatcher(): void {
 // Image paste and drop
 // ---------------------------------------------------------------------------
 
-function imageContext(): ImageContext {
+function imageContext(hasSelection = false): ImageContext {
   return {
     settings,
     documentPath: currentPath,
+    hasSelection,
     insert: (markdown) => editor.insertBlock(markdown),
     notify: (text, isError = false) => toast(text, isError ? 5200 : 3200),
   };
@@ -1832,16 +2428,22 @@ function installImagePaste(): void {
   const handler = (event: ClipboardEvent) => {
     // A paste over the preview targets the block under the pointer: move the
     // caret there first so the image lands where the user aimed.
-    const target = event.target as HTMLElement | null;
-    const anchor = target?.closest?.<HTMLElement>("[data-line]");
+    const target = event.target as Node | null;
+    const element = target as HTMLElement | null;
+    const anchor = element?.closest?.<HTMLElement>("[data-line]");
     if (anchor) {
       const line = Number(anchor.dataset.line);
       if (Number.isFinite(line)) editor.revealLine(line, true, false);
     }
 
+    // Only an editor selection is a text selection. A paste over the preview
+    // has already moved the caret to the block under the pointer.
+    const inEditor = target !== null && editorPane.contains(target);
+    const hasSelection = inEditor && editor.cursorInfo().selectionLength > 0;
+
     // The decision and preventDefault must happen in this same turn; deferring
     // them to a promise lets the browser insert the pasted text as well.
-    if (handleImagePaste(event, imageContext())) {
+    if (handleImagePaste(event, imageContext(hasSelection))) {
       event.preventDefault();
       event.stopPropagation();
     }
@@ -1865,6 +2467,18 @@ function installChrome(): void {
   el<HTMLButtonElement>("btn-theme").addEventListener("click", () =>
     setTheme(isDark ? "light" : "dark"),
   );
+  statusZoom.addEventListener("click", () => setFontSize(DEFAULT_FONT_SIZE));
+
+  // The flags take the same route as the native menu items, so the two can never
+  // disagree and the 250 ms double-run guard lives in one place.
+  for (const [button, id] of [
+    ["flag-focus", "view.focus"],
+    ["flag-typewriter", "view.typewriter"],
+    ["flag-sync", "view.syncScroll"],
+    ["flag-auto-save", "file.autoSave"],
+  ] as const) {
+    el<HTMLButtonElement>(button).addEventListener("click", () => runMenuAction(id));
+  }
 }
 
 /**
@@ -1906,8 +2520,9 @@ async function boot(): Promise<void> {
   editor.onDocChanged((text) => {
     setDirty(text !== savedContent);
     refreshStatus();
+    scheduleTokenCount(text);
     scheduleRender();
-    updateActiveOutline();
+    scheduleOutlineRefresh(text);
   });
   editor.onCursor(() => {
     refreshStatus();
@@ -1936,6 +2551,7 @@ async function boot(): Promise<void> {
     setupPandoc: async () => {
       await pandocSetup();
       await refreshPandocStatus();
+      await syncExportAvailability();
     },
     chooseStyleReference: async (current) => {
       const chosen = await openDialog({
@@ -1960,7 +2576,19 @@ async function boot(): Promise<void> {
   installResizers();
   installSystemThemeWatcher();
 
+  setSpellRemember(rememberSpelling);
   applyLayout();
+  // The language list is a local COM/hunspell query, not a download. It still
+  // waits until after the first paint: start-up does not block on it, and the
+  // underlines appear once the answer is in.
+  void api.spellcheckLanguages().then((languages) => {
+    setInstalledLanguages(languages);
+    applySpellcheck();
+    preferences?.refresh();
+  }).catch(() => {
+    setInstalledLanguages([]);
+    preferences?.refresh();
+  });
 
   await installMenuListener();
   // The accelerators the menu registered, bound to the keyboard. Tauri 2 never
@@ -1969,9 +2597,11 @@ async function boot(): Promise<void> {
   installShortcuts(await api.shortcuts());
   await installDragDrop();
   await installCloseGuard();
-  // Look for pandoc in the background: nothing at start-up depends on it, and
-  // the answer only matters once the Export menu or panel is used.
-  void refreshPandocStatus();
+  // Look for pandoc and Typst in the background: nothing at start-up depends on
+  // them, and the answers only matter once the Export menu or a `.typ` document
+  // is used. The menu labels follow as soon as both answers are in.
+  void refreshPandocStatus().then(syncExportAvailability);
+  void refreshTypstStatus().then(syncExportAvailability);
   await listen<string[]>("open-files", (event) => {
     const first = event.payload[0];
     if (first) void openPath(first);
@@ -1981,7 +2611,7 @@ async function boot(): Promise<void> {
   if (startup) {
     await openPath(startup, { confirm: false, silent: true });
   } else if (settings.onLaunch === "new") {
-    await loadUntitled("");
+    await loadUntitled("", defaultDocumentLanguage());
   } else if (settings.onLaunch === "last" && settings.recentFiles.length > 0) {
     await openPath(settings.recentFiles[0], { confirm: false, silent: true });
   } else {

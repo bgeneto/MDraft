@@ -345,7 +345,7 @@ pub fn export<R: Runtime>(app: &AppHandle<R>, request: &ExportRequest) -> Result
     if typst_source {
         let ext = format.extension.to_ascii_lowercase();
         if ext == "pdf" || ext == "html" {
-            return export_typst_direct(app, request, &format, &ext);
+            return export_typst_direct(app, request, &ext);
         }
     }
 
@@ -462,13 +462,13 @@ pub fn export<R: Runtime>(app: &AppHandle<R>, request: &ExportRequest) -> Result
         ));
     }
 
-    let (after, after_errors) = run_after_actions(app, &format, &target);
+    let after = run_after_actions(app, &target);
     Ok(ExportOutcome {
         output_path: target.to_string_lossy().into_owned(),
         bytes,
         warnings: stderr,
-        after,
-        after_errors,
+        after: after.after,
+        after_errors: after.after_errors,
     })
 }
 
@@ -482,7 +482,6 @@ pub fn export<R: Runtime>(app: &AppHandle<R>, request: &ExportRequest) -> Result
 fn export_typst_direct<R: Runtime>(
     app: &AppHandle<R>,
     request: &ExportRequest,
-    format: &ExportFormat,
     extension: &str,
 ) -> Result<ExportOutcome, String> {
     let target = PathBuf::from(&request.output_path);
@@ -502,13 +501,13 @@ fn export_typst_direct<R: Runtime>(
         ));
     }
 
-    let (after, after_errors) = run_after_actions(app, format, &target);
+    let after = run_after_actions(app, &target);
     Ok(ExportOutcome {
         output_path: target.to_string_lossy().into_owned(),
         bytes,
         warnings: String::new(),
-        after,
-        after_errors,
+        after: after.after,
+        after_errors: after.after_errors,
     })
 }
 
@@ -611,46 +610,69 @@ fn wait_with_timeout(
     }
 }
 
-/// Apply the format's after-export options.
+/// What the after-export options did, for the status line and the error dialog.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AfterExportOutcome {
+    pub after: Vec<String>,
+    pub after_errors: Vec<String>,
+}
+
+/// Apply the after-export options to a file that was just written.
+///
+/// The options are global settings, not per format. They used to live on each
+/// `ExportFormat`, which made them look dead: a box ticked for Word did nothing
+/// when the user exported HTML or a different pandoc format. Every path that
+/// writes a file — pandoc, Typst and HTML — now asks for the same three actions.
 ///
 /// Errors are collected rather than propagated: the file was written, so a
 /// failure to open it must not be reported as a failed export.
-fn run_after_actions<R: Runtime>(
-    app: &AppHandle<R>,
-    format: &ExportFormat,
-    target: &Path,
-) -> (Vec<String>, Vec<String>) {
-    let mut done = Vec::new();
-    let mut failed = Vec::new();
+fn run_after_actions<R: Runtime>(app: &AppHandle<R>, target: &Path) -> AfterExportOutcome {
+    let settings = match app.state::<AppState>().settings.lock() {
+        Ok(settings) => settings.clone(),
+        Err(_) => {
+            return AfterExportOutcome {
+                after: Vec::new(),
+                after_errors: vec!["The settings are unavailable.".into()],
+            };
+        }
+    };
 
-    if format.after_open_location {
+    let mut outcome = AfterExportOutcome::default();
+
+    if settings.after_open_location {
         match tauri_plugin_opener::reveal_item_in_dir(target) {
-            Ok(()) => done.push("revealed the file".into()),
-            Err(e) => failed.push(format!("could not reveal the file: {e}")),
+            Ok(()) => outcome.after.push("revealed the file".into()),
+            Err(e) => outcome
+                .after_errors
+                .push(format!("could not reveal the file: {e}")),
         }
     }
-    if format.after_open_file {
+    if settings.after_open_file {
         match tauri_plugin_opener::open_path(target, None::<&str>) {
-            Ok(()) => done.push("opened the file".into()),
-            Err(e) => failed.push(format!("could not open the file: {e}")),
+            Ok(()) => outcome.after.push("opened the file".into()),
+            Err(e) => outcome
+                .after_errors
+                .push(format!("could not open the file: {e}")),
         }
     }
-    if format.after_run_command {
-        let command = format
+    if settings.after_run_command {
+        let command = settings
             .after_command
             .replace("${outputPath}", &target.to_string_lossy());
         if command.trim().is_empty() {
-            failed.push("no command was configured".into());
+            outcome
+                .after_errors
+                .push("no command was configured".into());
         } else {
             match run_user_command(&command) {
-                Ok(()) => done.push(format!("ran {command}")),
-                Err(e) => failed.push(format!("command failed: {e}")),
+                Ok(()) => outcome.after.push(format!("ran {command}")),
+                Err(e) => outcome.after_errors.push(format!("command failed: {e}")),
             }
         }
     }
 
-    let _ = app;
-    (done, failed)
+    outcome
 }
 
 /// Run a command the user configured themselves.
@@ -1008,6 +1030,17 @@ pub async fn install_pandoc<R: Runtime>(app: AppHandle<R>) -> Result<PandocStatu
     tauri::async_runtime::spawn_blocking(move || install(&app))
         .await
         .map_err(|e| format!("The install task could not be started: {e}"))?
+}
+
+/// Run the after-export options for a file the frontend wrote itself.
+///
+/// HTML is produced in TypeScript and written through `write_document`, so it
+/// never passes through [`export`]. Without this command the options did nothing
+/// for HTML at all — one of the paths the user was exporting when they reported
+/// that neither box worked.
+#[tauri::command]
+pub fn run_after_export<R: Runtime>(app: AppHandle<R>, path: String) -> AfterExportOutcome {
+    run_after_actions(&app, Path::new(&path))
 }
 
 // ---------------------------------------------------------------------------

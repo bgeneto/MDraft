@@ -6,6 +6,7 @@ import {
   EditorState,
   RangeSetBuilder,
   type Extension,
+  type Text,
 } from "@codemirror/state";
 import {
   Decoration,
@@ -44,12 +45,20 @@ import {
   searchKeymap,
 } from "@codemirror/search";
 import { buildChromeTheme, buildHighlightStyle, type SyntaxPalette } from "./syntax-themes";
+import { resetSpellLanguage, spellExtension, type SpellOptions } from "./spellcheck";
 
 export interface CursorInfo {
   line: number;
   column: number;
   selectionLength: number;
   selectionLines: number;
+}
+
+/** Counts for the buffer, maintained incrementally rather than rescanned. */
+export interface DocMetrics {
+  words: number;
+  lines: number;
+  chars: number;
 }
 
 export interface ScrollInfo {
@@ -62,6 +71,8 @@ export interface EditorHandle {
   view: EditorView;
   setDoc(text: string, resetHistory?: boolean): void;
   getDoc(): string;
+  /** Word/line/character counts for the buffer, updated on every change. */
+  metrics(): DocMetrics;
   focus(): void;
   /** Install a syntax palette: token colours plus the writing surface. */
   setSyntax(palette: SyntaxPalette): void;
@@ -74,6 +85,8 @@ export interface EditorHandle {
   requestMeasure(): void;
   setFocusMode(on: boolean): void;
   setTypewriter(on: boolean): void;
+  /** Underline misspellings, or clear the marks when spelling is off. */
+  setSpellcheck(options: SpellOptions): void;
   openSearch(replace?: boolean): void;
   closeSearch(): void;
   scrollToLine(line: number): void;
@@ -81,6 +94,12 @@ export interface EditorHandle {
   revealLine(line: number, moveCaret?: boolean, focus?: boolean): void;
   /** Source line currently at the top of the visible editor area. */
   topVisibleLine(): number;
+  /** Content offset of the top of `line`, in pixels. */
+  lineTop(line: number): number;
+  /** Scroll the source pane vertically without moving the caret or focusing it. */
+  scrollToOffset(top: number): void;
+  /** Largest vertical scroll offset the source pane can reach. */
+  scrollMax(): number;
   cursorInfo(): CursorInfo;
   setHeading(level: number): void;
   shiftHeading(delta: number): void;
@@ -102,6 +121,11 @@ export interface EditorHandle {
 }
 
 const dimLine = Decoration.line({ class: "cm-dim-line" });
+
+function countWordsInLine(text: string): number {
+  const trimmed = text.trim();
+  return trimmed.length === 0 ? 0 : trimmed.split(/\s+/).length;
+}
 
 function focusDecorations(view: EditorView): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
@@ -168,6 +192,8 @@ export function createEditor(host: HTMLElement): EditorHandle {
   const focusCompartment = new Compartment();
   const historyCompartment = new Compartment();
   const syntaxCompartment = new Compartment();
+  const spellCompartment = new Compartment();
+  let spellKey = "";
 /// Which language the buffer is parsed as. A markdown editor that also edits
 /// Typst needs this to be switchable at runtime; a static extension could not be.
 const languageCompartment = new Compartment();
@@ -186,6 +212,97 @@ const markdownSupport = markdown({
   let onScroll: (info: ScrollInfo) => void = () => {};
   let typewriter = false;
   let view: EditorView;
+
+  // One word count per line. A change only touches the lines it spans, so the
+  // total is adjusted by the difference instead of rescanning the document.
+  // Text is never joined across a newline, which is what makes the per-line
+  // sum exactly equal to trimming and splitting the whole buffer.
+  let lineWordCounts: number[] = [0];
+  let totalWords = 0;
+
+  function rebuildWordCache(doc: Text): void {
+    lineWordCounts = [];
+    totalWords = 0;
+    for (const line of doc.iterLines()) {
+      const words = countWordsInLine(line);
+      lineWordCounts.push(words);
+      totalWords += words;
+    }
+  }
+
+  function applyWordChanges(update: ViewUpdate): void {
+    const before = update.startState.doc;
+    const after = update.state.doc;
+
+    // Fail safe: if an update ever bypasses this listener, or a document was
+    // installed without one, discard the cache rather than report a wrong count.
+    if (lineWordCounts.length !== before.lines) {
+      rebuildWordCache(after);
+      return;
+    }
+
+    const ranges: Array<[number, number, number, number]> = [];
+    update.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+      ranges.push([fromA, toA, fromB, toB]);
+    });
+    if (ranges.length === 0) return;
+
+    let minOldStart = Infinity;
+    let maxOldEnd = -1;
+    let minNewStart = Infinity;
+    let maxNewEnd = -1;
+    for (const [fromA, toA, fromB, toB] of ranges) {
+      minOldStart = Math.min(minOldStart, before.lineAt(fromA).number - 1);
+      maxOldEnd = Math.max(maxOldEnd, before.lineAt(toA).number - 1);
+      minNewStart = Math.min(minNewStart, after.lineAt(fromB).number - 1);
+      maxNewEnd = Math.max(maxNewEnd, after.lineAt(toB).number - 1);
+    }
+
+    // A whole-buffer replacement (open, reload, format) is cheaper to rebuild
+    // than to splice, and avoids spreading a huge line array into splice().
+    if (
+      minOldStart === 0 &&
+      maxOldEnd === before.lines - 1 &&
+      minNewStart === 0 &&
+      maxNewEnd === after.lines - 1
+    ) {
+      rebuildWordCache(after);
+      return;
+    }
+
+    // The first changed line has the same index in both documents because all
+    // content before it is unchanged. Anything else means the line mapping is
+    // not what this cache assumes; rebuild rather than guess.
+    if (minNewStart !== minOldStart) {
+      rebuildWordCache(after);
+      return;
+    }
+
+    let removed = 0;
+    for (let line = minOldStart; line <= maxOldEnd; line++) {
+      removed += lineWordCounts[line] ?? 0;
+    }
+
+    // Multiple change ranges are replaced as one span. That rescans unchanged
+    // lines between two multi-cursor edits, but keeps the mapping exact; a
+    // single edit — every keystroke — still touches only its own lines.
+    const next: number[] = [];
+    let added = 0;
+    for (let line = minNewStart; line <= maxNewEnd; line++) {
+      const words = countWordsInLine(after.line(line + 1).text);
+      next.push(words);
+      added += words;
+    }
+
+    if (next.length > 20_000) {
+      rebuildWordCache(after);
+      return;
+    }
+
+    lineWordCounts.splice(minNewStart, maxOldEnd - minOldStart + 1, ...next);
+    totalWords += added - removed;
+    if (lineWordCounts.length !== after.lines) rebuildWordCache(after);
+  }
 
   const extensions: Extension[] = [
     lineNumbers(),
@@ -216,9 +333,13 @@ const markdownSupport = markdown({
     fontSizeCompartment.of(EditorView.theme({ "&": { fontSize: "16px" } })),
     focusCompartment.of([]),
     syntaxCompartment.of([]),
+    spellCompartment.of([]),
     baseTheme,
     EditorView.updateListener.of((update) => {
-      if (update.docChanged) onDocChanged(update.state.doc.toString());
+      if (update.docChanged) {
+        applyWordChanges(update);
+        onDocChanged(update.state.doc.toString());
+      }
       if (update.selectionSet || update.docChanged) onCursor(readCursor(update.view));
       if (typewriter && update.selectionSet && !update.docChanged) {
         const head = update.state.selection.main.head;
@@ -295,6 +416,7 @@ const markdownSupport = markdown({
     },
 
     setDoc(text, resetHistory = false) {
+      resetSpellLanguage();
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: text },
         selection: { anchor: 0 },
@@ -310,6 +432,15 @@ const markdownSupport = markdown({
 
     getDoc() {
       return view.state.doc.toString();
+    },
+
+    metrics() {
+      const doc = view.state.doc;
+      return {
+        words: totalWords,
+        lines: doc.length === 0 ? 0 : doc.lines,
+        chars: doc.length,
+      };
     },
 
     focus() {
@@ -360,6 +491,20 @@ const markdownSupport = markdown({
       typewriter = on;
     },
 
+    /**
+     * Turn spelling on or off. The same options are a no-op: reconfiguring the
+     * compartment drops the underlines until the next pass, and layout updates
+     * call this on every sidebar toggle.
+     */
+    setSpellcheck(options: SpellOptions) {
+      const key = `${options.enabled}\0${options.language}\0${options.words.join("\n")}`;
+      if (key === spellKey) return;
+      spellKey = key;
+      view.dispatch({
+        effects: spellCompartment.reconfigure(options.enabled ? spellExtension(options) : []),
+      });
+    },
+
     openSearch(replace = false) {
       openSearchPanel(view);
       if (replace) {
@@ -396,6 +541,19 @@ const markdownSupport = markdown({
     topVisibleLine() {
       const block = view.lineBlockAtHeight(view.scrollDOM.scrollTop);
       return view.state.doc.lineAt(block.from).number;
+    },
+
+    lineTop(line) {
+      const target = Math.min(Math.max(Math.round(line), 1), view.state.doc.lines);
+      return view.lineBlockAt(view.state.doc.line(target).from).top;
+    },
+
+    scrollToOffset(top) {
+      view.scrollDOM.scrollTop = Math.max(0, top);
+    },
+
+    scrollMax() {
+      return Math.max(0, view.scrollDOM.scrollHeight - view.scrollDOM.clientHeight);
     },
 
     cursorInfo() {
