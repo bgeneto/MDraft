@@ -21,9 +21,11 @@
     "typography": "node scripts/typography-test.mjs",
     "shortcuts": "node scripts/shortcut-test.mjs",
     "licence": "node scripts/licence-test.mjs",
+    "spellcheck": "node scripts/spellcheck-test.mjs",
     "images": "node scripts/image-paste-test.mjs",
     "screenshot": "node scripts/screenshot.mjs",
     "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml",
+    "test": "node scripts/test-all.mjs",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {

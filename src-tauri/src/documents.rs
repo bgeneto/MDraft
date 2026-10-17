@@ -17,6 +17,11 @@ pub struct DocumentPayload {
     pub name: String,
     pub directory: String,
     pub content: String,
+    /// Approximate token count of `content`, from the same estimator the live
+    /// status-bar counter uses. Computed here because the text is already in
+    /// hand: sending a megabyte back over IPC just to count it would add a full
+    /// round-trip to every document open.
+    pub tokens: usize,
     /// "\n" or "\r\n"
     pub line_ending: String,
     pub had_bom: bool,
@@ -84,6 +89,7 @@ pub fn read_document(path: String) -> Result<DocumentPayload, String> {
 
     let line_ending = if text.contains("\r\n") { "\r\n" } else { "\n" };
     let content = text.replace("\r\n", "\n").replace('\r', "\n");
+    let tokens = crate::tokens::estimate_tokens(&content);
 
     Ok(DocumentPayload {
         path: p.to_string_lossy().to_string(),
@@ -93,6 +99,7 @@ pub fn read_document(path: String) -> Result<DocumentPayload, String> {
             .map(|d| d.to_string_lossy().to_string())
             .unwrap_or_default(),
         content,
+        tokens,
         line_ending: line_ending.to_string(),
         had_bom,
         lossy,
@@ -179,9 +186,27 @@ pub fn stat_document(path: String) -> Result<FileStat, String> {
     }
 }
 
+/// Resolve a path the user typed or pasted.
+///
+/// An absolute path is used unchanged. A relative one is resolved against the
+/// folder of the document being edited, which is what the preview does and what
+/// `./image.png` means to a reader. The process working directory is wherever
+/// the application happened to be launched, so it must never be the base here:
+/// doing so made a file beside the document look missing.
+pub(crate) fn resolve_path(path: &str, document_path: Option<&str>) -> PathBuf {
+    let candidate = PathBuf::from(path);
+    if candidate.is_absolute() {
+        return candidate;
+    }
+    match document_path.and_then(|doc| Path::new(doc).parent()) {
+        Some(dir) if !dir.as_os_str().is_empty() => dir.join(candidate),
+        _ => candidate,
+    }
+}
+
 #[tauri::command]
-pub fn path_exists(path: String) -> bool {
-    Path::new(&path).exists()
+pub fn path_exists(path: String, document_path: Option<String>) -> bool {
+    resolve_path(&path, document_path.as_deref()).exists()
 }
 
 /// List one directory level for the sidebar file browser.
@@ -253,6 +278,8 @@ mod tests {
         assert!(doc.had_bom);
         assert_eq!(doc.line_ending, "\r\n");
         assert_eq!(doc.content, "# Title\n\nbody\n");
+        // "#" + "Title" + "body": the open path counts the normalised text.
+        assert_eq!(doc.tokens, 3);
 
         write_document(
             file.to_string_lossy().to_string(),
@@ -311,5 +338,63 @@ mod tests {
         let with = list_directory(dir.to_string_lossy().to_string(), Some(true)).unwrap();
         assert_eq!(with.len(), 2);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn relative_paths_resolve_against_the_document_folder() {
+        let dir = std::env::temp_dir().join(format!("tt-resolve-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let doc = dir.join("notes.md");
+        fs::write(&doc, "x").unwrap();
+        fs::write(dir.join("picture.png"), b"not really a png").unwrap();
+        let doc_path = Some(doc.to_string_lossy().to_string());
+
+        // The file sits beside the document, not in the process working
+        // directory, which is what made the paste report it as missing.
+        assert!(path_exists("picture.png".to_string(), doc_path.clone()));
+        assert!(path_exists("./picture.png".to_string(), doc_path.clone()));
+        assert!(!path_exists("missing.png".to_string(), doc_path));
+
+        // An absolute path keeps its meaning.
+        assert!(path_exists(
+            dir.join("picture.png").to_string_lossy().to_string(),
+            Some(doc.to_string_lossy().to_string())
+        ));
+
+        // Without a document there is no folder to resolve against.
+        assert_eq!(
+            resolve_path("picture.png", None),
+            PathBuf::from("picture.png")
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_paths_resolve_against_the_document_folder() {
+        assert_eq!(
+            resolve_path("./image.png", Some("C:\\docs\\notes.md")),
+            PathBuf::from("C:\\docs\\.\\image.png")
+        );
+        assert_eq!(
+            resolve_path("C:\\pics\\image.png", Some("C:\\docs\\notes.md")),
+            PathBuf::from("C:\\pics\\image.png"),
+            "an absolute path must not be joined to the document folder"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_paths_resolve_against_the_document_folder() {
+        assert_eq!(
+            resolve_path("./image.png", Some("/home/me/notes.md")),
+            PathBuf::from("/home/me/./image.png")
+        );
+        assert_eq!(
+            resolve_path("/opt/pics/image.png", Some("/home/me/notes.md")),
+            PathBuf::from("/opt/pics/image.png"),
+            "an absolute path must not be joined to the document folder"
+        );
     }
 }

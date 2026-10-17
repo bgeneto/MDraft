@@ -44,7 +44,7 @@ for tool in cargo rsync pkg-config; do
 done
 
 missing=()
-for pkg in webkit2gtk-4.1 javascriptcoregtk-4.1 libsoup-3.0 gtk+-3.0; do
+for pkg in webkit2gtk-4.1 javascriptcoregtk-4.1 libsoup-3.0 gtk+-3.0 hunspell; do
   pkg-config --exists "$pkg" 2>/dev/null || missing+=("$pkg")
 done
 if [ ${#missing[@]} -gt 0 ]; then
@@ -54,7 +54,7 @@ error: missing Tauri Linux dependencies: ${missing[*]}
 On Debian/Ubuntu:
   sudo apt update && sudo apt install -y \\
     libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev \\
-    libgtk-3-dev librsvg2-dev patchelf
+    libgtk-3-dev librsvg2-dev patchelf libhunspell-dev
 EOF
   exit 1
 fi

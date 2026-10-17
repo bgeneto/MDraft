@@ -218,6 +218,61 @@ const unknown = await call("run_export", {
 });
 check(!unknown.ok && /unknown export format/i.test(unknown.error), "an unknown format id is reported");
 
+// (5b) The after-export options are global, and the HTML path runs them too.
+//
+//      HTML is written by the frontend, so it never reaches `run_export`. This
+//      calls the same helper through `run_after_export` and uses a command that
+//      exits immediately: the folder and file flags share the code path, so the
+//      outcome proves the wiring without opening a window in the test.
+const settingsBefore = await call("get_settings");
+if (!settingsBefore.ok) throw new Error(settingsBefore.error);
+const afterCommand = process.platform === "win32" ? "exit 0" : "true";
+const htmlPath = join(workDir, "after-export.html");
+await call("write_document", {
+  path: htmlPath,
+  content: "<!doctype html><h1>after export</h1>",
+  lineEnding: "\n",
+  hadBom: false,
+});
+try {
+  const saved = await call("save_settings", {
+    settings: {
+      ...settingsBefore.value,
+      afterOpenLocation: false,
+      afterOpenFile: false,
+      afterRunCommand: true,
+      afterCommand,
+    },
+  });
+  check(saved.ok, "the global after-export settings are saved", saved.ok ? "" : saved.error);
+
+  const after = await call("run_after_export", { path: htmlPath });
+  check(
+    after.ok && after.value.afterErrors.length === 0,
+    "the HTML export runs the after-export options",
+    after.ok ? after.value.after.join(", ") || "nothing ran" : after.error,
+  );
+  check(
+    after.ok &&
+      after.value.after.length === 1 &&
+      after.value.after[0] === `ran ${afterCommand}`,
+    "only the enabled after-export action runs",
+    after.ok ? after.value.after.join(", ") : after.error,
+  );
+} finally {
+  // Never leave the developer's settings changed, even if a check throws.
+  await call("save_settings", { settings: settingsBefore.value });
+}
+const restored = await call("get_settings");
+check(
+  restored.ok &&
+    restored.value.afterOpenLocation === settingsBefore.value.afterOpenLocation &&
+    restored.value.afterOpenFile === settingsBefore.value.afterOpenFile &&
+    restored.value.afterRunCommand === settingsBefore.value.afterRunCommand &&
+    restored.value.afterCommand === settingsBefore.value.afterCommand,
+  "the after-export settings are restored after the test",
+);
+
 // (6) A relative output path is refused: the save dialog always returns an
 //     absolute one, so a relative path means something went wrong upstream.
 const relative = await call("run_export", {
@@ -377,10 +432,24 @@ if (pdfButton === "clicked") {
     const faces = [
       ...html.matchAll(/@font-face\{font-family:"([^"]+)"[^}]*?base64,/g),
     ].map((m) => m[1]);
+    // A system stack names no bundled family, so there is no file to embed and
+    // the reader's own machine supplies the face. That is the correct outcome
+    // for the default preset, not a missing asset.
+    const stacks = [...html.matchAll(/--font-(?:source|body|heading|code):([^;}]+)/g)]
+      .map((m) => m[1])
+      .join(" ");
+    const bundledStack =
+      /Source Serif 4|Source Sans 3|Inter|JetBrains Mono|Fira Code/.test(stacks);
     check(
-      faces.length > 0,
-      "the print document embeds the chosen typefaces",
-      faces.length > 0 ? `${faces.length} face(s): ${[...new Set(faces)].join(", ")}` : "none embedded — exports would fall back",
+      bundledStack ? faces.length > 0 : faces.length === 0,
+      bundledStack
+        ? "the print document embeds the chosen typefaces"
+        : "system font stacks need no embedded faces",
+      faces.length > 0
+        ? `${faces.length} face(s): ${[...new Set(faces)].join(", ")}`
+        : bundledStack
+          ? "none embedded — exports would fall back"
+          : "system stack, nothing to embed",
     );
     check(
       !/src:url\("(?!#|data:|\/)/.test(html),
@@ -396,6 +465,14 @@ if (pdfButton === "clicked") {
     check(
       /--font-body:/.test(html) && /--font-heading:/.test(html),
       "the export carries the role declarations, not just the faces",
+    );
+    // The preview scales KaTeX from a CSS variable; the exported document has no
+    // stylesheet of its own, so the variable and the rule that consumes it must
+    // both travel or the PDF ignores the reader's math size.
+    check(
+      /--math-scale:\d/.test(html) && /var\(--math-scale\)/.test(html),
+      "the export carries the reader's math scale",
+      /--math-scale:\d/.test(html) ? "variable and rule present" : "MISSING — math scale would be ignored",
     );
   }
 

@@ -58,8 +58,11 @@ for you; nothing is installed system-wide and no administrator rights are needed
   overwritten, and the bytes are content-sniffed rather than trusted.
 - **Export** to HTML and PDF with nothing installed, and to DOCX, ODT,
   LibreOffice, LaTeX, reStructuredText, AsciiDoc, EPUB, RTF, Textile, MediaWiki
-  and OPML through pandoc, each format configurable in Preferences. See
-  [Export](#export).
+  and OPML through pandoc, each format configurable in Preferences. When the
+  tool a format needs is missing, its entry is disabled and says so
+  (`— needs Pandoc`, `— needs Typst`); *Install Pandoc…* and *Install Typst…*
+  sit at the bottom of the same submenu and the check runs again before any save
+  dialog opens. See [Export](#export).
 - **Faithful saves**: the file's original line ending (`LF` / `CRLF`) and
   byte-order mark are preserved, and writes go through a temporary sibling +
   rename so an interrupted save cannot truncate your file.
@@ -76,12 +79,24 @@ for you; nothing is installed system-wide and no administrator rights are needed
   recent-files list persisted between runs.
 - **Preferences panel** (`Ctrl+,`) laid out like Typora's: search box, vertical
   sections in the same order — Files, Editor, Image, Markdown, Export,
-  Appearance, General — and rows whose controls write straight to
+  Appearance, General, Typography — and rows whose controls write straight to
   `settings.json`.
 - **Native menu bar** following Typora's structure (File, Edit, Paragraph,
-  Format, View, Themes, Help) with working accelerators, including
-  Increase/Decrease Heading Level, Math Block, Alert, Task Status and List
-  Indentation submenus.
+  Format, View, Themes, Help) with working accelerators, including Inline Math
+  and Display Math under Format, Increase/Decrease Heading Level, Math Block,
+  Alert, Task Status and List Indentation submenus. View modes, the sidebar and
+  its tabs, the status bar, Focus, Typewriter, Sync Scroll, Auto Save and the
+  theme carry native check marks, so the menu states what is on instead of
+  leaving it to be inferred.
+- **Mode flags in the status bar**: `Focus`, `Type`, `Sync` and `Auto`, each with
+  an SVG icon and a literal `on`/`off`, and each clickable. The full name and
+  shortcut are in the tooltip; the same state is the check mark in the menu. The
+  zoom level appears as a percentage chip only while it differs from 100%, and
+  clicking it returns to the default size.
+- **Typst as a first-class default**: Preferences › Files › *Default File
+  Extension* offers `.typ`. A new document then starts in Typst mode, Save As
+  suggests `untitled.typ` with the Typst filter selected, and the open/save
+  dialogs put the matching filter first.
 - **GitHub alerts** (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`,
   `[!CAUTION]`) rendered with per-kind colours, and `[TOC]` expanded into links
   to the document's headings.
@@ -106,8 +121,8 @@ for you; nothing is installed system-wide and no administrator rights are needed
 What matches: the Preferences layout (search box, vertical sections with the
 active one highlighted, `label → control` rows, `?` help affordances), the menu
 bar's top-level structure, the Paragraph menu's grouping and shortcuts, the
-status bar shape (mode toggles bottom-left, word count bottom-right), heading
-rules, inline-code chips, link colour and the outline sidebar.
+status bar shape (mode toggles bottom-left, word and token counts bottom-right),
+heading rules, inline-code chips, link colour and the outline sidebar.
 
 What does not match, by design:
 
@@ -131,7 +146,17 @@ What does not match, by design:
   Source / Split / Preview segmented control. An earlier version had both the
   `</>` toggle *and* the segmented control, which made two controls look
   selected at once in source mode; the toggle was removed because the segmented
-  control states the current mode instead of hiding it behind a toggle.
+  control states the current mode instead of hiding it behind a toggle. Focus,
+  Typewriter, Sync Scroll and Auto Save are status-bar flags with a literal
+  `on`/`off`, and the same states are check marks in the View, File and Themes
+  menus. The zoom chip follows the same rule: it appears only when the editor
+  font size is not 100%, and the theme button swaps its sun for a moon with the
+  theme. The status bar also estimates the token count beside the word count: it
+  classifies
+  characters rather than loading a vocabulary, so it stays within roughly 10% of
+  the GPT tokenizers without shipping a model file. Word, line and character
+  counts are maintained per changed line from the editor's change set, so typing
+  does not rescan the buffer; moving the caret only moves the outline marker.
 - **Status-bar icons are inline SVG**, not characters. `⚙`, `◐` and `☰` render
   as thin shapes whose stroke weight does not match the surrounding 11.5px text,
   and the emoji presentation (`⚙️`) is a platform-specific colour bitmap that
@@ -268,6 +293,11 @@ Every preset is a starting point: the dropdowns beneath it are there to be taken
 apart. Fira Code is the editor and preview-code face of **Serif** only; every
 other preset uses JetBrains Mono, or the system monospace for **System**.
 
+**Math scale** is the one percentage in the section: KaTeX sets formulas at 121%
+of the surrounding text, so 100% keeps KaTeX's own ratio and about 83% makes a
+formula match the prose. It travels into exported HTML and the printed PDF along
+with the faces, so the file the reader opens looks like the preview.
+
 ### Semibold, not Bold
 
 Emphasis, headings and table headers are set in Semibold (600) rather than Bold
@@ -355,6 +385,12 @@ Wide display equations scroll horizontally instead of being clipped, and the
 wrapper owns the vertical spacing because KaTeX's own `1em` margins would
 otherwise double it.
 
+KaTeX draws at `1.21em`, which is why a formula reads as a fifth larger than the
+prose beside it. *Preferences › Typography › Math scale* multiplies that ratio
+from 70% to 130%: 100% is KaTeX's own size, 83% brings the formula down to the
+text, and values outside the range are clamped by the field. The preview,
+exported HTML and the printed PDF all read the same `--math-scale` variable.
+
 ### How this was verified
 
 `scripts/math-render-check.mjs` forces every one of the 12 families to load
@@ -387,6 +423,12 @@ aligned by **content**, not by scroll ratio:
   and a click in the preview moves the source caret. Neither one scrolls;
 - typing or arrowing keeps the caret's block in view, but only when it has
   actually left the pane.
+
+Within a block the mapping is continuous: both directions interpolate between
+the two anchors around the current position, using measured pixel offsets rather
+than a global scroll ratio. The local slope is the real ratio between the
+rendered block and its source lines, so it adapts by itself to the preview font
+(11–32 px), the editor font (10–40 px), wrapped lines, images and tables.
 
 Three details there are deliberate rather than incidental:
 
@@ -433,7 +475,7 @@ gesture does; without it the two panes would chase each other.
 
 ## Tested against real documents
 
-`docs/sample-files/` holds two documents that are much harsher than the built-in
+`docs/samples/` holds two documents that are much harsher than the built-in
 sample, and `scripts/audit-document.mjs` reports what the renderer produced and —
 more usefully — what it left behind.
 
@@ -524,8 +566,8 @@ with an explanation rather than producing an empty file.
 ### Configuring the pandoc formats
 
 *Preferences › Export* edits each format: its menu label, file extension, pandoc
-arguments, extra arguments, a style reference, and up to three things to do after
-a successful export. Four placeholders are substituted into the arguments:
+arguments, extra arguments and a style reference. Four placeholders are
+substituted into the arguments:
 
 | Placeholder | Expands to |
 | --- | --- |
@@ -539,6 +581,21 @@ with spaces needs no quoting — and a quote typed into the field would be taken
 literally. **A token whose placeholder expanded to nothing is dropped entirely**,
 which is what lets `--reference-doc=${styleReference}` simply disappear when no
 style reference has been chosen.
+
+### After export
+
+Below the format editor, *After Export* holds three global options: open the
+exported file's folder, open the exported file itself, and run a command with
+`${outputPath}` substituted. They run after every successful export that writes
+a file — HTML, Typst and all the pandoc formats — not just the format that
+happened to be selected in the editor.
+
+The one exception is **PDF (Print)**. MDraft hands that document to the browser,
+which asks where to save the PDF, so the application never learns the path. It
+cannot reveal or open a file it does not know. This is why the options live in
+one place: a per-format copy read as a global promise while doing nothing for
+every other format, which is exactly how the option came to be reported as
+broken.
 
 ## Image handling
 
@@ -587,6 +644,11 @@ over CDP and needs a local fixture server:
 # serve a PNG on 127.0.0.1:8791, then:
 node scripts\image-paste-test.mjs 9222 "http://127.0.0.1:8791/served.png" "C:\path\to\served.png"
 ```
+
+`scripts/image-path-paste-test.mjs` covers the editor-side workflow from
+Format › Image: it selects the inserted `./image.png` with the mouse and pastes
+a path that exists beside the document, then checks that the text is replaced
+and the preview loads the image.
 
 ## Deliberately out of scope for v1
 
@@ -812,7 +874,9 @@ than an emoji font Debian does not ship by default.
 `#[cfg(unix)]` variants. Path semantics come from `std::path`, so a single test
 written with `C:\` strings asserts nothing true about Linux while looking like
 coverage — and it hid a real off-by-one in the relative-path expectations until
-the suite was finally run on Linux. `cargo test` passes on both: 38 tests each.
+the suite was finally run on Linux. `cargo test` passes on both. Windows runs 64
+(one is ignored because it downloads pandoc); Linux runs 62, because the two
+`ISpellChecker` tests exist only on Windows.
 
 ## Application icon
 
@@ -887,7 +951,7 @@ that really is a zip containing `word/document.xml`, an RTF that starts with
 overwrite the document it is reading, that an unknown format is reported rather
 than ignored, and that the PDF print document carries both stylesheets.
 
-Last run against `samples/feature-tour.md` — **61/61 checks passed**:
+Last run against `samples/feature-tour.md` — **85/85 checks passed**:
 
 | Stage | Observed |
 | --- | --- |
@@ -904,11 +968,13 @@ Last run against `samples/feature-tour.md` — **61/61 checks passed**:
 | Source pane | 9 distinct token colours, exactly one view mode active, no duplicate control |
 | Status icons | 3 inline SVG at 16px, all inheriting the theme colour |
 | Math | KaTeX_Main declared and available, fraction rules drawn, radical signs drawn, KaTeX font applied |
-| Status bar | 404 words · UTF-8 · LF |
-| Preferences | opens, 8 sections, 36 rows, search filters, a toggle rewrites the preview |
+| Math scale | 70% shrinks the formula to 0.7×, 40 and 400 clamp to 70/130, 100% restores it |
+| Status bar | 734 tokens · 404 words · UTF-8 · LF |
+| Preferences | opens, 8 sections, 64 rows, search filters, a toggle rewrites the preview |
 | Pane sync | 37 anchors, monotonic 1 → 126 |
 | ↳ preview click | block at line 21 → caret lands on `Ln 21`, preview scroll unchanged |
-| ↳ source scroll | preview top 845 → 1559 px, no blink left behind |
+| ↳ source scroll | preview top 22 → 1891 px, no blink left behind |
+| ↳ interpolation | 11-line block tracks at 4+ distinct preview positions at 10/32 px and 40/11 px; reverse drift stays within the local slope |
 | ↳ source click | five clicks down the pane, preview scroll drift 0.15 px, panes stay aligned |
 | Close | WM_CLOSE exits in 500 ms and writes `.window-state.json` |
 | Console | no errors or warnings |
@@ -956,6 +1022,7 @@ npm run tauri dev          # Windows: .\scripts\with-msvc.cmd npm run tauri dev
 npm run build              # typecheck + bundle the frontend only
 npm run dist               # build, then stage installers into bin/
 npm run test:rust          # cargo test
+npm test                   # build, then every test layer, each in its own instance
 ```
 
 Raw build artefacts land in `src-tauri/target/release/`; `npm run dist` rewrites
@@ -972,16 +1039,16 @@ subsystem, and which traps cost time before.
 ```
 index.html                 application shell markup
 docs/ícones/               source archive for the application icon
-docs/sample-files/         real documents used as rendering fixtures
+docs/samples/         real documents used as rendering fixtures
 samples/feature-tour.md    showcase document / smoke-test fixture
 src/
   main.ts                  document lifecycle, menu wiring, sidebar, status bar
   api.ts                   typed wrappers over the Rust commands
-  editor.ts                CodeMirror 6 setup, focus/typewriter modes, formatting
+  editor.ts                CodeMirror 6 setup, focus/typewriter modes, incremental counts, formatting
   `markdown.ts`              markdown -> HTML, math, mermaid, alerts, TOC, images
   images.ts                paste, drop and download of images
   preferences.ts           the Preferences panel and its declarative rows
-  sidebar.ts               outline extraction, folder browser, recent files
+  sidebar.ts               outline extraction and active-marker updates, folder browser, recent files
   highlight-theme.ts       runtime-swappable highlight.js themes
   content.ts               built-in welcome / reference / shortcuts documents
   styles.css               application chrome and preview theme
@@ -990,12 +1057,14 @@ src-tauri/
   src/menu.rs              native menu definition
   src/documents.rs         document and filesystem commands (+ tests)
   src/images.rs            image import, sanitising and download (+ tests)
+  src/tokens.rs            approximate token count for the status bar (+ tests)
   src/settings.rs          persisted settings and app state (+ tests)
   capabilities/default.json
 scripts/with-msvc.cmd      MSVC environment wrapper
 scripts/dom-smoke.mjs      CDP smoke test for a running window
 scripts/audit-document.mjs CDP render audit for a real document
 scripts/image-paste-test.mjs  CDP test of the image paste paths
+scripts/image-path-paste-test.mjs CDP test of pasting a path into the image template
 scripts/math-render-check.mjs CDP test of math fonts and equation geometry
 scripts/syntax-theme-test.mjs CDP test of source-pane highlighting
 scripts/set-palette.mjs    drive the syntax palette from the shell
@@ -1024,6 +1093,7 @@ scripts/screenshot.mjs     CDP screenshot of a running window
 | Outline / File list / Recent files | `Ctrl+Shift+1` / `Ctrl+Shift+2` / `Ctrl+Shift+3` |
 | Focus / Typewriter mode | `F8` / `F9` |
 | Zoom in / out / reset | `Ctrl+Shift+=` / `Ctrl+Shift+-` / `Ctrl+Shift+0` |
+| Full screen | `F11` |
 
 ## Known limitations
 

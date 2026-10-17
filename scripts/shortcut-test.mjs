@@ -88,6 +88,25 @@ async function press({ code, key, ctrl = false, shift = false, alt = false, meta
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// The accelerator registry is readable as soon as Rust is up, but the keydown
+// listener is installed near the end of the frontend boot. A test that attaches
+// immediately pressed Ctrl+/ before that and reported "mode-split -> mode-split",
+// which reads like a broken shortcut. The document title is assigned after
+// `installShortcuts`, so waiting for it proves the handler exists.
+const bootDeadline = Date.now() + 60_000;
+let booted = false;
+while (Date.now() < bootDeadline) {
+  booted = await evaluate(
+    `document.title.endsWith(" — MDraft") && document.querySelectorAll(".cm-line").length > 0`,
+  );
+  if (booted) break;
+  await sleep(250);
+}
+if (!booted) {
+  console.error("the window did not finish booting within 60 s; no keys were pressed");
+  process.exit(1);
+}
+
 // ---------------------------------------------------------------------------
 console.log("=== the accelerator registry is complete ===");
 const registry = await evaluate(
@@ -141,12 +160,42 @@ await sleep(250);
 console.log("\n=== Menu shortcuts that change the interface ===");
 
 const focusOn = () => evaluate(`document.getElementById("app").classList.contains("focus-mode")`);
+const menuChecks = () => evaluate(`window.__TAURI_INTERNALS__.invoke("menu_state")`);
+const checkedInMenu = async (id) =>
+  (await menuChecks()).find((entry) => entry.id === id)?.checked === true;
 const focusBefore = await focusOn();
 await press({ code: "F8", key: "F8" });
 await sleep(250);
-check((await focusOn()) !== focusBefore, "F8 toggles focus mode", `${focusBefore} -> ${await focusOn()}`);
+const focusAfter = await focusOn();
+check(focusAfter !== focusBefore, "F8 toggles focus mode", `${focusBefore} -> ${focusAfter}`);
+// The native menu cannot be seen over CDP; `menu_state` is the only way to
+// prove the check mark moved with the mode.
+check(
+  (await checkedInMenu("view.focus")) === focusAfter,
+  "F8 also checks the Focus Mode menu item",
+);
 await press({ code: "F8", key: "F8" });
 await sleep(200);
+check((await focusOn()) === focusBefore, "F8 restores the previous focus state");
+
+// Fullscreen was a PredefinedMenuItem, which muda documents as unsupported on
+// Windows and GTK3 and whose handler is a no-op. It is a custom check item now,
+// and F11 has to reach it through the same frontend shortcut handler.
+const fullscreenBefore = await checkedInMenu("view.fullscreen");
+await press({ code: "F11", key: "F11" });
+await sleep(900);
+const fullscreenAfter = await checkedInMenu("view.fullscreen");
+check(
+  fullscreenAfter !== fullscreenBefore,
+  "F11 toggles fullscreen and the menu check follows",
+  `${fullscreenBefore} -> ${fullscreenAfter}`,
+);
+await press({ code: "F11", key: "F11" });
+await sleep(900);
+check(
+  (await checkedInMenu("view.fullscreen")) === fullscreenBefore,
+  "F11 restores the previous fullscreen state",
+);
 
 // Start from a different tab, or "the tab changed" is untestable: the outline is
 // the default, so selecting it again produces no observable difference.
@@ -166,8 +215,22 @@ await press({ code: "Equal", key: "+", ctrl: true, shift: true });
 await sleep(250);
 const sizeAfter = await fontSize();
 check(sizeAfter > sizeBefore, "Ctrl+Shift+= zooms the editor in", `${sizeBefore}px -> ${sizeAfter}px`);
+
+const zoomChip = () =>
+  evaluate(
+    `(() => { const b = document.getElementById('status-zoom'); return { hidden: b.hidden, text: b.textContent }; })()`,
+  );
+const zoomed = await zoomChip();
+check(
+  zoomed.hidden === false && /^\d+%$/.test(zoomed.text),
+  "zoom in shows the percentage in the status bar",
+  zoomed.text,
+);
+
 await press({ code: "Digit0", key: "0", ctrl: true, shift: true });
 await sleep(200);
+const zoomReset = await zoomChip();
+check(zoomReset.hidden === true, "reset hides the zoom indicator");
 
 await press({ code: "Slash", key: "/", ctrl: true });
 await sleep(200);

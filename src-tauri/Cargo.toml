@@ -15,11 +15,18 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2.7.3", features = [] }
 
+[target.'cfg(target_os = "linux")'.build-dependencies]
+pkg-config = "0.3"
+
 [dependencies]
 tauri = { version = "2.12.4", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2.8.3"
 tauri-plugin-opener = "2.7.2"
 tauri-plugin-window-state = "2.5.0"
+# Approximate token count for the status bar. Zero dependencies and no
+# vocabulary: a full BPE tokenizer would add 8.7 MB of tables and take 40-60 ms
+# per megabyte, which is far too much for a counter that follows typing.
+tokenx-rs = "0.1.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 # Blocking HTTPS client for user-initiated downloads: images, and the optional
@@ -43,9 +50,31 @@ zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 tar = "0.4.46"
 
+# The system spell checker. Dictionaries stay on the machine: Windows uses the
+# Spell Checking API (the same service WebView2 would), Linux opens the hunspell
+# files the distro installed, and macOS uses NSSpellChecker. None of these
+# crates embeds a word list.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_System_Com",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSRange"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSSpellChecker"] }
+dispatch2 = "0.3"
+
 [profile.release]
-codegen-units = 1
-lto = true
+# Thin LTO with parallel codegen, not fat LTO with one codegen unit. Fat LTO is
+# single-threaded: on this crate it made the final step take 104 s, against 27 s
+# with these settings, and `npm run dist` builds that crate twice. Binary size
+# barely moves either way. A markdown editor cannot tell the two apart at
+# runtime, so the build time is the difference that matters.
+codegen-units = 16
+lto = "thin"
 opt-level = 3
 panic = "abort"
 strip = true

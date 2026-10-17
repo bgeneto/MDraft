@@ -7,6 +7,8 @@ export interface DocumentPayload {
   name: string;
   directory: string;
   content: string;
+  /** Approximate token count, computed by the backend while reading the file. */
+  tokens: number;
   /** "\n" or "\r\n" */
   lineEnding: string;
   hadBom: boolean;
@@ -59,10 +61,6 @@ export interface ExportFormat {
   arguments: string;
   extraArguments: string;
   styleReference: string;
-  afterOpenLocation: boolean;
-  afterOpenFile: boolean;
-  afterRunCommand: boolean;
-  afterCommand: string;
 }
 
 export const emptyExportFormat = (): ExportFormat => ({
@@ -72,10 +70,6 @@ export const emptyExportFormat = (): ExportFormat => ({
   arguments: "-s -o ${outputPath}",
   extraArguments: "",
   styleReference: "",
-  afterOpenLocation: false,
-  afterOpenFile: false,
-  afterRunCommand: false,
-  afterCommand: "",
 });
 
 export interface PandocStatus {
@@ -110,6 +104,12 @@ export interface ExportOutcome {
   afterErrors: string[];
 }
 
+/** What the after-export options did, for a file another path wrote. */
+export interface AfterExportOutcome {
+  after: string[];
+  afterErrors: string[];
+}
+
 export interface Settings {
   theme: ThemeMode;
   viewMode: ViewMode;
@@ -135,6 +135,14 @@ export interface Settings {
   codeFont: string;
   /** Prose size in the preview, in pixels. The editor has `editorFontSize`. */
   bodyFontSize: number;
+  /**
+   * Scale applied to KaTeX's mathematics, as a percentage.
+   *
+   * KaTeX sets formulas at 1.21em of the surrounding text, so 100 leaves them a
+   * fifth larger and about 83 makes them match the prose. The Preferences field
+   * limits the range to 70–130.
+   */
+  mathFontScale: number;
   /** Programming ligatures in code, both panes. Off by default: `->` is a choice. */
   ligaturesInCode: boolean;
   /** Tabular figures in preview tables, so columns of numbers line up. */
@@ -164,6 +172,13 @@ export interface Settings {
   enableMath: boolean;
   enableMermaid: boolean;
 
+  /** Underline misspellings while typing. On unless the reader turns it off. */
+  spellcheck: boolean;
+  /** `"auto"`, or a tag from `spellcheckLanguages` (`en`, `en-GB`, `pt-BR`). */
+  spellcheckLanguage: string;
+  /** Words ignored or added. Not written into the operating system's dictionary. */
+  spellcheckWords: string[];
+
   imageRule: ImageRule;
   imageCustomDir: string;
   imageApplyLocal: boolean;
@@ -173,6 +188,19 @@ export interface Settings {
   imageAutoEscape: boolean;
 
   exportFormats: ExportFormat[];
+
+  /**
+   * What to do after a successful export, for every format.
+   *
+   * These used to live on each `ExportFormat`, which made a ticked box apply
+   * only to that one target. Global now, so HTML and every pandoc format run
+   * the same three actions. PDF (Print) is the exception: the browser chooses
+   * the PDF's path, so there is nothing for MDraft to open.
+   */
+  afterOpenLocation: boolean;
+  afterOpenFile: boolean;
+  afterRunCommand: boolean;
+  afterCommand: string;
 }
 
 export interface ImageOptions {
@@ -193,6 +221,31 @@ export interface SavedImage {
 export const readDocument = (path: string) =>
   invoke<DocumentPayload>("read_document", { path });
 
+/**
+ * Approximate token count for a buffer.
+ *
+ * Deliberately not a model-specific tokenizer: the number is an estimate that
+ * lands within about 10% of both cl100k and o200k, with no vocabulary to ship.
+ */
+export const countTokens = (text: string) =>
+  invoke<number>("count_tokens", { text });
+
+/** Languages the operating system can spell, as `en`, `en-GB`, `pt-BR`, `pt-PT`. */
+export const spellcheckLanguages = () => invoke<string[]>("spellcheck_languages");
+
+/**
+ * Indices of `words` the dictionary rejects.
+ *
+ * Tokens the backend declines to check — capitals, digits, CamelCase — are
+ * never included. An unknown language returns an empty list.
+ */
+export const spellcheckCheck = (language: string, words: readonly string[]) =>
+  invoke<number[]>("spellcheck_check", { language, words });
+
+/** Up to eight suggestions for one word. Empty when the language is not installed. */
+export const spellcheckSuggest = (language: string, word: string) =>
+  invoke<string[]>("spellcheck_suggest", { language, word });
+
 export const writeDocument = (
   path: string,
   content: string,
@@ -203,8 +256,8 @@ export const writeDocument = (
 export const statDocument = (path: string) =>
   invoke<FileStat>("stat_document", { path });
 
-export const pathExists = (path: string) =>
-  invoke<boolean>("path_exists", { path });
+export const pathExists = (path: string, documentPath: string | null = null) =>
+  invoke<boolean>("path_exists", { path, documentPath });
 
 export const listDirectory = (path: string, showHidden = false) =>
   invoke<DirEntry[]>("list_directory", { path, showHidden });
@@ -244,6 +297,15 @@ export const pandocStatus = () => invoke<PandocStatus>("pandoc_status");
 
 export const runExport = (request: ExportRequest) =>
   invoke<ExportOutcome>("run_export", { request });
+
+/**
+ * Run the global after-export options for a file the frontend wrote.
+ *
+ * HTML is assembled in TypeScript, so it does not pass through `run_export`.
+ * This is the same Rust helper the pandoc and Typst paths use.
+ */
+export const runAfterExport = (path: string) =>
+  invoke<AfterExportOutcome>("run_after_export", { path });
 
 export const installPandoc = () => invoke<PandocStatus>("install_pandoc");
 
@@ -309,6 +371,59 @@ export interface Shortcut {
  * two cannot disagree.
  */
 export const shortcuts = () => invoke<Shortcut[]>("accelerators");
+
+/**
+ * The state the native menu's check marks mirror.
+ *
+ * `fullscreen` is not a setting: only the window knows it, so the frontend sends
+ * it along with the settings-backed flags instead of letting Rust guess.
+ */
+export interface MenuState {
+  viewMode: ViewMode;
+  sidebarVisible: boolean;
+  sidebarTab: SidebarTab;
+  showStatusBar: boolean;
+  focusMode: boolean;
+  typewriterMode: boolean;
+  syncScroll: boolean;
+  theme: ThemeMode;
+  autoSave: boolean;
+  fullscreen: boolean;
+}
+
+/** One checkable menu item, as the native menu reports it. */
+export interface MenuCheck {
+  id: string;
+  checked: boolean;
+  enabled: boolean;
+}
+
+/**
+ * Mirror the UI state onto the native menu.
+ *
+ * The menu is a native control, not part of the DOM, so the frontend cannot
+ * read its check marks and must tell Rust what they should be.
+ */
+export const setMenuState = (state: MenuState) =>
+  invoke<void>("set_menu_state", { state });
+
+/**
+ * Read the menu's check marks back.
+ *
+ * This exists for the test suites: `Page.captureScreenshot` only captures the
+ * webview, so the native menu is invisible to every DOM probe.
+ */
+export const menuState = () => invoke<MenuCheck[]>("menu_state");
+
+/**
+ * Tell the native Export menu which external tools are installed.
+ *
+ * Formats that cannot run are disabled and annotated instead of failing after
+ * the save dialog; the answer is cached in Rust so a menu rebuild caused by an
+ * export-format edit keeps it.
+ */
+export const setExportAvailability = (pandoc: boolean, typst: boolean) =>
+  invoke<void>("set_export_availability", { pandoc, typst });
 
 /**
  * Write a print-ready document and open it in the system browser.

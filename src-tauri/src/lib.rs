@@ -5,9 +5,11 @@ mod export;
 mod images;
 mod menu;
 mod settings;
+mod spellcheck;
+mod tokens;
 mod typst;
 
-use settings::AppState;
+use settings::{AppState, Settings};
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -16,11 +18,21 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
-        .menu(|handle| menu::build(handle))
         .on_menu_event(|app, event| menu::on_event(app, event))
         .setup(|app| {
             let state = AppState::load(app.handle());
+            // The menu is built after the state is managed so its check marks
+            // start on the values the user persisted, not on all-unchecked. The
+            // builder's own `menu` hook runs before `setup`, which is why it
+            // cannot do this.
+            let menu_state = state
+                .settings
+                .lock()
+                .map(|settings| menu::MenuState::from_settings(&settings))
+                .unwrap_or_else(|_| menu::MenuState::from_settings(&Settings::default()));
             app.manage(state);
+            let menu = menu::build(app.handle(), &menu_state)?;
+            app.set_menu(menu)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -34,14 +46,22 @@ pub fn run() {
             documents::path_exists,
             documents::list_directory,
             documents::startup_file,
+            tokens::count_tokens,
+            spellcheck::spellcheck_languages,
+            spellcheck::spellcheck_check,
+            spellcheck::spellcheck_suggest,
             images::save_clipboard_image,
             images::import_image,
             images::download_image,
             export::pandoc_status,
             export::run_export,
+            export::run_after_export,
             export::install_pandoc,
             export::print_document,
             menu::accelerators,
+            menu::set_menu_state,
+            menu::menu_state,
+            menu::set_export_availability,
             typst::typst_status,
             typst::install_typst,
             typst::typst_download_page,

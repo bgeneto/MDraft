@@ -73,6 +73,11 @@ function blobToBase64(blob: Blob): Promise<string> {
 export interface ImageContext {
   settings: api.Settings;
   documentPath: string | null;
+  /**
+   * True when the paste lands on a non-empty editor selection. Such a paste is
+   * an edit of the selected text (usually an image URL), not an insertion.
+   */
+  hasSelection: boolean;
   /** Put markdown at the caret. */
   insert(markdown: string): void;
   notify(message: string, isError?: boolean): void;
@@ -143,6 +148,13 @@ export function handleImagePaste(event: ClipboardEvent, ctx: ImageContext): bool
   const text = clipboard.getData("text/plain");
   if (!text) return false;
 
+  // A paste over a selection is an edit of that selection: typically the
+  // `./image.png` placeholder or an existing image URL. Importing would append
+  // a second block and leave the selected text in place, so let the editor
+  // paste the text normally. Real image data above still wins: there is no
+  // text to replace.
+  if (ctx.hasSelection) return false;
+
   // 2. A URL, if online images are in scope.
   const url = onlineImageFromText(text);
   if (url) {
@@ -157,7 +169,7 @@ export function handleImagePaste(event: ClipboardEvent, ctx: ImageContext): bool
   if (!ctx.settings.imageApplyLocal) return false;
 
   void api
-    .pathExists(local)
+    .pathExists(local, ctx.documentPath)
     .catch(() => false)
     .then((exists) => {
       if (!exists) {

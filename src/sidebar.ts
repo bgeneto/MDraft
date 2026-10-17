@@ -73,6 +73,14 @@ function emptyState(container: HTMLElement, message: string): void {
 // Outline
 // ---------------------------------------------------------------------------
 
+function activeHeadingIndex(headings: Heading[], activeLine: number): number {
+  let activeIndex = -1;
+  for (let i = 0; i < headings.length; i++) {
+    if (headings[i].line <= activeLine) activeIndex = i;
+  }
+  return activeIndex;
+}
+
 export function renderOutline(
   container: HTMLElement,
   headings: Heading[],
@@ -89,10 +97,7 @@ export function renderOutline(
     return;
   }
 
-  let activeIndex = -1;
-  for (let i = 0; i < headings.length; i++) {
-    if (headings[i].line <= activeLine) activeIndex = i;
-  }
+  const activeIndex = activeHeadingIndex(headings, activeLine);
 
   const fragment = document.createDocumentFragment();
   headings.forEach((heading, index) => {
@@ -105,6 +110,27 @@ export function renderOutline(
     fragment.appendChild(button);
   });
   container.replaceChildren(fragment);
+}
+
+/**
+ * Move the active outline marker without rebuilding the list.
+ *
+ * Rebuilding hundreds of buttons on every arrow key is the expensive part of
+ * the outline, not finding the headings. A stale list (different length) is left
+ * alone: the debounced refresh is about to replace it, and guessing which item
+ * moved would highlight the wrong heading.
+ */
+export function highlightOutline(
+  container: HTMLElement,
+  headings: Heading[],
+  activeLine: number,
+): void {
+  const items = container.querySelectorAll<HTMLElement>(".outline-item");
+  if (items.length !== headings.length) return;
+  const activeIndex = activeHeadingIndex(headings, activeLine);
+  items.forEach((item, index) => {
+    item.classList.toggle("active", index === activeIndex);
+  });
 }
 
 // ---------------------------------------------------------------------------

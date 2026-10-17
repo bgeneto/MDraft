@@ -16,6 +16,10 @@
   --active-line: rgba(0, 0, 0, 0.035);
   --selection: rgba(80, 140, 255, 0.22);
   --accent: #3b7ddd;
+  /* The "on" surface for a status flag. Deliberately not --code-bg: that is the
+     neutral pill the active view mode uses, and a mode flag must not read as a
+     second view-mode button. */
+  --accent-soft: rgba(59, 125, 221, 0.12);
   --code-bg: rgba(127, 127, 127, 0.1);
   --selected: #c9c9c9;
   --sync-highlight: rgba(59, 125, 221, 0.1);
@@ -41,6 +45,8 @@
   --font-heading: system-ui, "Segoe UI", -apple-system, Roboto, sans-serif;
   --font-code: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --body-size: 16px;
+  /* KaTeX's own scale is 1. This multiplies it; see the math rules below. */
+  --math-scale: 1;
 
   /* Emphatic text uses Semibold, not Bold. This is the one weight the preview,
      the Typst document view and both native exports share; 700 is still used by
@@ -54,6 +60,7 @@
   --table-figures: tabular-nums;
   --code-figures: normal;
   --code-ligatures: normal;
+  --spell-error: #c24040;
 }
 
 [data-theme="dark"] {
@@ -67,10 +74,12 @@
   --active-line: rgba(255, 255, 255, 0.05);
   --selection: rgba(80, 140, 255, 0.3);
   --accent: #4c9aff;
+  --accent-soft: rgba(76, 154, 255, 0.2);
   --code-bg: rgba(255, 255, 255, 0.07);
   --selected: #3a3d41;
   --sync-highlight: rgba(76, 154, 255, 0.16);
   --quote-bar: rgba(200, 200, 200, 0.35);
+  --spell-error: #f07178;
 }
 
 * {
@@ -372,6 +381,60 @@ body {
   margin: 0 auto;
 }
 
+/* The dictionary's underline. A wavy line, not a tint: a persistent background
+   reads as markup applied to the document. */
+.cm-spell-error {
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
+  text-decoration-color: var(--spell-error);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.spell-menu {
+  position: fixed;
+  z-index: 80;
+  min-width: 180px;
+  max-width: 280px;
+  padding: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  font-family: var(--font-ui);
+  font-size: 13px;
+}
+
+.spell-menu button {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.spell-menu button:hover {
+  background: var(--accent-soft);
+}
+
+.spell-menu-pending {
+  padding: 6px 10px;
+  color: var(--muted);
+}
+
+.spell-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+
 .preview-pane {
   overflow: auto;
   padding: 34px 34px 45vh;
@@ -454,6 +517,126 @@ body {
   background: var(--code-bg);
   color: var(--fg);
   font-weight: 600;
+}
+
+/* Only present when the editor font size differs from the default, so it must
+   not reserve space the rest of the bar needs. Tabular figures stop the label
+   from shifting as the percentage changes. */
+.status-zoom {
+  font-variant-numeric: tabular-nums;
+  min-width: 42px;
+  text-align: center;
+}
+
+/* --------------------------------------------------------------------------
+   Status flags
+
+   Focus, Typewriter, Sync Scroll and Auto Save are modes, not commands: a menu
+   item that closes the moment it is clicked cannot tell you whether it is on,
+   and two of these have no visible effect at all. Each flag carries its state in
+   text as well as colour, and is itself the toggle — an indicator that cannot be
+   clicked is another dead end.
+
+   The label is dropped before the state: "on"/"off" is the information, the icon
+   says which mode it belongs to. Below 760px the group goes away; the View
+   menu's check marks remain.
+   -------------------------------------------------------------------------- */
+
+.status-flags {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.status-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.status-flag svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  display: block;
+}
+
+.status-flag .flag-state {
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  opacity: 0.9;
+}
+
+.status-flag[data-on="true"] {
+  background: var(--accent-soft);
+  color: var(--fg);
+}
+
+.status-flag[data-on="true"] svg {
+  color: var(--accent);
+}
+
+.status-flag[data-on="true"] .flag-state {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.status-flag[data-on="false"] svg {
+  opacity: 0.5;
+}
+
+/* Sync Scroll stays on outside Split but has no effect there. Dim it rather
+   than disable it: clicking it now sets the state for the next split view. */
+.status-flag[data-inactive="true"] {
+  opacity: 0.55;
+}
+
+.status-flag[data-inactive="true"]:hover {
+  opacity: 1;
+}
+
+.status-flag:hover {
+  background: var(--active-line);
+  color: var(--fg);
+}
+
+.status-flag[data-on="true"]:hover {
+  background: var(--accent-soft);
+}
+
+.status-flag:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.status-flag-sep {
+  width: 1px;
+  height: 14px;
+  margin: 0 3px;
+  flex: none;
+  background: var(--border);
+}
+
+@media (max-width: 960px) {
+  .status-flag .flag-label {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .status-flags {
+    display: none;
+  }
 }
 
 /* --------------------------------------------------------------------------
@@ -649,6 +832,17 @@ body {
 }
 
 /* Math ------------------------------------------------------------------- */
+
+/* KaTeX renders every formula at 1.21em of the surrounding text, so it is a
+   fifth larger than the prose beside it — deliberate for display equations,
+   conspicuous for inline ones. `--math-scale` multiplies the inherited size:
+   0.83 makes the two match, 1 leaves KaTeX alone. The declaration sits on the
+   wrapper rather than on `.katex` so KaTeX's own em-based spacing scales with
+   the formula instead of staying sized for the larger type. */
+.math-inline,
+.math-display {
+  font-size: calc(1em * var(--math-scale, 1));
+}
 
 .math-inline {
   white-space: nowrap;
@@ -1234,8 +1428,17 @@ body {
   grid-template-columns: 0 0 1fr;
 }
 
+/* The status bar stays. It carries the Focus Mode flag, so hiding it would make
+   the mode's own indicator disappear exactly when it is on; the sidebar is the
+   chrome worth removing, 28px of status is not. */
 .app.focus-mode .sidebar,
-.app.focus-mode .resizer,
-.app.focus-mode .statusbar {
+.app.focus-mode .resizer {
+  display: none;
+}
+
+/* Focus mode removes the sidebar, so its toggle in the visible status bar would
+   be a button that changes a setting nobody can see. The View menu disables the
+   same four items; this hides the only other route. */
+.app.focus-mode #btn-sidebar {
   display: none;
 }

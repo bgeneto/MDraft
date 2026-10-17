@@ -5,10 +5,12 @@
 //! forwards that id to the frontend as the `menu` event so the UI owns the
 //! actual behaviour.
 
-use crate::settings::{default_export_formats, AppState};
+use crate::settings::{
+    default_export_formats, AppState, ExportAvailability, ExportFormat,
+};
 use tauri::menu::{
-    IsMenuItem, Menu, MenuBuilder, MenuEvent, MenuItem, MenuItemBuilder, PredefinedMenuItem,
-    SubmenuBuilder,
+    CheckMenuItem, IsMenuItem, Menu, MenuBuilder, MenuEvent, MenuItem, MenuItemBuilder,
+    MenuItemKind, PredefinedMenuItem, SubmenuBuilder,
 };
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
@@ -26,6 +28,47 @@ fn export_formats<R: Runtime>(app: &AppHandle<R>) -> Vec<crate::settings::Export
     app.try_state::<AppState>()
         .and_then(|state| state.settings.lock().ok().map(|s| s.export_formats.clone()))
         .unwrap_or_else(default_export_formats)
+}
+
+/// The last tool availability the frontend reported.
+///
+/// `None` on both fields is the state before the first check: the menu keeps
+/// every format enabled rather than guessing that a working tool is missing.
+fn export_availability<R: Runtime>(app: &AppHandle<R>) -> ExportAvailability {
+    app.try_state::<AppState>()
+        .and_then(|state| {
+            state
+                .export_availability
+                .lock()
+                .ok()
+                .map(|availability| *availability)
+        })
+        .unwrap_or_default()
+}
+
+/// A format label that says why the item is disabled.
+///
+/// The suffix is part of the label rather than a tooltip because a native menu
+/// item does not show a tooltip reliably. It is deliberately short: the submenu
+/// still has to fit the format's own name and its accelerator column.
+fn export_label(format: &ExportFormat, availability: ExportAvailability) -> String {
+    let base = plain_label(&format.label);
+    match availability.pandoc {
+        Some(false) => format!("{base} — needs Pandoc"),
+        Some(true) if format.id.eq_ignore_ascii_case("pdf") && availability.typst == Some(false) => {
+            format!("{base} — needs Typst")
+        }
+        _ => base,
+    }
+}
+
+/// Whether this format can run with the tools that are installed.
+///
+/// PDF is the one format that also needs Typst; every other pandoc target reads
+/// Markdown and writes a file, so Pandoc alone is enough.
+fn export_enabled(format: &ExportFormat, availability: ExportAvailability) -> bool {
+    availability.pandoc.unwrap_or(true)
+        && (!format.id.eq_ignore_ascii_case("pdf") || availability.typst.unwrap_or(true))
 }
 
 /// A menu label safe to hand to the platform backends.
@@ -75,12 +118,110 @@ pub struct Shortcut {
     pub accelerator: String,
 }
 
-pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
+/// The state every checkable menu item mirrors.
+///
+/// The frontend owns this: it is the only side that knows whether the window is
+/// fullscreen, and it already owns the settings-backed modes. It sends the whole
+/// struct after every layout change instead of letting the two sides derive the
+/// same booleans separately — a menu that is right at start-up and stale after
+/// the first toggle is worse than no check mark at all.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MenuState {
+    pub view_mode: String,
+    pub sidebar_visible: bool,
+    pub sidebar_tab: String,
+    pub show_status_bar: bool,
+    pub focus_mode: bool,
+    pub typewriter_mode: bool,
+    pub sync_scroll: bool,
+    pub theme: String,
+    pub auto_save: bool,
+    pub fullscreen: bool,
+}
+
+impl MenuState {
+    /// The settings-backed part of the state.
+    ///
+    /// `fullscreen` is not a persisted setting, so a caller that can see the
+    /// window must fill it in; the default is "not fullscreen", which is what a
+    /// freshly built menu should show.
+    pub fn from_settings(settings: &crate::settings::Settings) -> Self {
+        Self {
+            view_mode: settings.view_mode.clone(),
+            sidebar_visible: settings.sidebar_visible,
+            sidebar_tab: settings.sidebar_tab.clone(),
+            show_status_bar: settings.show_status_bar,
+            focus_mode: settings.focus_mode,
+            typewriter_mode: settings.typewriter_mode,
+            sync_scroll: settings.sync_scroll,
+            theme: settings.theme.clone(),
+            auto_save: settings.auto_save,
+            fullscreen: false,
+        }
+    }
+}
+
+/// Every checkable id, in the order `menu_state` reports them.
+///
+/// `sync` walks this list; an item added to the menu but not here is built with
+/// its start-up state and then never changes.
+const CHECK_IDS: &[&str] = &[
+    "file.autoSave",
+    "view.source",
+    "view.split",
+    "view.preview",
+    "view.sidebar",
+    "view.outline",
+    "view.files",
+    "view.recent",
+    "view.statusBar",
+    "view.focus",
+    "view.typewriter",
+    "view.syncScroll",
+    "view.fullscreen",
+    "themes.system",
+    "themes.light",
+    "themes.dark",
+];
+
+/// Whether one checkable item is on.
+///
+/// One table for the initial menu and for every later update, so a mode cannot
+/// be wired into the menu and forgotten by the synchroniser.
+fn is_checked(state: &MenuState, id: &str) -> bool {
+    match id {
+        "file.autoSave" => state.auto_save,
+        "view.source" => state.view_mode == "source",
+        "view.split" => state.view_mode == "split",
+        "view.preview" => state.view_mode == "preview",
+        "view.sidebar" => state.sidebar_visible,
+        "view.outline" => state.sidebar_tab == "outline",
+        "view.files" => state.sidebar_tab == "files",
+        "view.recent" => state.sidebar_tab == "recent",
+        "view.statusBar" => state.show_status_bar,
+        "view.focus" => state.focus_mode,
+        "view.typewriter" => state.typewriter_mode,
+        "view.syncScroll" => state.sync_scroll,
+        "view.fullscreen" => state.fullscreen,
+        "themes.system" => state.theme == "system",
+        "themes.light" => state.theme == "light",
+        "themes.dark" => state.theme == "dark",
+        _ => false,
+    }
+}
+
+pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result<Menu<R>> {
     // The menu is rebuilt whenever the export formats change, so the registry is
     // reset here; appending would accumulate duplicates.
     if let Ok(mut list) = ACCELERATORS.lock() {
         list.clear();
     }
+
+    // The frontend reports this once it has asked pandoc and typst. Until then
+    // every format is enabled and unannotated, because hiding a working format
+    // on a guess is worse than showing one that will explain itself on click.
+    let availability = export_availability(app);
 
     // Accelerator strings are parsed by the platform menu backend; a name it does
     // not recognise would otherwise abort the whole build. Register the item
@@ -115,6 +256,33 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         }
     };
 
+    // The same shape as `item`, plus a check state. The accelerator must still be
+    // recorded in ACCELERATORS: F8, F9 and the sidebar and tab shortcuts are
+    // carried by check items, and losing them here would silently kill the
+    // frontend bindings that make those keys work on Windows.
+    let check = |id: &str, label: &str, accel: Option<&str>| -> tauri::Result<CheckMenuItem<R>> {
+        let attempt = |with: Option<&str>| {
+            CheckMenuItem::with_id(app, id, label, true, is_checked(state, id), with)
+        };
+        match attempt(accel) {
+            Ok(built) => {
+                if let Some(a) = accel {
+                    if let Ok(mut list) = ACCELERATORS.lock() {
+                        list.push((id.to_string(), a.to_string()));
+                    }
+                }
+                Ok(built)
+            }
+            Err(error) if accel.is_some() => {
+                eprintln!(
+                    "[menu] accelerator {accel:?} for {id} was rejected ({error}); registering without it"
+                );
+                attempt(None)
+            }
+            Err(error) => Err(error),
+        }
+    };
+
     // ---- File -------------------------------------------------------------
     // The export submenu is built from settings, so the entries a user adds in
     // Preferences appear here without any further wiring. HTML and PDF come
@@ -127,13 +295,22 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .item(&item("export.pdf", "PDF (Print)", None)?)
         .separator();
     for format in export_formats(app) {
-        export = export.item(&item(
-            &format!("{EXPORT_PREFIX}{}", format.id),
-            &plain_label(&format.label),
+        let id = format!("{EXPORT_PREFIX}{}", format.id);
+        let built = item(
+            &id,
+            &export_label(&format, availability),
             None,
-        )?);
+        )?;
+        if !export_enabled(&format, availability) {
+            built.set_enabled(false)?;
+        }
+        export = export.item(&built);
     }
-    let export = export.build()?;
+    let export = export
+        .separator()
+        .item(&item("export.installPandoc", "Install Pandoc…", None)?)
+        .item(&item("export.installTypst", "Install Typst…", None)?)
+        .build()?;
 
     let file = SubmenuBuilder::new(app, "File")
         .item(&item("file.new", "New", Some("CmdOrCtrl+N"))?)
@@ -141,6 +318,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .separator()
         .item(&item("file.save", "Save", Some("CmdOrCtrl+S"))?)
         .item(&item("file.saveAs", "Save As…", Some("CmdOrCtrl+Shift+S"))?)
+        .item(&check("file.autoSave", "Auto Save", None)?)
         .item(&item("file.reload", "Reload From Disk", None)?)
         .separator()
         .item(&export)
@@ -247,35 +425,53 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .item(&item("format.image", "Image", Some("CmdOrCtrl+Shift+I"))?)
         .separator()
         .item(&item("format.math", "Inline Math", None)?)
+        .item(&item("format.displayMath", "Display Math", None)?)
         .build()?;
 
     // ---- View -------------------------------------------------------------
+    // Check items make the current mode legible when the menu is opened. There
+    // is no radio control in Tauri/muda, so exclusive groups are still
+    // checkmarks; `is_checked` and the frontend keep exactly one of each on.
+    #[cfg(not(target_os = "macos"))]
+    let fullscreen: Box<dyn IsMenuItem<R>> =
+        Box::new(check("view.fullscreen", "Full Screen", Some("F11"))?);
+    // macOS has a native full-screen item that integrates with Spaces and the
+    // green button. A custom CheckMenuItem would lose that, and the platform
+    // draws its own state, so keep the predefined one there.
+    #[cfg(target_os = "macos")]
+    let fullscreen: Box<dyn IsMenuItem<R>> =
+        Box::new(PredefinedMenuItem::fullscreen(app, None)?);
+
     let view = SubmenuBuilder::new(app, "View")
-        .item(&item(
+        .item(&check(
             "view.source",
             "Source Code Mode",
             Some("CmdOrCtrl+/"),
         )?)
-        .item(&item("view.split", "Split View", None)?)
-        .item(&item("view.preview", "Preview Only", None)?)
+        .item(&check("view.split", "Split View", None)?)
+        .item(&check("view.preview", "Preview Only", None)?)
         .separator()
-        .item(&item(
+        .item(&check(
             "view.sidebar",
-            "Toggle Sidebar",
+            "Sidebar",
             Some("CmdOrCtrl+Shift+L"),
         )?)
-        .item(&item("view.outline", "Outline", Some("CmdOrCtrl+Shift+1"))?)
-        .item(&item("view.files", "File List", Some("CmdOrCtrl+Shift+2"))?)
-        .item(&item(
+        .item(&check("view.outline", "Outline", Some("CmdOrCtrl+Shift+1"))?)
+        .item(&check("view.files", "File List", Some("CmdOrCtrl+Shift+2"))?)
+        .item(&check(
             "view.recent",
             "Recent Files",
             Some("CmdOrCtrl+Shift+3"),
         )?)
-        .item(&item("view.statusBar", "Toggle Status Bar", None)?)
+        .item(&check("view.statusBar", "Status Bar", None)?)
         .separator()
-        .item(&item("view.focus", "Focus Mode", Some("F8"))?)
-        .item(&item("view.typewriter", "Typewriter Mode", Some("F9"))?)
-        .item(&item("view.syncScroll", "Sync Scroll", None)?)
+        .item(&check("view.focus", "Focus Mode", Some("F8"))?)
+        .item(&check(
+            "view.typewriter",
+            "Typewriter Mode",
+            Some("F9"),
+        )?)
+        .item(&check("view.syncScroll", "Sync Scroll", None)?)
         .separator()
         .item(&item("view.zoomIn", "Zoom In", Some("CmdOrCtrl+Shift+="))?)
         .item(&item("view.zoomOut", "Zoom Out", Some("CmdOrCtrl+Shift+-"))?)
@@ -285,14 +481,14 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             Some("CmdOrCtrl+Shift+0"),
         )?)
         .separator()
-        .item(&PredefinedMenuItem::fullscreen(app, None)?)
+        .item(fullscreen.as_ref())
         .build()?;
 
     // ---- Themes -----------------------------------------------------------
     let themes = SubmenuBuilder::new(app, "Themes")
-        .item(&item("themes.system", "Follow System", None)?)
-        .item(&item("themes.light", "Light", None)?)
-        .item(&item("themes.dark", "Dark", None)?)
+        .item(&check("themes.system", "Follow System", None)?)
+        .item(&check("themes.light", "Light", None)?)
+        .item(&check("themes.dark", "Dark", None)?)
         .build()?;
 
     // ---- Help -------------------------------------------------------------
@@ -346,4 +542,241 @@ pub fn on_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     // Predefined items are handled by the platform; their ids simply find no
     // listener on the frontend.
     let _ = app.emit("menu", id);
+}
+
+/// Find an item anywhere in the menu tree.
+///
+/// `Menu::get` only looks at the direct children of the menu bar, which is the
+/// menu itself. Every item that matters here lives one level down in a submenu,
+/// so a recursive walk is required; `Menu::get("view.focus")` returns `None`.
+fn find_item<R: Runtime>(menu: &Menu<R>, id: &str) -> Option<MenuItemKind<R>> {
+    fn walk<R: Runtime>(items: Vec<MenuItemKind<R>>, id: &str) -> Option<MenuItemKind<R>> {
+        for item in items {
+            if item.id() == id {
+                return Some(item);
+            }
+            if let MenuItemKind::Submenu(submenu) = &item {
+                if let Ok(children) = submenu.items() {
+                    if let Some(found) = walk(children, id) {
+                        return Some(found);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    walk(menu.items().ok()?, id)
+}
+
+/// Apply a state to every checkable item.
+///
+/// Check items are not exclusive by themselves: setting `view.preview` does not
+/// clear `view.split`. Writing the whole group on every update is what keeps the
+/// radio behaviour, and it also repairs a menu that was rebuilt with one stale
+/// value.
+pub fn sync<R: Runtime>(app: &AppHandle<R>, state: &MenuState) {
+    let Some(menu) = app.menu() else {
+        return;
+    };
+    for id in CHECK_IDS {
+        let Some(item) = find_item(&menu, id) else {
+            continue;
+        };
+        let Some(check) = item.as_check_menuitem() else {
+            // On macOS the full-screen item is a predefined one; the platform
+            // owns its state.
+            continue;
+        };
+        if let Err(error) = check.set_checked(is_checked(state, id)) {
+            eprintln!("[menu] could not set the check state of {id}: {error}");
+        }
+    }
+
+    // Focus mode removes the sidebar from the layout. Now that the status bar
+    // stays visible there, its sidebar button is visible too; leaving the four
+    // sidebar items clickable would be a control that changes a setting nobody
+    // can see. Disable them until focus mode is left.
+    for id in ["view.sidebar", "view.outline", "view.files", "view.recent"] {
+        let Some(item) = find_item(&menu, id) else {
+            continue;
+        };
+        let Some(check) = item.as_check_menuitem() else {
+            continue;
+        };
+        if let Err(error) = check.set_enabled(!state.focus_mode) {
+            eprintln!("[menu] could not set the enabled state of {id}: {error}");
+        }
+    }
+}
+
+/// Let the frontend mirror its state onto the native menu.
+#[tauri::command]
+pub fn set_menu_state<R: Runtime>(app: AppHandle<R>, state: MenuState) {
+    sync(&app, &state);
+}
+
+/// Apply a tool-availability report to the Export submenu.
+///
+/// `pandoc`/`typst` say whether each program was found. The answer is cached in
+/// `AppState` so a rebuild caused by an export-format edit keeps the labels and
+/// disabled states instead of briefly offering every format again.
+#[tauri::command]
+pub fn set_export_availability<R: Runtime>(app: AppHandle<R>, pandoc: bool, typst: bool) {
+    let availability = ExportAvailability {
+        pandoc: Some(pandoc),
+        typst: Some(typst),
+    };
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut slot) = state.export_availability.lock() {
+            *slot = availability;
+        }
+    }
+    apply_export_availability(&app, availability);
+}
+
+fn apply_export_availability<R: Runtime>(app: &AppHandle<R>, availability: ExportAvailability) {
+    let Some(menu) = app.menu() else {
+        return;
+    };
+    for format in export_formats(app) {
+        let id = format!("{EXPORT_PREFIX}{}", format.id);
+        let Some(item) = find_item(&menu, &id) else {
+            continue;
+        };
+        let Some(menu_item) = item.as_menuitem() else {
+            continue;
+        };
+        if let Err(error) = menu_item.set_text(export_label(&format, availability)) {
+            eprintln!("[menu] could not set the label of {id}: {error}");
+        }
+        if let Err(error) = menu_item.set_enabled(export_enabled(&format, availability)) {
+            eprintln!("[menu] could not set the enabled state of {id}: {error}");
+        }
+    }
+}
+
+#[derive(serde::Serialize)]
+pub struct MenuCheck {
+    pub id: String,
+    pub checked: bool,
+    pub enabled: bool,
+}
+
+/// Every checkable item and its state, for the test suites.
+///
+/// A native menu is not part of the webview, so `Page.captureScreenshot` and the
+/// DOM probes cannot see a check mark. This command is the only way to prove
+/// that the menu a person opens agrees with the state the application thinks it
+/// is in.
+#[tauri::command]
+pub fn menu_state<R: Runtime>(app: AppHandle<R>) -> Vec<MenuCheck> {
+    fn walk<R: Runtime>(items: Vec<MenuItemKind<R>>, out: &mut Vec<MenuCheck>) {
+        for item in items {
+            if let MenuItemKind::Check(check) = &item {
+                out.push(MenuCheck {
+                    id: check.id().as_ref().to_string(),
+                    checked: check.is_checked().unwrap_or(false),
+                    enabled: check.is_enabled().unwrap_or(true),
+                });
+            }
+            if let MenuItemKind::Submenu(submenu) = &item {
+                if let Ok(children) = submenu.items() {
+                    walk(children, out);
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    if let Some(menu) = app.menu() {
+        if let Ok(items) = menu.items() {
+            walk(items, &mut out);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::Settings;
+
+    #[test]
+    fn check_state_tracks_settings() {
+        let mut settings = Settings::default();
+        settings.view_mode = "preview".into();
+        settings.sidebar_visible = false;
+        settings.sidebar_tab = "files".into();
+        settings.show_status_bar = false;
+        settings.focus_mode = true;
+        settings.typewriter_mode = true;
+        settings.sync_scroll = false;
+        settings.theme = "dark".into();
+        settings.auto_save = true;
+
+        let state = MenuState::from_settings(&settings);
+
+        assert!(is_checked(&state, "view.preview"));
+        assert!(!is_checked(&state, "view.source"));
+        assert!(!is_checked(&state, "view.sidebar"));
+        assert!(is_checked(&state, "view.files"));
+        assert!(!is_checked(&state, "view.outline"));
+        assert!(!is_checked(&state, "view.statusBar"));
+        assert!(is_checked(&state, "view.focus"));
+        assert!(is_checked(&state, "view.typewriter"));
+        assert!(!is_checked(&state, "view.syncScroll"));
+        assert!(is_checked(&state, "themes.dark"));
+        assert!(!is_checked(&state, "themes.system"));
+        assert!(is_checked(&state, "file.autoSave"));
+        assert!(!is_checked(&state, "view.fullscreen"));
+    }
+
+    #[test]
+    fn exclusive_groups_check_exactly_one() {
+        let state = MenuState::from_settings(&Settings::default());
+        let checked = |ids: &[&str]| ids.iter().filter(|id| is_checked(&state, id)).count();
+
+        assert_eq!(checked(&["view.source", "view.split", "view.preview"]), 1);
+        assert_eq!(checked(&["view.outline", "view.files", "view.recent"]), 1);
+        assert_eq!(checked(&["themes.system", "themes.light", "themes.dark"]), 1);
+    }
+
+    #[test]
+    fn export_availability_disables_and_annotates() {
+        let mut docx = ExportFormat::default();
+        docx.id = "docx".into();
+        docx.label = "Word (.docx)".into();
+
+        let mut pdf = ExportFormat::default();
+        pdf.id = "pdf".into();
+        pdf.label = "PDF (via Typst)".into();
+
+        let unknown = ExportAvailability::default();
+        assert!(export_enabled(&docx, unknown));
+        assert_eq!(export_label(&docx, unknown), "Word (.docx)");
+
+        let pandoc_missing = ExportAvailability {
+            pandoc: Some(false),
+            typst: Some(false),
+        };
+        assert!(!export_enabled(&docx, pandoc_missing));
+        assert!(export_label(&docx, pandoc_missing).ends_with("— needs Pandoc"));
+
+        // Pandoc alone is enough for every target but PDF.
+        let typst_missing = ExportAvailability {
+            pandoc: Some(true),
+            typst: Some(false),
+        };
+        assert!(export_enabled(&docx, typst_missing));
+        assert!(!export_enabled(&pdf, typst_missing));
+        assert!(export_label(&pdf, typst_missing).ends_with("— needs Typst"));
+
+        let installed = ExportAvailability {
+            pandoc: Some(true),
+            typst: Some(true),
+        };
+        assert!(export_enabled(&pdf, installed));
+        assert_eq!(export_label(&pdf, installed), "PDF (via Typst)");
+    }
 }

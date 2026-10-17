@@ -117,6 +117,13 @@ const doc = await evaluate(`(() => {
   return JSON.stringify({
     title: document.title,
     theme: document.documentElement.dataset.theme,
+    themeIcon: (() => {
+      const svg = document.querySelector('#btn-theme svg');
+      return {
+        paths: svg?.querySelectorAll('path').length ?? 0,
+        circles: svg?.querySelectorAll('circle').length ?? 0,
+      };
+    })(),
     appClasses: document.getElementById('app').className,
     bootError: document.body.textContent.includes('Failed to start MDraft'),
     editorLines: q('.cm-line'),
@@ -206,6 +213,12 @@ check("no duplicate source-mode button", doc.hasLegacySourceButton === false);
 check("status icons are inline SVG", doc.statusIcons.every((icon) => icon.isSvg));
 check("status icons are at least 16px", doc.statusIcons.every((icon) => icon.size >= 16));
 check("status icons inherit the theme colour", doc.statusIcons.every((icon) => icon.stroke.length > 0));
+check(
+  "the theme button shows the sun in light and the moon in dark",
+  doc.theme === "dark"
+    ? doc.themeIcon.paths === 1 && doc.themeIcon.circles === 0
+    : doc.themeIcon.paths === 1 && doc.themeIcon.circles === 1,
+);
 check("source pane is syntax highlighted", doc.syntaxColors >= 4);
 check("KaTeX stylesheet loaded (font declared)", doc.math.declared);
 check("KaTeX_Main is available", doc.math.available);
@@ -254,6 +267,14 @@ const prefs = await evaluate(`(() => {
     selects: document.querySelectorAll('.prefs-control select').length,
     checkboxes: document.querySelectorAll('.prefs-row-checkbox input[type=checkbox]').length,
     buttons: document.querySelectorAll('.prefs-button').length,
+    defaultExtensionOptions: (() => {
+      const row = rows.find(
+        (r) =>
+          (r.querySelector('.prefs-label')?.textContent ?? '').replace('?', '').trim() ===
+          'Default File Extension',
+      );
+      return row ? [...row.querySelectorAll('select option')].map((o) => o.value) : [];
+    })(),
     hasSearch: Boolean(document.querySelector('.prefs-search'))
   });
 })()`);
@@ -278,7 +299,15 @@ check("first section selected", prefs.activeSection === "Files" && prefs.section
 check("every section has rows", prefs.emptySections === "");
 check("rows rendered", prefs.totalRows >= 24);
 check("controls present", prefs.selects >= 2 && prefs.checkboxes >= 2 && prefs.buttons >= 1);
+check("default extension offers Typst", prefs.defaultExtensionOptions.includes("typ"));
 check("search box present", prefs.hasSearch);
+const editorSection = prefs.perSection.find((section) => section.name === "Editor");
+check(
+  "spelling preference",
+  Boolean(editorSection) &&
+    editorSection.labels.includes("Check spelling while typing") &&
+    editorSection.labels.includes("Dictionary"),
+);
 
 // Search filters the navigation down to matching sections.
 const search = await evaluate(`(() => {
@@ -377,6 +406,68 @@ check(
 check(
   "face pickers list the faces and keep a selection",
   faces.options.every((count) => count >= 10) && faces.selected.every(Boolean),
+);
+
+// Math is drawn at KaTeX's own 1.21em, which is what makes it larger than the
+// prose in the reference screenshot. The preference must visibly change the
+// rendered formula — a stored number that nothing reads would pass any check
+// that only looked at settings.json — and the field must refuse a value outside
+// the range it advertises.
+const mathScale = await evaluate(`(() => {
+  [...document.querySelectorAll('.prefs-section')]
+    .find((s) => s.textContent === 'Typography').click();
+  const findRow = () => [...document.querySelectorAll('.prefs-row')].find((r) =>
+    (r.querySelector('.prefs-label')?.textContent ?? '').replace('?', '').trim() === 'Math scale');
+  const input = () => findRow()?.querySelector('input[type=number]') ?? null;
+  const width = () => {
+    const katex = document.querySelector('#preview .math-inline .katex');
+    return katex ? Math.round(katex.getBoundingClientRect().width * 10) / 10 : 0;
+  };
+  if (!input()) return JSON.stringify({ found: false });
+
+  const bounds = { min: input().min, max: input().max, value: input().value };
+  const before = width();
+  const set = (value) => {
+    const field = input();
+    field.value = String(value);
+    field.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  set(70);
+  const at70 = width();
+  set(40);                       // below the range: must clamp up
+  const clampedLow = input().value;
+  set(400);                      // above the range: must clamp down
+  const clampedHigh = input().value;
+  // Leave the stored setting as it was found, so the next suite does not
+  // inherit a shrunken preview.
+  set(100);
+  const restored = width();
+  return JSON.stringify({ found: true, bounds, before, at70, clampedLow, clampedHigh, restored });
+})()`);
+
+console.log("\n=== math scale preference ===");
+console.log(`  bounds   ${mathScale.bounds?.min}–${mathScale.bounds?.max}  value ${mathScale.bounds?.value}`);
+console.log(`  width    ${mathScale.before} px at 100%, ${mathScale.at70} px at 70%`);
+console.log(`  clamps   ${mathScale.clampedLow} / ${mathScale.clampedHigh}`);
+
+check(
+  "math scale row is present and bounded 70–130",
+  mathScale.found &&
+    mathScale.bounds.min === "70" &&
+    mathScale.bounds.max === "130" &&
+    mathScale.bounds.value === "100",
+);
+check(
+  "math scale visibly shrinks rendered math",
+  mathScale.before > 20 && Math.abs(mathScale.at70 / mathScale.before - 0.7) < 0.05,
+);
+check(
+  "math scale input clamps out-of-range values",
+  mathScale.clampedLow === "70" && mathScale.clampedHigh === "130",
+);
+check(
+  "math returns to KaTeX's ratio at 100%",
+  Math.abs(mathScale.restored - mathScale.before) <= 0.5,
 );
 
 // Close with Escape.
@@ -572,6 +663,294 @@ check(
   sync.topLineAfterSourceClick === sync.topLineBeforeSourceClick,
 );
 check("source click lands lower in the document", sync.clickedLine > 20);
+
+// ---------------------------------------------------------------------------
+// Phase 3b — sync is continuous inside a block, at both font extremes
+// ---------------------------------------------------------------------------
+//
+// The old mapping aligned a block only when its first line reached the top of
+// the source and then held the preview still until the next block. It passed
+// every check above because they only ask whether the preview moved at all.
+// This phase scrolls a few pixels at a time through the longest block, once
+// with a large preview font and once with a small one: a staircase gives one
+// value, interpolation gives many, and a small nudge of the preview must come
+// back to the same source position instead of jumping to the block start.
+
+const interpolation = await evaluate(`(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const preview = document.getElementById('preview');
+  const previewPane = document.getElementById('preview-pane');
+  const scroller = document.querySelector('.cm-scroller');
+
+  const openPrefs = () => {
+    const overlay = document.querySelector('.prefs-overlay');
+    if (!overlay || overlay.hidden) document.getElementById('btn-prefs').click();
+    return overlay;
+  };
+  const closePrefs = () => {
+    document.querySelector('.prefs-overlay')?.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  };
+  const setNumber = (sectionName, label, value) => {
+    const section = [...document.querySelectorAll('.prefs-section')]
+      .find((s) => s.textContent === sectionName);
+    if (!section) return false;
+    section.click();
+    const row = [...document.querySelectorAll('.prefs-row')].find((r) =>
+      (r.querySelector('.prefs-label')?.textContent ?? '').replace('?', '').trim() === label);
+    const input = row?.querySelector('input[type=number]');
+    if (!input) return false;
+    input.value = String(value);
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  };
+  const setFonts = (editorPx, previewPx) => {
+    openPrefs();
+    const ok =
+      setNumber('Editor', 'Font Size', editorPx) &&
+      setNumber('Typography', 'Preview text size', previewPx);
+    closePrefs();
+    return ok;
+  };
+
+  // The longest source-line span between consecutive top-level blocks. A
+  // one-line heading cannot show interpolation; the code fences can.
+  const anchors = [...preview.querySelectorAll('[data-line]')];
+  let bestIndex = 0;
+  let bestGap = 0;
+  for (let i = 0; i + 1 < anchors.length; i++) {
+    const gap = Number(anchors[i + 1].dataset.line) - Number(anchors[i].dataset.line);
+    if (gap > bestGap) { bestGap = gap; bestIndex = i; }
+  }
+
+  const measure = async (editorPx, previewPx) => {
+    if (!setFonts(editorPx, previewPx)) return { ok: false, editorPx, previewPx };
+    await sleep(500);
+
+    // Put the block in the editor, then move it from 12% down to the top so the
+    // top visible line is inside it rather than in the block before.
+    anchors[bestIndex].dispatchEvent(
+      new MouseEvent('mousedown', { bubbles: true, clientX: 0, clientY: 0 }));
+    await sleep(500);
+    const start = Math.max(0, scroller.scrollTop + scroller.clientHeight * 0.12 + 2);
+    const samples = [];
+    for (const step of [0, 8, 16, 24, 32]) {
+      scroller.scrollTop = start + step;
+      await sleep(200);
+      samples.push(Math.round(previewPane.scrollTop));
+    }
+    const distinct = new Set(samples).size;
+    const monotonic = samples.every((value, i) => i === 0 || value >= samples[i - 1]);
+    const moved = samples[samples.length - 1] - samples[0];
+    const slope = moved / 32;
+
+    // Reverse map: 3px further down the preview should move the source by only
+    // the local slope, not jump to the top of the block. The tolerance follows
+    // the measured slope, because 3 preview pixels are worth more source pixels
+    // when the preview font is small.
+    const sourceBeforeInverse = scroller.scrollTop;
+    previewPane.scrollTop = samples[samples.length - 1] + 3;
+    await sleep(350);
+    const inverseDelta = Math.abs(scroller.scrollTop - sourceBeforeInverse);
+    const inverseLimit = slope > 0.05 ? 3 / slope + 8 : 1000;
+
+    return {
+      ok: true,
+      editorPx,
+      previewPx,
+      samples,
+      distinct,
+      monotonic,
+      moved,
+      inverseDelta,
+      inverseLimit,
+    };
+  };
+
+  const large = await measure(10, 32);
+  const small = await measure(40, 11);
+
+  // Restore the settings and the viewport whatever the measurements said.
+  setFonts(16, 16);
+  previewPane.scrollTop = 0;
+  scroller.scrollTop = 0;
+  await sleep(400);
+
+  return JSON.stringify({ ok: true, gap: bestGap, large, small });
+})()`);
+
+console.log("\n=== sync interpolation at both font extremes ===");
+for (const [label, measured] of [
+  ["10px editor / 32px preview", interpolation.large],
+  ["40px editor / 11px preview", interpolation.small],
+]) {
+  console.log(
+    `  ${label}: ${measured?.samples?.join(", ")}  ` +
+      `(moved ${measured?.moved} px, inverse drift ${measured?.inverseDelta} px ` +
+      `of ${measured?.inverseLimit} allowed)`,
+  );
+}
+
+const interpolates = (measured) =>
+  measured?.ok === true &&
+  measured.monotonic === true &&
+  measured.distinct >= 4 &&
+  measured.moved > 0;
+
+check(
+  "sync test found a multi-line block",
+  interpolation.ok === true && interpolation.gap >= 3,
+);
+check(
+  "sync interpolates with a large preview font",
+  interpolates(interpolation.large),
+);
+check(
+  "sync interpolates with a small preview font",
+  interpolates(interpolation.small),
+);
+check(
+  "reverse sync returns to the same source position at both extremes",
+  interpolation.large?.inverseDelta <= interpolation.large?.inverseLimit &&
+    interpolation.small?.inverseDelta <= interpolation.small?.inverseLimit,
+);
+
+// ---------------------------------------------------------------------------
+// Phase 4 — mode flags and the native menu's check marks
+// ---------------------------------------------------------------------------
+//
+// A check mark in a native menu is not in the DOM, so `Page.captureScreenshot`
+// cannot see it. The `menu_state` command reports what the menu actually holds;
+// the flags are measured through their attributes and text, not their colours.
+
+console.log("\n=== mode flags and the native menu ===");
+
+const FLAGS = ["flag-focus", "flag-typewriter", "flag-sync", "flag-auto-save"];
+const menuOf = () => evaluate(`window.__TAURI_INTERNALS__.invoke("menu_state")`);
+const menuChecked = (menu, id) => menu.some((entry) => entry.id === id && entry.checked);
+const menuEnabled = (menu, id) => menu.find((entry) => entry.id === id)?.enabled !== false;
+
+const readFlag = (id) =>
+  evaluate(`(() => {
+    const button = document.getElementById(${JSON.stringify(id)});
+    const svg = button.querySelector('svg');
+    return JSON.stringify({
+      id: ${JSON.stringify(id)},
+      svg: Boolean(svg),
+      size: Math.round(svg?.getBoundingClientRect().width ?? 0),
+      on: button.dataset.on,
+      state: button.querySelector('.flag-state')?.textContent ?? '',
+      pressed: button.getAttribute('aria-pressed'),
+      inactive: button.dataset.inactive,
+      focusClass: document.getElementById('app').classList.contains('focus-mode'),
+      statusVisible: getComputedStyle(document.getElementById('statusbar')).display !== 'none',
+      sidebarButtonVisible:
+        getComputedStyle(document.getElementById('btn-sidebar')).display !== 'none',
+    });
+  })()`);
+
+// Split view first: Sync Scroll is only meaningful there, and the previous
+// phase may have left any mode behind.
+await evaluate(`document.getElementById("mode-split").click()`);
+await settle(400);
+
+const flagState = await Promise.all(FLAGS.map(readFlag));
+console.log(
+  `  flags     ${flagState.map((f) => `${f.id.replace("flag-", "")}=${f.on}`).join(" ")}`,
+);
+
+check("four mode flags are present", flagState.length === 4 && flagState.every((f) => f.svg));
+check("mode flags are inline SVG at least 16px", flagState.every((f) => f.svg && f.size >= 16));
+check(
+  "every flag states on/off and agrees with aria-pressed",
+  flagState.every((f) =>
+    f.on === "true"
+      ? f.state === "on" && f.pressed === "true"
+      : f.state === "off" && f.pressed === "false",
+  ),
+);
+
+const menuBefore = await menuOf();
+console.log(`  menu      ${menuBefore.filter((entry) => entry.checked).map((entry) => entry.id).join(", ")}`);
+check("the menu exposes every checkable item", menuBefore.length >= 12);
+
+const exclusiveGroups = [
+  ["view.source", "view.split", "view.preview"],
+  ["view.outline", "view.files", "view.recent"],
+  ["themes.system", "themes.light", "themes.dark"],
+];
+check(
+  "each exclusive menu group checks exactly one item",
+  exclusiveGroups.every(
+    (group) => group.filter((id) => menuChecked(menuBefore, id)).length === 1,
+  ),
+);
+
+/** Click a flag, let the asynchronous menu sync land, then read both sides. */
+async function toggle(id) {
+  await evaluate(`document.getElementById(${JSON.stringify(id)}).click()`);
+  await settle(450);
+  return { flag: await readFlag(id), menu: await menuOf() };
+}
+
+const focusOn = await toggle("flag-focus");
+check(
+  "the Focus flag turns focus mode on and checks the menu",
+  focusOn.flag.on === "true" &&
+    focusOn.flag.state === "on" &&
+    focusOn.flag.focusClass === true &&
+    menuChecked(focusOn.menu, "view.focus"),
+);
+check("focus mode keeps the status bar visible", focusOn.flag.statusVisible === true);
+check(
+  "focus mode hides the sidebar controls instead of leaving dead buttons",
+  focusOn.flag.sidebarButtonVisible === false &&
+    !menuEnabled(focusOn.menu, "view.sidebar") &&
+    !menuEnabled(focusOn.menu, "view.outline"),
+);
+const focusOff = await toggle("flag-focus");
+check(
+  "leaving focus mode restores the sidebar controls",
+  focusOff.flag.sidebarButtonVisible === true &&
+    menuEnabled(focusOff.menu, "view.sidebar") &&
+    menuEnabled(focusOff.menu, "view.outline"),
+);
+
+const typewriterOn = await toggle("flag-typewriter");
+check(
+  "the Typewriter flag mirrors the setting and checks the menu",
+  typewriterOn.flag.on === "true" &&
+    typewriterOn.flag.state === "on" &&
+    menuChecked(typewriterOn.menu, "view.typewriter"),
+);
+await toggle("flag-typewriter");
+
+const syncOff = await toggle("flag-sync");
+check(
+  "the Sync flag turns sync off and clears the menu check",
+  syncOff.flag.on === "false" &&
+    syncOff.flag.state === "off" &&
+    !menuChecked(syncOff.menu, "view.syncScroll"),
+);
+await toggle("flag-sync");
+
+// Sync Scroll stays on but has no effect outside Split; the flag says so with
+// the dimmed state rather than pretending the setting changed.
+await evaluate(`document.getElementById("mode-source").click()`);
+await settle(400);
+const syncInSource = await readFlag("flag-sync");
+await evaluate(`document.getElementById("mode-split").click()`);
+await settle(400);
+check("Sync is dimmed outside Split view", syncInSource.inactive === "true");
+
+const autoOn = await toggle("flag-auto-save");
+check(
+  "the Auto Save flag mirrors the setting and checks the menu",
+  autoOn.flag.on === "true" &&
+    autoOn.flag.state === "on" &&
+    menuChecked(autoOn.menu, "file.autoSave"),
+);
+await toggle("flag-auto-save");
 
 // ---------------------------------------------------------------------------
 // Report

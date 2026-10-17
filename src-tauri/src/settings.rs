@@ -35,11 +35,6 @@ pub struct ExportFormat {
     /// Appended verbatim after `arguments`, for one-off tweaks.
     pub extra_arguments: String,
     pub style_reference: String,
-    pub after_open_location: bool,
-    pub after_open_file: bool,
-    pub after_run_command: bool,
-    /// The user's own command. `${outputPath}` is substituted into it.
-    pub after_command: String,
 }
 
 impl Default for ExportFormat {
@@ -51,10 +46,6 @@ impl Default for ExportFormat {
             arguments: "-s -o ${outputPath}".into(),
             extra_arguments: String::new(),
             style_reference: String::new(),
-            after_open_location: false,
-            after_open_file: false,
-            after_run_command: false,
-            after_command: String::new(),
         }
     }
 }
@@ -111,6 +102,15 @@ fn default_true() -> bool {
 
 fn default_body_font_size() -> u32 {
     16
+}
+
+fn default_spellcheck_language() -> String {
+    "auto".to_string()
+}
+
+/// KaTeX draws every formula at 1.21em, so 100 is KaTeX's own ratio.
+fn default_math_font_scale() -> u32 {
+    100
 }
 
 pub fn default_export_formats() -> Vec<ExportFormat> {    let args = |rest: &str| format!("{PANDOC_INPUT} {rest}");
@@ -196,6 +196,16 @@ pub struct Settings {
     /// Prose size in the preview, in pixels. The editor has its own, above.
     #[serde(default = "default_body_font_size")]
     pub body_font_size: u32,
+    /// Scale applied to KaTeX's mathematics, as a percentage.
+    ///
+    /// KaTeX sets `.katex` at 1.21em of the surrounding text, so a formula is a
+    /// fifth larger than the prose beside it; roughly 83% makes the two match,
+    /// and 100 leaves KaTeX's own ratio alone. The Preferences field limits the
+    /// range to 70–130. A hand-edited file is not clamped on load: silently
+    /// rewriting a value the reader typed is worse than drawing it oddly, and
+    /// the same rule applies to every other size in this struct.
+    #[serde(default = "default_math_font_scale")]
+    pub math_font_scale: u32,
     #[serde(default)]
     pub ligatures_in_code: bool,
     #[serde(default = "default_true")]
@@ -230,6 +240,25 @@ pub struct Settings {
     pub enable_math: bool,
     pub enable_mermaid: bool,
 
+    // ---- Preferences: Spelling -------------------------------------------
+    /// Underline misspellings while typing.
+    ///
+    /// On by default. A settings file written before the field existed must
+    /// come back on too, which is what `default_true` does: the container's
+    /// `#[serde(default)]` would otherwise use `bool::default()`, and that is
+    /// false.
+    #[serde(default = "default_true")]
+    pub spellcheck: bool,
+    /// `"auto"`, or a tag `spellcheck_languages` reports (`en`, `en-GB`, `pt-BR`).
+    #[serde(default = "default_spellcheck_language")]
+    pub spellcheck_language: String,
+    /// Words the reader ignored or added.
+    ///
+    /// Stored here, not via `ISpellChecker::Add`. That call writes the Windows
+    /// user dictionary and would change spelling in every other program.
+    #[serde(default)]
+    pub spellcheck_words: Vec<String>,
+
     // ---- Preferences: Image ----------------------------------------------
     /// "assetsFolder" | "assetsDir" | "custom" | "keepOriginal"
     pub image_rule: String,
@@ -243,6 +272,24 @@ pub struct Settings {
     // ---- Preferences: Export ---------------------------------------------
     /// Pandoc export targets, in the order the menu shows them.
     pub export_formats: Vec<ExportFormat>,
+
+    /// What to do after a **successful** export, for every format.
+    ///
+    /// These were once stored per pandoc format. That made the option look
+    /// dead: a box ticked for Word did nothing when the user exported HTML,
+    /// PDF (Print) or any other format. The choices are global now, and the
+    /// three paths that write a file — pandoc, Typst and HTML — all run them.
+    /// PDF (Print) is the one exception: the browser chooses where the PDF
+    /// goes, so MDraft has no path to open.
+    #[serde(default)]
+    pub after_open_location: bool,
+    #[serde(default)]
+    pub after_open_file: bool,
+    #[serde(default)]
+    pub after_run_command: bool,
+    /// The user's own command. `${outputPath}` is substituted into it.
+    #[serde(default)]
+    pub after_command: String,
 }
 
 impl Default for Settings {
@@ -264,6 +311,7 @@ impl Default for Settings {
             heading_font: String::new(),
             code_font: String::new(),
             body_font_size: default_body_font_size(),
+            math_font_scale: default_math_font_scale(),
             ligatures_in_code: false,
             tabular_figures: true,
             oldstyle_figures: false,
@@ -282,6 +330,10 @@ impl Default for Settings {
             enable_math: true,
             enable_mermaid: true,
 
+            spellcheck: true,
+            spellcheck_language: default_spellcheck_language(),
+            spellcheck_words: Vec::new(),
+
             image_rule: "assetsFolder".into(),
             image_custom_dir: String::new(),
             image_apply_local: true,
@@ -291,13 +343,106 @@ impl Default for Settings {
             image_auto_escape: false,
 
             export_formats: default_export_formats(),
+            after_open_location: false,
+            after_open_file: false,
+            after_run_command: false,
+            after_command: String::new(),
         }
     }
+}
+
+/// Whether the external tools an export needs are installed.
+///
+/// `None` means "not checked yet". The menu is built before the frontend has
+/// asked, and disabling formats on a guess would hide working ones; the
+/// frontend sends a definite answer once `pandoc_status`/`typst_status` return,
+/// and a later menu rebuild reads the cached value instead of starting over.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ExportAvailability {
+    pub pandoc: Option<bool>,
+    pub typst: Option<bool>,
 }
 
 pub struct AppState {
     pub settings: Mutex<Settings>,
     pub config_file: PathBuf,
+    pub export_availability: Mutex<ExportAvailability>,
+}
+
+/// Deserialize a settings file, carrying the old per-format after-export flags
+/// forward to the global ones.
+///
+/// The flags used to live on each `ExportFormat`, which meant a box ticked for
+/// Word did nothing when the user exported HTML or PDF. They are global now.
+/// A file written before that change has no `afterOpenLocation` key at the top
+/// level, so its per-format values are OR-ed together and the old keys are
+/// removed. Once a top-level key exists the file belongs to the new shape and
+/// is left alone: otherwise unchecking a global box would be undone on the next
+/// start by the obsolete per-format value.
+fn parse_settings(raw: &str) -> Option<Settings> {
+    let mut value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let object = value.as_object_mut()?;
+    let legacy = ![
+        "afterOpenLocation",
+        "afterOpenFile",
+        "afterRunCommand",
+        "afterCommand",
+    ]
+    .iter()
+    .any(|key| object.contains_key(*key));
+
+    let mut open_location = false;
+    let mut open_file = false;
+    let mut run_command = false;
+    let mut command = String::new();
+
+    if let Some(formats) = object
+        .get_mut("exportFormats")
+        .and_then(|v| v.as_array_mut())
+    {
+        for format in formats {
+            let Some(format) = format.as_object_mut() else {
+                continue;
+            };
+            if legacy {
+                open_location |= format
+                    .remove("afterOpenLocation")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                open_file |= format
+                    .remove("afterOpenFile")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                run_command |= format
+                    .remove("afterRunCommand")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let candidate = format
+                    .remove("afterCommand")
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .unwrap_or_default();
+                if command.is_empty() {
+                    command = candidate;
+                }
+            } else {
+                // A file already in the new shape must not keep a stale copy of
+                // the old keys, or an older build could resurrect them.
+                format.remove("afterOpenLocation");
+                format.remove("afterOpenFile");
+                format.remove("afterRunCommand");
+                format.remove("afterCommand");
+            }
+        }
+    }
+
+    if legacy {
+        object.insert("afterOpenLocation".into(), open_location.into());
+        object.insert("afterOpenFile".into(), open_file.into());
+        object.insert("afterRunCommand".into(), run_command.into());
+        object.insert("afterCommand".into(), command.into());
+    }
+
+    serde_json::from_value(value).ok()
 }
 
 impl AppState {
@@ -314,12 +459,13 @@ impl AppState {
 
         let settings = std::fs::read_to_string(&config_file)
             .ok()
-            .and_then(|raw| serde_json::from_str::<Settings>(&raw).ok())
+            .and_then(|raw| parse_settings(&raw))
             .unwrap_or_default();
 
         Self {
             settings: Mutex::new(settings),
             config_file,
+            export_availability: Mutex::new(ExportAvailability::default()),
         }
     }
 
@@ -373,7 +519,14 @@ pub fn save_settings<R: Runtime>(
     let saved = state.save(settings)?;
 
     if formats_changed {
-        match crate::menu::build(&app) {
+        // The new menu is built from the settings that were just saved, so its
+        // check marks are right from the first paint. Fullscreen is not a
+        // setting, so ask the window rather than assuming false.
+        let mut menu_state = crate::menu::MenuState::from_settings(&saved);
+        if let Some(window) = app.get_webview_window("main") {
+            menu_state.fullscreen = window.is_fullscreen().unwrap_or(false);
+        }
+        match crate::menu::build(&app, &menu_state) {
             Ok(menu) => {
                 if let Err(error) = app.set_menu(menu) {
                     eprintln!("[menu] could not be rebuilt after an export change: {error}");
@@ -445,6 +598,19 @@ mod tests {
         assert_eq!(s.editor_max_width, 980);
         assert_eq!(s.syntax_theme, "auto");
         assert!(s.recent_files.is_empty());
+        assert!(s.spellcheck);
+        assert_eq!(s.spellcheck_language, "auto");
+        assert!(s.spellcheck_words.is_empty());
+    }
+
+    #[test]
+    fn a_settings_file_without_spellcheck_keys_comes_back_on() {
+        // The container default would make a missing bool false. The field
+        // default is what keeps an older file checking spelling.
+        let settings = parse_settings("{}").expect("an empty object is still settings");
+        assert!(settings.spellcheck);
+        assert_eq!(settings.spellcheck_language, "auto");
+        assert!(settings.spellcheck_words.is_empty());
     }
 
     #[test]
@@ -458,6 +624,8 @@ mod tests {
         assert_eq!(s.heading_font, "");
         assert_eq!(s.code_font, "");
         assert_eq!(s.body_font_size, 16);
+        // KaTeX's own ratio is the default; the preference opts into a change.
+        assert_eq!(s.math_font_scale, 100);
         // Off by default, because whether `->` should render as an arrow is a
         // genuine disagreement and the conservative answer is the plain one.
         assert!(!s.ligatures_in_code);
@@ -495,6 +663,7 @@ mod tests {
         assert_eq!(parsed.editor_font_size, 21);
         assert_eq!(parsed.body_font, "");
         assert_eq!(parsed.body_font_size, 16);
+        assert_eq!(parsed.math_font_scale, 100);
         // `tabular_figures` is `#[serde(default = "default_true")]`, so the
         // serde default and the struct default have to agree or an upgrade would
         // silently change how tables render.
@@ -512,6 +681,84 @@ mod tests {
         assert!(same_path(r"C:\Docs\a.md", r"c:\docs\A.MD"));
         #[cfg(not(windows))]
         assert!(!same_path("/Docs/a.md", "/docs/a.md"));
+    }
+
+    #[test]
+    fn legacy_per_format_after_export_flags_become_global() {
+        // The shape written by every release before the options moved out of
+        // the format editor: the flags are on the formats, and no top-level
+        // `afterOpenLocation` exists. The OR is deliberate — a user who ticked
+        // one box on Word and another on PDF meant both actions.
+        let legacy = r#"{
+            "theme": "dark",
+            "exportFormats": [
+                {
+                    "id": "docx", "label": "Word (.docx)", "extension": "docx",
+                    "arguments": "-s -o ${outputPath}", "extraArguments": "",
+                    "styleReference": "",
+                    "afterOpenLocation": true, "afterOpenFile": true,
+                    "afterRunCommand": false, "afterCommand": ""
+                },
+                {
+                    "id": "pdf", "label": "PDF", "extension": "pdf",
+                    "arguments": "-s -o ${outputPath}", "extraArguments": "",
+                    "styleReference": "",
+                    "afterOpenLocation": false, "afterOpenFile": false,
+                    "afterRunCommand": true, "afterCommand": "echo ${outputPath}"
+                }
+            ]
+        }"#;
+        let parsed = parse_settings(legacy).expect("legacy settings should load");
+        assert_eq!(parsed.theme, "dark");
+        assert!(parsed.after_open_location);
+        assert!(parsed.after_open_file);
+        assert!(parsed.after_run_command);
+        assert_eq!(parsed.after_command, "echo ${outputPath}");
+        // The old keys are gone from the formats in memory, so saving cannot
+        // bring them back for an older build to read.
+        let json = serde_json::to_value(&parsed).unwrap();
+        let formats = json["exportFormats"].as_array().unwrap();
+        assert!(formats.iter().all(|f| f.get("afterOpenLocation").is_none()));
+        assert!(formats.iter().all(|f| f.get("afterCommand").is_none()));
+        // But the format itself survives untouched.
+        assert_eq!(parsed.export_formats[0].id, "docx");
+        assert_eq!(parsed.export_formats[0].label, "Word (.docx)");
+    }
+
+    #[test]
+    fn explicit_global_after_export_flags_are_not_overwritten_by_legacy_ones() {
+        // Once the file has a top-level key it belongs to the new shape. If the
+        // user unticks the global box, the stale per-format true values must not
+        // silently turn it back on at the next start.
+        let current = r#"{
+            "afterOpenLocation": false,
+            "afterOpenFile": false,
+            "afterRunCommand": false,
+            "afterCommand": "",
+            "exportFormats": [
+                {
+                    "id": "docx", "label": "Word (.docx)", "extension": "docx",
+                    "arguments": "-s -o ${outputPath}", "extraArguments": "",
+                    "styleReference": "",
+                    "afterOpenLocation": true, "afterOpenFile": true,
+                    "afterRunCommand": true, "afterCommand": "rm -rf /"
+                }
+            ]
+        }"#;
+        let parsed = parse_settings(current).expect("current settings should load");
+        assert!(!parsed.after_open_location);
+        assert!(!parsed.after_open_file);
+        assert!(!parsed.after_run_command);
+        assert_eq!(parsed.after_command, "");
+    }
+
+    #[test]
+    fn after_export_defaults_are_off() {
+        let settings = Settings::default();
+        assert!(!settings.after_open_location);
+        assert!(!settings.after_open_file);
+        assert!(!settings.after_run_command);
+        assert!(settings.after_command.is_empty());
     }
 }
 

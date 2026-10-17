@@ -95,7 +95,7 @@ are for knowledge that has no natural home in the code.
 - **Node.js** 20+ and npm. This repo uses **npm**; pnpm is not installed here.
 - **Windows**: Visual Studio C++ build tools, Windows SDK, WebView2 runtime
 - **macOS**: Xcode command line tools
-- **Linux**: `webkit2gtk-4.1`, `libayatana-appindicator3`, `librsvg2`, `patchelf`
+- **Linux**: `webkit2gtk-4.1`, `libayatana-appindicator3`, `librsvg2`, `patchelf`, `libhunspell-dev` (spelling; the dictionaries themselves are `hunspell-en-us` and `hunspell-pt-br`, which are not bundled)
 
 ### Windows: everything through `scripts\with-msvc.cmd`
 
@@ -141,14 +141,16 @@ rewrite from scratch.
 | `npm run stage` | `scripts/stage-artifacts.mjs` | Re-stage what is already built |
 | `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
-| `npm run test:rust` | `cargo test` | 38 tests, on Windows and on Linux |
-| `npm run smoke` | `scripts/dom-smoke.mjs` | 61 checks against `samples/feature-tour.md` |
+| `npm run test:rust` | `cargo test` | 64 tests (63 run, one ignored download), on Windows and on Linux |
+| `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. Puts back the working tree and the developer's own settings afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
+| `npm run smoke` | `scripts/dom-smoke.mjs` | 85 checks against `samples/feature-tour.md` |
+| `npm run spellcheck` | `scripts/spellcheck-test.mjs` | Underlines a misspelling, then clears it when spelling is turned off |
 | `npm run audit` | `scripts/audit-document.mjs` | Render metrics for whatever document is loaded |
 | `npm run math` | `scripts/math-render-check.mjs` | 10 checks against the physics paper |
 | `npm run syntax` | `scripts/syntax-theme-test.mjs` | 7 checks that highlighting is real |
-| `npm run export` | `scripts/export-test.mjs` | 30 checks of every export path, against real pandoc |
+| `npm run export` | `scripts/export-test.mjs` | 34 checks of every export path, against real pandoc |
 | `npm run typography` | `scripts/typography-test.mjs` | 26 checks that each face loads, each OpenType switch changes pixels, and the preset matrix and Semibold weights hold |
-| `npm run shortcuts` | `scripts/shortcut-test.mjs` | 26 checks that every menu accelerator is registered and that pressing one changes state |
+| `npm run shortcuts` | `scripts/shortcut-test.mjs` | 32 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, and that the zoom chip follows the level |
 | `npm run licence` | `scripts/licence-test.mjs` | 4 checks that the bundled typefaces' licences ship inside the application. Run against its own instance: it opens a document |
 | `npm run images` | `scripts/image-paste-test.mjs` | Image paste through the real UI |
 | `npm run screenshot` | `scripts/screenshot.mjs` | PNG of the running window |
@@ -163,7 +165,7 @@ All of these need the app already running with CDP enabled (see
 | --- | --- | --- | --- |
 | `dom-smoke.mjs` | `[port]` | `samples/feature-tour.md` | Rendering, pane sync, preferences, search, toggles, math, fonts, status icons, blink behaviour |
 | `audit-document.mjs` | `[port] [label]` | any — `label` names it in the output | Block/anchor counts, table and code-fence totals, KaTeX errors, stray `$` in prose |
-| `math-render-check.mjs` | `[port]` | `docs/sample-files/physrevb_70_035307.md` | That fonts actually load and that fractions and radicals have real geometry |
+| `math-render-check.mjs` | `[port]` | `docs/samples/physrevb_70_035307.md` | That fonts actually load and that fractions and radicals have real geometry |
 | `syntax-theme-test.mjs` | `[port]` | `samples/feature-tour.md` | Distinct computed token colours, and that switching palette changes them |
 | `export-test.mjs` | `[port] [--install]` | `samples/feature-tour.md` | That pandoc really converts: the bytes of each output are inspected. `--install` additionally exercises the pandoc download, which is why it is opt-in |
 | `typography-test.mjs` | `[port]` | any | Screenshots text with each OpenType feature off and on and compares pixels, then asserts the preset matrix and the Semibold weights. Width cannot measure a monospaced face, so nothing narrower would work |
@@ -171,6 +173,8 @@ All of these need the app already running with CDP enabled (see
 | `licence-test.mjs` | `[port]` | any | Opens *Font licences* and looks for the five OFL texts in the rendered document. Searching the executable cannot answer this: the frontend bundle is compressed inside it |
 | `fetch-fonts.ps1` | `[--work-directory]` | — | Downloads the five bundled families, verifies each archive against a pinned SHA-256 and rewrites `src/assets/fonts/fonts.json`. Only needed to upgrade them; the fonts are committed |
 | `image-paste-test.mjs` | `[port] [imageUrl] [localPath]` | `samples/feature-tour.md` | Clipboard, local and remote image paths, and the markdown that results |
+| `image-path-paste-test.mjs` | `[port]` | `samples/feature-tour.md` | Selects the `./image.png` placeholder with the mouse, pastes a relative path beside the document, and checks the text is replaced and the preview loads it |
+| `spellcheck-test.mjs` | `[port]` | `samples/feature-tour.md` | Sets the dictionary to English, types a misspelling, requires the wavy underline, then turns spelling off and requires the mark to be gone |
 | `set-palette.mjs` | `[port] [paletteId] [--split]` | `samples/feature-tour.md` | Not a test: drives the palette through the Preferences UI so you can screenshot a theme |
 | `screenshot.mjs` | `[port] [out.png] [setupExpression]` | any | Not a test: captures the window, optionally after running a JS setup string |
 | `test-close.ps1` | `[-Exe path] [-Doc path] [-TimeoutSeconds 12]` | `samples\feature-tour.md` | Launches the release binary, sends WM_CLOSE, and asserts the process exits and writes `.window-state.json` |
@@ -375,12 +379,22 @@ Seven layers, cheapest first. Run them in this order when changing anything.
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 23 | Path handling, sanitisers, file IO, settings |
-| DOM smoke | `npm run smoke` | 61 | Rendering, pane sync, preferences, math, fonts, status icons |
+| Rust unit | `npm run test:rust` | 64 | Path handling, sanitisers, file IO, settings, token estimate, spellcheck |
+| DOM smoke | `npm run smoke` | 85 | Rendering, pane sync, preferences, math, fonts, status icons |
 | Math | `npm run math` | 10 | Font loading, fraction and radical geometry |
 | Syntax | `npm run syntax` | 7 | Token colours, palette switching |
 | Close | `.\scripts\test-close.ps1` | 4 | The window really exits and saves its state |
 | Document audit | `npm run audit` | — | Real-world render quality on big files |
+
+`npm test` (`scripts/test-all.mjs`) runs that table in that order. It exists
+because the layers are not self-contained: it builds first, gives every UI suite
+its own freshly launched instance, its own port and its own fixture, starts each
+one from first-run state, stages the binary outside the workspace — an executable
+launched from inside it cannot write `%APPDATA%`, which is exactly what the close
+test asserts — and closes everything it started on every exit path. `--no-build`
+tests the binary already built, `--only`/`--skip` narrow the run, `--all` adds the
+pandoc export and the image paste checks, and `--kill` closes an MDraft that is
+running from `target/release` instead of refusing to build over it.
 
 The close test is PowerShell rather than CDP because it has to kill the
 application, which no DOM test can survive. It launches the release binary, sends
@@ -392,7 +406,7 @@ exits and that `.window-state.json` was written. Run it after any change to
 
 **Each test needs the app open with the right document.** The smoke test asserts
 against `samples/feature-tour.md`; the math test against
-`docs/sample-files/physrevb_70_035307.md`. Running a test against the wrong
+`docs/samples/physrevb_70_035307.md`. Running a test against the wrong
 document produces a wall of failures that look like regressions.
 
 ```powershell
@@ -543,6 +557,33 @@ Two independent causes arrive together and cargo's message names neither.
   cargo, and `npm run dist -- --kill` closes it for you. If you hit the raw cargo
   error, that is the cause.
 
+**`npm run dist` sits on `Building … 461/463: mdraft` for minutes even though
+every dependency is cached**
+That unit is the app crate (lib + bin). The release profile used to give it
+`lto = true` with `codegen-units = 1`, which is effectively single-threaded:
+104 s per pass. `dist.mjs` then makes it run **twice**: the portable pass and
+the ordinary pass carry different `TAURI_CONFIG` values, and `tauri-build`
+declares `cargo:rerun-if-env-changed=TAURI_CONFIG`, so the final crate is dirty
+each time. Each pass also rewrites `dist/`, and every file there is listed in
+`src-tauri/target/release/mdraft.d`, so a frontend rebuild dirties the crate
+again. Measured on this host with a warm cache: 222 s total, 208 s of it in that
+step; the frontend build is 1.3 s and bundling 7 s. `--no-portable` halves it.
+The profile now ships `lto = "thin"` with `codegen-units = 16`: the same step
+takes 27 s and a whole `npm run dist` 78 s, with no meaningful change in binary
+size. Do not try profile changes casually through
+`CARGO_PROFILE_RELEASE_LTO` / `CARGO_PROFILE_RELEASE_CODEGEN_UNITS`: they
+invalidate all 461 dependency fingerprints, and switching back invalidates them
+again, so the next ordinary build is a cold rebuild.
+
+**A plain `cargo build --release` links a binary with no frontend**
+`tauri build` sets the environment that makes `generate_context!` embed `dist/`;
+invoking cargo directly produces a binary about 5 MB smaller that contains no UI.
+The tell is the dep-info: `src-tauri/target/release/mdraft.d` is 835 bytes instead
+of ~78 KB, and it lists no `dist/` asset at all. A size comparison or a benchmark
+taken from such a binary is worthless — build through `npm run dist` /
+`tauri build`. This is how a "the thin build is 7.9 MB instead of 12.0 MB" claim
+was produced and then had to be retracted.
+
 **A test that launches the app can leave it running and break the next build**
 This is how the failure above gets manufactured. Any script that starts
 `MDraft.exe` has to kill it on **every** exit path — an early `Write-Error`
@@ -561,6 +602,18 @@ run because it scrolled to 45% from a position that was already 45%. Both now
 reset to a known baseline — scroll to the top — before measuring. **Any new probe
 that reads the viewport must establish its own starting position.** A suite that
 passes once and fails on re-run is usually this.
+
+**A CDP test sets `window.getSelection()` but CodeMirror still reports no selection**
+`editor.cursorInfo().selectionLength` stays 0 when a test sets a DOM Range from
+`Runtime.evaluate`, even after dispatching `selectionchange`; the paste handler
+then imports the image instead of replacing the selected text, so the test
+reproduces a bug that is not there. Select with real mouse events
+(`Input.dispatchMouseEvent` pressed/moved/released), assert
+`window.getSelection().toString()` before pasting, and only then dispatch the
+paste. `scripts/image-path-paste-test.mjs` does exactly this.
+
+**A Preferences row's label includes its help mark, and one label can be a prefix of another**
+`row.querySelector('.prefs-label').textContent` is `"Run a command?"` for a row that has help: the `?` span is part of the text. Worse, `"Open the exported file"` is a prefix of `"Open the exported file's folder"`, so an `includes()` match silently picks the first row and a test can report both boxes ticked while one was never touched. Strip the trailing `?` and compare the exact label. A probe that matched by substring concluded the second checkbox was already on and never clicked it, then chased a backend/frontend mismatch that did not exist.
 
 **Renaming the product leaves stale bundles that staging will happily ship**
 `src-tauri/target/release/bundle/` is not cleaned between builds, so after
@@ -796,6 +849,96 @@ view. Getting there took two wrong versions, both shipped:
   also has to respect `caretByPointer`, or a pending render reintroduces the jump
   through the back door.
 
+**`cargo test` fails with `Access is denied` in every temp-directory test, and the release app exits with WebView2 `0x800700AA`**
+Both are the agent harness, not the code. Executables launched from inside the
+workspace run under a file sandbox that cannot create files outside it. The test
+binary at `src-tauri\target\debug\deps\mdraft_lib-*.exe` cannot create
+`%TEMP%\tt-*`, so ten tests fail with
+`Os { code: 5, kind: PermissionDenied, message: "Access is denied." }`; and
+`mdraft.exe` cannot create its WebView2 profile under `%LOCALAPPDATA%`, which the
+runtime reports as
+`HRESULT(0x800700AA): "The requested resource is in use."` (sometimes
+`0x8007139F`). Neither is profile corruption. Copy the test executable or the app
+to a directory outside the workspace and run it there: all 56 runnable tests pass
+and the window starts. `cargo test` still has to be invoked from the workspace
+through the MSVC wrapper, so run the executable it produces from `%TEMP%`.
+
+**`cl : Command line error D8050 : cannot execute '…\c1.dll': failed to get command line into debug records` while `cargo test` compiles `ring`**
+The message names the compiler, so it reads as a broken MSVC install, the wrong
+`cl.exe` or a missing SDK — none of them. `cl.exe` writes debug records for `/Z7`
+through its temporary directory, and when `%TEMP%`/`%TMP%` names a directory the
+launching process may not write to, that write fails and `cl` reports the loader
+error instead. On this host both variables point at `T:\Temp` (`T:` is a separate
+local volume), and the workspace sandbox covers only executables launched from
+inside the workspace: `echo > %TEMP%\x` from `cmd` succeeds while the same
+compiler spawned by cargo is denied. The same run then produces a second,
+unrelated-looking symptom — 13 tests panic with
+`Os { code: 5, kind: PermissionDenied, message: "Access is denied." }`. Prove it
+in one step, before touching the toolchain, by pointing `TEMP` and `TMP` at a
+folder **inside** the workspace: the build completes and all 56 runnable tests
+pass. `CARGO_PROFILE_DEV_DEBUG=0` also gets the build through, because without
+`-Z7` no debug records are written; that hides the cause rather than fixing it.
+
+**Starting the app with `Start-Process` never returns and prints nothing**
+`Start-Process .\src-tauri\target\release\mdraft.exe` from a harness shell hangs
+until the call is moved to the background: the GUI child inherits the caller's
+output handles, so the shell never sees the pipe close, and not even the line
+printed before the launch appears. It reads like the application failing to
+start. Pass `-RedirectStandardOutput` and `-RedirectStandardError` to files —
+which also recovers the release build's Rust output, normally discarded — and
+poll `http://127.0.0.1:9222/json/list` for readiness.
+
+**A second MDraft for a CDP test dies with `HRESULT(0x800700AA)`, even when the exe is outside the workspace**
+WebView2 allows one browser process per user-data folder, and every instance
+defaults to `%LOCALAPPDATA%\io.github.bernh.mdraft\EBWebView`. While another
+MDraft window — including another agent's test instance — is open, launching a
+copy fails with
+`failed to create webview: WebView2 error: WindowsError(Error { code: HRESULT(0x800700AA), message: "The requested resource is in use." })`.
+Set `WEBVIEW2_USER_DATA_FOLDER` to a private directory and a distinct
+`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=...` before
+launching the second instance. Verified to run two test instances at once; do
+not kill the other instance or delete the shared profile.
+
+**`Page.captureScreenshot` shows the status bar but never the native menu**
+A check mark in the View, File or Themes menu cannot be photographed by CDP and
+cannot be read from the DOM: the menu is a native control outside the webview.
+Screenshots of the application therefore look as if the checks were never added.
+The `menu_state` command returns every check item's `id` and `checked` for the
+suites; use a Win32 screen capture only if a pixel proof is genuinely needed, and
+do not conclude from a CDP screenshot that the menu is unchanged.
+
+**Two view modes are checked at once after a toggle**
+`CheckMenuItem` is a checkbox, not a radio button: setting `view.preview` does not
+clear `view.split`, and the platform only toggles the item that was clicked.
+`sync` must write every item in each exclusive group from one state table;
+`dom-smoke.mjs` asserts exactly one check per group. Tauri/muda has no radio item,
+so the check mark plus this write-everything rule is the whole mechanism.
+
+**F8 and F9 stop working when their menu items become check marks**
+The accelerators are collected by the `item()` helper that builds each
+`MenuItem`, and the frontend binds only what the `accelerators` command returns.
+A separate helper that built `CheckMenuItem` with an accelerator but did not push
+it to `ACCELERATORS` produced a menu that printed `F8` and did nothing. Keep the
+registry push in both helpers; the command should still report 40 entries, now
+including `F11`.
+
+**View › Full Screen and `F11` do nothing on Windows**
+`PredefinedMenuItem::fullscreen` is documented as unsupported on Windows and
+GTK 3, and muda's `run_predefined` falls through to `_ => {}`; predefined items
+also emit no `MenuEvent`, so the frontend never hears about the click. Replace it
+on non-macOS with a custom `CheckMenuItem` whose handler calls `setFullscreen`,
+and keep the predefined item on macOS for Spaces integration. `F11` now reaches
+the handler through the accelerator registry, and `menu_state` proves the check.
+
+**The status flags lose their names on a window nowhere near the breakpoint**
+`.window-state.json` stores physical pixels, not CSS pixels: on this 165 % display
+the restored window was 1770 px wide, but `window.innerWidth` was **1073**, under
+the 1080 px media query, so the labels were hidden and the screenshot looked like
+a CSS bug. Measure `innerWidth` and `devicePixelRatio` over CDP before choosing a
+breakpoint. The four flags plus a long cursor selection also truncate the word
+and token counts near 1070 px; keep the visible names short (`Type`, `Auto`) and
+the full names in the tooltip.
+
 ## Adding a preference, end to end
 
 Five files, in this order:
@@ -819,12 +962,13 @@ If the setting changes the editor's appearance, call it through
 ```
 src/
   main.ts            shell: document lifecycle, menus, status bar, pane sync
-  editor.ts          CodeMirror 6 setup, EditorHandle API, heading/task helpers
+  editor.ts          CodeMirror 6 setup, incremental word/line metrics, EditorHandle API
+  spellcheck.ts      spelling marks, language detection, suggestion menu
   markdown.ts        markdown → HTML; math extraction, mermaid, alerts, anchors
   syntax-themes.ts   editor palettes: token colours and writing surface
   images.ts          paste, drop and download of images
   preferences.ts     the Preferences panel and its declarative rows
-  sidebar.ts         outline / file list / recent files
+  sidebar.ts         outline (active-marker updates) / file list / recent files
   api.ts             typed wrappers over every Rust command
   highlight-theme.ts highlight.js theme swap, so code follows light/dark
   content.ts         the welcome, reference and shortcuts documents
@@ -834,11 +978,13 @@ src-tauri/src/
   settings.rs        persisted settings and AppState
   documents.rs       file IO, directory listing, startup file
   images.rs          image import: sniffing, sanitiser, dedup, download
+  tokens.rs          approximate token count for the status bar
+  spellcheck.rs      OS spell checker: Windows ISpellChecker, Linux hunspell, macOS NSSpellChecker
   menu.rs            native menu construction and event routing
-scripts/             build helpers and CDP test harnesses — all 15 are in
+scripts/             build helpers and CDP test harnesses — every one is in
                      "Repository scripts", and a new one belongs there too
 samples/             fixtures the smoke test asserts against
-docs/sample-files/   real documents used to judge rendering quality
+docs/samples/   real documents used to judge rendering quality
 docs/ícones/         source archive for the application icon
 ```
 
@@ -955,11 +1101,11 @@ platform and fails on the other.
    reads the latter for the bundle, and the two must agree. `npm run
    check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
-3. `npm run test:rust` — 38 tests. Run them on Linux too
+3. `npm run test:rust` — 64 tests (one ignored: the pandoc download). Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run math`,
-   `npm run syntax` — 61 + 10 + 7 checks.
+   `npm run syntax` — 85 + 10 + 7 checks.
 5. `npm run audit` against both `docs/sample-files` documents and compare the
    counts with the table in the README.
 6. `npm run dist` — installers and checksums land in `bin/<os>/<arch>/`.
