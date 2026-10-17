@@ -36,8 +36,8 @@
     "active": true,
     "targets": "all",
     "category": "Productivity",
-    "shortDescription": "A Markdown and Typst editor",
-    "longDescription": "A Markdown and Typst editor in the spirit of Typora: live preview, math, diagrams and syntax highlighting, with PDF typeset by Typst.",
+    "shortDescription": "A Markdown, Typst and HTML editor",
+    "longDescription": "A Markdown, Typst and HTML editor in the spirit of Typora: live preview, math, diagrams and syntax highlighting, with PDF typeset by Typst and HTML previews in a sandboxed guest document.",
       "copyright": "Copyright © 2026 Bernhard Enders",
       "publisher": "Bernhard Enders",
     "icon": [

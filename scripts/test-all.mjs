@@ -94,6 +94,13 @@ const SUITES = [
     doc: "samples/feature-tour.md",
   },
   {
+    id: "html",
+    title: "HTML guest preview",
+    kind: "cdp",
+    script: "html-preview-test.mjs",
+    doc: "samples/html-tour/index.html",
+  },
+  {
     id: "spellcheck",
     title: "Spelling",
     kind: "cdp",

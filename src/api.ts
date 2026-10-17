@@ -110,6 +110,12 @@ export interface AfterExportOutcome {
   afterErrors: string[];
 }
 
+/** Sizes remembered for one typography preset. Either field may be absent. */
+export interface PresetOverride {
+  bodyFontSize?: number;
+  mathFontScale?: number;
+}
+
 export interface Settings {
   theme: ThemeMode;
   viewMode: ViewMode;
@@ -143,6 +149,14 @@ export interface Settings {
    * limits the range to 70–130.
    */
   mathFontScale: number;
+  /**
+   * Sizes remembered per preset id.
+   *
+   * Preview text size and Math scale are reader adjustments, not part of what
+   * identifies a preset. The top-level fields remain the active values; this
+   * map is consulted when a preset is chosen.
+   */
+  presetOverrides: Record<string, PresetOverride>;
   /** Programming ligatures in code, both panes. Off by default: `->` is a choice. */
   ligaturesInCode: boolean;
   /** Tabular figures in preview tables, so columns of numbers line up. */
@@ -171,6 +185,14 @@ export interface Settings {
 
   enableMath: boolean;
   enableMermaid: boolean;
+
+  /**
+   * Run the document's own scripts in the sandboxed HTML preview.
+   *
+   * On by default. Off keeps the preview bridge (scroll sync, blink and
+   * shortcuts) but blocks the document's scripts with a nonce-only CSP.
+   */
+  htmlPreviewScripts: boolean;
 
   /** Underline misspellings while typing. On unless the reader turns it off. */
   spellcheck: boolean;
@@ -310,7 +332,7 @@ export const runAfterExport = (path: string) =>
 export const installPandoc = () => invoke<PandocStatus>("install_pandoc");
 
 /** Which markup the buffer holds. */
-export type DocumentLanguage = "markdown" | "typst";
+export type DocumentLanguage = "markdown" | "typst" | "html";
 
 /** One Typst installation, as the backend sees it. */
 export interface TypstStatus {
@@ -432,3 +454,28 @@ export const setExportAvailability = (pandoc: boolean, typst: boolean) =>
  */
 export const printDocument = (html: string, name: string) =>
   invoke<string>("print_document", { html, name });
+
+/**
+ * Prepare the sandboxed HTML preview and get the URL the iframe should load.
+ *
+ * The source is the preview copy (line attributes and bridge already spliced
+ * in), not necessarily the editor buffer. The backend holds it only until the
+ * next render or `clearHtmlPreview`.
+ */
+export interface HtmlPreviewRequest {
+  nonce: string;
+  bridgeNonce: string;
+  source: string;
+  root: string | null;
+  filename: string;
+  scripts: boolean;
+}
+
+export interface HtmlPreviewUrl {
+  url: string;
+}
+
+export const setHtmlPreview = (request: HtmlPreviewRequest) =>
+  invoke<HtmlPreviewUrl>("set_html_preview", { request });
+
+export const clearHtmlPreview = () => invoke<void>("clear_html_preview");

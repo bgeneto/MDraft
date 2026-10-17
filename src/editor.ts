@@ -28,6 +28,7 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import type { DocumentLanguage } from "./api";
+import { htmlLanguage } from "./html-language";
 import { typstLanguage } from "./typst-language";
 import {
   bracketMatching,
@@ -467,6 +468,17 @@ const markdownSupport = markdown({
     setLanguage(kind) {
       if (kind === "markdown") {
         view.dispatch({ effects: languageCompartment.reconfigure(markdownSupport) });
+        return;
+      }
+      if (kind === "html") {
+        // The HTML branch must be explicit: the fallback below is Typst.
+        void htmlLanguage()
+          .then((language) => {
+            view.dispatch({ effects: languageCompartment.reconfigure(language) });
+          })
+          .catch((error) => {
+            console.warn(`[editor] the HTML grammar could not be loaded: ${error}`);
+          });
         return;
       }
       // The grammar arrives asynchronously; until it does the buffer keeps the

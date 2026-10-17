@@ -290,10 +290,10 @@ for (const section of prefs.perSection) {
 
 check("preferences opens", prefs.open);
 check("preferences title", prefs.title === "Preferences");
-check("eight sections", prefs.sectionNames.split(",").length === 8);
+check("nine sections", prefs.sectionNames.split(",").length === 9);
 check(
   "sections named and ordered like Typora",
-  prefs.sectionNames === "Files,Editor,Image,Markdown,Export,Appearance,General,Typography",
+  prefs.sectionNames === "Files,Editor,Image,Markdown,HTML,Export,Appearance,General,Typography",
 );
 check("first section selected", prefs.activeSection === "Files" && prefs.sectionHeading === "Files");
 check("every section has rows", prefs.emptySections === "");
@@ -468,6 +468,130 @@ check(
 check(
   "math returns to KaTeX's ratio at 100%",
   Math.abs(mathScale.restored - mathScale.before) <= 0.5,
+);
+
+// Preview text size and Math scale are reader adjustments, not part of a
+// preset's identity. Editing one must leave the picker on the preset, and each
+// preset must remember its own pair across a round trip. The first preset a
+// reader visits without an entry starts at the application defaults (16/100).
+const presetSizes = await evaluate(`(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const section = [...document.querySelectorAll('.prefs-section')]
+    .find((s) => s.textContent === 'Typography');
+  if (section) section.click();
+
+  const row = (label) => [...document.querySelectorAll('.prefs-row')].find((r) =>
+    (r.querySelector('.prefs-label')?.textContent ?? '').replace('?', '').trim() === label);
+  const input = (label) => row(label)?.querySelector('input[type=number]') ?? null;
+  const setNumber = (label, value) => {
+    const field = input(label);
+    if (!field) return false;
+    field.value = String(value);
+    field.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  };
+  const active = () => document.querySelector('.prefs-choice.active')?.textContent ?? '';
+  const choose = (label) => {
+    const button = [...document.querySelectorAll('.prefs-choice')]
+      .find((b) => b.textContent === label);
+    if (!button) return false;
+    button.click();
+    return true;
+  };
+  const read = () => ({
+    active: active(),
+    body: input('Preview text size')?.value,
+    math: input('Math scale')?.value,
+  });
+
+  // System is the starting preset. Give it a pair that is not 16/100.
+  if (!setNumber('Preview text size', 18) || !setNumber('Math scale', 90)) {
+    return JSON.stringify({ ok: false });
+  }
+  await sleep(200);
+  const system = read();
+
+  choose('Serif');
+  await sleep(250);
+  const serifFresh = read();
+  setNumber('Preview text size', 19);
+  setNumber('Math scale', 83);
+  await sleep(200);
+  const serif = read();
+
+  choose('Classic');
+  await sleep(250);
+  const classic = read();
+  choose('Serif');
+  await sleep(250);
+  const serifBack = read();
+  choose('System');
+  await sleep(250);
+  const systemBack = read();
+
+  // Leave the suite on the first-run pair, whichever check failed.
+  setNumber('Preview text size', 16);
+  setNumber('Math scale', 100);
+  await sleep(200);
+  const reset = read();
+
+  return JSON.stringify({
+    ok: true,
+    system,
+    serifFresh,
+    serif,
+    classic,
+    serifBack,
+    systemBack,
+    reset,
+  });
+})()`);
+
+console.log("\n=== sizes remembered per preset ===");
+for (const [name, size] of [
+  ["System", presetSizes.system],
+  ["Serif (fresh)", presetSizes.serifFresh],
+  ["Serif", presetSizes.serif],
+  ["Classic", presetSizes.classic],
+  ["Serif (back)", presetSizes.serifBack],
+  ["System (back)", presetSizes.systemBack],
+  ["reset", presetSizes.reset],
+]) {
+  console.log(`  ${name.padEnd(14)} ${size?.body}px / ${size?.math}%  active ${size?.active}`);
+}
+
+check(
+  "editing a size keeps the preset active",
+  presetSizes.system?.active === "System" &&
+    presetSizes.serif?.active === "Serif" &&
+    presetSizes.serifBack?.active === "Serif",
+);
+check(
+  "an unvisited preset starts at 16 px / 100%",
+  presetSizes.serifFresh?.body === "16" &&
+    presetSizes.serifFresh?.math === "100" &&
+    presetSizes.classic?.body === "16" &&
+    presetSizes.classic?.math === "100",
+);
+check(
+  "preview text size is remembered per preset",
+  presetSizes.system?.body === "18" &&
+    presetSizes.serif?.body === "19" &&
+    presetSizes.serifBack?.body === "19" &&
+    presetSizes.systemBack?.body === "18",
+);
+check(
+  "math scale is remembered per preset",
+  presetSizes.system?.math === "90" &&
+    presetSizes.serif?.math === "83" &&
+    presetSizes.serifBack?.math === "83" &&
+    presetSizes.systemBack?.math === "90",
+);
+check(
+  "the preset test restores 16 px / 100%",
+  presetSizes.reset?.body === "16" &&
+    presetSizes.reset?.math === "100" &&
+    presetSizes.reset?.active === "System",
 );
 
 // Close with Escape.

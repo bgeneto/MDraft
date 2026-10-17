@@ -1,6 +1,7 @@
 //! Persisted application settings and the shared application state.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, Runtime};
@@ -159,6 +160,20 @@ pub fn default_export_formats() -> Vec<ExportFormat> {    let args = |rest: &str
     ]
 }
 
+/// Sizes remembered for one typography preset.
+///
+/// Preview text size and Math scale are reader adjustments, not part of what
+/// identifies a preset. Either field may be absent; a missing field means the
+/// preset has never been adjusted and the application default applies.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PresetOverride {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_font_size: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub math_font_scale: Option<u32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -206,6 +221,14 @@ pub struct Settings {
     /// the same rule applies to every other size in this struct.
     #[serde(default = "default_math_font_scale")]
     pub math_font_scale: u32,
+    /// Sizes remembered per typography preset, keyed by preset id.
+    ///
+    /// The top-level `body_font_size` and `math_font_scale` above are the
+    /// active values. This map is only consulted when a preset is selected; a
+    /// missing entry means the preset has never been adjusted and starts at
+    /// 16 px / 100%.
+    #[serde(default)]
+    pub preset_overrides: BTreeMap<String, PresetOverride>,
     #[serde(default)]
     pub ligatures_in_code: bool,
     #[serde(default = "default_true")]
@@ -239,6 +262,15 @@ pub struct Settings {
     // ---- Preferences: Markdown -------------------------------------------
     pub enable_math: bool,
     pub enable_mermaid: bool,
+
+    // ---- Preferences: HTML -----------------------------------------------
+    /// Run the document's own scripts in the sandboxed HTML preview.
+    ///
+    /// On by default: an HTML document is expected to behave like one. Turning
+    /// it off keeps the preview's bridge (and therefore scroll sync) but blocks
+    /// the document's scripts with a nonce-only CSP.
+    #[serde(default = "default_true")]
+    pub html_preview_scripts: bool,
 
     // ---- Preferences: Spelling -------------------------------------------
     /// Underline misspellings while typing.
@@ -312,6 +344,7 @@ impl Default for Settings {
             code_font: String::new(),
             body_font_size: default_body_font_size(),
             math_font_scale: default_math_font_scale(),
+            preset_overrides: BTreeMap::new(),
             ligatures_in_code: false,
             tabular_figures: true,
             oldstyle_figures: false,
@@ -329,6 +362,7 @@ impl Default for Settings {
 
             enable_math: true,
             enable_mermaid: true,
+            html_preview_scripts: true,
 
             spellcheck: true,
             spellcheck_language: default_spellcheck_language(),
@@ -626,6 +660,10 @@ mod tests {
         assert_eq!(s.body_font_size, 16);
         // KaTeX's own ratio is the default; the preference opts into a change.
         assert_eq!(s.math_font_scale, 100);
+        // The HTML guest runs the document's scripts unless the reader opts out.
+        assert!(s.html_preview_scripts);
+        // Sizes are per-preset adjustments, so a fresh profile has none yet.
+        assert!(s.preset_overrides.is_empty());
         // Off by default, because whether `->` should render as an arrow is a
         // genuine disagreement and the conservative answer is the plain one.
         assert!(!s.ligatures_in_code);
@@ -649,6 +687,7 @@ mod tests {
         assert_eq!(parsed.image_rule, "assetsFolder");
         assert!(parsed.image_apply_online);
         assert!(!parsed.image_auto_escape);
+        assert!(parsed.preset_overrides.is_empty());
     }
 
     #[test]
@@ -664,6 +703,8 @@ mod tests {
         assert_eq!(parsed.body_font, "");
         assert_eq!(parsed.body_font_size, 16);
         assert_eq!(parsed.math_font_scale, 100);
+        assert!(parsed.preset_overrides.is_empty());
+        assert!(parsed.html_preview_scripts);
         // `tabular_figures` is `#[serde(default = "default_true")]`, so the
         // serde default and the struct default have to agree or an upgrade would
         // silently change how tables render.
@@ -671,6 +712,33 @@ mod tests {
             parsed.tabular_figures,
             Settings::default().tabular_figures,
             "the serde default for tabular_figures disagrees with Settings::default()"
+        );
+    }
+
+    #[test]
+    fn preset_overrides_round_trip_and_may_be_partial() {
+        // A preset may remember only one of the two sizes; the other must stay
+        // absent so the application default continues to apply.
+        let parsed: Settings = serde_json::from_str(
+            r#"{"presetOverrides":{"superfamily":{"bodyFontSize":19,"mathFontScale":83},"system":{"bodyFontSize":18}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parsed.preset_overrides["superfamily"].body_font_size,
+            Some(19)
+        );
+        assert_eq!(
+            parsed.preset_overrides["superfamily"].math_font_scale,
+            Some(83)
+        );
+        assert_eq!(parsed.preset_overrides["system"].body_font_size, Some(18));
+        assert_eq!(parsed.preset_overrides["system"].math_font_scale, None);
+
+        let json = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(json["presetOverrides"]["superfamily"]["mathFontScale"], 83);
+        assert!(
+            json["presetOverrides"]["system"].get("mathFontScale").is_none(),
+            "a missing size must stay absent rather than serialising as null"
         );
     }
 
