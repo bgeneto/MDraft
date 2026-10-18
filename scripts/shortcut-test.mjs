@@ -380,6 +380,25 @@ check(
 );
 
 // ---------------------------------------------------------------------------
+// The webview's own reload keys. Without the guard, F5 reloads the page and
+// every open tab and unsaved buffer is discarded with no prompt; the window
+// close guard never runs. See installReloadGuard in src/main.ts.
+console.log("\n=== the webview reload keys are swallowed ===");
+check((await press({ code: "F5", key: "F5" })) === "handled", "F5 is swallowed");
+check(
+  (await press({ code: "KeyR", key: "r", ctrl: true })) === "handled",
+  "Ctrl+R is swallowed",
+);
+check(
+  (await press({ code: "KeyR", key: "R", ctrl: true, shift: true })) === "handled",
+  "Ctrl+Shift+R is swallowed",
+);
+check(
+  (await press({ code: "KeyR", key: "r" })) === "passed-through",
+  "a plain r is left to the editor",
+);
+
+// ---------------------------------------------------------------------------
 // Ctrl+O and Ctrl+Shift+S open native modal dialogs. Pressing them here would
 // block on a window this session cannot dismiss, so they are covered by the
 // registry check above — bound, and reachable — and not executed. Say so rather

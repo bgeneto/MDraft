@@ -173,6 +173,18 @@ const guest = JSON.parse(
     anchors: document.querySelectorAll('[data-mdraft-line]').length,
     bridge: !!document.querySelector('script[nonce]'),
     scriptString: document.getElementById('script-string').textContent,
+    reload: (() => {
+      const fire = (init) => {
+        const event = new KeyboardEvent('keydown', Object.assign({ bubbles: true, cancelable: true }, init));
+        window.dispatchEvent(event);
+        return event.defaultPrevented;
+      };
+      return {
+        f5: fire({ key: 'F5', code: 'F5' }),
+        ctrlR: fire({ key: 'r', code: 'KeyR', ctrlKey: true }),
+        plain: fire({ key: 'r', code: 'KeyR' }),
+      };
+    })(),
   })`),
 );
 check("linked CSS applies", guest.css === "rgb(1, 128, 2)", guest.css);
@@ -189,6 +201,11 @@ check(
   "script text survives without reserialisation",
   guest.scriptString === "<div class='kept'> > </div>",
   guest.scriptString,
+);
+check(
+  "the guest swallows the webview reload keys",
+  guest.reload.f5 === true && guest.reload.ctrlR === true && guest.reload.plain === false,
+  JSON.stringify(guest.reload),
 );
 
 const security = JSON.parse(

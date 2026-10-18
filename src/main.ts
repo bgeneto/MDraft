@@ -2988,6 +2988,38 @@ function revealHtmlCursor(line: number): void {
   htmlPreview.scrollToLine(line);
 }
 
+// ---------------------------------------------------------------------------
+// The webview's own reload keys
+//
+// WebView2 keeps its browser accelerator keys enabled, and F5 / Ctrl+R reload
+// the page. A reload is not a window close: it throws away every open tab and
+// every unsaved buffer with no prompt, because the dirty guard only runs on
+// `onCloseRequested`. This application has no reload — File › Reload From Disk
+// is the explicit command — so the reload family is swallowed here, before
+// CodeMirror sees it. Measured: without this, F5 reset the window to the last
+// saved file and the in-memory tabs were gone.
+//
+// The HTML guest is a separate document. A key pressed while its iframe has
+// focus never reaches this listener, so `html-bridge.js` installs the same
+// guard inside the guest.
+// ---------------------------------------------------------------------------
+function installReloadGuard(): void {
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      const reload =
+        event.key === "F5" ||
+        ((event.ctrlKey || event.metaKey) &&
+          (event.code === "KeyR" || event.key.toLowerCase() === "r"));
+      if (!reload) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      toast("F5 and Ctrl+R are disabled: reloading would discard unsaved tabs.");
+    },
+    true,
+  );
+}
+
 function installPaneSync(): void {
   // Caret in the source -> the preview follows the keyboard, never the pointer.
   //
@@ -3956,6 +3988,7 @@ async function boot(): Promise<void> {
   });
 
   installChrome();
+  installReloadGuard();
   installPaneSync();
   installPasteHandlers();
   installPreviewClicks();
