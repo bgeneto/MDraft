@@ -516,7 +516,6 @@ function renderMarked(
     return fragments.length - 1;
   };
   const escape = escapeHtml;
-  const fallback = new Renderer();
 
   const renderer: RendererObject = {
     text(token) {
@@ -564,7 +563,10 @@ function renderMarked(
     },
 
     code(token) {
-      const html = fallback.code(token);
+      // Through the prototype, not a detached `new Renderer()`: the built-in
+      // `image` below needs `this.parser` to render alt text, and a detached
+      // renderer never receives one.
+      const html = Renderer.prototype.code.call(this, token);
       const positioned = token as unknown as Positioned;
       if (positioned.srcStart === undefined) return html;
       const index = push({
@@ -577,7 +579,7 @@ function renderMarked(
     },
 
     image(token) {
-      const html = fallback.image(token);
+      const html = Renderer.prototype.image.call(this, token);
       const positioned = token as unknown as Positioned;
       if (positioned.srcStart === undefined) return html;
       const index = push({
