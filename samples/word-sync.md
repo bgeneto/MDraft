@@ -14,6 +14,8 @@ no meio da frase.
 
 A fórmula $E = mc^2$ fica no meio do parágrafo, entre palavras comuns.
 
+Uma imagem local: ![imagem de teste](html-tour/image.png) no meio do texto.
+
 > [!NOTE]
 > Este é um alerta com **destaque** e texto suficiente para uma linha.
 

@@ -549,6 +549,29 @@ function parseCounts(output) {
   return pass + fail ? { passed: pass, total: pass + fail } : null;
 }
 
+/**
+ * What a suite's output says about its result.
+ *
+ * A suite prints `N/M checks passed` at the end. When it dies before that — an
+ * uncaught exception, a killed process — the PASS lines are all that is left,
+ * and counting them reports "39/39", which looks like a clean run. Say
+ * "crashed" instead and name the exit code; that is the whole diagnosis.
+ */
+function describeChecks(output, code) {
+  const summary = parseChecks(output);
+  if (summary) {
+    return {
+      checks: summary,
+      detail: `${summary.passed}/${summary.total} checks${code === 0 ? "" : `, exit ${code}`}`,
+    };
+  }
+  const counts = parseCounts(output);
+  if (counts) {
+    return { checks: counts, detail: `crashed after ${counts.passed} checks (exit ${code})` };
+  }
+  return { checks: null, detail: `exit ${code}, no check line` };
+}
+
 function parseRustResult(output) {
   const match = output.match(/test result: (\w+)\. (\d+) passed; (\d+) failed; (\d+) ignored/);
   if (!match) return null;
@@ -730,13 +753,11 @@ async function runNodeSuite(suite, options) {
     stream: options.verbose,
   });
   const output = result.out + result.err;
-  const checks = parseChecks(output) ?? parseCounts(output);
-  const ok = result.code === 0 && (!checks || checks.passed === checks.total);
-  return {
-    ok,
-    detail: checks ? checks.passed + "/" + checks.total + " checks" : "exit " + result.code + ", no check line",
-    output,
-  };
+  const described = describeChecks(output, result.code);
+  const ok =
+    result.code === 0 &&
+    (!described.checks || described.checks.passed === described.checks.total);
+  return { ok, detail: described.detail, output };
 }
 
 async function runCdpSuite(suite, port, options, context) {
@@ -771,13 +792,11 @@ async function runCdpSuite(suite, port, options, context) {
     if (suite.docArg) args.push(path.join(repoRoot, suite.doc));
     const result = await run(process.execPath, args, { env, stream: options.verbose });
     const output = result.out + result.err;
-    const checks = parseChecks(output) ?? parseCounts(output);
-    const ok = result.code === 0 && (!checks || checks.passed === checks.total);
-    return {
-      ok,
-      detail: checks ? `${checks.passed}/${checks.total} checks` : `exit ${result.code}, no check line`,
-      output,
-    };
+    const described = describeChecks(output, result.code);
+    const ok =
+      result.code === 0 &&
+      (!described.checks || described.checks.passed === described.checks.total);
+    return { ok, detail: described.detail, output };
   } finally {
     await stopApp(child);
     activeApp = null;

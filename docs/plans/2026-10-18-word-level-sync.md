@@ -396,7 +396,7 @@ Deviations from the approved plan, all deliberate:
 against the development instance, each on its own fixture:
 
 - `node scripts/dom-smoke.mjs` — **93/93**.
-- `node scripts/word-sync-test.mjs` — **29/29**; double-click to decoration
+- `node scripts/word-sync-test.mjs` — **30/30**; double-click to decoration
   14–31 ms.
 - `node scripts/asciidoc-test.mjs` — **51/51** (43 existing + 8 new).
 

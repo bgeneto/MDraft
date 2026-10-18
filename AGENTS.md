@@ -200,7 +200,7 @@ rewrite from scratch.
 | `npm run test:rust` | `cargo test` | 79 tests on Windows (78 run, one ignored download); Linux has 78 total (77 run, one ignored) |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. Puts back the working tree and the developer's own settings afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
 | `npm run smoke` | `scripts/dom-smoke.mjs` | 93 checks against `samples/feature-tour.md` |
-| `npm run word-sync` | `scripts/word-sync-test.mjs` | 29 checks of word-level sync against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula spans, no scroll, Escape, and the fallbacks |
+| `npm run word-sync` | `scripts/word-sync-test.mjs` | 30 checks of word-level sync against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, no scroll, Escape, and the fallbacks |
 | `npm run spellcheck` | `scripts/spellcheck-test.mjs` | Underlines a misspelling, then clears it when spelling is turned off |
 | `npm run audit` | `scripts/audit-document.mjs` | Render metrics for whatever document is loaded |
 | `npm run math` | `scripts/math-render-check.mjs` | 10 checks against the physics paper |
@@ -456,7 +456,7 @@ Fifteen layers, cheapest first. Run them in this order when changing anything.
 | Session store | `npm run test:sessions` | 59 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
 | Paste conversion | `npm run paste:convert` | 72 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, image syntax, AsciiDoc |
 | DOM smoke | `npm run smoke` | 93 | Rendering, pane sync, preferences, math, fonts, status icons |
-| Word sync | `npm run word-sync` | 29 | The fragment map, preview → source and source → preview, atomic code and formula spans, word snapping, no scroll, Escape |
+| Word sync | `npm run word-sync` | 30 | The fragment map, preview → source and source → preview, atomic code, formula and image spans, word snapping, no scroll, Escape |
 | Rich paste | `npm run paste` | 23 | The paste event, destination notice, preferences, Ctrl+Shift+V, undo |
 | Image syntax | `npm run image:syntax` | 14 | Bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, plus the Image preference |
 | Math | `npm run math` | 10 | Font loading, fraction and radical geometry |

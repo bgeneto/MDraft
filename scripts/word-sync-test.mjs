@@ -186,6 +186,9 @@ console.log("\n=== the map ===");
   const fence = await evaluate(`document.querySelectorAll("#preview pre[data-f]").length`);
   check("a fence is an atomic fragment", fence >= 1, `${fence} fences`);
 
+  const image = await evaluate(`document.querySelectorAll("#preview img[data-f]").length`);
+  check("an image is an atomic fragment", image >= 1, `${image} images`);
+
   const line = await evaluate(
     `document.querySelector("#preview [data-f]")?.closest("[data-line]") !== null`,
   );
