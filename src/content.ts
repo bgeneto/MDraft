@@ -10,7 +10,7 @@ import ASCIIDOC_REFERENCE_SOURCE from "../samples/asciidoc-reference.adoc?raw";
 const WELCOME_LINES: string[] = [
   '# Welcome to MDraft',
   '',
-  'A **Tauri 2** editor for Markdown, Typst, HTML and AsciiDoc in the spirit of Typora. This',
+  'A **Tauri 2** markup editor for AsciiDoc, HTML, Markdown, and Typst with live preview. This',
   'document is a live sample: everything below is rendered by the same pipeline',
   'that renders your own Markdown files.',
   '',
