@@ -14,6 +14,25 @@
 
   if (window.parent === window) return;
 
+  // F5 and Ctrl+R are WebView2 browser accelerators: a reload here discards the
+  // whole application state, unsaved tabs included, with no prompt. The parent
+  // document swallows them, but a key pressed while this frame has focus never
+  // reaches the parent, so the same rule is installed inside the guest. Only
+  // the reload family is touched; editing keys belong to the document.
+  window.addEventListener(
+    "keydown",
+    function (event) {
+      var reload =
+        event.key === "F5" ||
+        ((event.ctrlKey || event.metaKey) &&
+          (event.code === "KeyR" || String(event.key).toLowerCase() === "r"));
+      if (!reload) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    },
+    true
+  );
+
   var TOKEN = "__MDRAFT_TOKEN__";
   var BLINK_MS = 620;
   var SYNC_MARGIN = 12;

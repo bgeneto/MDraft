@@ -125,7 +125,10 @@ In Split view:
   covers Markdown and AsciiDoc. A paragraph whose text comes from an attribute
   substitution, or from an included file, is left alone rather than guessed at,
   and Typst and HTML documents have no word-level sync;
-- keyboard movement may reveal the caret's block when it has left the pane.
+- keyboard movement may reveal the caret's block when it has left the pane;
+- **F5 and Ctrl+R do not reload the window.** A reload would discard every open
+  tab and every unsaved buffer with no prompt, so those keys are swallowed.
+  **File › Reload From Disk** is the explicit way to reread the current file.
 
 The sidebar holds the document outline, a folder browser and recent files.
 The outline updates as headings change; recents are remembered between runs.

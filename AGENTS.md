@@ -205,10 +205,10 @@ rewrite from scratch.
 | `npm run audit` | `scripts/audit-document.mjs` | Render metrics for whatever document is loaded |
 | `npm run math` | `scripts/math-render-check.mjs` | 10 checks against the physics paper |
 | `npm run syntax` | `scripts/syntax-theme-test.mjs` | 7 checks that highlighting is real |
-| `npm run html` | `scripts/html-preview-test.mjs` | 42 checks of the sandboxed HTML guest |
+| `npm run html` | `scripts/html-preview-test.mjs` | 43 checks of the sandboxed HTML guest |
 | `npm run export` | `scripts/export-test.mjs` | 35 checks of every export path, against real pandoc, including an AsciiDoc source |
 | `npm run typography` | `scripts/typography-test.mjs` | 48 checks that each face loads, each OpenType switch changes pixels, the six-preset matrix holds, the four new body faces render differently, and the Semibold weights are real |
-| `npm run shortcuts` | `scripts/shortcut-test.mjs` | 39 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, that the zoom chip follows the level, and that a new tab keeps the previous buffer's undo |
+| `npm run shortcuts` | `scripts/shortcut-test.mjs` | 43 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, that the zoom chip follows the level, that a new tab keeps the previous buffer's undo, and that the webview's F5/Ctrl+R reload keys are swallowed |
 | `npm run tabs` | `scripts/document-tabs-test.mjs` | 104 checks of several open documents: sidebar and Recents, `open-files`, active-tab styling, the tab context menu, keyboard navigation, caret and scroll per tab, dirty dot, × and middle-click, Ctrl+Tab, drag and keyboard reordering, the disk poll, Auto Save across tabs, overflow arrows and the wheel, Close Others, the last tab |
 | `npm run asciidoc` | `scripts/asciidoc-test.mjs` | 51 checks of the AsciiDoc preview, source highlighting, outline, preview copy, spellcheck, includes, paste, the AsciiDoc reference, the default extension and word-level sync |
 | `npm run test:sessions` | `scripts/sessions-test.mjs` | 59 unit checks of `src/sessions.ts`, with no application and no build |
@@ -462,7 +462,7 @@ Fifteen layers, cheapest first. Run them in this order when changing anything.
 | Math | `npm run math` | 10 | Font loading, fraction and radical geometry |
 | Syntax | `npm run syntax` | 7 | Token colours, palette switching |
 | AsciiDoc | `npm run asciidoc` | 51 | Preview, title/TOC, math, includes, source highlighting, outline, preview copy, spellcheck, paste, the built-in reference, defaults, word-level sync |
-| HTML guest | `npm run html` | 42 | Sandbox, IPC boundary, local assets, sync/blink, scripts-off, outline |
+| HTML guest | `npm run html` | 43 | Sandbox, IPC boundary, local assets, sync/blink, scripts-off, outline, reload-key guard |
 | Document tabs | `npm run tabs` | 104 | Several open documents, the context menu, drag and keyboard reordering, overflow arrows, the disk poll, Auto Save across tabs, caret and scroll per tab |
 | Close | `.\scripts\test-close.ps1` | 4 | The window really exits and saves its state |
 | Document audit | `npm run audit` | — | Real-world render quality on big files |
@@ -1233,6 +1233,28 @@ long document and queries immediately reports a failure that is not one. Scroll
 the editor to the target first. Also read **every** `.cm-sync-word` element: a
 range that crosses lines is one element per line, so `querySelector` returns only
 the first segment and a paragraph-sized selection looks truncated.
+
+**F5 and Ctrl+R wipe every open tab and unsaved buffer, with no prompt**
+WebView2 keeps its browser accelerator keys enabled (`AreBrowserAcceleratorKeysEnabled`
+defaults to true, and wry exposes `with_browser_accelerator_keys` but Tauri 2.12
+does not pass it through), so the webview reloads itself. `onCloseRequested`
+never runs for a reload, so the dirty guard is bypassed; with Auto Save on, the
+buffers may also be written to disk under the user. Measured: F5 reset the window
+to the last saved file, `window.__marker` was gone and the tab strip collapsed to
+one tab. A capture-phase `keydown` that calls `preventDefault()` on `F5` and
+`Ctrl/Cmd+R` **does** stop it — verified with a real key press (`SendKeys`), not
+CDP, because CDP input never reaches the browser accelerator. The HTML guest is a
+separate document, so `html-bridge.js` installs the same guard inside the iframe;
+a key pressed while the guest has focus never reaches the parent document's
+listener.
+
+**GitHub's Windows runner accepts "recieve"**
+`spellcheck::windows_tests` asserted that the runner's English dictionary rejects
+a particular misspelling, and the Windows image GitHub uses accepted it:
+`recieve should be rejected, languages=["en"] bad=[]`. A dictionary's word list is
+not this repository's to assert. Probe with a nonsense token (`zzqx`) and skip
+when the dictionary flags nothing, the way the Portuguese test already skips when
+its dictionary is absent; otherwise the release fails for the image's sake.
 
 ## Adding a preference, end to end
 
