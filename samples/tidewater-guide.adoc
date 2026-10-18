@@ -1,0 +1,54 @@
+= Instrument Guide
+:subtitle: Tidewater Observatory
+:author: Field Instruments Group
+:revnumber: 2.4
+:stem: latexmath
+
+== The gauge
+
+The gauge is a pressure sensor mounted below the low-water mark. It samples every
+six minutes and reports the raw pressure, the water temperature and the
+conductivity of the water above the sensor.
+
+NOTE: A reading is only as good as its datum. Check the benchmark against the
+brass bolt on the north pier before recording a new series.
+
+[options="header"]
+|===
+| Channel | Range | Resolution
+| Pressure | 0–10 bar | 0.01 mbar
+| Temperature | −5–40 °C | 0.1 °C
+| Conductivity | 0–60 mS/cm | 0.1 mS/cm
+|===
+
+== Calibration
+
+The height of the surface above the survey datum follows the pressure:
+
+[latexmath]
+++++
+h = h_0 + \frac{p - p_0}{\rho g}
+++++
+
+where latexmath:[h_0] is the datum, latexmath:[p_0] the atmospheric pressure,
+latexmath:[\rho] the density of the water and latexmath:[g] the local
+acceleration due to gravity.
+
+[source,python]
+----
+def surface_height(pressure, datum, rho=1025.0, g=9.81):
+    """Convert gauge pressure to height above the survey datum."""
+    return datum + pressure / (rho * g)
+----
+
+TIP: Log the atmospheric pressure at the same time as the gauge reading. A
+change in weather is easily mistaken for a change in the tide.
+
+== Deployment
+
+. Slack the mooring line until the sensor clears the low-water mark.
+. Lower the sensor at least one metre below the lowest expected surface.
+. Record the time, the datum and the atmospheric pressure in the deployment log.
+
+WARNING: Do not lift the sensor by its cable. The cable carries the signal, not
+the weight of the housing.

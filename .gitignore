@@ -15,16 +15,16 @@ dist-ssr
 # Staged release output, bin/<os>/<arch>/. Reproducible with `npm run dist`.
 bin
 
-# Only the two screenshots the README embeds are part of the repository. The
-# rest of this folder holds captures taken while comparing against Typora, which
-# are working files: several megabytes of another application's interface.
+# Only the screenshots the README embeds are part of the repository. The rest of
+# this folder holds captures taken while comparing layouts and themes, which are
+# working files.
 #
 # `docs/screenshots/*` rather than `docs/screenshots/` on purpose — excluding the
 # directory itself makes git stop descending into it, and a `!` rule inside it
 # would then have nothing to re-include.
 docs/screenshots/*
-!docs/screenshots/readme-main.png
-!docs/screenshots/readme-preferences.png
+!docs/screenshots/readme-markdown-split.png
+!docs/screenshots/readme-asciidoc-preview.png
 
 # Remove samples 
 docs/samples/*
