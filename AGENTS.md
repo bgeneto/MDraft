@@ -1396,11 +1396,11 @@ Three things are easy to get wrong here and are worth knowing:
 
 ## Portable builds
 
-`MDraft-portable.exe` is the ordinary Windows build compiled with one extra config
-file, `src-tauri/tauri.portable.conf.json`. There is no portable code path: the
-config sets `appDirectoriesOverride`, and Tauri applies it to its own path APIs
-(`app_config_dir`, `app_data_dir`, and the webview's data directory) and to
-plugins.
+`MDraft_<version>_x64-portable.exe` is the ordinary Windows build compiled with
+one extra config file, `src-tauri/tauri.portable.conf.json`. There is no portable
+code path: the config sets `appDirectoriesOverride`, and Tauri applies it to its
+own path APIs (`app_config_dir`, `app_data_dir`, and the webview's data
+directory) and to plugins.
 
 Two things follow from that, and both were verified rather than assumed:
 
@@ -1421,6 +1421,12 @@ still find the ordinary one there. `--no-portable` skips the pass; it is skipped
 automatically on Linux, where the AppImage is already a single self-contained
 file.
 
+Staging keeps only the portable on Windows, under
+`<product>_<version>_<arch>-portable.exe` (`x64`, like the installers). The bare
+`MDraft.exe` is deliberately **not** published: it is the same program as the
+portable with settings in `%APPDATA%`, and two near-identical executables make
+the download page ambiguous. Linux still publishes the bare `mdraft`.
+
 `stage-artifacts.mjs` resolves bare binaries by listing `target/release` and
 matching case-insensitively, rather than returning a path it constructed. The
 names it looks for are guesses (`mainBinaryName`, `productName`, the Cargo
@@ -1439,7 +1445,7 @@ platform and fails on the other.
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run math`,
    `npm run syntax`, `npm run html` and `npm run asciidoc` —
-   93 + 10 + 7 + 42 + 43 checks.
+   93 + 10 + 7 + 43 + 51 checks.
 5. `npm run audit` against both `docs/sample-files` documents and compare the
    counts with the table in the README.
 6. `npm run dist` — installers and checksums land in `bin/<os>/<arch>/`.
