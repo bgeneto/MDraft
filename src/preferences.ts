@@ -737,6 +737,23 @@ function buildSections(host: PreferencesHost): Section[] {
           get: () => s().richPaste,
           set: (value) => host.update({ richPaste: value }),
         },
+        { kind: "heading", label: "Auto-close" },
+        {
+          kind: "checkbox",
+          label: "Auto-close brackets and quotes",
+          help:
+            "Typing ( [ { ' \" or ` inserts the closing character, typing it again steps over it, and Backspace between the pair deletes both. A selection is wrapped instead.",
+          get: () => s().autoClosePairs,
+          set: (value) => host.update({ autoClosePairs: value }),
+        },
+        {
+          kind: "checkbox",
+          label: "Auto-close HTML tags",
+          help:
+            "Typing the > of an opening tag in an HTML, Markdown or AsciiDoc document inserts the matching closing tag. Void elements, self-closing tags, autolinks and code are left alone.",
+          get: () => s().autoCloseTags,
+          set: (value) => host.update({ autoCloseTags: value }),
+        },
         {
           kind: "select",
           label: "Content Width",

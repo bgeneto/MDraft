@@ -534,6 +534,13 @@ function applySettingsPatch(patch: Partial<api.Settings>): void {
   applyLayout();
   persist();
 
+  if (patch.autoClosePairs !== undefined || patch.autoCloseTags !== undefined) {
+    editor.setAutoClose({
+      pairs: settings.autoClosePairs,
+      tags: settings.autoCloseTags,
+    });
+  }
+
   if (affectsRendering) scheduleRender(true);
   if (patch.showHiddenFiles !== undefined && settings.sidebarTab === "files") {
     renderSidebar();
@@ -3920,7 +3927,10 @@ async function boot(): Promise<void> {
   migrateLegacySystemPreset();
   applyTheme();
 
-  editor = createEditor(editorHost);
+  editor = createEditor(editorHost, {
+    autoClosePairs: settings.autoClosePairs,
+    autoCloseTags: settings.autoCloseTags,
+  });
   editor.onDocChanged((text) => {
     setDirty(text !== doc.savedContent);
     refreshStatus();

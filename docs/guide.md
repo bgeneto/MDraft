@@ -139,6 +139,11 @@ Other editor features:
 - **Focus mode** dims every line except the one holding the caret.
 - **Typewriter mode** keeps the caret vertically centred while typing.
 - **Auto Save** is opt-in and writes dirty files in place every 20 seconds.
+- **Auto-close** inserts `)`, `]`, `}`, `'`, `"` and `` ` `` after the opening
+  character, steps over the closer, deletes both with Backspace and wraps a
+  selection. HTML tags close in HTML documents and in the inline HTML that
+  Markdown and AsciiDoc pass through; Typst gets the pairs only. Both switches
+  are under **Preferences › Editor**.
 - A clean buffer reloads when the file changes on disk.
 - **Themes** follow the system, or are fixed to light or dark.
 - The source pane has eight syntax palettes, each with its own surface rather

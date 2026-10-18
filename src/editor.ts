@@ -4,6 +4,7 @@
 import {
   Compartment,
   EditorState,
+  Prec,
   RangeSetBuilder,
   StateEffect,
   StateField,
@@ -27,11 +28,15 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
+import { html } from "@codemirror/lang-html";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import type { DocumentLanguage } from "./api";
 import { asciidocLanguage } from "./asciidoc-language";
+import { isCodeContext } from "./code-context";
 import { htmlLanguage } from "./html-language";
+import { autoCloseTag } from "./tag-close";
 import { typstLanguage } from "./typst-language";
 import {
   bracketMatching,
@@ -40,7 +45,6 @@ import {
   indentOnInput,
   indentUnit,
   syntaxHighlighting,
-  syntaxTree,
 } from "@codemirror/language";
 import {
   closeSearchPanel,
@@ -154,6 +158,13 @@ export interface EditorHandle {
   insertPasted(text: string, block: boolean): void;
   /** True when the caret sits inside fenced/raw code or an HTML code element. */
   inCodeContext(): boolean;
+  /**
+   * Turn bracket/quote pairing and tag closing on or off at runtime.
+   *
+   * The two are separate so a reader can keep the pairs and refuse the tags;
+   * both are reconfigured through compartments, never by rebuilding the state.
+   */
+  setAutoClose(options: { pairs: boolean; tags: boolean }): void;
   insertAtTop(text: string): void;
   wrapSelection(before: string, after: string, placeholder: string): void;
   onDocChanged(cb: (text: string) => void): void;
@@ -261,13 +272,23 @@ const baseTheme = EditorView.theme({
   "&.cm-editor.cm-focused": { outline: "none" },
 });
 
-export function createEditor(host: HTMLElement): EditorHandle {
+export interface EditorOptions {
+  autoClosePairs?: boolean;
+  autoCloseTags?: boolean;
+}
+
+export function createEditor(host: HTMLElement, options: EditorOptions = {}): EditorHandle {
   const fontSizeCompartment = new Compartment();
   const focusCompartment = new Compartment();
   const historyCompartment = new Compartment();
   const syntaxCompartment = new Compartment();
   const spellCompartment = new Compartment();
+  const pairCompartment = new Compartment();
+  const tagCompartment = new Compartment();
   let spellKey = "";
+  let autoPairs = options.autoClosePairs ?? true;
+  let autoTags = options.autoCloseTags ?? true;
+  let currentLanguage: DocumentLanguage = "markdown";
 /// Which language the buffer is parsed as. A markdown editor that also edits
 /// Typst needs this to be switchable at runtime; a static extension could not be.
 const languageCompartment = new Compartment();
@@ -277,9 +298,67 @@ const markdownSupport = markdown({
   base: markdownLanguage,
   codeLanguages: languages,
   addKeymap: true,
+  // Markdown parses line-start HTML blocks with this nested grammar, and its
+  // own `autoCloseTags` would fire regardless of the preference. The editor
+  // owns tag closing for Markdown (see tag-close.ts), so the nested one is off.
+  htmlTagLanguage: html({ matchClosingTags: false, autoCloseTags: false }),
 });
 
   const buildHistory = () => history({ minDepth: 400 });
+
+  /**
+   * Bracket and quote pairing.
+   *
+   * The Backspace command travels with the input handler on purpose: with
+   * pairing off, a manually typed `()` must lose one character per Backspace,
+   * not both. The language data is what adds the backtick — the library's
+   * default list is `(`, `[`, `{`, `'`, `"` and nothing more.
+   */
+  const pairSupport = (): Extension[] => [
+    Prec.highest(keymap.of(closeBracketsKeymap)),
+    EditorState.languageData.of(() => [
+      { closeBrackets: { brackets: ["(", "[", "{", "'", '"', "`"] } },
+    ]),
+    // `don't` must not become `don't'`. The library pairs a quote whenever the
+    // next character is not a word character, and at the end of `don` that is
+    // true; an apostrophe after a word is far more likely than an opening
+    // single quote, so it wins.
+    Prec.highest(
+      EditorView.inputHandler.of((view, from, to, text) => {
+        if (text !== "'" || from !== to || view.composing || view.state.readOnly) return false;
+        const before = from > 0 ? view.state.sliceDoc(from - 1, from) : "";
+        if (!/[\p{L}\p{N}]/u.test(before)) return false;
+        view.dispatch({
+          changes: { from, to, insert: "'" },
+          selection: { anchor: from + 1 },
+          userEvent: "input.type",
+        });
+        return true;
+      }),
+    ),
+    closeBrackets(),
+  ];
+
+  /** The tag closer, but only in the document types that pass HTML through. */
+  const tagSupport = (kind: DocumentLanguage): Extension =>
+    autoTags && (kind === "markdown" || kind === "asciidoc") ? autoCloseTag() : [];
+
+  /**
+   * Install the HTML grammar with the tag preference that is current when the
+   * import resolves. The module is cached per flag; the generation counter keeps
+   * a tab switch from landing the wrong support.
+   */
+  const loadHtml = (): void => {
+    const generation = ++languageGeneration;
+    void htmlLanguage(autoTags)
+      .then((language) => {
+        if (generation !== languageGeneration) return;
+        view.dispatch({ effects: languageCompartment.reconfigure(language) });
+      })
+      .catch((error) => {
+        console.warn(`[editor] the HTML grammar could not be loaded: ${error}`);
+      });
+  };
 
   let onDocChanged: (text: string) => void = () => {};
   let onCursor: (info: CursorInfo) => void = () => {};
@@ -401,6 +480,8 @@ const markdownSupport = markdown({
     search({ top: true }),
     EditorView.lineWrapping,
     languageCompartment.of(markdownSupport),
+    pairCompartment.of(autoPairs ? pairSupport() : []),
+    tagCompartment.of(tagSupport("markdown")),
     keymap.of([
       ...defaultKeymap,
       ...searchKeymap,
@@ -553,22 +634,22 @@ const markdownSupport = markdown({
     },
 
     setLanguage(kind) {
+      currentLanguage = kind;
       const generation = ++languageGeneration;
       const install = (language: Extension) => {
         if (generation !== languageGeneration) return;
         view.dispatch({ effects: languageCompartment.reconfigure(language) });
       };
+      // The tag closer follows the document type, not the grammar's promise:
+      // switching to Typst must drop a handler that would insert `</a>`.
+      view.dispatch({ effects: tagCompartment.reconfigure(tagSupport(kind)) });
       if (kind === "markdown") {
         install(markdownSupport);
         return;
       }
       if (kind === "html") {
         // The HTML branch must be explicit: the fallback below is Typst.
-        void htmlLanguage()
-          .then(install)
-          .catch((error) => {
-            console.warn(`[editor] the HTML grammar could not be loaded: ${error}`);
-          });
+        loadHtml();
         return;
       }
       if (kind === "asciidoc") {
@@ -583,6 +664,24 @@ const markdownSupport = markdown({
         .catch((error) => {
           console.warn(`[editor] the Typst grammar could not be loaded: ${error}`);
         });
+    },
+
+    setAutoClose(next) {
+      if (next.pairs !== autoPairs) {
+        autoPairs = next.pairs;
+        view.dispatch({
+          effects: pairCompartment.reconfigure(autoPairs ? pairSupport() : []),
+        });
+      }
+      if (next.tags !== autoTags) {
+        autoTags = next.tags;
+        if (currentLanguage === "html") loadHtml();
+        else {
+          view.dispatch({
+            effects: tagCompartment.reconfigure(tagSupport(currentLanguage)),
+          });
+        }
+      }
     },
 
     captureState() {
@@ -990,37 +1089,7 @@ const markdownSupport = markdown({
     },
 
     inCodeContext() {
-      let node: any = syntaxTree(view.state).resolveInner(view.state.selection.main.head, -1);
-      for (; node; node = node.parent) {
-        if (
-          [
-            "FencedCode",
-            "CodeBlock",
-            "InlineCode",
-            "Raw",
-            "Code",
-            "CodeBlock",
-            "CodeText",
-            "ScriptText",
-            "StyleText",
-            "monospace",
-            "listing",
-            "literal",
-            "passthrough",
-          ].includes(node.name)
-        ) {
-          return true;
-        }
-        if (node.name === "Element") {
-          const open = node.getChild?.("OpenTag");
-          const tag = open?.getChild?.("TagName");
-          if (tag) {
-            const text = view.state.sliceDoc(tag.from, tag.to).toLowerCase();
-            if (["pre", "code", "script", "style", "textarea"].includes(text)) return true;
-          }
-        }
-      }
-      return false;
+      return isCodeContext(view.state, view.state.selection.main.head);
     },
 
     insertAtTop(text) {

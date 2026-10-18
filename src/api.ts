@@ -215,6 +215,11 @@ export interface Settings {
   /** What to do with remote images inside a pasted fragment. */
   richPasteImages: "download" | "url";
 
+  /** Insert the closing half of a bracket or quote while typing. */
+  autoClosePairs: boolean;
+  /** Close an HTML tag when its opening `>` is typed. */
+  autoCloseTags: boolean;
+
   exportFormats: ExportFormat[];
 
   /**

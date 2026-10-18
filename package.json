@@ -15,6 +15,8 @@
     "check:version": "node scripts/check-version.mjs",
     "smoke": "node scripts/dom-smoke.mjs",
     "word-sync": "node scripts/word-sync-test.mjs",
+    "autoclose": "node scripts/autoclose-test.mjs",
+    "autoclose:unit": "node scripts/autoclose-unit.mjs",
     "audit": "node scripts/audit-document.mjs",
     "math": "node scripts/math-render-check.mjs",
     "syntax": "node scripts/syntax-theme-test.mjs",
@@ -38,6 +40,7 @@
   },
   "dependencies": {
     "@asciidoctor/core": "4.1.1",
+    "@codemirror/autocomplete": "^6.20.3",
     "@codemirror/commands": "^6.9.0",
     "@codemirror/lang-html": "^6.4.12",
     "@codemirror/lang-markdown": "^6.5.2",

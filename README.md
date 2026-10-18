@@ -32,6 +32,10 @@ binary. Release notes and checksums are on the release page.
   keep each document's caret, undo and scroll position. A crowded strip scrolls
   with arrows, the wheel or drag reordering, and right-click offers the tab
   actions. The outline, file browser and recent list are one shortcut away.
+- **Typing that closes itself.** `(`, `[`, `{`, quotes and backticks insert
+  their pair, step over the closer and delete both on Backspace; HTML tags close
+  in HTML, Markdown and AsciiDoc. Both behaviors have a switch under
+  Preferences › Editor.
 - **Typography that holds up.** Thirteen bundled typefaces, six presets,
   independent faces for editor, prose, headings and code, plus OpenType
   controls. Preview headings and emphasis use Semibold; mathematics has its own
