@@ -89,6 +89,12 @@ const SUITES = [
     script: "paste-convert-test.mjs",
   },
   {
+    id: "autoclose-unit",
+    title: "Auto-close matching (unit)",
+    kind: "node",
+    script: "autoclose-unit.mjs",
+  },
+  {
     id: "smoke",
     title: "DOM smoke",
     kind: "cdp",
@@ -102,6 +108,13 @@ const SUITES = [
     script: "word-sync-test.mjs",
     doc: "samples/word-sync.md",
     writesDoc: true,
+  },
+  {
+    id: "autoclose",
+    title: "Auto-close pairs and tags",
+    kind: "cdp",
+    script: "autoclose-test.mjs",
+    doc: "samples/feature-tour.md",
   },
   {
     id: "paste",

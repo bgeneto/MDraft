@@ -320,6 +320,13 @@ pub struct Settings {
     /// fragment. The explicit paste-an-URL path has its own switch above.
     #[serde(default = "default_rich_paste_images")]
     pub rich_paste_images: String,
+    /// Insert the closing half of a bracket or quote while typing.
+    #[serde(default = "default_true")]
+    pub auto_close_pairs: bool,
+    /// Insert the matching closing tag when the `>` of an opening tag is typed
+    /// in an HTML, Markdown or AsciiDoc document.
+    #[serde(default = "default_true")]
+    pub auto_close_tags: bool,
 
     // ---- Preferences: Export ---------------------------------------------
     /// Pandoc export targets, in the order the menu shows them.
@@ -397,6 +404,8 @@ impl Default for Settings {
             image_auto_escape: false,
             rich_paste: true,
             rich_paste_images: default_rich_paste_images(),
+            auto_close_pairs: true,
+            auto_close_tags: true,
 
             export_formats: default_export_formats(),
             after_open_location: false,
@@ -698,6 +707,20 @@ mod tests {
         // changes that one select.
         assert!(s.rich_paste);
         assert_eq!(s.rich_paste_images, "download");
+        // The delimiters a writer types most: both are on, matching Typora.
+        assert!(s.auto_close_pairs);
+        assert!(s.auto_close_tags);
+    }
+
+    #[test]
+    fn auto_close_settings_round_trip() {
+        let mut settings = Settings::default();
+        settings.auto_close_pairs = false;
+        settings.auto_close_tags = false;
+        let json = serde_json::to_string(&settings).unwrap();
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert!(!back.auto_close_pairs);
+        assert!(!back.auto_close_tags);
     }
 
     #[test]
@@ -726,6 +749,8 @@ mod tests {
         assert!(!parsed.image_auto_escape);
         assert!(parsed.rich_paste);
         assert_eq!(parsed.rich_paste_images, "download");
+        assert!(parsed.auto_close_pairs);
+        assert!(parsed.auto_close_tags);
         assert!(parsed.preset_overrides.is_empty());
     }
 

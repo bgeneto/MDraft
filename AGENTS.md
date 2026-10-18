@@ -197,10 +197,12 @@ rewrite from scratch.
 | `npm run stage` | `scripts/stage-artifacts.mjs` | Re-stage what is already built |
 | `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
-| `npm run test:rust` | `cargo test` | 79 tests on Windows (78 run, one ignored download); Linux has 78 total (77 run, one ignored) |
+| `npm run test:rust` | `cargo test` | 80 tests on Windows (79 run, one ignored download); Linux has 79 total (78 run, one ignored) |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. Puts back the working tree and the developer's own settings afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
 | `npm run smoke` | `scripts/dom-smoke.mjs` | 93 checks against `samples/feature-tour.md` |
 | `npm run word-sync` | `scripts/word-sync-test.mjs` | 30 checks of word-level sync against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, no scroll, Escape, and the fallbacks |
+| `npm run autoclose:unit` | `scripts/autoclose-unit.mjs` | 17 checks of the tag matcher: attributes, custom elements, void and self-closing tags, autolinks, escapes, declarations, prose — no application |
+| `npm run autoclose` | `scripts/autoclose-test.mjs` | 33 checks of pairs, quotes, backticks, HTML tags and both preferences, typed through the real editor in Markdown, HTML, Typst and AsciiDoc |
 | `npm run spellcheck` | `scripts/spellcheck-test.mjs` | Underlines a misspelling, then clears it when spelling is turned off |
 | `npm run audit` | `scripts/audit-document.mjs` | Render metrics for whatever document is loaded |
 | `npm run math` | `scripts/math-render-check.mjs` | 10 checks against the physics paper |
@@ -229,6 +231,8 @@ All of these need the app already running with CDP enabled (see
 | --- | --- | --- | --- |
 | `dom-smoke.mjs` | `[port]` | `samples/feature-tour.md` | Rendering, pane sync, preferences, search, toggles, math, fonts, status icons, blink behaviour |
 | `word-sync-test.mjs` | `[port]` | `samples/word-sync.md` | The fragment map, preview → source and source → preview, atomic code and formula spans, word snapping, no scroll, Escape, typing clears, and the documented fallbacks (alert, missing fragment) |
+| `autoclose-unit.mjs` | — | none — runs without the application | The tag matcher: attributes, custom elements, void and self-closing tags, autolinks, escapes, declarations, prose |
+| `autoclose-test.mjs` | `[port]` | `samples/feature-tour.md` | Pairs, step-over, Backspace, selection wrap and Markdown inline tags, typed through the real editor; HTML, Typst and AsciiDoc through the default-extension switch; both preferences |
 | `asciidoc-test.mjs` | `[port]` | `samples/asciidoc-tour.adoc` | The AsciiDoc preview, title/TOC, KaTeX and AsciiMath, the built-in AsciiDoc reference, source anchors and scroll sync, highlighting, outline, preview copy, spellcheck, include refusal, rich paste, bitmap `image::`, default extension, the Files panel and word-level sync |
 | `audit-document.mjs` | `[port] [label]` | any — `label` names it in the output | Block/anchor counts, table and code-fence totals, KaTeX errors, stray `$` in prose |
 | `math-render-check.mjs` | `[port]` | `docs/samples/physrevb_70_035307.md` | That fonts actually load and that fractions and radicals have real geometry |
@@ -447,16 +451,18 @@ hash the pixels.
 
 ## Testing
 
-Fifteen layers, cheapest first. Run them in this order when changing anything.
+Seventeen layers, cheapest first. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 79 | Path handling, sanitisers, file IO, settings, token estimate, spellcheck, HTML preview scheme, export reader selection |
+| Rust unit | `npm run test:rust` | 80 | Path handling, sanitisers, file IO, settings, token estimate, spellcheck, HTML preview scheme, export reader selection |
 | Session store | `npm run test:sessions` | 59 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
 | Paste conversion | `npm run paste:convert` | 72 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, image syntax, AsciiDoc |
 | DOM smoke | `npm run smoke` | 93 | Rendering, pane sync, preferences, math, fonts, status icons |
 | Word sync | `npm run word-sync` | 30 | The fragment map, preview → source and source → preview, atomic code, formula and image spans, word snapping, no scroll, Escape |
+| Auto-close matching | `npm run autoclose:unit` | 17 | Which tag a typed `>`, the void/self-closing/autolink/escape rules — no application |
+| Auto-close typing | `npm run autoclose` | 33 | Pairs, step-over, Backspace, selection wrap, Markdown inline tags, HTML tags, both preferences, in all four document types |
 | Rich paste | `npm run paste` | 23 | The paste event, destination notice, preferences, Ctrl+Shift+V, undo |
 | Image syntax | `npm run image:syntax` | 14 | Bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, plus the Image preference |
 | Math | `npm run math` | 10 | Font loading, fraction and radical geometry |
@@ -1256,6 +1262,24 @@ not this repository's to assert. Probe with a nonsense token (`zzqx`) and skip
 when the dictionary flags nothing, the way the Portuguese test already skips when
 its dictionary is absent; otherwise the release fails for the image's sake.
 
+**`<p>` in Markdown closes the tag even with "Auto-close HTML tags" turned off**
+The preference removed the editor's own tag handler, and the tag still closed.
+`markdown()` installs `htmlTagLanguage` — `html({ matchClosingTags: false })` —
+and that support carries CodeMirror's `autoCloseTags`; at a line-start HTML block
+its guard is true, so it fires independently of the editor's compartment. A
+mid-line `x <p>` did not close, which is what made the two sources look alike.
+Pass `htmlTagLanguage: html({ matchClosingTags: false, autoCloseTags: false })`
+to `markdown()` and own the behavior in `tag-close.ts`; the suite's off-check now
+types at the start of a line, where the two disagree.
+
+**Typing in a CDP test leaves the buffer untouched**
+`closeBrackets()` is an `EditorView.inputHandler`, not a key binding: it reacts to
+text insertion, so a synthetic `KeyboardEvent` dispatched from `Runtime.evaluate`
+never reaches it, and a test written that way proves nothing. Type through
+`Input.dispatchKeyEvent` with `{ type: "char", text, key }` (one call per
+character, focused `.cm-content`), the same path the webview uses for real keys.
+The autoclose suite is written that way for exactly this reason.
+
 ## Adding a preference, end to end
 
 Five files, in this order — more than three, so a plan comes first; see
@@ -1283,6 +1307,9 @@ src/
   sessions.ts        open documents: one session per tab, one EditorState each
   tabs.ts            tab strip: rendering, overflow arrows, context menu, drag/keyboard order
   editor.ts          CodeMirror 6 setup, incremental word/line metrics, EditorHandle API
+  code-context.ts    code-like positions shared by spelling, paste conversion and the tag closer
+  tag-close.ts       the Markdown/AsciiDoc `>` input handler
+  tag-name.ts        the pure rule: which tag a typed `>` closes
   spellcheck.ts      spelling marks, language detection, suggestion menu
   markdown.ts        markdown → HTML; math extraction, mermaid, alerts, anchors
   html-preview.ts    sandboxed HTML guest: parse5 splice, iframe, bridge protocol
@@ -1440,7 +1467,7 @@ platform and fails on the other.
    reads the latter for the bundle, and the two must agree. `npm run
    check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
-3. `npm run test:rust` — 78 runnable tests (one ignored: the pandoc download). Run them on Linux too
+3. `npm run test:rust` — 79 runnable tests (one ignored: the pandoc download). Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run math`,
