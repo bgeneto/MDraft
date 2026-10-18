@@ -19,6 +19,8 @@ const dryRun = process.argv.includes("--dry-run");
 /** Rust target triples, not Node's, name the release folder. */
 const OS = { win32: "windows", darwin: "macos", linux: "linux" }[process.platform] ?? process.platform;
 const ARCH = { x64: "amd64", arm64: "arm64", ia32: "386" }[process.arch] ?? process.arch;
+/** The architecture label Tauri's Windows installers already use. */
+const WINDOWS_ARCH = { x64: "x64", arm64: "arm64", ia32: "x86" }[process.arch] ?? process.arch;
 
 /** Tauri's bundle subdirectory for each target, with the extensions it emits. */
 const BUNDLE_KINDS = {
@@ -48,6 +50,12 @@ if (!existsSync(bundleRoot)) {
 const sources = [];
 
 // The bare executable, for people who would rather not install anything.
+//
+// Windows ships the portable variant instead (below): it is the same program,
+// with settings beside it, and it is the one download that does not install.
+// Staging both would publish two identical Windows executables whose only
+// difference is where they keep `settings.json`. Linux keeps the bare `mdraft`,
+// because the AppImage is large and a binary is the light option there.
 //
 // Its name is not simply the product name: cargo names the binary after the
 // Cargo package, while `productName` is the display name the bundlers use. With
@@ -95,12 +103,9 @@ function findBinary(candidates) {
  */
 const rename = new Map();
 
-const binary = findBinary(binaryNames);if (binary) {
+const binary = findBinary(binaryNames);
+if (binary && OS !== "windows") {
   sources.push(binary);
-  // Cargo names the file after the package, so it arrives as `mdraft.exe`. The
-  // release should carry the product's name; on Linux a lowercase binary is the
-  // convention, so only Windows is renamed.
-  if (OS === "windows") rename.set(binary, `${productName}.exe`);
 }
 
 // The portable variant, which `dist.mjs` parks here after its own build pass.
@@ -111,7 +116,11 @@ const binary = findBinary(binaryNames);if (binary) {
 const portable = findBinary(binaryNames.map((name) => `${name}-portable`));
 if (portable) {
   sources.push(portable);
-  if (OS === "windows") rename.set(portable, `${productName}-portable.exe`);
+  if (OS === "windows") {
+    // Version and architecture in the name, like the installers: a download
+    // that does not say which build it is invites the wrong file being kept.
+    rename.set(portable, `${productName}_${version}_${WINDOWS_ARCH}-portable.exe`);
+  }
 }
 
 const skipped = [];
