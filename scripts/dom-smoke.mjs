@@ -380,12 +380,17 @@ check("toggle restores diagrams", toggled.afterOn.checked === true && toggled.af
 const faces = await evaluate(`(() => {
   [...document.querySelectorAll('.prefs-section')]
     .find((s) => s.textContent === 'Typography').click();
-  const wanted = ['Editor', 'Preview text', 'Preview headings', 'Preview code'];
+  const allLabels = [...document.querySelectorAll('.prefs-row')]
+    .map((row) => (row.querySelector('.prefs-label')?.textContent ?? '').replace('?', '').trim());
+  const editorSizeIdx = allLabels.indexOf('Editor font size');
+  const sourceEditorIdx = allLabels.indexOf('Source Editor');
+  const wanted = ['Source Editor', 'Preview text', 'Preview headings', 'Preview code'];
   const rows = [...document.querySelectorAll('.prefs-row')].filter((row) => {
     const label = (row.querySelector('.prefs-label')?.textContent ?? '').replace('?', '').trim();
     return wanted.includes(label);
   });
   return JSON.stringify({
+    editorAboveSource: editorSizeIdx !== -1 && sourceEditorIdx === editorSizeIdx + 1,
     labels: rows.map((row) => row.querySelector('.prefs-label')?.textContent?.replace('?', '').trim()),
     controls: rows.map((row) =>
       row.querySelectorAll('input, select, textarea, .prefs-font-specimen').length),
@@ -403,7 +408,8 @@ console.log(`  selected ${faces.selected.join(', ')}`);
 
 check(
   "one dropdown for each face",
-  faces.labels.length === 4 &&
+  faces.editorAboveSource &&
+    faces.labels.length === 4 &&
     faces.tags.every((tag) => tag === "SELECT") &&
     faces.controls.every((count) => count === 1),
 );
@@ -474,10 +480,11 @@ check(
   Math.abs(mathScale.restored - mathScale.before) <= 0.5,
 );
 
-// Preview text size and Math scale are reader adjustments, not part of a
-// preset's identity. Editing one must leave the picker on the preset, and each
-// preset must remember its own pair across a round trip. The first preset a
-// reader visits without an entry starts at the application defaults (16/100).
+// Editor font size, Preview font size and Math scale are reader adjustments,
+// not part of a preset's identity. Editing one must leave the picker on the
+// preset, and each preset must remember its own sizes across a round trip.
+// An unvisited preset starts at its default sizes (18/80 for Serif, 18/90 for
+// Renaissance, 16/100 for System).
 const presetSizes = await evaluate(`(async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const section = [...document.querySelectorAll('.prefs-section')]
@@ -487,6 +494,7 @@ const presetSizes = await evaluate(`(async () => {
   const row = (label) => [...document.querySelectorAll('.prefs-row')].find((r) =>
     (r.querySelector('.prefs-label')?.textContent ?? '').replace('?', '').trim() === label);
   const input = (label) => row(label)?.querySelector('input[type=number]') ?? null;
+  const checkbox = (label) => row(label)?.querySelector('input[type=checkbox]') ?? null;
   const setNumber = (label, value) => {
     const field = input(label);
     if (!field) return false;
@@ -504,12 +512,18 @@ const presetSizes = await evaluate(`(async () => {
   };
   const read = () => ({
     active: active(),
-    body: input('Preview text size')?.value,
+    editor: input('Editor font size')?.value,
+    body: input('Preview font size')?.value,
     math: input('Math scale')?.value,
+    oldstyle: checkbox('Oldstyle figures in prose')?.checked ?? false,
   });
 
-  // System is the starting preset. Give it a pair that is not 16/100.
-  if (!setNumber('Preview text size', 18) || !setNumber('Math scale', 90)) {
+  // System is the starting preset. Give it sizes that are not 16/16/100.
+  if (
+    !setNumber('Editor font size', 17) ||
+    !setNumber('Preview font size', 18) ||
+    !setNumber('Math scale', 90)
+  ) {
     return JSON.stringify({ ok: false });
   }
   await sleep(200);
@@ -518,14 +532,15 @@ const presetSizes = await evaluate(`(async () => {
   choose('Serif');
   await sleep(250);
   const serifFresh = read();
-  setNumber('Preview text size', 19);
+  setNumber('Editor font size', 20);
+  setNumber('Preview font size', 19);
   setNumber('Math scale', 83);
   await sleep(200);
   const serif = read();
 
-  choose('Classic');
+  choose('Renaissance');
   await sleep(250);
-  const classic = read();
+  const renaissance = read();
   choose('Serif');
   await sleep(250);
   const serifBack = read();
@@ -533,8 +548,9 @@ const presetSizes = await evaluate(`(async () => {
   await sleep(250);
   const systemBack = read();
 
-  // Leave the suite on the first-run pair, whichever check failed.
-  setNumber('Preview text size', 16);
+  // Leave the suite on the first-run sizes, whichever check failed.
+  setNumber('Editor font size', 16);
+  setNumber('Preview font size', 16);
   setNumber('Math scale', 100);
   await sleep(200);
   const reset = read();
@@ -544,7 +560,7 @@ const presetSizes = await evaluate(`(async () => {
     system,
     serifFresh,
     serif,
-    classic,
+    renaissance,
     serifBack,
     systemBack,
     reset,
@@ -556,30 +572,39 @@ for (const [name, size] of [
   ["System", presetSizes.system],
   ["Serif (fresh)", presetSizes.serifFresh],
   ["Serif", presetSizes.serif],
-  ["Classic", presetSizes.classic],
+  ["Renaissance", presetSizes.renaissance],
   ["Serif (back)", presetSizes.serifBack],
   ["System (back)", presetSizes.systemBack],
   ["reset", presetSizes.reset],
 ]) {
-  console.log(`  ${name.padEnd(14)} ${size?.body}px / ${size?.math}%  active ${size?.active}`);
+  console.log(`  ${name.padEnd(14)} ${size?.editor}px / ${size?.body}px / ${size?.math}%  active ${size?.active}`);
 }
 
 check(
   "editing a size keeps the preset active",
   presetSizes.system?.active === "System" &&
     presetSizes.serif?.active === "Serif" &&
+    presetSizes.renaissance?.active === "Renaissance" &&
     presetSizes.serifBack?.active === "Serif",
 );
 check(
-  "an unvisited preset starts at 16 px / 100%",
-  presetSizes.serifFresh?.body === "16" &&
-    presetSizes.serifFresh?.math === "100" &&
-    presetSizes.classic?.body === "16" &&
-    presetSizes.classic?.math === "100",
+  "an unvisited preset starts at its default sizes",
+  presetSizes.serifFresh?.editor === "16" &&
+    presetSizes.serifFresh?.body === "18" &&
+    presetSizes.serifFresh?.math === "80" &&
+    presetSizes.serifFresh?.oldstyle === true &&
+    presetSizes.renaissance?.editor === "16" &&
+    presetSizes.renaissance?.body === "18" &&
+    presetSizes.renaissance?.math === "90" &&
+    presetSizes.renaissance?.oldstyle === true,
 );
 check(
-  "preview text size is remembered per preset",
-  presetSizes.system?.body === "18" &&
+  "editor and preview font sizes are remembered per preset",
+  presetSizes.system?.editor === "17" &&
+    presetSizes.serif?.editor === "20" &&
+    presetSizes.serifBack?.editor === "20" &&
+    presetSizes.systemBack?.editor === "17" &&
+    presetSizes.system?.body === "18" &&
     presetSizes.serif?.body === "19" &&
     presetSizes.serifBack?.body === "19" &&
     presetSizes.systemBack?.body === "18",
@@ -593,7 +618,8 @@ check(
 );
 check(
   "the preset test restores 16 px / 100%",
-  presetSizes.reset?.body === "16" &&
+  presetSizes.reset?.editor === "16" &&
+    presetSizes.reset?.body === "16" &&
     presetSizes.reset?.math === "100" &&
     presetSizes.reset?.active === "System",
 );
@@ -631,6 +657,14 @@ const sync = await evaluate(`(async () => {
     return -1;
   };
   const contentBox = content.getBoundingClientRect();
+
+  // At the default 16 px the whole visible source column can map to blocks that
+  // still fit inside the preview pane, so the off-screen case this phase exists
+  // to test never occurs. Give the preview a taller measure for the measurement
+  // and restore the reader's size before returning.
+  const previousBodySize = document.documentElement.style.getPropertyValue('--body-size');
+  document.documentElement.style.setProperty('--body-size', '20px');
+  await sleep(300);
 
   const anchors = [...preview.querySelectorAll('[data-line]')];
   const lines = anchors.map((a) => Number(a.dataset.line));
@@ -722,6 +756,9 @@ const sync = await evaluate(`(async () => {
   const offScreenCases = samples.filter((s) => s.blockBelowFold === true).length;
   const blinkedCases = samples.filter((s) => s.blink === 1).length;
   const clicked = samples.length ? samples[samples.length - 1].line : -1;
+
+  document.documentElement.style.setProperty('--body-size', previousBodySize || '16px');
+  await sleep(200);
 
   return JSON.stringify({
     anchors: anchors.length,
@@ -835,8 +872,8 @@ const interpolation = await evaluate(`(async () => {
   const setFonts = (editorPx, previewPx) => {
     openPrefs();
     const ok =
-      setNumber('Editor', 'Font Size', editorPx) &&
-      setNumber('Typography', 'Preview text size', previewPx);
+      setNumber('Typography', 'Editor font size', editorPx) &&
+      setNumber('Typography', 'Preview font size', previewPx);
     closePrefs();
     return ok;
   };

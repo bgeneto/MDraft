@@ -4,10 +4,11 @@
 //! placeholders → highlight code → tag mermaid blocks → resolve local images and
 //! links. Mermaid runs afterwards, against the live preview element.
 
-import { Marked } from "marked";
+import { Marked, Renderer, type RendererObject, type Token } from "marked";
 import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/common";
 import katex from "katex";
+import { translateOffset, type Fragment, type Substitution } from "./source-map";
 // The stylesheet carries the Computer Modern faces AND the layout rules. Without
 // it KaTeX still emits its DOM, but fractions collapse and radicals, integrals
 // and large delimiters vanish, because those are drawn with the KaTeX_Size
@@ -39,6 +40,11 @@ export interface RenderOptions {
   math?: boolean;
   /** Render `mermaid` fences as diagrams. When false they stay code blocks. */
   mermaid?: boolean;
+  /**
+   * Emit the source fragments word-level sync needs. Off for exports: they have
+   * no source pane to point at, and the wrapper spans are only weight.
+   */
+  map?: boolean;
 }
 
 const marked = new Marked({
@@ -48,6 +54,22 @@ const marked = new Marked({
 });
 
 const PLACEHOLDER = /@@(CODE|MATH)(\d+)@@/g;
+const PLACEHOLDER_PIECE = /@@(CODE|MATH)(\d+)@@/g;
+
+/** A code span protected from the parser, with the source range it came from. */
+interface CodeEntry {
+  text: string;
+  src0: number;
+  src1: number;
+}
+
+/** A formula extracted before `marked`, with the source range it came from. */
+interface MathEntry {
+  body: string;
+  display: boolean;
+  src0: number;
+  src1: number;
+}
 
 export function escapeHtml(input: string): string {
   return input
@@ -105,10 +127,23 @@ function splitFences(markdown: string): Segment[] {
   return out;
 }
 
-/** Replace `code spans` with placeholders so math never rewrites them. */
-function protectInlineCode(text: string, codes: string[]): string {
+/**
+ * Replace `code spans` with placeholders so math never rewrites them.
+ *
+ * `base` is the offset of `text` in the original source, so each entry carries an
+ * absolute range and the word map never has to search for it later. The
+ * substitution list is in prepared-local coordinates; `extractMath` needs it to
+ * translate the formulas that follow a code span.
+ */
+function protectInlineCode(
+  text: string,
+  codes: CodeEntry[],
+  base: number,
+): { text: string; subs: Substitution[] } {
   let out = "";
+  const subs: Substitution[] = [];
   let i = 0;
+
   while (i < text.length) {
     if (text[i] !== "`") {
       out += text[i++];
@@ -123,11 +158,13 @@ function protectInlineCode(text: string, codes: string[]): string {
       i += run;
       continue;
     }
-    codes.push(text.slice(i + run, end));
-    out += `@@CODE${codes.length - 1}@@`;
+    const placeholder = `@@CODE${codes.length}@@`;
+    codes.push({ text: text.slice(i + run, end), src0: base + i, src1: base + end + run });
+    subs.push({ p0: out.length, p1: out.length + placeholder.length, o0: i, o1: end + run });
+    out += placeholder;
     i = end + run;
   }
-  return out;
+  return { text: out, subs };
 }
 
 /**
@@ -142,18 +179,62 @@ const MATH_INDICATOR = /[\\^_{}=+<>]/;
  */
 const AMOUNT_ONLY = /^[\d.,]+$/;
 
-/** Replace `$…$`, `$$…$$`, `\(…\)` and `\[…\]` with placeholders. */
-function extractMath(text: string, maths: { body: string; display: boolean }[]): string {
-  const push = (body: string, display: boolean) => {
-    maths.push({ body, display });
+/**
+ * Replace `$…$`, `$$…$$`, `\(…\)` and `\[…\]` with placeholders.
+ *
+ * The three display forms used to be three chained `replace` calls. They are
+ * matched independently here and accepted in that same precedence order — a
+ * candidate that overlaps one an earlier form already consumed is skipped,
+ * which is what the chain did — so the offsets survive the extraction.
+ */
+function extractMath(
+  text: string,
+  maths: MathEntry[],
+  codeSubs: readonly Substitution[],
+  base: number,
+): string {
+  const sourceOf = (preparedLocal: number) => base + translateOffset(codeSubs, preparedLocal);
+
+  const push = (body: string, display: boolean, start: number, end: number): string => {
+    maths.push({ body, display, src0: sourceOf(start), src1: sourceOf(end) });
     return `@@MATH${maths.length - 1}@@`;
   };
 
-  // Display forms first: they may span lines.
-  let out = text
-    .replace(/\$\$([\s\S]+?)\$\$/g, (_m, body: string) => push(body.trim(), true))
-    .replace(/\\\[([\s\S]+?)\\\]/g, (_m, body: string) => push(body.trim(), true))
-    .replace(/\\\(([\s\S]+?)\\\)/g, (_m, body: string) => push(body.trim(), false));
+  const forms: { regex: RegExp; display: boolean }[] = [
+    { regex: /\$\$([\s\S]+?)\$\$/g, display: true },
+    { regex: /\\\[([\s\S]+?)\\\]/g, display: true },
+    { regex: /\\\(([\s\S]+?)\\\)/g, display: false },
+  ];
+  const accepted: { start: number; end: number; body: string; display: boolean }[] = [];
+  for (const form of forms) {
+    for (const match of text.matchAll(form.regex)) {
+      const start = match.index;
+      const end = start + match[0].length;
+      if (accepted.some((other) => start < other.end && end > other.start)) continue;
+      accepted.push({ start, end, body: (match[1] ?? "").trim(), display: form.display });
+    }
+  }
+  accepted.sort((a, b) => a.start - b.start);
+
+  let out = "";
+  let last = 0;
+  const displaySubs: Substitution[] = [];
+  for (const match of accepted) {
+    out += text.slice(last, match.start);
+    const placeholder = push(match.body, match.display, match.start, match.end);
+    displaySubs.push({
+      p0: out.length,
+      p1: out.length + placeholder.length,
+      o0: match.start,
+      o1: match.end,
+    });
+    out += placeholder;
+    last = match.end;
+  }
+  out += text.slice(last);
+
+  /** Post-display offsets are not the protected ones: map back through them. */
+  const protectedAt = (at: number) => translateOffset(displaySubs, at);
 
   // Inline `$…$` with a hand-written scan so escapes, spacing and pairing are
   // respected. A rejected candidate is consumed WHOLE: emitting only the
@@ -198,7 +279,7 @@ function extractMath(text: string, maths: { body: string; display: boolean }[]):
       const looksLikeMath =
         trimmed.length > 0 && !body.includes("@@") && (tight || paddedMath);
       if (looksLikeMath) {
-        scanned += push(body, false);
+        scanned += push(body, false, protectedAt(i), protectedAt(end + 1));
       } else {
         scanned += out.slice(i, end + 1);
       }
@@ -263,6 +344,260 @@ function assetUrl(raw: string, baseDir: string | null): string {
 }
 
 // ---------------------------------------------------------------------------
+// Word-level source fragments
+// ---------------------------------------------------------------------------
+
+/** A token carrying the offset `marked` does not provide. */
+interface Positioned {
+  srcStart?: number;
+  raw?: string;
+  text?: string;
+  tokens?: unknown;
+  items?: unknown;
+  header?: unknown;
+  rows?: unknown;
+}
+
+interface Piece {
+  start: number;
+  text: string;
+  kind: "raw" | "code" | "math";
+}
+
+/** Split a text run at the placeholders code and math left behind. */
+function splitPieces(raw: string): Piece[] {
+  const pieces: Piece[] = [];
+  let last = 0;
+  for (const match of raw.matchAll(PLACEHOLDER_PIECE)) {
+    if (match.index > last) {
+      pieces.push({ start: last, text: raw.slice(last, match.index), kind: "raw" });
+    }
+    pieces.push({
+      start: match.index,
+      text: match[0],
+      kind: match[1] === "CODE" ? "code" : "math",
+    });
+    last = match.index + match[0].length;
+  }
+  if (last < raw.length) pieces.push({ start: last, text: raw.slice(last), kind: "raw" });
+  return pieces;
+}
+
+/** Insert an attribute into the first opening tag of a name. */
+function injectAttribute(html: string, tag: string, attribute: string): string {
+  const at = html.indexOf(`<${tag}`);
+  if (at < 0) return html;
+  const after = at + tag.length + 1;
+  return `${html.slice(0, after)} ${attribute}${html.slice(after)}`;
+}
+
+/**
+ * Record the prepared offset of every token in the tree.
+ *
+ * `raw` is a literal slice of the text `marked` lexed, so `indexOf` from a
+ * forward cursor is exact and cannot run backwards. A token whose raw cannot be
+ * found — a table cell that was trimmed, a construct the walk does not know —
+ * gets no offset and renders without a fragment, which falls back to the block.
+ */
+function assignOffsets(tokens: Token[], source: string): void {
+  let cursor = 0;
+  for (const token of tokens) {
+    const record = token as unknown as Positioned;
+    const raw = record.raw ?? "";
+    const at = raw ? source.indexOf(raw, cursor) : -1;
+    if (at >= 0) cursor = at + raw.length;
+    record.srcStart = at >= 0 ? at : cursor;
+    assignChildren(record);
+  }
+}
+
+function assignChildren(token: Positioned): void {
+  const base = token.srcStart;
+  if (base === undefined) return;
+  const raw = token.raw ?? "";
+
+  if (Array.isArray(token.items)) {
+    let cursor = 0;
+    for (const item of token.items as Positioned[]) {
+      const itemRaw = item.raw ?? "";
+      const at = itemRaw ? raw.indexOf(itemRaw, cursor) : -1;
+      if (at < 0) {
+        item.srcStart = undefined;
+        continue;
+      }
+      item.srcStart = base + at;
+      cursor = at + itemRaw.length;
+      assignChildren(item);
+    }
+  }
+
+  if (Array.isArray(token.header) || Array.isArray(token.rows)) {
+    const cells: Positioned[] = [
+      ...(Array.isArray(token.header) ? (token.header as Positioned[]) : []),
+      ...(Array.isArray(token.rows) ? (token.rows as Positioned[][]).flat() : []),
+    ];
+    let cursor = 0;
+    for (const cell of cells) {
+      const text = cell.text ?? "";
+      if (!text) continue;
+      const at = raw.indexOf(text, cursor);
+      if (at < 0) continue;
+      cursor = at + text.length;
+      cell.srcStart = base + at;
+      assignChildList(cell.tokens, base + at, text);
+    }
+  }
+
+  assignChildList(token.tokens, base, raw);
+}
+
+function assignChildList(children: unknown, base: number, parentRaw: string): void {
+  if (!Array.isArray(children)) return;
+  let cursor = 0;
+  for (const child of children as Positioned[]) {
+    const raw = child.raw ?? "";
+    const at = raw ? parentRaw.indexOf(raw, cursor) : -1;
+    if (at < 0) {
+      child.srcStart = undefined;
+      continue;
+    }
+    child.srcStart = base + at;
+    cursor = at + raw.length;
+    assignChildren(child);
+  }
+}
+
+/** Pair every placeholder in the prepared text with the range it replaced. */
+function collectSubstitutions(
+  preparedSegments: readonly string[],
+  isCode: readonly boolean[],
+  codes: readonly CodeEntry[],
+  maths: readonly MathEntry[],
+): Substitution[] {
+  const substitutions: Substitution[] = [];
+  const placeholder = /@@(CODE|MATH)(\d+)@@/g;
+  let base = 0;
+
+  for (let i = 0; i < preparedSegments.length; i += 1) {
+    const segment = preparedSegments[i];
+    if (!isCode[i]) {
+      for (const match of segment.matchAll(placeholder)) {
+        const entry = match[1] === "CODE" ? codes[Number(match[2])] : maths[Number(match[2])];
+        if (!entry) continue;
+        substitutions.push({
+          p0: base + match.index,
+          p1: base + match.index + match[0].length,
+          o0: entry.src0,
+          o1: entry.src1,
+        });
+      }
+    }
+    base += segment.length + 1;
+  }
+
+  return substitutions;
+}
+
+/**
+ * Render the prepared markdown with the fragment table.
+ *
+ * One wrapper per text run, never per word: a word is a range inside a run, and
+ * the run is what the DOM needs to map back. Code, formulas, images and fences
+ * are atomic spans, because their rendered text is not their source text.
+ */
+function renderMarked(
+  prepared: string,
+  substitutions: readonly Substitution[],
+): { html: string; fragments: Fragment[] } {
+  const fragments: Fragment[] = [];
+  const sourceOf = (preparedOffset: number) => translateOffset(substitutions, preparedOffset);
+  const push = (fragment: Fragment): number => {
+    fragments.push(fragment);
+    return fragments.length - 1;
+  };
+  const escape = escapeHtml;
+  const fallback = new Renderer();
+
+  const renderer: RendererObject = {
+    text(token) {
+      const positioned = token as unknown as Positioned;
+      const raw = token.raw ?? "";
+      const escaped = "escaped" in token && token.escaped === true;
+      const children = "tokens" in token ? token.tokens : undefined;
+      const body =
+        children && children.length > 0
+          ? this.parser.parseInline(children)
+          : escaped
+            ? token.text
+            : escape(token.text);
+
+      if (positioned.srcStart === undefined || raw.length === 0) return body;
+      // Children carry their own offsets; wrapping the parent would overlap them.
+      if (children && children.length > 0) return body;
+
+      const pieces = splitPieces(raw);
+      if (pieces.length === 1) {
+        const index = push({
+          src0: sourceOf(positioned.srcStart),
+          src1: sourceOf(positioned.srcStart + raw.length),
+          raw,
+          kind: "text",
+        });
+        return `<span data-f="${index}">${body}</span>`;
+      }
+
+      let out = "";
+      for (const piece of pieces) {
+        const src0 = sourceOf(positioned.srcStart + piece.start);
+        const src1 = sourceOf(positioned.srcStart + piece.start + piece.text.length);
+        const index = push({
+          src0,
+          src1,
+          raw: piece.text,
+          kind: piece.kind === "raw" ? "text" : piece.kind,
+        });
+        const html =
+          piece.kind === "raw" ? (escaped ? piece.text : escape(piece.text)) : piece.text;
+        out += `<span data-f="${index}">${html}</span>`;
+      }
+      return out;
+    },
+
+    code(token) {
+      const html = fallback.code(token);
+      const positioned = token as unknown as Positioned;
+      if (positioned.srcStart === undefined) return html;
+      const index = push({
+        src0: sourceOf(positioned.srcStart),
+        src1: sourceOf(positioned.srcStart + (token.raw?.length ?? 0)),
+        raw: "",
+        kind: "pre",
+      });
+      return injectAttribute(html, "pre", `data-f="${index}"`);
+    },
+
+    image(token) {
+      const html = fallback.image(token);
+      const positioned = token as unknown as Positioned;
+      if (positioned.srcStart === undefined) return html;
+      const index = push({
+        src0: sourceOf(positioned.srcStart),
+        src1: sourceOf(positioned.srcStart + (token.raw?.length ?? 0)),
+        raw: "",
+        kind: "image",
+      });
+      return injectAttribute(html, "img", `data-f="${index}"`);
+    },
+  };
+
+  const instance = new Marked({ gfm: true, breaks: false, pedantic: false });
+  instance.use({ renderer });
+  const tokens = instance.lexer(prepared);
+  assignOffsets(tokens, prepared);
+  return { html: instance.parser(tokens) as string, fragments };
+}
+
+// ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
 
@@ -276,27 +611,45 @@ export interface RenderResult {
   linesMapped: boolean;
   /** Number of anchored blocks. */
   anchors: number;
+  /** Word-level source fragments, present only when `map` was requested. */
+  fragments?: Fragment[];
 }
 
 export function renderPreview(source: string, options: RenderOptions): RenderResult {
   const mathEnabled = options.math ?? true;
   const mermaidEnabled = options.mermaid ?? true;
 
-  const codes: string[] = [];
-  const maths: { body: string; display: boolean }[] = [];
+  const codes: CodeEntry[] = [];
+  const maths: MathEntry[] = [];
+  const segments = splitFences(source);
+  const preparedSegments: string[] = [];
+  const isCode: boolean[] = [];
+  let base = 0;
 
-  const prepared = splitFences(source)
-    .map((segment) => {
-      if (segment.code) return segment.text;
-      const protectedCode = protectInlineCode(segment.text, codes);
-      return mathEnabled ? extractMath(protectedCode, maths) : protectedCode;
-    })
-    .join("\n");
+  for (const segment of segments) {
+    isCode.push(segment.code);
+    if (segment.code) {
+      preparedSegments.push(segment.text);
+    } else {
+      const protectedCode = protectInlineCode(segment.text, codes, base);
+      preparedSegments.push(
+        mathEnabled
+          ? extractMath(protectedCode.text, maths, protectedCode.subs, base)
+          : protectedCode.text,
+      );
+    }
+    // Segments are rejoined with a newline, so the next one starts one past.
+    base += segment.text.length + 1;
+  }
 
-  const rawHtml = marked.parse(prepared, { async: false }) as string;
+  const prepared = preparedSegments.join("\n");
+  const mapped = options.map
+    ? renderMarked(prepared, collectSubstitutions(preparedSegments, isCode, codes, maths))
+    : null;
+  const rawHtml = mapped ? mapped.html : (marked.parse(prepared, { async: false }) as string);
 
   const clean = DOMPurify.sanitize(rawHtml, {
-    ADD_ATTR: ["align", "data-mermaid", "data-href", "id", "colspan", "rowspan", "type", "checked", "disabled"],
+    ADD_ATTR: ["align", "data-f", "data-mermaid", "data-href", "id", "colspan", "rowspan", "type", "checked", "disabled"],
     // `input` has to survive sanitising so GFM task lists keep their checkbox;
     // normalizeInputs() then strips every input that is not a disabled checkbox.
     FORBID_TAGS: ["script", "iframe", "object", "embed", "form", "textarea", "select", "button", "base"],
@@ -317,7 +670,12 @@ export function renderPreview(source: string, options: RenderOptions): RenderRes
   // Last, once the element set is final: tie every block back to its source line.
   const mapping = annotatePreviewLines(host, source);
 
-  return { html: host.innerHTML, linesMapped: mapping.complete, anchors: mapping.count };
+  return {
+    html: host.innerHTML,
+    linesMapped: mapping.complete,
+    anchors: mapping.count,
+    fragments: mapped?.fragments,
+  };
 }
 
 /** Tokens that render no element, so they cannot be zipped with the DOM. */
@@ -432,8 +790,8 @@ function normalizeInputs(host: HTMLElement): void {
 
 function restorePlaceholders(
   host: HTMLElement,
-  codes: string[],
-  maths: { body: string; display: boolean }[],
+  codes: readonly CodeEntry[],
+  maths: readonly MathEntry[],
 ): void {
   const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
   const targets: Text[] = [];
@@ -460,7 +818,7 @@ function restorePlaceholders(
       const index = Number(indexRaw);
       if (kind === "CODE") {
         const code = document.createElement("code");
-        code.textContent = codes[index] ?? "";
+        code.textContent = codes[index]?.text ?? "";
         fragment.appendChild(code);
       } else {
         fragment.appendChild(mathNode(maths[index]));
@@ -474,7 +832,7 @@ function restorePlaceholders(
   }
 }
 
-function mathNode(entry: { body: string; display: boolean } | undefined): Node {
+export function mathNode(entry: { body: string; display: boolean } | undefined): Node {
   const span = document.createElement("span");
   span.className = entry?.display ? "math-display" : "math-inline";
   if (!entry) {

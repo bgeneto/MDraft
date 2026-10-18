@@ -2,7 +2,7 @@
 //
 //   node scripts/licence-test.mjs [port]
 //
-// The five families are under the SIL Open Font License 1.1, which requires the
+// The thirteen families are under the SIL Open Font License 1.1, which requires the
 // copyright notice and the licence text to accompany the fonts wherever they are
 // redistributed. Keeping the texts in the repository does not satisfy that: Vite
 // bundles only what is imported, so for a while every installer shipped the
@@ -84,18 +84,44 @@ if (state.clicked) {
     const text = document.body.innerText;
     return JSON.stringify({
       ofl: text.includes('SIL OPEN FONT LICENSE'),
-      serif: text.includes('Source Serif'),
-      sans: text.includes('Source Sans'),
-      inter: text.includes('The Inter Project Authors'),
+      serif: text.includes('2014 - 2023 Adobe'),
+      sans: text.includes('2010-2022 Adobe'),
       jetbrains: text.includes('JetBrains Mono Project Authors'),
       fira: text.includes('Fira Code Project Authors'),
+      eb: text.includes('EB Garamond Project Authors'),
+      ibm: text.includes('IBM Corp.'),
+      bodoni: text.includes('Bodoni Moda Project Authors'),
+      archivo: text.includes('Archivo Project Authors'),
+      jost: text.includes('Jost Project Authors'),
+      azeret: text.includes('Azeret Project Authors'),
+      alegreya: text.includes('Alegreya Project Authors'),
+      caveat: text.includes('Caveat Project Authors'),
+      victor: text.includes('Rune Bjørnerås'),
       length: text.length,
     });
   })()`);
   const seen = JSON.parse(found);
   check("the licence text itself is present", seen.ofl, `document is ${seen.length} chars`);
-  check("each bundled family is attributed", seen.serif && seen.sans && seen.inter && seen.jetbrains && seen.fira,
-    `serif=${seen.serif} sans=${seen.sans} inter=${seen.inter} jetbrains=${seen.jetbrains} fira=${seen.fira}`);
+  check(
+    "each bundled family is attributed",
+    seen.serif &&
+      seen.sans &&
+      seen.jetbrains &&
+      seen.fira &&
+      seen.eb &&
+      seen.ibm &&
+      seen.bodoni &&
+      seen.archivo &&
+      seen.jost &&
+      seen.azeret &&
+      seen.alegreya &&
+      seen.caveat &&
+      seen.victor,
+    Object.entries(seen)
+      .filter(([key]) => key !== "length")
+      .map(([key, value]) => `${key}=${value}`)
+      .join(" "),
+  );
 }
 
 console.log("\n=== the Help menu reaches the same document ===");

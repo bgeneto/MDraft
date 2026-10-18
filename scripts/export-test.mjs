@@ -459,11 +459,26 @@ if (pdfButton === "clicked") {
     // A system stack names no bundled family, so there is no file to embed and
     // the reader's own machine supplies the face. That is the correct outcome
     // for the default preset, not a missing asset.
+    const bundledNames = [
+      "Source Serif 4",
+      "Source Sans 3",
+      "JetBrains Mono",
+      "Fira Code",
+      "EB Garamond",
+      "IBM Plex Mono",
+      "Bodoni Moda",
+      "Archivo",
+      "Jost",
+      "Azeret Mono",
+      "Alegreya",
+      "Caveat",
+      "Victor Mono",
+    ];
+    const first = (stack) => stack.split(",")[0].replace(/["']/g, "").trim();
     const stacks = [...html.matchAll(/--font-(?:source|body|heading|code):([^;}]+)/g)]
-      .map((m) => m[1])
-      .join(" ");
-    const bundledStack =
-      /Source Serif 4|Source Sans 3|Inter|JetBrains Mono|Fira Code/.test(stacks);
+      .map((m) => first(m[1]));
+    const winners = [...new Set(stacks.filter((name) => bundledNames.includes(name)))];
+    const bundledStack = winners.length > 0;
     check(
       bundledStack ? faces.length > 0 : faces.length === 0,
       bundledStack
@@ -480,11 +495,13 @@ if (pdfButton === "clicked") {
       "the print document needs no font file from the network or the app",
     );
     // A fallback in a stack can never be used once the family ahead of it is
-    // embedded, and carrying it costs hundreds of kilobytes per export.
+    // embedded, and carrying it costs hundreds of kilobytes per export. The
+    // check is generic: every embedded family must be the first family of one
+    // of the four role stacks.
     check(
-      !faces.includes("Inter"),
-      "a face that only appears as a fallback is not embedded",
-      faces.includes("Inter") ? "Inter was embedded although Source Sans 3 wins the stack" : "correctly omitted",
+      [...new Set(faces)].every((face) => winners.includes(face)),
+      "only a family that wins its stack is embedded",
+      `winners ${winners.join(", ") || "none"}; faces ${[...new Set(faces)].join(", ") || "none"}`,
     );
     check(
       /--font-body:/.test(html) && /--font-heading:/.test(html),

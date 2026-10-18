@@ -41,8 +41,11 @@ attributes such as `lines`, `tag` and `leveloffset` are not applied, and the
 included file is read again on every preview pass: a document that includes a
 large book pays for it on each edit pause.
 
-AsciiMath (`stem:[…]` under the default `:stem:`) is left as text. `.asc` and
-`.ad` are not recognised as AsciiDoc.
+AsciiMath is supported: `[asciimath]`, `asciimath:[…]` and `stem:[…]` under
+`:stem: asciimath` are converted to TeX and drawn with KaTeX. A document that
+declares `:stem: latexmath` is still LaTeX, so `sqrt(4)` there is four
+variables, not a radical. **Help › AsciiDoc Reference** opens a live cheat
+sheet of the syntax above. `.asc` and `.ad` are not recognised as AsciiDoc.
 
 ## Typst
 
@@ -98,6 +101,18 @@ Documents open in tabs. Each tab keeps its text, caret, scroll position and
 undo history while another tab is in front. The tab list itself is not saved
 when the window closes.
 
+When more tabs are open than fit, the strip scrolls horizontally: the arrow
+buttons at its right edge move it, a vertical wheel over the strip does the
+same, and the active tab is always scrolled back into view. Tabs can be dragged
+to a new position (or moved one place with `Alt+Shift+Left` / `Alt+Shift+Right`
+while a tab has focus). Right-click a tab for **Close**, **Close Others**,
+**Close All to the Left**, **Close All to the Right**, **Close Unchanged**,
+**Save**, **Save As…** and **Reveal in File Manager**; right-click the empty
+part of the strip for **New Tab**, **Close All Tabs** and **Close Unchanged**.
+Double-clicking the empty part starts a new tab. The active tab's name is shown
+in Semibold and carries an accent edge. **File › Close All Tabs** closes the
+whole strip, with the usual save prompt for each dirty tab.
+
 The view can be **Source**, **Split** or **Preview**; Split is the default.
 In Split view:
 
@@ -105,6 +120,11 @@ In Split view:
 - clicking in the source blinks the matching preview block without scrolling
   the preview;
 - clicking in the preview moves the source caret without scrolling the source;
+- selecting a word or a range in either pane paints the corresponding text in
+  the other, without taking the selection or scrolling; Escape clears it. This
+  covers Markdown and AsciiDoc. A paragraph whose text comes from an attribute
+  substitution, or from an included file, is left alone rather than guessed at,
+  and Typst and HTML documents have no word-level sync;
 - keyboard movement may reveal the caret's block when it has left the pane.
 
 The sidebar holds the document outline, a folder browser and recent files.
@@ -195,6 +215,8 @@ built from source, use `Cmd` where the application registers `CmdOrCtrl`.
 | Save As | `Ctrl+Shift+S` |
 | Close tab | `Ctrl+W` |
 | Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
+| Move focused tab left / right | `Alt+Shift+Left` / `Alt+Shift+Right` |
+| Tab context menu | `Shift+F10` (or the Menu key) |
 | Preferences | `Ctrl+,` |
 | Find / Find and Replace | `Ctrl+F` / `Ctrl+H` |
 | Source code mode | `Ctrl+/` |

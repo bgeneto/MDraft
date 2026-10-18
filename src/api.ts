@@ -110,8 +110,9 @@ export interface AfterExportOutcome {
   afterErrors: string[];
 }
 
-/** Sizes remembered for one typography preset. Either field may be absent. */
+/** Sizes remembered for one typography preset. Any field may be absent. */
 export interface PresetOverride {
+  editorFontSize?: number;
   bodyFontSize?: number;
   mathFontScale?: number;
 }
@@ -152,9 +153,9 @@ export interface Settings {
   /**
    * Sizes remembered per preset id.
    *
-   * Preview text size and Math scale are reader adjustments, not part of what
-   * identifies a preset. The top-level fields remain the active values; this
-   * map is consulted when a preset is chosen.
+   * Editor font size, Preview font size and Math scale are reader adjustments,
+   * not part of what identifies a preset. The top-level fields remain the
+   * active values; this map is consulted when a preset is chosen.
    */
   presetOverrides: Record<string, PresetOverride>;
   /** Programming ligatures in code, both panes. Off by default: `->` is a choice. */

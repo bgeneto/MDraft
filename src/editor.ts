@@ -5,6 +5,8 @@ import {
   Compartment,
   EditorState,
   RangeSetBuilder,
+  StateEffect,
+  StateField,
   type Extension,
   type Text,
 } from "@codemirror/state";
@@ -53,6 +55,9 @@ import { resetSpellLanguage, spellExtension, type SpellOptions } from "./spellch
 export interface CursorInfo {
   line: number;
   column: number;
+  /** Absolute document offsets of the selection, used by word-level sync. */
+  from: number;
+  to: number;
   selectionLength: number;
   selectionLines: number;
 }
@@ -109,6 +114,8 @@ export interface EditorHandle {
   scrollToLine(line: number): void;
   /** Scroll `line` to the top of the editor; optionally move the caret. */
   revealLine(line: number, moveCaret?: boolean, focus?: boolean): void;
+  /** Scroll a source position into view with the least movement; never moves the caret. */
+  revealOffset(pos: number): void;
   /** Source line currently at the top of the visible editor area. */
   topVisibleLine(): number;
   /** Content offset of the top of `line`, in pixels. */
@@ -118,6 +125,10 @@ export interface EditorHandle {
   /** Largest vertical scroll offset the source pane can reach. */
   scrollMax(): number;
   cursorInfo(): CursorInfo;
+  /** Paint the source range that corresponds to a preview selection. */
+  setSyncRange(from: number, to: number): void;
+  /** Remove that decoration, leaving the caret and the selection alone. */
+  clearSyncRange(): void;
   setHeading(level: number): void;
   shiftHeading(delta: number): void;
   /** The AsciiDoc heading commands; `=` is the title, `==` the first section. */
@@ -151,6 +162,39 @@ export interface EditorHandle {
 }
 
 const dimLine = Decoration.line({ class: "cm-dim-line" });
+
+/**
+ * The preview selection, mirrored into the source.
+ *
+ * This is a decoration and never the selection: taking the selection would make
+ * the next keystroke replace text the reader only pointed at. It lives in the
+ * state so it maps like any other decoration, and it is cleared on every document
+ * change and whenever a tab is restored — an `EditorState` is captured per tab,
+ * so a decoration that survived capture would come back in the wrong document.
+ */
+const syncRangeEffect = StateEffect.define<{ from: number; to: number } | null>();
+
+const syncMark = Decoration.mark({ class: "cm-sync-word" });
+
+const syncRangeField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, transaction) {
+    let next = value.map(transaction.changes);
+    let explicit = false;
+    for (const effect of transaction.effects) {
+      if (!effect.is(syncRangeEffect)) continue;
+      explicit = true;
+      const range = effect.value;
+      next =
+        range && range.to > range.from
+          ? Decoration.set([syncMark.range(range.from, range.to)])
+          : Decoration.none;
+    }
+    if (transaction.docChanged && !explicit) return Decoration.none;
+    return next;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
 
 function countWordsInLine(text: string): number {
   const trimmed = text.trim();
@@ -353,6 +397,7 @@ const markdownSupport = markdown({
     crosshairCursor(),
     highlightActiveLine(),
     highlightSelectionMatches(),
+    syncRangeField,
     search({ top: true }),
     EditorView.lineWrapping,
     languageCompartment.of(markdownSupport),
@@ -400,6 +445,8 @@ const markdownSupport = markdown({
     return {
       line: line.number,
       column: range.head - line.from + 1,
+      from: range.from,
+      to: range.to,
       selectionLength: range.to - range.from,
       selectionLines:
         target.state.doc.lineAt(range.to).number - line.number + 1,
@@ -556,6 +603,9 @@ const markdownSupport = markdown({
       // them. Discard it here; displayDoc installs the session's own grammar
       // afterwards, which parses the document that is actually on screen.
       view.dispatch({ effects: languageCompartment.reconfigure([]) });
+      // `setState` does not run field updates, so the restored state can still
+      // carry the previous tab's preview highlight.
+      view.dispatch({ effects: syncRangeEffect.of(null) });
       rebuildWordCache(view.state.doc);
       const applyScroll = () => {
         view.scrollDOM.scrollTop = scrollTop;
@@ -639,6 +689,13 @@ const markdownSupport = markdown({
       if (focus) view.focus();
     },
 
+    revealOffset(pos) {
+      const target = Math.max(0, Math.min(pos, view.state.doc.length));
+      // "nearest" moves only when the position is outside the viewport, which is
+      // the reveal-not-follow rule the block sync already follows.
+      view.dispatch({ effects: EditorView.scrollIntoView(target, { y: "nearest", yMargin: 80 }) });
+    },
+
     topVisibleLine() {
       const block = view.lineBlockAtHeight(view.scrollDOM.scrollTop);
       return view.state.doc.lineAt(block.from).number;
@@ -659,6 +716,24 @@ const markdownSupport = markdown({
 
     cursorInfo() {
       return readCursor(view);
+    },
+
+    setSyncRange(from, to) {
+      // The range belongs to the other pane. A focused editor writes its own
+      // selection back into the DOM on its next update, which collapses the
+      // preview selection the reader just made — measured at about 100 ms. A
+      // real mousedown in the preview blurs the editor anyway; do the same for a
+      // selection that arrives by script or by keyboard.
+      if (view.hasFocus) view.contentDOM.blur();
+      const max = view.state.doc.length;
+      const start = Math.max(0, Math.min(from, max));
+      const end = Math.max(start, Math.min(to, max));
+      view.dispatch({ effects: syncRangeEffect.of(end > start ? { from: start, to: end } : null) });
+    },
+
+    clearSyncRange() {
+      if (view.state.field(syncRangeField).size === 0) return;
+      view.dispatch({ effects: syncRangeEffect.of(null) });
     },
 
     setHeading(level) {

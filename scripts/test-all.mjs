@@ -96,6 +96,14 @@ const SUITES = [
     doc: "samples/feature-tour.md",
   },
   {
+    id: "word-sync",
+    title: "Word-level sync",
+    kind: "cdp",
+    script: "word-sync-test.mjs",
+    doc: "samples/word-sync.md",
+    writesDoc: true,
+  },
+  {
     id: "paste",
     title: "Rich paste",
     kind: "cdp",

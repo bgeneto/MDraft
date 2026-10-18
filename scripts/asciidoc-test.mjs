@@ -130,6 +130,15 @@ await sleep(1200);
       include: (root.textContent ?? "").includes("Included Chapter"),
       image: image ? { src: image.getAttribute("src"), width: image.naturalWidth } : null,
       fraction: fraction ? fraction.getBoundingClientRect().width : 0,
+      asciimathInline: root.querySelector(".math-inline .sqrt")?.getBoundingClientRect().width ?? 0,
+      asciimathBlock: root.querySelector(".math-display .sqrt")?.getBoundingClientRect().width ?? 0,
+      asciimathMatrix: (() => {
+        const table = root.querySelector(".math-display .mtable");
+        if (!table) return null;
+        const box = table.getBoundingClientRect();
+        return { width: box.width, height: box.height };
+      })(),
+      asciimathLiteral: (root.textContent ?? "").includes(String.fromCharCode(92) + "$"),
       admonitionDisplay: admonition ? getComputedStyle(admonition).display : "",
       error: root.querySelector(".asciidoc-error")?.textContent ?? "",
     });
@@ -147,6 +156,20 @@ await sleep(1200);
   check(preview.include, "the include is inlined");
   check(preview.image !== null && preview.image.width > 0, "the local image loads", JSON.stringify(preview.image));
   check(preview.fraction > 0, "the latexmath fraction bar has width", String(preview.fraction));
+  check(preview.asciimathInline > 0, "inline AsciiMath renders a radical", String(preview.asciimathInline));
+  check(preview.asciimathBlock > 0, "an AsciiMath block renders a radical", String(preview.asciimathBlock));
+  check(
+    preview.asciimathMatrix !== null &&
+      preview.asciimathMatrix.width > 0 &&
+      preview.asciimathMatrix.height > 0,
+    "an AsciiMath matrix renders as a table",
+    JSON.stringify(preview.asciimathMatrix),
+  );
+  check(
+    preview.asciimathLiteral === false,
+    "AsciiMath delimiters do not remain in the preview",
+    String(preview.asciimathLiteral),
+  );
   check(preview.admonitionDisplay === "table", "the admonition table is reset to display:table", preview.admonitionDisplay);
   check(preview.error === "", "the conversion has no error", preview.error);
 }
@@ -333,6 +356,152 @@ console.log("\n=== the Files panel ===");
   await sleep(700);
   const listed = await evaluate(`[...document.querySelectorAll(".sidebar-body .entry")].some((entry) => (entry.title || "").endsWith("asciidoc-tour.adoc"))`);
   check(listed, "the Files panel offers the .adoc document");
+}
+
+console.log("\n=== the AsciiDoc reference ===");
+{
+  const emitted = await evaluate(`(async () => {
+    try {
+      await window.__TAURI_INTERNALS__.invoke("plugin:event|emit", { event: "menu", payload: "help.asciidocReference" });
+      return "ok";
+    } catch (error) {
+      return String(error);
+    }
+  })()`);
+  await sleep(1500);
+  const reference = await evaluate(`(() => {
+    const root = document.querySelector("#preview");
+    return JSON.stringify({
+      h1: root.querySelector("h1")?.textContent ?? "",
+      admonitions: root.querySelectorAll(".admonitionblock").length,
+      tables: root.querySelectorAll("table").length,
+      stems: root.querySelectorAll(".stemblock").length,
+      toc: root.querySelectorAll("#toc").length,
+      mermaid: root.querySelectorAll(".mermaid").length,
+    });
+  })()`);
+  check(
+    emitted === "ok" && reference.h1 === "AsciiDoc Reference",
+    "Help opens the AsciiDoc reference",
+    `${emitted} / ${reference.h1}`,
+  );
+  check(
+    reference.admonitions >= 5 && reference.tables >= 2,
+    "the reference renders admonitions and a table",
+    JSON.stringify(reference),
+  );
+  check(
+    reference.stems >= 3,
+    "the reference renders LaTeX, AsciiMath and a numbered equation",
+    String(reference.stems),
+  );
+  check(
+    reference.toc >= 1 && reference.mermaid >= 1,
+    "the reference renders a table of contents and a diagram",
+    JSON.stringify(reference),
+  );
+  await openTab("asciidoc-tour.adoc");
+}
+
+console.log("\n=== word-level sync ===");
+{
+  // The Word sync section is at the end of the fixture. CodeMirror renders only
+  // the visible lines, so the source pane must be scrolled there before a
+  // decoration can exist in the DOM.
+  await evaluate(`document.querySelector('.cm-scroller').scrollTop = 999999`);
+  await sleep(350);
+
+  const blocks = await evaluate(`document.querySelectorAll("#preview [data-b]").length`);
+  check(blocks >= 20, "the render emits block ranges", `${blocks} blocks`);
+
+  const selectWord = async (word) =>
+    evaluate(`(() => {
+      const walker = document.createTreeWalker(document.getElementById("preview"), NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const at = node.data.indexOf(${JSON.stringify(word)});
+        if (at < 0) continue;
+        if (!node.parentElement?.closest("[data-b]")) continue;
+        const range = document.createRange();
+        range.setStart(node, at);
+        range.setEnd(node, at + ${JSON.stringify(word)}.length);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        return selection.toString();
+      }
+      return null;
+    })()`);
+
+  const painted = () =>
+    evaluate(`(() => {
+      const marks = [...document.querySelectorAll(".cm-sync-word")];
+      return marks.length === 0 ? null : marks.map((mark) => mark.textContent).join("\\n");
+    })()`);
+
+  for (const [word, label] of [
+    ["atravessa", "a word on a hard-wrapped line"],
+    ["Planalto", "link text"],
+    ["Analista", "a table cell"],
+  ]) {
+    const selected = await selectWord(word);
+    await sleep(160);
+    const result = await painted();
+    check(selected === word && result === word, label, `${selected} -> ${result}`);
+  }
+
+  await selectWord("substituído");
+  await sleep(160);
+  check((await painted()) === null, "an attribute substitution paints nothing", String(await painted()));
+
+  const includeAnchored = await evaluate(`(() => {
+    const walker = document.createTreeWalker(document.getElementById("preview"), NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.data.includes("Included Chapter")) continue;
+      return Boolean(node.parentElement?.closest("[data-b]"));
+    }
+    return null;
+  })()`);
+  check(includeAnchored === false, "included content has no block range", String(includeAnchored));
+
+  // Source -> preview, from the top where the first lines are visible.
+  await evaluate(`document.querySelector('.cm-scroller').scrollTop = 0`);
+  await sleep(300);
+  const beforePreview = await evaluate(`document.getElementById("preview-pane").scrollTop`);
+  const point = await evaluate(`(() => {
+    const walker = document.createTreeWalker(document.querySelector(".cm-content"), NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const at = node.data.indexOf("AsciiDoc");
+      if (at < 0) continue;
+      const range = document.createRange();
+      range.setStart(node, at);
+      range.setEnd(node, at + 8);
+      const box = range.getBoundingClientRect();
+      if (box.width === 0) continue;
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    }
+    return null;
+  })()`);
+  if (point) {
+    for (const clickCount of [1, 2]) {
+      await send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount });
+      await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount });
+    }
+    await sleep(260);
+    const ranges = await evaluate(`(() => {
+      const highlight = CSS.highlights?.get("mdraft-sync");
+      return highlight ? [...highlight].map((range) => range.toString()) : null;
+    })()`);
+    const afterPreview = await evaluate(`document.getElementById("preview-pane").scrollTop`);
+    check(
+      Array.isArray(ranges) && ranges.join(" ").includes("AsciiDoc"),
+      "a source word paints the preview",
+      JSON.stringify(ranges),
+    );
+    check(beforePreview === afterPreview, "painting the preview does not scroll it", `${beforePreview} -> ${afterPreview}`);
+  } else {
+    check(false, "a source word paints the preview", "the title word is not on screen");
+    check(false, "painting the preview does not scroll it", "the title word is not on screen");
+  }
 }
 
 try {

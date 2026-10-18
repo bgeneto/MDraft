@@ -1,24 +1,33 @@
 //! The bundled typefaces, and the roles the editor and preview use them in.
 //!
-//! Four families are compiled into the application under the SIL Open Font
+//! Thirteen families are compiled into the application under the SIL Open Font
 //! License, so the typography does not depend on what the reader happens to have
-//! installed. `scripts/fetch-fonts.ps1` downloads them, verifies each archive
-//! against a pinned SHA-256 and writes `assets/fonts/fonts.json`; the files
-//! themselves are committed, so an ordinary build needs neither that script nor
-//! a network connection.
+//! installed. `scripts/fetch-fonts.ps1` downloads the pins in
+//! `scripts/font-sources.json`, subsets the variable text faces with
+//! `scripts/subset-fonts.py`, and writes `assets/fonts/fonts.json`; the files
+//! themselves are committed, so an ordinary build needs neither Python nor a
+//! network connection.
 //!
-//! Why these four, given that mathematics is fixed to KaTeX's Computer Modern:
+//! The presets are complete systems rather than one family swapped in:
 //!
-//!  * **Source Serif 4** for prose. A screen-first serif with a real optical
-//!    size axis, true italics and moderate contrast, which is what sits
-//!    comfortably beside a Didone like Computer Modern.
-//!  * **Source Sans 3** for headings. Designed by Adobe as Source Serif's
-//!    companion, so the two share a skeleton — the safe typographic pairing is a
-//!    superfamily rather than two unrelated faces.
-//!  * **Inter** as the alternative sans. More display presence, and an unusually
-//!    complete set of OpenType alternates.
-//!  * **JetBrains Mono** for code. Drawn with programming ligatures as a
-//!    headline feature, which is what makes the ligature switch worth having.
+//!  * **Source Serif 4 / Source Sans 3** for the neutral Serif preset, a
+//!    superfamily drawn to one skeleton, with Fira Code in the editor and code.
+//!  * **EB Garamond / IBM Plex Mono** for Renaissance. Both are humanist and
+//!    low-contrast; Garamond's serif headings keep the page in one voice, and
+//!    Plex's larger x-height is the concession code needs.
+//!  * **Bodoni Moda / Archivo / JetBrains Mono** for Editorial. Didone hairlines
+//!    under a grotesque heading; JetBrains is the already-bundled grotesque code
+//!    face, with ligatures and a slashed zero.
+//!  * **Jost / Azeret Mono** for Bauhaus. Geometric prose and headings over a
+//!    geometric code face; there is no serif anywhere in the preset.
+//!  * **Alegreya / Caveat / Victor Mono** for Notebook. A calligraphic serif, a
+//!    handwriting heading and a narrow mono whose italic is cursive.
+//!
+//! Why EB Garamond rather than Cormorant: the latter is a display cut and too
+//! light at 16–18 px. Why Bodoni Moda rather than Libre Bodoni: the optical-size
+//! axis picks the text cut at the size in use. Why Jost rather than Poppins:
+//! Poppins has no italic and one width. Why Alegreya rather than Lora: Lora's
+//! OFL reserves the name, so a subset would have to be renamed.
 
 import catalogue from "./assets/fonts/fonts.json";
 
@@ -37,8 +46,10 @@ export interface BundledFamily {
   source: string;
   licence: string;
   licenceFile: string;
-  archive: string;
-  archiveSha256: string;
+  /** Present for release-archive families; the Google and woff2 families have
+   * their source pins in scripts/font-sources.json instead. */
+  archive?: string;
+  archiveSha256?: string;
   files: BundledFace[];
 }
 
@@ -65,9 +76,9 @@ function urlOf(file: string): string | null {
  *
  * Only the *first* bundled family in each stack counts. A stack is a fallback
  * chain, so anything after the winner can never be used — and embedding it would
- * be pure weight: the default heading stack ends `"Source Sans 3", Inter, …`,
- * and carrying Inter as well added nearly a megabyte of base64 to every export
- * for a face that cannot render.
+ * be pure weight: the Renaissance code stack ends `"IBM Plex Mono", "JetBrains
+ * Mono", …`, and carrying JetBrains as well would add its files for a face that
+ * cannot render.
  */
 export function familiesIn(stacks: string[]): BundledFamily[] {
   const winners = new Set<string>();
@@ -154,7 +165,7 @@ export interface TypographyRole {
 export const TYPOGRAPHY_ROLES: TypographyRole[] = [
   {
     id: "sourceFont",
-    label: "Editor",
+    label: "Source Editor",
     help: "The source pane. Monospaced by default, but any family will work.",
     variable: "--font-source",
     // The system monospace, which is what the default "System" preset asks for.
@@ -175,7 +186,7 @@ export const TYPOGRAPHY_ROLES: TypographyRole[] = [
   {
     id: "headingFont",
     label: "Preview headings",
-    help: "Headings in the preview and in exports. A sans beside a serif body is the usual pairing.",
+    help: "Headings in the preview and in exports. A sans beside a serif body is the usual pairing; some presets keep the serif in the headings.",
     variable: "--font-heading",
     fallback: 'system-ui, "Segoe UI", -apple-system, Roboto, sans-serif',
   },
@@ -201,8 +212,7 @@ export const FONT_SUGGESTIONS: string[] = [
   ...BUNDLED_FAMILIES.map((family) => family.name),
   "Cascadia Code",
   "Consolas",
-  "Fira Code",
-  "IBM Plex Mono",
+  "Inter",
   "SF Mono",
   "Menlo",
   "Georgia",
@@ -217,7 +227,7 @@ export const FONT_SUGGESTIONS: string[] = [
   "Arial",
   "Helvetica Neue",
   "Verdana",
-];
+].filter((name, index, all) => all.indexOf(name) === index);
 
 // ---------------------------------------------------------------------------
 // Presets
@@ -236,13 +246,15 @@ const ROLE_DEFAULTS: Record<string, string> = Object.fromEntries(
 );
 
 /**
- * The application defaults for the two per-preset reader adjustments.
+ * The application defaults for the three per-preset reader adjustments.
  *
- * These mirror `default_body_font_size()` and `default_math_font_scale()` in
- * `src-tauri/src/settings.rs`. They are deliberately *not* part of a preset:
- * Preview text size and Math scale are remembered per preset in
- * `Settings::preset_overrides`, so an unadjusted preset starts here.
+ * These mirror the defaults in `src-tauri/src/settings.rs`. They are
+ * deliberately *not* part of a preset's identity (`values`): Editor font size,
+ * Preview font size and Math scale are remembered per preset in
+ * `Settings::preset_overrides`, so an unadjusted preset starts at its own
+ * `defaults` (or here when omitted).
  */
+export const DEFAULT_EDITOR_FONT_SIZE = 16;
 export const DEFAULT_BODY_FONT_SIZE = 16;
 export const DEFAULT_MATH_SCALE = 100;
 
@@ -252,9 +264,19 @@ export interface TypographyPreset {
   /** What the preset is for, shown under the picker. */
   note: string;
   /**
+   * Starting sizes for this preset before the reader adjusts them.
+   * Absent fields fall back to the application defaults (16 px / 16 px / 100%).
+   */
+  defaults?: {
+    editorFontSize?: number;
+    bodyFontSize?: number;
+    mathFontScale?: number;
+  };
+  /**
    * What identifies the preset: the four font stacks and the OpenType
-   * booleans. Preview text size and Math scale are reader adjustments and are
-   * stored separately, so editing one does not change the active preset.
+   * booleans. Editor font size, Preview font size and Math scale are reader
+   * adjustments and are stored separately, so editing one does not change the
+   * active preset.
    */
   values: Record<string, string | boolean>;
 }
@@ -271,8 +293,9 @@ export interface TypographyPreset {
  * first because that is the default: the application should not depend on a face
  * the reader's machine may not own until the reader asks for one.
  *
- * Fira Code is the editor and preview-code face of the Serif preset only. Every
- * other preset names JetBrains Mono, or the system monospace for System, so the
+ * Fira Code is the editor and preview-code face of the Serif preset only.
+ * JetBrains Mono, which Classic, Literary and Technical used to share, now
+ * belongs to Editorial alone; the other new presets name their own mono, so the
  * ligature-drawing face is a deliberate choice rather than an inherited default.
  */
 export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
@@ -292,6 +315,10 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
     id: "superfamily",
     label: "Serif",
     note: "Source Serif 4 and Source Sans 3, drawn to the same skeleton, with Fira Code in the editor and in preview code. The two Source faces were designed together, so the pairing cannot clash.",
+    defaults: {
+      bodyFontSize: 18,
+      mathFontScale: 80,
+    },
     values: {
       ...ROLE_DEFAULTS,
       sourceFont: '"Fira Code", "JetBrains Mono", ui-monospace, monospace',
@@ -300,56 +327,93 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
       codeFont: '"Fira Code", "JetBrains Mono", ui-monospace, monospace',
       ligaturesInCode: true,
       tabularFigures: true,
-      oldstyleFigures: false,
+      oldstyleFigures: true,
       slashedZero: true,
     },
   },
   {
-    id: "classic",
-    label: "Classic",
-    note: "The original MDraft pairing: Source Serif 4 under Source Sans 3, with JetBrains Mono in the editor and in preview code, and code ligatures off.",
-    values: {
-      ...ROLE_DEFAULTS,
-      sourceFont: '"JetBrains Mono", ui-monospace, monospace',
-      bodyFont: '"Source Serif 4", Charter, Georgia, "Times New Roman", serif',
-      headingFont: '"Source Sans 3", Inter, system-ui, "Segoe UI", Arial, sans-serif',
-      codeFont: '"JetBrains Mono", ui-monospace, monospace',
-      ligaturesInCode: false,
-      tabularFigures: true,
-      oldstyleFigures: false,
-      slashedZero: false,
+    id: "renaissance",
+    label: "Renaissance",
+    note: "Garamond's 16th-century old style: low contrast, a small x-height, serif headings and oldstyle figures. IBM Plex Mono sets the editor and code.",
+    defaults: {
+      bodyFontSize: 18,
+      mathFontScale: 90,
     },
-  },
-  {
-    id: "literary",
-    label: "Literary",
-    note: "Source Serif 4 with oldstyle figures and code ligatures on — figures that sit in running text rather than shout. JetBrains Mono sets the code.",
     values: {
       ...ROLE_DEFAULTS,
-      sourceFont: '"JetBrains Mono", ui-monospace, monospace',
-      bodyFont: '"Source Serif 4", Charter, Georgia, "Times New Roman", serif',
-      headingFont: '"Source Sans 3", Inter, system-ui, "Segoe UI", Arial, sans-serif',
-      codeFont: '"JetBrains Mono", ui-monospace, monospace',
-      ligaturesInCode: true,
+      sourceFont: '"IBM Plex Mono", "JetBrains Mono", ui-monospace, monospace',
+      bodyFont: '"EB Garamond", "Source Serif 4", Georgia, "Times New Roman", serif',
+      headingFont: '"EB Garamond", "Source Serif 4", Georgia, "Times New Roman", serif',
+      codeFont: '"IBM Plex Mono", "JetBrains Mono", ui-monospace, monospace',
+      ligaturesInCode: false,
       tabularFigures: true,
       oldstyleFigures: true,
       slashedZero: true,
     },
   },
   {
-    id: "technical",
-    label: "Technical",
-    note: "Inter throughout, lining figures everywhere, and no code ligatures — for reading source rather than prose. JetBrains Mono in both code roles.",
+    id: "editorial",
+    label: "Editorial",
+    note: "Bodoni Moda's hairline Didone against Archivo's grotesque headings, with JetBrains Mono in code. Lining figures and ligatures; the page behaves like a magazine.",
+    defaults: {
+      bodyFontSize: 17,
+      mathFontScale: 100,
+    },
     values: {
       ...ROLE_DEFAULTS,
       sourceFont: '"JetBrains Mono", ui-monospace, monospace',
-      bodyFont: 'Inter, system-ui, "Segoe UI", sans-serif',
-      headingFont: 'Inter, system-ui, "Segoe UI", sans-serif',
+      bodyFont: '"Bodoni Moda", "Source Serif 4", "Times New Roman", serif',
+      headingFont: '"Archivo", "Source Sans 3", system-ui, sans-serif',
       codeFont: '"JetBrains Mono", ui-monospace, monospace',
-      ligaturesInCode: false,
+      ligaturesInCode: true,
       tabularFigures: true,
       oldstyleFigures: false,
       slashedZero: true,
+    },
+  },
+  {
+    id: "bauhaus",
+    label: "Bauhaus",
+    note: "Jost's circles and straight lines in prose and headings, with Azeret Mono's geometric code. No serif anywhere; proportional figures and the arrow ligature.",
+    defaults: {
+      bodyFontSize: 17,
+      mathFontScale: 95,
+    },
+    values: {
+      ...ROLE_DEFAULTS,
+      sourceFont: '"Azeret Mono", "JetBrains Mono", ui-monospace, monospace',
+      bodyFont: '"Jost", "Source Sans 3", system-ui, sans-serif',
+      headingFont: '"Jost", "Source Sans 3", system-ui, sans-serif',
+      codeFont: '"Azeret Mono", "JetBrains Mono", ui-monospace, monospace',
+      ligaturesInCode: true,
+      // Jost's `tnum` is a fullwidth set, not a tabular one; the preview tables
+      // keep the proportional figures rather than turning digits into wide
+      // fullwidth glyphs.
+      tabularFigures: false,
+      oldstyleFigures: false,
+      slashedZero: true,
+    },
+  },
+  {
+    id: "notebook",
+    label: "Notebook",
+    note: "Alegreya's calligraphic serif under Caveat's handwriting, with Victor Mono's narrow, cursive-italic code. A notebook rather than a printed page.",
+    defaults: {
+      bodyFontSize: 17,
+      mathFontScale: 95,
+    },
+    values: {
+      ...ROLE_DEFAULTS,
+      sourceFont: '"Victor Mono", "JetBrains Mono", ui-monospace, monospace',
+      bodyFont: '"Alegreya", "Source Serif 4", Georgia, serif',
+      headingFont: '"Caveat", "Alegreya", cursive',
+      codeFont: '"Victor Mono", "JetBrains Mono", ui-monospace, monospace',
+      ligaturesInCode: true,
+      tabularFigures: true,
+      oldstyleFigures: true,
+      // Victor Mono's slashed zero is a stylistic set (`ss02`), not the `zero`
+      // feature that `font-variant-numeric` can request.
+      slashedZero: false,
     },
   },
 ];

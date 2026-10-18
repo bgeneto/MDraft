@@ -12,14 +12,20 @@
 //   * a sidebar click adds a tab, and a `.typ` file is offered at all
 //   * a path that is already open is focused, not read again (Recent)
 //   * the open-files event adds a tab
+//   * the active tab is bold and carries an accent edge
+//   * right-click opens the tab menu, with the right entries disabled
+//   * ArrowLeft / ArrowRight move between tabs and focus follows
 //   * a large document, then Ctrl+N: no error, the tab appears (regression)
 //   * the caret and both scroll offsets come back with their tab
 //   * the dirty dot belongs to the edited tab
 //   * × closes a tab, active or inactive, without activating it
 //   * Ctrl+Tab / Ctrl+Shift+Tab change the active tab
 //   * middle-click closes a tab
+//   * dragging reorders the strip, and Alt+Shift+Arrow moves one place
 //   * the disk poll reloads a clean inactive tab and leaves a dirty one alone
 //   * Auto Save writes every dirty tab, not just the visible one
+//   * a crowded strip scrolls with the arrows and the wheel, and reveals the
+//     active tab; Close Others clears the rest
 //   * closing the last tab leaves a fresh untitled document
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -219,17 +225,126 @@ try {
   check((await activeTab()) === "feature-tour.md", "it focuses the existing tab", await activeTab());
 
   // -------------------------------------------------------------------------
+  // The active tab is unmistakable
+  // -------------------------------------------------------------------------
+  console.log("\n=== the active tab is unmistakable ===");
+  const tabStyles = await json(
+    `[...document.querySelectorAll(".doc-tab")].map((tab) => ({
+      selected: tab.getAttribute("aria-selected") === "true",
+      weight: Number(getComputedStyle(tab.querySelector(".doc-tab-name")).fontWeight),
+      edge: getComputedStyle(tab).boxShadow,
+    }))`,
+  );
+  const activeStyle = tabStyles.find((tab) => tab.selected) ?? { weight: 0, edge: "none" };
+  const inactiveStyle = tabStyles.find((tab) => !tab.selected) ?? { weight: 0, edge: "none" };
+  check(activeStyle.weight >= 600, "the active tab's name is bold", String(activeStyle.weight));
+  check(inactiveStyle.weight < 600, "an inactive tab's name is not", String(inactiveStyle.weight));
+  check(activeStyle.edge !== "none", "the active tab carries its accent edge", activeStyle.edge);
+
+  // -------------------------------------------------------------------------
+  // The context menu on a tab
+  // -------------------------------------------------------------------------
+  console.log("\n=== the tab context menu ===");
+  const menuState = await json(
+    `(() => {
+      const tab = [...document.querySelectorAll(".doc-tab")].find(
+        (entry) => entry.querySelector(".doc-tab-name")?.textContent === "feature-tour.md",
+      );
+      const bounds = tab.getBoundingClientRect();
+      tab.dispatchEvent(new MouseEvent("contextmenu", {
+        bubbles: true, cancelable: true, button: 2,
+        clientX: bounds.left + 12, clientY: bounds.top + 12,
+      }));
+      const menu = document.querySelector(".tab-menu");
+      return {
+        open: !menu.hidden,
+        focused: document.activeElement?.dataset?.action ?? "",
+        items: [...menu.querySelectorAll(".tab-menu-item")].map((button) => ({
+          action: button.dataset.action,
+          disabled: button.disabled,
+          label: button.querySelector(".tab-menu-label")?.textContent ?? "",
+        })),
+      };
+    })()`,
+  );
+  const menuAction = (id) => menuState.items.find((item) => item.action === id);
+  check(menuState.open, "right-click opens the tab menu");
+  check(menuState.focused === "close", "the first enabled action takes focus", menuState.focused);
+  check(
+    menuAction("closeOthers") && !menuAction("closeOthers").disabled,
+    "Close Others is available with two tabs",
+  );
+  check(
+    menuAction("closeLeft") && menuAction("closeLeft").disabled,
+    "Close All to the Left is disabled on the first tab",
+  );
+  check(
+    menuAction("closeRight") && !menuAction("closeRight").disabled,
+    "Close All to the Right is available",
+  );
+  check(menuAction("save") && menuAction("save").disabled, "Save is disabled on a clean tab");
+  check(menuAction("reveal") && !menuAction("reveal").disabled, "Reveal is offered for a saved file");
+  const menuClosed = await evaluate(
+    `(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      return document.querySelector(".tab-menu").hidden;
+    })()`,
+  );
+  check(menuClosed, "Escape closes the menu");
+
+  // -------------------------------------------------------------------------
+  // Keyboard navigation between tabs
+  // -------------------------------------------------------------------------
+  console.log("\n=== keyboard navigation between tabs ===");
+  await evaluate(
+    `(() => {
+      const tab = [...document.querySelectorAll(".doc-tab")].find(
+        (entry) => entry.querySelector(".doc-tab-name")?.textContent === "feature-tour.md",
+      );
+      tab.focus();
+      tab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }));
+      return "sent";
+    })()`,
+  );
+  await sleep(900);
+  check((await activeTab()) === "typst-tour.typ", "ArrowRight activates the next tab", await activeTab());
+  check(
+    (await evaluate(
+      `document.activeElement?.querySelector?.(".doc-tab-name")?.textContent === "typst-tour.typ"`,
+    )) === true,
+    "and focus follows the active tab",
+  );
+  await evaluate(
+    `(() => {
+      const tab = document.querySelector('.doc-tab[aria-selected="true"]');
+      tab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true }));
+      return "sent";
+    })()`,
+  );
+  await sleep(900);
+  check((await activeTab()) === "feature-tour.md", "ArrowLeft comes back", await activeTab());
+
+  // -------------------------------------------------------------------------
   // The regression: a large document, then a new tab
   // -------------------------------------------------------------------------
   console.log("\n=== a large document, then Ctrl+N ===");
-  // README.md is the repository's own 63 KB Markdown file. The bug this guards
-  // threw while mapping its parse state through the 2.5 KB fixture's change set.
-  const readme = path.resolve("README.md");
-  await emitOpenFiles([readme]);
-  const openedReadme = await pollFor(
-    `[...document.querySelectorAll(".doc-tab-name")].some((e) => e.textContent === "README.md")`,
+  // Generate the fixture rather than borrowing README.md: the repository's own
+  // README is 5.5 KB now, so a test that assumed its old 63 KB size silently
+  // stopped exercising a large document.
+  const largeDoc = tmp("large-document.md");
+  writeFileSync(
+    largeDoc,
+    Array.from(
+      { length: 1400 },
+      (_, index) =>
+        `## Section ${index + 1}\n\nParagraph ${index + 1} with enough text to make this document large.\n`,
+    ).join("\n"),
   );
-  check(openedReadme, "the open-files event adds a tab", (await tabs()).join(", "));
+  await emitOpenFiles([largeDoc]);
+  const openedLarge = await pollFor(
+    `[...document.querySelectorAll(".doc-tab-name")].some((e) => e.textContent === "large-document.md")`,
+  );
+  check(openedLarge, "the open-files event adds a tab", (await tabs()).join(", "));
   // CodeMirror renders only the visible lines, so counting `.cm-content` text
   // would measure the viewport, not the document. The status bar reports the
   // buffer's real length.
@@ -242,9 +357,9 @@ try {
   );
   check(docChars > 50000, "the large document really is loaded", docChars + " characters");
 
-  const closedReadme = await clickClose("README.md");
+  const closedLarge = await clickClose("large-document.md");
   await sleep(900);
-  check(closedReadme === "clicked", "its tab closes without a prompt", "the document was clean");
+  check(closedLarge === "clicked", "its tab closes without a prompt", "the document was clean");
   check((await tabCount()) === 2, "the two file tabs remain", (await tabs()).join(", "));
   await clickTab("feature-tour.md");
   await sleep(900);
@@ -476,6 +591,67 @@ try {
   check(polled, "three temporary documents open as tabs", (await tabs()).join(", "));
   await sleep(800);
 
+  // -------------------------------------------------------------------------
+  // Dragging a tab reorders the strip
+  // -------------------------------------------------------------------------
+  console.log("\n=== dragging a tab reorders the strip ===");
+  const beforeDrag = await tabs();
+  const dragged = await evaluate(
+    `(() => {
+      const bar = document.getElementById("doc-tabs");
+      const find = (name) => [...bar.querySelectorAll(".doc-tab")].find(
+        (tab) => tab.querySelector(".doc-tab-name")?.textContent === name,
+      );
+      const from = find("a.md");
+      const to = find("c.md");
+      if (!from || !to) return "missing";
+      const data = typeof DataTransfer === "function" ? new DataTransfer() : null;
+      const fromRect = from.getBoundingClientRect();
+      from.dispatchEvent(new DragEvent("dragstart", {
+        bubbles: true, cancelable: true, dataTransfer: data,
+        clientX: fromRect.left + fromRect.width / 2, clientY: fromRect.top + fromRect.height / 2,
+      }));
+      const target = to.getBoundingClientRect();
+      const x = target.right - 2;
+      const y = target.top + target.height / 2;
+      bar.dispatchEvent(new DragEvent("dragover", {
+        bubbles: true, cancelable: true, dataTransfer: data, clientX: x, clientY: y,
+      }));
+      bar.dispatchEvent(new DragEvent("drop", {
+        bubbles: true, cancelable: true, dataTransfer: data, clientX: x, clientY: y,
+      }));
+      from.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer: data }));
+      return "sent";
+    })()`,
+  );
+  await sleep(500);
+  const afterDrag = await tabs();
+  check(dragged === "sent", "the drag events reached the strip");
+  check(afterDrag[afterDrag.length - 1] === "a.md", "a.md moved to the end", afterDrag.join(", "));
+  check(afterDrag.length === beforeDrag.length, "no tab was lost", String(afterDrag.length));
+  check((await activeTab()) === "c.md", "dragging does not activate the dragged tab", await activeTab());
+
+  await evaluate(
+    `(() => {
+      const tab = [...document.querySelectorAll(".doc-tab")].find(
+        (entry) => entry.querySelector(".doc-tab-name")?.textContent === "a.md",
+      );
+      tab.focus();
+      tab.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "ArrowLeft", altKey: true, shiftKey: true, bubbles: true, cancelable: true,
+      }));
+      return "sent";
+    })()`,
+  );
+  await sleep(400);
+  const afterKeyMove = await tabs();
+  check(
+    afterKeyMove.indexOf("a.md") === afterKeyMove.length - 2,
+    "Alt+Shift+ArrowLeft moves the focused tab one place left",
+    afterKeyMove.join(", "),
+  );
+  check((await activeTab()) === "c.md", "the keyboard move leaves the active tab alone", await activeTab());
+
   // A clean inactive tab reloads when its file changes.
   await clickTab("a.md");
   await sleep(800);
@@ -553,14 +729,180 @@ try {
   check((await dirtyCount()) === 0, "the dots clear once both are saved", String(await dirtyCount()));
 
   // -------------------------------------------------------------------------
+  // A strip wider than the window
+  // -------------------------------------------------------------------------
+  console.log("\n=== a strip wider than the window ===");
+  const overflowFiles = Array.from({ length: 14 }, (_, index) =>
+    tmp(`overflow-document-with-a-long-name-${String(index + 1).padStart(2, "0")}.md`),
+  );
+  for (const [index, file] of overflowFiles.entries()) {
+    writeFileSync(file, `# Overflow ${index + 1}\n\nbody\n`);
+  }
+  await emitOpenFiles(overflowFiles);
+  const overflowed = await pollFor(
+    `document.querySelectorAll(".doc-tab").length === ${4 + overflowFiles.length}`,
+    20000,
+  );
+  check(overflowed, "enough tabs are open to overflow the strip", String(await tabCount()));
+  await sleep(900);
+  const activeVisible = await evaluate(
+    `(() => {
+      const viewport = document.getElementById("doc-tabs").getBoundingClientRect();
+      const tab = document.querySelector('.doc-tab[aria-selected="true"]').getBoundingClientRect();
+      return tab.left >= viewport.left - 1 && tab.right <= viewport.right + 1;
+    })()`,
+  );
+  check(activeVisible, "the active tab is scrolled fully into view", `${await tabCount()} tabs`);
+  const afterActive = await json(
+    `(() => {
+      const tabs = [...document.querySelectorAll(".doc-tab")];
+      const index = tabs.findIndex((tab) => tab.getAttribute("aria-selected") === "true");
+      return tabs.slice(index + 1).map((tab) => tab.querySelector(".doc-tab-name")?.textContent ?? "");
+    })()`,
+  );
+  check(
+    afterActive.includes("a.md") && afterActive.includes("c.md"),
+    "documents remain to the right of the active tab",
+    afterActive.join(", "),
+  );
+
+  const strip = await json(
+    `(() => {
+      const bar = document.getElementById("doc-tabs");
+      return {
+        scrollWidth: bar.scrollWidth,
+        clientWidth: bar.clientWidth,
+        scrollLeft: bar.scrollLeft,
+        overflowing: document.getElementById("doc-tabs-bar").classList.contains("is-overflowing"),
+        toolbar: getComputedStyle(document.getElementById("doc-tabs-toolbar")).display,
+        leftDisabled: document.getElementById("doc-tabs-left").disabled,
+        rightDisabled: document.getElementById("doc-tabs-right").disabled,
+      };
+    })()`,
+  );
+  check(
+    strip.scrollWidth > strip.clientWidth,
+    "the tabs are wider than the viewport",
+    `${strip.scrollWidth} > ${strip.clientWidth}`,
+  );
+  check(strip.overflowing && strip.toolbar !== "none", "the arrow toolbar appears");
+  check(
+    !strip.leftDisabled && !strip.rightDisabled,
+    "both arrows are available when tabs remain on both sides",
+    JSON.stringify(strip),
+  );
+
+  const stripLeft = strip.scrollLeft;
+  await evaluate(`document.getElementById("doc-tabs-left").click()`);
+  await sleep(800);
+  const afterLeft = await json(
+    `(() => {
+      const bar = document.getElementById("doc-tabs");
+      return {
+        scrollLeft: bar.scrollLeft,
+        leftDisabled: document.getElementById("doc-tabs-left").disabled,
+        rightDisabled: document.getElementById("doc-tabs-right").disabled,
+      };
+    })()`,
+  );
+  check(afterLeft.scrollLeft < stripLeft, "the left arrow scrolls the strip", `${stripLeft} -> ${afterLeft.scrollLeft}`);
+  check(!afterLeft.rightDisabled, "the right arrow becomes enabled away from the edge");
+
+  const wheel = await evaluate(
+    `(() => {
+      const bar = document.getElementById("doc-tabs");
+      const event = new WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true });
+      const before = bar.scrollLeft;
+      bar.dispatchEvent(event);
+      return { prevented: event.defaultPrevented, before, after: bar.scrollLeft };
+    })()`,
+  );
+  check(wheel.prevented, "a vertical wheel is claimed by the strip");
+  check(wheel.after > wheel.before, "and moves it horizontally", `${wheel.before} -> ${wheel.after}`);
+
+  await evaluate(`document.getElementById("doc-tabs-right").click()`);
+  await sleep(1400);
+  const firstRight = await json(
+    `(() => {
+      const bar = document.getElementById("doc-tabs");
+      return {
+        scrollLeft: bar.scrollLeft,
+        rightDisabled: document.getElementById("doc-tabs-right").disabled,
+      };
+    })()`,
+  );
+  check(firstRight.scrollLeft > wheel.after, "the right arrow scrolls back", `${wheel.after} -> ${firstRight.scrollLeft}`);
+  check(!firstRight.rightDisabled, "one page is not the end of a long strip");
+  // A second page reaches the edge, where the arrow disables itself.
+  await evaluate(`document.getElementById("doc-tabs-right").click()`);
+  const rightSettled = await pollFor(
+    `(() => {
+      const bar = document.getElementById("doc-tabs");
+      return document.getElementById("doc-tabs-right").disabled &&
+        bar.scrollLeft + bar.clientWidth >= bar.scrollWidth - 2;
+    })()`,
+    6000,
+  );
+  const afterRight = await json(
+    `(() => {
+      const bar = document.getElementById("doc-tabs");
+      return {
+        scrollLeft: bar.scrollLeft,
+        rightDisabled: document.getElementById("doc-tabs-right").disabled,
+      };
+    })()`,
+  );
+  check(
+    rightSettled && afterRight.rightDisabled,
+    "a second page reaches the edge and disables the arrow",
+    `${afterRight.scrollLeft}`,
+  );
+
+  await clickTab("feature-tour.md");
+  await sleep(900);
+  check((await activeTab()) === "feature-tour.md", "a tab outside the viewport can be activated", await activeTab());
+  const visible = await evaluate(
+    `(() => {
+      const viewport = document.getElementById("doc-tabs").getBoundingClientRect();
+      const tab = [...document.querySelectorAll(".doc-tab")].find(
+        (entry) => entry.querySelector(".doc-tab-name")?.textContent === "feature-tour.md",
+      ).getBoundingClientRect();
+      return tab.left >= viewport.left - 1 && tab.right <= viewport.right + 1;
+    })()`,
+  );
+  check(visible, "and the strip scrolls it into view");
+
+  // -------------------------------------------------------------------------
+  // Close Others, from the tab menu
+  // -------------------------------------------------------------------------
+  console.log("\n=== Close Others ===");
+  const closeOthers = await evaluate(
+    `(() => {
+      const tab = [...document.querySelectorAll(".doc-tab")].find(
+        (entry) => entry.querySelector(".doc-tab-name")?.textContent === "feature-tour.md",
+      );
+      const bounds = tab.getBoundingClientRect();
+      tab.dispatchEvent(new MouseEvent("contextmenu", {
+        bubbles: true, cancelable: true, button: 2,
+        clientX: bounds.left + 10, clientY: bounds.top + 10,
+      }));
+      const button = [...document.querySelectorAll(".tab-menu-item")].find(
+        (entry) => entry.dataset.action === "closeOthers",
+      );
+      if (!button) return "missing";
+      button.click();
+      return "clicked";
+    })()`,
+  );
+  const cleaned = await pollFor(`document.querySelectorAll(".doc-tab").length === 1`, 15000);
+  check(closeOthers === "clicked", "the Close Others menu entry was clicked");
+  check(cleaned, "Close Others leaves one tab", (await tabs()).join(", "));
+  check((await activeTab()) === "feature-tour.md", "and it is the tab the menu targeted", await activeTab());
+
+  // -------------------------------------------------------------------------
   // Closing the last tab
   // -------------------------------------------------------------------------
   console.log("\n=== closing the last tab ===");
-  for (const name of ["c.md", "b.md", "a.md"]) {
-    const state = await clickClose(name);
-    await sleep(700);
-    check(state === "clicked" && !(await tabs()).includes(name), `${name} closed cleanly`, (await tabs()).join(", "));
-  }
   check((await tabCount()) === 1, "one file tab is left", (await tabs()).join(", "));
   check((await activeTab()) === "feature-tour.md", "and it is the file", await activeTab());
 

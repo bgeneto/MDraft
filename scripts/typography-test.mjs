@@ -109,7 +109,11 @@ console.log("=== bundled faces are available ===");
 const loaded = await evaluate(`
   (async () => {
     await document.fonts.ready;
-    const names = ["Source Serif 4", "Source Sans 3", "Inter", "JetBrains Mono"];
+    const names = [
+      "Source Serif 4", "Source Sans 3", "JetBrains Mono", "Fira Code",
+      "EB Garamond", "IBM Plex Mono", "Bodoni Moda", "Archivo", "Jost",
+      "Azeret Mono", "Alegreya", "Caveat", "Victor Mono",
+    ];
     const found = [];
     for (const name of names) {
       try { await document.fonts.load('36px "' + name + '"', "Ag0123"); } catch {}
@@ -149,14 +153,87 @@ const kernOff = await shot({ family: serif, kerning: "none" }, "AVATAR To Wa");
 const kernOn = await shot({ family: serif, kerning: "normal" }, "AVATAR To Wa");
 check(kernOff !== kernOn, "kerning changes the drawing", kernOff === kernOn ? "identical pixels" : "differs");
 
+console.log("\n=== the new faces keep the switches real ===");
+
+const ebgNormal = await shot({ family: '"EB Garamond", serif' }, "0123456789");
+const ebgOld = await shot({ family: '"EB Garamond", serif', numeric: "oldstyle-nums" }, "0123456789");
+check(
+  ebgNormal !== ebgOld,
+  "EB Garamond oldstyle figures change the drawing",
+  ebgNormal === ebgOld ? "identical pixels — the subset lost onum" : "differs",
+);
+
+const bodoniNormal = await shot({ family: '"Bodoni Moda", serif' }, "1111111111");
+const bodoniTab = await shot({ family: '"Bodoni Moda", serif', numeric: "tabular-nums" }, "1111111111");
+check(
+  bodoniNormal !== bodoniTab,
+  "Bodoni Moda tabular figures change the drawing",
+  bodoniNormal === bodoniTab ? "identical pixels — the subset lost tnum" : "differs",
+);
+
+const alegreyaNormal = await shot({ family: '"Alegreya", serif' }, "1111111111");
+const alegreyaTab = await shot({ family: '"Alegreya", serif', numeric: "tabular-nums" }, "1111111111");
+check(
+  alegreyaNormal !== alegreyaTab,
+  "Alegreya tabular figures change the drawing",
+  alegreyaNormal === alegreyaTab ? "identical pixels — the subset lost tnum" : "differs",
+);
+
+const plexZeroOff = await shot({ family: '"IBM Plex Mono", monospace' }, "0O0O0O0O");
+const plexZeroOn = await shot({ family: '"IBM Plex Mono", monospace', numeric: "slashed-zero" }, "0O0O0O0O");
+check(
+  plexZeroOff !== plexZeroOn,
+  "IBM Plex Mono slashed zero changes the drawing",
+  plexZeroOff === plexZeroOn ? "identical pixels — the font lost zero" : "differs",
+);
+
+const azeretLigOff = await shot({ family: '"Azeret Mono", monospace', ligatures: "none" }, "->");
+const azeretLigOn = await shot(
+  { family: '"Azeret Mono", monospace', ligatures: "contextual common-ligatures" },
+  "->",
+);
+check(
+  azeretLigOff !== azeretLigOn,
+  "Azeret Mono arrow ligature changes the drawing",
+  azeretLigOff === azeretLigOn ? "identical pixels — the subset lost calt" : "differs",
+);
+
+const azeretZeroOff = await shot({ family: '"Azeret Mono", monospace' }, "0O0O0O0O");
+const azeretZeroOn = await shot({ family: '"Azeret Mono", monospace', numeric: "slashed-zero" }, "0O0O0O0O");
+check(
+  azeretZeroOff !== azeretZeroOn,
+  "Azeret Mono slashed zero changes the drawing",
+  azeretZeroOff === azeretZeroOn ? "identical pixels — the subset lost zero" : "differs",
+);
+
+const victorLigOff = await shot({ family: '"Victor Mono", monospace', ligatures: "none" }, "-> => != <= >=");
+const victorLigOn = await shot(
+  { family: '"Victor Mono", monospace', ligatures: "contextual common-ligatures" },
+  "-> => != <= >=",
+);
+check(
+  victorLigOff !== victorLigOn,
+  "Victor Mono code ligatures change the drawing",
+  victorLigOff === victorLigOn ? "identical pixels — the subset lost calt" : "differs",
+);
+
 console.log("\n=== the faces differ from each other, and from the fallback ===");
 const serifShot = await shot({ family: serif }, "Hamburgefonstiv 123");
 const sansShot = await shot({ family: '"Source Sans 3", sans-serif' }, "Hamburgefonstiv 123");
-const interShot = await shot({ family: "Inter, sans-serif" }, "Hamburgefonstiv 123");
+const ebShot = await shot({ family: '"EB Garamond", serif' }, "Hamburgefonstiv 123");
+const bodoniShot = await shot({ family: '"Bodoni Moda", serif' }, "Hamburgefonstiv 123");
+const jostShot = await shot({ family: '"Jost", sans-serif' }, "Hamburgefonstiv 123");
+const alegreyaShot = await shot({ family: '"Alegreya", serif' }, "Hamburgefonstiv 123");
 const fallbackShot = await shot({ family: "monospace" }, "Hamburgefonstiv 123");
 check(serifShot !== sansShot, "the serif and the sans render differently");
-check(interShot !== fallbackShot, "Inter renders rather than falling back to monospace");
-check(sansShot !== serifShot && interShot !== sansShot, "Source Sans 3 and Inter are distinct faces");
+check(
+  new Set([serifShot, ebShot, bodoniShot, jostShot, alegreyaShot]).size === 5,
+  "the five body families render differently",
+);
+check(
+  [ebShot, bodoniShot, jostShot, alegreyaShot].every((digest) => digest !== fallbackShot),
+  "the new body families do not collapse to the monospace fallback",
+);
 
 // ---------------------------------------------------------------------------
 // Semibold instead of Bold
@@ -290,7 +367,7 @@ const presets = await evaluate(`
       fonts: roles.map((name) => document.documentElement.style.getPropertyValue(name).trim()),
     });
     const out = {};
-    for (const label of ["System", "Serif", "Classic", "Literary", "Technical"]) {
+    for (const label of ["System", "Serif", "Renaissance", "Editorial", "Bauhaus", "Notebook"]) {
       [...document.querySelectorAll(".prefs-choice")].find((b) => b.textContent === label).click();
       await sleep(200);
       out[label] = read();
@@ -303,11 +380,11 @@ const presets = await evaluate(`
   })()
 `);
 
+const first = (stack) => stack.split(",")[0].replace(/["']/g, "").trim();
+const labels = ["System", "Serif", "Renaissance", "Editorial", "Bauhaus", "Notebook"];
 const namesFira = (name) => presets[name].fonts.some((stack) => stack.includes("Fira Code"));
 check(
-  ["System", "Serif", "Classic", "Literary", "Technical"].every(
-    (name) => presets[name].active === name,
-  ),
+  labels.every((name) => presets[name].active === name),
   "every preset reports itself as active when chosen",
 );
 check(
@@ -324,19 +401,58 @@ check(
   `${presets.Serif.fonts[0]} | ${presets.Serif.fonts[3]}`,
 );
 check(
-  ["System", "Serif", "Classic", "Literary", "Technical"].filter(namesFira).join(",") === "Serif",
+  labels.filter(namesFira).join(",") === "Serif",
   "no preset other than Serif names Fira Code",
-  ["System", "Serif", "Classic", "Literary", "Technical"]
-    .filter(namesFira)
-    .join(",") || "none",
+  labels.filter(namesFira).join(",") || "none",
+);
+
+const expected = {
+  Renaissance: ["IBM Plex Mono", "EB Garamond", "EB Garamond", "IBM Plex Mono"],
+  Editorial: ["JetBrains Mono", "Bodoni Moda", "Archivo", "JetBrains Mono"],
+  Bauhaus: ["Azeret Mono", "Jost", "Jost", "Azeret Mono"],
+  Notebook: ["Victor Mono", "Alegreya", "Caveat", "Victor Mono"],
+};
+for (const [name, faces] of Object.entries(expected)) {
+  check(
+    presets[name].fonts.map(first).join("|") === faces.join("|"),
+    `${name} resolves the four roles to its own system`,
+    presets[name].fonts.map(first).join(" | "),
+  );
+}
+
+const bodyFaces = ["Renaissance", "Editorial", "Bauhaus", "Notebook"].map((name) =>
+  first(presets[name].fonts[1]),
 );
 check(
-  ["Classic", "Literary", "Technical"].every(
-    (name) =>
-      presets[name].fonts[0].includes("JetBrains Mono") &&
-      presets[name].fonts[3].includes("JetBrains Mono"),
-  ),
-  "the remaining presets use JetBrains Mono in both code roles",
+  new Set(bodyFaces).size === 4,
+  "the four new presets use four different body faces",
+  bodyFaces.join(", "),
+);
+const codePairs = ["Renaissance", "Editorial", "Bauhaus", "Notebook"].map(
+  (name) => `${first(presets[name].fonts[0])}/${first(presets[name].fonts[3])}`,
+);
+check(
+  new Set(codePairs).size === 4,
+  "the four new presets pair the editor and code differently",
+  codePairs.join(", "),
+);
+
+// The acceptance measurement: the same paragraph, rendered in each preset's
+// body stack, must produce four different images. A stack string can be
+// correct while the face silently falls back; pixels cannot.
+const presetShots = {};
+for (const name of ["Renaissance", "Editorial", "Bauhaus", "Notebook"]) {
+  presetShots[name] = await shot(
+    { family: presets[name].fonts[1] },
+    "The quick brown fox jumps over the lazy dog. 0123",
+  );
+}
+check(
+  new Set(Object.values(presetShots)).size === 4,
+  "the four new presets render the body differently",
+  Object.entries(presetShots)
+    .map(([name, digest]) => `${name}:${digest.slice(0, 8)}`)
+    .join(" "),
 );
 
 // Leave nothing behind: the harness sits above the document while it runs.

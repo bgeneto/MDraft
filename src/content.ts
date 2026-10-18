@@ -1,6 +1,11 @@
 //! Built-in documents shown to the user on first run and from the Help menu.
 //!
-//! Kept as line arrays so markdown fences and backticks need no escaping.
+//! Most are line arrays so Markdown fences and backticks need no escaping. The
+//! AsciiDoc reference is a real `.adoc` file imported raw: it is large enough
+//! that a sample file is easier to read and lets a test convert the exact text
+//! the Help menu opens.
+
+import ASCIIDOC_REFERENCE_SOURCE from "../samples/asciidoc-reference.adoc?raw";
 
 const WELCOME_LINES: string[] = [
   '# Welcome to MDraft',
@@ -77,6 +82,8 @@ const WELCOME_LINES: string[] = [
   '| Save as | `Ctrl+Shift+S` |',
   '| Close tab | `Ctrl+W` |',
   '| Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` |',
+  '| Move focused tab left / right | `Alt+Shift+Left` / `Alt+Shift+Right` |',
+  '| Tab context menu | `Shift+F10` |',
   '| Bold / Italic | `Ctrl+B` / `Ctrl+I` |',
   '| Hyperlink | `Ctrl+K` |',
   '| Headings 1-6 | `Ctrl+1` … `Ctrl+6` |',
@@ -98,15 +105,13 @@ const REFERENCE_LINES: string[] = [
   '```',
   '# Heading 1',
   '## Heading 2',
-  '###### Heading 6',
+  '### Heading 3',
   '```',
   '',
   '## Emphasis',
   '',
-  '```',
   '*italic*   **bold**   ***both***   ~~strikethrough~~',
   '`inline code`',
-  '```',
   '',
   '## Links and images',
   '',
@@ -122,7 +127,6 @@ const REFERENCE_LINES: string[] = [
   '',
   '## Lists',
   '',
-  '```',
   '- item',
   '  - nested',
   '',
@@ -131,26 +135,21 @@ const REFERENCE_LINES: string[] = [
   '',
   '- [ ] task',
   '- [x] done task',
-  '```',
   '',
   '## Blockquotes and rules',
   '',
-  '```',
-  '> quoted text',
+  '> This is a quoted text',
   '> continued',
   '',
   '---',
-  '```',
   '',
   '## Code blocks',
   '',
   'Fence with a language identifier to get syntax highlighting:',
   '',
-  '```',
   '```python',
   'def hello(name):',
   '    return f"hello {name}"',
-  '```',
   '```',
   '',
   '## Tables',
@@ -161,9 +160,37 @@ const REFERENCE_LINES: string[] = [
   '| a    | b      | c     |',
   '```',
   '',
+  'HTML tables are also supported:',
+  '',
+  '<table>',
+  '    <tr>',
+  '        <th>Model</th>',
+  '        <th>Make</th>',
+  '        <th>Year</th>',
+  '        <th>Transmission Type</th>',
+  '    </tr>',
+  '    <tr>',
+  '        <td>Urus</td>',
+  '        <td>Lamborghini</td>',
+  '        <td>2017</td>',
+  '        <td>Automatic</td>',
+  '    </tr>',
+  '    <tr>',
+  '        <td>Cayenne Turbo</td>',
+  '        <td>Porsche</td>',
+  '        <td>2018</td>',
+  '        <td>Automatic</td>',
+  '    </tr>',
+  '    <tr>',
+  '        <td>Durango SRT</td>',
+  '        <td>Dodge</td>',
+  '        <td>2018</td>',
+  '        <td>Automatic</td>',
+  '    </tr>',
+  '</table>',
+  '',
   '## Math',
   '',
-  '```',
   'Inline: $a^2 + b^2 = c^2$',
   '',
   'Display:',
@@ -171,9 +198,8 @@ const REFERENCE_LINES: string[] = [
   '',
   'Padded delimiters work too, which matters for documents converted',
   'from PDF or LaTeX: $ ^{1} $, $ E_{n} $, $ L $',
-  '```',
   '',
-  'How the delimiters are recognised:',
+  'How the delimiters are recognized:',
   '',
   '- `$…$` with no space inside is always math.',
   '- `$ … $` with padding is math when the content holds a TeX character',
@@ -187,12 +213,10 @@ const REFERENCE_LINES: string[] = [
   '',
   'Use a `mermaid` code fence:',
   '',
-  '```',
   '```mermaid',
   'sequenceDiagram',
   '  Alice->>Bob: Hello',
   '  Bob-->>Alice: Hi',
-  '```',
   '```',
   '',
 ];
@@ -210,6 +234,8 @@ const SHORTCUTS_LINES: string[] = [
   '| Save as | `Ctrl+Shift+S` |',
   '| Close tab | `Ctrl+W` |',
   '| Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` |',
+  '| Move focused tab left / right | `Alt+Shift+Left` / `Alt+Shift+Right` |',
+  '| Tab context menu | `Shift+F10` |',
   '',
   '## Edit',
   '',
@@ -265,6 +291,7 @@ const SHORTCUTS_LINES: string[] = [
 
 export const WELCOME = WELCOME_LINES.join("\n");
 export const REFERENCE = REFERENCE_LINES.join("\n");
+export const ASCIIDOC_REFERENCE = ASCIIDOC_REFERENCE_SOURCE;
 export const SHORTCUTS = SHORTCUTS_LINES.join("\n");
 
 // ---------------------------------------------------------------------------
@@ -277,30 +304,47 @@ export const SHORTCUTS = SHORTCUTS_LINES.join("\n");
 // sitting in the repository is not accompanying anything once the application is
 // installed. Vite bundles only what is imported, so leaving these unimported
 // shipped the fonts without their licence — a compliance gap, not untidiness.
+import alegreyaLicence from "./assets/fonts/licenses/alegreya-OFL.txt?raw";
+import archivoLicence from "./assets/fonts/licenses/archivo-OFL.txt?raw";
+import azeretMonoLicence from "./assets/fonts/licenses/azeret-mono-OFL.txt?raw";
+import bodoniModaLicence from "./assets/fonts/licenses/bodoni-moda-OFL.txt?raw";
+import caveatLicence from "./assets/fonts/licenses/caveat-OFL.txt?raw";
+import ebGaramondLicence from "./assets/fonts/licenses/eb-garamond-OFL.txt?raw";
 import firaCodeLicence from "./assets/fonts/licenses/fira-code-OFL.txt?raw";
-import interLicence from "./assets/fonts/licenses/inter-OFL.txt?raw";
+import ibmPlexMonoLicence from "./assets/fonts/licenses/ibm-plex-mono-OFL.txt?raw";
 import jetbrainsLicence from "./assets/fonts/licenses/jetbrains-mono-OFL.txt?raw";
+import jostLicence from "./assets/fonts/licenses/jost-OFL.txt?raw";
 import sourceSansLicence from "./assets/fonts/licenses/source-sans-OFL.txt?raw";
 import sourceSerifLicence from "./assets/fonts/licenses/source-serif-OFL.txt?raw";
+import victorMonoLicence from "./assets/fonts/licenses/victor-mono-OFL.txt?raw";
 
 const FONT_LICENCE_LINES: string[] = [
   '# Bundled typefaces',
   '',
-  'MDraft compiles five typefaces into the application so the typography does not',
-  'depend on what the machine happens to have installed. All five are under the',
-  'SIL Open Font License 1.1, which permits bundling inside an application provided',
-  'the copyright notice and the licence text travel with the fonts. They follow.',
+  'MDraft compiles thirteen typefaces into the application so the typography does',
+  'not depend on what the machine happens to have installed. All thirteen are',
+  'under the SIL Open Font License 1.1, which permits bundling inside an',
+  'application provided the copyright notice and the licence text travel with the',
+  'fonts. They follow.',
   '',
   '| Family | Source |',
   '| --- | --- |',
   '| Source Serif 4 | https://github.com/adobe-fonts/source-serif |',
   '| Source Sans 3 | https://github.com/adobe-fonts/source-sans |',
-  '| Inter | https://github.com/rsms/inter |',
   '| JetBrains Mono | https://github.com/JetBrains/JetBrainsMono |',
   '| Fira Code | https://github.com/tonsky/FiraCode |',
+  '| EB Garamond | https://github.com/octaviopardo/EBGaramond12 |',
+  '| IBM Plex Mono | https://github.com/IBM/plex |',
+  '| Bodoni Moda | https://github.com/indestructible-type/Bodoni |',
+  '| Archivo | https://github.com/Omnibus-Type/Archivo |',
+  '| Jost | https://github.com/indestructible-type/Jost |',
+  '| Azeret Mono | https://github.com/displaay/azeret |',
+  '| Alegreya | https://github.com/huertatipografica/Alegreya |',
+  '| Caveat | https://github.com/googlefonts/caveat |',
+  '| Victor Mono | https://github.com/rubjo/victor-mono |',
   '',
-  'The versions, archive checksums and per-file checksums are recorded in',
-  '`src/assets/fonts/fonts.json`.',
+  'The source pins live in `scripts/font-sources.json`; the built files and their',
+  'checksums are recorded in `src/assets/fonts/fonts.json`.',
   '',
   '## Source Serif 4',
   '',
@@ -310,10 +354,6 @@ const FONT_LICENCE_LINES: string[] = [
   '',
   sourceSansLicence,
   '',
-  '## Inter',
-  '',
-  interLicence,
-  '',
   '## JetBrains Mono',
   '',
   jetbrainsLicence,
@@ -321,6 +361,42 @@ const FONT_LICENCE_LINES: string[] = [
   '## Fira Code',
   '',
   firaCodeLicence,
+  '',
+  '## EB Garamond',
+  '',
+  ebGaramondLicence,
+  '',
+  '## IBM Plex Mono',
+  '',
+  ibmPlexMonoLicence,
+  '',
+  '## Bodoni Moda',
+  '',
+  bodoniModaLicence,
+  '',
+  '## Archivo',
+  '',
+  archivoLicence,
+  '',
+  '## Jost',
+  '',
+  jostLicence,
+  '',
+  '## Azeret Mono',
+  '',
+  azeretMonoLicence,
+  '',
+  '## Alegreya',
+  '',
+  alegreyaLicence,
+  '',
+  '## Caveat',
+  '',
+  caveatLicence,
+  '',
+  '## Victor Mono',
+  '',
+  victorMonoLicence,
 ];
 
 export const FONT_LICENCES = FONT_LICENCE_LINES.join("\n");
