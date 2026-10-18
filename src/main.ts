@@ -15,7 +15,7 @@ import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import * as api from "./api";
 import { renderAsciidocPreview } from "./asciidoc-preview";
-import { FONT_LICENCES, REFERENCE, SHORTCUTS, WELCOME } from "./content";
+import { ASCIIDOC_REFERENCE, FONT_LICENCES, REFERENCE, SHORTCUTS, WELCOME } from "./content";
 import { createEditor, type EditorHandle } from "./editor";
 import {
   embeddedFontCss,
@@ -43,11 +43,22 @@ import {
   wrapPrintHtml,
   wrapStandaloneHtml,
 } from "./markdown";
+import {
+  bindWordMap,
+  fragmentKindFor,
+  rangeForSource,
+  snapToWords,
+  sourceRangeFor,
+  type BlockRange,
+  type Fragment,
+  type WordMap,
+} from "./source-map";
 import { createPreferences, type PreferencesHandle } from "./preferences";
 import { createSessionStore, type Session } from "./sessions";
 import { setInstalledLanguages, setSpellRemember } from "./spellcheck";
 import * as sidebarPanel from "./sidebar";
 import { resolvePalette } from "./syntax-themes";
+import { createTabsUi, type TabsUi } from "./tabs";
 import { annotateTypstLines } from "./typst-map";
 
 // ---------------------------------------------------------------------------
@@ -87,6 +98,39 @@ let settings: api.Settings;
 const sessions = createSessionStore();
 /** The session on screen. Inactive tabs keep their own EditorState. */
 let doc: Session = sessions.active();
+/**
+ * The tab strip owns its own DOM and gestures. It is created once the editor
+ * exists, so a gesture that arrives before the first document cannot reach an
+ * uninitialised shell. The callbacks are the shell's document lifecycle; the
+ * strip never reaches into the editor itself.
+ */
+let tabsUi: TabsUi | null = null;
+
+function installTabs(): void {
+  tabsUi = createTabsUi({
+    bar: el<HTMLDivElement>("doc-tabs"),
+    wrapper: el<HTMLDivElement>("doc-tabs-bar"),
+    leftButton: el<HTMLButtonElement>("doc-tabs-left"),
+    rightButton: el<HTMLButtonElement>("doc-tabs-right"),
+    store: sessions,
+    callbacks: {
+      activeId: () => doc.id,
+      activate: (id) => activateSession(id),
+      close: (id) => closeSession(id),
+      closeMany: (ids) => closeSessions(ids),
+      save: (id) => {
+        const session = sessions.byId(id);
+        return session ? saveSession(session).then(() => undefined) : undefined;
+      },
+      saveAs: async (id) => {
+        if (id !== doc.id) await activateSession(id);
+        await saveAs();
+      },
+      reveal: (id) => revealSession(id),
+      newTab: () => loadUntitled("", defaultDocumentLanguage()),
+    },
+  });
+}
 /**
  * Boot installs the startup file into the first tab. After that, Open and New
  * add a tab instead of replacing the one the reader is in.
@@ -134,6 +178,8 @@ const SYNC_SUPPRESS_MS = 150;
 const SYNC_MARGIN = 12;
 /** How long the preview block matching the caret stays lit. */
 const BLINK_MS = 620;
+/** How long a preview selection settles before it paints the source. */
+const WORD_SYNC_DEBOUNCE_MS = 60;
 
 /**
  * True only while a click in the preview is moving the source caret. Without
@@ -796,6 +842,10 @@ async function doRender(): Promise<void> {
   const token = ++renderToken;
   const source = editor.getDoc();
 
+  // The DOM the old map described is about to be replaced.
+  wordMap = null;
+  clearPreviewWords();
+
   if (doc.language === "html") {
     await renderHtmlPreview(source, token);
     return;
@@ -816,10 +866,12 @@ async function doRender(): Promise<void> {
     if (token !== renderToken) return;
     preview.innerHTML = result.html;
     previewLinesMapped = result.linesMapped;
+    bindPreviewWords(source, undefined, result.blocks);
     rebuildAnchors();
     if (pendingPreviewScroll === null) revealCursorInPreview();
     else applyPendingPreviewScroll();
     updateActiveOutline();
+    syncPreviewFromSource();
     return;
   }
 
@@ -827,10 +879,12 @@ async function doRender(): Promise<void> {
     baseDir: doc.directory ?? null,
     math: settings.enableMath,
     mermaid: settings.enableMermaid,
+    map: true,
   });
   if (token !== renderToken) return;
   preview.innerHTML = result.html;
   previewLinesMapped = result.linesMapped;
+  bindPreviewWords(source, result.fragments);
 
   if (result.linesMapped !== lastMappedState) {
     lastMappedState = result.linesMapped;
@@ -849,6 +903,7 @@ async function doRender(): Promise<void> {
   if (pendingPreviewScroll === null) revealCursorInPreview();
   else applyPendingPreviewScroll();
   updateActiveOutline();
+  syncPreviewFromSource();
 }
 
 // ---------------------------------------------------------------------------
@@ -857,67 +912,7 @@ async function doRender(): Promise<void> {
 
 /** Draw the document tabs. One document still gets a tab: New and Close need a target. */
 function renderDocTabs(): void {
-  const bar = el<HTMLDivElement>("doc-tabs");
-  bar.replaceChildren(
-    ...sessions.list().map((session) => {
-      const tab = document.createElement("div");
-      tab.className = "doc-tab" + (session.dirty ? " is-dirty" : "");
-      tab.dataset.id = session.id;
-      tab.role = "tab";
-      tab.tabIndex = session.id === doc.id ? 0 : -1;
-      tab.setAttribute("aria-selected", String(session.id === doc.id));
-      tab.title = session.path ?? session.name;
-
-      const name = document.createElement("span");
-      name.className = "doc-tab-name";
-      name.textContent = session.name;
-
-      const mark = document.createElement("span");
-      mark.className = "doc-tab-dirty";
-      mark.title = "Unsaved changes";
-
-      const close = document.createElement("button");
-      close.type = "button";
-      close.className = "doc-tab-close";
-      close.setAttribute("aria-label", `Close ${session.name}`);
-      close.textContent = "\u00d7";
-
-      tab.append(name, mark, close);
-      return tab;
-    }),
-  );
-  const selected = bar.querySelector<HTMLElement>('[aria-selected="true"]');
-  if (!selected) return;
-  const left = selected.offsetLeft;
-  const right = left + selected.offsetWidth;
-  if (left < bar.scrollLeft) bar.scrollLeft = left;
-  else if (right > bar.scrollLeft + bar.clientWidth) bar.scrollLeft = right - bar.clientWidth;
-}
-
-function installDocTabs(): void {
-  const bar = el<HTMLDivElement>("doc-tabs");
-  bar.addEventListener("click", (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLElement)) return;
-    const tab = target.closest<HTMLElement>(".doc-tab");
-    const id = tab?.dataset.id;
-    if (!id) return;
-    if (target.closest(".doc-tab-close")) {
-      void closeSession(id);
-      return;
-    }
-    void activateSession(id);
-  });
-  // Middle-click closes, the same gesture as a browser tab.
-  bar.addEventListener("auxclick", (event) => {
-    if (event.button !== 1) return;
-    const target = event.target;
-    if (!(target instanceof HTMLElement)) return;
-    const id = target.closest<HTMLElement>(".doc-tab")?.dataset.id;
-    if (!id) return;
-    event.preventDefault();
-    void closeSession(id);
-  });
+  tabsUi?.render();
 }
 
 function renderSidebar(): void {
@@ -1412,6 +1407,65 @@ async function closeSession(id: string): Promise<void> {
     return;
   }
   renderDocTabs();
+}
+
+/**
+ * Close a set of tabs as one action — the right-click menu's "Close Others",
+ * "Close All to the Left" and friends.
+ *
+ * Dirty tabs get the same one-at-a-time prompt a single close uses. Cancelling
+ * a save aborts the whole action instead of leaving the strip half-closed,
+ * which is the only outcome the reader can still reason about.
+ */
+async function closeSessions(ids: readonly string[]): Promise<void> {
+  const wanted = new Set(ids);
+  const targets = sessions.list().filter((session) => wanted.has(session.id));
+  if (targets.length === 0) return;
+  if (targets.length === 1) {
+    await closeSession(targets[0].id);
+    return;
+  }
+
+  for (const session of targets) {
+    if (!session.dirty) continue;
+    const shouldSave = await ask(`"${session.name}" has unsaved changes. Save them first?`, {
+      title: "Unsaved changes",
+      kind: "warning",
+    });
+    if (shouldSave && !(await saveSession(session))) return;
+  }
+
+  // Saving an untitled tab activates it, so `doc` may have moved while the
+  // prompts were open. Membership of `targets` did not change.
+  const activeRemoved = targets.some((session) => session.id === doc.id);
+  const next = sessions.removeMany(targets.map((session) => session.id));
+
+  if (sessions.list().length === 0) {
+    // Closing everything leaves the shell with its one fresh buffer, exactly as
+    // closing the last tab does.
+    await loadUntitled("", defaultDocumentLanguage());
+    return;
+  }
+  if (activeRemoved && next) {
+    doc = next;
+    await displayDoc();
+    return;
+  }
+  renderDocTabs();
+}
+
+/** Reveal the file behind a tab, whether or not that tab is on screen. */
+async function revealSession(id: string): Promise<void> {
+  const session = sessions.byId(id);
+  if (!session?.path) {
+    toast("Save the document first.");
+    return;
+  }
+  try {
+    await revealItemInDir(session.path);
+  } catch (error) {
+    toast(String(error));
+  }
 }
 
 async function reloadFromDisk(): Promise<void> {
@@ -2066,7 +2120,12 @@ function alertCommand(label: string): void {
     return;
   }
   if (doc.language === "asciidoc") {
-    editor.insertBlock(`${label}: `);
+    // A titled block admonition. The paragraph form (`NOTE: …`) is valid
+    // AsciiDoc, but a block renders in its own frame with a heading. The body
+    // line is part of the template on purpose: a title with no content below it
+    // renders as nothing at all, so the block would vanish from the preview
+    // until the user typed into it.
+    editor.insertBlock(`[${label}]\n.Title\nText`);
     return;
   }
   editor.insertBlock(`> [!${label}]\n> `);
@@ -2190,6 +2249,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "file.save": () => void save(),
   "file.saveAs": () => void saveAs(),
   "file.close": () => void closeSession(doc.id),
+  "file.closeAll": () => closeSessions(sessions.list().map((session) => session.id)),
   "file.nextTab": () => void activateSession(sessions.next().id),
   "file.prevTab": () => void activateSession(sessions.previous().id),
   "file.autoSave": () => {
@@ -2203,17 +2263,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "export.pdf": () => void exportPdf(),
   "export.installPandoc": () => void pandocSetup(),
   "export.installTypst": () => void typstSetup(),
-  "file.reveal": async () => {
-    if (!doc.path) {
-      toast("Save the document first.");
-      return;
-    }
-    try {
-      await revealItemInDir(doc.path);
-    } catch (error) {
-      toast(String(error));
-    }
-  },
+  "file.reveal": () => revealSession(doc.id),
 
   "edit.find": () => editor.openSearch(false),
   "edit.replace": () => editor.openSearch(true),
@@ -2312,6 +2362,8 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "file.preferences": () => preferences.toggle(),
 
   "help.reference": () => void showBuiltin(REFERENCE),
+  "help.asciidocReference": () =>
+    void showBuiltin(ASCIIDOC_REFERENCE, "asciidoc"),
   "help.shortcuts": () => void showBuiltin(SHORTCUTS),
   "help.licences": () => void showBuiltin(FONT_LICENCES),
   "help.installTypst": () => void typstSetup(),
@@ -2322,10 +2374,10 @@ const handlers: Record<string, () => void | Promise<void>> = {
         "MDraft",
         `Version ${APP_VERSION}`,
         "",
-        "A Markdown, Typst and HTML editor in the spirit of Typora.",
+        "Live-preview editor for Asciidoc, Markdown, Typst, and HTML",
         "",
-        "Conceived by Bernhard Enders.",
-        "Coded by DeepSeek",
+        "Conceived by Bernhard Enders",
+        "Coded 100% by DeepSeek Flash v4.1",
         "https://github.com/bgeneto/MDraft",
         "",
         "Editor: CodeMirror 6",
@@ -2333,15 +2385,17 @@ const handlers: Record<string, () => void | Promise<void>> = {
         "Math: KaTeX",
         "Diagrams: Mermaid",
         "Highlighting: highlight.js",
-        "PDF: Typst",
       ].join("\n"),
       { title: "About MDraft", kind: "info" },
     );
   },
 };
 
-async function showBuiltin(content: string): Promise<void> {
-  await loadUntitled(content);
+async function showBuiltin(
+  content: string,
+  language: api.DocumentLanguage = "markdown",
+): Promise<void> {
+  await loadUntitled(content, language);
   toast("Built-in document — use Save As to keep a copy");
 }
 
@@ -2637,6 +2691,177 @@ function blinkAnchor(line: number): void {
   }, BLINK_MS);
 }
 
+// ---------------------------------------------------------------------------
+// Word-level sync
+//
+// The block anchors say *which block*; this says which characters. The map is
+// built by the renderer and bound after every render, so it always describes the
+// DOM that is on screen. Painting never mutates the DOM and never takes the
+// selection — see docs/adr/2026-10-18-word-level-sync.md.
+// ---------------------------------------------------------------------------
+
+interface HighlightRegistryLike {
+  set(name: string, highlight: unknown): void;
+  delete(name: string): void;
+}
+
+let wordMap: WordMap | null = null;
+let syncedSource: { from: number; to: number } | null = null;
+let selectionTimer = 0;
+
+/** `CSS.highlights` and `Highlight`, when this webview has them. */
+function highlightApi(): {
+  registry: HighlightRegistryLike;
+  create: new (...ranges: Range[]) => unknown;
+} | null {
+  const registry = (CSS as unknown as { highlights?: HighlightRegistryLike }).highlights;
+  const create = (window as unknown as { Highlight?: new (...ranges: Range[]) => unknown }).Highlight;
+  return registry && create ? { registry, create } : null;
+}
+
+function clearPreviewWords(): void {
+  highlightApi()?.registry.delete("mdraft-sync");
+}
+
+/** Rebuild the map against the DOM a render just produced. */
+function bindPreviewWords(
+  source: string,
+  fragments?: Fragment[],
+  blocks?: BlockRange[],
+): void {
+  const hasFragments = fragments && fragments.length > 0;
+  const hasBlocks = blocks && blocks.length > 0;
+  wordMap =
+    hasFragments || hasBlocks
+      ? bindWordMap(preview, { source, fragments, blocks })
+      : null;
+  syncedSource = null;
+}
+
+/** Word sync needs a map, a split view and a format that can produce one. */
+function wordSyncAvailable(): boolean {
+  return (
+    settings.viewMode === "split" &&
+    (doc.language === "markdown" || doc.language === "asciidoc") &&
+    wordMap !== null
+  );
+}
+
+/** The text node a selection boundary points at, when it names an element. */
+function textNodeAt(container: Node, side: "start" | "end"): Text | null {
+  if (container.nodeType === Node.TEXT_NODE) return container as Text;
+  if (container.nodeType !== Node.ELEMENT_NODE) return null;
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  let found: Text | null = null;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const text = node as Text;
+    if (text.data.length === 0) continue;
+    if (side === "start") return text;
+    found = text;
+  }
+  return found;
+}
+
+/** The source range the current preview selection points at. */
+function sourceFromPreviewSelection(): { from: number; to: number } | null {
+  const map = wordMap;
+  if (!map) return null;
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
+  const range = selection.getRangeAt(0);
+  if (!preview.contains(range.commonAncestorContainer)) return null;
+
+  const startNode = textNodeAt(range.startContainer, "start");
+  const endNode = textNodeAt(range.endContainer, "end");
+  if (!startNode || !endNode) return null;
+  const startOffset = range.startContainer === startNode ? range.startOffset : 0;
+  const endOffset = range.endContainer === endNode ? range.endOffset : endNode.data.length;
+  const atomic = (kind: ReturnType<typeof fragmentKindFor>) => kind !== null && kind !== "text";
+  const startKind = fragmentKindFor(map, startNode);
+  const endKind = fragmentKindFor(map, endNode);
+
+  if (startNode === endNode) {
+    const exact = sourceRangeFor(map, startNode, startOffset, endOffset);
+    if (!exact) return null;
+    // A code span or a formula is one unit; a text run is widened to words.
+    if (atomic(startKind)) return exact;
+    return snapToWords(map.source, exact.from, exact.to) ?? exact;
+  }
+
+  // A selection can span several nodes: a formula is several text nodes inside
+  // one atomic fragment, and prose can cross inline elements.
+  const startExact = sourceRangeFor(map, startNode, startOffset, startOffset);
+  const endExact = sourceRangeFor(map, endNode, endOffset, endOffset);
+  if (!startExact || !endExact) return null;
+  if (atomic(startKind) || atomic(endKind)) {
+    return {
+      from: Math.min(startExact.from, endExact.from),
+      to: Math.max(startExact.to, endExact.to),
+    };
+  }
+  return (
+    snapToWords(map.source, startExact.from, endExact.to) ?? {
+      from: startExact.from,
+      to: endExact.to,
+    }
+  );
+}
+
+/**
+ * Preview selection -> source decoration.
+ *
+ * `reveal` is true only for a double-click: a drag updates continuously and must
+ * never move the pane out from under the pointer.
+ */
+function syncSourceFromPreview(reveal: boolean): void {
+  if (!wordSyncAvailable()) return;
+  const range = sourceFromPreviewSelection();
+  if (!range) {
+    syncedSource = null;
+    editor.clearSyncRange();
+    return;
+  }
+  if (syncedSource && syncedSource.from === range.from && syncedSource.to === range.to) {
+    if (reveal) editor.revealOffset(range.from);
+    return;
+  }
+  syncedSource = range;
+  editor.setSyncRange(range.from, range.to);
+  if (reveal) editor.revealOffset(range.from);
+}
+
+/**
+ * Source selection -> preview highlight.
+ *
+ * Only a real selection counts: expanding a collapsed caret would repaint a word
+ * on every arrow key, which reads as markup the document does not have.
+ */
+function syncPreviewFromSource(): void {
+  const map = wordMap;
+  if (!map || !wordSyncAvailable()) {
+    clearPreviewWords();
+    return;
+  }
+  const info = editor.cursorInfo();
+  if (info.selectionLength === 0) {
+    clearPreviewWords();
+    return;
+  }
+  const range = snapToWords(map.source, info.from, info.to);
+  if (!range) {
+    clearPreviewWords();
+    return;
+  }
+  const api = highlightApi();
+  if (!api) return;
+  const domRange = rangeForSource(map, range.from, range.to);
+  if (!domRange) {
+    api.registry.delete("mdraft-sync");
+    return;
+  }
+  api.registry.set("mdraft-sync", new api.create(domRange));
+}
+
 /** Restore the scroll a tab switch saved, and keep pane sync from fighting it. */
 function applyPendingPreviewScroll(): void {
   if (pendingPreviewScroll === null) return;
@@ -2783,6 +3008,7 @@ function installPaneSync(): void {
   editor.onCursor((info) => {
     refreshStatus();
     updateActiveOutline();
+    syncPreviewFromSource();
     // A caret we just moved from the preview must not move the preview.
     if (caretCameFromPreview) return;
     if (doc.language === "html") {
@@ -2836,6 +3062,35 @@ function installPaneSync(): void {
       caretCameFromPreview = false;
     }
     blinkAnchor(line);
+  });
+
+  // A double-click selects a word and is a deliberate "show me this" gesture, so
+  // it may reveal the source. A drag only paints: moving the pane under the
+  // pointer is the bug this rule exists to prevent.
+  preview.addEventListener("dblclick", () => {
+    window.clearTimeout(selectionTimer);
+    syncSourceFromPreview(true);
+  });
+
+  // A drag inside the preview paints the source once it settles.
+  document.addEventListener("selectionchange", () => {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+    if (!preview.contains(selection.anchorNode)) return;
+    window.clearTimeout(selectionTimer);
+    selectionTimer = window.setTimeout(
+      () => syncSourceFromPreview(false),
+      WORD_SYNC_DEBOUNCE_MS,
+    );
+  });
+
+  // Escape clears both surfaces. It neither collapses the selection nor moves
+  // anything else: the highlight is the only thing the reader is dismissing.
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    syncedSource = null;
+    editor.clearSyncRange();
+    clearPreviewWords();
   });
 
   // Scrolling the preview -> the source follows the same fraction of the block
@@ -3604,7 +3859,7 @@ function installChrome(): void {
  * A preset is written into settings when it is picked, so the old values survive
  * in `settings.json`. The preset used to name Georgia for prose; it is now the
  * system stack, and without this pass the reader would open the new version on
- * "Custom (user)" showing the very face the rename was meant to remove.
+ * "Custom" showing the very face the rename was meant to remove.
  *
  * The whole font signature is required, not just the body stack: a reader who
  * typed one of these strings by hand, or mixed it with another stack, has a
@@ -3640,6 +3895,7 @@ async function boot(): Promise<void> {
     scheduleTokenCount(text);
     scheduleRender();
     scheduleOutlineRefresh(text);
+    clearPreviewWords();
   });
   editor.onCursor(() => {
     refreshStatus();
@@ -3654,6 +3910,10 @@ async function boot(): Promise<void> {
     onReady: handleHtmlReady,
     onError: (message) => toast(message, 6200),
   });
+
+  // After the editor exists: a tab gesture that arrives during the first paint
+  // must not reach a shell whose editor is still undefined.
+  installTabs();
 
   preferences = createPreferences({
     settings: () => settings,
@@ -3696,7 +3956,6 @@ async function boot(): Promise<void> {
   });
 
   installChrome();
-  installDocTabs();
   installPaneSync();
   installPasteHandlers();
   installPreviewClicks();

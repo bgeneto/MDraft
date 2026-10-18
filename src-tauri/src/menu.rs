@@ -319,6 +319,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&item("file.save", "Save", Some("CmdOrCtrl+S"))?)
         .item(&item("file.saveAs", "Save As…", Some("CmdOrCtrl+Shift+S"))?)
         .item(&item("file.close", "Close Tab", Some("CmdOrCtrl+W"))?)
+        .item(&item("file.closeAll", "Close All Tabs", None)?)
         .separator()
         .item(&item("file.nextTab", "Next Tab", Some("CmdOrCtrl+Tab"))?)
         .item(&item("file.prevTab", "Previous Tab", Some("CmdOrCtrl+Shift+Tab"))?)
@@ -499,6 +500,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     // ---- Help -------------------------------------------------------------
     let help = SubmenuBuilder::new(app, "Help")
         .item(&item("help.reference", "Markdown Reference", None)?)
+        .item(&item("help.asciidocReference", "AsciiDoc Reference", None)?)
         .item(&item("help.shortcuts", "Keyboard Shortcuts", None)?)
             .separator()
             .item(&item("help.licences", "Font Licences", None)?)

@@ -168,12 +168,14 @@ pub fn default_export_formats() -> Vec<ExportFormat> {    let args = |rest: &str
 
 /// Sizes remembered for one typography preset.
 ///
-/// Preview text size and Math scale are reader adjustments, not part of what
-/// identifies a preset. Either field may be absent; a missing field means the
-/// preset has never been adjusted and the application default applies.
+/// Editor font size, Preview font size and Math scale are reader adjustments,
+/// not part of what identifies a preset. Any field may be absent; a missing
+/// field means the preset has never been adjusted and its default applies.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct PresetOverride {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor_font_size: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body_font_size: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -229,10 +231,10 @@ pub struct Settings {
     pub math_font_scale: u32,
     /// Sizes remembered per typography preset, keyed by preset id.
     ///
-    /// The top-level `body_font_size` and `math_font_scale` above are the
-    /// active values. This map is only consulted when a preset is selected; a
-    /// missing entry means the preset has never been adjusted and starts at
-    /// 16 px / 100%.
+    /// The top-level `editor_font_size`, `body_font_size` and `math_font_scale`
+    /// above are the active values. This map is only consulted when a preset is
+    /// selected; a missing entry means the preset has never been adjusted and
+    /// starts at its default.
     #[serde(default)]
     pub preset_overrides: BTreeMap<String, PresetOverride>,
     #[serde(default)]
@@ -668,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    fn typography_defaults_are_the_literary_preset() {
+    fn typography_defaults_are_the_system_preset() {
         let s = Settings::default();
         // Empty means "the built-in default for that role", which lives in
         // src/fonts.ts beside the reasoning for each stack. Storing the stacks
@@ -754,12 +756,16 @@ mod tests {
 
     #[test]
     fn preset_overrides_round_trip_and_may_be_partial() {
-        // A preset may remember only one of the two sizes; the other must stay
-        // absent so the application default continues to apply.
+        // A preset may remember only a subset of the three sizes; the others
+        // must stay absent so the preset's default continues to apply.
         let parsed: Settings = serde_json::from_str(
-            r#"{"presetOverrides":{"superfamily":{"bodyFontSize":19,"mathFontScale":83},"system":{"bodyFontSize":18}}}"#,
+            r#"{"presetOverrides":{"superfamily":{"editorFontSize":18,"bodyFontSize":19,"mathFontScale":83},"system":{"bodyFontSize":18}}}"#,
         )
         .unwrap();
+        assert_eq!(
+            parsed.preset_overrides["superfamily"].editor_font_size,
+            Some(18)
+        );
         assert_eq!(
             parsed.preset_overrides["superfamily"].body_font_size,
             Some(19)
@@ -768,11 +774,17 @@ mod tests {
             parsed.preset_overrides["superfamily"].math_font_scale,
             Some(83)
         );
+        assert_eq!(parsed.preset_overrides["system"].editor_font_size, None);
         assert_eq!(parsed.preset_overrides["system"].body_font_size, Some(18));
         assert_eq!(parsed.preset_overrides["system"].math_font_scale, None);
 
         let json = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(json["presetOverrides"]["superfamily"]["editorFontSize"], 18);
         assert_eq!(json["presetOverrides"]["superfamily"]["mathFontScale"], 83);
+        assert!(
+            json["presetOverrides"]["system"].get("editorFontSize").is_none(),
+            "a missing size must stay absent rather than serialising as null"
+        );
         assert!(
             json["presetOverrides"]["system"].get("mathFontScale").is_none(),
             "a missing size must stay absent rather than serialising as null"

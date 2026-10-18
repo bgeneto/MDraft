@@ -6,30 +6,38 @@ HTML and printed PDF exports.
 
 ## The faces
 
-Five families are compiled into the application under the SIL Open Font
+Thirteen families are compiled into the application under the SIL Open Font
 License. None is fetched at runtime.
 
 | Family | Used for | Source |
 | --- | --- | --- |
-| Source Serif 4 | Prose in the Serif, Classic and Literary presets | [adobe-fonts/source-serif](https://github.com/adobe-fonts/source-serif) |
-| Source Sans 3 | Headings in those presets | [adobe-fonts/source-sans](https://github.com/adobe-fonts/source-sans) |
-| Inter | Prose and headings in the Technical preset, and an alternative sans | [rsms/inter](https://github.com/rsms/inter) |
-| JetBrains Mono | Code and source in most presets | [JetBrains/JetBrainsMono](https://github.com/JetBrains/JetBrainsMono) |
-| Fira Code | Code and source in the Serif preset | [tonsky/FiraCode](https://github.com/tonsky/FiraCode) |
+| Source Serif 4 | Prose in the Serif preset | [adobe-fonts/source-serif](https://github.com/adobe-fonts/source-serif) |
+| Source Sans 3 | Headings in the Serif preset | [adobe-fonts/source-sans](https://github.com/adobe-fonts/source-sans) |
+| JetBrains Mono | Code and source in Editorial, and the grotesque code fallback | [JetBrains/JetBrainsMono](https://github.com/JetBrains/JetBrainsMono) |
+| Fira Code | Code and source in Serif | [tonsky/FiraCode](https://github.com/tonsky/FiraCode) |
+| EB Garamond | Prose and headings in Renaissance | [octaviopardo/EBGaramond12](https://github.com/octaviopardo/EBGaramond12) |
+| IBM Plex Mono | Code and source in Renaissance | [IBM/plex](https://github.com/IBM/plex) |
+| Bodoni Moda | Prose in Editorial | [indestructible-type/Bodoni](https://github.com/indestructible-type/Bodoni) |
+| Archivo | Headings in Editorial | [Omnibus-Type/Archivo](https://github.com/Omnibus-Type/Archivo) |
+| Jost | Prose and headings in Bauhaus | [indestructible-type/Jost](https://github.com/indestructible-type/Jost) |
+| Azeret Mono | Code and source in Bauhaus | [displaay/azeret](https://github.com/displaay/azeret) |
+| Alegreya | Prose in Notebook | [huertatipografica/Alegreya](https://github.com/huertatipografica/Alegreya) |
+| Caveat | Headings in Notebook | [googlefonts/caveat](https://github.com/googlefonts/caveat) |
+| Victor Mono | Code and source in Notebook | [rubjo/victor-mono](https://github.com/rubjo/victor-mono) |
 
-The editor chrome keeps the operating system's UI font. A menu that reflows
-with the document's typeface would be a less predictable application.
+The editor chrome keeps the operating system's UI font. A menu that reflows with
+the document's typeface would be a less predictable application.
 
 ## Roles
 
 **Preferences › Typography** has one face picker for each role:
 
-- **Editor** — the source pane. Monospaced by default; any family works.
+- **Source Editor** — the source pane. Monospaced by default; any family works.
 - **Preview text** — prose in the preview and in exports.
 - **Preview headings** — headings in the preview and in exports.
 - **Preview code** — fenced and inline code in the preview.
 
-Each picker offers the five bundled families first, then faces likely to be
+Each picker offers the thirteen bundled families first, then faces likely to be
 installed on Windows, macOS or a Linux desktop. A value written by an older
 version, or a family not in the list, is shown as a custom entry rather than
 silently replaced.
@@ -46,28 +54,48 @@ hard part of choosing type is the pairing rather than one family.
 | Preset | Character |
 | --- | --- |
 | **System** | The default. No bundled faces; nothing is embedded in an export. |
-| **Serif** | Source Serif 4 under Source Sans 3, with Fira Code in both code roles. Ligatures and slashed zero on. |
-| **Classic** | The same Source superfamily with JetBrains Mono and code ligatures off. |
-| **Literary** | Source Serif 4 with oldstyle figures, code ligatures on, JetBrains Mono. |
-| **Technical** | Inter throughout, JetBrains Mono in code, lining figures, no code ligatures. |
+| **Serif** | Source Serif 4 under Source Sans 3, with Fira Code in both code roles. A neutral modern book: oldstyle figures, ligatures and slashed zero on; starts at 18 px preview size and 80% math scale. |
+| **Renaissance** | EB Garamond in prose and headings, IBM Plex Mono in the editor. A 16th-century book page: low contrast, small x-height, serif headings, oldstyle figures, no code ligatures, 90% math scale. |
+| **Editorial** | Bodoni Moda's hairline Didone under Archivo's grotesque headings, with JetBrains Mono in code. A mid-century magazine: lining figures, ligatures and slashed zero on, 17 px preview size and KaTeX's own 100% math scale. |
+| **Bauhaus** | Jost's circles and straight lines in prose and headings, with Azeret Mono's geometric code. A 1920s poster with no serif anywhere: ligatures and slashed zero on, proportional table figures, 17 px and 95% math. |
+| **Notebook** | Alegreya's calligraphic serif under Caveat's handwriting, with Victor Mono's narrow, cursive-italic code. A writer's notebook: oldstyle and tabular figures, ligatures on, 17 px and 95% math. |
+
+`Classic`, `Literary` and `Technical` were removed. A reader who had one of them
+selected keeps the saved stacks in `settings.json`, so the picker shows
+**Custom** until a new preset is chosen; the old per-preset size entries remain
+inert. No value is lost.
 
 Every preset is a starting point: changing a face or a switch moves the panel
-to **Custom (user)**, which keeps the values you chose.
+to **Custom**, which keeps the values you chose. The four role pickers are not
+locked to a preset.
 
-Preview text size and math scale are not part of a preset. They are reader
-adjustments remembered per preset: set Serif to 17 px, visit System and
-Classic, and Serif still comes back at 17 px. A preset that has never been
-adjusted starts at 16 px and 100%. Under Custom (user), both values are global.
-Changing either size does not leave the active preset.
+Editor font size, preview font size and math scale are not part of a preset's
+identity. They are reader adjustments remembered per preset: set Serif to 19 px,
+visit System and Renaissance, and Serif still comes back at 19 px. A preset that
+has never been adjusted starts at its own defaults (System 16/100, Serif 18/80,
+Renaissance 18/90, Editorial 17/100, Bauhaus 17/95, Notebook 17/95). The editor
+font size starts at 16 px for every preset. Under Custom, all three values are
+global. Changing any of the three sizes does not leave the active preset.
 
 ## OpenType
 
 | Setting | Default | Effect |
 | --- | --- | --- |
-| Ligatures in code | Off | Draws `->` and `=>` as single glyphs in faces that have them |
-| Tabular figures in tables | On | Equal-width digits, so columns line up |
-| Oldstyle figures in prose | Off | Figures with ascenders and descenders in running text |
-| Slashed zero in code | Off | Distinguishes `0` from `O` |
+| Ligatures in code | Off in System and Renaissance; on in Serif, Editorial, Bauhaus and Notebook | Draws `->` and `=>` as single glyphs in faces that have them |
+| Tabular figures in tables | On, except Bauhaus | Equal-width digits, so columns line up |
+| Oldstyle figures in prose | On in Serif, Renaissance and Notebook | Figures with ascenders and descenders in running text |
+| Slashed zero in code | On in Serif, Renaissance, Editorial and Bauhaus; off in System and Notebook | Distinguishes `0` from `O` |
+
+Two faces need a note rather than a checkbox:
+
+- **Jost's `tnum` is a fullwidth set**, not a tabular one. Bauhaus therefore
+  leaves tabular figures off; turning the switch on would replace the table
+  digits with wide fullwidth glyphs.
+- **Victor Mono's slashed zero is stylistic set `ss02`**, not the `zero` feature
+  that `font-variant-numeric` can request. Notebook leaves the switch off.
+- **Alegreya's default figures are oldstyle**, and **EB Garamond's default
+  figures are tabular lining**. The switches describe the result; on those two
+  faces the default already has the requested shape.
 
 Kerning and standard ligatures are stated explicitly rather than left to the
 browser's defaults, and variable fonts are asked to interpolate their optical
@@ -80,11 +108,13 @@ Emphasis, headings and table headers are set at weight 600 (Semibold), not 700
 Semibold holds its counters at heading sizes and sits closer to the body text;
 Bold at 700 reads as a different face.
 
-Source Serif 4 and Inter carry the weight on a variable axis; Source Sans 3
-ships a separate Semibold cut, which is one of the files bundled here. The
-editor and code are deliberately excluded: syntax highlighting uses 700 because
-the extra weight is what makes a token read as syntax. Mathematics keeps
-KaTeX's own weights for the same reason.
+Source Serif 4, EB Garamond, Bodoni Moda, Jost and Alegreya carry the weight on
+a variable axis. Source Sans 3 ships a separate Semibold cut; Archivo and Caveat
+are bundled as a single Semibold instance for the heading role. IBM Plex Mono
+and Victor Mono ship 400, 400 italic and 700; the code view uses 700 where a
+token is bold. The editor and code are deliberately excluded from the 600 rule:
+syntax highlighting uses 700 because the extra weight is what makes a token read
+as syntax. Mathematics keeps KaTeX's own weights for the same reason.
 
 ## Mathematics
 
@@ -95,7 +125,15 @@ do not depend on the reader's fonts.
 KaTeX draws at `1.21em`, which is why a formula reads slightly larger than the
 text beside it. **Preferences › Typography › Math scale** multiplies that ratio
 from 70% to 130%. 100% keeps KaTeX's own size; about 83% makes a formula match
-the prose. The preview, exported HTML and printed PDF all read the same value.
+the prose. Editorial uses 100% because Computer Modern and Bodoni are both
+Didones; Renaissance uses 90% so the mathematics does not shout beside
+Garamond; Bauhaus and Notebook use 95%. The preview, exported HTML and printed
+PDF all read the same value.
+
+A perfect text-and-math match would need a different math font and a renderer
+that can use it — KaTeX's metrics are tied to its own fonts. A future
+"Typeset" preset with Latin Modern would be the closest match, at the cost of a
+different licence (GFL) and a look close to Editorial.
 
 ## Exports
 
@@ -109,18 +147,36 @@ Only faces that actually win in a stack are embedded. A fallback cannot render,
 and carrying it added weight for nothing. The default System preset embeds no
 fonts because there is nothing to embed.
 
+The new families are subset to Latin, Vietnamese, punctuation, arrows, maths,
+box drawing and geometric shapes, with the features the panel uses. Greek and
+Cyrillic are not in those subsets; the Serif preset, whose Source faces are
+bundled whole, remains the full-coverage choice. A document that mixes Greek or
+Cyrillic into a new preset falls back in the preview; an export falls back to
+the reader's system for those runs. Approximate base64 sizes of a print
+document: Renaissance 513 KiB, Editorial 694 KiB, Bauhaus 150 KiB, Notebook
+448 KiB, Serif 1,919 KiB.
+
 Pandoc exports (DOCX, ODT, LaTeX and the rest) use pandoc's own layout. They do
 not carry the preview's typography in the same way; the native HTML and PDF
 (Print) paths are the ones that do.
 
 ## Licences
 
-All five families are under the SIL Open Font License 1.1, which permits
+All thirteen families are under the SIL Open Font License 1.1, which permits
 bundling inside an application provided the copyright notice and licence text
 travel with it. They do: **Help › Font Licences** displays the texts inside the
 application, and the same files are under
 [`src/assets/fonts/licenses/`](../src/assets/fonts/licenses).
 
-`src/assets/fonts/fonts.json` records every version, archive SHA-256 and file
-SHA-256. `scripts/fetch-fonts.ps1` reproduces the set, refusing to extract an
-archive whose hash has changed.
+Subsetting is a modification. Eight of the new families declare no Reserved
+Font Name and keep their canonical names in the subset. **IBM Plex Mono**
+declares "Plex", so it is bundled whole, unchanged. The two Source families are
+also bundled unchanged from Adobe's release. Lora ("Lora") and Source Code Pro
+("Source") were considered and rejected for the same reason; the Notebook body
+uses Alegreya instead.
+
+`scripts/font-sources.json` records every source pin. `scripts/fetch-fonts.ps1`
+downloads and verifies each source, calls `scripts/subset-fonts.py` for the
+Google families, and rewrites `src/assets/fonts/fonts.json` with the output
+bytes and SHA-256. The Python tooling (fonttools and brotli) is needed only to
+refresh the fonts, never by an ordinary build. The woff2 files are committed.

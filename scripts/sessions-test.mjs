@@ -8,10 +8,10 @@
 //
 // What it is for: the tab shell's rules are decisions about a list — insert after
 // the active session, which neighbour takes over when one closes, what a new
-// untitled tab is called, whether two paths name the same file. Those are cheap
-// to test here and awkward to reach through the UI, which is why
-// `document-tabs-test.mjs` proves the behaviour a reader sees and this file
-// pins the rules underneath it.
+// untitled tab is called, whether two paths name the same file, where a dragged
+// tab lands. Those are cheap to test here and awkward to reach through the UI,
+// which is why `document-tabs-test.mjs` proves the behaviour a reader sees and
+// this file pins the rules underneath it.
 
 import { createSessionStore } from "../src/sessions.ts";
 
@@ -180,6 +180,75 @@ console.log("\n=== remove hands back the neighbour that takes the space ===");
   check(store.remove(d.id) === null, "removing an inactive session returns null");
   check(store.active() === a, "the active session is untouched", store.active().name);
   check(store.remove("doc-does-not-exist") === null, "an unknown id is a no-op");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n=== move puts a tab where it was dropped ===");
+{
+  const store = createSessionStore();
+  const a = store.active();
+  a.name = "a";
+  const b = untitled(store, "b");
+  const c = untitled(store, "c");
+  const d = untitled(store, "d");
+  check(names(store).join(",") === "a,b,c,d", "the starting order is known", names(store).join(","));
+
+  store.move(d.id, 0);
+  check(names(store).join(",") === "d,a,b,c", "the last tab moves to the front", names(store).join(","));
+  check(store.active() === d, "the active tab stays active after a move", store.active().name);
+
+  store.move(d.id, 3);
+  check(names(store).join(",") === "a,b,c,d", "and back to the end", names(store).join(","));
+
+  store.move(b.id, 1);
+  check(names(store).join(",") === "a,b,c,d", "dropping on its own position is a no-op", names(store).join(","));
+
+  store.move(b.id, 99);
+  check(names(store).join(",") === "a,c,d,b", "an index past the end lands at the end", names(store).join(","));
+
+  store.move(b.id, -5);
+  check(names(store).join(",") === "b,a,c,d", "an index before the start lands at the start", names(store).join(","));
+
+  store.move("doc-nope", 2);
+  check(names(store).join(",") === "b,a,c,d", "an unknown id is a no-op", names(store).join(","));
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n=== removeMany closes a set in one pass ===");
+{
+  const store = createSessionStore();
+  const a = store.active();
+  a.name = "a";
+  const b = untitled(store, "b");
+  const c = untitled(store, "c");
+  const d = untitled(store, "d");
+
+  store.setActive(c.id);
+  const next = store.removeMany([c.id, d.id]);
+  check(
+    next === b,
+    "removing the active tab and its right neighbour returns the left neighbour",
+    next?.name,
+  );
+  check(store.active() === b, "and that survivor is active", store.active().name);
+  check(names(store).join(",") === "a,b", "only the requested tabs left", names(store).join(","));
+
+  check(store.removeMany([a.id]) === null, "removing an inactive tab returns null");
+  check(store.active() === b, "and leaves the active tab alone", store.active().name);
+  check(names(store).join(",") === "b", "the list kept the active tab", names(store).join(","));
+
+  const all = createSessionStore();
+  const only = all.active();
+  check(all.removeMany([only.id]) === null && all.list().length === 0, "removing every tab leaves an empty list");
+
+  const noMatch = createSessionStore();
+  const kept = noMatch.active();
+  check(
+    noMatch.removeMany(["doc-nope"]) === null &&
+      noMatch.list().length === 1 &&
+      noMatch.active() === kept,
+    "an unknown id changes nothing",
+  );
 }
 
 // ---------------------------------------------------------------------------

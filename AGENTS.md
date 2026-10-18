@@ -146,6 +146,9 @@ are for knowledge that has no natural home in the code.
 
 - **Rust** 1.91+ (`x86_64-pc-windows-msvc` target on Windows)
 - **Node.js** 20+ and npm. This repo uses **npm**; pnpm is not installed here.
+- **Python 3** with `fonttools` and `brotli`, only to refresh the bundled fonts
+  through `scripts/fetch-fonts.ps1`. Ordinary builds and the test suite do not
+  need Python.
 - **Windows**: Visual Studio C++ build tools, Windows SDK, WebView2 runtime
 - **macOS**: Xcode command line tools
 - **Linux**: `webkit2gtk-4.1`, `libayatana-appindicator3`, `librsvg2`, `patchelf`, `libhunspell-dev` (spelling; the dictionaries themselves are `hunspell-en-us` and `hunspell-pt-br`, which are not bundled)
@@ -197,17 +200,18 @@ rewrite from scratch.
 | `npm run test:rust` | `cargo test` | 79 tests on Windows (78 run, one ignored download); Linux has 78 total (77 run, one ignored) |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. Puts back the working tree and the developer's own settings afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
 | `npm run smoke` | `scripts/dom-smoke.mjs` | 93 checks against `samples/feature-tour.md` |
+| `npm run word-sync` | `scripts/word-sync-test.mjs` | 29 checks of word-level sync against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula spans, no scroll, Escape, and the fallbacks |
 | `npm run spellcheck` | `scripts/spellcheck-test.mjs` | Underlines a misspelling, then clears it when spelling is turned off |
 | `npm run audit` | `scripts/audit-document.mjs` | Render metrics for whatever document is loaded |
 | `npm run math` | `scripts/math-render-check.mjs` | 10 checks against the physics paper |
 | `npm run syntax` | `scripts/syntax-theme-test.mjs` | 7 checks that highlighting is real |
 | `npm run html` | `scripts/html-preview-test.mjs` | 42 checks of the sandboxed HTML guest |
 | `npm run export` | `scripts/export-test.mjs` | 35 checks of every export path, against real pandoc, including an AsciiDoc source |
-| `npm run typography` | `scripts/typography-test.mjs` | 26 checks that each face loads, each OpenType switch changes pixels, and the preset matrix and Semibold weights hold |
+| `npm run typography` | `scripts/typography-test.mjs` | 48 checks that each face loads, each OpenType switch changes pixels, the six-preset matrix holds, the four new body faces render differently, and the Semibold weights are real |
 | `npm run shortcuts` | `scripts/shortcut-test.mjs` | 39 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, that the zoom chip follows the level, and that a new tab keeps the previous buffer's undo |
-| `npm run tabs` | `scripts/document-tabs-test.mjs` | 69 checks of several open documents: sidebar and Recents, `open-files`, caret and scroll per tab, dirty dot, × and middle-click, Ctrl+Tab, the disk poll, Auto Save across tabs, the last tab |
-| `npm run asciidoc` | `scripts/asciidoc-test.mjs` | 35 checks of the AsciiDoc preview, source highlighting, outline, preview copy, spellcheck, includes, paste and the default extension |
-| `npm run test:sessions` | `scripts/sessions-test.mjs` | 43 unit checks of `src/sessions.ts`, with no application and no build |
+| `npm run tabs` | `scripts/document-tabs-test.mjs` | 104 checks of several open documents: sidebar and Recents, `open-files`, active-tab styling, the tab context menu, keyboard navigation, caret and scroll per tab, dirty dot, × and middle-click, Ctrl+Tab, drag and keyboard reordering, the disk poll, Auto Save across tabs, overflow arrows and the wheel, Close Others, the last tab |
+| `npm run asciidoc` | `scripts/asciidoc-test.mjs` | 51 checks of the AsciiDoc preview, source highlighting, outline, preview copy, spellcheck, includes, paste, the AsciiDoc reference, the default extension and word-level sync |
+| `npm run test:sessions` | `scripts/sessions-test.mjs` | 59 unit checks of `src/sessions.ts`, with no application and no build |
 | `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 72 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
 | `npm run paste` | `scripts/rich-paste-test.mjs` | 23 checks of rich paste through the real UI: destination detection, conversion, preferences, Ctrl+Shift+V, undo |
 | `npm run image:syntax` | `scripts/image-syntax-test.mjs` | 14 checks of bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, including the Image preference |
@@ -224,21 +228,22 @@ All of these need the app already running with CDP enabled (see
 | Script | Arguments | Needs this document | Proves |
 | --- | --- | --- | --- |
 | `dom-smoke.mjs` | `[port]` | `samples/feature-tour.md` | Rendering, pane sync, preferences, search, toggles, math, fonts, status icons, blink behaviour |
-| `asciidoc-test.mjs` | `[port]` | `samples/asciidoc-tour.adoc` | The AsciiDoc preview, title/TOC, KaTeX fraction, source anchors and scroll sync, highlighting, outline, preview copy, spellcheck, include refusal, rich paste, bitmap `image::`, default extension and the Files panel |
+| `word-sync-test.mjs` | `[port]` | `samples/word-sync.md` | The fragment map, preview → source and source → preview, atomic code and formula spans, word snapping, no scroll, Escape, typing clears, and the documented fallbacks (alert, missing fragment) |
+| `asciidoc-test.mjs` | `[port]` | `samples/asciidoc-tour.adoc` | The AsciiDoc preview, title/TOC, KaTeX and AsciiMath, the built-in AsciiDoc reference, source anchors and scroll sync, highlighting, outline, preview copy, spellcheck, include refusal, rich paste, bitmap `image::`, default extension, the Files panel and word-level sync |
 | `audit-document.mjs` | `[port] [label]` | any — `label` names it in the output | Block/anchor counts, table and code-fence totals, KaTeX errors, stray `$` in prose |
 | `math-render-check.mjs` | `[port]` | `docs/samples/physrevb_70_035307.md` | That fonts actually load and that fractions and radicals have real geometry |
 | `syntax-theme-test.mjs` | `[port]` | `samples/feature-tour.md` | Distinct computed token colours, and that switching palette changes them |
 | `html-preview-test.mjs` | `[port]` | `samples/html-tour/index.html` | The guest iframe, its sandbox and IPC boundary, local CSS/images/modules, sync, blink, scripts-off, outline, the return to Markdown and the HTML tab coming back. It connects to the iframe target as well as the page |
 | `export-test.mjs` | `[port] [--install]` | `samples/feature-tour.md` | That pandoc really converts: the bytes of each output are inspected. `--install` additionally exercises the pandoc download, which is why it is opt-in |
-| `typography-test.mjs` | `[port]` | any | Screenshots text with each OpenType feature off and on and compares pixels, then asserts the preset matrix and the Semibold weights. Width cannot measure a monospaced face, so nothing narrower would work |
+| `typography-test.mjs` | `[port]` | any | Screenshots text with each OpenType feature off and on and compares pixels, then asserts the six-preset matrix, that the four new body faces produce different images, and the Semibold weights. Width cannot measure a monospaced face, so nothing narrower would work |
 | `shortcut-test.mjs` | `[port] [document]` | `samples/feature-tour.md` | Presses each accelerator through a synthetic keydown and checks what changed. Also reads the `accelerators` registry, which is the only way to see an accelerator the platform rejected |
-| `licence-test.mjs` | `[port]` | any | Opens *Font licences* and looks for the five OFL texts in the rendered document. Searching the executable cannot answer this: the frontend bundle is compressed inside it |
-| `fetch-fonts.ps1` | `[--work-directory]` | — | Downloads the five bundled families, verifies each archive against a pinned SHA-256 and rewrites `src/assets/fonts/fonts.json`. Only needed to upgrade them; the fonts are committed |
+| `licence-test.mjs` | `[port]` | any | Opens *Font licences* and looks for the thirteen OFL texts in the rendered document. Searching the executable cannot answer this: the frontend bundle is compressed inside it |
+| `fetch-fonts.ps1` | `[--work-directory]` | — | Downloads the thirteen families pinned in `scripts/font-sources.json`, verifies every source, subsets the Google faces through `scripts/subset-fonts.py`, and rewrites `src/assets/fonts/fonts.json`. Only needed to upgrade them; needs Python/fonttools; the fonts are committed |
 | `image-paste-test.mjs` | `[port] [imageUrl] [localPath]` | `samples/feature-tour.md` | Clipboard, local and remote image paths, and the markdown that results |
 | `image-path-paste-test.mjs` | `[port]` | `samples/feature-tour.md` | Selects the `./image.png` placeholder with the mouse, pastes a relative path beside the document, and checks the text is replaced and the preview loads it |
 | `spellcheck-test.mjs` | `[port]` | `samples/feature-tour.md` | Sets the dictionary to English, types a misspelling, requires the wavy underline, then turns spelling off and requires the mark to be gone |
-| `document-tabs-test.mjs` | `[port]` | `samples/feature-tour.md` | That several documents stay open sanely: a path already open is focused, the caret and both scroll offsets come back, the disk poll reloads a clean inactive tab and leaves a dirty one alone, Auto Save writes every dirty tab, and a large document no longer breaks the next New |
-| `sessions-test.mjs` | — | none — runs without the application | The session store's rules: insertion after the active tab, untitled names, one tab per path under both case rules, the neighbour that takes over on close, wrap-around, and the empty-list invariant |
+| `document-tabs-test.mjs` | `[port]` | `samples/feature-tour.md` | That several documents stay open sanely: a path already open is focused, the active tab is bold, the context menu and its disabled entries, Arrow-key navigation, drag and keyboard reordering, overflow arrows and the wheel, Close Others, the caret and both scroll offsets come back, the disk poll reloads a clean inactive tab and leaves a dirty one alone, Auto Save writes every dirty tab, and a large document no longer breaks the next New |
+| `sessions-test.mjs` | — | none — runs without the application | The session store's rules: insertion after the active tab, untitled names, one tab per path under both case rules, the neighbour that takes over on close, `move` and `removeMany` order, wrap-around, and the empty-list invariant |
 | `paste-convert-test.mjs` | — | none — runs without the application | The paste matrix: clipboard and document detection, all reader/renderer pairs, escaping, sanitisation, caps and image syntax |
 | `rich-paste-test.mjs` | `[port]` | `samples/feature-tour.md` | That the paste event converts HTML, leaves Markdown/plain text alone, detects an unsaved Typst/Markdown/HTML buffer, honours Ctrl+Shift+V and the preference, and undoes in one step |
 | `image-syntax-test.mjs` | `[port]` | `samples/typst-tour.typ` | A clipboard bitmap becomes `#image`, a remote image is downloaded or kept according to the Image preference, and the files land in the document's assets folder |
@@ -263,6 +268,7 @@ node scripts\image-paste-test.mjs 9222 "http://127.0.0.1:8791/served.png" "C:\pa
 | `with-msvc.cmd` | `<command> [args…]` | Loads `vcvars64.bat` then runs the command. **Required for every cargo or tauri invocation on this host.** Searches the standard Visual Studio locations, including the Enterprise edition the GitHub runners install |
 | `cargo-vcvars.cmd` | `<cargo args…>` | The same wrapper specialised for cargo: `cargo-vcvars.cmd test --manifest-path src-tauri\Cargo.toml` |
 | `check-version.mjs` | `[tag]` | Asserts `package.json` and `src-tauri/tauri.conf.json` carry the same version, and that a supplied tag (`v0.1.0`, or `GITHUB_REF_NAME`) matches. CI runs it before building anything |
+| `subset-fonts.py` | `--source … --output … [--instance JSON] [--features csv] [--require csv]` | Instances and subsets one source into woff2, verifies the Latin probe and the required OpenType features. Called by `fetch-fonts.ps1` for each Google output; needs Python, fonttools and brotli |
 
 ### Conventions for new test scripts
 
@@ -441,22 +447,23 @@ hash the pixels.
 
 ## Testing
 
-Fourteen layers, cheapest first. Run them in this order when changing anything.
+Fifteen layers, cheapest first. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
 | Rust unit | `npm run test:rust` | 79 | Path handling, sanitisers, file IO, settings, token estimate, spellcheck, HTML preview scheme, export reader selection |
-| Session store | `npm run test:sessions` | 43 | Tab order, untitled names, path identity, the neighbour on close — no application needed |
+| Session store | `npm run test:sessions` | 59 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
 | Paste conversion | `npm run paste:convert` | 72 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, image syntax, AsciiDoc |
 | DOM smoke | `npm run smoke` | 93 | Rendering, pane sync, preferences, math, fonts, status icons |
+| Word sync | `npm run word-sync` | 29 | The fragment map, preview → source and source → preview, atomic code and formula spans, word snapping, no scroll, Escape |
 | Rich paste | `npm run paste` | 23 | The paste event, destination notice, preferences, Ctrl+Shift+V, undo |
 | Image syntax | `npm run image:syntax` | 14 | Bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, plus the Image preference |
 | Math | `npm run math` | 10 | Font loading, fraction and radical geometry |
 | Syntax | `npm run syntax` | 7 | Token colours, palette switching |
-| AsciiDoc | `npm run asciidoc` | 35 | Preview, title/TOC, math, includes, source highlighting, outline, preview copy, spellcheck, paste, defaults |
+| AsciiDoc | `npm run asciidoc` | 51 | Preview, title/TOC, math, includes, source highlighting, outline, preview copy, spellcheck, paste, the built-in reference, defaults, word-level sync |
 | HTML guest | `npm run html` | 42 | Sandbox, IPC boundary, local assets, sync/blink, scripts-off, outline |
-| Document tabs | `npm run tabs` | 69 | Several open documents, the disk poll, Auto Save across tabs, caret and scroll per tab |
+| Document tabs | `npm run tabs` | 104 | Several open documents, the context menu, drag and keyboard reordering, overflow arrows, the disk poll, Auto Save across tabs, caret and scroll per tab |
 | Close | `.\scripts\test-close.ps1` | 4 | The window really exits and saves its state |
 | Document audit | `npm run audit` | — | Real-world render quality on big files |
 
@@ -717,6 +724,9 @@ run because it scrolled to 45% from a position that was already 45%. Both now
 reset to a known baseline — scroll to the top — before measuring. **Any new probe
 that reads the viewport must establish its own starting position.** A suite that
 passes once and fails on re-run is usually this.
+
+**A test reads `scrollLeft` before a smooth scroll has moved**
+`scrollBy({ behavior: "smooth" })` returns immediately, so `element.click()` followed by a `Runtime.evaluate` of `scrollLeft` still sees the old offset; two rapid clicks can also coalesce into one page. The document-tabs suite first failed "a second page reaches the edge" for exactly this reason. Poll until the offset changes and then settles, and issue one click per page.
 
 **A CDP test sets `window.getSelection()` but CodeMirror still reports no selection**
 `editor.cursorInfo().selectionLength` stays 0 when a test sets a DOM Range from
@@ -1151,6 +1161,79 @@ before any frontend work. `scripts/build-linux.sh` already installed it, which i
 why a local Linux build did not reproduce the CI failure. Add it to the
 workflow's `Install the Linux system libraries` step.
 
+**An AsciiDoc block admonition with a title and no body renders as nothing**
+`[WARNING]` followed by `.Title` and nothing below converts to an empty string —
+not to an admonition with just a title — with no error, so a title-only template
+inserted by the Alert menu makes the whole block vanish from the preview until
+the reader types a body. Keep a body line in the template
+(`[WARNING]\n.Title\nText`). To check a candidate string cheaply, load it rather
+than reasoning about the syntax: the app's browser build can be imported in Node
+by file URL when the package `exports` map hides the subpath.
+
+**A custom inline macro named `asciimath` never runs; the built-in stem macro wins**
+An `InlineMacroProcessor` registered for `asciimath` builds a regexp that
+matches `asciimath:[…]`, but its `process` is never called: the built-in stem
+substitution consumes the text first. A custom `foo:[…]` macro in the same
+registry does run, so the registry and its regexp are not the problem. Do not
+intercept `stem`, `asciimath` or `latexmath` with an inline macro. Mark stems in
+the HTML5 converter instead: `convert_inline_quoted` receives
+`node.type === "asciimath"` and `convert_stem` receives `node.style`.
+
+**`You cannot call a method on a null-valued expression` after downloading `EBGaramond[wght].ttf`**
+The path contains `[wght]`, which PowerShell treats as a wildcard character
+class. `Test-Path`, `Get-Item` and `Get-FileHash` then find nothing, `Get-FileHash`
+returns `$null`, and `.Hash.ToLower()` throws. Use `-LiteralPath` (and
+`Test-Path -LiteralPath`) for every font file whose name comes from Google
+Fonts; the download itself succeeds, which is what makes the error misleading.
+
+**A font subset from `fonts.googleapis.com` renders, but the OpenType switches do nothing**
+Google's CSS woff2 files are already subset, and their subsetter strips layout
+features the panel depends on: measured, the EB Garamond Latin file has no
+`onum`, IBM Plex Mono's has no `zero`, and Google's static Recursive has no
+`calt`/`liga`. The family loads, so the failure looks like a CSS bug. Download
+the pinned upstream TTF and run `scripts/subset-fonts.py` with the feature list;
+verify the cmap and features before committing.
+
+**`required feature(s) missing after subset: onum` (or `tnum`/`zero`) for a font that has the feature**
+`fontTools.subset` keeps a GSUB feature only when the glyphs its lookups consume
+survive. EB Garamond's `tnum` maps the `.lf` alternates back to the default
+figures; if `pnum`/`lnum` are not kept, those inputs are dropped and the feature
+disappears with them. Per-family `layoutFeatures` in `scripts/font-sources.json`
+are the fix. Require only the features a preset turns on, and do not require one
+whose default already renders the desired shape: EB Garamond's figures are
+tabular and Alegreya's are oldstyle by default, and Jost's `tnum` is a fullwidth
+set, so Bauhaus leaves tabular figures off.
+
+**Subsetting an OFL font whose licence declares a Reserved Font Name**
+Not a build error: the file works, but the OFL forbids distributing a modified
+version under the reserved name. IBM Plex ("Plex"), Lora ("Lora") and the Source
+fonts ("Source") all declare one. Bundle the official woff2 unmodified, or
+rename the subset. This repository keeps IBM Plex whole and uses Alegreya
+instead of Lora.
+
+**A CDP driver that checks `if (message.id && pending.has(message.id))` hangs on `Runtime.enable`**
+`Runtime.enable` is the first request, so its response carries `id: 0`, which is
+falsy. The response arrives and is dropped, the promise never resolves, and the
+socket looks dead. Compare `message.id !== undefined`, or start `nextId` at 1.
+Found while writing `word-sync-test.mjs`, after first blaming the WebView2
+endpoint.
+
+**A selection made in the preview collapses about 100 ms after it is painted**
+The editor still had focus, and CodeMirror writes its own selection back into the
+DOM on the next update — the update the word-sync decoration dispatch causes.
+Measured: `getSelection()` was `"Presidente"` at 0 and 40 ms, `""` at 100 ms,
+while `.cm-sync-word` was already painted. A real mouse press in the preview
+blurs the editor first, so this only appears when the selection is made by script
+or by keyboard. `setSyncRange` now blurs the content element before dispatching.
+
+**`.cm-sync-word` is absent even though the decoration exists in the editor state**
+CodeMirror renders only the visible lines, so a decoration whose range is
+off-screen has no DOM node at all; a test that selects a word near the end of a
+long document and queries immediately reports a failure that is not one. Scroll
+the editor to the target first. Also read **every** `.cm-sync-word` element: a
+range that crosses lines is one element per line, so `querySelector` returns only
+the first segment and a paragraph-sized selection looks truncated.
+
 ## Adding a preference, end to end
 
 Five files, in this order — more than three, so a plan comes first; see
@@ -1176,6 +1259,7 @@ If the setting changes the editor's appearance, call it through
 src/
   main.ts            shell: document lifecycle, menus, status bar, pane sync
   sessions.ts        open documents: one session per tab, one EditorState each
+  tabs.ts            tab strip: rendering, overflow arrows, context menu, drag/keyboard order
   editor.ts          CodeMirror 6 setup, incremental word/line metrics, EditorHandle API
   spellcheck.ts      spelling marks, language detection, suggestion menu
   markdown.ts        markdown → HTML; math extraction, mermaid, alerts, anchors
@@ -1333,7 +1417,7 @@ platform and fails on the other.
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run math`,
    `npm run syntax`, `npm run html` and `npm run asciidoc` —
-   93 + 10 + 7 + 42 + 35 checks.
+   93 + 10 + 7 + 42 + 43 checks.
 5. `npm run audit` against both `docs/sample-files` documents and compare the
    counts with the table in the README.
 6. `npm run dist` — installers and checksums land in `bin/<os>/<arch>/`.

@@ -23,6 +23,9 @@
   --code-bg: rgba(127, 127, 127, 0.1);
   --selected: #c9c9c9;
   --sync-highlight: rgba(59, 125, 221, 0.1);
+  /* The corresponding word, not a selection: warmer than --selection so the two
+     never read as the same thing. */
+  --word-sync: rgba(255, 193, 7, 0.3);
   --quote-bar: rgba(127, 127, 127, 0.4);
   --sidebar-w: 244px;
   --editor-max-width: 860px;
@@ -61,6 +64,7 @@
   --code-figures: normal;
   --code-ligatures: normal;
   --spell-error: #c24040;
+  --scroll-shadow: rgba(0, 0, 0, 0.2);
 }
 
 [data-theme="dark"] {
@@ -78,8 +82,10 @@
   --code-bg: rgba(255, 255, 255, 0.07);
   --selected: #3a3d41;
   --sync-highlight: rgba(76, 154, 255, 0.16);
+  --word-sync: rgba(255, 213, 79, 0.24);
   --quote-bar: rgba(200, 200, 200, 0.35);
   --spell-error: #f07178;
+  --scroll-shadow: rgba(0, 0, 0, 0.55);
 }
 
 * {
@@ -138,23 +144,106 @@ body {
    Document tabs
    -------------------------------------------------------------------------- */
 
-.doc-tabs {
+.doc-tabs-bar {
   grid-column: 1 / -1;
   grid-row: 1;
   display: flex;
   align-items: stretch;
-  gap: 2px;
+  min-width: 0;
   height: 34px;
-  padding: 4px 6px 0;
-  overflow-x: auto;
-  overflow-y: hidden;
   background: var(--sidebar-bg);
   border-bottom: 1px solid var(--border);
   user-select: none;
 }
 
+.doc-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 4px 6px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
 .doc-tabs::-webkit-scrollbar {
+  width: 0;
   height: 0;
+}
+
+/* Fixed edge shadows say "there is more strip this way" without painting over
+   a tab. The arrows below say the same thing, but the shadow survives the
+   moment when the pointer is nowhere near the toolbar. */
+.doc-tabs.has-left-shadow {
+  box-shadow: inset 14px 0 14px -14px var(--scroll-shadow);
+}
+
+.doc-tabs.has-right-shadow {
+  box-shadow: inset -14px 0 14px -14px var(--scroll-shadow);
+}
+
+.doc-tabs.has-left-shadow.has-right-shadow {
+  box-shadow:
+    inset 14px 0 14px -14px var(--scroll-shadow),
+    inset -14px 0 14px -14px var(--scroll-shadow);
+}
+
+.doc-tabs-toolbar {
+  display: none;
+  align-items: flex-start;
+  gap: 2px;
+  flex: 0 0 auto;
+  padding: 4px 6px 0 0;
+}
+
+.doc-tabs-bar.is-overflowing .doc-tabs-toolbar {
+  display: flex;
+}
+
+.doc-tabs-divider {
+  align-self: center;
+  width: 1px;
+  height: 16px;
+  margin: 0 4px 0 2px;
+  background: var(--border);
+}
+
+.doc-tab-scroll {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.doc-tab-scroll svg {
+  width: 16px;
+  height: 16px;
+}
+
+.doc-tab-scroll:hover:not(:disabled) {
+  background: var(--active-line);
+  color: var(--fg);
+}
+
+.doc-tab-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.doc-tab-scroll:disabled {
+  opacity: 0.3;
+  cursor: default;
 }
 
 .doc-tab {
@@ -173,6 +262,9 @@ body {
   font-family: var(--font-ui);
   font-size: 12.5px;
   cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease;
 }
 
 .doc-tab:hover {
@@ -189,12 +281,19 @@ body {
   background: var(--bg);
   color: var(--fg);
   border-color: var(--border);
+  /* The accent edge is the second signal after the bold name: it survives at a
+     glance when the strip is crowded and the background difference is subtle. */
+  box-shadow: inset 0 2px 0 var(--accent);
 }
 
 .doc-tab-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.doc-tab[aria-selected="true"] .doc-tab-name {
+  font-weight: 600;
 }
 
 .doc-tab-dirty {
@@ -214,6 +313,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex: 0 0 auto;
   width: 18px;
   height: 18px;
   padding: 0;
@@ -224,7 +324,17 @@ body {
   font: inherit;
   font-size: 14px;
   line-height: 1;
+  opacity: 0.55;
   cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    opacity 0.12s ease;
+}
+
+.doc-tab:hover .doc-tab-close,
+.doc-tab[aria-selected="true"] .doc-tab-close,
+.doc-tab-close:focus-visible {
+  opacity: 1;
 }
 
 .doc-tab-close:hover {
@@ -232,8 +342,106 @@ body {
   color: var(--fg);
 }
 
+.doc-tab-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .doc-tab[aria-selected="true"] .doc-tab-close:hover {
   background: var(--code-bg);
+}
+
+.doc-tab.is-dragging {
+  opacity: 0.45;
+}
+
+.doc-tabs.is-reordering {
+  cursor: grabbing;
+}
+
+.doc-tabs.is-reordering .doc-tab {
+  cursor: grabbing;
+}
+
+.doc-tab-drop {
+  flex: 0 0 2px;
+  width: 2px;
+  align-self: stretch;
+  margin: 4px 0;
+  border-radius: 1px;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-soft);
+}
+
+/* --------------------------------------------------------------------------
+   Tab context menu
+   -------------------------------------------------------------------------- */
+
+.tab-menu {
+  position: fixed;
+  z-index: 90;
+  min-width: 238px;
+  max-width: 320px;
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  user-select: none;
+}
+
+[data-theme="dark"] .tab-menu {
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.tab-menu[hidden] {
+  display: none;
+}
+
+.tab-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tab-menu-item:hover:not(:disabled),
+.tab-menu-item:focus-visible {
+  background: var(--accent-soft);
+  outline: none;
+}
+
+.tab-menu-item:disabled {
+  color: var(--muted);
+  opacity: 0.5;
+  cursor: default;
+}
+
+.tab-menu-shortcut {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tab-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
 }
 
 /* --------------------------------------------------------------------------
@@ -1653,6 +1861,18 @@ body {
   .markdown-body .sync-blink {
     animation: none;
   }
+}
+
+/* The word that corresponds to a selection in the other pane. Painted with the
+   Custom Highlight API, so the DOM is untouched and the tint cannot be mistaken
+   for markup applied to the document. */
+::highlight(mdraft-sync) {
+  background-color: var(--word-sync);
+}
+
+.cm-sync-word {
+  background-color: var(--word-sync);
+  border-radius: 2px;
 }
 
 /* --------------------------------------------------------------------------

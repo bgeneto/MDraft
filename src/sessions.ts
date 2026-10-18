@@ -46,10 +46,21 @@ export interface SessionStore {
   add(session: Session): void;
   setActive(id: string): Session;
   /**
+   * Move a session to `index` in the final order, where 0 is the left edge.
+   * The active session stays active; an unknown id is a no-op.
+   */
+  move(id: string, index: number): void;
+  /**
    * Remove a session. When the removed one was active, the neighbour that
    * should be shown is returned and is already the active session.
    */
   remove(id: string): Session | null;
+  /**
+   * Remove several sessions in one pass. When the active session was among
+   * them, the survivor that should be shown is returned and is already active;
+   * otherwise null. Removing every session leaves the list empty.
+   */
+  removeMany(ids: readonly string[]): Session | null;
   next(): Session;
   previous(): Session;
 }
@@ -134,11 +145,22 @@ export function createSessionStore(): SessionStore {
       activeId = session.id;
     },
 
+    move(id, index) {
+      const from = items.findIndex((item) => item.id === id);
+      if (from < 0) return;
+      // `index` is the position in the list *after* the move, which is how a
+      // drop position is measured: the dragged tab is not one of the targets.
+      const to = Math.max(0, Math.min(Math.trunc(index), items.length - 1));
+      if (from === to) return;
+      const [session] = items.splice(from, 1);
+      items.splice(to, 0, session);
+    },
+
     setActive(id) {
-      const found = items.find((item) => item.id === id);
-      if (!found) throw new Error(`No open document ${id}`);
+      const found = items.findIndex((item) => item.id === id);
+      if (found < 0) throw new Error(`No open document ${id}`);
       activeId = id;
-      return found;
+      return items[found];
     },
 
     remove(id) {
@@ -148,6 +170,24 @@ export function createSessionStore(): SessionStore {
       items.splice(index, 1);
       if (!removingActive || items.length === 0) return null;
       const next = items[Math.min(index, items.length - 1)];
+      activeId = next.id;
+      return next;
+    },
+
+    removeMany(ids) {
+      const removing = new Set(ids);
+      if (!items.some((item) => removing.has(item.id))) return null;
+      const activeIndex = items.findIndex((item) => item.id === activeId);
+      const activeRemoved = removing.has(activeId);
+      // Keeping the original index lets the survivor to the right of the active
+      // tab take over, just as remove() does for one tab.
+      const survivors = items
+        .map((session, index) => ({ session, index }))
+        .filter((entry) => !removing.has(entry.session.id));
+      items.splice(0, items.length, ...survivors.map((entry) => entry.session));
+      if (!activeRemoved || survivors.length === 0) return null;
+      const right = survivors.find((entry) => entry.index > activeIndex);
+      const next = (right ?? survivors[survivors.length - 1]).session;
       activeId = next.id;
       return next;
     },

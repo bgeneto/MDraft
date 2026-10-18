@@ -8,6 +8,7 @@
 import * as api from "./api";
 import {
   DEFAULT_BODY_FONT_SIZE,
+  DEFAULT_EDITOR_FONT_SIZE,
   DEFAULT_MATH_SCALE,
   FONT_SUGGESTIONS,
   TYPOGRAPHY_PRESETS,
@@ -204,11 +205,14 @@ function typographyRows(host: PreferencesHost): Row[] {
   /**
    * Remember a size for the active preset, or keep it global under Custom.
    *
-   * The top-level value is always written: it is what the preview and exports
-   * read. The map entry is what makes the next visit to the same preset restore
-   * the reader's choice.
+   * The top-level value is always written: it is what the editor, preview and
+   * exports read. The map entry is what makes the next visit to the same preset
+   * restore the reader's choice.
    */
-  const updateSize = (key: "bodyFontSize" | "mathFontScale", value: number) => {
+  const updateSize = (
+    key: "editorFontSize" | "bodyFontSize" | "mathFontScale",
+    value: number,
+  ) => {
     const preset = activePreset(host);
     if (!preset) {
       host.update({ [key]: value } as Partial<api.Settings>);
@@ -224,14 +228,14 @@ function typographyRows(host: PreferencesHost): Row[] {
       kind: "choices",
       label: "Preset",
       help:
-        "Sets the faces and OpenType options below at once. Preview text size and Math scale are remembered separately for each preset; switching back restores them. Changing a face leaves the preset — nothing is locked.",
+        "Sets the faces and OpenType options below at once. Editor font size, Preview font size and Math scale are remembered separately for each preset; switching back restores them. Changing a face leaves the preset — nothing is locked.",
       options: [
         ...TYPOGRAPHY_PRESETS.map((preset) => [preset.id, preset.label] as [string, string]),
         // Always present, so the control is never blank: it is what the picker
         // shows once a field below has been edited away from every preset.
-        ["custom", "Custom (user)"],
+        ["custom", "Custom"],
       ],
-      // The preset's identity is detected from its fixed values; the two sizes
+      // The preset's identity is detected from its fixed values; the three sizes
       // are remembered separately in `presetOverrides`. Picking a preset writes
       // both, and the picker then reports whichever identity is in force.
       get: () => activePreset(host)?.id ?? "custom",
@@ -246,6 +250,7 @@ function typographyRows(host: PreferencesHost): Row[] {
         const current = activePreset(host);
         if (current) {
           const entry = { ...next[current.id] };
+          if (entry.editorFontSize === undefined) entry.editorFontSize = s().editorFontSize;
           if (entry.bodyFontSize === undefined) entry.bodyFontSize = s().bodyFontSize;
           if (entry.mathFontScale === undefined) entry.mathFontScale = s().mathFontScale;
           next[current.id] = entry;
@@ -254,8 +259,18 @@ function typographyRows(host: PreferencesHost): Row[] {
         const remembered = next[preset.id] ?? {};
         host.update({
           ...preset.values,
-          bodyFontSize: remembered.bodyFontSize ?? DEFAULT_BODY_FONT_SIZE,
-          mathFontScale: remembered.mathFontScale ?? DEFAULT_MATH_SCALE,
+          editorFontSize:
+            remembered.editorFontSize ??
+            preset.defaults?.editorFontSize ??
+            DEFAULT_EDITOR_FONT_SIZE,
+          bodyFontSize:
+            remembered.bodyFontSize ??
+            preset.defaults?.bodyFontSize ??
+            DEFAULT_BODY_FONT_SIZE,
+          mathFontScale:
+            remembered.mathFontScale ??
+            preset.defaults?.mathFontScale ??
+            DEFAULT_MATH_SCALE,
           presetOverrides: next,
         } as Partial<api.Settings>);
       },
@@ -268,6 +283,17 @@ function typographyRows(host: PreferencesHost): Row[] {
         "Set by hand, so no preset matches exactly. The four faces below are the ones in use.",
     },
     { kind: "heading", label: "Faces" },
+    {
+      kind: "number",
+      label: "Editor font size",
+      help:
+        "Source text in the editor. Remembered for the active preset; under Custom it applies to the current setup.",
+      min: 10,
+      max: 40,
+      suffix: "px",
+      get: () => s().editorFontSize,
+      set: (value) => updateSize("editorFontSize", value),
+    },
   ];
 
   for (const role of TYPOGRAPHY_ROLES) {
@@ -295,9 +321,9 @@ function typographyRows(host: PreferencesHost): Row[] {
   rows.push(
     {
       kind: "number",
-      label: "Preview text size",
+      label: "Preview font size",
       help:
-        "Prose in the preview and in exports. Remembered for the active preset; under Custom (user) it applies to the current setup.",
+        "Prose in the preview and in exports. Remembered for the active preset; under Custom it applies to the current setup.",
       min: 11,
       max: 32,
       suffix: "px",
@@ -308,7 +334,7 @@ function typographyRows(host: PreferencesHost): Row[] {
       kind: "number",
       label: "Math scale",
       help:
-        "Scales the mathematics in the preview and in exports. KaTeX draws formulas at 121% of the surrounding text, so about 83% makes them match the prose; 100% leaves KaTeX's own ratio alone. Remembered for the active preset; under Custom (user) it applies to the current setup.",
+        "Scales the mathematics in the preview and in exports. KaTeX draws formulas at 121% of the surrounding text, so about 83% makes them match the prose; 100% leaves KaTeX's own ratio alone. Remembered for the active preset; under Custom it applies to the current setup.",
       min: 70,
       max: 130,
       suffix: "%",
@@ -365,9 +391,9 @@ function typographyRows(host: PreferencesHost): Row[] {
  * means "the built-in default for that role" — comparing the raw string would
  * make every fresh installation report "custom", which is precisely backwards.
  *
- * Preview text size and Math scale are deliberately absent from `values`: they
- * are reader adjustments in `presetOverrides`, so editing one does not make the
- * active preset look custom.
+ * Editor font size, Preview font size and Math scale are deliberately absent
+ * from `values`: they are reader adjustments in `presetOverrides`, so editing
+ * one does not make the active preset look custom.
  */
 function activePreset(host: PreferencesHost): TypographyPreset | null {
   const settings = host.settings() as unknown as Record<string, unknown>;
@@ -707,18 +733,9 @@ function buildSections(host: PreferencesHost): Section[] {
           kind: "checkbox",
           label: "Convert Rich Text on Paste",
           help:
-            "Past HTML and Markdown copied from another application are converted into this document's markup. Untick to always paste the clipboard's plain text. Ctrl/Cmd+Shift+V bypasses the conversion once.",
+            "Content copied to clipboard from another application are converted into the document's markup. Untick to always paste the clipboard's in plain text. Ctrl/Cmd+Shift+V bypasses the conversion once.",
           get: () => s().richPaste,
           set: (value) => host.update({ richPaste: value }),
-        },
-        {
-          kind: "number",
-          label: "Font Size",
-          min: 10,
-          max: 40,
-          suffix: "px",
-          get: () => s().editorFontSize,
-          set: (value) => host.update({ editorFontSize: value }),
         },
         {
           kind: "select",
@@ -989,7 +1006,7 @@ function buildSections(host: PreferencesHost): Section[] {
           kind: "button",
           label: "",
           text: "Font licences…",
-          help: "The five bundled typefaces are under the SIL Open Font License 1.1, which requires their copyright notices and licence texts to travel with them wherever they are redistributed. All are compiled into the application and shown here.",
+          help: "The thirteen bundled typefaces are under the SIL Open Font License 1.1, which requires their copyright notices and licence texts to travel with them wherever they are redistributed. All are compiled into the application and shown here.",
           action: () => host.openDocumentation("licences"),
         },
         {

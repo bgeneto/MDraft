@@ -7,7 +7,22 @@
   </head>
   <body>
     <div id="app" class="app">
-      <div id="doc-tabs" class="doc-tabs" role="tablist" aria-label="Open documents"></div>
+      <div id="doc-tabs-bar" class="doc-tabs-bar">
+        <div id="doc-tabs" class="doc-tabs" role="tablist" aria-label="Open documents"></div>
+        <div id="doc-tabs-toolbar" class="doc-tabs-toolbar" role="group" aria-label="Tab navigation">
+          <span class="doc-tabs-divider" aria-hidden="true"></span>
+          <button id="doc-tabs-left" class="doc-tab-scroll" type="button" title="Scroll tabs left" aria-label="Scroll tabs left" aria-controls="doc-tabs" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m15 18-6-6 6-6" />
+            </svg>
+          </button>
+          <button id="doc-tabs-right" class="doc-tab-scroll" type="button" title="Scroll tabs right" aria-label="Scroll tabs right" aria-controls="doc-tabs" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m9 18 6-6-6-6" />
+            </svg>
+          </button>
+        </div>
+      </div>
       <aside id="sidebar" class="sidebar">
         <div class="sidebar-tabs" role="tablist">
           <button id="tab-outline" class="sidebar-tab" role="tab" aria-selected="true">Outline</button>

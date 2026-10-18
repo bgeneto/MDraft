@@ -1,0 +1,209 @@
+= AsciiDoc Reference
+:toc:
+:stem: latexmath
+
+This document is a live sample. Everything shown below is processed by the
+same Asciidoctor.js preview that renders your own `.adoc` files, so the examples
+are the syntax the application actually honours.
+
+== Document header and sections
+
+A document starts with a level-0 title. Sections use `==`, subsections `===`,
+and so on:
+
+[source,asciidoc]
+----
+= Document Title
+:toc:
+:stem: latexmath
+
+== Section
+=== Subsection
+----
+
+The preview understands `:toc:` and `:stem:` at the top of the document. The
+`toc` attribute places a table of contents after the title.
+
+== Text formatting
+
+*strong*, _emphasis_, `inline code`, ^superscript^, ~subscript~, and a
+https://example.com[link]. Line breaks can be forced with ` +` at the end of a
+line. A line starting with `//` is a comment and is not rendered.
+
+[source,asciidoc]
+----
+*strong*   _emphasis_   `inline code`
+^superscript^   ~subscript~
+https://example.com[link]
+----
+
+== Lists
+
+* first item
+* second item
+** nested item
+** another nested item
+
+. ordered item
+. second ordered item
+.. nested ordered item
+
+* [x] a completed task
+* [ ] a pending task
+
+A description list pairs a term with its definition:
+
+AsciiDoc:: A plain-text markup language processed by Asciidoctor.
+MDraft:: An editor that previews it in the webview.
+
+== Tables
+
+[options="header"]
+|===
+| Feature | Syntax | Status
+| Table | delimiter block | supported
+| Header row | options attribute | supported
+| Nested markup | inline code and links | supported
+|===
+
+Tables support header rows, column spans and nested inline markup. The table
+above is a live delimiter block.
+
+== Admonitions
+
+NOTE: Notes call attention to a useful detail.
+
+TIP: Tips suggest a faster or cleaner way to do something.
+
+IMPORTANT: Important text should not be skipped.
+
+WARNING: Warnings describe a trap or a destructive action.
+
+CAUTION: Caution marks the most serious cases.
+
+Admonitions can also be blocks with a title:
+
+[WARNING]
+.Before you save
+====
+A title alone is not enough: keep a body line inside the block, or Asciidoctor
+drops the admonition from the output.
+====
+
+== Quotes and rules
+
+[quote, Ada Lovelace]
+____
+That brain of mine is something more than merely mortal, as time will show.
+____
+
+A horizontal rule is three apostrophes on their own line:
+
+'''
+
+== Code and literals
+
+A source block gets syntax highlighting when it names a language:
+
+[source,javascript]
+----
+const answer = 42;
+console.log(`the answer is ${answer}`);
+----
+
+A literal block preserves its text without highlighting:
+
+....
+= this is not a heading
+  indentation is kept
+....
+
+An image and an include are shown here as source, because a built-in document
+has no folder of its own to resolve them against:
+
+[source,asciidoc]
+----
+image::picture.png[Alt text]
+include::chapter.adoc[]
+----
+
+Local images resolve against the folder of the document being edited. Includes
+are read through the application's file commands, only from the document's own
+folder; absolute paths, URLs and `..` escapes are refused. Include attributes
+such as `lines`, `tag` and `leveloffset` are not applied.
+
+== Diagrams
+
+A `mermaid` source block becomes a diagram:
+
+[source,mermaid]
+----
+flowchart LR
+  A[AsciiDoc] --> B[Asciidoctor]
+  B --> C[KaTeX]
+----
+
+== Mathematics
+
+The document declares `:stem: latexmath`, so `stem:[…]` is LaTeX.
+
+Inline LaTeX: stem:[\sqrt{9} = 3] and latexmath:[e^{i\pi} + 1 = 0].
+
+A display formula uses a `latexmath` block:
+
+[latexmath]
+++++
+\int_0^1 x^2\,dx = \frac{1}{3}
+++++
+
+AsciiMath is explicit. Inline:
+
+asciimath:[sqrt(4) = 2]
+
+And as a block:
+
+[asciimath]
+++++
+[[a,b],[c,d]]((n),(k))
+++++
+
+`stem:[…]` follows the document's `:stem:` setting. To mix dialects, use
+`asciimath:[…]` or `[asciimath]` for AsciiMath, and `latexmath:[…]` or
+`[latexmath]` for LaTeX.
+
+An equation environment gets a number from KaTeX:
+
+[stem]
+++++
+\begin{equation}
+x = y^2
+\end{equation}
+++++
+
+The `:eqnums:` attribute does not number ordinary `[stem]` blocks; only
+`\begin{equation}` does.
+
+== Links
+
+External links use the target followed by the label in brackets:
+
+https://tauri.app[Tauri]
+
+[source,asciidoc]
+----
+https://example.com[Example]
+link:https://example.com[Example]
+----
+
+Relative links and anchors are kept as local links in the preview.
+
+== What the preview does not do
+
+* `include::` accepts only local files inside the document's folder, and does
+  not apply `lines`, `tag` or `leveloffset`.
+* `:eqnums:` does not number ordinary stems; use `\begin{equation}`.
+* `stem:[…]` under `:stem: latexmath` is LaTeX. AsciiMath written there is
+  typeset as TeX symbols, not as a radical or matrix.
+* `.asc` and `.ad` are not recognised as AsciiDoc.
+* HTML and PDF exports reuse this preview; a Pandoc export receives the
+  original AsciiDoc source and may resolve includes differently.

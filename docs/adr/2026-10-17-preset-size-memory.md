@@ -1,6 +1,6 @@
 # Preview text size and Math scale are remembered per preset, not defined by it
 
-**Status:** accepted
+**Status:** superseded by `2026-10-18-editor-font-size-per-preset.md`
 **Date:** 2026-10-17
 
 ## Context

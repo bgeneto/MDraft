@@ -1,0 +1,691 @@
+{
+  "note": "Pinned sources for the bundled typefaces. scripts/fetch-fonts.ps1 downloads and verifies every entry, then writes src/assets/fonts/fonts.json. Do not edit fonts.json by hand.",
+  "googleFontsCommit": "47d54ca1ebb14fd864695f1d39dc734f39017c33",
+  "families": [
+    {
+      "id": "source-serif",
+      "name": "Source Serif 4",
+      "kind": "archive",
+      "source": "https://github.com/adobe-fonts/source-serif",
+      "tag": "4.005R",
+      "licence": "OFL-1.1",
+      "licenceFile": "licenses/source-serif-OFL.txt",
+      "licenceUrl": "https://raw.githubusercontent.com/adobe-fonts/source-serif/4.005R/LICENSE.md",
+      "archive": "source-serif-4.005_WOFF2.zip",
+      "archiveSha256": "af10e80dcd2296748b04cb9917db9f7ba0ae65101165fd2f0c16b9812d9abd28",
+      "url": "https://github.com/adobe-fonts/source-serif/releases/download/4.005R/source-serif-4.005_WOFF2.zip",
+      "picks": [
+        {
+          "entry": "source-serif-4.005_WOFF2/VAR/SourceSerif4Variable-Roman.ttf.woff2",
+          "file": "SourceSerif4-Variable-Roman.woff2",
+          "style": "normal",
+          "weight": "200 900"
+        },
+        {
+          "entry": "source-serif-4.005_WOFF2/VAR/SourceSerif4Variable-Italic.ttf.woff2",
+          "file": "SourceSerif4-Variable-Italic.woff2",
+          "style": "italic",
+          "weight": "200 900"
+        }
+      ]
+    },
+    {
+      "id": "source-sans",
+      "name": "Source Sans 3",
+      "kind": "archive",
+      "source": "https://github.com/adobe-fonts/source-sans",
+      "tag": "3.052R",
+      "licence": "OFL-1.1",
+      "licenceFile": "licenses/source-sans-OFL.txt",
+      "licenceUrl": "https://raw.githubusercontent.com/adobe-fonts/source-sans/3.052R/LICENSE.md",
+      "archive": "WOFF2-source-sans-3.052R.zip",
+      "archiveSha256": "d7f6724027fe5ca0bab44d6121284f1fa8f66dec5f2864aa969aed347041ac95",
+      "url": "https://github.com/adobe-fonts/source-sans/releases/download/3.052R/WOFF2-source-sans-3.052R.zip",
+      "picks": [
+        {
+          "entry": "WOFF2/TTF/SourceSans3-Regular.ttf.woff2",
+          "file": "SourceSans3-Regular.woff2",
+          "style": "normal",
+          "weight": "400"
+        },
+        {
+          "entry": "WOFF2/TTF/SourceSans3-Semibold.ttf.woff2",
+          "file": "SourceSans3-Semibold.woff2",
+          "style": "normal",
+          "weight": "600"
+        },
+        {
+          "entry": "WOFF2/TTF/SourceSans3-Bold.ttf.woff2",
+          "file": "SourceSans3-Bold.woff2",
+          "style": "normal",
+          "weight": "700"
+        },
+        {
+          "entry": "WOFF2/TTF/SourceSans3-It.ttf.woff2",
+          "file": "SourceSans3-Italic.woff2",
+          "style": "italic",
+          "weight": "400"
+        },
+        {
+          "entry": "WOFF2/TTF/SourceSans3-SemiboldIt.ttf.woff2",
+          "file": "SourceSans3-SemiboldItalic.woff2",
+          "style": "italic",
+          "weight": "600"
+        },
+        {
+          "entry": "WOFF2/TTF/SourceSans3-BoldIt.ttf.woff2",
+          "file": "SourceSans3-BoldItalic.woff2",
+          "style": "italic",
+          "weight": "700"
+        }
+      ]
+    },
+    {
+      "id": "jetbrains-mono",
+      "name": "JetBrains Mono",
+      "kind": "archive",
+      "source": "https://github.com/JetBrains/JetBrainsMono",
+      "tag": "v2.304",
+      "licence": "OFL-1.1",
+      "licenceFile": "licenses/jetbrains-mono-OFL.txt",
+      "licenceEntry": "OFL.txt",
+      "archive": "JetBrainsMono-2.304.zip",
+      "archiveSha256": "6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf",
+      "url": "https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip",
+      "picks": [
+        {
+          "entry": "fonts/webfonts/JetBrainsMono-Regular.woff2",
+          "file": "JetBrainsMono-Regular.woff2",
+          "style": "normal",
+          "weight": "400"
+        },
+        {
+          "entry": "fonts/webfonts/JetBrainsMono-Bold.woff2",
+          "file": "JetBrainsMono-Bold.woff2",
+          "style": "normal",
+          "weight": "700"
+        },
+        {
+          "entry": "fonts/webfonts/JetBrainsMono-Italic.woff2",
+          "file": "JetBrainsMono-Italic.woff2",
+          "style": "italic",
+          "weight": "400"
+        },
+        {
+          "entry": "fonts/webfonts/JetBrainsMono-BoldItalic.woff2",
+          "file": "JetBrainsMono-BoldItalic.woff2",
+          "style": "italic",
+          "weight": "700"
+        }
+      ]
+    },
+    {
+      "id": "fira-code",
+      "name": "Fira Code",
+      "kind": "archive",
+      "source": "https://github.com/tonsky/FiraCode",
+      "tag": "6.2",
+      "licence": "OFL-1.1",
+      "licenceFile": "licenses/fira-code-OFL.txt",
+      "licenceUrl": "https://raw.githubusercontent.com/tonsky/FiraCode/6.2/LICENSE",
+      "archive": "Fira_Code_v6.2.zip",
+      "archiveSha256": "0949915ba8eb24d89fd93d10a7ff623f42830d7c5ffc3ecbf960e4ecad3e3e79",
+      "url": "https://github.com/tonsky/FiraCode/releases/download/6.2/Fira_Code_v6.2.zip",
+      "picks": [
+        {
+          "entry": "woff2/FiraCode-VF.woff2",
+          "file": "FiraCode-Variable.woff2",
+          "style": "normal",
+          "weight": "300 700"
+        }
+      ]
+    },
+    {
+      "id": "eb-garamond",
+      "name": "EB Garamond",
+      "kind": "google",
+      "source": "https://github.com/google/fonts",
+      "tag": "google-fonts@47d54ca",
+      "licence": "OFL-1.1",
+      "licenceFile": "licenses/eb-garamond-OFL.txt",
+      "licenceUrl": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/ebgaramond/OFL.txt",
+      "sources": [
+        {
+          "file": "EBGaramond[wght].ttf",
+          "url": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/ebgaramond/EBGaramond%5Bwght%5D.ttf",
+          "sha256": "ef9512f92f6d579e5dc75af59a5a4b1b8b47d2eda89e00b954d44520e5369027"
+        },
+        {
+          "file": "EBGaramond-Italic[wght].ttf",
+          "url": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/ebgaramond/EBGaramond-Italic%5Bwght%5D.ttf",
+          "sha256": "bba2c4499c93c9612b90b9825d32b07da52fce2fe57562a1eb6b833553f93c4e"
+        }
+      ],
+      "outputs": [
+        {
+          "file": "EBGaramond-Variable.woff2",
+          "source": "EBGaramond[wght].ttf",
+          "style": "normal",
+          "weight": "400 800",
+          "subset": true,
+          "requiredFeatures": [
+            "onum",
+            "liga"
+          ],
+          "layoutFeatures": [
+            "ccmp",
+            "locl",
+            "rlig",
+            "rvrn",
+            "liga",
+            "calt",
+            "onum",
+            "kern",
+            "mark",
+            "mkmk"
+          ]
+        },
+        {
+          "file": "EBGaramond-Variable-Italic.woff2",
+          "source": "EBGaramond-Italic[wght].ttf",
+          "style": "italic",
+          "weight": "400 800",
+          "subset": true,
+          "requiredFeatures": [
+            "onum",
+            "liga"
+          ],
+          "layoutFeatures": [
+            "ccmp",
+            "locl",
+            "rlig",
+            "rvrn",
+            "liga",
+            "calt",
+            "onum",
+            "kern",
+            "mark",
+            "mkmk"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ibm-plex-mono",
+      "name": "IBM Plex Mono",
+      "kind": "woff2",
+      "source": "https://github.com/IBM/plex",
+      "tag": "IBM/plex@71f5589",
+      "licence": "OFL-1.1",
+      "licenceFile": "licenses/ibm-plex-mono-OFL.txt",
+      "licenceUrl": "https://raw.githubusercontent.com/IBM/plex/71f558992315a12ca1f06a2215d57962a1992162/packages/plex-mono/LICENSE.txt",
+      "sources": [
+        {
+          "file": "IBMPlexMono-Regular.woff2",
+          "url": "https://raw.githubusercontent.com/IBM/plex/71f558992315a12ca1f06a2215d57962a1992162/packages/plex-mono/fonts/complete/woff2/IBMPlexMono-Regular.woff2",
+          "sha256": "ba204497f16b6d334cee9d1e963a831b73e3a56e1d6300a8489d18df7214b350"
+        },
+        {
+          "file": "IBMPlexMono-Italic.woff2",
+          "url": "https://raw.githubusercontent.com/IBM/plex/71f558992315a12ca1f06a2215d57962a1992162/packages/plex-mono/fonts/complete/woff2/IBMPlexMono-Italic.woff2",
+          "sha256": "2024bf2b08027dcd6d09091385756e327744bbe26b782c411381dffc40ffc622"
+        },
+        {
+          "file": "IBMPlexMono-Bold.woff2",
+          "url": "https://raw.githubusercontent.com/IBM/plex/71f558992315a12ca1f06a2215d57962a1992162/packages/plex-mono/fonts/complete/woff2/IBMPlexMono-Bold.woff2",
+          "sha256": "ea576f38d05cc44cca48c45314984beb8cc1d2b886f58e1dce99f15dc344eb1d"
+        }
+      ],
+      "outputs": [
+        {
+          "file": "IBMPlexMono-Regular.woff2",
+          "source": "IBMPlexMono-Regular.woff2",
+          "style": "normal",
+          "weight": "400",
+          "copy": true
+        },
+        {
+          "file": "IBMPlexMono-Italic.woff2",
+          "source": "IBMPlexMono-Italic.woff2",
+          "style": "italic",
+          "weight": "400",
+          "copy": true
+        },
+        {
+          "file": "IBMPlexMono-Bold.woff2",
+          "source": "IBMPlexMono-Bold.woff2",
+          "style": "normal",
+          "weight": "700",
+          "copy": true
+        }
+      ]
+    },
+    {
+      "id": "bodoni-moda",
+      "name": "Bodoni Moda",
+      "kind": "google",
+      "source": "https://github.com/google/fonts",
+      "tag": "google-fonts@47d54ca",
+      "licence": "OFL-1.1",
+      "licenceFile": "licenses/bodoni-moda-OFL.txt",
+      "licenceUrl": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/bodonimoda/OFL.txt",
+      "sources": [
+        {
+          "file": "BodoniModa[opsz,wght].ttf",
+          "url": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/bodonimoda/BodoniModa%5Bopsz,wght%5D.ttf",
+          "sha256": "550f5e34ee0a828d7941b1fe9bc58b34e5260d3f33a61532e6d0a0114e79a5cf"
+        },
+        {
+          "file": "BodoniModa-Italic[opsz,wght].ttf",
+          "url": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/bodonimoda/BodoniModa-Italic%5Bopsz,wght%5D.ttf",
+          "sha256": "dfff1619f8f6871c6372f8855b67211f9a73b4e93d45aca868cd8f46a48622de"
+        }
+      ],
+      "outputs": [
+        {
+          "file": "BodoniModa-Variable.woff2",
+          "source": "BodoniModa[opsz,wght].ttf",
+          "style": "normal",
+          "weight": "400 900",
+          "subset": true,
+          "requiredFeatures": [
+            "onum",
+            "tnum",
+            "liga"
+          ],
+          "layoutFeatures": [
+            "ccmp",
+            "locl",
+            "rlig",
+            "rvrn",
+            "liga",
+            "calt",
+            "onum",
+            "kern",
+            "mark",
+            "mkmk",
+            "tnum"
+          ]
+        },
+        {
+          "file": "BodoniModa-Variable-Italic.woff2",
+          "source": "BodoniModa-Italic[opsz,wght].ttf",
+          "style": "italic",
+          "weight": "400 900",
+          "subset": true,
+          "requiredFeatures": [
+            "onum",
+            "tnum",
+            "liga"
+          ],
+          "layoutFeatures": [
+            "ccmp",
+            "locl",
+            "rlig",
+            "rvrn",
+            "liga",
+            "calt",
+            "onum",
+            "kern",
+            "mark",
+            "mkmk",
+            "tnum"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "archivo",
+      "name": "Archivo",
+      "kind": "google",
+      "source": "https://github.com/google/fonts",
+      "tag": "google-fonts@47d54ca",
+      "licence": "OFL-1.1",
+      "licenceFile": "licenses/archivo-OFL.txt",
+      "licenceUrl": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/archivo/OFL.txt",
+      "sources": [
+        {
+          "file": "Archivo[wdth,wght].ttf",
+          "url": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/archivo/Archivo%5Bwdth,wght%5D.ttf",
+          "sha256": "0e094a7d3c7c4c25cf1310c4b30014f1dae9332220b1c2c88f4fa996f0b05053"
+        }
+      ],
+      "outputs": [
+        {
+          "file": "Archivo-Semibold.woff2",
+          "source": "Archivo[wdth,wght].ttf",
+          "style": "normal",
+          "weight": "600",
+          "subset": true,
+          "instance": {
+            "wght": 600,
+            "wdth": 100
+          },
+          "requiredFeatures": [
+            "liga"
+          ],
+          "layoutFeatures": [
+            "ccmp",
+            "locl",
+            "rlig",
+            "rvrn",
+            "liga",
+            "kern",
+            "mark",
+            "mkmk"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "jost",
+      "name": "Jost",
+      "kind": "google",
+      "source": "https://github.com/google/fonts",
+      "tag": "google-fonts@47d54ca",
+      "licence": "OFL-1.1",
+      "licenceFile": "licenses/jost-OFL.txt",
+      "licenceUrl": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/jost/OFL.txt",
+      "sources": [
+        {
+          "file": "Jost[wght].ttf",
+          "url": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/jost/Jost%5Bwght%5D.ttf",
+          "sha256": "6343b70971000b04c5d401c96ae08ce371086135e999d5e1e1413039c0213076"
+        },
+        {
+          "file": "Jost-Italic[wght].ttf",
+          "url": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/jost/Jost-Italic%5Bwght%5D.ttf",
+          "sha256": "15a6f7e3e11f9e8e338a583a6fe03e8f6b1d9ce877efa3fe579282b6c1cb15fe"
+        }
+      ],
+      "outputs": [
+        {
+          "file": "Jost-Variable.woff2",
+          "source": "Jost[wght].ttf",
+          "style": "normal",
+          "weight": "100 900",
+          "subset": true,
+          "layoutFeatures": [
+            "ccmp",
+            "locl",
+            "rlig",
+            "rvrn",
+            "liga",
+            "calt",
+            "onum",
+            "kern",
+            "mark",
+            "mkmk"
+          ]
+        },
+        {
+          "file": "Jost-Variable-Italic.woff2",
+          "source": "Jost-Italic[wght].ttf",
+          "style": "italic",
+          "weight": "100 900",
+          "subset": true,
+          "layoutFeatures": [
+            "ccmp",
+            "locl",
+            "rlig",
+            "rvrn",
+            "liga",
+            "calt",
+            "onum",
+            "kern",
+            "mark",
+            "mkmk"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "azeret-mono",
+      "name": "Azeret Mono",
+      "kind": "google",
+      "source": "https://github.com/google/fonts",
+      "tag": "google-fonts@47d54ca",
+      "licence": "OFL-1.1",
+      "licenceFile": "licenses/azeret-mono-OFL.txt",
+      "licenceUrl": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/azeretmono/OFL.txt",
+      "sources": [
+        {
+          "file": "AzeretMono[wght].ttf",
+          "url": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/azeretmono/AzeretMono%5Bwght%5D.ttf",
+          "sha256": "f13962c26c1baa864aff7768364001f9bca6e506f41b9a3037c0d6a31e2ca736"
+        }
+      ],
+      "outputs": [
+        {
+          "file": "AzeretMono-Variable.woff2",
+          "source": "AzeretMono[wght].ttf",
+          "style": "normal",
+          "weight": "100 900",
+          "subset": true,
+          "requiredFeatures": [
+            "zero",
+            "calt"
+          ],
+          "layoutFeatures": [
+            "ccmp",
+            "locl",
+            "rlig",
+            "rvrn",
+            "liga",
+            "calt",
+            "zero",
+            "kern",
+            "mark",
+            "mkmk"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "alegreya",
+      "name": "Alegreya",
+      "kind": "google",
+      "source": "https://github.com/google/fonts",
+      "tag": "google-fonts@47d54ca",
+      "licence": "OFL-1.1",
+      "licenceFile": "licenses/alegreya-OFL.txt",
+      "licenceUrl": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/alegreya/OFL.txt",
+      "sources": [
+        {
+          "file": "Alegreya[wght].ttf",
+          "url": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/alegreya/Alegreya%5Bwght%5D.ttf",
+          "sha256": "ba5564634b93a8f8ba57b48cd4f1ae7417d2b4656fbac779028679b00de3cf12"
+        },
+        {
+          "file": "Alegreya-Italic[wght].ttf",
+          "url": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/alegreya/Alegreya-Italic%5Bwght%5D.ttf",
+          "sha256": "fa915eec76227935dc5fb678953c94b71287c360928013cfdb441dfe52f5a391"
+        }
+      ],
+      "outputs": [
+        {
+          "file": "Alegreya-Variable.woff2",
+          "source": "Alegreya[wght].ttf",
+          "style": "normal",
+          "weight": "400 900",
+          "subset": true,
+          "requiredFeatures": [
+            "tnum",
+            "liga"
+          ],
+          "layoutFeatures": [
+            "ccmp",
+            "locl",
+            "rlig",
+            "rvrn",
+            "liga",
+            "calt",
+            "kern",
+            "mark",
+            "mkmk",
+            "tnum"
+          ]
+        },
+        {
+          "file": "Alegreya-Variable-Italic.woff2",
+          "source": "Alegreya-Italic[wght].ttf",
+          "style": "italic",
+          "weight": "400 900",
+          "subset": true,
+          "requiredFeatures": [
+            "tnum",
+            "liga"
+          ],
+          "layoutFeatures": [
+            "ccmp",
+            "locl",
+            "rlig",
+            "rvrn",
+            "liga",
+            "calt",
+            "kern",
+            "mark",
+            "mkmk",
+            "tnum"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "caveat",
+      "name": "Caveat",
+      "kind": "google",
+      "source": "https://github.com/google/fonts",
+      "tag": "google-fonts@47d54ca",
+      "licence": "OFL-1.1",
+      "licenceFile": "licenses/caveat-OFL.txt",
+      "licenceUrl": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/caveat/OFL.txt",
+      "sources": [
+        {
+          "file": "Caveat[wght].ttf",
+          "url": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/caveat/Caveat%5Bwght%5D.ttf",
+          "sha256": "0bdb6b660482d31531b3945849fba5916b3ef8695da7024a9e6b9ee3c4157988"
+        }
+      ],
+      "outputs": [
+        {
+          "file": "Caveat-Semibold.woff2",
+          "source": "Caveat[wght].ttf",
+          "style": "normal",
+          "weight": "600",
+          "subset": true,
+          "instance": {
+            "wght": 600
+          },
+          "requiredFeatures": [
+            "liga"
+          ],
+          "layoutFeatures": [
+            "ccmp",
+            "locl",
+            "rlig",
+            "rvrn",
+            "liga",
+            "calt",
+            "onum",
+            "kern",
+            "mark",
+            "mkmk"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "victor-mono",
+      "name": "Victor Mono",
+      "kind": "woff2",
+      "source": "https://github.com/rubjo/victor-mono",
+      "tag": "victor-mono@1.5.6",
+      "licence": "OFL-1.1",
+      "licenceFile": "licenses/victor-mono-OFL.txt",
+      "licenceUrl": "https://raw.githubusercontent.com/rubjo/victor-mono/a5d059ff7a098a4c63ca74ab4c9ff8b9876534bf/LICENSE",
+      "sources": [
+        {
+          "file": "VictorMono-Regular.woff2",
+          "url": "https://cdn.jsdelivr.net/npm/victormono@1.5.6/dist/woff2/VictorMono-Regular.woff2",
+          "sha256": "5e15272c9aa63b4c8557766d705a712415edaa23e5e26b15c61433ab48096d84"
+        },
+        {
+          "file": "VictorMono-Italic.woff2",
+          "url": "https://cdn.jsdelivr.net/npm/victormono@1.5.6/dist/woff2/VictorMono-Italic.woff2",
+          "sha256": "d4f77a24b83d37a886528b3b84ee8e4fe165742ba780ecb08c0fc9fb94512562"
+        },
+        {
+          "file": "VictorMono-Bold.woff2",
+          "url": "https://cdn.jsdelivr.net/npm/victormono@1.5.6/dist/woff2/VictorMono-Bold.woff2",
+          "sha256": "2aea0f0a47691e110c1c8e3ff046607a0329897e73d1a63ea9c669c91c444ce7"
+        }
+      ],
+      "outputs": [
+        {
+          "file": "VictorMono-Regular.woff2",
+          "source": "VictorMono-Regular.woff2",
+          "style": "normal",
+          "weight": "400",
+          "subset": true,
+          "layoutFeatures": [
+            "ccmp",
+            "locl",
+            "rlig",
+            "rvrn",
+            "liga",
+            "calt",
+            "kern",
+            "mark",
+            "mkmk"
+          ],
+          "requiredFeatures": [
+            "calt"
+          ]
+        },
+        {
+          "file": "VictorMono-Italic.woff2",
+          "source": "VictorMono-Italic.woff2",
+          "style": "italic",
+          "weight": "400",
+          "subset": true,
+          "layoutFeatures": [
+            "ccmp",
+            "locl",
+            "rlig",
+            "rvrn",
+            "liga",
+            "calt",
+            "kern",
+            "mark",
+            "mkmk"
+          ],
+          "requiredFeatures": [
+            "calt"
+          ]
+        },
+        {
+          "file": "VictorMono-Bold.woff2",
+          "source": "VictorMono-Bold.woff2",
+          "style": "normal",
+          "weight": "700",
+          "subset": true,
+          "layoutFeatures": [
+            "ccmp",
+            "locl",
+            "rlig",
+            "rvrn",
+            "liga",
+            "calt",
+            "kern",
+            "mark",
+            "mkmk"
+          ],
+          "requiredFeatures": [
+            "calt"
+          ]
+        }
+      ]
+    }
+  ]
+}
