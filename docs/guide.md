@@ -59,8 +59,12 @@ compiler's absence rather than an empty pane.
 The preview has two views:
 
 - **Document** shows Typst's HTML export: flowing, selectable text in the
-  application's typography. It cannot represent page layout, so page size,
-  `#align`, boxes and page breaks are not shown. Double-clicking or selecting a
+  application's typography. It cannot represent page layout, and the layout
+  containers it cannot represent — `#columns`, `#grid`, `#align`, `#stack`,
+  `#place`, `#rect` and `#pad` — are dropped *together with everything inside
+  them*. A paper whose body is a two-column grid therefore shows only the text
+  that sits outside the grid; the pane names the constructs it dropped and
+  offers **Show pages**. Double-clicking or selecting a
   prose word paints the corresponding source word; generated text such as
   `#lorem` has no source word and paints nothing.
 - **Pages** shows the compiler's real PDF, drawn by PDF.js. This is what a PDF
@@ -69,6 +73,12 @@ The preview has two views:
   word or dragging across a range paints that selection and reveals it. The line
   around the click identifies the occurrence, so a repeated word in a second
   column does not jump to the first occurrence. Generated text paints nothing.
+  In the dark theme the pages follow the application: the PDF's white paper and
+  black text become the app's dark surface and off-white. In both themes a page
+  fills the pane's width — its side edges are clipped, and only the rule between
+  pages shows where one ends — so the preview reads as a continuous document
+  rather than a sheet floating in the middle. Because PDF.js hands the page over
+  as one raster, figures inside it are inverted with the text in the dark theme.
 
 An `#include` or `#image` resolves against the document's folder, as it does
 on export. PDF export from a `.typ` document goes directly through Typst, so

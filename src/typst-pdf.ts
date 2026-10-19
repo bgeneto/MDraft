@@ -4,7 +4,9 @@
 //! things the old SVG page view could not: a canvas we can draw at the pane's
 //! resolution, and a text layer whose spans can be selected, copied and
 //! hit-tested. The page is laid out once at 96 dpi and fitted to the pane with a
-//! CSS transform, so resizing the pane never re-flows the text layer.
+//! CSS transform, so resizing the pane never re-flows the text layer; only the
+//! canvas is re-rastered when the fit changes. The fit may exceed 1 so the page
+//! reaches both sides of the pane, with a few pixels of bleed clipped away.
 //!
 //! The text layer is the only source of selection/click data. This module never
 //! touches the editor; it reports the selected text and lets `main.ts` decide
@@ -22,8 +24,10 @@ import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
 /** A4 at 96 dpi, the width the old SVG page view capped at. */
 const MAX_PAGE_WIDTH = 794;
-/** Space kept for the pane's padding and a scrollbar. */
-const PANE_GUTTER = 24;
+/** The fitted page runs this far past the pane, half clipped on each side. */
+const PAGE_BLEED = 4;
+/** A page canvas above this many device pixels is downscaled to bound memory. */
+const MAX_CANVAS_PIXELS = 12_000_000;
 /** Render pages this far outside the viewport, then free their canvas again. */
 const PRELOAD_MARGIN = "600px 0px";
 /** A selected phrase longer than this is not a word sync request. */
@@ -103,6 +107,7 @@ export class TypstPdfPreview {
   private observer: IntersectionObserver | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private fit = 1;
+  private fitTimer = 0;
   private maxPageWidth = MAX_PAGE_WIDTH;
   private disposed = false;
   private selectionTimer = 0;
@@ -224,6 +229,8 @@ export class TypstPdfPreview {
     this.selectionTimer = 0;
     window.clearTimeout(this.clickTimer);
     this.clickTimer = 0;
+    window.clearTimeout(this.fitTimer);
+    this.fitTimer = 0;
     this.host.removeEventListener("click", this.click);
     this.host.removeEventListener("dblclick", this.doubleClick);
     this.host.removeEventListener("mouseup", this.mouseUp);
@@ -316,9 +323,39 @@ export class TypstPdfPreview {
 
   private applyFit(): void {
     if (this.disposed || this.pages.length === 0) return;
-    const available = Math.max(160, this.pane.clientWidth - PANE_GUTTER);
-    this.fit = Math.min(1, available / this.maxPageWidth);
+    // Fit to the pane, allowing a scale above 1. The bleed makes the page a few
+    // pixels wider than the pane; the pane clips it, so no side gutter can show
+    // and a resize cannot leave a one-pixel seam.
+    const available = Math.max(160, this.pane.clientWidth + PAGE_BLEED);
+    const fit = available / this.maxPageWidth;
+    if (Math.abs(fit - this.fit) < 0.001) return;
+    this.fit = fit;
     this.host.style.setProperty("--typst-fit", this.fit.toFixed(4));
+
+    // CSS scales the live canvas while the window is being dragged; the raster
+    // itself has to be redrawn at the final size or its glyphs stay soft. A page
+    // that has not been painted yet will use the new fit on its first paint.
+    window.clearTimeout(this.fitTimer);
+    if (this.pages.some((page) => page.rendered || page.rendering)) {
+      this.fitTimer = window.setTimeout(() => {
+        this.fitTimer = 0;
+        this.repaintRendered();
+      }, 140);
+    }
+  }
+
+  /** Redraw the pages that are already on screen at the fit's pixel scale. */
+  private repaintRendered(): void {
+    if (this.disposed) return;
+    for (const page of this.pages) {
+      if (!page.rendered && !page.rendering) continue;
+      page.renderVersion += 1;
+      page.task?.cancel();
+      page.task = null;
+      page.rendering = false;
+      page.rendered = false;
+      void this.paint(page, true);
+    }
   }
 
   private observePages(): void {
@@ -336,27 +373,50 @@ export class TypstPdfPreview {
     for (const page of this.pages) this.observer.observe(page.shell);
   }
 
-  private async paint(page: PdfPage): Promise<void> {
+  private async paint(page: PdfPage, keepVisible = false): Promise<void> {
     if (this.disposed || page.rendered || page.rendering) return;
     const version = ++page.renderVersion;
     page.rendering = true;
+    // A repaint at a new fit renders off-screen first. The page stays visible
+    // (scaled, therefore briefly soft) until the new bitmap is ready, instead of
+    // blanking while the render runs.
+    const target =
+      keepVisible && page.canvas.width > 0 ? document.createElement("canvas") : page.canvas;
     try {
       const ratio = Math.min(window.devicePixelRatio || 1, 2);
-      page.canvas.width = Math.max(1, Math.floor(page.viewport.width * ratio));
-      page.canvas.height = Math.max(1, Math.floor(page.viewport.height * ratio));
+      // Below a fit of 1 the bitmap is downscaled, which is sharp. Above it, the
+      // canvas is stretched by the page transform, so render at the displayed
+      // size instead of letting the browser enlarge a 96 dpi image.
+      const wanted = ratio * Math.max(1, this.fit);
+      const area = page.viewport.width * page.viewport.height;
+      const scale = Math.min(wanted, Math.sqrt(MAX_CANVAS_PIXELS / area));
+      target.width = Math.max(1, Math.floor(page.viewport.width * scale));
+      target.height = Math.max(1, Math.floor(page.viewport.height * scale));
       const task = page.page.render({
-        canvas: page.canvas,
+        canvas: target,
         viewport: page.viewport,
-        transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0],
+        transform: scale === 1 ? undefined : [scale, 0, 0, scale, 0, 0],
       });
       page.task = task;
       await task.promise;
-      if (!this.disposed && page.renderVersion === version) page.rendered = true;
+      if (!this.disposed && page.renderVersion === version) {
+        if (target !== page.canvas) {
+          page.canvas.width = target.width;
+          page.canvas.height = target.height;
+          page.canvas.getContext("2d")?.drawImage(target, 0, 0);
+          target.width = 0;
+          target.height = 0;
+        }
+        page.rendered = true;
+      }
     } catch (error) {
       // A cancelled render is the normal result of scrolling a page out while
       // it is being painted. Leaving the shell blank is correct; a real failure
       // is surfaced by the next render or by the page never appearing.
       if (!this.disposed && page.renderVersion === version) {
+        // A failed repaint kept the old bitmap: leave the page marked as drawn
+        // so the next fit change can try again.
+        if (target !== page.canvas && page.canvas.width > 0) page.rendered = true;
         console.warn("Typst page render failed", error);
       }
     } finally {

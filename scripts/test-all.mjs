@@ -95,6 +95,14 @@ const SUITES = [
     script: "autoclose-unit.mjs",
   },
   {
+    // What to remember when the tabs change, and what to open at boot: pure
+    // list logic, no application.
+    id: "tabs-restore-unit",
+    title: "Remembered tabs (unit)",
+    kind: "node",
+    script: "tabs-restore-unit.mjs",
+  },
+  {
     id: "smoke",
     title: "DOM smoke",
     kind: "cdp",
@@ -200,6 +208,19 @@ const SUITES = [
     kind: "cdp",
     script: "document-tabs-test.mjs",
     doc: "samples/feature-tour.md",
+  },
+  {
+    // Two launches on one settings directory. Phase 1 opens documents, reorders
+    // and activates, sets the launch preference, then closes a tab and returns;
+    // the harness closes the window with WM_CLOSE (so the close flush runs) and
+    // starts the same binary again **without a document argument** — argv would
+    // win over the remembered set and hide what this layer exists to see.
+    id: "tabs-restore",
+    title: "Tab restore across launches",
+    kind: "restart",
+    script: "tabs-restore-test.mjs",
+    doc: "samples/feature-tour.md",
+    extras: ["README.md", "docs/guide.md"],
   },
   {
     // Clears Recents and opens temporary documents, so it owns its instance.
@@ -561,6 +582,26 @@ async function waitForCdp(port, child, documentName, timeoutMs = 60000) {
   throw new Error(`no CDP page target on port ${port} after ${timeoutMs} ms`);
 }
 
+/**
+ * Wait until nothing answers on `port` any more.
+ *
+ * Only the restart layer needs this: it starts a second instance on the same
+ * port after the first exits, and WebView2 can hold the listening socket for a
+ * moment after the process is gone. A fresh instance would fail to bind, and the
+ * readiness poll would then time out against a dead port.
+ */
+async function waitForPortFree(port, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(1000) });
+    } catch {
+      return;
+    }
+    await sleep(250);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Result parsing. The layers own their counts; this script must not repeat them,
 // because a count hard-coded here would drift the moment a check is added.
@@ -570,6 +611,25 @@ function parseChecks(output) {
   if (!matches.length) return null;
   const last = matches.at(-1);
   return { passed: Number(last[1]), total: Number(last[2]) };
+}
+
+/**
+ * Sum every per-phase `N/M checks passed` line a restart suite printed.
+ *
+ * The restart layer is two processes, so it prints two summaries; `parseChecks`
+ * reads only the last, which would report phase 2's total as the suite's. The
+ * harness's contract is one count per suite, so add them.
+ */
+function parsePhaseChecks(output) {
+  const matches = [...output.matchAll(/(\d+)\/(\d+) checks passed/g)];
+  if (!matches.length) return null;
+  return matches.reduce(
+    (sum, match) => ({
+      passed: sum.passed + Number(match[1]),
+      total: sum.total + Number(match[2]),
+    }),
+    { passed: 0, total: 0 },
+  );
 }
 
 function parseCounts(output) {
@@ -739,13 +799,13 @@ async function runRustSuite(options) {
   };
 }
 
-async function launchApp(suite, port, context, { temp, userData }) {
+async function launchApp(suite, port, context, { temp, userData, noDocument = false, label = suite.id }) {
   const doc = path.join(repoRoot, suite.doc);
-  if (!fs.existsSync(doc)) throw new Error(`missing fixture: ${suite.doc}`);
+  if (!noDocument && !fs.existsSync(doc)) throw new Error(`missing fixture: ${suite.doc}`);
 
-  const outFd = fs.openSync(path.join(context.logDir, `${suite.id}.app.out.log`), "w");
-  const errFd = fs.openSync(path.join(context.logDir, `${suite.id}.app.err.log`), "w");
-  const child = spawn(context.staged, [doc], {
+  const outFd = fs.openSync(path.join(context.logDir, `${label}.app.out.log`), "w");
+  const errFd = fs.openSync(path.join(context.logDir, `${label}.app.err.log`), "w");
+  const child = spawn(context.staged, noDocument ? [] : [doc], {
     cwd: context.stage,
     env: {
       ...process.env,
@@ -767,7 +827,9 @@ async function launchApp(suite, port, context, { temp, userData }) {
     child.on("error", () => {});
   activeApp = child;
   try {
-    await waitForCdp(port, child, path.basename(suite.doc));
+    // A second launch with no document argument has no title to wait for; the
+    // suite's own probes establish what is on screen.
+    await waitForCdp(port, child, noDocument ? null : path.basename(suite.doc));
   } catch (error) {
     fs.closeSync(outFd);
     fs.closeSync(errFd);
@@ -834,6 +896,75 @@ async function runCdpSuite(suite, port, options, context) {
   }
 }
 
+/**
+ * A layer that spans two launches on one settings directory.
+ *
+ * The phases are two invocations of the same script. Between them the harness
+ * closes the window with WM_CLOSE — the message the title-bar X sends, so the
+ * close handler's remembered-tab flush runs — waits for the process to be gone
+ * and only then starts the binary again, **without a document argument**; argv
+ * would win over the remembered set and hide what the layer exists to see.
+ */
+async function runRestartSuite(suite, port, options, context) {
+  resetAppState();
+  const temp = path.join(context.stage, "tmp", suite.id);
+  const userData = path.join(context.stage, "webview", suite.id);
+  fs.mkdirSync(temp, { recursive: true });
+  fs.mkdirSync(userData, { recursive: true });
+  const env = { ...process.env, TEMP: temp, TMP: temp };
+  const args = (phase) => [
+    path.join("scripts", suite.script),
+    String(port),
+    phase,
+    path.join(repoRoot, suite.doc),
+    ...(suite.extras ?? []).map((entry) => path.join(repoRoot, entry)),
+  ];
+
+  const runs = [];
+  let launched = null;
+  try {
+    launched = await launchApp(suite, port, context, { temp, userData });
+    runs.push(await run(process.execPath, args("phase1"), { env, stream: options.verbose }));
+    // WM_CLOSE, not /F: the close handler has to run so the remembered tab list
+    // is flushed before the process ends.
+    await stopApp(launched.child);
+    activeApp = null;
+    fs.closeSync(launched.outFd);
+    fs.closeSync(launched.errFd);
+    launched = null;
+
+    if (runs[0].code === 0) {
+      await waitForPortFree(port);
+      launched = await launchApp(suite, port, context, {
+        temp,
+        userData,
+        noDocument: true,
+        label: `${suite.id}-phase2`,
+      });
+      runs.push(await run(process.execPath, args("phase2"), { env, stream: options.verbose }));
+    }
+  } finally {
+    if (launched) {
+      await stopApp(launched.child);
+      activeApp = null;
+      fs.closeSync(launched.outFd);
+      fs.closeSync(launched.errFd);
+    }
+  }
+
+  const output = runs.map((entry) => entry.out + entry.err).join("");
+  const checks = parsePhaseChecks(output);
+  const failed = runs.findIndex((entry) => entry.code !== 0);
+  const ok = failed < 0 && (!checks || checks.passed === checks.total);
+  const detail =
+    failed >= 0
+      ? `phase ${failed + 1} exited ${runs[failed].code}${checks ? `, ${checks.passed}/${checks.total} checks so far` : ""}`
+      : checks
+        ? `${checks.passed}/${checks.total} checks`
+        : "exit 0, no check line";
+  return { ok, detail, output };
+}
+
 async function runCloseSuite(options, context) {
   // The PowerShell layer launches the binary itself; hand it the staged copy and
   // the same private WebView2 folder, or it inherits the developer's profile.
@@ -875,7 +1006,9 @@ async function main() {
 
   let suites = selectedSuites(options);
   if (!CDP_CAPABLE) {
-    const skipped = suites.filter((suite) => suite.kind === "cdp" || suite.kind === "close");
+    const skipped = suites.filter(
+      (suite) => suite.kind === "cdp" || suite.kind === "close" || suite.kind === "restart",
+    );
     if (skipped.length) {
       console.log(`note: ${skipped.length} UI layer(s) cannot run on ${process.platform} — WebKitGTK has no CDP endpoint.`);
       suites = suites.filter((suite) => suite.kind === "rust" || suite.kind === "node");
@@ -914,7 +1047,9 @@ async function main() {
 
     // A run that only touches Rust needs neither a release binary nor the
     // developer's application profile; do not copy or move either for it.
-    const touchesApp = suites.some((suite) => suite.kind === "cdp" || suite.kind === "close");
+    const touchesApp = suites.some(
+      (suite) => suite.kind === "cdp" || suite.kind === "close" || suite.kind === "restart",
+    );
     const binary = touchesApp ? findReleaseBinary() : null;
     if (touchesApp && !binary) {
       fail("no release binary in src-tauri/target/release — run without --no-build, or: npm run dist");
@@ -957,7 +1092,10 @@ async function main() {
           else {
             const port = await findFreePort(portCursor);
             portCursor = port + 1; // one port per instance, so a slow close cannot collide
-            result = await runCdpSuite(suite, port, options, context);
+            result =
+              suite.kind === "restart"
+                ? await runRestartSuite(suite, port, options, context)
+                : await runCdpSuite(suite, port, options, context);
           }
         } catch (error) {
           result = { ok: false, detail: error.message, output: "" };

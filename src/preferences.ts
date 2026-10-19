@@ -670,10 +670,13 @@ function buildSections(host: PreferencesHost): Section[] {
         {
           kind: "select",
           label: "On Launch",
+          help:
+            "Reopen the last tabs restores every saved document that was open when MDraft last closed, in the same tab order with the same one active. Only paths are remembered: untitled or unsaved content is not restored, and a file that has been deleted is skipped.",
           options: [
             ["welcome", "Show the welcome document"],
             ["new", "Open a new file"],
             ["last", "Reopen the most recent file"],
+            ["tabs", "Reopen the last tabs"],
           ],
           get: () => s().onLaunch,
           set: (value) => host.update({ onLaunch: value as api.OnLaunch }),

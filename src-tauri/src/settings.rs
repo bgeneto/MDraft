@@ -14,6 +14,14 @@ use tauri::{AppHandle, Manager, Runtime};
 /// would throw away paths the sidebar can still offer.
 pub(crate) const MAX_RECENT: usize = 100;
 
+/// Maximum number of documents remembered as "the tabs that were open".
+///
+/// The frontend deduplicates and caps the list it writes; this is the second
+/// line of defence for a hand-edited or older `settings.json`, the same way
+/// [`MAX_RECENT`] guards the recent list. Twenty is the agreed ceiling: enough
+/// for a realistic working set, small enough that restoring stays a few reads.
+pub(crate) const MAX_LAST_TABS: usize = 20;
+
 /// One pandoc export target: how to invoke pandoc, and what to do afterwards.
 ///
 /// `arguments` is a token list, not a shell string, and four placeholders are
@@ -264,9 +272,19 @@ pub struct Settings {
     pub syntax_theme: String,
     pub recent_files: Vec<String>,
     pub last_directory: Option<String>,
+    /// Paths of the tabs that were open when the window last closed.
+    ///
+    /// Written by the frontend whenever the saved set changes, and read at boot
+    /// when `on_launch` is `"tabs"`. Only documents with a path appear here:
+    /// an untitled buffer has nothing to remember. Order is the tab order.
+    #[serde(default)]
+    pub last_tabs: Vec<String>,
+    /// The path of the tab that should come back active, or `None` for the first.
+    #[serde(default)]
+    pub last_active_tab: Option<String>,
 
     // ---- Preferences: Files ----------------------------------------------
-    /// "welcome" | "new" | "last"
+    /// "welcome" | "new" | "last" | "tabs"
     pub on_launch: String,
     pub default_extension: String,
     pub record_recent: bool,
@@ -386,6 +404,8 @@ impl Default for Settings {
             syntax_theme: "auto".into(),
             recent_files: Vec::new(),
             last_directory: None,
+            last_tabs: Vec::new(),
+            last_active_tab: None,
 
             on_launch: "welcome".into(),
             default_extension: "md".into(),
@@ -518,6 +538,7 @@ fn parse_settings(raw: &str) -> Option<Settings> {
     // here so a load cannot grow the settings file without bound; the menu then
     // takes its own smaller slice when it is built.
     settings.recent_files.truncate(MAX_RECENT);
+    settings.last_tabs.truncate(MAX_LAST_TABS);
     Some(settings)
 }
 
@@ -550,6 +571,7 @@ impl AppState {
         // frontend's whole-object save. Keeping the cap here means a stale or
         // hand-built payload cannot grow the stored history without bound.
         next.recent_files.truncate(MAX_RECENT);
+        next.last_tabs.truncate(MAX_LAST_TABS);
         write_json(&self.config_file, &next)?;
         let mut guard = self.settings.lock().map_err(|e| e.to_string())?;
         *guard = next.clone();
@@ -861,6 +883,60 @@ mod tests {
         assert!(same_path(r"C:\Docs\a.md", r"c:\docs\A.MD"));
         #[cfg(not(windows))]
         assert!(!same_path("/Docs/a.md", "/docs/a.md"));
+    }
+
+    #[test]
+    fn remembered_tabs_default_to_empty_and_come_back_from_old_files() {
+        let s = Settings::default();
+        assert!(s.last_tabs.is_empty());
+        assert_eq!(s.last_active_tab, None);
+
+        // A file written before the feature existed has neither key. It must
+        // load, with the preference untouched and the list empty.
+        let parsed: Settings =
+            serde_json::from_str(r#"{"theme":"dark","onLaunch":"last"}"#).unwrap();
+        assert_eq!(parsed.on_launch, "last");
+        assert!(parsed.last_tabs.is_empty());
+        assert_eq!(parsed.last_active_tab, None);
+    }
+
+    #[test]
+    fn remembered_tabs_round_trip() {
+        let mut settings = Settings::default();
+        settings.on_launch = "tabs".into();
+        settings.last_tabs = vec![
+            "C:/Docs/a.md".into(),
+            "C:/Docs/b.md".into(),
+            "C:/Docs/c.md".into(),
+        ];
+        settings.last_active_tab = Some("C:/Docs/b.md".into());
+
+        let json = serde_json::to_string(&settings).unwrap();
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.on_launch, "tabs");
+        assert_eq!(
+            back.last_tabs,
+            vec!["C:/Docs/a.md", "C:/Docs/b.md", "C:/Docs/c.md"]
+        );
+        assert_eq!(back.last_active_tab.as_deref(), Some("C:/Docs/b.md"));
+    }
+
+    #[test]
+    fn settings_load_caps_an_overlong_remembered_tab_list() {
+        // Same guard as the recent list: a hand-edited file must not make the
+        // next launch open hundreds of documents.
+        let paths: Vec<String> = (0..=MAX_LAST_TABS)
+            .map(|index| format!("C:/Docs/file{index}.md"))
+            .collect();
+        let raw = serde_json::json!({ "lastTabs": paths }).to_string();
+
+        let parsed = parse_settings(&raw).expect("a tab list is still settings");
+        assert_eq!(parsed.last_tabs.len(), MAX_LAST_TABS);
+        assert_eq!(parsed.last_tabs[0], "C:/Docs/file0.md");
+        assert_eq!(
+            parsed.last_tabs[MAX_LAST_TABS - 1],
+            format!("C:/Docs/file{}.md", MAX_LAST_TABS - 1)
+        );
     }
 
     #[test]

@@ -40,7 +40,7 @@ export interface DirEntry {
 export type ThemeMode = "system" | "light" | "dark";
 export type ViewMode = "source" | "split" | "preview";
 export type SidebarTab = "outline" | "files" | "recent";
-export type OnLaunch = "welcome" | "new" | "last";
+export type OnLaunch = "welcome" | "new" | "last" | "tabs";
 export type ImageRule = "assetsFolder" | "assetsDir" | "custom" | "keepOriginal";
 
 /**
@@ -177,6 +177,15 @@ export interface Settings {
   syntaxTheme: string;
   recentFiles: string[];
   lastDirectory: string | null;
+  /**
+   * Paths of the tabs that were open when the window last closed, in order.
+   *
+   * Only saved documents: an untitled buffer has nothing to remember. Consulted
+   * at boot when `onLaunch` is `"tabs"`; missing files are skipped there.
+   */
+  lastTabs: string[];
+  /** The path of the tab to reactivate, or null to fall back to the first. */
+  lastActiveTab: string | null;
 
   onLaunch: OnLaunch;
   defaultExtension: string;

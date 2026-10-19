@@ -94,8 +94,11 @@ function blank(): Session {
  * Windows treats `C:\A` and `c:/a` as one file. A case-sensitive compare would
  * open that file twice. Other platforms keep case, so a Linux tree can hold
  * both `Notes.md` and `notes.md`.
+ *
+ * Exported because the remembered-tab list has to answer "is this the same
+ * document" with exactly the store's rule; a second implementation would drift.
  */
-function pathKey(path: string): string {
+export function pathKey(path: string): string {
   const slashed = path.replace(/\\/g, "/").replace(/\/+$/, "");
   const windows = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
   return windows ? slashed.toLowerCase() : slashed;

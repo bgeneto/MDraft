@@ -313,6 +313,52 @@ check(
     editorSection.labels.includes("Dictionary"),
 );
 
+// The On Launch row gained a fourth choice: reopen the tab set that was open
+// when the window last closed. A row that only moved its own select would look
+// identical until the next launch, so the choice is read back through
+// `get_settings` — and put back, so the suite leaves no trace.
+const onLaunch = await evaluate(`(async () => {
+  [...document.querySelectorAll('.prefs-section')]
+    .find((s) => s.textContent === 'Files').click();
+  const findRow = () => [...document.querySelectorAll('.prefs-row')].find((r) =>
+    (r.querySelector('.prefs-label')?.textContent ?? '').replace('?', '').trim() === 'On Launch');
+  const select = () => findRow()?.querySelector('select') ?? null;
+  if (!select()) return JSON.stringify({ found: false });
+
+  const initial = select().value;
+  const options = [...select().options].map((o) => ({ value: o.value, label: o.textContent }));
+  const help = findRow().querySelector('.prefs-help')?.textContent ?? '';
+
+  select().value = 'tabs';
+  select().dispatchEvent(new Event('change', { bubbles: true }));
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  let stored = '';
+  for (let i = 0; i < 30 && stored !== 'tabs'; i += 1) {
+    await sleep(100);
+    stored = (await window.__TAURI_INTERNALS__.invoke('get_settings')).onLaunch;
+  }
+
+  const back = select();
+  back.value = initial;
+  back.dispatchEvent(new Event('change', { bubbles: true }));
+  return JSON.stringify({ found: true, initial, options, help, stored, restored: back.value });
+})()`);
+
+console.log("\n=== the On Launch preference ===");
+console.log(`  choices  ${onLaunch.options?.map((o) => o.label).join(" | ")}`);
+check(
+  "On Launch offers the remembered tab set",
+  onLaunch.found === true &&
+    onLaunch.options.map((o) => o.value).join(",") === "welcome,new,last,tabs" &&
+    onLaunch.options[onLaunch.options.length - 1].label === "Reopen the last tabs",
+);
+check(
+  "the fourth choice explains what is restored",
+  /saved documents/i.test(onLaunch.help ?? "") && /not restored/i.test(onLaunch.help ?? ""),
+);
+check("the choice reaches the settings file", onLaunch.stored === "tabs");
+check("the preference is left as it was found", onLaunch.restored === onLaunch.initial);
+
 // Search filters the navigation down to matching sections.
 const search = await evaluate(`(() => {
   const input = document.querySelector('.prefs-search');
