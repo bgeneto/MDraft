@@ -197,9 +197,9 @@ rewrite from scratch.
 | `npm run stage` | `scripts/stage-artifacts.mjs` | Re-stage what is already built |
 | `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
-| `npm run test:rust` | `cargo test` | 87 tests on Windows (86 run, one ignored download); Linux has 86 total (85 run, one ignored) |
-| `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. Puts back the working tree and the developer's own settings afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
-| `npm run smoke` | `scripts/dom-smoke.mjs` | 93 checks against `samples/feature-tour.md` |
+| `npm run test:rust` | `cargo test` | 90 tests on Windows (89 run, one ignored download); Linux has 89 total (88 run, one ignored) |
+| `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. The tab-restore layer is the exception: two launches of the same instance's settings directory, closed with WM_CLOSE in between so the close flush runs. Puts back the working tree and the developer's own settings afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
+| `npm run smoke` | `scripts/dom-smoke.mjs` | 97 checks against `samples/feature-tour.md` |
 | `npm run word-sync` | `scripts/word-sync-test.mjs` | 30 checks of word-level sync against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, no scroll, Escape, and the fallbacks |
 | `npm run autoclose:unit` | `scripts/autoclose-unit.mjs` | 17 checks of the tag matcher: attributes, custom elements, void and self-closing tags, autolinks, escapes, declarations, prose — no application |
 | `npm run autoclose` | `scripts/autoclose-test.mjs` | 33 checks of pairs, quotes, backticks, HTML tags and both preferences, typed through the real editor in Markdown, HTML, Typst and AsciiDoc |
@@ -212,6 +212,7 @@ rewrite from scratch.
 | `npm run typography` | `scripts/typography-test.mjs` | 48 checks that each face loads, each OpenType switch changes pixels, the six-preset matrix holds, the four new body faces render differently, and the Semibold weights are real |
 | `npm run shortcuts` | `scripts/shortcut-test.mjs` | 43 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, that the zoom chip follows the level, that a new tab keeps the previous buffer's undo, and that the webview's F5/Ctrl+R reload keys are swallowed |
 | `npm run tabs` | `scripts/document-tabs-test.mjs` | 104 checks of several open documents: sidebar and Recents, `open-files`, active-tab styling, the tab context menu, keyboard navigation, caret and scroll per tab, dirty dot, × and middle-click, Ctrl+Tab, drag and keyboard reordering, the disk poll, Auto Save across tabs, overflow arrows and the wheel, Close Others, the last tab |
+| `npm run tabs:restore:unit` | `scripts/tabs-restore-unit.mjs` | 33 checks of what is remembered and what is restored: tab order, untitled exclusion, deduplication under the platform's path identity, the 20-document cap, and the restore plan's handling of missing files — no application |
 | `npm run recent` | `scripts/recent-menu-test.mjs` | 26 checks that File › Open Recent mirrors the persisted list: the launch file, a new file becoming first, the menu id opening/focusing a tab, Clear Items emptying menu and sidebar, the list refilling, and a 27-row history rendered in full by the sidebar while the menu shows 20 plus Clear Items |
 | `npm run asciidoc` | `scripts/asciidoc-test.mjs` | 51 checks of the AsciiDoc preview, source highlighting, outline, preview copy, spellcheck, includes, paste, the AsciiDoc reference, the default extension and word-level sync |
 | `npm run test:sessions` | `scripts/sessions-test.mjs` | 59 unit checks of `src/sessions.ts`, with no application and no build |
@@ -249,9 +250,11 @@ All of these need the app already running with CDP enabled (see
 | `image-path-paste-test.mjs` | `[port]` | `samples/feature-tour.md` | Selects the `./image.png` placeholder with the mouse, pastes a relative path beside the document, and checks the text is replaced and the preview loads it |
 | `spellcheck-test.mjs` | `[port]` | `samples/feature-tour.md` | Sets the dictionary to English, types a misspelling, requires the wavy underline, then turns spelling off and requires the mark to be gone |
 | `document-tabs-test.mjs` | `[port]` | `samples/feature-tour.md` | That several documents stay open sanely: a path already open is focused, the active tab is bold, the context menu and its disabled entries, Arrow-key navigation, drag and keyboard reordering, overflow arrows and the wheel, Close Others, the caret and both scroll offsets come back, the disk poll reloads a clean inactive tab and leaves a dirty one alone, Auto Save writes every dirty tab, and a large document no longer breaks the next New |
+| `tabs-restore-test.mjs` | `[port] phase1\|phase2 <doc> <extra…>` | phase 1: `samples/feature-tour.md`; the extras open as tabs | The two-launch store: phase 1 opens and reorders tabs, sets the launch preference and closes one tab just before the window does; phase 2 — launched **without** a document argument — sees the same tabs, order, active tab and preference. Normally run by `test-all.mjs`, which supplies both launches and the WM_CLOSE between them |
 | `recent-menu-test.mjs` | `[port]` | `samples/feature-tour.md` | The native Open Recent submenu through the `recent_menu` probe: it lists the launch file, a newly opened file becomes the first row, the emitted menu id focuses an existing tab instead of duplicating it, Clear Items empties the menu/sidebar/settings, a 27-row history renders in full in the sidebar while the menu shows 20 plus Clear Items, and a later open refills the list |
 | `sessions-test.mjs` | — | none — runs without the application | The session store's rules: insertion after the active tab, untitled names, one tab per path under both case rules, the neighbour that takes over on close, `move` and `removeMany` order, wrap-around, and the empty-list invariant |
 | `paste-convert-test.mjs` | — | none — runs without the application | The paste matrix: clipboard and document detection, all reader/renderer pairs, escaping, sanitisation, caps and image syntax |
+| `tabs-restore-unit.mjs` | — | none — runs without the application | What is remembered and what is restored: tab order, untitled exclusion, deduplication under the platform's path identity, the 20-document cap, missing files and the active-tab fallback |
 | `rich-paste-test.mjs` | `[port]` | `samples/feature-tour.md` | That the paste event converts HTML, leaves Markdown/plain text alone, detects an unsaved Typst/Markdown/HTML buffer, honours Ctrl+Shift+V and the preference, and undoes in one step |
 | `image-syntax-test.mjs` | `[port]` | `samples/typst-tour.typ` | A clipboard bitmap becomes `#image`, a remote image is downloaded or kept according to the Image preference, and the files land in the document's assets folder |
 | `typst-preview-test.mjs` | `[port]` | `samples/typst-pages.typ` | The Pages view is the compiler's PDF drawn by PDF.js with selectable text, both columns and two pages; a single click paints the source paragraph, a repeated word in a later line or the right column maps that occurrence, generated `#lorem` paints nothing, the view bar does not blur the page, and switching back disposes the PDF view. Document gets the same word-map checks, and a single click does not paint a word there |
@@ -455,17 +458,18 @@ hash the pixels.
 
 ## Testing
 
-Eighteen layers, cheapest first. Run them in this order when changing anything.
+Twenty-one layers, cheapest first. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 87 | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection |
+| Rust unit | `npm run test:rust` | 90 | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection |
 | Session store | `npm run test:sessions` | 59 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
 | Paste conversion | `npm run paste:convert` | 72 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, image syntax, AsciiDoc |
-| DOM smoke | `npm run smoke` | 93 | Rendering, pane sync, preferences, math, fonts, status icons |
+| DOM smoke | `npm run smoke` | 97 | Rendering, pane sync, preferences (including the four On Launch choices), math, fonts, status icons |
 | Word sync | `npm run word-sync` | 30 | The fragment map, preview → source and source → preview, atomic code, formula and image spans, word snapping, no scroll, Escape |
 | Auto-close matching | `npm run autoclose:unit` | 17 | Which tag a typed `>`, the void/self-closing/autolink/escape rules — no application |
+| Remembered tabs (unit) | `npm run tabs:restore:unit` | 33 | What is stored (order, untitled exclusion, deduplication, the 20-document cap) and what a restore plan does with it (missing files, the active-tab fallback) — no application |
 | Auto-close typing | `npm run autoclose` | 33 | Pairs, step-over, Backspace, selection wrap, Markdown inline tags, HTML tags, both preferences, in all four document types |
 | Rich paste | `npm run paste` | 23 | The paste event, destination notice, preferences, Ctrl+Shift+V, undo |
 | Image syntax | `npm run image:syntax` | 14 | Bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, plus the Image preference |
@@ -475,6 +479,7 @@ Eighteen layers, cheapest first. Run them in this order when changing anything.
 | AsciiDoc | `npm run asciidoc` | 51 | Preview, title/TOC, math, includes, source highlighting, outline, preview copy, spellcheck, paste, the built-in reference, defaults, word-level sync |
 | HTML guest | `npm run html` | 43 | Sandbox, IPC boundary, local assets, sync/blink, scripts-off, outline, reload-key guard |
 | Document tabs | `npm run tabs` | 104 | Several open documents, the context menu, drag and keyboard reordering, overflow arrows, the disk poll, Auto Save across tabs, caret and scroll per tab |
+| Tab restore | `npm test -- --only tabs-restore` | 25 | Two launches on one settings directory: the tabs come back in order with the remembered one active, the preference survives, and the close flush records a tab closed just before the window closed |
 | Recent menu | `npm run recent` | 26 | The native Open Recent 20-row window, a longer sidebar history, menu-id dispatch, Clear Items across menu/sidebar/settings, refilling after a clear |
 | Close | `.\scripts\test-close.ps1` | 4 | The window really exits and saves its state |
 | Document audit | `npm run audit` | — | Real-world render quality on big files |
@@ -482,7 +487,10 @@ Eighteen layers, cheapest first. Run them in this order when changing anything.
 `npm test` (`scripts/test-all.mjs`) runs that table in that order. It exists
 because the layers are not self-contained: it builds first, gives every UI suite
 its own freshly launched instance, its own port and its own fixture, starts each
-one from first-run state, stages the binary outside the workspace — an executable
+one from first-run state, runs the tab-restore layer as two launches of one
+settings directory — the first closed with WM_CLOSE so the flush runs, the
+second started with no document argument — stages the binary outside the
+workspace — an executable
 launched from inside it cannot write `%APPDATA%`, which is exactly what the close
 test asserts — and closes everything it started on every exit path. `--no-build`
 tests the binary already built, `--only`/`--skip` narrow the run, `--all` adds the
@@ -775,7 +783,7 @@ reproduces a bug that is not there. Select with real mouse events
 paste. `scripts/image-path-paste-test.mjs` does exactly this.
 
 **A Preferences row's label includes its help mark, and one label can be a prefix of another**
-`row.querySelector('.prefs-label').textContent` is `"Run a command?"` for a row that has help: the `?` span is part of the text. Worse, `"Open the exported file"` is a prefix of `"Open the exported file's folder"`, so an `includes()` match silently picks the first row and a test can report both boxes ticked while one was never touched. Strip the trailing `?` and compare the exact label. A probe that matched by substring concluded the second checkbox was already on and never clicked it, then chased a backend/frontend mismatch that did not exist.
+`row.querySelector('.prefs-label').textContent` is `"Run a command?"` for a row that has help: the `?` span is part of the text. Worse, `"Open the exported file"` is a prefix of `"Open the exported file's folder"`, so an `includes()` match silently picks the first row and a test can report both boxes ticked while one was never touched. Strip the trailing `?` and compare the exact label. A probe that matched by substring concluded the second checkbox was already on and never clicked it, then chased a backend/frontend mismatch that did not exist. The help text itself is not in that span either: `.prefs-help`'s `textContent` is just the `?`, and the sentence lives in its `title` attribute.
 
 **Renaming the product leaves stale bundles that staging will happily ship**
 `src-tauri/target/release/bundle/` is not cleaned between builds, so after
@@ -1167,6 +1175,17 @@ a menu command "does nothing", read `#toast` (and `Runtime.exceptionThrown`)
 before touching the handler, and treat a state captured for one document as
 unusable for another.
 
+**A restored tab set opens only one tab, named after the last file in the list**
+`openPath` has an `installingStartup` branch that fills the window's first blank
+session instead of adding a tab — right for a single startup file, wrong for a
+remembered set, where every call through that branch replaced the same session.
+The window ended up holding one document while `settings.json` held all of them,
+which is what makes it look like a persistence bug. Measured in the two-launch
+suite as `FAIL two tabs came back — 1` with that one tab named
+`feature-tour.md`. Set `installingStartup = false` before opening the second
+file, so the rest are added as tabs; anything else that opens several documents
+before the first paint needs the same rule.
+
 **`ERR_PACKAGE_PATH_NOT_EXPORTED` for `@asciidoctor/core/build/browser/index.js`**
 The package's `exports` map exposes only `"."`, so the browser build cannot be
 imported by subpath even though the file exists. Use
@@ -1510,12 +1529,12 @@ platform and fails on the other.
    reads the latter for the bundle, and the two must agree. `npm run
    check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
-3. `npm run test:rust` — 79 runnable tests (one ignored: the pandoc download). Run them on Linux too
+3. `npm run test:rust` — 89 runnable tests (one ignored: the pandoc download). Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run math`,
    `npm run syntax`, `npm run html` and `npm run asciidoc` —
-   93 + 10 + 7 + 43 + 51 checks.
+   97 + 10 + 7 + 43 + 51 checks.
 5. `npm run audit` against both `docs/sample-files` documents and compare the
    counts with the table in the README.
 6. `npm run dist` — installers and checksums land in `bin/<os>/<arch>/`.

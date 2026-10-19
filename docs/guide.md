@@ -155,6 +155,13 @@ newest 20 of those paths, newest first, in the native menu; **Clear Items** ther
 clears the same history as the sidebar footer and Preferences. Sidebar width and
 the editor/preview split are not persisted.
 
+**On Launch** (Preferences › Files) chooses what a new window opens with: the
+welcome document, a new file, the most recent file, or **Reopen the last tabs** —
+every saved document that was open when MDraft last closed, in the same order
+with the same tab active. Only paths are remembered: untitled or unsaved content
+is not restored, and a file that has since been deleted is skipped and reported.
+A document named on the command line still wins over the remembered set.
+
 Other editor features:
 
 - **Focus mode** dims every line except the one holding the caret.
