@@ -128,6 +128,8 @@ const doc = await evaluate(`(() => {
     bootError: document.body.textContent.includes('Failed to start MDraft'),
     editorLines: q('.cm-line'),
     editorChars: (document.querySelector('.cm-content')?.textContent ?? '').length,
+    editorFontSize: getComputedStyle(document.querySelector('.cm-editor')).fontSize,
+    editorLineHeight: getComputedStyle(document.querySelector('.cm-scroller')).lineHeight,
     previewChildren: preview ? preview.children.length : 0,
     headings: q('#preview h1') + q('#preview h2') + q('#preview h3'),
     tables: q('#preview table'),
@@ -197,6 +199,13 @@ for (const [key, value] of Object.entries(doc)) console.log(`  ${key.padEnd(16)}
 
 check("boot succeeded", !doc.bootError);
 check("editor rendered", doc.editorLines > 5 && doc.editorChars > 200);
+// 1.5 is the default line height; a fresh 15 px editor therefore measures
+// 22.5 px per line. A changed font size without a proportional line box means
+// the unitless value was replaced by a fixed one.
+check(
+  "editor starts at 15px with a proportional 1.5 line height",
+  doc.editorFontSize === "15px" && doc.editorLineHeight === "22.5px",
+);
 check("preview rendered", doc.previewChildren > 5);
 check("headings", doc.headings >= 3);
 check("gfm table", doc.tables >= 1 && doc.tableRows >= 3);
@@ -534,8 +543,8 @@ check(
 // Editor font size, Preview font size and Math scale are reader adjustments,
 // not part of a preset's identity. Editing one must leave the picker on the
 // preset, and each preset must remember its own sizes across a round trip.
-// An unvisited preset starts at its default sizes (18/85 for Serif, 18/77 for
-// Renaissance, 16/90 for System).
+// An unvisited preset starts at its default sizes (15/18/85 for Serif,
+// 15/18/77 for Renaissance, 15/16/90 for System).
 const presetSizes = await evaluate(`(async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const section = [...document.querySelectorAll('.prefs-section')]
@@ -600,7 +609,7 @@ const presetSizes = await evaluate(`(async () => {
   const systemBack = read();
 
   // Leave the suite on the first-run sizes, whichever check failed.
-  setNumber('Editor font size', 16);
+  setNumber('Editor font size', 15);
   setNumber('Preview font size', 16);
   setNumber('Math scale', 90);
   await sleep(200);
@@ -640,11 +649,11 @@ check(
 );
 check(
   "an unvisited preset starts at its default sizes",
-  presetSizes.serifFresh?.editor === "16" &&
+  presetSizes.serifFresh?.editor === "15" &&
     presetSizes.serifFresh?.body === "18" &&
     presetSizes.serifFresh?.math === "85" &&
     presetSizes.serifFresh?.oldstyle === true &&
-    presetSizes.renaissance?.editor === "16" &&
+    presetSizes.renaissance?.editor === "15" &&
     presetSizes.renaissance?.body === "18" &&
     presetSizes.renaissance?.math === "77" &&
     presetSizes.renaissance?.oldstyle === true,
@@ -668,8 +677,8 @@ check(
     presetSizes.systemBack?.math === "92",
 );
 check(
-  "the preset test restores 16 px / 90%",
-  presetSizes.reset?.editor === "16" &&
+  "the preset test restores 15 px / 90%",
+  presetSizes.reset?.editor === "15" &&
     presetSizes.reset?.body === "16" &&
     presetSizes.reset?.math === "90" &&
     presetSizes.reset?.active === "System",

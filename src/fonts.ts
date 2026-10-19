@@ -254,7 +254,7 @@ const ROLE_DEFAULTS: Record<string, string> = Object.fromEntries(
  * `Settings::preset_overrides`, so an unadjusted preset starts at its own
  * `defaults` (or here when omitted).
  */
-export const DEFAULT_EDITOR_FONT_SIZE = 16;
+export const DEFAULT_EDITOR_FONT_SIZE = 15;
 export const DEFAULT_BODY_FONT_SIZE = 16;
 export const DEFAULT_MATH_SCALE = 90;
 
@@ -265,7 +265,7 @@ export interface TypographyPreset {
   note: string;
   /**
    * Starting sizes for this preset before the reader adjusts them.
-   * Absent fields fall back to the application defaults (16 px / 16 px / 90%).
+   * Absent fields fall back to the application defaults (15 px / 16 px / 90%).
    */
   defaults?: {
     editorFontSize?: number;

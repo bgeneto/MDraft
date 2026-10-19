@@ -676,7 +676,10 @@ fn render<R: Runtime>(
     mode: &str,
 ) -> Result<RenderedTypst, String> {
     let typst = find_typst(app).ok_or_else(|| {
-        format!("Typst is not installed, so .typ documents cannot be previewed. {DOWNLOAD_PAGE}")
+        format!(
+            "Typst is not installed, so .typ documents cannot be previewed. \
+             Install it via Help › Install Typst... or manually from {DOWNLOAD_PAGE}."
+        )
     })?;
 
     let dir = std::env::temp_dir().join("mdraft-typst");

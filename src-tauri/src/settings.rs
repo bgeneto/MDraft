@@ -386,7 +386,7 @@ impl Default for Settings {
             show_status_bar: true,
             focus_mode: false,
             typewriter_mode: false,
-            editor_font_size: 16,
+            editor_font_size: 15,
             editor_max_width: 980,
             // Empty means "the built-in default for that role"; see src/fonts.ts.
             source_font: String::new(),
@@ -719,7 +719,7 @@ mod tests {
     fn defaults_are_sane() {
         let s = Settings::default();
         assert_eq!(s.view_mode, "split");
-        assert_eq!(s.editor_font_size, 16);
+        assert_eq!(s.editor_font_size, 15);
         assert_eq!(s.editor_max_width, 980);
         assert_eq!(s.syntax_theme, "auto");
         assert!(s.recent_files.is_empty());
