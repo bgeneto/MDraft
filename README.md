@@ -32,7 +32,9 @@ binary. Release notes and checksums are on the release page.
   Markdown, AsciiDoc and Typst, without moving the selection or scrolling; tabs
   keep each document's caret, undo and scroll position. A crowded strip scrolls
   with arrows, the wheel or drag reordering, and right-click offers the tab
-  actions. The outline, file browser and recent list are one shortcut away, and
+  actions. **Reopen the last tabs** on launch restores the set that was open, in
+  the same order and with the same one active. The outline, file browser and
+  recent list are one shortcut away, and
   **File › Open Recent** reaches the newest twenty entries of the persisted
   history without opening the sidebar.
 - **Typing that closes itself.** `(`, `[`, `{`, quotes and backticks insert

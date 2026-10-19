@@ -85,19 +85,20 @@ Rejected alternatives:
 
 ## Steps
 
-- [ ] `src-tauri/src/settings.rs`: add `last_tabs: Vec<String>` and
+- [x] `src-tauri/src/settings.rs`: add `last_tabs: Vec<String>` and
   `last_active_tab: Option<String>` with `#[serde(default)]`; defaults empty;
   extend the `on_launch` doc comment with `"tabs"`. Tests: defaults, parsing an
-  old file without the fields, round-trip with them.
-- [ ] `src/api.ts`: add the two fields to `Settings`; add `"tabs"` to
+  old file without the fields, round-trip with them. Also a `MAX_LAST_TABS = 20`
+  cap enforced in `parse_settings` and `AppState::save`, with a load test.
+- [x] `src/api.ts`: add the two fields to `Settings`; add `"tabs"` to
   `OnLaunch`.
-- [ ] `src/tab-restore.ts` (new): pure helpers
+- [x] `src/tab-restore.ts` (new): pure helpers
   `rememberTabs(list, active)` → `{ tabs, active }` (saved paths only, capped,
   deduplicated with the store's path identity) and
   `planRestore(saved, active, exists)` → `{ tabs, active, missing }` (order
   preserved, duplicates and missing files dropped). Export the path
   normalisation from `sessions.ts` instead of writing a second one.
-- [ ] `src/main.ts`:
+- [x] `src/main.ts`:
   - seed the remembered signature from the loaded settings, then a 1.5 s
     interval that calls `rememberTabs` and `persist()` only on a change;
   - `installCloseGuard`: always `preventDefault()` once, run the existing dirty
@@ -109,21 +110,45 @@ Rejected alternatives:
     toast when files disappeared, otherwise fall back to the welcome document;
   - `openPath` gains a `rememberRecent` option so restoring ten tabs does not
     flood Recents.
-- [ ] `src/preferences.ts`: add `["tabs", "Reopen the last tabs"]` to On Launch,
+- [x] `src/preferences.ts`: add `["tabs", "Reopen the last tabs"]` to On Launch,
   with help text saying only saved documents are reopened.
-- [ ] `scripts/tabs-restore-unit.mjs` (new): unit checks of `rememberTabs` and
+- [x] `scripts/tabs-restore-unit.mjs` (new): unit checks of `rememberTabs` and
   `planRestore` — order, duplicates under Windows case rules, missing files,
-  cap, untitled exclusion, empty list. Register in `test-all.mjs`.
-- [ ] `scripts/tabs-restore-test.mjs` (new) and a `restart` suite kind in
+  cap, untitled exclusion, empty list. Register in `test-all.mjs` (33 checks).
+- [x] `scripts/tabs-restore-test.mjs` (new) and a `restart` suite kind in
   `scripts/test-all.mjs`: phase 1 opens three documents, reorders, picks the
   active one and sets the preference through the Preferences UI; the harness
   closes and relaunches the app with the same settings; phase 2 asserts the tab
   names, their order, the active tab and the preference value. The close path
-  uses WM_CLOSE so the flush runs.
-- [ ] Docs: README/`docs/guide.md` (the new launch option), AGENTS (suite row,
-  counts, a trap for the async close flush). ADR as above.
-- [ ] Version: propose 0.4.0 for the feature at release time; the implementation
-  commit itself does not bump.
+  uses WM_CLOSE so the flush runs (25 checks across the two phases).
+- [x] Extend `scripts/dom-smoke.mjs` with the four checks AGENTS' preference
+  recipe asks for: the four choices, the help text, the stored value, and the
+  row left as it was found (93 → 97 checks).
+- [x] Docs: `docs/guide.md` (the new launch option), AGENTS (suite rows, counts,
+  the multi-file `installingStartup` trap, the help-text clarification), the ADR
+  below.
+- [x] Version: propose 0.4.0 for the feature at release time; the implementation
+  commit itself does not bump. The separate release commit `684f86a` carries the
+  0.4.0 bump.
+
+### Deviations
+
+- Cap is 20, not 40 (the amendment at approval), applied in the plan, both
+  unit layers and the Rust truncation.
+- The ADR is dated 2026-10-19 (the implementation date) rather than 2026-10-18;
+  the plan's link was updated.
+- The plan's `npm run test:tabs-restore` entry point does not exist: the CDP
+  script needs two invocations around a WM_CLOSE and a relaunch, which is the
+  harness's job. The layer is `npm test -- --only tabs-restore`; the no-app
+  helpers have `npm run tabs:restore:unit`.
+- The `installingStartup` flag had to be cleared before the second restored
+  file; the plan's wording ("open the first with `installingStartup` true and
+  the rest as tabs") assumed that followed from opening them in order. It does
+  not, and the first two-launch run produced one tab instead of two. Recorded in
+  AGENTS Traps.
+- Smoke checks were added although the plan's Docs step did not name them:
+  AGENTS' "Adding a preference, end to end" requires the row to be exercised
+  there.
 
 ## Files and modules
 
@@ -166,19 +191,27 @@ Rejected alternatives:
 
 ## Tests and validation
 
-- `npm run build` — typecheck.
-- `npm run test:rust` — the new settings tests and the existing 79.
-- `node scripts/tabs-restore-unit.mjs` — the two helpers, no application.
-- `npm run tabs` — 104 existing tab checks must stay green (the interval and the
-  close handler touch their paths).
+- `npm run build` — typecheck. **Run: pass.**
+- `npm run test:rust` — 90 tests (89 run, one ignored), including the three new
+  settings tests. **Run: pass.**
+- `npm run tabs:restore:unit` — the two helpers, no application (33 checks).
+  **Run: pass.**
+- `npm run smoke` — the four new On Launch checks and the existing 93 (97
+  total). **Run: pass.**
+- `npm run tabs` — 104 existing tab checks stayed green (the interval and the
+  close handler touch their paths). **Run: pass.**
+- `npm run recent` — 26 checks, since `openPath` gained an option. **Run: pass.**
 - `.\scripts\test-close.ps1` — the window still exits and writes its state.
-- `npm run test:tabs-restore` — the two-launch suite: phase 2 sees three
-  `.doc-tab` elements in the same order with the same active tab.
-- Full `npm test` before the release.
+  **Run: pass (4 checks).**
+- `npm test -- --only tabs-restore` — the two-launch suite (25 checks across the
+  phases): phase 1 opens three documents, reorders, closes one and leaves the
+  active tab; phase 2 restores two, in order, with the remembered one active,
+  and the flushed settings list matches. **Run: pass.**
+- Full `npm test` — **run at the end of the implementation; see Status.**
 
 The one measurement that proves it: open three documents, reorder them, close
 the window, relaunch, and read the tab names and the active tab from the DOM —
-they must match, and `settings.json` must contain the same three paths under
+they must match, and `settings.json` must contain the same paths under
 `lastTabs`.
 
 ## Acceptance criteria
