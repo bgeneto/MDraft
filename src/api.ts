@@ -370,14 +370,15 @@ export type TypstView = "document" | "pages";
  * A compiled Typst document.
  *
  * `kind` says which shape arrived: `document` carries flowing HTML in `html`,
- * `pages` carries one SVG per page. Both can carry warnings, and `ignored` names
- * the constructs the document view had to drop.
+ * `pages` carries the compiler's PDF in `pdf`, base64-encoded. Both can carry
+ * warnings, and `ignored` names the constructs the document view had to drop.
  */
 export interface RenderedTypst {
   kind: TypstView;
   html: string | null;
   css: string | null;
-  pages: string[];
+  /** Base64 PDF, when `kind` is `"pages"`. */
+  pdf: string | null;
   warnings: string[];
   ignored: string[];
 }

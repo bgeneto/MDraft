@@ -217,6 +217,7 @@ rewrite from scratch.
 | `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 72 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
 | `npm run paste` | `scripts/rich-paste-test.mjs` | 23 checks of rich paste through the real UI: destination detection, conversion, preferences, Ctrl+Shift+V, undo |
 | `npm run image:syntax` | `scripts/image-syntax-test.mjs` | 14 checks of bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, including the Image preference |
+| `npm run typst:preview` | `scripts/typst-preview-test.mjs` | 23 checks of Typst Pages through PDF.js and Typst word sync: page shells, canvases, text layers, both columns, selection/copy, prose words, generated-text fallback, single-click behaviour, view switching and PDF disposal |
 | `npm run licence` | `scripts/licence-test.mjs` | 4 checks that the bundled typefaces' licences ship inside the application. Run against its own instance: it opens a document |
 | `npm run images` | `scripts/image-paste-test.mjs` | Image paste through the real UI |
 | `npm run screenshot` | `scripts/screenshot.mjs` | PNG of the running window |
@@ -251,6 +252,7 @@ All of these need the app already running with CDP enabled (see
 | `paste-convert-test.mjs` | — | none — runs without the application | The paste matrix: clipboard and document detection, all reader/renderer pairs, escaping, sanitisation, caps and image syntax |
 | `rich-paste-test.mjs` | `[port]` | `samples/feature-tour.md` | That the paste event converts HTML, leaves Markdown/plain text alone, detects an unsaved Typst/Markdown/HTML buffer, honours Ctrl+Shift+V and the preference, and undoes in one step |
 | `image-syntax-test.mjs` | `[port]` | `samples/typst-tour.typ` | A clipboard bitmap becomes `#image`, a remote image is downloaded or kept according to the Image preference, and the files land in the document's assets folder |
+| `typst-preview-test.mjs` | `[port]` | `samples/typst-pages.typ` | The Pages view is the compiler's PDF drawn by PDF.js with selectable text, both columns and two pages; double-clicking prose paints the source word, generated `#lorem` paints nothing, and switching back disposes the PDF view. Document gets the same word-map checks, and a single click does not paint a word |
 | `set-palette.mjs` | `[port] [paletteId] [--split]` | `samples/feature-tour.md` | Not a test: drives the palette through the Preferences UI so you can screenshot a theme |
 | `screenshot.mjs` | `[port] [out.png] [setupExpression]` | any | Not a test: captures the window, optionally after running a JS setup string |
 | `test-close.ps1` | `[-Exe path] [-Doc path] [-TimeoutSeconds 12]` | `samples\feature-tour.md` | Launches the release binary, sends WM_CLOSE, and asserts the process exits and writes `.window-state.json` |
@@ -451,7 +453,7 @@ hash the pixels.
 
 ## Testing
 
-Seventeen layers, cheapest first. Run them in this order when changing anything.
+Eighteen layers, cheapest first. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
@@ -465,6 +467,7 @@ Seventeen layers, cheapest first. Run them in this order when changing anything.
 | Auto-close typing | `npm run autoclose` | 33 | Pairs, step-over, Backspace, selection wrap, Markdown inline tags, HTML tags, both preferences, in all four document types |
 | Rich paste | `npm run paste` | 23 | The paste event, destination notice, preferences, Ctrl+Shift+V, undo |
 | Image syntax | `npm run image:syntax` | 14 | Bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, plus the Image preference |
+| Typst pages | `npm run typst:preview` | 23 | PDF.js page shells/canvases/text layers, both columns, A4 geometry, Pages and Document word sync, generated-text fallback, single-click behaviour and PDF disposal |
 | Math | `npm run math` | 10 | Font loading, fraction and radical geometry |
 | Syntax | `npm run syntax` | 7 | Token colours, palette switching |
 | AsciiDoc | `npm run asciidoc` | 51 | Preview, title/TOC, math, includes, source highlighting, outline, preview copy, spellcheck, paste, the built-in reference, defaults, word-level sync |
@@ -606,6 +609,19 @@ renderer then joined them with blank lines. Ignore whitespace-only nodes while a
 list is open (`space.trim() === "" && list && inline.length === 0`), and inspect
 the tree before assuming the list is contiguous.
 
+**A Typst paragraph beginning with inline formatting gets no `data-line`**
+`blockText` joins descendant text nodes with spaces, so `<strong>Abstract</strong>—This`
+folds to `abstract —this` while the source folds to `abstract—this`. The prefix
+lookup fails and the whole block is skipped, which looked like a word-map bug
+rather than a folding one. Normalize whitespace before em/en dashes in `fold`;
+the Typst preview suite asserts that the abstract is anchored.
+
+**`Property 'destroy' does not exist on type 'PDFDocumentProxy'` after adding PDF.js**
+PDF.js 6 keeps destruction on the `PDFDocumentLoadingTask` returned by
+`getDocument`, not on the document proxy, and `page.render` takes `canvas`, not
+only `canvasContext`. Store the loading task and call `loadingTask.destroy()`;
+pass `canvas: page.canvas` to the render task.
+
 **A CDP test reading `.cm-content.innerText` sees extra blank lines**
 CodeMirror's content element includes the visual gap between lines, so
 `innerText` does not equal the buffer and a string comparison fails even when the
@@ -730,6 +746,11 @@ run because it scrolled to 45% from a position that was already 45%. Both now
 reset to a known baseline — scroll to the top — before measuring. **Any new probe
 that reads the viewport must establish its own starting position.** A suite that
 passes once and fails on re-run is usually this.
+
+  The Typst preview suite hit a variant of this with a double-click: it scrolled
+  the target *paragraph* into view, but a long `#lorem` paragraph is taller than
+  the pane, so the word itself stayed off screen and the click selected nothing.
+  Center the word's range in `#preview-pane` before dispatching the click.
 
 **A test reads `scrollLeft` before a smooth scroll has moved**
 `scrollBy({ behavior: "smooth" })` returns immediately, so `element.click()` followed by a `Runtime.evaluate` of `scrollLeft` still sees the old offset; two rapid clicks can also coalesce into one page. The document-tabs suite first failed "a second page reaches the edge" for exactly this reason. Poll until the offset changes and then settles, and issue one click per page.

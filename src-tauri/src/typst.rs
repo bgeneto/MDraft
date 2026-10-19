@@ -14,8 +14,11 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -29,6 +32,10 @@ const RELEASE_API: &str = "https://api.github.com/repos/typst/typst/releases/lat
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 /// A preview that takes longer than this is a runaway document, not a big one.
 const RENDER_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Concurrent previews share the temporary directory; each PDF gets its own name
+/// so a slow render cannot be overwritten by the next keystroke.
+static NEXT_PDF: AtomicU64 = AtomicU64::new(0);
 
 pub fn typst_exe() -> &'static str {
     if cfg!(windows) { "typst.exe" } else { "typst" }
@@ -329,15 +336,19 @@ fn extract_binary(_archive: &[u8]) -> Result<Vec<u8>, String> {
 #[serde(rename_all = "camelCase")]
 pub struct RenderedTypst {
     /// `"document"` when the pane should show flowing HTML, `"pages"` when it
-    /// should show the compiler's SVG pages.
+    /// should show the compiler's PDF pages.
     pub kind: String,
     /// Body markup, when `kind` is `"document"`.
     pub html: Option<String>,
     /// The export's own stylesheet. Most of it is MathML layout: browsers get
     /// alignment inside tabular mathematics wrong without it.
     pub css: Option<String>,
-    /// One SVG document per page, when `kind` is `"pages"`.
-    pub pages: Vec<String>,
+    /// Base64-encoded PDF, when `kind` is `"pages"`.
+    ///
+    /// The PDF is the compiler's own layout. PDF.js draws it and supplies the
+    /// text layer; the alternative, one SVG per page, drew every glyph as an
+    /// outline and made the page impossible to select or click.
+    pub pdf: Option<String>,
     /// Warnings worth showing. Not errors: a document with warnings still renders.
     pub warnings: Vec<String>,
     /// Constructs the document view dropped, by name. Its HTML export cannot
@@ -359,10 +370,10 @@ pub struct RenderedTypst {
 /// it cannot represent layout at all: page size, `#align`, boxes and page breaks
 /// are dropped, each with a warning that this code collects so the pane can say so.
 ///
-/// The **pages** view renders the real pages to SVG. It is always faithful, and it
-/// is the only way to see what an export will print — but the text is drawn as
-/// outlines, so it cannot reflow or be selected, which is the wrong thing to read
-/// a document in.
+/// The **pages** view renders the real pages to PDF. It is always faithful, and it
+/// is the only way to see what an export will print; PDF.js draws it and supplies
+/// the selectable text layer, so the page can be read, copied and clicked without
+/// becoming a second layout engine.
 ///
 /// The source arrives as a string and is piped in on stdin rather than written to
 /// a file next to the user's document. Verified equivalent for both formats: an
@@ -547,7 +558,7 @@ fn render_document(
         kind: "document".into(),
         html: Some(body),
         css,
-        pages: Vec::new(),
+        pdf: None,
         warnings,
         ignored,
     })
@@ -568,61 +579,45 @@ fn render_pages(
     dir: &Path,
     source: &str,
 ) -> Result<RenderedTypst, String> {
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.filter_map(Result::ok) {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with("page-") && name.ends_with(".svg") {
-                let _ = std::fs::remove_file(entry.path());
-            }
-        }
-    }
+    let target = dir.join(format!(
+        "pages-{}-{}.pdf",
+        std::process::id(),
+        NEXT_PDF.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_file(&target);
 
-    // A `{p}` placeholder is mandatory for multi-page output: without one Typst
-    // writes nothing at all rather than a numbered series.
-    let template = dir.join("page-{p}.svg");
-    let (ok, stderr) = run_typst(binary, root, source, &["--format", "svg"], &template)?;
+    // PDF, not one SVG per page: the PDF carries the text and its positions, so
+    // PDF.js can put a selectable text layer over the compiler's layout. The SVG
+    // writer turns every glyph into an outline, which is why the old page view
+    // could not be selected or clicked.
+    let (ok, stderr) = run_typst(binary, root, source, &["--format", "pdf"], &target)?;
 
     if !ok {
+        let _ = std::fs::remove_file(&target);
         let message: Vec<&str> = stderr
             .lines()
             .filter(|line| !line.trim().is_empty())
             .take(20)
             .collect();
         return Err(if message.is_empty() {
-            format!("Typst produced no pages and said nothing.")
+            "Typst produced no PDF and said nothing.".to_string()
         } else {
             message.join("\n")
         });
     }
 
-    let mut pages: Vec<(u32, String)> = Vec::new();
-    for entry in std::fs::read_dir(dir)
-        .map_err(|e| format!("Could not read {}: {e}", dir.display()))?
-        .filter_map(Result::ok)
-    {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let Some(number) = name
-            .strip_prefix("page-")
-            .and_then(|rest| rest.strip_suffix(".svg"))
-            .and_then(|n| n.parse::<u32>().ok())
-        else {
-            continue;
-        };
-        let svg = std::fs::read_to_string(entry.path())
-            .map_err(|e| format!("Could not read page {number}: {e}"))?;
-        pages.push((number, svg));
-    }
-    pages.sort_by_key(|(number, _)| *number);
-
-    if pages.is_empty() {
-        return Err("Typst produced no pages. The document may be empty.".into());
+    let bytes =
+        std::fs::read(&target).map_err(|e| format!("Could not read the rendered pages: {e}"))?;
+    let _ = std::fs::remove_file(&target);
+    if bytes.is_empty() {
+        return Err("Typst produced an empty PDF. The document may be empty.".into());
     }
 
     Ok(RenderedTypst {
         kind: "pages".into(),
         html: None,
         css: None,
-        pages: pages.into_iter().map(|(_, svg)| svg).collect(),
+        pdf: Some(BASE64.encode(bytes)),
         warnings: diagnostics(&stderr),
         ignored: Vec::new(),
     })

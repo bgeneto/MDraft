@@ -23,12 +23,13 @@ binary. Release notes and checksums are on the release page.
 - **Four languages, each with the right preview.** Markdown gets GFM tables,
   KaTeX, Mermaid, GitHub alerts and `[TOC]`. AsciiDoc gets Asciidoctor's
   admonitions, tables, listings, local includes and `latexmath`/`asciimath`. Typst, once
-  its compiler is installed, gets a flowing document view and a page view. HTML
-  keeps its own CSS, images and scripts, isolated in a sandbox.
+  its compiler is installed, gets a flowing document view and a PDF page view
+  whose text can be selected and clicked. HTML keeps its own CSS, images and
+  scripts, isolated in a sandbox.
 - **A preview that follows the work.** Split, source-only and preview-only
   modes; scroll sync; clicking a source line blinks the matching block;
   selecting a word or a range in either pane paints it in the other, for
-  Markdown and AsciiDoc, without moving the selection or scrolling; tabs
+  Markdown, AsciiDoc and Typst, without moving the selection or scrolling; tabs
   keep each document's caret, undo and scroll position. A crowded strip scrolls
   with arrows, the wheel or drag reordering, and right-click offers the tab
   actions. The outline, file browser and recent list are one shortcut away.

@@ -138,6 +138,13 @@ const SUITES = [
     doc: "samples/typst-tour.typ",
   },
   {
+    id: "typst-preview",
+    title: "Typst PDF pages and word sync",
+    kind: "cdp",
+    script: "typst-preview-test.mjs",
+    doc: "samples/typst-pages.typ",
+  },
+  {
     id: "math",
     title: "Math rendering",
     kind: "cdp",
