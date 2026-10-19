@@ -781,7 +781,10 @@ struct Asset {
 
 /// Lowercase hex SHA-256, written out byte by byte so no formatting trait of the
 /// digest crate's output type has to be relied on.
-fn sha256_hex(bytes: &[u8]) -> String {
+///
+/// Shared with the Typst installer: both verify a downloaded release archive
+/// against the digest GitHub publishes before executing anything from it.
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(bytes);

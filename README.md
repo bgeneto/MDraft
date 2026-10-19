@@ -84,10 +84,10 @@ binary. Release notes and checksums are on the release page.
 3. Split view is the default. Use the status-bar buttons for Source or
    Preview; `Ctrl+/` jumps to the source.
 4. For `.typ` files, install the Typst compiler: **Help › Install Typst** on
-   Windows; your package manager or the [Typst download
-   page](https://typst.app/open-source/#download) on Linux, with `typst` on your
-   `PATH`. For DOCX, ODT and the other pandoc formats, use **Help › Install
-   Pandoc**. Neither is required to edit or preview Markdown, AsciiDoc or HTML.
+   Windows and Linux; on macOS use your package manager or the [Typst download
+   page](https://typst.app/open-source/#download), with `typst` on your `PATH`.
+   For DOCX, ODT and the other pandoc formats, use **Help › Install Pandoc**.
+   Neither is required to edit or preview Markdown, AsciiDoc or HTML.
 
 ## Requirements
 
@@ -101,9 +101,9 @@ binary. Release notes and checksums are on the release page.
   silent in-app PDF.
 - Pandoc and Typst are optional. **Help › Install Pandoc** installs pandoc
   into MDraft's own data folder on every published platform; **Help › Install
-  Typst** does the same on Windows. On Linux, install Typst with your package
-  manager or from its download page, and put `typst` on `PATH`. Administrator
-  rights are not needed for the in-app installs.
+  Typst** does the same on Windows and Linux. On macOS, install Typst with your
+  package manager or from its download page, and put `typst` on `PATH`.
+  Administrator rights are not needed for the in-app installs.
 
 ## Documentation
 

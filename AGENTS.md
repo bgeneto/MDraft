@@ -197,7 +197,7 @@ rewrite from scratch.
 | `npm run stage` | `scripts/stage-artifacts.mjs` | Re-stage what is already built |
 | `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
-| `npm run test:rust` | `cargo test` | 92 tests on Windows (91 run, one ignored download); Linux has 91 total (90 run, one ignored) |
+| `npm run test:rust` | `cargo test` | 93 tests (91 run, two ignored downloads) on both platforms |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. The tab-restore layer is the exception: two launches of the same instance's settings directory, closed with WM_CLOSE in between so the close flush runs. Puts back the working tree and the developer's own settings afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
 | `npm run smoke` | `scripts/dom-smoke.mjs` | 105 checks against `samples/feature-tour.md` |
 | `npm run word-sync` | `scripts/word-sync-test.mjs` | 30 checks of word-level sync against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, no scroll, Escape, and the fallbacks |
@@ -464,7 +464,7 @@ Twenty-two layers, cheapest first. Run them in this order when changing anything
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 92 | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection |
+| Rust unit | `npm run test:rust` | 93 | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, xz/tar release extraction |
 | Session store | `npm run test:sessions` | 59 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
 | Paste conversion | `npm run paste:convert` | 99 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, image syntax, AsciiDoc |
 | AsciiDoc export source | `npm run asciidoc:export:unit` | 17 | Unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations - no application |
@@ -596,8 +596,8 @@ handle is released. Do not switch to an in-place shell write to work around it:
 it bypasses the tool's read-before-write check and the other program's buffer
 then overflows the change on its next save.
 
-**`git diff --check` reports every added line of `src-tauri/src/settings.rs` as "trailing whitespace"**
-The file is stored with CRLF in the index (`git ls-files --eol` says `i/crlf w/crlf`) while most of the tree is LF in the index, and the repository's `core.whitespace` does not include `cr-at-eol`. The carriage return at the end of each added line is therefore read as trailing whitespace even though the text is clean. Do not normalise the file or strip the CR — that rewrites every line. Confirm with `[IO.File]::ReadAllText` if in doubt; zero LF-only line endings means the whitespace warning is the line-ending policy, not the patch.
+**`git diff --check` reports every added line of `src-tauri/src/settings.rs` or `src-tauri/src/typst.rs` as "trailing whitespace"**
+Those files are stored with CRLF in the index (`git ls-files --eol` says `i/crlf w/crlf`) while most of the tree is LF in the index, and the repository's `core.whitespace` does not include `cr-at-eol`. The carriage return at the end of each added line is therefore read as trailing whitespace even though the text is clean. Do not normalise the file or strip the CR — that rewrites every line. Confirm with `[IO.File]::ReadAllText` if in doubt; zero LF-only line endings means the whitespace warning is the line-ending policy, not the patch.
 
 **`document.fonts.check()` is false for a font that exists**
 Web fonts load lazily. `check()` reports whether a face is *active*, not whether
@@ -1484,6 +1484,26 @@ replaces the image with its description and the PDF still builds. That is a
 pre-existing limitation of every pandoc PDF export with local images on
 Windows, not an AsciiDoc problem. Do not add `--resource-path` casually.
 
+**`cargo fmt --check` reports hundreds of differences in files you did not touch**
+The tree is not rustfmt-clean: the installed rustfmt wants different import
+ordering and test indentation in `html_preview.rs`, `images.rs`, `menu.rs`,
+`settings.rs`, `spellcheck.rs` and `typst.rs` itself. A repository-wide check
+therefore fails before it reaches your patch, and running `cargo fmt` would turn
+a small change into a tree-wide diff. Match the surrounding style by hand and
+use `cargo check` / `cargo test` as the gate; do not reformat the repository to
+make the check green.
+
+**`libhunspell not found` on an agent host where `sudo` needs a password**
+`build.rs` runs `pkg-config --libs --cflags hunspell` and panics by design, so
+`cargo check` and `cargo test` cannot even reach the Rust code. Install the
+system package when possible. Without root, `apt-get download libhunspell-dev`,
+extract it with `dpkg-deb -x` into a temp prefix, and point `PKG_CONFIG_PATH` at
+its `hunspell.pc`. The extracted `.so` symlink dangles (the dev package does not
+carry the runtime library), so the linker then picks `libhunspell-1.7.a` and
+fails with `undefined symbol: __gxx_personality_v0`; symlink the system
+`libhunspell-1.7.so.0.0.1` into the extracted `lib` directory to make the shared
+library win. No repository file should change for this.
+
 ## Adding a preference, end to end
 
 Five files, in this order — more than three, so a plan comes first; see
@@ -1675,7 +1695,7 @@ platform and fails on the other.
    reads the latter for the bundle, and the two must agree. `npm run
    check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
-3. `npm run test:rust` — 91 runnable tests (one ignored: the pandoc download). Run them on Linux too
+3. `npm run test:rust` — 91 runnable tests (two ignored downloads: pandoc and Typst). Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run math`,
