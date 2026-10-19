@@ -56,6 +56,10 @@ tar = "0.4.46"
 # `lzma-rs` is pure Rust, matching flate2's `rust_backend`, so the installer
 # needs no C toolchain, no liblzma headers and no system xz binary.
 lzma-rs = "0.3"
+# GTK3 takes the Wayland app id from GLib's program name, and the compositor
+# matches that id against a .desktop file. Declared directly because lib.rs
+# sets it; the version is the one Tauri's GTK already pulls in.
+glib = "0.18"
 
 # The system spell checker. Dictionaries stay on the machine: Windows uses the
 # Spell Checking API (the same service WebView2 would), Linux opens the hunspell

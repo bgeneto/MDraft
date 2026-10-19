@@ -15,6 +15,21 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let context = tauri::generate_context!();
+
+    // Wayland has no window-icon property for GTK3 applications: the
+    // compositor resolves the icon by matching the window's app id to a
+    // `.desktop` file. GTK derives that id from g_get_prgname(), which is the
+    // binary name (`mdraft`), while Tauri names the installed entry after
+    // productName (`MDraft.desktop`), and the lookup is case-sensitive. Use the
+    // same config value Tauri bundles so KWin and GNOME find the entry instead
+    // of falling back to the Breeze `wayland` logo.
+    #[cfg(target_os = "linux")]
+    {
+        let product_name = context.config().product_name.as_deref().unwrap_or("mdraft");
+        glib::set_prgname(Some(product_name));
+    }
+
     let app = tauri::Builder::default()
         .manage(html_preview::PreviewStore::default())
         .register_asynchronous_uri_scheme_protocol(
@@ -78,7 +93,7 @@ pub fn run() {
             html_preview::set_html_preview,
             html_preview::clear_html_preview,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building the tauri application");
 
     app.run(|app_handle, event| {
