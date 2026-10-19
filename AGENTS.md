@@ -1504,6 +1504,22 @@ fails with `undefined symbol: __gxx_personality_v0`; symlink the system
 `libhunspell-1.7.so.0.0.1` into the extracted `lib` directory to make the shared
 library win. No repository file should change for this.
 
+**The window and taskbar show an orange “W” on KDE Wayland, not the MDraft icon**
+The compositor does not read a GTK window's icon on Wayland: KWin resolves the
+window's `app_id` to `<app_id>.desktop`, reads its `Icon=`, and falls back to the
+Breeze `wayland` icon when the lookup is empty (`XdgToplevelWindow::updateIcon()`
+in `src/xdgshellwindow.cpp`). GTK3 sets `app_id` from `g_get_prgname()`, the
+binary name `mdraft`, while Tauri names the installed entry after `productName`,
+`MDraft.desktop`, and the lookup is case-sensitive. Measured on the installed
+binary before the fix with `WAYLAND_DEBUG=1 /usr/bin/mdraft`:
+`xdg_toplevel.set_app_id("mdraft")`, while
+`/usr/share/applications/MDraft.desktop` was the only entry.
+`src-tauri/src/lib.rs` now sets the GLib program name from the config's
+`productName` before Tauri builds the GTK application, and
+`src-tauri/linux.desktop.hbs` sets `StartupWMClass={{name}}` so the X11
+`WM_CLASS` stays aligned with the entry. Do not conclude the icon assets or
+`bundle.icon` are wrong from this; X11 uses `_NET_WM_ICON` and looked correct.
+
 ## Adding a preference, end to end
 
 Five files, in this order — more than three, so a plan comes first; see
