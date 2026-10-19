@@ -1666,6 +1666,12 @@ body {
   flex: 1 1 20em;
 }
 
+/* Without the view bar above it, the missing-compiler note is the pane's first
+   child and needs its own top margin. */
+.typst-note:first-child {
+  margin-top: 10px;
+}
+
 .typst-notebutton {
   padding: 2px 9px;
   border: 1px solid var(--border);

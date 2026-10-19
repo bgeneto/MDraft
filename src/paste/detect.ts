@@ -11,6 +11,7 @@
 //! can never decide on its own.
 
 import type { DocumentLanguage } from "../api.ts";
+import { VOID_ELEMENTS } from "../tag-name.ts";
 
 export type SourceFormat = "html" | "markdown" | "typst" | "asciidoc" | "plain";
 
@@ -133,6 +134,65 @@ export function scoreHtml(raw: string, mode: "clipboard" | "document"): number {
   return 0;
 }
 
+/**
+ * Every tag-shaped token in a text: a comment, a declaration, or an element.
+ * Quoted attribute values may contain `>`; the name and the attribute run are
+ * the same shapes `src/tag-name.ts` recognises, so `<3`, `a < b` and `\<p\>`
+ * are not tags.
+ */
+const TAG_TOKEN =
+  /<!--[\s\S]*?-->|<![^<>]*>|<\?[^<>]*\?>|<\/?[A-Za-z][A-Za-z0-9:-]*(?:\s(?:"[^"]*"|'[^']*'|[^<>"'])*)?\/?>/g;
+
+/**
+ * The clipboard's plain text is HTML *source*, not prose that mentions a tag.
+ *
+ * `Use the <div> tag` is a sentence; `<link …>`, `<p>Hello</p>` and
+ * `<div>\n<p>Hi</p>\n</div>` are markup. Prose may only appear inside an
+ * element, so everything at the top level must be a tag or whitespace, and a
+ * fragment that ends with an opening tag (`<div>`) is markup too — that is a
+ * thing you paste into a document, while `<div> is how you group` is a
+ * sentence. `scoreHtml` cannot make this call: it refuses to trust an HTML
+ * fragment on a clipboard, precisely so that a code snippet is not eaten by
+ * the parser.
+ */
+export function isHtmlSource(text: string): boolean {
+  let depth = 0;
+  let elements = 0;
+  let endsWithOpenTag = false;
+  let index = 0;
+  TAG_TOKEN.lastIndex = 0;
+  for (let match = TAG_TOKEN.exec(text); match !== null; match = TAG_TOKEN.exec(text)) {
+    const gap = text.slice(index, match.index);
+    if (gap.trim() !== "") {
+      if (depth === 0) return false;
+      endsWithOpenTag = false;
+    }
+    index = match.index + match[0].length;
+    const token = match[0];
+    // `<!-- … -->`, `<!doctype …>` and `<? … ?>` are declarations, not elements.
+    if (token.startsWith("<!--") || /^<[!?]/.test(token)) {
+      endsWithOpenTag = false;
+      continue;
+    }
+    elements += 1;
+    if (token.startsWith("</")) {
+      if (depth > 0) depth -= 1;
+      endsWithOpenTag = false;
+      continue;
+    }
+    const name = /^<([A-Za-z][A-Za-z0-9:-]*)/.exec(token)?.[1]?.toLowerCase() ?? "";
+    const empty = VOID_ELEMENTS.has(name) || /\/>$/.test(token);
+    if (!empty) depth += 1;
+    endsWithOpenTag = !empty;
+  }
+  const tail = text.slice(index);
+  if (tail.trim() !== "") {
+    if (depth === 0) return false;
+    endsWithOpenTag = false;
+  }
+  return elements > 0 && (depth === 0 || endsWithOpenTag);
+}
+
 /** The confident syntax of a text, or null when the evidence is too thin. */
 export function detectTextSyntax(
   raw: string,
@@ -172,11 +232,29 @@ function listLines(text: string): number {
 }
 
 /**
+ * The text carries Markdown's own syntax, so a Markdown destination should
+ * paste it as written. Looser than `detectTextSyntax` on purpose (see
+ * `chooseSource`); a fence is included because `stripNoise` removes the one
+ * signal that cannot also be prose.
+ */
+function carriesMarkdown(text: string): boolean {
+  return scoreMarkdown(text) > 0 || /^ {0,3}(?:`{3,}|~{3,})/m.test(text);
+}
+
+/**
  * Which clipboard representation to use for `destination`.
  *
  * The plain-text representation wins when it is already in the destination's
  * syntax; otherwise HTML wins over a different text syntax; otherwise text is
  * pasted natively.
+ *
+ * "Already in the destination's syntax" includes markup *written out* on the
+ * clipboard: `isHtmlSource` names an HTML fragment, and a Markdown destination
+ * takes any text carrying Markdown's own signals. The HTML representation of
+ * such a copy is only the same characters decorated — an editor's syntax
+ * highlighting, a page's `<code>` block — so converting it re-serialises the
+ * code (spans and all) or, in the HTML case, drops `link`, `meta` and `style`
+ * entirely. Both shapes are reproduced in `scripts/paste-convert-test.mjs`.
  */
 export function chooseSource(
   payload: ClipboardPayload,
@@ -185,19 +263,32 @@ export function chooseSource(
   const text = payload.text ?? "";
   const confident = detectTextSyntax(text, "clipboard");
 
-  // A typed syntax that already matches the destination should not be converted.
-  if (destination === "markdown" && text && confident?.language === "markdown") {
+  // HTML source wins where HTML is the destination's own text. In Typst and
+  // AsciiDoc the converter still makes a literal tag out of it: `<link>` is a
+  // label reference in Typst, so pasting it verbatim would hide it.
+  if (text && isHtmlSource(text) && (destination === "html" || destination === "markdown")) {
+    return { source: "plain", native: true };
+  }
+  // The Markdown threshold is the loosest of the four on purpose: a bullet
+  // list or a fence is Markdown syntax, but it cannot classify a *document*
+  // (`detectTextSyntax` needs a two-point lead), and the destination is the
+  // one place that already knows the text is Markdown. A confident other
+  // syntax still wins — a Typst document with a bullet list stays Typst.
+  if (
+    destination === "markdown" &&
+    text &&
+    carriesMarkdown(text) &&
+    (!confident || confident.language === "markdown")
+  ) {
     return { source: "markdown", native: true };
   }
+
+  // A typed syntax that already matches the destination should not be converted.
   if (destination === "typst" && text && confident?.language === "typst") {
     return { source: "typst", native: true };
   }
   if (destination === "asciidoc" && text && confident?.language === "asciidoc") {
     return { source: "asciidoc", native: true };
-  }
-  if (destination === "html" && text && confident?.language === "html") {
-    // The destination is HTML, but the fragment still needs sanitising.
-    return { source: "html", native: false };
   }
 
   if (payload.html && payload.html.trim() !== "") {

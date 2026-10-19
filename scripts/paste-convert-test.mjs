@@ -10,7 +10,7 @@
 // cheaply cover every reader/writer pair. This suite pins the matrix, the
 // destination resolution and the escaping before the UI layer sees it.
 
-import { chooseSource } from "../src/paste/detect.ts";
+import { chooseSource, isHtmlSource } from "../src/paste/detect.ts";
 import { resolvePasteDestination } from "../src/paste/detect-document.ts";
 import { planPaste } from "../src/paste/index.ts";
 import { imageSyntaxFor } from "../src/image-syntax.ts";
@@ -94,6 +94,86 @@ console.log("\n=== clipboard source choice ===");
 
   const htmlList = chooseSource(payload(null, "- one\n- two\n- three"), "html");
   check(htmlList.source === "markdown" && !htmlList.native, "a list pasted into HTML converts", htmlList.source);
+}
+
+console.log("\n=== markup source on the clipboard ===");
+{
+  const link =
+    '<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.2.1/reset.min.css">';
+
+  const table = [
+    [link, true, "a link tag"],
+    [`${link}\n<script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.2.1/reveal.js"></script>`, true, "two tags"],
+    ["<p>Hello</p>", true, "an element with text"],
+    ["<div>\n  <p>Hello <strong>world</strong></p>\n</div>", true, "a nested fragment"],
+    ["<style>p { color: red }</style>", true, "a style element"],
+    ["<div>", true, "an opening tag left open at the end"],
+    ["Use the <div> tag", false, "prose that mentions a tag"],
+    ["<div> is how you group", false, "a tag followed by prose"],
+    ["a < b", false, "a comparison"],
+    ["<!-- only a comment -->", false, "a comment alone"],
+    ["\\<p\\>", false, "an escaped tag"],
+  ];
+  for (const [text, expected, label] of table) {
+    check(isHtmlSource(text) === expected, `${expected ? "source" : "not source"}: ${label}`, JSON.stringify(text).slice(0, 52));
+  }
+
+  // What a syntax-highlighting editor puts on the clipboard: every token, its
+  // leading space included, is its own span inside a styled wrapper.
+  const highlighted =
+    `<meta charset='utf-8'><div style="color: #d4d4d4;white-space: pre;"><div>` +
+    `<span style="color: #808080;">&lt;</span><span style="color: #9CDCFE;">link</span>` +
+    `<span style="color: #9CDCFE;"> rel</span>=<span style="color: #CE9178;">"stylesheet"</span> ` +
+    `<span style="color: #9CDCFE;">href</span>=<span style="color: #CE9178;">"https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.2.1/reset.min.css"</span>` +
+    `<span style="color: #808080;">&gt;</span></div></div>`;
+
+  const choice = chooseSource(payload(highlighted, link), "html");
+  check(
+    choice.source === "plain" && choice.native,
+    "HTML source beats a highlighted HTML representation",
+    JSON.stringify(choice),
+  );
+
+  const pasted = await planPaste(payload(highlighted, link), "html");
+  check(pasted?.text === link && pasted.converted === false, "the snippet is pasted byte-for-byte", pasted?.text);
+
+  const bare = await planPaste(payload(link, link), "html");
+  check(bare?.text === link, "a bare link tag is not dropped by the sanitizer", bare?.text);
+
+  const codeBlock = await planPaste(
+    payload(
+      `<code class="language-html">&lt;link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.2.1/reset.min.css"&gt;</code>`,
+      link,
+    ),
+    "html",
+  );
+  check(codeBlock?.text === link, "a code block copied from a docs page keeps the text", codeBlock?.text);
+
+  const prose = await planPaste(payload("Use the <code>&lt;div&gt;</code> tag", "Use the <div> tag"), "html");
+  check(
+    prose?.converted === true && (prose?.text ?? "").includes("&lt;div&gt;"),
+    "prose that mentions a tag still converts",
+    prose?.text,
+  );
+
+  const list = await planPaste(payload(`<div style="white-space: pre">- one<br>- two</div>`, "- one\n- two"), "markdown");
+  check(
+    list?.text === "- one\n- two" && list.converted === false,
+    "a Markdown list snippet stays byte-identical",
+    JSON.stringify(list?.text),
+  );
+
+  // Typst has its own use for `<…>` (a label), so a tag snippet is converted
+  // to escaped literal text there rather than pasted verbatim.
+  const highlightedTag =
+    '<div style="white-space: pre">&lt;link rel="stylesheet" href="a.css"&gt;</div>';
+  const tag = '<link rel="stylesheet" href="a.css">';
+  const typst = await planPaste(payload(highlightedTag, tag), "typst");
+  check(
+    typst?.converted === true && (typst?.text ?? "").includes("\\<link"),
+    "a tag snippet into Typst becomes escaped text",
+    typst?.text,
+  );
 }
 
 console.log("\n=== HTML to Markdown ===");

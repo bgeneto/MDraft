@@ -74,8 +74,9 @@ identity. They are reader adjustments remembered per preset: set Serif to 19 px,
 visit System and Renaissance, and Serif still comes back at 19 px. A preset that
 has never been adjusted starts at its own defaults (System 16/90, Serif 18/85,
 Renaissance 18/77, Editorial 17/85, Bauhaus 17/87, Notebook 17/80). The editor
-font size starts at 16 px for every preset. Under Custom, all three values are
-global. Changing any of the three sizes does not leave the active preset.
+font size starts at 15 px for every preset, with a 1.5 line height that scales
+with the size. Under Custom, all three values are global. Changing any of the
+three sizes does not leave the active preset.
 
 ## OpenType
 

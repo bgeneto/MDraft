@@ -35,6 +35,7 @@ import { languages } from "@codemirror/language-data";
 import type { DocumentLanguage } from "./api";
 import { asciidocLanguage } from "./asciidoc-language";
 import { isCodeContext } from "./code-context";
+import { DEFAULT_EDITOR_FONT_SIZE } from "./fonts";
 import { htmlLanguage } from "./html-language";
 import { autoCloseTag } from "./tag-close";
 import { typstLanguage } from "./typst-language";
@@ -255,7 +256,7 @@ const baseTheme = EditorView.theme({
     // compartment and no reconfiguration is needed to change the face, only a
     // `requestMeasure()` afterwards so it re-measures its line wrapping.
     fontFamily: "var(--font-source)",
-    lineHeight: "1.75",
+    lineHeight: "1.5",
     padding: "22px 0 45vh",
   },
   ".cm-content": {
@@ -489,7 +490,9 @@ const markdownSupport = markdown({
       ...foldKeymap,
       indentWithTab,
     ]),
-    fontSizeCompartment.of(EditorView.theme({ "&": { fontSize: "16px" } })),
+    fontSizeCompartment.of(
+      EditorView.theme({ "&": { fontSize: `${DEFAULT_EDITOR_FONT_SIZE}px` } }),
+    ),
     focusCompartment.of([]),
     syntaxCompartment.of([]),
     spellCompartment.of([]),

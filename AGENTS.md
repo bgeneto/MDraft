@@ -199,7 +199,7 @@ rewrite from scratch.
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
 | `npm run test:rust` | `cargo test` | 90 tests on Windows (89 run, one ignored download); Linux has 89 total (88 run, one ignored) |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. The tab-restore layer is the exception: two launches of the same instance's settings directory, closed with WM_CLOSE in between so the close flush runs. Puts back the working tree and the developer's own settings afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
-| `npm run smoke` | `scripts/dom-smoke.mjs` | 97 checks against `samples/feature-tour.md` |
+| `npm run smoke` | `scripts/dom-smoke.mjs` | 98 checks against `samples/feature-tour.md` |
 | `npm run word-sync` | `scripts/word-sync-test.mjs` | 30 checks of word-level sync against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, no scroll, Escape, and the fallbacks |
 | `npm run autoclose:unit` | `scripts/autoclose-unit.mjs` | 17 checks of the tag matcher: attributes, custom elements, void and self-closing tags, autolinks, escapes, declarations, prose — no application |
 | `npm run autoclose` | `scripts/autoclose-test.mjs` | 33 checks of pairs, quotes, backticks, HTML tags and both preferences, typed through the real editor in Markdown, HTML, Typst and AsciiDoc |
@@ -216,8 +216,8 @@ rewrite from scratch.
 | `npm run recent` | `scripts/recent-menu-test.mjs` | 26 checks that File › Open Recent mirrors the persisted list: the launch file, a new file becoming first, the menu id opening/focusing a tab, Clear Items emptying menu and sidebar, the list refilling, and a 27-row history rendered in full by the sidebar while the menu shows 20 plus Clear Items |
 | `npm run asciidoc` | `scripts/asciidoc-test.mjs` | 51 checks of the AsciiDoc preview, source highlighting, outline, preview copy, spellcheck, includes, paste, the AsciiDoc reference, the default extension and word-level sync |
 | `npm run test:sessions` | `scripts/sessions-test.mjs` | 59 unit checks of `src/sessions.ts`, with no application and no build |
-| `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 72 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
-| `npm run paste` | `scripts/rich-paste-test.mjs` | 23 checks of rich paste through the real UI: destination detection, conversion, preferences, Ctrl+Shift+V, undo |
+| `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 90 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
+| `npm run paste` | `scripts/rich-paste-test.mjs` | 26 checks of rich paste through the real UI: destination detection, conversion, preferences, Ctrl+Shift+V, undo |
 | `npm run image:syntax` | `scripts/image-syntax-test.mjs` | 14 checks of bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, including the Image preference |
 | `npm run typst:preview` | `scripts/typst-preview-test.mjs` | 31 checks of Typst Pages through PDF.js and Typst word sync: page shells, canvases, text layers, both columns, selection/copy, paragraph click, repeated-word/right-column mapping, drag ranges, generated-text fallback, the transparent view bar, view switching and PDF disposal |
 | `npm run licence` | `scripts/licence-test.mjs` | 4 checks that the bundled typefaces' licences ship inside the application. Run against its own instance: it opens a document |
@@ -465,13 +465,13 @@ Twenty-one layers, cheapest first. Run them in this order when changing anything
 | Typecheck | `npm run build` | — | Type errors, unused imports |
 | Rust unit | `npm run test:rust` | 90 | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection |
 | Session store | `npm run test:sessions` | 59 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
-| Paste conversion | `npm run paste:convert` | 72 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, image syntax, AsciiDoc |
-| DOM smoke | `npm run smoke` | 97 | Rendering, pane sync, preferences (including the four On Launch choices), math, fonts, status icons |
+| Paste conversion | `npm run paste:convert` | 90 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, markup source, image syntax, AsciiDoc |
+| DOM smoke | `npm run smoke` | 98 | Rendering, pane sync, preferences (including the four On Launch choices), math, fonts, status icons |
 | Word sync | `npm run word-sync` | 30 | The fragment map, preview → source and source → preview, atomic code, formula and image spans, word snapping, no scroll, Escape |
 | Auto-close matching | `npm run autoclose:unit` | 17 | Which tag a typed `>`, the void/self-closing/autolink/escape rules — no application |
 | Remembered tabs (unit) | `npm run tabs:restore:unit` | 33 | What is stored (order, untitled exclusion, deduplication, the 20-document cap) and what a restore plan does with it (missing files, the active-tab fallback) — no application |
 | Auto-close typing | `npm run autoclose` | 33 | Pairs, step-over, Backspace, selection wrap, Markdown inline tags, HTML tags, both preferences, in all four document types |
-| Rich paste | `npm run paste` | 23 | The paste event, destination notice, preferences, Ctrl+Shift+V, undo |
+| Rich paste | `npm run paste` | 26 | The paste event, destination notice, preferences, Ctrl+Shift+V, undo, markup source pasted byte-for-byte |
 | Image syntax | `npm run image:syntax` | 14 | Bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, plus the Image preference |
 | Typst pages | `npm run typst:preview` | 31 | PDF.js page shells/canvases/text layers, both columns, A4 geometry, paragraph click, repeated-word/right-column mapping, drag ranges, Pages and Document word sync, generated-text fallback, transparent view bar and PDF disposal |
 | Math | `npm run math` | 10 | Font loading, fraction and radical geometry |
@@ -1339,6 +1339,55 @@ settings and menu tests still pass, so it looks like a regression in unrelated
 modules. Use the harness for the Rust layer on this host, or point `TEMP` at a
 workspace path before a bare `cargo test`.
 
+**`building ... FAIL` with `An Application Control policy has blocked this file. (os error 4551)` for `target\release\build\*\build-script-build.exe`**
+The host runs ESET and Code Integrity is enforced; a freshly compiled release
+build script can be blocked while its on-access scan is still in progress. The
+same binary copied to `%TEMP%` and run a moment later executed normally, and a
+plain retry of `npm test` completed the build. The debug target is usually
+unaffected because its build scripts have already been scanned. Do not read this
+as a broken toolchain or a source problem, do not disable the security product,
+and do not clean `target/release`; retry once the scan settles. Running the
+blocked executable by hand returns the same policy error, while its debug
+counterpart runs and prints the expected `cargo:` lines.
+
+**A pasted HTML snippet becomes the editor's syntax highlighting — or nothing at all**
+Copying `<link rel="stylesheet" href="…">` from a source editor with highlighting
+and pasting it into an HTML document inserted
+`<div style="color: #d4d4d4; white-space: pre"><div><span style="color: #808080">&lt;</span>…`,
+and when the clipboard's HTML representation was the bare tag the paste inserted
+**nothing**. The plain text was already the destination's syntax, but
+`chooseSource` only trusted plain text that `detectTextSyntax` classified, and
+`scoreHtml` refuses an HTML *fragment* on purpose — "a code snippet starting with
+`<div>` must not be eaten by the parser" — so the next branch handed the snippet
+to the parser anyway, through the clipboard's HTML representation, and
+`sanitizeHtmlFragment` drops `link`, `meta` and `style`. `isHtmlSource()` now
+decides it; the Markdown destination has the same looser rule. Measure the paste
+layer without the application: Node 24 strips the types, so a scratch `.mjs` that
+imports `src/paste/index.ts` and calls `planPaste` prints exactly what the editor
+will insert. Do not start by suspecting the sanitizer or the paste handler.
+
+**The spaces vanish from a converted code snippet (`linkrel="stylesheet"href=…`)**
+`convertInline` in `src/paste/read-html.ts` runs `trimInline` over every
+element's children, and a syntax highlighter puts each token *and its leading
+space* in its own `<span>`; the span's only text node is then trimmed, so
+`link rel="stylesheet" href=…` becomes `linkrel="stylesheet"href=…`. Rendered
+copies are not affected, because a browser's spaces are separate text nodes one
+level up. Markup source no longer takes that route, so this only shows up for a
+rendered copy whose text sits alone in an inline element; if it ever needs
+fixing, the place is `trimInline`, not the Markdown renderer.
+
+**`clip.exe` fails with `ERROR: Access is denied.`, and `Set-Clipboard` "succeeds" but reads back empty**
+The agent session's sandbox denies clipboard ownership to any process launched
+from it — the same family as `%TEMP%` writes and the WebView2 profile.
+`[Windows.Forms.Clipboard]::SetDataObject` throws "Requested Clipboard operation
+did not succeed" however often it is retried, and setting `-STA` or running from
+outside the workspace changes nothing. A real Ctrl+V therefore cannot be driven
+from here, and `Set-Clipboard` is the trap inside the trap: it reports success,
+so a driver that checks nothing afterwards tests an empty clipboard. Test the
+paste path with the UI suites' synthetic `ClipboardEvent` and `DataTransfer` —
+that is the same `event.clipboardData` a real paste carries — and say the real
+clipboard was unavailable rather than claiming a failed end-to-end check.
+
 ## Adding a preference, end to end
 
 Five files, in this order — more than three, so a plan comes first; see
@@ -1534,7 +1583,7 @@ platform and fails on the other.
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run math`,
    `npm run syntax`, `npm run html` and `npm run asciidoc` —
-   97 + 10 + 7 + 43 + 51 checks.
+   98 + 10 + 7 + 43 + 51 checks.
 5. `npm run audit` against both `docs/sample-files` documents and compare the
    counts with the table in the README.
 6. `npm run dist` — installers and checksums land in `bin/<os>/<arch>/`.

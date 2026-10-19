@@ -221,6 +221,31 @@ console.log("=== rich paste ===");
   check(html.includes("<p>After <strong>bold</strong></p>"), "an HTML buffer pastes HTML", html);
   check((await toast()).includes("Pasted as HTML"), "the HTML destination is announced", await toast());
 
+  // A snippet copied as *source* is not a rendering: the highlighting must not
+  // come along, and the tag must not be dropped on the way (the sanitizer has
+  // no use for `link`).
+  const snippet =
+    '<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.2.1/reset.min.css">';
+  const highlighted =
+    `<meta charset='utf-8'><div style="color: #d4d4d4;white-space: pre;"><div>` +
+    `<span style="color: #808080;">&lt;</span><span style="color: #9CDCFE;">link</span>` +
+    `<span style="color: #9CDCFE;"> rel</span>=<span style="color: #CE9178;">"stylesheet"</span> ` +
+    `<span style="color: #9CDCFE;">href</span>=<span style="color: #CE9178;">"https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.2.1/reset.min.css"</span>` +
+    `<span style="color: #808080;">&gt;</span></div></div>`;
+
+  await newTab();
+  await type("<h1>Title</h1>\n<p>Before</p>\n");
+  await paste(highlighted, snippet);
+  const fromEditor = await lines();
+  check(fromEditor.includes(snippet), "a snippet from a highlighting editor keeps its own characters", fromEditor);
+  check(!fromEditor.includes("<span"), "the editor highlighting is not pasted", fromEditor);
+
+  await newTab();
+  await type("<h1>Title</h1>\n<p>Before</p>\n");
+  await paste(snippet, snippet);
+  const fromTag = await lines();
+  check(fromTag.includes(snippet), "a bare link tag is not thrown away", fromTag);
+
   await newTab();
   await paste("<p>Inline <strong>word</strong></p>", "Inline word");
   check((await lines()).startsWith("Inline **word**"), "an inline fragment does not add a leading blank line", JSON.stringify(await lines()));

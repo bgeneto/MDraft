@@ -18,6 +18,7 @@ import { renderAsciidocPreview } from "./asciidoc-preview";
 import { ASCIIDOC_REFERENCE, FONT_LICENCES, REFERENCE, SHORTCUTS, WELCOME } from "./content";
 import { createEditor, type EditorHandle } from "./editor";
 import {
+  DEFAULT_EDITOR_FONT_SIZE,
   embeddedFontCss,
   installBundledFonts,
   TYPOGRAPHY_ROLES,
@@ -172,7 +173,7 @@ let outlineTimer = 0;
 /** Headings are document-shaped, so they can wait for a typing pause. */
 const OUTLINE_REFRESH_DELAY_MS = 250;
 
-const DEFAULT_FONT_SIZE = 16;
+const DEFAULT_FONT_SIZE = DEFAULT_EDITOR_FONT_SIZE;
 const MIN_FONT = 10;
 const MAX_FONT = 40;
 const AUTO_SAVE_INTERVAL_MS = 20_000;
@@ -725,16 +726,51 @@ function decodePdf(base64: string): Uint8Array {
   return bytes;
 }
 
+/**
+ * The sentence `render` in `src-tauri/src/typst.rs` returns when no Typst
+ * executable could be found. The command reports failures as plain strings, so
+ * there is no error code to test; keep this and the Rust wording in step.
+ */
+const TYPST_MISSING = "Typst is not installed, so .typ documents cannot be previewed.";
+
+/** The pane's note when Typst is absent, with the one action that fixes it. */
+function typstMissingNote(message: string): HTMLElement {
+  const note = document.createElement("div");
+  note.className = "typst-note";
+  const text = document.createElement("span");
+  text.className = "typst-note-text";
+  text.textContent = message;
+  const install = document.createElement("button");
+  install.type = "button";
+  install.className = "typst-notebutton";
+  install.textContent = "Install Typst…";
+  install.title = "Download the official Typst build into MDraft's own folder";
+  install.addEventListener("click", () => {
+    // Installing from this note should revive the pane without an edit.
+    void typstSetup().then(() => scheduleRender(true));
+  });
+  note.append(text, install);
+  return note;
+}
+
 /** Replace the pane with a Typst error, keeping the view switch available. */
 function showTypstFailure(error: unknown, wanted: string): void {
   disposeTypstPdf();
   preview.innerHTML = "";
+  previewLinesMapped = false;
+  const message = String(error);
+  if (message.includes(TYPST_MISSING)) {
+    // Neither view can render without the compiler, so a Document/Pages switch
+    // would be a dead control. The note offers the fix instead.
+    preview.appendChild(typstMissingNote(message));
+    applyPendingPreviewScroll();
+    return;
+  }
   preview.appendChild(typstViewBar(wanted));
   const box = document.createElement("pre");
   box.className = "typst-error";
-  box.textContent = String(error);
+  box.textContent = message;
   preview.appendChild(box);
-  previewLinesMapped = false;
   applyPendingPreviewScroll();
 }
 

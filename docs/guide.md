@@ -191,7 +191,12 @@ into the destination document's own markup. A saved file's extension decides
 the destination. An unsaved buffer is inferred from its content; if the result
 differs from the language the editor is currently using, a notice tells you
 which extension to save. **Ctrl/Cmd+Shift+V** bypasses the conversion once and
-pastes the clipboard's plain text.
+pastes the clipboard's plain text. Markup that is already written out is pasted
+as written: an HTML snippet copied from a code editor or a documentation page,
+or a Markdown list, keeps its own characters — the clipboard's HTML
+representation of such a copy is only the same characters decorated with the
+source's highlighting. (A Typst or AsciiDoc destination still escapes the
+snippet, so that it displays as text.)
 
 The converter understands headings, emphasis, links, lists, tables, quotes,
 code, images and common maths. If a conversion fails or the fragment is too
