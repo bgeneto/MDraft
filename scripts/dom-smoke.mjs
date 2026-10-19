@@ -327,7 +327,8 @@ const onLaunch = await evaluate(`(async () => {
 
   const initial = select().value;
   const options = [...select().options].map((o) => ({ value: o.value, label: o.textContent }));
-  const help = findRow().querySelector('.prefs-help')?.textContent ?? '';
+  // The real help text is the span's title; its textContent is the "?" mark.
+  const help = findRow().querySelector('.prefs-help')?.getAttribute('title') ?? '';
 
   select().value = 'tabs';
   select().dispatchEvent(new Event('change', { bubbles: true }));
@@ -354,7 +355,7 @@ check(
 );
 check(
   "the fourth choice explains what is restored",
-  /saved documents/i.test(onLaunch.help ?? "") && /not restored/i.test(onLaunch.help ?? ""),
+  /saved document/i.test(onLaunch.help ?? "") && /not restored/i.test(onLaunch.help ?? ""),
 );
 check("the choice reaches the settings file", onLaunch.stored === "tabs");
 check("the preference is left as it was found", onLaunch.restored === onLaunch.initial);
