@@ -360,21 +360,49 @@ check(
 check("the choice reaches the settings file", onLaunch.stored === "tabs");
 check("the preference is left as it was found", onLaunch.restored === onLaunch.initial);
 
-// Search filters the navigation down to matching sections.
+// Search filters the navigation down to matching sections. A group heading is
+// a searchable category too: "Recent Locations" is a heading, not a row, and
+// used to leave the section with nothing the reader could see.
 const search = await evaluate(`(() => {
   const input = document.querySelector('.prefs-search');
-  input.value = 'mermaid';
+  const run = (value) => {
+    input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    return {
+      sections: [...document.querySelectorAll('.prefs-section')].map((s) => s.textContent).join(','),
+      labels: [...document.querySelectorAll('.prefs-label')].map((l) => l.textContent.replace('?','').trim()).join('|'),
+      groups: [...document.querySelectorAll('.prefs-group')].map((g) => g.textContent).join('|'),
+      buttons: [...document.querySelectorAll('.prefs-button')].map((b) => b.textContent).join('|'),
+    };
+  };
+  const mermaid = run('mermaid');
+  const locations = run('locations');
+  const fileTree = run('file tree');
+  const clear = run('clear recent');
+  input.value = '';
   input.dispatchEvent(new Event('input', { bubbles: true }));
-  const sections = [...document.querySelectorAll('.prefs-section')].map((s) => s.textContent);
-  const labels = [...document.querySelectorAll('.prefs-label')].map((l) => l.textContent.replace('?','').trim());
-  return JSON.stringify({ sections: sections.join(','), labels: labels.join('|') });
+  return JSON.stringify({ mermaid, locations, fileTree, clear });
 })()`);
 
-console.log("\n=== preferences search 'mermaid' ===");
-console.log(`  sections  ${search.sections}`);
-console.log(`  labels    ${search.labels}`);
-check("search narrows sections", search.sections === "Markdown");
-check("search keeps the matching row", /Enable Diagrams/.test(search.labels));
+console.log("\n=== preferences search ===");
+console.log(`  mermaid    ${search.mermaid.sections} / ${search.mermaid.labels}`);
+console.log(`  locations  ${search.locations.sections} / ${search.locations.groups} / ${search.locations.labels}`);
+console.log(`  file tree  ${search.fileTree.sections} / ${search.fileTree.groups} / ${search.fileTree.labels}`);
+console.log(`  clear      ${search.clear.sections} / ${search.clear.buttons}`);
+check(
+  "search narrows sections",
+  search.mermaid.sections === "Markdown" &&
+    search.locations.sections === "Files" &&
+    search.fileTree.sections === "Files" &&
+    search.clear.sections === "Files",
+);
+check(
+  "search keeps the matching row or heading",
+  /Enable Diagrams/.test(search.mermaid.labels) &&
+    /Recent Locations/.test(search.locations.groups) &&
+    /Show Hidden Folders and Files/.test(search.fileTree.labels) &&
+    /Clear Recent Files/.test(search.clear.buttons),
+);
 
 // A checkbox in the panel must actually change rendering behaviour.
 // The panel re-renders itself after every change, so the input has to be

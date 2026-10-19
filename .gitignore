@@ -23,8 +23,8 @@ bin
 # directory itself makes git stop descending into it, and a `!` rule inside it
 # would then have nothing to re-include.
 docs/screenshots/*
-!docs/screenshots/readme-markdown-split.png
-!docs/screenshots/readme-asciidoc-preview.png
+!docs/screenshots/readme-markdown-light-renaissance.png
+!docs/screenshots/readme-markdown-dark-system.png
 
 # Remove samples 
 docs/samples/*

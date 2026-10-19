@@ -1,6 +1,6 @@
 # Restore the tabs that were open at the last launch
 
-**Status:** in progress
+**Status:** done
 **Date:** 2026-10-18
 **Approved:** 2026-10-19, with one amendment: the cap is **20** saved documents,
 not 40, and the remembered list is deduplicated (the amendment is applied
@@ -207,7 +207,12 @@ Rejected alternatives:
   phases): phase 1 opens three documents, reorders, closes one and leaves the
   active tab; phase 2 restores two, in order, with the remembered one active,
   and the flushed settings list matches. **Run: pass.**
-- Full `npm test` — **run at the end of the implementation; see Status.**
+- Full `npm test` — **run: 21 of 23 layers green on the first pass.** `word-sync`
+  (29/30) and `tabs` (a CDP crash after 36 checks, exit 13) failed, and both
+  passed on a clean re-run (`word-sync 30/30`, `tabs 104/104`); neither exercises
+  the restore path, and the tab suite had passed 104/104 earlier in the same
+  session. Treated as the viewport/WebSocket flakes the Traps section already
+  documents, not as regressions.
 
 The one measurement that proves it: open three documents, reorder them, close
 the window, relaunch, and read the tab names and the active tab from the DOM —

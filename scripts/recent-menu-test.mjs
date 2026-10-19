@@ -333,5 +333,10 @@ if (failed.length > 0) {
   for (const entry of failed) {
     console.log(`  - ${entry.label}${entry.detail ? `: ${entry.detail}` : ""}`);
   }
-  process.exit(1);
 }
+
+// An open WebSocket keeps Node alive, so a green run would otherwise sit at
+// this point forever and the harness would call it a failure. The other CDP
+// suites close the socket and exit explicitly for the same reason.
+ws.close();
+process.exit(failed.length === 0 ? 0 : 1);

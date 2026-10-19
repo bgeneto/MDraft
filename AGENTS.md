@@ -785,6 +785,15 @@ paste. `scripts/image-path-paste-test.mjs` does exactly this.
 **A Preferences row's label includes its help mark, and one label can be a prefix of another**
 `row.querySelector('.prefs-label').textContent` is `"Run a command?"` for a row that has help: the `?` span is part of the text. Worse, `"Open the exported file"` is a prefix of `"Open the exported file's folder"`, so an `includes()` match silently picks the first row and a test can report both boxes ticked while one was never touched. Strip the trailing `?` and compare the exact label. A probe that matched by substring concluded the second checkbox was already on and never clicked it, then chased a backend/frontend mismatch that did not exist. The help text itself is not in that span either: `.prefs-help`'s `textContent` is just the `?`, and the sentence lives in its `title` attribute.
 
+**`#sidebar.hidden` stays false while the sidebar is visibly gone**
+Sidebar visibility is a class on `.app` (`sidebar-hidden`), not the element's
+`hidden` attribute; the element is always in the DOM and `.hidden` is always
+`false`. A screenshot setup that asked `document.getElementById("sidebar").hidden`
+concluded the sidebar was visible when it was not, clicked the toggle the wrong
+way, and produced a capture with the outline where the next one had none. Read
+`.app.classList.contains("sidebar-hidden")` (or the button's `aria-pressed`)
+before deciding whether to toggle it.
+
 **Renaming the product leaves stale bundles that staging will happily ship**
 `src-tauri/target/release/bundle/` is not cleaned between builds, so after
 changing `productName` the directory held two installers: one under the new name
@@ -1058,6 +1067,15 @@ start. Pass `-RedirectStandardOutput` and `-RedirectStandardError` to files —
 which also recovers the release build's Rust output, normally discarded — and
 poll `http://127.0.0.1:9222/json/list` for readiness.
 
+**`CloseMainWindow()` returns `False` for a release copy, although the window is visible**
+`Get-Process` reported the title `feature-tour.md - MDraft`, and the app had been
+launched normally from the temp directory, yet `$p.CloseMainWindow()` returned
+`False` twice and the process stayed alive. `taskkill /PID <pid>` **without**
+`/F` posts WM_CLOSE and the app exits through its normal close handler, so the
+window-state flush still runs. Use that when a harness needs a graceful exit
+and `CloseMainWindow()` refuses; reserve `Stop-Process -Force` for the case where
+the profile is already known to be disposable.
+
 **A second MDraft for a CDP test dies with `HRESULT(0x800700AA)`, even when the exe is outside the workspace**
 WebView2 allows one browser process per user-data folder, and every instance
 defaults to `%LOCALAPPDATA%\io.github.bernh.mdraft\EBWebView`. While another
@@ -1273,6 +1291,13 @@ falsy. The response arrives and is dropped, the promise never resolves, and the
 socket looks dead. Compare `message.id !== undefined`, or start `nextId` at 1.
 Found while writing `word-sync-test.mjs`, after first blaming the WebView2
 endpoint.
+
+**A CDP suite prints `26/26 checks passed` and then hangs the whole `npm test`**
+The suite is green, but the Node process never exits: an open `WebSocket` keeps
+the event loop alive. `recent-menu-test.mjs` had no `ws.close()` and called
+`process.exit` only on failure, so `test-all.mjs` waited on it until the outer
+timeout, and `recent-menu ...` looked like the layer that hung. Every CDP suite
+must end with `ws.close(); process.exit(failed === 0 ? 0 : 1);` on both paths.
 
 **A selection made in the preview collapses about 100 ms after it is painted**
 The editor still had focus, and CodeMirror writes its own selection back into the

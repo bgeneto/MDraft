@@ -4,6 +4,10 @@
 //! vertical list of sections on the left, and the selected section's rows on the
 //! right. Every row is backed by a real setting — the panel never shows an
 //! option that does nothing.
+//!
+//! It is a non-modal floating card, not a full-screen page: a font or spacing
+//! change is visible in the document behind it as it is made, and the card can
+//! be dragged and resized without leaving the webview.
 
 import * as api from "./api";
 import {
@@ -116,6 +120,81 @@ interface Section {
   id: string;
   title: string;
   rows: Row[];
+}
+
+/** Everything a row can be found by, lower-cased once. */
+function rowSearchText(row: Row): string {
+  const parts: string[] = [row.label];
+  if ("help" in row && row.help) parts.push(row.help);
+  if (row.kind === "note" || row.kind === "button") parts.push(row.text);
+  if (row.kind === "select" || row.kind === "choices") {
+    for (const [, label] of row.options) parts.push(label);
+  }
+  return parts.join(" ").toLowerCase();
+}
+
+/**
+ * Every query word must occur somewhere in the text.
+ *
+ * `includes` alone already made each word a partial match; requiring all words
+ * rather than the whole phrase lets "locations recent" find "Recent Locations".
+ */
+function matchesTerms(text: string, terms: string[]): boolean {
+  const haystack = text.toLowerCase();
+  return terms.every((term) => haystack.includes(term));
+}
+
+function rowMatches(row: Row, terms: string[]): boolean {
+  return matchesTerms(rowSearchText(row), terms);
+}
+
+/**
+ * Keep the rows a query names, with a group heading for context.
+ *
+ * A heading is a searchable category. When "Recent Locations" matches, its
+ * whole group comes with it — the settings underneath are not expected to
+ * repeat the group's word. A matching setting stays under its heading, and a
+ * heading with neither a matching name nor a matching row disappears.
+ */
+function filterSection(section: Section, terms: string[]): Section | null {
+  // A section's own name stands for all of it.
+  if (matchesTerms(section.title, terms)) return section;
+
+  const rows: Row[] = [];
+  let heading: Row | null = null;
+  let grouped: Row[] = [];
+  let matched = false;
+
+  const flush = (): void => {
+    if (heading === null && grouped.length === 0) return;
+
+    if (heading !== null && rowMatches(heading, terms)) {
+      rows.push(heading, ...grouped);
+      matched = true;
+    } else {
+      const hits = grouped.filter((row) => rowMatches(row, terms));
+      if (hits.length > 0) {
+        if (heading !== null) rows.push(heading);
+        rows.push(...hits);
+        matched = true;
+      }
+    }
+
+    heading = null;
+    grouped = [];
+  };
+
+  for (const row of section.rows) {
+    if (row.kind === "heading") {
+      flush();
+      heading = row;
+    } else {
+      grouped.push(row);
+    }
+  }
+  flush();
+
+  return matched ? { ...section, rows } : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1050,7 +1129,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
   overlay.className = "prefs-overlay";
   overlay.hidden = true;
   overlay.innerHTML = `
-    <div class="prefs-panel" role="dialog" aria-modal="true" aria-label="Preferences">
+    <div class="prefs-panel" role="dialog" aria-label="Preferences">
       <header class="prefs-header">
         <h1 class="prefs-title">Preferences</h1>
         <button class="prefs-close" type="button" title="Close (Esc)" aria-label="Close">&#10005;</button>
@@ -1062,37 +1141,188 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
         </nav>
         <div class="prefs-content"></div>
       </div>
+      <div class="prefs-resize" title="Drag to resize"></div>
     </div>`;
 
+  const panelEl = overlay.querySelector<HTMLDivElement>(".prefs-panel")!;
+  const headerEl = overlay.querySelector<HTMLElement>(".prefs-header")!;
+  const resizeEl = overlay.querySelector<HTMLElement>(".prefs-resize")!;
   const sectionsEl = overlay.querySelector<HTMLDivElement>(".prefs-sections")!;
   const contentEl = overlay.querySelector<HTMLDivElement>(".prefs-content")!;
   const searchEl = overlay.querySelector<HTMLInputElement>(".prefs-search")!;
   const closeEl = overlay.querySelector<HTMLButtonElement>(".prefs-close")!;
 
+  const PANEL_MARGIN = 8;
+  const MIN_PANEL_WIDTH = 480;
+  const MIN_PANEL_HEIGHT = 320;
+
   let activeId = buildSections(host)[0].id;
   let query = "";
+  let placed = false;
 
-  function matches(row: Row): boolean {
-    if (query.length === 0) return true;
-    const haystack = `${"label" in row ? row.label : ""} ${
-      "help" in row && row.help ? row.help : ""
-    } ${row.kind === "note" ? row.text : ""}`.toLowerCase();
-    return haystack.includes(query);
+  function clamp(value: number, min: number, max: number): number {
+    return Math.max(min, Math.min(max, value));
   }
+
+  function syncPanelWidth(): void {
+    const width = panelEl.offsetWidth;
+    panelEl.classList.toggle("is-compact", width < 820);
+    panelEl.classList.toggle("is-narrow", width < 640);
+  }
+
+  /** Keep the card inside the webview and out from under the document tabs. */
+  function layoutPanel(): void {
+    const availableWidth = Math.max(1, overlay.clientWidth - PANEL_MARGIN * 2);
+    const availableHeight = Math.max(1, overlay.clientHeight - PANEL_MARGIN * 2);
+
+    // Inline sizes exist only after the reader has resized the card; the CSS
+    // width/height already follow the viewport until then.
+    if (panelEl.style.width) {
+      const width = Number.parseFloat(panelEl.style.width);
+      panelEl.style.width = `${Math.round(Math.min(width, availableWidth))}px`;
+    }
+    if (panelEl.style.height) {
+      const height = Number.parseFloat(panelEl.style.height);
+      panelEl.style.height = `${Math.round(Math.min(height, availableHeight))}px`;
+    }
+
+    syncPanelWidth();
+
+    const width = panelEl.offsetWidth;
+    const height = panelEl.offsetHeight;
+    const maxLeft = Math.max(overlay.clientWidth - width - PANEL_MARGIN, PANEL_MARGIN);
+    const maxTop = Math.max(overlay.clientHeight - height - PANEL_MARGIN, PANEL_MARGIN);
+
+    if (!placed) {
+      placed = true;
+      const centeredTop = (overlay.clientHeight - height) / 2;
+      panelEl.style.left = `${Math.round(
+        clamp((overlay.clientWidth - width) / 2, PANEL_MARGIN, maxLeft),
+      )}px`;
+      panelEl.style.top = `${Math.round(clamp(Math.max(56, centeredTop), PANEL_MARGIN, maxTop))}px`;
+      return;
+    }
+
+    const left = Number.parseFloat(panelEl.style.left) || 0;
+    const top = Number.parseFloat(panelEl.style.top) || 0;
+    panelEl.style.left = `${Math.round(clamp(left, PANEL_MARGIN, maxLeft))}px`;
+    panelEl.style.top = `${Math.round(clamp(top, PANEL_MARGIN, maxTop))}px`;
+  }
+
+  let drag:
+    | { pointerId: number; x: number; y: number; left: number; top: number }
+    | null = null;
+
+  headerEl.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    if (event.target instanceof Element && event.target.closest("button")) return;
+    event.preventDefault();
+    drag = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      left: panelEl.offsetLeft,
+      top: panelEl.offsetTop,
+    };
+    headerEl.setPointerCapture(event.pointerId);
+    panelEl.classList.add("is-dragging");
+  });
+
+  headerEl.addEventListener("pointermove", (event) => {
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const maxLeft = Math.max(
+      overlay.clientWidth - panelEl.offsetWidth - PANEL_MARGIN,
+      PANEL_MARGIN,
+    );
+    const maxTop = Math.max(
+      overlay.clientHeight - panelEl.offsetHeight - PANEL_MARGIN,
+      PANEL_MARGIN,
+    );
+    panelEl.style.left = `${Math.round(
+      clamp(drag.left + event.clientX - drag.x, PANEL_MARGIN, maxLeft),
+    )}px`;
+    panelEl.style.top = `${Math.round(
+      clamp(drag.top + event.clientY - drag.y, PANEL_MARGIN, maxTop),
+    )}px`;
+  });
+
+  function endDrag(event: PointerEvent): void {
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    drag = null;
+    panelEl.classList.remove("is-dragging");
+    if (headerEl.hasPointerCapture(event.pointerId)) {
+      headerEl.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  headerEl.addEventListener("pointerup", endDrag);
+  headerEl.addEventListener("pointercancel", endDrag);
+  headerEl.addEventListener("lostpointercapture", endDrag);
+
+  let resize:
+    | { pointerId: number; x: number; y: number; width: number; height: number }
+    | null = null;
+
+  resizeEl.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    resize = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      width: panelEl.offsetWidth,
+      height: panelEl.offsetHeight,
+    };
+    resizeEl.setPointerCapture(event.pointerId);
+    panelEl.classList.add("is-resizing");
+  });
+
+  resizeEl.addEventListener("pointermove", (event) => {
+    if (!resize || event.pointerId !== resize.pointerId) return;
+    const maxWidth = Math.max(
+      overlay.clientWidth - panelEl.offsetLeft - PANEL_MARGIN,
+      1,
+    );
+    const maxHeight = Math.max(
+      overlay.clientHeight - panelEl.offsetTop - PANEL_MARGIN,
+      1,
+    );
+    const minWidth = Math.min(MIN_PANEL_WIDTH, maxWidth);
+    const minHeight = Math.min(MIN_PANEL_HEIGHT, maxHeight);
+    panelEl.style.width = `${Math.round(
+      clamp(resize.width + event.clientX - resize.x, minWidth, maxWidth),
+    )}px`;
+    panelEl.style.height = `${Math.round(
+      clamp(resize.height + event.clientY - resize.y, minHeight, maxHeight),
+    )}px`;
+    syncPanelWidth();
+  });
+
+  function endResize(event: PointerEvent): void {
+    if (!resize || event.pointerId !== resize.pointerId) return;
+    resize = null;
+    panelEl.classList.remove("is-resizing");
+    if (resizeEl.hasPointerCapture(event.pointerId)) {
+      resizeEl.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  resizeEl.addEventListener("pointerup", endResize);
+  resizeEl.addEventListener("pointercancel", endResize);
+  resizeEl.addEventListener("lostpointercapture", endResize);
+
+  window.addEventListener("resize", () => {
+    if (!overlay.hidden) layoutPanel();
+  });
 
   function visibleSections(): Section[] {
     const all = buildSections(host);
     if (query.length === 0) return all;
+    const terms = query.split(/\s+/).filter((term) => term.length > 0);
+    if (terms.length === 0) return all;
     return all
-      .map((section) => ({
-        ...section,
-        rows: section.rows.filter((row) => row.kind === "heading" || matches(row)),
-      }))
-      .filter(
-        (section) =>
-          section.rows.some((row) => row.kind !== "heading") ||
-          section.title.toLowerCase().includes(query),
-      );
+      .map((section) => filterSection(section, terms))
+      .filter((section): section is Section => section !== null);
   }
 
   function renderNav(sections: Section[]): void {
@@ -1290,6 +1520,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
     query = "";
     searchEl.value = "";
     render();
+    layoutPanel();
     searchEl.focus();
   }
 
@@ -1303,10 +1534,6 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
   });
 
   closeEl.addEventListener("click", close);
-
-  overlay.addEventListener("mousedown", (event) => {
-    if (event.target === overlay) close();
-  });
 
   overlay.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
