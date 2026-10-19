@@ -1646,6 +1646,7 @@ body {
 
 /* Typst preview: the compiler's own pages, one below the other. */
 .typst-preview {
+  --typst-fit: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1653,14 +1654,93 @@ body {
   padding: 22px 12px 40px;
 }
 
-.typst-page {
-  /* A4 at 96 dpi is 794px wide; capping at that keeps the page from being
-     stretched beyond the size it will print at, while still fitting a narrow
-     pane. */
-  max-width: min(794px, 100%);
-  height: auto;
+/* The shell owns the fitted size and the shadow; the page inside keeps the
+   fixed 96 dpi coordinate system PDF.js laid the text layer out in. */
+.typst-page-shell {
+  position: relative;
+  flex: none;
+  width: calc(var(--typst-page-width) * 1px * var(--typst-fit));
+  height: calc(var(--typst-page-height) * 1px * var(--typst-fit));
   background: #ffffff;
   box-shadow: 0 1px 4px rgb(0 0 0 / 22%);
+}
+
+.typst-page {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: calc(var(--typst-page-width) * 1px);
+  height: calc(var(--typst-page-height) * 1px);
+  transform: scale(var(--typst-fit));
+  transform-origin: top left;
+  background: #ffffff;
+}
+
+.typst-page canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* The subset of PDF.js's text-layer CSS the viewer needs. The spans are
+   transparent and sit over the canvas; only their selection is visible. */
+.typst-page .textLayer {
+  color-scheme: only light;
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  letter-spacing: normal;
+  word-spacing: normal;
+  -webkit-text-size-adjust: none;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  z-index: 2;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+
+.typst-page .textLayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.typst-page .textLayer > :not(.markedContent),
+.typst-page .textLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.typst-page .textLayer .markedContent {
+  display: contents;
+}
+
+.typst-page .textLayer span[role="img"] {
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+.typst-page .textLayer ::selection {
+  color: transparent;
+  background: color-mix(in srgb, var(--accent, #4a8cff) 35%, transparent);
+}
+
+.typst-page .textLayer br::selection {
+  background: transparent;
 }
 
 .typst-error {
@@ -1676,7 +1756,7 @@ body {
 
 /* The page a document prints on is white even when the chrome is dark, so the
    shadow above is what separates it from the pane. */
-.app.dark .typst-page {
+.app.dark .typst-page-shell {
   box-shadow: 0 1px 6px rgb(0 0 0 / 55%);
 }
 

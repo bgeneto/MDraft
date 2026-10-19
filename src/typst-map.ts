@@ -15,6 +15,8 @@
 //! the inside of a table call) keeps the previous block's line rather than
 //! inventing one.
 
+import type { BlockRange } from "./source-map";
+
 /**
  * Fold text into something comparable between the two sides.
  *
@@ -31,7 +33,7 @@ function fold(text: string): string {
     .replace(/[*_`#$\\{}[\]]/g, "")
     // Removing a marker can leave a space before punctuation — `*strong*,` is
     // `strong ,` after the star goes — and the rendered side has no such space.
-    .replace(/\s+([,.;:!?)])/g, "$1")
+    .replace(/\s+([,.;:!?—–)])/g, "$1")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
@@ -99,17 +101,21 @@ function lineAt(starts: number[], offset: number): number {
  * Returns how many blocks were mapped, which is what decides whether positional
  * sync is offered at all: two anchors is enough to scroll against, and demanding
  * every block would switch sync off for any document containing a figure.
+ *
+ * The block ranges are the same approximation AsciiDoc uses: a block's source
+ * text is searched forward inside its line range, so prose is found and generated
+ * text is not. `data-b` is the index the word map binds after `innerHTML`.
  */
 export function annotateTypstLines(
   host: HTMLElement,
   source: string,
-): { mapped: number; blocks: number } {
-  const blocks = Array.from(host.children) as HTMLElement[];
+): { mapped: number; blocks: BlockRange[] } {
+  const elements = Array.from(host.children) as HTMLElement[];
   const { plain, starts } = foldSource(source);
+  const found: Array<{ element: HTMLElement; line: number }> = [];
   let cursor = 0;
-  let mapped = 0;
 
-  for (const block of blocks) {
+  for (const block of elements) {
     const text = fold(blockText(block));
     if (text.length < 2) continue;
     // A prefix long enough to be specific, short enough to survive the small
@@ -117,10 +123,32 @@ export function annotateTypstLines(
     const needle = text.slice(0, 24);
     const at = plain.indexOf(needle, cursor);
     if (at < 0) continue;
-    block.setAttribute("data-line", String(lineAt(starts, at)));
+    const line = lineAt(starts, at);
+    block.setAttribute("data-line", String(line));
+    found.push({ element: block, line });
     cursor = at + 1;
-    mapped += 1;
   }
 
-  return { mapped, blocks: blocks.length };
+  // Turn consecutive source lines into one block range. The next mapped block is
+  // the end boundary, which keeps a search inside the paragraph rather than the
+  // rest of the document; the last block reaches the end.
+  const lineStarts: number[] = [0];
+  for (let i = 0; i < source.length; i += 1) {
+    if (source.charCodeAt(i) === 10) lineStarts.push(i + 1);
+  }
+  const blocks: BlockRange[] = [];
+  for (let i = 0; i < found.length; i += 1) {
+    const startLine = found[i].line;
+    const nextLine = found[i + 1]?.line ?? Number.POSITIVE_INFINITY;
+    const endLine = Number.isFinite(nextLine)
+      ? Math.max(startLine, nextLine - 1)
+      : lineStarts.length;
+    const src0 = lineStarts[Math.max(0, startLine - 1)] ?? 0;
+    const src1 = endLine < lineStarts.length ? lineStarts[endLine] : source.length;
+    if (src1 <= src0) continue;
+    found[i].element.dataset.b = String(blocks.length);
+    blocks.push({ src0, src1 });
+  }
+
+  return { mapped: found.length, blocks };
 }

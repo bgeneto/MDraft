@@ -60,10 +60,13 @@ The preview has two views:
 
 - **Document** shows Typst's HTML export: flowing, selectable text in the
   application's typography. It cannot represent page layout, so page size,
-  `#align`, boxes and page breaks are not shown.
-- **Pages** shows the compiler's real pages as SVG. This is what a PDF export
-  will contain, but the text is drawn as outlines and cannot be selected or
-  reflowed.
+  `#align`, boxes and page breaks are not shown. Double-clicking or selecting a
+  prose word paints the corresponding source word; generated text such as
+  `#lorem` has no source word and paints nothing.
+- **Pages** shows the compiler's real PDF, drawn by PDF.js. This is what a PDF
+  export will contain, and its text layer can be selected, copied and searched.
+  Double-clicking a word paints it in the source and reveals it; generated text
+  paints nothing. A single click leaves the source alone.
 
 An `#include` or `#image` resolves against the document's folder, as it does
 on export. PDF export from a `.typ` document goes directly through Typst, so
@@ -119,12 +122,15 @@ In Split view:
 - scrolling either pane moves the other, when **Sync Scroll** is on;
 - clicking in the source blinks the matching preview block without scrolling
   the preview;
-- clicking in the preview moves the source caret without scrolling the source;
+- clicking in the Markdown, AsciiDoc or Typst Document preview moves the source
+  caret without scrolling the source; a single click in Typst's Pages view only
+  places the text caret there;
 - selecting a word or a range in either pane paints the corresponding text in
   the other, without taking the selection or scrolling; Escape clears it. This
-  covers Markdown and AsciiDoc. A paragraph whose text comes from an attribute
-  substitution, or from an included file, is left alone rather than guessed at,
-  and Typst and HTML documents have no word-level sync;
+  covers Markdown, AsciiDoc, and Typst's Document and Pages views. A paragraph
+  whose text comes from an attribute substitution, from an included file or from
+  generated Typst content is left alone rather than guessed at; HTML documents
+  have no word-level sync;
 - keyboard movement may reveal the caret's block when it has left the pane;
 - **F5 and Ctrl+R do not reload the window.** A reload would discard every open
   tab and every unsaved buffer with no prompt, so those keys are swallowed.
@@ -170,12 +176,12 @@ code, images and common maths. If a conversion fails or the fragment is too
 large, the plain text is pasted rather than nothing. Pasting inside a code
 fence is left alone.
 
-Copying a selection from a text preview — Markdown, AsciiDoc, HTML, or Typst's
-Document view — sends the formatted selection to other applications. The
-AsciiDoc preview also puts the matching AsciiDoc source on the clipboard as
-plain text. Copying from the source pane gives plain markup. Typst's Pages view
-is a picture of the page, so its text cannot be selected; copy from Document
-view or the source.
+Copying a selection from a text preview — Markdown, AsciiDoc, HTML, or either
+Typst view — sends the selection to other applications; Typst's Pages text layer
+is plain text. The AsciiDoc preview also puts the matching AsciiDoc source on the
+clipboard as plain text. Copying from the source pane gives plain markup. Typst's
+Pages view has a real text layer, so its text can be selected and copied like the
+page it shows.
 
 Images can arrive by pasting a bitmap, pasting an image URL, pasting a path to
 a local file, dropping image files on the window, or using **Format › Image**.

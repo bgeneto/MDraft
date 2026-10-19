@@ -30,6 +30,7 @@
     "paste": "node scripts/rich-paste-test.mjs",
     "asciidoc": "node scripts/asciidoc-test.mjs",
     "image:syntax": "node scripts/image-syntax-test.mjs",
+    "typst:preview": "node scripts/typst-preview-test.mjs",
     "licence": "node scripts/licence-test.mjs",
     "spellcheck": "node scripts/spellcheck-test.mjs",
     "images": "node scripts/image-paste-test.mjs",
@@ -61,7 +62,8 @@
     "katex": "^0.19.0",
     "marked": "^18.1.1",
     "mermaid": "^12.2.0",
-    "parse5": "^7.3.0"
+    "parse5": "^7.3.0",
+    "pdfjs-dist": "6.4.299"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.3",

@@ -45,6 +45,7 @@ import {
 } from "./markdown";
 import {
   bindWordMap,
+  findWordInSource,
   fragmentKindFor,
   rangeForSource,
   snapToWords,
@@ -60,6 +61,7 @@ import * as sidebarPanel from "./sidebar";
 import { resolvePalette } from "./syntax-themes";
 import { createTabsUi, type TabsUi } from "./tabs";
 import { annotateTypstLines } from "./typst-map";
+import { TypstPdfPreview } from "./typst-pdf";
 
 // ---------------------------------------------------------------------------
 // DOM
@@ -698,19 +700,37 @@ function scheduleRender(immediate = false): void {
   renderTimer = window.setTimeout(() => void doRender(), immediate ? 0 : delay);
 }
 
-// Object URLs handed to the preview, kept so they can be revoked. A long session
-// that edits a Typst document hundreds of times would otherwise hold every page
-// it ever drew in memory.
-let typstObjectUrls: string[] = [];
+// The PDF.js page view currently on screen, if any. It owns the PDF document,
+// its worker connection and the page canvases; replacing the preview must
+// destroy it or a long session keeps every page it ever drew alive.
+let typstPdf: TypstPdfPreview | null = null;
 
-/**
- * Draw a Typst document by compiling it and showing the pages.
- *
- * The pages are the compiler's own output rather than an interpretation of it, so
- * what is on screen is what the PDF will contain. `doc.path` is passed only as
- * the project root, so `#image("img/plot.png")` resolves as it will on export; the
- * text itself is sent, so unsaved edits appear.
- */
+function disposeTypstPdf(): void {
+  typstPdf?.dispose();
+  typstPdf = null;
+}
+
+/** Decode the base64 PDF the Rust command returns. */
+function decodePdf(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+/** Replace the pane with a Typst error, keeping the view switch available. */
+function showTypstFailure(error: unknown, wanted: string): void {
+  disposeTypstPdf();
+  preview.innerHTML = "";
+  preview.appendChild(typstViewBar(wanted));
+  const box = document.createElement("pre");
+  box.className = "typst-error";
+  box.textContent = String(error);
+  preview.appendChild(box);
+  previewLinesMapped = false;
+  applyPendingPreviewScroll();
+}
+
 /**
  * The preview of a Typst document.
  *
@@ -719,8 +739,10 @@ let typstObjectUrls: string[] = [];
  * and MathML that the Markdown preview already renders — so the pane's type,
  * colours and width apply to it and the text flows and can be selected. What it
  * cannot do is layout: page size, `#align`, boxes and page breaks are dropped.
- * The page view is the compiler's real output and always faithful, but its text is
- * drawn as outlines, so it neither reflows nor can be read as text.
+ *
+ * The page view is the compiler's PDF drawn by PDF.js. It is always faithful,
+ * its text layer can be selected and clicked, and it is the only view that shows
+ * the page layout Typst will print.
  *
  * The default is the document view: a preview is for reading. The page view is one
  * click away, and the pane says so when the document view had to drop something.
@@ -735,22 +757,16 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
     if (token !== renderToken) return;
     // Shown in place of the preview, not as a toast: a Typst error is about a
     // line of this document, and the pane is where the document is looked at.
-    for (const url of typstObjectUrls) URL.revokeObjectURL(url);
-    typstObjectUrls = [];
-    preview.innerHTML = "";
-    preview.appendChild(typstViewBar(wanted));
-    const box = document.createElement("pre");
-    box.className = "typst-error";
-    box.textContent = String(error);
-    preview.appendChild(box);
-    previewLinesMapped = false;
-    applyPendingPreviewScroll();
+    showTypstFailure(error, wanted);
     return;
   }
   if (token !== renderToken) return;
 
-  for (const url of typstObjectUrls) URL.revokeObjectURL(url);
-  typstObjectUrls = [];
+  disposeTypstPdf();
+  // A word decoration belongs to the view that produced it. Switching to Pages,
+  // or re-rendering the document, must not leave a mark that cannot be cleared.
+  syncedSource = null;
+  editor.clearSyncRange();
   preview.innerHTML = "";
   preview.appendChild(typstViewBar(rendered.kind));
 
@@ -775,11 +791,12 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
       style.textContent = rendered.css;
     }
     // Typst's HTML export carries no source positions, so the blocks are matched
-    // back to the source by their text — see typst-map.ts. Two anchors are enough
-    // to scroll against, and requiring all of them would disable sync for any
-    // document holding a figure.
+    // back to the source by their text — see typst-map.ts. The returned ranges
+    // feed the same block-record word map AsciiDoc uses; generated text simply
+    // does not map, and the block click remains.
     const mapped = annotateTypstLines(host, source);
     previewLinesMapped = mapped.mapped >= 2;
+    bindPreviewWords(source, undefined, mapped.blocks);
     rebuildAnchors();
     if (pendingPreviewScroll === null) revealCursorInPreview();
     else applyPendingPreviewScroll();
@@ -787,19 +804,30 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
     return;
   }
 
+  if (!rendered.pdf) {
+    showTypstFailure("The page render produced no PDF.", rendered.kind);
+    return;
+  }
+
   const host = document.createElement("div");
   host.className = "typst-preview";
-  rendered.pages.forEach((svg, index) => {
-    const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
-    typstObjectUrls.push(url);
-    const page = document.createElement("img");
-    page.className = "typst-page";
-    page.alt = `Page ${index + 1}`;
-    page.src = url;
-    host.appendChild(page);
-  });
   preview.appendChild(host);
-  // Pages are pictures of pages: there is nothing to map a line onto.
+  const view = new TypstPdfPreview(host, previewPane, syncSourceFromPageSelection);
+  typstPdf = view;
+  try {
+    await view.render(decodePdf(rendered.pdf));
+  } catch (error) {
+    if (token !== renderToken) return;
+    showTypstFailure(error, rendered.kind);
+    return;
+  }
+  if (token !== renderToken) {
+    view.dispose();
+    if (typstPdf === view) typstPdf = null;
+    return;
+  }
+  // Pages are a rendered layout, not a source-anchored document; the text layer
+  // supplies click sync separately.
   previewLinesMapped = false;
   applyPendingPreviewScroll();
 }
@@ -2749,7 +2777,9 @@ function bindPreviewWords(
 function wordSyncAvailable(): boolean {
   return (
     settings.viewMode === "split" &&
-    (doc.language === "markdown" || doc.language === "asciidoc") &&
+    (doc.language === "markdown" ||
+      doc.language === "asciidoc" ||
+      doc.language === "typst") &&
     wordMap !== null
   );
 }
@@ -2823,6 +2853,30 @@ function sourceFromPreviewSelection(): { from: number; to: number } | null {
 function syncSourceFromPreview(reveal: boolean): void {
   if (!wordSyncAvailable()) return;
   const range = sourceFromPreviewSelection();
+  if (!range) {
+    syncedSource = null;
+    editor.clearSyncRange();
+    return;
+  }
+  if (syncedSource && syncedSource.from === range.from && syncedSource.to === range.to) {
+    if (reveal) editor.revealOffset(range.from);
+    return;
+  }
+  syncedSource = range;
+  editor.setSyncRange(range.from, range.to);
+  if (reveal) editor.revealOffset(range.from);
+}
+
+/**
+ * Pages selection -> source word.
+ *
+ * The PDF text layer has no fragment map. The selected text is searched in the
+ * source, nearest the caret; a generated word is absent and paints nothing. The
+ * decoration never takes the source selection, and only a double-click reveals
+ * the source, matching the Markdown/AsciiDoc rule.
+ */
+function syncSourceFromPageSelection(text: string, reveal: boolean): void {
+  const range = findWordInSource(editor.getDoc(), text, editor.cursorInfo().from);
   if (!range) {
     syncedSource = null;
     editor.clearSyncRange();
