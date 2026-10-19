@@ -1985,7 +1985,9 @@ async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
     // the preview, so hand pandoc its HTML instead. An AsciiDoc target keeps
     // the original source: writing it back as AsciiDoc should not pass through
     // HTML first.
-    if (doc.language === "asciidoc" && format.extension.toLowerCase() !== "adoc") {
+    const asciidocTarget =
+      format.id === "asciidoc" || format.extension.toLowerCase() === "adoc";
+    if (doc.language === "asciidoc" && !asciidocTarget) {
       source = await renderAsciidocForExport(source, {
         baseDir: doc.directory ?? null,
       });
