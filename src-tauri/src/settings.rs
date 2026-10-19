@@ -6,8 +6,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, Runtime};
 
-/// Maximum number of entries kept in the "recent files" list.
-const MAX_RECENT: usize = 20;
+/// Maximum number of entries kept in the persisted "recent files" list.
+///
+/// The sidebar renders all of these and scrolls. The File › Open Recent submenu
+/// shows only the newest entries; its smaller limit lives in `menu.rs`. Keeping
+/// the history longer than the menu is deliberate: clearing the menu's limit
+/// would throw away paths the sidebar can still offer.
+pub(crate) const MAX_RECENT: usize = 100;
 
 /// One pandoc export target: how to invoke pandoc, and what to do afterwards.
 ///
@@ -115,9 +120,10 @@ fn default_spellcheck_language() -> String {
     "auto".to_string()
 }
 
-/// KaTeX draws every formula at 1.21em, so 100 is KaTeX's own ratio.
+/// KaTeX draws every formula at 1.21em. The default scales that down to sit
+/// with the prose; 100 is KaTeX's own ratio, kept as the upper bound's anchor.
 fn default_math_font_scale() -> u32 {
-    100
+    90
 }
 
 pub fn default_export_formats() -> Vec<ExportFormat> {    let args = |rest: &str| format!("{PANDOC_INPUT} {rest}");
@@ -507,7 +513,12 @@ fn parse_settings(raw: &str) -> Option<Settings> {
         object.insert("afterCommand".into(), command.into());
     }
 
-    serde_json::from_value(value).ok()
+    let mut settings: Settings = serde_json::from_value(value).ok()?;
+    // A hand-edited or older file can carry more than the stored limit. Cap it
+    // here so a load cannot grow the settings file without bound; the menu then
+    // takes its own smaller slice when it is built.
+    settings.recent_files.truncate(MAX_RECENT);
+    Some(settings)
 }
 
 impl AppState {
@@ -534,7 +545,11 @@ impl AppState {
         }
     }
 
-    pub fn save(&self, next: Settings) -> Result<Settings, String> {
+    pub fn save(&self, mut next: Settings) -> Result<Settings, String> {
+        // Every route that writes settings goes through here, including the
+        // frontend's whole-object save. Keeping the cap here means a stale or
+        // hand-built payload cannot grow the stored history without bound.
+        next.recent_files.truncate(MAX_RECENT);
         write_json(&self.config_file, &next)?;
         let mut guard = self.settings.lock().map_err(|e| e.to_string())?;
         *guard = next.clone();
@@ -576,36 +591,47 @@ pub fn save_settings<R: Runtime>(
     state: tauri::State<'_, AppState>,
     settings: Settings,
 ) -> Result<Settings, String> {
-    let formats_changed = {
+    let (formats_changed, recents_changed) = {
         let current = state.settings.lock().map_err(|e| e.to_string())?;
-        current.export_formats != settings.export_formats
+        (
+            current.export_formats != settings.export_formats,
+            current.recent_files != settings.recent_files,
+        )
     };
 
     let saved = state.save(settings)?;
 
-    if formats_changed {
-        // The new menu is built from the settings that were just saved, so its
-        // check marks are right from the first paint. Fullscreen is not a
-        // setting, so ask the window rather than assuming false.
-        let mut menu_state = crate::menu::MenuState::from_settings(&saved);
-        if let Some(window) = app.get_webview_window("main") {
-            menu_state.fullscreen = window.is_fullscreen().unwrap_or(false);
-        }
-        match crate::menu::build(&app, &menu_state) {
-            Ok(menu) => {
-                if let Err(error) = app.set_menu(menu) {
-                    eprintln!("[menu] could not be rebuilt after an export change: {error}");
-                }
-            }
-            Err(error) => eprintln!("[menu] could not be rebuilt after an export change: {error}"),
-        }
+    // Two parts of the native menu are generated from settings: the Export
+    // submenu and Open Recent. Rebuilding when either list changed keeps the
+    // menu from keeping a stale copy. Recents normally arrive through
+    // `add_recent`/`clear_recent`, but Preferences and the tests save the whole
+    // settings object too, so the same guard belongs here.
+    if formats_changed || recents_changed {
+        crate::menu::rebuild(&app, &saved);
     }
 
     Ok(saved)
 }
 
+/// Move `path` to the front of the recent list.
+///
+/// One rule table for every route that records a file, kept separate from the
+/// command so it can be tested without a running application: the same path is
+/// removed before insertion (so reopening a file does not duplicate it), the
+/// newest entry is first, the list is capped at [`MAX_RECENT`], and the parent
+/// folder becomes the next Open dialog's starting point.
+fn record_recent(settings: &mut Settings, path: &str) {
+    settings.recent_files.retain(|p| !same_path(p, path));
+    settings.recent_files.insert(0, path.to_string());
+    settings.recent_files.truncate(MAX_RECENT);
+    settings.last_directory = Path::new(path)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string());
+}
+
 #[tauri::command]
-pub fn add_recent(
+pub fn add_recent<R: Runtime>(
+    app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
     path: String,
 ) -> Result<Settings, String> {
@@ -615,25 +641,37 @@ pub fn add_recent(
         .map_err(|e| e.to_string())?
         .clone();
 
-    next.recent_files.retain(|p| !same_path(p, &path));
-    next.recent_files.insert(0, path.clone());
-    next.recent_files.truncate(MAX_RECENT);
-    next.last_directory = Path::new(&path)
-        .parent()
-        .map(|p| p.to_string_lossy().to_string());
+    let previous = next.recent_files.clone();
+    record_recent(&mut next, &path);
+    let changed = next.recent_files != previous;
 
-    state.save(next)
+    let saved = state.save(next)?;
+    // The native submenu is built from this list, and a menu cannot be edited in
+    // place. Rebuilding only when the order or contents changed keeps the common
+    // case — reopening the file already at the top — from churning the menu bar.
+    if changed {
+        crate::menu::rebuild(&app, &saved);
+    }
+    Ok(saved)
 }
 
 #[tauri::command]
-pub fn clear_recent(state: tauri::State<'_, AppState>) -> Result<Settings, String> {
+pub fn clear_recent<R: Runtime>(
+    app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+) -> Result<Settings, String> {
     let mut next = state
         .settings
         .lock()
         .map_err(|e| e.to_string())?
         .clone();
+    let had_recent = !next.recent_files.is_empty();
     next.recent_files.clear();
-    state.save(next)
+    let saved = state.save(next)?;
+    if had_recent {
+        crate::menu::rebuild(&app, &saved);
+    }
+    Ok(saved)
 }
 
 /// Compare two paths for equality, tolerating case and separator differences on
@@ -689,8 +727,8 @@ mod tests {
         assert_eq!(s.heading_font, "");
         assert_eq!(s.code_font, "");
         assert_eq!(s.body_font_size, 16);
-        // KaTeX's own ratio is the default; the preference opts into a change.
-        assert_eq!(s.math_font_scale, 100);
+        // The System preset's own starting point; the preference opts into a change.
+        assert_eq!(s.math_font_scale, 90);
         // The HTML guest runs the document's scripts unless the reader opts out.
         assert!(s.html_preview_scripts);
         // Sizes are per-preset adjustments, so a fresh profile has none yet.
@@ -766,7 +804,7 @@ mod tests {
         assert_eq!(parsed.editor_font_size, 21);
         assert_eq!(parsed.body_font, "");
         assert_eq!(parsed.body_font_size, 16);
-        assert_eq!(parsed.math_font_scale, 100);
+        assert_eq!(parsed.math_font_scale, 90);
         assert!(parsed.preset_overrides.is_empty());
         assert!(parsed.html_preview_scripts);
         // `tabular_figures` is `#[serde(default = "default_true")]`, so the
@@ -823,6 +861,72 @@ mod tests {
         assert!(same_path(r"C:\Docs\a.md", r"c:\docs\A.MD"));
         #[cfg(not(windows))]
         assert!(!same_path("/Docs/a.md", "/docs/a.md"));
+    }
+
+    #[test]
+    fn settings_load_caps_an_overlong_recent_list() {
+        // A hand-edited file (or a future import) must not grow the sidebar
+        // history without bound. The native submenu caps itself at 20
+        // separately, so this test is about the store, not the menu.
+        let paths: Vec<String> = (0..=MAX_RECENT)
+            .map(|index| format!("C:/Docs/file{index}.md"))
+            .collect();
+        let raw = serde_json::json!({ "recentFiles": paths }).to_string();
+
+        let parsed = parse_settings(&raw).expect("a recent list is still settings");
+        assert_eq!(parsed.recent_files.len(), MAX_RECENT);
+        assert_eq!(parsed.recent_files[0], "C:/Docs/file0.md");
+        assert_eq!(
+            parsed.recent_files[MAX_RECENT - 1],
+            format!("C:/Docs/file{}.md", MAX_RECENT - 1)
+        );
+    }
+
+    #[test]
+    fn recent_files_are_newest_first_deduplicated_and_capped() {
+        let mut settings = Settings::default();
+        // One more than the limit, so the oldest entries must fall off.
+        for index in 0..=MAX_RECENT {
+            record_recent(&mut settings, &format!("C:/Docs/file{index}.md"));
+        }
+
+        assert_eq!(settings.recent_files.len(), MAX_RECENT);
+        assert_eq!(
+            settings.recent_files[0],
+            format!("C:/Docs/file{MAX_RECENT}.md")
+        );
+        assert_eq!(settings.recent_files[MAX_RECENT - 1], "C:/Docs/file1.md");
+        assert_eq!(settings.last_directory.as_deref(), Some("C:/Docs"));
+
+        // Reopening an existing file moves it to the front instead of adding a
+        // second copy, and the list stays at the cap.
+        record_recent(&mut settings, "C:/Docs/file10.md");
+        assert_eq!(settings.recent_files.len(), MAX_RECENT);
+        assert_eq!(settings.recent_files[0], "C:/Docs/file10.md");
+        assert_eq!(
+            settings
+                .recent_files
+                .iter()
+                .filter(|path| path.ends_with("file10.md"))
+                .count(),
+            1
+        );
+
+        // The same path under the platform's own identity is the same entry.
+        #[cfg(windows)]
+        {
+            record_recent(&mut settings, r"c:\docs\FILE10.MD");
+            assert_eq!(settings.recent_files.len(), MAX_RECENT);
+            assert_eq!(settings.recent_files[0], r"c:\docs\FILE10.MD");
+            assert_eq!(
+                settings
+                    .recent_files
+                    .iter()
+                    .filter(|path| path.to_lowercase().ends_with("file10.md"))
+                    .count(),
+                1
+            );
+        }
     }
 
     #[test]

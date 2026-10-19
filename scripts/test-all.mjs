@@ -202,6 +202,15 @@ const SUITES = [
     doc: "samples/feature-tour.md",
   },
   {
+    // Clears Recents and opens temporary documents, so it owns its instance.
+    // The native menu is invisible to DOM probes; `recent_menu` is the bridge.
+    id: "recent-menu",
+    title: "Recent files menu",
+    kind: "cdp",
+    script: "recent-menu-test.mjs",
+    doc: "samples/feature-tour.md",
+  },
+  {
     id: "licence",
     title: "Font licences",
     kind: "cdp",

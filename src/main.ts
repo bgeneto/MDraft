@@ -45,7 +45,6 @@ import {
 } from "./markdown";
 import {
   bindWordMap,
-  findWordInSource,
   fragmentKindFor,
   rangeForSource,
   snapToWords,
@@ -61,7 +60,8 @@ import * as sidebarPanel from "./sidebar";
 import { resolvePalette } from "./syntax-themes";
 import { createTabsUi, type TabsUi } from "./tabs";
 import { annotateTypstLines } from "./typst-map";
-import { TypstPdfPreview } from "./typst-pdf";
+import { lineTokenAt, paragraphRangeAt, TypstSourceMap } from "./typst-page-map";
+import { TypstPdfPreview, type TypstPageContext } from "./typst-pdf";
 
 // ---------------------------------------------------------------------------
 // DOM
@@ -982,14 +982,27 @@ function renderSidebar(): void {
 
   sidebarPanel.renderRecent(sidebarBody, settings.recentFiles, {
     onOpenFile: (path) => void openPath(path),
-    onClear: () => {
-      void api.clearRecent().then((next) => {
-        settings = next;
-        renderSidebar();
-      });
-    },
+    onClear: clearRecentFiles,
     onError: toast,
   });
+}
+
+/**
+ * Clear the persisted recents from whichever control asked.
+ *
+ * The native menu, the sidebar footer and Preferences all mean the same thing,
+ * and Rust refreshes the menu itself. Doing it in one place keeps the toast and
+ * the sidebar redraw from existing on only one of the three routes.
+ */
+function clearRecentFiles(): void {
+  void api
+    .clearRecent()
+    .then((next) => {
+      settings = next;
+      renderSidebar();
+      toast("Recent files cleared");
+    })
+    .catch((error) => toast(String(error)));
 }
 
 /** Rebuild the outline list from the current buffer. */
@@ -1080,10 +1093,15 @@ function defaultDocumentLanguage(): api.DocumentLanguage {
 }
 
 /**
- * The file dialog filters, with the default markup's filter first.
+ * The file dialog filters: the default markup's filter first, the rest
+ * alphabetical.
  *
- * The native dialog selects the first entry, so a reader who chose Typst as the
- * default should not have to switch away from "Markdown" every time.
+ * The native dialog selects the first entry and offers no way to select another
+ * (rfd declares `SetFileTypeIndex` but never calls it), so a reader who chose
+ * Typst as the default should not have to switch away from "Markdown" every
+ * time. The remaining entries are ordered by name — All files, AsciiDoc, HTML,
+ * Markdown, Typst — so the list reads the same in every dialog rather than in
+ * the order the markup types happened to be introduced.
  */
 function documentFilters(): { name: string; extensions: string[] }[] {
   const markdown = {
@@ -1094,16 +1112,15 @@ function documentFilters(): { name: string; extensions: string[] }[] {
   const html = { name: "HTML", extensions: ["html", "htm"] };
   const asciidoc = { name: "AsciiDoc", extensions: ["adoc", "asciidoc"] };
   const all = { name: "All files", extensions: ["*"] };
-  switch (defaultDocumentLanguage()) {
-    case "typst":
-      return [typst, markdown, asciidoc, html, all];
-    case "html":
-      return [html, markdown, typst, asciidoc, all];
-    case "asciidoc":
-      return [asciidoc, markdown, typst, html, all];
-    default:
-      return [markdown, typst, html, asciidoc, all];
-  }
+  const alphabetical = [all, asciidoc, html, markdown, typst];
+  const preferred = {
+    markdown,
+    typst,
+    html,
+    asciidoc,
+  } satisfies Record<api.DocumentLanguage, { name: string; extensions: string[] }>;
+  const first = preferred[defaultDocumentLanguage()];
+  return [first, ...alphabetical.filter((filter) => filter !== first)];
 }
 
 /** Drop the guest when the editor leaves HTML; start a fresh nonce when it enters. */
@@ -1522,13 +1539,23 @@ async function reloadFromDisk(): Promise<void> {
 }
 
 /**
- * Build the article the exports write: the preview pipeline's HTML, with Mermaid
- * drawn and the article wrapped so the stylesheet applies.
+ * The article the exports write, and the stylesheet it depends on.
+ *
+ * Each markup is rendered by the same pipeline its own preview uses: Markdown
+ * through the preview renderer, AsciiDoc through Asciidoctor, Typst through
+ * Typst's own HTML export. The Markdown renderer cannot read Typst — `==
+ * Introduction` and `+/-` would print as the source text — which is exactly what
+ * a PDF export of a `.typ` document used to do.
+ *
+ * Typst's own stylesheet comes back with the markup and must be carried into the
+ * exported document: most of it is MathML layout that no browser resolves
+ * unaided, the same reason the preview injects it.
  *
  * Shared by the HTML and PDF exports so the two can never drift apart.
  */
-async function buildExportArticle(): Promise<string> {
+async function buildExportArticle(): Promise<{ html: string; css: string }> {
   const holder = document.createElement("div");
+  let css = "";
   if (doc.language === "asciidoc") {
     const result = await renderAsciidocPreview(editor.getDoc(), {
       baseDir: doc.directory ?? null,
@@ -1537,6 +1564,10 @@ async function buildExportArticle(): Promise<string> {
       isDark,
     });
     holder.innerHTML = result.html;
+  } else if (doc.language === "typst") {
+    const rendered = await api.renderTypst(doc.path, editor.getDoc(), "document");
+    holder.innerHTML = rendered.html ?? "";
+    css = rendered.css ?? "";
   } else {
     holder.innerHTML = renderPreview(editor.getDoc(), {
       baseDir: doc.directory ?? null,
@@ -1545,7 +1576,11 @@ async function buildExportArticle(): Promise<string> {
     }).html;
   }
   await renderMermaidIn(holder, isDark);
-  return `<article class="markdown-body">${holder.innerHTML}</article>`;
+  // The same class the preview's Typst view uses, so the rules written for it
+  // apply to the export too.
+  const classes =
+    doc.language === "typst" ? "markdown-body typst-document" : "markdown-body";
+  return { html: `<article class="${classes}">${holder.innerHTML}</article>`, css };
 }
 
 /**
@@ -1635,6 +1670,7 @@ async function exportHtml(): Promise<void> {
     const headExtra = [
       `<style>${fontCss}</style>`,
       `<style>${exportTypographyCss()}</style>`,
+      article.css ? `<style>${article.css}</style>` : "",
       "<style>",
       highlightStyle,
       ".markdown-body{max-width:none}",
@@ -1644,7 +1680,7 @@ async function exportHtml(): Promise<void> {
 
     const html = wrapStandaloneHtml(
       doc.name ?? "Untitled",
-      article,
+      article.html,
       isDark,
       headExtra,
     );
@@ -1702,11 +1738,14 @@ async function exportPdf(): Promise<void> {
     // token colours would print as pale text on white paper. Its typefaces,
     // however, are the reader's — embedded, because a browser reading a file in
     // the temporary directory cannot reach the application's assets.
+    const typography = article.css
+      ? `${exportTypographyCss()}\n${article.css}`
+      : exportTypographyCss();
     const html = wrapPrintHtml(
       doc.name ?? "Untitled",
-      article,
+      article.html,
       highlightThemeCss(false),
-      exportTypographyCss(),
+      typography,
       await exportFontCss(),
     );
     const written = await api.printDocument(html, documentStem());
@@ -1725,6 +1764,9 @@ async function exportPdf(): Promise<void> {
 
 /** Menu ids for configured pandoc formats; must match `menu::EXPORT_PREFIX`. */
 const EXPORT_MENU_PREFIX = "export.pandoc.";
+
+/** Menu ids for recent files; must match `menu::RECENT_PREFIX`. */
+const RECENT_MENU_PREFIX = "recent.file:";
 
 /**
  * The last pandoc status we looked up.
@@ -2867,17 +2909,57 @@ function syncSourceFromPreview(reveal: boolean): void {
   if (reveal) editor.revealOffset(range.from);
 }
 
+let typstPageSource: { source: string; map: TypstSourceMap } | null = null;
+
+/** Build (or reuse) the word index for the current Typst source. */
+function typstPageMap(source: string): TypstSourceMap {
+  if (typstPageSource?.source !== source) {
+    typstPageSource = { source, map: new TypstSourceMap(source) };
+  }
+  return typstPageSource.map;
+}
+
 /**
- * Pages selection -> source word.
+ * Pages click/selection -> source range.
  *
- * The PDF text layer has no fragment map. The selected text is searched in the
- * source, nearest the caret; a generated word is absent and paints nothing. The
- * decoration never takes the source selection, and only a double-click reveals
- * the source, matching the Markdown/AsciiDoc rule.
+ * A word-only search cannot distinguish repeated words or two columns: it finds
+ * the first occurrence near the caret. The PDF line around the selection is a
+ * stronger key, so the line's word sequence is mapped to its actual source
+ * occurrence, and the clicked word/paragraph is then selected inside that
+ * occurrence. A generated line has no match and paints nothing.
  */
-function syncSourceFromPageSelection(text: string, reveal: boolean): void {
-  const range = findWordInSource(editor.getDoc(), text, editor.cursorInfo().from);
-  if (!range) {
+function syncSourceFromPageSelection(context: TypstPageContext, reveal: boolean): void {
+  const source = editor.getDoc();
+  const map = typstPageMap(source);
+  const match = map.mapLine(context.lineText, editor.cursorInfo().from);
+  const startToken = lineTokenAt(context.lineText, context.start, "start");
+  if (!match || !startToken) {
+    syncedSource = null;
+    editor.clearSyncRange();
+    return;
+  }
+
+  const startWord = map.wordForLineToken(match, startToken.index);
+  if (!startWord) {
+    syncedSource = null;
+    editor.clearSyncRange();
+    return;
+  }
+
+  let range: { from: number; to: number } | null = null;
+  if (context.paragraph || context.multiLine) {
+    range = paragraphRangeAt(source, startWord.from);
+  } else {
+    const endToken =
+      lineTokenAt(context.lineText, context.end, "end") ?? startToken;
+    const endWord = map.wordForLineToken(match, endToken.index) ?? startWord;
+    range = {
+      from: startWord.from,
+      to: Math.max(startWord.to, endWord.to),
+    };
+  }
+
+  if (!range || range.to <= range.from) {
     syncedSource = null;
     editor.clearSyncRange();
     return;
@@ -3380,6 +3462,19 @@ function runMenuAction(id: string): void {
       return;
     }
     void exportWithPandoc(format).catch((error) => toast(String(error)));
+    return;
+  }
+
+  // The Open Recent rows are generated from the persisted list, so their ids
+  // carry the path rather than an index: a list change between the menu being
+  // built and the row being clicked cannot open the wrong document.
+  if (id.startsWith(RECENT_MENU_PREFIX)) {
+    const path = id.slice(RECENT_MENU_PREFIX.length);
+    if (path) void openPath(path);
+    return;
+  }
+  if (id === "recent.clear") {
+    clearRecentFiles();
     return;
   }
 
@@ -4014,13 +4109,7 @@ async function boot(): Promise<void> {
   preferences = createPreferences({
     settings: () => settings,
     update: applySettingsPatch,
-    clearRecent: () => {
-      void api.clearRecent().then((next) => {
-        settings = next;
-        renderSidebar();
-        toast("Recent files cleared");
-      });
-    },
+    clearRecent: clearRecentFiles,
     exportHtml: () => void exportHtml(),
     exportPdf: () => void exportPdf(),
     setupTypst: () => typstSetup(),

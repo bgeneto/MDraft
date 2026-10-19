@@ -436,12 +436,15 @@ const mathScale = await evaluate(`(() => {
   if (!input()) return JSON.stringify({ found: false });
 
   const bounds = { min: input().min, max: input().max, value: input().value };
-  const before = width();
   const set = (value) => {
     const field = input();
     field.value = String(value);
     field.dispatchEvent(new Event('change', { bubbles: true }));
   };
+  // Measure the 100% baseline explicitly: the starting value is now a preset
+  // default (90 for System), not KaTeX's own ratio.
+  set(100);
+  const before = width();
   set(70);
   const at70 = width();
   set(40);                       // below the range: must clamp up
@@ -450,14 +453,14 @@ const mathScale = await evaluate(`(() => {
   const clampedHigh = input().value;
   // Leave the stored setting as it was found, so the next suite does not
   // inherit a shrunken preview.
-  set(100);
+  set(bounds.value);
   const restored = width();
   return JSON.stringify({ found: true, bounds, before, at70, clampedLow, clampedHigh, restored });
 })()`);
 
 console.log("\n=== math scale preference ===");
 console.log(`  bounds   ${mathScale.bounds?.min}–${mathScale.bounds?.max}  value ${mathScale.bounds?.value}`);
-console.log(`  width    ${mathScale.before} px at 100%, ${mathScale.at70} px at 70%`);
+console.log(`  width    ${mathScale.at70} px at 70%, ${mathScale.before} px at 100%`);
 console.log(`  clamps   ${mathScale.clampedLow} / ${mathScale.clampedHigh}`);
 
 check(
@@ -465,7 +468,7 @@ check(
   mathScale.found &&
     mathScale.bounds.min === "70" &&
     mathScale.bounds.max === "130" &&
-    mathScale.bounds.value === "100",
+    mathScale.bounds.value === "90",
 );
 check(
   "math scale visibly shrinks rendered math",
@@ -476,15 +479,16 @@ check(
   mathScale.clampedLow === "70" && mathScale.clampedHigh === "130",
 );
 check(
-  "math returns to KaTeX's ratio at 100%",
-  Math.abs(mathScale.restored - mathScale.before) <= 0.5,
+  "math returns to its starting scale",
+  mathScale.before > 20 &&
+    Math.abs(mathScale.restored / mathScale.before - Number(mathScale.bounds.value) / 100) < 0.02,
 );
 
 // Editor font size, Preview font size and Math scale are reader adjustments,
 // not part of a preset's identity. Editing one must leave the picker on the
 // preset, and each preset must remember its own sizes across a round trip.
-// An unvisited preset starts at its default sizes (18/80 for Serif, 18/90 for
-// Renaissance, 16/100 for System).
+// An unvisited preset starts at its default sizes (18/85 for Serif, 18/77 for
+// Renaissance, 16/90 for System).
 const presetSizes = await evaluate(`(async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const section = [...document.querySelectorAll('.prefs-section')]
@@ -518,11 +522,11 @@ const presetSizes = await evaluate(`(async () => {
     oldstyle: checkbox('Oldstyle figures in prose')?.checked ?? false,
   });
 
-  // System is the starting preset. Give it sizes that are not 16/16/100.
+  // System is the starting preset. Give it sizes that are not 16/16/90.
   if (
     !setNumber('Editor font size', 17) ||
     !setNumber('Preview font size', 18) ||
-    !setNumber('Math scale', 90)
+    !setNumber('Math scale', 92)
   ) {
     return JSON.stringify({ ok: false });
   }
@@ -551,7 +555,7 @@ const presetSizes = await evaluate(`(async () => {
   // Leave the suite on the first-run sizes, whichever check failed.
   setNumber('Editor font size', 16);
   setNumber('Preview font size', 16);
-  setNumber('Math scale', 100);
+  setNumber('Math scale', 90);
   await sleep(200);
   const reset = read();
 
@@ -591,11 +595,11 @@ check(
   "an unvisited preset starts at its default sizes",
   presetSizes.serifFresh?.editor === "16" &&
     presetSizes.serifFresh?.body === "18" &&
-    presetSizes.serifFresh?.math === "80" &&
+    presetSizes.serifFresh?.math === "85" &&
     presetSizes.serifFresh?.oldstyle === true &&
     presetSizes.renaissance?.editor === "16" &&
     presetSizes.renaissance?.body === "18" &&
-    presetSizes.renaissance?.math === "90" &&
+    presetSizes.renaissance?.math === "77" &&
     presetSizes.renaissance?.oldstyle === true,
 );
 check(
@@ -611,16 +615,16 @@ check(
 );
 check(
   "math scale is remembered per preset",
-  presetSizes.system?.math === "90" &&
+  presetSizes.system?.math === "92" &&
     presetSizes.serif?.math === "83" &&
     presetSizes.serifBack?.math === "83" &&
-    presetSizes.systemBack?.math === "90",
+    presetSizes.systemBack?.math === "92",
 );
 check(
-  "the preset test restores 16 px / 100%",
+  "the preset test restores 16 px / 90%",
   presetSizes.reset?.editor === "16" &&
     presetSizes.reset?.body === "16" &&
-    presetSizes.reset?.math === "100" &&
+    presetSizes.reset?.math === "90" &&
     presetSizes.reset?.active === "System",
 );
 

@@ -642,49 +642,6 @@ export function wordAt(source: string, offset: number): { from: number; to: numb
 }
 
 /**
- * Find the source range of selected preview text.
- *
- * Pages has no per-fragment map; its PDF text layer only says which text the
- * reader selected. This looks for that text as whole words, preferring the
- * occurrence nearest the caret. It returns null rather than guessing when the
- * text is absent, so generated content (`#lorem`, a `#let` value) paints
- * nothing instead of marking the wrong occurrence.
- */
-export function findWordInSource(
-  source: string,
-  text: string,
-  hint: number,
-): { from: number; to: number } | null {
-  const needle = text.replace(/\s+/g, " ").trim();
-  if (!needle || needle.length > 120 || /[\r\n]/.test(needle)) return null;
-
-  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  let expression: RegExp;
-  try {
-    // A captured boundary rather than a lookbehind: WebKitGTK builds older than
-    // Safari 16.4 do not implement lookbehind, and this search must not fail on
-    // a platform the application otherwise supports.
-    expression = new RegExp(
-      `(^|[^\\p{L}\\p{N}_])(${escaped})(?![\\p{L}\\p{N}_])`,
-      "giu",
-    );
-  } catch {
-    return null;
-  }
-
-  let best: { from: number; to: number; distance: number } | null = null;
-  for (const match of source.matchAll(expression)) {
-    const prefix = match[1] ?? "";
-    const from = (match.index ?? 0) + prefix.length;
-    const to = from + (match[2]?.length ?? 0);
-    if (to <= from) continue;
-    const distance = Math.abs(from - Math.max(0, Math.min(hint, source.length)));
-    if (!best || distance < best.distance) best = { from, to, distance };
-  }
-  return best ? { from: best.from, to: best.to } : null;
-}
-
-/**
  * Widen a source range to whole words.
  *
  * A preview selection can start mid-word — a double-click never does, a drag

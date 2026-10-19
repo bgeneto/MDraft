@@ -69,6 +69,7 @@ pub fn run() {
             menu::accelerators,
             menu::set_menu_state,
             menu::menu_state,
+            menu::recent_menu,
             menu::set_export_availability,
             typst::typst_status,
             typst::install_typst,
