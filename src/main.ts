@@ -55,6 +55,7 @@ import {
 } from "./source-map";
 import { createPreferences, type PreferencesHandle } from "./preferences";
 import { createSessionStore, type Session } from "./sessions";
+import { planRestore, rememberTabs, type RememberedTabs } from "./tab-restore";
 import { setInstalledLanguages, setSpellRemember } from "./spellcheck";
 import * as sidebarPanel from "./sidebar";
 import { resolvePalette } from "./syntax-themes";
@@ -143,6 +144,12 @@ let isDark = false;
 let isFullscreen = false;
 let allowClose = false;
 let lastTitle = "";
+/**
+ * Signature of the last remembered tab list that was written (or seeded from
+ * the settings loaded at boot). Comparing it is what keeps the tab-memory
+ * interval from rewriting `settings.json` when nothing changed.
+ */
+let lastTabsSignature = "";
 /** Menu accelerators the guest is allowed to ask the parent to run. */
 let knownAcceleratorIds = new Set<string>();
 
@@ -771,6 +778,8 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
   preview.appendChild(typstViewBar(rendered.kind));
 
   if (rendered.kind === "document") {
+    const dropped = typstDroppedNote(rendered);
+    if (dropped) preview.appendChild(dropped);
     const host = document.createElement("div");
     // The same class the Markdown preview uses, so every rule that shapes prose,
     // headings, code, tables and quotes applies to this document too.
@@ -846,15 +855,70 @@ function typstViewBar(active: string): HTMLElement {
     button.className = "typst-viewbutton" + (id === active ? " active" : "");
     button.textContent = label;
     button.title = title;
-    button.addEventListener("click", () => {
-      if (settings.typstView === id) return;
-      settings.typstView = id as api.TypstView;
-      persist();
-      scheduleRender(true);
-    });
+    button.addEventListener("click", () => chooseTypstView(id as api.TypstView));
     bar.appendChild(button);
   }
   return bar;
+}
+
+/** Switch the preview view and redraw it. */
+function chooseTypstView(view: api.TypstView): void {
+  if (settings.typstView === view) return;
+  settings.typstView = view;
+  persist();
+  scheduleRender(true);
+}
+
+/**
+ * The constructs Typst's HTML export drops *together with their contents*.
+ *
+ * Every construct it cannot express produces a warning, but the warnings are not
+ * equivalent: `#v`, `#h` and `#pagebreak` only lose spacing, while `#columns`,
+ * `#grid` and `#align` take everything inside them. A paper whose body is one
+ * `#columns` call therefore previews as a couple of stray paragraphs, which looks
+ * like a broken renderer rather than a limitation of the export.
+ */
+const TYPST_CONTENT_LOSS = new Set([
+  "align",
+  "columns",
+  "grid",
+  "pad",
+  "place",
+  "rect",
+  "stack",
+]);
+
+/**
+ * A note naming what the document view could not show, or null when it is whole.
+ *
+ * Typst reports the dropped constructs on stderr and the Rust side collects them
+ * into `ignored`. Without this note the pane silently shows less than the
+ * document contains — the one failure mode a preview must not have.
+ */
+function typstDroppedNote(rendered: api.RenderedTypst): HTMLElement | null {
+  const lost = rendered.ignored.filter((name) => TYPST_CONTENT_LOSS.has(name));
+  if (lost.length === 0) return null;
+
+  const note = document.createElement("div");
+  note.className = "typst-note";
+  const text = document.createElement("span");
+  text.className = "typst-note-text";
+  const names = lost.map((name) => `#${name}`);
+  const listed =
+    names.length === 1
+      ? names[0]
+      : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  text.textContent =
+    `Typst's HTML export cannot represent ${listed} and drops everything inside ` +
+    `${names.length === 1 ? "it" : "them"}, so this view shows less than the document.`;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "typst-notebutton";
+  button.textContent = "Show pages";
+  button.title = "The compiler's own page layout, where nothing is dropped";
+  button.addEventListener("click", () => chooseTypstView("pages"));
+  note.append(text, button);
+  return note;
 }
 
 /** Delegate an HTML document to the sandboxed guest. */
@@ -1262,10 +1326,16 @@ function setDirty(next: boolean): void {
 
 interface OpenOptions {
   silent?: boolean;
+  /**
+   * Record the file in Recents. Restoring a remembered tab set passes false:
+   * those documents were not opened in this session, and ten restored tabs
+   * would push the reader's actual history off the sidebar.
+   */
+  rememberRecent?: boolean;
 }
 
 async function openPath(path: string, options: OpenOptions = {}): Promise<void> {
-  const { silent = false } = options;
+  const { silent = false, rememberRecent = true } = options;
   const existing = sessions.findByPath(path);
   if (existing) {
     await activateSession(existing.id);
@@ -1285,7 +1355,7 @@ async function openPath(path: string, options: OpenOptions = {}): Promise<void> 
     }
     await showInEditor(true, payload.tokens);
 
-    if (settings.recordRecent) {
+    if (rememberRecent && settings.recordRecent) {
       settings = await api.addRecent(path).catch(() => settings);
     }
     if (settings.sidebarTab === "recent") renderSidebar();
@@ -3746,13 +3816,65 @@ async function installDragDrop(): Promise<void> {
   });
 }
 
+/** How often the open tabs are checked against what was last written. */
+const TAB_MEMORY_INTERVAL_MS = 1500;
+
+/** The remembered-tab payload for the sessions that are open now. */
+function rememberedTabsNow(): RememberedTabs {
+  return rememberTabs(sessions.list(), doc.id);
+}
+
+/**
+ * Keep `lastTabs`/`lastActiveTab` in sync with the open tabs.
+ *
+ * A 1.5 s check rather than a hook on every tab gesture: the set changes rarely,
+ * and the signature compare means the settings file is rewritten only when it
+ * actually differs — not on every caret move, and not on every auto-save tick.
+ * The close handler flushes the same signature, so a tab touched inside the
+ * last interval still survives the exit.
+ */
+function installTabMemory(): void {
+  lastTabsSignature = JSON.stringify(rememberedTabsNow());
+  window.setInterval(() => {
+    const remembered = rememberedTabsNow();
+    const signature = JSON.stringify(remembered);
+    if (signature === lastTabsSignature) return;
+    lastTabsSignature = signature;
+    settings = { ...settings, lastTabs: remembered.tabs, lastActiveTab: remembered.active };
+    persist();
+  }, TAB_MEMORY_INTERVAL_MS);
+}
+
+/**
+ * Write the remembered tab list before the window goes.
+ *
+ * The wait is bounded: a wedged IPC or a full disk must not keep the window
+ * open. When the write does not fit in the budget the interval has already
+ * written the previous state, which is a stale tab list rather than a hung
+ * close.
+ */
+async function flushRememberedTabs(): Promise<void> {
+  const remembered = rememberedTabsNow();
+  const signature = JSON.stringify(remembered);
+  if (signature === lastTabsSignature) return;
+  lastTabsSignature = signature;
+  const next = { ...settings, lastTabs: remembered.tabs, lastActiveTab: remembered.active };
+  settings = next;
+  await Promise.race([
+    api.saveSettings(next).catch(() => undefined),
+    new Promise((resolve) => window.setTimeout(resolve, 750)),
+  ]);
+}
+
 async function installCloseGuard(): Promise<void> {
   const win = getCurrentWindow();
   await win.onCloseRequested(async (event) => {
     if (allowClose) return;
-    const dirty = sessions.list().filter((session) => session.dirty);
-    if (dirty.length === 0) return;
+    // Every close is deferred once: the remembered tab list has to reach the
+    // disk before the process ends, and a dirty buffer may need a prompt first.
+    // Closing again with `allowClose` set is what actually ends the window.
     event.preventDefault();
+    const dirty = sessions.list().filter((session) => session.dirty);
     for (const session of dirty) {
       const shouldSave = await ask(
         `"${session.name}" has unsaved changes. Save them before closing?`,
@@ -3760,8 +3882,12 @@ async function installCloseGuard(): Promise<void> {
       );
       if (shouldSave && !(await saveSession(session))) return;
     }
-    allowClose = true;
-    await win.close();
+    try {
+      await flushRememberedTabs();
+    } finally {
+      allowClose = true;
+      await win.close();
+    }
   });
 }
 
@@ -4067,6 +4193,50 @@ function migrateLegacySystemPreset(): void {
   persist();
 }
 
+/**
+ * Reopen the remembered tab set at boot.
+ *
+ * Every path is checked before anything is opened, so a vanished file is
+ * skipped and counted in one toast instead of producing one error per file. The
+ * first survivor fills the initial blank tab (`installingStartup` is still
+ * true); the rest become tabs. Recents are deliberately not written: restoring
+ * is not the reader opening ten documents.
+ */
+async function restoreLastTabs(): Promise<void> {
+  const saved = settings.lastTabs;
+  const exists = new Map<string, boolean>();
+  await Promise.all(
+    saved.map(async (path) => {
+      exists.set(path, await api.pathExists(path).catch(() => false));
+    }),
+  );
+
+  const plan = planRestore(saved, settings.lastActiveTab, (path) => exists.get(path) === true);
+  if (plan.tabs.length === 0) {
+    // First run with the preference set, or every remembered file is gone.
+    await loadUntitled(WELCOME);
+    return;
+  }
+
+  // The first survivor fills the blank session the window booted with; once it
+  // is installed, `installingStartup` has to be off or every later file would
+  // replace it in the same tab instead of becoming a tab of its own.
+  for (const [index, path] of plan.tabs.entries()) {
+    if (index === 1) installingStartup = false;
+    await openPath(path, { silent: true, rememberRecent: false });
+  }
+
+  if (plan.active !== null) {
+    const session = sessions.findByPath(plan.active);
+    if (session) await activateSession(session.id);
+  }
+
+  if (plan.missing > 0) {
+    const subject = plan.missing === 1 ? "1 document" : `${plan.missing} documents`;
+    toast(`${subject} from the last session could not be found — the rest were reopened.`, 4000);
+  }
+}
+
 async function boot(): Promise<void> {
   // Before the first paint, so the preview is never drawn in a fallback and then
   // corrected. The faces are local files, so this costs a millisecond.
@@ -4184,6 +4354,8 @@ async function boot(): Promise<void> {
   const startup = await api.startupFile().catch(() => null);
   if (startup) {
     await openPath(startup, { silent: true });
+  } else if (settings.onLaunch === "tabs") {
+    await restoreLastTabs();
   } else if (settings.onLaunch === "new") {
     await loadUntitled("", defaultDocumentLanguage());
   } else if (settings.onLaunch === "last" && settings.recentFiles.length > 0) {
@@ -4193,6 +4365,7 @@ async function boot(): Promise<void> {
   }
   installingStartup = false;
 
+  installTabMemory();
   installDiskWatcher();
   installAutoSave();
   editor.focus();

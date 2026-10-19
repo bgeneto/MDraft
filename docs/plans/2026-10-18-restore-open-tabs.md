@@ -1,8 +1,11 @@
 # Restore the tabs that were open at the last launch
 
-**Status:** draft
+**Status:** in progress
 **Date:** 2026-10-18
-**ADR:** `../adr/2026-10-18-remembered-tabs.md` (written with the change)
+**Approved:** 2026-10-19, with one amendment: the cap is **20** saved documents,
+not 40, and the remembered list is deduplicated (the amendment is applied
+throughout this file).
+**ADR:** `../adr/2026-10-19-remembered-tabs.md` (written with the change)
 
 ## Context and goal
 
@@ -27,7 +30,7 @@ promised about unsaved content: only paths and order are remembered.
   `serde(default)` so an existing `settings.json` keeps loading).
 - A fourth On Launch choice, `"tabs"` → **Reopen the last tabs**.
 - Remembering the tab list as tabs are opened, closed, reordered, activated or
-  saved under a new path; capped at 40 saved documents; duplicates removed with
+  saved under a new path; capped at 20 saved documents; duplicates removed with
   the same path identity the session store already uses.
 - Restoring at boot: order preserved, the remembered tab re-activated, missing
   files skipped and counted in a toast, and a fallback to the welcome document
@@ -148,7 +151,7 @@ Rejected alternatives:
   error or a wedged IPC could keep the window open. Bound the wait (about
   750 ms) and close regardless — the 1.5 s interval has already written the
   common case. `scripts/test-close.ps1` (12 s budget) catches a regression.
-- **Boot delay.** Restoring 40 documents reads 40 files before the first paint.
+- **Boot delay.** Restoring 20 documents reads 20 files before the first paint.
   The cap and sequential open make the common case (a handful) a few
   milliseconds; if a real set is slow, open the first, paint, then the rest.
   Measure with the tab suite and a 10-file folder.
@@ -200,4 +203,4 @@ they must match, and `settings.json` must contain the same three paths under
   prompts on a clean exit, and skipping would hide a document the reader had
   open.
 - **Recents during restore:** do not write Recents for restored tabs. Default: no.
-- **Cap:** 40 documents. Default: 40.
+- **Cap:** 20 documents (amended at approval; 40 was proposed). Default: 20.

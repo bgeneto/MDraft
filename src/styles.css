@@ -1641,6 +1641,47 @@ body {
   color: var(--fg, #ddd);
 }
 
+/* What the document view had to drop. Typst's HTML export cannot represent
+   `#columns`, `#grid` and friends, and takes their contents with them, so a
+   two-column paper previews as a few stray paragraphs. Saying so is the one
+   thing that keeps that from reading as a broken renderer. */
+.typst-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin: 0 10px 12px;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.typst-note-text {
+  flex: 1 1 20em;
+}
+
+.typst-notebutton {
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.typst-notebutton:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* The document view reuses `.markdown-body`, so it inherits the preview's type.
    Only the spacing above the first block needs resetting: Typst's HTML export
    starts with a heading, not with the margin the Markdown path expects. */
@@ -1655,7 +1696,26 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 18px;
-  padding: 22px 12px 40px;
+  padding: 22px 0 40px;
+}
+
+/* Pages own the pane from edge to edge: the fitted page is a few pixels wider
+   than the pane, so the scroll container clips its sides instead of showing a
+   gutter. The scrollbar is always present, which keeps clientWidth, and
+   therefore the fit, from oscillating as a wider page becomes tall enough to
+   need one. */
+.preview-pane:has(.typst-preview) {
+  padding-left: 0;
+  padding-right: 0;
+  overflow-x: hidden;
+  overflow-y: scroll;
+}
+
+/* `#preview` is a `.markdown-body`, whose reading measure would otherwise cap
+   the pages at 860 px in the middle of a wide pane. Pages have their own
+   measure: the PDF's. */
+.preview-pane:has(.typst-preview) #preview {
+  max-width: none;
 }
 
 /* The shell owns the fitted size and the shadow; the page inside keeps the
@@ -1665,8 +1725,13 @@ body {
   flex: none;
   width: calc(var(--typst-page-width) * 1px * var(--typst-fit));
   height: calc(var(--typst-page-height) * 1px * var(--typst-fit));
-  background: #ffffff;
-  box-shadow: 0 1px 4px rgb(0 0 0 / 22%);
+  background: var(--bg);
+  /* The page is as wide as the pane, so its side shadow is clipped away. What
+     is left is a rule above each page and a soft shadow below it: the page
+     break reads vertically, which is the only place a page edge should show. */
+  box-shadow:
+    0 -1px 0 var(--border),
+    0 1px 4px rgb(0 0 0 / 22%);
 }
 
 .typst-page {
@@ -1677,13 +1742,24 @@ body {
   height: calc(var(--typst-page-height) * 1px);
   transform: scale(var(--typst-fit));
   transform-origin: top left;
-  background: #ffffff;
+  background: var(--bg);
 }
 
 .typst-page canvas {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+/* The PDF page reaches us as one raster, so the only way to follow the theme is
+   a filter: 0.882 maps white paper to --bg (#1e1e1e) and black text to #e1e1e1,
+   leaving only the rule and shadow above to mark the page break. The hue
+   rotation puts back the hues a plain invert would flip. Filter the canvas, not
+   the page, so the text layer's selection keeps its normal colour. */
+@media not (forced-colors: active) {
+  [data-theme="dark"] .typst-page canvas {
+    filter: invert(0.882) hue-rotate(180deg);
+  }
 }
 
 /* The subset of PDF.js's text-layer CSS the viewer needs. The spans are
@@ -1758,10 +1834,14 @@ body {
   overflow-wrap: anywhere;
 }
 
-/* The page a document prints on is white even when the chrome is dark, so the
-   shadow above is what separates it from the pane. */
-.app.dark .typst-page-shell {
-  box-shadow: 0 1px 6px rgb(0 0 0 / 55%);
+/* The page stands slightly off the pane, so a rule and the shadow above are
+   what separate one page from the next. The shell is dark too: it is visible
+   for the instant between appending a page and PDF.js filling its canvas. */
+[data-theme="dark"] .typst-page-shell {
+  background: var(--bg);
+  box-shadow:
+    0 -1px 0 var(--border),
+    0 1px 6px rgb(0 0 0 / 55%);
 }
 
 /* A set of alternatives as buttons, used where picking one redraws the panel. */

@@ -25,6 +25,7 @@
     "typography": "node scripts/typography-test.mjs",
     "shortcuts": "node scripts/shortcut-test.mjs",
     "tabs": "node scripts/document-tabs-test.mjs",
+    "tabs:restore:unit": "node scripts/tabs-restore-unit.mjs",
     "recent": "node scripts/recent-menu-test.mjs",
     "test:sessions": "node scripts/sessions-test.mjs",
     "paste:convert": "node scripts/paste-convert-test.mjs",
