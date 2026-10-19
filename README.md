@@ -9,14 +9,24 @@ languages in one window, and exports to the formats other people ask for. It is
 a native Tauri application: the system webview draws the preview. There is no
 bundled browser, no account, and no telemetry.
 
-**[Download MDraft 0.3.0 →](https://github.com/bgeneto/MDraft/releases/latest)**
+[![Latest release](https://img.shields.io/github/v/release/bgeneto/MDraft?label=latest&sort=semver)](https://github.com/bgeneto/MDraft/releases/latest)
+
+**[Download the latest release →](https://github.com/bgeneto/MDraft/releases/latest)**
 
 Windows installers and a portable `.exe`; Linux `.deb`, AppImage and a bare
-binary. Release notes and checksums are on the release page.
+binary. The release page always names the current version and carries its notes
+and checksums.
 
-![MDraft showing Markdown source in the left pane and its typeset preview on the right](docs/screenshots/readme-markdown-split.png)
+![MDraft in the light theme with the Renaissance typography preset, showing Markdown source and its typeset preview](docs/screenshots/readme-markdown-light-renaissance.png)
 
-*Markdown source and preview in Split view, set in the Serif typography preset.*
+*Light theme with the Renaissance preset: EB Garamond prose and headings, IBM
+Plex Mono in the source. Four documents are open as tabs; the Markdown file is
+active.*
+
+![MDraft in the dark theme with the System typography preset, showing the same Markdown source and preview](docs/screenshots/readme-markdown-dark-system.png)
+
+*Dark theme with the System preset: the platform's own faces, the same four
+tabs, and the same Markdown document active.*
 
 ## What it does well
 
@@ -29,18 +39,25 @@ binary. Release notes and checksums are on the release page.
 - **A preview that follows the work.** Split, source-only and preview-only
   modes; scroll sync; clicking a source line blinks the matching block;
   selecting a word or a range in either pane paints it in the other, for
-  Markdown, AsciiDoc and Typst, without moving the selection or scrolling; tabs
-  keep each document's caret, undo and scroll position. A crowded strip scrolls
-  with arrows, the wheel or drag reordering, and right-click offers the tab
-  actions. **Reopen the last tabs** on launch restores the set that was open, in
-  the same order and with the same one active. The outline, file browser and
-  recent list are one shortcut away, and
+  Markdown, AsciiDoc and Typst, without moving the selection or scrolling. The
+  outline, file browser and recent list are one shortcut away, and
   **File › Open Recent** reaches the newest twenty entries of the persisted
   history without opening the sidebar.
+- **Many documents, each with its own state.** Tabs keep every document's
+  caret, undo and scroll position. A crowded strip scrolls with arrows, the
+  wheel or drag reordering, and right-click offers the tab actions. **Reopen
+  the last tabs** on launch restores the set that was open, in the same order
+  and with the same one active.
 - **Typing that closes itself.** `(`, `[`, `{`, quotes and backticks insert
   their pair, step over the closer and delete both on Backspace; HTML tags close
   in HTML, Markdown and AsciiDoc. Both behaviors have a switch under
   Preferences › Editor.
+- **Spelling in the language being written.** The operating system's own
+  dictionary underlines prose as you type; code, URLs and mathematics are left
+  alone. English and Portuguese are detected automatically, a language can be
+  pinned under Preferences › Editor, and the status bar turns checking on and
+  off. Right-click a marked word for suggestions or **Add to dictionary**.
+  Nothing is downloaded, and HTML guests are not checked.
 - **Typography that holds up.** Thirteen bundled typefaces, six presets,
   independent faces for editor, prose, headings and code, plus OpenType
   controls. Preview headings and emphasis use Semibold; mathematics has its own
@@ -59,10 +76,6 @@ binary. Release notes and checksums are on the release page.
   MDraft makes no network request at start-up; it goes online only for an action
   you take, such as installing pandoc or Typst, fetching a pasted image URL, or
   opening an HTML document whose own markup references remote resources.
-
-![MDraft in preview mode showing an AsciiDoc instrument guide with a note, table, formula and outline](docs/screenshots/readme-asciidoc-preview.png)
-
-*The same window reading an AsciiDoc document: title, admonition, table and formula in Preview mode, with the outline alongside.*
 
 ## Getting started
 
