@@ -14,11 +14,13 @@ import {
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import * as api from "./api";
-import { renderAsciidocPreview } from "./asciidoc-preview";
+import { renderAsciidocForExport, renderAsciidocPreview } from "./asciidoc-preview";
 import { ASCIIDOC_REFERENCE, FONT_LICENCES, REFERENCE, SHORTCUTS, WELCOME } from "./content";
 import { createEditor, type EditorHandle } from "./editor";
 import {
   DEFAULT_EDITOR_FONT_SIZE,
+  DEFAULT_EDITOR_LINE_HEIGHT,
+  EDITOR_LINE_HEIGHTS,
   embeddedFontCss,
   installBundledFonts,
   TYPOGRAPHY_ROLES,
@@ -443,6 +445,13 @@ function applyLayout(): void {
     "--editor-max-width",
     width > 0 ? `${width}px` : "none",
   );
+
+  // The setting stores a name, not a multiplier. An older or hand-edited file
+  // may carry a name this build does not know; Normal is the fallback.
+  const lineHeight =
+    EDITOR_LINE_HEIGHTS[settings.editorLineHeight] ??
+    EDITOR_LINE_HEIGHTS[DEFAULT_EDITOR_LINE_HEIGHT];
+  document.documentElement.style.setProperty("--editor-line-height", String(lineHeight));
 
   editor?.setFontSize(settings.editorFontSize);
   editor?.setFocusMode(settings.focusMode);
@@ -1968,14 +1977,28 @@ async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
 
   const notice = toast(`Exporting with pandoc…`, 0);
   try {
+    let source = editor.getDoc();
+    let language: api.DocumentLanguage = doc.language;
+    // Pandoc's AsciiDoc reader prints an unset attribute (`:toc!:`) and every
+    // attribute line below it as prose, ignores `ifdef::backend-pdf[]` and does
+    // not resolve `{attributes}`. Asciidoctor already resolved all of that for
+    // the preview, so hand pandoc its HTML instead. An AsciiDoc target keeps
+    // the original source: writing it back as AsciiDoc should not pass through
+    // HTML first.
+    if (doc.language === "asciidoc" && format.extension.toLowerCase() !== "adoc") {
+      source = await renderAsciidocForExport(source, {
+        baseDir: doc.directory ?? null,
+      });
+      language = "html";
+    }
     const outcome = await api.runExport({
       formatId: format.id,
-      markdown: editor.getDoc(),
+      markdown: source,
       outputPath,
       inputPath: doc.path,
       // Tells the backend which reader to use, and that a Typst document exported
       // to PDF is rendered by Typst itself rather than translated through pandoc.
-      language: doc.language,
+      language,
     });
     notice.dismiss();
     toast(`Exported ${basename(outcome.outputPath)}`);

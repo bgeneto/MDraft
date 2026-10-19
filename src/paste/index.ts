@@ -180,6 +180,15 @@ function sourceText(payload: ClipboardPayload, source: SourceFormat): string {
   if (source === "markdown") return payload.markdown ?? payload.text ?? "";
   return payload.text ?? "";
 }
+/** Text pasted as literal characters, escaped the way `destination` needs. */
+function literalFor(destination: DocumentLanguage, text: string): string {
+  const blocks: Block[] = [{ kind: "paragraph", children: [{ kind: "text", value: text }] }];
+  if (destination === "markdown") return renderMarkdown(blocks);
+  if (destination === "typst") return renderTypst(blocks);
+  if (destination === "asciidoc") return renderAsciidoc(blocks);
+  return renderHtmlFragment(blocks);
+}
+
 /**
  * Convert a clipboard payload for `destination`.
  *
@@ -194,24 +203,30 @@ export async function planPaste(
   const choice = chooseSource(payload, destination);
   const source = choice.source;
   const notices: string[] = [];
-  const original = sourceText(payload, source);
+  // A source read from the text is the text; an HTML representation (from a
+  // rendered copy) is the other flavour. Converting the wrong one is how a
+  // snippet's spaces and structure get lost.
+  const original = choice.fromText ? (payload.text ?? "") : sourceText(payload, source);
   if (!payload.html && !payload.markdown && !payload.text) return null;
 
-  // The clipboard already carries the destination syntax. Do not round-trip it.
-  if (source === destination && source !== "html") {
+  // CodeMirror will insert the text flavour, untouched: the clipboard is
+  // already written in the destination's syntax, or it is plain text.
+  if (choice.native) {
+    const text = payload.text ?? "";
     return {
-      text: original,
-      block: plainBlock(original),
+      text,
+      block: plainBlock(text),
       source,
       converted: false,
       notices,
     };
   }
 
-  if (source === "plain") {
+  // The clipboard already carries the destination syntax. Do not round-trip it.
+  if (source === destination && source !== "html") {
     return {
-      text: payload.text ?? "",
-      block: plainBlock(payload.text ?? ""),
+      text: original,
+      block: plainBlock(original),
       source,
       converted: false,
       notices,
@@ -271,7 +286,14 @@ export async function planPaste(
     else text = renderHtmlFragment(blocks);
 
     if (!text.trim()) {
-      const fallback = fallbackText(payload);
+      // The reader keeps nothing of `<link>`, `<meta>` or a `<style>` block.
+      // The characters are still what the user copied, so paste them as
+      // literal text for this destination: a bare `<link>` is a label in
+      // Typst and would vanish unescaped.
+      const fallback =
+        choice.fromText && payload.text
+          ? literalFor(destination, payload.text)
+          : fallbackText(payload);
       if (!fallback.trim()) return null;
       return { text: fallback, block: plainBlock(fallback), source, converted: false, notices };
     }

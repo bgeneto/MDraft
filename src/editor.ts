@@ -256,18 +256,30 @@ const baseTheme = EditorView.theme({
     // compartment and no reconfiguration is needed to change the face, only a
     // `requestMeasure()` afterwards so it re-measures its line wrapping.
     fontFamily: "var(--font-source)",
-    lineHeight: "1.5",
+    // A variable for the same reason as the family: the reader's Line Height
+    // preference is published by `applyLayout`, and CodeMirror's generated
+    // stylesheet resolves it through the cascade. `applyTypography` then calls
+    // `requestMeasure()` so every line box is measured again.
+    lineHeight: "var(--editor-line-height)",
     padding: "22px 0 45vh",
   },
   ".cm-content": {
-    padding: "0 28px",
     // Same two decisions as the preview's code, applied to the source pane, so a
     // reader who turns ligatures on does not get them in one pane and not the
     // other.
     fontVariantLigatures: "var(--code-ligatures)",
     fontVariantNumeric: "var(--code-figures)",
   },
+  // Horizontal padding belongs on the line, not on `.cm-content`. CodeMirror
+  // measures the full-width rectangles of a multi-line selection from the
+  // `.cm-line` padding (`RectangleMarker.forRange`), so padding on the content
+  // box made a selection paint into the 28px margin as a strip left of the text.
+  ".cm-line": { padding: "0 28px" },
   ".cm-gutters": { backgroundColor: "transparent", border: "none" },
+  // Padding on the line would otherwise widen every line-level background.
+  // Keep the active-line tint inside the text column, as it was when the
+  // horizontal padding sat on the content box.
+  ".cm-activeLine": { backgroundClip: "content-box" },
   ".cm-activeLineGutter": { backgroundColor: "transparent" },
   ".cm-dim-line": { opacity: "0.28" },
   "&.cm-editor.cm-focused": { outline: "none" },

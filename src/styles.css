@@ -29,6 +29,9 @@
   --quote-bar: rgba(127, 127, 127, 0.4);
   --sidebar-w: 244px;
   --editor-max-width: 860px;
+  /* The source pane's Normal multiplier before settings load. Runtime writes
+     the reader's choice from src/fonts.ts; see baseTheme in editor.ts. */
+  --editor-line-height: 1.5;
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
     Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,

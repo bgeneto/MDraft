@@ -197,9 +197,9 @@ rewrite from scratch.
 | `npm run stage` | `scripts/stage-artifacts.mjs` | Re-stage what is already built |
 | `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
-| `npm run test:rust` | `cargo test` | 90 tests on Windows (89 run, one ignored download); Linux has 89 total (88 run, one ignored) |
+| `npm run test:rust` | `cargo test` | 91 tests on Windows (90 run, one ignored download); Linux has 90 total (89 run, one ignored) |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. The tab-restore layer is the exception: two launches of the same instance's settings directory, closed with WM_CLOSE in between so the close flush runs. Puts back the working tree and the developer's own settings afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
-| `npm run smoke` | `scripts/dom-smoke.mjs` | 98 checks against `samples/feature-tour.md` |
+| `npm run smoke` | `scripts/dom-smoke.mjs` | 105 checks against `samples/feature-tour.md` |
 | `npm run word-sync` | `scripts/word-sync-test.mjs` | 30 checks of word-level sync against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, no scroll, Escape, and the fallbacks |
 | `npm run autoclose:unit` | `scripts/autoclose-unit.mjs` | 17 checks of the tag matcher: attributes, custom elements, void and self-closing tags, autolinks, escapes, declarations, prose — no application |
 | `npm run autoclose` | `scripts/autoclose-test.mjs` | 33 checks of pairs, quotes, backticks, HTML tags and both preferences, typed through the real editor in Markdown, HTML, Typst and AsciiDoc |
@@ -215,9 +215,10 @@ rewrite from scratch.
 | `npm run tabs:restore:unit` | `scripts/tabs-restore-unit.mjs` | 33 checks of what is remembered and what is restored: tab order, untitled exclusion, deduplication under the platform's path identity, the 20-document cap, and the restore plan's handling of missing files — no application |
 | `npm run recent` | `scripts/recent-menu-test.mjs` | 26 checks that File › Open Recent mirrors the persisted list: the launch file, a new file becoming first, the menu id opening/focusing a tab, Clear Items emptying menu and sidebar, the list refilling, and a 27-row history rendered in full by the sidebar while the menu shows 20 plus Clear Items |
 | `npm run asciidoc` | `scripts/asciidoc-test.mjs` | 51 checks of the AsciiDoc preview, source highlighting, outline, preview copy, spellcheck, includes, paste, the AsciiDoc reference, the default extension and word-level sync |
+| `npm run asciidoc:export:unit` | `scripts/asciidoc-export-unit.mjs` | 17 unit checks of the AsciiDoc -> HTML step every pandoc export uses: unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations; no application |
 | `npm run test:sessions` | `scripts/sessions-test.mjs` | 59 unit checks of `src/sessions.ts`, with no application and no build |
-| `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 90 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
-| `npm run paste` | `scripts/rich-paste-test.mjs` | 26 checks of rich paste through the real UI: destination detection, conversion, preferences, Ctrl+Shift+V, undo |
+| `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 99 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
+| `npm run paste` | `scripts/rich-paste-test.mjs` | 28 checks of rich paste through the real UI: destination detection, conversion in every direction, whitespace across inline elements, preferences, Ctrl+Shift+V, undo |
 | `npm run image:syntax` | `scripts/image-syntax-test.mjs` | 14 checks of bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, including the Image preference |
 | `npm run typst:preview` | `scripts/typst-preview-test.mjs` | 31 checks of Typst Pages through PDF.js and Typst word sync: page shells, canvases, text layers, both columns, selection/copy, paragraph click, repeated-word/right-column mapping, drag ranges, generated-text fallback, the transparent view bar, view switching and PDF disposal |
 | `npm run licence` | `scripts/licence-test.mjs` | 4 checks that the bundled typefaces' licences ship inside the application. Run against its own instance: it opens a document |
@@ -458,20 +459,20 @@ hash the pixels.
 
 ## Testing
 
-Twenty-one layers, cheapest first. Run them in this order when changing anything.
+Twenty-two layers, cheapest first. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 90 | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection |
+| Rust unit | `npm run test:rust` | 91 | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection |
 | Session store | `npm run test:sessions` | 59 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
-| Paste conversion | `npm run paste:convert` | 90 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, markup source, image syntax, AsciiDoc |
-| DOM smoke | `npm run smoke` | 98 | Rendering, pane sync, preferences (including the four On Launch choices), math, fonts, status icons |
+| Paste conversion | `npm run paste:convert` | 99 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, image syntax, AsciiDoc |
+| DOM smoke | `npm run smoke` | 105 | Rendering, pane sync, preferences (including the four On Launch choices and Line Height), math, fonts, status icons |
 | Word sync | `npm run word-sync` | 30 | The fragment map, preview → source and source → preview, atomic code, formula and image spans, word snapping, no scroll, Escape |
 | Auto-close matching | `npm run autoclose:unit` | 17 | Which tag a typed `>`, the void/self-closing/autolink/escape rules — no application |
 | Remembered tabs (unit) | `npm run tabs:restore:unit` | 33 | What is stored (order, untitled exclusion, deduplication, the 20-document cap) and what a restore plan does with it (missing files, the active-tab fallback) — no application |
 | Auto-close typing | `npm run autoclose` | 33 | Pairs, step-over, Backspace, selection wrap, Markdown inline tags, HTML tags, both preferences, in all four document types |
-| Rich paste | `npm run paste` | 26 | The paste event, destination notice, preferences, Ctrl+Shift+V, undo, markup source pasted byte-for-byte |
+| Rich paste | `npm run paste` | 28 | The paste event, destination notice, preferences, Ctrl+Shift+V, undo, the same clipboard converted into Markdown and kept as source in HTML, spaces around inline elements |
 | Image syntax | `npm run image:syntax` | 14 | Bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, plus the Image preference |
 | Typst pages | `npm run typst:preview` | 31 | PDF.js page shells/canvases/text layers, both columns, A4 geometry, paragraph click, repeated-word/right-column mapping, drag ranges, Pages and Document word sync, generated-text fallback, transparent view bar and PDF disposal |
 | Math | `npm run math` | 10 | Font loading, fraction and radical geometry |
@@ -593,6 +594,9 @@ Retry the same edit once; the second attempt succeeds as soon as the external
 handle is released. Do not switch to an in-place shell write to work around it:
 it bypasses the tool's read-before-write check and the other program's buffer
 then overflows the change on its next save.
+
+**`git diff --check` reports every added line of `src-tauri/src/settings.rs` as "trailing whitespace"**
+The file is stored with CRLF in the index (`git ls-files --eol` says `i/crlf w/crlf`) while most of the tree is LF in the index, and the repository's `core.whitespace` does not include `cr-at-eol`. The carriage return at the end of each added line is therefore read as trailing whitespace even though the text is clean. Do not normalise the file or strip the CR — that rewrites every line. Confirm with `[IO.File]::ReadAllText` if in doubt; zero LF-only line endings means the whitespace warning is the line-ending policy, not the patch.
 
 **`document.fonts.check()` is false for a font that exists**
 Web fonts load lazily. `check()` reports whether a face is *active*, not whether
@@ -784,6 +788,9 @@ paste. `scripts/image-path-paste-test.mjs` does exactly this.
 
 **A Preferences row's label includes its help mark, and one label can be a prefix of another**
 `row.querySelector('.prefs-label').textContent` is `"Run a command?"` for a row that has help: the `?` span is part of the text. Worse, `"Open the exported file"` is a prefix of `"Open the exported file's folder"`, so an `includes()` match silently picks the first row and a test can report both boxes ticked while one was never touched. Strip the trailing `?` and compare the exact label. A probe that matched by substring concluded the second checkbox was already on and never clicked it, then chased a backend/frontend mismatch that did not exist. The help text itself is not in that span either: `.prefs-help`'s `textContent` is just the `?`, and the sentence lives in its `title` attribute.
+
+**A Preferences test edits a row that belongs to another section, and nothing changes**
+The panel renders one section at a time. With *Editor* open, `document.querySelector('.prefs-row')` cannot find **Editor font size** or the preset buttons — those live under *Typography* — so a test that ignores the setter's return value silently changes nothing and then fails on a downstream measurement (here, the line height stayed at the old font size). Click the owning section first (`Typography` for sizes and presets, `Editor` for Content Width and Line Height), re-query after every update because the panel rebuilds, and assert that the setter found its control.
 
 **Renaming the product leaves stale bundles that staging will happily ship**
 `src-tauri/target/release/bundle/` is not cleaned between builds, so after
@@ -1290,6 +1297,17 @@ the editor to the target first. Also read **every** `.cm-sync-word` element: a
 range that crosses lines is one element per line, so `querySelector` returns only
 the first segment and a paragraph-sized selection looks truncated.
 
+**The selection background paints a strip to the left of the text**
+A wrapped or multi-line selection covered part of the editor's horizontal margin,
+between the gutter and the first character. `RectangleMarker.forRange` in
+CodeMirror measures the full-width rectangles from `.cm-line`'s `paddingLeft` and
+`paddingRight`, not from `.cm-content`'s: with `padding: 0 28px` on the content
+box, the between-lines rectangle starts at `contentRect.left + 6px` (the default
+line padding), 22px left of the text. Put horizontal padding on `.cm-line`
+instead; selection then starts exactly at the text edge. Verified by measuring
+`min(.cm-selectionBackground)` against `view.coordsAtPos(0).left` in a 409px
+pane.
+
 **F5 and Ctrl+R wipe every open tab and unsaved buffer, with no prompt**
 WebView2 keeps its browser accelerator keys enabled (`AreBrowserAcceleratorKeysEnabled`
 defaults to true, and wry exposes `with_browser_accelerator_keys` but Tauri 2.12
@@ -1361,20 +1379,47 @@ and when the clipboard's HTML representation was the bare tag the paste inserted
 `<div>` must not be eaten by the parser" — so the next branch handed the snippet
 to the parser anyway, through the clipboard's HTML representation, and
 `sanitizeHtmlFragment` drops `link`, `meta` and `style`. `isHtmlSource()` now
-decides it; the Markdown destination has the same looser rule. Measure the paste
+names the source, and the destination decides whether it is pasted or converted.
+Measure the paste
 layer without the application: Node 24 strips the types, so a scratch `.mjs` that
 imports `src/paste/index.ts` and calls `planPaste` prints exactly what the editor
 will insert. Do not start by suspecting the sanitizer or the paste handler.
 
-**The spaces vanish from a converted code snippet (`linkrel="stylesheet"href=…`)**
-`convertInline` in `src/paste/read-html.ts` runs `trimInline` over every
-element's children, and a syntax highlighter puts each token *and its leading
-space* in its own `<span>`; the span's only text node is then trimmed, so
-`link rel="stylesheet" href=…` becomes `linkrel="stylesheet"href=…`. Rendered
-copies are not affected, because a browser's spaces are separate text nodes one
-level up. Markup source no longer takes that route, so this only shows up for a
-rendered copy whose text sits alone in an inline element; if it ever needs
-fixing, the place is `trimInline`, not the Markdown renderer.
+**Pasting an HTML article into Markdown inserts the literal tags**
+A fix that made clipboard markup win in *every* destination repaired HTML and
+broke Markdown: `<p>…<strong>…</strong>…</p>` landed in a `.md` file verbatim,
+when the reader expects `**…**` and `[text](href)`. The clipboard is identical in
+both reports — `<p>…</p>` source text plus a decorated HTML representation — so
+the **destination** carries the intent: "keep this markup" in HTML, "convert
+this into my format" in Markdown, Typst and AsciiDoc. `chooseSource` reads the
+text as the *source format*, pastes it untouched only when that format is the
+destination, and otherwise converts the **text** (never the HTML flavour, which
+is only the same characters decorated and loses the spaces between token spans).
+A snippet the HTML reader keeps nothing of (`<link>`, `<meta>`) is rendered as
+escaped literal text for the destination. When a paste rule feels wrong in one
+direction, add the case to `scripts/paste-convert-test.mjs`: the matrix is the
+only thing that stops the next one-legged fix.
+
+**The spaces vanish from a converted snippet (`como**CPF…**a`, `golpes,[doxing](…)e`)**
+`src/paste/read-html.ts` trimmed the edges of *every* inline element's children
+(`trimInline` inside `convertInline`, `wrap` and `inlineFrom`), so a space that
+lives inside a wrapper was thrown away even though it is significant between
+that element and its neighbour in the parent's flow — a syntax highlighter's
+per-token `<span>`, or a page where an extension such as Google Translate or
+Grammarly wraps every text run. Copying
+
+```html
+<p>… como <strong>CPF, e-mail ou telefone</strong> a estranhos, … <a href=…>doxing</a> e …</p>
+```
+
+from a rendered page produced `como**CPF, e-mail ou telefone**a estranhos` in
+Markdown **and** AsciiDoc. Only a *block's* outer edges may be trimmed, and the
+trim must descend through wrappers: `trimFlow` (join text, then
+`trimStart`/`trimEnd`) runs at the paragraph, heading, list item, table cell and
+flush level, while inline elements keep their edges (`joinText`).
+`scripts/paste-convert-test.mjs` pins the sentence with and without `<span>`
+wrappers, in both destinations. Do not "fix" this in a renderer: the IR is where
+the space is lost.
 
 **`clip.exe` fails with `ERROR: Access is denied.`, and `Set-Clipboard` "succeeds" but reads back empty**
 The agent session's sandbox denies clipboard ownership to any process launched
@@ -1387,6 +1432,49 @@ so a driver that checks nothing afterwards tests an empty clipboard. Test the
 paste path with the UI suites' synthetic `ClipboardEvent` and `DataTransfer` —
 that is the same `event.clipboardData` a real paste carries — and say the real
 clipboard was unavailable rather than claiming a failed end-to-end check.
+
+**`PDF (via Typst)` prints `:toc!:`, `ifdef::backend-pdf[]` and `{attribute}` placeholders**
+Pandoc's AsciiDoc reader is not AsciiDoc enough for an export. A single unset
+attribute such as `:toc!:` makes it stop recognising every following
+`:name: value` line, so the header is emitted as prose; it also never evaluates
+`ifdef::`/`ifndef::` or substitutes document attributes. Measured with pandoc
+3.12.1: `pandoc -f asciidoc -t plain` on the reported document starts with
+`:toc!: :sectnums!: :icons!: :pdf-page-size: A4 ...`. Do not try to patch the
+source with a regex. Render the buffer with Asciidoctor to HTML first (the
+shared `src/asciidoc-render.ts`), send it to `run_export` with
+`language: "html"`, and let pandoc's HTML reader carry it. The preview and the
+native HTML/PDF (Print) paths already use Asciidoctor, which is why they looked
+correct.
+
+**`missing converter for backend 'pdf'` when Asciidoctor renders an export**
+Setting `backend: "pdf"` is the way to make `ifdef::backend-pdf[]` true while
+the output is still HTML, but Asciidoctor then looks for a converter registered
+under `"pdf"` and aborts before producing anything. Register the HTML5
+converter subclass for that backend:
+
+```ts
+const factory = new Asciidoctor.ConverterCustomFactory();
+factory.register(PandocHtml5Converter, "pdf");
+```
+
+The preview keeps its own registry under `"html5"`; the two must not share one.
+
+**An exported AsciiDoc formula is literal `\(x^2\)`, or a KaTeX formula disappears**
+Pandoc's plain HTML reader does not enable the backslash math delimiters, and
+Asciidoctor emits exactly `\(…\)` / `\[…\]`. Name
+`html+tex_math_single_backslash+tex_math_double_backslash` (the `HTML_READER`
+constant in `export.rs`) or the formula prints as punctuation. Do not hand
+pandoc the preview HTML either: KaTeX's spans are dropped and the formula
+vanishes completely (`No instante e .`). The export renderer emits source
+delimiters, not rendered KaTeX.
+
+**`error: failed to load file (path contains invalid component "C:")` from Typst during a PDF export with images**
+Pandoc resolves a local image to an absolute `C:/…` path, and Typst rejects a
+drive-letter path even when `--root C:\` is supplied. Adding `--resource-path`
+makes pandoc find the image and then triggers this error; without it pandoc
+replaces the image with its description and the PDF still builds. That is a
+pre-existing limitation of every pandoc PDF export with local images on
+Windows, not an AsciiDoc problem. Do not add `--resource-path` casually.
 
 ## Adding a preference, end to end
 
@@ -1578,12 +1666,12 @@ platform and fails on the other.
    reads the latter for the bundle, and the two must agree. `npm run
    check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
-3. `npm run test:rust` — 89 runnable tests (one ignored: the pandoc download). Run them on Linux too
+3. `npm run test:rust` — 90 runnable tests (one ignored: the pandoc download). Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run math`,
    `npm run syntax`, `npm run html` and `npm run asciidoc` —
-   98 + 10 + 7 + 43 + 51 checks.
+   105 + 10 + 7 + 43 + 51 checks.
 5. `npm run audit` against both `docs/sample-files` documents and compare the
    counts with the table in the README.
 6. `npm run dist` — installers and checksums land in `bin/<os>/<arch>/`.
