@@ -197,7 +197,7 @@ rewrite from scratch.
 | `npm run stage` | `scripts/stage-artifacts.mjs` | Re-stage what is already built |
 | `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
-| `npm run test:rust` | `cargo test` | 91 tests on Windows (90 run, one ignored download); Linux has 90 total (89 run, one ignored) |
+| `npm run test:rust` | `cargo test` | 92 tests on Windows (91 run, one ignored download); Linux has 91 total (90 run, one ignored) |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. The tab-restore layer is the exception: two launches of the same instance's settings directory, closed with WM_CLOSE in between so the close flush runs. Puts back the working tree and the developer's own settings afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
 | `npm run smoke` | `scripts/dom-smoke.mjs` | 105 checks against `samples/feature-tour.md` |
 | `npm run word-sync` | `scripts/word-sync-test.mjs` | 30 checks of word-level sync against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, no scroll, Escape, and the fallbacks |
@@ -208,7 +208,7 @@ rewrite from scratch.
 | `npm run math` | `scripts/math-render-check.mjs` | 10 checks against the physics paper |
 | `npm run syntax` | `scripts/syntax-theme-test.mjs` | 7 checks that highlighting is real |
 | `npm run html` | `scripts/html-preview-test.mjs` | 43 checks of the sandboxed HTML guest |
-| `npm run export` | `scripts/export-test.mjs` | 35 checks of every export path, against real pandoc, including an AsciiDoc source |
+| `npm run export` | `scripts/export-test.mjs` | 36 checks of every export path, against real pandoc, including an AsciiDoc source and the rendered-HTML math reader |
 | `npm run typography` | `scripts/typography-test.mjs` | 48 checks that each face loads, each OpenType switch changes pixels, the six-preset matrix holds, the four new body faces render differently, and the Semibold weights are real |
 | `npm run shortcuts` | `scripts/shortcut-test.mjs` | 43 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, that the zoom chip follows the level, that a new tab keeps the previous buffer's undo, and that the webview's F5/Ctrl+R reload keys are swallowed |
 | `npm run tabs` | `scripts/document-tabs-test.mjs` | 104 checks of several open documents: sidebar and Recents, `open-files`, active-tab styling, the tab context menu, keyboard navigation, caret and scroll per tab, dirty dot, × and middle-click, Ctrl+Tab, drag and keyboard reordering, the disk poll, Auto Save across tabs, overflow arrows and the wheel, Close Others, the last tab |
@@ -464,9 +464,10 @@ Twenty-two layers, cheapest first. Run them in this order when changing anything
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 91 | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection |
+| Rust unit | `npm run test:rust` | 92 | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection |
 | Session store | `npm run test:sessions` | 59 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
 | Paste conversion | `npm run paste:convert` | 99 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, image syntax, AsciiDoc |
+| AsciiDoc export source | `npm run asciidoc:export:unit` | 17 | Unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations - no application |
 | DOM smoke | `npm run smoke` | 105 | Rendering, pane sync, preferences (including the four On Launch choices and Line Height), math, fonts, status icons |
 | Word sync | `npm run word-sync` | 30 | The fragment map, preview → source and source → preview, atomic code, formula and image spans, word snapping, no scroll, Escape |
 | Auto-close matching | `npm run autoclose:unit` | 17 | Which tag a typed `>`, the void/self-closing/autolink/escape rules — no application |
@@ -1468,6 +1469,13 @@ pandoc the preview HTML either: KaTeX's spans are dropped and the formula
 vanishes completely (`No instante e .`). The export renderer emits source
 delimiters, not rendered KaTeX.
 
+**`[WARNING] Could not convert TeX math ... unexpected control sequence \\`, and the PDF shows the formula as literal text**
+Pandoc's TeX -> Typst conversion does not accept TeX's `\\` line break. An
+AsciiMath block whose lines were joined into one display formula with `\\`
+produces that warning, and Typst then prints the source instead of typesetting.
+Emit one `<div class="math">\[…\]</div>` per source line, which is also how the
+preview draws a multi-line stem. The unit suite pins the separate blocks.
+
 **`error: failed to load file (path contains invalid component "C:")` from Typst during a PDF export with images**
 Pandoc resolves a local image to an absolute `C:/…` path, and Typst rejects a
 drive-letter path even when `--root C:\` is supplied. Adding `--resource-path`
@@ -1515,7 +1523,8 @@ src/
   html-bridge.js     guest-side scroll/click/keyboard bridge (inlined, not imported)
   html-language.ts   lazy CodeMirror HTML grammar
   asciidoc-language.ts AsciiDoc stream highlighter
-  asciidoc-preview.ts Asciidoctor load/convert, per-load registry, includes, data-line markers
+  asciidoc-preview.ts Asciidoctor preview: registry, data-line markers, KaTeX
+  asciidoc-render.ts shared Asciidoctor load/include and the pandoc export HTML
   syntax-themes.ts   editor palettes: token colours and writing surface
   image-syntax.ts    the one image markup builder for Markdown, Typst, HTML and AsciiDoc
   images.ts          paste, drop and download of images
@@ -1666,7 +1675,7 @@ platform and fails on the other.
    reads the latter for the bundle, and the two must agree. `npm run
    check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
-3. `npm run test:rust` — 90 runnable tests (one ignored: the pandoc download). Run them on Linux too
+3. `npm run test:rust` — 91 runnable tests (one ignored: the pandoc download). Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run math`,

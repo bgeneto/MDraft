@@ -70,7 +70,11 @@ function normalizePath(input: string): string {
 }
 
 function foldForCompare(path: string): string {
-  return /^[A-Za-z]:/.test(path) || /Windows/i.test(navigator.userAgent)
+  // The Node suite runs on Node 20, which has no global `navigator`; the
+  // drive-letter check alone is enough there, and the browser adds the
+  // case-insensitive Windows rule for paths without a drive.
+  const userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent;
+  return /^[A-Za-z]:/.test(path) || /Windows/i.test(userAgent)
     ? path.toLowerCase()
     : path;
 }
@@ -237,7 +241,7 @@ function createPdfConverterFactory(Asciidoctor: AsciidoctorModule): unknown {
 
     async convert_stem(node: any): Promise<string> {
       if (node.style === "asciimath") {
-        const lines = Array.isArray(node.lines)
+        const lines: string[] = Array.isArray(node.lines)
           ? node.lines.map((line: unknown) => String(line).trim())
           : [String(node.source ?? "").trim()];
         const parser = await asciimathParser();
@@ -245,13 +249,14 @@ function createPdfConverterFactory(Asciidoctor: AsciidoctorModule): unknown {
           return `<pre class="asciimath-raw">${escapeHtml(lines.join("\n"))}</pre>`;
         }
         try {
-          const tex = lines
+          // One display block per source line. TeX's `\\` line break is not
+          // accepted by Typst's math parser, and a block stem is a sequence of
+          // equations, not one long formula; the preview draws it the same way.
+          return lines
             .filter((line: string) => line.length > 0)
             .map((line: string) => parser.parse(line))
-            .join(" \\\\ ");
-          return tex
-            ? `<div class="math">\\[${escapeHtml(tex)}\\]</div>`
-            : "";
+            .map((tex) => `<div class="math">\\[${escapeHtml(tex)}\\]</div>`)
+            .join("\n");
         } catch {
           return `<pre class="asciimath-raw">${escapeHtml(lines.join("\n"))}</pre>`;
         }

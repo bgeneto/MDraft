@@ -1,6 +1,6 @@
 # AsciiDoc pandoc exports: render with Asciidoctor, not pandoc's AsciiDoc reader
 
-**Status:** draft
+**Status:** done
 **Date:** 2026-10-19
 **ADR:** `../adr/2026-10-19-asciidoc-pandoc-export.md`
 
@@ -133,49 +133,67 @@ Rejected alternatives:
 
 ## Steps
 
-- [ ] 1. Add `src/asciidoc-render.ts` with the shared Asciidoctor loader, the
+- [x] 1. Add `src/asciidoc-render.ts` with the shared Asciidoctor loader, the
       AsciiMath parser loader, the include processor factory (moved verbatim
       from `src/asciidoc-preview.ts`) and `renderAsciidocForPandoc`.
-- [ ] 2. In that module, register an HTML5 converter under the `"pdf"` backend.
+- [x] 2. In that module, register an HTML5 converter under the `"pdf"` backend.
       Override `convert_inline_quoted` and `convert_stem` for AsciiMath:
       - inline: `<span class="math">\(tex\)</span>`;
-      - block: `<div class="math">\[tex1 \\ tex2\]</div>`;
+      - block: one `<div class="math">\[tex\]</div>` per non-empty line;
       - escape the TeX for HTML and fall back to escaped literal text if
         `asciimath2tex` rejects a body.
-- [ ] 3. In `src/asciidoc-preview.ts`, import the shared loader and include
+- [x] 3. In `src/asciidoc-preview.ts`, import the shared loader and include
       factory, keep the preview's marker processor and KaTeX converter, and add
       `renderAsciidocForExport(source, { baseDir })`. The wrapper reads includes
       through `api.readDocument` and sanitises the result with the same
       DOMPurify profile the preview uses.
-- [ ] 4. In `src/main.ts`, render AsciiDoc to HTML before `api.runExport` for
+- [x] 4. In `src/main.ts`, render AsciiDoc to HTML before `api.runExport` for
       every pandoc target except `format.extension === "adoc"`, and send
       `language: "html"`. Leave the source, `inputPath`, save dialog and
       after-export behaviour unchanged.
-- [ ] 5. In `src-tauri/src/export.rs`, change the HTML reader to
+- [x] 5. In `src-tauri/src/export.rs`, change the HTML reader to
       `html+tex_math_single_backslash+tex_math_double_backslash` and add tests:
       the long/short `--from` replacement still works, the math extensions are
       present, and the user's extra arguments still come last.
-- [ ] 6. Add `scripts/asciidoc-export-unit.mjs` (no application): unset
+- [x] 6. Add `scripts/asciidoc-export-unit.mjs` (no application): unset
       attributes, attribute substitution, `backend-pdf` vs `backend-html5`
       conditionals, include expansion, include escape refusal, AsciiMath inline
       and block conversion, LaTeX inline/display preservation, title and the
       absence of source directives in the output.
-- [ ] 7. Add the suite to `scripts/test-all.mjs`, `package.json` and the
+- [x] 7. Add the suite to `scripts/test-all.mjs`, `package.json` and the
       Testing/Repository scripts tables in `AGENTS.md`; update the export suite
       count after its new check.
-- [ ] 8. Extend `scripts/export-test.mjs` with a check that an HTML source
+- [x] 8. Extend `scripts/export-test.mjs` with a check that an HTML source
       containing `\(x^2\)` and `\[…\]` keeps its mathematics through the HTML
       reader, and record the new count.
-- [ ] 9. Update `docs/export.md` and `docs/guide.md`: AsciiDoc pandoc exports
+- [x] 9. Update `docs/export.md` and `docs/guide.md`: AsciiDoc pandoc exports
       are rendered by Asciidoctor to HTML first; attributes, conditionals and
       includes are resolved; the Asciidoctor PDF theme is not carried into the
       Typst layout. Remove the old claim that `include::` and `:toc:` are not
       expanded.
-- [ ] 10. Write the ADR and add a `Superseded in part by` line to
+- [x] 10. Write the ADR and add a `Superseded in part by` line to
       `docs/adr/2026-10-17-asciidoc.md`. Record the new traps in `AGENTS.md`.
-- [ ] 11. Run the validation below, manually export an AsciiDoc document with
+- [x] 11. Run the validation below, manually export an AsciiDoc document with
       unset attributes and conditionals to PDF (via Typst), and inspect the
       text of the resulting PDF.
+
+### Deviations
+
+- The unit suite has **17** checks, not 14: the include-refusal rule is split
+  into "not read" and "explained", and the empty-document check was added.
+- The manual end-to-end check was automated without changing the application: a
+  temporary CDP driver emitted the same `menu` event the native menu sends, and
+  a PowerShell `SendKeys` filled the native save dialog. The resulting PDF was
+  inspected with PDF.js.
+- A multi-line AsciiMath block is emitted as one display block per line, not
+  one display block joined with TeX's `\\`. Measured with Typst: `\\` is
+  rejected with `unexpected control sequence \\`, and the PDF falls back to
+  literal TeX. One block per line also matches the preview, which draws each
+  line separately.
+- The Rust suite gained one test, so its counts moved from 91/90 to 92/91.
+- `src/api.ts`'s `language` comment was updated to name the rendered-HTML case.
+- The trap about Typst's drive-letter image paths was recorded in `AGENTS.md`
+  during validation; it is a pre-existing limitation, not a regression.
 
 ## Files and modules
 
@@ -218,19 +236,23 @@ Rejected alternatives:
 
 ## Tests and validation
 
-- `npm run build` — typecheck and frontend bundle.
-- `npm run asciidoc:export:unit` — the new 14-check Node suite.
-- `npm run test:rust` — includes the new reader tests.
-- `npm run asciidoc` — 51 preview checks, with the same fixture.
-- `npm run export` against a running window with pandoc — the opt-in suite,
-  now with the HTML math check.
-- `npm run test -- --only asciidoc-export-unit` — proves the suite is wired into
-  the harness.
-- Manual: open an AsciiDoc document containing `:toc!:`/`:sectnums!:`/
-  `:icons!:`, `ifdef::backend-pdf[]`, `{attribute}` references, an include,
-  `latexmath` and `asciimath`; export **PDF (via Typst)**; extract the PDF text
-  and confirm none of the source directives or braces survive and the formulas
-  are typeset.
+- `npm run build` — **PASS**, typecheck and frontend bundle.
+- `npm run asciidoc:export:unit` — **17/17** checks.
+- `npm run test:rust` — **91 passed, 1 ignored** (92 total); includes the new
+  HTML-reader math test.
+- `npm run asciidoc` — **51/51** preview checks, with the same fixture.
+- `npm run export` against a running window with pandoc — **36/36** checks,
+  including the rendered-HTML math reader.
+- `npm run test -- --only asciidoc-export-unit` — **17/17**, proving the suite is
+  wired into the harness.
+- Combined run of `asciidoc-export-unit`, `asciidoc` and `export` on the same
+  build — **17/17, 51/51, 36/36**.
+- End-to-end: opened a fixture with `:toc!:`/`:sectnums!:`/`:icons!:`,
+  `ifdef::backend-pdf[]`, `{attribute}` references, `latexmath` and `asciimath`;
+  emitted the menu event and filled the save dialog. The PDF text was
+  `Física 1 - Lista extra ... PDF-ONLY-MARKER ... Universidade de Brasília /
+  Faculdade UnB Planaltina / 10,0 ... √9 = 3`: no directives, no placeholders,
+  no HTML-only marker, and both formulas typeset.
 
 ## Acceptance criteria
 

@@ -1234,7 +1234,7 @@ mod tests {
             &format_with("--from markdown -s -o ${outputPath} --from", ""),
             &values(),
         );
-        assert_eq!(args, vec!["-s", "-o", "/out/report.docx", "-f", "html"]);
+        assert_eq!(args, vec!["-s", "-o", "/out/report.docx", "-f", HTML_READER]);
     }
 
     #[test]

@@ -151,8 +151,10 @@ try {
     html.includes("\\sqrt{9}") ? "sqrt converted" : "still AsciiMath",
   );
   check(
-    /\\\[[^\]]*\\sqrt\{4\}[^\]]*\\\\[^\]]*x \+ y[^\]]*\\\]/.test(html),
-    "a multi-line AsciiMath block becomes display TeX",
+    /\\\[\\sqrt\{4\} = 2\\\]/.test(html) &&
+      /\\\[x \+ y\\\]/.test(html) &&
+      !html.includes("\\\\"),
+    "a multi-line AsciiMath block becomes one display block per line",
   );
   check(
     !html.includes("asciimath-raw"),

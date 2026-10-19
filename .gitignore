@@ -35,6 +35,7 @@ docs/samples/*
 # Shared on purpose: without it rust-analyzer holds a cargo lock on
 # src-tauri/target and `npm run dist` stalls on "Blocking waiting for file lock".
 !.vscode/settings.json
+.VSCodeCounter/*
 .idea
 .DS_Store
 *.suo
