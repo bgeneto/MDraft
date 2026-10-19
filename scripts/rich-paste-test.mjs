@@ -186,6 +186,46 @@ console.log("=== rich paste ===");
     JSON.stringify(preview),
   );
 
+  // The same clipboard shape as the HTML-document checks below — source text
+  // plus a decorated representation — but a Markdown destination, where the
+  // intent is the opposite: convert the markup, do not paste it.
+  await newTab();
+  await type("# Title\n\n");
+  await paste(
+    "<p>Elsewhere</p>",
+    '<p>Enviar sua chave Pix pode expor dados sensíveis como <strong>CPF, e-mail ou telefone</strong> a estranhos, abrindo portas para golpes, <a href="/blog/o-que-e-doxxing-e-como-evitar/">doxing</a> e exposição indesejada.</p>',
+  );
+  const article = await lines();
+  check(
+    article.includes("**CPF, e-mail ou telefone**") &&
+      article.includes("[doxing](/blog/o-que-e-doxxing-e-como-evitar/)") &&
+      !article.includes("<p>") &&
+      !article.includes("<strong>"),
+    "an HTML source pasted into Markdown is converted, not inserted",
+    article,
+  );
+
+  // A rendered copy may wrap every text run in an inline element (a browser
+  // extension, a word processor); the spaces then sit at those elements' edges.
+  await newTab();
+  await type("# Title\n\n");
+  await paste(
+    "<meta charset='utf-8'>" +
+      "<span>Enviar sua chave Pix pode expor dados sensíveis como </span>" +
+      "<strong>CPF, e-mail ou telefone</strong>" +
+      "<span> a estranhos, abrindo portas para golpes, </span>" +
+      "<a href=/blog/o-que-e-doxxing-e-como-evitar/>doxing</a>" +
+      "<span> e exposição indesejada.</span>",
+    "Enviar sua chave Pix pode expor dados sensíveis como CPF, e-mail ou telefone a estranhos, abrindo portas para golpes, doxing e exposição indesejada.",
+  );
+  const spaced = await lines();
+  check(
+    spaced.includes("como **CPF, e-mail ou telefone** a estranhos") &&
+      spaced.includes("golpes, [doxing](/blog/o-que-e-doxxing-e-como-evitar/) e exposição"),
+    "spaces survive around inline elements in a rendered copy",
+    spaced,
+  );
+
   await newTab();
   await paste(null, "# Title\n\nA **bold** line.");
   check((await lines()).includes("A **bold** line."), "Markdown into Markdown is native");

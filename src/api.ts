@@ -42,6 +42,8 @@ export type ViewMode = "source" | "split" | "preview";
 export type SidebarTab = "outline" | "files" | "recent";
 export type OnLaunch = "welcome" | "new" | "last" | "tabs";
 export type ImageRule = "assetsFolder" | "assetsDir" | "custom" | "keepOriginal";
+/** Spacing between source lines, as a named choice rather than a multiplier. */
+export type EditorLineHeight = "compact" | "normal" | "wide";
 
 /**
  * One pandoc export target.
@@ -87,11 +89,11 @@ export interface ExportRequest {
   outputPath: string;
   inputPath: string | null;
   /**
-   * `"typst"` when the source is Typst rather than Markdown.
+   * The source language, when it is not Markdown.
    *
-   * The backend needs it twice over: pandoc has to be told to read Typst instead
-   * of assuming Markdown, and a Typst document exported to PDF is rendered by
-   * Typst itself rather than translated through pandoc.
+   * The backend needs it to choose pandoc's reader: `"typst"` is rendered by
+   * Typst itself for PDF, while an AsciiDoc document is rendered by Asciidoctor
+   * to HTML in the frontend and therefore arrives here as `"html"`.
    */
   language?: DocumentLanguage;
 }
@@ -174,6 +176,8 @@ export interface Settings {
    */
   typstView: TypstView;
   editorMaxWidth: number;
+  /** Line spacing in the source pane. The preview keeps its own reading height. */
+  editorLineHeight: EditorLineHeight;
   syntaxTheme: string;
   recentFiles: string[];
   lastDirectory: string | null;

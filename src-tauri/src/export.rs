@@ -39,6 +39,15 @@ const EXPORT_TIMEOUT: Duration = Duration::from_secs(300);
 /// tried on stderr.
 const PANDOC_PDF_PROGRAM_NOT_FOUND: i32 = 47;
 
+/// Pandoc's HTML reader plus the backslash math delimiters Asciidoctor emits.
+///
+/// An AsciiDoc buffer reaches pandoc as Asciidoctor-rendered HTML, because
+/// pandoc's own AsciiDoc reader prints unset attributes and conditional
+/// directives as prose. Asciidoctor writes inline LaTeX as `\(…\)` and display
+/// LaTeX as `\[…\]`; without these extensions the HTML reader treats both as
+/// literal text, so the formula survives the round trip as punctuation.
+const HTML_READER: &str = "html+tex_math_single_backslash+tex_math_double_backslash";
+
 /// A plain-language lead-in for an exit code whose meaning is not obvious from
 /// pandoc's own wording, or `None` when pandoc already explains itself.
 fn exit_hint(code: Option<i32>) -> Option<&'static str> {
@@ -213,7 +222,7 @@ fn reader_arguments(
 }
 
 fn html_input_arguments(format: &ExportFormat, values: &Placeholders) -> Vec<String> {
-    reader_arguments(format, values, "html")
+    reader_arguments(format, values, HTML_READER)
 }
 
 fn asciidoc_input_arguments(format: &ExportFormat, values: &Placeholders) -> Vec<String> {
@@ -1195,7 +1204,7 @@ mod tests {
             ),
             &values(),
         );
-        assert_eq!(args, vec!["-s", "-o", "/out/report.docx", "-f", "html"]);
+        assert_eq!(args, vec!["-s", "-o", "/out/report.docx", "-f", HTML_READER]);
         assert!(!args.iter().any(|arg| arg.contains("tex_math_dollars")));
     }
 
@@ -1212,7 +1221,7 @@ mod tests {
                 "-o",
                 "/out/report.docx",
                 "-f",
-                "html",
+                HTML_READER,
                 "--from=latex",
                 "--toc"
             ]
@@ -1226,6 +1235,19 @@ mod tests {
             &values(),
         );
         assert_eq!(args, vec!["-s", "-o", "/out/report.docx", "-f", "html"]);
+    }
+
+    #[test]
+    fn html_reader_keeps_the_backslash_math_asciidoctor_emits() {
+        // Asciidoctor writes `\(…\)` and `\[…\]`; pandoc's plain HTML reader
+        // prints both as literal text unless these extensions are named.
+        let args = html_input_arguments(
+            &format_with("-f markdown -s -o ${outputPath}", ""),
+            &values(),
+        );
+        assert!(args.iter().any(|arg| arg == HTML_READER));
+        assert!(HTML_READER.contains("tex_math_single_backslash"));
+        assert!(HTML_READER.contains("tex_math_double_backslash"));
     }
 
     #[test]

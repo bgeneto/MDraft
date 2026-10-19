@@ -166,6 +166,9 @@ Other editor features:
 
 - **Focus mode** dims every line except the one holding the caret.
 - **Typewriter mode** keeps the caret vertically centred while typing.
+- **Line height** in the source pane is **Compact** (1.3×), **Normal** (1.5×)
+  or **Wide** (1.8×), under **Preferences › Editor**. The preview keeps its own
+  reading line height.
 - **Auto Save** is opt-in and writes dirty files in place every 20 seconds.
 - **Auto-close** inserts `)`, `]`, `}`, `'`, `"` and `` ` `` after the opening
   character, steps over the closer, deletes both with Backspace and wraps a
@@ -191,12 +194,12 @@ into the destination document's own markup. A saved file's extension decides
 the destination. An unsaved buffer is inferred from its content; if the result
 differs from the language the editor is currently using, a notice tells you
 which extension to save. **Ctrl/Cmd+Shift+V** bypasses the conversion once and
-pastes the clipboard's plain text. Markup that is already written out is pasted
-as written: an HTML snippet copied from a code editor or a documentation page,
-or a Markdown list, keeps its own characters — the clipboard's HTML
-representation of such a copy is only the same characters decorated with the
-source's highlighting. (A Typst or AsciiDoc destination still escapes the
-snippet, so that it displays as text.)
+pastes the clipboard's plain text. Markup that is already written out is read as
+the source: into a document of the same format it is pasted exactly as it is (an
+HTML snippet into an HTML file, a Markdown list into a Markdown file), and into
+another format it is converted from that text — an HTML article pasted into
+Markdown becomes Markdown, not literal tags. Only when the copied text is plain
+prose does the clipboard's formatted HTML decide the structure.
 
 The converter understands headings, emphasis, links, lists, tables, quotes,
 code, images and common maths. If a conversion fails or the fragment is too
@@ -295,9 +298,11 @@ built from source, use `Cmd` where the application registers `CmdOrCtrl`.
   HTML output, so page layout is lost.
 - **Pandoc cannot carry everything.** The Markdown extensions `[TOC]` and the
   GitHub alert markers have no pandoc equivalent and appear literally in DOCX,
-  ODT and LaTeX output. AsciiDoc `include::` and `:toc:` are not expanded by
-  pandoc; add `--toc` to the format's Extra Arguments for a real table of
-  contents.
+  ODT and LaTeX output. An AsciiDoc document is rendered by Asciidoctor before
+  pandoc sees it, so attributes, conditionals and `include::` are resolved, but
+  an Asciidoctor PDF theme is not applied to the Typst layout. A `:toc:` arrives
+  as a static contents list; add `--toc` to the format's Extra Arguments for
+  pandoc's numbered table of contents.
 - **A Markdown or AsciiDoc HTML export fetches one stylesheet.** KaTeX's layout
   rules and fonts come from jsDelivr in the exported file, so its mathematics
   renders in a browser. The editor itself makes no such request.

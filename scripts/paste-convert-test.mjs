@@ -129,8 +129,8 @@ console.log("\n=== markup source on the clipboard ===");
 
   const choice = chooseSource(payload(highlighted, link), "html");
   check(
-    choice.source === "plain" && choice.native,
-    "HTML source beats a highlighted HTML representation",
+    choice.source === "html" && choice.native && choice.fromText,
+    "HTML source into HTML is the text, untouched",
     JSON.stringify(choice),
   );
 
@@ -149,6 +149,31 @@ console.log("\n=== markup source on the clipboard ===");
   );
   check(codeBlock?.text === link, "a code block copied from a docs page keeps the text", codeBlock?.text);
 
+  // The destination decides the intent: the same clipboard that is left alone
+  // in an HTML document is *converted* into Markdown. The HTML representation
+  // is a placeholder here on purpose — using it instead of the text would give
+  // "Elsewhere".
+  const article =
+    '<p>Enviar sua chave Pix pode expor dados sensíveis como <strong>CPF, e-mail ou telefone</strong> a estranhos, abrindo portas para golpes, <a href="/blog/o-que-e-doxxing-e-como-evitar/">doxing</a> e exposição indesejada.</p>';
+  const articleMarkdown =
+    "Enviar sua chave Pix pode expor dados sensíveis como **CPF, e-mail ou telefone** a estranhos, abrindo portas para golpes, [doxing](/blog/o-que-e-doxxing-e-como-evitar/) e exposição indesejada.";
+  const articleHtml = "<p>Elsewhere</p>";
+
+  const markdown = await planPaste(payload(articleHtml, article), "markdown");
+  check(
+    markdown?.text === articleMarkdown && markdown.converted === true,
+    "an HTML article pasted into Markdown becomes Markdown",
+    markdown?.text,
+  );
+
+  const asciidoc = await planPaste(payload(articleHtml, article), "asciidoc");
+  check(
+    (asciidoc?.text ?? "").includes("*CPF, e-mail ou telefone*") &&
+      (asciidoc?.text ?? "").includes("link:/blog/o-que-e-doxxing-e-como-evitar/[doxing]"),
+    "the same article into AsciiDoc becomes AsciiDoc",
+    asciidoc?.text,
+  );
+
   const prose = await planPaste(payload("Use the <code>&lt;div&gt;</code> tag", "Use the <div> tag"), "html");
   check(
     prose?.converted === true && (prose?.text ?? "").includes("&lt;div&gt;"),
@@ -163,17 +188,64 @@ console.log("\n=== markup source on the clipboard ===");
     JSON.stringify(list?.text),
   );
 
-  // Typst has its own use for `<…>` (a label), so a tag snippet is converted
-  // to escaped literal text there rather than pasted verbatim.
+  // A tag has no content to convert, and `<link>` is a label in Typst: the
+  // characters are pasted as escaped literal text rather than raw.
   const highlightedTag =
     '<div style="white-space: pre">&lt;link rel="stylesheet" href="a.css"&gt;</div>';
   const tag = '<link rel="stylesheet" href="a.css">';
   const typst = await planPaste(payload(highlightedTag, tag), "typst");
   check(
-    typst?.converted === true && (typst?.text ?? "").includes("\\<link"),
-    "a tag snippet into Typst becomes escaped text",
+    typst?.converted === false && (typst?.text ?? "").includes("\\<link"),
+    "a tag snippet into Typst becomes escaped literal text",
     typst?.text,
   );
+}
+
+console.log("\n=== whitespace across inline elements ===");
+{
+  const sentence =
+    "Enviar sua chave Pix pode expor dados sensíveis como <strong>CPF, e-mail ou telefone</strong> a\n" +
+    "estranhos, abrindo portas para golpes, <a href=/blog/o-que-e-doxxing-e-como-evitar/>doxing</a>\n" +
+    "e exposição indesejada.";
+  const quoted =
+    "Enviar sua chave Pix pode expor dados sensíveis como **CPF, e-mail ou telefone** a estranhos, " +
+    "abrindo portas para golpes, [doxing](/blog/o-que-e-doxxing-e-como-evitar/) e exposição indesejada.";
+
+  const exact = await planPaste(payload(`<p>${sentence}</p>`, "prose"), "markdown");
+  check(exact?.text === quoted, "spaces survive around bold and links", exact?.text);
+
+  // A browser or an extension may wrap every text run in an inline element; the
+  // space then sits inside that element, at the edge of its content.
+  const wrapped =
+    "<meta charset='utf-8'>" +
+    "<span>Enviar sua chave Pix pode expor dados sensíveis como </span>" +
+    "<strong>CPF, e-mail ou telefone</strong>" +
+    "<span> a estranhos, abrindo portas para golpes, </span>" +
+    "<a href=/blog/o-que-e-doxxing-e-como-evitar/>doxing</a>" +
+    "<span> e exposição indesejada.</span>";
+  const nested = await planPaste(payload(wrapped, "prose"), "markdown");
+  check(nested?.text === quoted, "span wrappers do not swallow the boundary spaces", nested?.text);
+
+  const asciidoc = await planPaste(payload(wrapped, "prose"), "asciidoc");
+  check(
+    asciidoc?.text ===
+      "Enviar sua chave Pix pode expor dados sensíveis como *CPF, e-mail ou telefone* a estranhos, " +
+        "abrindo portas para golpes, link:/blog/o-que-e-doxxing-e-como-evitar/[doxing] e exposição indesejada.",
+    "the same copy keeps its spaces in AsciiDoc",
+    asciidoc?.text,
+  );
+
+  const edges = await planPaste(payload("<p> <strong>  Hello  </strong> </p>", "Hello"), "markdown");
+  check(edges?.text === "**Hello**", "a block's own outer edges are still trimmed", edges?.text);
+
+  const runs = await planPaste(payload("<p>a <em>b</em>  <strong>c</strong> d</p>", "a b c d"), "markdown");
+  check(runs?.text === "a *b* **c** d", "runs of whitespace collapse to one space", runs?.text);
+
+  const emptyStrong = await planPaste(payload("<p>a<strong> </strong>b</p>", "a b"), "markdown");
+  check(emptyStrong?.text === "a b", "a whitespace-only emphasis keeps its space", emptyStrong?.text);
+
+  const emptyLink = await planPaste(payload('<p>a<a href="/x"> </a>b</p>', "a b"), "markdown");
+  check(emptyLink?.text === "a b", "a whitespace-only link keeps its space", emptyLink?.text);
 }
 
 console.log("\n=== HTML to Markdown ===");

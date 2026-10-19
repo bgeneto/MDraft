@@ -14,6 +14,12 @@
 import DOMPurify from "dompurify";
 import * as api from "./api";
 import {
+  createIncludeProcessor,
+  loadAsciiMath,
+  loadAsciidoctor,
+  renderAsciidocForPandoc,
+} from "./asciidoc-render";
+import {
   decorateCodeBlocks,
   decorateLinks,
   escapeHtml,
@@ -21,8 +27,6 @@ import {
   renderMathIn,
   renderMermaidIn,
 } from "./markdown";
-
-type AsciidoctorModule = typeof import("@asciidoctor/core");
 
 import type { BlockRange } from "./source-map";
 
@@ -50,38 +54,7 @@ interface Mark {
   line: number;
 }
 
-let asciidoctorPromise: Promise<AsciidoctorModule> | null = null;
-
-function loadAsciidoctor(): Promise<AsciidoctorModule> {
-  if (!asciidoctorPromise) {
-    // The package exports only ".", and Vite's browser condition resolves that
-    // to build/browser/index.js. A /build/browser subpath is not exported.
-    asciidoctorPromise = import("@asciidoctor/core");
-  }
-  return asciidoctorPromise;
-}
-
-// ---------------------------------------------------------------------------
-// AsciiMath
-// ---------------------------------------------------------------------------
-
-interface AsciiMathParser {
-  parse(input: string): string;
-}
-
-type AsciiMathModule = { default: new () => AsciiMathParser };
-
-let asciimathPromise: Promise<AsciiMathModule> | null = null;
-
-function loadAsciiMath(): Promise<AsciiMathModule> {
-  if (!asciimathPromise) {
-    // `asciimath2tex` is ~25 KB of code. Importing it here keeps it out of the
-    // startup bundle; Vite emits only this module as a lazy chunk, never the
-    // package's source maps or type declarations.
-    asciimathPromise = import("asciimath2tex");
-  }
-  return asciimathPromise;
-}
+type AsciidoctorModule = typeof import("@asciidoctor/core");
 
 /**
  * A per-load HTML5 converter that marks AsciiMath stems.
@@ -135,13 +108,13 @@ async function renderAsciiMathIn(host: HTMLElement): Promise<number> {
   );
   if (elements.length === 0) return 0;
 
-  let Parser: new () => AsciiMathParser;
+  let parser: { parse(input: string): string };
   try {
-    ({ default: Parser } = await loadAsciiMath());
+    const Parser = await loadAsciiMath();
+    parser = new Parser();
   } catch {
     return 0;
   }
-  const parser = new Parser();
   let count = 0;
 
   for (const element of elements) {
@@ -186,78 +159,49 @@ async function renderAsciiMathIn(host: HTMLElement): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------
-// Include paths
-// ---------------------------------------------------------------------------
-
-function normalizePath(input: string): string {
-  // The browser build of Asciidoctor reports `base_dir`-derived paths with a
-  // leading slash before the drive (`/C:/…`), while the Rust payload uses
-  // `C:\…`. Fold the two so the containment check compares like with like.
-  const slashed = input.replace(/\\/g, "/").replace(/^\/([A-Za-z]:\/)/, "$1");
-  const drive = /^([A-Za-z]:)(?:\/|$)/.exec(slashed);
-  const prefix = drive ? `${drive[1]}/` : slashed.startsWith("/") ? "/" : "";
-  const rest = prefix ? slashed.slice(prefix.length) : slashed;
-  const parts: string[] = [];
-  for (const part of rest.split("/")) {
-    if (part === "" || part === ".") continue;
-    if (part === "..") {
-      if (parts.length === 0) return "";
-      parts.pop();
-      continue;
-    }
-    parts.push(part);
-  }
-  return prefix + parts.join("/");
-}
-
-function foldForCompare(path: string): string {
-  return /^[A-Za-z]:/.test(path) || /Windows/i.test(navigator.userAgent)
-    ? path.toLowerCase()
-    : path;
-}
-
-function isInside(base: string, candidate: string): boolean {
-  const parent = foldForCompare(base.replace(/\/+$/, ""));
-  const child = foldForCompare(candidate);
-  return child === parent || child.startsWith(`${parent}/`);
-}
-
-function isAbsoluteInclude(target: string): boolean {
-  return (
-    /^[A-Za-z]:[\\/]/.test(target) ||
-    target.startsWith("/") ||
-    target.startsWith("\\") ||
-    target.startsWith("//") ||
-    /^file:/i.test(target) ||
-    /^[a-z][a-z0-9+.-]*:/i.test(target)
-  );
-}
-
-function resolveInclude(
-  target: string,
-  currentDir: string | null,
-  baseDir: string | null,
-): string | null {
-  if (!baseDir) return null;
-  const raw = target.trim().replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
-  if (!raw || isAbsoluteInclude(raw)) return null;
-
-  const base = normalizePath(baseDir);
-  if (!base) return null;
-  const directory =
-    currentDir && currentDir !== "." && currentDir !== ""
-      ? normalizePath(currentDir)
-      : base;
-  if (!directory) return null;
-
-  const candidate = normalizePath(`${directory}/${raw}`);
-  if (!candidate || !isInside(base, candidate)) return null;
-  return candidate;
-}
-
-// ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
+
+/**
+ * The DOM sanitising profile shared by the preview and the pandoc export.
+ *
+ * The export never inserts its HTML into the application, but it does hand it
+ * to pandoc, so raw HTML blocks from an AsciiDoc document still pass through a
+ * sanitiser at the boundary. The allow-list is the preview's: it keeps the
+ * table, list and stem attributes the converter emits and removes scripts,
+ * forms and embedded documents.
+ */
+function sanitizeAsciidoc(raw: string): string {
+  return DOMPurify.sanitize(raw, {
+    ADD_ATTR: [
+      "align",
+      "checked",
+      "colspan",
+      "data-lang",
+      "data-stem",
+      "data-title",
+      "data-value",
+      "disabled",
+      "id",
+      "reversed",
+      "rowspan",
+      "start",
+      "type",
+    ],
+    FORBID_TAGS: [
+      "script",
+      "iframe",
+      "object",
+      "embed",
+      "form",
+      "textarea",
+      "select",
+      "button",
+      "base",
+    ],
+    USE_PROFILES: { html: true },
+  });
+}
 
 export async function renderAsciidocPreview(
   source: string,
@@ -269,57 +213,7 @@ export async function renderAsciidocPreview(
 
     const marks: Mark[] = [];
     let markerCount = 0;
-    const includeStack: string[] = [];
     const baseDir = options.baseDir;
-
-    const pushIncludeError = (
-      reader: { path?: string; pushInclude: (...args: unknown[]) => unknown },
-      target: string,
-      reason: string,
-    ): void => {
-      const where = reader.path ?? "this document";
-      reader.pushInclude(
-        `Unresolved directive in ${where} - include::${target}[] (${reason})`,
-        target,
-        target,
-        1,
-      );
-    };
-
-    class IncludeExtension extends Asciidoctor.IncludeProcessor {
-      handles(_doc: unknown, _target: string): boolean {
-        return true;
-      }
-
-      async process(
-        _doc: any,
-        reader: any,
-        target: string,
-        _attributes: Record<string, string>,
-      ): Promise<void> {
-        const resolved = resolveInclude(target, reader._dir ?? null, baseDir);
-        if (!resolved) {
-          pushIncludeError(reader, target, "outside the document directory");
-          return;
-        }
-        const key = foldForCompare(resolved);
-        if (includeStack.includes(key)) {
-          pushIncludeError(reader, target, "include cycle");
-          return;
-        }
-        try {
-          const payload = await api.readDocument(resolved);
-          includeStack.push(key);
-          try {
-            reader.pushInclude(payload.content, resolved, resolved, 1);
-          } finally {
-            includeStack.pop();
-          }
-        } catch (error) {
-          pushIncludeError(reader, target, String(error));
-        }
-      }
-    }
 
     class MarkerProcessor extends Asciidoctor.TreeProcessor {
       private readonly seen = new Set<unknown>();
@@ -361,7 +255,12 @@ export async function renderAsciidocPreview(
     }
 
     const registry = Asciidoctor.Extensions.create("mdraft");
-    registry.includeProcessor(IncludeExtension);
+    registry.includeProcessor(
+      createIncludeProcessor(Asciidoctor, {
+        baseDir,
+        readFile: async (path) => (await api.readDocument(path)).content,
+      }),
+    );
     registry.treeProcessor(new MarkerProcessor());
 
     const loadOptions = {
@@ -384,35 +283,7 @@ export async function renderAsciidocPreview(
 
     const raw = await doc.convert();
 
-    const clean = DOMPurify.sanitize(raw, {
-      ADD_ATTR: [
-        "align",
-        "checked",
-        "colspan",
-        "data-lang",
-        "data-stem",
-        "data-title",
-        "data-value",
-        "disabled",
-        "id",
-        "reversed",
-        "rowspan",
-        "start",
-        "type",
-      ],
-      FORBID_TAGS: [
-        "script",
-        "iframe",
-        "object",
-        "embed",
-        "form",
-        "textarea",
-        "select",
-        "button",
-        "base",
-      ],
-      USE_PROFILES: { html: true },
-    });
+    const clean = sanitizeAsciidoc(raw);
 
     const holder = document.createElement("div");
     holder.innerHTML = clean;
@@ -488,4 +359,25 @@ export async function renderAsciidocPreview(
       blocks: [],
     };
   }
+}
+
+/**
+ * The AsciiDoc buffer as clean HTML for a pandoc export.
+ *
+ * The preview's decorations are deliberately absent: pandoc needs semantic
+ * HTML (`<pre><code>`, `\(…\)`) rather than KaTeX spans, highlight.js tokens or
+ * `data-line` anchors. Includes are read through the same command and jail the
+ * preview uses. A conversion failure is thrown rather than turned into an
+ * error box, because an export must stop instead of writing a PDF of the error
+ * message.
+ */
+export async function renderAsciidocForExport(
+  source: string,
+  options: { baseDir: string | null },
+): Promise<string> {
+  const raw = await renderAsciidocForPandoc(source, {
+    baseDir: options.baseDir,
+    readFile: async (path) => (await api.readDocument(path)).content,
+  });
+  return raw ? sanitizeAsciidoc(raw) : "";
 }

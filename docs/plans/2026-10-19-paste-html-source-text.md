@@ -33,10 +33,12 @@ natively. The same gap exists for Markdown text that carries only low-value
 signals: `- one\n- two` scores 1, misses the score-4 threshold, and is converted
 from the HTML representation.
 
-Goal: when the clipboard's plain text is markup *written out* — HTML source, or
-text carrying Markdown's own syntax — paste it as written into a destination
-that can carry it (an HTML or Markdown document). Rendered copies from a
-browser, Word or Google Docs keep converting exactly as they do today.
+Goal: the destination decides what a paste means. When the clipboard's text is
+markup written out — HTML source, or text carrying Markdown's own syntax — it is
+the *source format*: pasted byte-for-byte into a document of the same format,
+converted into any other. A copy from a rendered surface (the text is prose) is
+converted from its HTML representation, as before. This mirrors the original
+report — `input=html, output=html` — without inverting it for other destinations.
 
 ## Scope and non-scope
 
@@ -47,9 +49,11 @@ In scope:
   `<div>\n<p>x</p>\n</div>`, `<style>…</style>`, `<div>`) but not prose that
   mentions a tag (`Use the <div> tag`, `<div> is how you group`, `a < b`,
   `<!-- only a comment -->`, `\<p\>`).
-- `chooseSource` prefers the plain text when it is HTML source (an HTML or
-  Markdown destination), and when the destination is Markdown and the text
-  carries Markdown syntax (`scoreMarkdown(text) > 0`, or a visible code fence).
+- `chooseSource` reads the **text** as the source format when it is markup
+  (`isHtmlSource`, `detectTextSyntax`, or text carrying Markdown syntax), pastes
+  it natively only when that format is the destination, and otherwise converts
+  **that text** — never the decorated HTML representation. Rendered copies keep
+  using the HTML representation.
 - Unit checks in `scripts/paste-convert-test.mjs`, three UI checks in
   `scripts/rich-paste-test.mjs`, the guide sentence, a small ADR, the quoted
   suite counts and Traps entries.
@@ -68,24 +72,26 @@ Non-scope (deliberately):
 - **Typst and AsciiDoc destinations** keep converting HTML source text to their
   escaped literal form (`<` is meaningful syntax in Typst; loose signals there
   are ambiguous — `@ref`, `$5$`, `<label>` occur in prose).
-- **`trimInline`'s whitespace loss** (`src/paste/read-html.ts`):
-  `convertInline` trims every element's children, so a token `<span> rel</span>`
-  — a syntax highlighter puts each token *and its space* in its own span —
-  loses the space and renders `linkrel="stylesheet"href=…`. Found while
-  diagnosing this; it still affects rendered copies whose text sits alone in an
-  inline element. It is recorded in Traps, not fixed here; the paste path for
-  code no longer takes that route.
+- **`trimInline`'s whitespace loss** was found while diagnosing this and is now
+  fixed in the same change: the HTML reader trimmed the edges of every inline
+  element, so a space inside a wrapper (a highlighter's per-token `<span>`, an
+  extension's text runs) was lost — `como <strong>x</strong> a` became
+  `como**x**a` in Markdown and AsciiDoc. Only a block's outer edges are trimmed
+  now, through wrappers.
 
 ## Approach and rejected alternatives
 
-Chosen: the clipboard's text is authoritative whenever it is markup and the
-destination can carry that markup as text (HTML, and Markdown, which accepts raw
-HTML). One new predicate decides it for HTML; the Markdown rule is the existing
-"text already in the destination's syntax" branch with its threshold lowered to
-"carries Markdown syntax at all". Both return
-`{ source: "plain" | "markdown", native: true }`, so the paste handler does not
-`preventDefault` and CodeMirror inserts the text — the same route plain prose and
-confident Markdown already take.
+Chosen: **the text flavour is the content, and the destination decides.** When
+the text is markup we recognise (HTML source, a confident Typst/AsciiDoc
+document, or text carrying Markdown syntax) it is the *source format*: the same
+format is pasted byte-for-byte, anything else is converted **from the text**.
+When the text is not markup it is a rendered copy, so the HTML representation is
+the content and is converted (sanitised for HTML). The choice carries a
+`fromText` flag so `planPaste` reads the same representation the handler would
+let CodeMirror insert. The native paths still return
+`{ native: true }`, so the paste handler does not `preventDefault` and
+CodeMirror inserts the text — the same route plain prose and confident Markdown
+already take.
 
 Predicate shape: walk the text with one tag token pattern; everything at depth 0
 must be a tag or whitespace (`Use the <div> tag` fails on `Use the`), text inside
@@ -137,6 +143,15 @@ Rejected alternatives:
       HTML-snippet paste (symptom → cause → fix, with the literal output), and
       one for the `trimInline` space loss.
 - [x] 8. Validation (below) and the plan's status.
+- [x] 9. Review: the first version was keyed on the clipboard instead of the
+      destination and pasted literal HTML into Markdown. Reworked into the
+      source-format model above (`fromText`, convert the text), with the
+      article-in-Markdown case added to both suites.
+- [x] 10. Follow-up from the same review: `src/paste/read-html.ts` trimmed the
+      edges of every inline element, so boundary whitespace was lost
+      (`como**CPF…**a`). Split into `joinText` (per element) and `trimFlow`
+      (per block, descending through wrappers), with a whitespace matrix in the
+      unit suite and a rendered-copy check in the UI suite.
 
 ## Deviations
 
@@ -161,6 +176,25 @@ Rejected alternatives:
   *label* in Typst, so a verbatim tag disappears and its attributes shift into
   the prose. A new check pins it: a tag snippet into Typst becomes escaped
   literal text. The ADR records the gate; the unit count is 90, not 89.
+- **Review correction.** That gate was still the wrong axis: it pasted HTML
+  source verbatim into Markdown, which the maintainer rejected with a concrete
+  case (a `<p>` article must become `**bold**` and `[text](href)`). The rule is
+  now keyed on the *destination*: the text is the source format, natively pasted
+  only when it matches the destination, otherwise converted **from the text**.
+  Two consequences the earlier version did not have: `ClipboardChoice.fromText`
+  (so `planPaste` converts the same representation the handler inserts), and
+  `literalFor()` for a snippet the reader keeps nothing of (`<link>`, `<meta>`),
+  which is rendered as escaped literal text instead of raw markup. The article
+  case and the Typst literal case are in the unit suite; the article case is in
+  the UI suite.
+- **Second review: boundary whitespace.** A rendered copy whose text runs are
+  wrapped in inline elements lost every space around bold text and links
+  (`como**CPF…**a`). The same HTML read directly is fine, which is why the first
+  matrix did not catch it: `read-html.ts` trimmed the edges of every inline
+  element, and the wrapper put the significant space at an element edge.
+  `joinText` now merges text per element and `trimFlow` trims only a block's own
+  edges, descending through wrappers; the whitespace matrix and a rendered-copy
+  UI check pin it. The earlier "out of scope" note for this bug is superseded.
 
 ## Files and modules
 
@@ -195,28 +229,30 @@ No Rust, no `src/api.ts`, no `settings.json` field, no new dependency.
 
 ## Tests and validation
 
-- `node scripts/paste-convert-test.mjs` — the count grows from 72 to 90; the
-  exact snippet comes back byte-for-byte from `planPaste` for both clipboard
-  shapes, the prose guard still converts, and a tag snippet into Typst still
-  becomes escaped text. **Recorded: 90/90.**
+- `node scripts/paste-convert-test.mjs` — the count grows from 72 to 99; the
+  exact snippet comes back byte-for-byte from `planPaste` for an HTML
+  destination, the HTML article becomes the expected Markdown and AsciiDoc, the
+  whitespace matrix holds (exact markup, span-wrapped runs, block edges, runs of
+  spaces), the prose guard still converts, and a content-less tag into Typst
+  becomes escaped literal text. **Recorded: 99/99.**
 - `npm run build` — typecheck and frontend bundle. **Recorded: run by the
   `tauri build` inside `npm test`; green.**
 - `npm test -- --only paste,paste-convert` — the rich-paste suite on a freshly
-  launched instance, 23 checks plus the three new ones. It has to build first:
-  the binary is staged from `src-tauri/target/release`, and the portable copy
-  must be closed for the build and for the second instance's WebView2 profile
-  (existing trap). **Recorded: paste-convert 90/90, paste 26/26.**
-- The reported case on a *saved* `.html` file: the staging binary opened
-  `target.html`, the highlighted payload went in through the app's paste
-  handler, and the buffer held the snippet exactly, with no `<span`; a rendered
-  `<p>Hello <strong>world</strong></p>` payload still converted. The real OS
-  clipboard is not reachable from this session (see Deviations).
+  launched instance, 28 checks including the rendered-copy whitespace case. It has to
+  build first: the binary is staged from `src-tauri/target/release`, and the
+  portable copy must be closed for the build and for the second instance's
+  WebView2 profile (existing trap). **Recorded: paste-convert 99/99, paste
+  28/28.**
+- The reported cases on *saved* documents: a staged binary opened a `.html` file
+  (snippet byte-for-byte, no `<span`; rendered content still converted) — see
+  Deviations for why the OS clipboard is out of reach.
 - Suites that paste through the same source choice: `npm test -- --no-build
-  --only asciidoc,image-syntax` — their pastes carry prose text, which the new
-  rules do not touch. **Recorded: asciidoc 51/51, image-syntax 14/14.**
-- The measurement that proves it: `planPaste(payload(decorated, LINK), "html")`
-  returns `LINK` with `converted: false`, and in the application the source pane
-  holds the exact line — no `<span`, no `<div style=`.
+  --only asciidoc,image-syntax` — their pastes carry prose text, and their
+  conversions must not move. **Recorded: asciidoc 51/51, image-syntax 14/14.**
+- The measurement that proves it:
+  `planPaste(payload("<p>Elsewhere</p>", ARTICLE), "markdown")` returns the
+  Markdown article exactly (the placeholder HTML flavour is deliberately
+  ignored), and `planPaste(payload(DECORATED, LINK), "html")` returns `LINK`.
 - Full `npm test` is not the gate for this change: the working tree carries
   unrelated in-progress work (typography defaults), so the paste layers plus the
   build are run, and that is stated in the summary.
@@ -227,13 +263,19 @@ No Rust, no `src/api.ts`, no `settings.json` field, no new dependency.
    (copied from a syntax-highlighting editor, a docs code block, or a plain-text
    clipboard that also carries `text/html`) into an HTML document inserts that
    exact line, byte-for-byte, with `converted: false` and no notice.
-2. The same paste into a Markdown document inserts the same line; a Markdown
-   bullet list snippet stays byte-identical too.
-3. `Use the <div> tag` copied from a page with its `<code>` markup still converts
+2. Pasting the HTML article from the review into a Markdown document inserts
+   `**CPF, e-mail ou telefone**` and `[doxing](/blog/o-que-e-doxxing-e-como-evitar/)`,
+   not the tags; the same clipboard pasted into AsciiDoc becomes AsciiDoc.
+3. A Markdown list snippet into Markdown stays byte-identical; a content-less
+   `<link>` into Typst becomes escaped literal text (visible, not a label).
+4. Whitespace around bold text and links survives a rendered copy, whether the
+   page's text runs are bare text nodes or wrapped in `<span>`s, in Markdown and
+   AsciiDoc alike; a block's own leading/trailing whitespace is still trimmed.
+5. `Use the <div> tag` copied from a page with its `<code>` markup still converts
    to escaped text; "an HTML buffer pastes HTML", "a list pasted into HTML
    converts", "Markdown into Markdown is native" and every other existing check
    still pass.
-4. Suite counts quoted in `AGENTS.md` match the suites' own output (the README
+6. Suite counts quoted in `AGENTS.md` match the suites' own output (the README
    quotes no counts).
 
 ## Open questions

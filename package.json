@@ -31,6 +31,7 @@
     "paste:convert": "node scripts/paste-convert-test.mjs",
     "paste": "node scripts/rich-paste-test.mjs",
     "asciidoc": "node scripts/asciidoc-test.mjs",
+    "asciidoc:export:unit": "node scripts/asciidoc-export-unit.mjs",
     "image:syntax": "node scripts/image-syntax-test.mjs",
     "typst:preview": "node scripts/typst-preview-test.mjs",
     "licence": "node scripts/licence-test.mjs",

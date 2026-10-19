@@ -43,15 +43,16 @@ binary. Release notes and checksums are on the release page.
   Preferences › Editor.
 - **Typography that holds up.** Thirteen bundled typefaces, six presets,
   independent faces for editor, prose, headings and code, plus OpenType
-  controls. Preview headings and emphasis use Semibold; mathematics has its own
-  scale. Native HTML and PDF (Print) exports of Markdown and AsciiDoc embed the
-  chosen faces.
+  controls. The source pane's line height is **Compact**, **Normal** or
+  **Wide** under Preferences › Editor. Preview headings and emphasis use
+  Semibold; mathematics has its own scale. Native HTML and PDF (Print) exports
+  of Markdown and AsciiDoc embed the chosen faces.
 - **Content moves both ways.** Paste formatted text from a browser or word
-  processor and MDraft converts it into the destination's markup, while markup
-  pasted as source text — an HTML snippet, a Markdown list — stays exactly as
-  copied in an HTML or Markdown document; copy from a text preview and the
-  formatting goes with it. Images can be pasted, dropped, linked or downloaded
-  into the document's assets folder.
+  processor and MDraft converts it into the destination's markup; paste markup
+  source and it is converted the same way, or kept byte-for-byte when it is
+  already the destination's format. Copy from a text preview and the formatting
+  goes with it. Images can be pasted, dropped, linked or downloaded into the
+  document's assets folder.
 - **Useful exports, stated plainly.** HTML needs no extra tools; PDF (Print)
   needs only a browser. DOCX, ODT, EPUB, LaTeX and the rest go through pandoc,
   which MDraft can install for you. A format whose converter is missing is
