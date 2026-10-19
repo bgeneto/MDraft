@@ -43,6 +43,37 @@ interface PdfPage {
   task: RenderTask | null;
 }
 
+/** A visual line in the PDF text layer, with its spans joined in reading order. */
+interface TextLine {
+  page: number;
+  text: string;
+  top: number;
+  left: number;
+  right: number;
+  /** Column cluster; -1 when the page did not resolve to columns. */
+  column: number;
+  spans: Array<{ span: HTMLSpanElement; start: number }>;
+}
+
+/**
+ * What the reader pointed at in Pages.
+ *
+ * `lineText` is the whole visual line, not just the selected word. `main.ts`
+ * uses it to find the matching occurrence in the source; the selected range is
+ * character offsets inside that line.
+ */
+export interface TypstPageContext {
+  page: number;
+  lineText: string;
+  start: number;
+  end: number;
+  text: string;
+  /** A collapsed click: map the line/paragraph rather than a word. */
+  paragraph: boolean;
+  /** The selection crossed a line boundary. */
+  multiLine: boolean;
+}
+
 let pdfjsPromise: Promise<typeof import("pdfjs-dist")> | null = null;
 
 async function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
@@ -65,7 +96,7 @@ async function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
 export class TypstPdfPreview {
   private readonly host: HTMLElement;
   private readonly pane: HTMLElement;
-  private readonly onSelection: (text: string, reveal: boolean) => void;
+  private readonly onContext: (context: TypstPageContext, reveal: boolean) => void;
 
   private loadingTask: PDFDocumentLoadingTask | null = null;
   private pages: PdfPage[] = [];
@@ -75,6 +106,11 @@ export class TypstPdfPreview {
   private maxPageWidth = MAX_PAGE_WIDTH;
   private disposed = false;
   private selectionTimer = 0;
+  private clickTimer = 0;
+  private readonly spanLines = new WeakMap<
+    HTMLSpanElement,
+    { line: TextLine; start: number }
+  >();
 
   private readonly selectionChange = (): void => {
     if (this.disposed) return;
@@ -85,24 +121,52 @@ export class TypstPdfPreview {
     this.selectionTimer = window.setTimeout(() => this.emitSelection(false), 120);
   };
 
+  private readonly click = (event: MouseEvent): void => {
+    if (this.disposed) return;
+    if (!this.host.contains(event.target as Node)) return;
+    const selection = window.getSelection();
+    if (!selection || !selection.isCollapsed) return;
+    const x = event.clientX;
+    const y = event.clientY;
+    window.clearTimeout(this.clickTimer);
+    // Give dblclick a chance to cancel this. A double-click's first click is a
+    // paragraph gesture too, but the word mapping is the better answer.
+    this.clickTimer = window.setTimeout(() => this.emitParagraph(x, y), 240);
+  };
+
   private readonly doubleClick = (event: MouseEvent): void => {
     if (this.disposed) return;
     if (!this.host.contains(event.target as Node)) return;
     // The browser has selected the word by the time dblclick fires.
+    window.clearTimeout(this.clickTimer);
+    this.clickTimer = 0;
     window.clearTimeout(this.selectionTimer);
+    this.emitSelection(true);
+  };
+
+  private readonly mouseUp = (event: MouseEvent): void => {
+    if (this.disposed || !this.host.contains(event.target as Node)) return;
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !this.selectionInside(selection)) return;
+    // A drag has settled. Reveal the source once, at the end, instead of
+    // scrolling it on every intermediate selectionchange.
+    window.clearTimeout(this.selectionTimer);
+    this.selectionTimer = 0;
     this.emitSelection(true);
   };
 
   constructor(
     host: HTMLElement,
     pane: HTMLElement,
-    onSelection: (text: string, reveal: boolean) => void,
+    onContext: (context: TypstPageContext, reveal: boolean) => void,
   ) {
     this.host = host;
     this.pane = pane;
-    this.onSelection = onSelection;
+    this.onContext = onContext;
     this.host.style.setProperty("--typst-fit", "1");
+    this.host.addEventListener("click", this.click);
     this.host.addEventListener("dblclick", this.doubleClick);
+    this.host.addEventListener("mouseup", this.mouseUp);
     document.addEventListener("selectionchange", this.selectionChange);
     this.resizeObserver = new ResizeObserver(() => this.applyFit());
     this.resizeObserver.observe(this.pane);
@@ -158,7 +222,11 @@ export class TypstPdfPreview {
     this.disposed = true;
     window.clearTimeout(this.selectionTimer);
     this.selectionTimer = 0;
+    window.clearTimeout(this.clickTimer);
+    this.clickTimer = 0;
+    this.host.removeEventListener("click", this.click);
     this.host.removeEventListener("dblclick", this.doubleClick);
+    this.host.removeEventListener("mouseup", this.mouseUp);
     document.removeEventListener("selectionchange", this.selectionChange);
     this.observer?.disconnect();
     this.observer = null;
@@ -230,6 +298,7 @@ export class TypstPdfPreview {
     // the explicit pixel size keeps the spans over the glyphs.
     textLayer.style.width = `${viewport.width}px`;
     textLayer.style.height = `${viewport.height}px`;
+    this.indexLines(pageEl, textLayer, number);
 
     return {
       page,
@@ -311,6 +380,172 @@ export class TypstPdfPreview {
     page.canvas.height = 0;
   }
 
+  /**
+   * Group the text-layer spans into visual lines.
+   *
+   * PDF.js emits one span per text item, and a justified line can be split into
+   * several items (`tion` + `time error…`). A line is the useful unit for source
+   * mapping: it is long enough to identify the occurrence, short enough that a
+   * two-column page does not confuse columns. Spans are grouped by vertical
+   * position within a tolerance and split when the horizontal gap is large
+   * enough to be the gutter between columns.
+   */
+  private indexLines(pageEl: HTMLDivElement, textLayer: HTMLDivElement, page: number): void {
+    const pageRect = pageEl.getBoundingClientRect();
+    // Within a single column a justified line can be split into spans with a
+    // wide word gap. The columns themselves are identified by repeated left
+    // edges, not by one horizontal gap, so a narrow gutter between columns still
+    // separates them.
+    const gap = Math.max(8, pageRect.width * 0.08);
+    const tolerance = 2;
+    const records = Array.from(
+      textLayer.querySelectorAll<HTMLSpanElement>('span[role="presentation"]'),
+    )
+      .filter((span) => !span.classList.contains("markedContent"))
+      .map((span) => ({
+        span,
+        text: span.textContent ?? "",
+        rect: span.getBoundingClientRect(),
+      }))
+      .filter(
+        (record) =>
+          record.text.trim().length > 0 &&
+          record.rect.width > 0 &&
+          record.rect.height > 0,
+      )
+      .sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left);
+
+    const columns = this.columnStarts(records, pageRect.width);
+    const columnOf = (left: number): number => {
+      if (columns.length < 2) return -1;
+      let best = 0;
+      for (let i = 1; i < columns.length; i += 1) {
+        if (Math.abs(left - columns[i]) < Math.abs(left - columns[best])) best = i;
+      }
+      return best;
+    };
+
+    const lines: TextLine[] = [];
+    for (const record of records) {
+      const column = columnOf(record.rect.left);
+      let line: TextLine | null = null;
+      for (const candidate of lines) {
+        const sameColumn = columns.length >= 2 && candidate.column === column;
+        const closeEnough = columns.length < 2 &&
+          record.rect.left <= candidate.right + gap &&
+          record.rect.right >= candidate.left - gap;
+        if (
+          Math.abs(candidate.top - record.rect.top) <= tolerance &&
+          (sameColumn || closeEnough)
+        ) {
+          line = candidate;
+          break;
+        }
+      }
+      if (!line) {
+        line = {
+          page,
+          text: "",
+          top: record.rect.top,
+          left: record.rect.left,
+          right: record.rect.right,
+          column,
+          spans: [],
+        };
+        lines.push(line);
+      }
+      const prefix = line.text.length > 0 ? 1 : 0;
+      const start = line.text.length + prefix;
+      line.spans.push({ span: record.span, start });
+      line.text += (prefix > 0 ? " " : "") + record.text;
+      line.left = Math.min(line.left, record.rect.left);
+      line.right = Math.max(line.right, record.rect.right);
+    }
+
+    for (const line of lines) {
+      for (const entry of line.spans) {
+        this.spanLines.set(entry.span, { line, start: entry.start });
+      }
+    }
+  }
+
+  /**
+   * Repeated left edges across a page are columns.
+   *
+   * A two-column paper gives two clusters with many spans; a one-column page
+   * gives one. Centered headings and authors form small clusters and are merged
+   * into the nearest real column, so they do not become a phantom column.
+   */
+  private columnStarts(
+    records: Array<{ rect: DOMRect }>,
+    pageWidth: number,
+  ): number[] {
+    const tolerance = pageWidth * 0.02;
+    const clusters: Array<{ at: number; count: number }> = [];
+    for (const record of [...records].sort((a, b) => a.rect.left - b.rect.left)) {
+      const last = clusters[clusters.length - 1];
+      if (last && record.rect.left - last.at <= tolerance) {
+        last.at = (last.at * last.count + record.rect.left) / (last.count + 1);
+        last.count += 1;
+      } else {
+        clusters.push({ at: record.rect.left, count: 1 });
+      }
+    }
+
+    const strong = clusters
+      .filter((cluster) => cluster.count >= Math.max(3, Math.floor(records.length * 0.08)))
+      .map((cluster) => cluster.at)
+      .sort((a, b) => a - b);
+    const merged: number[] = [];
+    for (const at of strong) {
+      const last = merged[merged.length - 1];
+      if (last !== undefined && at - last <= pageWidth * 0.08) {
+        merged[merged.length - 1] = (last + at) / 2;
+      } else {
+        merged.push(at);
+      }
+    }
+    const separated = merged.filter(
+      (at, index) => index === 0 || at - merged[index - 1] > pageWidth * 0.22,
+    );
+    return separated.length >= 2 ? separated : [];
+  }
+
+  /** Locate a DOM point in the indexed text lines. */
+  private locate(node: Node | null, offset: number): { line: TextLine; offset: number } | null {
+    if (!node) return null;
+    const element =
+      node.nodeType === Node.TEXT_NODE
+        ? node.parentElement
+        : node instanceof HTMLElement
+          ? node
+          : null;
+    const span = element?.closest<HTMLSpanElement>('span[role="presentation"]');
+    if (!span || !this.host.contains(span)) return null;
+    const entry = this.spanLines.get(span);
+    if (!entry) return null;
+    const inSpan = node.nodeType === Node.TEXT_NODE ? offset : 0;
+    return { line: entry.line, offset: entry.start + inSpan };
+  }
+
+  private contextForRange(range: Range): TypstPageContext | null {
+    const start = this.locate(range.startContainer, range.startOffset);
+    if (!start) return null;
+    const end = this.locate(range.endContainer, range.endOffset);
+    const multiLine = end === null || end.line !== start.line;
+    const text = range.toString();
+    if (!text.trim()) return null;
+    return {
+      page: start.line.page,
+      lineText: start.line.text,
+      start: start.offset,
+      end: multiLine ? start.offset : end.offset,
+      text,
+      paragraph: false,
+      multiLine,
+    };
+  }
+
   private selectionInside(selection: Selection): boolean {
     const anchor = selection.anchorNode;
     const focus = selection.focusNode;
@@ -327,7 +562,48 @@ export class TypstPdfPreview {
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed || !this.selectionInside(selection)) return;
     const text = selection.toString().replace(/\s+/g, " ").trim();
-    if (!text || text.length > MAX_SELECTION || /[\r\n]/.test(text)) return;
-    this.onSelection(text, reveal);
+    if (!text || text.length > MAX_SELECTION) return;
+    const range = selection.getRangeAt(0);
+    const context = this.contextForRange(range);
+    if (!context) return;
+    this.onContext(context, reveal);
+  }
+
+  private emitParagraph(clientX: number, clientY: number): void {
+    if (this.disposed) return;
+    const selection = window.getSelection();
+    if (!selection || !selection.isCollapsed) return;
+
+    const doc = document as Document & {
+      caretPositionFromPoint?: (
+        x: number,
+        y: number,
+      ) => { offsetNode: Node; offset: number } | null;
+      caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    };
+    const point = doc.caretPositionFromPoint?.(clientX, clientY);
+    let node: Node | null = point?.offsetNode ?? null;
+    let offset = point?.offset ?? 0;
+    if (!node && doc.caretRangeFromPoint) {
+      const range = doc.caretRangeFromPoint(clientX, clientY);
+      if (range) {
+        node = range.startContainer;
+        offset = range.startOffset;
+      }
+    }
+    const start = this.locate(node, offset);
+    if (!start) return;
+    this.onContext(
+      {
+        page: start.line.page,
+        lineText: start.line.text,
+        start: start.offset,
+        end: start.offset,
+        text: "",
+        paragraph: true,
+        multiLine: false,
+      },
+      true,
+    );
   }
 }

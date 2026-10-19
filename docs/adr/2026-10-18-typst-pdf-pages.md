@@ -44,6 +44,17 @@ and leaves generated text unmapped. This narrows the Typst exclusion in
 `2026-10-18-word-level-sync.md`; it does not add compiler source spans or exact
 word-level sync.
 
+## Follow-up: the clicked occurrence
+
+The first cut mapped a selected word by searching for that word nearest the
+caret. That is wrong for a repeated word and wrong in a two-column PDF, where the
+nearest occurrence is often in the other column. The PDF text layer's visual
+line is the stronger key: its word sequence is matched to the source, so the
+clicked occurrence is found first and the word/paragraph is selected inside it.
+A single click maps the line's paragraph; a double-click or drag maps the
+selected word or range. Generated text has no line match and paints nothing.
+This changes the click behaviour but not the PDF/PDF.js decision above.
+
 ## Consequences
 
 - `render_typst` returns `pdf` instead of `pages`; the command signature is

@@ -51,7 +51,8 @@ In scope:
 - Document word-level sync for Typst: `annotateTypstLines` also returns block
   ranges and marks elements with `data-b`; `bindPreviewWords` binds them; the
   existing Markdown/AsciiDoc selection and double-click handlers become active
-  for Typst. Single click remains the existing block reveal/blink.
+  for Typst. Document keeps the existing single-click block reveal; Pages gets
+  the paragraph click described below.
 - A package-free two-column fixture, a CDP suite covering both views, the
   `test-all` entry, the npm script, and the documentation/test-table updates.
 
@@ -97,15 +98,20 @@ CSS pixels so the spans land on the canvas glyphs. The page shell gets
 
 Click sync on Pages:
 
-- A double-click selects a word in the text layer; a drag selection is left
-  alone.
-- The handler reads the selected text, normalises it, and searches the source
-  for the nearest occurrence to the editor's current caret. If found, it calls
-  `editor.setSyncRange(from, to)` and `editor.revealOffset(from)`; if not, it
-  does nothing. It never moves the preview selection.
-- A single click only places the text caret; it does not move the source. This
-  keeps drag-selection and copy predictable and matches the existing
-  Markdown/AsciiDoc rule that a pointer gesture paints, it does not follow.
+- A double-click selects a word in the text layer; a drag selection is also
+  mapped.
+- The handler reads the whole visual line around the selection, groups the
+  PDF.js text items on the same baseline (joining a line split into several
+  spans), and matches that line's word sequence to the source. The matched
+  occurrence identifies the clicked word or paragraph; it is not a search for
+  the first/nearest occurrence of the selected word. A line that starts or ends
+  in a hyphenated fragment still maps when a complete window inside it matches.
+- A single click maps the source paragraph containing the clicked line. A
+  double-click or drag maps the selected word/range. In both cases the handler
+  calls `editor.setSyncRange` and `editor.revealOffset`; a generated line has no
+  match and does nothing. It never moves the preview selection.
+- The view bar is transparent; only its buttons are opaque, so the sticky bar
+  does not blur the page underneath.
 
 ### Document: block records, not a second source map
 
@@ -173,9 +179,11 @@ guessed at.
       PDF view, attach the word callback, destroy the previous view, and remove
       the SVG object-URL bookkeeping. Keep the view bar, error box and pending
       scroll. Document path unchanged except for step 8.
-- [x] 7. Pages word sync: add `findWordInSource(source, word, hint)` (nearest
-      occurrence; null when absent) and call `setSyncRange`/`revealOffset` from
-      the double-click/selection handler. Do not move the preview selection.
+- [x] 7. Pages click sync: group the text layer into visual lines, map the line's
+      word sequence to the source occurrence (not a nearest-word search), and
+      call `setSyncRange`/`revealOffset` from the click/double-click/selection
+      handler. A single click maps the paragraph; a word gesture maps the word.
+      Do not move the preview selection.
 - [x] 8. Document word sync: extend `annotateTypstLines` to return
       `{ mapped, blocks: BlockRange[] }`, set `data-b`, and pass the ranges to
       `bindPreviewWords`; add Typst to `wordSyncAvailable` only when the map is
@@ -204,11 +212,34 @@ guessed at.
 - The PDF is written to a per-render temporary filename (`pages-<n>.pdf`) rather
   than a shared `pages.pdf`. Concurrent previews share the temporary directory,
   and the shared name could let a slow render overwrite a newer one.
-- The suite has **23** checks rather than the 22 first sketched: a single Pages
-  click is asserted not to paint a word, matching the approved interaction.
+- The suite has **31** checks. The first cut had 23 and asserted that a single
+  Pages click painted no word; that was the approved interaction at the time.
+  The follow-up below replaced it with paragraph mapping, repeated-word, right
+  column, drag-range and view-bar assertions.
 - `cargo fmt --check` reports formatting differences across unrelated existing
   files; the changed Rust follows the surrounding file's style rather than
   reformatting the repository.
+
+### Follow-up: two columns and the clicked occurrence
+
+The first implementation searched the source for the selected word nearest the
+editor caret. That cannot distinguish repeated words and is wrong in a two-column
+PDF: a word in the left column can match a later occurrence in the right column,
+or the first occurrence in the document. The follow-up:
+
+- adds `src/typst-page-map.ts`, which indexes the source's 2/3/4-word sequences
+  and maps a PDF visual line to its actual source occurrence (with fragment
+  handling for hyphenated lines);
+- groups PDF.js text items into visual lines by baseline and repeated left-edge
+  clusters, so a line split into several spans (`tion` + `time error…`) is one
+  context and a narrow two-column gutter still starts a new line;
+- maps a single Pages click to the source paragraph and a double-click/drag to
+  the clicked word/range; a drag reveals the source once on mouseup, not on
+  every intermediate selection change;
+- removes the old `findWordInSource` nearest-word fallback, so an unmatched line
+  paints nothing rather than the wrong occurrence;
+- removes the full-width `backdrop-filter` from the view bar and gives only its
+  buttons an opaque background.
 
 ## Files and modules
 
@@ -326,8 +357,12 @@ while a generated word paints nothing.**
   text layer per page, both columns' text in the DOM, and selectable/copyable
   text.
 - Double-clicking a prose word in Pages paints exactly that word in the source
-  and reveals it; double-clicking a generated word paints nothing; the page
-  selection is not moved.
+  and reveals it; a repeated word in a later line or the second column paints
+  that occurrence, not the first; double-clicking a generated word paints
+  nothing; the page selection is not moved.
+- A single click in Pages paints the source paragraph containing the clicked
+  line. The view bar does not blur or tint the page; only the buttons are
+  opaque.
 - In Document, double-clicking or selecting a prose word paints exactly that
   word in the source; generated text paints nothing; a single click still
   reveals/blinks the block as it does today.
@@ -342,11 +377,10 @@ while a generated word paints nothing.**
 
 ## Open questions
 
-- **Single click versus double-click in Pages and Document.** Default: single
-  click keeps the existing block/caret behaviour; double-click/selection performs
-  the word sync. This preserves drag-selection and matches Markdown and AsciiDoc.
-  If the reader wants every click to move the source word, that is a deliberate
-  change to the rule and should be decided before step 7.
+- **Single click versus double-click in Pages and Document.** The first cut kept
+  single click passive in Pages; the user then asked for a paragraph click.
+  Resolved in the follow-up: Pages single click paints the paragraph,
+  double-click/drag paints the word; Document keeps its existing block reveal.
 - **Text layer timing.** Default: build the text layer with the page when it is
   near the viewport, alongside the canvas, so selection is available as soon as
   the page appears. A text layer for every page at once is simpler but heavier

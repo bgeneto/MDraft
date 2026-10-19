@@ -32,7 +32,9 @@ binary. Release notes and checksums are on the release page.
   Markdown, AsciiDoc and Typst, without moving the selection or scrolling; tabs
   keep each document's caret, undo and scroll position. A crowded strip scrolls
   with arrows, the wheel or drag reordering, and right-click offers the tab
-  actions. The outline, file browser and recent list are one shortcut away.
+  actions. The outline, file browser and recent list are one shortcut away, and
+  **File › Open Recent** reaches the newest twenty entries of the persisted
+  history without opening the sidebar.
 - **Typing that closes itself.** `(`, `[`, `{`, quotes and backticks insert
   their pair, step over the closer and delete both on Backspace; HTML tags close
   in HTML, Markdown and AsciiDoc. Both behaviors have a switch under

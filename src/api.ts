@@ -322,9 +322,16 @@ export const getSettings = () => invoke<Settings>("get_settings");
 export const saveSettings = (settings: Settings) =>
   invoke<Settings>("save_settings", { settings });
 
+/**
+ * Record a path as most recent.
+ *
+ * Rust also rebuilds the native **Open Recent** submenu before this resolves, so
+ * the returned settings are the list both views now show.
+ */
 export const addRecent = (path: string) =>
   invoke<Settings>("add_recent", { path });
 
+/** Clear the persisted list; Rust also refreshes the native Open Recent menu. */
 export const clearRecent = () => invoke<Settings>("clear_recent");
 
 export const pandocStatus = () => invoke<PandocStatus>("pandoc_status");

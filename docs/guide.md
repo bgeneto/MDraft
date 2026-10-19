@@ -65,8 +65,10 @@ The preview has two views:
   `#lorem` has no source word and paints nothing.
 - **Pages** shows the compiler's real PDF, drawn by PDF.js. This is what a PDF
   export will contain, and its text layer can be selected, copied and searched.
-  Double-clicking a word paints it in the source and reveals it; generated text
-  paints nothing. A single click leaves the source alone.
+  A single click paints the corresponding source paragraph; double-clicking a
+  word or dragging across a range paints that selection and reveals it. The line
+  around the click identifies the occurrence, so a repeated word in a second
+  column does not jump to the first occurrence. Generated text paints nothing.
 
 An `#include` or `#image` resolves against the document's folder, as it does
 on export. PDF export from a `.typ` document goes directly through Typst, so
@@ -123,8 +125,8 @@ In Split view:
 - clicking in the source blinks the matching preview block without scrolling
   the preview;
 - clicking in the Markdown, AsciiDoc or Typst Document preview moves the source
-  caret without scrolling the source; a single click in Typst's Pages view only
-  places the text caret there;
+  caret without scrolling the source; a single click in Typst's Pages view paints
+  the source paragraph that contains the clicked line;
 - selecting a word or a range in either pane paints the corresponding text in
   the other, without taking the selection or scrolling; Escape clears it. This
   covers Markdown, AsciiDoc, and Typst's Document and Pages views. A paragraph
@@ -137,8 +139,11 @@ In Split view:
   **File › Reload From Disk** is the explicit way to reread the current file.
 
 The sidebar holds the document outline, a folder browser and recent files.
-The outline updates as headings change; recents are remembered between runs.
-Sidebar width and the editor/preview split are not persisted.
+The outline updates as headings change; recents are remembered between runs,
+up to 100 paths, and the Recent panel scrolls. **File › Open Recent** lists the
+newest 20 of those paths, newest first, in the native menu; **Clear Items** there
+clears the same history as the sidebar footer and Preferences. Sidebar width and
+the editor/preview split are not persisted.
 
 Other editor features:
 

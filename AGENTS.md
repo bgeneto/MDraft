@@ -197,7 +197,7 @@ rewrite from scratch.
 | `npm run stage` | `scripts/stage-artifacts.mjs` | Re-stage what is already built |
 | `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
-| `npm run test:rust` | `cargo test` | 80 tests on Windows (79 run, one ignored download); Linux has 79 total (78 run, one ignored) |
+| `npm run test:rust` | `cargo test` | 87 tests on Windows (86 run, one ignored download); Linux has 86 total (85 run, one ignored) |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. Puts back the working tree and the developer's own settings afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
 | `npm run smoke` | `scripts/dom-smoke.mjs` | 93 checks against `samples/feature-tour.md` |
 | `npm run word-sync` | `scripts/word-sync-test.mjs` | 30 checks of word-level sync against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, no scroll, Escape, and the fallbacks |
@@ -212,12 +212,13 @@ rewrite from scratch.
 | `npm run typography` | `scripts/typography-test.mjs` | 48 checks that each face loads, each OpenType switch changes pixels, the six-preset matrix holds, the four new body faces render differently, and the Semibold weights are real |
 | `npm run shortcuts` | `scripts/shortcut-test.mjs` | 43 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, that the zoom chip follows the level, that a new tab keeps the previous buffer's undo, and that the webview's F5/Ctrl+R reload keys are swallowed |
 | `npm run tabs` | `scripts/document-tabs-test.mjs` | 104 checks of several open documents: sidebar and Recents, `open-files`, active-tab styling, the tab context menu, keyboard navigation, caret and scroll per tab, dirty dot, × and middle-click, Ctrl+Tab, drag and keyboard reordering, the disk poll, Auto Save across tabs, overflow arrows and the wheel, Close Others, the last tab |
+| `npm run recent` | `scripts/recent-menu-test.mjs` | 26 checks that File › Open Recent mirrors the persisted list: the launch file, a new file becoming first, the menu id opening/focusing a tab, Clear Items emptying menu and sidebar, the list refilling, and a 27-row history rendered in full by the sidebar while the menu shows 20 plus Clear Items |
 | `npm run asciidoc` | `scripts/asciidoc-test.mjs` | 51 checks of the AsciiDoc preview, source highlighting, outline, preview copy, spellcheck, includes, paste, the AsciiDoc reference, the default extension and word-level sync |
 | `npm run test:sessions` | `scripts/sessions-test.mjs` | 59 unit checks of `src/sessions.ts`, with no application and no build |
 | `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 72 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
 | `npm run paste` | `scripts/rich-paste-test.mjs` | 23 checks of rich paste through the real UI: destination detection, conversion, preferences, Ctrl+Shift+V, undo |
 | `npm run image:syntax` | `scripts/image-syntax-test.mjs` | 14 checks of bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, including the Image preference |
-| `npm run typst:preview` | `scripts/typst-preview-test.mjs` | 23 checks of Typst Pages through PDF.js and Typst word sync: page shells, canvases, text layers, both columns, selection/copy, prose words, generated-text fallback, single-click behaviour, view switching and PDF disposal |
+| `npm run typst:preview` | `scripts/typst-preview-test.mjs` | 31 checks of Typst Pages through PDF.js and Typst word sync: page shells, canvases, text layers, both columns, selection/copy, paragraph click, repeated-word/right-column mapping, drag ranges, generated-text fallback, the transparent view bar, view switching and PDF disposal |
 | `npm run licence` | `scripts/licence-test.mjs` | 4 checks that the bundled typefaces' licences ship inside the application. Run against its own instance: it opens a document |
 | `npm run images` | `scripts/image-paste-test.mjs` | Image paste through the real UI |
 | `npm run screenshot` | `scripts/screenshot.mjs` | PNG of the running window |
@@ -248,11 +249,12 @@ All of these need the app already running with CDP enabled (see
 | `image-path-paste-test.mjs` | `[port]` | `samples/feature-tour.md` | Selects the `./image.png` placeholder with the mouse, pastes a relative path beside the document, and checks the text is replaced and the preview loads it |
 | `spellcheck-test.mjs` | `[port]` | `samples/feature-tour.md` | Sets the dictionary to English, types a misspelling, requires the wavy underline, then turns spelling off and requires the mark to be gone |
 | `document-tabs-test.mjs` | `[port]` | `samples/feature-tour.md` | That several documents stay open sanely: a path already open is focused, the active tab is bold, the context menu and its disabled entries, Arrow-key navigation, drag and keyboard reordering, overflow arrows and the wheel, Close Others, the caret and both scroll offsets come back, the disk poll reloads a clean inactive tab and leaves a dirty one alone, Auto Save writes every dirty tab, and a large document no longer breaks the next New |
+| `recent-menu-test.mjs` | `[port]` | `samples/feature-tour.md` | The native Open Recent submenu through the `recent_menu` probe: it lists the launch file, a newly opened file becomes the first row, the emitted menu id focuses an existing tab instead of duplicating it, Clear Items empties the menu/sidebar/settings, a 27-row history renders in full in the sidebar while the menu shows 20 plus Clear Items, and a later open refills the list |
 | `sessions-test.mjs` | — | none — runs without the application | The session store's rules: insertion after the active tab, untitled names, one tab per path under both case rules, the neighbour that takes over on close, `move` and `removeMany` order, wrap-around, and the empty-list invariant |
 | `paste-convert-test.mjs` | — | none — runs without the application | The paste matrix: clipboard and document detection, all reader/renderer pairs, escaping, sanitisation, caps and image syntax |
 | `rich-paste-test.mjs` | `[port]` | `samples/feature-tour.md` | That the paste event converts HTML, leaves Markdown/plain text alone, detects an unsaved Typst/Markdown/HTML buffer, honours Ctrl+Shift+V and the preference, and undoes in one step |
 | `image-syntax-test.mjs` | `[port]` | `samples/typst-tour.typ` | A clipboard bitmap becomes `#image`, a remote image is downloaded or kept according to the Image preference, and the files land in the document's assets folder |
-| `typst-preview-test.mjs` | `[port]` | `samples/typst-pages.typ` | The Pages view is the compiler's PDF drawn by PDF.js with selectable text, both columns and two pages; double-clicking prose paints the source word, generated `#lorem` paints nothing, and switching back disposes the PDF view. Document gets the same word-map checks, and a single click does not paint a word |
+| `typst-preview-test.mjs` | `[port]` | `samples/typst-pages.typ` | The Pages view is the compiler's PDF drawn by PDF.js with selectable text, both columns and two pages; a single click paints the source paragraph, a repeated word in a later line or the right column maps that occurrence, generated `#lorem` paints nothing, the view bar does not blur the page, and switching back disposes the PDF view. Document gets the same word-map checks, and a single click does not paint a word there |
 | `set-palette.mjs` | `[port] [paletteId] [--split]` | `samples/feature-tour.md` | Not a test: drives the palette through the Preferences UI so you can screenshot a theme |
 | `screenshot.mjs` | `[port] [out.png] [setupExpression]` | any | Not a test: captures the window, optionally after running a JS setup string |
 | `test-close.ps1` | `[-Exe path] [-Doc path] [-TimeoutSeconds 12]` | `samples\feature-tour.md` | Launches the release binary, sends WM_CLOSE, and asserts the process exits and writes `.window-state.json` |
@@ -458,7 +460,7 @@ Eighteen layers, cheapest first. Run them in this order when changing anything.
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 80 | Path handling, sanitisers, file IO, settings, token estimate, spellcheck, HTML preview scheme, export reader selection |
+| Rust unit | `npm run test:rust` | 87 | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection |
 | Session store | `npm run test:sessions` | 59 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
 | Paste conversion | `npm run paste:convert` | 72 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, image syntax, AsciiDoc |
 | DOM smoke | `npm run smoke` | 93 | Rendering, pane sync, preferences, math, fonts, status icons |
@@ -467,12 +469,13 @@ Eighteen layers, cheapest first. Run them in this order when changing anything.
 | Auto-close typing | `npm run autoclose` | 33 | Pairs, step-over, Backspace, selection wrap, Markdown inline tags, HTML tags, both preferences, in all four document types |
 | Rich paste | `npm run paste` | 23 | The paste event, destination notice, preferences, Ctrl+Shift+V, undo |
 | Image syntax | `npm run image:syntax` | 14 | Bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, plus the Image preference |
-| Typst pages | `npm run typst:preview` | 23 | PDF.js page shells/canvases/text layers, both columns, A4 geometry, Pages and Document word sync, generated-text fallback, single-click behaviour and PDF disposal |
+| Typst pages | `npm run typst:preview` | 31 | PDF.js page shells/canvases/text layers, both columns, A4 geometry, paragraph click, repeated-word/right-column mapping, drag ranges, Pages and Document word sync, generated-text fallback, transparent view bar and PDF disposal |
 | Math | `npm run math` | 10 | Font loading, fraction and radical geometry |
 | Syntax | `npm run syntax` | 7 | Token colours, palette switching |
 | AsciiDoc | `npm run asciidoc` | 51 | Preview, title/TOC, math, includes, source highlighting, outline, preview copy, spellcheck, paste, the built-in reference, defaults, word-level sync |
 | HTML guest | `npm run html` | 43 | Sandbox, IPC boundary, local assets, sync/blink, scripts-off, outline, reload-key guard |
 | Document tabs | `npm run tabs` | 104 | Several open documents, the context menu, drag and keyboard reordering, overflow arrows, the disk poll, Auto Save across tabs, caret and scroll per tab |
+| Recent menu | `npm run recent` | 26 | The native Open Recent 20-row window, a longer sidebar history, menu-id dispatch, Clear Items across menu/sidebar/settings, refilling after a clear |
 | Close | `.\scripts\test-close.ps1` | 4 | The window really exits and saves its state |
 | Document audit | `npm run audit` | — | Real-world render quality on big files |
 
@@ -621,6 +624,13 @@ PDF.js 6 keeps destruction on the `PDFDocumentLoadingTask` returned by
 `getDocument`, not on the document proxy, and `page.render` takes `canvas`, not
 only `canvasContext`. Store the loading task and call `loadingTask.destroy()`;
 pass `canvas: page.canvas` to the render task.
+
+**Every PDF line appears twice when you query `.textLayer span`**
+PDF.js wraps each text item in `<span class="markedContent">`, and the wrapper's
+`textContent` repeats its inner span. A `querySelectorAll("span")` therefore
+sees two copies of every line; the outer copy has a zero-size rect and a source
+line map built from it selects the wrong line. Query
+`span[role="presentation"]:not(.markedContent)` and group those by baseline.
 
 **A CDP test reading `.cm-content.innerText` sees extra blank lines**
 CodeMirror's content element includes the visual gap between lines, so
@@ -1301,6 +1311,15 @@ never reaches it, and a test written that way proves nothing. Type through
 character, focused `.cm-content`), the same path the webview uses for real keys.
 The autoclose suite is written that way for exactly this reason.
 
+**A direct `cargo test` fails 14 file-IO tests with `Os { code: 5, kind: PermissionDenied }`, but `npm test -- --only rust` passes**
+The test binary inherits the machine temp directory (`T:\Temp` here), which the
+workspace sandbox does not let it write. `scripts/test-all.mjs` runs cargo with
+`TEMP`/`TMP` inside `src-tauri/target/test-tmp/cargo`, which it is allowed to
+write. Failures in `documents`, `images` and `html_preview` are the signal; the
+settings and menu tests still pass, so it looks like a regression in unrelated
+modules. Use the harness for the Rust layer on this host, or point `TEMP` at a
+workspace path before a bare `cargo test`.
+
 ## Adding a preference, end to end
 
 Five files, in this order — more than three, so a plan comes first; see
@@ -1328,6 +1347,9 @@ src/
   sessions.ts        open documents: one session per tab, one EditorState each
   tabs.ts            tab strip: rendering, overflow arrows, context menu, drag/keyboard order
   editor.ts          CodeMirror 6 setup, incremental word/line metrics, EditorHandle API
+  typst-pdf.ts       PDF.js Pages: page shells, text layer, fit transform, click context
+  typst-page-map.ts  PDF visual line -> source occurrence and paragraph mapping
+  typst-map.ts       Typst Document block ranges for the shared word map
   code-context.ts    code-like positions shared by spelling, paste conversion and the tag closer
   tag-close.ts       the Markdown/AsciiDoc `>` input handler
   tag-name.ts        the pure rule: which tag a typed `>` closes
@@ -1357,7 +1379,7 @@ src-tauri/src/
   images.rs          image import: sniffing, sanitiser, dedup, download
   tokens.rs          approximate token count for the status bar
   spellcheck.rs      OS spell checker: Windows ISpellChecker, Linux hunspell, macOS NSSpellChecker
-  menu.rs            native menu construction and event routing
+  menu.rs            native menu construction, Open Recent, event routing, menu probes
 scripts/             build helpers and CDP test harnesses — every one is in
                      "Repository scripts", and a new one belongs there too
 samples/             fixtures the smoke test asserts against

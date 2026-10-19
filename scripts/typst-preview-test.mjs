@@ -117,6 +117,40 @@ async function rectOf(word, root) {
   })()`);
 }
 
+/** A word's centre on one specific line of the PDF text layer. */
+async function rectOfWordInLine(word, line, root) {
+  return evaluate(`(() => {
+    const root = document.querySelector(${JSON.stringify(root)});
+    if (!root) return null;
+    const spans = [...root.querySelectorAll('.typst-page .textLayer span[role="presentation"]')]
+      .filter((span) => !span.classList.contains("markedContent"));
+    for (const span of spans) {
+      const text = span.textContent ?? "";
+      if (!text.includes(${JSON.stringify(line)}) || !text.includes(${JSON.stringify(word)})) continue;
+      const at = text.indexOf(${JSON.stringify(word)});
+      const range = document.createRange();
+      range.setStart(span.firstChild, at);
+      range.setEnd(span.firstChild, at + ${word.length});
+      let box = range.getBoundingClientRect();
+      if (box.width === 0 || box.height === 0) continue;
+      const pane = document.getElementById("preview-pane");
+      if (pane) {
+        const paneBox = pane.getBoundingClientRect();
+        if (box.top < paneBox.top + 8 || box.bottom > paneBox.bottom - 8) {
+          pane.scrollTop += box.top - paneBox.top - paneBox.height / 2;
+          box = range.getBoundingClientRect();
+        }
+      }
+      return {
+        x: box.left + box.width / 2,
+        y: box.top + box.height / 2,
+        context: text,
+      };
+    }
+    return null;
+  })()`);
+}
+
 async function doubleClickAt(point) {
   for (const clickCount of [1, 2]) {
     await send("Input.dispatchMouseEvent", {
@@ -136,11 +170,82 @@ async function doubleClickAt(point) {
   }
 }
 
+async function singleClickAt(point) {
+  await send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: point.x,
+    y: point.y,
+    button: "left",
+    clickCount: 1,
+  });
+  await send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: point.x,
+    y: point.y,
+    button: "left",
+    clickCount: 1,
+  });
+  // The click handler waits 240 ms so a double-click can supersede it.
+  await sleep(450);
+}
+
+async function dragBetween(start, end) {
+  await send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: start.x,
+    y: start.y,
+    button: "left",
+    clickCount: 1,
+  });
+  for (let step = 1; step <= 5; step += 1) {
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: start.x + ((end.x - start.x) * step) / 5,
+      y: start.y + ((end.y - start.y) * step) / 5,
+      button: "left",
+      buttons: 1,
+    });
+  }
+  await send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: end.x,
+    y: end.y,
+    button: "left",
+    clickCount: 1,
+  });
+  await sleep(350);
+}
+
 async function selectWord(word, root) {
-  const point = await rectOf(word, root);
+  let point = await rectOf(word, root);
   if (!point) return { selected: "", point: null };
-  await doubleClickAt(point);
-  await sleep(250);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await doubleClickAt(point);
+    await sleep(250);
+    const selected = await evaluate(`window.getSelection()?.toString() ?? ""`);
+    if (selected.includes(word)) return { selected, point };
+    // The first launch can still be laying the pane out; re-measure before
+    // calling a real selection failure.
+    point = await rectOf(word, root);
+    if (!point) break;
+  }
+  return {
+    selected: await evaluate(`window.getSelection()?.toString() ?? ""`),
+    point,
+  };
+}
+
+async function selectWordInLine(word, line, root) {
+  let point = await rectOfWordInLine(word, line, root);
+  if (!point) return { selected: "", point: null };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await doubleClickAt(point);
+    await sleep(250);
+    const selected = await evaluate(`window.getSelection()?.toString() ?? ""`);
+    if (selected.includes(word)) return { selected, point };
+    point = await rectOfWordInLine(word, line, root);
+    if (!point) break;
+  }
   return {
     selected: await evaluate(`window.getSelection()?.toString() ?? ""`),
     point,
@@ -150,6 +255,12 @@ async function selectWord(word, root) {
 async function mark() {
   return evaluate(
     `[...document.querySelectorAll(".cm-sync-word")].map((node) => node.textContent).join("|")`,
+  );
+}
+
+async function markedLine() {
+  return evaluate(
+    `document.querySelector(".cm-sync-word")?.closest(".cm-line")?.textContent ?? ""`,
   );
 }
 
@@ -291,6 +402,47 @@ check(
 );
 check("Pages shows no error box", pagesShape.errors === 0);
 
+const viewBarStyle = await evaluate(`(() => {
+  const bar = document.querySelector(".typst-viewbar");
+  const button = document.querySelector(".typst-viewbutton");
+  if (!bar || !button) return null;
+  const barStyle = getComputedStyle(bar);
+  const buttonStyle = getComputedStyle(button);
+  return {
+    blur: barStyle.backdropFilter,
+    barBackground: barStyle.backgroundColor,
+    buttonBackground: buttonStyle.backgroundColor,
+  };
+})()`);
+check(
+  "the view bar does not blur the page",
+  viewBarStyle?.blur === "none" &&
+    viewBarStyle?.barBackground === "rgba(0, 0, 0, 0)",
+  viewBarStyle ? `${viewBarStyle.blur}/${viewBarStyle.barBackground}` : "missing",
+);
+check(
+  "the view buttons keep their own background",
+  viewBarStyle !== null &&
+    viewBarStyle.buttonBackground !== "rgba(0, 0, 0, 0)",
+  viewBarStyle?.buttonBackground ?? "",
+);
+
+const paragraphPoint = await rectOfWordInLine(
+  "simple",
+  "The simple pendulum is a useful model",
+  ".typst-preview",
+);
+check("the two-column paragraph line is there", paragraphPoint !== null);
+await clearSelection();
+if (paragraphPoint) await singleClickAt(paragraphPoint);
+const paragraphMark = await mark();
+check(
+  "a single Pages click paints the source paragraph",
+  paragraphMark.includes("The simple pendulum is a useful model"),
+  paragraphMark.slice(0, 80),
+);
+
+await clearSelection();
 const pagesWord = await selectWord("gyroscope", ".typst-preview");
 check(
   "double-clicking a Pages word selects it",
@@ -301,6 +453,61 @@ const pagesMark = await mark();
 check("the Pages word paints the source", pagesMark === "gyroscope", pagesMark);
 
 await clearSelection();
+const latePendulum = await selectWordInLine(
+  "pendulum",
+  "celeration. The word pendulum appears again",
+  ".typst-preview",
+);
+check(
+  "a repeated Pages word can be selected",
+  latePendulum.selected.includes("pendulum"),
+  latePendulum.selected,
+);
+const latePendulumLine = await markedLine();
+check(
+  "a repeated Pages word maps the clicked occurrence",
+  latePendulumLine.includes("The word pendulum appears again"),
+  latePendulumLine,
+);
+
+await clearSelection();
+const rightColumnThe = await selectWordInLine(
+  "the",
+  "Substituting the illustrative values gives an estimate",
+  ".typst-preview",
+);
+check(
+  "a right-column Pages word can be selected",
+  rightColumnThe.selected.includes("the"),
+  rightColumnThe.selected,
+);
+const rightColumnLine = await markedLine();
+check(
+  "a right-column Pages word maps its own line",
+  rightColumnLine.includes("Substituting the illustrative values"),
+  rightColumnLine,
+);
+
+await clearSelection();
+const dragStart = await rectOfWordInLine(
+  "simple",
+  "The simple pendulum is a useful model",
+  ".typst-preview",
+);
+const dragEnd = await rectOfWordInLine(
+  "model",
+  "The simple pendulum is a useful model",
+  ".typst-preview",
+);
+if (dragStart && dragEnd) await dragBetween(dragStart, dragEnd);
+const dragMark = await mark();
+check(
+  "dragging across a Pages line paints the selected range",
+  dragMark.includes("simple") && dragMark.includes("model"),
+  dragMark,
+);
+
+await clearSelection();
 const pagesGenerated = await selectWord("consectetur", ".typst-preview");
 check(
   "generated Pages text can be selected",
@@ -309,28 +516,6 @@ check(
 );
 const generatedPagesMark = await mark();
 check("generated Pages text paints nothing", generatedPagesMark === "", generatedPagesMark);
-
-await clearSelection();
-const singlePagePoint = await rectOf("gyroscope", ".typst-preview");
-if (singlePagePoint) {
-  await send("Input.dispatchMouseEvent", {
-    type: "mousePressed",
-    x: singlePagePoint.x,
-    y: singlePagePoint.y,
-    button: "left",
-    clickCount: 1,
-  });
-  await send("Input.dispatchMouseEvent", {
-    type: "mouseReleased",
-    x: singlePagePoint.x,
-    y: singlePagePoint.y,
-    button: "left",
-    clickCount: 1,
-  });
-  await sleep(250);
-}
-const singlePageMark = await mark();
-check("a single Pages click does not paint a word", singlePageMark === "", singlePageMark);
 
 console.log("\n=== switching back ===");
 await clearSelection();

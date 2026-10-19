@@ -6,17 +6,40 @@
 //! actual behaviour.
 
 use crate::settings::{
-    default_export_formats, AppState, ExportAvailability, ExportFormat,
+    default_export_formats, AppState, ExportAvailability, ExportFormat, Settings,
 };
 use tauri::menu::{
     CheckMenuItem, IsMenuItem, Menu, MenuBuilder, MenuEvent, MenuItem, MenuItemBuilder,
-    MenuItemKind, PredefinedMenuItem, SubmenuBuilder,
+    MenuItemKind, PredefinedMenuItem, Submenu, SubmenuBuilder,
 };
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 /// Menu ids for the configured pandoc formats are prefixed with this, so
 /// `on_event` and the frontend can tell them apart from built-in items.
 pub const EXPORT_PREFIX: &str = "export.pandoc.";
+
+/// Menu ids for recent files carry the path after this prefix.
+///
+/// The path travels in the id instead of an index: the list changes whenever a
+/// file is opened, and a menu built a moment before that change must still open
+/// the file whose label the reader clicked. `src/main.ts` has the same string.
+pub const RECENT_PREFIX: &str = "recent.file:";
+
+/// Stable id for the submenu, so the test probe can find it without knowing
+/// where it sits in the menu tree.
+const RECENT_SUBMENU_ID: &str = "file.openRecent";
+
+/// Longest path shown in the menu, in characters.
+///
+/// Native menu items do not wrap. A path longer than this is middle-ellipsized
+/// so the file name stays visible, which is the part a reader scans for.
+const RECENT_LABEL_MAX: usize = 88;
+
+/// Most recent paths the native submenu lists.
+///
+/// The persisted list and the sidebar keep a longer history; a menu is a
+/// quick-pick, not a library, and a 100-row native popup is unusable.
+const RECENT_MENU_LIMIT: usize = 20;
 
 /// The export targets to list, falling back to the built-in set.
 ///
@@ -77,6 +100,125 @@ fn export_enabled(format: &ExportFormat, availability: ExportAvailability) -> bo
 /// typed containing one would silently swallow the next character.
 fn plain_label(label: &str) -> String {
     label.replace('&', "&&")
+}
+
+// ---------------------------------------------------------------------------
+// Open Recent
+// ---------------------------------------------------------------------------
+
+const RECENT_EMPTY_ID: &str = "recent.empty";
+const RECENT_CLEAR_ID: &str = "recent.clear";
+
+/// The persisted recent files, capped at the store's limit.
+///
+/// The sidebar keeps this longer list and scrolls; the menu applies its own
+/// smaller slice in `recent_entries`. The menu is built while `AppState` may not
+/// be managed yet, which is why the read is fallible.
+fn recent_files<R: Runtime>(app: &AppHandle<R>) -> Vec<String> {
+    let mut files = app
+        .try_state::<AppState>()
+        .and_then(|state| {
+            state
+                .settings
+                .lock()
+                .ok()
+                .map(|settings| settings.recent_files.clone())
+        })
+        .unwrap_or_default();
+    files.truncate(crate::settings::MAX_RECENT);
+    files
+}
+
+/// Middle-ellipsize a path, keeping its file name visible.
+///
+/// A native menu does not wrap, and a full path can easily be wider than the
+/// screen. Truncating at the end would hide the one part that identifies the
+/// document, so the tail (the file name) is preserved and the middle is cut.
+fn ellipsize_path(path: &str, max: usize) -> String {
+    if max <= 1 {
+        return "…".to_string();
+    }
+    let chars: Vec<char> = path.chars().collect();
+    if chars.len() <= max {
+        return path.to_string();
+    }
+
+    let name_start = chars
+        .iter()
+        .rposition(|c| *c == '\\' || *c == '/')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let name_len = chars.len() - name_start;
+    let keep = max - 1;
+
+    if name_len >= keep {
+        // The file name alone is at the limit; keep its tail rather than a head
+        // that would consist only of a directory.
+        let tail: String = chars[chars.len() - keep..].iter().collect();
+        return format!("…{tail}");
+    }
+
+    let head: String = chars[..max - name_len - 1].iter().collect();
+    let name: String = chars[name_start..].iter().collect();
+    format!("{head}…{name}")
+}
+
+fn recent_label(path: &str) -> String {
+    plain_label(&ellipsize_path(path, RECENT_LABEL_MAX))
+}
+
+/// One row of the generated submenu, before it is turned into a native item.
+///
+/// Kept pure so the id/label/enabled rules can be tested without a window.
+#[derive(Debug, Clone, PartialEq)]
+struct RecentEntry {
+    id: String,
+    label: String,
+    enabled: bool,
+}
+
+fn recent_entries(files: &[String]) -> Vec<RecentEntry> {
+    if files.is_empty() {
+        return vec![RecentEntry {
+            id: RECENT_EMPTY_ID.into(),
+            label: "No Recent Files".into(),
+            enabled: false,
+        }];
+    }
+
+    let mut entries: Vec<RecentEntry> = files
+        .iter()
+        .take(RECENT_MENU_LIMIT)
+        .map(|path| RecentEntry {
+            id: format!("{RECENT_PREFIX}{path}"),
+            label: recent_label(path),
+            enabled: true,
+        })
+        .collect();
+    entries.push(RecentEntry {
+        id: RECENT_CLEAR_ID.into(),
+        label: "Clear Items".into(),
+        enabled: true,
+    });
+    entries
+}
+
+/// Build the submenu from the list as it is right now.
+fn recent_submenu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
+    let entries = recent_entries(&recent_files(app));
+    let mut builder = SubmenuBuilder::with_id(app, RECENT_SUBMENU_ID, "Open Recent");
+
+    for entry in &entries {
+        // The Clear row is set apart from the file rows; the empty row is not.
+        if entry.id == RECENT_CLEAR_ID {
+            builder = builder.separator();
+        }
+        let built = MenuItemBuilder::with_id(entry.id.as_str(), entry.label.as_str()).build(app)?;
+        built.set_enabled(entry.enabled)?;
+        builder = builder.item(&built);
+    }
+
+    builder.build()
 }
 
 use std::sync::Mutex;
@@ -312,9 +454,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&item("export.installTypst", "Install Typst…", None)?)
         .build()?;
 
+    let recent = recent_submenu(app)?;
     let file = SubmenuBuilder::new(app, "File")
         .item(&item("file.new", "New", Some("CmdOrCtrl+N"))?)
         .item(&item("file.open", "Open…", Some("CmdOrCtrl+O"))?)
+        .item(&recent)
         .separator()
         .item(&item("file.save", "Save", Some("CmdOrCtrl+S"))?)
         .item(&item("file.saveAs", "Save As…", Some("CmdOrCtrl+Shift+S"))?)
@@ -543,6 +687,28 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     MenuBuilder::new(app).items(&items).build()
 }
 
+/// Replace the native menu from settings that affect its generated parts.
+///
+/// The Export submenu and Open Recent are both built from lists the reader can
+/// change, and a native menu cannot be edited in place safely. One helper keeps
+/// the two callers — a settings save and the recent-file commands — from
+/// deriving the check-mark state differently. Fullscreen is not a setting, so
+/// ask the window rather than assuming false.
+pub fn rebuild<R: Runtime>(app: &AppHandle<R>, settings: &Settings) {
+    let mut menu_state = MenuState::from_settings(settings);
+    if let Some(window) = app.get_webview_window("main") {
+        menu_state.fullscreen = window.is_fullscreen().unwrap_or(false);
+    }
+    match build(app, &menu_state) {
+        Ok(menu) => {
+            if let Err(error) = app.set_menu(menu) {
+                eprintln!("[menu] could not replace the menu: {error}");
+            }
+        }
+        Err(error) => eprintln!("[menu] could not rebuild the menu: {error}"),
+    }
+}
+
 /// Forward a menu activation to the frontend.
 pub fn on_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     let id = event.id().as_ref().to_string();
@@ -704,6 +870,43 @@ pub fn menu_state<R: Runtime>(app: AppHandle<R>) -> Vec<MenuCheck> {
     out
 }
 
+#[derive(serde::Serialize)]
+pub struct RecentMenuItem {
+    pub id: String,
+    pub text: String,
+    pub enabled: bool,
+}
+
+/// The rows currently in the Open Recent submenu, for the test suites.
+///
+/// The native menu is not part of the webview, so no DOM probe can read it.
+/// This walks the menu the same way `menu_state` does and reports the normal
+/// items; separators and the submenu itself are not rows a reader can click.
+#[tauri::command]
+pub fn recent_menu<R: Runtime>(app: AppHandle<R>) -> Vec<RecentMenuItem> {
+    let Some(menu) = app.menu() else {
+        return Vec::new();
+    };
+    let Some(MenuItemKind::Submenu(submenu)) = find_item(&menu, RECENT_SUBMENU_ID) else {
+        return Vec::new();
+    };
+    let Ok(items) = submenu.items() else {
+        return Vec::new();
+    };
+
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let normal = item.as_menuitem()?;
+            Some(RecentMenuItem {
+                id: normal.id().as_ref().to_string(),
+                text: normal.text().unwrap_or_default(),
+                enabled: normal.is_enabled().unwrap_or(true),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -785,5 +988,73 @@ mod tests {
         };
         assert!(export_enabled(&pdf, installed));
         assert_eq!(export_label(&pdf, installed), "PDF (via Typst)");
+    }
+
+    #[test]
+    fn an_empty_recent_list_offers_one_disabled_row() {
+        let entries = recent_entries(&[]);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "recent.empty");
+        assert_eq!(entries[0].label, "No Recent Files");
+        assert!(!entries[0].enabled);
+    }
+
+    #[test]
+    fn recent_rows_carry_the_path_and_end_with_clear_items() {
+        let files = vec![
+            r"C:\Docs\newer.md".to_string(),
+            r"C:\Docs\older.md".to_string(),
+        ];
+        let entries = recent_entries(&files);
+
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].id, r"recent.file:C:\Docs\newer.md");
+        assert_eq!(entries[0].label, r"C:\Docs\newer.md");
+        assert!(entries[0].enabled);
+        assert_eq!(entries[1].id, r"recent.file:C:\Docs\older.md");
+        assert_eq!(entries[2].id, "recent.clear");
+        assert_eq!(entries[2].label, "Clear Items");
+        assert!(entries[2].enabled);
+    }
+
+    #[test]
+    fn the_menu_shows_only_the_newest_twenty_of_a_longer_history() {
+        // The store and the sidebar keep up to 100 entries; the menu is a quick
+        // pick and must not turn into a 100-row native popup.
+        let files: Vec<String> = (0..100)
+            .map(|index| format!("C:/Docs/file{index}.md"))
+            .collect();
+        let entries = recent_entries(&files);
+
+        assert_eq!(entries.len(), RECENT_MENU_LIMIT + 1);
+        assert_eq!(entries[0].id, "recent.file:C:/Docs/file0.md");
+        assert_eq!(
+            entries[RECENT_MENU_LIMIT - 1].id,
+            format!("recent.file:C:/Docs/file{}.md", RECENT_MENU_LIMIT - 1)
+        );
+        assert_eq!(entries[RECENT_MENU_LIMIT].id, "recent.clear");
+    }
+
+    #[test]
+    fn a_long_recent_path_is_middle_ellipsized_around_its_file_name() {
+        let path = r"C:\Users\bernh\Documents\GitHub\MDraft\a-long-directory-name\another-long-directory-name\2026-10-18-open-recent-menu.md";
+        let label = recent_label(path);
+
+        assert_eq!(label.chars().count(), RECENT_LABEL_MAX);
+        assert!(label.contains('…'), "the middle must be the part cut: {label}");
+        assert!(
+            label.ends_with("2026-10-18-open-recent-menu.md"),
+            "the file name is the part a reader scans for: {label}"
+        );
+        assert!(label.starts_with("C:"), "the root stays visible: {label}");
+    }
+
+    #[test]
+    fn recent_labels_cannot_become_a_windows_mnemonic() {
+        // A raw `&` starts a mnemonic on Windows; `plain_label` doubles it so
+        // the menu draws the folder name the reader actually has.
+        assert_eq!(recent_label(r"C:\A&B\file.md"), r"C:\A&&B\file.md");
+        let entries = recent_entries(&[r"C:\A&B\file.md".to_string()]);
+        assert_eq!(entries[0].label, r"C:\A&&B\file.md");
     }
 }
