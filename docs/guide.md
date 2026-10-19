@@ -50,9 +50,9 @@ sheet of the syntax above. `.asc` and `.ad` are not recognised as AsciiDoc.
 ## Typst
 
 `.typ` files are edited as source and previewed by the Typst compiler. Typst is
-not bundled. On Windows, **Help › Install Typst** downloads it into MDraft's
-own data folder. On Linux and macOS, install it with your package manager or
-from the [Typst download page](https://typst.app/open-source/#download), or put
+not bundled. On Windows and Linux, **Help › Install Typst** downloads it into
+MDraft's own data folder. On macOS, install it with your package manager or from
+the [Typst download page](https://typst.app/open-source/#download), or put
 `typst` on your `PATH`; MDraft picks it up. Without it, the preview shows the
 compiler's absence rather than an empty pane.
 
@@ -283,9 +283,9 @@ built from source, use `Cmd` where the application registers `CmdOrCtrl`.
 ## Limitations and troubleshooting
 
 - **No typst?** `.typ` previews and PDF through Typst need the compiler. On
-  Windows, **Help › Install Typst** installs it into MDraft's own data folder.
-  On Linux, use your package manager or the official download page; MDraft
-  finds `typst` on `PATH`.
+  Windows and Linux, **Help › Install Typst** installs it into MDraft's own data
+  folder. On macOS, use your package manager or the official download page;
+  MDraft finds `typst` on `PATH`.
 - **No pandoc?** DOCX, ODT, EPUB and the other pandoc formats need it. Use
   **Help › Install Pandoc**, which installs into MDraft's own data folder; a
   copy on `PATH` is also found.

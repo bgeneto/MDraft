@@ -52,6 +52,10 @@ zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tar = "0.4.46"
+# Typst publishes its Linux build as a .tar.xz, unlike pandoc's .tar.gz.
+# `lzma-rs` is pure Rust, matching flate2's `rust_backend`, so the installer
+# needs no C toolchain, no liblzma headers and no system xz binary.
+lzma-rs = "0.3"
 
 # The system spell checker. Dictionaries stay on the machine: Windows uses the
 # Spell Checking API (the same service WebView2 would), Linux opens the hunspell

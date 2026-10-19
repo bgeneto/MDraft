@@ -117,12 +117,12 @@ Both are optional and neither is bundled.
   against the SHA-256 GitHub publishes, and unpacks it into MDraft's own data
   folder on Windows, Linux and macOS. It does not install system-wide and
   needs no administrator rights.
-- **Help › Install Typst** downloads the official compiler into the same
-  application data area on Windows. On Linux and macOS the command opens the
-  official download page instead, because Typst ships those builds as
-  `.tar.xz`; install it with your package manager or from that page. Typst is
-  used for `.typ` previews and for PDF export, and is a single executable with
-  no runtime dependencies.
+- **Help › Install Typst** downloads the official compiler, checks the archive
+  against the SHA-256 GitHub publishes, and unpacks it into the same application
+  data area on Windows and Linux. On macOS the command opens the official
+  download page instead; install it with your package manager or from that page.
+  Typst is used for `.typ` previews and for PDF export, and is a single
+  executable with no runtime dependencies.
 
 A copy on `PATH` is also found. A copy MDraft installed itself takes precedence
 over the one on `PATH`. Typst can be installed with a package manager

@@ -2142,7 +2142,7 @@ async function typstSetup(): Promise<void> {
       "MDraft can download the official Typst build and put it in its own data folder. " +
       "Nothing is installed system-wide, no administrator rights are needed, and removing the " +
       "folder undoes it.\n\n" +
-      "The download is about 21 MB and unpacks to a single executable.",
+      "The download is about 20 MB and unpacks to a single executable.",
     { title: "Install Typst", kind: "info", okLabel: "Download", cancelLabel: "Cancel" },
   );
   if (!agreed) return;
