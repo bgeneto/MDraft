@@ -368,8 +368,8 @@ function extraSkips(text: string, base: number): Array<[number, number]> {
     /www\.\S+/g,
     /<[^>\n]{1,200}>/g,
     // AsciiDoc markup that is not prose.
-    /image::?[^\[\n]*\[[^\]]*\]/g,
-    /(?:include|xref|link|footnote|kbd|btn|menu|latexmath|stem):[^\s\[]*\[[^\]]*\]/g,
+    /image::?[^[\n]*\[[^\]]*\]/g,
+    /(?:include|xref|link|footnote|kbd|btn|menu|latexmath|stem):[^\s[]*\[[^\]]*\]/g,
     /^:[A-Za-z0-9_-]+:.*$/gm,
     /<<[^>\n]+>>/g,
     /\[\[[^\]\n]+\]\]/g,
@@ -571,7 +571,7 @@ class SpellPlugin implements PluginValue {
       if (hits.length >= 1_500) break;
     }
     const request = ++this.request;
-    let bad: number[] = [];
+    let bad: number[];
     try {
       bad = await api.spellcheckCheck(
         language,

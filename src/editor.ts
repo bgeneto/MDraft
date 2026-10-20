@@ -379,7 +379,6 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
   let onCursor: (info: CursorInfo) => void = () => {};
   let onScroll: (info: ScrollInfo) => void = () => {};
   let typewriter = false;
-  let view: EditorView;
   // The HTML and Typst grammars arrive in a promise. A tab switch that lands
   // before that promise resolves must not install the grammar into the new buffer.
   let languageGeneration = 0;
@@ -521,7 +520,7 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     }),
   ];
 
-  view = new EditorView({
+  const view = new EditorView({
     state: EditorState.create({ doc: "", extensions }),
     parent: host,
   });

@@ -892,7 +892,7 @@ export function renderMathIn(host: HTMLElement): number {
         return NodeFilter.FILTER_REJECT;
       }
       const text = node.nodeValue ?? "";
-      return /\\[\(\[]/.test(text) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      return /\\[([]/.test(text) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
     },
   });
   const nodes: Text[] = [];

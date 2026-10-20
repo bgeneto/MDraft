@@ -30,11 +30,11 @@ function parseInline(text: string, stemLatex: boolean): Inline[] {
       make: (m) => ({ kind: "em", children: parseInline(m[1], stemLatex) }),
     },
     {
-      re: /^image:([^\s\[]+)\[([^\]]*)\]/,
+      re: /^image:([^\s[]+)\[([^\]]*)\]/,
       make: (m) => ({ kind: "image", src: m[1], alt: m[2] }),
     },
     {
-      re: /^link:([^\s\[]+)\[([^\]]*)\]/,
+      re: /^link:([^\s[]+)\[([^\]]*)\]/,
       make: (m) => ({
         kind: "link",
         href: m[1],
@@ -42,7 +42,7 @@ function parseInline(text: string, stemLatex: boolean): Inline[] {
       }),
     },
     {
-      re: /^xref:([^\s\[]+)\[([^\]]*)\]/,
+      re: /^xref:([^\s[]+)\[([^\]]*)\]/,
       make: (m) => ({
         kind: "link",
         href: `#${m[1]}`,
@@ -66,7 +66,7 @@ function parseInline(text: string, stemLatex: boolean): Inline[] {
       make: (m) => (stemLatex ? { kind: "math", tex: m[1] } : { kind: "code", value: m[0] }),
     },
     {
-      re: /^((?:https?:\/\/|www\.)[^\s\[]+)\[([^\]]*)\]/,
+      re: /^((?:https?:\/\/|www\.)[^\s[]+)\[([^\]]*)\]/,
       make: (m) => ({
         kind: "link",
         href: m[1],
@@ -256,7 +256,7 @@ export function readAsciidoc(source: string): Block[] {
       continue;
     }
 
-    const image = /^image::([^\s\[]+)\[([^\]]*)\]$/.exec(trimmed);
+    const image = /^image::([^\s[]+)\[([^\]]*)\]$/.exec(trimmed);
     if (image) {
       blocks.push({
         kind: "paragraph",

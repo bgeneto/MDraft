@@ -9,7 +9,7 @@ import type { Block, Inline } from "./ir.ts";
 import { imageSyntaxFor } from "../image-syntax.ts";
 
 function escapeText(value: string): string {
-  return value.replace(/([\\*_`\[\]])/g, "\\$1");
+  return value.replace(/([\\*_`[\]])/g, "\\$1");
 }
 
 function escapeAttribute(value: string): string {

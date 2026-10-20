@@ -3110,7 +3110,7 @@ function syncSourceFromPageSelection(context: TypstPageContext, reveal: boolean)
     return;
   }
 
-  let range: { from: number; to: number } | null = null;
+  let range: { from: number; to: number } | null;
   if (context.paragraph || context.multiLine) {
     range = paragraphRangeAt(source, startWord.from);
   } else {

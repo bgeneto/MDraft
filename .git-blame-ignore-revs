@@ -1,0 +1,5 @@
+# Formatting commits. Use with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# Prettier, JavaScript/TypeScript/CSS only; no logic changes.
+0cd6aed
