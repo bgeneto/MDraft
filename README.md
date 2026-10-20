@@ -57,6 +57,12 @@ Markdown document active.*
   pinned under Preferences › Editor, and the status bar turns checking on and
   off. Right-click a marked word for suggestions or **Add to dictionary**.
   Nothing is downloaded, and HTML guests are not checked.
+- **Formatting on demand.** Right-click in a Markdown, HTML or Typst source
+  pane and choose **Format Document**: Prettier aligns Markdown tables and
+  tidies HTML, Typstyle reindents Typst. One undo restores the exact original,
+  the caret keeps its line, and the formatters are bundled rather than
+  downloaded — nothing is loaded until the first format. AsciiDoc has no
+  formatter and keeps its own right-click.
 - **Typography that holds up.** Thirteen bundled typefaces, six presets,
   independent faces for editor, prose, headings and code, plus OpenType
   controls. The source pane's line height is **Compact**, **Normal** or

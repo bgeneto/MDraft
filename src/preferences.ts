@@ -1071,6 +1071,11 @@ function buildSections(host: PreferencesHost): Section[] {
       rows: [
         { kind: "note", label: "Version", text: `MDraft ${host.version()}` },
         {
+          kind: "note",
+          label: "Formatting",
+          text: "Format Document uses Prettier (MIT) for Markdown and HTML and Typstyle (Apache-2.0) for Typst. Both are bundled with MDraft and are loaded only the first time this command is used.",
+        },
+        {
           kind: "button",
           label: "",
           text: "Open the Markdown Reference",

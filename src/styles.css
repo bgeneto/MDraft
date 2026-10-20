@@ -712,7 +712,8 @@ body {
   text-underline-offset: 2px;
 }
 
-.spell-menu {
+.spell-menu,
+.format-menu {
   position: fixed;
   z-index: 80;
   min-width: 180px;
@@ -727,7 +728,8 @@ body {
   font-size: 13px;
 }
 
-.spell-menu button {
+.spell-menu button,
+.format-menu button {
   display: block;
   width: 100%;
   margin: 0;
@@ -741,8 +743,19 @@ body {
   cursor: pointer;
 }
 
-.spell-menu button:hover {
+.spell-menu button:hover,
+.format-menu button:hover {
   background: var(--accent-soft);
+}
+
+/* A read-only file keeps the menu, so the reason is visible, but the action is
+   not. The disabled item must not take the hover tint: that would read as a
+   working choice. */
+.format-menu button:disabled,
+.format-menu button:disabled:hover {
+  background: none;
+  color: var(--muted);
+  cursor: default;
 }
 
 .spell-menu-pending {

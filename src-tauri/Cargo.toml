@@ -1,6 +1,6 @@
 [package]
 name = "mdraft"
-version = "0.4.2"
+version = "0.4.3"
 description = "A Tauri 2 Markdown, Typst, HTML and AsciiDoc editor"
 authors = ["bernh"]
 edition = "2024"

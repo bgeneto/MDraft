@@ -12,6 +12,7 @@ import * as api from "./api";
 import { renderAsciidocForExport, renderAsciidocPreview } from "./asciidoc-preview";
 import { ASCIIDOC_REFERENCE, FONT_LICENCES, REFERENCE, SHORTCUTS, WELCOME } from "./content";
 import { createEditor, type EditorHandle } from "./editor";
+import { installFormatMenu } from "./format/menu";
 import {
   DEFAULT_EDITOR_FONT_SIZE,
   DEFAULT_EDITOR_LINE_HEIGHT,
@@ -4379,6 +4380,15 @@ async function boot(): Promise<void> {
   editor.onCursor(() => {
     refreshStatus();
     updateActiveOutline();
+  });
+  // Right-click formatting lives outside the spelling plugin: that plugin owns
+  // `contextmenu` on the editor when a misspelled word is under the pointer, and
+  // stops the event, so the two menus never compete for the same click.
+  installFormatMenu({
+    view: editor.view,
+    language: () => doc.language,
+    readOnly: () => doc.readOnly,
+    toast,
   });
 
   htmlPreview = createHtmlPreview(previewPane, {
