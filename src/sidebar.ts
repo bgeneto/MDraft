@@ -69,7 +69,7 @@ export function extractAsciidocHeadings(source: string): Heading[] {
       .replace(/\\(.)/g, "$1")
       .replace(/\[\.line-through\]#([^#]*)#/g, "$1")
       .replace(/(?:https?:\/\/|www\.)\S+\[([^\]]*)\]/g, "$1")
-      .replace(/image::?[^\[]*\[([^\]]*)\]/g, "$1")
+      .replace(/image::?[^[]*\[([^\]]*)\]/g, "$1")
       .replace(/latexmath:\[[^\]]*\]|stem:\[[^\]]*\]/g, "")
       .replace(/[*_`]/g, "")
       .replace(/\s+/g, " ")

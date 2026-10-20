@@ -147,10 +147,10 @@ export function asciidocLanguage() {
       if (stream.match(/^\*{1,2}[^*\n]+?\*{1,2}/)) return "strong";
       if (stream.match(/^_{1,2}[^_\n]+?_{1,2}/)) return "emphasis";
       if (stream.match(/^\[\.line-through\]#[^#\n]+#/)) return "strikethrough";
-      if (stream.match(/^(?:https?:\/\/|www\.)[^\s\[]+\[[^\]]*\]/)) return "link";
+      if (stream.match(/^(?:https?:\/\/|www\.)[^\s[]+\[[^\]]*\]/)) return "link";
       if (
         stream.match(
-          /^(?:image|include|xref|link|footnote|kbd|btn|menu|latexmath|stem):[^\s\[]*\[[^\]]*\]/,
+          /^(?:image|include|xref|link|footnote|kbd|btn|menu|latexmath|stem):[^\s[]*\[[^\]]*\]/,
         )
       ) {
         return "monospace";

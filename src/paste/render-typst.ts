@@ -7,7 +7,7 @@ import { typstString } from "../image-syntax.ts";
 function escapeText(value: string): string {
   return value
     .replace(/\\/g, "\\\\")
-    .replace(/([#*_$@<>~`\[\]])/g, "\\$1")
+    .replace(/([#*_$@<>~`[\]])/g, "\\$1")
     .replace(/^(\s*)([-+/=])/gm, "$1\\$2");
 }
 

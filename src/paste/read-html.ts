@@ -588,7 +588,7 @@ export async function readHtml(raw: string): Promise<Block[]> {
   const { parse, parseFragment } = await import("parse5");
   const html = normalizeClipboardHtml(raw);
   let nodes: AnyNode[];
-  let base: string | null = null;
+  let base: string | null;
   if (/^\s*(?:<!doctype\b|<html\b|<head\b|<body\b)/i.test(html)) {
     const doc = parse(html) as AnyNode;
     const htmlElement = children(doc).find((node) => name(node) === "html");

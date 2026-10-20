@@ -108,7 +108,7 @@ export function scoreAsciidoc(raw: string): number {
   const text = stripNoise(raw);
   let score = 0;
   if (/^ {0,3}={1,6}\s+\S/m.test(text)) score += 4;
-  if (/^ {0,3}image::?[^\s\[]*\[/m.test(text)) score += 4;
+  if (/^ {0,3}image::?[^\s[]*\[/m.test(text)) score += 4;
   if (/^ {0,3}:[A-Za-z0-9_-]+:\s*\S/m.test(text)) score += 4;
   if (/^ {0,3}(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION):\s+/m.test(text)) score += 4;
   if (/^\s*\|===\s*$/m.test(text)) score += 5;
@@ -120,7 +120,7 @@ export function scoreAsciidoc(raw: string): number {
 }
 
 const BLOCK_TAG =
-  /^<(?:\!doctype\s+html|html|body|main|article|section|header|footer|div|p|h[1-6]|ul|ol|li|table|blockquote|pre|figure|details)\b/i;
+  /^<(?:!doctype\s+html|html|body|main|article|section|header|footer|div|p|h[1-6]|ul|ol|li|table|blockquote|pre|figure|details)\b/i;
 
 /** HTML is conservative for a clipboard fragment and looser for a whole buffer. */
 export function scoreHtml(raw: string, mode: "clipboard" | "document"): number {
@@ -164,14 +164,13 @@ const TAG_TOKEN =
 export function isHtmlSource(text: string): boolean {
   let depth = 0;
   let elements = 0;
-  let endsWithOpenTag = false;
+  let endsWithOpenTag: boolean | undefined;
   let index = 0;
   TAG_TOKEN.lastIndex = 0;
   for (let match = TAG_TOKEN.exec(text); match !== null; match = TAG_TOKEN.exec(text)) {
     const gap = text.slice(index, match.index);
     if (gap.trim() !== "") {
       if (depth === 0) return false;
-      endsWithOpenTag = false;
     }
     index = match.index + match[0].length;
     const token = match[0];
@@ -196,7 +195,7 @@ export function isHtmlSource(text: string): boolean {
     if (depth === 0) return false;
     endsWithOpenTag = false;
   }
-  return elements > 0 && (depth === 0 || endsWithOpenTag);
+  return elements > 0 && (depth === 0 || endsWithOpenTag === true);
 }
 
 /** The confident syntax of a text, or null when the evidence is too thin. */
