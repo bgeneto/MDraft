@@ -169,9 +169,9 @@ then exits 0 on the same tree.
   pass; `npx tsc --version` is 7.0.2 while the linter's TypeScript API is 6.0.2.
 - `cargo clippy --all-targets -- -D warnings` passes; the Rust suite reports
   91 passed and 2 ignored.
-- Smoke 105/105, AsciiDoc 55/55, Typst Pages 36/36, math 10/10, syntax 10/10,
-  word sync 33/33, rich paste 28/28 and HTML 50/50 pass. One combined run
-  reported the pre-existing HTML outline race; the suite passes on its own.
+- The full suite (`npm test -- --no-build`) passes all 27 layers, including
+  smoke 105/105, AsciiDoc 55/55, Typst Pages 36/36, HTML 50/50, the tab restore
+  and the close test.
 
 ## Open questions
 
