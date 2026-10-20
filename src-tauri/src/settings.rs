@@ -110,6 +110,16 @@ fn default_typst_view() -> String {
     "document".to_string()
 }
 
+/// The source pane's line spacing.
+///
+/// `normal` is the 1.5 established when the default was tightened; Compact and
+/// Wide are opt-in adjustments chosen in Preferences. The names, not a
+/// multiplier, are what a settings file stores, so a hand-edited value cannot
+/// produce an invalid CSS line height.
+fn default_editor_line_height() -> String {
+    "normal".to_string()
+}
+
 fn default_true() -> bool {
     true
 }
@@ -213,6 +223,9 @@ pub struct Settings {
     pub editor_font_size: u32,
     /// Maximum content width in pixels; 0 means full width.
     pub editor_max_width: u32,
+    /// "compact" | "normal" | "wide"; line spacing in the source pane.
+    #[serde(default = "default_editor_line_height")]
+    pub editor_line_height: String,
 
     // ---- Preferences: Typography -----------------------------------------
     //
@@ -386,8 +399,9 @@ impl Default for Settings {
             show_status_bar: true,
             focus_mode: false,
             typewriter_mode: false,
-            editor_font_size: 16,
+            editor_font_size: 15,
             editor_max_width: 980,
+            editor_line_height: default_editor_line_height(),
             // Empty means "the built-in default for that role"; see src/fonts.ts.
             source_font: String::new(),
             body_font: String::new(),
@@ -719,8 +733,9 @@ mod tests {
     fn defaults_are_sane() {
         let s = Settings::default();
         assert_eq!(s.view_mode, "split");
-        assert_eq!(s.editor_font_size, 16);
+        assert_eq!(s.editor_font_size, 15);
         assert_eq!(s.editor_max_width, 980);
+        assert_eq!(s.editor_line_height, "normal");
         assert_eq!(s.syntax_theme, "auto");
         assert!(s.recent_files.is_empty());
         assert!(s.spellcheck);
@@ -795,6 +810,16 @@ mod tests {
     }
 
     #[test]
+    fn editor_line_height_round_trips_as_a_name() {
+        let mut settings = Settings::default();
+        settings.editor_line_height = "compact".into();
+        let json = serde_json::to_string(&settings).unwrap();
+        assert!(json.contains(r#""editorLineHeight":"compact""#));
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.editor_line_height, "compact");
+    }
+
+    #[test]
     fn missing_fields_fall_back_to_defaults() {
         let parsed: Settings = serde_json::from_str(r#"{"theme":"dark"}"#).unwrap();
         assert_eq!(parsed.theme, "dark");
@@ -802,6 +827,7 @@ mod tests {
         assert!(parsed.sidebar_visible);
         // Settings written by an older build must still load.
         assert_eq!(parsed.on_launch, "welcome");
+        assert_eq!(parsed.editor_line_height, "normal");
         assert!(parsed.enable_math);
         assert!(!parsed.auto_save);
         assert_eq!(parsed.image_rule, "assetsFolder");

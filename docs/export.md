@@ -75,7 +75,11 @@ add and remove formats.
 
 - Markdown is converted with pandoc's Markdown reader configured for the
   dialect MDraft writes, including the backslash math delimiters it renders.
-- AsciiDoc is read with pandoc's AsciiDoc reader, not its Markdown one.
+- AsciiDoc is rendered by Asciidoctor to HTML first, then read with pandoc's
+  HTML reader. This is the same engine that draws the preview, so document
+  attributes, unset attributes (`:toc!:`), `ifdef::`/`ifndef::` conditionals,
+  includes, LaTeX and AsciiMath are resolved before pandoc sees the document.
+  The AsciiDoc target itself is the exception: it keeps the original source.
 - HTML is read with pandoc's HTML reader.
 - Typst is compiled by Typst to HTML first and that HTML is handed to pandoc.
   A `.typ` document exported to PDF is instead written by Typst directly.
@@ -113,12 +117,12 @@ Both are optional and neither is bundled.
   against the SHA-256 GitHub publishes, and unpacks it into MDraft's own data
   folder on Windows, Linux and macOS. It does not install system-wide and
   needs no administrator rights.
-- **Help › Install Typst** downloads the official compiler into the same
-  application data area on Windows. On Linux and macOS the command opens the
-  official download page instead, because Typst ships those builds as
-  `.tar.xz`; install it with your package manager or from that page. Typst is
-  used for `.typ` previews and for PDF export, and is a single executable with
-  no runtime dependencies.
+- **Help › Install Typst** downloads the official compiler, checks the archive
+  against the SHA-256 GitHub publishes, and unpacks it into the same application
+  data area on Windows and Linux. On macOS the command opens the official
+  download page instead; install it with your package manager or from that page.
+  Typst is used for `.typ` previews and for PDF export, and is a single
+  executable with no runtime dependencies.
 
 A copy on `PATH` is also found. A copy MDraft installed itself takes precedence
 over the one on `PATH`. Typst can be installed with a package manager
@@ -129,10 +133,15 @@ the [Typst download page](https://typst.app/open-source/#download).
 
 - **The pandoc route is a real conversion, not the preview.** The Markdown
   extensions `[TOC]` and `[!NOTE]`-style alerts have no pandoc equivalent and
-  arrive as literal text in DOCX, ODT and LaTeX. AsciiDoc `include::` targets
-  are not expanded by pandoc, and `:toc:` comes through empty; add `--toc` to
-  the format's Extra Arguments for a real table of contents. Typst page layout
-  is lost when pandoc writes DOCX, ODT or another flow format.
+  arrive as literal text in DOCX, ODT and LaTeX. Typst page layout is lost when
+  pandoc writes DOCX, ODT or another flow format.
+- **AsciiDoc reaches pandoc as HTML, not as AsciiDoc.** Attributes,
+  conditionals and includes are resolved by Asciidoctor, but an Asciidoctor
+  PDF theme (`:pdf-theme:`, `:pdf-page-size:`) is not applied to the Typst
+  layout. A `:toc:` arrives as Asciidoctor's static contents list, without page
+  numbers; add `--toc` to the format's Extra Arguments if pandoc's own numbered
+  table of contents is preferred. The AsciiDoc target keeps the original
+  source and pandoc's AsciiDoc reader.
 - **The native HTML and PDF (Print) exports do not have those gaps for
   Markdown and AsciiDoc**, because they use the preview's own HTML. This is why
   both routes exist.

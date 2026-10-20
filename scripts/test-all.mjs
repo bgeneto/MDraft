@@ -89,6 +89,15 @@ const SUITES = [
     script: "paste-convert-test.mjs",
   },
   {
+    // The AsciiDoc -> HTML step every pandoc export uses. Pure Asciidoctor and
+    // AsciiMath, no DOM and no application; this is where the unset-attribute,
+    // conditional and include rules are pinned.
+    id: "asciidoc-export-unit",
+    title: "AsciiDoc export source (unit)",
+    kind: "node",
+    script: "asciidoc-export-unit.mjs",
+  },
+  {
     id: "autoclose-unit",
     title: "Auto-close matching (unit)",
     kind: "node",

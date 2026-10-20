@@ -60,13 +60,16 @@ tabs, and the same Markdown document active.*
   Nothing is downloaded, and HTML guests are not checked.
 - **Typography that holds up.** Thirteen bundled typefaces, six presets,
   independent faces for editor, prose, headings and code, plus OpenType
-  controls. Preview headings and emphasis use Semibold; mathematics has its own
-  scale. Native HTML and PDF (Print) exports of Markdown and AsciiDoc embed the
-  chosen faces.
+  controls. The source pane's line height is **Compact**, **Normal** or
+  **Wide** under Preferences › Editor. Preview headings and emphasis use
+  Semibold; mathematics has its own scale. Native HTML and PDF (Print) exports
+  of Markdown and AsciiDoc embed the chosen faces.
 - **Content moves both ways.** Paste formatted text from a browser or word
-  processor and MDraft converts it into the destination's markup; copy from a
-  text preview and the formatting goes with it. Images can be pasted, dropped,
-  linked or downloaded into the document's assets folder.
+  processor and MDraft converts it into the destination's markup; paste markup
+  source and it is converted the same way, or kept byte-for-byte when it is
+  already the destination's format. Copy from a text preview and the formatting
+  goes with it. Images can be pasted, dropped, linked or downloaded into the
+  document's assets folder.
 - **Useful exports, stated plainly.** HTML needs no extra tools; PDF (Print)
   needs only a browser. DOCX, ODT, EPUB, LaTeX and the rest go through pandoc,
   which MDraft can install for you. A format whose converter is missing is
@@ -94,10 +97,10 @@ tabs, and the same Markdown document active.*
 3. Split view is the default. Use the status-bar buttons for Source or
    Preview; `Ctrl+/` jumps to the source.
 4. For `.typ` files, install the Typst compiler: **Help › Install Typst** on
-   Windows; your package manager or the [Typst download
-   page](https://typst.app/open-source/#download) on Linux, with `typst` on your
-   `PATH`. For DOCX, ODT and the other pandoc formats, use **Help › Install
-   Pandoc**. Neither is required to edit or preview Markdown, AsciiDoc or HTML.
+   Windows and Linux; on macOS use your package manager or the [Typst download
+   page](https://typst.app/open-source/#download), with `typst` on your `PATH`.
+   For DOCX, ODT and the other pandoc formats, use **Help › Install Pandoc**.
+   Neither is required to edit or preview Markdown, AsciiDoc or HTML.
 
 ## Requirements
 
@@ -111,9 +114,9 @@ tabs, and the same Markdown document active.*
   silent in-app PDF.
 - Pandoc and Typst are optional. **Help › Install Pandoc** installs pandoc
   into MDraft's own data folder on every published platform; **Help › Install
-  Typst** does the same on Windows. On Linux, install Typst with your package
-  manager or from its download page, and put `typst` on `PATH`. Administrator
-  rights are not needed for the in-app installs.
+  Typst** does the same on Windows and Linux. On macOS, install Typst with your
+  package manager or from its download page, and put `typst` on `PATH`.
+  Administrator rights are not needed for the in-app installs.
 
 ## Documentation
 

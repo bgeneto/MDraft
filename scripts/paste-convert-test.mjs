@@ -10,7 +10,7 @@
 // cheaply cover every reader/writer pair. This suite pins the matrix, the
 // destination resolution and the escaping before the UI layer sees it.
 
-import { chooseSource } from "../src/paste/detect.ts";
+import { chooseSource, isHtmlSource } from "../src/paste/detect.ts";
 import { resolvePasteDestination } from "../src/paste/detect-document.ts";
 import { planPaste } from "../src/paste/index.ts";
 import { imageSyntaxFor } from "../src/image-syntax.ts";
@@ -94,6 +94,158 @@ console.log("\n=== clipboard source choice ===");
 
   const htmlList = chooseSource(payload(null, "- one\n- two\n- three"), "html");
   check(htmlList.source === "markdown" && !htmlList.native, "a list pasted into HTML converts", htmlList.source);
+}
+
+console.log("\n=== markup source on the clipboard ===");
+{
+  const link =
+    '<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.2.1/reset.min.css">';
+
+  const table = [
+    [link, true, "a link tag"],
+    [`${link}\n<script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.2.1/reveal.js"></script>`, true, "two tags"],
+    ["<p>Hello</p>", true, "an element with text"],
+    ["<div>\n  <p>Hello <strong>world</strong></p>\n</div>", true, "a nested fragment"],
+    ["<style>p { color: red }</style>", true, "a style element"],
+    ["<div>", true, "an opening tag left open at the end"],
+    ["Use the <div> tag", false, "prose that mentions a tag"],
+    ["<div> is how you group", false, "a tag followed by prose"],
+    ["a < b", false, "a comparison"],
+    ["<!-- only a comment -->", false, "a comment alone"],
+    ["\\<p\\>", false, "an escaped tag"],
+  ];
+  for (const [text, expected, label] of table) {
+    check(isHtmlSource(text) === expected, `${expected ? "source" : "not source"}: ${label}`, JSON.stringify(text).slice(0, 52));
+  }
+
+  // What a syntax-highlighting editor puts on the clipboard: every token, its
+  // leading space included, is its own span inside a styled wrapper.
+  const highlighted =
+    `<meta charset='utf-8'><div style="color: #d4d4d4;white-space: pre;"><div>` +
+    `<span style="color: #808080;">&lt;</span><span style="color: #9CDCFE;">link</span>` +
+    `<span style="color: #9CDCFE;"> rel</span>=<span style="color: #CE9178;">"stylesheet"</span> ` +
+    `<span style="color: #9CDCFE;">href</span>=<span style="color: #CE9178;">"https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.2.1/reset.min.css"</span>` +
+    `<span style="color: #808080;">&gt;</span></div></div>`;
+
+  const choice = chooseSource(payload(highlighted, link), "html");
+  check(
+    choice.source === "html" && choice.native && choice.fromText,
+    "HTML source into HTML is the text, untouched",
+    JSON.stringify(choice),
+  );
+
+  const pasted = await planPaste(payload(highlighted, link), "html");
+  check(pasted?.text === link && pasted.converted === false, "the snippet is pasted byte-for-byte", pasted?.text);
+
+  const bare = await planPaste(payload(link, link), "html");
+  check(bare?.text === link, "a bare link tag is not dropped by the sanitizer", bare?.text);
+
+  const codeBlock = await planPaste(
+    payload(
+      `<code class="language-html">&lt;link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.2.1/reset.min.css"&gt;</code>`,
+      link,
+    ),
+    "html",
+  );
+  check(codeBlock?.text === link, "a code block copied from a docs page keeps the text", codeBlock?.text);
+
+  // The destination decides the intent: the same clipboard that is left alone
+  // in an HTML document is *converted* into Markdown. The HTML representation
+  // is a placeholder here on purpose — using it instead of the text would give
+  // "Elsewhere".
+  const article =
+    '<p>Enviar sua chave Pix pode expor dados sensíveis como <strong>CPF, e-mail ou telefone</strong> a estranhos, abrindo portas para golpes, <a href="/blog/o-que-e-doxxing-e-como-evitar/">doxing</a> e exposição indesejada.</p>';
+  const articleMarkdown =
+    "Enviar sua chave Pix pode expor dados sensíveis como **CPF, e-mail ou telefone** a estranhos, abrindo portas para golpes, [doxing](/blog/o-que-e-doxxing-e-como-evitar/) e exposição indesejada.";
+  const articleHtml = "<p>Elsewhere</p>";
+
+  const markdown = await planPaste(payload(articleHtml, article), "markdown");
+  check(
+    markdown?.text === articleMarkdown && markdown.converted === true,
+    "an HTML article pasted into Markdown becomes Markdown",
+    markdown?.text,
+  );
+
+  const asciidoc = await planPaste(payload(articleHtml, article), "asciidoc");
+  check(
+    (asciidoc?.text ?? "").includes("*CPF, e-mail ou telefone*") &&
+      (asciidoc?.text ?? "").includes("link:/blog/o-que-e-doxxing-e-como-evitar/[doxing]"),
+    "the same article into AsciiDoc becomes AsciiDoc",
+    asciidoc?.text,
+  );
+
+  const prose = await planPaste(payload("Use the <code>&lt;div&gt;</code> tag", "Use the <div> tag"), "html");
+  check(
+    prose?.converted === true && (prose?.text ?? "").includes("&lt;div&gt;"),
+    "prose that mentions a tag still converts",
+    prose?.text,
+  );
+
+  const list = await planPaste(payload(`<div style="white-space: pre">- one<br>- two</div>`, "- one\n- two"), "markdown");
+  check(
+    list?.text === "- one\n- two" && list.converted === false,
+    "a Markdown list snippet stays byte-identical",
+    JSON.stringify(list?.text),
+  );
+
+  // A tag has no content to convert, and `<link>` is a label in Typst: the
+  // characters are pasted as escaped literal text rather than raw.
+  const highlightedTag =
+    '<div style="white-space: pre">&lt;link rel="stylesheet" href="a.css"&gt;</div>';
+  const tag = '<link rel="stylesheet" href="a.css">';
+  const typst = await planPaste(payload(highlightedTag, tag), "typst");
+  check(
+    typst?.converted === false && (typst?.text ?? "").includes("\\<link"),
+    "a tag snippet into Typst becomes escaped literal text",
+    typst?.text,
+  );
+}
+
+console.log("\n=== whitespace across inline elements ===");
+{
+  const sentence =
+    "Enviar sua chave Pix pode expor dados sensíveis como <strong>CPF, e-mail ou telefone</strong> a\n" +
+    "estranhos, abrindo portas para golpes, <a href=/blog/o-que-e-doxxing-e-como-evitar/>doxing</a>\n" +
+    "e exposição indesejada.";
+  const quoted =
+    "Enviar sua chave Pix pode expor dados sensíveis como **CPF, e-mail ou telefone** a estranhos, " +
+    "abrindo portas para golpes, [doxing](/blog/o-que-e-doxxing-e-como-evitar/) e exposição indesejada.";
+
+  const exact = await planPaste(payload(`<p>${sentence}</p>`, "prose"), "markdown");
+  check(exact?.text === quoted, "spaces survive around bold and links", exact?.text);
+
+  // A browser or an extension may wrap every text run in an inline element; the
+  // space then sits inside that element, at the edge of its content.
+  const wrapped =
+    "<meta charset='utf-8'>" +
+    "<span>Enviar sua chave Pix pode expor dados sensíveis como </span>" +
+    "<strong>CPF, e-mail ou telefone</strong>" +
+    "<span> a estranhos, abrindo portas para golpes, </span>" +
+    "<a href=/blog/o-que-e-doxxing-e-como-evitar/>doxing</a>" +
+    "<span> e exposição indesejada.</span>";
+  const nested = await planPaste(payload(wrapped, "prose"), "markdown");
+  check(nested?.text === quoted, "span wrappers do not swallow the boundary spaces", nested?.text);
+
+  const asciidoc = await planPaste(payload(wrapped, "prose"), "asciidoc");
+  check(
+    asciidoc?.text ===
+      "Enviar sua chave Pix pode expor dados sensíveis como *CPF, e-mail ou telefone* a estranhos, " +
+        "abrindo portas para golpes, link:/blog/o-que-e-doxxing-e-como-evitar/[doxing] e exposição indesejada.",
+    "the same copy keeps its spaces in AsciiDoc",
+    asciidoc?.text,
+  );
+
+  const edges = await planPaste(payload("<p> <strong>  Hello  </strong> </p>", "Hello"), "markdown");
+  check(edges?.text === "**Hello**", "a block's own outer edges are still trimmed", edges?.text);
+
+  const runs = await planPaste(payload("<p>a <em>b</em>  <strong>c</strong> d</p>", "a b c d"), "markdown");
+  check(runs?.text === "a *b* **c** d", "runs of whitespace collapse to one space", runs?.text);
+
+  const emptyStrong = await planPaste(payload("<p>a<strong> </strong>b</p>", "a b"), "markdown");
+  check(emptyStrong?.text === "a b", "a whitespace-only emphasis keeps its space", emptyStrong?.text);
+
+  const emptyLink = await planPaste(payload('<p>a<a href="/x"> </a>b</p>', "a b"), "markdown");
+  check(emptyLink?.text === "a b", "a whitespace-only link keeps its space", emptyLink?.text);
 }
 
 console.log("\n=== HTML to Markdown ===");
