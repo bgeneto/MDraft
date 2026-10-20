@@ -215,14 +215,15 @@ rewrite from scratch.
 | `npm run tabs:restore:unit` | `scripts/tabs-restore-unit.mjs` | 33 checks of what is remembered and what is restored: tab order, untitled exclusion, deduplication under the platform's path identity, the 20-document cap, and the restore plan's handling of missing files — no application |
 | `npm run typst:map:unit` | `scripts/typst-page-map-unit.mjs` | 9 checks of the Typst Pages source map: a repeated one-word line with identical neighbours paints nothing, a unique neighbour window picks the clicked occurrence, ligatures and soft hyphens match, and generated text stays unmapped — no application |
 | `npm run html:map:unit` | `scripts/html-source-map-unit.mjs` | 14 checks of the HTML text-node offsets: entities and CRLF, the decoded-to-raw translation, the sample mismatch that paints nothing, and two nodes under one stamp — no application |
+| `npm run block:map:unit` | `scripts/block-map-unit.mjs` | 12 checks of the block-level source map and Typst line annotation: folded index mapping, per-node alignment across substitutions and smart punctuation, gap block fallback, Typst comments/rules/math/code/tables, and `#lorem` exclusion — no application |
 | `npm run recent` | `scripts/recent-menu-test.mjs` | 26 checks that File › Open Recent mirrors the persisted list: the launch file, a new file becoming first, the menu id opening/focusing a tab, Clear Items emptying menu and sidebar, the list refilling, and a 27-row history rendered in full by the sidebar while the menu shows 20 plus Clear Items |
-| `npm run asciidoc` | `scripts/asciidoc-test.mjs` | 51 checks of the AsciiDoc preview, source highlighting, outline, preview copy, spellcheck, includes, paste, the AsciiDoc reference, the default extension and word-level sync |
+| `npm run asciidoc` | `scripts/asciidoc-test.mjs` | 55 checks of the AsciiDoc preview, source highlighting, outline, preview copy, spellcheck, includes, paste, the AsciiDoc reference, the default extension and word-level sync |
 | `npm run asciidoc:export:unit` | `scripts/asciidoc-export-unit.mjs` | 17 unit checks of the AsciiDoc -> HTML step every pandoc export uses: unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations; no application |
 | `npm run test:sessions` | `scripts/sessions-test.mjs` | 59 unit checks of `src/sessions.ts`, with no application and no build |
 | `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 99 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
 | `npm run paste` | `scripts/rich-paste-test.mjs` | 28 checks of rich paste through the real UI: destination detection, conversion in every direction, whitespace across inline elements, preferences, Ctrl+Shift+V, undo |
 | `npm run image:syntax` | `scripts/image-syntax-test.mjs` | 14 checks of bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, including the Image preference |
-| `npm run typst:preview` | `scripts/typst-preview-test.mjs` | 33 checks of Typst Pages through PDF.js and Typst word sync: page shells, canvases, text layers, both columns, selection/copy, paragraph click, repeated-word/right-column mapping, one-word heading mapping, drag ranges, generated-text fallback, the transparent view bar, view switching and PDF disposal |
+| `npm run typst:preview` | `scripts/typst-preview-test.mjs` | 36 checks of Typst Pages through PDF.js and Typst word sync: page shells, canvases, text layers, both columns, selection/copy, paragraph click, repeated-word/right-column mapping, one-word heading mapping, drag ranges, generated-text fallback, inline-math paragraphs, tables and code blocks, the transparent view bar, view switching and PDF disposal |
 | `npm run licence` | `scripts/licence-test.mjs` | 4 checks that the bundled typefaces' licences ship inside the application. Run against its own instance: it opens a document |
 | `npm run images` | `scripts/image-paste-test.mjs` | Image paste through the real UI |
 | `npm run screenshot` | `scripts/screenshot.mjs` | PNG of the running window |
@@ -260,9 +261,10 @@ All of these need the app already running with CDP enabled (see
 | `tabs-restore-unit.mjs` | — | none — runs without the application | What is remembered and what is restored: tab order, untitled exclusion, deduplication under the platform's path identity, the 20-document cap, missing files and the active-tab fallback |
 | `typst-page-map-unit.mjs` | — | none — runs without the application | The Typst Pages source map's one-word rule: identical neighbours paint nothing, a unique window picks the occurrence, ligatures and soft hyphens fold, generated text stays unmapped |
 | `html-source-map-unit.mjs` | — | none — runs without the application | The HTML text-node rule: decoded-to-raw offsets across entities and CRLF, the sample check that fails closed, and the index that selects one node under a stamp |
+| `block-map-unit.mjs` | — | none — runs without the application | The block-level source map and Typst line annotation: folded index mapping, per-node alignment across substitutions and smart punctuation, gap block fallback, Typst comments/rules/math/code/tables, and `#lorem` exclusion |
 | `rich-paste-test.mjs` | `[port]` | `samples/feature-tour.md` | That the paste event converts HTML, leaves Markdown/plain text alone, detects an unsaved Typst/Markdown/HTML buffer, honours Ctrl+Shift+V and the preference, and undoes in one step |
 | `image-syntax-test.mjs` | `[port]` | `samples/typst-tour.typ` | A clipboard bitmap becomes `#image`, a remote image is downloaded or kept according to the Image preference, and the files land in the document's assets folder |
-| `typst-preview-test.mjs` | `[port]` | `samples/typst-pages.typ` | The Pages view is the compiler's PDF drawn by PDF.js with selectable text, both columns and two pages; a single click paints the source paragraph, a repeated word in a later line or the right column maps that occurrence, generated `#lorem` paints nothing, the view bar does not blur the page, and switching back disposes the PDF view. Document gets the same word-map checks, and a single click does not paint a word there |
+| `typst-preview-test.mjs` | `[port]` | `samples/typst-pages.typ` | The Pages view is the compiler's PDF drawn by PDF.js with selectable text, both columns and two pages; a single click paints the source paragraph, a repeated word in a later line or the right column maps that occurrence, generated `#lorem` paints nothing, the view bar does not blur the page, and switching back disposes the PDF view. Document gets the same word-map checks plus inline-math paragraphs, tables and code blocks, and a single click does not paint a word there |
 | `set-palette.mjs` | `[port] [paletteId] [--split]` | `samples/feature-tour.md` | Not a test: drives the palette through the Preferences UI so you can screenshot a theme |
 | `screenshot.mjs` | `[port] [out.png] [setupExpression]` | any | Not a test: captures the window, optionally after running a JS setup string |
 | `test-close.ps1` | `[-Exe path] [-Doc path] [-TimeoutSeconds 12]` | `samples\feature-tour.md` | Launches the release binary, sends WM_CLOSE, and asserts the process exits and writes `.window-state.json` |
@@ -463,7 +465,7 @@ hash the pixels.
 
 ## Testing
 
-Twenty-four layers, cheapest first. Run them in this order when changing anything.
+Twenty-five layers, cheapest first. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
@@ -478,13 +480,14 @@ Twenty-four layers, cheapest first. Run them in this order when changing anythin
 | Remembered tabs (unit) | `npm run tabs:restore:unit` | 33 | What is stored (order, untitled exclusion, deduplication, the 20-document cap) and what a restore plan does with it (missing files, the active-tab fallback) — no application |
 | Typst page map (unit) | `npm run typst:map:unit` | 9 | One-word lines with identical neighbours paint nothing, a unique neighbour window picks the occurrence, ligatures and soft hyphens fold, generated text stays unmapped — no application |
 | HTML source map (unit) | `npm run html:map:unit` | 14 | Entities and CRLF offsets, decoded-to-raw translation, the sample mismatch, and two text nodes under one stamp — no application |
+| Block source map (unit) | `npm run block:map:unit` | 12 | Folded index mapping, per-node alignment across substitutions and smart punctuation, gap block fallback, Typst comments/rules/math/code/tables, and `#lorem` exclusion — no application |
 | Auto-close typing | `npm run autoclose` | 33 | Pairs, step-over, Backspace, selection wrap, Markdown inline tags, HTML tags, both preferences, in all four document types |
 | Rich paste | `npm run paste` | 28 | The paste event, destination notice, preferences, Ctrl+Shift+V, undo, the same clipboard converted into Markdown and kept as source in HTML, spaces around inline elements |
 | Image syntax | `npm run image:syntax` | 14 | Bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, plus the Image preference |
-| Typst pages | `npm run typst:preview` | 33 | PDF.js page shells/canvases/text layers, both columns, A4 geometry, paragraph click, repeated-word/right-column mapping, a one-word heading, drag ranges, Pages and Document word sync, generated-text fallback, transparent view bar and PDF disposal |
+| Typst pages | `npm run typst:preview` | 36 | PDF.js page shells/canvases/text layers, both columns, A4 geometry, paragraph click, repeated-word/right-column mapping, a one-word heading, drag ranges, Pages and Document word sync, inline-math paragraphs, tables and code blocks, generated-text fallback, transparent view bar and PDF disposal |
 | Math | `npm run math` | 10 | Font loading, fraction and radical geometry |
 | Syntax | `npm run syntax` | 10 | Token colours, palette switching, and the sync mark's amber contrast on three dark palettes |
-| AsciiDoc | `npm run asciidoc` | 51 | Preview, title/TOC, math, includes, source highlighting, outline, preview copy, spellcheck, paste, the built-in reference, defaults, word-level sync |
+| AsciiDoc | `npm run asciidoc` | 55 | Preview, title/TOC, math, includes, source highlighting, outline, preview copy, spellcheck, paste, the built-in reference, defaults, word-level sync |
 | HTML guest | `npm run html` | 50 | Sandbox, IPC boundary, local assets, sync/blink, the guest word double-click, scripts-off, outline, reload-key guard |
 | Document tabs | `npm run tabs` | 104 | Several open documents, the context menu, drag and keyboard reordering, overflow arrows, the disk poll, Auto Save across tabs, caret and scroll per tab |
 | Tab restore | `npm test -- --only tabs-restore` | 25 | Two launches on one settings directory: the tabs come back in order with the remembered one active, the preference survives, and the close flush records a tab closed just before the window closed |
@@ -770,6 +773,19 @@ false conclusion was that the feature had not landed: no `.doc-tab`, and
 exe's `LastWriteTime` with the source, and search the bytes for a string only
 the new menu has (`Close Tab`). Copy the sandbox binary over
 `src-tauri\target\release\mdraft.exe` before `--no-build`.
+
+**`failed to run custom build command for mdraft ... exit code: 0xc0000142, STATUS_DLL_INIT_FAILED`**
+When `CARGO_TARGET_DIR` is not redirected out of the workspace, the Windows agent
+sandbox denies DLL initialization (`0xc0000142`) to newly compiled executables
+whose backing file lives inside `src-tauri\target\release\build\mdraft-*\build-script-build.exe` —
+the same sandbox rule that prevents an un-staged `mdraft.exe` inside the workspace
+from reaching `%APPDATA%`. Deleting `deps\*build_script_build*` does not touch
+`build\mdraft-*\build-script-build.exe` and a recompiled binary at that path hits
+the same `0xc0000142`. Temporarily replace `src-tauri\target\release\build\mdraft-<hash>`
+with a directory junction (`cmd /c mklink /J`) to a folder in `$env:TEMP` for the
+`tauri build --no-bundle` pass, then remove the junction (`cmd /c rmdir`) and
+copy the folder back so Cargo keeps its warm `src-tauri\target\release\deps` cache
+without leaving a junction in the tree.
 
 **A test that launches the app can leave it running and break the next build**
 This is how the failure above gets manufactured. Any script that starts
@@ -1570,6 +1586,9 @@ binary before the fix with `WAYLAND_DEBUG=1 /usr/bin/mdraft`:
 
 **`elementFromPoint` returns `none` for a word visibly in the iframe, and the double-click selects nothing**
 The HTML word test computed the range rect in the guest but never scrolled the guest. `getBoundingClientRect` returned y=674 while the iframe viewport was about 671 px tall, so the page coordinates fell below the frame: no selection, no `select` message, and `check("the target is on screen")` passed because it only tested `!== null`. Call `scrollIntoView({ block: "center" })` in the guest, wait for the layout, and assert `0 < y < frameOrigin.height` before sending the click. The guest's rect and the frame's rect are in different coordinate systems; `elementFromPoint` on both sides is the cheap proof that they line up.
+
+**A probe reports `csp: null` because it looks for a `<meta>` tag, while the policy is enforced**
+Tauri injects the application CSP as a **response header** for the custom protocol; there is no `meta[http-equiv="Content-Security-Policy"]` in `index.html`. Asking for that element returns `null` and reads as "no CSP" even though inline scripts are already blocked. Prove enforcement by appending a script element and checking that its side effect did not happen, or read the document response headers. Do not conclude the policy is absent from the meta tag.
 
 ## Adding a preference, end to end
 

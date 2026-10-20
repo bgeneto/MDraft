@@ -326,6 +326,59 @@ const documentMark = await mark();
 check("the Document word paints the source", documentMark === "gyroscope", documentMark);
 
 await clearSelection();
+const wrappedAfterMath = await evaluate(`(() => {
+  const host = document.querySelector(".typst-document");
+  if (!host) return null;
+  const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const match = node.data.match(/measuring the\\s+length carefully/);
+    if (!match || match.index === undefined) continue;
+    const range = document.createRange();
+    range.setStart(node, match.index);
+    range.setEnd(node, match.index + match[0].length);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return selection.toString();
+  }
+  return null;
+})()`);
+await evaluate(`document.querySelector(".cm-scroller").scrollTop = 999999`);
+await sleep(220);
+const wrappedAfterMathMark = await mark();
+check(
+  "a hard-wrapped phrase after inline math in Document view paints the exact source phrase",
+  wrappedAfterMath !== null &&
+    wrappedAfterMathMark === "measuring the|length carefully",
+  `${JSON.stringify(wrappedAfterMath)} -> ${wrappedAfterMathMark}`,
+);
+
+await clearSelection();
+const mathSelected = await evaluate(`(() => {
+  const math = document.querySelector(".typst-document p math");
+  if (!math) return null;
+  const range = document.createRange();
+  range.selectNodeContents(math);
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return selection.toString();
+})()`);
+await sleep(220);
+const mathFallbackMark = await mark();
+const mathFallbackPlain = mathFallbackMark.replace(/\|/g, "");
+check(
+  "selecting inside inline math in Document view falls back to its paragraph",
+  mathSelected !== null &&
+    mathFallbackPlain.includes("The agreement with $T = 2 pi sqrt(L / g)$") &&
+    mathFallbackPlain.includes("measuring the") &&
+    mathFallbackPlain.includes("model predicts"),
+  mathFallbackPlain.slice(0, 90),
+);
+await evaluate(`document.querySelector(".cm-scroller").scrollTop = 0`);
+await sleep(150);
+
+await clearSelection();
 const documentGenerated = await selectWord("consectetur", ".typst-document");
 check(
   "generated Document text can be selected",
@@ -541,6 +594,50 @@ check("the PDF page view is disposed", pagesGone === 0, String(pagesGone));
 check(
   "Document still maps its blocks after the switch",
   (await evaluate(`document.querySelectorAll(".typst-document [data-b]").length`)) >= 8,
+);
+
+await evaluate(`document.querySelector(".cm-scroller").scrollTop = 260`);
+await sleep(200);
+const srcWordPoint = await evaluate(`(() => {
+  const walker = document.createTreeWalker(document.querySelector(".cm-content"), NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const at = node.data.indexOf("illustrative");
+    if (at < 0) continue;
+    const range = document.createRange();
+    range.setStart(node, at);
+    range.setEnd(node, at + "illustrative".length);
+    const box = range.getBoundingClientRect();
+    if (box.width === 0 || box.height === 0) continue;
+    return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+  }
+  return null;
+})()`);
+if (srcWordPoint) {
+  await doubleClickAt(srcWordPoint);
+  await sleep(280);
+}
+const highlightBeforeSwitch = await evaluate(`(() => {
+  const highlight =
+    CSS.highlights?.get("mdraft-sync") ??
+    CSS.highlights?.get("mdraft-sync-peak");
+  return highlight ? [...highlight].map((range) => range.toString()) : null;
+})()`);
+await switchView("Pages");
+await waitFor(`document.querySelectorAll(".typst-page-shell").length >= 2`);
+await switchView("Document");
+await waitFor(`Boolean(document.querySelector(".typst-document"))`);
+await sleep(260);
+const previewHighlightAfterRender = await evaluate(`(() => {
+  const highlight =
+    CSS.highlights?.get("mdraft-sync") ??
+    CSS.highlights?.get("mdraft-sync-peak");
+  return highlight ? [...highlight].map((range) => range.toString()) : null;
+})()`);
+check(
+  "a source selection still paints the Document preview after a re-render",
+  Array.isArray(previewHighlightAfterRender) &&
+    previewHighlightAfterRender.join(" ").includes("illustrative"),
+  JSON.stringify({ srcWordPoint, highlightBeforeSwitch, previewHighlightAfterRender }),
 );
 
 console.log(`\n${passed}/${passed + failed} checks passed`);

@@ -308,8 +308,13 @@ export async function renderAsciidocPreview(
       element.classList.remove(marker);
       if (element.classList.length === 0) element.removeAttribute("class");
       if (range) {
-        element.setAttribute("data-line", String(range.line));
-        element.setAttribute("data-line-end", String(range.end));
+        const target = element.matches(".sect1, .sect2, .sect3, .sect4, .sect5")
+          ? (element.querySelector<HTMLElement>(
+              ":scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6",
+            ) ?? element)
+          : element;
+        target.setAttribute("data-line", String(range.line));
+        target.setAttribute("data-line-end", String(range.end));
       }
     }
 

@@ -128,6 +128,14 @@ const SUITES = [
     script: "html-source-map-unit.mjs",
   },
   {
+    // Folded-offset translation and sub-node word-run alignment for AsciiDoc
+    // and Typst Document block maps.
+    id: "block-map-unit",
+    title: "Block source map (unit)",
+    kind: "node",
+    script: "block-map-unit.mjs",
+  },
+  {
     id: "smoke",
     title: "DOM smoke",
     kind: "cdp",

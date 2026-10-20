@@ -52,8 +52,9 @@ percent, which is smaller than the estimated uncertainty.
 
 = Discussion
 
-The agreement is reasonable for a simple measurement. Timing several
-oscillations reduces the effect of reaction-time error, while measuring the
+The agreement with $T = 2 pi sqrt(L / g)$ is reasonable for a simple
+measurement. Timing several oscillations reduces the effect of reaction-time
+error, while measuring the
 length carefully matters because the calculated value is proportional to it.
 The small-angle approximation also matters: larger release angles make the
 period slightly longer than the model predicts.

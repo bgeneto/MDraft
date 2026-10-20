@@ -49,6 +49,7 @@ import {
 } from "./markdown";
 import {
   bindWordMap,
+  blockRangeForNode,
   fragmentKindFor,
   rangeForSource,
   snapToWords,
@@ -856,6 +857,7 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
     if (pendingPreviewScroll === null) revealCursorInPreview();
     else applyPendingPreviewScroll();
     updateActiveOutline();
+    syncPreviewFromSource();
     return;
   }
 
@@ -3054,10 +3056,20 @@ function sourceFromPreviewSelection(): { from: number; to: number } | null {
   const atomic = (kind: ReturnType<typeof fragmentKindFor>) => kind !== null && kind !== "text";
   const startKind = fragmentKindFor(map, startNode);
   const endKind = fragmentKindFor(map, endNode);
+  const blockFallback = (node: Text): { from: number; to: number } | null => {
+    const block = blockRangeForNode(map, node);
+    if (!block) return null;
+    return (
+      snapToWords(map.source, block.src0, block.src1) ?? {
+        from: block.src0,
+        to: block.src1,
+      }
+    );
+  };
 
   if (startNode === endNode) {
     const exact = sourceRangeFor(map, startNode, startOffset, endOffset);
-    if (!exact) return null;
+    if (!exact) return blockFallback(startNode);
     // A code span or a formula is one unit; a text run is widened to words.
     if (atomic(startKind)) return exact;
     return snapToWords(map.source, exact.from, exact.to) ?? exact;
@@ -3065,8 +3077,12 @@ function sourceFromPreviewSelection(): { from: number; to: number } | null {
 
   // A selection can span several nodes: a formula is several text nodes inside
   // one atomic fragment, and prose can cross inline elements.
-  const startExact = sourceRangeFor(map, startNode, startOffset, startOffset);
-  const endExact = sourceRangeFor(map, endNode, endOffset, endOffset);
+  const startExact =
+    sourceRangeFor(map, startNode, startOffset, startNode.data.length) ??
+    blockFallback(startNode);
+  const endExact =
+    sourceRangeFor(map, endNode, 0, endOffset) ??
+    blockFallback(endNode);
   if (!startExact || !endExact) return null;
   if (atomic(startKind) || atomic(endKind)) {
     return {
@@ -3074,12 +3090,9 @@ function sourceFromPreviewSelection(): { from: number; to: number } | null {
       to: Math.max(startExact.to, endExact.to),
     };
   }
-  return (
-    snapToWords(map.source, startExact.from, endExact.to) ?? {
-      from: startExact.from,
-      to: endExact.to,
-    }
-  );
+  const from = Math.min(startExact.from, endExact.from);
+  const to = Math.max(startExact.to, endExact.to);
+  return snapToWords(map.source, from, to) ?? { from, to };
 }
 
 /**
