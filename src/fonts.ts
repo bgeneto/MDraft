@@ -30,6 +30,7 @@
 //! OFL reserves the name, so a subset would have to be renamed.
 
 import catalogue from "./assets/fonts/fonts.json";
+import type { EditorLineHeight } from "./api";
 
 export interface BundledFace {
   file: string;
@@ -254,9 +255,25 @@ const ROLE_DEFAULTS: Record<string, string> = Object.fromEntries(
  * `Settings::preset_overrides`, so an unadjusted preset starts at its own
  * `defaults` (or here when omitted).
  */
-export const DEFAULT_EDITOR_FONT_SIZE = 16;
+export const DEFAULT_EDITOR_FONT_SIZE = 15;
 export const DEFAULT_BODY_FONT_SIZE = 16;
 export const DEFAULT_MATH_SCALE = 90;
+
+/**
+ * Line-height multipliers for the source pane, keyed by the stored name.
+ *
+ * Compact is 1.3 rather than 1.25: at the 10 px minimum a 1.25 line box is
+ * 12.5 px, tight enough for tall ascenders to meet the descenders above. The
+ * names are what `settings.json` stores, so a hand-edited value cannot become
+ * an invalid CSS declaration; an unknown name falls back to Normal.
+ */
+export const EDITOR_LINE_HEIGHTS: Record<EditorLineHeight, number> = {
+  compact: 1.3,
+  normal: 1.5,
+  wide: 1.8,
+};
+
+export const DEFAULT_EDITOR_LINE_HEIGHT: EditorLineHeight = "normal";
 
 export interface TypographyPreset {
   id: string;
@@ -265,7 +282,7 @@ export interface TypographyPreset {
   note: string;
   /**
    * Starting sizes for this preset before the reader adjusts them.
-   * Absent fields fall back to the application defaults (16 px / 16 px / 90%).
+   * Absent fields fall back to the application defaults (15 px / 16 px / 90%).
    */
   defaults?: {
     editorFontSize?: number;

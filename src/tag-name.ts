@@ -5,8 +5,13 @@
 //! positive inserts a closing tag into prose, a false negative costs one typing
 //! motion, so every ambiguous shape is left alone.
 
-/** Elements that never take a closing tag. */
-const VOID_ELEMENTS = new Set(
+/**
+ * Elements that never take a closing tag.
+ *
+ * Exported because the paste source rule (`src/paste/detect.ts`) needs the same
+ * list to tell markup from prose; the two must not drift.
+ */
+export const VOID_ELEMENTS = new Set(
   "area base br col embed hr img input keygen link meta param source track wbr".split(" "),
 );
 

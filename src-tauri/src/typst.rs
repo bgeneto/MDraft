@@ -22,7 +22,7 @@ use base64::Engine;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime};
 
-use crate::export::{quiet, which};
+use crate::export::{quiet, sha256_hex, which};
 
 /// Where the official downloads live. Shown whenever something has to be done by
 /// hand, because it is the page that stays correct across releases.
@@ -44,20 +44,22 @@ pub fn typst_exe() -> &'static str {
 /// The archive GitHub publishes for this platform, when automatic installation
 /// is possible.
 ///
-/// Only Windows. Linux and macOS ship `.tar.xz`, and unpacking those would mean
-/// pulling in an xz decoder — dependencies this project does not otherwise need —
-/// for a platform where `cargo install typst-cli`, `apt install typst` and
-/// `brew install typst` all work. The install command says so instead of failing
-/// obscurely.
+/// Windows gets a `.zip`; Linux gets a statically linked musl build inside a
+/// `.tar.xz`, which [`extract_binary`] decodes in-process. macOS and other
+/// architectures still install by hand, where a package manager is the better
+/// answer anyway.
 fn release_asset() -> Option<&'static str> {
-    const X86: Option<&str> = if cfg!(all(windows, target_arch = "x86_64")) {
+    if cfg!(all(windows, target_arch = "x86_64")) {
         Some("typst-x86_64-pc-windows-msvc.zip")
     } else if cfg!(all(windows, target_arch = "aarch64")) {
         Some("typst-aarch64-pc-windows-msvc.zip")
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        Some("typst-x86_64-unknown-linux-musl.tar.xz")
+    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        Some("typst-aarch64-unknown-linux-musl.tar.xz")
     } else {
         None
-    };
-    X86
+    }
 }
 
 #[derive(Serialize)]
@@ -190,16 +192,26 @@ struct Release {
 struct Asset {
     name: String,
     browser_download_url: String,
+    /// `sha256:<hex>`, published by GitHub for every release asset.
+    digest: Option<String>,
 }
 
-#[tauri::command]
-pub async fn install_typst<R: Runtime>(app: AppHandle<R>) -> Result<TypstStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || install(&app))
-        .await
-        .map_err(|e| format!("The install task could not be started: {e}"))?
+fn http_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(DOWNLOAD_TIMEOUT))
+        // GitHub rejects API requests without a User-Agent.
+        .user_agent(concat!("MDraft/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .into()
 }
 
-fn install<R: Runtime>(app: &AppHandle<R>) -> Result<TypstStatus, String> {
+/// Fetch the release, verify the archive's published digest, and unpack the
+/// compiler.
+///
+/// Kept separate from [`install`] so the whole download-verify-unpack contract
+/// can be exercised without an `AppHandle`; see the ignored test at the bottom
+/// of this file.
+fn download_binary(agent: &ureq::Agent) -> Result<(String, Vec<u8>), String> {
     let asset = release_asset().ok_or_else(|| {
         format!(
             "Typst cannot be installed automatically on this platform. Download it from \
@@ -207,12 +219,6 @@ fn install<R: Runtime>(app: &AppHandle<R>) -> Result<TypstStatus, String> {
              from PATH."
         )
     })?;
-
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(DOWNLOAD_TIMEOUT))
-        .user_agent(concat!("MDraft/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .into();
 
     let release: Release = {
         let body = agent
@@ -241,6 +247,19 @@ fn install<R: Runtime>(app: &AppHandle<R>) -> Result<TypstStatus, String> {
             )
         })?;
 
+    let expected = chosen
+        .digest
+        .as_deref()
+        .and_then(|digest| digest.strip_prefix("sha256:"))
+        .ok_or_else(|| {
+            format!(
+                "GitHub did not publish a SHA-256 for {} so the download cannot be verified. \
+                 Install Typst yourself from {DOWNLOAD_PAGE} and it will be picked up from PATH.",
+                chosen.name
+            )
+        })?
+        .to_lowercase();
+
     let archive = agent
         .get(&chosen.browser_download_url)
         .call()
@@ -251,12 +270,31 @@ fn install<R: Runtime>(app: &AppHandle<R>) -> Result<TypstStatus, String> {
         .read_to_vec()
         .map_err(|e| format!("Could not read the download: {e}"))?;
 
-    let binary = extract_binary(&archive)?;
+    let actual = sha256_hex(&archive);
+    if actual != expected {
+        return Err(format!(
+            "The downloaded Typst archive did not match the digest GitHub published, so it was \
+             discarded.\n expected {expected}\n got      {actual}"
+        ));
+    }
+
+    Ok((release.tag_name, extract_binary(&archive)?))
+}
+
+#[tauri::command]
+pub async fn install_typst<R: Runtime>(app: AppHandle<R>) -> Result<TypstStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || install(&app))
+        .await
+        .map_err(|e| format!("The install task could not be started: {e}"))?
+}
+
+fn install<R: Runtime>(app: &AppHandle<R>) -> Result<TypstStatus, String> {
+    let (tag, binary) = download_binary(&http_agent())?;
 
     let root = managed_root(app).ok_or_else(|| {
         "The application could not work out where to put Typst, so it was not installed.".to_string()
     })?;
-    let version = release.tag_name.trim_start_matches('v').to_string();
+    let version = tag.trim_start_matches('v').to_string();
     let dir = root.join(&version);
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
@@ -323,7 +361,44 @@ fn extract_binary(archive: &[u8]) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+/// Read the `typst` member out of the Linux release tarball.
+///
+/// The xz stream is decoded in memory with the pure-Rust `lzma-rs`, so no system
+/// `xz` binary or `liblzma` is involved. Only the matching member's bytes are
+/// kept: nothing is unpacked to disk and the entry's path is never used to
+/// construct a destination.
+#[cfg(target_os = "linux")]
+fn extract_binary(archive: &[u8]) -> Result<Vec<u8>, String> {
+    let mut tar_bytes = Vec::new();
+    lzma_rs::xz_decompress(&mut std::io::Cursor::new(archive), &mut tar_bytes)
+        .map_err(|e| format!("The downloaded archive is not readable xz: {e}"))?;
+
+    let mut tar = tar::Archive::new(std::io::Cursor::new(tar_bytes));
+    let entries = tar
+        .entries()
+        .map_err(|e| format!("The downloaded archive is not a readable tar: {e}"))?;
+    for entry in entries {
+        let mut entry = entry.map_err(|e| format!("Could not read a tar entry: {e}"))?;
+        let path = entry
+            .path()
+            .map_err(|e| format!("Could not read a tar entry name: {e}"))?
+            .into_owned();
+        if path.file_name().and_then(|n| n.to_str()) != Some("typst") {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        entry
+            .read_to_end(&mut bytes)
+            .map_err(|e| format!("Could not read the Typst binary: {e}"))?;
+        if !bytes.is_empty() {
+            return Ok(bytes);
+        }
+    }
+    Err("The downloaded archive did not contain a typst binary. Its layout may have changed."
+        .to_string())
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 fn extract_binary(_archive: &[u8]) -> Result<Vec<u8>, String> {
     Err("Automatic installation is not implemented on this platform.".into())
 }
@@ -676,7 +751,10 @@ fn render<R: Runtime>(
     mode: &str,
 ) -> Result<RenderedTypst, String> {
     let typst = find_typst(app).ok_or_else(|| {
-        format!("Typst is not installed, so .typ documents cannot be previewed. {DOWNLOAD_PAGE}")
+        format!(
+            "Typst is not installed, so .typ documents cannot be previewed. \
+             Install it via Help › Install Typst... or manually from {DOWNLOAD_PAGE}."
+        )
     })?;
 
     let dir = std::env::temp_dir().join("mdraft-typst");
@@ -728,19 +806,101 @@ mod tests {
     }
 
     #[test]
-    fn the_windows_archive_name_matches_what_github_publishes() {
+    fn the_archive_name_matches_what_github_publishes() {
         // Pinned because the asset name is a promise between two projects: if
         // Typst renames it, the installer fails with "no build called ..." and
         // this test is the reminder of what it used to be.
         if cfg!(all(windows, target_arch = "x86_64")) {
             assert_eq!(release_asset(), Some("typst-x86_64-pc-windows-msvc.zip"));
         }
+        if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            assert_eq!(
+                release_asset(),
+                Some("typst-x86_64-unknown-linux-musl.tar.xz")
+            );
+        }
+        if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+            assert_eq!(
+                release_asset(),
+                Some("typst-aarch64-unknown-linux-musl.tar.xz")
+            );
+        }
     }
 
     #[test]
-    fn automatic_installation_is_windows_only_and_says_so() {
-        // Every other platform has a package manager that does this better, and
-        // shipping an xz decoder to duplicate it is not worth the bytes.
-        assert_eq!(release_asset().is_some(), cfg!(windows));
+    fn automatic_installation_is_available_where_a_single_executable_is_published() {
+        let expected = (cfg!(windows) || cfg!(target_os = "linux"))
+            && (cfg!(target_arch = "x86_64") || cfg!(target_arch = "aarch64"));
+        assert_eq!(release_asset().is_some(), expected);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_linux_archive_reader_finds_the_typst_member() {
+        let payload = b"#!/bin/sh\necho 'typst 9.9.9'\n";
+        let mut tar_bytes = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut tar_bytes);
+            let mut header = tar::Header::new_gnu();
+            header.set_size(payload.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder
+                .append_data(
+                    &mut header,
+                    "typst-x86_64-unknown-linux-musl/typst",
+                    &payload[..],
+                )
+                .unwrap();
+            builder.finish().unwrap();
+        }
+
+        let mut xz = Vec::new();
+        lzma_rs::xz_compress(&mut std::io::Cursor::new(&tar_bytes), &mut xz).unwrap();
+
+        assert_eq!(extract_binary(&xz).unwrap(), payload.to_vec());
+    }
+
+    /// The installer talks to a live service whose asset naming, digest field
+    /// and archive layout are all outside our control. Any of the three can
+    /// change without notice, and the failure would only surface the first time
+    /// a user pressed the button — so this exercises the real contract.
+    ///
+    /// Ignored by default because it downloads about 18 MB:
+    ///
+    /// ```text
+    /// cargo test -- --ignored --nocapture downloading_typst
+    /// ```
+    #[test]
+    #[ignore = "downloads ~18 MB from GitHub"]
+    fn downloading_typst_yields_a_runnable_binary() {
+        let (tag, binary) =
+            download_binary(&http_agent()).expect("the installer contract still holds");
+        assert!(!tag.is_empty(), "the release has no tag");
+        assert!(
+            binary.len() > 1_000_000,
+            "the extracted binary is only {} bytes, which cannot be Typst",
+            binary.len()
+        );
+        // A zip starts with "PK"; anything else means we unpacked a README or a
+        // directory entry by mistake.
+        assert_ne!(&binary[..2], b"PK", "extracted an archive, not the binary");
+
+        let dir = std::env::temp_dir().join("mdraft-typst-contract");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(typst_exe());
+        std::fs::write(&path, &binary).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let version = probe_version(&path).expect("the downloaded Typst did not run");
+        assert!(
+            version.chars().next().is_some_and(|c| c.is_ascii_digit()),
+            "unexpected version {version:?}"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 }

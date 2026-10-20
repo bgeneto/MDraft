@@ -119,22 +119,101 @@ function cleanText(value: string): string {
   return value.replace(/\u00a0/g, " ").replace(/[ \t\r\n\f]+/g, " ");
 }
 
-function trimInline(nodes: Inline[]): Inline[] {
+/**
+ * Merge adjacent text nodes and collapse the whitespace runs a merge can
+ * create. Whitespace at the edges is kept: between inline elements it is
+ * significant (`como <strong>x</strong> a` must not become `como**x**a`).
+ */
+function joinText(nodes: Inline[]): Inline[] {
   const out: Inline[] = [];
   for (const node of nodes) {
-    if (node.kind === "text") {
-      if (!node.value) continue;
-      const previous = out[out.length - 1];
-      if (previous?.kind === "text") previous.value += node.value;
-      else out.push({ ...node });
-    } else {
+    if (node.kind !== "text") {
       out.push(node);
+      continue;
+    }
+    if (!node.value) continue;
+    const previous = out[out.length - 1];
+    if (previous?.kind === "text") {
+      previous.value = `${previous.value}${node.value}`.replace(/[ \t\r\n\f]+/g, " ");
+    } else {
+      out.push({ ...node });
     }
   }
-  if (out[0]?.kind === "text") out[0].value = out[0].value.replace(/^\s+/, "");
-  const last = out[out.length - 1];
-  if (last?.kind === "text") last.value = last.value.replace(/\s+$/, "");
-  return out.filter((node) => node.kind !== "text" || node.value.length > 0);
+  return out;
+}
+
+/**
+ * Drop the whitespace at the start of an inline flow, descending into wrappers:
+ * `<p> <strong> Hello</strong>` loses the space before `Hello`, which is the
+ * <p>'s edge and not the <strong>'s.
+ */
+function trimStart(nodes: Inline[]): Inline[] {
+  const out: Inline[] = [];
+  let trimming = true;
+  for (const node of nodes) {
+    if (!trimming) {
+      out.push(node);
+      continue;
+    }
+    if (node.kind === "text") {
+      const value = node.value.replace(/^\s+/, "");
+      if (value === "") continue;
+      out.push({ ...node, value });
+      trimming = false;
+      continue;
+    }
+    if ("children" in node) {
+      const children = trimStart(node.children);
+      if (children.length === 0) continue;
+      out.push({ ...node, children });
+      trimming = false;
+      continue;
+    }
+    // code, image, math and break are visible atoms.
+    out.push(node);
+    trimming = false;
+  }
+  return out;
+}
+
+/** The mirror of `trimStart`: the whitespace at the end of a flow. */
+function trimEnd(nodes: Inline[]): Inline[] {
+  const out: Inline[] = [];
+  let trimming = true;
+  for (let index = nodes.length - 1; index >= 0; index -= 1) {
+    const node = nodes[index];
+    if (!trimming) {
+      out.push(node);
+      continue;
+    }
+    if (node.kind === "text") {
+      const value = node.value.replace(/\s+$/, "");
+      if (value === "") continue;
+      out.push({ ...node, value });
+      trimming = false;
+      continue;
+    }
+    if ("children" in node) {
+      const children = trimEnd(node.children);
+      if (children.length === 0) continue;
+      out.push({ ...node, children });
+      trimming = false;
+      continue;
+    }
+    out.push(node);
+    trimming = false;
+  }
+  return out.reverse();
+}
+
+/**
+ * The inline flow of a block: adjacent text merged, the block's outer edges
+ * trimmed through wrappers. Only the block's edges, never an element's own —
+ * trimming inside every wrapper is what swallowed the spaces around bold text
+ * and links copied from a rendered page.
+ */
+function trimFlow(nodes: Inline[]): Inline[] {
+  return trimEnd(trimStart(joinText(nodes)));
 }
 
 function hasVisible(nodes: Inline[]): boolean {
@@ -142,8 +221,10 @@ function hasVisible(nodes: Inline[]): boolean {
 }
 
 function wrap(kind: "strong" | "em" | "strike" | "sup" | "sub", nodes: Inline[]): Inline[] {
-  const body = trimInline(nodes);
-  return body.length > 0 ? [{ kind, children: body }] : [];
+  const body = joinText(nodes);
+  // Whitespace-only emphasis has no emphasis, but its space still separates the
+  // words around it.
+  return hasVisible(body) ? [{ kind, children: body }] : body;
 }
 
 function styleFlags(node: AnyNode): { strong: boolean; em: boolean; strike: boolean; sup: boolean; sub: boolean } {
@@ -260,11 +341,11 @@ function convertInline(node: AnyNode, ctx: Context): Inline[] {
   }
   if (tag === "img") return imageNode(node, ctx);
 
-  const kids = trimInline(children(node).flatMap((child) => convertInline(child, ctx)));
+  const kids = joinText(children(node).flatMap((child) => convertInline(child, ctx)));
   const flags = styleFlags(node);
   if (tag === "a") {
     const href = safeHref(attr(node, "href"));
-    if (href && kids.length > 0) {
+    if (href && hasVisible(kids)) {
       return [{ kind: "link", href, title: attr(node, "title") ?? undefined, children: kids }];
     }
     return kids;
@@ -284,7 +365,9 @@ function convertInline(node: AnyNode, ctx: Context): Inline[] {
 function inlineFrom(node: AnyNode, ctx: Context): Inline[] {
   const tag = name(node);
   if (BLOCK_NAMES.has(tag)) return [];
-  return trimInline(convertInline(node, ctx));
+  // No edge trim here: this node is one piece of the block's inline flow, and
+  // the space between it and its sibling text belongs to that flow.
+  return joinText(convertInline(node, ctx));
 }
 
 function codeLanguage(pre: AnyNode): string | null {
@@ -330,7 +413,7 @@ function tableBlock(node: AnyNode, ctx: Context): Block[] {
       }
     }
     for (const cell of cells) {
-      const body = trimInline(children(cell).flatMap((child) => convertInline(child, ctx)));
+      const body = trimFlow(children(cell).flatMap((child) => convertInline(child, ctx)));
       const align = alignOf(cell);
       const column = line.length;
       if (aligns[column] === undefined) aligns[column] = align;
@@ -364,7 +447,7 @@ function listBlock(node: AnyNode, ctx: Context): Block[] {
       }
     }
     if (blocks.length === 0) {
-      const inline = trimInline(children(li).flatMap((child) => convertInline(child, ctx)));
+      const inline = trimFlow(children(li).flatMap((child) => convertInline(child, ctx)));
       if (inline.length > 0) blocks.push({ kind: "paragraph", children: inline });
     }
     items.push({ blocks, task });
@@ -382,11 +465,11 @@ function blockNode(node: AnyNode, ctx: Context): Block[] {
   if (tag === "#text" || tag === "#comment") return [];
   if (DROP_NAMES.has(tag) || hidden(node)) return [];
   if (/^h[1-6]$/.test(tag)) {
-    const body = trimInline(children(node).flatMap((child) => convertInline(child, ctx)));
+    const body = trimFlow(children(node).flatMap((child) => convertInline(child, ctx)));
     return body.length > 0 ? [{ kind: "heading", level: Number(tag[1]), children: body }] : [];
   }
   if (tag === "p") {
-    const body = trimInline(children(node).flatMap((child) => convertInline(child, ctx)));
+    const body = trimFlow(children(node).flatMap((child) => convertInline(child, ctx)));
     return hasVisible(body) ? [{ kind: "paragraph", children: body }] : [];
   }
   if (tag === "ul" || tag === "ol") return listBlock(node, ctx);
@@ -408,7 +491,7 @@ function blockNode(node: AnyNode, ctx: Context): Block[] {
     const out: Block[] = [];
     for (const child of children(node)) {
       if (name(child) === "dt") {
-        const body = trimInline(children(child).flatMap((entry) => convertInline(entry, ctx)));
+        const body = trimFlow(children(child).flatMap((entry) => convertInline(entry, ctx)));
         if (body.length) out.push({ kind: "paragraph", children: [{ kind: "strong", children: body }] });
       } else if (name(child) === "dd") {
         out.push(...convertBlocks(children(child), ctx));
@@ -432,7 +515,7 @@ function convertBlocks(nodes: AnyNode[], ctx: Context): Block[] {
   const out: Block[] = [];
   let inline: Inline[] = [];
   const flush = () => {
-    const body = trimInline(inline);
+    const body = trimFlow(inline);
     inline = [];
     if (hasVisible(body)) out.push({ kind: "paragraph", children: body });
   };
@@ -508,7 +591,7 @@ export async function readHtmlInline(raw: string): Promise<Inline[]> {
   const { parseFragment } = await import("parse5");
   const fragment = parseFragment(raw) as AnyNode;
   const base = findBase(children(fragment));
-  return trimInline(children(fragment).flatMap((child) => convertInline(child, { base })));
+  return joinText(children(fragment).flatMap((child) => convertInline(child, { base })));
 }
 
 /** Plain text extraction for the last-resort fallback. */

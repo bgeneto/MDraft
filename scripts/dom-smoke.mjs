@@ -128,6 +128,8 @@ const doc = await evaluate(`(() => {
     bootError: document.body.textContent.includes('Failed to start MDraft'),
     editorLines: q('.cm-line'),
     editorChars: (document.querySelector('.cm-content')?.textContent ?? '').length,
+    editorFontSize: getComputedStyle(document.querySelector('.cm-editor')).fontSize,
+    editorLineHeight: getComputedStyle(document.querySelector('.cm-scroller')).lineHeight,
     previewChildren: preview ? preview.children.length : 0,
     headings: q('#preview h1') + q('#preview h2') + q('#preview h3'),
     tables: q('#preview table'),
@@ -197,6 +199,13 @@ for (const [key, value] of Object.entries(doc)) console.log(`  ${key.padEnd(16)}
 
 check("boot succeeded", !doc.bootError);
 check("editor rendered", doc.editorLines > 5 && doc.editorChars > 200);
+// 1.5 is the default line height; a fresh 15 px editor therefore measures
+// 22.5 px per line. A changed font size without a proportional line box means
+// the unitless value was replaced by a fixed one.
+check(
+  "editor starts at 15px with a proportional 1.5 line height",
+  doc.editorFontSize === "15px" && doc.editorLineHeight === "22.5px",
+);
 check("preview rendered", doc.previewChildren > 5);
 check("headings", doc.headings >= 3);
 check("gfm table", doc.tables >= 1 && doc.tableRows >= 3);
@@ -562,8 +571,8 @@ check(
 // Editor font size, Preview font size and Math scale are reader adjustments,
 // not part of a preset's identity. Editing one must leave the picker on the
 // preset, and each preset must remember its own sizes across a round trip.
-// An unvisited preset starts at its default sizes (18/85 for Serif, 18/77 for
-// Renaissance, 16/90 for System).
+// An unvisited preset starts at its default sizes (15/18/85 for Serif,
+// 15/18/77 for Renaissance, 15/16/90 for System).
 const presetSizes = await evaluate(`(async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const section = [...document.querySelectorAll('.prefs-section')]
@@ -628,7 +637,7 @@ const presetSizes = await evaluate(`(async () => {
   const systemBack = read();
 
   // Leave the suite on the first-run sizes, whichever check failed.
-  setNumber('Editor font size', 16);
+  setNumber('Editor font size', 15);
   setNumber('Preview font size', 16);
   setNumber('Math scale', 90);
   await sleep(200);
@@ -668,11 +677,11 @@ check(
 );
 check(
   "an unvisited preset starts at its default sizes",
-  presetSizes.serifFresh?.editor === "16" &&
+  presetSizes.serifFresh?.editor === "15" &&
     presetSizes.serifFresh?.body === "18" &&
     presetSizes.serifFresh?.math === "85" &&
     presetSizes.serifFresh?.oldstyle === true &&
-    presetSizes.renaissance?.editor === "16" &&
+    presetSizes.renaissance?.editor === "15" &&
     presetSizes.renaissance?.body === "18" &&
     presetSizes.renaissance?.math === "77" &&
     presetSizes.renaissance?.oldstyle === true,
@@ -696,11 +705,175 @@ check(
     presetSizes.systemBack?.math === "92",
 );
 check(
-  "the preset test restores 16 px / 90%",
-  presetSizes.reset?.editor === "16" &&
+  "the preset test restores 15 px / 90%",
+  presetSizes.reset?.editor === "15" &&
     presetSizes.reset?.body === "16" &&
     presetSizes.reset?.math === "90" &&
     presetSizes.reset?.active === "System",
+);
+
+// Line Height lives under Editor, directly after Content Width. It stores a
+// name rather than a number, applies only to the source pane, and must survive
+// both a font-size change and a preset switch. The measurements are the point:
+// at 15 px the three choices are 19.5 / 22.5 / 27 px, not merely a changed
+// select value.
+const lineHeightPref = await evaluate(`(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const section = [...document.querySelectorAll('.prefs-section')]
+    .find((s) => s.textContent === 'Editor');
+  if (section) section.click();
+  await sleep(200);
+
+  const labelOf = (row) => (row.querySelector('.prefs-label')?.textContent ?? '').replace('?', '').trim();
+  const rows = () => [...document.querySelectorAll('.prefs-row')];
+  const row = (label) => rows().find((r) => labelOf(r) === label);
+  const select = (label) => row(label)?.querySelector('select') ?? null;
+  const setSelect = (label, value) => {
+    const field = select(label);
+    if (!field) return false;
+    field.value = value;
+    field.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  };
+  const setNumber = (label, value) => {
+    const field = row(label)?.querySelector('input[type=number]') ?? null;
+    if (!field) return false;
+    field.value = String(value);
+    field.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  };
+  const computed = () => getComputedStyle(document.querySelector('.cm-scroller')).lineHeight;
+  const stored = async () => (await window.__TAURI_INTERNALS__.invoke('get_settings')).editorLineHeight;
+
+  const labels = rows().map(labelOf);
+  const lineIndex = labels.indexOf('Line Height');
+  const widthIndex = labels.indexOf('Content Width');
+  const control = select('Line Height');
+  if (!control) return JSON.stringify({ found: false });
+
+  const options = [...control.options].map((o) => [o.value, o.textContent]);
+  const initial = control.value;
+
+  if (!setSelect('Line Height', 'compact')) return JSON.stringify({ found: false });
+  await sleep(300);
+  const compact = computed();
+  let compactStored = '';
+  for (let i = 0; i < 30 && compactStored !== 'compact'; i += 1) {
+    await sleep(100);
+    compactStored = await stored();
+  }
+
+  if (!setSelect('Line Height', 'normal')) return JSON.stringify({ found: false });
+  await sleep(300);
+  const normal = computed();
+
+  if (!setSelect('Line Height', 'wide')) return JSON.stringify({ found: false });
+  await sleep(300);
+  const wide = computed();
+
+  // The multiplier must follow Editor font size: 1.5 x 20 px = 30 px. The size
+  // field lives in Typography, so move there and back to set each preference.
+  const showSection = (name) => {
+    const target = [...document.querySelectorAll('.prefs-section')]
+      .find((s) => s.textContent === name);
+    if (target) target.click();
+  };
+  showSection('Typography');
+  await sleep(200);
+  if (!setNumber('Editor font size', 20)) return JSON.stringify({ found: false });
+  await sleep(250);
+  showSection('Editor');
+  await sleep(200);
+  setSelect('Line Height', 'normal');
+  await sleep(300);
+  const scaled = computed();
+
+  showSection('Typography');
+  await sleep(200);
+  setNumber('Editor font size', 15);
+  await sleep(250);
+
+  // A preset switch must not reset the global spacing. Serif remembers 20 px
+  // from the earlier preset test, so Wide there is 1.8 x 20 = 36 px.
+  showSection('Editor');
+  await sleep(200);
+  setSelect('Line Height', 'wide');
+  await sleep(250);
+  showSection('Typography');
+  await sleep(200);
+  const choose = (text) => {
+    const button = [...document.querySelectorAll('.prefs-choice')]
+      .find((b) => b.textContent === text);
+    if (button) button.click();
+  };
+  choose('Serif');
+  await sleep(350);
+  const afterPreset = await stored();
+  const presetHeight = computed();
+  choose('System');
+  await sleep(350);
+
+  // Leave the suite on first-run state: System preset, Normal spacing.
+  showSection('Editor');
+  await sleep(200);
+  setSelect('Line Height', 'normal');
+  await sleep(300);
+  const restored = select('Line Height')?.value ?? '';
+  const restoredHeight = computed();
+
+  return JSON.stringify({
+    found: true,
+    options,
+    initial,
+    directlyBelow: lineIndex >= 0 && lineIndex === widthIndex + 1,
+    compact,
+    compactStored,
+    normal,
+    wide,
+    scaled,
+    afterPreset,
+    presetHeight,
+    restored,
+    restoredHeight,
+  });
+})()`);
+
+console.log("\n=== Line Height preference ===");
+console.log(`  choices  ${lineHeightPref.options?.map((o) => o[1] + '=' + o[0]).join(" | ")}`);
+console.log(
+  `  measured ${lineHeightPref.compact} / ${lineHeightPref.normal} / ${lineHeightPref.wide}` +
+    ` · 20px Normal ${lineHeightPref.scaled} · after preset ${lineHeightPref.presetHeight}`,
+);
+check(
+  "Line Height sits directly below Content Width",
+  lineHeightPref.found === true && lineHeightPref.directlyBelow === true,
+);
+check(
+  "Line Height offers Compact, Normal and Wide",
+  lineHeightPref.options?.map((o) => o[0]).join(",") === "compact,normal,wide" &&
+    lineHeightPref.options?.map((o) => o[1]).join(",") === "Compact,Normal,Wide",
+);
+check(
+  "each Line Height choice changes the source line box",
+  lineHeightPref.compact === "19.5px" &&
+    lineHeightPref.normal === "22.5px" &&
+    lineHeightPref.wide === "27px",
+);
+check(
+  "the Line Height choice reaches the settings file",
+  lineHeightPref.compactStored === "compact",
+);
+check(
+  "the line height scales with Editor font size",
+  lineHeightPref.scaled === "30px",
+);
+check(
+  "switching presets keeps the line height",
+  lineHeightPref.afterPreset === "wide" && lineHeightPref.presetHeight === "36px",
+);
+check(
+  "the Line Height test restores Normal",
+  lineHeightPref.restored === "normal" && lineHeightPref.restoredHeight === "22.5px",
 );
 
 // Close with Escape.

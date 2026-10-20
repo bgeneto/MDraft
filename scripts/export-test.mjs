@@ -209,6 +209,33 @@ for (const format of formats) {
   }
 }
 
+// (3c) The AsciiDoc frontend renders the source to HTML and sends
+//      `language: "html"`. Asciidoctor emits `\(…\)` / `\[…\]`; without the
+//      backslash math extensions pandoc's HTML reader prints them literally.
+{
+  const output = join(workDir, "asciidoc-rendered.tex");
+  const result = await call("run_export", {
+    request: {
+      formatId: "latex",
+      markdown:
+        "<p>Inline \\(x^2\\) and display:</p><p>\\[\\int_0^1 x^2\\,dx\\]</p>\n",
+      outputPath: output,
+      inputPath: null,
+      language: "html",
+    },
+  });
+  if (!result.ok) {
+    check(false, "rendered AsciiDoc HTML keeps its mathematics", result.error.split("\n")[0]);
+  } else {
+    const text = readFileSync(output, "utf8");
+    check(
+      text.includes("\\(x^2\\)") && text.includes("\\int_0^1"),
+      "rendered AsciiDoc HTML keeps its mathematics",
+      text.split("\n").find((line) => line.includes("x^2")) ?? "no formula",
+    );
+  }
+}
+
 // (4) An export must not be able to clobber the document it is exporting.
 //     Pandoc reads stdin and would happily truncate the source file.
 if (documentPath && documentPath.endsWith(".md")) {

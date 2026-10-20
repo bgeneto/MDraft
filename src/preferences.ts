@@ -13,7 +13,9 @@ import * as api from "./api";
 import {
   DEFAULT_BODY_FONT_SIZE,
   DEFAULT_EDITOR_FONT_SIZE,
+  DEFAULT_EDITOR_LINE_HEIGHT,
   DEFAULT_MATH_SCALE,
+  EDITOR_LINE_HEIGHTS,
   FONT_SUGGESTIONS,
   TYPOGRAPHY_PRESETS,
   TYPOGRAPHY_ROLES,
@@ -847,6 +849,28 @@ function buildSections(host: PreferencesHost): Section[] {
           ],
           get: () => String(s().editorMaxWidth),
           set: (value) => host.update({ editorMaxWidth: Number(value) }),
+        },
+        {
+          kind: "select",
+          label: "Line Height",
+          help:
+            "Spacing between lines in the source pane: Compact is 1.3× the font size, Normal 1.5× and Wide 1.8×. The preview keeps its own reading line height.",
+          options: [
+            ["compact", "Compact"],
+            ["normal", "Normal"],
+            ["wide", "Wide"],
+          ],
+          // A hand-edited settings file may contain a name this build does not
+          // know; show Normal rather than leaving the control blank.
+          get: () =>
+            EDITOR_LINE_HEIGHTS[s().editorLineHeight] !== undefined
+              ? s().editorLineHeight
+              : DEFAULT_EDITOR_LINE_HEIGHT,
+          set: (value) => {
+            if (value === "compact" || value === "normal" || value === "wide") {
+              host.update({ editorLineHeight: value });
+            }
+          },
         },
         {
           kind: "checkbox",

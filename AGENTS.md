@@ -197,9 +197,9 @@ rewrite from scratch.
 | `npm run stage` | `scripts/stage-artifacts.mjs` | Re-stage what is already built |
 | `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
-| `npm run test:rust` | `cargo test` | 90 tests on Windows (89 run, one ignored download); Linux has 89 total (88 run, one ignored) |
+| `npm run test:rust` | `cargo test` | 93 tests (91 run, two ignored downloads) on both platforms |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. The tab-restore layer is the exception: two launches of the same instance's settings directory, closed with WM_CLOSE in between so the close flush runs. Puts back the working tree and the developer's own settings afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
-| `npm run smoke` | `scripts/dom-smoke.mjs` | 97 checks against `samples/feature-tour.md` |
+| `npm run smoke` | `scripts/dom-smoke.mjs` | 105 checks against `samples/feature-tour.md` |
 | `npm run word-sync` | `scripts/word-sync-test.mjs` | 30 checks of word-level sync against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, no scroll, Escape, and the fallbacks |
 | `npm run autoclose:unit` | `scripts/autoclose-unit.mjs` | 17 checks of the tag matcher: attributes, custom elements, void and self-closing tags, autolinks, escapes, declarations, prose — no application |
 | `npm run autoclose` | `scripts/autoclose-test.mjs` | 33 checks of pairs, quotes, backticks, HTML tags and both preferences, typed through the real editor in Markdown, HTML, Typst and AsciiDoc |
@@ -208,16 +208,17 @@ rewrite from scratch.
 | `npm run math` | `scripts/math-render-check.mjs` | 10 checks against the physics paper |
 | `npm run syntax` | `scripts/syntax-theme-test.mjs` | 7 checks that highlighting is real |
 | `npm run html` | `scripts/html-preview-test.mjs` | 43 checks of the sandboxed HTML guest |
-| `npm run export` | `scripts/export-test.mjs` | 35 checks of every export path, against real pandoc, including an AsciiDoc source |
+| `npm run export` | `scripts/export-test.mjs` | 36 checks of every export path, against real pandoc, including an AsciiDoc source and the rendered-HTML math reader |
 | `npm run typography` | `scripts/typography-test.mjs` | 48 checks that each face loads, each OpenType switch changes pixels, the six-preset matrix holds, the four new body faces render differently, and the Semibold weights are real |
 | `npm run shortcuts` | `scripts/shortcut-test.mjs` | 43 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, that the zoom chip follows the level, that a new tab keeps the previous buffer's undo, and that the webview's F5/Ctrl+R reload keys are swallowed |
 | `npm run tabs` | `scripts/document-tabs-test.mjs` | 104 checks of several open documents: sidebar and Recents, `open-files`, active-tab styling, the tab context menu, keyboard navigation, caret and scroll per tab, dirty dot, × and middle-click, Ctrl+Tab, drag and keyboard reordering, the disk poll, Auto Save across tabs, overflow arrows and the wheel, Close Others, the last tab |
 | `npm run tabs:restore:unit` | `scripts/tabs-restore-unit.mjs` | 33 checks of what is remembered and what is restored: tab order, untitled exclusion, deduplication under the platform's path identity, the 20-document cap, and the restore plan's handling of missing files — no application |
 | `npm run recent` | `scripts/recent-menu-test.mjs` | 26 checks that File › Open Recent mirrors the persisted list: the launch file, a new file becoming first, the menu id opening/focusing a tab, Clear Items emptying menu and sidebar, the list refilling, and a 27-row history rendered in full by the sidebar while the menu shows 20 plus Clear Items |
 | `npm run asciidoc` | `scripts/asciidoc-test.mjs` | 51 checks of the AsciiDoc preview, source highlighting, outline, preview copy, spellcheck, includes, paste, the AsciiDoc reference, the default extension and word-level sync |
+| `npm run asciidoc:export:unit` | `scripts/asciidoc-export-unit.mjs` | 17 unit checks of the AsciiDoc -> HTML step every pandoc export uses: unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations; no application |
 | `npm run test:sessions` | `scripts/sessions-test.mjs` | 59 unit checks of `src/sessions.ts`, with no application and no build |
-| `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 72 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
-| `npm run paste` | `scripts/rich-paste-test.mjs` | 23 checks of rich paste through the real UI: destination detection, conversion, preferences, Ctrl+Shift+V, undo |
+| `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 99 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
+| `npm run paste` | `scripts/rich-paste-test.mjs` | 28 checks of rich paste through the real UI: destination detection, conversion in every direction, whitespace across inline elements, preferences, Ctrl+Shift+V, undo |
 | `npm run image:syntax` | `scripts/image-syntax-test.mjs` | 14 checks of bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, including the Image preference |
 | `npm run typst:preview` | `scripts/typst-preview-test.mjs` | 31 checks of Typst Pages through PDF.js and Typst word sync: page shells, canvases, text layers, both columns, selection/copy, paragraph click, repeated-word/right-column mapping, drag ranges, generated-text fallback, the transparent view bar, view switching and PDF disposal |
 | `npm run licence` | `scripts/licence-test.mjs` | 4 checks that the bundled typefaces' licences ship inside the application. Run against its own instance: it opens a document |
@@ -458,20 +459,21 @@ hash the pixels.
 
 ## Testing
 
-Twenty-one layers, cheapest first. Run them in this order when changing anything.
+Twenty-two layers, cheapest first. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 90 | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection |
+| Rust unit | `npm run test:rust` | 93 | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, xz/tar release extraction |
 | Session store | `npm run test:sessions` | 59 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
-| Paste conversion | `npm run paste:convert` | 72 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, image syntax, AsciiDoc |
-| DOM smoke | `npm run smoke` | 97 | Rendering, pane sync, preferences (including the four On Launch choices), math, fonts, status icons |
+| Paste conversion | `npm run paste:convert` | 99 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, image syntax, AsciiDoc |
+| AsciiDoc export source | `npm run asciidoc:export:unit` | 17 | Unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations - no application |
+| DOM smoke | `npm run smoke` | 105 | Rendering, pane sync, preferences (including the four On Launch choices and Line Height), math, fonts, status icons |
 | Word sync | `npm run word-sync` | 30 | The fragment map, preview → source and source → preview, atomic code, formula and image spans, word snapping, no scroll, Escape |
 | Auto-close matching | `npm run autoclose:unit` | 17 | Which tag a typed `>`, the void/self-closing/autolink/escape rules — no application |
 | Remembered tabs (unit) | `npm run tabs:restore:unit` | 33 | What is stored (order, untitled exclusion, deduplication, the 20-document cap) and what a restore plan does with it (missing files, the active-tab fallback) — no application |
 | Auto-close typing | `npm run autoclose` | 33 | Pairs, step-over, Backspace, selection wrap, Markdown inline tags, HTML tags, both preferences, in all four document types |
-| Rich paste | `npm run paste` | 23 | The paste event, destination notice, preferences, Ctrl+Shift+V, undo |
+| Rich paste | `npm run paste` | 28 | The paste event, destination notice, preferences, Ctrl+Shift+V, undo, the same clipboard converted into Markdown and kept as source in HTML, spaces around inline elements |
 | Image syntax | `npm run image:syntax` | 14 | Bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, plus the Image preference |
 | Typst pages | `npm run typst:preview` | 31 | PDF.js page shells/canvases/text layers, both columns, A4 geometry, paragraph click, repeated-word/right-column mapping, drag ranges, Pages and Document word sync, generated-text fallback, transparent view bar and PDF disposal |
 | Math | `npm run math` | 10 | Font loading, fraction and radical geometry |
@@ -593,6 +595,9 @@ Retry the same edit once; the second attempt succeeds as soon as the external
 handle is released. Do not switch to an in-place shell write to work around it:
 it bypasses the tool's read-before-write check and the other program's buffer
 then overflows the change on its next save.
+
+**`git diff --check` reports every added line of `src-tauri/src/settings.rs` or `src-tauri/src/typst.rs` as "trailing whitespace"**
+Those files are stored with CRLF in the index (`git ls-files --eol` says `i/crlf w/crlf`) while most of the tree is LF in the index, and the repository's `core.whitespace` does not include `cr-at-eol`. The carriage return at the end of each added line is therefore read as trailing whitespace even though the text is clean. Do not normalise the file or strip the CR — that rewrites every line. Confirm with `[IO.File]::ReadAllText` if in doubt; zero LF-only line endings means the whitespace warning is the line-ending policy, not the patch.
 
 **`document.fonts.check()` is false for a font that exists**
 Web fonts load lazily. `check()` reports whether a face is *active*, not whether
@@ -793,6 +798,9 @@ concluded the sidebar was visible when it was not, clicked the toggle the wrong
 way, and produced a capture with the outline where the next one had none. Read
 `.app.classList.contains("sidebar-hidden")` (or the button's `aria-pressed`)
 before deciding whether to toggle it.
+
+**A Preferences test edits a row that belongs to another section, and nothing changes**
+The panel renders one section at a time. With *Editor* open, `document.querySelector('.prefs-row')` cannot find **Editor font size** or the preset buttons — those live under *Typography* — so a test that ignores the setter's return value silently changes nothing and then fails on a downstream measurement (here, the line height stayed at the old font size). Click the owning section first (`Typography` for sizes and presets, `Editor` for Content Width and Line Height), re-query after every update because the panel rebuilds, and assert that the setter found its control.
 
 **Renaming the product leaves stale bundles that staging will happily ship**
 `src-tauri/target/release/bundle/` is not cleaned between builds, so after
@@ -1315,6 +1323,17 @@ the editor to the target first. Also read **every** `.cm-sync-word` element: a
 range that crosses lines is one element per line, so `querySelector` returns only
 the first segment and a paragraph-sized selection looks truncated.
 
+**The selection background paints a strip to the left of the text**
+A wrapped or multi-line selection covered part of the editor's horizontal margin,
+between the gutter and the first character. `RectangleMarker.forRange` in
+CodeMirror measures the full-width rectangles from `.cm-line`'s `paddingLeft` and
+`paddingRight`, not from `.cm-content`'s: with `padding: 0 28px` on the content
+box, the between-lines rectangle starts at `contentRect.left + 6px` (the default
+line padding), 22px left of the text. Put horizontal padding on `.cm-line`
+instead; selection then starts exactly at the text edge. Verified by measuring
+`min(.cm-selectionBackground)` against `view.coordsAtPos(0).left` in a 409px
+pane.
+
 **F5 and Ctrl+R wipe every open tab and unsaved buffer, with no prompt**
 WebView2 keeps its browser accelerator keys enabled (`AreBrowserAcceleratorKeysEnabled`
 defaults to true, and wry exposes `with_browser_accelerator_keys` but Tauri 2.12
@@ -1364,6 +1383,168 @@ settings and menu tests still pass, so it looks like a regression in unrelated
 modules. Use the harness for the Rust layer on this host, or point `TEMP` at a
 workspace path before a bare `cargo test`.
 
+**`building ... FAIL` with `An Application Control policy has blocked this file. (os error 4551)` for `target\release\build\*\build-script-build.exe`**
+The host runs ESET and Code Integrity is enforced; a freshly compiled release
+build script can be blocked while its on-access scan is still in progress. The
+same binary copied to `%TEMP%` and run a moment later executed normally, and a
+plain retry of `npm test` completed the build. The debug target is usually
+unaffected because its build scripts have already been scanned. Do not read this
+as a broken toolchain or a source problem, do not disable the security product,
+and do not clean `target/release`; retry once the scan settles. Running the
+blocked executable by hand returns the same policy error, while its debug
+counterpart runs and prints the expected `cargo:` lines.
+
+**A pasted HTML snippet becomes the editor's syntax highlighting — or nothing at all**
+Copying `<link rel="stylesheet" href="…">` from a source editor with highlighting
+and pasting it into an HTML document inserted
+`<div style="color: #d4d4d4; white-space: pre"><div><span style="color: #808080">&lt;</span>…`,
+and when the clipboard's HTML representation was the bare tag the paste inserted
+**nothing**. The plain text was already the destination's syntax, but
+`chooseSource` only trusted plain text that `detectTextSyntax` classified, and
+`scoreHtml` refuses an HTML *fragment* on purpose — "a code snippet starting with
+`<div>` must not be eaten by the parser" — so the next branch handed the snippet
+to the parser anyway, through the clipboard's HTML representation, and
+`sanitizeHtmlFragment` drops `link`, `meta` and `style`. `isHtmlSource()` now
+names the source, and the destination decides whether it is pasted or converted.
+Measure the paste
+layer without the application: Node 24 strips the types, so a scratch `.mjs` that
+imports `src/paste/index.ts` and calls `planPaste` prints exactly what the editor
+will insert. Do not start by suspecting the sanitizer or the paste handler.
+
+**Pasting an HTML article into Markdown inserts the literal tags**
+A fix that made clipboard markup win in *every* destination repaired HTML and
+broke Markdown: `<p>…<strong>…</strong>…</p>` landed in a `.md` file verbatim,
+when the reader expects `**…**` and `[text](href)`. The clipboard is identical in
+both reports — `<p>…</p>` source text plus a decorated HTML representation — so
+the **destination** carries the intent: "keep this markup" in HTML, "convert
+this into my format" in Markdown, Typst and AsciiDoc. `chooseSource` reads the
+text as the *source format*, pastes it untouched only when that format is the
+destination, and otherwise converts the **text** (never the HTML flavour, which
+is only the same characters decorated and loses the spaces between token spans).
+A snippet the HTML reader keeps nothing of (`<link>`, `<meta>`) is rendered as
+escaped literal text for the destination. When a paste rule feels wrong in one
+direction, add the case to `scripts/paste-convert-test.mjs`: the matrix is the
+only thing that stops the next one-legged fix.
+
+**The spaces vanish from a converted snippet (`como**CPF…**a`, `golpes,[doxing](…)e`)**
+`src/paste/read-html.ts` trimmed the edges of *every* inline element's children
+(`trimInline` inside `convertInline`, `wrap` and `inlineFrom`), so a space that
+lives inside a wrapper was thrown away even though it is significant between
+that element and its neighbour in the parent's flow — a syntax highlighter's
+per-token `<span>`, or a page where an extension such as Google Translate or
+Grammarly wraps every text run. Copying
+
+```html
+<p>… como <strong>CPF, e-mail ou telefone</strong> a estranhos, … <a href=…>doxing</a> e …</p>
+```
+
+from a rendered page produced `como**CPF, e-mail ou telefone**a estranhos` in
+Markdown **and** AsciiDoc. Only a *block's* outer edges may be trimmed, and the
+trim must descend through wrappers: `trimFlow` (join text, then
+`trimStart`/`trimEnd`) runs at the paragraph, heading, list item, table cell and
+flush level, while inline elements keep their edges (`joinText`).
+`scripts/paste-convert-test.mjs` pins the sentence with and without `<span>`
+wrappers, in both destinations. Do not "fix" this in a renderer: the IR is where
+the space is lost.
+
+**`clip.exe` fails with `ERROR: Access is denied.`, and `Set-Clipboard` "succeeds" but reads back empty**
+The agent session's sandbox denies clipboard ownership to any process launched
+from it — the same family as `%TEMP%` writes and the WebView2 profile.
+`[Windows.Forms.Clipboard]::SetDataObject` throws "Requested Clipboard operation
+did not succeed" however often it is retried, and setting `-STA` or running from
+outside the workspace changes nothing. A real Ctrl+V therefore cannot be driven
+from here, and `Set-Clipboard` is the trap inside the trap: it reports success,
+so a driver that checks nothing afterwards tests an empty clipboard. Test the
+paste path with the UI suites' synthetic `ClipboardEvent` and `DataTransfer` —
+that is the same `event.clipboardData` a real paste carries — and say the real
+clipboard was unavailable rather than claiming a failed end-to-end check.
+
+**`PDF (via Typst)` prints `:toc!:`, `ifdef::backend-pdf[]` and `{attribute}` placeholders**
+Pandoc's AsciiDoc reader is not AsciiDoc enough for an export. A single unset
+attribute such as `:toc!:` makes it stop recognising every following
+`:name: value` line, so the header is emitted as prose; it also never evaluates
+`ifdef::`/`ifndef::` or substitutes document attributes. Measured with pandoc
+3.12.1: `pandoc -f asciidoc -t plain` on the reported document starts with
+`:toc!: :sectnums!: :icons!: :pdf-page-size: A4 ...`. Do not try to patch the
+source with a regex. Render the buffer with Asciidoctor to HTML first (the
+shared `src/asciidoc-render.ts`), send it to `run_export` with
+`language: "html"`, and let pandoc's HTML reader carry it. The preview and the
+native HTML/PDF (Print) paths already use Asciidoctor, which is why they looked
+correct.
+
+**`missing converter for backend 'pdf'` when Asciidoctor renders an export**
+Setting `backend: "pdf"` is the way to make `ifdef::backend-pdf[]` true while
+the output is still HTML, but Asciidoctor then looks for a converter registered
+under `"pdf"` and aborts before producing anything. Register the HTML5
+converter subclass for that backend:
+
+```ts
+const factory = new Asciidoctor.ConverterCustomFactory();
+factory.register(PandocHtml5Converter, "pdf");
+```
+
+The preview keeps its own registry under `"html5"`; the two must not share one.
+
+**An exported AsciiDoc formula is literal `\(x^2\)`, or a KaTeX formula disappears**
+Pandoc's plain HTML reader does not enable the backslash math delimiters, and
+Asciidoctor emits exactly `\(…\)` / `\[…\]`. Name
+`html+tex_math_single_backslash+tex_math_double_backslash` (the `HTML_READER`
+constant in `export.rs`) or the formula prints as punctuation. Do not hand
+pandoc the preview HTML either: KaTeX's spans are dropped and the formula
+vanishes completely (`No instante e .`). The export renderer emits source
+delimiters, not rendered KaTeX.
+
+**`[WARNING] Could not convert TeX math ... unexpected control sequence \\`, and the PDF shows the formula as literal text**
+Pandoc's TeX -> Typst conversion does not accept TeX's `\\` line break. An
+AsciiMath block whose lines were joined into one display formula with `\\`
+produces that warning, and Typst then prints the source instead of typesetting.
+Emit one `<div class="math">\[…\]</div>` per source line, which is also how the
+preview draws a multi-line stem. The unit suite pins the separate blocks.
+
+**`error: failed to load file (path contains invalid component "C:")` from Typst during a PDF export with images**
+Pandoc resolves a local image to an absolute `C:/…` path, and Typst rejects a
+drive-letter path even when `--root C:\` is supplied. Adding `--resource-path`
+makes pandoc find the image and then triggers this error; without it pandoc
+replaces the image with its description and the PDF still builds. That is a
+pre-existing limitation of every pandoc PDF export with local images on
+Windows, not an AsciiDoc problem. Do not add `--resource-path` casually.
+
+**`cargo fmt --check` reports hundreds of differences in files you did not touch**
+The tree is not rustfmt-clean: the installed rustfmt wants different import
+ordering and test indentation in `html_preview.rs`, `images.rs`, `menu.rs`,
+`settings.rs`, `spellcheck.rs` and `typst.rs` itself. A repository-wide check
+therefore fails before it reaches your patch, and running `cargo fmt` would turn
+a small change into a tree-wide diff. Match the surrounding style by hand and
+use `cargo check` / `cargo test` as the gate; do not reformat the repository to
+make the check green.
+
+**`libhunspell not found` on an agent host where `sudo` needs a password**
+`build.rs` runs `pkg-config --libs --cflags hunspell` and panics by design, so
+`cargo check` and `cargo test` cannot even reach the Rust code. Install the
+system package when possible. Without root, `apt-get download libhunspell-dev`,
+extract it with `dpkg-deb -x` into a temp prefix, and point `PKG_CONFIG_PATH` at
+its `hunspell.pc`. The extracted `.so` symlink dangles (the dev package does not
+carry the runtime library), so the linker then picks `libhunspell-1.7.a` and
+fails with `undefined symbol: __gxx_personality_v0`; symlink the system
+`libhunspell-1.7.so.0.0.1` into the extracted `lib` directory to make the shared
+library win. No repository file should change for this.
+
+**The window and taskbar show an orange “W” on KDE Wayland, not the MDraft icon**
+The compositor does not read a GTK window's icon on Wayland: KWin resolves the
+window's `app_id` to `<app_id>.desktop`, reads its `Icon=`, and falls back to the
+Breeze `wayland` icon when the lookup is empty (`XdgToplevelWindow::updateIcon()`
+in `src/xdgshellwindow.cpp`). GTK3 sets `app_id` from `g_get_prgname()`, the
+binary name `mdraft`, while Tauri names the installed entry after `productName`,
+`MDraft.desktop`, and the lookup is case-sensitive. Measured on the installed
+binary before the fix with `WAYLAND_DEBUG=1 /usr/bin/mdraft`:
+`xdg_toplevel.set_app_id("mdraft")`, while
+`/usr/share/applications/MDraft.desktop` was the only entry.
+`src-tauri/src/lib.rs` now sets the GLib program name from the config's
+`productName` before Tauri builds the GTK application, and
+`src-tauri/linux.desktop.hbs` sets `StartupWMClass={{name}}` so the X11
+`WM_CLASS` stays aligned with the entry. Do not conclude the icon assets or
+`bundle.icon` are wrong from this; X11 uses `_NET_WM_ICON` and looked correct.
+
 ## Adding a preference, end to end
 
 Five files, in this order — more than three, so a plan comes first; see
@@ -1403,7 +1584,8 @@ src/
   html-bridge.js     guest-side scroll/click/keyboard bridge (inlined, not imported)
   html-language.ts   lazy CodeMirror HTML grammar
   asciidoc-language.ts AsciiDoc stream highlighter
-  asciidoc-preview.ts Asciidoctor load/convert, per-load registry, includes, data-line markers
+  asciidoc-preview.ts Asciidoctor preview: registry, data-line markers, KaTeX
+  asciidoc-render.ts shared Asciidoctor load/include and the pandoc export HTML
   syntax-themes.ts   editor palettes: token colours and writing surface
   image-syntax.ts    the one image markup builder for Markdown, Typst, HTML and AsciiDoc
   images.ts          paste, drop and download of images
@@ -1554,12 +1736,12 @@ platform and fails on the other.
    reads the latter for the bundle, and the two must agree. `npm run
    check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
-3. `npm run test:rust` — 89 runnable tests (one ignored: the pandoc download). Run them on Linux too
+3. `npm run test:rust` — 91 runnable tests (two ignored downloads: pandoc and Typst). Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run math`,
    `npm run syntax`, `npm run html` and `npm run asciidoc` —
-   97 + 10 + 7 + 43 + 51 checks.
+   105 + 10 + 7 + 43 + 51 checks.
 5. `npm run audit` against both `docs/sample-files` documents and compare the
    counts with the table in the README.
 6. `npm run dist` — installers and checksums land in `bin/<os>/<arch>/`.

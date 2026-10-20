@@ -11,6 +11,7 @@
 //! can never decide on its own.
 
 import type { DocumentLanguage } from "../api.ts";
+import { VOID_ELEMENTS } from "../tag-name.ts";
 
 export type SourceFormat = "html" | "markdown" | "typst" | "asciidoc" | "plain";
 
@@ -22,8 +23,14 @@ export interface ClipboardPayload {
 
 export interface ClipboardChoice {
   source: SourceFormat;
-  /** True when CodeMirror's own paste already does the right thing. */
+  /** True when CodeMirror's own paste is already right: the text, untouched. */
   native: boolean;
+  /**
+   * True when the source format was read from the text flavour, so the text is
+   * the content to convert. False when an HTML or Markdown representation is
+   * the content (a copy from a rendered surface, or a format-specific flavour).
+   */
+  fromText: boolean;
 }
 
 export interface Detection {
@@ -133,6 +140,65 @@ export function scoreHtml(raw: string, mode: "clipboard" | "document"): number {
   return 0;
 }
 
+/**
+ * Every tag-shaped token in a text: a comment, a declaration, or an element.
+ * Quoted attribute values may contain `>`; the name and the attribute run are
+ * the same shapes `src/tag-name.ts` recognises, so `<3`, `a < b` and `\<p\>`
+ * are not tags.
+ */
+const TAG_TOKEN =
+  /<!--[\s\S]*?-->|<![^<>]*>|<\?[^<>]*\?>|<\/?[A-Za-z][A-Za-z0-9:-]*(?:\s(?:"[^"]*"|'[^']*'|[^<>"'])*)?\/?>/g;
+
+/**
+ * The clipboard's plain text is HTML *source*, not prose that mentions a tag.
+ *
+ * `Use the <div> tag` is a sentence; `<link …>`, `<p>Hello</p>` and
+ * `<div>\n<p>Hi</p>\n</div>` are markup. Prose may only appear inside an
+ * element, so everything at the top level must be a tag or whitespace, and a
+ * fragment that ends with an opening tag (`<div>`) is markup too — that is a
+ * thing you paste into a document, while `<div> is how you group` is a
+ * sentence. `scoreHtml` cannot make this call: it refuses to trust an HTML
+ * fragment on a clipboard, precisely so that a code snippet is not eaten by
+ * the parser.
+ */
+export function isHtmlSource(text: string): boolean {
+  let depth = 0;
+  let elements = 0;
+  let endsWithOpenTag = false;
+  let index = 0;
+  TAG_TOKEN.lastIndex = 0;
+  for (let match = TAG_TOKEN.exec(text); match !== null; match = TAG_TOKEN.exec(text)) {
+    const gap = text.slice(index, match.index);
+    if (gap.trim() !== "") {
+      if (depth === 0) return false;
+      endsWithOpenTag = false;
+    }
+    index = match.index + match[0].length;
+    const token = match[0];
+    // `<!-- … -->`, `<!doctype …>` and `<? … ?>` are declarations, not elements.
+    if (token.startsWith("<!--") || /^<[!?]/.test(token)) {
+      endsWithOpenTag = false;
+      continue;
+    }
+    elements += 1;
+    if (token.startsWith("</")) {
+      if (depth > 0) depth -= 1;
+      endsWithOpenTag = false;
+      continue;
+    }
+    const name = /^<([A-Za-z][A-Za-z0-9:-]*)/.exec(token)?.[1]?.toLowerCase() ?? "";
+    const empty = VOID_ELEMENTS.has(name) || /\/>$/.test(token);
+    if (!empty) depth += 1;
+    endsWithOpenTag = !empty;
+  }
+  const tail = text.slice(index);
+  if (tail.trim() !== "") {
+    if (depth === 0) return false;
+    endsWithOpenTag = false;
+  }
+  return elements > 0 && (depth === 0 || endsWithOpenTag);
+}
+
 /** The confident syntax of a text, or null when the evidence is too thin. */
 export function detectTextSyntax(
   raw: string,
@@ -167,61 +233,61 @@ export function detectTextSyntax(
   return { language, score, runnerUp };
 }
 
-function listLines(text: string): number {
-  return count(stripNoise(text), /^ {0,3}(?:[-*+]|\d+[.)])\s+\S/gm);
+/**
+ * The text carries Markdown's own syntax. Looser than `detectTextSyntax` on
+ * purpose (see `chooseSource`); a fence is included because `stripNoise`
+ * removes the one signal that cannot also be prose.
+ */
+function carriesMarkdown(text: string): boolean {
+  return scoreMarkdown(text) > 0 || /^ {0,3}(?:`{3,}|~{3,})/m.test(text);
 }
 
 /**
  * Which clipboard representation to use for `destination`.
  *
- * The plain-text representation wins when it is already in the destination's
- * syntax; otherwise HTML wins over a different text syntax; otherwise text is
- * pasted natively.
+ * The **text** flavour is the content. When it is markup we recognise — HTML
+ * source, a confident Typst or AsciiDoc document, or text carrying Markdown's
+ * own syntax — that is the *source format*. If it is the destination's format
+ * the text is pasted byte-for-byte; otherwise it is converted into the
+ * destination. The HTML representation is not used in that case: for a copy
+ * made from source it is only the same characters decorated (an editor's
+ * syntax highlighting, a page's `<code>` block), and converting it loses the
+ * spaces between token spans.
+ *
+ * Only when the text is not markup is the **HTML representation** the content:
+ * that is a copy from a rendered page, a word processor or a preview, and it is
+ * converted (or sanitised, when the destination is HTML). Then the Markdown
+ * representation, and finally plain text natively.
+ *
+ * The destination decides the intent, and it has to: the same clipboard — an
+ * `<p>…</p>` snippet — means "keep this markup" in an HTML document and
+ * "convert this into my format" in a Markdown one. Keying the rule on the
+ * clipboard alone is what made an earlier version paste literal HTML into
+ * Markdown.
  */
 export function chooseSource(
   payload: ClipboardPayload,
   destination: DocumentLanguage,
 ): ClipboardChoice {
   const text = payload.text ?? "";
-  const confident = detectTextSyntax(text, "clipboard");
+  const typed = detectTextSyntax(text, "clipboard");
+  const detected: DocumentLanguage | null = isHtmlSource(text)
+    ? "html"
+    : (typed?.language ?? (carriesMarkdown(text) ? "markdown" : null));
 
-  // A typed syntax that already matches the destination should not be converted.
-  if (destination === "markdown" && text && confident?.language === "markdown") {
-    return { source: "markdown", native: true };
-  }
-  if (destination === "typst" && text && confident?.language === "typst") {
-    return { source: "typst", native: true };
-  }
-  if (destination === "asciidoc" && text && confident?.language === "asciidoc") {
-    return { source: "asciidoc", native: true };
-  }
-  if (destination === "html" && text && confident?.language === "html") {
-    // The destination is HTML, but the fragment still needs sanitising.
-    return { source: "html", native: false };
+  if (detected) {
+    return { source: detected, native: detected === destination, fromText: true };
   }
 
   if (payload.html && payload.html.trim() !== "") {
-    return { source: "html", native: false };
+    return { source: "html", native: false, fromText: false };
   }
   if (payload.markdown && payload.markdown.trim() !== "") {
     return {
       source: "markdown",
       native: destination === "markdown" && payload.text !== null,
+      fromText: false,
     };
   }
-  if (!text) return { source: "plain", native: true };
-
-  if (destination === "html" && listLines(text) >= 2) {
-    return { source: "markdown", native: false };
-  }
-  if (confident) {
-    const native =
-      confident.language === destination &&
-      (confident.language === "markdown" ||
-        confident.language === "typst" ||
-        confident.language === "asciidoc") &&
-      payload.text !== null;
-    return { source: confident.language === "html" ? "html" : confident.language, native };
-  }
-  return { source: "plain", native: true };
+  return { source: "plain", native: true, fromText: false };
 }

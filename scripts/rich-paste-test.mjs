@@ -186,6 +186,46 @@ console.log("=== rich paste ===");
     JSON.stringify(preview),
   );
 
+  // The same clipboard shape as the HTML-document checks below — source text
+  // plus a decorated representation — but a Markdown destination, where the
+  // intent is the opposite: convert the markup, do not paste it.
+  await newTab();
+  await type("# Title\n\n");
+  await paste(
+    "<p>Elsewhere</p>",
+    '<p>Enviar sua chave Pix pode expor dados sensíveis como <strong>CPF, e-mail ou telefone</strong> a estranhos, abrindo portas para golpes, <a href="/blog/o-que-e-doxxing-e-como-evitar/">doxing</a> e exposição indesejada.</p>',
+  );
+  const article = await lines();
+  check(
+    article.includes("**CPF, e-mail ou telefone**") &&
+      article.includes("[doxing](/blog/o-que-e-doxxing-e-como-evitar/)") &&
+      !article.includes("<p>") &&
+      !article.includes("<strong>"),
+    "an HTML source pasted into Markdown is converted, not inserted",
+    article,
+  );
+
+  // A rendered copy may wrap every text run in an inline element (a browser
+  // extension, a word processor); the spaces then sit at those elements' edges.
+  await newTab();
+  await type("# Title\n\n");
+  await paste(
+    "<meta charset='utf-8'>" +
+      "<span>Enviar sua chave Pix pode expor dados sensíveis como </span>" +
+      "<strong>CPF, e-mail ou telefone</strong>" +
+      "<span> a estranhos, abrindo portas para golpes, </span>" +
+      "<a href=/blog/o-que-e-doxxing-e-como-evitar/>doxing</a>" +
+      "<span> e exposição indesejada.</span>",
+    "Enviar sua chave Pix pode expor dados sensíveis como CPF, e-mail ou telefone a estranhos, abrindo portas para golpes, doxing e exposição indesejada.",
+  );
+  const spaced = await lines();
+  check(
+    spaced.includes("como **CPF, e-mail ou telefone** a estranhos") &&
+      spaced.includes("golpes, [doxing](/blog/o-que-e-doxxing-e-como-evitar/) e exposição"),
+    "spaces survive around inline elements in a rendered copy",
+    spaced,
+  );
+
   await newTab();
   await paste(null, "# Title\n\nA **bold** line.");
   check((await lines()).includes("A **bold** line."), "Markdown into Markdown is native");
@@ -220,6 +260,31 @@ console.log("=== rich paste ===");
   const html = await lines();
   check(html.includes("<p>After <strong>bold</strong></p>"), "an HTML buffer pastes HTML", html);
   check((await toast()).includes("Pasted as HTML"), "the HTML destination is announced", await toast());
+
+  // A snippet copied as *source* is not a rendering: the highlighting must not
+  // come along, and the tag must not be dropped on the way (the sanitizer has
+  // no use for `link`).
+  const snippet =
+    '<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.2.1/reset.min.css">';
+  const highlighted =
+    `<meta charset='utf-8'><div style="color: #d4d4d4;white-space: pre;"><div>` +
+    `<span style="color: #808080;">&lt;</span><span style="color: #9CDCFE;">link</span>` +
+    `<span style="color: #9CDCFE;"> rel</span>=<span style="color: #CE9178;">"stylesheet"</span> ` +
+    `<span style="color: #9CDCFE;">href</span>=<span style="color: #CE9178;">"https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.2.1/reset.min.css"</span>` +
+    `<span style="color: #808080;">&gt;</span></div></div>`;
+
+  await newTab();
+  await type("<h1>Title</h1>\n<p>Before</p>\n");
+  await paste(highlighted, snippet);
+  const fromEditor = await lines();
+  check(fromEditor.includes(snippet), "a snippet from a highlighting editor keeps its own characters", fromEditor);
+  check(!fromEditor.includes("<span"), "the editor highlighting is not pasted", fromEditor);
+
+  await newTab();
+  await type("<h1>Title</h1>\n<p>Before</p>\n");
+  await paste(snippet, snippet);
+  const fromTag = await lines();
+  check(fromTag.includes(snippet), "a bare link tag is not thrown away", fromTag);
 
   await newTab();
   await paste("<p>Inline <strong>word</strong></p>", "Inline word");
