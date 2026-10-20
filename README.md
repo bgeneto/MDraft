@@ -20,18 +20,17 @@ and checksums.
 ![MDraft in the light theme with the Renaissance typography preset, showing Markdown source and its typeset preview](docs/screenshots/readme-markdown-light-renaissance.png)
 
 *Light theme with the Renaissance preset: EB Garamond prose and headings, IBM
-Plex Mono in the source. Four documents are open as tabs; the Markdown file is
-active.*
+Plex Mono in the source.*
 
 ![MDraft in the dark theme with the System typography preset, showing the same Markdown source and preview](docs/screenshots/readme-markdown-dark-system.png)
 
-*Dark theme with the System preset: the platform's own faces, the same four
-tabs, and the same Markdown document active.*
+*Dark theme with the System preset: the platform's own faces, 
+Markdown document active.*
 
 ## What it does well
 
-- **Four languages, each with the right preview.** Markdown gets GFM tables,
-  KaTeX, Mermaid, GitHub alerts and `[TOC]`. AsciiDoc gets Asciidoctor's
+- **Four languages, each with the right preview.** Markdown supports GFM tables,
+  KaTeX, Mermaid, GitHub alerts and `[TOC]`. AsciiDoc supports Asciidoctor's
   admonitions, tables, listings, local includes and `latexmath`/`asciimath`. Typst, once
   its compiler is installed, gets a flowing document view and a PDF page view
   whose text can be selected and clicked. HTML keeps its own CSS, images and
