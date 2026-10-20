@@ -274,7 +274,7 @@ node scripts\image-paste-test.mjs 9222 "http://127.0.0.1:8791/served.png" "C:\pa
 
 | Script | Arguments | Does |
 | --- | --- | --- |
-| `dist.mjs` | `[-- <tauri build args>] [--kill]` | Typechecks, builds the frontend, routes through the MSVC wrapper on Windows, then calls `stage-artifacts.mjs`. Streams output; exits non-zero on any failure. **Refuses to start while a copy of the app is running** (Windows locks a running executable, so cargo cannot replace it) unless `--kill` is given, which closes it first |
+| `dist.mjs` | `[-- <tauri build args>] [--kill]` | Typechecks, builds the frontend, routes through the MSVC wrapper on Windows, then calls `stage-artifacts.mjs`. Streams output; exits non-zero on any failure. **Refuses to start while a copy of the app is running** (Windows locks a running executable, so cargo cannot replace it) unless `--kill` is given, which closes it first. Also refuses with the `npm ci` instruction when the local `@tauri-apps/cli` is missing, rather than letting `npx` fetch the unrelated registry package |
 | `stage-artifacts.mjs` | `[--dry-run]` | Copies the binary and every installer into `bin/<os>/<arch>/` with `SHA256SUMS.txt` and `manifest.json`. Fails loudly, naming the path it searched, when it finds no bundles |
 | `build-linux.sh` | `[--bundles deb,appimage] [--build-dir path]` | The whole Linux build inside WSL2 or a container — see [Building for Linux](#building-for-linux) |
 | `with-msvc.cmd` | `<command> [args…]` | Loads `vcvars64.bat` then runs the command. **Required for every cargo or tauri invocation on this host.** Searches the standard Visual Studio locations, including the Enterprise edition the GitHub runners install |
@@ -711,6 +711,20 @@ Two independent causes arrive together and cargo's message names neither.
   this before building and refuses with the PID list instead of failing inside
   cargo, and `npm run dist -- --kill` closes it for you. If you hit the raw cargo
   error, that is the cause.
+
+**`git worktree remove` empties the main checkout's `node_modules` when the worktree borrowed it through a junction**
+To reuse dependencies in a temporary worktree, `node_modules` was made a
+Windows directory junction to the main checkout, and the worktree was removed
+with `git worktree remove --force`. Git's recursive delete followed the junction
+and deleted the **target's** contents, leaving an empty `node_modules` in the
+main checkout. The next `npm run dist` then failed in the portable pass with
+`npm error could not determine executable to run`: without the local
+`@tauri-apps/cli`, `npx tauri` fetched the unrelated `tauri@0.15.0` package from
+the registry, which has no bin. Restore with `npm ci`. Before removing a
+worktree, delete the junction itself with `cmd /c rmdir <worktree>\node_modules`
+(no `/s`), or give the worktree its own install. `scripts/dist.mjs` now checks
+for `node_modules/@tauri-apps/cli/tauri.js` first and runs the package's `tauri`
+script rather than `npx tauri`, so the message names the missing dependency.
 
 **`npm run dist` sits on `Building … 461/463: mdraft` for minutes even though
 every dependency is cached**

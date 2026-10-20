@@ -160,19 +160,55 @@ the one from target/release — then run this again. Or let this script do it:
 
 const wrapper = join(repoRoot, "scripts", "with-msvc.cmd");
 const releaseDir = join(repoRoot, "src-tauri", "target", "release");
+const tauriCli = join(repoRoot, "node_modules", "@tauri-apps", "cli", "tauri.js");
+
+/**
+ * Refuse to build without the local Tauri CLI.
+ *
+ * `npx tauri` looks harmless, but with no `node_modules` it fetches the
+ * unrelated `tauri@0.15.0` package from the registry, which has no executable,
+ * and dies with only:
+ *
+ *   npm error could not determine executable to run
+ *
+ * Nothing in that names the missing dependency or the command that fixes it.
+ * Check the file we are actually going to run, and say both.
+ */
+function requireTauriCli() {
+  if (existsSync(tauriCli)) return;
+  console.error(`
+The Tauri CLI is missing: ${relative(repoRoot, tauriCli)} does not exist.
+
+The frontend dependencies are not installed. Run:
+
+    npm ci
+
+and try again. (Do not reach for "npx tauri": without the local package it
+downloads the unrelated "tauri" package from the registry, which has no
+executable, and the build stops with "could not determine executable to run".)
+`);
+  process.exit(1);
+}
 
 /** Run the Tauri CLI, through the MSVC wrapper where the host needs it. */
 function tauriBuild(args) {
+  requireTauriCli();
+  // Go through the package script instead of `npx`: npm puts the local bin on
+  // PATH, so a missing CLI is a local "not recognized" error rather than a
+  // registry lookup for a package with the same name.
   // A .cmd is not a PE image, so it has to go through the command interpreter.
   // `windowsHide` is what keeps the entire batch-file chain — vcvars64.bat, then
   // every .bat MSVC runs — inside one console that has no window.
   return process.platform === "win32" && existsSync(wrapper)
-    ? spawnSync("cmd.exe", ["/c", wrapper, "npx", "tauri", ...args], {
+    ? spawnSync("cmd.exe", ["/c", wrapper, "npm", "run", "tauri", "--", ...args], {
         stdio: "inherit",
         cwd: repoRoot,
         windowsHide: true,
       })
-    : spawnSync("npx", ["tauri", ...args], { stdio: "inherit", cwd: repoRoot });
+    : spawnSync("npm", ["run", "tauri", "--", ...args], {
+        stdio: "inherit",
+        cwd: repoRoot,
+      });
 }
 
 /**
