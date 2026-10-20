@@ -142,8 +142,24 @@ const paintedWord = () =>
 
 const highlightText = () =>
   evaluate(`(() => {
-    const highlight = CSS.highlights?.get("mdraft-sync");
+    // The pulse swaps the registered name, so either one is the painted word.
+    const highlight =
+      CSS.highlights?.get("mdraft-sync") ??
+      CSS.highlights?.get("mdraft-sync-peak");
     return highlight ? [...highlight].map((range) => range.toString()) : null;
+  })()`);
+
+const markStyle = () =>
+  evaluate(`(() => {
+    const mark = document.querySelector(".cm-sync-word");
+    if (!mark) return null;
+    const style = getComputedStyle(mark);
+    return {
+      animation: style.animationName,
+      duration: style.animationDuration,
+      count: style.animationIterationCount,
+      background: style.backgroundColor,
+    };
   })()`);
 
 const scrollState = () =>
@@ -329,6 +345,35 @@ console.log("\n=== real input ===");
     check("a real double-click paints exactly the word", painted === "sanciona", `${painted} in ${elapsed} ms`);
     check("a double-click does not scroll when the word is visible", before.source === after.source);
     check("the highlight arrives within a frame budget", elapsed < 250, `${elapsed} ms`);
+
+    const style = await markStyle();
+    check(
+      "the mark pulses four times of 500 ms",
+      style?.duration === "0.5s" && style?.count === "4",
+      style ? `${style.duration} x ${style.count}` : "missing",
+    );
+    await sleep(2300);
+    const lingering = await markStyle();
+    check(
+      "the mark remains after the pulse",
+      lingering !== null && lingering.background !== "rgba(0, 0, 0, 0)",
+      lingering?.background ?? "missing",
+    );
+
+    await send("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+    });
+    await clearSelection();
+    await selectPreviewWord("sanciona");
+    await sleep(150);
+    const reduced = await markStyle();
+    check(
+      "reduced motion keeps the mark and skips the pulse",
+      reduced?.animation === "none" &&
+        reduced?.background !== "rgba(0, 0, 0, 0)",
+      reduced ? `${reduced.animation} / ${reduced.background}` : "missing",
+    );
+    await send("Emulation.setEmulatedMedia", { features: [] });
   }
 
   await clearSelection();

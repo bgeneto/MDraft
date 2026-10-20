@@ -1,7 +1,7 @@
 {
   "name": "mdraft",
   "private": true,
-  "version": "0.4.1",
+  "version": "0.4.2",
   "type": "module",
   "description": "A Tauri 2 Markdown, Typst, HTML and AsciiDoc editor in the spirit of Typora",
   "license": "MIT",
@@ -26,6 +26,8 @@
     "shortcuts": "node scripts/shortcut-test.mjs",
     "tabs": "node scripts/document-tabs-test.mjs",
     "tabs:restore:unit": "node scripts/tabs-restore-unit.mjs",
+    "typst:map:unit": "node scripts/typst-page-map-unit.mjs",
+    "html:map:unit": "node scripts/html-source-map-unit.mjs",
     "recent": "node scripts/recent-menu-test.mjs",
     "test:sessions": "node scripts/sessions-test.mjs",
     "paste:convert": "node scripts/paste-convert-test.mjs",

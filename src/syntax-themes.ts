@@ -25,6 +25,14 @@ export interface SyntaxPalette {
   selection: string;
   activeLine: string;
   gutter: string;
+  /**
+   * The word-sync mark. Opaque, and judged against `surface`: a translucent
+   * yellow on a teal or blue-black surface blends green and stops reading as a
+   * mark at all. `syncPeak` is the pulse's lighter beat; the resting colour is
+   * what remains after it.
+   */
+  sync: string;
+  syncPeak: string;
 
   /** Markdown structure. */
   heading: string;
@@ -68,6 +76,8 @@ const paper: SyntaxPalette = {
   selection: "rgba(84, 174, 255, 0.28)",
   activeLine: "rgba(0, 0, 0, 0.035)",
   gutter: "#a0a6ad",
+  sync: "#ffe08a",
+  syncPeak: "#ffc107",
   heading: "#0550ae",
   strong: "#111827",
   emphasis: "#7c3aed",
@@ -98,6 +108,8 @@ const ink: SyntaxPalette = {
   selection: "rgba(80, 140, 255, 0.32)",
   activeLine: "rgba(255, 255, 255, 0.05)",
   gutter: "#6e7681",
+  sync: "#7a5c10",
+  syncPeak: "#c49214",
   heading: "#7cb7ff",
   strong: "#ffffff",
   emphasis: "#c792ea",
@@ -158,6 +170,8 @@ const oneDark: SyntaxPalette = {
   selection: "rgba(97, 175, 239, 0.30)",
   activeLine: "rgba(255, 255, 255, 0.045)",
   gutter: "#5c6370",
+  sync: "#6e5410",
+  syncPeak: "#c4921a",
   heading: "#e06c75",
   strong: "#d7dae0",
   emphasis: "#c678dd",
@@ -187,6 +201,8 @@ const solarizedLight: SyntaxPalette = {
   selection: "rgba(38, 139, 210, 0.22)",
   activeLine: "rgba(101, 123, 131, 0.07)",
   gutter: "#b3b3a8",
+  sync: "#f3d36b",
+  syncPeak: "#e6b422",
   heading: "#268bd2",
   strong: "#073642",
   emphasis: "#6c71c4",
@@ -217,6 +233,8 @@ const solarizedDark: SyntaxPalette = {
   selection: "rgba(38, 139, 210, 0.28)",
   activeLine: "rgba(147, 161, 161, 0.07)",
   gutter: "#586e75",
+  sync: "#5c4810",
+  syncPeak: "#c49a1a",
   heading: "#268bd2",
   strong: "#eee8d5",
   emphasis: "#6c71c4",
@@ -246,6 +264,8 @@ const nord: SyntaxPalette = {
   selection: "rgba(136, 192, 208, 0.26)",
   activeLine: "rgba(216, 222, 233, 0.05)",
   gutter: "#616e88",
+  sync: "#7a5c20",
+  syncPeak: "#c4a35a",
   heading: "#88c0d0",
   strong: "#eceff4",
   emphasis: "#b48ead",
@@ -343,7 +363,15 @@ export function buildHighlightStyle(palette: SyntaxPalette): HighlightStyle {
 export function buildChromeTheme(palette: SyntaxPalette) {
   return EditorView.theme(
     {
-      "&": { backgroundColor: palette.surface, color: palette.text },
+      "&": {
+        backgroundColor: palette.surface,
+        color: palette.text,
+        // The sync mark is judged against this surface, not against the
+        // application chrome, so the palette publishes it. The stylesheet owns
+        // the background property itself; these are only the colours.
+        "--editor-sync": palette.sync,
+        "--editor-sync-peak": palette.syncPeak,
+      },
       ".cm-content": { caretColor: palette.text },
       ".cm-gutters": { color: palette.gutter },
       ".cm-activeLine": { backgroundColor: palette.activeLine },

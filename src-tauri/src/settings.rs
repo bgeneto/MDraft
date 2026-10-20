@@ -141,7 +141,7 @@ fn default_spellcheck_language() -> String {
 /// KaTeX draws every formula at 1.21em. The default scales that down to sit
 /// with the prose; 100 is KaTeX's own ratio, kept as the upper bound's anchor.
 fn default_math_font_scale() -> u32 {
-    90
+    95
 }
 
 pub fn default_export_formats() -> Vec<ExportFormat> {    let args = |rest: &str| format!("{PANDOC_INPUT} {rest}");
@@ -765,7 +765,7 @@ mod tests {
         assert_eq!(s.code_font, "");
         assert_eq!(s.body_font_size, 16);
         // The System preset's own starting point; the preference opts into a change.
-        assert_eq!(s.math_font_scale, 90);
+        assert_eq!(s.math_font_scale, 95);
         // The HTML guest runs the document's scripts unless the reader opts out.
         assert!(s.html_preview_scripts);
         // Sizes are per-preset adjustments, so a fresh profile has none yet.
@@ -852,7 +852,7 @@ mod tests {
         assert_eq!(parsed.editor_font_size, 21);
         assert_eq!(parsed.body_font, "");
         assert_eq!(parsed.body_font_size, 16);
-        assert_eq!(parsed.math_font_scale, 90);
+        assert_eq!(parsed.math_font_scale, 95);
         assert!(parsed.preset_overrides.is_empty());
         assert!(parsed.html_preview_scripts);
         // `tabular_figures` is `#[serde(default = "default_true")]`, so the

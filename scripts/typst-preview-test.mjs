@@ -471,6 +471,20 @@ check(
 );
 
 await clearSelection();
+const oneWordHeading = await selectWordInLine("Method", "Method", ".typst-preview");
+check(
+  "a one-word Pages heading can be selected",
+  oneWordHeading.selected.includes("Method"),
+  oneWordHeading.selected,
+);
+const oneWordHeadingLine = await markedLine();
+check(
+  "a one-word Pages heading maps its source line",
+  oneWordHeadingLine.includes("= Method"),
+  oneWordHeadingLine,
+);
+
+await clearSelection();
 const rightColumnThe = await selectWordInLine(
   "the",
   "Substituting the illustrative values gives an estimate",

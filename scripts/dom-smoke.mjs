@@ -526,7 +526,7 @@ const mathScale = await evaluate(`(() => {
     field.dispatchEvent(new Event('change', { bubbles: true }));
   };
   // Measure the 100% baseline explicitly: the starting value is now a preset
-  // default (90 for System), not KaTeX's own ratio.
+  // default (95 for System), not KaTeX's own ratio.
   set(100);
   const before = width();
   set(70);
@@ -552,7 +552,7 @@ check(
   mathScale.found &&
     mathScale.bounds.min === "70" &&
     mathScale.bounds.max === "130" &&
-    mathScale.bounds.value === "90",
+    mathScale.bounds.value === "95",
 );
 check(
   "math scale visibly shrinks rendered math",
@@ -571,8 +571,8 @@ check(
 // Editor font size, Preview font size and Math scale are reader adjustments,
 // not part of a preset's identity. Editing one must leave the picker on the
 // preset, and each preset must remember its own sizes across a round trip.
-// An unvisited preset starts at its default sizes (15/18/85 for Serif,
-// 15/18/77 for Renaissance, 15/16/90 for System).
+// An unvisited preset starts at its default sizes (15/18/92 for Serif,
+// 15/18/80 for Renaissance, 15/16/95 for System).
 const presetSizes = await evaluate(`(async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const section = [...document.querySelectorAll('.prefs-section')]
@@ -639,7 +639,7 @@ const presetSizes = await evaluate(`(async () => {
   // Leave the suite on the first-run sizes, whichever check failed.
   setNumber('Editor font size', 15);
   setNumber('Preview font size', 16);
-  setNumber('Math scale', 90);
+  setNumber('Math scale', 95);
   await sleep(200);
   const reset = read();
 
@@ -679,11 +679,11 @@ check(
   "an unvisited preset starts at its default sizes",
   presetSizes.serifFresh?.editor === "15" &&
     presetSizes.serifFresh?.body === "18" &&
-    presetSizes.serifFresh?.math === "85" &&
+    presetSizes.serifFresh?.math === "92" &&
     presetSizes.serifFresh?.oldstyle === true &&
     presetSizes.renaissance?.editor === "15" &&
     presetSizes.renaissance?.body === "18" &&
-    presetSizes.renaissance?.math === "77" &&
+    presetSizes.renaissance?.math === "80" &&
     presetSizes.renaissance?.oldstyle === true,
 );
 check(
@@ -705,10 +705,10 @@ check(
     presetSizes.systemBack?.math === "92",
 );
 check(
-  "the preset test restores 15 px / 90%",
+  "the preset test restores 15 px / 95%",
   presetSizes.reset?.editor === "15" &&
     presetSizes.reset?.body === "16" &&
-    presetSizes.reset?.math === "90" &&
+    presetSizes.reset?.math === "95" &&
     presetSizes.reset?.active === "System",
 );
 
@@ -1165,11 +1165,16 @@ const interpolation = await evaluate(`(async () => {
     // the local slope, not jump to the top of the block. The tolerance follows
     // the measured slope, because 3 preview pixels are worth more source pixels
     // when the preview font is small.
+    //
+    // The floor is one line of the 40 px editor: the 11 px preview moves only
+    // 5 px over the whole 32 px sweep, so a one-pixel reading error changes
+    // 3/slope by 3.5 px. The test exists to catch a jump to the block's top,
+    // which is hundreds of pixels; a 32 px floor does not hide that.
     const sourceBeforeInverse = scroller.scrollTop;
     previewPane.scrollTop = samples[samples.length - 1] + 3;
     await sleep(350);
     const inverseDelta = Math.abs(scroller.scrollTop - sourceBeforeInverse);
-    const inverseLimit = slope > 0.05 ? 3 / slope + 8 : 1000;
+    const inverseLimit = Math.max(32, slope > 0.05 ? 3 / slope + 8 : 1000);
 
     return {
       ok: true,

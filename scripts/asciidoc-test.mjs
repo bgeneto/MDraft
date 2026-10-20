@@ -488,7 +488,10 @@ console.log("\n=== word-level sync ===");
     }
     await sleep(260);
     const ranges = await evaluate(`(() => {
-      const highlight = CSS.highlights?.get("mdraft-sync");
+      // The pulse swaps the registered name every 250 ms; either one is painted.
+      const highlight =
+        CSS.highlights?.get("mdraft-sync") ??
+        CSS.highlights?.get("mdraft-sync-peak");
       return highlight ? [...highlight].map((range) => range.toString()) : null;
     })()`);
     const afterPreview = await evaluate(`document.getElementById("preview-pane").scrollTop`);

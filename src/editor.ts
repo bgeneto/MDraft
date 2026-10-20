@@ -134,6 +134,8 @@ export interface EditorHandle {
   setSyncRange(from: number, to: number): void;
   /** Remove that decoration, leaving the caret and the selection alone. */
   clearSyncRange(): void;
+  /** Replay the pulse on the current decoration without changing its range. */
+  pulseSyncRange(): void;
   setHeading(level: number): void;
   shiftHeading(delta: number): void;
   /** The AsciiDoc heading commands; `=` is the title, `==` the first section. */
@@ -579,6 +581,23 @@ const markdownSupport = markdown({
     view.focus();
   }
 
+  /**
+   * Replay the word-sync pulse on the marks already in the DOM.
+   *
+   * A second gesture on the same range never dispatches, so CodeMirror reuses
+   * the element and the CSS animation does not run again. Clearing the inline
+   * animation and forcing a style flush restarts it without touching the
+   * decoration or the buffer. Reduced motion keeps the resting colour.
+   */
+  function pulseSyncRange(): void {
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    for (const mark of view.dom.querySelectorAll<HTMLElement>(".cm-sync-word")) {
+      mark.style.animation = "none";
+      void mark.offsetWidth;
+      mark.style.animation = "";
+    }
+  }
+
   return {
     view,
 
@@ -843,12 +862,15 @@ const markdownSupport = markdown({
       const start = Math.max(0, Math.min(from, max));
       const end = Math.max(start, Math.min(to, max));
       view.dispatch({ effects: syncRangeEffect.of(end > start ? { from: start, to: end } : null) });
+      pulseSyncRange();
     },
 
     clearSyncRange() {
       if (view.state.field(syncRangeField).size === 0) return;
       view.dispatch({ effects: syncRangeEffect.of(null) });
     },
+
+    pulseSyncRange,
 
     setHeading(level) {
       transformSelectedLines((line) => {

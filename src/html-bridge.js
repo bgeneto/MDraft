@@ -267,6 +267,82 @@
     true,
   );
 
+  var selectionTimer = 0;
+
+  // The host records one entry per text node under a stamped block. The guest
+  // reports only that index and the selected characters; it never sees a source
+  // offset. A document whose own scripts rewrote the DOM will fail the host's
+  // sample check, which is the intended fail-closed result.
+  function textEntry(node) {
+    if (!node || node.nodeType !== 3) return null;
+    var element = node.parentElement;
+    var stamp =
+      element && element.closest ? element.closest("[data-mdraft-n]") : null;
+    if (!stamp) return null;
+    var n = parseInt(stamp.getAttribute("data-mdraft-n"), 10);
+    if (!isFinite(n)) return null;
+    var index = 0;
+    var walker = document.createTreeWalker(stamp, NodeFilter.SHOW_TEXT);
+    for (var text = walker.nextNode(); text; text = walker.nextNode()) {
+      if (text === node) return { n: n, index: index };
+      index += 1;
+    }
+    return null;
+  }
+
+  function reportSelection(reveal) {
+    var selection = window.getSelection();
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
+    var range = selection.getRangeAt(0);
+    if (range.startContainer.nodeType !== 3 || range.endContainer.nodeType !== 3) {
+      return;
+    }
+    var start = textEntry(range.startContainer);
+    var end = textEntry(range.endContainer);
+    if (!start || !end || start.n !== end.n || start.index !== end.index) return;
+    var sample = range.toString();
+    // A word double-click commonly takes the following space with it. The
+    // source mark should be the word, not the gap, so trim both edges and move
+    // the offsets by the same amount.
+    var leading = sample.length - sample.trimStart().length;
+    var trailing = sample.length - sample.trimEnd().length;
+    var startOffset = range.startOffset + leading;
+    var endOffset = range.endOffset - trailing;
+    sample = sample.slice(leading, sample.length - trailing);
+    if (!sample || sample.length > 2000 || endOffset <= startOffset) return;
+    post({
+      type: "select",
+      n: start.n,
+      index: start.index,
+      start: startOffset,
+      end: endOffset,
+      sample: sample,
+      reveal: reveal === true,
+    });
+  }
+
+  document.addEventListener(
+    "dblclick",
+    function () {
+      window.clearTimeout(selectionTimer);
+      selectionTimer = window.setTimeout(function () {
+        reportSelection(true);
+      }, 0);
+    },
+    true,
+  );
+
+  document.addEventListener(
+    "mouseup",
+    function () {
+      window.clearTimeout(selectionTimer);
+      selectionTimer = window.setTimeout(function () {
+        reportSelection(false);
+      }, 120);
+    },
+    true,
+  );
+
   document.addEventListener(
     "click",
     function (event) {

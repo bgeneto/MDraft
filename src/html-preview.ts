@@ -11,7 +11,14 @@
 //! parent still treats every message as untrusted.
 
 import * as api from "./api";
+import {
+  htmlSourceRange,
+  type HtmlSelection,
+  type HtmlTextFragment,
+} from "./html-source-map";
 import bridgeTemplate from "./html-bridge.js?raw";
+
+export type { HtmlSelection, HtmlTextFragment } from "./html-source-map";
 
 interface Anchor {
   line: number;
@@ -37,6 +44,7 @@ export interface HtmlAccelerator {
 
 export interface HtmlPreviewCallbacks {
   onLine(line: number): void;
+  onSelection(selection: HtmlSelection): void;
   onLink(href: string, raw: string): void;
   onAction(id: string): void;
   onScroll(layout: HtmlLayout): void;
@@ -53,6 +61,8 @@ export interface HtmlPreviewHandle {
   scrollTo(top: number): void;
   scrollToLine(line: number): void;
   blink(line: number): void;
+  /** Translate a guest selection through the table built with the preview. */
+  wordRange(selection: HtmlSelection): { from: number; to: number } | null;
   layout(): HtmlLayout | null;
   anchors(): Anchor[];
   baseUrl(): string | null;
@@ -64,6 +74,8 @@ interface FrameState {
   generation: number;
   ready: boolean;
   timer: number;
+  /** The word table this frame's copy was built with. */
+  fragments: HtmlTextFragment[];
 }
 
 const BLOCK_TAGS = new Set([
@@ -145,25 +157,61 @@ interface Insertion {
   text: string;
 }
 
+export interface HtmlPreviewBuild {
+  html: string;
+  fragments: HtmlTextFragment[];
+}
+
 /**
- * Build the preview copy: line anchors and the bridge, spliced into the
- * original text.
+ * Build the preview copy: line anchors, word-node ids and the bridge, spliced
+ * into the original text.
  *
  * The document is never reserialised. A DOM round trip can normalise quotes,
  * escape text inside `<script>` and `<style>`, and reorder malformed markup; a
- * `parse5` tree only supplies source offsets for two small insertions.
+ * `parse5` tree only supplies source offsets for a few small insertions.
+ *
+ * Both attributes are preview-only. The text-node table is the host's answer to
+ * an opaque iframe: the guest can name a text node by its position under a
+ * stamped block, but it cannot see a source offset.
  */
 export async function buildHtmlPreview(
   source: string,
   token: string,
   bridgeNonce: string,
-): Promise<string> {
+): Promise<HtmlPreviewBuild> {
   const { parse } = await loadParse5();
   const document: any = parse(source, { sourceCodeLocationInfo: true });
   const insertions: Insertion[] = [];
+  const fragments: HtmlTextFragment[] = [];
+  const counts = new Map<number, number>();
+  let nextStamp = 0;
 
-  const walk = (node: any): void => {
+  const walk = (node: any, stamp: number | null): void => {
     if (!node) return;
+
+    if (node.nodeName === "#text") {
+      if (stamp === null) return;
+      const location = node.sourceCodeLocation;
+      if (
+        !location ||
+        !Number.isFinite(location.startOffset) ||
+        !Number.isFinite(location.endOffset)
+      ) {
+        return;
+      }
+      const raw = source.slice(location.startOffset, location.endOffset);
+      const index = counts.get(stamp) ?? 0;
+      counts.set(stamp, index + 1);
+      fragments.push({
+        n: stamp,
+        index,
+        src0: location.startOffset,
+        src1: location.endOffset,
+        raw,
+        text: node.value ?? "",
+      });
+      return;
+    }
 
     if (node.tagName && addsCrossOrigin(node)) {
       const startTag = node.sourceCodeLocation?.startTag;
@@ -176,27 +224,37 @@ export async function buildHtmlPreview(
 
     if (node.tagName && SKIP_TAGS.has(node.tagName)) return;
 
+    let childStamp = stamp;
     if (node.tagName && BLOCK_TAGS.has(node.tagName)) {
       const location = node.sourceCodeLocation;
       const startTag = location?.startTag;
       if (startTag && Number.isFinite(startTag.endOffset)) {
         const raw = source.slice(startTag.startOffset, startTag.endOffset);
+        let at = startTag.endOffset - 1;
+        // Insert before the optional `/` of `<img />`, never after it.
+        if (at > startTag.startOffset && source[at - 1] === "/") at -= 1;
         if (!raw.includes("data-mdraft-line")) {
-          let at = startTag.endOffset - 1;
-          // Insert before the optional `/` of `<img />`, never after it.
-          if (at > startTag.startOffset && source[at - 1] === "/") at -= 1;
           const line = location.startLine || startTag.startLine || 1;
           insertions.push({ at, text: ` data-mdraft-line="${line}"` });
+        }
+        if (raw.includes("data-mdraft-n")) {
+          // The document already uses the attribute; its value is not one of
+          // ours. Leave the block unmapped rather than colliding with it.
+          childStamp = null;
+        } else {
+          const id = nextStamp++;
+          insertions.push({ at, text: ` data-mdraft-n="${id}"` });
+          childStamp = id;
         }
       }
     }
 
     if (Array.isArray(node.childNodes)) {
-      for (const child of node.childNodes) walk(child);
+      for (const child of node.childNodes) walk(child, childStamp);
     }
-    if (node.content) walk(node.content);
+    if (node.content) walk(node.content, childStamp);
   };
-  walk(document);
+  walk(document, null);
 
   const bridge = bridgeMarkup(token, bridgeNonce);
   insertions.push({ at: bridgeInsertOffset(document, source), text: bridge });
@@ -206,7 +264,7 @@ export async function buildHtmlPreview(
   for (const insertion of insertions) {
     output = output.slice(0, insertion.at) + insertion.text + output.slice(insertion.at);
   }
-  return output;
+  return { html: output, fragments };
 }
 
 /**
@@ -369,6 +427,7 @@ export function createHtmlPreview(
   let currentLayout: HtmlLayout | null = null;
   let accelerators: HtmlAccelerator[] = [];
   let guestBase: string | null = null;
+  let htmlFragments: HtmlTextFragment[] = [];
 
   const onMessage = (event: MessageEvent) => {
     const data = event.data as
@@ -395,6 +454,9 @@ export function createHtmlPreview(
         const old = active;
         active = pending;
         pending = null;
+        // The table belongs to the frame that is now on screen, not to the one
+        // that is still being built.
+        htmlFragments = frame.fragments;
         frame.frame.classList.remove("pending");
         frame.frame.classList.add("active");
         if (old) {
@@ -424,6 +486,29 @@ export function createHtmlPreview(
     }
     if (data.type === "line" && typeof data.line === "number") {
       callbacks.onLine(data.line);
+      return;
+    }
+    if (data.type === "select") {
+      const n = Number(data.n);
+      const index = Number(data.index);
+      const start = Number(data.start);
+      const end = Number(data.end);
+      if (
+        Number.isInteger(n) &&
+        Number.isInteger(index) &&
+        Number.isInteger(start) &&
+        Number.isInteger(end) &&
+        typeof data.sample === "string"
+      ) {
+        callbacks.onSelection({
+          n,
+          index,
+          start,
+          end,
+          sample: data.sample,
+          reveal: data.reveal === true,
+        });
+      }
       return;
     }
     if (data.type === "link" && typeof data.href === "string") {
@@ -473,7 +558,11 @@ export function createHtmlPreview(
     };
   }
 
-  function makeFrame(url: string, token: string): FrameState {
+  function makeFrame(
+    url: string,
+    token: string,
+    fragments: HtmlTextFragment[],
+  ): FrameState {
     const frame = document.createElement("iframe");
     frame.className = "html-preview-frame pending";
     frame.title = "HTML preview";
@@ -481,7 +570,7 @@ export function createHtmlPreview(
     frame.setAttribute("referrerpolicy", "no-referrer");
     frame.src = `${url}?v=${generation}`;
     host.appendChild(frame);
-    return { frame, token, generation, ready: false, timer: 0 };
+    return { frame, token, generation, ready: false, timer: 0, fragments };
   }
 
   function dropFrames(): void {
@@ -505,6 +594,7 @@ export function createHtmlPreview(
       dropFrames();
       nonce = randomToken();
       guestBase = null;
+      htmlFragments = [];
     },
 
     async render(source, root, filename, scripts) {
@@ -514,9 +604,9 @@ export function createHtmlPreview(
       const previewNonce = nonce;
       const bridgeNonce = randomToken();
       const token = randomToken();
-      let html: string;
+      let built: HtmlPreviewBuild;
       try {
-        html = await buildHtmlPreview(source, token, bridgeNonce);
+        built = await buildHtmlPreview(source, token, bridgeNonce);
       } catch (error) {
         if (mine !== generation) return;
         callbacks.onError(`Could not prepare the HTML preview: ${String(error)}`);
@@ -530,7 +620,7 @@ export function createHtmlPreview(
           await api.setHtmlPreview({
             nonce: previewNonce,
             bridgeNonce,
-            source: html,
+            source: built.html,
             root,
             filename,
             scripts,
@@ -543,7 +633,7 @@ export function createHtmlPreview(
       }
       if (mine !== generation) return;
 
-      const next = makeFrame(url, token);
+      const next = makeFrame(url, token, built.fragments);
       guestBase = url;
       // A newer render supersedes a frame that has not become ready yet.
       if (pending) {
@@ -563,6 +653,7 @@ export function createHtmlPreview(
       generation += 1;
       dropFrames();
       guestBase = null;
+      htmlFragments = [];
       void api.clearHtmlPreview().catch(() => {});
     },
 
@@ -582,6 +673,10 @@ export function createHtmlPreview(
 
     blink(line) {
       if (active) postTo(active, { type: "blink", line });
+    },
+
+    wordRange(selection) {
+      return htmlSourceRange(htmlFragments, selection);
     },
 
     layout() {

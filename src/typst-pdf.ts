@@ -69,6 +69,9 @@ interface TextLine {
 export interface TypstPageContext {
   page: number;
   lineText: string;
+  /** The neighbouring visual lines in the same column, for a one-word line. */
+  before: string;
+  after: string;
   start: number;
   end: number;
   text: string;
@@ -104,6 +107,7 @@ export class TypstPdfPreview {
 
   private loadingTask: PDFDocumentLoadingTask | null = null;
   private pages: PdfPage[] = [];
+  private readonly linesByPage = new Map<number, TextLine[]>();
   private observer: IntersectionObserver | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private fit = 1;
@@ -244,6 +248,7 @@ export class TypstPdfPreview {
       page.task = null;
     }
     this.pages = [];
+    this.linesByPage.clear();
     if (this.loadingTask) {
       const loadingTask = this.loadingTask;
       this.loadingTask = null;
@@ -527,6 +532,20 @@ export class TypstPdfPreview {
         this.spanLines.set(entry.span, { line, start: entry.start });
       }
     }
+    this.linesByPage.set(page, lines);
+  }
+
+  /** The previous and next visual line in the same column. */
+  private neighbours(line: TextLine): { before: string; after: string } {
+    const lines = this.linesByPage.get(line.page) ?? [];
+    const sameColumn = lines.filter(
+      (candidate) => line.column < 0 || candidate.column === line.column,
+    );
+    const at = sameColumn.indexOf(line);
+    return {
+      before: at > 0 ? sameColumn[at - 1].text : "",
+      after: at >= 0 && at + 1 < sameColumn.length ? sameColumn[at + 1].text : "",
+    };
   }
 
   /**
@@ -595,9 +614,12 @@ export class TypstPdfPreview {
     const multiLine = end === null || end.line !== start.line;
     const text = range.toString();
     if (!text.trim()) return null;
+    const neighbours = this.neighbours(start.line);
     return {
       page: start.line.page,
       lineText: start.line.text,
+      before: neighbours.before,
+      after: neighbours.after,
       start: start.offset,
       end: multiLine ? start.offset : end.offset,
       text,
@@ -653,10 +675,13 @@ export class TypstPdfPreview {
     }
     const start = this.locate(node, offset);
     if (!start) return;
+    const neighbours = this.neighbours(start.line);
     this.onContext(
       {
         page: start.line.page,
         lineText: start.line.text,
+        before: neighbours.before,
+        after: neighbours.after,
         start: start.offset,
         end: start.offset,
         text: "",

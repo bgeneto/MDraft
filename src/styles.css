@@ -26,6 +26,9 @@
   /* The corresponding word, not a selection: warmer than --selection so the two
      never read as the same thing. */
   --word-sync: rgba(255, 193, 7, 0.3);
+  /* The pulse's lighter beat. Kept beside the resting wash so the preview's two
+     registered highlight names cannot drift from the source mark. */
+  --word-sync-peak: rgba(255, 167, 0, 0.55);
   --quote-bar: rgba(127, 127, 127, 0.4);
   --sidebar-w: 244px;
   --editor-max-width: 860px;
@@ -85,7 +88,12 @@
   --code-bg: rgba(255, 255, 255, 0.07);
   --selected: #3a3d41;
   --sync-highlight: rgba(76, 154, 255, 0.16);
-  --word-sync: rgba(255, 213, 79, 0.24);
+  /* A yellow wash at 24% over #1e1e1e blended to rgb(84, 74, 42), and over
+     Solarized's #002b36 to rgb(61, 84, 60) — green, not yellow. The higher alpha
+     is what keeps the preview mark warm on a dark surface; the source mark does
+     not share this value, because it sits on the syntax palette's surface. */
+  --word-sync: rgba(255, 196, 0, 0.42);
+  --word-sync-peak: rgba(255, 214, 80, 0.62);
   --quote-bar: rgba(200, 200, 200, 0.35);
   --spell-error: #f07178;
   --scroll-shadow: rgba(0, 0, 0, 0.55);
@@ -2180,14 +2188,42 @@ body {
 
 /* The word that corresponds to a selection in the other pane. Painted with the
    Custom Highlight API, so the DOM is untouched and the tint cannot be mistaken
-   for markup applied to the document. */
+   for markup applied to the document. The two names let the host pulse the
+   highlight by swapping the registered range between beat and rest; animating
+   the ::highlight pseudo-element itself is not portable between WebView2 and
+   WebKitGTK. */
 ::highlight(mdraft-sync) {
   background-color: var(--word-sync);
 }
 
+::highlight(mdraft-sync-peak) {
+  background-color: var(--word-sync-peak);
+}
+
+/* The source mark. Its colour comes from the syntax palette, not from the
+   application theme: Solarized Dark's #002b36 pulled the old translucent yellow
+   green. Four beats of 500 ms, then the element's own background remains — the
+   animation must never be paired with a timer that removes the class. */
+@keyframes sync-word-pulse {
+  0%,
+  100% {
+    background-color: var(--editor-sync, var(--word-sync));
+  }
+  40% {
+    background-color: var(--editor-sync-peak, var(--word-sync));
+  }
+}
+
 .cm-sync-word {
-  background-color: var(--word-sync);
+  background-color: var(--editor-sync, var(--word-sync));
   border-radius: 2px;
+  animation: sync-word-pulse 500ms ease-in-out 4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cm-sync-word {
+    animation: none;
+  }
 }
 
 /* --------------------------------------------------------------------------
