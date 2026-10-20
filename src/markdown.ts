@@ -1243,10 +1243,17 @@ export function wrapPrintHtml(
     "table{border-collapse:collapse;width:100%;font-variant-numeric:var(--table-figures,normal)}",
     "th,td{border:1px solid #c8c8c8;padding:5px 9px;text-align:left}",
     "th{background:#f2f2f2}",
-    "pre{background:#f6f8fa;padding:10px 12px;border-radius:4px;overflow:visible;white-space:pre-wrap}",
+    "pre{background:#f6f8fa;padding:10px 12px;border-radius:4px;overflow:visible;white-space:pre-wrap;",
+    // The family and size belong on `pre`: a literal block is a bare `<pre>`
+    // with no `<code>` in it, so `code`-only styling would print it in the
+    // default monospace at full prose size.
+    "font-family:var(--font-code,monospace);font-size:.86em;line-height:1.6;",
+    "font-variant-ligatures:var(--code-ligatures,normal);",
+    "font-variant-numeric:var(--code-figures,normal)}",
     "code{font-family:var(--font-code,monospace);font-size:.9em;",
     "font-variant-ligatures:var(--code-ligatures,normal);",
     "font-variant-numeric:var(--code-figures,normal)}",
+    "pre code{font-size:inherit;line-height:inherit}",
     "blockquote{margin:0;padding-left:12px;border-left:3px solid #d0d0d0;color:#444}",
     "a{color:#0b57d0;text-decoration:none}",
     // Long URLs and code lines must wrap rather than be clipped at the margin.
@@ -1286,8 +1293,12 @@ export function wrapStandaloneHtml(
     `body{max-width:820px;margin:40px auto;padding:0 24px;background:${background};color:${color};`,
     'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;',
     "line-height:1.7;font-size:16px}",
-    "pre{background:rgba(127,127,127,.12);padding:12px 14px;border-radius:6px;overflow:auto}",
+    "pre{background:rgba(127,127,127,.12);padding:12px 14px;border-radius:6px;overflow:auto;",
+    // A literal block has no `<code>` child, so the face and size must be on
+    // `pre` or the exported file shows it in the browser default at 100%.
+    "font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.9em}",
     "code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.9em}",
+    "pre code{font-size:inherit}",
     "table{border-collapse:collapse}th,td{border:1px solid rgba(127,127,127,.35);padding:6px 10px}",
     "blockquote{margin:0;padding-left:14px;border-left:3px solid rgba(127,127,127,.4);opacity:.9}",
     // The same divider the preview draws: stronger than the panel border, so a
