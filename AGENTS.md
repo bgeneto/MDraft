@@ -193,6 +193,10 @@ rewrite from scratch.
 | `npm run dev` | `vite` | Vite dev server only, no Tauri shell |
 | `npm run tauri dev` | `tauri dev` | Full app with HMR |
 | `npm run build` | `tsc --noEmit && vite build` | Typecheck plus frontend bundle into `dist/` |
+| `npm run format` | `prettier --write …` | Format the TypeScript, JavaScript, CSS, JSON and HTML sources; see `.prettierignore` |
+| `npm run format:check` | `prettier --check …` | Fail when a source file is not Prettier-formatted |
+| `npm run lint` | `eslint src` | ESLint plus typescript-eslint over the frontend |
+| `npm run knip` | `knip --include dependencies,unlisted` | Fail on an unused dependency or an import that is not declared |
 | `npm run dist` | `scripts/dist.mjs` | Build, bundle and stage into `bin/<os>/<arch>/` |
 | `npm run stage` | `scripts/stage-artifacts.mjs` | Re-stage what is already built |
 | `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
@@ -507,6 +511,11 @@ test asserts — and closes everything it started on every exit path. `--no-buil
 tests the binary already built, `--only`/`--skip` narrow the run, `--all` adds the
 pandoc export and the image paste checks, and `--kill` closes an MDraft that is
 running from `target/release` instead of refusing to build over it.
+
+The frontend quality gates are separate from the functional table: `npm run
+format:check`, `npm run lint` and `npm run knip`. The `Quality` workflow
+(`.github/workflows/quality.yml`) runs those with `npm run build` and `cargo
+clippy --all-targets -- -D warnings`.
 
 The close test is PowerShell rather than CDP because it has to kill the
 application, which no DOM test can survive. It launches the release binary, sends
@@ -1589,6 +1598,9 @@ The HTML word test computed the range rect in the guest but never scrolled the g
 
 **A probe reports `csp: null` because it looks for a `<meta>` tag, while the policy is enforced**
 Tauri injects the application CSP as a **response header** for the custom protocol; there is no `meta[http-equiv="Content-Security-Policy"]` in `index.html`. Asking for that element returns `null` and reads as "no CSP" even though inline scripts are already blocked. Prove enforcement by appending a script element and checking that its side effect did not happen, or read the document response headers. Do not conclude the policy is absent from the meta tag.
+
+**`typescript-eslint does not support TS 7.0` although `npx tsc --version` prints 7.0.2**
+TypeScript 7 ships no programmatic API, so typescript-eslint needs the 6.0 API. `package.json` therefore aliases `typescript` to `@typescript/typescript6` for the linter and `@typescript/native` to TypeScript 7 for the `tsc` binary. Do not "fix" the error with `npm install typescript@latest`, which replaces the linter's API with 7 and makes ESLint abort, and do not hide it with `--legacy-peer-deps`. Verify both halves: `npx tsc --version` is 7.0.2 while `node_modules/typescript/package.json` is 6.0.x.
 
 ## Adding a preference, end to end
 
