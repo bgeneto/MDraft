@@ -2554,7 +2554,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
         "Live-preview editor for Asciidoc, Markdown, Typst, and HTML",
         "",
         "Conceived by Bernhard Enders",
-        "Coded 100% by DeepSeek Flash v4.1",
+        "Coded by DeepSeek Flash v4.1",
         "https://github.com/bgeneto/MDraft",
         "",
         "Editor: CodeMirror 6",
