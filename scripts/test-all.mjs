@@ -214,6 +214,17 @@ const SUITES = [
     doc: "samples/feature-tour.md",
   },
   {
+    // Formats temporary copies of the Markdown, HTML, Typst and AsciiDoc
+    // fixtures, then saves after formatting and after undo so the assertion is
+    // the bytes on disk. It also checks that the spelling menu still wins the
+    // right-click on a misspelled word, so it owns its instance.
+    id: "format-document",
+    title: "Format Document",
+    kind: "cdp",
+    script: "format-document-test.mjs",
+    doc: "samples/feature-tour.md",
+  },
+  {
     id: "shortcuts",
     title: "Menu accelerators",
     kind: "cdp",

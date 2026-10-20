@@ -208,6 +208,7 @@ rewrite from scratch.
 | `npm run autoclose:unit` | `scripts/autoclose-unit.mjs` | 17 checks of the tag matcher: attributes, custom elements, void and self-closing tags, autolinks, escapes, declarations, prose — no application |
 | `npm run autoclose` | `scripts/autoclose-test.mjs` | 33 checks of pairs, quotes, backticks, HTML tags and both preferences, typed through the real editor in Markdown, HTML, Typst and AsciiDoc |
 | `npm run spellcheck` | `scripts/spellcheck-test.mjs` | Underlines a misspelling, then clears it when spelling is turned off |
+| `npm run format:document` | `scripts/format-document-test.mjs` | 42 checks of right-click **Format Document** in Markdown, HTML and Typst: one undo restores the exact bytes, the caret keeps its line, AsciiDoc gets no menu, and a misspelling keeps the spelling menu |
 | `npm run audit` | `scripts/audit-document.mjs` | Render metrics for whatever document is loaded |
 | `npm run math` | `scripts/math-render-check.mjs` | 10 checks against the physics paper |
 | `npm run syntax` | `scripts/syntax-theme-test.mjs` | 10 checks that highlighting is real and that the sync mark stays amber and visible on Nord, Ink and Solarized Dark |
@@ -257,6 +258,7 @@ All of these need the app already running with CDP enabled (see
 | `image-paste-test.mjs` | `[port] [imageUrl] [localPath]` | `samples/feature-tour.md` | Clipboard, local and remote image paths, and the markdown that results |
 | `image-path-paste-test.mjs` | `[port]` | `samples/feature-tour.md` | Selects the `./image.png` placeholder with the mouse, pastes a relative path beside the document, and checks the text is replaced and the preview loads it |
 | `spellcheck-test.mjs` | `[port]` | `samples/feature-tour.md` | Sets the dictionary to English, types a misspelling, requires the wavy underline, then turns spelling off and requires the mark to be gone |
+| `format-document-test.mjs` | `[port]` | `samples/feature-tour.md` | Works on temporary copies of the Markdown, HTML, Typst and AsciiDoc fixtures: right-click opens exactly one **Format Document** in the three formattable languages, the saved bytes change in the formatter's own way, one undo restores the exact original bytes, the caret keeps its line, Escape and an outside click close the menu, the preview opens nothing, AsciiDoc opens nothing, a misspelling still opens the spelling menu, and an invalid Typst document leaves its bytes alone with a toast naming the failure |
 | `document-tabs-test.mjs` | `[port]` | `samples/feature-tour.md` | That several documents stay open sanely: a path already open is focused, the active tab is bold, the context menu and its disabled entries, Arrow-key navigation, drag and keyboard reordering, overflow arrows and the wheel, Close Others, the caret and both scroll offsets come back, the disk poll reloads a clean inactive tab and leaves a dirty one alone, Auto Save writes every dirty tab, and a large document no longer breaks the next New |
 | `tabs-restore-test.mjs` | `[port] phase1\|phase2 <doc> <extra…>` | phase 1: `samples/feature-tour.md`; the extras open as tabs | The two-launch store: phase 1 opens and reorders tabs, sets the launch preference and closes one tab just before the window does; phase 2 — launched **without** a document argument — sees the same tabs, order, active tab and preference. Normally run by `test-all.mjs`, which supplies both launches and the WM_CLOSE between them |
 | `recent-menu-test.mjs` | `[port]` | `samples/feature-tour.md` | The native Open Recent submenu through the `recent_menu` probe: it lists the launch file, a newly opened file becomes the first row, the emitted menu id focuses an existing tab instead of duplicating it, Clear Items empties the menu/sidebar/settings, a 27-row history renders in full in the sidebar while the menu shows 20 plus Clear Items, and a later open refills the list |
@@ -469,7 +471,7 @@ hash the pixels.
 
 ## Testing
 
-Twenty-five layers, cheapest first. Run them in this order when changing anything.
+Twenty-six layers, cheapest first. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
@@ -492,6 +494,7 @@ Twenty-five layers, cheapest first. Run them in this order when changing anythin
 | Math | `npm run math` | 10 | Font loading, fraction and radical geometry |
 | Syntax | `npm run syntax` | 10 | Token colours, palette switching, and the sync mark's amber contrast on three dark palettes |
 | AsciiDoc | `npm run asciidoc` | 55 | Preview, title/TOC, math, includes, source highlighting, outline, preview copy, spellcheck, paste, the built-in reference, defaults, word-level sync |
+| Format Document | `npm run format:document` | 42 | Right-click formatting in Markdown, HTML and Typst; exact bytes after undo; caret line; AsciiDoc excluded; the spelling menu still wins; a formatter failure leaves the buffer alone |
 | HTML guest | `npm run html` | 50 | Sandbox, IPC boundary, local assets, sync/blink, the guest word double-click, scripts-off, outline, reload-key guard |
 | Document tabs | `npm run tabs` | 104 | Several open documents, the context menu, drag and keyboard reordering, overflow arrows, the disk poll, Auto Save across tabs, caret and scroll per tab |
 | Tab restore | `npm test -- --only tabs-restore` | 25 | Two launches on one settings directory: the tabs come back in order with the remembered one active, the preference survives, and the close flush records a tab closed just before the window closed |
@@ -1602,6 +1605,16 @@ Tauri injects the application CSP as a **response header** for the custom protoc
 **`typescript-eslint does not support TS 7.0` although `npx tsc --version` prints 7.0.2**
 TypeScript 7 ships no programmatic API, so typescript-eslint needs the 6.0 API. `package.json` therefore aliases `typescript` to `@typescript/typescript6` for the linter and `@typescript/native` to TypeScript 7 for the `tsc` binary. Do not "fix" the error with `npm install typescript@latest`, which replaces the linter's API with 7 and makes ESLint abort, and do not hide it with `--legacy-peer-deps`. Verify both halves: `npx tsc --version` is 7.0.2 while `node_modules/typescript/package.json` is 6.0.x.
 
+**A CDP suite saves twice and the second write never happens, with no error**
+`runMenuAction` suppresses a repeat of the same menu id within 250 ms, so a
+platform whose native accelerator also fires cannot run the command twice. The
+format suite emitted `file.save`, saw the file change, formatted again and saved
+again inside that window; the second `file.save` was dropped without a message.
+The file stayed formatted and the tab stayed dirty, which looks exactly like a
+broken undo. The tell was the toast: it still read "Already formatted", never
+"Saved". Wait 300 ms before reusing a menu id from a script — a person cannot
+press Save twice in 250 ms, but a test can.
+
 ## Adding a preference, end to end
 
 Five files, in this order — more than three, so a plan comes first; see
@@ -1636,6 +1649,8 @@ src/
   tag-close.ts       the Markdown/AsciiDoc `>` input handler
   tag-name.ts        the pure rule: which tag a typed `>` closes
   spellcheck.ts      spelling marks, language detection, suggestion menu
+  format/            right-click Format Document: the lazy Prettier/Typstyle
+                     dispatcher, snapshot guard and the context menu
   markdown.ts        markdown → HTML; math extraction, mermaid, alerts, anchors
   html-preview.ts    sandboxed HTML guest: parse5 splice, iframe, bridge protocol
   html-source-map.ts host-side source offsets for the guest's text nodes
