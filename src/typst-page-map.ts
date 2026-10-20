@@ -32,12 +32,26 @@ export interface LineMatch {
   score: number;
 }
 
-const WORD = /[\p{L}\p{N}_]+/gu;
+// A soft hyphen is a break opportunity inside a word, not a word boundary.
+// Without it `co\u00adoperate` tokenises as two words and can never match the
+// one word the PDF drew.
+const WORD = /[\p{L}\p{N}_\u00ad]+/gu;
 const KEY_SEPARATOR = "\u0001";
 const MIN_FRAGMENT = 3;
 
 function normalize(text: string): string {
-  return text.normalize("NFC").toLocaleLowerCase();
+  return text
+    // PDF.js reports what the font drew. A soft hyphen is a break opportunity in
+    // the source, and a ligature is one glyph for two letters; neither changes
+    // the word the reader clicked, but both break a literal comparison.
+    .replace(/\u00ad/g, "")
+    .replace(/ﬃ/g, "ffi")
+    .replace(/ﬄ/g, "ffl")
+    .replace(/ﬀ/g, "ff")
+    .replace(/ﬁ/g, "fi")
+    .replace(/ﬂ/g, "fl")
+    .normalize("NFC")
+    .toLocaleLowerCase();
 }
 
 /** Split text into words, keeping each word's original range. */
@@ -123,17 +137,67 @@ export class TypstSourceMap {
       }
     }
 
-    // A one-word line (a heading, a page number) has no sequence to match.
-    if (lineWords.length === 1) {
-      let best: { sourceAt: number; distance: number } | null = null;
-      for (let i = 0; i < this.words.length; i += 1) {
-        if (this.words[i].norm !== lineWords[0].norm) continue;
-        const distance = Math.abs(i - hintWord);
-        if (!best || distance < best.distance) best = { sourceAt: i, distance };
+    return null;
+  }
+
+  /**
+   * Map a one-word visual line with its neighbours as context.
+   *
+   * A heading or a short line often has one word, and the nearest occurrence of
+   * that word is not evidence: a repeated heading, or the same word in the other
+   * column, wins by being closer to the caret. The neighbouring lines are
+   * already indexed, so a window around the word either identifies one source
+   * occurrence or there is no answer. Ambiguity paints nothing — the rule from
+   * the Typst Pages ADR is that a missing mark is acceptable and a wrong one is
+   * not.
+   */
+  mapLineWithNeighbors(
+    lineText: string,
+    before: string,
+    after: string,
+    hint = 0,
+  ): LineMatch | null {
+    const lineWords = tokenizeWords(lineText);
+    if (lineWords.length !== 1) return this.mapLine(lineText, hint);
+
+    const beforeWords = tokenizeWords(before).slice(-2);
+    const afterWords = tokenizeWords(after).slice(0, 2);
+    const target = beforeWords.length;
+    const windowWords = [...beforeWords, ...lineWords, ...afterWords];
+    if (windowWords.length < 2) return null;
+
+    const candidates = new Set<number>();
+    for (let size = Math.min(4, windowWords.length); size >= 2; size -= 1) {
+      const index = this.sequences[size - 2];
+      const firstStart = Math.max(0, target - size + 1);
+      const lastStart = Math.min(target, windowWords.length - size);
+      for (let start = firstStart; start <= lastStart; start += 1) {
+        const bucket = index.get(this.key(windowWords, start, size));
+        if (!bucket) continue;
+        for (const sourceAt of bucket) {
+          const sourceTarget = sourceAt + (target - start);
+          const candidate = this.words[sourceTarget];
+          if (!candidate || candidate.norm !== lineWords[0].norm) continue;
+          let intact = true;
+          for (let i = 0; i < size; i += 1) {
+            const source = this.words[sourceAt + i];
+            if (!source || source.norm !== windowWords[start + i].norm) {
+              intact = false;
+              break;
+            }
+          }
+          if (intact) candidates.add(sourceTarget);
+        }
       }
-      if (best) {
-        return { lineWords, matchedAt: 0, sourceAt: best.sourceAt, score: 1 };
+      if (candidates.size === 1) {
+        return {
+          lineWords,
+          matchedAt: 0,
+          sourceAt: [...candidates][0],
+          score: size,
+        };
       }
+      if (candidates.size > 1) return null;
     }
     return null;
   }

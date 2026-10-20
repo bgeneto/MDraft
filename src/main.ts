@@ -32,6 +32,7 @@ import {
   type HtmlAccelerator,
   type HtmlLayout,
   type HtmlPreviewHandle,
+  type HtmlSelection,
 } from "./html-preview";
 import { handleImageDrop, handleImagePaste, imageOptions, type ImageContext } from "./images";
 import { imageSyntaxFor, needsRelativePath } from "./image-syntax";
@@ -2916,6 +2917,13 @@ interface HighlightRegistryLike {
 let wordMap: WordMap | null = null;
 let syncedSource: { from: number; to: number } | null = null;
 let selectionTimer = 0;
+/** The source range currently painted in the preview, and its pulse state. */
+let previewSyncKey = "";
+let previewPulseRange: Range | null = null;
+let previewPulseTimer = 0;
+let previewPulseStep = 0;
+const PREVIEW_PULSE_BEATS = 8;
+const PREVIEW_PULSE_STEP_MS = 250;
 
 /** `CSS.highlights` and `Highlight`, when this webview has them. */
 function highlightApi(): {
@@ -2928,7 +2936,61 @@ function highlightApi(): {
 }
 
 function clearPreviewWords(): void {
-  highlightApi()?.registry.delete("mdraft-sync");
+  const api = highlightApi();
+  api?.registry.delete("mdraft-sync");
+  api?.registry.delete("mdraft-sync-peak");
+  window.clearTimeout(previewPulseTimer);
+  previewPulseTimer = 0;
+  previewPulseStep = 0;
+  previewPulseRange = null;
+  previewSyncKey = "";
+}
+
+/**
+ * Paint the preview word, then alternate the two registered highlight names.
+ *
+ * The Custom Highlight API cannot be animated portably, so the pulse is a name
+ * swap: eight 250 ms steps are four 500 ms beats. It ends with `mdraft-sync`
+ * registered, which is the resting wash; the range itself is never removed by
+ * the pulse.
+ */
+function paintPreviewWords(range: Range, key: string): void {
+  const api = highlightApi();
+  if (!api) return;
+  // A new range must not race the previous pulse: its closure holds the old
+  // Range and would repaint it under the new name.
+  window.clearTimeout(previewPulseTimer);
+  previewPulseTimer = 0;
+  const rest = new api.create(range);
+  const peak = new api.create(range);
+  let atPeak = false;
+  previewPulseRange = range;
+  previewSyncKey = key;
+  previewPulseStep = 0;
+  api.registry.set("mdraft-sync", rest);
+  api.registry.delete("mdraft-sync-peak");
+
+  const step = (): void => {
+    if (!previewPulseRange) return;
+    atPeak = !atPeak;
+    if (atPeak) {
+      api.registry.set("mdraft-sync-peak", peak);
+      api.registry.delete("mdraft-sync");
+    } else {
+      api.registry.set("mdraft-sync", rest);
+      api.registry.delete("mdraft-sync-peak");
+    }
+    previewPulseStep += 1;
+    if (previewPulseStep < PREVIEW_PULSE_BEATS) {
+      previewPulseTimer = window.setTimeout(step, PREVIEW_PULSE_STEP_MS);
+    } else {
+      // End on the resting name even when the last beat was the peak.
+      api.registry.set("mdraft-sync", rest);
+      api.registry.delete("mdraft-sync-peak");
+      previewPulseTimer = 0;
+    }
+  };
+  previewPulseTimer = window.setTimeout(step, PREVIEW_PULSE_STEP_MS);
 }
 
 /** Rebuild the map against the DOM a render just produced. */
@@ -2937,6 +2999,9 @@ function bindPreviewWords(
   fragments?: Fragment[],
   blocks?: BlockRange[],
 ): void {
+  // A render replaces the nodes the old Range pointed at, so drop both the
+  // highlight and the pulse before binding the new map.
+  clearPreviewWords();
   const hasFragments = fragments && fragments.length > 0;
   const hasBlocks = blocks && blocks.length > 0;
   wordMap =
@@ -3033,6 +3098,7 @@ function syncSourceFromPreview(reveal: boolean): void {
   }
   if (syncedSource && syncedSource.from === range.from && syncedSource.to === range.to) {
     if (reveal) editor.revealOffset(range.from);
+    editor.pulseSyncRange();
     return;
   }
   syncedSource = range;
@@ -3062,7 +3128,12 @@ function typstPageMap(source: string): TypstSourceMap {
 function syncSourceFromPageSelection(context: TypstPageContext, reveal: boolean): void {
   const source = editor.getDoc();
   const map = typstPageMap(source);
-  const match = map.mapLine(context.lineText, editor.cursorInfo().from);
+  const match = map.mapLineWithNeighbors(
+    context.lineText,
+    context.before,
+    context.after,
+    editor.cursorInfo().from,
+  );
   const startToken = lineTokenAt(context.lineText, context.start, "start");
   if (!match || !startToken) {
     syncedSource = null;
@@ -3097,6 +3168,7 @@ function syncSourceFromPageSelection(context: TypstPageContext, reveal: boolean)
   }
   if (syncedSource && syncedSource.from === range.from && syncedSource.to === range.to) {
     if (reveal) editor.revealOffset(range.from);
+    editor.pulseSyncRange();
     return;
   }
   syncedSource = range;
@@ -3128,12 +3200,19 @@ function syncPreviewFromSource(): void {
   }
   const api = highlightApi();
   if (!api) return;
-  const domRange = rangeForSource(map, range.from, range.to);
-  if (!domRange) {
-    api.registry.delete("mdraft-sync");
+  const key = `${range.from}:${range.to}`;
+  if (key === previewSyncKey && previewPulseRange) {
+    // A second selection of the same word replays the pulse, but a cursor
+    // movement during the pulse must not restart it on every key.
+    if (previewPulseTimer === 0) paintPreviewWords(previewPulseRange, key);
     return;
   }
-  api.registry.set("mdraft-sync", new api.create(domRange));
+  const domRange = rangeForSource(map, range.from, range.to);
+  if (!domRange) {
+    clearPreviewWords();
+    return;
+  }
+  paintPreviewWords(domRange, key);
 }
 
 /** Restore the scroll a tab switch saved, and keep pane sync from fighting it. */
@@ -3790,6 +3869,27 @@ function handleHtmlLine(line: number): void {
   htmlPreview.blink(line);
 }
 
+/**
+ * A guest double-click or drag -> the source mark.
+ *
+ * The guest reports a text-node index, never a source offset. The host checks
+ * the selected sample against the table built with the preview and paints
+ * nothing when it has drifted; the line reveal already happened on mousedown.
+ */
+function handleHtmlSelection(selection: HtmlSelection): void {
+  if (doc.language !== "html" || !htmlPreview) return;
+  const range = htmlPreview.wordRange(selection);
+  if (!range) return;
+  if (syncedSource && syncedSource.from === range.from && syncedSource.to === range.to) {
+    editor.pulseSyncRange();
+    if (selection.reveal) editor.revealOffset(range.from);
+    return;
+  }
+  syncedSource = range;
+  editor.setSyncRange(range.from, range.to);
+  if (selection.reveal) editor.revealOffset(range.from);
+}
+
 /** Map a resolved guest URL back to the document folder, or null. */
 function guestLinkToPath(href: string): string | null {
   const base = htmlPreview.baseUrl();
@@ -4326,6 +4426,7 @@ async function boot(): Promise<void> {
 
   htmlPreview = createHtmlPreview(previewPane, {
     onLine: handleHtmlLine,
+    onSelection: handleHtmlSelection,
     onLink: (href) => handleHtmlLink(href),
     onAction: handleHtmlAction,
     onScroll: handleHtmlScroll,

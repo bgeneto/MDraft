@@ -54,11 +54,11 @@ hard part of choosing type is the pairing rather than one family.
 | Preset | Character |
 | --- | --- |
 | **System** | The default. No bundled faces; nothing is embedded in an export. |
-| **Serif** | Source Serif 4 under Source Sans 3, with Fira Code in both code roles. A neutral modern book: oldstyle figures, ligatures and slashed zero on; starts at 18 px preview size and 85% math scale. |
-| **Renaissance** | EB Garamond in prose and headings, IBM Plex Mono in the editor. A 16th-century book page: low contrast, small x-height, serif headings, oldstyle figures, no code ligatures, 77% math scale. |
-| **Editorial** | Bodoni Moda's hairline Didone under Archivo's grotesque headings, with JetBrains Mono in code. A mid-century magazine: lining figures, ligatures and slashed zero on, 17 px preview size and 85% math scale. |
-| **Bauhaus** | Jost's circles and straight lines in prose and headings, with Azeret Mono's geometric code. A 1920s poster with no serif anywhere: ligatures and slashed zero on, proportional table figures, 17 px and 87% math. |
-| **Notebook** | Alegreya's calligraphic serif under Caveat's handwriting, with Victor Mono's narrow, cursive-italic code. A writer's notebook: oldstyle and tabular figures, ligatures on, 17 px and 80% math. |
+| **Serif** | Source Serif 4 under Source Sans 3, with Fira Code in both code roles. A neutral modern book: oldstyle figures, ligatures and slashed zero on; starts at 18 px preview size and 92% math scale. |
+| **Renaissance** | EB Garamond in prose and headings, IBM Plex Mono in the editor. A 16th-century book page: low contrast, small x-height, serif headings, oldstyle figures, no code ligatures, 80% math scale. |
+| **Editorial** | Bodoni Moda's hairline Didone under Archivo's grotesque headings, with JetBrains Mono in code. A mid-century magazine: lining figures, ligatures and slashed zero on, 17 px preview size and 90% math scale. |
+| **Bauhaus** | Jost's circles and straight lines in prose and headings, with Azeret Mono's geometric code. A 1920s poster with no serif anywhere: ligatures and slashed zero on, proportional table figures, 17 px and 90% math. |
+| **Notebook** | Alegreya's calligraphic serif under Caveat's handwriting, with Victor Mono's narrow, cursive-italic code. A writer's notebook: oldstyle and tabular figures, ligatures on, 17 px and 86% math. |
 
 `Classic`, `Literary` and `Technical` were removed. A reader who had one of them
 selected keeps the saved stacks in `settings.json`, so the picker shows
@@ -72,8 +72,8 @@ locked to a preset.
 Editor font size, preview font size and math scale are not part of a preset's
 identity. They are reader adjustments remembered per preset: set Serif to 19 px,
 visit System and Renaissance, and Serif still comes back at 19 px. A preset that
-has never been adjusted starts at its own defaults (System 16/90, Serif 18/85,
-Renaissance 18/77, Editorial 17/85, Bauhaus 17/87, Notebook 17/80). The editor
+has never been adjusted starts at its own defaults (System 16/95, Serif 18/92,
+Renaissance 18/80, Editorial 17/90, Bauhaus 17/90, Notebook 17/86). The editor
 font size starts at 15 px for every preset, with a 1.5 line height that scales
 with the size. **Line Height** in *Preferences › Editor* chooses **Compact**
 (1.3×), **Normal** (1.5×) or **Wide** (1.8×). It is a global preference, not a
@@ -129,8 +129,8 @@ do not depend on the reader's fonts.
 KaTeX draws at `1.21em`, which is why a formula reads slightly larger than the
 text beside it. **Preferences › Typography › Math scale** multiplies that ratio
 from 70% to 130%. 100% keeps KaTeX's own size; about 83% makes a formula match
-the prose. Serif and Editorial use 85%; System 90%; Renaissance 77% so the
-mathematics does not shout beside Garamond; Bauhaus 87% and Notebook 80%. The
+the prose. Serif uses 92%; System 95%; Renaissance 80% so the mathematics does
+not shout beside Garamond; Editorial and Bauhaus 90%, and Notebook 86%. The
 preview, exported HTML and printed PDF all read the same value.
 
 A perfect text-and-math match would need a different math font and a renderer

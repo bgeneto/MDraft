@@ -49,6 +49,7 @@ const probe = `(() => {
   const distinct = [...new Set(tokens.map((t) => t.color))];
   return JSON.stringify({
     surface: getComputedStyle(editor).backgroundColor,
+    sync: getComputedStyle(editor).getPropertyValue('--editor-sync').trim(),
     bodyColor: getComputedStyle(document.querySelector('.cm-content')).color,
     tokenCount: tokens.length,
     distinctColors: distinct.length,
@@ -111,6 +112,39 @@ for (const [k, v] of Object.entries(nord)) {
   console.log(`  ${k.padEnd(15)} ${Array.isArray(v) ? JSON.stringify(v) : v}`);
 }
 
+const dark = { nord };
+for (const id of ["ink", "solarized-dark"]) {
+  await evaluate(switchPalette(id));
+  dark[id] = await evaluate(probe);
+  console.log(`\n=== palette: ${id} ===`);
+  console.log(`  ${"surface".padEnd(15)} ${dark[id].surface}`);
+  console.log(`  ${"sync".padEnd(15)} ${dark[id].sync}`);
+}
+
+const rgb = (value) => {
+  const hex = /^#([0-9a-f]{6})$/i.exec(value ?? "");
+  if (hex) {
+    return [0, 2, 4].map((at) => parseInt(hex[1].slice(at, at + 2), 16));
+  }
+  const parts = /rgb\((\d+),\s*(\d+),\s*(\d+)\)/.exec(value ?? "");
+  return parts ? parts.slice(1, 4).map(Number) : null;
+};
+
+// The mark must stay amber (R > G > B) and stand off its own surface. This is
+// the measurement the old translucent wash failed on Solarized Dark:
+// rgb(61, 84, 60), green.
+const syncVisible = (sample) => {
+  const mark = rgb(sample.sync);
+  const surface = rgb(sample.surface);
+  return (
+    mark !== null &&
+    surface !== null &&
+    mark[0] > mark[1] &&
+    mark[1] > mark[2] &&
+    mark[0] - surface[0] >= 70
+  );
+};
+
 console.log("\n=== assertions ===");
 const checks = [
   ["auto: several distinct token colours", auto.distinctColors >= 4],
@@ -120,6 +154,9 @@ const checks = [
   ["palette changes the surface", nord.surface !== auto.surface],
   ["palette changes token colours", JSON.stringify(nord.palette) !== JSON.stringify(auto.palette)],
   ["nord surface is #2e3440", nord.surface === "rgb(46, 52, 64)"],
+  ["nord: the sync mark is amber and visible", syncVisible(dark.nord)],
+  ["ink: the sync mark is amber and visible", syncVisible(dark.ink)],
+  ["solarized-dark: the sync mark is amber and visible", syncVisible(dark["solarized-dark"])],
 ];
 let failed = 0;
 for (const [label, ok] of checks) {

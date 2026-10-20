@@ -200,19 +200,21 @@ rewrite from scratch.
 | `npm run test:rust` | `cargo test` | 93 tests (91 run, two ignored downloads) on both platforms |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. The tab-restore layer is the exception: two launches of the same instance's settings directory, closed with WM_CLOSE in between so the close flush runs. Puts back the working tree and the developer's own settings afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
 | `npm run smoke` | `scripts/dom-smoke.mjs` | 105 checks against `samples/feature-tour.md` |
-| `npm run word-sync` | `scripts/word-sync-test.mjs` | 30 checks of word-level sync against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, no scroll, Escape, and the fallbacks |
+| `npm run word-sync` | `scripts/word-sync-test.mjs` | 33 checks of word-level sync against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, the four-beat pulse and its resting mark, reduced motion, no scroll, Escape, and the fallbacks |
 | `npm run autoclose:unit` | `scripts/autoclose-unit.mjs` | 17 checks of the tag matcher: attributes, custom elements, void and self-closing tags, autolinks, escapes, declarations, prose — no application |
 | `npm run autoclose` | `scripts/autoclose-test.mjs` | 33 checks of pairs, quotes, backticks, HTML tags and both preferences, typed through the real editor in Markdown, HTML, Typst and AsciiDoc |
 | `npm run spellcheck` | `scripts/spellcheck-test.mjs` | Underlines a misspelling, then clears it when spelling is turned off |
 | `npm run audit` | `scripts/audit-document.mjs` | Render metrics for whatever document is loaded |
 | `npm run math` | `scripts/math-render-check.mjs` | 10 checks against the physics paper |
-| `npm run syntax` | `scripts/syntax-theme-test.mjs` | 7 checks that highlighting is real |
-| `npm run html` | `scripts/html-preview-test.mjs` | 43 checks of the sandboxed HTML guest |
+| `npm run syntax` | `scripts/syntax-theme-test.mjs` | 10 checks that highlighting is real and that the sync mark stays amber and visible on Nord, Ink and Solarized Dark |
+| `npm run html` | `scripts/html-preview-test.mjs` | 50 checks of the sandboxed HTML guest, including a double-click that paints the clicked word rather than the first occurrence |
 | `npm run export` | `scripts/export-test.mjs` | 36 checks of every export path, against real pandoc, including an AsciiDoc source and the rendered-HTML math reader |
 | `npm run typography` | `scripts/typography-test.mjs` | 48 checks that each face loads, each OpenType switch changes pixels, the six-preset matrix holds, the four new body faces render differently, and the Semibold weights are real |
 | `npm run shortcuts` | `scripts/shortcut-test.mjs` | 43 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, that the zoom chip follows the level, that a new tab keeps the previous buffer's undo, and that the webview's F5/Ctrl+R reload keys are swallowed |
 | `npm run tabs` | `scripts/document-tabs-test.mjs` | 104 checks of several open documents: sidebar and Recents, `open-files`, active-tab styling, the tab context menu, keyboard navigation, caret and scroll per tab, dirty dot, × and middle-click, Ctrl+Tab, drag and keyboard reordering, the disk poll, Auto Save across tabs, overflow arrows and the wheel, Close Others, the last tab |
 | `npm run tabs:restore:unit` | `scripts/tabs-restore-unit.mjs` | 33 checks of what is remembered and what is restored: tab order, untitled exclusion, deduplication under the platform's path identity, the 20-document cap, and the restore plan's handling of missing files — no application |
+| `npm run typst:map:unit` | `scripts/typst-page-map-unit.mjs` | 9 checks of the Typst Pages source map: a repeated one-word line with identical neighbours paints nothing, a unique neighbour window picks the clicked occurrence, ligatures and soft hyphens match, and generated text stays unmapped — no application |
+| `npm run html:map:unit` | `scripts/html-source-map-unit.mjs` | 14 checks of the HTML text-node offsets: entities and CRLF, the decoded-to-raw translation, the sample mismatch that paints nothing, and two nodes under one stamp — no application |
 | `npm run recent` | `scripts/recent-menu-test.mjs` | 26 checks that File › Open Recent mirrors the persisted list: the launch file, a new file becoming first, the menu id opening/focusing a tab, Clear Items emptying menu and sidebar, the list refilling, and a 27-row history rendered in full by the sidebar while the menu shows 20 plus Clear Items |
 | `npm run asciidoc` | `scripts/asciidoc-test.mjs` | 51 checks of the AsciiDoc preview, source highlighting, outline, preview copy, spellcheck, includes, paste, the AsciiDoc reference, the default extension and word-level sync |
 | `npm run asciidoc:export:unit` | `scripts/asciidoc-export-unit.mjs` | 17 unit checks of the AsciiDoc -> HTML step every pandoc export uses: unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations; no application |
@@ -220,7 +222,7 @@ rewrite from scratch.
 | `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 99 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
 | `npm run paste` | `scripts/rich-paste-test.mjs` | 28 checks of rich paste through the real UI: destination detection, conversion in every direction, whitespace across inline elements, preferences, Ctrl+Shift+V, undo |
 | `npm run image:syntax` | `scripts/image-syntax-test.mjs` | 14 checks of bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, including the Image preference |
-| `npm run typst:preview` | `scripts/typst-preview-test.mjs` | 31 checks of Typst Pages through PDF.js and Typst word sync: page shells, canvases, text layers, both columns, selection/copy, paragraph click, repeated-word/right-column mapping, drag ranges, generated-text fallback, the transparent view bar, view switching and PDF disposal |
+| `npm run typst:preview` | `scripts/typst-preview-test.mjs` | 33 checks of Typst Pages through PDF.js and Typst word sync: page shells, canvases, text layers, both columns, selection/copy, paragraph click, repeated-word/right-column mapping, one-word heading mapping, drag ranges, generated-text fallback, the transparent view bar, view switching and PDF disposal |
 | `npm run licence` | `scripts/licence-test.mjs` | 4 checks that the bundled typefaces' licences ship inside the application. Run against its own instance: it opens a document |
 | `npm run images` | `scripts/image-paste-test.mjs` | Image paste through the real UI |
 | `npm run screenshot` | `scripts/screenshot.mjs` | PNG of the running window |
@@ -256,6 +258,8 @@ All of these need the app already running with CDP enabled (see
 | `sessions-test.mjs` | — | none — runs without the application | The session store's rules: insertion after the active tab, untitled names, one tab per path under both case rules, the neighbour that takes over on close, `move` and `removeMany` order, wrap-around, and the empty-list invariant |
 | `paste-convert-test.mjs` | — | none — runs without the application | The paste matrix: clipboard and document detection, all reader/renderer pairs, escaping, sanitisation, caps and image syntax |
 | `tabs-restore-unit.mjs` | — | none — runs without the application | What is remembered and what is restored: tab order, untitled exclusion, deduplication under the platform's path identity, the 20-document cap, missing files and the active-tab fallback |
+| `typst-page-map-unit.mjs` | — | none — runs without the application | The Typst Pages source map's one-word rule: identical neighbours paint nothing, a unique window picks the occurrence, ligatures and soft hyphens fold, generated text stays unmapped |
+| `html-source-map-unit.mjs` | — | none — runs without the application | The HTML text-node rule: decoded-to-raw offsets across entities and CRLF, the sample check that fails closed, and the index that selects one node under a stamp |
 | `rich-paste-test.mjs` | `[port]` | `samples/feature-tour.md` | That the paste event converts HTML, leaves Markdown/plain text alone, detects an unsaved Typst/Markdown/HTML buffer, honours Ctrl+Shift+V and the preference, and undoes in one step |
 | `image-syntax-test.mjs` | `[port]` | `samples/typst-tour.typ` | A clipboard bitmap becomes `#image`, a remote image is downloaded or kept according to the Image preference, and the files land in the document's assets folder |
 | `typst-preview-test.mjs` | `[port]` | `samples/typst-pages.typ` | The Pages view is the compiler's PDF drawn by PDF.js with selectable text, both columns and two pages; a single click paints the source paragraph, a repeated word in a later line or the right column maps that occurrence, generated `#lorem` paints nothing, the view bar does not blur the page, and switching back disposes the PDF view. Document gets the same word-map checks, and a single click does not paint a word there |
@@ -459,7 +463,7 @@ hash the pixels.
 
 ## Testing
 
-Twenty-two layers, cheapest first. Run them in this order when changing anything.
+Twenty-four layers, cheapest first. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
@@ -469,17 +473,19 @@ Twenty-two layers, cheapest first. Run them in this order when changing anything
 | Paste conversion | `npm run paste:convert` | 99 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, image syntax, AsciiDoc |
 | AsciiDoc export source | `npm run asciidoc:export:unit` | 17 | Unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations - no application |
 | DOM smoke | `npm run smoke` | 105 | Rendering, pane sync, preferences (including the four On Launch choices and Line Height), math, fonts, status icons |
-| Word sync | `npm run word-sync` | 30 | The fragment map, preview → source and source → preview, atomic code, formula and image spans, word snapping, no scroll, Escape |
+| Word sync | `npm run word-sync` | 33 | The fragment map, preview → source and source → preview, atomic code, formula and image spans, the pulse and its resting mark, reduced motion, word snapping, no scroll, Escape |
 | Auto-close matching | `npm run autoclose:unit` | 17 | Which tag a typed `>`, the void/self-closing/autolink/escape rules — no application |
 | Remembered tabs (unit) | `npm run tabs:restore:unit` | 33 | What is stored (order, untitled exclusion, deduplication, the 20-document cap) and what a restore plan does with it (missing files, the active-tab fallback) — no application |
+| Typst page map (unit) | `npm run typst:map:unit` | 9 | One-word lines with identical neighbours paint nothing, a unique neighbour window picks the occurrence, ligatures and soft hyphens fold, generated text stays unmapped — no application |
+| HTML source map (unit) | `npm run html:map:unit` | 14 | Entities and CRLF offsets, decoded-to-raw translation, the sample mismatch, and two text nodes under one stamp — no application |
 | Auto-close typing | `npm run autoclose` | 33 | Pairs, step-over, Backspace, selection wrap, Markdown inline tags, HTML tags, both preferences, in all four document types |
 | Rich paste | `npm run paste` | 28 | The paste event, destination notice, preferences, Ctrl+Shift+V, undo, the same clipboard converted into Markdown and kept as source in HTML, spaces around inline elements |
 | Image syntax | `npm run image:syntax` | 14 | Bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, plus the Image preference |
-| Typst pages | `npm run typst:preview` | 31 | PDF.js page shells/canvases/text layers, both columns, A4 geometry, paragraph click, repeated-word/right-column mapping, drag ranges, Pages and Document word sync, generated-text fallback, transparent view bar and PDF disposal |
+| Typst pages | `npm run typst:preview` | 33 | PDF.js page shells/canvases/text layers, both columns, A4 geometry, paragraph click, repeated-word/right-column mapping, a one-word heading, drag ranges, Pages and Document word sync, generated-text fallback, transparent view bar and PDF disposal |
 | Math | `npm run math` | 10 | Font loading, fraction and radical geometry |
-| Syntax | `npm run syntax` | 7 | Token colours, palette switching |
+| Syntax | `npm run syntax` | 10 | Token colours, palette switching, and the sync mark's amber contrast on three dark palettes |
 | AsciiDoc | `npm run asciidoc` | 51 | Preview, title/TOC, math, includes, source highlighting, outline, preview copy, spellcheck, paste, the built-in reference, defaults, word-level sync |
-| HTML guest | `npm run html` | 43 | Sandbox, IPC boundary, local assets, sync/blink, scripts-off, outline, reload-key guard |
+| HTML guest | `npm run html` | 50 | Sandbox, IPC boundary, local assets, sync/blink, the guest word double-click, scripts-off, outline, reload-key guard |
 | Document tabs | `npm run tabs` | 104 | Several open documents, the context menu, drag and keyboard reordering, overflow arrows, the disk poll, Auto Save across tabs, caret and scroll per tab |
 | Tab restore | `npm test -- --only tabs-restore` | 25 | Two launches on one settings directory: the tabs come back in order with the remembered one active, the preference survives, and the close flush records a tab closed just before the window closed |
 | Recent menu | `npm run recent` | 26 | The native Open Recent 20-row window, a longer sidebar history, menu-id dispatch, Clear Items across menu/sidebar/settings, refilling after a clear |
@@ -1559,6 +1565,12 @@ binary before the fix with `WAYLAND_DEBUG=1 /usr/bin/mdraft`:
 `WM_CLASS` stays aligned with the entry. Do not conclude the icon assets or
 `bundle.icon` are wrong from this; X11 uses `_NET_WM_ICON` and looked correct.
 
+**A CDP test reports the preview word highlight as `null` even though the word is painted**
+`syncPreviewFromSource` pulses by swapping the registered name between `mdraft-sync` and `mdraft-sync-peak` every 250 ms. A probe that reads only `CSS.highlights.get("mdraft-sync")` lands on the peak half of the beat and sees nothing; `word-sync` failed "a source word paints the preview" at 250 ms after the double-click for this reason, not because the mark was missing. Read either name (`get("mdraft-sync") ?? get("mdraft-sync-peak")`), and assert persistence on the computed background of `.cm-sync-word` rather than on the registry entry.
+
+**`elementFromPoint` returns `none` for a word visibly in the iframe, and the double-click selects nothing**
+The HTML word test computed the range rect in the guest but never scrolled the guest. `getBoundingClientRect` returned y=674 while the iframe viewport was about 671 px tall, so the page coordinates fell below the frame: no selection, no `select` message, and `check("the target is on screen")` passed because it only tested `!== null`. Call `scrollIntoView({ block: "center" })` in the guest, wait for the layout, and assert `0 < y < frameOrigin.height` before sending the click. The guest's rect and the frame's rect are in different coordinate systems; `elementFromPoint` on both sides is the cheap proof that they line up.
+
 ## Adding a preference, end to end
 
 Five files, in this order — more than three, so a plan comes first; see
@@ -1595,6 +1607,7 @@ src/
   spellcheck.ts      spelling marks, language detection, suggestion menu
   markdown.ts        markdown → HTML; math extraction, mermaid, alerts, anchors
   html-preview.ts    sandboxed HTML guest: parse5 splice, iframe, bridge protocol
+  html-source-map.ts host-side source offsets for the guest's text nodes
   html-bridge.js     guest-side scroll/click/keyboard bridge (inlined, not imported)
   html-language.ts   lazy CodeMirror HTML grammar
   asciidoc-language.ts AsciiDoc stream highlighter

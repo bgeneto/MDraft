@@ -288,6 +288,125 @@ check("preview click does not scroll the preview", Math.abs(scrollAfterClick - s
 await sleep(800);
 check("blink clears itself", (await frame.evaluate("document.querySelectorAll('.mdraft-blink').length")) === 0);
 
+// Word-level sync. The fixture repeats "Paragraph", so a source search would be
+// ambiguous; the parse5 table is what makes the clicked occurrence exact.
+await page.evaluate("document.querySelector('.cm-scroller').scrollTop = 0; 'ok'");
+// Setting the editor scroll fires the editor -> guest sync, and that message is
+// delivered asynchronously. Scrolling the guest before it lands lets the app's
+// scrollTo overwrite ours, which is what made this pass alone and fail in the
+// full run. Let the sync settle first.
+await sleep(500);
+await frame.evaluate(`(() => {
+  const paragraph = [...document.querySelectorAll('p')].find((node) =>
+    node.textContent.startsWith('Paragraph two.')
+  );
+  if (!paragraph) return 'missing';
+  // scrollIntoView is not reliable here and the guest's viewport is shorter
+  // than the page; place the paragraph 180 px below the top explicitly.
+  const rect = paragraph.getBoundingClientRect();
+  window.scrollTo(0, Math.max(0, rect.top + window.scrollY - 180));
+  return 'ok';
+})()`);
+await sleep(700);
+const wordTarget = JSON.parse(
+  await frame.evaluate(`(() => {
+    const paragraph = [...document.querySelectorAll('p')].find((node) =>
+      node.textContent.startsWith('Paragraph two.')
+    );
+    if (!paragraph || !paragraph.firstChild) return JSON.stringify(null);
+    const at = paragraph.firstChild.data.indexOf('Paragraph');
+    if (at < 0) return JSON.stringify(null);
+    const range = document.createRange();
+    range.setStart(paragraph.firstChild, at);
+    range.setEnd(paragraph.firstChild, at + 'Paragraph'.length);
+    const rect = range.getBoundingClientRect();
+    return JSON.stringify({
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    });
+  })()`),
+);
+const frameOrigin = JSON.parse(
+  await page.evaluate(`(() => {
+    const element = document.querySelector('.html-preview-frame.active');
+    if (!element) return JSON.stringify(null);
+    const rect = element.getBoundingClientRect();
+    return JSON.stringify({
+      x: rect.left,
+      y: rect.top,
+      width: rect.width,
+      height: rect.height,
+    });
+  })()`),
+);
+check(
+  "the guest word target is on screen",
+  wordTarget !== null &&
+    frameOrigin !== null &&
+    wordTarget.y > 0 &&
+    wordTarget.y < frameOrigin.height,
+  wordTarget && frameOrigin
+    ? JSON.stringify({ wordTarget, frameOrigin })
+    : "missing",
+);
+if (wordTarget && frameOrigin) {
+  const x = frameOrigin.x + wordTarget.x;
+  const y = frameOrigin.y + wordTarget.y;
+  for (const clickCount of [1, 2]) {
+    await page.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x,
+      y,
+      button: "left",
+      clickCount,
+    });
+    await page.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x,
+      y,
+      button: "left",
+      clickCount,
+    });
+  }
+  await sleep(400);
+}
+const guestHit =
+  wordTarget === null
+    ? "missing"
+    : await frame.evaluate(`(() => {
+        const element = document.elementFromPoint(${wordTarget.x}, ${wordTarget.y});
+        return element ? element.tagName + ':' + (element.textContent ?? '').slice(0, 40) : 'none';
+      })()`);
+const pageHit =
+  wordTarget === null || frameOrigin === null
+    ? "missing"
+    : await page.evaluate(`(() => {
+        const element = document.elementFromPoint(${frameOrigin.x + wordTarget.x}, ${frameOrigin.y + wordTarget.y});
+        return element ? element.tagName + ':' + (element.className ?? '') : 'none';
+      })()`);
+check("the guest point is over the paragraph", guestHit.startsWith("P"), guestHit);
+check("the page point is over the guest", pageHit.startsWith("IFRAME"), pageHit);
+const guestSelection = await frame.evaluate(
+  "window.getSelection()?.toString() ?? ''",
+);
+const guestStamps = await frame.evaluate(
+  "document.querySelectorAll('[data-mdraft-n]').length",
+);
+check("the guest selected the word", guestSelection.includes("Paragraph"), guestSelection);
+check("the preview copy carries word ids", guestStamps > 0, String(guestStamps));
+const guestMark = await page.evaluate(
+  `[...document.querySelectorAll('.cm-sync-word')].map((node) => node.textContent).join('|')`,
+);
+const guestMarkLine = await page.evaluate(
+  `document.querySelector('.cm-sync-word')?.closest('.cm-line')?.textContent ?? ''`,
+);
+check("a guest double-click paints the clicked word", guestMark === "Paragraph", guestMark);
+check(
+  "the guest word maps its own paragraph",
+  guestMarkLine.includes("Paragraph two."),
+  guestMarkLine.slice(0, 80),
+);
+
 // Keyboard forwarding: F8 is a menu accelerator with a visible flag.
 await frame.evaluate("window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F8', code: 'F8', bubbles: true, cancelable: true }))");
 await sleep(400);

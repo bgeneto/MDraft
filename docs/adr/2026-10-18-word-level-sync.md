@@ -1,6 +1,7 @@
 # Word-level sync maps rendered text to source offsets at render time
 
 **Status:** accepted
+**Superseded in part by:** `2026-10-20-html-word-sync.md` (the HTML exclusion only)
 **Date:** 2026-10-18
 
 ## Context

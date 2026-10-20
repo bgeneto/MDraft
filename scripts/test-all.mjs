@@ -112,6 +112,22 @@ const SUITES = [
     script: "tabs-restore-unit.mjs",
   },
   {
+    // One-word Typst Pages lines, ligatures and soft hyphens: pure matching,
+    // no application and no compiler.
+    id: "typst-page-map-unit",
+    title: "Typst page map (unit)",
+    kind: "node",
+    script: "typst-page-map-unit.mjs",
+  },
+  {
+    // HTML text-node offsets and the sample check: the guest's report is
+    // translated here, so this is testable without an iframe.
+    id: "html-source-map-unit",
+    title: "HTML source map (unit)",
+    kind: "node",
+    script: "html-source-map-unit.mjs",
+  },
+  {
     id: "smoke",
     title: "DOM smoke",
     kind: "cdp",

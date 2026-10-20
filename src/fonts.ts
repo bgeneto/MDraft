@@ -257,7 +257,7 @@ const ROLE_DEFAULTS: Record<string, string> = Object.fromEntries(
  */
 export const DEFAULT_EDITOR_FONT_SIZE = 15;
 export const DEFAULT_BODY_FONT_SIZE = 16;
-export const DEFAULT_MATH_SCALE = 90;
+export const DEFAULT_MATH_SCALE = 95;
 
 /**
  * Line-height multipliers for the source pane, keyed by the stored name.
@@ -321,7 +321,7 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
     label: "System",
     note: "The default: no bundled faces. Prose, headings and code use whatever the operating system provides, so nothing is embedded in an export.",
     defaults: {
-      mathFontScale: 90,
+      mathFontScale: 95,
     },
     values: {
       ...ROLE_DEFAULTS,
@@ -337,7 +337,7 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
     note: "Source Serif 4 and Source Sans 3, drawn to the same skeleton, with Fira Code in the editor and in preview code. The two Source faces were designed together, so the pairing cannot clash.",
     defaults: {
       bodyFontSize: 18,
-      mathFontScale: 85,
+      mathFontScale: 92,
     },
     values: {
       ...ROLE_DEFAULTS,
@@ -357,7 +357,7 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
     note: "Garamond's 16th-century old style: low contrast, a small x-height, serif headings and oldstyle figures. IBM Plex Mono sets the editor and code.",
     defaults: {
       bodyFontSize: 18,
-      mathFontScale: 77,
+      mathFontScale: 80,
     },
     values: {
       ...ROLE_DEFAULTS,
@@ -377,7 +377,7 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
     note: "Bodoni Moda's hairline Didone against Archivo's grotesque headings, with JetBrains Mono in code. Lining figures and ligatures; the page behaves like a magazine.",
     defaults: {
       bodyFontSize: 17,
-      mathFontScale: 85,
+      mathFontScale: 90,
     },
     values: {
       ...ROLE_DEFAULTS,
@@ -397,7 +397,7 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
     note: "Jost's circles and straight lines in prose and headings, with Azeret Mono's geometric code. No serif anywhere; proportional figures and the arrow ligature.",
     defaults: {
       bodyFontSize: 17,
-      mathFontScale: 87,
+      mathFontScale: 90,
     },
     values: {
       ...ROLE_DEFAULTS,
@@ -420,7 +420,7 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
     note: "Alegreya's calligraphic serif under Caveat's handwriting, with Victor Mono's narrow, cursive-italic code. A notebook rather than a printed page.",
     defaults: {
       bodyFontSize: 17,
-      mathFontScale: 80,
+      mathFontScale: 86,
     },
     values: {
       ...ROLE_DEFAULTS,
