@@ -381,10 +381,10 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
                 // Recorded only once the backend accepted it: a rejected string
                 // means the menu carries no shortcut, and the frontend must not
                 // pretend otherwise.
-                if let Some(a) = accel {
-                    if let Ok(mut list) = ACCELERATORS.lock() {
-                        list.push((id.to_string(), a.to_string()));
-                    }
+                if let Some(a) = accel
+                    && let Ok(mut list) = ACCELERATORS.lock()
+                {
+                    list.push((id.to_string(), a.to_string()));
                 }
                 Ok(built)
             }
@@ -408,10 +408,10 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         };
         match attempt(accel) {
             Ok(built) => {
-                if let Some(a) = accel {
-                    if let Ok(mut list) = ACCELERATORS.lock() {
-                        list.push((id.to_string(), a.to_string()));
-                    }
+                if let Some(a) = accel
+                    && let Ok(mut list) = ACCELERATORS.lock()
+                {
+                    list.push((id.to_string(), a.to_string()));
                 }
                 Ok(built)
             }
@@ -657,7 +657,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .build()?;
 
     // ---- Assemble ---------------------------------------------------------
-    let mut items: Vec<&dyn IsMenuItem<R>> = Vec::new();
+    let mut items: Vec<&dyn IsMenuItem<R>> = Vec::with_capacity(8);
 
     // macOS expects a leading application submenu.
     #[cfg(target_os = "macos")]
@@ -728,12 +728,11 @@ fn find_item<R: Runtime>(menu: &Menu<R>, id: &str) -> Option<MenuItemKind<R>> {
             if item.id() == id {
                 return Some(item);
             }
-            if let MenuItemKind::Submenu(submenu) = &item {
-                if let Ok(children) = submenu.items() {
-                    if let Some(found) = walk(children, id) {
-                        return Some(found);
-                    }
-                }
+            if let MenuItemKind::Submenu(submenu) = &item
+                && let Ok(children) = submenu.items()
+                && let Some(found) = walk(children, id)
+            {
+                return Some(found);
             }
         }
         None
@@ -800,10 +799,10 @@ pub fn set_export_availability<R: Runtime>(app: AppHandle<R>, pandoc: bool, typs
         pandoc: Some(pandoc),
         typst: Some(typst),
     };
-    if let Some(state) = app.try_state::<AppState>() {
-        if let Ok(mut slot) = state.export_availability.lock() {
-            *slot = availability;
-        }
+    if let Some(state) = app.try_state::<AppState>()
+        && let Ok(mut slot) = state.export_availability.lock()
+    {
+        *slot = availability;
     }
     apply_export_availability(&app, availability);
 }
@@ -853,19 +852,19 @@ pub fn menu_state<R: Runtime>(app: AppHandle<R>) -> Vec<MenuCheck> {
                     enabled: check.is_enabled().unwrap_or(true),
                 });
             }
-            if let MenuItemKind::Submenu(submenu) = &item {
-                if let Ok(children) = submenu.items() {
-                    walk(children, out);
-                }
+            if let MenuItemKind::Submenu(submenu) = &item
+                && let Ok(children) = submenu.items()
+            {
+                walk(children, out);
             }
         }
     }
 
     let mut out = Vec::new();
-    if let Some(menu) = app.menu() {
-        if let Ok(items) = menu.items() {
-            walk(items, &mut out);
-        }
+    if let Some(menu) = app.menu()
+        && let Ok(items) = menu.items()
+    {
+        walk(items, &mut out);
     }
     out
 }
@@ -914,16 +913,18 @@ mod tests {
 
     #[test]
     fn check_state_tracks_settings() {
-        let mut settings = Settings::default();
-        settings.view_mode = "preview".into();
-        settings.sidebar_visible = false;
-        settings.sidebar_tab = "files".into();
-        settings.show_status_bar = false;
-        settings.focus_mode = true;
-        settings.typewriter_mode = true;
-        settings.sync_scroll = false;
-        settings.theme = "dark".into();
-        settings.auto_save = true;
+        let settings = Settings {
+            view_mode: "preview".into(),
+            sidebar_visible: false,
+            sidebar_tab: "files".into(),
+            show_status_bar: false,
+            focus_mode: true,
+            typewriter_mode: true,
+            sync_scroll: false,
+            theme: "dark".into(),
+            auto_save: true,
+            ..Settings::default()
+        };
 
         let state = MenuState::from_settings(&settings);
 
@@ -954,13 +955,17 @@ mod tests {
 
     #[test]
     fn export_availability_disables_and_annotates() {
-        let mut docx = ExportFormat::default();
-        docx.id = "docx".into();
-        docx.label = "Word (.docx)".into();
+        let docx = ExportFormat {
+            id: "docx".into(),
+            label: "Word (.docx)".into(),
+            ..ExportFormat::default()
+        };
 
-        let mut pdf = ExportFormat::default();
-        pdf.id = "pdf".into();
-        pdf.label = "PDF (via Typst)".into();
+        let pdf = ExportFormat {
+            id: "pdf".into(),
+            label: "PDF (via Typst)".into(),
+            ..ExportFormat::default()
+        };
 
         let unknown = ExportAvailability::default();
         assert!(export_enabled(&docx, unknown));

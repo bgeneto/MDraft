@@ -711,7 +711,8 @@ pub fn compile_to<R: Runtime>(
     target: &Path,
 ) -> Result<(), String> {
     let typst = find_typst(app).ok_or_else(|| {
-        format!("Typst is not installed, so this cannot be exported as PDF. Use Help › Install Typst.")
+        "Typst is not installed, so this cannot be exported as PDF. Use Help › Install Typst."
+            .to_string()
     })?;
 
     let root = document_path

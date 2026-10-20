@@ -134,10 +134,10 @@ pub fn write_document(
         body.push_str(&content);
     }
 
-    if let Some(parent) = p.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
+    if let Some(parent) = p.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
     let tmp = temp_sibling(&p);
