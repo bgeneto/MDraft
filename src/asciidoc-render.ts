@@ -74,9 +74,7 @@ function foldForCompare(path: string): string {
   // drive-letter check alone is enough there, and the browser adds the
   // case-insensitive Windows rule for paths without a drive.
   const userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent;
-  return /^[A-Za-z]:/.test(path) || /Windows/i.test(userAgent)
-    ? path.toLowerCase()
-    : path;
+  return /^[A-Za-z]:/.test(path) || /Windows/i.test(userAgent) ? path.toLowerCase() : path;
 }
 
 function isInside(base: string, candidate: string): boolean {
@@ -102,15 +100,16 @@ function resolveInclude(
   baseDir: string | null,
 ): string | null {
   if (!baseDir) return null;
-  const raw = target.trim().replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
+  const raw = target
+    .trim()
+    .replace(/^"(.*)"$/, "$1")
+    .replace(/^'(.*)'$/, "$1");
   if (!raw || isAbsoluteInclude(raw)) return null;
 
   const base = normalizePath(baseDir);
   if (!base) return null;
   const directory =
-    currentDir && currentDir !== "." && currentDir !== ""
-      ? normalizePath(currentDir)
-      : base;
+    currentDir && currentDir !== "." && currentDir !== "" ? normalizePath(currentDir) : base;
   if (!directory) return null;
 
   const candidate = normalizePath(`${directory}/${raw}`);
@@ -195,10 +194,7 @@ export function createIncludeProcessor(
 // ---------------------------------------------------------------------------
 
 function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 async function asciimathParser(): Promise<AsciiMathParser | null> {

@@ -109,9 +109,7 @@ if (!booted) {
 
 // ---------------------------------------------------------------------------
 console.log("=== the accelerator registry is complete ===");
-const registry = await evaluate(
-  `window.__TAURI_INTERNALS__.invoke("accelerators").then((r) => r)`,
-);
+const registry = await evaluate(`window.__TAURI_INTERNALS__.invoke("accelerators").then((r) => r)`);
 const byId = new Map(registry.map((entry) => [entry.id, entry.accelerator]));
 check(registry.length >= 39, "every accelerator was registered", `${registry.length} entries`);
 
@@ -134,7 +132,9 @@ for (const [id, expected] of [
 console.log("\n=== a shortcut must change state, and a near miss must not ===");
 
 const modeOf = () =>
-  evaluate(`[...document.getElementById("app").classList].find((c) => c.startsWith("mode-")) ?? ""`);
+  evaluate(
+    `[...document.getElementById("app").classList].find((c) => c.startsWith("mode-")) ?? ""`,
+  );
 const before = await modeOf();
 
 const handled = await press({ code: "Slash", key: "/", ctrl: true });
@@ -152,7 +152,11 @@ check(!afterMode.includes("split"), "the mode it switched to is not split");
 const beforeNearMiss = await modeOf();
 await press({ code: "Slash", key: "/", ctrl: true, shift: true });
 await sleep(250);
-check((await modeOf()) === beforeNearMiss, "Ctrl+Shift+/ does not run the Ctrl+/ command", `${beforeNearMiss} -> ${await modeOf()}`);
+check(
+  (await modeOf()) === beforeNearMiss,
+  "Ctrl+Shift+/ does not run the Ctrl+/ command",
+  `${beforeNearMiss} -> ${await modeOf()}`,
+);
 
 // Back to split through the toolbar, so the checks below start from a known
 // mode rather than whatever the previous one left behind.
@@ -212,12 +216,17 @@ await press({ code: "Digit1", key: "1", ctrl: true, shift: true });
 await sleep(300);
 check((await outlineSelected()) === "true", "Ctrl+Shift+1 returns to the outline tab");
 
-const fontSize = () => evaluate(`parseFloat(getComputedStyle(document.querySelector(".cm-content")).fontSize)`);
+const fontSize = () =>
+  evaluate(`parseFloat(getComputedStyle(document.querySelector(".cm-content")).fontSize)`);
 const sizeBefore = await fontSize();
 await press({ code: "Equal", key: "+", ctrl: true, shift: true });
 await sleep(250);
 const sizeAfter = await fontSize();
-check(sizeAfter > sizeBefore, "Ctrl+Shift+= zooms the editor in", `${sizeBefore}px -> ${sizeAfter}px`);
+check(
+  sizeAfter > sizeBefore,
+  "Ctrl+Shift+= zooms the editor in",
+  `${sizeBefore}px -> ${sizeAfter}px`,
+);
 
 const zoomChip = () =>
   evaluate(
@@ -296,7 +305,11 @@ const textBefore = await evaluate(`document.querySelector(".cm-content").innerTe
 await send("Input.insertText", { text: "ZZZ" });
 await sleep(400);
 const textTyped = await evaluate(`document.querySelector(".cm-content").innerText`);
-check(textTyped.length > textBefore.length, "typing inserts text", `${textBefore.length} -> ${textTyped.length} chars`);
+check(
+  textTyped.length > textBefore.length,
+  "typing inserts text",
+  `${textBefore.length} -> ${textTyped.length} chars`,
+);
 await press({ code: "KeyZ", key: "z", ctrl: true });
 await sleep(400);
 const textUndone = await evaluate(`document.querySelector(".cm-content").innerText`);
@@ -317,11 +330,15 @@ await sleep(1000);
 const newTitle = await evaluate(`document.title`);
 check(/untitled/i.test(newTitle), "Ctrl+N starts a new document", newTitle);
 check(
-  (await evaluate(`document.querySelector(".cm-content").innerText.replace(/\\u200b/g, "").trim()`)) === "",
+  (await evaluate(
+    `document.querySelector(".cm-content").innerText.replace(/\\u200b/g, "").trim()`,
+  )) === "",
   "the new document is empty",
 );
 const tabNames = JSON.parse(
-  await evaluate(`JSON.stringify([...document.querySelectorAll(".doc-tab-name")].map((el) => el.textContent))`),
+  await evaluate(
+    `JSON.stringify([...document.querySelectorAll(".doc-tab-name")].map((el) => el.textContent))`,
+  ),
 );
 check(
   tabNames.length === 2 && tabNames.some((name) => name.includes("feature-tour")),
@@ -385,10 +402,7 @@ check(
 // close guard never runs. See installReloadGuard in src/main.ts.
 console.log("\n=== the webview reload keys are swallowed ===");
 check((await press({ code: "F5", key: "F5" })) === "handled", "F5 is swallowed");
-check(
-  (await press({ code: "KeyR", key: "r", ctrl: true })) === "handled",
-  "Ctrl+R is swallowed",
-);
+check((await press({ code: "KeyR", key: "r", ctrl: true })) === "handled", "Ctrl+R is swallowed");
 check(
   (await press({ code: "KeyR", key: "R", ctrl: true, shift: true })) === "handled",
   "Ctrl+Shift+R is swallowed",

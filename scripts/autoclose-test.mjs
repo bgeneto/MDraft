@@ -73,11 +73,12 @@ async function type(text) {
   await sleep(80);
 }
 
-const focusEditor = () =>
-  evaluate(`document.querySelector('.cm-content')?.focus() ?? null`);
+const focusEditor = () => evaluate(`document.querySelector('.cm-content')?.focus() ?? null`);
 
 const text = () =>
-  evaluate(`[...document.querySelectorAll('.cm-line')].map((line) => line.textContent).join('\\n')`);
+  evaluate(
+    `[...document.querySelectorAll('.cm-line')].map((line) => line.textContent).join('\\n')`,
+  );
 
 const tabNames = () =>
   evaluate(`[...document.querySelectorAll('.doc-tab-name')].map((el) => el.textContent)`);
@@ -266,11 +267,7 @@ check(
 console.log("\n=== Markdown tags ===");
 await scenario(async () => {
   await type('<a href="x">');
-  check(
-    (await text()) === '<a href="x"></a>',
-    "a tag with attributes closes",
-    await text(),
-  );
+  check((await text()) === '<a href="x"></a>', "a tag with attributes closes", await text());
 });
 
 await scenario(async () => {
@@ -280,11 +277,7 @@ await scenario(async () => {
 
 await scenario(async () => {
   await type("<https://example.com>");
-  check(
-    (await text()) === "<https://example.com>",
-    "an autolink is left alone",
-    await text(),
-  );
+  check((await text()) === "<https://example.com>", "an autolink is left alone", await text());
 });
 
 await scenario(async () => {
@@ -303,18 +296,12 @@ await scenario(async () => {
 // The tag preference, in Markdown and in HTML.
 // ---------------------------------------------------------------------------
 console.log("\n=== the tag preference ===");
-check(
-  (await setCheckbox("Auto-close HTML tags", false)) === false,
-  "the tag checkbox turns off",
-);
+check((await setCheckbox("Auto-close HTML tags", false)) === false, "the tag checkbox turns off");
 await scenario(async () => {
   await type("<p>");
   check((await text()) === "<p>", "with tags off <p> stays alone", await text());
 });
-check(
-  (await setCheckbox("Auto-close HTML tags", true)) === true,
-  "the tag checkbox turns back on",
-);
+check((await setCheckbox("Auto-close HTML tags", true)) === true, "the tag checkbox turns back on");
 
 console.log("\n=== HTML documents ===");
 await setExtension("html");
@@ -381,7 +368,8 @@ const failed = checks.filter((item) => !item.ok);
 console.log(`\n${checks.length - failed.length}/${checks.length} checks passed`);
 if (failed.length > 0) {
   console.log("\nFailed:");
-  for (const item of failed) console.log(`  - ${item.label}${item.detail ? `: ${item.detail}` : ""}`);
+  for (const item of failed)
+    console.log(`  - ${item.label}${item.detail ? `: ${item.detail}` : ""}`);
 }
 ws.close();
 process.exit(failed.length === 0 ? 0 : 1);

@@ -17,7 +17,9 @@ ws.addEventListener("message", (e) => {
     pending.get(m.id)(m);
     pending.delete(m.id);
   } else if (m.method === "Runtime.exceptionThrown") {
-    consoleIssues.push(m.params.exceptionDetails.exception?.description ?? m.params.exceptionDetails.text);
+    consoleIssues.push(
+      m.params.exceptionDetails.exception?.description ?? m.params.exceptionDetails.text,
+    );
   }
 });
 const send = (method, params = {}) => {

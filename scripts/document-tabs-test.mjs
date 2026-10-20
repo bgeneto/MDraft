@@ -82,10 +82,13 @@ function check(ok, label, detail = "") {
 }
 
 const json = async (expression) => JSON.parse(await evaluate(`JSON.stringify(${expression})`));
-const tabs = () => json(`[...document.querySelectorAll(".doc-tab-name")].map((e) => e.textContent)`);
+const tabs = () =>
+  json(`[...document.querySelectorAll(".doc-tab-name")].map((e) => e.textContent)`);
 const tabCount = () => evaluate(`document.querySelectorAll(".doc-tab").length`);
 const activeTab = () =>
-  evaluate(`document.querySelector('.doc-tab[aria-selected="true"] .doc-tab-name')?.textContent ?? ""`);
+  evaluate(
+    `document.querySelector('.doc-tab[aria-selected="true"] .doc-tab-name')?.textContent ?? ""`,
+  );
 const dirtyCount = () => evaluate(`document.querySelectorAll(".doc-tab.is-dirty").length`);
 const isDirty = (name) =>
   evaluate(
@@ -94,7 +97,9 @@ const isDirty = (name) =>
 const cursor = () => evaluate(`document.getElementById("status-cursor").textContent`);
 const title = () => evaluate(`document.title`);
 const toast = () =>
-  evaluate(`document.getElementById("toast").hidden ? "" : document.getElementById("toast").textContent`);
+  evaluate(
+    `document.getElementById("toast").hidden ? "" : document.getElementById("toast").textContent`,
+  );
 const editorText = () =>
   evaluate(`document.querySelector(".cm-content").innerText.replace(/\\u200b/g, "")`);
 const guestCount = () => evaluate(`document.querySelectorAll(".html-preview-frame").length`);
@@ -169,7 +174,11 @@ try {
   );
   check(booted, "the window finished booting");
   check((await tabCount()) === 1, "one document, one tab", String(await tabCount()));
-  check((await activeTab()) === "feature-tour.md", "the tab is the file that was opened", await activeTab());
+  check(
+    (await activeTab()) === "feature-tour.md",
+    "the tab is the file that was opened",
+    await activeTab(),
+  );
   check(
     (await evaluate(`document.getElementById("app").classList.contains("mode-split")`)) === true,
     "the window is in split view, so the preview scroll can be measured",
@@ -187,7 +196,11 @@ try {
   const listedAsciiDoc = await evaluate(
     `[...document.querySelectorAll(".sidebar-body .entry")].some((e) => (e.title || "").endsWith("asciidoc-tour.adoc"))`,
   );
-  check(listedAsciiDoc, "the folder listing offers an .adoc document", "AsciiDoc is a first-class format");
+  check(
+    listedAsciiDoc,
+    "the folder listing offers an .adoc document",
+    "AsciiDoc is a first-class format",
+  );
   const opened = await evaluate(
     `(() => {
       const row = [...document.querySelectorAll(".sidebar-body .entry")]
@@ -221,8 +234,16 @@ try {
   );
   await sleep(1200);
   const afterRecent = await tabs();
-  check(afterRecent.length === 2, "opening it again does not add a second tab", afterRecent.join(", "));
-  check((await activeTab()) === "feature-tour.md", "it focuses the existing tab", await activeTab());
+  check(
+    afterRecent.length === 2,
+    "opening it again does not add a second tab",
+    afterRecent.join(", "),
+  );
+  check(
+    (await activeTab()) === "feature-tour.md",
+    "it focuses the existing tab",
+    await activeTab(),
+  );
 
   // -------------------------------------------------------------------------
   // The active tab is unmistakable
@@ -283,7 +304,10 @@ try {
     "Close All to the Right is available",
   );
   check(menuAction("save") && menuAction("save").disabled, "Save is disabled on a clean tab");
-  check(menuAction("reveal") && !menuAction("reveal").disabled, "Reveal is offered for a saved file");
+  check(
+    menuAction("reveal") && !menuAction("reveal").disabled,
+    "Reveal is offered for a saved file",
+  );
   const menuClosed = await evaluate(
     `(() => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
@@ -307,7 +331,11 @@ try {
     })()`,
   );
   await sleep(900);
-  check((await activeTab()) === "typst-tour.typ", "ArrowRight activates the next tab", await activeTab());
+  check(
+    (await activeTab()) === "typst-tour.typ",
+    "ArrowRight activates the next tab",
+    await activeTab(),
+  );
   check(
     (await evaluate(
       `document.activeElement?.querySelector?.(".doc-tab-name")?.textContent === "typst-tour.typ"`,
@@ -367,9 +395,21 @@ try {
   await press({ code: "KeyN", key: "n", ctrl: true });
   await sleep(1500);
   const afterLarge = await tabs();
-  check(afterLarge.length === 3, "Ctrl+N adds a tab after a large document was open", afterLarge.join(", "));
-  check((await activeTab()) === "Untitled", "and the new tab is on screen at once", await activeTab());
-  check(!(await toast()).includes("RangeError"), "no error was reported", (await toast()) || "no toast");
+  check(
+    afterLarge.length === 3,
+    "Ctrl+N adds a tab after a large document was open",
+    afterLarge.join(", "),
+  );
+  check(
+    (await activeTab()) === "Untitled",
+    "and the new tab is on screen at once",
+    await activeTab(),
+  );
+  check(
+    !(await toast()).includes("RangeError"),
+    "no error was reported",
+    (await toast()) || "no toast",
+  );
 
   await clickClose("Untitled");
   await sleep(800);
@@ -450,7 +490,11 @@ try {
 
   const wanted = await setScroll(520, 340);
   await sleep(300);
-  check(wanted.preview > 300 && wanted.editor > 200, "both panes were scrolled away from the top", JSON.stringify(wanted));
+  check(
+    wanted.preview > 300 && wanted.editor > 200,
+    "both panes were scrolled away from the top",
+    JSON.stringify(wanted),
+  );
 
   await clickTab("typst-tour.typ");
   await sleep(900);
@@ -524,7 +568,11 @@ try {
 
   await emitOpenFiles([path.resolve("samples", "feature-tour.md")]);
   await sleep(1200);
-  check((await tabCount()) === 2, "a tab is opened again for the next check", (await tabs()).join(", "));
+  check(
+    (await tabCount()) === 2,
+    "a tab is opened again for the next check",
+    (await tabs()).join(", "),
+  );
   const activeForClose = await activeTab();
   const closedActive = await clickClose(activeForClose);
   await sleep(900);
@@ -544,7 +592,11 @@ try {
   await press({ code: "Tab", key: "Tab", ctrl: true });
   await sleep(700);
   const cycleNext = await activeTab();
-  check(cycleNext !== cycleStart, "Ctrl+Tab changes the active tab", `${cycleStart} -> ${cycleNext}`);
+  check(
+    cycleNext !== cycleStart,
+    "Ctrl+Tab changes the active tab",
+    `${cycleStart} -> ${cycleNext}`,
+  );
   check(cycleNext === onlyFile, "it lands on the other tab", cycleNext);
   await press({ code: "Tab", key: "Tab", ctrl: true, shift: true });
   await sleep(700);
@@ -629,7 +681,11 @@ try {
   check(dragged === "sent", "the drag events reached the strip");
   check(afterDrag[afterDrag.length - 1] === "a.md", "a.md moved to the end", afterDrag.join(", "));
   check(afterDrag.length === beforeDrag.length, "no tab was lost", String(afterDrag.length));
-  check((await activeTab()) === "c.md", "dragging does not activate the dragged tab", await activeTab());
+  check(
+    (await activeTab()) === "c.md",
+    "dragging does not activate the dragged tab",
+    await activeTab(),
+  );
 
   await evaluate(
     `(() => {
@@ -650,7 +706,11 @@ try {
     "Alt+Shift+ArrowLeft moves the focused tab one place left",
     afterKeyMove.join(", "),
   );
-  check((await activeTab()) === "c.md", "the keyboard move leaves the active tab alone", await activeTab());
+  check(
+    (await activeTab()) === "c.md",
+    "the keyboard move leaves the active tab alone",
+    await activeTab(),
+  );
 
   // A clean inactive tab reloads when its file changes.
   await clickTab("a.md");
@@ -678,7 +738,11 @@ try {
   await clickTab("c.md");
   await sleep(1200);
   const dirtyText = await editorText();
-  check(dirtyText.includes("LOCAL-EDIT"), "a dirty tab keeps the reader's text", dirtyText.slice(0, 40));
+  check(
+    dirtyText.includes("LOCAL-EDIT"),
+    "a dirty tab keeps the reader's text",
+    dirtyText.slice(0, 40),
+  );
   check(!dirtyText.includes("CHANGED-AGAIN"), "and is not reloaded underneath them");
   await press({ code: "KeyZ", key: "z", ctrl: true });
   await sleep(500);
@@ -724,9 +788,16 @@ try {
     await sleep(1000);
   }
   check(savedBoth, "Auto Save wrote the inactive tab as well as the active one", "a.md and b.md");
-  check(!readFileSync(docA, "utf8").includes("AUTOSAVE-B"), "and it wrote each buffer to its own file");
+  check(
+    !readFileSync(docA, "utf8").includes("AUTOSAVE-B"),
+    "and it wrote each buffer to its own file",
+  );
   await sleep(800);
-  check((await dirtyCount()) === 0, "the dots clear once both are saved", String(await dirtyCount()));
+  check(
+    (await dirtyCount()) === 0,
+    "the dots clear once both are saved",
+    String(await dirtyCount()),
+  );
 
   // -------------------------------------------------------------------------
   // A strip wider than the window
@@ -805,7 +876,11 @@ try {
       };
     })()`,
   );
-  check(afterLeft.scrollLeft < stripLeft, "the left arrow scrolls the strip", `${stripLeft} -> ${afterLeft.scrollLeft}`);
+  check(
+    afterLeft.scrollLeft < stripLeft,
+    "the left arrow scrolls the strip",
+    `${stripLeft} -> ${afterLeft.scrollLeft}`,
+  );
   check(!afterLeft.rightDisabled, "the right arrow becomes enabled away from the edge");
 
   const wheel = await evaluate(
@@ -818,7 +893,11 @@ try {
     })()`,
   );
   check(wheel.prevented, "a vertical wheel is claimed by the strip");
-  check(wheel.after > wheel.before, "and moves it horizontally", `${wheel.before} -> ${wheel.after}`);
+  check(
+    wheel.after > wheel.before,
+    "and moves it horizontally",
+    `${wheel.before} -> ${wheel.after}`,
+  );
 
   await evaluate(`document.getElementById("doc-tabs-right").click()`);
   await sleep(1400);
@@ -831,7 +910,11 @@ try {
       };
     })()`,
   );
-  check(firstRight.scrollLeft > wheel.after, "the right arrow scrolls back", `${wheel.after} -> ${firstRight.scrollLeft}`);
+  check(
+    firstRight.scrollLeft > wheel.after,
+    "the right arrow scrolls back",
+    `${wheel.after} -> ${firstRight.scrollLeft}`,
+  );
   check(!firstRight.rightDisabled, "one page is not the end of a long strip");
   // A second page reaches the edge, where the arrow disables itself.
   await evaluate(`document.getElementById("doc-tabs-right").click()`);
@@ -860,7 +943,11 @@ try {
 
   await clickTab("feature-tour.md");
   await sleep(900);
-  check((await activeTab()) === "feature-tour.md", "a tab outside the viewport can be activated", await activeTab());
+  check(
+    (await activeTab()) === "feature-tour.md",
+    "a tab outside the viewport can be activated",
+    await activeTab(),
+  );
   const visible = await evaluate(
     `(() => {
       const viewport = document.getElementById("doc-tabs").getBoundingClientRect();
@@ -897,7 +984,11 @@ try {
   const cleaned = await pollFor(`document.querySelectorAll(".doc-tab").length === 1`, 15000);
   check(closeOthers === "clicked", "the Close Others menu entry was clicked");
   check(cleaned, "Close Others leaves one tab", (await tabs()).join(", "));
-  check((await activeTab()) === "feature-tour.md", "and it is the tab the menu targeted", await activeTab());
+  check(
+    (await activeTab()) === "feature-tour.md",
+    "and it is the tab the menu targeted",
+    await activeTab(),
+  );
 
   // -------------------------------------------------------------------------
   // Closing the last tab
@@ -910,7 +1001,11 @@ try {
   await press({ code: "KeyW", key: "w", ctrl: true });
   await sleep(1200);
   check((await tabCount()) === 1, "the strip still holds one tab", String(await tabCount()));
-  check((await activeTab()) === "Untitled", "the file tab became a fresh untitled document", await activeTab());
+  check(
+    (await activeTab()) === "Untitled",
+    "the file tab became a fresh untitled document",
+    await activeTab(),
+  );
   check((await editorText()).replace(/\s+/g, "") === "", "the buffer is empty");
   check((await title()) === "Untitled — MDraft", "the title follows", await title());
   check((await dirtyCount()) === 0, "the fresh document is clean", String(await dirtyCount()));

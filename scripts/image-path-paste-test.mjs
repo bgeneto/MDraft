@@ -112,7 +112,12 @@ if (setup.error) {
 // it is the selection CodeMirror actually knows about.
 const { left, right, y } = setup;
 await send("Input.dispatchMouseEvent", {
-  type: "mousePressed", x: left + 1, y, button: "left", buttons: 1, clickCount: 1,
+  type: "mousePressed",
+  x: left + 1,
+  y,
+  button: "left",
+  buttons: 1,
+  clickCount: 1,
 });
 for (let step = 1; step <= 5; step++) {
   await send("Input.dispatchMouseEvent", {
@@ -125,12 +130,20 @@ for (let step = 1; step <= 5; step++) {
   await sleep(25);
 }
 await send("Input.dispatchMouseEvent", {
-  type: "mouseReleased", x: right - 1, y, button: "left", buttons: 0, clickCount: 1,
+  type: "mouseReleased",
+  x: right - 1,
+  y,
+  button: "left",
+  buttons: 0,
+  clickCount: 1,
 });
 await sleep(200);
 
 const selected = await evaluate("String(window.getSelection())");
-check(selected === "./image.png", `mouse drag selected the image URL (got ${JSON.stringify(selected)})`);
+check(
+  selected === "./image.png",
+  `mouse drag selected the image URL (got ${JSON.stringify(selected)})`,
+);
 
 // Paste the path over the selection. The handler must decline to import and
 // let CodeMirror replace the text, or the placeholder stays and a second block
@@ -173,7 +186,10 @@ check(
   "pasted path replaced the URL instead of leaving the placeholder and appending a block",
 );
 check(image !== null, "preview loaded the relative image (natural width above zero)");
-check(!toast.includes("was not found"), `no false "not found" toast (toast: ${JSON.stringify(toast)})`);
+check(
+  !toast.includes("was not found"),
+  `no false "not found" toast (toast: ${JSON.stringify(toast)})`,
+);
 
 const passed = results.filter(Boolean).length;
 console.log(`\n${passed}/${results.length} checks passed`);

@@ -41,7 +41,8 @@ ws.addEventListener("message", (event) => {
     pending.delete(message.id);
   } else if (message.method === "Runtime.exceptionThrown") {
     exceptions.push(
-      message.params.exceptionDetails.exception?.description ?? message.params.exceptionDetails.text,
+      message.params.exceptionDetails.exception?.description ??
+        message.params.exceptionDetails.text,
     );
   }
 });
@@ -182,7 +183,11 @@ try {
   const bitmap = await lines();
   check(bitmap.includes("#image("), "a clipboard bitmap becomes #image", bitmap);
   check(!bitmap.includes("!["), "no Markdown image syntax in Typst");
-  check(assetFiles().length === before + 1, "the bitmap wrote one asset file", JSON.stringify(assetFiles()));
+  check(
+    assetFiles().length === before + 1,
+    "the bitmap wrote one asset file",
+    JSON.stringify(assetFiles()),
+  );
   await undo();
 
   // A remote image inside a pasted fragment uses the new preference.
@@ -196,9 +201,17 @@ try {
   })()`);
   await sleep(4000);
   const downloaded = await lines();
-  check(downloaded.includes("#image("), "a remote pasted image is downloaded and inserted", downloaded);
+  check(
+    downloaded.includes("#image("),
+    "a remote pasted image is downloaded and inserted",
+    downloaded,
+  );
   check(!downloaded.includes("http://"), "the source has no remote URL left", downloaded);
-  check(assetFiles().length === before + 2, "the remote image wrote one asset file", JSON.stringify(assetFiles()));
+  check(
+    assetFiles().length === before + 2,
+    "the remote image wrote one asset file",
+    JSON.stringify(assetFiles()),
+  );
   await undo();
 
   await setRemoteMode("url");
@@ -214,7 +227,11 @@ try {
   const kept = await lines();
   check(!kept.includes("#image("), "Keep the original URL does not save the image", kept);
   check(kept.includes("served.png"), "the URL is kept in the document", kept);
-  check(assetFiles().length === before + 2, "Keep the original URL writes no file", JSON.stringify(assetFiles()));
+  check(
+    assetFiles().length === before + 2,
+    "Keep the original URL writes no file",
+    JSON.stringify(assetFiles()),
+  );
   await setRemoteMode("download");
 
   console.log("=== images in Markdown and HTML tabs ===");

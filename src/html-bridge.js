@@ -30,7 +30,7 @@
       event.preventDefault();
       event.stopImmediatePropagation();
     },
-    true
+    true,
   );
 
   var TOKEN = "__MDRAFT_TOKEN__";
@@ -258,8 +258,7 @@
     "mousedown",
     function (event) {
       var target = event.target;
-      var element =
-        target && target.closest ? target.closest("[data-mdraft-line]") : null;
+      var element = target && target.closest ? target.closest("[data-mdraft-line]") : null;
       if (!element) return;
       var line = parseInt(element.getAttribute("data-mdraft-line"), 10);
       if (isFinite(line)) post({ type: "line", line: line });
@@ -276,8 +275,7 @@
   function textEntry(node) {
     if (!node || node.nodeType !== 3) return null;
     var element = node.parentElement;
-    var stamp =
-      element && element.closest ? element.closest("[data-mdraft-n]") : null;
+    var stamp = element && element.closest ? element.closest("[data-mdraft-n]") : null;
     if (!stamp) return null;
     var n = parseInt(stamp.getAttribute("data-mdraft-n"), 10);
     if (!isFinite(n)) return null;

@@ -41,14 +41,23 @@ function onWindows(body) {
 // ---------------------------------------------------------------------------
 console.log("=== rememberTabs keeps saved paths in tab order ===");
 {
-  const list = [session("1", "C:/Docs/a.md"), session("2", "C:/Docs/b.md"), session("3", "C:/Docs/c.md")];
+  const list = [
+    session("1", "C:/Docs/a.md"),
+    session("2", "C:/Docs/b.md"),
+    session("3", "C:/Docs/c.md"),
+  ];
   const remembered = rememberTabs(list, "2");
   check(
-    JSON.stringify(remembered.tabs) === JSON.stringify(["C:/Docs/a.md", "C:/Docs/b.md", "C:/Docs/c.md"]),
+    JSON.stringify(remembered.tabs) ===
+      JSON.stringify(["C:/Docs/a.md", "C:/Docs/b.md", "C:/Docs/c.md"]),
     "order is the tab order",
     remembered.tabs.join(", "),
   );
-  check(remembered.active === "C:/Docs/b.md", "the active session is remembered", String(remembered.active));
+  check(
+    remembered.active === "C:/Docs/b.md",
+    "the active session is remembered",
+    String(remembered.active),
+  );
 }
 
 console.log("\n=== untitled sessions are not remembered ===");
@@ -57,7 +66,11 @@ console.log("\n=== untitled sessions are not remembered ===");
   const remembered = rememberTabs(list, "3");
   check(remembered.tabs.length === 1, "one path is stored", String(remembered.tabs.length));
   check(remembered.tabs[0] === "C:/Docs/a.md", "the saved document", remembered.tabs[0]);
-  check(remembered.active === null, "an untitled active tab is not remembered", String(remembered.active));
+  check(
+    remembered.active === null,
+    "an untitled active tab is not remembered",
+    String(remembered.active),
+  );
 }
 
 console.log("\n=== an empty set is empty ===");
@@ -69,10 +82,22 @@ console.log("\n=== an empty set is empty ===");
 
 console.log("\n=== duplicates collapse to the first occurrence ===");
 {
-  const list = [session("1", "C:/Docs/a.md"), session("2", "C:/Docs/b.md"), session("3", "C:/Docs/a.md")];
+  const list = [
+    session("1", "C:/Docs/a.md"),
+    session("2", "C:/Docs/b.md"),
+    session("3", "C:/Docs/a.md"),
+  ];
   const remembered = rememberTabs(list, "3");
-  check(remembered.tabs.length === 2, "the repeated path is stored once", remembered.tabs.join(", "));
-  check(remembered.tabs[0] === "C:/Docs/a.md", "the first occurrence keeps its place", remembered.tabs[0]);
+  check(
+    remembered.tabs.length === 2,
+    "the repeated path is stored once",
+    remembered.tabs.join(", "),
+  );
+  check(
+    remembered.tabs[0] === "C:/Docs/a.md",
+    "the first occurrence keeps its place",
+    remembered.tabs[0],
+  );
   onWindows(() => {
     const mixed = [session("1", "C:/Docs/a.md"), session("2", "c:/docs/A.MD")];
     check(
@@ -88,7 +113,11 @@ console.log("\n=== the list is capped, and the active tab must survive the cap =
   const list = [];
   for (let i = 0; i <= MAX_LAST_TABS; i++) list.push(session(String(i), `C:/Docs/file${i}.md`));
   const remembered = rememberTabs(list, "0");
-  check(remembered.tabs.length === MAX_LAST_TABS, `kept ${MAX_LAST_TABS} paths`, String(remembered.tabs.length));
+  check(
+    remembered.tabs.length === MAX_LAST_TABS,
+    `kept ${MAX_LAST_TABS} paths`,
+    String(remembered.tabs.length),
+  );
   check(remembered.tabs[0] === "C:/Docs/file0.md", "the first path is kept");
   check(
     !remembered.tabs.includes(`C:/Docs/file${MAX_LAST_TABS}.md`),
@@ -97,7 +126,11 @@ console.log("\n=== the list is capped, and the active tab must survive the cap =
   check(remembered.active === "C:/Docs/file0.md", "an active tab inside the cap is remembered");
 
   const beyond = rememberTabs(list, String(MAX_LAST_TABS));
-  check(beyond.active === null, "an active tab beyond the cap is not recorded", String(beyond.active));
+  check(
+    beyond.active === null,
+    "an active tab beyond the cap is not recorded",
+    String(beyond.active),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -111,7 +144,11 @@ console.log("\n=== planRestore preserves order and checks existence ===");
     plan.tabs.join(", "),
   );
   check(plan.missing === 1, "one missing file is counted", String(plan.missing));
-  check(plan.active === "C:/Docs/a.md", "a missing active file falls back to the first tab", String(plan.active));
+  check(
+    plan.active === "C:/Docs/a.md",
+    "a missing active file falls back to the first tab",
+    String(plan.active),
+  );
 }
 
 console.log("\n=== the active tab comes back when it exists ===");
@@ -126,7 +163,11 @@ console.log("\n=== a null or unknown active path leaves the first tab active ===
 {
   const saved = ["C:/Docs/a.md", "C:/Docs/b.md"];
   const noActive = planRestore(saved, null, () => true);
-  check(noActive.active === "C:/Docs/a.md", "no remembered tab → the first is active", String(noActive.active));
+  check(
+    noActive.active === "C:/Docs/a.md",
+    "no remembered tab → the first is active",
+    String(noActive.active),
+  );
 
   const staleActive = planRestore(saved, "C:/Docs/gone.md", () => true);
   check(
@@ -160,7 +201,11 @@ console.log("\n=== an empty or overlong list is handled ===");
 
   const overlong = Array.from({ length: MAX_LAST_TABS + 5 }, (_, i) => `C:/Docs/file${i}.md`);
   const plan = planRestore(overlong, null, () => true);
-  check(plan.tabs.length === MAX_LAST_TABS, `restores at most ${MAX_LAST_TABS}`, String(plan.tabs.length));
+  check(
+    plan.tabs.length === MAX_LAST_TABS,
+    `restores at most ${MAX_LAST_TABS}`,
+    String(plan.tabs.length),
+  );
   check(plan.tabs[0] === "C:/Docs/file0.md", "from the front of the list");
 }
 
@@ -179,7 +224,11 @@ console.log("\n=== the session store and the plan agree on path identity ===");
     // remembered list must refuse to store it twice — otherwise a launch would
     // behave differently from the same files opened by hand.
     const remembered = rememberTabs([first, session("2", "c:/docs/NOTE.md")], "2");
-    check(remembered.tabs.length === 1, "rememberTabs keeps one entry for them", String(remembered.tabs.length));
+    check(
+      remembered.tabs.length === 1,
+      "rememberTabs keeps one entry for them",
+      String(remembered.tabs.length),
+    );
     check(remembered.active === "c:/docs/NOTE.md", "and the active spelling is the one stored");
   });
 }

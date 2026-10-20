@@ -68,7 +68,19 @@ function cleanStyle(value: string): string {
       if (!declaration) return false;
       const property = declaration.split(":")[0]?.trim().toLowerCase() ?? "";
       if (property.startsWith("mso-")) return false;
-      if (["position", "top", "left", "right", "bottom", "z-index", "float", "display", "visibility"].includes(property)) {
+      if (
+        [
+          "position",
+          "top",
+          "left",
+          "right",
+          "bottom",
+          "z-index",
+          "float",
+          "display",
+          "visibility",
+        ].includes(property)
+      ) {
         return false;
       }
       return true;
@@ -109,14 +121,16 @@ function unwrapDocsWrapper(node: AnyNode): boolean {
   return (
     /^(b|strong)$/.test(name(node)) &&
     /^docs-internal-guid/.test(
-      (node.attrs ?? []).find((entry: AnyNode) => String(entry.name).toLowerCase() === "id")?.value ?? "",
+      (node.attrs ?? []).find((entry: AnyNode) => String(entry.name).toLowerCase() === "id")
+        ?.value ?? "",
     )
   );
 }
 
 function hiddenByStyle(node: AnyNode): boolean {
   const style = String(
-    (node.attrs ?? []).find((entry: AnyNode) => String(entry.name).toLowerCase() === "style")?.value ?? "",
+    (node.attrs ?? []).find((entry: AnyNode) => String(entry.name).toLowerCase() === "style")
+      ?.value ?? "",
   ).toLowerCase();
   return /display\s*:\s*none/.test(style) || /visibility\s*:\s*hidden/.test(style);
 }
@@ -148,7 +162,9 @@ export async function sanitizeHtmlFragment(raw: string): Promise<string> {
   if (/^\s*(?:<!doctype\b|<html\b|<head\b|<body\b)/i.test(raw)) {
     const document = parse(raw) as AnyNode;
     const html = (document.childNodes ?? []).find((node: AnyNode) => name(node) === "html");
-    const body = html ? (html.childNodes ?? []).find((node: AnyNode) => name(node) === "body") : null;
+    const body = html
+      ? (html.childNodes ?? []).find((node: AnyNode) => name(node) === "body")
+      : null;
     root = body ?? document;
     bodyOnly = body !== null;
   } else {

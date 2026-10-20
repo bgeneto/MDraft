@@ -30,10 +30,14 @@ ws.addEventListener("message", (event) => {
 });
 await new Promise((resolve, reject) => {
   const timer = setTimeout(() => reject(new Error("CDP socket did not open")), 8000);
-  ws.addEventListener("open", () => {
-    clearTimeout(timer);
-    resolve();
-  }, { once: true });
+  ws.addEventListener(
+    "open",
+    () => {
+      clearTimeout(timer);
+      resolve();
+    },
+    { once: true },
+  );
 });
 await new Promise((resolve) => setTimeout(resolve, 300));
 
@@ -290,9 +294,7 @@ const title = await evaluate("document.title");
 check("the Typst fixture is open", title.includes("typst-pages.typ"), title);
 
 await switchView("Document");
-const documentReady = await waitFor(
-  `Boolean(document.querySelector(".typst-document"))`,
-);
+const documentReady = await waitFor(`Boolean(document.querySelector(".typst-document"))`);
 check("Document view is available", documentReady);
 
 const documentShape = await evaluate(`(() => {
@@ -348,8 +350,7 @@ await sleep(220);
 const wrappedAfterMathMark = await mark();
 check(
   "a hard-wrapped phrase after inline math in Document view paints the exact source phrase",
-  wrappedAfterMath !== null &&
-    wrappedAfterMathMark === "measuring the|length carefully",
+  wrappedAfterMath !== null && wrappedAfterMathMark === "measuring the|length carefully",
   `${JSON.stringify(wrappedAfterMath)} -> ${wrappedAfterMathMark}`,
 );
 
@@ -386,7 +387,11 @@ check(
   documentGenerated.selected,
 );
 const generatedDocumentMark = await mark();
-check("generated Document text paints nothing", generatedDocumentMark === "", generatedDocumentMark);
+check(
+  "generated Document text paints nothing",
+  generatedDocumentMark === "",
+  generatedDocumentMark,
+);
 
 await clearSelection();
 const singlePoint = await rectOf("gyroscope", ".typst-document");
@@ -469,14 +474,12 @@ const viewBarStyle = await evaluate(`(() => {
 })()`);
 check(
   "the view bar does not blur the page",
-  viewBarStyle?.blur === "none" &&
-    viewBarStyle?.barBackground === "rgba(0, 0, 0, 0)",
+  viewBarStyle?.blur === "none" && viewBarStyle?.barBackground === "rgba(0, 0, 0, 0)",
   viewBarStyle ? `${viewBarStyle.blur}/${viewBarStyle.barBackground}` : "missing",
 );
 check(
   "the view buttons keep their own background",
-  viewBarStyle !== null &&
-    viewBarStyle.buttonBackground !== "rgba(0, 0, 0, 0)",
+  viewBarStyle !== null && viewBarStyle.buttonBackground !== "rgba(0, 0, 0, 0)",
   viewBarStyle?.buttonBackground ?? "",
 );
 

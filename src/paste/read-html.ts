@@ -227,7 +227,13 @@ function wrap(kind: "strong" | "em" | "strike" | "sup" | "sub", nodes: Inline[])
   return hasVisible(body) ? [{ kind, children: body }] : body;
 }
 
-function styleFlags(node: AnyNode): { strong: boolean; em: boolean; strike: boolean; sup: boolean; sub: boolean } {
+function styleFlags(node: AnyNode): {
+  strong: boolean;
+  em: boolean;
+  strike: boolean;
+  sup: boolean;
+  sub: boolean;
+} {
   const style = (attr(node, "style") ?? "").toLowerCase();
   return {
     strong: /font-weight\s*:\s*(?:bold|bolder|[6-9]\d{2})/.test(style),
@@ -249,14 +255,12 @@ function safeHref(value: string | null): string | null {
 
 function annotateMath(node: AnyNode): { tex: string | null; display: boolean } {
   const annotation = descend(node, "annotation");
-  const encoding = annotation ? attr(annotation, "encoding") ?? "" : "";
-  const tex =
-    annotation && /x-tex|tex/i.test(encoding)
-      ? textContent(annotation).trim()
-      : null;
+  const encoding = annotation ? (attr(annotation, "encoding") ?? "") : "";
+  const tex = annotation && /x-tex|tex/i.test(encoding) ? textContent(annotation).trim() : null;
   const display =
     /katex-display/.test(attr(node, "class") ?? "") ||
-    (name(node.parentNode) === "span" && /katex-display/.test(attr(node.parentNode, "class") ?? "")) ||
+    (name(node.parentNode) === "span" &&
+      /katex-display/.test(attr(node.parentNode, "class") ?? "")) ||
     /display/.test(attr(node, "mode") ?? "");
   return { tex, display };
 }
@@ -266,7 +270,9 @@ function mathInline(node: AnyNode): Inline[] {
   if (tex) return [{ kind: "math", tex, display }];
   if (name(node) === "script") {
     const body = textContent(node).trim();
-    return body ? [{ kind: "math", tex: body, display: /display/.test(attr(node, "mode") ?? "") }] : [];
+    return body
+      ? [{ kind: "math", tex: body, display: /display/.test(attr(node, "mode") ?? "") }]
+      : [];
   }
   const text = textContent(node).trim();
   return text ? [{ kind: "text", value: text }] : [];
@@ -294,7 +300,10 @@ function imageNode(node: AnyNode, ctx: Context): Inline[] {
   if (/^data:/i.test(raw) && raw.length > 4_000_000) return [];
   const width = Number.parseFloat(attr(node, "width") ?? "");
   const height = Number.parseFloat(attr(node, "height") ?? "");
-  if ((Number.isFinite(width) && width > 0 && width <= 2) || (Number.isFinite(height) && height > 0 && height <= 2)) {
+  if (
+    (Number.isFinite(width) && width > 0 && width <= 2) ||
+    (Number.isFinite(height) && height > 0 && height <= 2)
+  ) {
     return [];
   }
   let src = raw.trim();
@@ -327,7 +336,11 @@ function convertInline(node: AnyNode, ctx: Context): Inline[] {
   if (DROP_NAMES.has(tag) || hidden(node)) return [];
   if (tag === "br") return [{ kind: "break" }];
   if (tag === "img") return imageNode(node, ctx);
-  if (tag === "math" || tag === "mjx-container" || (tag === "span" && /katex/.test(attr(node, "class") ?? ""))) {
+  if (
+    tag === "math" ||
+    tag === "mjx-container" ||
+    (tag === "span" && /katex/.test(attr(node, "class") ?? ""))
+  ) {
     return mathInline(node);
   }
   if (tag === "script") {
@@ -352,7 +365,8 @@ function convertInline(node: AnyNode, ctx: Context): Inline[] {
   }
   // Google Docs wraps the whole fragment in a bold element whose own style is
   // normal; treating it as bold would embolden the entire paste.
-  const docsWrapper = /^(b|strong)$/.test(tag) && /^docs-internal-guid/.test(attr(node, "id") ?? "");
+  const docsWrapper =
+    /^(b|strong)$/.test(tag) && /^docs-internal-guid/.test(attr(node, "id") ?? "");
   if (docsWrapper) return kids;
   if (tag === "strong" || tag === "b" || flags.strong) return wrap("strong", kids);
   if (tag === "em" || tag === "i" || flags.em) return wrap("em", kids);
@@ -417,10 +431,16 @@ function tableBlock(node: AnyNode, ctx: Context): Block[] {
       const align = alignOf(cell);
       const column = line.length;
       if (aligns[column] === undefined) aligns[column] = align;
-      const colspan = Math.max(1, Math.min(20, Number.parseInt(attr(cell, "colspan") ?? "1", 10) || 1));
+      const colspan = Math.max(
+        1,
+        Math.min(20, Number.parseInt(attr(cell, "colspan") ?? "1", 10) || 1),
+      );
       line.push(body);
       for (let extra = 1; extra < colspan; extra += 1) line.push([]);
-      const rowspan = Math.max(1, Math.min(20, Number.parseInt(attr(cell, "rowspan") ?? "1", 10) || 1));
+      const rowspan = Math.max(
+        1,
+        Math.min(20, Number.parseInt(attr(cell, "rowspan") ?? "1", 10) || 1),
+      );
       if (rowspan > 1) pendingRowspan.push({ column, remaining: rowspan - 1 });
     }
     if (rowIndex > 0 || hasHeader) converted.push(line);
@@ -430,7 +450,10 @@ function tableBlock(node: AnyNode, ctx: Context): Block[] {
   if (converted.length === 0) return [];
   const header = hasHeader ? converted[0] : null;
   const body = hasHeader ? converted.slice(1) : converted;
-  if (header) header.forEach((_cell, index) => { if (aligns[index] === undefined) aligns[index] = null; });
+  if (header)
+    header.forEach((_cell, index) => {
+      if (aligns[index] === undefined) aligns[index] = null;
+    });
   return [{ kind: "table", align: aligns, header, rows: body }];
 }
 
@@ -478,7 +501,9 @@ function blockNode(node: AnyNode, ctx: Context): Block[] {
     return blocks.length > 0 ? [{ kind: "quote", blocks }] : [];
   }
   if (tag === "pre") {
-    const text = textContent(node).replace(/\u00a0/g, " ").replace(/^\n+|\n+$/g, "");
+    const text = textContent(node)
+      .replace(/\u00a0/g, " ")
+      .replace(/^\n+|\n+$/g, "");
     return text ? [{ kind: "code", language: codeLanguage(node), text }] : [];
   }
   if (tag === "table") return tableBlock(node, ctx);
@@ -492,7 +517,8 @@ function blockNode(node: AnyNode, ctx: Context): Block[] {
     for (const child of children(node)) {
       if (name(child) === "dt") {
         const body = trimFlow(children(child).flatMap((entry) => convertInline(entry, ctx)));
-        if (body.length) out.push({ kind: "paragraph", children: [{ kind: "strong", children: body }] });
+        if (body.length)
+          out.push({ kind: "paragraph", children: [{ kind: "strong", children: body }] });
       } else if (name(child) === "dd") {
         out.push(...convertBlocks(children(child), ctx));
       }
@@ -595,7 +621,8 @@ export async function readHtmlInline(raw: string): Promise<Inline[]> {
 }
 
 /** Plain text extraction for the last-resort fallback. */
-export function htmlToText(raw: string): string {  return normalizeClipboardHtml(raw)
+export function htmlToText(raw: string): string {
+  return normalizeClipboardHtml(raw)
     .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/(?:p|div|li|h[1-6]|tr|blockquote)>/gi, "\n")

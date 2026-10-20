@@ -264,8 +264,7 @@ export interface SavedImage {
   source: "clipboard" | "local" | "remote";
 }
 
-export const readDocument = (path: string) =>
-  invoke<DocumentPayload>("read_document", { path });
+export const readDocument = (path: string) => invoke<DocumentPayload>("read_document", { path });
 
 /**
  * Approximate token count for a buffer.
@@ -273,8 +272,7 @@ export const readDocument = (path: string) =>
  * Deliberately not a model-specific tokenizer: the number is an estimate that
  * lands within about 10% of both cl100k and o200k, with no vocabulary to ship.
  */
-export const countTokens = (text: string) =>
-  invoke<number>("count_tokens", { text });
+export const countTokens = (text: string) => invoke<number>("count_tokens", { text });
 
 /** Languages the operating system can spell, as `en`, `en-GB`, `pt-BR`, `pt-PT`. */
 export const spellcheckLanguages = () => invoke<string[]>("spellcheck_languages");
@@ -292,15 +290,10 @@ export const spellcheckCheck = (language: string, words: readonly string[]) =>
 export const spellcheckSuggest = (language: string, word: string) =>
   invoke<string[]>("spellcheck_suggest", { language, word });
 
-export const writeDocument = (
-  path: string,
-  content: string,
-  lineEnding: string,
-  hadBom: boolean,
-) => invoke<SavedInfo>("write_document", { path, content, lineEnding, hadBom });
+export const writeDocument = (path: string, content: string, lineEnding: string, hadBom: boolean) =>
+  invoke<SavedInfo>("write_document", { path, content, lineEnding, hadBom });
 
-export const statDocument = (path: string) =>
-  invoke<FileStat>("stat_document", { path });
+export const statDocument = (path: string) => invoke<FileStat>("stat_document", { path });
 
 export const pathExists = (path: string, documentPath: string | null = null) =>
   invoke<boolean>("path_exists", { path, documentPath });
@@ -332,8 +325,7 @@ export const startupFile = () => invoke<string | null>("startup_file");
 
 export const getSettings = () => invoke<Settings>("get_settings");
 
-export const saveSettings = (settings: Settings) =>
-  invoke<Settings>("save_settings", { settings });
+export const saveSettings = (settings: Settings) => invoke<Settings>("save_settings", { settings });
 
 /**
  * Record a path as most recent.
@@ -341,8 +333,7 @@ export const saveSettings = (settings: Settings) =>
  * Rust also rebuilds the native **Open Recent** submenu before this resolves, so
  * the returned settings are the list both views now show.
  */
-export const addRecent = (path: string) =>
-  invoke<Settings>("add_recent", { path });
+export const addRecent = (path: string) => invoke<Settings>("add_recent", { path });
 
 /** Clear the persisted list; Rust also refreshes the native Open Recent menu. */
 export const clearRecent = () => invoke<Settings>("clear_recent");
@@ -459,8 +450,7 @@ export interface MenuCheck {
  * The menu is a native control, not part of the DOM, so the frontend cannot
  * read its check marks and must tell Rust what they should be.
  */
-export const setMenuState = (state: MenuState) =>
-  invoke<void>("set_menu_state", { state });
+export const setMenuState = (state: MenuState) => invoke<void>("set_menu_state", { state });
 
 /**
  * Read the menu's check marks back.

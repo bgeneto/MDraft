@@ -31,7 +31,8 @@ const CODE_NODES = new Set([
 /** Elements whose text content is code rather than markup. */
 const CODE_ELEMENTS = new Set(["pre", "code", "script", "style", "textarea"]);
 
-export function isCodeContext(state: EditorState, pos: number): boolean {  let node: any = syntaxTree(state).resolveInner(pos, -1);
+export function isCodeContext(state: EditorState, pos: number): boolean {
+  let node: any = syntaxTree(state).resolveInner(pos, -1);
   for (; node; node = node.parent) {
     if (CODE_NODES.has(node.name)) return true;
     if (node.name === "Element") {

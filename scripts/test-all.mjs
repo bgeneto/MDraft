@@ -312,24 +312,59 @@ const CDP_CAPABLE = isWindows;
 // Command line
 // ---------------------------------------------------------------------------
 function parseArgs(argv) {
-  const options = { only: null, skip: new Set(), all: false, build: true, verbose: false, keep: false, kill: false, port: 9222, list: false };
+  const options = {
+    only: null,
+    skip: new Set(),
+    all: false,
+    build: true,
+    verbose: false,
+    keep: false,
+    kill: false,
+    port: 9222,
+    list: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const next = () => argv[++i];
     switch (arg) {
-      case "--only": options.only = next().split(",").map((s) => s.trim()).filter(Boolean); break;
-      case "--skip": for (const id of next().split(",")) options.skip.add(id.trim()); break;
-      case "--all": options.all = true; break;
-      case "--no-build": options.build = false; break;
-      case "--verbose": options.verbose = true; break;
-      case "--keep": options.keep = true; break;
-      case "--kill": options.kill = true; break;
-      case "--port": options.port = Number(next()); break;
-      case "--list": options.list = true; break;
+      case "--only":
+        options.only = next()
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        break;
+      case "--skip":
+        for (const id of next().split(",")) options.skip.add(id.trim());
+        break;
+      case "--all":
+        options.all = true;
+        break;
+      case "--no-build":
+        options.build = false;
+        break;
+      case "--verbose":
+        options.verbose = true;
+        break;
+      case "--keep":
+        options.keep = true;
+        break;
+      case "--kill":
+        options.kill = true;
+        break;
+      case "--port":
+        options.port = Number(next());
+        break;
+      case "--list":
+        options.list = true;
+        break;
       case "--help":
-      case "-h": options.help = true; break;
+      case "-h":
+        options.help = true;
+        break;
       default:
-        fail(`unknown argument: ${arg}\nRun with --list to see the suite ids, or --help for usage.`);
+        fail(
+          `unknown argument: ${arg}\nRun with --list to see the suite ids, or --help for usage.`,
+        );
     }
   }
   return options;
@@ -391,7 +426,11 @@ function printSuites() {
 // inherited stdio leaves `out` empty. That made `npm test -- --verbose` report
 // the Rust layer as "cargo test exited 0 without a result line" while cargo had
 // printed a clean pass — a harness false failure blamed on the code.
-function run(file, args, { cwd = repoRoot, env = process.env, stream = false, shell = false } = {}) {
+function run(
+  file,
+  args,
+  { cwd = repoRoot, env = process.env, stream = false, shell = false } = {},
+) {
   // A shell needs one command string. Every argument passed here is a literal
   // with no spaces (`cargo`, `build`, `--no-bundle`, a relative .cmd path), so
   // joining them is exact; passing an argv alongside `shell: true` instead is
@@ -437,14 +476,21 @@ function runTauriBuild(options) {
   const args = ["run", "tauri", "--", "build", "--no-bundle"];
   const env = { ...process.env, MDRAFT_QUIET: "1" };
   if (isWindows && fs.existsSync(path.join(repoRoot, "scripts", "with-msvc.cmd"))) {
-    return run("scripts\\with-msvc.cmd", ["npm", ...args], { env, stream: options.verbose, shell: true });
+    return run("scripts\\with-msvc.cmd", ["npm", ...args], {
+      env,
+      stream: options.verbose,
+      shell: true,
+    });
   }
   return run("npm", args, { env, stream: options.verbose });
 }
 
 function appConfigDir() {
   if (isWindows) {
-    return path.join(process.env.APPDATA ?? path.join(os.homedir(), "AppData", "Roaming"), identifier);
+    return path.join(
+      process.env.APPDATA ?? path.join(os.homedir(), "AppData", "Roaming"),
+      identifier,
+    );
   }
   if (process.platform === "darwin") {
     return path.join(os.homedir(), "Library", "Application Support", identifier);
@@ -505,7 +551,9 @@ async function prepareForRun(options) {
   if (!instances.length) return;
   const ours = instances.filter((instance) => /mdraft-test-/.test(instance.path));
   if (ours.length) {
-    console.log(`closing ${ours.length} leftover test instance(s): ${ours.map((i) => i.pid).join(", ")}`);
+    console.log(
+      `closing ${ours.length} leftover test instance(s): ${ours.map((i) => i.pid).join(", ")}`,
+    );
     await closeInstances(ours);
   }
   // Only a copy running out of `target/release` holds the file cargo has to
@@ -520,11 +568,15 @@ async function prepareForRun(options) {
   // build the staged copy is a separate file, so an open editor is harmless —
   // and closing someone's window to run tests would be a strange price.
   if (!options.build) {
-    console.log(`note: ${locking.length} instance(s) running from target/release; not building, leaving them alone`);
+    console.log(
+      `note: ${locking.length} instance(s) running from target/release; not building, leaving them alone`,
+    );
     return;
   }
   if (options.kill) {
-    console.log(`closing ${locking.length} running instance(s) (--kill): ${locking.map((i) => i.pid).join(", ")}`);
+    console.log(
+      `closing ${locking.length} running instance(s) (--kill): ${locking.map((i) => i.pid).join(", ")}`,
+    );
     await closeInstances(locking);
     return;
   }
@@ -593,10 +645,14 @@ async function waitForCdp(port, child, documentName, timeoutMs = 60000) {
   let pageSeenAt = 0;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
-      throw new Error(`the application exited with code ${child.exitCode} before opening port ${port}`);
+      throw new Error(
+        `the application exited with code ${child.exitCode} before opening port ${port}`,
+      );
     }
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(1500) });
+      const response = await fetch(`http://127.0.0.1:${port}/json/list`, {
+        signal: AbortSignal.timeout(1500),
+      });
       const targets = await response.json();
       const page = targets.find((target) => target.type === "page");
       if (page) {
@@ -697,7 +753,12 @@ function describeChecks(output, code) {
 function parseRustResult(output) {
   const match = output.match(/test result: (\w+)\. (\d+) passed; (\d+) failed; (\d+) ignored/);
   if (!match) return null;
-  return { ok: match[1] === "ok", passed: Number(match[2]), failed: Number(match[3]), ignored: Number(match[4]) };
+  return {
+    ok: match[1] === "ok",
+    passed: Number(match[2]),
+    failed: Number(match[3]),
+    ignored: Number(match[4]),
+  };
 }
 
 function failureLines(output) {
@@ -816,13 +877,21 @@ async function runRustSuite(options) {
   const temp = path.join(repoRoot, "src-tauri", "target", "test-tmp", "cargo");
   fs.mkdirSync(temp, { recursive: true });
   const env = { ...process.env, TEMP: temp, TMP: temp, MDRAFT_QUIET: "1" };
-  const result = await runWrapped("cargo-vcvars", ["test", "--manifest-path", "src-tauri/Cargo.toml"], {
-    env,
-    stream: options.verbose,
-  });
+  const result = await runWrapped(
+    "cargo-vcvars",
+    ["test", "--manifest-path", "src-tauri/Cargo.toml"],
+    {
+      env,
+      stream: options.verbose,
+    },
+  );
   const parsed = parseRustResult(result.out);
   if (!parsed) {
-    return { ok: false, detail: `cargo test exited ${result.code} without a result line`, output: result.out + result.err };
+    return {
+      ok: false,
+      detail: `cargo test exited ${result.code} without a result line`,
+      output: result.out + result.err,
+    };
   }
   const ok = result.code === 0 && parsed.failed === 0;
   return {
@@ -832,7 +901,12 @@ async function runRustSuite(options) {
   };
 }
 
-async function launchApp(suite, port, context, { temp, userData, noDocument = false, label = suite.id }) {
+async function launchApp(
+  suite,
+  port,
+  context,
+  { temp, userData, noDocument = false, label = suite.id },
+) {
   const doc = path.join(repoRoot, suite.doc);
   if (!noDocument && !fs.existsSync(doc)) throw new Error(`missing fixture: ${suite.doc}`);
 
@@ -855,9 +929,9 @@ async function launchApp(suite, port, context, { temp, userData, noDocument = fa
     stdio: ["ignore", outFd, errFd],
     windowsHide: false,
   });
-    // Whether the step prints its own line is a human concern, not a reason to
-    // give up the captured copy that the summary is built from.
-    child.on("error", () => {});
+  // Whether the step prints its own line is a human concern, not a reason to
+  // give up the captured copy that the summary is built from.
+  child.on("error", () => {});
   activeApp = child;
   try {
     // A second launch with no document argument has no title to wait for; the
@@ -879,8 +953,7 @@ async function runNodeSuite(suite, options) {
   const output = result.out + result.err;
   const described = describeChecks(output, result.code);
   const ok =
-    result.code === 0 &&
-    (!described.checks || described.checks.passed === described.checks.total);
+    result.code === 0 && (!described.checks || described.checks.passed === described.checks.total);
   return { ok, detail: described.detail, output };
 }
 
@@ -1011,7 +1084,15 @@ async function runCloseSuite(options, context) {
   fs.mkdirSync(env.WEBVIEW2_USER_DATA_FOLDER, { recursive: true });
   const result = await run(
     "pwsh",
-    ["-NoProfile", "-File", path.join("scripts", "test-close.ps1"), "-Exe", context.staged, "-Doc", path.join(repoRoot, "samples", "feature-tour.md")],
+    [
+      "-NoProfile",
+      "-File",
+      path.join("scripts", "test-close.ps1"),
+      "-Exe",
+      context.staged,
+      "-Doc",
+      path.join(repoRoot, "samples", "feature-tour.md"),
+    ],
     { env, stream: options.verbose },
   );
   const output = result.out + result.err;
@@ -1043,7 +1124,9 @@ async function main() {
       (suite) => suite.kind === "cdp" || suite.kind === "close" || suite.kind === "restart",
     );
     if (skipped.length) {
-      console.log(`note: ${skipped.length} UI layer(s) cannot run on ${process.platform} — WebKitGTK has no CDP endpoint.`);
+      console.log(
+        `note: ${skipped.length} UI layer(s) cannot run on ${process.platform} — WebKitGTK has no CDP endpoint.`,
+      );
       suites = suites.filter((suite) => suite.kind === "rust" || suite.kind === "node");
     }
   }
@@ -1085,7 +1168,9 @@ async function main() {
     );
     const binary = touchesApp ? findReleaseBinary() : null;
     if (touchesApp && !binary) {
-      fail("no release binary in src-tauri/target/release — run without --no-build, or: npm run dist");
+      fail(
+        "no release binary in src-tauri/target/release — run without --no-build, or: npm run dist",
+      );
     }
 
     context = { stage: fs.mkdtempSync(path.join(os.tmpdir(), "mdraft-test-")), logDir: "" };
@@ -1095,8 +1180,12 @@ async function main() {
     if (touchesApp) {
       context.staged = stageBinary(binary, context.stage);
       const size = (fs.statSync(binary).size / 1024 / 1024).toFixed(1);
-      console.log(`binary   ${path.relative(repoRoot, binary)}  ${size} MB  sha256 ${sha256(binary)}`);
-      console.log(`staged   ${context.stage}  (the sandbox cannot reach %APPDATA% from inside the workspace)\n`);
+      console.log(
+        `binary   ${path.relative(repoRoot, binary)}  ${size} MB  sha256 ${sha256(binary)}`,
+      );
+      console.log(
+        `staged   ${context.stage}  (the sandbox cannot reach %APPDATA% from inside the workspace)\n`,
+      );
 
       savedUserState = takeUserState(path.join(context.stage, "user-state"));
       fixtures = snapshotFixtures(suites);
@@ -1110,7 +1199,8 @@ async function main() {
       // A layer whose fixture is not in this checkout, or whose external tool is
       // not installed, could never pass; failing it would read as a regression.
       const missingFixture = suite.doc && !fs.existsSync(path.join(repoRoot, suite.doc));
-      const missingTool = suite.requires === "pandoc" && (await run("pandoc", ["--version"])).code !== 0;
+      const missingTool =
+        suite.requires === "pandoc" && (await run("pandoc", ["--version"])).code !== 0;
       if (missingFixture || missingTool) {
         result = {
           ok: true,
@@ -1153,7 +1243,9 @@ async function main() {
     // Every exit path has to clean up: a leftover window breaks the next build,
     // and the developer's own settings have to come back. Only instances this
     // run started are swept — never one the developer opened.
-    const leftovers = (await listRunningInstances()).filter((instance) => /mdraft-test-/.test(instance.path));
+    const leftovers = (await listRunningInstances()).filter((instance) =>
+      /mdraft-test-/.test(instance.path),
+    );
     if (leftovers.length) await closeInstances(leftovers);
     if (savedUserState.length) restoreUserState(savedUserState);
     if (fixtures.size) restoreFixtures(fixtures);
@@ -1166,9 +1258,16 @@ async function main() {
         // result, so retry and then say so instead of throwing an EPERM that
         // hides the summary.
         try {
-          fs.rmSync(context.stage, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+          fs.rmSync(context.stage, {
+            recursive: true,
+            force: true,
+            maxRetries: 5,
+            retryDelay: 300,
+          });
         } catch (error) {
-          console.log(`\nnote: could not remove the staging folder ${context.stage}: ${error.code ?? error}`);
+          console.log(
+            `\nnote: could not remove the staging folder ${context.stage}: ${error.code ?? error}`,
+          );
         }
       }
     }

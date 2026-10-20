@@ -44,10 +44,7 @@ export function extractTypstHeadings(source: string): Heading[] {
     const match = /^\s{0,3}(={1,6})\s+(\S.*?)\s*$/.exec(line);
     if (!match) continue;
     // Inline markup is stripped so the outline reads as text.
-    const text = match[2]
-      .replace(/\\(.)/g, "$1")
-      .replace(/[*_`]/g, "")
-      .trim();
+    const text = match[2].replace(/\\(.)/g, "$1").replace(/[*_`]/g, "").trim();
     if (text) headings.push({ level: match[1].length, text, line: i + 1 });
   }
 
@@ -110,9 +107,8 @@ export function extractAsciidocHeadings(source: string): Heading[] {
  */
 export function extractHtmlHeadings(source: string): Heading[] {
   const masked = source
-    .replace(
-      /<(script|style|textarea|title|template)\b[^>]*>[\s\S]*?<\/\1\s*>/gi,
-      (block) => block.replace(/[^\n]/g, " "),
+    .replace(/<(script|style|textarea|title|template)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, (block) =>
+      block.replace(/[^\n]/g, " "),
     )
     .replace(/<!--[\s\S]*?-->/g, (comment) => comment.replace(/[^\n]/g, " "));
 
@@ -138,12 +134,8 @@ function decodeBasicEntities(text: string): string {
     .replace(/&gt;/gi, ">")
     .replace(/&quot;/gi, '"')
     .replace(/&#39;/gi, "'")
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) =>
-      String.fromCodePoint(parseInt(hex, 16)),
-    )
-    .replace(/&#(\d+);/g, (_, decimal: string) =>
-      String.fromCodePoint(Number(decimal)),
-    );
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, decimal: string) => String.fromCodePoint(Number(decimal)));
 }
 
 function element<K extends keyof HTMLElementTagNameMap>(
@@ -236,9 +228,7 @@ export function highlightOutline(
 const DIRECTORY_STACK: string[] = [];
 
 export function currentDirectory(): string | null {
-  return DIRECTORY_STACK.length > 0
-    ? DIRECTORY_STACK[DIRECTORY_STACK.length - 1]
-    : null;
+  return DIRECTORY_STACK.length > 0 ? DIRECTORY_STACK[DIRECTORY_STACK.length - 1] : null;
 }
 
 export async function showDirectory(
@@ -376,10 +366,7 @@ export function renderRecent(
     const row = element("button", "entry recent-item");
     row.type = "button";
     row.title = file;
-    row.append(
-      element("span", "name", name),
-      element("span", "dir", directory),
-    );
+    row.append(element("span", "name", name), element("span", "dir", directory));
     row.addEventListener("click", () => handlers.onOpenFile(file));
     fragment.appendChild(row);
   }

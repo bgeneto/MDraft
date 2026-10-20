@@ -19,7 +19,8 @@ import { createHash } from "node:crypto";
 const port = process.argv[2] ?? "9222";
 const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
 const page = list.find((t) => t.type === "page");
-if (!page) throw new Error("no page target; is the application running with --remote-debugging-port?");
+if (!page)
+  throw new Error("no page target; is the application running with --remote-debugging-port?");
 
 const ws = new WebSocket(page.webSocketDebuggerUrl);
 const pending = new Map();
@@ -125,7 +126,11 @@ const loaded = await evaluate(`
   })()
 `);
 for (const face of loaded) {
-  check(face.declared > 0, `${face.name} is declared to the document`, `${face.declared} face(s), ${face.loaded} loaded`);
+  check(
+    face.declared > 0,
+    `${face.name} is declared to the document`,
+    `${face.declared} face(s), ${face.loaded} loaded`,
+  );
 }
 
 console.log("\n=== a feature must change pixels, not just computed style ===");
@@ -134,29 +139,55 @@ const mono = '"JetBrains Mono", monospace';
 const serif = '"Source Serif 4", serif';
 
 const ligOff = await shot({ family: mono, ligatures: "none" }, "-> => != === ---");
-const ligOn = await shot({ family: mono, ligatures: "contextual common-ligatures" }, "-> => != === ---");
-check(ligOff !== ligOn, "code ligatures change the drawing", ligOff === ligOn ? "identical pixels — the feature does nothing" : "differs");
+const ligOn = await shot(
+  { family: mono, ligatures: "contextual common-ligatures" },
+  "-> => != === ---",
+);
+check(
+  ligOff !== ligOn,
+  "code ligatures change the drawing",
+  ligOff === ligOn ? "identical pixels — the feature does nothing" : "differs",
+);
 
 const zeroOff = await shot({ family: mono, numeric: "normal" }, "0O0O0O0O");
 const zeroOn = await shot({ family: mono, numeric: "slashed-zero" }, "0O0O0O0O");
-check(zeroOff !== zeroOn, "slashed zero changes the drawing", zeroOff === zeroOn ? "identical pixels — the feature does nothing" : "differs");
+check(
+  zeroOff !== zeroOn,
+  "slashed zero changes the drawing",
+  zeroOff === zeroOn ? "identical pixels — the feature does nothing" : "differs",
+);
 
 const lin = await shot({ family: serif, numeric: "lining-nums" }, "0123456789");
 const old = await shot({ family: serif, numeric: "oldstyle-nums" }, "0123456789");
-check(lin !== old, "oldstyle figures change the drawing", lin === old ? "identical pixels — the face may have no onum feature" : "differs");
+check(
+  lin !== old,
+  "oldstyle figures change the drawing",
+  lin === old ? "identical pixels — the face may have no onum feature" : "differs",
+);
 
 const prop = await shot({ family: serif, numeric: "proportional-nums" }, "1111111111");
 const tab = await shot({ family: serif, numeric: "tabular-nums" }, "1111111111");
-check(prop !== tab, "tabular figures change the drawing", prop === tab ? "identical pixels" : "differs");
+check(
+  prop !== tab,
+  "tabular figures change the drawing",
+  prop === tab ? "identical pixels" : "differs",
+);
 
 const kernOff = await shot({ family: serif, kerning: "none" }, "AVATAR To Wa");
 const kernOn = await shot({ family: serif, kerning: "normal" }, "AVATAR To Wa");
-check(kernOff !== kernOn, "kerning changes the drawing", kernOff === kernOn ? "identical pixels" : "differs");
+check(
+  kernOff !== kernOn,
+  "kerning changes the drawing",
+  kernOff === kernOn ? "identical pixels" : "differs",
+);
 
 console.log("\n=== the new faces keep the switches real ===");
 
 const ebgNormal = await shot({ family: '"EB Garamond", serif' }, "0123456789");
-const ebgOld = await shot({ family: '"EB Garamond", serif', numeric: "oldstyle-nums" }, "0123456789");
+const ebgOld = await shot(
+  { family: '"EB Garamond", serif', numeric: "oldstyle-nums" },
+  "0123456789",
+);
 check(
   ebgNormal !== ebgOld,
   "EB Garamond oldstyle figures change the drawing",
@@ -164,7 +195,10 @@ check(
 );
 
 const bodoniNormal = await shot({ family: '"Bodoni Moda", serif' }, "1111111111");
-const bodoniTab = await shot({ family: '"Bodoni Moda", serif', numeric: "tabular-nums" }, "1111111111");
+const bodoniTab = await shot(
+  { family: '"Bodoni Moda", serif', numeric: "tabular-nums" },
+  "1111111111",
+);
 check(
   bodoniNormal !== bodoniTab,
   "Bodoni Moda tabular figures change the drawing",
@@ -172,7 +206,10 @@ check(
 );
 
 const alegreyaNormal = await shot({ family: '"Alegreya", serif' }, "1111111111");
-const alegreyaTab = await shot({ family: '"Alegreya", serif', numeric: "tabular-nums" }, "1111111111");
+const alegreyaTab = await shot(
+  { family: '"Alegreya", serif', numeric: "tabular-nums" },
+  "1111111111",
+);
 check(
   alegreyaNormal !== alegreyaTab,
   "Alegreya tabular figures change the drawing",
@@ -180,7 +217,10 @@ check(
 );
 
 const plexZeroOff = await shot({ family: '"IBM Plex Mono", monospace' }, "0O0O0O0O");
-const plexZeroOn = await shot({ family: '"IBM Plex Mono", monospace', numeric: "slashed-zero" }, "0O0O0O0O");
+const plexZeroOn = await shot(
+  { family: '"IBM Plex Mono", monospace', numeric: "slashed-zero" },
+  "0O0O0O0O",
+);
 check(
   plexZeroOff !== plexZeroOn,
   "IBM Plex Mono slashed zero changes the drawing",
@@ -199,14 +239,20 @@ check(
 );
 
 const azeretZeroOff = await shot({ family: '"Azeret Mono", monospace' }, "0O0O0O0O");
-const azeretZeroOn = await shot({ family: '"Azeret Mono", monospace', numeric: "slashed-zero" }, "0O0O0O0O");
+const azeretZeroOn = await shot(
+  { family: '"Azeret Mono", monospace', numeric: "slashed-zero" },
+  "0O0O0O0O",
+);
 check(
   azeretZeroOff !== azeretZeroOn,
   "Azeret Mono slashed zero changes the drawing",
   azeretZeroOff === azeretZeroOn ? "identical pixels — the subset lost zero" : "differs",
 );
 
-const victorLigOff = await shot({ family: '"Victor Mono", monospace', ligatures: "none" }, "-> => != <= >=");
+const victorLigOff = await shot(
+  { family: '"Victor Mono", monospace', ligatures: "none" },
+  "-> => != <= >=",
+);
 const victorLigOn = await shot(
   { family: '"Victor Mono", monospace', ligatures: "contextual common-ligatures" },
   "-> => != <= >=",

@@ -25,22 +25,24 @@ import type { BlockRange } from "./source-map";
  * becomes `bold`. Both sides are reduced to plain lower-case words.
  */
 function fold(text: string): string {
-  return text
-    .replace(/[\u2018\u2019\u02bc]/g, "'")
-    .replace(/[\u201c\u201d]/g, '"')
-    // Typst's automatic heading and figure numbering prefixes a number or label.
-    .replace(/^\s*\d+(?:\.\d+)*\.?\s+/, "")
-    .replace(/^\s*(?:table|figure|listing)\s+\d+\s*[:.]\s*/i, "")
-    // Formatting markers are removed rather than spaced out so `*strong*` and
-    // rendered `strong` fold to the same word.
-    .replace(/[*_`#$\\{}[\]]/g, "")
-    // Punctuation and dashes become spaces on both sides so `[*Feature*], [*Status*]`
-    // and `<th>Feature</th><th>Status</th>`, or `*Abstract*—This` and
-    // `<strong>Abstract</strong>—This`, fold to identical word sequences.
-    .replace(/[\u2014\u2013]|--+|[,.;:!?()"'/]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
+  return (
+    text
+      .replace(/[\u2018\u2019\u02bc]/g, "'")
+      .replace(/[\u201c\u201d]/g, '"')
+      // Typst's automatic heading and figure numbering prefixes a number or label.
+      .replace(/^\s*\d+(?:\.\d+)*\.?\s+/, "")
+      .replace(/^\s*(?:table|figure|listing)\s+\d+\s*[:.]\s*/i, "")
+      // Formatting markers are removed rather than spaced out so `*strong*` and
+      // rendered `strong` fold to the same word.
+      .replace(/[*_`#$\\{}[\]]/g, "")
+      // Punctuation and dashes become spaces on both sides so `[*Feature*], [*Status*]`
+      // and `<th>Feature</th><th>Status</th>`, or `*Abstract*—This` and
+      // `<strong>Abstract</strong>—This`, fold to identical word sequences.
+      .replace(/[\u2014\u2013]|--+|[,.;:!?()"'/]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase()
+  );
 }
 
 /**
@@ -51,10 +53,7 @@ function fold(text: string): string {
 function stripSourceLineMarkup(line: string): string {
   let out = line
     .replace(/#footnote\[[^\]]*\]/g, " ")
-    .replace(
-      /#[a-zA-Z_][\w.-]*\([^()\n]*(?:\([^()\n]*\)[^()\n]*)*\)/g,
-      " ",
-    );
+    .replace(/#[a-zA-Z_][\w.-]*\([^()\n]*(?:\([^()\n]*\)[^()\n]*)*\)/g, " ");
   // Strip inline `$...$` math only when the line also has prose outside it.
   const withoutMath = out.replace(/\$[^$\n]+\$/g, " ");
   if (/[a-zA-Z\u00C0-\u024F]/.test(withoutMath)) {
@@ -90,8 +89,7 @@ function blockText(element: HTMLElement): string {
       if (tag === "MATH" && el !== element) return;
       if (
         tag === "SUP" &&
-        (el.getAttribute("role") === "doc-noteref" ||
-          el.getAttribute("role") === "doc-backlink")
+        (el.getAttribute("role") === "doc-noteref" || el.getAttribute("role") === "doc-backlink")
       ) {
         return;
       }
@@ -136,9 +134,7 @@ function foldSource(source: string): {
       !trimmed ||
       trimmed.startsWith("//") ||
       /^(?:`{3,}|~{3,})/.test(trimmed) ||
-      /^#(?:set|show|import|include|let|v|h|pagebreak|colbreak|lorem)\b/.test(
-        trimmed,
-      )
+      /^#(?:set|show|import|include|let|v|h|pagebreak|colbreak|lorem)\b/.test(trimmed)
     ) {
       continue;
     }
@@ -160,9 +156,7 @@ function foldSource(source: string): {
     // rendered side has them as structure, not as text, and `+ one + two` would
     // otherwise never line up with `one two`.
     const stripped = stripSourceLineMarkup(
-      rawLine
-        .replace(/^\s*(?:={1,6}|\+|-|\d+\.)\s+/, "")
-        .replace(/^\s*(?:={1,6}|\+|-)\s*$/, ""),
+      rawLine.replace(/^\s*(?:={1,6}|\+|-|\d+\.)\s+/, "").replace(/^\s*(?:={1,6}|\+|-)\s*$/, ""),
     );
     const folded = fold(stripped);
     if (!folded) continue;
@@ -182,11 +176,7 @@ function lineAt(starts: number[], offset: number): number {
   return line;
 }
 
-function indexOfWordBounded(
-  plain: string,
-  needle: string,
-  fromIndex: number,
-): number {
+function indexOfWordBounded(plain: string, needle: string, fromIndex: number): number {
   let searchFrom = fromIndex;
   while (searchFrom <= plain.length - needle.length) {
     const at = plain.indexOf(needle, searchFrom);
@@ -244,11 +234,7 @@ function adjustBlockStartLine(
  * generated blocks between two anchored blocks never fall inside the preceding
  * block's source range.
  */
-function trimBlockEndLine(
-  lines: readonly string[],
-  startLine: number,
-  rawEndLine: number,
-): number {
+function trimBlockEndLine(lines: readonly string[], startLine: number, rawEndLine: number): number {
   let end = Math.min(rawEndLine, lines.length);
   for (let line = startLine + 1; line <= end; line += 1) {
     const trimmed = lines[line - 1]?.trim() ?? "";
@@ -307,9 +293,7 @@ export function annotateTypstLines(
       const heading = headings.find(
         (h) =>
           h.line >= lastLine &&
-          (h.text === text ||
-            h.text.startsWith(text) ||
-            text.startsWith(h.text)),
+          (h.text === text || h.text.startsWith(text) || text.startsWith(h.text)),
       );
       if (heading) {
         block.setAttribute("data-line", String(heading.line));

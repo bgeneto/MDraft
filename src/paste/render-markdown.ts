@@ -4,9 +4,7 @@ import type { Align, Block, Inline } from "./ir.ts";
 import { inlineText } from "./ir.ts";
 
 function escapeText(value: string): string {
-  return value
-    .replace(/\\/g, "\\\\")
-    .replace(/([`*_[\]<>$])/g, "\\$1");
+  return value.replace(/\\/g, "\\\\").replace(/([`*_[\]<>$])/g, "\\$1");
 }
 
 function escapeLineStarts(value: string): string {
@@ -124,16 +122,13 @@ function alignment(align: Align): string {
 }
 
 function renderTable(block: Extract<Block, { kind: "table" }>): string {
-  const columns = Math.max(
-    block.header?.length ?? 0,
-    ...block.rows.map((row) => row.length),
-    1,
-  );
+  const columns = Math.max(block.header?.length ?? 0, ...block.rows.map((row) => row.length), 1);
   const header = block.header ?? Array.from({ length: columns }, () => [] as Inline[]);
   const headerLine = `| ${header.map(renderTableCell).join(" | ")} |`;
   const delimiter = `| ${Array.from({ length: columns }, (_unused, index) => alignment(block.align[index] ?? null)).join(" | ")} |`;
   const rows = block.rows.map(
-    (row) => `| ${Array.from({ length: columns }, (_unused, index) => renderTableCell(row[index] ?? [])).join(" | ")} |`,
+    (row) =>
+      `| ${Array.from({ length: columns }, (_unused, index) => renderTableCell(row[index] ?? [])).join(" | ")} |`,
   );
   return [headerLine, delimiter, ...rows].join("\n");
 }

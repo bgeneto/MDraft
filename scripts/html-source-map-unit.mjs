@@ -8,10 +8,7 @@
 // offsets differ) and a DOM that no longer matches the table (the sample check).
 // No application and no browser are needed.
 
-import {
-  htmlSourceRange,
-  rawOffsetForDecoded,
-} from "../src/html-source-map.ts";
+import { htmlSourceRange, rawOffsetForDecoded } from "../src/html-source-map.ts";
 
 const checks = [];
 function check(ok, label, detail = "") {

@@ -40,18 +40,20 @@ const KEY_SEPARATOR = "\u0001";
 const MIN_FRAGMENT = 3;
 
 function normalize(text: string): string {
-  return text
-    // PDF.js reports what the font drew. A soft hyphen is a break opportunity in
-    // the source, and a ligature is one glyph for two letters; neither changes
-    // the word the reader clicked, but both break a literal comparison.
-    .replace(/\u00ad/g, "")
-    .replace(/ﬃ/g, "ffi")
-    .replace(/ﬄ/g, "ffl")
-    .replace(/ﬀ/g, "ff")
-    .replace(/ﬁ/g, "fi")
-    .replace(/ﬂ/g, "fl")
-    .normalize("NFC")
-    .toLocaleLowerCase();
+  return (
+    text
+      // PDF.js reports what the font drew. A soft hyphen is a break opportunity in
+      // the source, and a ligature is one glyph for two letters; neither changes
+      // the word the reader clicked, but both break a literal comparison.
+      .replace(/\u00ad/g, "")
+      .replace(/ﬃ/g, "ffi")
+      .replace(/ﬄ/g, "ffl")
+      .replace(/ﬀ/g, "ff")
+      .replace(/ﬁ/g, "fi")
+      .replace(/ﬂ/g, "fl")
+      .normalize("NFC")
+      .toLocaleLowerCase()
+  );
 }
 
 /** Split text into words, keeping each word's original range. */
@@ -118,11 +120,7 @@ export class TypstSourceMap {
           const score = this.score(lineWords, at, sourceAt);
           if (score < size) continue;
           const distance = Math.abs(sourceAt - hintWord);
-          if (
-            !best ||
-            score > best.score ||
-            (score === best.score && distance < best.distance)
-          ) {
+          if (!best || score > best.score || (score === best.score && distance < best.distance)) {
             best = { matchedAt: at, sourceAt, score, distance };
           }
         }
@@ -299,10 +297,7 @@ export function lineTokenAt(
  * Blank lines delimit paragraphs. A heading or list marker is selected as one
  * line rather than swallowing the following paragraph.
  */
-export function paragraphRangeAt(
-  source: string,
-  offset: number,
-): { from: number; to: number } {
+export function paragraphRangeAt(source: string, offset: number): { from: number; to: number } {
   const at = Math.max(0, Math.min(offset, source.length));
   const lineStart = source.lastIndexOf("\n", Math.max(0, at - 1)) + 1;
   const lineEndAt = source.indexOf("\n", at);

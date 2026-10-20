@@ -30,8 +30,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
  * The editor itself still makes no network request — this is a link the reader's
  * browser follows, which the README documents.
  */
-export const KATEX_STYLESHEET_URL =
-  "https://cdn.jsdelivr.net/npm/katex@0.19.0/dist/katex.min.css";
+export const KATEX_STYLESHEET_URL = "https://cdn.jsdelivr.net/npm/katex@0.19.0/dist/katex.min.css";
 
 export interface RenderOptions {
   /** Directory of the document being edited, used to resolve relative images. */
@@ -274,10 +273,8 @@ function extractMath(
       // TeX character or to be a single unspaced token, and never a bare amount.
       const tight = !/^\s|\s$/.test(body);
       const paddedMath =
-        !AMOUNT_ONLY.test(trimmed) &&
-        (MATH_INDICATOR.test(trimmed) || !/\s/.test(trimmed));
-      const looksLikeMath =
-        trimmed.length > 0 && !body.includes("@@") && (tight || paddedMath);
+        !AMOUNT_ONLY.test(trimmed) && (MATH_INDICATOR.test(trimmed) || !/\s/.test(trimmed));
+      const looksLikeMath = trimmed.length > 0 && !body.includes("@@") && (tight || paddedMath);
       if (looksLikeMath) {
         scanned += push(body, false, protectedAt(i), protectedAt(end + 1));
       } else {
@@ -333,8 +330,7 @@ function assetUrl(raw: string, baseDir: string | null): string {
     }
   }
 
-  const absolute =
-    isAbsolutePath(path) || !baseDir ? path : joinPath(baseDir, path);
+  const absolute = isAbsolutePath(path) || !baseDir ? path : joinPath(baseDir, path);
 
   try {
     return convertFileSrc(absolute);
@@ -651,10 +647,31 @@ export function renderPreview(source: string, options: RenderOptions): RenderRes
   const rawHtml = mapped ? mapped.html : (marked.parse(prepared, { async: false }) as string);
 
   const clean = DOMPurify.sanitize(rawHtml, {
-    ADD_ATTR: ["align", "data-f", "data-mermaid", "data-href", "id", "colspan", "rowspan", "type", "checked", "disabled"],
+    ADD_ATTR: [
+      "align",
+      "data-f",
+      "data-mermaid",
+      "data-href",
+      "id",
+      "colspan",
+      "rowspan",
+      "type",
+      "checked",
+      "disabled",
+    ],
     // `input` has to survive sanitising so GFM task lists keep their checkbox;
     // normalizeInputs() then strips every input that is not a disabled checkbox.
-    FORBID_TAGS: ["script", "iframe", "object", "embed", "form", "textarea", "select", "button", "base"],
+    FORBID_TAGS: [
+      "script",
+      "iframe",
+      "object",
+      "embed",
+      "form",
+      "textarea",
+      "select",
+      "button",
+      "base",
+    ],
     USE_PROFILES: { html: true },
   });
 
@@ -895,9 +912,7 @@ export function renderMathIn(host: HTMLElement): number {
         fragment.appendChild(document.createTextNode(text.slice(last, match.index)));
       }
       const display = match[2] !== undefined;
-      fragment.appendChild(
-        mathNode({ body: (display ? match[2] : match[1]) ?? "", display }),
-      );
+      fragment.appendChild(mathNode({ body: (display ? match[2] : match[1]) ?? "", display }));
       last = MATH_IN_TEXT.lastIndex;
       count += 1;
     }
@@ -1072,9 +1087,7 @@ function buildTableOfContents(host: HTMLElement): void {
     nav.appendChild(empty);
   } else {
     const list = document.createElement("ul");
-    const minLevel = Math.min(
-      ...headings.map((h) => Number(h.tagName.slice(1))),
-    );
+    const minLevel = Math.min(...headings.map((h) => Number(h.tagName.slice(1))));
     for (const heading of headings) {
       const item = document.createElement("li");
       item.style.paddingLeft = `${(Number(heading.tagName.slice(1)) - minLevel) * 14}px`;

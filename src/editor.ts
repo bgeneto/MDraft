@@ -304,20 +304,20 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
   let autoPairs = options.autoClosePairs ?? true;
   let autoTags = options.autoCloseTags ?? true;
   let currentLanguage: DocumentLanguage = "markdown";
-/// Which language the buffer is parsed as. A markdown editor that also edits
-/// Typst needs this to be switchable at runtime; a static extension could not be.
-const languageCompartment = new Compartment();
-/// The markdown parser and its keymap. Kept as a value because switching back
-/// from Typst has to reinstall exactly what start-up installed.
-const markdownSupport = markdown({
-  base: markdownLanguage,
-  codeLanguages: languages,
-  addKeymap: true,
-  // Markdown parses line-start HTML blocks with this nested grammar, and its
-  // own `autoCloseTags` would fire regardless of the preference. The editor
-  // owns tag closing for Markdown (see tag-close.ts), so the nested one is off.
-  htmlTagLanguage: html({ matchClosingTags: false, autoCloseTags: false }),
-});
+  /// Which language the buffer is parsed as. A markdown editor that also edits
+  /// Typst needs this to be switchable at runtime; a static extension could not be.
+  const languageCompartment = new Compartment();
+  /// The markdown parser and its keymap. Kept as a value because switching back
+  /// from Typst has to reinstall exactly what start-up installed.
+  const markdownSupport = markdown({
+    base: markdownLanguage,
+    codeLanguages: languages,
+    addKeymap: true,
+    // Markdown parses line-start HTML blocks with this nested grammar, and its
+    // own `autoCloseTags` would fire regardless of the preference. The editor
+    // owns tag closing for Markdown (see tag-close.ts), so the nested one is off.
+    htmlTagLanguage: html({ matchClosingTags: false, autoCloseTags: false }),
+  });
 
   const buildHistory = () => history({ minDepth: 400 });
 
@@ -497,13 +497,7 @@ const markdownSupport = markdown({
     languageCompartment.of(markdownSupport),
     pairCompartment.of(autoPairs ? pairSupport() : []),
     tagCompartment.of(tagSupport("markdown")),
-    keymap.of([
-      ...defaultKeymap,
-      ...searchKeymap,
-      ...historyKeymap,
-      ...foldKeymap,
-      indentWithTab,
-    ]),
+    keymap.of([...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, indentWithTab]),
     fontSizeCompartment.of(
       EditorView.theme({ "&": { fontSize: `${DEFAULT_EDITOR_FONT_SIZE}px` } }),
     ),
@@ -546,8 +540,7 @@ const markdownSupport = markdown({
       from: range.from,
       to: range.to,
       selectionLength: range.to - range.from,
-      selectionLines:
-        target.state.doc.lineAt(range.to).number - line.number + 1,
+      selectionLines: target.state.doc.lineAt(range.to).number - line.number + 1,
     };
   }
 
@@ -944,9 +937,7 @@ const markdownSupport = markdown({
       transformSelectedLines((line) => {
         const indent = /^\s*/.exec(line)?.[0] ?? "";
         const body = line.slice(indent.length);
-        const bare = body
-          .replace(/^\*\s+\[[ xX]\]\s*/, "")
-          .replace(/^\*\s+/, "");
+        const bare = body.replace(/^\*\s+\[[ xX]\]\s*/, "").replace(/^\*\s+/, "");
         if (state === "plain") return `${indent}${bare}`;
         const marker = state === "done" ? "[x]" : "[ ]";
         return `${indent}* ${marker} ${bare}`;
@@ -1068,9 +1059,7 @@ const markdownSupport = markdown({
     },
 
     insertPasted(text, block) {
-      const normalized = text
-        .replace(/\r\n?/g, "\n")
-        .replace(/^\n+|\n+$/g, "");
+      const normalized = text.replace(/\r\n?/g, "\n").replace(/^\n+|\n+$/g, "");
       if (!normalized) return;
 
       const state = view.state;

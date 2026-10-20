@@ -13,10 +13,7 @@ function escapeText(value: string): string {
 }
 
 function escapeAttribute(value: string): string {
-  return value
-    .replace(/\\/g, "\\\\")
-    .replace(/\]/g, "\\]")
-    .replace(/,/g, "\\,");
+  return value.replace(/\\/g, "\\\\").replace(/\]/g, "\\]").replace(/,/g, "\\,");
 }
 
 function inlineImage(src: string, alt: string): string {
@@ -86,8 +83,7 @@ function block(node: Block): string {
       return node.items
         .map((item) => {
           const marker = node.ordered ? "." : "*";
-          const task =
-            item.task === "done" ? "[x] " : item.task === "todo" ? "[ ] " : "";
+          const task = item.task === "done" ? "[x] " : item.task === "todo" ? "[ ] " : "";
           return `${marker} ${task}${item.blocks.map(block).join("\n")}`;
         })
         .join("\n");
@@ -99,10 +95,9 @@ function block(node: Block): string {
       return `${language}${fence}\n${node.text}\n${fence}`;
     }
     case "table": {
-      const rows = [
-        ...(node.header ? [node.header] : []),
-        ...node.rows,
-      ].map((row) => `| ${row.map((cell) => inline(cell)).join(" | ")}`);
+      const rows = [...(node.header ? [node.header] : []), ...node.rows].map(
+        (row) => `| ${row.map((cell) => inline(cell)).join(" | ")}`,
+      );
       const header = node.header ? '[options="header"]\n' : "";
       return `${header}|===\n${rows.join("\n")}\n|===`;
     }

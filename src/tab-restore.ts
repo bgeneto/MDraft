@@ -30,10 +30,7 @@ export interface RememberedTabs {
  * platform's path identity are collapsed to their first occurrence; the list is
  * capped, and the active path is only recorded when it survived the cap.
  */
-export function rememberTabs(
-  sessions: readonly Session[],
-  activeId: string,
-): RememberedTabs {
+export function rememberTabs(sessions: readonly Session[], activeId: string): RememberedTabs {
   const tabs: string[] = [];
   const seen = new Set<string>();
   let active: string | null = null;
@@ -104,7 +101,7 @@ export function planRestore(
 
   const activeKey = active === null ? null : pathKey(active);
   const remembered =
-    activeKey !== null ? tabs.find((path) => pathKey(path) === activeKey) ?? null : null;
+    activeKey !== null ? (tabs.find((path) => pathKey(path) === activeKey) ?? null) : null;
 
   return { tabs, active: remembered ?? tabs[0] ?? null, missing };
 }

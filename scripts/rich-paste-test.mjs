@@ -25,7 +25,8 @@ ws.addEventListener("message", (event) => {
     pending.delete(message.id);
   } else if (message.method === "Runtime.exceptionThrown") {
     exceptions.push(
-      message.params.exceptionDetails.exception?.description ?? message.params.exceptionDetails.text,
+      message.params.exceptionDetails.exception?.description ??
+        message.params.exceptionDetails.text,
     );
   }
 });
@@ -62,7 +63,9 @@ const lines = () =>
     "JSON.stringify([...document.querySelectorAll('.cm-line')].map((line) => line.textContent))",
   ).then((raw) => JSON.parse(raw).join("\n"));
 const toast = () =>
-  evaluate("document.getElementById('toast').hidden ? '' : document.getElementById('toast').textContent");
+  evaluate(
+    "document.getElementById('toast').hidden ? '' : document.getElementById('toast').textContent",
+  );
 const title = () => evaluate("document.title");
 
 async function newTab() {
@@ -239,7 +242,11 @@ console.log("=== rich paste ===");
   await paste("<p>Hello <strong>world</strong></p>", "Hello world");
   const typst = await lines();
   check(typst.includes("*world*"), "Typst content selects the Typst destination", typst);
-  check((await toast()).includes("Pasted as Typst"), "the detected destination is announced", await toast());
+  check(
+    (await toast()).includes("Pasted as Typst"),
+    "the detected destination is announced",
+    await toast(),
+  );
 
   await openSection("Files");
   await setSelect("Default File Extension", "typ");
@@ -249,7 +256,11 @@ console.log("=== rich paste ===");
   await paste("<p>Hello <strong>world</strong></p>", "Hello world");
   const markdown = await lines();
   check(markdown.includes("**world**"), "Markdown content beats a Typst default", markdown);
-  check((await toast()).includes("Pasted as Markdown"), "the Markdown destination is announced", await toast());
+  check(
+    (await toast()).includes("Pasted as Markdown"),
+    "the Markdown destination is announced",
+    await toast(),
+  );
   await openSection("Files");
   await setSelect("Default File Extension", "md");
   await closePrefs();
@@ -259,7 +270,11 @@ console.log("=== rich paste ===");
   await paste("<p>After <strong>bold</strong></p>", "After bold");
   const html = await lines();
   check(html.includes("<p>After <strong>bold</strong></p>"), "an HTML buffer pastes HTML", html);
-  check((await toast()).includes("Pasted as HTML"), "the HTML destination is announced", await toast());
+  check(
+    (await toast()).includes("Pasted as HTML"),
+    "the HTML destination is announced",
+    await toast(),
+  );
 
   // A snippet copied as *source* is not a rendering: the highlighting must not
   // come along, and the tag must not be dropped on the way (the sanitizer has
@@ -277,7 +292,11 @@ console.log("=== rich paste ===");
   await type("<h1>Title</h1>\n<p>Before</p>\n");
   await paste(highlighted, snippet);
   const fromEditor = await lines();
-  check(fromEditor.includes(snippet), "a snippet from a highlighting editor keeps its own characters", fromEditor);
+  check(
+    fromEditor.includes(snippet),
+    "a snippet from a highlighting editor keeps its own characters",
+    fromEditor,
+  );
   check(!fromEditor.includes("<span"), "the editor highlighting is not pasted", fromEditor);
 
   await newTab();
@@ -288,24 +307,42 @@ console.log("=== rich paste ===");
 
   await newTab();
   await paste("<p>Inline <strong>word</strong></p>", "Inline word");
-  check((await lines()).startsWith("Inline **word**"), "an inline fragment does not add a leading blank line", JSON.stringify(await lines()));
+  check(
+    (await lines()).startsWith("Inline **word**"),
+    "an inline fragment does not add a leading blank line",
+    JSON.stringify(await lines()),
+  );
 
   await newTab();
   await type("```\n");
   await paste("<p>Inside <strong>code</strong></p>", "Inside code");
-  check((await lines()).includes("Inside code"), "a code fence receives the clipboard verbatim", await lines());
+  check(
+    (await lines()).includes("Inside code"),
+    "a code fence receives the clipboard verbatim",
+    await lines(),
+  );
 
   await newTab();
   await key("KeyV", "v", { ctrlKey: true, shiftKey: true });
   await paste("<p>Plain <strong>bypass</strong></p>", "<p>Plain <strong>bypass</strong></p>");
-  check((await lines()).includes("<p>Plain <strong>bypass</strong></p>"), "Ctrl+Shift+V bypasses the conversion", await lines());
+  check(
+    (await lines()).includes("<p>Plain <strong>bypass</strong></p>"),
+    "Ctrl+Shift+V bypasses the conversion",
+    await lines(),
+  );
 
   await openSection("Editor");
   await setCheckbox("Convert Rich Text on Paste", false);
   await closePrefs();
   await newTab();
-  await paste("<p>Unconverted <strong>html</strong></p>", "<p>Unconverted <strong>html</strong></p>");
-  check((await lines()).includes("<p>Unconverted <strong>html</strong></p>"), "the preference off pastes plain text");
+  await paste(
+    "<p>Unconverted <strong>html</strong></p>",
+    "<p>Unconverted <strong>html</strong></p>",
+  );
+  check(
+    (await lines()).includes("<p>Unconverted <strong>html</strong></p>"),
+    "the preference off pastes plain text",
+  );
   await openSection("Editor");
   await setCheckbox("Convert Rich Text on Paste", true);
   await closePrefs();
@@ -315,7 +352,11 @@ console.log("=== rich paste ===");
   await paste("<p>After</p>", "After");
   check((await lines()).includes("After"), "the paste inserted content before undo");
   await key("KeyZ", "z", { ctrlKey: true });
-  check((await lines()).trim() === "Before", "one undo restores the buffer", JSON.stringify(await lines()));
+  check(
+    (await lines()).trim() === "Before",
+    "one undo restores the buffer",
+    JSON.stringify(await lines()),
+  );
 
   await openSection("Image");
   const select = await evaluate(`(() => {
@@ -325,7 +366,11 @@ console.log("=== rich paste ===");
     const control = found.querySelector('select');
     return JSON.stringify({ value: control.value, options: [...control.options].map((option) => option.value) });
   })()`);
-  check(select !== "missing" && select.includes('"download"') && select.includes('"url"'), "the image preference exposes both values", select);
+  check(
+    select !== "missing" && select.includes('"download"') && select.includes('"url"'),
+    "the image preference exposes both values",
+    select,
+  );
   await closePrefs();
 }
 

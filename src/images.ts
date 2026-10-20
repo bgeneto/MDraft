@@ -104,7 +104,9 @@ async function saveClipboard(blob: Blob, ctx: ImageContext): Promise<void> {
   if (options.rule === "keepOriginal") {
     // A clipboard bitmap has no original location to keep.
     options.rule = "assetsFolder";
-    ctx.notify("Clipboard images have no original location; saved to the document's assets folder.");
+    ctx.notify(
+      "Clipboard images have no original location; saved to the document's assets folder.",
+    );
   }
 
   const data = await blobToBase64(blob);
@@ -199,10 +201,7 @@ export function handleImagePaste(event: ClipboardEvent, ctx: ImageContext): bool
  * Import dropped files. Returns the paths that were NOT images, so the caller
  * can still open a dropped document.
  */
-export async function handleImageDrop(
-  paths: string[],
-  ctx: ImageContext,
-): Promise<string[]> {
+export async function handleImageDrop(paths: string[], ctx: ImageContext): Promise<string[]> {
   const images = paths.filter(isImagePath);
   if (images.length === 0) return paths;
   if (!ctx.settings.imageApplyLocal) return paths.filter((p) => !isImagePath(p));

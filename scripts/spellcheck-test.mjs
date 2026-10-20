@@ -96,13 +96,25 @@ if (english) {
     return { x: rect.left + 8, y: rect.top + rect.height / 2 };
   })()`);
   await send("Input.dispatchMouseEvent", {
-    type: "mousePressed", x: point.x, y: point.y, button: "left", buttons: 1, clickCount: 1,
+    type: "mousePressed",
+    x: point.x,
+    y: point.y,
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
   });
   await send("Input.dispatchMouseEvent", {
-    type: "mouseReleased", x: point.x, y: point.y, button: "left", buttons: 0, clickCount: 1,
+    type: "mouseReleased",
+    x: point.x,
+    y: point.y,
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
   });
   await send("Input.insertText", { text: "recieve " });
-  const inserted = await evaluate(`(document.querySelector('.cm-content')?.textContent ?? '').slice(0, 40)`);
+  const inserted = await evaluate(
+    `(document.querySelector('.cm-content')?.textContent ?? '').slice(0, 40)`,
+  );
 
   let marks = 0;
   for (let attempt = 0; attempt < 20 && marks === 0; attempt++) {

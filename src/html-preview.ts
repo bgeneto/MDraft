@@ -11,11 +11,7 @@
 //! parent still treats every message as untrusted.
 
 import * as api from "./api";
-import {
-  htmlSourceRange,
-  type HtmlSelection,
-  type HtmlTextFragment,
-} from "./html-source-map";
+import { htmlSourceRange, type HtmlSelection, type HtmlTextFragment } from "./html-source-map";
 import bridgeTemplate from "./html-bridge.js?raw";
 
 export type { HtmlSelection, HtmlTextFragment } from "./html-source-map";
@@ -324,11 +320,7 @@ function bridgeInsertOffset(document: any, source: string): number {
     const first = Array.isArray(head.childNodes)
       ? head.childNodes.find((node: any) => node?.tagName)
       : null;
-    if (
-      first?.tagName === "meta" &&
-      first.sourceCodeLocation?.endOffset &&
-      isCharsetMeta(first)
-    ) {
+    if (first?.tagName === "meta" && first.sourceCodeLocation?.endOffset && isCharsetMeta(first)) {
       return first.sourceCodeLocation.endOffset;
     }
     return start;
@@ -343,8 +335,7 @@ function isCharsetMeta(node: any): boolean {
   return attrs.some(
     (attr) =>
       attr.name.toLowerCase() === "charset" ||
-      (attr.name.toLowerCase() === "http-equiv" &&
-        attr.value.toLowerCase() === "content-type"),
+      (attr.name.toLowerCase() === "http-equiv" && attr.value.toLowerCase() === "content-type"),
   );
 }
 
@@ -430,9 +421,7 @@ export function createHtmlPreview(
   let htmlFragments: HtmlTextFragment[] = [];
 
   const onMessage = (event: MessageEvent) => {
-    const data = event.data as
-      | { __mdraft?: string; type?: string; [key: string]: unknown }
-      | null;
+    const data = event.data as { __mdraft?: string; type?: string; [key: string]: unknown } | null;
     if (!data || typeof data !== "object") return;
 
     const frame =
@@ -524,10 +513,7 @@ export function createHtmlPreview(
 
   function postTo(frame: FrameState, payload: Record<string, unknown>): void {
     try {
-      frame.frame.contentWindow?.postMessage(
-        { ...payload, __mdraft: frame.token },
-        "*",
-      );
+      frame.frame.contentWindow?.postMessage({ ...payload, __mdraft: frame.token }, "*");
     } catch {
       /* the frame is going away */
     }
@@ -544,7 +530,7 @@ export function createHtmlPreview(
               Number.isFinite((entry as Anchor).top),
           )
           .slice(0, 20000)
-      : currentLayout?.anchors ?? [];
+      : (currentLayout?.anchors ?? []);
     const top = Number(data.top);
     const height = Number(data.height);
     const client = Number(data.client);
@@ -558,11 +544,7 @@ export function createHtmlPreview(
     };
   }
 
-  function makeFrame(
-    url: string,
-    token: string,
-    fragments: HtmlTextFragment[],
-  ): FrameState {
+  function makeFrame(url: string, token: string, fragments: HtmlTextFragment[]): FrameState {
     const frame = document.createElement("iframe");
     frame.className = "html-preview-frame pending";
     frame.title = "HTML preview";

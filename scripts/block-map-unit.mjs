@@ -117,10 +117,8 @@ console.log("\n=== attribute substitution inside one text node ===");
 
   // Guard against a substituted word jumping ahead to a later repeated occurrence
   // in the same paragraph.
-  const repeatSource =
-    "Um parágrafo com {atributo} que não deve repetir substituído no fim.";
-  const repeatDom =
-    "Um parágrafo com substituído que não deve repetir substituído no fim.";
+  const repeatSource = "Um parágrafo com {atributo} que não deve repetir substituído no fim.";
+  const repeatDom = "Um parágrafo com substituído que não deve repetir substituído no fim.";
   const firstSub = selectWordInAligned(repeatSource, [repeatDom], 0, "substituído", 0);
   const middleQue = selectWordInAligned(repeatSource, [repeatDom], 0, "que", 0);
   const secondSub = selectWordInAligned(repeatSource, [repeatDom], 0, "substituído", 1);
@@ -170,12 +168,7 @@ console.log("\n=== smart punctuation, numbered prefixes and inline calls ===");
 
   const multiNodeSource = "NOTE: A note admonition with prose after the label.";
   const multiNodeDom = ["Note", "A note admonition with prose after the label."];
-  const afterUnmatchedNode = selectWordInAligned(
-    multiNodeSource,
-    multiNodeDom,
-    1,
-    "admonition",
-  );
+  const afterUnmatchedNode = selectWordInAligned(multiNodeSource, multiNodeDom, 1, "admonition");
   check(
     afterUnmatchedNode?.slice === "admonition",
     "an unmatched leading text node does not abort the rest of the block",
