@@ -41,7 +41,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
-        .on_menu_event(|app, event| menu::on_event(app, event))
+        .on_menu_event(menu::on_event)
         .setup(|app| {
             let state = AppState::load(app.handle());
             // The menu is built after the state is managed so its check marks

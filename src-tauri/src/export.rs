@@ -604,12 +604,11 @@ fn prepare<R: Runtime>(
     }
     // Pandoc would happily read the document and then truncate it, because the
     // input arrives on stdin and the output would be the same file.
-    if let Some(input) = &request.input_path {
-        if !input.is_empty() && same_file(input, &request.output_path) {
-            return Err(
-                "The export target is the document you are editing. Choose another name.".into(),
-            );
-        }
+    if let Some(input) = &request.input_path
+        && !input.is_empty()
+        && same_file(input, &request.output_path)
+    {
+        return Err("The export target is the document you are editing. Choose another name.".into());
     }
 
     let values = Placeholders {

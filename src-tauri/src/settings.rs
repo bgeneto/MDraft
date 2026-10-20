@@ -789,9 +789,11 @@ mod tests {
 
     #[test]
     fn auto_close_settings_round_trip() {
-        let mut settings = Settings::default();
-        settings.auto_close_pairs = false;
-        settings.auto_close_tags = false;
+        let settings = Settings {
+            auto_close_pairs: false,
+            auto_close_tags: false,
+            ..Settings::default()
+        };
         let json = serde_json::to_string(&settings).unwrap();
         let back: Settings = serde_json::from_str(&json).unwrap();
         assert!(!back.auto_close_pairs);
@@ -800,9 +802,11 @@ mod tests {
 
     #[test]
     fn rich_paste_settings_round_trip() {
-        let mut settings = Settings::default();
-        settings.rich_paste = false;
-        settings.rich_paste_images = "url".into();
+        let settings = Settings {
+            rich_paste: false,
+            rich_paste_images: "url".into(),
+            ..Settings::default()
+        };
         let json = serde_json::to_string(&settings).unwrap();
         let back: Settings = serde_json::from_str(&json).unwrap();
         assert!(!back.rich_paste);
@@ -811,8 +815,10 @@ mod tests {
 
     #[test]
     fn editor_line_height_round_trips_as_a_name() {
-        let mut settings = Settings::default();
-        settings.editor_line_height = "compact".into();
+        let settings = Settings {
+            editor_line_height: "compact".into(),
+            ..Settings::default()
+        };
         let json = serde_json::to_string(&settings).unwrap();
         assert!(json.contains(r#""editorLineHeight":"compact""#));
         let back: Settings = serde_json::from_str(&json).unwrap();
@@ -928,14 +934,16 @@ mod tests {
 
     #[test]
     fn remembered_tabs_round_trip() {
-        let mut settings = Settings::default();
-        settings.on_launch = "tabs".into();
-        settings.last_tabs = vec![
-            "C:/Docs/a.md".into(),
-            "C:/Docs/b.md".into(),
-            "C:/Docs/c.md".into(),
-        ];
-        settings.last_active_tab = Some("C:/Docs/b.md".into());
+        let settings = Settings {
+            on_launch: "tabs".into(),
+            last_tabs: vec![
+                "C:/Docs/a.md".into(),
+                "C:/Docs/b.md".into(),
+                "C:/Docs/c.md".into(),
+            ],
+            last_active_tab: Some("C:/Docs/b.md".into()),
+            ..Settings::default()
+        };
 
         let json = serde_json::to_string(&settings).unwrap();
         let back: Settings = serde_json::from_str(&json).unwrap();

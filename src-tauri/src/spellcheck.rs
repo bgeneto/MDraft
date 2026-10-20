@@ -74,7 +74,7 @@ fn accepted_form(word: &str) -> Option<String> {
         }
         normalized.push(ch);
     }
-    if letters < 2 || internal_capital || (uppers == letters && letters >= 2) {
+    if letters < 2 || internal_capital || uppers == letters {
         return None;
     }
     if ALLOWED.iter().any(|entry| entry.eq_ignore_ascii_case(&normalized)) {
@@ -128,9 +128,9 @@ fn mask_uncheckable(text: &str) -> String {
     blank_front_matter(&mut bytes);
     blank_fences(&mut bytes);
     blank_delimited(&mut bytes, b'`', b'`', false);
-    blank_pattern(&mut bytes, |bytes, i| match_url(bytes, i));
-    blank_pattern(&mut bytes, |bytes, i| match_math(bytes, i));
-    blank_pattern(&mut bytes, |bytes, i| match_html(bytes, i));
+    blank_pattern(&mut bytes, match_url);
+    blank_pattern(&mut bytes, match_math);
+    blank_pattern(&mut bytes, match_html);
     String::from_utf8(bytes).unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned())
 }
 
@@ -263,12 +263,12 @@ fn blank_delimited(bytes: &mut [u8], open: u8, close: u8, multiline: bool) {
 fn blank_pattern(bytes: &mut [u8], mut matcher: impl FnMut(&[u8], usize) -> Option<usize>) {
     let mut i = 0usize;
     while i < bytes.len() {
-        if let Some(end) = matcher(bytes, i) {
-            if end > i {
-                blank_range(bytes, i, end);
-                i = end;
-                continue;
-            }
+        if let Some(end) = matcher(bytes, i)
+            && end > i
+        {
+            blank_range(bytes, i, end);
+            i = end;
+            continue;
         }
         i += 1;
     }
@@ -685,10 +685,10 @@ mod engine {
             if buf[0].is_null() {
                 break;
             }
-            if let Ok(text) = unsafe { buf[0].to_string() } {
-                if !text.is_empty() {
-                    out.push(text);
-                }
+            if let Ok(text) = unsafe { buf[0].to_string() }
+                && !text.is_empty()
+            {
+                out.push(text);
             }
             unsafe { CoTaskMemFree(Some(buf[0].as_ptr() as *const std::ffi::c_void)) };
             if out.len() >= 32 {
