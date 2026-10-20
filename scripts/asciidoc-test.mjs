@@ -442,6 +442,7 @@ console.log("\n=== word-level sync ===");
     ["atravessa", "a word on a hard-wrapped line"],
     ["Planalto", "link text"],
     ["Analista", "a table cell"],
+    ["localizado", "a word after an attribute substitution"],
   ]) {
     const selected = await selectWord(word);
     await sleep(160);
@@ -449,9 +450,41 @@ console.log("\n=== word-level sync ===");
     check(selected === word && result === word, label, `${selected} -> ${result}`);
   }
 
+  const beforeSubSelected = await evaluate(`(() => {
+    const p = [...document.querySelectorAll("#preview p")].find((el) =>
+      (el.textContent ?? "").includes("substituído"),
+    );
+    const node = p?.firstChild;
+    if (!node || node.nodeType !== Node.TEXT_NODE) return null;
+    const word = "parágrafo";
+    const at = node.data.indexOf(word);
+    if (at < 0) return null;
+    const range = document.createRange();
+    range.setStart(node, at);
+    range.setEnd(node, at + word.length);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return selection.toString();
+  })()`);
+  await sleep(160);
+  const beforeSubPainted = await painted();
+  check(
+    beforeSubSelected === "parágrafo" && beforeSubPainted === "parágrafo",
+    "a word before an attribute substitution in the same paragraph",
+    `${beforeSubSelected} -> ${beforeSubPainted}`,
+  );
+
   await selectWord("substituído");
   await sleep(160);
-  check((await painted()) === null, "an attribute substitution paints nothing", String(await painted()));
+  const subFallback = await painted();
+  check(
+    typeof subFallback === "string" &&
+      subFallback.includes("Um parágrafo com {atributo}") &&
+      subFallback.includes("localizado pelo texto"),
+    "an attribute substitution falls back to its paragraph",
+    String(subFallback),
+  );
 
   const includeAnchored = await evaluate(`(() => {
     const walker = document.createTreeWalker(document.getElementById("preview"), NodeFilter.SHOW_TEXT);
@@ -463,9 +496,19 @@ console.log("\n=== word-level sync ===");
   })()`);
   check(includeAnchored === false, "included content has no block range", String(includeAnchored));
 
-  // Source -> preview, from the top where the first lines are visible.
+  // Source -> preview, and admonition word sync near the top of the document.
   await evaluate(`document.querySelector('.cm-scroller').scrollTop = 0`);
   await sleep(300);
+
+  const admonitionWord = await selectWord("admonition");
+  await sleep(160);
+  const admonitionPainted = await painted();
+  check(
+    admonitionWord === "admonition" && admonitionPainted === "admonition",
+    "a word inside a NOTE admonition",
+    `${admonitionWord} -> ${admonitionPainted}`,
+  );
+
   const beforePreview = await evaluate(`document.getElementById("preview-pane").scrollTop`);
   const point = await evaluate(`(() => {
     const walker = document.createTreeWalker(document.querySelector(".cm-content"), NodeFilter.SHOW_TEXT);
@@ -504,6 +547,61 @@ console.log("\n=== word-level sync ===");
   } else {
     check(false, "a source word paints the preview", "the title word is not on screen");
     check(false, "painting the preview does not scroll it", "the title word is not on screen");
+  }
+
+  const strongDrag = await evaluate(`(() => {
+    const line = [...document.querySelectorAll(".cm-line")].find((el) =>
+      (el.textContent ?? "").includes("*strong*"),
+    );
+    if (!line) return null;
+    const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+    let startBox = null;
+    let endBox = null;
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const text = node.data;
+      if (!startBox && text.includes("*")) {
+        const at = text.indexOf("*");
+        const r = document.createRange();
+        r.setStart(node, at);
+        r.setEnd(node, at + 1);
+        const b = r.getBoundingClientRect();
+        if (b.width > 0) startBox = b;
+      }
+      if (text.includes("strong")) {
+        const at = text.indexOf("strong") + 6;
+        const r = document.createRange();
+        r.setStart(node, Math.max(0, at - 1));
+        r.setEnd(node, at);
+        const b = r.getBoundingClientRect();
+        if (b.width > 0) endBox = b;
+      }
+    }
+    if (!startBox || !endBox) return null;
+    return {
+      x1: startBox.left + 1,
+      y1: startBox.top + startBox.height / 2,
+      x2: endBox.right + 4,
+      y2: endBox.top + endBox.height / 2,
+    };
+  })()`);
+  if (strongDrag) {
+    await send("Input.dispatchMouseEvent", { type: "mousePressed", x: strongDrag.x1, y: strongDrag.y1, button: "left", clickCount: 1 });
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: strongDrag.x2, y: strongDrag.y2, button: "left", buttons: 1 });
+    await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: strongDrag.x2, y: strongDrag.y2, button: "left", clickCount: 1 });
+    await sleep(260);
+    const strongRanges = await evaluate(`(() => {
+      const highlight =
+        CSS.highlights?.get("mdraft-sync") ??
+        CSS.highlights?.get("mdraft-sync-peak");
+      return highlight ? [...highlight].map((range) => range.toString()) : null;
+    })()`);
+    check(
+      Array.isArray(strongRanges) && strongRanges.join(" ").includes("strong"),
+      "a source selection including *strong* markup paints the preview word",
+      JSON.stringify(strongRanges),
+    );
+  } else {
+    check(false, "a source selection including *strong* markup paints the preview word", "*strong* not on screen");
   }
 }
 

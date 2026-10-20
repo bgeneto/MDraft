@@ -65,24 +65,62 @@ interface BoundText {
   blockStart: number;
 }
 
-interface BlockEntry {
+interface BlockNodeEntry {
+  node: Text;
+  folded: FoldedText;
+  spans: BlockNodeSpan[];
+}
+
+export interface FoldedText {
+  plain: string;
+  at: number[];
+  rawLength: number;
+}
+
+export interface BlockNodeSpan {
+  /** Raw start offset in the text node (inclusive). */
+  dom0: number;
+  /** Raw end offset in the text node (exclusive). */
+  dom1: number;
+  /** Folded start index in `nodeFolded.plain`. */
+  nodeFolded0: number;
+  /** Folded end index in `nodeFolded.plain` (exclusive). */
+  nodeFolded1: number;
+  /** Folded start index in `blockFolded.plain`. */
+  blockFolded0: number;
+  /** Folded end index in `blockFolded.plain` (exclusive). */
+  blockFolded1: number;
+  /** Raw start offset in `map.source` (inclusive). */
   src0: number;
+  /** Raw end offset in `map.source` (exclusive). */
   src1: number;
+}
+
+export interface AlignedNode {
+  text: string;
+  folded: FoldedText;
+  spans: BlockNodeSpan[];
+}
+
+export interface AlignedBlock {
+  src0: number;
+  rawLength: number;
+  folded: FoldedText;
+  nodes: AlignedNode[];
 }
 
 /**
  * A block's text located against its source, in document order.
  *
- * `plain`/`at` are the folded block source: whitespace runs collapsed to one
- * space, with the raw index of every folded character. Folding is what lets a
- * hard-wrapped paragraph compare as one line while every offset stays valid.
+ * `folded` is the whitespace-collapsed and quote-normalized block source, with
+ * the raw index of every folded character. Each DOM `Text` node maps to one or
+ * more `BlockNodeSpan`s (one for a whole-node match, several when an internal
+ * substitution or typographic replacement split the node into word runs).
  */
 interface BlockLayout {
-  plain: string;
-  at: number[];
-  nodes: Map<Text, BlockEntry>;
-  /** A node could not be found; the rest of the block is not trusted. */
-  failed: boolean;
+  folded: FoldedText;
+  nodes: Map<Text, BlockNodeEntry>;
+  ordered: BlockNodeEntry[];
   src0: number;
 }
 
@@ -93,12 +131,23 @@ export interface WordMap {
   readonly text: WeakMap<Text, BoundText>;
   readonly fragNodes: Text[][];
   readonly blockNodes: Text[][];
+  readonly blockAllNodes: Text[][];
   readonly blockLayouts: (BlockLayout | null | undefined)[];
 }
 
 // ---------------------------------------------------------------------------
 // Binding
 // ---------------------------------------------------------------------------
+
+/**
+ * Subtrees inside an anchored block whose DOM text is generated or non-prose
+ * (rendered formulas, footnote markers, admonition icon cells). Their text
+ * nodes still record their owning `block` index for the block fallback, but
+ * they are excluded from `blockLayout` so they never desynchronize the prose
+ * cursor.
+ */
+const NON_PROSE_SELECTOR =
+  'math, .math-inline, .math-display, .katex, [data-stem], sup[role="doc-noteref"], sup[role="doc-backlink"], .admonitionblock td.icon';
 
 function walkTextNodes(root: Element, visit: (node: Text, start: number) => void): void {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -127,6 +176,7 @@ export function bindWordMap(container: HTMLElement, spec: MapSpec): WordMap {
     text: new WeakMap(),
     fragNodes: fragments.map(() => []),
     blockNodes: blocks.map(() => []),
+    blockAllNodes: blocks.map(() => []),
     blockLayouts: new Array(blocks.length),
   };
 
@@ -146,11 +196,17 @@ export function bindWordMap(container: HTMLElement, spec: MapSpec): WordMap {
     const index = Number(element.dataset.b);
     if (!Number.isInteger(index) || index < 0 || index >= blocks.length) continue;
     walkTextNodes(element, (node, start) => {
-      map.blockNodes[index].push(node);
+      // A descendant with its own `[data-b]` owns its subtree; keep each text
+      // node attached only to its innermost block.
+      if (node.parentElement?.closest("[data-b]") !== element) return;
+      map.blockAllNodes[index].push(node);
       const record = map.text.get(node) ?? { fragment: -1, fragStart: 0, block: -1, blockStart: 0 };
       record.block = index;
       record.blockStart = start;
       map.text.set(node, record);
+      const nonProse = node.parentElement?.closest(NON_PROSE_SELECTOR);
+      if (nonProse && element.contains(nonProse)) return;
+      map.blockNodes[index].push(node);
     });
   }
 
@@ -340,9 +396,20 @@ function fragmentRangeFor(
 // ---------------------------------------------------------------------------
 
 const WHITESPACE = /\s/;
+const WORD_RE = /[\p{L}\p{N}_]+(?:['\u00ad][\p{L}\p{N}_]+)*/gu;
+const WORD_LOOKAHEAD = 24;
 
-/** Collapse whitespace runs, keeping the raw index of every folded character. */
-function foldWhitespace(text: string): { plain: string; at: number[] } {
+function normalizeFoldChar(ch: string): string {
+  if (ch === "\u2018" || ch === "\u2019" || ch === "\u02bc") return "'";
+  if (ch === "\u201c" || ch === "\u201d") return '"';
+  return ch;
+}
+
+/**
+ * Collapse whitespace runs and normalize 1-to-1 typographic quotes, keeping the
+ * raw index where every folded character began.
+ */
+export function foldWhitespace(text: string): FoldedText {
   let plain = "";
   const at: number[] = [];
   let i = 0;
@@ -354,10 +421,508 @@ function foldWhitespace(text: string): { plain: string; at: number[] } {
       continue;
     }
     at.push(i);
-    plain += text[i];
+    plain += normalizeFoldChar(text[i]);
     i += 1;
   }
-  return { plain, at };
+  return { plain, at, rawLength: text.length };
+}
+
+function foldedCharRawEnd(folded: FoldedText, k: number): number {
+  if (k < 0) return 0;
+  if (k >= folded.plain.length) return folded.rawLength;
+  if (folded.plain[k] === " ") {
+    return k + 1 < folded.at.length ? folded.at[k + 1] : folded.rawLength;
+  }
+  return folded.at[k] + 1;
+}
+
+function largestAtOrBefore(
+  at: readonly number[],
+  low: number,
+  high: number,
+  target: number,
+): number {
+  let lo = low;
+  let hi = high - 1;
+  let best = low;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (at[mid] <= target) {
+      best = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return best;
+}
+
+function mapFoldedIndex(
+  index: number,
+  from0: number,
+  from1: number,
+  to0: number,
+  to1: number,
+): number {
+  const rel = Math.max(0, index - from0);
+  const fromLen = Math.max(1, from1 - from0);
+  const toLen = Math.max(1, to1 - to0);
+  if (fromLen === toLen) {
+    return Math.min(to1 - 1, to0 + rel);
+  }
+  const scaled = Math.floor((rel * toLen) / fromLen);
+  return Math.min(to1 - 1, to0 + scaled);
+}
+
+function makeSpan(
+  nodeFolded: FoldedText,
+  blockFolded: FoldedText,
+  blockSrc0: number,
+  nodeFolded0: number,
+  nodeFolded1: number,
+  blockFolded0: number,
+  blockFolded1: number,
+): BlockNodeSpan {
+  return {
+    dom0: nodeFolded.at[nodeFolded0] ?? 0,
+    dom1: foldedCharRawEnd(nodeFolded, nodeFolded1 - 1),
+    nodeFolded0,
+    nodeFolded1,
+    blockFolded0,
+    blockFolded1,
+    src0: blockSrc0 + (blockFolded.at[blockFolded0] ?? 0),
+    src1: blockSrc0 + foldedCharRawEnd(blockFolded, blockFolded1 - 1),
+  };
+}
+
+/**
+ * Translate a raw character offset in a DOM `Text` node to its raw source
+ * offset, routing through both whitespace-folded offset tables.
+ */
+export function rawNodeOffsetToSource(
+  nodeFolded: FoldedText,
+  blockFolded: FoldedText,
+  rawOffset: number,
+  bias: "start" | "end" = "start",
+  span?: BlockNodeSpan,
+  blockSrc0 = 0,
+): number {
+  const activeSpan: BlockNodeSpan = span ?? {
+    dom0: 0,
+    dom1: nodeFolded.rawLength,
+    nodeFolded0: 0,
+    nodeFolded1: nodeFolded.plain.length,
+    blockFolded0: 0,
+    blockFolded1: blockFolded.plain.length,
+    src0: blockSrc0,
+    src1: blockSrc0 + blockFolded.rawLength,
+  };
+  if (
+    activeSpan.nodeFolded1 <= activeSpan.nodeFolded0 ||
+    activeSpan.blockFolded1 <= activeSpan.blockFolded0
+  ) {
+    return activeSpan.src0;
+  }
+  if (bias === "start") {
+    if (rawOffset <= activeSpan.dom0) return activeSpan.src0;
+    if (rawOffset >= activeSpan.dom1) return activeSpan.src1;
+    let nIndex = largestAtOrBefore(
+      nodeFolded.at,
+      activeSpan.nodeFolded0,
+      activeSpan.nodeFolded1,
+      rawOffset,
+    );
+    if (
+      nodeFolded.plain[nIndex] === " " &&
+      nIndex + 1 < activeSpan.nodeFolded1
+    ) {
+      nIndex += 1;
+    }
+    const bIndex = mapFoldedIndex(
+      nIndex,
+      activeSpan.nodeFolded0,
+      activeSpan.nodeFolded1,
+      activeSpan.blockFolded0,
+      activeSpan.blockFolded1,
+    );
+    return blockSrc0 + blockFolded.at[bIndex];
+  }
+
+  if (rawOffset <= activeSpan.dom0) return activeSpan.src0;
+  if (rawOffset >= activeSpan.dom1) return activeSpan.src1;
+  const lastChar = Math.max(activeSpan.dom0, rawOffset - 1);
+  let nIndex = largestAtOrBefore(
+    nodeFolded.at,
+    activeSpan.nodeFolded0,
+    activeSpan.nodeFolded1,
+    lastChar,
+  );
+  if (
+    nodeFolded.plain[nIndex] === " " &&
+    nIndex > activeSpan.nodeFolded0
+  ) {
+    nIndex -= 1;
+  }
+  const bIndex = mapFoldedIndex(
+    nIndex,
+    activeSpan.nodeFolded0,
+    activeSpan.nodeFolded1,
+    activeSpan.blockFolded0,
+    activeSpan.blockFolded1,
+  );
+  return blockSrc0 + foldedCharRawEnd(blockFolded, bIndex);
+}
+
+/**
+ * Inverse of `rawNodeOffsetToSource`: translate a raw source offset back to a
+ * raw character offset inside the DOM `Text` node.
+ */
+export function sourceOffsetToRawNode(
+  nodeFolded: FoldedText,
+  blockFolded: FoldedText,
+  sourceOffset: number,
+  bias: "start" | "end" = "start",
+  span?: BlockNodeSpan,
+  blockSrc0 = 0,
+): number {
+  const activeSpan: BlockNodeSpan = span ?? {
+    dom0: 0,
+    dom1: nodeFolded.rawLength,
+    nodeFolded0: 0,
+    nodeFolded1: nodeFolded.plain.length,
+    blockFolded0: 0,
+    blockFolded1: blockFolded.plain.length,
+    src0: blockSrc0,
+    src1: blockSrc0 + blockFolded.rawLength,
+  };
+  if (
+    activeSpan.nodeFolded1 <= activeSpan.nodeFolded0 ||
+    activeSpan.blockFolded1 <= activeSpan.blockFolded0
+  ) {
+    return activeSpan.dom0;
+  }
+  if (bias === "start") {
+    if (sourceOffset <= activeSpan.src0) return activeSpan.dom0;
+    if (sourceOffset >= activeSpan.src1) return activeSpan.dom1;
+    const local = sourceOffset - blockSrc0;
+    let bIndex = largestAtOrBefore(
+      blockFolded.at,
+      activeSpan.blockFolded0,
+      activeSpan.blockFolded1,
+      local,
+    );
+    if (
+      blockFolded.plain[bIndex] === " " &&
+      bIndex + 1 < activeSpan.blockFolded1
+    ) {
+      bIndex += 1;
+    }
+    const nIndex = mapFoldedIndex(
+      bIndex,
+      activeSpan.blockFolded0,
+      activeSpan.blockFolded1,
+      activeSpan.nodeFolded0,
+      activeSpan.nodeFolded1,
+    );
+    return nodeFolded.at[nIndex];
+  }
+
+  if (sourceOffset <= activeSpan.src0) return activeSpan.dom0;
+  if (sourceOffset >= activeSpan.src1) return activeSpan.dom1;
+  const localLast = Math.max(
+    activeSpan.src0 - blockSrc0,
+    sourceOffset - 1 - blockSrc0,
+  );
+  let bIndex = largestAtOrBefore(
+    blockFolded.at,
+    activeSpan.blockFolded0,
+    activeSpan.blockFolded1,
+    localLast,
+  );
+  if (
+    blockFolded.plain[bIndex] === " " &&
+    bIndex > activeSpan.blockFolded0
+  ) {
+    bIndex -= 1;
+  }
+  const nIndex = mapFoldedIndex(
+    bIndex,
+    activeSpan.blockFolded0,
+    activeSpan.blockFolded1,
+    activeSpan.nodeFolded0,
+    activeSpan.nodeFolded1,
+  );
+  return foldedCharRawEnd(nodeFolded, nIndex);
+}
+
+interface FoldedWordToken {
+  f0: number;
+  f1: number;
+  norm: string;
+}
+
+function tokenizeFoldedWords(plain: string, startOffset = 0): FoldedWordToken[] {
+  const tokens: FoldedWordToken[] = [];
+  WORD_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = WORD_RE.exec(plain)) !== null) {
+    const f0 = startOffset + match.index;
+    const f1 = f0 + match[0].length;
+    tokens.push({
+      f0,
+      f1,
+      norm: match[0].replace(/\u00ad/g, ""),
+    });
+  }
+  return tokens;
+}
+
+/**
+ * Align a single node's words in order against the remaining block source words
+ * when whole-node `indexOf` failed (e.g. because of `{attribute}` substitution,
+ * `--` -> `—`, `...` -> `…`, numbered headings, or stripped `#func(...)` calls).
+ */
+function alignNodeWords(
+  nodeFolded: FoldedText,
+  blockFolded: FoldedText,
+  blockSrc0: number,
+  cursor: number,
+): { spans: BlockNodeSpan[]; nextCursor: number } {
+  const nodeWords = tokenizeFoldedWords(nodeFolded.plain, 0);
+  const sourceWords = tokenizeFoldedWords(
+    blockFolded.plain.slice(cursor),
+    cursor,
+  );
+  if (nodeWords.length === 0 || sourceWords.length === 0) {
+    return { spans: [], nextCursor: cursor };
+  }
+
+  const runLength = (wIdx: number, sIdx: number): number => {
+    let k = 0;
+    while (
+      wIdx + k < nodeWords.length &&
+      sIdx + k < sourceWords.length &&
+      nodeWords[wIdx + k].norm === sourceWords[sIdx + k].norm
+    ) {
+      k += 1;
+    }
+    return k;
+  };
+
+  const spans: BlockNodeSpan[] = [];
+  let sCursor = 0;
+  let nextCursor = cursor;
+
+  for (let w = 0; w < nodeWords.length; w += 1) {
+    const word = nodeWords[w];
+    const windowEnd = Math.min(sourceWords.length, sCursor + WORD_LOOKAHEAD);
+    let bestCand = -1;
+    let bestRun = 0;
+    let matchesInWindow = 0;
+
+    for (let s = sCursor; s < windowEnd; s += 1) {
+      if (sourceWords[s].norm !== word.norm) continue;
+      matchesInWindow += 1;
+      const run = runLength(w, s);
+      if (run > bestRun) {
+        bestRun = run;
+        bestCand = s;
+      }
+    }
+    if (bestCand < 0) continue;
+
+    if (bestCand > sCursor) {
+      // Guard 1: never jump past a closer source word that matches the next DOM
+      // word with an equal or longer consecutive run (prevents a substituted
+      // word from jumping to a later repeated occurrence over the real text).
+      if (w + 1 < nodeWords.length) {
+        const nextWord = nodeWords[w + 1];
+        let bypassedCloserNext = false;
+        for (let alt = sCursor; alt < bestCand; alt += 1) {
+          if (
+            sourceWords[alt].norm === nextWord.norm &&
+            runLength(w + 1, alt) >= bestRun
+          ) {
+            bypassedCloserNext = true;
+            break;
+          }
+        }
+        if (bypassedCloserNext) continue;
+      }
+      // Guard 2: a single-word jump over skipped source tokens requires a word
+      // of at least 3 characters that is unique in the lookahead window.
+      if (bestRun === 1 && (word.norm.length < 3 || matchesInWindow > 1)) {
+        continue;
+      }
+    }
+
+    const srcWord = sourceWords[bestCand];
+    const prev = spans[spans.length - 1];
+    if (
+      prev &&
+      prev.nodeFolded1 <= word.f0 &&
+      prev.blockFolded1 <= srcWord.f0 &&
+      word.f1 - word.f0 === srcWord.f1 - srcWord.f0 &&
+      nodeFolded.plain.slice(prev.nodeFolded1, word.f0) ===
+        blockFolded.plain.slice(prev.blockFolded1, srcWord.f0)
+    ) {
+      prev.nodeFolded1 = word.f1;
+      prev.blockFolded1 = srcWord.f1;
+      prev.dom1 = foldedCharRawEnd(nodeFolded, word.f1 - 1);
+      prev.src1 = blockSrc0 + foldedCharRawEnd(blockFolded, srcWord.f1 - 1);
+    } else {
+      spans.push(
+        makeSpan(
+          nodeFolded,
+          blockFolded,
+          blockSrc0,
+          word.f0,
+          word.f1,
+          srcWord.f0,
+          srcWord.f1,
+        ),
+      );
+    }
+
+    sCursor = bestCand + 1;
+    nextCursor = srcWord.f1;
+  }
+
+  return { spans, nextCursor };
+}
+
+/**
+ * Align a block's text nodes against its raw source slice using the two-tier
+ * strategy: whole-node folded match first, per-node word-run alignment second,
+ * without aborting the remaining nodes in the block.
+ */
+export function alignBlockNodes(
+  blockRaw: string,
+  blockSrc0: number,
+  nodeTexts: readonly string[],
+): AlignedBlock {
+  const blockFolded = foldWhitespace(blockRaw);
+  const alignedNodes: AlignedNode[] = [];
+  let cursor = 0;
+
+  for (const text of nodeTexts) {
+    const nodeFolded = foldWhitespace(text);
+    let nf0 = 0;
+    while (nf0 < nodeFolded.plain.length && nodeFolded.plain[nf0] === " ") {
+      nf0 += 1;
+    }
+    let nf1 = nodeFolded.plain.length;
+    while (nf1 > nf0 && nodeFolded.plain[nf1 - 1] === " ") {
+      nf1 -= 1;
+    }
+    if (nf0 >= nf1) {
+      alignedNodes.push({ text, folded: nodeFolded, spans: [] });
+      continue;
+    }
+
+    const needle = nodeFolded.plain.slice(nf0, nf1);
+    const found = blockFolded.plain.indexOf(needle, cursor);
+    if (found >= 0 && (needle.length >= 4 || found - cursor <= 48)) {
+      const bf0 = found;
+      const bf1 = found + needle.length;
+      const span = makeSpan(
+        nodeFolded,
+        blockFolded,
+        blockSrc0,
+        nf0,
+        nf1,
+        bf0,
+        bf1,
+      );
+      alignedNodes.push({ text, folded: nodeFolded, spans: [span] });
+      cursor = bf1;
+      continue;
+    }
+
+    const { spans, nextCursor } = alignNodeWords(
+      nodeFolded,
+      blockFolded,
+      blockSrc0,
+      cursor,
+    );
+    alignedNodes.push({ text, folded: nodeFolded, spans });
+    cursor = nextCursor;
+  }
+
+  return {
+    src0: blockSrc0,
+    rawLength: blockRaw.length,
+    folded: blockFolded,
+    nodes: alignedNodes,
+  };
+}
+
+/**
+ * Map a selection `[start, end)` inside one aligned node to its source range,
+ * or null when the selection overlaps no mapped span in that node.
+ */
+export function alignedNodeSourceRange(
+  block: AlignedBlock,
+  nodeIndex: number,
+  start: number,
+  end: number,
+): { from: number; to: number } | null {
+  const entry = block.nodes[nodeIndex];
+  if (!entry || entry.spans.length === 0) return null;
+  return spansSourceRange(entry.folded, entry.spans, block.folded, block.src0, start, end);
+}
+
+function spansSourceRange(
+  nodeFolded: FoldedText,
+  spans: readonly BlockNodeSpan[],
+  blockFolded: FoldedText,
+  blockSrc0: number,
+  start: number,
+  end: number,
+): { from: number; to: number } | null {
+  if (spans.length === 0) return null;
+  const lo = Math.min(start, end);
+  const hi = Math.max(start, end);
+  if (lo === hi) {
+    const hit = spans.find((span) => span.dom0 <= lo && lo <= span.dom1);
+    if (!hit) return null;
+    const at = rawNodeOffsetToSource(
+      nodeFolded,
+      blockFolded,
+      lo,
+      "start",
+      hit,
+      blockSrc0,
+    );
+    return { from: at, to: at };
+  }
+
+  let first: BlockNodeSpan | null = null;
+  let last: BlockNodeSpan | null = null;
+  for (const span of spans) {
+    if (span.dom1 <= lo || span.dom0 >= hi) continue;
+    if (!first) first = span;
+    last = span;
+  }
+  if (!first || !last) return null;
+
+  const from = rawNodeOffsetToSource(
+    nodeFolded,
+    blockFolded,
+    Math.max(lo, first.dom0),
+    "start",
+    first,
+    blockSrc0,
+  );
+  const to = rawNodeOffsetToSource(
+    nodeFolded,
+    blockFolded,
+    Math.min(hi, last.dom1),
+    "end",
+    last,
+    blockSrc0,
+  );
+  return { from, to: Math.max(from, to) };
 }
 
 /** Locate a block's text nodes against its source, once. */
@@ -373,57 +938,55 @@ function blockLayout(map: WordMap, index: number): BlockLayout | null {
   }
 
   const raw = map.source.slice(block.src0, block.src1);
-  const { plain, at } = foldWhitespace(raw);
-  const layout: BlockLayout = { plain, at, nodes: new Map(), failed: false, src0: block.src0 };
-  let cursor = 0;
-
-  for (const node of nodes) {
-    const folded = foldWhitespace(node.data);
-    if (folded.plain.trim().length === 0) continue;
-    const found = plain.indexOf(folded.plain, cursor);
-    if (found < 0) {
-      // The text came from somewhere a search cannot follow: an attribute
-      // substitution, a typographic replacement, an include. Abandon the rest of
-      // the block rather than sliding the cursor and painting the wrong word.
-      layout.failed = true;
-      break;
-    }
-    layout.nodes.set(node, {
-      src0: block.src0 + at[found],
-      src1: block.src0 + at[found + folded.plain.length - 1] + 1,
-    });
-    cursor = found + folded.plain.length;
+  const aligned = alignBlockNodes(
+    raw,
+    block.src0,
+    nodes.map((node) => node.data),
+  );
+  const byNode = new Map<Text, BlockNodeEntry>();
+  const ordered: BlockNodeEntry[] = [];
+  for (let i = 0; i < nodes.length; i += 1) {
+    const item = aligned.nodes[i];
+    const entry: BlockNodeEntry = {
+      node: nodes[i],
+      folded: item.folded,
+      spans: item.spans,
+    };
+    byNode.set(nodes[i], entry);
+    ordered.push(entry);
   }
 
+  const layout: BlockLayout = {
+    folded: aligned.folded,
+    nodes: byNode,
+    ordered,
+    src0: block.src0,
+  };
   map.blockLayouts[index] = layout;
   return layout;
 }
 
 /**
- * Index of the **deepest** block containing `offset`.
- *
- * Anchored blocks nest — a section and its paragraph both carry a range — and
- * the paragraph is the one whose search is bounded and trustworthy. Blocks are in
- * source order, so the last one starting at or before the offset is the deepest
- * candidate; walking back finds the enclosing block when the offset sits in a gap.
+ * Candidate blocks covering `[from, to]`, ordered from narrowest/deepest to
+ * outermost.
  */
-function blockForOffset(map: WordMap, offset: number): number {
-  let low = 0;
-  let high = map.blocks.length - 1;
-  let found = -1;
-  while (low <= high) {
-    const mid = (low + high) >> 1;
-    if (map.blocks[mid].src0 <= offset) {
-      found = mid;
-      low = mid + 1;
-    } else {
-      high = mid - 1;
+function blocksForRange(map: WordMap, from: number, to: number): number[] {
+  const lo = Math.min(from, to);
+  const hi = Math.max(from, to);
+  const matches: number[] = [];
+  for (let i = 0; i < map.blocks.length; i += 1) {
+    const b = map.blocks[i];
+    if (lo === hi ? b.src0 <= lo && lo <= b.src1 : b.src1 > lo && b.src0 < hi) {
+      matches.push(i);
     }
   }
-  for (let i = found; i >= 0; i -= 1) {
-    if (map.blocks[i].src1 > offset) return i;
-  }
-  return -1;
+  matches.sort((a, b) => {
+    const lenA = map.blocks[a].src1 - map.blocks[a].src0;
+    const lenB = map.blocks[b].src1 - map.blocks[b].src0;
+    if (lenA !== lenB) return lenA - lenB;
+    return b - a;
+  });
+  return matches;
 }
 
 /** Source range for a text node located by search inside its block. */
@@ -438,10 +1001,39 @@ function blockRangeFor(
   const layout = blockLayout(map, record.block);
   if (!layout) return null;
   const entry = layout.nodes.get(node);
-  // A node past a failed search has no entry: the block was abandoned.
-  if (!entry) return null;
-  const base = entry.src0 + start;
-  return { from: base, to: entry.src0 + end };
+  if (!entry || entry.spans.length === 0) return null;
+  return spansSourceRange(
+    entry.folded,
+    entry.spans,
+    layout.folded,
+    layout.src0,
+    start,
+    end,
+  );
+}
+
+/**
+ * Containing block's source range for a DOM node, or null when the node is not
+ * inside an anchored `[data-b]` block.
+ */
+export function blockRangeForNode(map: WordMap, node: Node): BlockRange | null {
+  if (node.nodeType === Node.TEXT_NODE) {
+    const record = map.text.get(node as Text);
+    if (record && record.block >= 0) {
+      return map.blocks[record.block] ?? null;
+    }
+  }
+  const element =
+    node.nodeType === Node.ELEMENT_NODE
+      ? (node as HTMLElement)
+      : node.parentElement;
+  const host = element?.closest<HTMLElement>("[data-b]");
+  if (!host) return null;
+  const index = Number(host.dataset.b);
+  if (!Number.isInteger(index) || index < 0 || index >= map.blocks.length) {
+    return null;
+  }
+  return map.blocks[index] ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -505,18 +1097,7 @@ function endPointForSource(
     }
   }
   if (map.blocks.length > 0 && offset > 0) {
-    const block = blockForOffset(map, offset - 1);
-    if (block >= 0) {
-      const layout = blockLayout(map, block);
-      if (layout) {
-        let last: { node: Text; offset: number } | null = null;
-        for (const [node, entry] of layout.nodes) {
-          if (entry.src0 >= offset) break;
-          last = { node, offset: Math.min(node.data.length, offset - entry.src0) };
-        }
-        if (last) return last;
-      }
-    }
+    return pointForSource(map, offset - 1, "end");
   }
   return null;
 }
@@ -545,27 +1126,148 @@ export function pointForSource(
     return locateInFragment(map, index, indexInText);
   }
 
-  const block = blockForOffset(map, offset);
-  if (block < 0) return null;
-  const layout = blockLayout(map, block);
-  if (!layout) return null;
-  for (const [node, entry] of layout.nodes) {
-    if (offset >= entry.src0 && offset <= entry.src1) {
-      return { node, offset: Math.min(node.data.length, offset - entry.src0) };
+  const candidates = blocksForRange(map, offset, offset);
+  // First pass: exact span containing `offset`.
+  for (const blockIndex of candidates) {
+    const layout = blockLayout(map, blockIndex);
+    if (!layout) continue;
+    for (const entry of layout.ordered) {
+      for (const span of entry.spans) {
+        if (offset >= span.src0 && offset <= span.src1) {
+          return {
+            node: entry.node,
+            offset: sourceOffsetToRawNode(
+              entry.folded,
+              layout.folded,
+              offset,
+              bias,
+              span,
+              layout.src0,
+            ),
+          };
+        }
+      }
     }
   }
+
+  // Second pass: gap fallback inside an anchored block when `offset` sits on
+  // inline markup or an unmapped token.
+  for (const blockIndex of candidates) {
+    const layout = blockLayout(map, blockIndex);
+    if (layout) {
+      if (bias === "start") {
+        for (const entry of layout.ordered) {
+          for (const span of entry.spans) {
+            if (span.src0 >= offset) {
+              return { node: entry.node, offset: span.dom0 };
+            }
+          }
+        }
+      } else {
+        let lastMatch: { node: Text; offset: number } | null = null;
+        for (const entry of layout.ordered) {
+          for (const span of entry.spans) {
+            if (span.src1 <= offset) {
+              lastMatch = { node: entry.node, offset: span.dom1 };
+            }
+          }
+        }
+        if (lastMatch) return lastMatch;
+      }
+    }
+    const fallbackNodes =
+      map.blockNodes[blockIndex]?.length > 0
+        ? map.blockNodes[blockIndex]
+        : map.blockAllNodes[blockIndex];
+    if (fallbackNodes && fallbackNodes.length > 0) {
+      if (bias === "start") {
+        return { node: fallbackNodes[0], offset: 0 };
+      }
+      const lastNode = fallbackNodes[fallbackNodes.length - 1];
+      return { node: lastNode, offset: lastNode.data.length };
+    }
+  }
+
   return null;
 }
 
 /** A DOM Range covering a source range, or null when nothing maps. */
 export function rangeForSource(map: WordMap, from: number, to: number): Range | null {
-  const start = pointForSource(map, Math.min(from, to));
+  const lo = Math.min(from, to);
+  const hi = Math.max(from, to);
+
+  if (map.fragments.length === 0 && map.blocks.length > 0 && hi > lo) {
+    const candidates = blocksForRange(map, lo, hi);
+    for (const blockIndex of candidates) {
+      const layout = blockLayout(map, blockIndex);
+      if (!layout) continue;
+      let firstHit: { entry: BlockNodeEntry; span: BlockNodeSpan } | null = null;
+      let lastHit: { entry: BlockNodeEntry; span: BlockNodeSpan } | null = null;
+      for (const entry of layout.ordered) {
+        for (const span of entry.spans) {
+          if (span.src1 <= lo || span.src0 >= hi) continue;
+          if (!firstHit) firstHit = { entry, span };
+          lastHit = { entry, span };
+        }
+      }
+      if (firstHit && lastHit) {
+        const startOffset = sourceOffsetToRawNode(
+          firstHit.entry.folded,
+          layout.folded,
+          Math.max(lo, firstHit.span.src0),
+          "start",
+          firstHit.span,
+          layout.src0,
+        );
+        const endOffset = sourceOffsetToRawNode(
+          lastHit.entry.folded,
+          layout.folded,
+          Math.min(hi, lastHit.span.src1),
+          "end",
+          lastHit.span,
+          layout.src0,
+        );
+        const range = document.createRange();
+        range.setStart(firstHit.entry.node, startOffset);
+        range.setEnd(lastHit.entry.node, endOffset);
+        return range;
+      }
+    }
+
+    // Block fallback when the source selection is entirely inside an unmapped
+    // construct (such as an attribute placeholder or inline formula) inside an
+    // anchored block.
+    for (const blockIndex of candidates) {
+      const fallbackNodes =
+        map.blockNodes[blockIndex]?.length > 0
+          ? map.blockNodes[blockIndex]
+          : map.blockAllNodes[blockIndex];
+      if (fallbackNodes && fallbackNodes.length > 0) {
+        const firstNode = fallbackNodes[0];
+        const lastNode = fallbackNodes[fallbackNodes.length - 1];
+        const range = document.createRange();
+        range.setStart(firstNode, 0);
+        range.setEnd(lastNode, lastNode.data.length);
+        return range;
+      }
+    }
+  }
+
+  const start = pointForSource(map, lo, "start");
   if (!start) return null;
-  const endPoint = to > from ? endPointForSource(map, to) : null;
+  const endPoint = hi > lo ? endPointForSource(map, hi) : null;
   const range = document.createRange();
   range.setStart(start.node, start.offset);
   if (endPoint) {
-    range.setEnd(endPoint.node, endPoint.offset);
+    try {
+      range.setEnd(endPoint.node, endPoint.offset);
+      if (range.collapsed && hi > lo) {
+        range.setStart(endPoint.node, 0);
+        range.setEnd(start.node, start.node.data.length);
+      }
+    } catch {
+      range.setEnd(start.node, start.offset);
+    }
   } else {
     range.setEnd(start.node, start.offset);
   }

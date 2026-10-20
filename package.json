@@ -28,6 +28,7 @@
     "tabs:restore:unit": "node scripts/tabs-restore-unit.mjs",
     "typst:map:unit": "node scripts/typst-page-map-unit.mjs",
     "html:map:unit": "node scripts/html-source-map-unit.mjs",
+    "block:map:unit": "node scripts/block-map-unit.mjs",
     "recent": "node scripts/recent-menu-test.mjs",
     "test:sessions": "node scripts/sessions-test.mjs",
     "paste:convert": "node scripts/paste-convert-test.mjs",
