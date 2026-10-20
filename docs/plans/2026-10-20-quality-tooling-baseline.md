@@ -1,6 +1,6 @@
 # Adopt a reproducible JavaScript/TypeScript quality baseline
 
-**Status:** draft
+**Status:** done
 **Date:** 2026-10-20
 **ADR:** none (tooling; no runtime decision)
 
@@ -89,22 +89,27 @@ Rejected alternatives:
 
 ## Steps
 
-- [ ] 1. Wait for the block-sync work to be committed; preserve its
+- [x] 1. Wait for the block-sync work to be committed; preserve its
       `package.json` script addition.
-- [ ] 2. Add Prettier config, ignore file, scripts and one formatting commit;
+- [x] 2. Add Prettier config, ignore file, scripts and one formatting commit;
       add `.git-blame-ignore-revs` after the commit exists.
-- [ ] 3. Add ESLint 10/typescript-eslint with the TypeScript 6 alias; verify
+- [x] 3. Add ESLint 10/typescript-eslint with the TypeScript 6 alias; verify
       `npx tsc --version` is still 7.0.2.
-- [ ] 4. Add the flat ESLint config and scoped ES5 bridge override; fix the 21
+- [x] 4. Add the flat ESLint config and scoped ES5 bridge override; fix the 21
       errors; run `npm run lint`.
-- [ ] 5. Add `knip.json`, remove `codemirror`, and gate
+- [x] 5. Add `knip.json`, remove `codemirror`, and gate
       `knip --include dependencies,unlisted`.
-- [ ] 6. Fix the 25 Clippy warnings; run
+- [x] 6. Fix the 25 Clippy warnings; run
       `cargo clippy --all-targets -- -D warnings`.
-- [ ] 7. Add a quality workflow on push/PR running `npm ci`,
+- [x] 7. Add a quality workflow on push/PR running `npm ci`,
       `npm run build`, `format:check`, `lint`, `knip` and Clippy.
-- [ ] 8. Document the new scripts in `AGENTS.md` and rerun the affected test
+- [x] 8. Document the new scripts in `AGENTS.md` and rerun the affected test
       layers.
+
+Deviations: the formatting commit touched 69 files rather than 65 because the
+root `index.html`, `tsconfig.json` and `vite.config.ts` are in the Prettier
+patterns. The quality workflow splits frontend (Ubuntu) from Rust (Windows) so
+Clippy does not need the Linux WebKit and hunspell packages.
 
 ## Files and modules
 
@@ -157,6 +162,16 @@ then exits 0 on the same tree.
 - `codemirror` is gone from `package.json` and the lock file.
 - `npx tsc --version` remains 7.0.2.
 - No Rust formatting changes are included.
+
+## Outcome
+
+- `npm run format:check`, `npm run lint`, `npm run knip` and `npm run build`
+  pass; `npx tsc --version` is 7.0.2 while the linter's TypeScript API is 6.0.2.
+- `cargo clippy --all-targets -- -D warnings` passes; the Rust suite reports
+  91 passed and 2 ignored.
+- Smoke 105/105, AsciiDoc 55/55, Typst Pages 36/36, math 10/10, syntax 10/10,
+  word sync 33/33, rich paste 28/28 and HTML 50/50 pass. One combined run
+  reported the pre-existing HTML outline race; the suite passes on its own.
 
 ## Open questions
 
