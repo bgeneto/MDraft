@@ -33,10 +33,14 @@ ws.addEventListener("message", (event) => {
 });
 await new Promise((resolve, reject) => {
   const timer = setTimeout(() => reject(new Error("CDP socket did not open")), 8000);
-  ws.addEventListener("open", () => {
-    clearTimeout(timer);
-    resolve();
-  }, { once: true });
+  ws.addEventListener(
+    "open",
+    () => {
+      clearTimeout(timer);
+      resolve();
+    },
+    { once: true },
+  );
 });
 await new Promise((resolve) => setTimeout(resolve, 300));
 
@@ -101,16 +105,52 @@ async function rectOf(word, root) {
 
 async function doubleClickAt(x, y) {
   for (const clickCount of [1, 2]) {
-    await send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount });
-    await send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount });
+    await send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x,
+      y,
+      button: "left",
+      clickCount,
+    });
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x,
+      y,
+      button: "left",
+      clickCount,
+    });
   }
 }
 
 async function drag(x1, y1, x2, y2) {
-  await send("Input.dispatchMouseEvent", { type: "mousePressed", x: x1, y: y1, button: "left", clickCount: 1 });
-  await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: (x1 + x2) / 2, y: y1, button: "left", buttons: 1 });
-  await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: x2, y: y2, button: "left", buttons: 1 });
-  await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: x2, y: y2, button: "left", clickCount: 1 });
+  await send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: x1,
+    y: y1,
+    button: "left",
+    clickCount: 1,
+  });
+  await send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: (x1 + x2) / 2,
+    y: y1,
+    button: "left",
+    buttons: 1,
+  });
+  await send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: x2,
+    y: y2,
+    button: "left",
+    buttons: 1,
+  });
+  await send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: x2,
+    y: y2,
+    button: "left",
+    clickCount: 1,
+  });
 }
 
 /** Select a word in the preview the way a browser double-click would. */
@@ -170,8 +210,18 @@ const scrollState = () =>
 
 async function clearSelection() {
   await evaluate(`window.getSelection()?.removeAllRanges()`);
-  await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
-  await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key: "Escape",
+    code: "Escape",
+    windowsVirtualKeyCode: 27,
+  });
+  await send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key: "Escape",
+    code: "Escape",
+    windowsVirtualKeyCode: 27,
+  });
   await sleep(80);
 }
 
@@ -230,7 +280,11 @@ console.log("\n=== preview to source ===");
     const selected = await selectPreviewWord(word);
     await sleep(120);
     const painted = await paintedWord();
-    check(`"${word}" paints the same word in the source`, selected === word && painted === word, `${note}: ${painted}`);
+    check(
+      `"${word}" paints the same word in the source`,
+      selected === word && painted === word,
+      `${note}: ${painted}`,
+    );
   }
 }
 
@@ -266,7 +320,11 @@ console.log("\n=== atomic spans ===");
   const alertSpans = await evaluate(
     `document.querySelectorAll("#preview .md-alert [data-f]").length`,
   );
-  check("the alert paragraph has no fragments (documented fallback)", alertSpans === 0, `${alertSpans}`);
+  check(
+    "the alert paragraph has no fragments (documented fallback)",
+    alertSpans === 0,
+    `${alertSpans}`,
+  );
 }
 
 console.log("\n=== across blocks ===");
@@ -342,8 +400,15 @@ console.log("\n=== real input ===");
     }
     const elapsed = Date.now() - started;
     const after = await scrollState();
-    check("a real double-click paints exactly the word", painted === "sanciona", `${painted} in ${elapsed} ms`);
-    check("a double-click does not scroll when the word is visible", before.source === after.source);
+    check(
+      "a real double-click paints exactly the word",
+      painted === "sanciona",
+      `${painted} in ${elapsed} ms`,
+    );
+    check(
+      "a double-click does not scroll when the word is visible",
+      before.source === after.source,
+    );
     check("the highlight arrives within a frame budget", elapsed < 250, `${elapsed} ms`);
 
     const style = await markStyle();
@@ -369,8 +434,7 @@ console.log("\n=== real input ===");
     const reduced = await markStyle();
     check(
       "reduced motion keeps the mark and skips the pulse",
-      reduced?.animation === "none" &&
-        reduced?.background !== "rgba(0, 0, 0, 0)",
+      reduced?.animation === "none" && reduced?.background !== "rgba(0, 0, 0, 0)",
       reduced ? `${reduced.animation} / ${reduced.background}` : "missing",
     );
     await send("Emulation.setEmulatedMedia", { features: [] });
@@ -386,7 +450,9 @@ console.log("\n=== real input ===");
     const painted = await paintedWord();
     check(
       "a drag paints a word-aligned range",
-      painted !== null && painted.trim().startsWith("Presidente") && painted.trim().endsWith("República"),
+      painted !== null &&
+        painted.trim().startsWith("Presidente") &&
+        painted.trim().endsWith("República"),
       JSON.stringify(painted),
     );
     const selection = await evaluate(`window.getSelection().toString()`);
@@ -420,8 +486,20 @@ console.log("\n=== source to preview ===");
     await sleep(300);
     const cleared = await highlightText();
     check("typing clears the preview highlight", cleared === null, JSON.stringify(cleared));
-    await send("Input.dispatchKeyEvent", { type: "keyDown", key: "z", code: "KeyZ", modifiers: 2, windowsVirtualKeyCode: 90 });
-    await send("Input.dispatchKeyEvent", { type: "keyUp", key: "z", code: "KeyZ", modifiers: 2, windowsVirtualKeyCode: 90 });
+    await send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key: "z",
+      code: "KeyZ",
+      modifiers: 2,
+      windowsVirtualKeyCode: 90,
+    });
+    await send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: "z",
+      code: "KeyZ",
+      modifiers: 2,
+      windowsVirtualKeyCode: 90,
+    });
     await sleep(300);
   }
 }
@@ -438,11 +516,25 @@ console.log("\n=== escape ===");
     await doubleClickAt(word.x, word.y);
     await sleep(150);
     const beforeEscape = await paintedWord();
-    await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
-    await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+    await send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key: "Escape",
+      code: "Escape",
+      windowsVirtualKeyCode: 27,
+    });
+    await send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: "Escape",
+      code: "Escape",
+      windowsVirtualKeyCode: 27,
+    });
     await sleep(120);
     const afterEscape = await paintedWord();
-    check("escape clears the source decoration", beforeEscape === "sanciona" && afterEscape === null, `${beforeEscape} -> ${afterEscape}`);
+    check(
+      "escape clears the source decoration",
+      beforeEscape === "sanciona" && afterEscape === null,
+      `${beforeEscape} -> ${afterEscape}`,
+    );
   }
 }
 

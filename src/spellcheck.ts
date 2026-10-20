@@ -48,16 +48,78 @@ const ALLOWED = new Set([
 ]);
 
 const EN_WORDS = new Set([
-  "the", "and", "of", "to", "in", "is", "that", "for", "with", "this", "you",
-  "are", "was", "be", "have", "from", "it", "on", "as", "at", "by", "or", "an",
-  "not", "but", "we", "they", "his", "her", "their", "which", "would", "there",
+  "the",
+  "and",
+  "of",
+  "to",
+  "in",
+  "is",
+  "that",
+  "for",
+  "with",
+  "this",
+  "you",
+  "are",
+  "was",
+  "be",
+  "have",
+  "from",
+  "it",
+  "on",
+  "as",
+  "at",
+  "by",
+  "or",
+  "an",
+  "not",
+  "but",
+  "we",
+  "they",
+  "his",
+  "her",
+  "their",
+  "which",
+  "would",
+  "there",
 ]);
 
 const PT_WORDS = new Set([
-  "não", "que", "uma", "para", "com", "dos", "das", "por", "como", "mais",
-  "mas", "foi", "são", "também", "já", "seu", "sua", "isso", "este", "esta",
-  "ela", "ele", "os", "um", "na", "em", "se", "ao", "ou", "quando", "muito",
-  "porque", "está", "são", "pelo", "pela",
+  "não",
+  "que",
+  "uma",
+  "para",
+  "com",
+  "dos",
+  "das",
+  "por",
+  "como",
+  "mais",
+  "mas",
+  "foi",
+  "são",
+  "também",
+  "já",
+  "seu",
+  "sua",
+  "isso",
+  "este",
+  "esta",
+  "ela",
+  "ele",
+  "os",
+  "um",
+  "na",
+  "em",
+  "se",
+  "ao",
+  "ou",
+  "quando",
+  "muito",
+  "porque",
+  "está",
+  "são",
+  "pelo",
+  "pela",
 ]);
 
 const PT_MARK = /[ãõçáàâéêíóôú]/i;
@@ -175,8 +237,7 @@ export function spellcheckAvailabilityNote(): string | null {
   const agent = navigator.userAgent;
   let how: string;
   if (/Windows/i.test(agent)) {
-    how =
-      "Add it in Settings → Time & language → Language & region, then turn on Basic typing.";
+    how = "Add it in Settings → Time & language → Language & region, then turn on Basic typing.";
   } else if (/Linux/i.test(agent)) {
     const packages = [!hasEn ? "hunspell-en-us" : "", !hasPt ? "hunspell-pt-br" : ""]
       .filter(Boolean)
@@ -191,10 +252,7 @@ export function spellcheckAvailabilityNote(): string | null {
 }
 
 export function spellExtension(options: SpellOptions): Extension {
-  return [
-    spellConfig.of({ language: options.language, words: options.words }),
-    spellPlugin,
-  ];
+  return [spellConfig.of({ language: options.language, words: options.words }), spellPlugin];
 }
 
 function normalize(word: string): string {
@@ -338,7 +396,12 @@ interface WordHit {
   form: string;
 }
 
-function collectWords(state: EditorState, from: number, to: number, ignored: Set<string>): WordHit[] {
+function collectWords(
+  state: EditorState,
+  from: number,
+  to: number,
+  ignored: Set<string>,
+): WordHit[] {
   const tree = syntaxTree(state);
   const skipped: Array<[number, number]> = [];
   const matter = frontMatterEnd(state);
@@ -376,7 +439,7 @@ function collectWords(state: EditorState, from: number, to: number, ignored: Set
     tokenFrom = at;
   };
 
-  for (let index = from; index < to; ) {
+  for (let index = from; index < to;) {
     const ch = state.doc.sliceString(index, index + 1);
     const size = ch.length || 1;
     if (covered(index, skipped) || ch === "\n" || ch === "\r") {
@@ -402,9 +465,14 @@ function sampleWords(state: EditorState, ignored: Set<string>): string[] {
   return collectWords(state, 0, limit, ignored).map((hit) => hit.form);
 }
 
-function chosenLanguage(config: SpellConfig, state: EditorState, ignored: Set<string>): string | null {
+function chosenLanguage(
+  config: SpellConfig,
+  state: EditorState,
+  ignored: Set<string>,
+): string | null {
   if (!installedKnown) return null;
-  const requested = config.language === "auto" ? detectLanguage(sampleWords(state, ignored)) : config.language;
+  const requested =
+    config.language === "auto" ? detectLanguage(sampleWords(state, ignored)) : config.language;
   if (!requested) return null;
   if (requested === "en") {
     return installed.some((tag) => tag === "en" || tag === "en-GB") ? "en" : null;
@@ -505,7 +573,10 @@ class SpellPlugin implements PluginValue {
     const request = ++this.request;
     let bad: number[] = [];
     try {
-      bad = await api.spellcheckCheck(language, hits.map((hit) => hit.form));
+      bad = await api.spellcheckCheck(
+        language,
+        hits.map((hit) => hit.form),
+      );
     } catch {
       return;
     }
@@ -624,7 +695,8 @@ class SpellPlugin implements PluginValue {
 
   private placeMenu(host: HTMLElement, x: number, y: number): void {
     const rect = host.getBoundingClientRect();
-    const left = x + rect.width > window.innerWidth ? Math.max(8, window.innerWidth - rect.width - 8) : x;
+    const left =
+      x + rect.width > window.innerWidth ? Math.max(8, window.innerWidth - rect.width - 8) : x;
     const top = y + rect.height > window.innerHeight ? Math.max(8, y - rect.height) : y;
     host.style.left = `${left}px`;
     host.style.top = `${top}px`;

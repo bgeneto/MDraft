@@ -397,8 +397,14 @@ export function createTabsUi(options: TabsOptions): TabsUi {
     const margin = 6;
     const width = Math.min(bounds.width, window.innerWidth - margin * 2);
     const height = Math.min(bounds.height, window.innerHeight - margin * 2);
-    const left = Math.min(Math.max(margin, clientX), Math.max(margin, window.innerWidth - width - margin));
-    const top = Math.min(Math.max(margin, clientY), Math.max(margin, window.innerHeight - height - margin));
+    const left = Math.min(
+      Math.max(margin, clientX),
+      Math.max(margin, window.innerWidth - width - margin),
+    );
+    const top = Math.min(
+      Math.max(margin, clientY),
+      Math.max(margin, window.innerHeight - height - margin),
+    );
     menu.style.left = `${left}px`;
     menu.style.top = `${top}px`;
 
@@ -655,7 +661,11 @@ export function createTabsUi(options: TabsOptions): TabsUi {
       return;
     }
 
-    if (event.altKey && event.shiftKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+    if (
+      event.altKey &&
+      event.shiftKey &&
+      (event.key === "ArrowLeft" || event.key === "ArrowRight")
+    ) {
       event.preventDefault();
       reorder(tab, event.key === "ArrowLeft" ? -1 : 1);
       return;

@@ -77,11 +77,7 @@ function alignStyle(align: Align): string {
 }
 
 function renderTable(block: Extract<Block, { kind: "table" }>): string {
-  const columns = Math.max(
-    block.header?.length ?? 0,
-    ...block.rows.map((row) => row.length),
-    1,
-  );
+  const columns = Math.max(block.header?.length ?? 0, ...block.rows.map((row) => row.length), 1);
   const cell = (tag: "td" | "th", nodes: readonly Inline[], index: number) =>
     `<${tag}${alignStyle(block.align[index] ?? null)}>${renderInline(nodes)}</${tag}>`;
   const head = block.header
@@ -108,7 +104,8 @@ function renderBlocks(blocks: readonly Block[]): string {
         }
         case "list": {
           const tag = block.ordered ? "ol" : "ul";
-          const start = block.ordered && block.start && block.start !== 1 ? ` start="${block.start}"` : "";
+          const start =
+            block.ordered && block.start && block.start !== 1 ? ` start="${block.start}"` : "";
           const items = block.items
             .map((item) => {
               const checkbox =

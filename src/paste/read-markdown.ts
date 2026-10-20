@@ -31,7 +31,9 @@ function inlineFromTokens(tokens: AnyToken[] | undefined): Inline[] {
   for (const token of tokens) {
     switch (token.type) {
       case "text":
-        out.push(...(token.tokens ? inlineFromTokens(token.tokens) : textNode(String(token.text ?? ""))));
+        out.push(
+          ...(token.tokens ? inlineFromTokens(token.tokens) : textNode(String(token.text ?? ""))),
+        );
         break;
       case "escape":
         out.push({ kind: "text", value: String(token.text ?? "") });
@@ -112,7 +114,9 @@ function tableBlock(token: AnyToken): Block {
   const rows = (token.rows ?? []).map((row: AnyToken[]) =>
     row.map((cell: AnyToken) => inlineFromTokens(cell.tokens)),
   );
-  const align: Align[] = (token.header ?? []).map((cell: AnyToken) => (cell.align ?? null) as Align);
+  const align: Align[] = (token.header ?? []).map(
+    (cell: AnyToken) => (cell.align ?? null) as Align,
+  );
   return { kind: "table", align, header, rows };
 }
 
@@ -122,7 +126,13 @@ function blockFromToken(token: AnyToken): Block[] {
     case "def":
       return [];
     case "heading":
-      return [{ kind: "heading", level: Number(token.depth ?? 1), children: inlineFromTokens(token.tokens) }];
+      return [
+        {
+          kind: "heading",
+          level: Number(token.depth ?? 1),
+          children: inlineFromTokens(token.tokens),
+        },
+      ];
     case "paragraph": {
       const children = inlineFromTokens(token.tokens);
       if (children.length === 1 && children[0].kind === "math" && children[0].display) {
@@ -142,7 +152,10 @@ function blockFromToken(token: AnyToken): Block[] {
       return blocks.length > 0 ? [{ kind: "quote", blocks }] : [];
     }
     case "code": {
-      const language = String(token.lang ?? "").trim().split(/\s+/)[0] || null;
+      const language =
+        String(token.lang ?? "")
+          .trim()
+          .split(/\s+/)[0] || null;
       return [{ kind: "code", language, text: String(token.text ?? "") }];
     }
     case "table":

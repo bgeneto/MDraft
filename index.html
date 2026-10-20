@@ -9,15 +9,52 @@
     <div id="app" class="app">
       <div id="doc-tabs-bar" class="doc-tabs-bar">
         <div id="doc-tabs" class="doc-tabs" role="tablist" aria-label="Open documents"></div>
-        <div id="doc-tabs-toolbar" class="doc-tabs-toolbar" role="group" aria-label="Tab navigation">
+        <div
+          id="doc-tabs-toolbar"
+          class="doc-tabs-toolbar"
+          role="group"
+          aria-label="Tab navigation"
+        >
           <span class="doc-tabs-divider" aria-hidden="true"></span>
-          <button id="doc-tabs-left" class="doc-tab-scroll" type="button" title="Scroll tabs left" aria-label="Scroll tabs left" aria-controls="doc-tabs" disabled>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <button
+            id="doc-tabs-left"
+            class="doc-tab-scroll"
+            type="button"
+            title="Scroll tabs left"
+            aria-label="Scroll tabs left"
+            aria-controls="doc-tabs"
+            disabled
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
               <path d="m15 18-6-6 6-6" />
             </svg>
           </button>
-          <button id="doc-tabs-right" class="doc-tab-scroll" type="button" title="Scroll tabs right" aria-label="Scroll tabs right" aria-controls="doc-tabs" disabled>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <button
+            id="doc-tabs-right"
+            class="doc-tab-scroll"
+            type="button"
+            title="Scroll tabs right"
+            aria-label="Scroll tabs right"
+            aria-controls="doc-tabs"
+            disabled
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
               <path d="m9 18 6-6-6-6" />
             </svg>
           </button>
@@ -25,9 +62,13 @@
       </div>
       <aside id="sidebar" class="sidebar">
         <div class="sidebar-tabs" role="tablist">
-          <button id="tab-outline" class="sidebar-tab" role="tab" aria-selected="true">Outline</button>
+          <button id="tab-outline" class="sidebar-tab" role="tab" aria-selected="true">
+            Outline
+          </button>
           <button id="tab-files" class="sidebar-tab" role="tab" aria-selected="false">Files</button>
-          <button id="tab-recent" class="sidebar-tab" role="tab" aria-selected="false">Recent</button>
+          <button id="tab-recent" class="sidebar-tab" role="tab" aria-selected="false">
+            Recent
+          </button>
         </div>
         <div id="sidebar-body" class="sidebar-body"></div>
       </aside>
@@ -46,35 +87,93 @@
 
       <footer id="statusbar" class="statusbar">
         <div class="status-left">
-          <button id="btn-sidebar" class="status-btn icon-btn" title="Toggle sidebar (Ctrl+Shift+L)" aria-label="Toggle sidebar">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+          <button
+            id="btn-sidebar"
+            class="status-btn icon-btn"
+            title="Toggle sidebar (Ctrl+Shift+L)"
+            aria-label="Toggle sidebar"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.9"
+              stroke-linecap="round"
+              aria-hidden="true"
+            >
               <path d="M3.5 6.5h17M3.5 12h17M3.5 17.5h17" />
             </svg>
           </button>
           <span class="status-modes" role="group" aria-label="View mode">
-            <button id="mode-source" class="status-btn" title="Source code mode (Ctrl+/)">Source</button>
+            <button id="mode-source" class="status-btn" title="Source code mode (Ctrl+/)">
+              Source
+            </button>
             <button id="mode-split" class="status-btn" title="Split view">Split</button>
             <button id="mode-preview" class="status-btn" title="Preview only">Preview</button>
           </span>
           <span class="status-flags" role="group" aria-label="Editor flags">
-            <button id="flag-focus" class="status-flag" data-on="false" aria-pressed="false" aria-label="Focus mode: off" title="Focus mode (F8)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+            <button
+              id="flag-focus"
+              class="status-flag"
+              data-on="false"
+              aria-pressed="false"
+              aria-label="Focus mode: off"
+              title="Focus mode (F8)"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.9"
+                stroke-linecap="round"
+                aria-hidden="true"
+              >
                 <circle cx="12" cy="12" r="7.5" />
                 <path d="M12 2v4M12 18v4M2 12h4M18 12h4" />
                 <circle cx="12" cy="12" r="2.4" />
               </svg>
               <span class="flag-label">Focus</span><span class="flag-state">off</span>
             </button>
-            <button id="flag-typewriter" class="status-flag" data-on="false" aria-pressed="false" aria-label="Typewriter mode: off" title="Typewriter mode (F9)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <button
+              id="flag-typewriter"
+              class="status-flag"
+              data-on="false"
+              aria-pressed="false"
+              aria-label="Typewriter mode: off"
+              title="Typewriter mode (F9)"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.9"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
                 <path d="M4 7V4h16v3" />
                 <path d="M9 20h6" />
                 <path d="M12 4v16" />
               </svg>
               <span class="flag-label">Type</span><span class="flag-state">off</span>
             </button>
-            <button id="flag-sync" class="status-flag" data-on="true" aria-pressed="true" aria-label="Sync scroll: on" title="Sync scroll">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <button
+              id="flag-sync"
+              class="status-flag"
+              data-on="true"
+              aria-pressed="true"
+              aria-label="Sync scroll: on"
+              title="Sync scroll"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.9"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
                 <path d="m21 16-4 4-4-4" />
                 <path d="M17 20V4" />
                 <path d="m3 8 4-4 4 4" />
@@ -83,16 +182,46 @@
               <span class="flag-label">Sync</span><span class="flag-state">on</span>
             </button>
             <span class="status-flag-sep" aria-hidden="true"></span>
-            <button id="flag-auto-save" class="status-flag" data-on="false" aria-pressed="false" aria-label="Auto Save: off" title="Auto Save">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <button
+              id="flag-auto-save"
+              class="status-flag"
+              data-on="false"
+              aria-pressed="false"
+              aria-label="Auto Save: off"
+              title="Auto Save"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.9"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
                 <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
                 <path d="M17 21v-8H7v8" />
                 <path d="M7 3v5h8" />
               </svg>
               <span class="flag-label">Auto</span><span class="flag-state">off</span>
             </button>
-            <button id="flag-spellcheck" class="status-flag" data-on="true" aria-pressed="true" aria-label="Check spelling: on" title="Check spelling">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <button
+              id="flag-spellcheck"
+              class="status-flag"
+              data-on="true"
+              aria-pressed="true"
+              aria-label="Check spelling: on"
+              title="Check spelling"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.9"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
                 <path d="M2.8 17.5 7.6 5l4.8 12.5" />
                 <path d="M4.7 13.2h5.8" />
                 <path d="m14 14.8 2.4 2.4 4.6-7.2" />
@@ -103,19 +232,53 @@
           <span id="status-file" class="status-item">Untitled</span>
         </div>
         <div class="status-right">
-          <button id="status-zoom" class="status-btn status-zoom" hidden title="Reset zoom"></button>
+          <button
+            id="status-zoom"
+            class="status-btn status-zoom"
+            hidden
+            title="Reset zoom"
+          ></button>
           <span id="status-cursor" class="status-item"></span>
           <span id="status-encoding" class="status-item"></span>
-          <button id="btn-prefs" class="status-btn icon-btn" title="Preferences (Ctrl+,)" aria-label="Preferences">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <button
+            id="btn-prefs"
+            class="status-btn icon-btn"
+            title="Preferences (Ctrl+,)"
+            aria-label="Preferences"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.9"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
               <circle cx="12" cy="12" r="3.1" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              <path
+                d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+              />
             </svg>
           </button>
-          <button id="btn-theme" class="status-btn icon-btn" title="Switch to dark theme" aria-label="Switch to dark theme">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+          <button
+            id="btn-theme"
+            class="status-btn icon-btn"
+            title="Switch to dark theme"
+            aria-label="Switch to dark theme"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.9"
+              stroke-linecap="round"
+              aria-hidden="true"
+            >
               <circle cx="12" cy="12" r="4.2" />
-              <path d="M12 2.5v2.3M12 19.2v2.3M2.5 12h2.3M19.2 12h2.3M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6" />
+              <path
+                d="M12 2.5v2.3M12 19.2v2.3M2.5 12h2.3M19.2 12h2.3M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6"
+              />
             </svg>
           </button>
           <span id="status-tokens" class="status-item" hidden></span>

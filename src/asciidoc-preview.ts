@@ -103,9 +103,7 @@ function asciimathSegments(content: HTMLElement): string[] {
  * text rather than replaced with half a formula.
  */
 async function renderAsciiMathIn(host: HTMLElement): Promise<number> {
-  const elements = Array.from(
-    host.querySelectorAll<HTMLElement>('[data-stem="asciimath"]'),
-  );
+  const elements = Array.from(host.querySelectorAll<HTMLElement>('[data-stem="asciimath"]'));
   if (elements.length === 0) return 0;
 
   let parser: { parse(input: string): string };
@@ -119,14 +117,10 @@ async function renderAsciiMathIn(host: HTMLElement): Promise<number> {
 
   for (const element of elements) {
     const block = element.classList.contains("stemblock");
-    const target = block
-      ? element.querySelector<HTMLElement>(".content")
-      : element;
+    const target = block ? element.querySelector<HTMLElement>(".content") : element;
     if (!target) continue;
 
-    const segments = block
-      ? asciimathSegments(target)
-      : [target.textContent ?? ""];
+    const segments = block ? asciimathSegments(target) : [target.textContent ?? ""];
     const rendered: Node[] = [];
     let failed = false;
     for (const raw of segments) {
@@ -300,9 +294,7 @@ export async function renderAsciidocPreview(
     });
 
     for (const element of Array.from(holder.querySelectorAll("[class]"))) {
-      const marker = Array.from(element.classList).find((name) =>
-        name.startsWith("mdraft-line-"),
-      );
+      const marker = Array.from(element.classList).find((name) => name.startsWith("mdraft-line-"));
       if (!marker) continue;
       const range = ranges.get(marker);
       element.classList.remove(marker);

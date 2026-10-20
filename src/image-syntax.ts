@@ -12,18 +12,11 @@ export function typstString(value: string): string {
 }
 
 function htmlEscape(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;");
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
 /** The image markup for a language. Paths are already document-relative. */
-export function imageSyntaxFor(
-  language: DocumentLanguage,
-  alt: string,
-  src: string,
-): string {
+export function imageSyntaxFor(language: DocumentLanguage, alt: string, src: string): string {
   if (language === "typst") {
     const body = `#image("${typstString(src)}"`;
     return alt.trim() ? `${body}, alt: "${typstString(alt)}")` : `${body})`;

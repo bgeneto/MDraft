@@ -76,11 +76,10 @@ function run(command, args) {
 function runningCopies() {
   try {
     if (process.platform === "win32") {
-      const out = spawnSync(
-        "tasklist",
-        ["/FI", `IMAGENAME eq ${APP}.exe`, "/NH", "/FO", "CSV"],
-        { encoding: "utf8", windowsHide: true },
-      );
+      const out = spawnSync("tasklist", ["/FI", `IMAGENAME eq ${APP}.exe`, "/NH", "/FO", "CSV"], {
+        encoding: "utf8",
+        windowsHide: true,
+      });
       if (out.status !== 0 || !out.stdout) return [];
       return out.stdout
         .split(/\r?\n/)

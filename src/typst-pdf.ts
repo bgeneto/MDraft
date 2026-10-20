@@ -116,10 +116,7 @@ export class TypstPdfPreview {
   private disposed = false;
   private selectionTimer = 0;
   private clickTimer = 0;
-  private readonly spanLines = new WeakMap<
-    HTMLSpanElement,
-    { line: TextLine; start: number }
-  >();
+  private readonly spanLines = new WeakMap<HTMLSpanElement, { line: TextLine; start: number }>();
 
   private readonly selectionChange = (): void => {
     if (this.disposed) return;
@@ -263,10 +260,7 @@ export class TypstPdfPreview {
     number: number,
   ): Promise<PdfPage> {
     const widthPt = page.view[2] - page.view[0];
-    const baseWidth = Math.min(
-      MAX_PAGE_WIDTH,
-      Math.max(200, Math.round((widthPt * 96) / 72)),
-    );
+    const baseWidth = Math.min(MAX_PAGE_WIDTH, Math.max(200, Math.round((widthPt * 96) / 72)));
     const scale = baseWidth / widthPt;
     const viewport = page.getViewport({ scale });
     const height = Math.round(viewport.height);
@@ -474,9 +468,7 @@ export class TypstPdfPreview {
       }))
       .filter(
         (record) =>
-          record.text.trim().length > 0 &&
-          record.rect.width > 0 &&
-          record.rect.height > 0,
+          record.text.trim().length > 0 && record.rect.width > 0 && record.rect.height > 0,
       )
       .sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left);
 
@@ -496,13 +488,11 @@ export class TypstPdfPreview {
       let line: TextLine | null = null;
       for (const candidate of lines) {
         const sameColumn = columns.length >= 2 && candidate.column === column;
-        const closeEnough = columns.length < 2 &&
+        const closeEnough =
+          columns.length < 2 &&
           record.rect.left <= candidate.right + gap &&
           record.rect.right >= candidate.left - gap;
-        if (
-          Math.abs(candidate.top - record.rect.top) <= tolerance &&
-          (sameColumn || closeEnough)
-        ) {
+        if (Math.abs(candidate.top - record.rect.top) <= tolerance && (sameColumn || closeEnough)) {
           line = candidate;
           break;
         }
@@ -555,10 +545,7 @@ export class TypstPdfPreview {
    * gives one. Centered headings and authors form small clusters and are merged
    * into the nearest real column, so they do not become a phantom column.
    */
-  private columnStarts(
-    records: Array<{ rect: DOMRect }>,
-    pageWidth: number,
-  ): number[] {
+  private columnStarts(records: Array<{ rect: DOMRect }>, pageWidth: number): number[] {
     const tolerance = pageWidth * 0.02;
     const clusters: Array<{ at: number; count: number }> = [];
     for (const record of [...records].sort((a, b) => a.rect.left - b.rect.left)) {
@@ -632,10 +619,7 @@ export class TypstPdfPreview {
     const anchor = selection.anchorNode;
     const focus = selection.focusNode;
     return (
-      anchor !== null &&
-      focus !== null &&
-      this.host.contains(anchor) &&
-      this.host.contains(focus)
+      anchor !== null && focus !== null && this.host.contains(anchor) && this.host.contains(focus)
     );
   }
 

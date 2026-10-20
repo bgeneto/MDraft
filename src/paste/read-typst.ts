@@ -120,7 +120,10 @@ function inlineFromFunc(cursor: Cursor, node: AnyNode): Inline[] {
     const href = positionalString(cursor, node, "");
     const label = contentBlocks(node)[0];
     const body = label ? inlineFromContent(cursor, label) : [];
-    if (href) return [{ kind: "link", href, children: body.length ? body : [{ kind: "text", value: href }] }];
+    if (href)
+      return [
+        { kind: "link", href, children: body.length ? body : [{ kind: "text", value: href }] },
+      ];
     return body;
   }
   if (command === "image") {
@@ -172,7 +175,9 @@ function inlineOne(cursor: Cursor, entry: AnyNode): Inline[] {
     const match = /^(`+)([\s\S]*?)\1$/.exec(raw);
     out.push({ kind: "code", value: match ? match[2].trim() : raw });
   } else if (name === "Equation") {
-    const tex = slice(cursor, entry).replace(/^\$+|\$+$/g, "").trim();
+    const tex = slice(cursor, entry)
+      .replace(/^\$+|\$+$/g, "")
+      .trim();
     out.push({ kind: "math", tex, display: false });
   } else if (name === "Linebreak") {
     out.push({ kind: "break" });
@@ -378,7 +383,12 @@ function blocksFrom(cursor: Cursor, container: AnyNode): Block[] {
       continue;
     }
     // Whitespace between list items is structural; it must not close the list.
-    if ((name === "Space" || name === "Text") && slice(cursor, entry).trim() === "" && list && inline.length === 0) {
+    if (
+      (name === "Space" || name === "Text") &&
+      slice(cursor, entry).trim() === "" &&
+      list &&
+      inline.length === 0
+    ) {
       continue;
     }
     flushList();

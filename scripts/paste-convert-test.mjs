@@ -34,45 +34,73 @@ console.log("=== destination resolution ===");
     language: "markdown",
     buffer: "= Typst looking\n#set text(size: 9pt)",
   });
-  check(saved.language === "markdown" && !saved.detected, "a saved file ignores its content", saved.language);
+  check(
+    saved.language === "markdown" && !saved.detected,
+    "a saved file ignores its content",
+    saved.language,
+  );
 
   const typst = resolvePasteDestination({
     saved: false,
     language: "markdown",
     buffer: "= A Typst title\n\n#set text(size: 10pt)\n\n- one\n- two",
   });
-  check(typst.language === "typst" && typst.detected, "unsaved Typst content beats a Markdown default", typst.language);
+  check(
+    typst.language === "typst" && typst.detected,
+    "unsaved Typst content beats a Markdown default",
+    typst.language,
+  );
 
   const markdown = resolvePasteDestination({
     saved: false,
     language: "typst",
     buffer: "# A Markdown title\n\nA **bold** sentence and [a link](https://example.com).",
   });
-  check(markdown.language === "markdown" && markdown.detected, "unsaved Markdown content beats a Typst default", markdown.language);
+  check(
+    markdown.language === "markdown" && markdown.detected,
+    "unsaved Markdown content beats a Typst default",
+    markdown.language,
+  );
 
   const html = resolvePasteDestination({
     saved: false,
     language: "markdown",
     buffer: "<h1>Title</h1>\n<p>Hello</p>",
   });
-  check(html.language === "html" && html.detected, "an HTML-looking buffer detects HTML", html.language);
+  check(
+    html.language === "html" && html.detected,
+    "an HTML-looking buffer detects HTML",
+    html.language,
+  );
 
   const blank = resolvePasteDestination({ saved: false, language: "typst", buffer: "   \n\n" });
-  check(blank.language === "typst" && blank.fallback, "a blank buffer falls back to the default", blank.language);
+  check(
+    blank.language === "typst" && blank.fallback,
+    "a blank buffer falls back to the default",
+    blank.language,
+  );
 
   const ambiguous = resolvePasteDestination({
     saved: false,
     language: "markdown",
     buffer: "A sentence.\n\n- one\n- two\n\nA little math $x^2$.",
   });
-  check(ambiguous.language === "markdown" && ambiguous.fallback, "shared constructs fall back", ambiguous.language);
+  check(
+    ambiguous.language === "markdown" && ambiguous.fallback,
+    "shared constructs fall back",
+    ambiguous.language,
+  );
 
   const fenced = resolvePasteDestination({
     saved: false,
     language: "markdown",
     buffer: "Prose.\n\n```typst\n= not a heading\n#set text(size: 9pt)\n```\n",
   });
-  check(fenced.language === "markdown" && fenced.fallback, "a code sample cannot classify the document", fenced.language);
+  check(
+    fenced.language === "markdown" && fenced.fallback,
+    "a code sample cannot classify the document",
+    fenced.language,
+  );
 }
 
 console.log("\n=== clipboard source choice ===");
@@ -81,19 +109,35 @@ console.log("\n=== clipboard source choice ===");
   check(html.source === "html" && !html.native, "HTML wins for Markdown", html.source);
 
   const nativeMd = chooseSource(payload(null, "# Title\n\nA **bold** word."), "markdown");
-  check(nativeMd.source === "markdown" && nativeMd.native, "plain Markdown into Markdown is native", `${nativeMd.source}/${nativeMd.native}`);
+  check(
+    nativeMd.source === "markdown" && nativeMd.native,
+    "plain Markdown into Markdown is native",
+    `${nativeMd.source}/${nativeMd.native}`,
+  );
 
   const typst = chooseSource(payload(null, "= Title\n\nSome *strong* text."), "markdown");
-  check(typst.source === "typst" && !typst.native, "plain Typst into Markdown converts", typst.source);
+  check(
+    typst.source === "typst" && !typst.native,
+    "plain Typst into Markdown converts",
+    typst.source,
+  );
 
   const nativeTyp = chooseSource(payload(null, "= Title\n\nSome *strong* text."), "typst");
-  check(nativeTyp.source === "typst" && nativeTyp.native, "plain Typst into Typst is native", `${nativeTyp.source}/${nativeTyp.native}`);
+  check(
+    nativeTyp.source === "typst" && nativeTyp.native,
+    "plain Typst into Typst is native",
+    `${nativeTyp.source}/${nativeTyp.native}`,
+  );
 
   const plain = chooseSource(payload(null, "Just a sentence about nothing."), "typst");
   check(plain.source === "plain" && plain.native, "plain prose stays native", plain.source);
 
   const htmlList = chooseSource(payload(null, "- one\n- two\n- three"), "html");
-  check(htmlList.source === "markdown" && !htmlList.native, "a list pasted into HTML converts", htmlList.source);
+  check(
+    htmlList.source === "markdown" && !htmlList.native,
+    "a list pasted into HTML converts",
+    htmlList.source,
+  );
 }
 
 console.log("\n=== markup source on the clipboard ===");
@@ -103,7 +147,11 @@ console.log("\n=== markup source on the clipboard ===");
 
   const table = [
     [link, true, "a link tag"],
-    [`${link}\n<script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.2.1/reveal.js"></script>`, true, "two tags"],
+    [
+      `${link}\n<script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.2.1/reveal.js"></script>`,
+      true,
+      "two tags",
+    ],
     ["<p>Hello</p>", true, "an element with text"],
     ["<div>\n  <p>Hello <strong>world</strong></p>\n</div>", true, "a nested fragment"],
     ["<style>p { color: red }</style>", true, "a style element"],
@@ -115,7 +163,11 @@ console.log("\n=== markup source on the clipboard ===");
     ["\\<p\\>", false, "an escaped tag"],
   ];
   for (const [text, expected, label] of table) {
-    check(isHtmlSource(text) === expected, `${expected ? "source" : "not source"}: ${label}`, JSON.stringify(text).slice(0, 52));
+    check(
+      isHtmlSource(text) === expected,
+      `${expected ? "source" : "not source"}: ${label}`,
+      JSON.stringify(text).slice(0, 52),
+    );
   }
 
   // What a syntax-highlighting editor puts on the clipboard: every token, its
@@ -135,7 +187,11 @@ console.log("\n=== markup source on the clipboard ===");
   );
 
   const pasted = await planPaste(payload(highlighted, link), "html");
-  check(pasted?.text === link && pasted.converted === false, "the snippet is pasted byte-for-byte", pasted?.text);
+  check(
+    pasted?.text === link && pasted.converted === false,
+    "the snippet is pasted byte-for-byte",
+    pasted?.text,
+  );
 
   const bare = await planPaste(payload(link, link), "html");
   check(bare?.text === link, "a bare link tag is not dropped by the sanitizer", bare?.text);
@@ -147,7 +203,11 @@ console.log("\n=== markup source on the clipboard ===");
     ),
     "html",
   );
-  check(codeBlock?.text === link, "a code block copied from a docs page keeps the text", codeBlock?.text);
+  check(
+    codeBlock?.text === link,
+    "a code block copied from a docs page keeps the text",
+    codeBlock?.text,
+  );
 
   // The destination decides the intent: the same clipboard that is left alone
   // in an HTML document is *converted* into Markdown. The HTML representation
@@ -174,14 +234,20 @@ console.log("\n=== markup source on the clipboard ===");
     asciidoc?.text,
   );
 
-  const prose = await planPaste(payload("Use the <code>&lt;div&gt;</code> tag", "Use the <div> tag"), "html");
+  const prose = await planPaste(
+    payload("Use the <code>&lt;div&gt;</code> tag", "Use the <div> tag"),
+    "html",
+  );
   check(
     prose?.converted === true && (prose?.text ?? "").includes("&lt;div&gt;"),
     "prose that mentions a tag still converts",
     prose?.text,
   );
 
-  const list = await planPaste(payload(`<div style="white-space: pre">- one<br>- two</div>`, "- one\n- two"), "markdown");
+  const list = await planPaste(
+    payload(`<div style="white-space: pre">- one<br>- two</div>`, "- one\n- two"),
+    "markdown",
+  );
   check(
     list?.text === "- one\n- two" && list.converted === false,
     "a Markdown list snippet stays byte-identical",
@@ -235,14 +301,24 @@ console.log("\n=== whitespace across inline elements ===");
     asciidoc?.text,
   );
 
-  const edges = await planPaste(payload("<p> <strong>  Hello  </strong> </p>", "Hello"), "markdown");
+  const edges = await planPaste(
+    payload("<p> <strong>  Hello  </strong> </p>", "Hello"),
+    "markdown",
+  );
   check(edges?.text === "**Hello**", "a block's own outer edges are still trimmed", edges?.text);
 
-  const runs = await planPaste(payload("<p>a <em>b</em>  <strong>c</strong> d</p>", "a b c d"), "markdown");
+  const runs = await planPaste(
+    payload("<p>a <em>b</em>  <strong>c</strong> d</p>", "a b c d"),
+    "markdown",
+  );
   check(runs?.text === "a *b* **c** d", "runs of whitespace collapse to one space", runs?.text);
 
   const emptyStrong = await planPaste(payload("<p>a<strong> </strong>b</p>", "a b"), "markdown");
-  check(emptyStrong?.text === "a b", "a whitespace-only emphasis keeps its space", emptyStrong?.text);
+  check(
+    emptyStrong?.text === "a b",
+    "a whitespace-only emphasis keeps its space",
+    emptyStrong?.text,
+  );
 
   const emptyLink = await planPaste(payload('<p>a<a href="/x"> </a>b</p>', "a b"), "markdown");
   check(emptyLink?.text === "a b", "a whitespace-only link keeps its space", emptyLink?.text);
@@ -289,14 +365,23 @@ console.log("\n=== HTML to Typst ===");
 console.log("\n=== Markdown to Typst ===");
 {
   const result = await planPaste(
-    payload(null, "# Title\n\nSome **bold** and *em* and `code`.\n\n- one\n- two\n\n| A | B |\n|:--|--:|\n| 1 | 2 |"),
+    payload(
+      null,
+      "# Title\n\nSome **bold** and *em* and `code`.\n\n- one\n- two\n\n| A | B |\n|:--|--:|\n| 1 | 2 |",
+    ),
     "typst",
   );
   const text = result?.text ?? "";
   check(text.includes("= Title"), "ATX heading becomes Typst");
-  check(text.includes("*bold*") && text.includes("_em_") && text.includes("`code`"), "inline syntax");
+  check(
+    text.includes("*bold*") && text.includes("_em_") && text.includes("`code`"),
+    "inline syntax",
+  );
   check(text.includes("- one") && text.includes("- two"), "list");
-  check(text.includes("#table(columns: 2") && text.includes("align: (left, right)"), "table alignment");
+  check(
+    text.includes("#table(columns: 2") && text.includes("align: (left, right)"),
+    "table alignment",
+  );
 }
 
 console.log("\n=== Typst to Markdown ===");
@@ -307,7 +392,10 @@ console.log("\n=== Typst to Markdown ===");
   );
   const text = result?.text ?? "";
   check(text.includes("# Title"), "Typst heading becomes Markdown");
-  check(text.includes("**strong**") && text.includes("*emph*") && text.includes("`raw`"), "inline syntax");
+  check(
+    text.includes("**strong**") && text.includes("*emph*") && text.includes("`raw`"),
+    "inline syntax",
+  );
   check(text.includes("- one") && text.includes("- two"), "list");
   check(text.includes("$$\n") || text.includes("$x^2$"), "equation carried", JSON.stringify(text));
 }
@@ -330,42 +418,62 @@ console.log("\n=== HTML and Markdown to AsciiDoc ===");
   check(!/<\/?[a-z][^>]*>/i.test(htmlText), "no HTML tags survive");
 
   const markdown = await planPaste(
-    payload(null, "# Title\n\nSome **bold** and *em* and `code`.\n\n- one\n- two\n\n| A | B |\n|:--|--:|\n| 1 | 2 |"),
+    payload(
+      null,
+      "# Title\n\nSome **bold** and *em* and `code`.\n\n- one\n- two\n\n| A | B |\n|:--|--:|\n| 1 | 2 |",
+    ),
     "asciidoc",
   );
   const mdText = markdown?.text ?? "";
   check(mdText.includes("== Title"), "Markdown heading becomes an AsciiDoc section");
-  check(mdText.includes("*bold*") && mdText.includes("_em_") && mdText.includes("`code`"), "inline syntax");
+  check(
+    mdText.includes("*bold*") && mdText.includes("_em_") && mdText.includes("`code`"),
+    "inline syntax",
+  );
   check(mdText.includes("* one") && mdText.includes("* two"), "list");
-  check(mdText.includes("[options=\"header\"]") && mdText.includes("|==="), "header table");
+  check(mdText.includes('[options="header"]') && mdText.includes("|==="), "header table");
 }
 
 console.log("\n=== AsciiDoc to Markdown and AsciiDoc ===");
 {
-  const source =
-    "= Title\n\n== Section\n\nA *strong* word and latexmath:[x^2].\n\n* one\n* two\n";
+  const source = "= Title\n\n== Section\n\nA *strong* word and latexmath:[x^2].\n\n* one\n* two\n";
   const destination = resolvePasteDestination({
     saved: false,
     language: "markdown",
     buffer: source,
   });
-  check(destination.language === "asciidoc", "an AsciiDoc buffer is detected", destination.language);
+  check(
+    destination.language === "asciidoc",
+    "an AsciiDoc buffer is detected",
+    destination.language,
+  );
 
   const markdown = await planPaste(payload(null, source), "markdown");
   const text = markdown?.text ?? "";
-  check(text.includes("# Title") && text.includes("## Section"), "titles become Markdown headings", text);
+  check(
+    text.includes("# Title") && text.includes("## Section"),
+    "titles become Markdown headings",
+    text,
+  );
   check(text.includes("**strong**") && text.includes("$x^2$"), "inline syntax and math survive");
   check(text.includes("- one") && text.includes("- two"), "bullets become Markdown");
 
   const same = await planPaste(payload(null, source), "asciidoc");
-  check(same?.text === source && same.converted === false, "AsciiDoc into AsciiDoc is byte-identical");
+  check(
+    same?.text === source && same.converted === false,
+    "AsciiDoc into AsciiDoc is byte-identical",
+  );
 
   const fenced = resolvePasteDestination({
     saved: false,
     language: "markdown",
     buffer: "# Markdown\n\n```asciidoc\n= Not a title\n:toc:\n|===\n```\n",
   });
-  check(fenced.language !== "asciidoc", "a fenced AsciiDoc example does not classify the document", fenced.language);
+  check(
+    fenced.language !== "asciidoc",
+    "a fenced AsciiDoc example does not classify the document",
+    fenced.language,
+  );
 
   const asciiMath = await planPaste(payload(null, "A $x^2$ formula."), "asciidoc");
   check(!(asciiMath?.text ?? "").includes("latexmath"), "AsciiMath is not rewritten as TeX");
@@ -423,7 +531,10 @@ console.log("\n=== same-format and plain passthrough ===");
 
 console.log("\n=== escaping and structure ===");
 {
-  const result = await planPaste(payload(null, "# Title\n\n- one\n  - nested\n- two\n\n> quote\n\n```js\nlet x = 1\n```\n"), "markdown");
+  const result = await planPaste(
+    payload(null, "# Title\n\n- one\n  - nested\n- two\n\n> quote\n\n```js\nlet x = 1\n```\n"),
+    "markdown",
+  );
   const text = result?.text ?? "";
   check(text.includes("  - nested"), "nested list indentation", JSON.stringify(text));
   check(text.includes("> quote"), "blockquote");
@@ -431,16 +542,29 @@ console.log("\n=== escaping and structure ===");
 
   const special = await planPaste(payload("<p>* _ [ ] &lt; $ | ` #</p>"), "markdown");
   const escaped = special?.text ?? "";
-  check(escaped.includes("\\*") && escaped.includes("\\_") && escaped.includes("\\[") && escaped.includes("\\$"), "special characters escaped", escaped);
+  check(
+    escaped.includes("\\*") &&
+      escaped.includes("\\_") &&
+      escaped.includes("\\[") &&
+      escaped.includes("\\$"),
+    "special characters escaped",
+    escaped,
+  );
 
   const typstSpecial = await planPaste(payload("<p>a * b _ c # d @ e [ f ]</p>"), "typst");
-  check(!/(^|[^\\])\*/.test(typstSpecial?.text ?? ""), "Typst markup escaped", typstSpecial?.text ?? "");
+  check(
+    !/(^|[^\\])\*/.test(typstSpecial?.text ?? ""),
+    "Typst markup escaped",
+    typstSpecial?.text ?? "",
+  );
 }
 
 console.log("\n=== sanitation and safety ===");
 {
   const result = await planPaste(
-    payload(`<p onclick="steal()">Hello <a href="javascript:alert(1)">link</a></p><script>alert(1)</script><style>p{color:red}</style>`),
+    payload(
+      `<p onclick="steal()">Hello <a href="javascript:alert(1)">link</a></p><script>alert(1)</script><style>p{color:red}</style>`,
+    ),
     "html",
   );
   const text = result?.text ?? "";
@@ -451,30 +575,53 @@ console.log("\n=== sanitation and safety ===");
 
 console.log("\n=== images and math ===");
 {
-  check(imageSyntaxFor("markdown", "Alt", "./a.png") === "![Alt](./a.png)", "Markdown image syntax");
-  check(imageSyntaxFor("typst", "Alt", "./a.png") === '#image("./a.png", alt: "Alt")', "Typst image syntax");
+  check(
+    imageSyntaxFor("markdown", "Alt", "./a.png") === "![Alt](./a.png)",
+    "Markdown image syntax",
+  );
+  check(
+    imageSyntaxFor("typst", "Alt", "./a.png") === '#image("./a.png", alt: "Alt")',
+    "Typst image syntax",
+  );
   check(imageSyntaxFor("typst", "", "./a.png") === '#image("./a.png")', "Typst empty alt");
-  check(imageSyntaxFor("html", "A \"quote\"", "./a.png") === '<img src="./a.png" alt="A &quot;quote&quot;">', "HTML image syntax");
+  check(
+    imageSyntaxFor("html", 'A "quote"', "./a.png") ===
+      '<img src="./a.png" alt="A &quot;quote&quot;">',
+    "HTML image syntax",
+  );
 
   const result = await planPaste(
     payload(`<p>Before <img src="data:image/png;base64,AAA" alt="shot"> after</p>`),
     "typst",
     { resolveImage: async () => ({ src: "./assets/shot.png", alt: "shot" }) },
   );
-  check(result?.text.includes('#image("./assets/shot.png", alt: "shot")'), "resolved image path", result?.text ?? "");
+  check(
+    result?.text.includes('#image("./assets/shot.png", alt: "shot")'),
+    "resolved image path",
+    result?.text ?? "",
+  );
 
   const math = await planPaste(
-    payload(`<p><span class="katex"><math><semantics><annotation encoding="application/x-tex">\\frac{a}{b}</annotation></semantics></math></span></p>`),
+    payload(
+      `<p><span class="katex"><math><semantics><annotation encoding="application/x-tex">\\frac{a}{b}</annotation></semantics></math></span></p>`,
+    ),
     "typst",
   );
-  check(math?.text.includes("frac(a, b)") || math?.text.includes("\\frac"), "TeX math reaches Typst", math?.text ?? "");
+  check(
+    math?.text.includes("frac(a, b)") || math?.text.includes("\\frac"),
+    "TeX math reaches Typst",
+    math?.text ?? "",
+  );
 }
 
 console.log("\n=== fallbacks ===");
 {
   const huge = "A Markdown paragraph. ".repeat(60_000);
   const result = await planPaste(payload(null, null, huge), "html");
-  check(result?.text === huge, "an oversized Markdown-only clipboard falls back to its Markdown text");
+  check(
+    result?.text === huge,
+    "an oversized Markdown-only clipboard falls back to its Markdown text",
+  );
   check(
     result?.notices.some((notice) => notice.includes("too large")),
     "the oversized fallback is announced",

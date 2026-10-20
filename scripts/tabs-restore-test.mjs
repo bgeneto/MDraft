@@ -83,11 +83,17 @@ function check(ok, label, detail = "") {
   console.log(`  ${ok ? "PASS" : "FAIL"}  ${label}${detail ? ` — ${detail}` : ""}`);
 }
 
-const tabs = () => json(`[...document.querySelectorAll(".doc-tab-name")].map((e) => e.textContent)`);
+const tabs = () =>
+  json(`[...document.querySelectorAll(".doc-tab-name")].map((e) => e.textContent)`);
 const activeTab = () =>
-  evaluate(`document.querySelector('.doc-tab[aria-selected="true"] .doc-tab-name')?.textContent ?? ""`);
+  evaluate(
+    `document.querySelector('.doc-tab[aria-selected="true"] .doc-tab-name')?.textContent ?? ""`,
+  );
 const title = () => evaluate(`document.title`);
-const toastText = () => evaluate(`document.getElementById("toast").hidden ? "" : document.getElementById("toast").textContent`);
+const toastText = () =>
+  evaluate(
+    `document.getElementById("toast").hidden ? "" : document.getElementById("toast").textContent`,
+  );
 
 /** Call an application command the way the frontend does. */
 const invoke = (command) =>
@@ -193,11 +199,21 @@ try {
       60000,
     );
     check(booted, "the window finished booting");
-    check((await tabs()).length === 1, "the launch file is the only tab", (await tabs()).join(", "));
-    check((await activeTab()) === basename(process.argv[4]), "and it is the active tab", await activeTab());
+    check(
+      (await tabs()).length === 1,
+      "the launch file is the only tab",
+      (await tabs()).join(", "),
+    );
+    check(
+      (await activeTab()) === basename(process.argv[4]),
+      "and it is the active tab",
+      await activeTab(),
+    );
 
     await emitOpenFiles(extras);
-    const opened = await pollFor(`document.querySelectorAll(".doc-tab").length === ${extras.length + 1}`);
+    const opened = await pollFor(
+      `document.querySelectorAll(".doc-tab").length === ${extras.length + 1}`,
+    );
     const afterOpen = await tabs();
     check(opened, `${extras.length} more documents opened as tabs`, String(afterOpen.length));
     check(
@@ -205,11 +221,18 @@ try {
       "the tabs are in open order",
       afterOpen.join(", "),
     );
-    check((await activeTab()) === basename(extras[extras.length - 1]), "the last opened document is active", await activeTab());
+    check(
+      (await activeTab()) === basename(extras[extras.length - 1]),
+      "the last opened document is active",
+      await activeTab(),
+    );
 
     // -----------------------------------------------------------------------
     console.log("\n=== the strip is reordered ===");
-    const dragged = await dragTabAfter(basename(process.argv[4]), basename(extras[extras.length - 1]));
+    const dragged = await dragTabAfter(
+      basename(process.argv[4]),
+      basename(extras[extras.length - 1]),
+    );
     await sleep(500);
     const afterDrag = await tabs();
     check(dragged === "sent", "the drag reached the strip");
@@ -219,11 +242,18 @@ try {
       afterDrag.join(", "),
     );
     check(afterDrag.length === extras.length + 1, "no tab was lost", String(afterDrag.length));
-    check((await activeTab()) !== basename(process.argv[4]), "dragging does not activate the dragged tab");
+    check(
+      (await activeTab()) !== basename(process.argv[4]),
+      "dragging does not activate the dragged tab",
+    );
 
     await clickTab(basename(extras[0]));
     await sleep(300);
-    check((await activeTab()) === basename(extras[0]), "a click picks the active tab", await activeTab());
+    check(
+      (await activeTab()) === basename(extras[0]),
+      "a click picks the active tab",
+      await activeTab(),
+    );
 
     // -----------------------------------------------------------------------
     console.log("\n=== the preference is set through the panel ===");
@@ -254,8 +284,13 @@ try {
     // fire again before the harness's WM_CLOSE, so phase 2 seeing two tabs is
     // what proves the close handler flushed the change.
     console.log("\n=== the final change is left to the close flush ===");
-    check((await clickClose(basename(extras[1]))) === "clicked", "a tab was closed just before the close");
-    const settled = await pollFor(`document.querySelectorAll(".doc-tab").length === ${extras.length}`);
+    check(
+      (await clickClose(basename(extras[1]))) === "clicked",
+      "a tab was closed just before the close",
+    );
+    const settled = await pollFor(
+      `document.querySelectorAll(".doc-tab").length === ${extras.length}`,
+    );
     check(settled, "the strip is down to the remembered set", (await tabs()).join(", "));
   } else {
     // -----------------------------------------------------------------------
@@ -268,13 +303,26 @@ try {
       "the documents and the order the strip was left in",
       restoredTabs.join(", "),
     );
-    check((await activeTab()) === basename(extras[0]), "the remembered tab is active", await activeTab());
-    check((await title()).startsWith(basename(extras[0])), "the window names the active document", await title());
+    check(
+      (await activeTab()) === basename(extras[0]),
+      "the remembered tab is active",
+      await activeTab(),
+    );
+    check(
+      (await title()).startsWith(basename(extras[0])),
+      "the window names the active document",
+      await title(),
+    );
 
     const settings = await invoke("get_settings");
-    check(settings.onLaunch === "tabs", "the launch preference survived the restart", settings.onLaunch);
     check(
-      settings.lastTabs.map(basename).join(",") === [basename(extras[0]), basename(process.argv[4])].join(","),
+      settings.onLaunch === "tabs",
+      "the launch preference survived the restart",
+      settings.onLaunch,
+    );
+    check(
+      settings.lastTabs.map(basename).join(",") ===
+        [basename(extras[0]), basename(process.argv[4])].join(","),
       "the flushed list holds exactly the documents that were open",
       settings.lastTabs.map(basename).join(", "),
     );

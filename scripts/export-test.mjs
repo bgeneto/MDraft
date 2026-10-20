@@ -114,7 +114,13 @@ check(bridge === true, "the Tauri IPC bridge is reachable from the page");
 // (2) Pandoc detection.
 const status = await call("pandoc_status");
 const found = status.ok && status.value?.found === true;
-check(found, "pandoc_status finds pandoc", found ? `version ${status.value.version} via ${status.value.source}` : status.error ?? "not found");
+check(
+  found,
+  "pandoc_status finds pandoc",
+  found
+    ? `version ${status.value.version} via ${status.value.source}`
+    : (status.error ?? "not found"),
+);
 // `pdfEngine` is null when nothing was found, which is a real answer rather
 // than a missing field.
 check(
@@ -149,7 +155,8 @@ for (const format of formats) {
   const result = await call("run_export", {
     request: {
       formatId: format.id,
-      markdown: "# Export probe\n\nSome **bold** text, a table and maths $e^{i\\pi}+1=0$.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n",
+      markdown:
+        "# Export probe\n\nSome **bold** text, a table and maths $e^{i\\pi}+1=0$.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n",
       outputPath: output,
       inputPath: null,
     },
@@ -198,7 +205,11 @@ for (const format of formats) {
     },
   });
   if (!result.ok) {
-    check(false, "an AsciiDoc source exports through the AsciiDoc reader", result.error.split("\n")[0]);
+    check(
+      false,
+      "an AsciiDoc source exports through the AsciiDoc reader",
+      result.error.split("\n")[0],
+    );
   } else {
     const text = readFileSync(output, "utf8");
     check(
@@ -217,8 +228,7 @@ for (const format of formats) {
   const result = await call("run_export", {
     request: {
       formatId: "latex",
-      markdown:
-        "<p>Inline \\(x^2\\) and display:</p><p>\\[\\int_0^1 x^2\\,dx\\]</p>\n",
+      markdown: "<p>Inline \\(x^2\\) and display:</p><p>\\[\\int_0^1 x^2\\,dx\\]</p>\n",
       outputPath: output,
       inputPath: null,
       language: "html",
@@ -257,17 +267,33 @@ if (documentPath && documentPath.endsWith(".md")) {
       guarded.ok ? "it was allowed" : guarded.error.split("\n")[0],
     );
   } else {
-    check(true, "an export refuses to overwrite its own source document", "skipped: no startup file");
+    check(
+      true,
+      "an export refuses to overwrite its own source document",
+      "skipped: no startup file",
+    );
   }
 } else {
-  check(true, "an export refuses to overwrite its own source document", "skipped: no document open");
+  check(
+    true,
+    "an export refuses to overwrite its own source document",
+    "skipped: no document open",
+  );
 }
 
 // (5) An unknown format is reported, not silently ignored.
 const unknown = await call("run_export", {
-  request: { formatId: "no-such-format", markdown: "x", outputPath: join(workDir, "x.docx"), inputPath: null },
+  request: {
+    formatId: "no-such-format",
+    markdown: "x",
+    outputPath: join(workDir, "x.docx"),
+    inputPath: null,
+  },
 });
-check(!unknown.ok && /unknown export format/i.test(unknown.error), "an unknown format id is reported");
+check(
+  !unknown.ok && /unknown export format/i.test(unknown.error),
+  "an unknown format id is reported",
+);
 
 // (5b) The after-export options are global, and the HTML path runs them too.
 //
@@ -304,9 +330,7 @@ try {
     after.ok ? after.value.after.join(", ") || "nothing ran" : after.error,
   );
   check(
-    after.ok &&
-      after.value.after.length === 1 &&
-      after.value.after[0] === `ran ${afterCommand}`,
+    after.ok && after.value.after.length === 1 && after.value.after[0] === `ran ${afterCommand}`,
     "only the enabled after-export action runs",
     after.ok ? after.value.after.join(", ") : after.error,
   );
@@ -459,10 +483,7 @@ if (pdfButton === "clicked") {
       "the print document carries the token colours",
       /\.hljs/.test(html) ? "present" : "MISSING — code would print uncoloured",
     );
-    check(
-      html.includes("window.print()"),
-      "the print document opens the print dialog by itself",
-    );
+    check(html.includes("window.print()"), "the print document opens the print dialog by itself");
     // The article must be the rendered one, not the markdown source.
     check(
       html.includes("katex") && !/<h1[^>]*>#\s/.test(html),
@@ -480,9 +501,9 @@ if (pdfButton === "clicked") {
     // so a family named in a stack but not embedded is silently substituted —
     // and the PDF stops matching the preview at the moment the reader had gone
     // to the trouble of choosing a face.
-    const faces = [
-      ...html.matchAll(/@font-face\{font-family:"([^"]+)"[^}]*?base64,/g),
-    ].map((m) => m[1]);
+    const faces = [...html.matchAll(/@font-face\{font-family:"([^"]+)"[^}]*?base64,/g)].map(
+      (m) => m[1],
+    );
     // A system stack names no bundled family, so there is no file to embed and
     // the reader's own machine supplies the face. That is the correct outcome
     // for the default preset, not a missing asset.
@@ -502,8 +523,9 @@ if (pdfButton === "clicked") {
       "Victor Mono",
     ];
     const first = (stack) => stack.split(",")[0].replace(/["']/g, "").trim();
-    const stacks = [...html.matchAll(/--font-(?:source|body|heading|code):([^;}]+)/g)]
-      .map((m) => first(m[1]));
+    const stacks = [...html.matchAll(/--font-(?:source|body|heading|code):([^;}]+)/g)].map((m) =>
+      first(m[1]),
+    );
     const winners = [...new Set(stacks.filter((name) => bundledNames.includes(name)))];
     const bundledStack = winners.length > 0;
     check(
@@ -540,7 +562,9 @@ if (pdfButton === "clicked") {
     check(
       /--math-scale:\d/.test(html) && /var\(--math-scale\)/.test(html),
       "the export carries the reader's math scale",
-      /--math-scale:\d/.test(html) ? "variable and rule present" : "MISSING — math scale would be ignored",
+      /--math-scale:\d/.test(html)
+        ? "variable and rule present"
+        : "MISSING — math scale would be ignored",
     );
   }
 
@@ -605,8 +629,7 @@ if (panel.found) {
     panel.choices.join(", "),
   );
   check(
-    panel.labels.includes("Open the exported file") &&
-      panel.labels.includes("Run a command"),
+    panel.labels.includes("Open the exported file") && panel.labels.includes("Run a command"),
     "the after-export options are present",
   );
   check(

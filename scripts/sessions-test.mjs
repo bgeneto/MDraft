@@ -78,7 +78,11 @@ console.log("\n=== add inserts after the active session and activates it ===");
 console.log("\n=== untitledName avoids a collision ===");
 {
   const store = createSessionStore();
-  check(store.untitledName() === "Untitled 2", "the open Untitled takes the first name", store.untitledName());
+  check(
+    store.untitledName() === "Untitled 2",
+    "the open Untitled takes the first name",
+    store.untitledName(),
+  );
   untitled(store, "Untitled 2");
   check(store.untitledName() === "Untitled 3", "then the next free number", store.untitledName());
   untitled(store, "Untitled 3");
@@ -116,7 +120,10 @@ console.log("\n=== findByPath treats one file as one tab ===");
     store.findByPath("C:\\Users\\ana\\Docs\\Notes.md\\") === first,
     "a trailing separator is ignored",
   );
-  check(store.findByPath("C:\\Users\\ana\\Docs\\Other.md") === undefined, "a different file does not match");
+  check(
+    store.findByPath("C:\\Users\\ana\\Docs\\Other.md") === undefined,
+    "a different file does not match",
+  );
   check(store.findByPath("Notes.md") === undefined, "a relative path is not guessed at");
 
   // The case-fold is a Windows rule. Reading it here keeps the platform branch
@@ -165,9 +172,17 @@ console.log("\n=== remove hands back the neighbour that takes the space ===");
   // Removing a middle active session: the next one takes over.
   store.setActive(b.id);
   const nextAfterB = store.remove(b.id);
-  check(nextAfterB === c, "removing the active middle session returns the one after it", nextAfterB?.name);
+  check(
+    nextAfterB === c,
+    "removing the active middle session returns the one after it",
+    nextAfterB?.name,
+  );
   check(store.active() === c, "and that session is already active", store.active().name);
-  check(names(store).join(",") === "a.md,c", "the list lost only that session", names(store).join(","));
+  check(
+    names(store).join(",") === "a.md,c",
+    "the list lost only that session",
+    names(store).join(","),
+  );
 
   // Removing the last session: the previous one takes over.
   const nextAfterC = store.remove(c.id);
@@ -191,23 +206,43 @@ console.log("\n=== move puts a tab where it was dropped ===");
   const b = untitled(store, "b");
   const c = untitled(store, "c");
   const d = untitled(store, "d");
-  check(names(store).join(",") === "a,b,c,d", "the starting order is known", names(store).join(","));
+  check(
+    names(store).join(",") === "a,b,c,d",
+    "the starting order is known",
+    names(store).join(","),
+  );
 
   store.move(d.id, 0);
-  check(names(store).join(",") === "d,a,b,c", "the last tab moves to the front", names(store).join(","));
+  check(
+    names(store).join(",") === "d,a,b,c",
+    "the last tab moves to the front",
+    names(store).join(","),
+  );
   check(store.active() === d, "the active tab stays active after a move", store.active().name);
 
   store.move(d.id, 3);
   check(names(store).join(",") === "a,b,c,d", "and back to the end", names(store).join(","));
 
   store.move(b.id, 1);
-  check(names(store).join(",") === "a,b,c,d", "dropping on its own position is a no-op", names(store).join(","));
+  check(
+    names(store).join(",") === "a,b,c,d",
+    "dropping on its own position is a no-op",
+    names(store).join(","),
+  );
 
   store.move(b.id, 99);
-  check(names(store).join(",") === "a,c,d,b", "an index past the end lands at the end", names(store).join(","));
+  check(
+    names(store).join(",") === "a,c,d,b",
+    "an index past the end lands at the end",
+    names(store).join(","),
+  );
 
   store.move(b.id, -5);
-  check(names(store).join(",") === "b,a,c,d", "an index before the start lands at the start", names(store).join(","));
+  check(
+    names(store).join(",") === "b,a,c,d",
+    "an index before the start lands at the start",
+    names(store).join(","),
+  );
 
   store.move("doc-nope", 2);
   check(names(store).join(",") === "b,a,c,d", "an unknown id is a no-op", names(store).join(","));
@@ -239,7 +274,10 @@ console.log("\n=== removeMany closes a set in one pass ===");
 
   const all = createSessionStore();
   const only = all.active();
-  check(all.removeMany([only.id]) === null && all.list().length === 0, "removing every tab leaves an empty list");
+  check(
+    all.removeMany([only.id]) === null && all.list().length === 0,
+    "removing every tab leaves an empty list",
+  );
 
   const noMatch = createSessionStore();
   const kept = noMatch.active();
@@ -279,7 +317,11 @@ console.log("\n=== next and previous wrap, and never return undefined ===");
 
   store.setActive(c.id);
   check(store.next() === a, "next from the last wraps to the first", store.next().name);
-  check(store.previous() === b, "previous from the last is the one before it", store.previous().name);
+  check(
+    store.previous() === b,
+    "previous from the last is the one before it",
+    store.previous().name,
+  );
   store.setActive(a.id);
   check(store.previous() === c, "previous from the first wraps to the last", store.previous().name);
   check(store.next() === b, "next from the first is the second", store.next().name);
@@ -295,7 +337,11 @@ console.log("\n=== list() is a copy and setActive rejects an unknown id ===");
   const store = createSessionStore();
   const copy = store.list();
   copy.push(store.create());
-  check(store.list().length === 1, "mutating the returned array does not change the store", String(store.list().length));
+  check(
+    store.list().length === 1,
+    "mutating the returned array does not change the store",
+    String(store.list().length),
+  );
 
   let threw = false;
   try {

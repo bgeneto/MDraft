@@ -73,10 +73,7 @@ console.log("\n=== context and fallbacks ===");
   );
 
   const generated = new TypstSourceMap("#let x = 1");
-  check(
-    generated.mapLineWithNeighbors("Lorem", "", "") === null,
-    "generated text paints nothing",
-  );
+  check(generated.mapLineWithNeighbors("Lorem", "", "") === null, "generated text paints nothing");
 }
 
 console.log("\n=== ligatures and soft hyphens ===");

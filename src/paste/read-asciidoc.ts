@@ -63,10 +63,7 @@ function parseInline(text: string, stemLatex: boolean): Inline[] {
     },
     {
       re: /^stem:\[([^\]]*)\]/,
-      make: (m) =>
-        stemLatex
-          ? { kind: "math", tex: m[1] }
-          : { kind: "code", value: m[0] },
+      make: (m) => (stemLatex ? { kind: "math", tex: m[1] } : { kind: "code", value: m[0] }),
     },
     {
       re: /^((?:https?:\/\/|www\.)[^\s\[]+)\[([^\]]*)\]/,
@@ -121,7 +118,11 @@ function paragraph(text: string, stemLatex: boolean): Block {
   return { kind: "paragraph", children: parseInline(text.trim(), stemLatex) };
 }
 
-function collect(lines: string[], start: number, delimiter: string): {
+function collect(
+  lines: string[],
+  start: number,
+  delimiter: string,
+): {
   body: string[];
   next: number;
 } {
@@ -133,11 +134,7 @@ function collect(lines: string[], start: number, delimiter: string): {
   };
 }
 
-function parseTable(
-  body: string[],
-  header: boolean,
-  stemLatex: boolean,
-): Block | null {
+function parseTable(body: string[], header: boolean, stemLatex: boolean): Block | null {
   const rows = body
     .map((line) => line.trim())
     .filter((line) => line.startsWith("|"))
@@ -149,7 +146,7 @@ function parseTable(
     )
     .filter((row) => row.length > 0);
   if (rows.length === 0) return null;
-  const head = header ? rows.shift() ?? null : null;
+  const head = header ? (rows.shift() ?? null) : null;
   const width = head?.length ?? rows[0]?.length ?? 0;
   return {
     kind: "table",

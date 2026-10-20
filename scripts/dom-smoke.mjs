@@ -223,9 +223,18 @@ check("a document tab is shown", doc.docTabs === 1);
 check("the open tab is feature-tour.md", doc.activeTab === "feature-tour.md");
 check("exactly one view mode is active", doc.activeModeButtons === 1);
 check("no duplicate source-mode button", doc.hasLegacySourceButton === false);
-check("status icons are inline SVG", doc.statusIcons.every((icon) => icon.isSvg));
-check("status icons are at least 16px", doc.statusIcons.every((icon) => icon.size >= 16));
-check("status icons inherit the theme colour", doc.statusIcons.every((icon) => icon.stroke.length > 0));
+check(
+  "status icons are inline SVG",
+  doc.statusIcons.every((icon) => icon.isSvg),
+);
+check(
+  "status icons are at least 16px",
+  doc.statusIcons.every((icon) => icon.size >= 16),
+);
+check(
+  "status icons inherit the theme colour",
+  doc.statusIcons.every((icon) => icon.stroke.length > 0),
+);
 check(
   "the theme button shows the sun in light and the moon in dark",
   doc.theme === "dark"
@@ -298,7 +307,9 @@ for (const [key, value] of Object.entries(prefs)) {
   console.log(`  ${key.padEnd(16)} ${String(value).slice(0, 150)}`);
 }
 for (const section of prefs.perSection) {
-  console.log(`  · ${section.name.padEnd(12)} ${section.rows} rows  [${section.labels.join(", ")}]`);
+  console.log(
+    `  · ${section.name.padEnd(12)} ${section.rows} rows  [${section.labels.join(", ")}]`,
+  );
 }
 
 check("preferences opens", prefs.open);
@@ -308,7 +319,10 @@ check(
   "sections named and ordered like Typora",
   prefs.sectionNames === "Files,Editor,Image,Markdown,HTML,Export,Appearance,General,Typography",
 );
-check("first section selected", prefs.activeSection === "Files" && prefs.sectionHeading === "Files");
+check(
+  "first section selected",
+  prefs.activeSection === "Files" && prefs.sectionHeading === "Files",
+);
 check("every section has rows", prefs.emptySections === "");
 check("rows rendered", prefs.totalRows >= 24);
 check("controls present", prefs.selects >= 2 && prefs.checkboxes >= 2 && prefs.buttons >= 1);
@@ -395,8 +409,12 @@ const search = await evaluate(`(() => {
 
 console.log("\n=== preferences search ===");
 console.log(`  mermaid    ${search.mermaid.sections} / ${search.mermaid.labels}`);
-console.log(`  locations  ${search.locations.sections} / ${search.locations.groups} / ${search.locations.labels}`);
-console.log(`  file tree  ${search.fileTree.sections} / ${search.fileTree.groups} / ${search.fileTree.labels}`);
+console.log(
+  `  locations  ${search.locations.sections} / ${search.locations.groups} / ${search.locations.labels}`,
+);
+console.log(
+  `  file tree  ${search.fileTree.sections} / ${search.fileTree.groups} / ${search.fileTree.labels}`,
+);
 console.log(`  clear      ${search.clear.sections} / ${search.clear.buttons}`);
 check(
   "search narrows sections",
@@ -485,10 +503,10 @@ const faces = await evaluate(`(() => {
 })()`);
 
 console.log("\n=== typography face rows ===");
-console.log(`  labels   ${faces.labels.join(', ')}`);
-console.log(`  controls ${faces.controls.join(', ')}`);
-console.log(`  tags     ${faces.tags.join(', ')}`);
-console.log(`  selected ${faces.selected.join(', ')}`);
+console.log(`  labels   ${faces.labels.join(", ")}`);
+console.log(`  controls ${faces.controls.join(", ")}`);
+console.log(`  tags     ${faces.tags.join(", ")}`);
+console.log(`  selected ${faces.selected.join(", ")}`);
 
 check(
   "one dropdown for each face",
@@ -543,7 +561,9 @@ const mathScale = await evaluate(`(() => {
 })()`);
 
 console.log("\n=== math scale preference ===");
-console.log(`  bounds   ${mathScale.bounds?.min}–${mathScale.bounds?.max}  value ${mathScale.bounds?.value}`);
+console.log(
+  `  bounds   ${mathScale.bounds?.min}–${mathScale.bounds?.max}  value ${mathScale.bounds?.value}`,
+);
 console.log(`  width    ${mathScale.at70} px at 70%, ${mathScale.before} px at 100%`);
 console.log(`  clamps   ${mathScale.clampedLow} / ${mathScale.clampedHigh}`);
 
@@ -665,7 +685,9 @@ for (const [name, size] of [
   ["System (back)", presetSizes.systemBack],
   ["reset", presetSizes.reset],
 ]) {
-  console.log(`  ${name.padEnd(14)} ${size?.editor}px / ${size?.body}px / ${size?.math}%  active ${size?.active}`);
+  console.log(
+    `  ${name.padEnd(14)} ${size?.editor}px / ${size?.body}px / ${size?.math}%  active ${size?.active}`,
+  );
 }
 
 check(
@@ -839,7 +861,7 @@ const lineHeightPref = await evaluate(`(async () => {
 })()`);
 
 console.log("\n=== Line Height preference ===");
-console.log(`  choices  ${lineHeightPref.options?.map((o) => o[1] + '=' + o[0]).join(" | ")}`);
+console.log(`  choices  ${lineHeightPref.options?.map((o) => o[1] + "=" + o[0]).join(" | ")}`);
 console.log(
   `  measured ${lineHeightPref.compact} / ${lineHeightPref.normal} / ${lineHeightPref.wide}` +
     ` · 20px Normal ${lineHeightPref.scaled} · after preset ${lineHeightPref.presetHeight}`,
@@ -863,10 +885,7 @@ check(
   "the Line Height choice reaches the settings file",
   lineHeightPref.compactStored === "compact",
 );
-check(
-  "the line height scales with Editor font size",
-  lineHeightPref.scaled === "30px",
-);
+check("the line height scales with Editor font size", lineHeightPref.scaled === "30px");
 check(
   "switching presets keeps the line height",
   lineHeightPref.afterPreset === "wide" && lineHeightPref.presetHeight === "36px",
@@ -1050,31 +1069,19 @@ for (const [key, value] of Object.entries(sync)) console.log(`  ${key.padEnd(20)
 check("preview pane is scrollable", sync.previewPaneMax > 500);
 check("every preview block is anchored", sync.anchors >= 10);
 check("anchors are monotonic", sync.monotonic === true);
-check(
-  "preview click moves the caret",
-  sync.afterPreviewClick.includes(`Ln ${sync.targetLine},`),
-);
+check("preview click moves the caret", sync.afterPreviewClick.includes(`Ln ${sync.targetLine},`));
 check("preview click finds a scrolled-into-view block", sync.foundMiddleBlock === true);
 check(
   "preview click leaves the preview where it is",
   Math.abs(sync.scrollAfterClick - sync.scrollBeforeClick) < 4,
 );
-check(
-  "preview click still moves the source caret",
-  sync.caretAfterClick !== sync.caretBeforeClick,
-);
+check("preview click still moves the source caret", sync.caretAfterClick !== sync.caretBeforeClick);
 check("source scroll drives the preview", sync.previewTopAfter > sync.previewTopBefore + 50);
 check("scrolling never blinks", sync.blinkAfterScroll === 0);
 check("clicking the source blinks the matching block", sync.blinkedCases >= 1);
 check("the blink clears itself", sync.blinkAfterClick === 0);
-check(
-  "at least one clicked line had its block below the preview fold",
-  sync.offScreenCases >= 1,
-);
-check(
-  "no source click moves the preview",
-  sync.maxDrift >= 0 && sync.maxDrift < 4,
-);
+check("at least one clicked line had its block below the preview fold", sync.offScreenCases >= 1);
+check("no source click moves the preview", sync.maxDrift >= 0 && sync.maxDrift < 4);
 check(
   "clicking the source keeps the panes aligned",
   sync.topLineAfterSourceClick === sync.topLineBeforeSourceClick,
@@ -1219,18 +1226,9 @@ const interpolates = (measured) =>
   measured.distinct >= 4 &&
   measured.moved > 0;
 
-check(
-  "sync test found a multi-line block",
-  interpolation.ok === true && interpolation.gap >= 3,
-);
-check(
-  "sync interpolates with a large preview font",
-  interpolates(interpolation.large),
-);
-check(
-  "sync interpolates with a small preview font",
-  interpolates(interpolation.small),
-);
+check("sync test found a multi-line block", interpolation.ok === true && interpolation.gap >= 3);
+check("sync interpolates with a large preview font", interpolates(interpolation.large));
+check("sync interpolates with a small preview font", interpolates(interpolation.small));
 check(
   "reverse sync returns to the same source position at both extremes",
   interpolation.large?.inverseDelta <= interpolation.large?.inverseLimit &&
@@ -1282,7 +1280,10 @@ console.log(
 );
 
 check("five editor flags are present", flagState.length === 5 && flagState.every((f) => f.svg));
-check("mode flags are inline SVG at least 16px", flagState.every((f) => f.svg && f.size >= 16));
+check(
+  "mode flags are inline SVG at least 16px",
+  flagState.every((f) => f.svg && f.size >= 16),
+);
 check(
   "every flag states on/off and agrees with aria-pressed",
   flagState.every((f) =>
@@ -1293,7 +1294,12 @@ check(
 );
 
 const menuBefore = await menuOf();
-console.log(`  menu      ${menuBefore.filter((entry) => entry.checked).map((entry) => entry.id).join(", ")}`);
+console.log(
+  `  menu      ${menuBefore
+    .filter((entry) => entry.checked)
+    .map((entry) => entry.id)
+    .join(", ")}`,
+);
 check("the menu exposes every checkable item", menuBefore.length >= 12);
 
 const exclusiveGroups = [
@@ -1303,9 +1309,7 @@ const exclusiveGroups = [
 ];
 check(
   "each exclusive menu group checks exactly one item",
-  exclusiveGroups.every(
-    (group) => group.filter((id) => menuChecked(menuBefore, id)).length === 1,
-  ),
+  exclusiveGroups.every((group) => group.filter((id) => menuChecked(menuBefore, id)).length === 1),
 );
 
 /** Click a flag, let the asynchronous menu sync land, then read both sides. */

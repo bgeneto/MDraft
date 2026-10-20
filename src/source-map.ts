@@ -532,10 +532,7 @@ export function rawNodeOffsetToSource(
       activeSpan.nodeFolded1,
       rawOffset,
     );
-    if (
-      nodeFolded.plain[nIndex] === " " &&
-      nIndex + 1 < activeSpan.nodeFolded1
-    ) {
+    if (nodeFolded.plain[nIndex] === " " && nIndex + 1 < activeSpan.nodeFolded1) {
       nIndex += 1;
     }
     const bIndex = mapFoldedIndex(
@@ -557,10 +554,7 @@ export function rawNodeOffsetToSource(
     activeSpan.nodeFolded1,
     lastChar,
   );
-  if (
-    nodeFolded.plain[nIndex] === " " &&
-    nIndex > activeSpan.nodeFolded0
-  ) {
+  if (nodeFolded.plain[nIndex] === " " && nIndex > activeSpan.nodeFolded0) {
     nIndex -= 1;
   }
   const bIndex = mapFoldedIndex(
@@ -611,10 +605,7 @@ export function sourceOffsetToRawNode(
       activeSpan.blockFolded1,
       local,
     );
-    if (
-      blockFolded.plain[bIndex] === " " &&
-      bIndex + 1 < activeSpan.blockFolded1
-    ) {
+    if (blockFolded.plain[bIndex] === " " && bIndex + 1 < activeSpan.blockFolded1) {
       bIndex += 1;
     }
     const nIndex = mapFoldedIndex(
@@ -629,20 +620,14 @@ export function sourceOffsetToRawNode(
 
   if (sourceOffset <= activeSpan.src0) return activeSpan.dom0;
   if (sourceOffset >= activeSpan.src1) return activeSpan.dom1;
-  const localLast = Math.max(
-    activeSpan.src0 - blockSrc0,
-    sourceOffset - 1 - blockSrc0,
-  );
+  const localLast = Math.max(activeSpan.src0 - blockSrc0, sourceOffset - 1 - blockSrc0);
   let bIndex = largestAtOrBefore(
     blockFolded.at,
     activeSpan.blockFolded0,
     activeSpan.blockFolded1,
     localLast,
   );
-  if (
-    blockFolded.plain[bIndex] === " " &&
-    bIndex > activeSpan.blockFolded0
-  ) {
+  if (blockFolded.plain[bIndex] === " " && bIndex > activeSpan.blockFolded0) {
     bIndex -= 1;
   }
   const nIndex = mapFoldedIndex(
@@ -689,10 +674,7 @@ function alignNodeWords(
   cursor: number,
 ): { spans: BlockNodeSpan[]; nextCursor: number } {
   const nodeWords = tokenizeFoldedWords(nodeFolded.plain, 0);
-  const sourceWords = tokenizeFoldedWords(
-    blockFolded.plain.slice(cursor),
-    cursor,
-  );
+  const sourceWords = tokenizeFoldedWords(blockFolded.plain.slice(cursor), cursor);
   if (nodeWords.length === 0 || sourceWords.length === 0) {
     return { spans: [], nextCursor: cursor };
   }
@@ -739,10 +721,7 @@ function alignNodeWords(
         const nextWord = nodeWords[w + 1];
         let bypassedCloserNext = false;
         for (let alt = sCursor; alt < bestCand; alt += 1) {
-          if (
-            sourceWords[alt].norm === nextWord.norm &&
-            runLength(w + 1, alt) >= bestRun
-          ) {
+          if (sourceWords[alt].norm === nextWord.norm && runLength(w + 1, alt) >= bestRun) {
             bypassedCloserNext = true;
             break;
           }
@@ -772,15 +751,7 @@ function alignNodeWords(
       prev.src1 = blockSrc0 + foldedCharRawEnd(blockFolded, srcWord.f1 - 1);
     } else {
       spans.push(
-        makeSpan(
-          nodeFolded,
-          blockFolded,
-          blockSrc0,
-          word.f0,
-          word.f1,
-          srcWord.f0,
-          srcWord.f1,
-        ),
+        makeSpan(nodeFolded, blockFolded, blockSrc0, word.f0, word.f1, srcWord.f0, srcWord.f1),
       );
     }
 
@@ -825,26 +796,13 @@ export function alignBlockNodes(
     if (found >= 0 && (needle.length >= 4 || found - cursor <= 48)) {
       const bf0 = found;
       const bf1 = found + needle.length;
-      const span = makeSpan(
-        nodeFolded,
-        blockFolded,
-        blockSrc0,
-        nf0,
-        nf1,
-        bf0,
-        bf1,
-      );
+      const span = makeSpan(nodeFolded, blockFolded, blockSrc0, nf0, nf1, bf0, bf1);
       alignedNodes.push({ text, folded: nodeFolded, spans: [span] });
       cursor = bf1;
       continue;
     }
 
-    const { spans, nextCursor } = alignNodeWords(
-      nodeFolded,
-      blockFolded,
-      blockSrc0,
-      cursor,
-    );
+    const { spans, nextCursor } = alignNodeWords(nodeFolded, blockFolded, blockSrc0, cursor);
     alignedNodes.push({ text, folded: nodeFolded, spans });
     cursor = nextCursor;
   }
@@ -886,14 +844,7 @@ function spansSourceRange(
   if (lo === hi) {
     const hit = spans.find((span) => span.dom0 <= lo && lo <= span.dom1);
     if (!hit) return null;
-    const at = rawNodeOffsetToSource(
-      nodeFolded,
-      blockFolded,
-      lo,
-      "start",
-      hit,
-      blockSrc0,
-    );
+    const at = rawNodeOffsetToSource(nodeFolded, blockFolded, lo, "start", hit, blockSrc0);
     return { from: at, to: at };
   }
 
@@ -1002,14 +953,7 @@ function blockRangeFor(
   if (!layout) return null;
   const entry = layout.nodes.get(node);
   if (!entry || entry.spans.length === 0) return null;
-  return spansSourceRange(
-    entry.folded,
-    entry.spans,
-    layout.folded,
-    layout.src0,
-    start,
-    end,
-  );
+  return spansSourceRange(entry.folded, entry.spans, layout.folded, layout.src0, start, end);
 }
 
 /**
@@ -1023,10 +967,7 @@ export function blockRangeForNode(map: WordMap, node: Node): BlockRange | null {
       return map.blocks[record.block] ?? null;
     }
   }
-  const element =
-    node.nodeType === Node.ELEMENT_NODE
-      ? (node as HTMLElement)
-      : node.parentElement;
+  const element = node.nodeType === Node.ELEMENT_NODE ? (node as HTMLElement) : node.parentElement;
   const host = element?.closest<HTMLElement>("[data-b]");
   if (!host) return null;
   const index = Number(host.dataset.b);
@@ -1078,10 +1019,7 @@ export function sourceRangeFor(
 }
 
 /** The DOM point where a source range ends, widening past unmapped text. */
-function endPointForSource(
-  map: WordMap,
-  offset: number,
-): { node: Text; offset: number } | null {
+function endPointForSource(map: WordMap, offset: number): { node: Text; offset: number } | null {
   const direct = pointForSource(map, offset, "end");
   if (direct) return direct;
   if (map.fragments.length > 0) {
@@ -1290,7 +1228,9 @@ let segmenter: SegmenterLike | null = null;
 
 /** `Intl.Segmenter` when the webview has it; word boundaries fall back to spans. */
 function wordSegmenter(): SegmenterLike | null {
-  const IntlAny = Intl as unknown as { Segmenter?: new (locale?: string, options?: { granularity: string }) => SegmenterLike };
+  const IntlAny = Intl as unknown as {
+    Segmenter?: new (locale?: string, options?: { granularity: string }) => SegmenterLike;
+  };
   if (!IntlAny.Segmenter) return null;
   segmenter ??= new IntlAny.Segmenter(undefined, { granularity: "word" });
   return segmenter;

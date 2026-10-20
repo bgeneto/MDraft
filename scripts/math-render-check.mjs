@@ -111,7 +111,9 @@ const report = await evaluate(`(async () => {
 })()`);
 
 console.log("=== KaTeX font faces ===");
-console.log(`  discovered ${report.faceCount}, loaded ${report.loadedCount}, failed ${report.failed.length}`);
+console.log(
+  `  discovered ${report.faceCount}, loaded ${report.loadedCount}, failed ${report.failed.length}`,
+);
 console.log(`  families: ${report.loaded.join(", ")}`);
 if (report.failed.length) console.log(`  FAILED: ${report.failed.join(", ")}`);
 
@@ -123,20 +125,30 @@ for (const [family, status] of Object.entries(report.check)) {
 console.log("\n=== rendered geometry ===");
 console.log(`  katex elements     ${report.katexElements}`);
 console.log(`  display blocks     ${report.displayBlocks}`);
-console.log(`  radicals           ${report.sqrtCount}  (without a tail box: ${report.radicalsWithoutTail})`);
+console.log(
+  `  radicals           ${report.sqrtCount}  (without a tail box: ${report.radicalsWithoutTail})`,
+);
 console.log(`  smallest radical   ${report.smallestRadicalWidth} px wide`);
-console.log(`  fractions          ${report.fracCount}  (without a bar: ${report.fractionsWithoutBar})`);
+console.log(
+  `  fractions          ${report.fracCount}  (without a bar: ${report.fractionsWithoutBar})`,
+);
 console.log(`  smallest frac bar  ${report.smallestFractionBar} px wide`);
 console.log(`  large delimiters   ${report.delimCount}`);
 console.log(`  sample font-family ${report.sampleFont}`);
 
 const checks = [
-  ["all 12 KaTeX families declared and fetchable", Object.values(report.check).every((s) => s === "loaded")],
+  [
+    "all 12 KaTeX families declared and fetchable",
+    Object.values(report.check).every((s) => s === "loaded"),
+  ],
   ["no font face failed to load", report.failed.length === 0],
   ["every declared face is accounted for", report.faceCount === 20],
   ["math elements rendered", report.katexElements > 100],
   ["display blocks present", report.displayBlocks >= 5],
-  ["radicals rendered with a visible sign", report.sqrtCount > 0 && report.radicalsWithoutTail === 0],
+  [
+    "radicals rendered with a visible sign",
+    report.sqrtCount > 0 && report.radicalsWithoutTail === 0,
+  ],
   ["radical sign has real width", (report.smallestRadicalWidth ?? 0) > 4],
   ["fraction bars have real width", report.fracCount > 0 && report.fractionsWithoutBar === 0],
   ["large delimiters rendered", report.delimCount > 0],

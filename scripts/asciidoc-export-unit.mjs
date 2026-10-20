@@ -118,13 +118,16 @@ try {
   check(reads.length === 1, "only the include is read through readFile", `${reads.length} read(s)`);
 
   const outsideReads = [];
-  const refused = await renderAsciidocForPandoc("= Refused\n\ninclude::../outside-asciidoc-export.adoc[]\n", {
-    baseDir: workDir,
-    readFile: async (path) => {
-      outsideReads.push(path);
-      return "OUTSIDE-MARKER";
+  const refused = await renderAsciidocForPandoc(
+    "= Refused\n\ninclude::../outside-asciidoc-export.adoc[]\n",
+    {
+      baseDir: workDir,
+      readFile: async (path) => {
+        outsideReads.push(path);
+        return "OUTSIDE-MARKER";
+      },
     },
-  });
+  );
   check(
     outsideReads.length === 0 && !refused.includes("OUTSIDE-MARKER"),
     "an include outside the document directory is not read",
@@ -151,15 +154,10 @@ try {
     html.includes("\\sqrt{9}") ? "sqrt converted" : "still AsciiMath",
   );
   check(
-    /\\\[\\sqrt\{4\} = 2\\\]/.test(html) &&
-      /\\\[x \+ y\\\]/.test(html) &&
-      !html.includes("\\\\"),
+    /\\\[\\sqrt\{4\} = 2\\\]/.test(html) && /\\\[x \+ y\\\]/.test(html) && !html.includes("\\\\"),
     "a multi-line AsciiMath block becomes one display block per line",
   );
-  check(
-    !html.includes("asciimath-raw"),
-    "no AsciiMath body fell back to raw text",
-  );
+  check(!html.includes("asciimath-raw"), "no AsciiMath body fell back to raw text");
 
   console.log("\n=== preview decoration ===");
   check(!html.includes("data-line"), "the export has no source-line anchors");

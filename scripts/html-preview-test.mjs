@@ -191,9 +191,15 @@ check("linked CSS applies", guest.css === "rgb(1, 128, 2)", guest.css);
 check("inline CSS applies", guest.inlineCss === "rgb(12, 34, 56)", guest.inlineCss);
 check("local image loads", guest.image > 0, String(guest.image));
 check("inline script runs", guest.inline === "yes" && guest.inlineText === "inline script ran");
-check("classic external script runs", guest.external === "yes" && guest.externalText === "external script ran");
+check(
+  "classic external script runs",
+  guest.external === "yes" && guest.externalText === "external script ran",
+);
 check("ES module runs", guest.module === "yes" && guest.moduleText === "module ran");
-check("local fetch is blocked", guest.fetch === "blocked" && guest.fetchText === "local fetch blocked");
+check(
+  "local fetch is blocked",
+  guest.fetch === "blocked" && guest.fetchText === "local fetch blocked",
+);
 check("math is not injected into HTML", guest.katex === 0 && guest.money.includes("$5"));
 check("line anchors were spliced in", guest.anchors >= 10, String(guest.anchors));
 check("bridge is present", guest.bridge === true);
@@ -264,8 +270,14 @@ check("editor scroll moves the guest", frameAfterEditorScroll > 50, String(frame
 
 await frame.evaluate("window.scrollTo(0, 300); 'ok'");
 await sleep(800);
-const editorAfterFrameScroll = await page.evaluate("document.querySelector('.cm-scroller').scrollTop");
-check("guest scroll moves the editor", editorAfterFrameScroll > 400, String(editorAfterFrameScroll));
+const editorAfterFrameScroll = await page.evaluate(
+  "document.querySelector('.cm-scroller').scrollTop",
+);
+check(
+  "guest scroll moves the editor",
+  editorAfterFrameScroll > 400,
+  String(editorAfterFrameScroll),
+);
 
 const scrollBeforeClick = await frame.evaluate("window.scrollY");
 const clicked = JSON.parse(
@@ -279,14 +291,26 @@ const clicked = JSON.parse(
   })()`),
 );
 await sleep(350);
-const cursorAfterClick = await page.evaluate("document.getElementById('status-cursor').textContent");
+const cursorAfterClick = await page.evaluate(
+  "document.getElementById('status-cursor').textContent",
+);
 const blinkNow = await frame.evaluate("document.querySelectorAll('.mdraft-blink').length");
 const scrollAfterClick = await frame.evaluate("window.scrollY");
-check("preview click moves the caret", clicked.line > 0 && cursorAfterClick.includes(`Ln ${clicked.line},`), `${clicked.line} / ${cursorAfterClick}`);
+check(
+  "preview click moves the caret",
+  clicked.line > 0 && cursorAfterClick.includes(`Ln ${clicked.line},`),
+  `${clicked.line} / ${cursorAfterClick}`,
+);
 check("preview click blinks the block", blinkNow === 1, String(blinkNow));
-check("preview click does not scroll the preview", Math.abs(scrollAfterClick - scrollBeforeClick) < 4);
+check(
+  "preview click does not scroll the preview",
+  Math.abs(scrollAfterClick - scrollBeforeClick) < 4,
+);
 await sleep(800);
-check("blink clears itself", (await frame.evaluate("document.querySelectorAll('.mdraft-blink').length")) === 0);
+check(
+  "blink clears itself",
+  (await frame.evaluate("document.querySelectorAll('.mdraft-blink').length")) === 0,
+);
 
 // Word-level sync. The fixture repeats "Paragraph", so a source search would be
 // ambiguous; the parse5 table is what makes the clicked occurrence exact.
@@ -345,9 +369,7 @@ check(
     frameOrigin !== null &&
     wordTarget.y > 0 &&
     wordTarget.y < frameOrigin.height,
-  wordTarget && frameOrigin
-    ? JSON.stringify({ wordTarget, frameOrigin })
-    : "missing",
+  wordTarget && frameOrigin ? JSON.stringify({ wordTarget, frameOrigin }) : "missing",
 );
 if (wordTarget && frameOrigin) {
   const x = frameOrigin.x + wordTarget.x;
@@ -386,12 +408,8 @@ const pageHit =
       })()`);
 check("the guest point is over the paragraph", guestHit.startsWith("P"), guestHit);
 check("the page point is over the guest", pageHit.startsWith("IFRAME"), pageHit);
-const guestSelection = await frame.evaluate(
-  "window.getSelection()?.toString() ?? ''",
-);
-const guestStamps = await frame.evaluate(
-  "document.querySelectorAll('[data-mdraft-n]').length",
-);
+const guestSelection = await frame.evaluate("window.getSelection()?.toString() ?? ''");
+const guestStamps = await frame.evaluate("document.querySelectorAll('[data-mdraft-n]').length");
 check("the guest selected the word", guestSelection.includes("Paragraph"), guestSelection);
 check("the preview copy carries word ids", guestStamps > 0, String(guestStamps));
 const guestMark = await page.evaluate(
@@ -408,11 +426,15 @@ check(
 );
 
 // Keyboard forwarding: F8 is a menu accelerator with a visible flag.
-await frame.evaluate("window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F8', code: 'F8', bubbles: true, cancelable: true }))");
+await frame.evaluate(
+  "window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F8', code: 'F8', bubbles: true, cancelable: true }))",
+);
 await sleep(400);
 const focusOn = await page.evaluate("document.getElementById('flag-focus').dataset.on");
 check("guest forwards a menu shortcut (F8)", focusOn === "true", String(focusOn));
-await frame.evaluate("window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F8', code: 'F8', bubbles: true, cancelable: true }))");
+await frame.evaluate(
+  "window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F8', code: 'F8', bubbles: true, cancelable: true }))",
+);
 await sleep(400);
 const focusOff = await page.evaluate("document.getElementById('flag-focus').dataset.on");
 check("the forwarded shortcut can be undone", focusOff === "false", String(focusOff));
@@ -424,7 +446,9 @@ const outline = JSON.parse(
 );
 check(
   "HTML outline lists source headings",
-  outline.includes("HTML Tour") && outline.includes("Second section") && outline.includes("Third section"),
+  outline.includes("HTML Tour") &&
+    outline.includes("Second section") &&
+    outline.includes("Third section"),
   outline.join(" | "),
 );
 
@@ -473,7 +497,10 @@ if (!newSrc) {
       bridge: !!document.querySelector('script[nonce]'),
     })`),
   );
-  check("scripts off blocks inline scripts", off.inline === "" && off.inlineText === "inline script did not run");
+  check(
+    "scripts off blocks inline scripts",
+    off.inline === "" && off.inlineText === "inline script did not run",
+  );
   check("scripts off blocks external scripts", off.external === "");
   check("scripts off blocks modules", off.module === "");
   check("scripts off keeps CSS and images", off.css === "rgb(1, 128, 2)" && off.image > 0);
@@ -486,7 +513,9 @@ if (!newSrc) {
   await sleep(800);
   const offScroll = await frame.evaluate("window.scrollY");
   check("scripts off keeps scroll sync", offScroll > 40, String(offScroll));
-  await frame.evaluate("window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F8', code: 'F8', bubbles: true, cancelable: true }))");
+  await frame.evaluate(
+    "window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F8', code: 'F8', bubbles: true, cancelable: true }))",
+  );
   await sleep(400);
   check(
     "scripts off keeps shortcut forwarding",
@@ -495,7 +524,9 @@ if (!newSrc) {
 }
 
 // Return to Markdown through the application's own New command.
-await page.evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', code: 'KeyN', ctrlKey: true, bubbles: true, cancelable: true })); 'ok'`);
+await page.evaluate(
+  `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', code: 'KeyN', ctrlKey: true, bubbles: true, cancelable: true })); 'ok'`,
+);
 await sleep(800);
 const back = JSON.parse(
   await page.evaluate(`JSON.stringify({
@@ -506,10 +537,15 @@ const back = JSON.parse(
   })`),
 );
 check("leaving HTML removes the guest iframe", back.iframes === 0, String(back.iframes));
-check("leaving HTML restores the Markdown pane", !back.app.includes("document-html") && back.previewDisplay !== "none");
+check(
+  "leaving HTML restores the Markdown pane",
+  !back.app.includes("document-html") && back.previewDisplay !== "none",
+);
 
 const parked = JSON.parse(
-  await page.evaluate(`JSON.stringify([...document.querySelectorAll(".doc-tab-name")].map((el) => el.textContent))`),
+  await page.evaluate(
+    `JSON.stringify([...document.querySelectorAll(".doc-tab-name")].map((el) => el.textContent))`,
+  ),
 );
 check(
   "leaving HTML keeps the document tab",

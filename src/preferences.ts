@@ -23,10 +23,7 @@ import {
   type TypographyRole,
 } from "./fonts";
 import { PALETTE_OPTIONS } from "./syntax-themes";
-import {
-  dictionaryOptions,
-  spellcheckAvailabilityNote,
-} from "./spellcheck";
+import { dictionaryOptions, spellcheckAvailabilityNote } from "./spellcheck";
 
 export interface PreferencesHost {
   settings(): api.Settings;
@@ -48,7 +45,8 @@ export interface PreferencesHost {
   chooseStyleReference(current: string): Promise<string>;
 }
 
-export interface PreferencesHandle {  open(): void;
+export interface PreferencesHandle {
+  open(): void;
   close(): void;
   toggle(): void;
   isOpen(): boolean;
@@ -290,10 +288,7 @@ function typographyRows(host: PreferencesHost): Row[] {
    * exports read. The map entry is what makes the next visit to the same preset
    * restore the reader's choice.
    */
-  const updateSize = (
-    key: "editorFontSize" | "bodyFontSize" | "mathFontScale",
-    value: number,
-  ) => {
+  const updateSize = (key: "editorFontSize" | "bodyFontSize" | "mathFontScale", value: number) => {
     const preset = activePreset(host);
     if (!preset) {
       host.update({ [key]: value } as Partial<api.Settings>);
@@ -308,8 +303,7 @@ function typographyRows(host: PreferencesHost): Row[] {
     {
       kind: "choices",
       label: "Preset",
-      help:
-        "Sets the faces and OpenType options below at once. Editor font size, Preview font size and Math scale are remembered separately for each preset; switching back restores them. Changing a face leaves the preset — nothing is locked.",
+      help: "Sets the faces and OpenType options below at once. Editor font size, Preview font size and Math scale are remembered separately for each preset; switching back restores them. Changing a face leaves the preset — nothing is locked.",
       options: [
         ...TYPOGRAPHY_PRESETS.map((preset) => [preset.id, preset.label] as [string, string]),
         // Always present, so the control is never blank: it is what the picker
@@ -345,13 +339,9 @@ function typographyRows(host: PreferencesHost): Row[] {
             preset.defaults?.editorFontSize ??
             DEFAULT_EDITOR_FONT_SIZE,
           bodyFontSize:
-            remembered.bodyFontSize ??
-            preset.defaults?.bodyFontSize ??
-            DEFAULT_BODY_FONT_SIZE,
+            remembered.bodyFontSize ?? preset.defaults?.bodyFontSize ?? DEFAULT_BODY_FONT_SIZE,
           mathFontScale:
-            remembered.mathFontScale ??
-            preset.defaults?.mathFontScale ??
-            DEFAULT_MATH_SCALE,
+            remembered.mathFontScale ?? preset.defaults?.mathFontScale ?? DEFAULT_MATH_SCALE,
           presetOverrides: next,
         } as Partial<api.Settings>);
       },
@@ -367,8 +357,7 @@ function typographyRows(host: PreferencesHost): Row[] {
     {
       kind: "number",
       label: "Editor font size",
-      help:
-        "Source text in the editor. Remembered for the active preset; under Custom it applies to the current setup.",
+      help: "Source text in the editor. Remembered for the active preset; under Custom it applies to the current setup.",
       min: 10,
       max: 40,
       suffix: "px",
@@ -403,8 +392,7 @@ function typographyRows(host: PreferencesHost): Row[] {
     {
       kind: "number",
       label: "Preview font size",
-      help:
-        "Prose in the preview and in exports. Remembered for the active preset; under Custom it applies to the current setup.",
+      help: "Prose in the preview and in exports. Remembered for the active preset; under Custom it applies to the current setup.",
       min: 11,
       max: 32,
       suffix: "px",
@@ -414,8 +402,7 @@ function typographyRows(host: PreferencesHost): Row[] {
     {
       kind: "number",
       label: "Math scale",
-      help:
-        "Scales the mathematics in the preview and in exports. KaTeX draws formulas at 121% of the surrounding text, so about 83% makes them match the prose; 100% leaves KaTeX's own ratio alone. Remembered for the active preset; under Custom it applies to the current setup.",
+      help: "Scales the mathematics in the preview and in exports. KaTeX draws formulas at 121% of the surrounding text, so about 83% makes them match the prose; 100% leaves KaTeX's own ratio alone. Remembered for the active preset; under Custom it applies to the current setup.",
       min: 70,
       max: 130,
       suffix: "%",
@@ -425,31 +412,27 @@ function typographyRows(host: PreferencesHost): Row[] {
     {
       kind: "note",
       label: "Bundled faces",
-      text:
-        "The bundled families are under the SIL Open Font License, so they look the same on every machine and travel inside exported HTML and PDF. Any other family comes from your operating system: it renders here, but a reader without it sees a fallback.",
+      text: "The bundled families are under the SIL Open Font License, so they look the same on every machine and travel inside exported HTML and PDF. Any other family comes from your operating system: it renders here, but a reader without it sees a fallback.",
     },
     { kind: "heading", label: "OpenType" },
     {
       kind: "checkbox",
       label: "Ligatures in code",
-      help:
-        "Turns the programming ligatures of faces that have them — JetBrains Mono draws `->`, `=>` and `!=` as single glyphs. Off by default, because whether a source file should look like that is a real disagreement.",
+      help: "Turns the programming ligatures of faces that have them — JetBrains Mono draws `->`, `=>` and `!=` as single glyphs. Off by default, because whether a source file should look like that is a real disagreement.",
       get: () => s().ligaturesInCode,
       set: (value) => host.update({ ligaturesInCode: value }),
     },
     {
       kind: "checkbox",
       label: "Tabular figures in tables",
-      help:
-        "Gives every digit the same width so columns of numbers line up. Worth leaving on: proportional figures in a table are one of the few typographic choices that is simply wrong.",
+      help: "Gives every digit the same width so columns of numbers line up. Worth leaving on: proportional figures in a table are one of the few typographic choices that is simply wrong.",
       get: () => s().tabularFigures,
       set: (value) => host.update({ tabularFigures: value }),
     },
     {
       kind: "checkbox",
       label: "Oldstyle figures in prose",
-      help:
-        "Figures with ascenders and descenders, so 1,234 sits in running text instead of shouting. Needs a face that has them; Source Serif 4 and Georgia do.",
+      help: "Figures with ascenders and descenders, so 1,234 sits in running text instead of shouting. Needs a face that has them; Source Serif 4 and Georgia do.",
       get: () => s().oldstyleFigures,
       set: (value) => host.update({ oldstyleFigures: value }),
     },
@@ -504,11 +487,7 @@ function activePreset(host: PreferencesHost): TypographyPreset | null {
  */
 let editingExport: string | null = null;
 
-function patchFormat(
-  host: PreferencesHost,
-  id: string,
-  patch: Partial<api.ExportFormat>,
-): void {
+function patchFormat(host: PreferencesHost, id: string, patch: Partial<api.ExportFormat>): void {
   const next = host
     .settings()
     .exportFormats.map((format) => (format.id === id ? { ...format, ...patch } : format));
@@ -569,8 +548,7 @@ function exportRows(host: PreferencesHost): Row[] {
     {
       kind: "note",
       label: "Typst",
-      text:
-        "Typst is what typesets PDFs: a single executable with no dependencies, where the LaTeX route it replaced wanted a TeX distribution of several gigabytes. The same program draws the preview of .typ documents.",
+      text: "Typst is what typesets PDFs: a single executable with no dependencies, where the LaTeX route it replaced wanted a TeX distribution of several gigabytes. The same program draws the preview of .typ documents.",
     },
     {
       kind: "button",
@@ -582,8 +560,7 @@ function exportRows(host: PreferencesHost): Row[] {
     {
       kind: "note",
       label: "HTML and PDF",
-      text:
-        "Both are produced by MDraft from the same pipeline that draws the preview, so neither needs pandoc. PDF is printed by your browser, which is why it asks you to choose “Save as PDF”. Everything below this point is a pandoc format and needs pandoc installed; the PDFs it makes are typeset by Typst.",
+      text: "Both are produced by MDraft from the same pipeline that draws the preview, so neither needs pandoc. PDF is printed by your browser, which is why it asks you to choose “Save as PDF”. Everything below this point is a pandoc format and needs pandoc installed; the PDFs it makes are typeset by Typst.",
     },
   ];
 
@@ -612,8 +589,7 @@ function exportRows(host: PreferencesHost): Row[] {
     {
       kind: "checkbox",
       label: "Run a command",
-      help:
-        "Runs your own command after a successful export. ${outputPath} is replaced with the file that was written.",
+      help: "Runs your own command after a successful export. ${outputPath} is replaced with the file that was written.",
       get: () => host.settings().afterRunCommand,
       set: (value) => host.update({ afterRunCommand: value }),
     },
@@ -636,8 +612,7 @@ function exportRows(host: PreferencesHost): Row[] {
       // pair of checkboxes that could never be honoured.
       kind: "note",
       label: "PDF (Print)",
-      text:
-        "PDF (Print) hands the document to your browser, which asks you where to save it. MDraft never learns that path, so these options do not run for it — they do run for HTML, Typst and every pandoc format.",
+      text: "PDF (Print) hands the document to your browser, which asks you where to save it. MDraft never learns that path, so these options do not run for it — they do run for HTML, Typst and every pandoc format.",
     },
     { kind: "heading", label: "Formats" },
   );
@@ -671,16 +646,14 @@ function exportRows(host: PreferencesHost): Row[] {
       {
         kind: "text",
         label: "Extension",
-        help:
-          "Without the dot. Pandoc also infers the output format from it, which is why the arguments below mostly do not need a -t.",
+        help: "Without the dot. Pandoc also infers the output format from it, which is why the arguments below mostly do not need a -t.",
         get: () => current.extension,
         set: (value) => patchFormat(host, current.id, { extension: value.replace(/^\./, "") }),
       },
       {
         kind: "text",
         label: "Arguments",
-        help:
-          "Passed to pandoc as separate arguments, so a path with spaces needs no quoting. ${inputPath}, ${outputPath}, ${styleReference} and ${pdfEngine} are substituted; a token whose placeholder is empty disappears entirely, which is how --reference-doc=${styleReference} is simply omitted when no style reference is chosen.",
+        help: "Passed to pandoc as separate arguments, so a path with spaces needs no quoting. ${inputPath}, ${outputPath}, ${styleReference} and ${pdfEngine} are substituted; a token whose placeholder is empty disappears entirely, which is how --reference-doc=${styleReference} is simply omitted when no style reference is chosen.",
         get: () => current.arguments,
         set: (value) => patchFormat(host, current.id, { arguments: value }),
       },
@@ -695,8 +668,7 @@ function exportRows(host: PreferencesHost): Row[] {
       {
         kind: "text",
         label: "Style Reference",
-        help:
-          "A reference .docx/.odt for Word and OpenDocument, or a .css for EPUB, depending on what the arguments above expect.",
+        help: "A reference .docx/.odt for Word and OpenDocument, or a .css for EPUB, depending on what the arguments above expect.",
         get: () => current.styleReference,
         set: (value) => patchFormat(host, current.id, { styleReference: value }),
       },
@@ -751,8 +723,7 @@ function buildSections(host: PreferencesHost): Section[] {
         {
           kind: "select",
           label: "On Launch",
-          help:
-            "Reopen the last tabs restores every saved document that was open when MDraft last closed, in the same tab order with the same one active. Only paths are remembered: untitled or unsaved content is not restored, and a file that has been deleted is skipped.",
+          help: "Reopen the last tabs restores every saved document that was open when MDraft last closed, in the same tab order with the same one active. Only paths are remembered: untitled or unsaved content is not restored, and a file that has been deleted is skipped.",
           options: [
             ["welcome", "Show the welcome document"],
             ["new", "Open a new file"],
@@ -765,8 +736,7 @@ function buildSections(host: PreferencesHost): Section[] {
         {
           kind: "select",
           label: "Default File Extension",
-          help:
-            "Used for Save As and for a new document. Typst starts the editor in Typst mode, HTML in HTML mode, AsciiDoc in AsciiDoc mode; the other choices start in Markdown.",
+          help: "Used for Save As and for a new document. Typst starts the editor in Typst mode, HTML in HTML mode, AsciiDoc in AsciiDoc mode; the other choices start in Markdown.",
           options: [
             ["md", "Markdown (.md)"],
             ["markdown", "Markdown (.markdown)"],
@@ -816,8 +786,7 @@ function buildSections(host: PreferencesHost): Section[] {
         {
           kind: "checkbox",
           label: "Convert Rich Text on Paste",
-          help:
-            "Content copied to clipboard from another application are converted into the document's markup. Untick to always paste the clipboard's in plain text. Ctrl/Cmd+Shift+V bypasses the conversion once.",
+          help: "Content copied to clipboard from another application are converted into the document's markup. Untick to always paste the clipboard's in plain text. Ctrl/Cmd+Shift+V bypasses the conversion once.",
           get: () => s().richPaste,
           set: (value) => host.update({ richPaste: value }),
         },
@@ -825,16 +794,14 @@ function buildSections(host: PreferencesHost): Section[] {
         {
           kind: "checkbox",
           label: "Auto-close brackets and quotes",
-          help:
-            "Typing ( [ { ' \" or ` inserts the closing character, typing it again steps over it, and Backspace between the pair deletes both. A selection is wrapped instead.",
+          help: "Typing ( [ { ' \" or ` inserts the closing character, typing it again steps over it, and Backspace between the pair deletes both. A selection is wrapped instead.",
           get: () => s().autoClosePairs,
           set: (value) => host.update({ autoClosePairs: value }),
         },
         {
           kind: "checkbox",
           label: "Auto-close HTML tags",
-          help:
-            "Typing the > of an opening tag in an HTML, Markdown or AsciiDoc document inserts the matching closing tag. Void elements, self-closing tags, autolinks and code are left alone.",
+          help: "Typing the > of an opening tag in an HTML, Markdown or AsciiDoc document inserts the matching closing tag. Void elements, self-closing tags, autolinks and code are left alone.",
           get: () => s().autoCloseTags,
           set: (value) => host.update({ autoCloseTags: value }),
         },
@@ -853,8 +820,7 @@ function buildSections(host: PreferencesHost): Section[] {
         {
           kind: "select",
           label: "Line Height",
-          help:
-            "Spacing between lines in the source pane: Compact is 1.3× the font size, Normal 1.5× and Wide 1.8×. The preview keeps its own reading line height.",
+          help: "Spacing between lines in the source pane: Compact is 1.3× the font size, Normal 1.5× and Wide 1.8×. The preview keeps its own reading line height.",
           options: [
             ["compact", "Compact"],
             ["normal", "Normal"],
@@ -889,8 +855,7 @@ function buildSections(host: PreferencesHost): Section[] {
         {
           kind: "checkbox",
           label: "Synchronise Scroll",
-          help:
-            "Keeps the two panes aligned while you scroll. Clicking in either pane always jumps the other one to the same content, and the block matching the caret is highlighted.",
+          help: "Keeps the two panes aligned while you scroll. Clicking in either pane always jumps the other one to the same content, and the block matching the caret is highlighted.",
           get: () => s().syncScroll,
           set: (value) => host.update({ syncScroll: value }),
         },
@@ -928,8 +893,7 @@ function buildSections(host: PreferencesHost): Section[] {
         {
           kind: "select",
           label: "When Insert…",
-          help:
-            "What happens to an image you paste, drop or insert. Applies to clipboard bitmaps, local files and downloaded URLs.",
+          help: "What happens to an image you paste, drop or insert. Applies to clipboard bitmaps, local files and downloaded URLs.",
           options: [
             ["assetsFolder", "Copy image to ./${filename}.assets"],
             ["assetsDir", "Copy image to ./assets"],
@@ -942,8 +906,7 @@ function buildSections(host: PreferencesHost): Section[] {
         {
           kind: "text",
           label: "Custom Folder",
-          help:
-            "Used by the custom rule. A relative path is resolved against the document's folder. ${filename} expands to the document name.",
+          help: "Used by the custom rule. A relative path is resolved against the document's folder. ${filename} expands to the document name.",
           placeholder: "media  or  D:\\pictures",
           get: () => s().imageCustomDir,
           set: (value) => host.update({ imageCustomDir: value }),
@@ -958,16 +921,14 @@ function buildSections(host: PreferencesHost): Section[] {
         {
           kind: "checkbox",
           label: "Apply Above Rules to Online Images",
-          help:
-            "When ticked, pasting an image URL on its own downloads it. When unticked, the URL is inserted as-is and nothing is fetched. Images inside pasted rich text have their own option below.",
+          help: "When ticked, pasting an image URL on its own downloads it. When unticked, the URL is inserted as-is and nothing is fetched. Images inside pasted rich text have their own option below.",
           get: () => s().imageApplyOnline,
           set: (value) => host.update({ imageApplyOnline: value }),
         },
         {
           kind: "select",
           label: "Remote Images in Pasted Rich Text",
-          help:
-            "Applies to remote images inside formatted text pasted from a browser or another editor. Download and save writes them to the document's assets folder and contacts their hosts; Keep the original URL makes no request. A URL you paste on its own still follows the option above.",
+          help: "Applies to remote images inside formatted text pasted from a browser or another editor. Download and save writes them to the document's assets folder and contacts their hosts; Keep the original URL makes no request. A URL you paste on its own still follows the option above.",
           options: [
             ["download", "Download and save"],
             ["url", "Keep the original URL"],
@@ -1020,8 +981,7 @@ function buildSections(host: PreferencesHost): Section[] {
         {
           kind: "note",
           label: "Extensions",
-          text:
-            "GitHub alerts (> [!NOTE]), task lists, tables, [TOC] and YAML front matter are always enabled. Math inside code spans and fenced blocks is never transformed.",
+          text: "GitHub alerts (> [!NOTE]), task lists, tables, [TOC] and YAML front matter are always enabled. Math inside code spans and fenced blocks is never transformed.",
         },
       ],
     },
@@ -1032,16 +992,14 @@ function buildSections(host: PreferencesHost): Section[] {
         {
           kind: "checkbox",
           label: "Run scripts in the HTML preview",
-          help:
-            "The preview runs in a sandboxed frame. Turning this off blocks the document's scripts while keeping its CSS, images, scroll sync and the preview itself. The bridge that keeps the panes in sync is trusted application code and still runs.",
+          help: "The preview runs in a sandboxed frame. Turning this off blocks the document's scripts while keeping its CSS, images, scroll sync and the preview itself. The bridge that keeps the panes in sync is trusted application code and still runs.",
           get: () => s().htmlPreviewScripts !== false,
           set: (value) => host.update({ htmlPreviewScripts: value }),
         },
         {
           kind: "note",
           label: "Sandbox",
-          text:
-            "An HTML preview behaves like a local page: it may read and run files in its own folder and load the network resources it references. It cannot reach the editor, its files outside that folder, or MDraft's commands. Math and diagram settings above apply to Markdown and Typst; an HTML document uses its own libraries.",
+          text: "An HTML preview behaves like a local page: it may read and run files in its own folder and load the network resources it references. It cannot reach the editor, its files outside that folder, or MDraft's commands. Math and diagram settings above apply to Markdown and Typst; an HTML document uses its own libraries.",
         },
       ],
     },
@@ -1083,8 +1041,7 @@ function buildSections(host: PreferencesHost): Section[] {
         {
           kind: "select",
           label: "Editor Syntax Theme",
-          help:
-            "Colours the markdown source and any code inside fenced blocks. Each palette also sets the editor's own background, so a light palette stays readable while the application is dark.",
+          help: "Colours the markdown source and any code inside fenced blocks. Each palette also sets the editor's own background, so a light palette stays readable while the application is dark.",
           options: PALETTE_OPTIONS,
           get: () => s().syntaxTheme,
           set: (value) => host.update({ syntaxTheme: value }),
@@ -1135,8 +1092,7 @@ function buildSections(host: PreferencesHost): Section[] {
         {
           kind: "note",
           label: "Settings file",
-          text:
-            "Preferences are stored as settings.json in the application config directory and are safe to edit by hand.",
+          text: "Preferences are stored as settings.json in the application config directory and are safe to edit by hand.",
         },
       ],
     },
@@ -1233,9 +1189,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
     panelEl.style.top = `${Math.round(clamp(top, PANEL_MARGIN, maxTop))}px`;
   }
 
-  let drag:
-    | { pointerId: number; x: number; y: number; left: number; top: number }
-    | null = null;
+  let drag: { pointerId: number; x: number; y: number; left: number; top: number } | null = null;
 
   headerEl.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
@@ -1283,9 +1237,8 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
   headerEl.addEventListener("pointercancel", endDrag);
   headerEl.addEventListener("lostpointercapture", endDrag);
 
-  let resize:
-    | { pointerId: number; x: number; y: number; width: number; height: number }
-    | null = null;
+  let resize: { pointerId: number; x: number; y: number; width: number; height: number } | null =
+    null;
 
   resizeEl.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
@@ -1303,14 +1256,8 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
 
   resizeEl.addEventListener("pointermove", (event) => {
     if (!resize || event.pointerId !== resize.pointerId) return;
-    const maxWidth = Math.max(
-      overlay.clientWidth - panelEl.offsetLeft - PANEL_MARGIN,
-      1,
-    );
-    const maxHeight = Math.max(
-      overlay.clientHeight - panelEl.offsetTop - PANEL_MARGIN,
-      1,
-    );
+    const maxWidth = Math.max(overlay.clientWidth - panelEl.offsetLeft - PANEL_MARGIN, 1);
+    const maxHeight = Math.max(overlay.clientHeight - panelEl.offsetTop - PANEL_MARGIN, 1);
     const minWidth = Math.min(MIN_PANEL_WIDTH, maxWidth);
     const minHeight = Math.min(MIN_PANEL_HEIGHT, maxHeight);
     panelEl.style.width = `${Math.round(

@@ -108,7 +108,11 @@ async function openTab(name) {
 console.log("=== AsciiDoc preview ===");
 await sleep(1200);
 {
-  check((await evaluate(`document.title`)).includes("asciidoc-tour.adoc"), "the fixture is open", await evaluate(`document.title`));
+  check(
+    (await evaluate(`document.title`)).includes("asciidoc-tour.adoc"),
+    "the fixture is open",
+    await evaluate(`document.title`),
+  );
 
   const preview = await evaluate(`(() => {
     const root = document.querySelector("#preview");
@@ -154,10 +158,22 @@ await sleep(1200);
   check(preview.anchors >= 4, "blocks carry source anchors", String(preview.anchors));
   check(preview.ranged, "blocks carry an end line for copy");
   check(preview.include, "the include is inlined");
-  check(preview.image !== null && preview.image.width > 0, "the local image loads", JSON.stringify(preview.image));
+  check(
+    preview.image !== null && preview.image.width > 0,
+    "the local image loads",
+    JSON.stringify(preview.image),
+  );
   check(preview.fraction > 0, "the latexmath fraction bar has width", String(preview.fraction));
-  check(preview.asciimathInline > 0, "inline AsciiMath renders a radical", String(preview.asciimathInline));
-  check(preview.asciimathBlock > 0, "an AsciiMath block renders a radical", String(preview.asciimathBlock));
+  check(
+    preview.asciimathInline > 0,
+    "inline AsciiMath renders a radical",
+    String(preview.asciimathInline),
+  );
+  check(
+    preview.asciimathBlock > 0,
+    "an AsciiMath block renders a radical",
+    String(preview.asciimathBlock),
+  );
   check(
     preview.asciimathMatrix !== null &&
       preview.asciimathMatrix.width > 0 &&
@@ -170,7 +186,11 @@ await sleep(1200);
     "AsciiMath delimiters do not remain in the preview",
     String(preview.asciimathLiteral),
   );
-  check(preview.admonitionDisplay === "table", "the admonition table is reset to display:table", preview.admonitionDisplay);
+  check(
+    preview.admonitionDisplay === "table",
+    "the admonition table is reset to display:table",
+    preview.admonitionDisplay,
+  );
   check(preview.error === "", "the conversion has no error", preview.error);
 }
 
@@ -185,7 +205,11 @@ console.log("\n=== source highlighting and outline ===");
     })) : [];
     return JSON.stringify({ line: line?.textContent ?? "", spans });
   })()`);
-  check(syntax.line.includes("= AsciiDoc Tour"), "the fixture source is in the editor", syntax.line);
+  check(
+    syntax.line.includes("= AsciiDoc Tour"),
+    "the fixture source is in the editor",
+    syntax.line,
+  );
   check(
     syntax.spans.some((span) => span.weight === "700" || span.color !== "rgb(0, 0, 0)"),
     "the AsciiDoc title is highlighted",
@@ -194,16 +218,32 @@ console.log("\n=== source highlighting and outline ===");
 
   await evaluate(`document.getElementById("tab-outline").click()`);
   await sleep(500);
-  const outline = await evaluate(`[...document.querySelectorAll(".outline-item")].map((node) => node.textContent)`);
-  check(outline.includes("AsciiDoc Tour"), "the outline lists the document title", JSON.stringify(outline.slice(0, 4)));
-  check(outline.includes("Lists") && outline.includes("Mathematics"), "the outline lists sections", JSON.stringify(outline.slice(0, 6)));
-  check(!outline.includes("Not a heading"), "a heading inside a literal block is skipped", JSON.stringify(outline));
+  const outline = await evaluate(
+    `[...document.querySelectorAll(".outline-item")].map((node) => node.textContent)`,
+  );
+  check(
+    outline.includes("AsciiDoc Tour"),
+    "the outline lists the document title",
+    JSON.stringify(outline.slice(0, 4)),
+  );
+  check(
+    outline.includes("Lists") && outline.includes("Mathematics"),
+    "the outline lists sections",
+    JSON.stringify(outline.slice(0, 6)),
+  );
+  check(
+    !outline.includes("Not a heading"),
+    "a heading inside a literal block is skipped",
+    JSON.stringify(outline),
+  );
 }
 
 console.log("\n=== spelling ===");
 {
   await sleep(900);
-  const marks = await evaluate(`[...document.querySelectorAll(".cm-spell-error")].map((node) => node.textContent)`);
+  const marks = await evaluate(
+    `[...document.querySelectorAll(".cm-spell-error")].map((node) => node.textContent)`,
+  );
   check(
     !marks.some((word) => /latexmath|stem|asciidoc|include|image::/i.test(word)),
     "spellcheck leaves AsciiDoc markup alone",
@@ -257,7 +297,11 @@ console.log("\n=== scroll sync ===");
   })()`);
   await sleep(800);
   const end = await evaluate(`document.querySelector(".preview-pane").scrollTop`);
-  check(before === 1 && end !== start, "scrolling the source moves the preview", `${start} -> ${end}`);
+  check(
+    before === 1 && end !== start,
+    "scrolling the source moves the preview",
+    `${start} -> ${end}`,
+  );
 }
 
 console.log("\n=== default extension and a new document ===");
@@ -269,7 +313,11 @@ console.log("\n=== default extension and a new document ===");
       (node.querySelector(".prefs-label")?.textContent ?? "").replace("?", "").trim() === "Default File Extension");
     return JSON.stringify(row ? [...row.querySelectorAll("option")].map((option) => option.value) : []);
   })()`);
-  check(options.includes("adoc") && options.includes("asciidoc"), "the default extension offers AsciiDoc", JSON.stringify(options));
+  check(
+    options.includes("adoc") && options.includes("asciidoc"),
+    "the default extension offers AsciiDoc",
+    JSON.stringify(options),
+  );
 
   await evaluate(`(() => {
     const row = [...document.querySelectorAll(".prefs-row")].find((node) =>
@@ -281,7 +329,9 @@ console.log("\n=== default extension and a new document ===");
     return 1;
   })()`);
   await sleep(400);
-  await evaluate(`document.querySelector(".prefs-overlay").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))`);
+  await evaluate(
+    `document.querySelector(".prefs-overlay").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))`,
+  );
   await sleep(300);
 
   await press({ code: "KeyN", key: "n", ctrl: true });
@@ -306,9 +356,15 @@ console.log("\n=== rich paste into AsciiDoc ===");
     return String(event.defaultPrevented);
   })()`);
   await sleep(900);
-  const lines = await evaluate(`[...document.querySelectorAll(".cm-line")].map((line) => line.textContent).join("\\n")`);
+  const lines = await evaluate(
+    `[...document.querySelectorAll(".cm-line")].map((line) => line.textContent).join("\\n")`,
+  );
   check(blocked === true, "the HTML paste is consumed");
-  check(lines.includes("*strong*"), "HTML becomes AsciiDoc emphasis", lines.split("\n").slice(-3).join(" / "));
+  check(
+    lines.includes("*strong*"),
+    "HTML becomes AsciiDoc emphasis",
+    lines.split("\n").slice(-3).join(" / "),
+  );
   await press({ code: "KeyZ", key: "z", ctrl: true });
 }
 
@@ -325,12 +381,27 @@ console.log("\n=== image paste ===");
     return String(event.defaultPrevented);
   })()`);
   await sleep(1600);
-  const lines = await evaluate(`[...document.querySelectorAll(".cm-line")].map((line) => line.textContent).join("\\n")`);
+  const lines = await evaluate(
+    `[...document.querySelectorAll(".cm-line")].map((line) => line.textContent).join("\\n")`,
+  );
   check(inserted === true, "the bitmap paste is consumed");
-  check(lines.includes("image::"), "a bitmap inserts an AsciiDoc block image", lines.split("\n").filter((line) => line.includes("image::")).join(" / "));
+  check(
+    lines.includes("image::"),
+    "a bitmap inserts an AsciiDoc block image",
+    lines
+      .split("\n")
+      .filter((line) => line.includes("image::"))
+      .join(" / "),
+  );
   await sleep(600);
-  const images = await evaluate(`[...document.querySelectorAll("#preview img")].map((image) => image.naturalWidth)`);
-  check(images.some((width) => width > 0), "the pasted image loads in the preview", JSON.stringify(images));
+  const images = await evaluate(
+    `[...document.querySelectorAll("#preview img")].map((image) => image.naturalWidth)`,
+  );
+  check(
+    images.some((width) => width > 0),
+    "the pasted image loads in the preview",
+    JSON.stringify(images),
+  );
 }
 
 console.log("\n=== include containment ===");
@@ -339,8 +410,14 @@ console.log("\n=== include containment ===");
   await type("\n\ninclude::../README.md[]\n");
   await sleep(1200);
   const preview = await evaluate(`document.querySelector("#preview").textContent`);
-  check(!preview.includes("A small, fast editor"), "an include outside the document directory is not read");
-  check(preview.includes("outside the document directory") || preview.includes("Unresolved directive"), "the refused include is explained");
+  check(
+    !preview.includes("A small, fast editor"),
+    "an include outside the document directory is not read",
+  );
+  check(
+    preview.includes("outside the document directory") || preview.includes("Unresolved directive"),
+    "the refused include is explained",
+  );
   await press({ code: "KeyZ", key: "z", ctrl: true });
   await press({ code: "KeyZ", key: "z", ctrl: true });
 }
@@ -354,7 +431,9 @@ console.log("\n=== the Files panel ===");
     return 1;
   })()`);
   await sleep(700);
-  const listed = await evaluate(`[...document.querySelectorAll(".sidebar-body .entry")].some((entry) => (entry.title || "").endsWith("asciidoc-tour.adoc"))`);
+  const listed = await evaluate(
+    `[...document.querySelectorAll(".sidebar-body .entry")].some((entry) => (entry.title || "").endsWith("asciidoc-tour.adoc"))`,
+  );
   check(listed, "the Files panel offers the .adoc document");
 }
 
@@ -526,8 +605,20 @@ console.log("\n=== word-level sync ===");
   })()`);
   if (point) {
     for (const clickCount of [1, 2]) {
-      await send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount });
-      await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount });
+      await send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: point.x,
+        y: point.y,
+        button: "left",
+        clickCount,
+      });
+      await send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: point.x,
+        y: point.y,
+        button: "left",
+        clickCount,
+      });
     }
     await sleep(260);
     const ranges = await evaluate(`(() => {
@@ -543,7 +634,11 @@ console.log("\n=== word-level sync ===");
       "a source word paints the preview",
       JSON.stringify(ranges),
     );
-    check(beforePreview === afterPreview, "painting the preview does not scroll it", `${beforePreview} -> ${afterPreview}`);
+    check(
+      beforePreview === afterPreview,
+      "painting the preview does not scroll it",
+      `${beforePreview} -> ${afterPreview}`,
+    );
   } else {
     check(false, "a source word paints the preview", "the title word is not on screen");
     check(false, "painting the preview does not scroll it", "the title word is not on screen");
@@ -585,9 +680,27 @@ console.log("\n=== word-level sync ===");
     };
   })()`);
   if (strongDrag) {
-    await send("Input.dispatchMouseEvent", { type: "mousePressed", x: strongDrag.x1, y: strongDrag.y1, button: "left", clickCount: 1 });
-    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: strongDrag.x2, y: strongDrag.y2, button: "left", buttons: 1 });
-    await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: strongDrag.x2, y: strongDrag.y2, button: "left", clickCount: 1 });
+    await send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: strongDrag.x1,
+      y: strongDrag.y1,
+      button: "left",
+      clickCount: 1,
+    });
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: strongDrag.x2,
+      y: strongDrag.y2,
+      button: "left",
+      buttons: 1,
+    });
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: strongDrag.x2,
+      y: strongDrag.y2,
+      button: "left",
+      clickCount: 1,
+    });
     await sleep(260);
     const strongRanges = await evaluate(`(() => {
       const highlight =
@@ -601,7 +714,11 @@ console.log("\n=== word-level sync ===");
       JSON.stringify(strongRanges),
     );
   } else {
-    check(false, "a source selection including *strong* markup paints the preview word", "*strong* not on screen");
+    check(
+      false,
+      "a source selection including *strong* markup paints the preview word",
+      "*strong* not on screen",
+    );
   }
 }
 

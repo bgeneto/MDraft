@@ -92,7 +92,8 @@ function countNodes(blocks: readonly Block[]): number {
   for (const block of blocks) {
     if (block.kind === "paragraph" || block.kind === "heading") count += block.children.length;
     else if (block.kind === "quote") count += countNodes(block.blocks);
-    else if (block.kind === "list") for (const item of block.items) count += countNodes(item.blocks);
+    else if (block.kind === "list")
+      for (const item of block.items) count += countNodes(item.blocks);
   }
   return count;
 }
@@ -144,7 +145,8 @@ async function resolveImages(
     }
     candidates.push(image);
   }
-  if (skipped > 0) notices.push(`${skipped} image${skipped === 1 ? "" : "s"} kept the original address.`);
+  if (skipped > 0)
+    notices.push(`${skipped} image${skipped === 1 ? "" : "s"} kept the original address.`);
   await mapLimit(candidates, 4, async (image) => {
     if (image.kind !== "image") return;
     try {
@@ -234,8 +236,7 @@ export async function planPaste(
   }
 
   const raw = original;
-  const tooLarge =
-    source === "html" ? raw.length > MAX_HTML : raw.length > MAX_TEXT;
+  const tooLarge = source === "html" ? raw.length > MAX_HTML : raw.length > MAX_TEXT;
   if (tooLarge) {
     notices.push("The clipboard was too large to convert; pasted it as plain text.");
     return {
@@ -252,7 +253,9 @@ export async function planPaste(
       const html = await sanitizeHtmlFragment(raw);
       return {
         text: html,
-        block: /<(?:p|div|h[1-6]|ul|ol|li|table|thead|tbody|tr|blockquote|pre|hr|figure)\b/i.test(html),
+        block: /<(?:p|div|h[1-6]|ul|ol|li|table|thead|tbody|tr|blockquote|pre|hr|figure)\b/i.test(
+          html,
+        ),
         source,
         converted: true,
         notices,
@@ -323,7 +326,8 @@ export function visibleText(blocks: readonly Block[]): string {
     .map((block) => {
       if (block.kind === "paragraph" || block.kind === "heading") return inlineText(block.children);
       if (block.kind === "quote") return visibleText(block.blocks);
-      if (block.kind === "list") return block.items.map((item) => visibleText(item.blocks)).join("\n");
+      if (block.kind === "list")
+        return block.items.map((item) => visibleText(item.blocks)).join("\n");
       if (block.kind === "code") return block.text;
       if (block.kind === "table") {
         const rows = [...(block.header ? [block.header] : []), ...block.rows];

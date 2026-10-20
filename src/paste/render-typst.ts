@@ -105,14 +105,12 @@ function alignment(align: Align): string {
 }
 
 function renderTable(block: Extract<Block, { kind: "table" }>): string {
-  const columns = Math.max(
-    block.header?.length ?? 0,
-    ...block.rows.map((row) => row.length),
-    1,
-  );
+  const columns = Math.max(block.header?.length ?? 0, ...block.rows.map((row) => row.length), 1);
   const parts: string[] = [`columns: ${columns}`];
   if (block.align.some((value) => value !== null)) {
-    parts.push(`align: (${Array.from({ length: columns }, (_unused, index) => alignment(block.align[index] ?? null)).join(", ")})`);
+    parts.push(
+      `align: (${Array.from({ length: columns }, (_unused, index) => alignment(block.align[index] ?? null)).join(", ")})`,
+    );
   }
   const cell = (nodes: readonly Inline[]) => `[${renderInline(nodes, true)}]`;
   if (block.header) parts.push(`table.header(${block.header.map(cell).join(", ")})`);

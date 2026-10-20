@@ -1,0 +1,12 @@
+node_modules/
+dist/
+bin/
+src-tauri/
+docs/
+samples/
+src/assets/fonts/
+scripts/font-sources.json
+package-lock.json
+*.md
+LICENSE
+*.log

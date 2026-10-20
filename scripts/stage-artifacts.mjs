@@ -9,7 +9,16 @@
 //!   node scripts/stage-artifacts.mjs [--dry-run]
 
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -17,7 +26,8 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const dryRun = process.argv.includes("--dry-run");
 
 /** Rust target triples, not Node's, name the release folder. */
-const OS = { win32: "windows", darwin: "macos", linux: "linux" }[process.platform] ?? process.platform;
+const OS =
+  { win32: "windows", darwin: "macos", linux: "linux" }[process.platform] ?? process.platform;
 const ARCH = { x64: "amd64", arm64: "arm64", ia32: "386" }[process.arch] ?? process.arch;
 /** The architecture label Tauri's Windows installers already use. */
 const WINDOWS_ARCH = { x64: "x64", arm64: "arm64", ia32: "x86" }[process.arch] ?? process.arch;
@@ -72,11 +82,13 @@ const cargoPackage = (() => {
   }
 })();
 
-const binaryNames = [...new Set(
-  [config.mainBinaryName, productName, cargoPackage].filter(
-    (name) => typeof name === "string" && name.length > 0,
+const binaryNames = [
+  ...new Set(
+    [config.mainBinaryName, productName, cargoPackage].filter(
+      (name) => typeof name === "string" && name.length > 0,
+    ),
   ),
-)];
+];
 
 /**
  * Find a bare binary in `target/release`, returning the name it actually has.
@@ -162,7 +174,9 @@ if (sources.length === 0) {
 
 const sha256 = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
 const humanSize = (bytes) =>
-  bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(2)} MB` : `${(bytes / 1024).toFixed(1)} KB`;
+  bytes >= 1024 * 1024
+    ? `${(bytes / 1024 / 1024).toFixed(2)} MB`
+    : `${(bytes / 1024).toFixed(1)} KB`;
 
 if (dryRun) {
   console.log(`would stage into bin/${OS}/${ARCH}/`);
@@ -174,7 +188,10 @@ if (dryRun) {
 if (existsSync(destDir)) {
   for (const entry of readdirSync(destDir)) {
     const full = join(destDir, entry);
-    if (statSync(full).isFile() && /\.(exe|msi|msix|dmg|deb|rpm|AppImage|zip|txt|json)$/i.test(entry)) {
+    if (
+      statSync(full).isFile() &&
+      /\.(exe|msi|msix|dmg|deb|rpm|AppImage|zip|txt|json)$/i.test(entry)
+    ) {
       rmSync(full, { force: true });
     }
   }

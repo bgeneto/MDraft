@@ -225,7 +225,11 @@ try {
     "the menu falls back to one empty-state row",
     rows.map((row) => row.id).join(", ") || "no rows",
   );
-  check(rows[0]?.text === "No Recent Files", "the empty row says No Recent Files", rows[0]?.text ?? "");
+  check(
+    rows[0]?.text === "No Recent Files",
+    "the empty row says No Recent Files",
+    rows[0]?.text ?? "",
+  );
   check(rows[0]?.enabled === false, "the empty row cannot be clicked");
   check(
     await pollFor(
@@ -308,11 +312,7 @@ try {
     "the menu starts with the newest row",
     rows[0]?.id ?? "missing row",
   );
-  check(
-    rows.length === 21,
-    "the menu shows 20 files plus Clear Items",
-    String(rows.length),
-  );
+  check(rows.length === 21, "the menu shows 20 files plus Clear Items", String(rows.length));
   check(
     rows.at(-1)?.id === "recent.clear",
     "the menu still ends with Clear Items",

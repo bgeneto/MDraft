@@ -5,12 +5,7 @@ import "./styles.css";
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
-import {
-  ask,
-  message,
-  open as openDialog,
-  save as saveDialog,
-} from "@tauri-apps/plugin-dialog";
+import { ask, message, open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import * as api from "./api";
@@ -414,7 +409,8 @@ function syncMenuState(): void {
 function rememberSpelling(word: string): void {
   const folded = word.replace(/[\u2019\u2018\u02BC]/g, "'").trim();
   if (!folded) return;
-  if (settings.spellcheckWords.some((entry) => entry.toLowerCase() === folded.toLowerCase())) return;
+  if (settings.spellcheckWords.some((entry) => entry.toLowerCase() === folded.toLowerCase()))
+    return;
   // The list is the reader's, and it is stored in settings.json. Cap it so a
   // long session of "add" cannot grow the file without bound.
   const words = [...settings.spellcheckWords, folded].slice(-500);
@@ -714,8 +710,7 @@ let pendingPreviewScroll: number | null = null;
 
 function scheduleRender(immediate = false): void {
   window.clearTimeout(renderTimer);
-  const delay =
-    doc.language === "html" ? 300 : doc.language === "asciidoc" ? 250 : 200;
+  const delay = doc.language === "html" ? 300 : doc.language === "asciidoc" ? 250 : 200;
   renderTimer = window.setTimeout(() => void doRender(), immediate ? 0 : delay);
 }
 
@@ -926,15 +921,7 @@ function chooseTypstView(view: api.TypstView): void {
  * `#columns` call therefore previews as a couple of stray paragraphs, which looks
  * like a broken renderer rather than a limitation of the export.
  */
-const TYPST_CONTENT_LOSS = new Set([
-  "align",
-  "columns",
-  "grid",
-  "pad",
-  "place",
-  "rect",
-  "stack",
-]);
+const TYPST_CONTENT_LOSS = new Set(["align", "columns", "grid", "pad", "place", "rect", "stack"]);
 
 /**
  * A note naming what the document view could not show, or null when it is whole.
@@ -1696,8 +1683,7 @@ async function buildExportArticle(): Promise<{ html: string; css: string }> {
   await renderMermaidIn(holder, isDark);
   // The same class the preview's Typst view uses, so the rules written for it
   // apply to the export too.
-  const classes =
-    doc.language === "typst" ? "markdown-body typst-document" : "markdown-body";
+  const classes = doc.language === "typst" ? "markdown-body typst-document" : "markdown-body";
   return { html: `<article class="${classes}">${holder.innerHTML}</article>`, css };
 }
 
@@ -1737,8 +1723,7 @@ function exportTypographyCss(): string {
   // The same scaling rule styles.css carries. An exported document has no
   // stylesheet of its own, and without this the formula in a printed PDF would
   // stay at KaTeX's 1.21em while the preview showed the reader's scale.
-  const mathScale =
-    ".math-inline,.math-display{font-size:calc(1em * var(--math-scale))}";
+  const mathScale = ".math-inline,.math-display{font-size:calc(1em * var(--math-scale))}";
   return `:root{${declarations.join(";")}}\n${emphasis}\n${mathScale}\n${ASCIIDOC_CSS}`;
 }
 
@@ -1765,12 +1750,7 @@ async function exportHtml(): Promise<void> {
     if (doc.language === "html") {
       // An HTML document is already HTML. Exporting a copy is useful; passing
       // it through the Markdown renderer would produce a different document.
-      await api.writeDocument(
-        target,
-        editor.getDoc(),
-        doc.lineEnding ?? "\n",
-        doc.hadBom ?? false,
-      );
+      await api.writeDocument(target, editor.getDoc(), doc.lineEnding ?? "\n", doc.hadBom ?? false);
       toast("Exported HTML");
       const after = await api.runAfterExport(target);
       if (after.afterErrors.length > 0) {
@@ -1796,12 +1776,7 @@ async function exportHtml(): Promise<void> {
       `<link rel="stylesheet" href="${KATEX_STYLESHEET_URL}">`,
     ].join("\n");
 
-    const html = wrapStandaloneHtml(
-      doc.name ?? "Untitled",
-      article.html,
-      isDark,
-      headExtra,
-    );
+    const html = wrapStandaloneHtml(doc.name ?? "Untitled", article.html, isDark, headExtra);
     await api.writeDocument(target, html, "\n", false);
     toast("Exported HTML");
 
@@ -1841,10 +1816,7 @@ async function exportPdf(): Promise<void> {
     if (doc.language === "html") {
       // The system browser cannot reach the preview scheme, but it can read a
       // local file base. The document's own CSS and scripts stay in charge.
-      const html = await buildHtmlPrintDocument(
-        editor.getDoc(),
-        doc.directory ?? null,
-      );
+      const html = await buildHtmlPrintDocument(editor.getDoc(), doc.directory ?? null);
       const written = await api.printDocument(html, documentStem());
       notice.dismiss();
       toast("Choose “Save as PDF” in the print dialog");
@@ -1988,8 +1960,7 @@ async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
     // the preview, so hand pandoc its HTML instead. An AsciiDoc target keeps
     // the original source: writing it back as AsciiDoc should not pass through
     // HTML first.
-    const asciidocTarget =
-      format.id === "asciidoc" || format.extension.toLowerCase() === "adoc";
+    const asciidocTarget = format.id === "asciidoc" || format.extension.toLowerCase() === "adoc";
     if (doc.language === "asciidoc" && !asciidocTarget) {
       source = await renderAsciidocForExport(source, {
         baseDir: doc.directory ?? null,
@@ -2014,7 +1985,8 @@ async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
     if (outcome.warnings) notes.push(outcome.warnings);
     if (notes.length > 0) {
       await message(notes.join("\n\n"), {
-        title: outcome.afterErrors.length > 0 ? "Exported, with a problem" : "Exported with warnings",
+        title:
+          outcome.afterErrors.length > 0 ? "Exported, with a problem" : "Exported with warnings",
         kind: outcome.afterErrors.length > 0 ? "warning" : "info",
       });
     }
@@ -2126,8 +2098,7 @@ async function typstSetup(): Promise<void> {
 
   if (!status.canInstall) {
     const open = await ask(
-      `Typst was not found.\n\n${status.hint}\n\n` +
-        "Open the official download page?",
+      `Typst was not found.\n\n${status.hint}\n\n` + "Open the official download page?",
       { title: "Install Typst", kind: "info", okLabel: "Open page", cancelLabel: "Cancel" },
     );
     if (open) {
@@ -2252,9 +2223,7 @@ function mathBlockCommand(): void {
 
 function listCommand(kind: "ul" | "ol"): void {
   if (doc.language === "html") {
-    editor.insertBlock(
-      kind === "ul" ? "<ul>\n  <li></li>\n</ul>" : "<ol>\n  <li></li>\n</ol>",
-    );
+    editor.insertBlock(kind === "ul" ? "<ul>\n  <li></li>\n</ul>" : "<ol>\n  <li></li>\n</ol>");
     return;
   }
   if (doc.language === "asciidoc") {
@@ -2286,9 +2255,7 @@ function tableCommand(): void {
     return;
   }
   if (doc.language === "asciidoc") {
-    editor.insertBlock(
-      '[options="header"]\n|===\n| Column | Column\n\n| Cell | Cell\n|===',
-    );
+    editor.insertBlock('[options="header"]\n|===\n| Column | Column\n\n| Cell | Cell\n|===');
     return;
   }
   editor.insertBlock("| Column | Column |\n| --- | --- |\n| Cell | Cell |");
@@ -2573,8 +2540,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "file.preferences": () => preferences.toggle(),
 
   "help.reference": () => void showBuiltin(REFERENCE),
-  "help.asciidocReference": () =>
-    void showBuiltin(ASCIIDOC_REFERENCE, "asciidoc"),
+  "help.asciidocReference": () => void showBuiltin(ASCIIDOC_REFERENCE, "asciidoc"),
   "help.shortcuts": () => void showBuiltin(SHORTCUTS),
   "help.licences": () => void showBuiltin(FONT_LICENCES),
   "help.installTypst": () => void typstSetup(),
@@ -2694,15 +2660,13 @@ function anchorIndexForLine(line: number): number {
 /** Last block that starts at or before `line`. */
 function anchorForLine(line: number): HTMLElement | null {
   const index = anchorIndexForLine(line);
-  return index >= 0 ? previewAnchors[index].el : previewAnchors[0]?.el ?? null;
+  return index >= 0 ? previewAnchors[index].el : (previewAnchors[0]?.el ?? null);
 }
 
 /** Preview block top in scroll-content coordinates, padding included. */
 function previewTop(el: HTMLElement): number {
   return (
-    previewPane.scrollTop +
-    el.getBoundingClientRect().top -
-    previewPane.getBoundingClientRect().top
+    previewPane.scrollTop + el.getBoundingClientRect().top - previewPane.getBoundingClientRect().top
   );
 }
 
@@ -2735,15 +2699,11 @@ function interpolate(
 /** Where the preview should stop once the last block has been read through. */
 function previewEndFor(el: HTMLElement): number {
   const pane = previewPane.getBoundingClientRect();
-  const blockBottom =
-    previewPane.scrollTop + el.getBoundingClientRect().bottom - pane.top;
+  const blockBottom = previewPane.scrollTop + el.getBoundingClientRect().bottom - pane.top;
   const max = Math.max(0, previewPane.scrollHeight - previewPane.clientHeight);
   // The 45vh bottom padding is for reading the last block at the top, not part
   // of the document. Mapping into it would scroll the text off screen.
-  return Math.max(
-    previewScrollFor(el),
-    Math.min(max, blockBottom - previewPane.clientHeight),
-  );
+  return Math.max(previewScrollFor(el), Math.min(max, blockBottom - previewPane.clientHeight));
 }
 
 /**
@@ -2933,7 +2893,8 @@ function highlightApi(): {
   create: new (...ranges: Range[]) => unknown;
 } | null {
   const registry = (CSS as unknown as { highlights?: HighlightRegistryLike }).highlights;
-  const create = (window as unknown as { Highlight?: new (...ranges: Range[]) => unknown }).Highlight;
+  const create = (window as unknown as { Highlight?: new (...ranges: Range[]) => unknown })
+    .Highlight;
   return registry && create ? { registry, create } : null;
 }
 
@@ -2996,20 +2957,13 @@ function paintPreviewWords(range: Range, key: string): void {
 }
 
 /** Rebuild the map against the DOM a render just produced. */
-function bindPreviewWords(
-  source: string,
-  fragments?: Fragment[],
-  blocks?: BlockRange[],
-): void {
+function bindPreviewWords(source: string, fragments?: Fragment[], blocks?: BlockRange[]): void {
   // A render replaces the nodes the old Range pointed at, so drop both the
   // highlight and the pulse before binding the new map.
   clearPreviewWords();
   const hasFragments = fragments && fragments.length > 0;
   const hasBlocks = blocks && blocks.length > 0;
-  wordMap =
-    hasFragments || hasBlocks
-      ? bindWordMap(preview, { source, fragments, blocks })
-      : null;
+  wordMap = hasFragments || hasBlocks ? bindWordMap(preview, { source, fragments, blocks }) : null;
   syncedSource = null;
 }
 
@@ -3017,9 +2971,7 @@ function bindPreviewWords(
 function wordSyncAvailable(): boolean {
   return (
     settings.viewMode === "split" &&
-    (doc.language === "markdown" ||
-      doc.language === "asciidoc" ||
-      doc.language === "typst") &&
+    (doc.language === "markdown" || doc.language === "asciidoc" || doc.language === "typst") &&
     wordMap !== null
   );
 }
@@ -3078,11 +3030,8 @@ function sourceFromPreviewSelection(): { from: number; to: number } | null {
   // A selection can span several nodes: a formula is several text nodes inside
   // one atomic fragment, and prose can cross inline elements.
   const startExact =
-    sourceRangeFor(map, startNode, startOffset, startNode.data.length) ??
-    blockFallback(startNode);
-  const endExact =
-    sourceRangeFor(map, endNode, 0, endOffset) ??
-    blockFallback(endNode);
+    sourceRangeFor(map, startNode, startOffset, startNode.data.length) ?? blockFallback(startNode);
+  const endExact = sourceRangeFor(map, endNode, 0, endOffset) ?? blockFallback(endNode);
   if (!startExact || !endExact) return null;
   if (atomic(startKind) || atomic(endKind)) {
     return {
@@ -3165,8 +3114,7 @@ function syncSourceFromPageSelection(context: TypstPageContext, reveal: boolean)
   if (context.paragraph || context.multiLine) {
     range = paragraphRangeAt(source, startWord.from);
   } else {
-    const endToken =
-      lineTokenAt(context.lineText, context.end, "end") ?? startToken;
+    const endToken = lineTokenAt(context.lineText, context.end, "end") ?? startToken;
     const endWord = map.wordForLineToken(match, endToken.index) ?? startWord;
     range = {
       from: startWord.from,
@@ -3476,10 +3424,7 @@ function installPaneSync(): void {
     if (!selection || selection.rangeCount === 0) return;
     if (!preview.contains(selection.anchorNode)) return;
     window.clearTimeout(selectionTimer);
-    selectionTimer = window.setTimeout(
-      () => syncSourceFromPreview(false),
-      WORD_SYNC_DEBOUNCE_MS,
-    );
+    selectionTimer = window.setTimeout(() => syncSourceFromPreview(false), WORD_SYNC_DEBOUNCE_MS);
   });
 
   // Escape clears both surfaces. It neither collapses the selection nor moves
@@ -3573,7 +3518,8 @@ function installPreviewCopy(): void {
 }
 
 function installPreviewClicks(): void {
-  preview.addEventListener("click", (event) => {    const target = (event.target as HTMLElement).closest("a, .local-link, .external-link");
+  preview.addEventListener("click", (event) => {
+    const target = (event.target as HTMLElement).closest("a, .local-link, .external-link");
     if (!target) return;
     const href = target.getAttribute("data-href") ?? "";
     if (!href) return;
@@ -4128,9 +4074,7 @@ function imageContext(hasSelection = false): ImageContext {
   return {
     // A relative image path is the only kind the HTML guest and the Typst
     // compiler can reach from the document's own folder.
-    settings: needsRelativePath(language)
-      ? { ...settings, imageUseRelativePath: true }
-      : settings,
+    settings: needsRelativePath(language) ? { ...settings, imageUseRelativePath: true } : settings,
     documentPath: doc.path,
     hasSelection,
     insert: (text) => editor.insertBlock(text),
@@ -4499,14 +4443,17 @@ async function boot(): Promise<void> {
   // The language list is a local COM/hunspell query, not a download. It still
   // waits until after the first paint: start-up does not block on it, and the
   // underlines appear once the answer is in.
-  void api.spellcheckLanguages().then((languages) => {
-    setInstalledLanguages(languages);
-    applySpellcheck();
-    preferences?.refresh();
-  }).catch(() => {
-    setInstalledLanguages([]);
-    preferences?.refresh();
-  });
+  void api
+    .spellcheckLanguages()
+    .then((languages) => {
+      setInstalledLanguages(languages);
+      applySpellcheck();
+      preferences?.refresh();
+    })
+    .catch(() => {
+      setInstalledLanguages([]);
+      preferences?.refresh();
+    });
 
   await installMenuListener();
   // The accelerators the menu registered, bound to the keyboard. Tauri 2 never

@@ -91,7 +91,11 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // ---------------------------------------------------------------------------
 console.log("=== the compiler is available ===");
 const status = await invoke("typst_status");
-check(status.found === true, "Typst is installed", `${status.version ?? "not found"} at ${status.path ?? "-"}`);
+check(
+  status.found === true,
+  "Typst is installed",
+  `${status.version ?? "not found"} at ${status.path ?? "-"}`,
+);
 check(
   status.source === "managed" || status.source === "path",
   "the application knows where it came from",
@@ -126,7 +130,11 @@ try {
       inputPath: join(process.cwd(), markdownDoc),
     },
   });
-  check(outcome.bytes > 0, "the export reported bytes", `${outcome.bytes} bytes at ${outcome.outputPath}`);
+  check(
+    outcome.bytes > 0,
+    "the export reported bytes",
+    `${outcome.bytes} bytes at ${outcome.outputPath}`,
+  );
   check(existsSync(pdfPath), "the file exists");
   if (existsSync(pdfPath)) {
     const head = readFileSync(pdfPath).subarray(0, 5).toString("latin1");
@@ -153,7 +161,11 @@ await invoke("read_document", { path: join(process.cwd(), typstDoc) }).then(asyn
       .then((d) => d.content.length)`,
   );
   check(opened > 0, "the .typ file reads", `${opened} chars`);
-  check(payload.content.startsWith("//!"), "its content arrives unaltered", payload.content.slice(0, 20));
+  check(
+    payload.content.startsWith("//!"),
+    "its content arrives unaltered",
+    payload.content.slice(0, 20),
+  );
 });
 
 const language = await evaluate(`(() => {
@@ -162,7 +174,11 @@ const language = await evaluate(`(() => {
   return JSON.stringify({ tokens, head: text.slice(0, 12) });
 })()`);
 const shown = JSON.parse(language);
-check(shown.tokens > 0, "the Typst grammar is producing highlighted tokens", `${shown.tokens} spans`);
+check(
+  shown.tokens > 0,
+  "the Typst grammar is producing highlighted tokens",
+  `${shown.tokens} spans`,
+);
 check(shown.head.startsWith("//!"), "the buffer holds the file as written", shown.head);
 
 const viewState = () =>
@@ -224,7 +240,11 @@ const outline = await evaluate(`(() => {
   return JSON.stringify([...document.querySelectorAll(".outline-item")].map((e) => e.textContent.trim()));
 })()`);
 const headings = JSON.parse(outline);
-check(headings.length >= 3, "the outline lists the document's headings", `${headings.length} heading(s)`);
+check(
+  headings.length >= 3,
+  "the outline lists the document's headings",
+  `${headings.length} heading(s)`,
+);
 check(
   headings.includes("Mathematics") || headings.some((h) => /Mathematics|Tables|Code/.test(h)),
   "the heading text is read from `= Title` markers",
