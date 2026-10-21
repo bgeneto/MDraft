@@ -11,6 +11,8 @@
     "core:window:allow-is-fullscreen",
     "core:window:allow-set-fullscreen",
     "core:webview:allow-internal-toggle-devtools",
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text",
     "dialog:default",
     "opener:default",
     "window-state:default"

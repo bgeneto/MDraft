@@ -10,6 +10,7 @@
 //! one undo restores the original bytes and a stale result can never overwrite a
 //! newer edit.
 
+import type { EditorState, TransactionSpec } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import type { Options, Plugin } from "prettier";
 import type { TypstyleConfig } from "@typstyle/typstyle-wasm-bundler/typstyle_wasm_bg.js";
@@ -99,6 +100,11 @@ async function formatWithPrettier(text: string, language: "markdown" | "html"): 
   return prettier.format(text, options);
 }
 
+/** Whether `language` has a formatter. AsciiDoc is deliberately excluded. */
+export function hasFormatter(language: DocumentLanguage): boolean {
+  return language === "markdown" || language === "html" || language === "typst";
+}
+
 /**
  * Format `text` as `language`. `null` means the language has no formatter, which
  * is how AsciiDoc is deliberately excluded.
@@ -121,6 +127,31 @@ export async function formatDocument(
 }
 
 /**
+ * The one transaction that replaces `state`'s document with `formatted`.
+ *
+ * The caret keeps its line and column, clamped to the formatted text. This is
+ * deliberately not a position map: formatting moves text between lines, and a
+ * map would land the caret somewhere plausible but arbitrary. The transaction is
+ * shared by the live editor and a background tab's stored `EditorState`.
+ */
+export function formattedTransaction(state: EditorState, formatted: string): TransactionSpec {
+  const head = state.selection.main.head;
+  const line = state.doc.lineAt(head);
+  const column = head - line.from;
+  const lines = formatted.split("\n");
+  const target = Math.min(line.number - 1, lines.length - 1);
+  let anchor = Math.min(column, lines[target].length);
+  for (let index = 0; index < target; index++) anchor += lines[index].length + 1;
+
+  return {
+    changes: { from: 0, to: state.doc.length, insert: formatted },
+    selection: { anchor },
+    scrollIntoView: false,
+    userEvent: "format",
+  };
+}
+
+/**
  * Format the document shown in `view` in one undoable transaction.
  *
  * `stale` means the buffer changed while the formatter ran; nothing was applied.
@@ -132,9 +163,6 @@ export async function formatEditor(
   const state = view.state;
   const before = state.doc;
   const source = before.toString();
-  const head = state.selection.main.head;
-  const line = before.lineAt(head);
-  const column = head - line.from;
 
   const formatted = await formatDocument(source, language);
   if (formatted === null) return "unchanged";
@@ -144,20 +172,7 @@ export async function formatEditor(
   if (view.state.doc !== before) return "stale";
   if (formatted === source) return "unchanged";
 
-  // The caret keeps its line and column, clamped to the formatted text. This is
-  // deliberately not a position map: formatting moves text between lines, and a
-  // map would land the caret somewhere plausible but arbitrary.
-  const lines = formatted.split("\n");
-  const target = Math.min(line.number - 1, lines.length - 1);
-  let anchor = Math.min(column, lines[target].length);
-  for (let index = 0; index < target; index++) anchor += lines[index].length + 1;
-
-  view.dispatch({
-    changes: { from: 0, to: before.length, insert: formatted },
-    selection: { anchor },
-    scrollIntoView: false,
-    userEvent: "format",
-  });
+  view.dispatch(formattedTransaction(state, formatted));
   return "changed";
 }
 

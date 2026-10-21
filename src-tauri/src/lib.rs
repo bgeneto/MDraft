@@ -38,6 +38,7 @@ pub fn run() {
                 html_preview::serve(context.app_handle().clone(), request, responder);
             },
         )
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())

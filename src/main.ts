@@ -11,8 +11,15 @@ import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import * as api from "./api";
 import { renderAsciidocForExport, renderAsciidocPreview } from "./asciidoc-preview";
 import { ASCIIDOC_REFERENCE, FONT_LICENCES, REFERENCE, SHORTCUTS, WELCOME } from "./content";
+import { installEditorContextMenu } from "./context-menu";
 import { createEditor, type EditorHandle } from "./editor";
-import { installFormatMenu } from "./format/menu";
+import {
+  formatDocument,
+  formatEditor,
+  formatErrorMessage,
+  formattedTransaction,
+  hasFormatter,
+} from "./format/formatters";
 import {
   DEFAULT_EDITOR_FONT_SIZE,
   DEFAULT_EDITOR_LINE_HEIGHT,
@@ -132,6 +139,15 @@ function installTabs(): void {
       },
       reveal: (id) => revealSession(id),
       newTab: () => loadUntitled("", defaultDocumentLanguage()),
+      format: (id) => {
+        void formatSession(id).catch((error) => {
+          toast(`Could not format: ${formatErrorMessage(error)}`, 5200);
+        });
+      },
+      formatBlocked: (id) => {
+        const session = sessions.byId(id);
+        return session ? formatUnavailableReason(session) : "No such document.";
+      },
     },
   });
 }
@@ -140,6 +156,8 @@ function installTabs(): void {
  * add a tab instead of replacing the one the reader is in.
  */
 let installingStartup = true;
+/** One full-document format at a time, whichever tab it belongs to. */
+let formatBusy = false;
 let isDark = false;
 /** Mirrors the window's fullscreen state, so the menu check can follow it. */
 let isFullscreen = false;
@@ -1358,6 +1376,79 @@ function setDirty(next: boolean): void {
   void refreshTitle();
   refreshStatus();
   renderDocTabs();
+}
+
+/** Why Format Document cannot run for `session`, or null when it can. */
+function formatUnavailableReason(session: Session): string | null {
+  if (session.readOnly) return "This document is read-only.";
+  if (!hasFormatter(session.language)) return "AsciiDoc documents have no formatter.";
+  if (formatBusy) return "Formatting is already running.";
+  if (session.id !== doc.id && !session.editorState) {
+    return "This document is not ready to be formatted yet.";
+  }
+  return null;
+}
+
+/**
+ * Format one document, active or in the background.
+ *
+ * The active tab uses the live view. An inactive tab has no view; its stored
+ * `EditorState` is formatted and replaced in place, which keeps the caret and
+ * undo history for the moment it comes back. Both paths discard a result whose
+ * snapshot changed while the formatter was running.
+ */
+async function formatSession(id: string): Promise<void> {
+  const session = sessions.byId(id);
+  if (!session) return;
+  const reason = formatUnavailableReason(session);
+  if (reason) {
+    toast(reason);
+    return;
+  }
+
+  const active = session.id === doc.id;
+  const state = active ? editor.view.state : session.editorState;
+  if (!state) {
+    toast("This document is not ready to be formatted yet.");
+    return;
+  }
+
+  formatBusy = true;
+  const pending = toast(active ? "Formatting…" : `Formatting ${session.name}…`, 0);
+  try {
+    if (active) {
+      const outcome = await formatEditor(editor.view, session.language);
+      pending.dismiss();
+      if (outcome === "changed") toast("Formatted");
+      else if (outcome === "unchanged") toast("Already formatted");
+      else {
+        toast("The document changed while it was being formatted — nothing was applied.", 4200);
+      }
+      return;
+    }
+
+    const before = state.doc;
+    const source = before.toString();
+    const formatted = await formatDocument(source, session.language);
+    pending.dismiss();
+    if (sessions.byId(id) !== session || session.editorState !== state || session.id === doc.id) {
+      toast("The document changed while it was being formatted — nothing was applied.", 4200);
+      return;
+    }
+    if (formatted === null || formatted === source) {
+      toast(`${session.name} is already formatted`);
+      return;
+    }
+    session.editorState = state.update(formattedTransaction(state, formatted)).state;
+    session.dirty = formatted !== session.savedContent;
+    renderDocTabs();
+    toast(`Formatted ${session.name}`);
+  } catch (error) {
+    pending.dismiss();
+    toast(`Could not format: ${formatErrorMessage(error)}`, 6200);
+  } finally {
+    formatBusy = false;
+  }
 }
 
 interface OpenOptions {
@@ -4381,13 +4472,15 @@ async function boot(): Promise<void> {
     refreshStatus();
     updateActiveOutline();
   });
-  // Right-click formatting lives outside the spelling plugin: that plugin owns
-  // `contextmenu` on the editor when a misspelled word is under the pointer, and
+  // The editor's whole right-click menu lives outside the spelling plugin: that
+  // plugin owns `contextmenu` when a misspelled word is under the pointer and
   // stops the event, so the two menus never compete for the same click.
-  installFormatMenu({
+  // Formatting needs the session lifecycle, so it is the one shell callback.
+  installEditorContextMenu({
     view: editor.view,
-    language: () => doc.language,
     readOnly: () => doc.readOnly,
+    format: () => formatSession(doc.id),
+    formatBlocked: () => formatUnavailableReason(doc),
     toast,
   });
 

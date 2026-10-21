@@ -54,7 +54,7 @@ hard part of choosing type is the pairing rather than one family.
 | Preset | Character |
 | --- | --- |
 | **System** | The default. No bundled faces; nothing is embedded in an export. |
-| **Serif** | Source Serif 4 under Source Sans 3, with Fira Code in both code roles. A neutral modern book: oldstyle figures, ligatures and slashed zero on; starts at 18 px preview size and 92% math scale. |
+| **Serif** | Source Serif 4 under Source Sans 3, with Fira Code in both code roles. A neutral modern book: oldstyle figures, ligatures and slashed zero on; starts at 17 px preview size and 88% math scale. |
 | **Renaissance** | EB Garamond in prose and headings, IBM Plex Mono in the editor. A 16th-century book page: low contrast, small x-height, serif headings, oldstyle figures, no code ligatures, 80% math scale. |
 | **Editorial** | Bodoni Moda's hairline Didone under Archivo's grotesque headings, with JetBrains Mono in code. A mid-century magazine: lining figures, ligatures and slashed zero on, 17 px preview size and 90% math scale. |
 | **Bauhaus** | Jost's circles and straight lines in prose and headings, with Azeret Mono's geometric code. A 1920s poster with no serif anywhere: ligatures and slashed zero on, proportional table figures, 17 px and 90% math. |
@@ -129,7 +129,7 @@ do not depend on the reader's fonts.
 KaTeX draws at `1.21em`, which is why a formula reads slightly larger than the
 text beside it. **Preferences › Typography › Math scale** multiplies that ratio
 from 70% to 130%. 100% keeps KaTeX's own size; about 83% makes a formula match
-the prose. Serif uses 92%; System 95%; Renaissance 80% so the mathematics does
+the prose. Serif uses 88%; System 95%; Renaissance 80% so the mathematics does
 not shout beside Garamond; Editorial and Bauhaus 90%, and Notebook 86%. The
 preview, exported HTML and printed PDF all read the same value.
 

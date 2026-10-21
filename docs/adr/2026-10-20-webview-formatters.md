@@ -1,6 +1,6 @@
 # Document formatting runs in the webview, not the Rust backend
 
-**Status:** accepted
+**Status:** superseded by `2026-10-20-editor-context-menu.md`
 **Date:** 2026-10-20
 
 ## Context

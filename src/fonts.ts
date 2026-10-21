@@ -336,8 +336,8 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
     label: "Serif",
     note: "Source Serif 4 and Source Sans 3, drawn to the same skeleton, with Fira Code in the editor and in preview code. The two Source faces were designed together, so the pairing cannot clash.",
     defaults: {
-      bodyFontSize: 18,
-      mathFontScale: 92,
+      bodyFontSize: 17,
+      mathFontScale: 88,
     },
     values: {
       ...ROLE_DEFAULTS,

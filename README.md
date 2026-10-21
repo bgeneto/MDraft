@@ -44,9 +44,9 @@ Markdown document active.*
   history without opening the sidebar.
 - **Many documents, each with its own state.** Tabs keep every document's
   caret, undo and scroll position. A crowded strip scrolls with arrows, the
-  wheel or drag reordering, and right-click offers the tab actions. **Reopen
-  the last tabs** on launch restores the set that was open, in the same order
-  and with the same one active.
+  wheel or drag reordering, and right-click offers the tab actions, including
+  **Format Document**. **Reopen the last tabs** on launch restores the set that
+  was open, in the same order and with the same one active.
 - **Typing that closes itself.** `(`, `[`, `{`, quotes and backticks insert
   their pair, step over the closer and delete both on Backspace; HTML tags close
   in HTML, Markdown and AsciiDoc. Both behaviors have a switch under
@@ -57,12 +57,15 @@ Markdown document active.*
   pinned under Preferences › Editor, and the status bar turns checking on and
   off. Right-click a marked word for suggestions or **Add to dictionary**.
   Nothing is downloaded, and HTML guests are not checked.
-- **Formatting on demand.** Right-click in a Markdown, HTML or Typst source
-  pane and choose **Format Document**: Prettier aligns Markdown tables and
-  tidies HTML, Typstyle reindents Typst. One undo restores the exact original,
-  the caret keeps its line, and the formatters are bundled rather than
-  downloaded — nothing is loaded until the first format. AsciiDoc has no
-  formatter and keeps its own right-click.
+- **A right-click menu that acts on the source.** Cut, copy, paste and delete;
+  select all; UPPERCASE, lowercase and Title Case; toggle a single-line comment;
+  duplicate a line or move it up and down; undo and redo. **Format Document** is
+  the last entry: Prettier aligns Markdown tables and tidies HTML, Typstyle
+  reindents Typst. The same command is on a tab's context menu and formats that
+  document even while another tab is on screen. One undo restores the exact
+  original, the caret keeps its line, and the formatters are bundled rather than
+  downloaded — nothing is loaded until the first format. AsciiDoc keeps the
+  editing menu but has no formatter, and the item says so.
 - **Typography that holds up.** Thirteen bundled typefaces, six presets,
   independent faces for editor, prose, headings and code, plus OpenType
   controls. The source pane's line height is **Compact**, **Normal** or
