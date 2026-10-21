@@ -17,6 +17,10 @@ export interface TabsCallbacks {
   saveAs: (id: string) => void | Promise<void>;
   reveal: (id: string) => void | Promise<void>;
   newTab: () => void | Promise<void>;
+  /** Format the clicked document, active or in the background. */
+  format: (id: string) => void | Promise<void>;
+  /** Why Format Document cannot run for this tab, or null when it can. */
+  formatBlocked: (id: string) => string | null;
 }
 
 export interface TabsOptions {
@@ -42,6 +46,8 @@ type MenuEntry =
       action: () => void | Promise<void>;
       disabled?: boolean;
       shortcut?: string;
+      /** Shown as the button's tooltip, usually why it is disabled. */
+      title?: string;
     };
 
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.userAgent);
@@ -220,6 +226,7 @@ export function createTabsUi(options: TabsOptions): TabsUi {
     const unchanged = list
       .filter((entry) => entry.id !== id && !entry.dirty)
       .map((entry) => entry.id);
+    const formatBlocked = callbacks.formatBlocked(id);
 
     const runMany = (ids: readonly string[]) => callbacks.closeMany(ids);
 
@@ -274,6 +281,15 @@ export function createTabsUi(options: TabsOptions): TabsUi {
         label: "Save As\u2026",
         shortcut: shortcutLabel("S", true),
         action: () => callbacks.saveAs(id),
+      },
+      { kind: "separator" },
+      {
+        kind: "item",
+        id: "format",
+        label: "Format Document",
+        disabled: formatBlocked !== null,
+        title: formatBlocked ?? undefined,
+        action: () => callbacks.format(id),
       },
       { kind: "separator" },
       {
@@ -361,6 +377,7 @@ export function createTabsUi(options: TabsOptions): TabsUi {
     button.tabIndex = -1;
     button.dataset.action = entry.id;
     button.disabled = entry.disabled === true;
+    if (entry.title) button.title = entry.title;
 
     const label = document.createElement("span");
     label.className = "tab-menu-label";

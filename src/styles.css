@@ -388,7 +388,8 @@ body {
    Tab context menu
    -------------------------------------------------------------------------- */
 
-.tab-menu {
+.tab-menu,
+.editor-menu {
   position: fixed;
   z-index: 90;
   min-width: 238px;
@@ -406,7 +407,8 @@ body {
   user-select: none;
 }
 
-[data-theme="dark"] .tab-menu {
+[data-theme="dark"] .tab-menu,
+[data-theme="dark"] .editor-menu {
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
 }
 
@@ -414,7 +416,8 @@ body {
   display: none;
 }
 
-.tab-menu-item {
+.tab-menu-item,
+.editor-menu-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -432,24 +435,29 @@ body {
 }
 
 .tab-menu-item:hover:not(:disabled),
-.tab-menu-item:focus-visible {
+.tab-menu-item:focus-visible,
+.editor-menu-item:hover:not(:disabled),
+.editor-menu-item:focus-visible {
   background: var(--accent-soft);
   outline: none;
 }
 
-.tab-menu-item:disabled {
+.tab-menu-item:disabled,
+.editor-menu-item:disabled {
   color: var(--muted);
   opacity: 0.5;
   cursor: default;
 }
 
-.tab-menu-shortcut {
+.tab-menu-shortcut,
+.editor-menu-shortcut {
   color: var(--muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
-.tab-menu-sep {
+.tab-menu-sep,
+.editor-menu-sep {
   height: 1px;
   margin: 4px 6px;
   background: var(--border);
@@ -712,8 +720,7 @@ body {
   text-underline-offset: 2px;
 }
 
-.spell-menu,
-.format-menu {
+.spell-menu {
   position: fixed;
   z-index: 80;
   min-width: 180px;
@@ -728,8 +735,7 @@ body {
   font-size: 13px;
 }
 
-.spell-menu button,
-.format-menu button {
+.spell-menu button {
   display: block;
   width: 100%;
   margin: 0;
@@ -743,19 +749,8 @@ body {
   cursor: pointer;
 }
 
-.spell-menu button:hover,
-.format-menu button:hover {
+.spell-menu button:hover {
   background: var(--accent-soft);
-}
-
-/* A read-only file keeps the menu, so the reason is visible, but the action is
-   not. The disabled item must not take the hover tint: that would read as a
-   working choice. */
-.format-menu button:disabled,
-.format-menu button:disabled:hover {
-  background: none;
-  color: var(--muted);
-  cursor: default;
 }
 
 .spell-menu-pending {

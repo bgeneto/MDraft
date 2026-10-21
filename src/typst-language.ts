@@ -10,7 +10,7 @@
 //! colouring and diagnostics that this editor does not need in the browser — it
 //! runs the real compiler on the desktop instead.
 
-import type { LanguageSupport } from "@codemirror/language";
+import { LanguageSupport } from "@codemirror/language";
 
 let pending: Promise<LanguageSupport> | null = null;
 
@@ -22,7 +22,18 @@ let pending: Promise<LanguageSupport> | null = null;
  */
 export function typstLanguage(): Promise<LanguageSupport> {
   if (!pending) {
-    pending = import("codemirror-lang-typst").then((module) => module.typst());
+    pending = import("codemirror-lang-typst").then((module) => {
+      const support = module.typst();
+      // The package carries the grammar and its highlighting, but no
+      // `commentTokens` language data. Without it the editor's comment command
+      // cannot know that Typst uses `//` and `/* … */`.
+      return new LanguageSupport(support.language, [
+        support.support,
+        support.language.data.of({
+          commentTokens: { line: "//", block: { open: "/*", close: "*/" } },
+        }),
+      ]);
+    });
   }
   return pending;
 }

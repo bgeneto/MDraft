@@ -1,5 +1,6 @@
-// Does right-click **Format Document** format a whole document, in one undo
-// step, without touching a document it did not format?
+// Does the editor's right-click menu carry the editing actions and format a
+// whole document, in one undo step, without touching a document it did not
+// format? Does the tab menu format the clicked tab, even in the background?
 //
 //   node scripts/format-document-test.mjs [port]
 //
@@ -8,6 +9,10 @@
 // bytes on disk, not a count of menu items. The launch document is left alone;
 // each language is opened as its own tab and each tab is undone back to its
 // original bytes before the next one is tested.
+//
+// The clipboard checks replace `navigator.clipboard` with an in-page fake. The
+// agent session cannot own the operating system clipboard, so the suite proves
+// the menu's read/write wiring and the synthetic paste path, not the OS itself.
 
 import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -154,25 +159,119 @@ function rightClick(x, y) {
 
 const menuState = () =>
   evaluate(`(() => {
-    const menus = [...document.querySelectorAll('.format-menu')];
+    const menus = [...document.querySelectorAll('.editor-menu')];
     return {
       count: menus.length,
       items: menus[0]
-        ? [...menus[0].querySelectorAll('button')].map((button) => ({
-            text: button.textContent,
+        ? [...menus[0].querySelectorAll('.editor-menu-item')].map((button) => ({
+            action: button.dataset.action,
+            label: button.querySelector('.editor-menu-label')?.textContent ?? button.textContent,
+            shortcut: button.querySelector('.editor-menu-shortcut')?.textContent ?? '',
             disabled: button.disabled,
+            title: button.title,
           }))
         : [],
+      separators: menus[0] ? menus[0].querySelectorAll('.editor-menu-sep').length : 0,
     };
   })()`);
 
-const chooseFormat = () =>
+const chooseEditor = (action) =>
   evaluate(`(() => {
-    const button = document.querySelector('.format-menu button');
-    if (!button) return false;
+    const button = document.querySelector('.editor-menu-item[data-action="${action}"]');
+    if (!button || button.disabled) return false;
     button.click();
     return true;
   })()`);
+
+const chooseFormat = () => chooseEditor("format");
+
+const tabMenuState = () =>
+  evaluate(`(() => {
+    const menu = document.querySelector('.tab-menu');
+    return {
+      open: !menu.hidden,
+      items: [...menu.querySelectorAll('.tab-menu-item')].map((button) => ({
+        action: button.dataset.action,
+        label: button.querySelector('.tab-menu-label')?.textContent ?? '',
+        disabled: button.disabled,
+        title: button.title,
+      })),
+    };
+  })()`);
+
+const tabByName = (name) => `[...document.querySelectorAll('.doc-tab')].find(
+  (tab) => tab.querySelector('.doc-tab-name')?.textContent === ${JSON.stringify(name)}
+)`;
+
+const rightClickTab = (name) =>
+  evaluate(`(() => {
+    const tab = ${tabByName(name)};
+    if (!tab) return false;
+    const bounds = tab.getBoundingClientRect();
+    tab.dispatchEvent(new MouseEvent('contextmenu', {
+      bubbles: true, cancelable: true, button: 2,
+      clientX: bounds.left + 12, clientY: bounds.top + 12,
+    }));
+    return true;
+  })()`);
+
+const chooseTab = (action) =>
+  evaluate(`(() => {
+    const button = document.querySelector('.tab-menu-item[data-action="${action}"]');
+    if (!button || button.disabled) return false;
+    button.click();
+    return true;
+  })()`);
+
+const isTabDirty = (name) =>
+  evaluate(`(() => {
+    const tab = ${tabByName(name)};
+    return tab?.classList.contains('is-dirty') === true;
+  })()`);
+
+const activateTab = (name) =>
+  evaluate(`(() => {
+    const tab = ${tabByName(name)};
+    if (!tab) return false;
+    tab.click();
+    return true;
+  })()`);
+
+const lineText = (index) =>
+  evaluate(`document.querySelectorAll('.cm-line')[${index}]?.textContent ?? ''`);
+
+async function pressKey(key, code, virtualKeyCode, modifiers = 0) {
+  await send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key,
+    code,
+    windowsVirtualKeyCode: virtualKeyCode,
+    nativeVirtualKeyCode: virtualKeyCode,
+    modifiers,
+  });
+  await send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key,
+    code,
+    windowsVirtualKeyCode: virtualKeyCode,
+    nativeVirtualKeyCode: virtualKeyCode,
+    modifiers,
+  });
+}
+
+/** Click a line, go Home, then select the whole logical line with Shift+End. */
+async function selectLine(index) {
+  const point = await clickLine(index);
+  await pressKey("Home", "Home", 36);
+  await pressKey("End", "End", 35, 8);
+  return point;
+}
+
+async function openLineMenu(index) {
+  const point = await selectLine(index);
+  await rightClick(point.x, point.y);
+  return point;
+}
 
 const cursorLine = async () => {
   const text = await evaluate(`document.getElementById('status-cursor')?.textContent ?? ""`);
@@ -278,15 +377,50 @@ try {
   const mdBeforeLine = await cursorLine();
   await rightClick(mdPoint.x, mdPoint.y);
   let menu = await menuState();
+  const expectedLabels = [
+    "Undo",
+    "Redo",
+    "Cut",
+    "Copy",
+    "Paste",
+    "Delete",
+    "Select All",
+    "UPPERCASE",
+    "lowercase",
+    "Title Case",
+    "Toggle Single Line Comment",
+    "Duplicate Line",
+    "Move Line Up",
+    "Move Line Down",
+    "Format Document",
+  ];
+  const labels = menu.items.map((item) => item.label);
+  const item = (action) => menu.items.find((entry) => entry.action === action);
   check(menu.count === 1, "right-clicking the source opens one menu", `menus=${menu.count}`);
   check(
-    menu.items.length === 1 &&
-      menu.items[0].text === "Format Document" &&
-      menu.items[0].disabled === false,
-    "the menu offers one enabled Format Document",
-    JSON.stringify(menu.items),
+    labels.join("|") === expectedLabels.join("|"),
+    "the menu lists every editor action in order",
+    labels.join(", "),
   );
-
+  check(
+    ["cut", "copy", "delete", "uppercase", "lowercase", "titleCase"].every(
+      (action) => item(action) && item(action).disabled,
+    ),
+    "the selection actions are disabled without a selection",
+  );
+  check(
+    ["paste", "selectAll", "comment", "format"].every(
+      (action) => item(action) && !item(action).disabled,
+    ),
+    "Paste, Select All, Comment and Format are available",
+  );
+  check(
+    ["Cut", "Copy", "Paste", "Select All"].every((label) =>
+      menu.items.some((entry) => entry.label === label && entry.shortcut !== ""),
+    ),
+    "the clipboard and selection items carry shortcut hints",
+    menu.items.map((entry) => `${entry.label}:${entry.shortcut}`).join(", "),
+  );
   const mdChosen = await chooseFormat();
   check(mdChosen, "the Format Document item is clickable");
   const mdDirty = await pollFor(
@@ -346,6 +480,159 @@ try {
   );
   check(!(await isDirty()), "the restored document is clean");
 
+  // -------------------------------------------------------------------------
+  // Editing actions in the menu
+  // -------------------------------------------------------------------------
+  console.log("\n=== editing actions ===");
+
+  // The real clipboard is not available to the agent session; this fake proves
+  // the menu's read/write wiring and the synthetic paste path. It is not a
+  // claim about the operating system's clipboard.
+  await evaluate(`(() => {
+    window.__realClipboard = navigator.clipboard;
+    window.__clipboardText = "";
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text) => { window.__clipboardText = text; },
+        readText: async () => window.__clipboardText,
+        read: async () => { throw new Error('rich clipboard unavailable in the test'); },
+      },
+    });
+  })()`);
+
+  await openLineMenu(15);
+  const selected = await evaluate(`window.getSelection().toString()`);
+  check(selected === "- Bullet item", "Home and Shift+End select the whole line", selected);
+  const selectionMenu = await menuState();
+  check(
+    ["cut", "copy", "delete", "uppercase", "lowercase", "titleCase"].every(
+      (action) => selectionMenu.items.find((entry) => entry.action === action)?.disabled === false,
+    ),
+    "a selection enables Cut, Copy, Delete and the case actions",
+  );
+
+  await chooseEditor("uppercase");
+  await sleep(120);
+  check((await lineText(15)) === "- BULLET ITEM", "UPPERCASE changes the selection");
+  await undo();
+  await sleep(120);
+  check((await lineText(15)) === "- Bullet item", "undo restores the line after UPPERCASE");
+
+  await openLineMenu(15);
+  await chooseEditor("lowercase");
+  await sleep(120);
+  check((await lineText(15)) === "- bullet item", "lowercase changes the selection");
+  await undo();
+  await sleep(120);
+  check((await lineText(15)) === "- Bullet item", "undo restores the line after lowercase");
+
+  await openLineMenu(15);
+  await chooseEditor("titleCase");
+  await sleep(120);
+  check((await lineText(15)) === "- Bullet Item", "Title Case changes the selection");
+  await undo();
+  await sleep(120);
+  check((await lineText(15)) === "- Bullet item", "undo restores the line after Title Case");
+
+  await openLineMenu(15);
+  await chooseEditor("comment");
+  await sleep(120);
+  check(
+    (await lineText(15)) === "<!-- - Bullet item -->",
+    "Toggle Single Line Comment wraps a Markdown line",
+  );
+  await undo();
+  await sleep(120);
+  check((await lineText(15)) === "- Bullet item", "undo restores the commented line");
+
+  await openLineMenu(15);
+  await chooseEditor("duplicateLine");
+  await sleep(120);
+  check(
+    (await lineText(15)) === "- Bullet item" && (await lineText(16)) === "- Bullet item",
+    "Duplicate Line copies the selected line",
+  );
+  await undo();
+  await sleep(120);
+
+  await openLineMenu(15);
+  await chooseEditor("moveLineDown");
+  await sleep(120);
+  check(
+    (await lineText(15)) === "- Second item" && (await lineText(16)) === "- Bullet item",
+    "Move Line Down swaps the line with its neighbour",
+  );
+  await undo();
+  await sleep(120);
+
+  await openLineMenu(15);
+  await chooseEditor("copy");
+  await sleep(150);
+  check(
+    (await evaluate(`window.__clipboardText`)) === "- Bullet item",
+    "Copy writes the selection to the clipboard",
+  );
+
+  const beforePaste = await lineText(15);
+  await clickLine(15);
+  await pressKey("End", "End", 35);
+  const pastePoint = await linePoint(15);
+  await rightClick(pastePoint.x, pastePoint.y);
+  await chooseEditor("paste");
+  await sleep(200);
+  const afterPaste = await lineText(15);
+  check(
+    afterPaste.length === beforePaste.length * 2 && afterPaste.includes(beforePaste),
+    "Paste inserts what Copy put on the clipboard",
+    afterPaste,
+  );
+  await undo();
+  await sleep(120);
+  check((await lineText(15)) === "- Bullet item", "undo restores the pasted line");
+
+  await openLineMenu(15);
+  await chooseEditor("cut");
+  await sleep(150);
+  check(
+    (await evaluate(`window.__clipboardText`)) === "- Bullet item",
+    "Cut writes the selection to the clipboard",
+  );
+  check((await lineText(15)) === "", "Cut removes the selected line");
+  await undo();
+  await sleep(120);
+  check((await lineText(15)) === "- Bullet item", "undo restores the cut line");
+
+  await openLineMenu(15);
+  await chooseEditor("delete");
+  await sleep(120);
+  check((await lineText(15)) === "", "Delete removes the selection");
+  await undo();
+  await sleep(120);
+
+  const selectPoint = await clickLine(15);
+  await rightClick(selectPoint.x, selectPoint.y);
+  await chooseEditor("selectAll");
+  await sleep(120);
+  check(
+    (await evaluate(`window.getSelection().toString().length`)) > 100,
+    "Select All selects more than the current line",
+  );
+  await clickLine(15);
+  await sleep(120);
+
+  await evaluate(`(() => {
+    if (window.__realClipboard === undefined) delete navigator.clipboard;
+    else {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: window.__realClipboard,
+      });
+    }
+    delete window.__realClipboard;
+    delete window.__clipboardText;
+  })()`);
+
   // Dismissal and placement.
   const dismissPoint = await linePoint(9);
   await rightClick(dismissPoint.x, dismissPoint.y);
@@ -379,8 +666,65 @@ try {
   })()`);
   check(
     (await menuState()).count === 0,
-    "right-clicking the preview opens no format menu",
+    "right-clicking the preview opens no editor menu",
     JSON.stringify(previewPoint),
+  );
+
+  // -------------------------------------------------------------------------
+  // The tab menu formats a background document
+  // -------------------------------------------------------------------------
+  console.log("\n=== tab formatting ===");
+  const htmlForBackground = await openFile(files.html);
+  check(htmlForBackground, "the HTML copy opens before the background format");
+  const markdownTabClicked = await rightClickTab(nameOf(files.markdown));
+  check(markdownTabClicked, "the Markdown tab can be right-clicked");
+  const tabMenu = await tabMenuState();
+  const tabFormat = tabMenu.items.find((entry) => entry.action === "format");
+  check(
+    tabMenu.open && tabFormat && !tabFormat.disabled,
+    "the tab menu offers an enabled Format Document",
+  );
+  const activeBefore = await evaluate(activeName);
+  await chooseTab("format");
+  const backgroundToast = await waitForToast(`Formatted ${nameOf(files.markdown)}`, 20000);
+  check(
+    backgroundToast === `Formatted ${nameOf(files.markdown)}`,
+    "the background format names the document",
+    backgroundToast,
+  );
+  const backgroundDirty = await pollFor(
+    `(() => {
+      const tab = ${tabByName(nameOf(files.markdown))};
+      return tab?.classList.contains('is-dirty') === true;
+    })()`,
+    10000,
+  );
+  check(backgroundDirty, "the background tab is marked dirty");
+  check(
+    (await evaluate(activeName)) === activeBefore,
+    "formatting a background tab leaves the active tab alone",
+    activeBefore,
+  );
+  check(!(await isTabDirty(nameOf(files.html))), "the active HTML tab stays clean");
+
+  const markdownActivated = await activateTab(nameOf(files.markdown));
+  check(markdownActivated, "the background-formatted tab can be activated");
+  await pollFor(`${activeName} === ${JSON.stringify(nameOf(files.markdown))}`, 10000);
+  const backgroundSaved = await save(files.markdown, (bytes) => !bytes.equals(original.markdown));
+  const backgroundText = backgroundSaved.toString("utf8");
+  check(
+    backgroundText.includes("_emphasis_") && /^\| Feature\s{2,}\|/m.test(backgroundText),
+    "the background format wrote the formatter's result",
+  );
+  await undo();
+  await pollFor(
+    `document.querySelector('.doc-tab[aria-selected="true"]')?.classList.contains('is-dirty') === true`,
+    10000,
+  );
+  const backgroundRestored = await save(files.markdown, (bytes) => bytes.equals(original.markdown));
+  check(
+    backgroundRestored.equals(original.markdown),
+    "one undo restores the background-formatted bytes",
   );
 
   // -------------------------------------------------------------------------
@@ -422,9 +766,22 @@ try {
   const typstOpened = await openFile(files.typst);
   check(typstOpened, "the Typst copy opens as its own tab");
   const typstPoint = await clickLine(17);
-  const typstBeforeLine = await cursorLine();
   await rightClick(typstPoint.x, typstPoint.y);
   check((await menuState()).count === 1, "right-clicking Typst opens the menu");
+  check(
+    (await menuState()).items.find((entry) => entry.action === "comment")?.disabled === false,
+    "Typst offers the comment action",
+  );
+  await chooseEditor("comment");
+  await sleep(120);
+  check(
+    (await lineText(17)).startsWith("// Regular text"),
+    "Toggle Single Line Comment prefixes a Typst line",
+  );
+  await undo();
+  await sleep(120);
+  const typstBeforeLine = await cursorLine();
+  await rightClick(typstPoint.x, typstPoint.y);
   await chooseFormat();
   await pollFor(
     `document.querySelector('.doc-tab[aria-selected="true"]')?.classList.contains('is-dirty') === true`,
@@ -447,14 +804,43 @@ try {
   check(typstRestored.equals(original.typst), "one undo restores the exact Typst bytes");
 
   // -------------------------------------------------------------------------
-  // AsciiDoc is deliberately excluded
+  // AsciiDoc keeps the menu, without a formatter
   // -------------------------------------------------------------------------
   console.log("\n=== AsciiDoc ===");
   const adocOpened = await openFile(files.asciidoc);
   check(adocOpened, "the AsciiDoc copy opens as its own tab");
   const adocPoint = await clickLine(4);
   await rightClick(adocPoint.x, adocPoint.y);
-  check((await menuState()).count === 0, "right-clicking AsciiDoc opens no format menu");
+  const adocMenu = await menuState();
+  const adocFormat = adocMenu.items.find((entry) => entry.action === "format");
+  check(adocMenu.count === 1, "right-clicking AsciiDoc opens the editor menu");
+  check(
+    adocFormat && adocFormat.disabled && /no formatter/.test(adocFormat.title),
+    "AsciiDoc disables Format Document with a reason",
+    adocFormat?.title ?? "",
+  );
+  check(
+    adocMenu.items.find((entry) => entry.action === "comment")?.disabled === false,
+    "AsciiDoc keeps the comment action",
+  );
+  await evaluate(
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`,
+  );
+
+  await rightClickTab(nameOf(files.asciidoc));
+  const adocTabMenu = await tabMenuState();
+  const adocTabFormat = adocTabMenu.items.find((entry) => entry.action === "format");
+  check(
+    adocTabMenu.open &&
+      adocTabFormat &&
+      adocTabFormat.disabled &&
+      /no formatter/.test(adocTabFormat.title),
+    "the AsciiDoc tab disables Format Document",
+    adocTabFormat?.title ?? "",
+  );
+  await evaluate(
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`,
+  );
 
   // -------------------------------------------------------------------------
   // Spelling owns its own right-click
@@ -501,7 +887,7 @@ try {
     if (missPoint) await rightClick(missPoint.x, missPoint.y);
     const hasSpellMenu = await evaluate(`document.querySelectorAll('.spell-menu').length === 1`);
     check(hasSpellMenu, "right-clicking a misspelling opens the spelling menu");
-    check((await menuState()).count === 0, "the format menu does not replace the spelling menu");
+    check((await menuState()).count === 0, "the editor menu does not replace the spelling menu");
     await evaluate(
       `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`,
     );
