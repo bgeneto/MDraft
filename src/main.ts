@@ -4416,6 +4416,9 @@ function installPasteHandlers(): void {
     (event) => {
       if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey) return;
       if (event.code !== "KeyV") return;
+      const target = event.target as Node | null;
+      if (!target || (!editor.view.contentDOM.contains(target) && !previewPane.contains(target)))
+        return;
       plainPastePending = true;
       window.setTimeout(() => {
         plainPastePending = false;
@@ -4425,6 +4428,8 @@ function installPasteHandlers(): void {
   );
 
   const handler = (event: ClipboardEvent) => {
+    const plainPaste = plainPastePending;
+    plainPastePending = false;
     // A paste over the preview targets the block under the pointer: move the
     // caret there first so the content lands where the user aimed.
     const target = event.target as Node | null;
@@ -4437,7 +4442,7 @@ function installPasteHandlers(): void {
 
     // Only an editor selection is a text selection. A paste over the preview
     // has already moved the caret to the block under the pointer.
-    const inEditor = target !== null && editorPane.contains(target);
+    const inEditor = target !== null && editor.view.contentDOM.contains(target);
     const hasSelection = inEditor && editor.cursorInfo().selectionLength > 0;
 
     // The decision and preventDefault must happen in this same turn; deferring
@@ -4448,10 +4453,7 @@ function installPasteHandlers(): void {
       return;
     }
 
-    if (plainPastePending) {
-      plainPastePending = false;
-      return;
-    }
+    if (plainPaste) return;
     if (!settings.richPaste) return;
     if (editor.inCodeContext()) return;
 
@@ -4491,7 +4493,9 @@ function installPasteHandlers(): void {
     });
   };
 
-  editorPane.addEventListener("paste", handler, { capture: true });
+  // Find/Replace and other editor panels own their native paste. Only document
+  // content may reach rich-text conversion or image import and change the file.
+  editor.view.contentDOM.addEventListener("paste", handler, { capture: true });
   previewPane.addEventListener("paste", handler, { capture: true });
 }
 
