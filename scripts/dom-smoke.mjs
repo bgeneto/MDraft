@@ -592,7 +592,7 @@ check(
 // not part of a preset's identity. Editing one must leave the picker on the
 // preset, and each preset must remember its own sizes across a round trip.
 // An unvisited preset starts at its default sizes (15/17/88 for Serif,
-// 15/18/80 for Renaissance, 15/16/95 for System).
+// 15/19/80 for Renaissance, 15/16/95 for System).
 const presetSizes = await evaluate(`(async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const section = [...document.querySelectorAll('.prefs-section')]
@@ -704,7 +704,7 @@ check(
     presetSizes.serifFresh?.math === "88" &&
     presetSizes.serifFresh?.oldstyle === true &&
     presetSizes.renaissance?.editor === "15" &&
-    presetSizes.renaissance?.body === "18" &&
+    presetSizes.renaissance?.body === "19" &&
     presetSizes.renaissance?.math === "80" &&
     presetSizes.renaissance?.oldstyle === true,
 );

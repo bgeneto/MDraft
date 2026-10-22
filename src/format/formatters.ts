@@ -15,6 +15,7 @@ import type { EditorView } from "@codemirror/view";
 import type { Options, Plugin } from "prettier";
 import type { TypstyleConfig } from "@typstyle/typstyle-wasm-bundler/typstyle_wasm_bg.js";
 import type { DocumentLanguage } from "../api";
+import { analyzeMath } from "../math-delimiters.ts";
 
 export type FormatOutcome = "changed" | "unchanged" | "stale";
 
@@ -96,8 +97,76 @@ async function formatWithPrettier(text: string, language: "markdown" | "html"): 
     parser: language,
     plugins: [plugin as Plugin],
   };
-  if (language === "markdown") options.proseWrap = "preserve";
-  return prettier.format(text, options);
+  if (language === "html") return prettier.format(text, options);
+
+  options.proseWrap = "preserve";
+  const analysis = analyzeMath(text);
+  // Prettier can pair TeX's asterisks across separate $...$ expressions and
+  // rewrite them as Markdown emphasis. Its opaque $$...$$ nodes avoid that
+  // parsing, but only our shared scanner decides which source is mathematics.
+  let prefix = "MDRAFTMATH";
+  while (text.includes(prefix)) prefix += "X";
+  const originals = new Map<string, string>();
+  const ranges = [...analysis.math, ...analysis.unfinished].sort((a, b) => a.from - b.from);
+  const parts: string[] = [];
+  let from = 0;
+  for (const range of ranges) {
+    if (range.from < from) continue;
+    // An unfinished display range reaches EOF, including its final newline.
+    // Keep that newline outside the node so Prettier does not add another one
+    // after the restored source on every Format Document invocation.
+    let to = range.to;
+    while (to > range.from && /[\r\n]/.test(text[to - 1])) to--;
+    const token = `${prefix}${originals.size}END`;
+    originals.set(token, text.slice(range.from, to));
+    parts.push(text.slice(from, range.from), `$$${token}$$`);
+    from = to;
+  }
+  parts.push(text.slice(from));
+
+  const markdown = plugin as typeof import("prettier/plugins/markdown");
+  const printer = markdown.printers.mdast;
+  options.plugins = [
+    {
+      ...markdown,
+      printers: {
+        ...markdown.printers,
+        mdast: {
+          ...printer,
+          print(path, ...args) {
+            const node = path.node as { type: string; value?: string };
+            const raw = node.type === "inlineMath" ? originals.get(node.value ?? "") : undefined;
+            // Print the real source while Prettier measures the document, so
+            // table columns align to the equation, not the placeholder width.
+            return raw ?? printer.print(path, ...args);
+          },
+        },
+      },
+    } satisfies Plugin,
+  ];
+  let formatted = await prettier.format(parts.join(""), options);
+  // prettier-ignore bypasses the printer. Restore its opaque nodes as well;
+  // a replacement callback keeps literal TeX dollars/backslashes untouched.
+  formatted = formatted.replace(
+    new RegExp(`\\$\\$(${prefix}\\d+END)\\$\\$`, "g"),
+    (match, token) => originals.get(token) ?? match,
+  );
+  const after = analyzeMath(formatted).math;
+  if (
+    formatted.includes(prefix) ||
+    after.length !== analysis.math.length ||
+    after.some(
+      (range, index) =>
+        range.display !== analysis.math[index].display ||
+        formatted.slice(range.from, range.to) !==
+          text.slice(analysis.math[index].from, analysis.math[index].to),
+    )
+  ) {
+    // Fail before the editor transaction: a changed delimiter/context is as
+    // unsafe as changed TeX, even when the resulting equation happens to parse.
+    throw new Error("Formatting would change mathematical notation; document left unchanged");
+  }
+  return formatted;
 }
 
 /** Whether `language` has a formatter. AsciiDoc is deliberately excluded. */

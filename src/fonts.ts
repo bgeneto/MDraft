@@ -356,7 +356,7 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
     label: "Renaissance",
     note: "Garamond's 16th-century old style: low contrast, a small x-height, serif headings and oldstyle figures. IBM Plex Mono sets the editor and code.",
     defaults: {
-      bodyFontSize: 18,
+      bodyFontSize: 19,
       mathFontScale: 80,
     },
     values: {
