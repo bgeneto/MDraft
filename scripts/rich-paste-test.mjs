@@ -546,6 +546,129 @@ for (const source of [
   );
 }
 
+console.log("\n=== real Ctrl+V in Find and Replace ===");
+const permission = await send("Browser.grantPermissions", {
+  permissions: ["clipboardReadWrite", "clipboardSanitizedWrite"],
+});
+if (permission.error) throw new Error(permission.error.message);
+// Materialize every format before writing test data: clipboard items can be lazy.
+await evaluate(`(async () => {
+  const items = (await navigator.clipboard.read()).filter(item => item.types.length > 0);
+  window.__findPasteClipboard = await Promise.all(items.map(async item =>
+    new ClipboardItem(Object.fromEntries(await Promise.all(item.types.map(async type =>
+      [type, await item.getType(type)]))))));
+})()`);
+try {
+  for (const field of ["search", "replace"]) {
+    for (const rich of [false, true]) {
+      for (const shift of [false, true]) {
+        await newTab();
+        await type("Source must stay unchanged.");
+        const before = await lines();
+        await key(field === "search" ? "KeyF" : "KeyH", field === "search" ? "f" : "h", {
+          ctrlKey: true,
+        });
+        const text = "busca çã $1 [.*]";
+        await evaluate(`(async () => {
+          const input = document.querySelector('.cm-search input[name="${field}"]');
+          input.focus();
+          input.value = 'left SELECT right';
+          input.setSelectionRange(5, 11);
+          await navigator.clipboard.write([new ClipboardItem({
+            'text/plain': new Blob([${JSON.stringify(text)}], {type: 'text/plain'}),
+            ${rich ? `'text/html': new Blob([${JSON.stringify(`<p><strong>${text}</strong></p>`)}], {type: 'text/html'}),` : ""}
+          })]);
+        })()`);
+        for (const type of ["keyDown", "keyUp"]) {
+          const result = await send("Input.dispatchKeyEvent", {
+            type,
+            key: "v",
+            code: "KeyV",
+            windowsVirtualKeyCode: 86,
+            modifiers: shift ? 10 : 2,
+          });
+          if (result.error) throw new Error(result.error.message);
+        }
+        await sleep(500);
+        const input = await evaluate(`(() => {
+          const input = document.querySelector('.cm-search input[name="${field}"]');
+          return {value: input.value, focused: document.activeElement === input};
+        })()`);
+        check(
+          input.value === `left ${text} right` && input.focused && (await lines()) === before,
+          `${field}: Ctrl+${shift ? "Shift+" : ""}V pastes ${rich ? "rich" : "plain"} clipboard text into the field`,
+          JSON.stringify({ ...input, source: await lines() }),
+        );
+      }
+    }
+  }
+} finally {
+  await evaluate(`(async () => {
+    if (window.__findPasteClipboard.length) await navigator.clipboard.write(window.__findPasteClipboard);
+    else await navigator.clipboard.writeText('');
+    delete window.__findPasteClipboard;
+  })()`);
+}
+
+console.log("\n=== Find and Replace own their paste events ===");
+for (const field of ["search", "replace"]) {
+  for (const [label, payload] of [
+    ["plain text", { "text/plain": "literal query" }],
+    [
+      "rich text",
+      { "text/plain": "bold query", "text/html": "<p><strong>bold query</strong></p>" },
+    ],
+    ["Markdown-only text", { "text/markdown": "**literal query**" }],
+    ["image path", { "text/plain": "./find-replace-query.png" }],
+    ["currency", { "text/plain": "R$50" }],
+  ]) {
+    await newTab();
+    await type("Source must stay unchanged.");
+    const before = await lines();
+    await key("KeyF", "f", { ctrlKey: true });
+    const result = await evaluate(`(() => {
+      const input = document.querySelector('.cm-search input[name="${field}"]');
+      if (!input) throw new Error('missing ${field} field');
+      input.focus();
+      const data = new DataTransfer();
+      for (const [type, value] of Object.entries(${JSON.stringify(payload)})) data.setData(type, value);
+      const event = new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true });
+      input.dispatchEvent(event);
+      return { consumed: event.defaultPrevented };
+    })()`);
+    await sleep(700);
+    const focused = await evaluate(
+      `document.activeElement === document.querySelector('.cm-search input[name="${field}"]')`,
+    );
+    check(
+      !result.consumed && focused && (await lines()) === before,
+      `${field}: ${label} stays native and never edits the source`,
+      JSON.stringify({ consumed: result.consumed, focused, source: await lines() }),
+    );
+  }
+}
+
+// A plain-paste gesture in Find must not arm the document's next rich paste.
+await newTab();
+await key("KeyF", "f", { ctrlKey: true });
+await evaluate(`(() => {
+  const input = document.querySelector('.cm-search input[name="search"]');
+  input.focus();
+  input.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'v', code: 'KeyV', ctrlKey: true, shiftKey: true, bubbles: true
+  }));
+  const data = new DataTransfer();
+  data.setData('text/plain', 'query');
+  input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+  document.querySelector('.cm-content').focus();
+})()`);
+await paste("<p><strong>Document paste</strong></p>", "Document paste");
+check(
+  (await lines()) === "**Document paste**",
+  "plain paste in Find cannot bypass the next document conversion",
+  await lines(),
+);
+
 if (exceptions.length > 0) {
   console.log("\n=== console exceptions ===");
   for (const line of exceptions.slice(0, 6)) console.log("  " + String(line).split("\n")[0]);

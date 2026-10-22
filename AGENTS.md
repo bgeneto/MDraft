@@ -227,7 +227,7 @@ rewrite from scratch.
 | `npm run asciidoc:export:unit` | `scripts/asciidoc-export-unit.mjs` | 17 unit checks of the AsciiDoc -> HTML step every pandoc export uses: unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations; no application |
 | `npm run test:sessions` | `scripts/sessions-test.mjs` | 59 unit checks of `src/sessions.ts`, with no application and no build |
 | `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 369 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
-| `npm run paste` | `scripts/rich-paste-test.mjs` | 68 checks of rich paste through the real UI: destination detection, conversion in every direction, whitespace across inline elements, preferences, Ctrl+Shift+V, undo |
+| `npm run paste` | `scripts/rich-paste-test.mjs` | 87 checks of rich paste through the real UI: destination detection, conversion in every direction, whitespace across inline elements, preferences, Ctrl+Shift+V, undo, and Find/Replace paste ownership, including real Ctrl+V and Ctrl+Shift+V with plain and rich clipboard text |
 | `npm run image:syntax` | `scripts/image-syntax-test.mjs` | 14 checks of bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, including the Image preference |
 | `npm run typst:preview` | `scripts/typst-preview-test.mjs` | 48 checks (49 with the optional local physics exam) of Typst Pages through PDF.js and bidirectional word sync, including 20 alternating pairs, narrow/wide fits, lazy canvases, stale renders, Escape, reduced motion and tab replacement: page shells, canvases, text layers, both columns, selection/copy, paragraph click, repeated-word/right-column mapping, one-word heading mapping, drag ranges, generated-text fallback, inline-math paragraphs, tables and code blocks, the transparent view bar, view switching and PDF disposal |
 | `npm run licence` | `scripts/licence-test.mjs` | 4 checks that the bundled typefaces' licences ship inside the application. Run against its own instance: it opens a document |
@@ -271,7 +271,7 @@ All of these need the app already running with CDP enabled (see
 | `typst-page-map-unit.mjs` | — | none — runs without the application | The Typst Pages source map's one-word rule: identical neighbours paint nothing, a unique window picks the occurrence, ligatures and soft hyphens fold, generated text stays unmapped |
 | `html-source-map-unit.mjs` | — | none — runs without the application | The HTML text-node rule: decoded-to-raw offsets across entities and CRLF, the sample check that fails closed, and the index that selects one node under a stamp |
 | `block-map-unit.mjs` | — | none — runs without the application | The block-level source map and Typst line annotation: folded index mapping, per-node alignment across substitutions and smart punctuation, gap block fallback, Typst comments/rules/math/code/tables, and `#lorem` exclusion |
-| `rich-paste-test.mjs` | `[port]` | `samples/feature-tour.md` | That the paste event converts HTML, leaves Markdown/plain text alone, detects an unsaved Typst/Markdown/HTML buffer, honours Ctrl+Shift+V and the preference, and undoes in one step |
+| `rich-paste-test.mjs` | `[port]` | `samples/feature-tour.md` | That the paste event converts HTML, leaves Markdown/plain text alone, detects an unsaved Typst/Markdown/HTML buffer, honours Ctrl+Shift+V and the preference, and undoes in one step. Real Ctrl+V/Ctrl+Shift+V replace the selected text inside Find/Replace without editing the source; rich text, Markdown-only text and image paths stay native there. Clipboard formats are saved and restored around the native-key checks |
 | `image-syntax-test.mjs` | `[port]` | `samples/typst-tour.typ` | A clipboard bitmap becomes `#image`, a remote image is downloaded or kept according to the Image preference, and the files land in the document's assets folder |
 | `typst-preview-test.mjs` | `[port]` | `samples/typst-pages.typ` | The Pages view is the compiler's PDF drawn by PDF.js with selectable text, both columns and two pages; a single click paints the source paragraph, a repeated word in a later line or the right column maps that occurrence, generated `#lorem` paints nothing, the view bar does not blur the page, and switching back disposes the PDF view. Document gets the same word-map checks plus inline-math paragraphs, tables and code blocks, and a single click does not paint a word there |
 | `set-palette.mjs` | `[port] [paletteId] [--split]` | `samples/feature-tour.md` | Not a test: drives the palette through the Preferences UI so you can screenshot a theme |
@@ -501,7 +501,7 @@ Twenty-eight layers, cheapest first. Run them in this order when changing anythi
 | HTML source map (unit) | `npm run html:map:unit` | 38 | Entities and CRLF offsets, decoded-to-raw translation, the sample mismatch, and two text nodes under one stamp — no application |
 | Block source map (unit) | `npm run block:map:unit` | 12 | Folded index mapping, per-node alignment across substitutions and smart punctuation, gap block fallback, Typst comments/rules/math/code/tables, and `#lorem` exclusion — no application |
 | Auto-close typing | `npm run autoclose` | 33 | Pairs, step-over, Backspace, selection wrap, Markdown inline tags, HTML tags, both preferences, in all four document types |
-| Rich paste | `npm run paste` | 68 | The paste event, destination notice, preferences, Ctrl+Shift+V, undo, the same clipboard converted into Markdown and kept as source in HTML, spaces around inline elements |
+| Rich paste | `npm run paste` | 87 | The paste event, destination notice, preferences, Ctrl+Shift+V, undo, the same clipboard converted into Markdown and kept as source in HTML, spaces around inline elements, native Find/Replace field paste and unchanged source bytes |
 | Image syntax | `npm run image:syntax` | 14 | Bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, plus the Image preference |
 | Typst pages | `npm run typst:preview` | 48 (+1 optional) | PDF.js page shells/canvases/text layers, both columns, A4 geometry, paragraph click, repeated-word/right-column mapping, a one-word heading, drag ranges, Pages and Document word sync, inline-math paragraphs, tables and code blocks, generated-text fallback, transparent view bar and PDF disposal |
 | Math | `npm run math` | 12 | Font loading, fraction and radical geometry |
@@ -600,6 +600,19 @@ Each of these cost real time. Symptom → cause → fix.
 [Recording traps is required](#recording-traps-is-required) for what qualifies and
 how to write it. The list is append-only in spirit: do not delete an entry because
 the fix landed, because the fix is what makes it recur.
+
+**`gh auth status` reports `The token in default is invalid.` inside the sandbox**
+The sandboxed command could not use this host's Windows keyring credentials;
+the same command outside the sandbox authenticated successfully with the
+existing account. Verify authentication with normal execution escalation before
+concluding that the user must log in again or replacing stored credentials.
+
+**`TypeError: Failed to construct 'ClipboardItem': Empty dictionary argument` while backing up the clipboard**
+WebView2 can return an item with `types: []` from `navigator.clipboard.read()`.
+A nonempty item array does not prove there is usable
+clipboard content; cloning each item blindly fails before the paste regression
+can run. Filter out items with no exposed formats before materializing their
+blobs and constructing the backup `ClipboardItem`s.
 
 **`50/50 checks passed` in the HTML suite, then every new real guest double-click selects nothing**
 The scripts-off preference probe leaves Preferences open; subsequent old checks
