@@ -276,6 +276,19 @@ const SUITES = [
     extras: ["README.md", "docs/guide.md"],
   },
   {
+    // The list has to survive the close flush, which saves the whole settings
+    // object. Phase 1 adds one favorite from the editor menu and one from an
+    // inactive tab's menu, leaves the panel selected, and closes a tab as its
+    // last act; phase 2 — a fresh process with no document argument — reads the
+    // list back from disk, checks its order and the rendered rows.
+    id: "favorites-restore",
+    title: "Favorites across launches",
+    kind: "restart",
+    script: "favorites-restore-test.mjs",
+    doc: "samples/feature-tour.md",
+    extras: ["samples/word-sync.md"],
+  },
+  {
     // Clears Recents and opens temporary documents, so it owns its instance.
     // The native menu is invisible to DOM probes; `recent_menu` is the bridge.
     id: "recent-menu",

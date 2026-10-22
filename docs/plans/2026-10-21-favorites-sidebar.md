@@ -328,3 +328,13 @@ Implemented as approved. The measured differences from the estimate:
   suite was not modified.
 - `npm run format:check`, `npm run lint` and `npm run knip` pass; `cargo
   clippy --all-targets -- -D warnings` is clean.
+
+## Follow-up (2026-10-22)
+
+Acceptance criterion 11 — a restart preserves the list — had no automated test:
+`scripts/favorites-test.mjs` reads `get_settings` from the running instance, so it
+cannot see a list that was never written or was overwritten by the close flush.
+`scripts/favorites-restore-test.mjs` now runs as the `favorites-restore` restart
+layer (two launches, WM_CLOSE in between) and `src/main.ts` serialises settings
+writes so a stale whole-object save cannot erase an in-flight favorite. See
+`docs/plans/2026-10-22-favorites-persistence.md`.

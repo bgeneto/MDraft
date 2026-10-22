@@ -328,6 +328,32 @@ function rightClick(x, y) {
   })()`);
 }
 
+/**
+ * Right-click a rendered line, recomputing its position in the same task.
+ *
+ * A separate `linePoint` call is not enough here: opening the physics document
+ * can schedule a preview-driven scroll that moves the editor between the
+ * measurement and the event, and the contextmenu then lands outside the pane.
+ * The full suite makes that window wide enough to see, while an isolated run
+ * usually does not. Measuring and dispatching synchronously removes it.
+ */
+function rightClickLine(index) {
+  return evaluate(`(() => {
+    const scroller = document.querySelector('.cm-scroller');
+    if (scroller) scroller.scrollTop = 0;
+    const line = document.querySelectorAll('.cm-line')[${index}];
+    if (!line) return 'missing';
+    const rect = line.getBoundingClientRect();
+    const x = rect.left + 30;
+    const y = rect.top + rect.height / 2;
+    const target = document.elementFromPoint(x, y) ?? line;
+    target.dispatchEvent(new MouseEvent('contextmenu', {
+      bubbles: true, cancelable: true, clientX: x, clientY: y, button: 2, buttons: 2,
+    }));
+    return 'sent';
+  })()`);
+}
+
 const menuState = () =>
   evaluate(`(() => {
     const menus = [...document.querySelectorAll('.editor-menu')];
@@ -680,8 +706,30 @@ try {
     "the physics preview starts with all 292 recorded equations",
   );
   await evaluate(`window.__mathBeforeFormat = document.querySelector('#preview .math-inline')`);
-  const mathPoint = await clickLine(0);
-  await rightClick(mathPoint.x, mathPoint.y);
+  await clickLine(0);
+  check((await rightClickLine(0)) === "sent", "the physics line accepts a right-click");
+  await sleep(120);
+  let mathMenu = await menuState();
+  if (mathMenu.count === 0) {
+    // One retry: a preview-driven scroll can move the pane between the caret
+    // click and the menu. `rightClickLine` measures in the same task, but a
+    // scheduled layout may still have run just before it.
+    await sleep(200);
+    await rightClickLine(0);
+    await sleep(120);
+    mathMenu = await menuState();
+  }
+  const mathFormat = mathMenu.items.find((item) => item.action === "format");
+  if (mathMenu.count !== 1 || !mathFormat || mathFormat.disabled) {
+    const spellMenus = await evaluate(`document.querySelectorAll(".spell-menu").length`);
+    console.log(
+      `  DIAG  physics menu ${JSON.stringify({
+        count: mathMenu.count,
+        spellMenus,
+        items: mathMenu.items,
+      })}`,
+    );
+  }
   check(await chooseFormat(), "the physics copy formats through the right-click menu");
   await pollFor(
     `document.querySelector('.doc-tab[aria-selected="true"]')?.classList.contains('is-dirty') === true`,
