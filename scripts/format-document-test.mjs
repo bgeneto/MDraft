@@ -393,6 +393,7 @@ try {
     "Move Line Up",
     "Move Line Down",
     "Format Document",
+    "Add to Favorites",
   ];
   const labels = menu.items.map((item) => item.label);
   const item = (action) => menu.items.find((entry) => entry.action === action);
@@ -409,10 +410,10 @@ try {
     "the selection actions are disabled without a selection",
   );
   check(
-    ["paste", "selectAll", "comment", "format"].every(
+    ["paste", "selectAll", "comment", "format", "favorite"].every(
       (action) => item(action) && !item(action).disabled,
     ),
-    "Paste, Select All, Comment and Format are available",
+    "Paste, Select All, Comment, Format and Favorites are available",
   );
   check(
     ["Cut", "Copy", "Paste", "Select All"].every((label) =>

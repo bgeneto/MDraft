@@ -6,7 +6,7 @@
 
 import type { Align, Block, Inline, ListItem } from "./ir.ts";
 import { trimBlocks } from "./ir.ts";
-import { splitMath } from "./math.ts";
+import { analyzeMath } from "../math-delimiters.ts";
 
 type AnyNode = any;
 
@@ -72,6 +72,7 @@ const DROP_NAMES = new Set([
 
 interface Context {
   base: string | null;
+  mathNodes: WeakMap<object, Inline[]>;
 }
 
 function name(node: AnyNode): string {
@@ -116,7 +117,67 @@ function hidden(node: AnyNode): boolean {
 }
 
 function cleanText(value: string): string {
-  return value.replace(/\u00a0/g, " ").replace(/[ \t\r\n\f]+/g, " ");
+  return value.replace(/[ \t\r\n\f]+/g, " ");
+}
+
+/** Preserve formatting while classifying currency across neighboring spans. */
+function decodedMathNodes(nodes: AnyNode[]): WeakMap<object, Inline[]> {
+  const map = new WeakMap<object, Inline[]>();
+  let run: { node: AnyNode; value: string; from: number }[] = [];
+  let length = 0;
+  const flush = () => {
+    if (!run.length) return;
+    const formulas = analyzeMath(run.map((part) => part.value).join(""), false).math;
+    let formula = 0;
+    for (const part of run) {
+      const out: Inline[] = [];
+      let start = 0;
+      while (formula < formulas.length && formulas[formula].to <= part.from) formula++;
+      for (
+        let index = formula;
+        index < formulas.length && formulas[index].from < part.from + part.value.length;
+        index++
+      ) {
+        const range = formulas[index];
+        if (range.from < part.from || range.to > part.from + part.value.length) continue;
+        const from = range.from - part.from,
+          to = range.to - part.from;
+        if (from > start) out.push({ kind: "text", value: part.value.slice(start, from) });
+        out.push({ kind: "math", tex: range.body, display: range.display });
+        start = to;
+      }
+      if (start < part.value.length) out.push({ kind: "text", value: part.value.slice(start) });
+      map.set(part.node, out);
+    }
+    run = [];
+    length = 0;
+  };
+  const visit = (node: AnyNode) => {
+    const tag = name(node);
+    if (tag === "#text") {
+      const value = cleanText(String(node.value ?? ""));
+      run.push({ node, value, from: length });
+      length += value.length;
+      return;
+    }
+    if (tag === "#comment") return;
+    if (
+      DROP_NAMES.has(tag) ||
+      hidden(node) ||
+      /^(?:code|kbd|samp|tt|math|mjx-container|br|img)$/.test(tag) ||
+      /katex/.test(attr(node, "class") ?? "")
+    ) {
+      flush();
+      return;
+    }
+    const block = BLOCK_NAMES.has(tag);
+    if (block) flush();
+    for (const child of children(node)) visit(child);
+    if (block) flush();
+  };
+  nodes.forEach(visit);
+  flush();
+  return map;
 }
 
 /**
@@ -330,7 +391,7 @@ function convertInline(node: AnyNode, ctx: Context): Inline[] {
   const tag = name(node);
   if (tag === "#text") {
     const value = cleanText(String(node.value ?? ""));
-    return value ? splitMath(value) : [];
+    return ctx.mathNodes.get(node) ?? (value ? [{ kind: "text", value }] : []);
   }
   if (tag === "#comment") return [];
   if (DROP_NAMES.has(tag) || hidden(node)) return [];
@@ -609,7 +670,7 @@ export async function readHtml(raw: string): Promise<Block[]> {
       base = null;
     }
   }
-  return trimBlocks(convertBlocks(nodes, { base }));
+  return trimBlocks(convertBlocks(nodes, { base, mathNodes: decodedMathNodes(nodes) }));
 }
 
 /** Inline HTML from a Markdown token, parsed with the same rules. */
@@ -617,7 +678,9 @@ export async function readHtmlInline(raw: string): Promise<Inline[]> {
   const { parseFragment } = await import("parse5");
   const fragment = parseFragment(raw) as AnyNode;
   const base = findBase(children(fragment));
-  return joinText(children(fragment).flatMap((child) => convertInline(child, { base })));
+  const nodes = children(fragment);
+  const ctx = { base, mathNodes: decodedMathNodes(nodes) };
+  return joinText(nodes.flatMap((child) => convertInline(child, ctx)));
 }
 
 /** Plain text extraction for the last-resort fallback. */

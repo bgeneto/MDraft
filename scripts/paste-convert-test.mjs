@@ -10,10 +10,23 @@
 // cheaply cover every reader/writer pair. This suite pins the matrix, the
 // destination resolution and the escaping before the UI layer sees it.
 
-import { chooseSource, isHtmlSource } from "../src/paste/detect.ts";
+import { chooseSource, isHtmlSource, detectTextSyntax, scoreTypst } from "../src/paste/detect.ts";
 import { resolvePasteDestination } from "../src/paste/detect-document.ts";
 import { planPaste } from "../src/paste/index.ts";
 import { imageSyntaxFor } from "../src/image-syntax.ts";
+import {
+  analyzeMath,
+  escapeMarkdownCurrency,
+  markdownProseSelection,
+} from "../src/math-delimiters.ts";
+import { readMarkdown } from "../src/paste/read-markdown.ts";
+import { readHtml } from "../src/paste/read-html.ts";
+import { renderMarkdown } from "../src/paste/render-markdown.ts";
+import { renderTypst } from "../src/paste/render-typst.ts";
+import { renderAsciidoc } from "../src/paste/render-asciidoc.ts";
+import { renderHtmlFragment } from "../src/paste/render-html.ts";
+import { readFileSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 
 let passed = 0;
 let total = 0;
@@ -629,5 +642,336 @@ console.log("\n=== fallbacks ===");
   );
 }
 
+console.log("\n=== currency and math contract ===");
+const money = ["R$50", "R$ 10.000", "R$ 15.200,75", "US$5", "US$5.00", "C$8,123.50"];
+function formulas(items) {
+  return items.flatMap((node) =>
+    node.kind === "math"
+      ? [node.tex]
+      : "children" in node
+        ? formulas(node.children)
+        : "blocks" in node
+          ? formulas(node.blocks)
+          : node.kind === "list"
+            ? node.items.flatMap((item) => formulas(item.blocks))
+            : node.kind === "table"
+              ? [...(node.header ?? []), ...node.rows.flat()].flatMap(formulas)
+              : [],
+  );
+}
+for (const amount of money) {
+  for (const source of [
+    amount,
+    amount + " e " + amount,
+    "**" + amount + "**",
+    amount + " and $ a + b $",
+    "$x$ and " + amount,
+  ]) {
+    const expected = source.replace(/\$/g, (dollar, at) =>
+      source.slice(at - 1, at) === "R" ||
+      source.slice(at - 1, at) === "C" ||
+      source.slice(at - 2, at) === "US"
+        ? "\\$"
+        : dollar,
+    );
+    const output = escapeMarkdownCurrency(source);
+    check(output === expected, "minimal escapes: " + source, JSON.stringify(output));
+    check(escapeMarkdownCurrency(output) === output, "idempotent: " + source);
+    const actual = await planPaste(payload(null, source), "markdown");
+    check(actual?.text === expected && actual.converted, "native plan: " + source);
+  }
+}
+const originals = [
+  "Você está autorizando uma média de **R$50/dia, R$350/semana e ~R\\$1.500/mês**, e aceitando disputar cliques oferecendo **até R\\$13,50 por clique",
+  "Você pode subir gradualmente (em dólares canadenses): C$5 → C$6 → C$7,50 etc. Eu evitaria começar diretamente em C$13,50.",
+];
+const currencyOnly = [
+  ...originals,
+  "US$5 and US$7",
+  "R$50 e R$40",
+  "$2.00 and $3.50",
+  "$2.00–$3.50",
+  "$2.00-$3.50",
+  "$2.00/$3.50",
+  "$5 + $7 = $12",
+  "$10 > $5",
+  "It costs $50 ($40 for members)",
+  '"$50" or "$40"',
+  "$350/week and ~$1,500/month",
+  "U$S100 e U$S 100",
+  "-$5, $-5, R$ -10,50, ($50), $.50",
+  "R$\u00a015.200,75 / C$\u202f8,123.50",
+  "US$1 000 and C$8'123.50",
+  "R$50\\\nUS$5\r\nC$8,123.50",
+];
+for (const source of currencyOnly) {
+  const expected = source.replace(/(?<!\\)\$/g, "\\$");
+  const result = escapeMarkdownCurrency(source);
+  check(
+    result === expected &&
+      analyzeMath(source).math.length === 0 &&
+      formulas(await readMarkdown(source)).length === 0,
+    "literal currency: " + JSON.stringify(source),
+    result,
+  );
+}
+const mathCases = [
+  ["$[a](b)$", ["[a](b)"]],
+  ["$ a + b $", ["a + b"]],
+  ["$ a - b $", ["a - b"]],
+  ["$ a * b $", ["a * b"]],
+  ["$ a / bc $", ["a / bc"]],
+  ["$ ^{1} $", ["^{1}"]],
+  ["$ E_{n} $", ["E_{n}"]],
+  ["$ L $", ["L"]],
+  ["$ 2\\gamma\\hbar\\omega_x $", ["2\\gamma\\hbar\\omega_x"]],
+  ["$5$", ["5"]],
+  ["$ 5 $", []],
+  ["$ -5 $", ["-5"]],
+  ["$2x + 1$", ["2x + 1"]],
+  ["$10^6$", ["10^6"]],
+  ["$1/2$", ["1/2"]],
+  ["$2/ab$", ["2/ab"]],
+  ["$2M$", ["2M"]],
+  ["f$2x+1$", ["2x+1"]],
+  ["R$2x+1$", ["2x+1"]],
+  ["Al$_x$Ga$_{1-x}$As", ["_x", "_{1-x}"]],
+  ["assuming$^29$", ["^29"]],
+  ["R$5$ and $x$", ["x"]],
+  ["$50/day$", ["50/day"]],
+  ["$5 + tax$", ["5 + tax"]],
+  ["$5 and $x$", ["x"]],
+  ["$5 + $x$", ["x"]],
+  ["$50/day and $x$", ["x"]],
+  ["$x$2", []],
+  ["The symbol \\$ precedes $ a + b $", ["a + b"]],
+  ["$ foo bar $ and $x$", ["x"]],
+  ["$a*b*c$", ["a*b*c"]],
+  ["$\\{x\\}$", ["\\{x\\}"]],
+  ["\\(x + y\\)", ["x + y"]],
+  ["\\[x^2\\]", ["x^2"]],
+  ["$$x^2\n+ y^2$$", ["x^2\n+ y^2"]],
+  ["$a → b$ and $x'$ and $x@@y$", ["a → b", "x'", "x@@y"]],
+  ["[$x$](https://example.com/$5) and | $y$ |", ["x", "y"]],
+];
+for (const [source, expected] of mathCases) {
+  const scanned = analyzeMath(source).math.map((range) => range.body);
+  check(
+    JSON.stringify(scanned) === JSON.stringify(expected),
+    "math ranges: " + source,
+    JSON.stringify(scanned),
+  );
+  const read = formulas(await readMarkdown(source));
+  check(
+    JSON.stringify(read) === JSON.stringify(expected),
+    "math before Markdown tokenization: " + source,
+    JSON.stringify(read),
+  );
+}
+const protectedSnippets = [
+  "https://example.com/$5",
+  "www.example.com/$5",
+  "`R$50 and $x$`",
+  "``R$50 ` and $x$``",
+  "`R$50\nUS$5`",
+  "````md\nR$50\n```\nUS$5\n````",
+  "~~~\nR$50\n~~~",
+  "```\nR$50",
+  "> - ````\n>   R$50\n>   ```\n>   US$5\n>   ````",
+  "    R$50\n    US$5",
+  '[price](https://example.com/$5 "R$50")',
+  "![image](./$5.png)",
+  '[price]: https://example.com/$5 "R$50"',
+  "<https://example.com/$5>",
+  '<p title="R$50">safe</p>',
+  "<!-- R$50 -->",
+  "<code>R$50</code>",
+  "<pre>R$50</pre>",
+  "$\\text{R\\$50}$",
+  "$$\\text{R\\$50}$$",
+  "\\[\\text{R\\$50}\\]",
+  "\\(\\text{R\\$50}\\)",
+];
+for (const source of protectedSnippets) {
+  check(escapeMarkdownCurrency(source) === source, "protected source: " + JSON.stringify(source));
+  check(
+    escapeMarkdownCurrency(source + "\n\nR$7") === source + "\n\nR\\$7" ||
+      source.startsWith("```\n"),
+    "prose resumes after protected region: " + JSON.stringify(source),
+  );
+}
+for (let count = 0; count <= 6; count++) {
+  const source = "\\".repeat(count) + "$5";
+  const expected = "\\".repeat(count + (count % 2 === 0 ? 1 : 0)) + "$5";
+  check(escapeMarkdownCurrency(source) === expected, "backslash parity " + count);
+}
+check(
+  formulas(await readMarkdown("R\\$50 and R\\$40")).length === 0 &&
+    renderMarkdown(await readMarkdown("R\\$50 and R\\$40")) === "R\\$50 and R\\$40",
+  "Markdown escapes decode once",
+);
+for (const source of [
+  "<p>R<span>$50 and R</span>$40</p>",
+  "<p><span>US</span><span>$5+$</span>7</p>",
+  "<p>R$50 e <strong>R$40</strong></p>",
+]) {
+  const blocks = await readHtml(source);
+  check(
+    formulas(blocks).length === 0 && !renderHtmlFragment(blocks).includes("katex"),
+    "HTML adjacent text context: " + source,
+  );
+}
+const htmlSlash = await readHtml("<p>R\\$50 and R\\$40</p>");
+check(
+  renderMarkdown(htmlSlash) === "R\\\\\\$50 and R\\\\\\$40",
+  "HTML visible backslashes are retained",
+);
+for (const amount of money) {
+  const blocks = await readHtml("<p>" + amount + "</p>");
+  check(
+    renderMarkdown(blocks) === amount.replace("$", "\\$") &&
+      renderTypst(blocks) === amount.replace("$", "\\$") &&
+      renderAsciidoc(blocks) === amount &&
+      renderHtmlFragment(blocks).includes(amount),
+    "currency through all renderers: " + amount,
+  );
+}
+const annotated = await readHtml(
+  '<span class="katex"><math><semantics><annotation encoding="application/x-tex">\\text{R\\$50}</annotation></semantics></math></span>',
+);
+check(formulas(annotated)[0] === "\\text{R\\$50}", "semantic HTML math is authoritative");
+for (const [data, expected] of [
+  [payload(null, null, "\n\nR$50\n\n"), "\n\nR\\$50\n\n"],
+  [payload(null, "plain R$50", "# unrelated R$7"), "plain R\\$50"],
+  [payload("<strong>decoration R$7</strong>", "# Source R$50"), "# Source R\\$50"],
+]) {
+  const result = await planPaste(data, "markdown");
+  check(
+    result?.text === expected && result.converted && !result.block,
+    "selected representation without block formatting",
+    JSON.stringify(result),
+  );
+}
+for (const source of [
+  "`R$5`",
+  "```\nR$5",
+  "$x + y$",
+  "\\(x + y\\)",
+  "[label](https://example.com/$5)",
+  '<span title="R$5">',
+]) {
+  const position = source.includes("https:")
+    ? source.indexOf("https:")
+    : source.indexOf("$5") >= 0
+      ? source.indexOf("$5") + 1
+      : Math.floor(source.length / 2);
+  check(
+    !markdownProseSelection(source, [{ from: position, to: position }]),
+    "protected insertion: " + source,
+  );
+}
+check(
+  markdownProseSelection("R$50 and $x$ after", [{ from: 4, to: 4 }]) &&
+    markdownProseSelection("$x$", [{ from: 3, to: 3 }]),
+  "currency and completed math boundaries are prose",
+);
+check(
+  !markdownProseSelection("text `code`", [
+    { from: 0, to: 0 },
+    { from: 8, to: 8 },
+  ]),
+  "mixed multi-selection guard",
+);
+for (const [file, baseline] of Object.entries(
+  JSON.parse(readFileSync(new URL("./fixtures/math-inventory.json", import.meta.url), "utf8")),
+)) {
+  const sourceUrl = new URL("../" + file, import.meta.url);
+  const optional = file.startsWith("docs/samples/");
+  const source =
+    existsSync(sourceUrl) && !(optional && process.argv.includes("--without-optional-corpus"))
+      ? readFileSync(sourceUrl, "utf8")
+      : null;
+  check(
+    source !== null
+      ? createHash("sha256").update(source).digest("hex") === baseline.sha256
+      : optional && baseline.entries.length === 292 && /^[a-f\d]{64}$/.test(baseline.sha256),
+    source !== null
+      ? "independent baseline source hash: " + file
+      : "optional local corpus absent; 292 pinned formula cases remain available",
+  );
+  const actual =
+    source !== null
+      ? analyzeMath(source).math.map(({ body, display, from, to }) => ({
+          body,
+          display,
+          src0: from,
+          src1: to,
+        }))
+      : null;
+  check(
+    actual !== null
+      ? JSON.stringify(actual) === JSON.stringify(baseline.entries)
+      : baseline.entries.every(({ body, display }) => {
+          const marker = display ? "$$" : "$";
+          const parsed = analyzeMath(marker + body + marker).math;
+          return parsed.length === 1 && parsed[0].body === body && parsed[0].display === display;
+        }),
+    actual !== null
+      ? "every baseline body/range/display kind: " + file
+      : "all recorded physics bodies/display kinds parse without the ignored source file",
+  );
+}
+const malformed = "\\( ".repeat(20_000) + "$5 and ".repeat(15_000);
+const started = performance.now();
+escapeMarkdownCurrency(malformed);
+check(
+  performance.now() - started < 4000,
+  "bounded malformed delimiter work",
+  Math.round(performance.now() - started) + "ms",
+);
+const oversizedMoney = await planPaste(payload(null, "R$50 ".repeat(210_000)), "markdown");
+check(
+  oversizedMoney?.converted === false &&
+    oversizedMoney.notices.some((n) => n.includes("too large")),
+  "currency size cap retains fallback notice",
+);
+
+check(
+  detectTextSyntax("- first\n- second\n\n@ref <label>\n\n$ 5 $")?.language === "typst",
+  "native Typst numeric math retains its threshold signal",
+);
+check(
+  scoreTypst("- first\n- second\n\n@ref <label>\n\nR$5 e R$7") === 3 &&
+    detectTextSyntax("- first\n- second\n\n@ref <label>\n\nR$5 e R$7") === null,
+  "currency does not award a false Typst threshold point",
+);
+check(
+  escapeMarkdownCurrency("\\[unfinished R$50") === "\\[unfinished R$50",
+  "unfinished explicit math protects its contents",
+);
+check(
+  !markdownProseSelection("$x\n\nR$50", [{ from: 2, to: 2 }]),
+  "unfinished math context ends at its own source line",
+);
+check(
+  analyzeMath("😀 Café\r\nR$50 and $x$ final").math[0]?.from === 18,
+  "CRLF and non-BMP source offsets remain UTF-16 positions",
+);
+const privateMarker = "\ue000PASTEMATH0:0\ue001";
+const markerRead = await readMarkdown(privateMarker + " $x$");
+check(
+  renderMarkdown(markerRead).includes(privateMarker) &&
+    JSON.stringify(formulas(markerRead)) === '["x"]',
+  "literal placeholder-like input cannot become a formula",
+);
+check(
+  JSON.stringify(analyzeMath("$x" + "\\".repeat(2) + "$").math.map((range) => range.body)) ===
+    JSON.stringify(["x" + "\\".repeat(2)]) && analyzeMath("$x\\$").math.length === 0,
+  "closing delimiter uses full backslash parity",
+);
+check(
+  escapeMarkdownCurrency("Cr$ and Cz$") === "Cr$ and Cz$",
+  "numberless currency prefixes remain ordinary text",
+);
 console.log(`\n${passed}/${total} checks passed`);
 process.exit(passed === total ? 0 : 1);

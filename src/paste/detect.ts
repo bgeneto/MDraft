@@ -12,6 +12,7 @@
 
 import type { DocumentLanguage } from "../api.ts";
 import { VOID_ELEMENTS } from "../tag-name.ts";
+import { hasInlineMath } from "../math-delimiters.ts";
 
 export type SourceFormat = "html" | "markdown" | "typst" | "asciidoc" | "plain";
 
@@ -92,7 +93,7 @@ export function scoreTypst(raw: string): number {
   if (/@[A-Za-z][\w:-]*/.test(text)) score += 1;
   if (/<[a-z][\w:-]*>/.test(text)) score += 1;
   if (/^\s*\/\/.*$/m.test(text)) score += 1;
-  if (/\$[^$\n]+\$/.test(text)) score += 1;
+  if (text.includes("$") && hasInlineMath(text, true)) score += 1;
   if (count(text, /^ {0,3}[-*+]\s+\S/gm) >= 2) score += 1;
   return score;
 }

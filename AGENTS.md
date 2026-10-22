@@ -201,32 +201,33 @@ rewrite from scratch.
 | `npm run stage` | `scripts/stage-artifacts.mjs` | Re-stage what is already built |
 | `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
-| `npm run test:rust` | `cargo test` | 93 tests (91 run, two ignored downloads) on both platforms |
+| `npm run test:rust` | `cargo test` | 99 tests (97 run, two ignored downloads) on both platforms |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. The tab-restore layer is the exception: two launches of the same instance's settings directory, closed with WM_CLOSE in between so the close flush runs. Puts back the working tree and the developer's own settings afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
-| `npm run smoke` | `scripts/dom-smoke.mjs` | 105 checks against `samples/feature-tour.md` |
-| `npm run word-sync` | `scripts/word-sync-test.mjs` | 33 checks of word-level sync against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, the four-beat pulse and its resting mark, reduced motion, no scroll, Escape, and the fallbacks |
+| `npm run smoke` | `scripts/dom-smoke.mjs` | 107 checks against `samples/feature-tour.md` |
+| `npm run word-sync` | `scripts/word-sync-test.mjs` | 39 checks of word-level sync against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, the four-beat pulse and its resting mark, reduced motion, no scroll, Escape, and the fallbacks |
 | `npm run autoclose:unit` | `scripts/autoclose-unit.mjs` | 17 checks of the tag matcher: attributes, custom elements, void and self-closing tags, autolinks, escapes, declarations, prose — no application |
 | `npm run autoclose` | `scripts/autoclose-test.mjs` | 33 checks of pairs, quotes, backticks, HTML tags and both preferences, typed through the real editor in Markdown, HTML, Typst and AsciiDoc |
 | `npm run spellcheck` | `scripts/spellcheck-test.mjs` | Underlines a misspelling, then clears it when spelling is turned off |
 | `npm run format:document` | `scripts/format-document-test.mjs` | 80 checks of the editor's right-click menu and **Format Document**: every editing action's enabled state, case conversion, comments, line operations, a fake-clipboard Copy/Cut/Paste round trip, formatting in Markdown, HTML and Typst, a background tab formatted from its own menu, AsciiDoc with the action disabled, one undo restoring the exact bytes, and the spelling menu still winning |
 | `npm run audit` | `scripts/audit-document.mjs` | Render metrics for whatever document is loaded |
-| `npm run math` | `scripts/math-render-check.mjs` | 10 checks against the physics paper |
+| `npm run math` | `scripts/math-render-check.mjs` | 12 checks against the physics paper |
 | `npm run syntax` | `scripts/syntax-theme-test.mjs` | 10 checks that highlighting is real and that the sync mark stays amber and visible on Nord, Ink and Solarized Dark |
 | `npm run html` | `scripts/html-preview-test.mjs` | 50 checks of the sandboxed HTML guest, including a double-click that paints the clicked word rather than the first occurrence |
-| `npm run export` | `scripts/export-test.mjs` | 36 checks of every export path, against real pandoc, including an AsciiDoc source and the rendered-HTML math reader |
+| `npm run export` | `scripts/export-test.mjs` | 38 checks of every export path, against real pandoc, including an AsciiDoc source and the rendered-HTML math reader |
 | `npm run typography` | `scripts/typography-test.mjs` | 48 checks that each face loads, each OpenType switch changes pixels, the six-preset matrix holds, the four new body faces render differently, and the Semibold weights are real |
 | `npm run shortcuts` | `scripts/shortcut-test.mjs` | 43 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, that the zoom chip follows the level, that a new tab keeps the previous buffer's undo, and that the webview's F5/Ctrl+R reload keys are swallowed |
-| `npm run tabs` | `scripts/document-tabs-test.mjs` | 104 checks of several open documents: sidebar and Recents, `open-files`, active-tab styling, the tab context menu, keyboard navigation, caret and scroll per tab, dirty dot, × and middle-click, Ctrl+Tab, drag and keyboard reordering, the disk poll, Auto Save across tabs, overflow arrows and the wheel, Close Others, the last tab |
+| `npm run tabs` | `scripts/document-tabs-test.mjs` | 106 checks of several open documents: sidebar and Recents, `open-files`, active-tab styling, the tab context menu, keyboard navigation, caret and scroll per tab, dirty dot, × and middle-click, Ctrl+Tab, drag and keyboard reordering, the disk poll, Auto Save across tabs, overflow arrows and the wheel, Close Others, the last tab |
+| `npm run favorites` | `scripts/favorites-test.mjs` | 56 checks of the Favorites panel that replaced Files: the editor and tab menu routes, the Add/Remove toggle, insertion order across opens, inactive-tab favoriting, duplicate adds, the per-row × and row menu, one-at-a-time removal, a missing file, the untitled disabled state, no Clear All, the Preferences changes and `view.favorites` in the native menu |
 | `npm run tabs:restore:unit` | `scripts/tabs-restore-unit.mjs` | 33 checks of what is remembered and what is restored: tab order, untitled exclusion, deduplication under the platform's path identity, the 20-document cap, and the restore plan's handling of missing files — no application |
 | `npm run typst:map:unit` | `scripts/typst-page-map-unit.mjs` | 9 checks of the Typst Pages source map: a repeated one-word line with identical neighbours paints nothing, a unique neighbour window picks the clicked occurrence, ligatures and soft hyphens match, and generated text stays unmapped — no application |
 | `npm run html:map:unit` | `scripts/html-source-map-unit.mjs` | 14 checks of the HTML text-node offsets: entities and CRLF, the decoded-to-raw translation, the sample mismatch that paints nothing, and two nodes under one stamp — no application |
 | `npm run block:map:unit` | `scripts/block-map-unit.mjs` | 12 checks of the block-level source map and Typst line annotation: folded index mapping, per-node alignment across substitutions and smart punctuation, gap block fallback, Typst comments/rules/math/code/tables, and `#lorem` exclusion — no application |
 | `npm run recent` | `scripts/recent-menu-test.mjs` | 26 checks that File › Open Recent mirrors the persisted list: the launch file, a new file becoming first, the menu id opening/focusing a tab, Clear Items emptying menu and sidebar, the list refilling, and a 27-row history rendered in full by the sidebar while the menu shows 20 plus Clear Items |
-| `npm run asciidoc` | `scripts/asciidoc-test.mjs` | 55 checks of the AsciiDoc preview, source highlighting, outline, preview copy, spellcheck, includes, paste, the AsciiDoc reference, the default extension and word-level sync |
+| `npm run asciidoc` | `scripts/asciidoc-test.mjs` | 54 checks of the AsciiDoc preview, source highlighting, outline, preview copy, spellcheck, includes, paste, the AsciiDoc reference, the default extension and word-level sync |
 | `npm run asciidoc:export:unit` | `scripts/asciidoc-export-unit.mjs` | 17 unit checks of the AsciiDoc -> HTML step every pandoc export uses: unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations; no application |
 | `npm run test:sessions` | `scripts/sessions-test.mjs` | 59 unit checks of `src/sessions.ts`, with no application and no build |
-| `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 99 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
-| `npm run paste` | `scripts/rich-paste-test.mjs` | 28 checks of rich paste through the real UI: destination detection, conversion in every direction, whitespace across inline elements, preferences, Ctrl+Shift+V, undo |
+| `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 369 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
+| `npm run paste` | `scripts/rich-paste-test.mjs` | 68 checks of rich paste through the real UI: destination detection, conversion in every direction, whitespace across inline elements, preferences, Ctrl+Shift+V, undo |
 | `npm run image:syntax` | `scripts/image-syntax-test.mjs` | 14 checks of bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, including the Image preference |
 | `npm run typst:preview` | `scripts/typst-preview-test.mjs` | 36 checks of Typst Pages through PDF.js and Typst word sync: page shells, canvases, text layers, both columns, selection/copy, paragraph click, repeated-word/right-column mapping, one-word heading mapping, drag ranges, generated-text fallback, inline-math paragraphs, tables and code blocks, the transparent view bar, view switching and PDF disposal |
 | `npm run licence` | `scripts/licence-test.mjs` | 4 checks that the bundled typefaces' licences ship inside the application. Run against its own instance: it opens a document |
@@ -245,7 +246,7 @@ All of these need the app already running with CDP enabled (see
 | `word-sync-test.mjs` | `[port]` | `samples/word-sync.md` | The fragment map, preview → source and source → preview, atomic code and formula spans, word snapping, no scroll, Escape, typing clears, and the documented fallbacks (alert, missing fragment) |
 | `autoclose-unit.mjs` | — | none — runs without the application | The tag matcher: attributes, custom elements, void and self-closing tags, autolinks, escapes, declarations, prose |
 | `autoclose-test.mjs` | `[port]` | `samples/feature-tour.md` | Pairs, step-over, Backspace, selection wrap and Markdown inline tags, typed through the real editor; HTML, Typst and AsciiDoc through the default-extension switch; both preferences |
-| `asciidoc-test.mjs` | `[port]` | `samples/asciidoc-tour.adoc` | The AsciiDoc preview, title/TOC, KaTeX and AsciiMath, the built-in AsciiDoc reference, source anchors and scroll sync, highlighting, outline, preview copy, spellcheck, include refusal, rich paste, bitmap `image::`, default extension, the Files panel and word-level sync |
+| `asciidoc-test.mjs` | `[port]` | `samples/asciidoc-tour.adoc` | The AsciiDoc preview, title/TOC, KaTeX and AsciiMath, the built-in AsciiDoc reference, source anchors and scroll sync, highlighting, outline, preview copy, spellcheck, include refusal, rich paste, bitmap `image::`, default extension and word-level sync |
 | `audit-document.mjs` | `[port] [label]` | any — `label` names it in the output | Block/anchor counts, table and code-fence totals, KaTeX errors, stray `$` in prose |
 | `math-render-check.mjs` | `[port]` | `docs/samples/physrevb_70_035307.md` | That fonts actually load and that fractions and radicals have real geometry |
 | `syntax-theme-test.mjs` | `[port]` | `samples/feature-tour.md` | Distinct computed token colours, and that switching palette changes them |
@@ -260,10 +261,11 @@ All of these need the app already running with CDP enabled (see
 | `spellcheck-test.mjs` | `[port]` | `samples/feature-tour.md` | Sets the dictionary to English, types a misspelling, requires the wavy underline, then turns spelling off and requires the mark to be gone |
 | `format-document-test.mjs` | `[port]` | `samples/feature-tour.md` | Works on temporary copies of the Markdown, HTML, Typst and AsciiDoc fixtures: the editor menu lists Undo/Redo, the clipboard and selection actions, case conversion, comments, line operations and **Format Document**; disabled items explain themselves; case, comment, duplicate, move, copy, cut, paste and delete change the buffer and undo; **Format Document** works in Markdown, HTML and Typst; a tab's menu formats an inactive tab and leaves the active one alone; AsciiDoc keeps the menu with Format disabled; the spelling menu still wins; Escape and an outside click close the menu; the preview opens nothing; and an invalid Typst document leaves its bytes alone with a toast naming the failure |
 | `document-tabs-test.mjs` | `[port]` | `samples/feature-tour.md` | That several documents stay open sanely: a path already open is focused, the active tab is bold, the context menu and its disabled entries, Arrow-key navigation, drag and keyboard reordering, overflow arrows and the wheel, Close Others, the caret and both scroll offsets come back, the disk poll reloads a clean inactive tab and leaves a dirty one alone, Auto Save writes every dirty tab, and a large document no longer breaks the next New |
+| `favorites-test.mjs` | `[port]` | `samples/feature-tour.md` | The Favorites panel and the two right-click routes: the empty state, the Add/Remove toggle, insertion order across opens, an inactive tab's path, duplicate adds, the row `×` and its menu, one-at-a-time removal, a missing file kept with a toast, the untitled disabled state, no Clear All, the Preferences changes, `Ctrl+Shift+2` and `view.favorites` |
 | `tabs-restore-test.mjs` | `[port] phase1\|phase2 <doc> <extra…>` | phase 1: `samples/feature-tour.md`; the extras open as tabs | The two-launch store: phase 1 opens and reorders tabs, sets the launch preference and closes one tab just before the window does; phase 2 — launched **without** a document argument — sees the same tabs, order, active tab and preference. Normally run by `test-all.mjs`, which supplies both launches and the WM_CLOSE between them |
 | `recent-menu-test.mjs` | `[port]` | `samples/feature-tour.md` | The native Open Recent submenu through the `recent_menu` probe: it lists the launch file, a newly opened file becomes the first row, the emitted menu id focuses an existing tab instead of duplicating it, Clear Items empties the menu/sidebar/settings, a 27-row history renders in full in the sidebar while the menu shows 20 plus Clear Items, and a later open refills the list |
 | `sessions-test.mjs` | — | none — runs without the application | The session store's rules: insertion after the active tab, untitled names, one tab per path under both case rules, the neighbour that takes over on close, `move` and `removeMany` order, wrap-around, and the empty-list invariant |
-| `paste-convert-test.mjs` | — | none — runs without the application | The paste matrix: clipboard and document detection, all reader/renderer pairs, escaping, sanitisation, caps and image syntax |
+| `paste-convert-test.mjs` | `[--without-optional-corpus]` | none — runs without the application | The paste matrix: clipboard and document detection, all reader/renderer pairs, escaping, sanitisation, caps and image syntax |
 | `tabs-restore-unit.mjs` | — | none — runs without the application | What is remembered and what is restored: tab order, untitled exclusion, deduplication under the platform's path identity, the 20-document cap, missing files and the active-tab fallback |
 | `typst-page-map-unit.mjs` | — | none — runs without the application | The Typst Pages source map's one-word rule: identical neighbours paint nothing, a unique window picks the occurrence, ligatures and soft hyphens fold, generated text stays unmapped |
 | `html-source-map-unit.mjs` | — | none — runs without the application | The HTML text-node rule: decoded-to-raw offsets across entities and CRLF, the sample check that fails closed, and the index that selects one node under a stamp |
@@ -287,8 +289,8 @@ node scripts\image-paste-test.mjs 9222 "http://127.0.0.1:8791/served.png" "C:\pa
 | Script | Arguments | Does |
 | --- | --- | --- |
 | `dist.mjs` | `[-- <tauri build args>] [--kill]` | Typechecks, builds the frontend, routes through the MSVC wrapper on Windows, then calls `stage-artifacts.mjs`. Streams output; exits non-zero on any failure. **Refuses to start while a copy of the app is running** (Windows locks a running executable, so cargo cannot replace it) unless `--kill` is given, which closes it first. Also refuses with the `npm ci` instruction when the local `@tauri-apps/cli` is missing, rather than letting `npx` fetch the unrelated registry package |
-| `stage-artifacts.mjs` | `[--dry-run]` | Copies the binary and every installer into `bin/<os>/<arch>/` with `SHA256SUMS.txt` and `manifest.json`. Fails loudly, naming the path it searched, when it finds no bundles |
-| `build-linux.sh` | `[--bundles deb,appimage] [--build-dir path]` | The whole Linux build inside WSL2 or a container — see [Building for Linux](#building-for-linux) |
+| `stage-artifacts.mjs` | `[--dry-run]` | Copies the binary and every installer into `bin/<os>/<arch>/` with `SHA256SUMS.txt` and `manifest.json`. Keeps the display `productName` for the manifest and the Windows portable name, but matches bundle filenames against the platform config's product name, which is `mdraft` on Linux. Fails loudly, naming the path it searched, when it finds no bundles |
+| `build-linux.sh` | `[--bundles deb,appimage] [--build-dir path]` | The whole Linux build inside WSL2 or a container — see [Building for Linux](#building-for-linux). Clears the cached `bundle/{deb,rpm,appimage}` before building and previous installers from `bin/linux/amd64` before collecting, so a previous name or version cannot linger |
 | `with-msvc.cmd` | `<command> [args…]` | Loads `vcvars64.bat` then runs the command. **Required for every cargo or tauri invocation on this host.** Searches the standard Visual Studio locations, including the Enterprise edition the GitHub runners install |
 | `cargo-vcvars.cmd` | `<cargo args…>` | The same wrapper specialised for cargo: `cargo-vcvars.cmd test --manifest-path src-tauri\Cargo.toml` |
 | `check-version.mjs` | `[tag]` | Asserts `package.json` and `src-tauri/tauri.conf.json` carry the same version, and that a supplied tag (`v0.1.0`, or `GITHUB_REF_NAME`) matches. CI runs it before building anything |
@@ -357,6 +359,16 @@ Verified on Debian 13 (trixie) with WSLg: `bin/linux/amd64/` receives a `.deb`
 (6.0 MB), an AppImage (107 MB) and the bare binary. Installing the `.deb` puts
 `/usr/bin/mdraft` and a `.desktop` entry in place, and the app runs as a
 normal window with a native GTK menu bar.
+
+On Linux the product name is lowercase `mdraft`, set in
+`src-tauri/tauri.linux.conf.json`: dpkg derives its `Package:` field by
+kebab-casing `productName`, so `MDraft` installed as `m-draft`. Everything users
+read stays capitalised — the launcher label is the literal `Name=MDraft` in
+`src-tauri/linux.desktop.hbs`, and the base config still names Windows and macOS
+artefacts and the manifest. Linux artefacts are therefore
+`mdraft_<version>_amd64.deb` and `mdraft_<version>_amd64.AppImage`. The deb
+declares `Replaces`/`Conflicts: m-draft` so installing it over the old package
+is an upgrade rather than a file conflict.
 
 ## Development loop
 
@@ -471,32 +483,33 @@ hash the pixels.
 
 ## Testing
 
-Twenty-six layers, cheapest first. Run them in this order when changing anything.
+Twenty-seven layers, cheapest first. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 93 | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, xz/tar release extraction |
+| Rust unit | `npm run test:rust` | 99 | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, xz/tar release extraction |
 | Session store | `npm run test:sessions` | 59 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
-| Paste conversion | `npm run paste:convert` | 99 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, image syntax, AsciiDoc |
+| Paste conversion | `npm run paste:convert` | 369 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, image syntax, AsciiDoc |
 | AsciiDoc export source | `npm run asciidoc:export:unit` | 17 | Unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations - no application |
-| DOM smoke | `npm run smoke` | 105 | Rendering, pane sync, preferences (including the four On Launch choices and Line Height), math, fonts, status icons |
-| Word sync | `npm run word-sync` | 33 | The fragment map, preview → source and source → preview, atomic code, formula and image spans, the pulse and its resting mark, reduced motion, word snapping, no scroll, Escape |
+| DOM smoke | `npm run smoke` | 107 | Rendering, pane sync, preferences (including the four On Launch choices and Line Height), math, fonts, status icons |
+| Word sync | `npm run word-sync` | 39 | The fragment map, preview → source and source → preview, atomic code, formula and image spans, the pulse and its resting mark, reduced motion, word snapping, no scroll, Escape |
 | Auto-close matching | `npm run autoclose:unit` | 17 | Which tag a typed `>`, the void/self-closing/autolink/escape rules — no application |
 | Remembered tabs (unit) | `npm run tabs:restore:unit` | 33 | What is stored (order, untitled exclusion, deduplication, the 20-document cap) and what a restore plan does with it (missing files, the active-tab fallback) — no application |
 | Typst page map (unit) | `npm run typst:map:unit` | 9 | One-word lines with identical neighbours paint nothing, a unique neighbour window picks the occurrence, ligatures and soft hyphens fold, generated text stays unmapped — no application |
 | HTML source map (unit) | `npm run html:map:unit` | 14 | Entities and CRLF offsets, decoded-to-raw translation, the sample mismatch, and two text nodes under one stamp — no application |
 | Block source map (unit) | `npm run block:map:unit` | 12 | Folded index mapping, per-node alignment across substitutions and smart punctuation, gap block fallback, Typst comments/rules/math/code/tables, and `#lorem` exclusion — no application |
 | Auto-close typing | `npm run autoclose` | 33 | Pairs, step-over, Backspace, selection wrap, Markdown inline tags, HTML tags, both preferences, in all four document types |
-| Rich paste | `npm run paste` | 28 | The paste event, destination notice, preferences, Ctrl+Shift+V, undo, the same clipboard converted into Markdown and kept as source in HTML, spaces around inline elements |
+| Rich paste | `npm run paste` | 68 | The paste event, destination notice, preferences, Ctrl+Shift+V, undo, the same clipboard converted into Markdown and kept as source in HTML, spaces around inline elements |
 | Image syntax | `npm run image:syntax` | 14 | Bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, plus the Image preference |
 | Typst pages | `npm run typst:preview` | 36 | PDF.js page shells/canvases/text layers, both columns, A4 geometry, paragraph click, repeated-word/right-column mapping, a one-word heading, drag ranges, Pages and Document word sync, inline-math paragraphs, tables and code blocks, generated-text fallback, transparent view bar and PDF disposal |
-| Math | `npm run math` | 10 | Font loading, fraction and radical geometry |
+| Math | `npm run math` | 12 | Font loading, fraction and radical geometry |
 | Syntax | `npm run syntax` | 10 | Token colours, palette switching, and the sync mark's amber contrast on three dark palettes |
-| AsciiDoc | `npm run asciidoc` | 55 | Preview, title/TOC, math, includes, source highlighting, outline, preview copy, spellcheck, paste, the built-in reference, defaults, word-level sync |
+| AsciiDoc | `npm run asciidoc` | 54 | Preview, title/TOC, math, includes, source highlighting, outline, preview copy, spellcheck, paste, the built-in reference, defaults, word-level sync |
 | Editor menu / Format | `npm run format:document` | 80 | The full right-click menu (clipboard, case, comment, line operations); clipboard wiring through a fake; formatting in Markdown, HTML and Typst; formatting an inactive tab from its menu; exact bytes after undo; caret line; AsciiDoc disabled with a reason; the spelling menu still wins; a formatter failure leaves the buffer alone |
 | HTML guest | `npm run html` | 50 | Sandbox, IPC boundary, local assets, sync/blink, the guest word double-click, scripts-off, outline, reload-key guard |
-| Document tabs | `npm run tabs` | 104 | Several open documents, the context menu, drag and keyboard reordering, overflow arrows, the disk poll, Auto Save across tabs, caret and scroll per tab |
+| Document tabs | `npm run tabs` | 106 | Several open documents, the context menu, drag and keyboard reordering, overflow arrows, the disk poll, Auto Save across tabs, caret and scroll per tab |
+| Favorites | `npm run favorites` | 56 | The panel that replaced Files, both Add/Remove menu routes, insertion order across opens, inactive tabs, one-at-a-time removal, a missing file, the untitled disabled state, no Clear All, the Preferences changes and `view.favorites` |
 | Tab restore | `npm test -- --only tabs-restore` | 25 | Two launches on one settings directory: the tabs come back in order with the remembered one active, the preference survives, and the close flush records a tab closed just before the window closed |
 | Recent menu | `npm run recent` | 26 | The native Open Recent 20-row window, a longer sidebar history, menu-id dispatch, Clear Items across menu/sidebar/settings, refilling after a clear |
 | Close | `.\scripts\test-close.ps1` | 4 | The window really exits and saves its state |
@@ -585,6 +598,49 @@ Each of these cost real time. Symptom → cause → fix.
 [Recording traps is required](#recording-traps-is-required) for what qualifies and
 how to write it. The list is append-only in spirit: do not delete an entry because
 the fix landed, because the fix is what makes it recur.
+
+**Assigning `window.__TAURI_INTERNALS__.invoke` leaves the export save-picker stub unused**
+In the production Tauri webview its descriptor is non-writable and
+non-configurable; a sloppy-mode assignment silently does nothing. Inspect
+`Object.getOwnPropertyDescriptor` rather than assuming the mock was installed.
+Do not weaken IPC protection to make a test pass. The native HTML currency test
+uses Print's real shared article, the actual pure HTML wrapper, and the Rust
+writer, leaving only the native picker outside CDP coverage.
+
+**`ReferenceError: require is not defined` when SSR-loading `src/markdown.ts` for a pure export-wrapper test**
+The browser module imports CSS and Highlight.js's CommonJS entry point; loading
+the whole module through Vite SSR can inline that dependency into an ESM
+evaluator. This is a test-environment mismatch, not a broken application build.
+Exercise the renderer in the real webview; when checking only its pure wrapper,
+compile the actual pure declarations in isolation as `export-test.mjs` does.
+Do not rewrite runtime imports to satisfy a Node-only wrapper test.
+
+**A new-tab CDP probe finds no `.math-inline`, or currency checks fail on an empty preview**
+`Ctrl+N` activation and focus are not synchronous with the synthetic keydown.
+`Input.insertText` sent immediately afterwards can target the previous surface
+instead of the new editor; this initially looked like a renderer regression.
+Wait for the new tab to activate and focus `.cm-content` before inserting text,
+as `newTab` in `rich-paste-test.mjs` does.
+
+**A multi-cursor paste probe produces `AC\\$6 A` instead of two insertions**
+CodeMirror's default add-selection modifier is Ctrl on Windows/Linux and Meta
+on macOS, not Alt. Use CDP mouse modifier `2` (Ctrl) on Windows; verify the
+installed `addsSelectionRange` implementation before diagnosing paste mapping.
+
+**A paste into a fresh tab produces `R\\$5\nA A` instead of inline text**
+CodeMirror remembers its last linewise copy across tabs. Pasting the exact same
+text with empty selections intentionally inserts whole lines, even in a new
+tab. This looked like the currency transform had introduced block spacing.
+Use a different clipboard value for an unrelated multi-selection test, or make
+a nonempty-selection copy to clear the linewise metadata. Preserve that native
+metadata when adding clipboard filters.
+
+**Vite fails with `EPERM: operation not permitted, realpath '...node_modules\\@asciidoctor\\core\\build\\browser\\index.js'`**
+On this Windows host the sandbox can reject Vite's dependency realpath lookup
+even after TypeScript succeeds. The same build succeeds outside the sandbox;
+this is not evidence of a broken dependency or parser change. Request the
+normal execution escalation and rerun the same build/test command without
+rewriting dependencies or replacing the source file.
 
 **`cannot open include file 'windows.h'` / `LNK1181`**
 Cargo never found the Windows SDK because the registry version and the on-disk
@@ -850,16 +906,24 @@ before deciding whether to toggle it.
 **A Preferences test edits a row that belongs to another section, and nothing changes**
 The panel renders one section at a time. With *Editor* open, `document.querySelector('.prefs-row')` cannot find **Editor font size** or the preset buttons — those live under *Typography* — so a test that ignores the setter's return value silently changes nothing and then fails on a downstream measurement (here, the line height stayed at the old font size). Click the owning section first (`Typography` for sizes and presets, `Editor` for Content Width and Line Height), re-query after every update because the panel rebuilds, and assert that the setter found its control.
 
+**A Preferences search probe for "favorites" narrows to two sections, not one**
+Search matches row labels, select options and group headings across every section. "favorites" is both the Files note **Managing Favorites** and the **Favorites** option of *Default Sidebar Panel* under *Appearance*, so a probe that expected only `Files` saw `Files,Appearance` and failed. Search a term unique to the target row (`managing`), or assert that the expected section is present rather than that it is the only one. A word shared by two sections is not a locator.
+
 **Renaming the product leaves stale bundles that staging will happily ship**
 `src-tauri/target/release/bundle/` is not cleaned between builds, so after
 changing `productName` the directory held two installers: one under the new name
 and one under the previous one. `stage-artifacts.mjs` copied every file matching
 the extension, so `bin/<os>/<arch>/` ended up offering both, with the wrong one
 just as prominent. The same happens on a version bump. Staging now requires the
-filename to contain both the current `productName` and `version`, and fails
-loudly naming the directory when nothing matches.
+filename to contain both the current bundle name and `version`, and fails
+loudly naming the directory when nothing matches — where the bundle name comes
+from the platform config, not the base one, because Linux lowercases it.
 
-Renaming is more than a find-and-replace. The name lives in six shapes, and
+The Linux rename from `MDraft` to `mdraft` makes the collision certain rather
+than occasional, since the cache keeps the previous build. `scripts/build-linux.sh`
+therefore clears `bundle/{deb,rpm,appimage}` before building.
+
+Renaming is more than a find-and-replace. The name lives in eight shapes, and
 missing one fails in a way that does not point at the cause:
 
 | Shape | Where | Example |
@@ -867,6 +931,8 @@ missing one fails in a way that does not point at the cause:
 | Cargo package (kebab) | `Cargo.toml`, names the binary | `mdraft` |
 | Rust lib (snake) | `Cargo.toml` `[lib]`, used by `main.rs` | `mdraft_lib` |
 | `productName` | `tauri.conf.json`, names every bundle | `MDraft` |
+| `productName` (Linux) | `tauri.linux.conf.json`, kebab-cased into dpkg's `Package:` | `mdraft` |
+| Desktop label | `linux.desktop.hbs` `Name=` (a literal since the Linux rename) | `MDraft` |
 | `identifier` | `tauri.conf.json`, **moves the settings directory** | `io.github.bernh.mdraft` |
 | npm package | `package.json` and the lock file | `mdraft` |
 | Display strings | window title, menus, About, welcome document | `MDraft` |
@@ -874,7 +940,7 @@ missing one fails in a way that does not point at the cause:
 The bare binary is named after the **Cargo package**, not `productName`, and
 Tauri renames it to `productName` only inside the bundle. `stage-artifacts.mjs`
 therefore reads the package name out of `Cargo.toml` and tries
-`mainBinaryName`, `productName` and the package name in turn.
+`mainBinaryName`, both product names and the package name in turn.
 
 Changing the `identifier` silently relocates settings and window state, because
 both live under `%APPDATA%\<identifier>`. That is a user-visible reset; do it
@@ -1228,10 +1294,11 @@ pane is correct either way.
 **`bin/linux/amd64` offers both the old and the new version after a version bump**
 `build-linux.sh` copies every `.deb`/`.AppImage` it finds under
 `~/.cache/mdraft-build/src-tauri/target/release/bundle/`, and the cache is not
-cleared by the next build, so a 0.2.1 build also shipped the cached 0.1.0 `.deb`
-and AppImage. Delete `bundle/deb` and `bundle/appimage` in the cache before a
-release build, or filter by the current version. Check the printed collection
-list, not just the exit code: the stale files look like successful outputs.
+cleared by rsync, so a 0.2.1 build also shipped the cached 0.1.0 `.deb` and
+AppImage. The script now clears `bundle/{deb,rpm,appimage}` before building, so
+only what this build produced can be collected; if you collect by hand instead,
+delete those directories first. Check the printed collection list, not just the
+exit code: the stale files look like successful outputs.
 
 **A tab switch throws `RangeError: Position 30262 is out of range for changeset of length 2532`, and the command silently does nothing**
 The numbers are two different documents: `2532` is the buffer on screen, `30262`
@@ -1581,16 +1648,20 @@ library win. No repository file should change for this.
 The compositor does not read a GTK window's icon on Wayland: KWin resolves the
 window's `app_id` to `<app_id>.desktop`, reads its `Icon=`, and falls back to the
 Breeze `wayland` icon when the lookup is empty (`XdgToplevelWindow::updateIcon()`
-in `src/xdgshellwindow.cpp`). GTK3 sets `app_id` from `g_get_prgname()`, the
-binary name `mdraft`, while Tauri names the installed entry after `productName`,
-`MDraft.desktop`, and the lookup is case-sensitive. Measured on the installed
-binary before the fix with `WAYLAND_DEBUG=1 /usr/bin/mdraft`:
+in `src/xdgshellwindow.cpp`). GTK3 sets `app_id` from `g_get_prgname()`, which
+was the binary name `mdraft`, while Tauri named the installed entry after
+`productName`, `MDraft.desktop`, and the lookup is case-sensitive. Measured on
+the installed binary before the fix with `WAYLAND_DEBUG=1 /usr/bin/mdraft`:
 `xdg_toplevel.set_app_id("mdraft")`, while
 `/usr/share/applications/MDraft.desktop` was the only entry.
-`src-tauri/src/lib.rs` now sets the GLib program name from the config's
-`productName` before Tauri builds the GTK application, and
-`src-tauri/linux.desktop.hbs` sets `StartupWMClass={{name}}` so the X11
-`WM_CLASS` stays aligned with the entry. Do not conclude the icon assets or
+
+The Linux product name is now `mdraft`, so the app id, the entry's basename
+(`mdraft.desktop`), its `StartupWMClass=mdraft` and the binary name all agree;
+the launcher label stays `Name=MDraft` because that is a literal in
+`src-tauri/linux.desktop.hbs`. `src-tauri/src/lib.rs` still sets the GLib program
+name from the merged config's `productName` before Tauri builds the GTK
+application: the call is what makes the four values keep agreeing, rather than a
+coincidence that a future rename would break. Do not conclude the icon assets or
 `bundle.icon` are wrong from this; X11 uses `_NET_WM_ICON` and looked correct.
 
 **A CDP test reports the preview word highlight as `null` even though the word is painted**
@@ -1678,7 +1749,7 @@ src/
   paste/             rich paste: IR, destination/source detection, readers,
                      renderers (AsciiDoc included), HTML sanitizer and image resolution
   preferences.ts     the Preferences panel and its declarative rows
-  sidebar.ts         outline (active-marker updates) / file list / recent files
+  sidebar.ts         outline (active-marker updates) / favorites / recent files
   api.ts             typed wrappers over every Rust command
   highlight-theme.ts highlight.js theme swap, so code follows light/dark
   content.ts         the welcome, reference and shortcuts documents
@@ -1687,7 +1758,7 @@ src-tauri/src/
   lib.rs             builder, plugin registration, command table
   html_preview.rs    preview scheme, CSP, path confinement, preview commands (+ tests)
   settings.rs        persisted settings and AppState
-  documents.rs       file IO, directory listing, startup file
+  documents.rs       file IO, path existence, startup file
   images.rs          image import: sniffing, sanitiser, dedup, download
   tokens.rs          approximate token count for the status bar
   spellcheck.rs      OS spell checker: Windows ISpellChecker, Linux hunspell, macOS NSSpellChecker
@@ -1822,12 +1893,12 @@ platform and fails on the other.
    reads the latter for the bundle, and the two must agree. `npm run
    check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
-3. `npm run test:rust` — 91 runnable tests (two ignored downloads: pandoc and Typst). Run them on Linux too
+3. `npm run test:rust` — 97 runnable tests (two ignored downloads: pandoc and Typst). Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run math`,
-   `npm run syntax`, `npm run html` and `npm run asciidoc` —
-   105 + 10 + 7 + 43 + 51 checks.
+   `npm run syntax`, `npm run html`, `npm run asciidoc` and `npm run favorites` —
+   105 + 10 + 10 + 50 + 54 + 56 checks.
 5. `npm run audit` against both `docs/sample-files` documents and compare the
    counts with the table in the README.
 6. `npm run dist` — installers and checksums land in `bin/<os>/<arch>/`.
@@ -1841,8 +1912,10 @@ platform and fails on the other.
 9. Confirm the release binary still refuses to do anything on its own: no
    network at start-up, no telemetry, no licence check.
 10. For Linux: `bash scripts/build-linux.sh`, then
-    `sudo apt install -y ./bin/linux/amd64/*.deb` and launch `mdraft` from
-    a WSLg or desktop session. Check the GTK menu bar, the outline, math and the
-    status-bar icons.
+    `sudo apt install -y ./bin/linux/amd64/mdraft_*.deb` and launch `mdraft`
+    from a WSLg or desktop session. Check the GTK menu bar, the outline, math and
+    the status-bar icons. `dpkg -s mdraft` must report `Package: mdraft` with
+    `Replaces: m-draft`, the launcher must still read **MDraft**, and
+    `/usr/share/applications/` must hold only `mdraft.desktop`.
 11. Tag and push — CI builds both platforms and publishes the release. See
     [Releasing](#releasing).

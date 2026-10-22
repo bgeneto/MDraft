@@ -21,6 +21,12 @@ export interface TabsCallbacks {
   format: (id: string) => void | Promise<void>;
   /** Why Format Document cannot run for this tab, or null when it can. */
   formatBlocked: (id: string) => string | null;
+  /** Why this tab cannot be favorited, or null when it can. */
+  favoriteBlocked: (id: string) => string | null;
+  /** Whether the clicked tab's file is already in Favorites. */
+  isFavorite: (id: string) => boolean;
+  /** Add the clicked tab to Favorites, or remove it when already there. */
+  favorite: (id: string) => void | Promise<void>;
 }
 
 export interface TabsOptions {
@@ -227,6 +233,8 @@ export function createTabsUi(options: TabsOptions): TabsUi {
       .filter((entry) => entry.id !== id && !entry.dirty)
       .map((entry) => entry.id);
     const formatBlocked = callbacks.formatBlocked(id);
+    const favoriteBlocked = callbacks.favoriteBlocked(id);
+    const favorite = callbacks.isFavorite(id);
 
     const runMany = (ids: readonly string[]) => callbacks.closeMany(ids);
 
@@ -290,6 +298,15 @@ export function createTabsUi(options: TabsOptions): TabsUi {
         disabled: formatBlocked !== null,
         title: formatBlocked ?? undefined,
         action: () => callbacks.format(id),
+      },
+      { kind: "separator" },
+      {
+        kind: "item",
+        id: "favorite",
+        label: favorite ? "Remove from Favorites" : "Add to Favorites",
+        disabled: favoriteBlocked !== null,
+        title: favoriteBlocked ?? undefined,
+        action: () => callbacks.favorite(id),
       },
       { kind: "separator" },
       {

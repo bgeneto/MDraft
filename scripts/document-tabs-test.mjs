@@ -185,34 +185,58 @@ try {
   );
 
   // -------------------------------------------------------------------------
-  // A sidebar click adds a tab; a Typst file has to be offered at all
+  // A favorite opens a tab; the row is a real second route to a document
   // -------------------------------------------------------------------------
-  console.log("\n=== the Files panel ===");
-  await evaluate(`document.getElementById("tab-files").click(); "ok"`);
+  console.log("\n=== the Favorites panel ===");
+  await emitOpenFiles([path.resolve("samples", "typst-tour.typ")]);
+  await sleep(1500);
+  const favorited = await evaluate(`(() => {
+    const tab = [...document.querySelectorAll(".doc-tab")].find(
+      (entry) => entry.querySelector(".doc-tab-name")?.textContent === "typst-tour.typ",
+    );
+    if (!tab) return "missing tab";
+    const bounds = tab.getBoundingClientRect();
+    tab.dispatchEvent(new MouseEvent("contextmenu", {
+      bubbles: true, cancelable: true, button: 2,
+      clientX: bounds.left + 12, clientY: bounds.top + 12,
+    }));
+    const button = document.querySelector('.tab-menu-item[data-action="favorite"]');
+    if (!button) return "missing item";
+    button.click();
+    return "clicked";
+  })()`);
+  await sleep(500);
+  check(favorited === "clicked", "the typst tab can be added to Favorites");
+  await evaluate(`document.getElementById("tab-favorites").click(); "ok"`);
   const listed = await pollFor(
-    `[...document.querySelectorAll(".sidebar-body .entry")].some((e) => (e.title || "").endsWith("typst-tour.typ"))`,
+    `[...document.querySelectorAll("#sidebar-body .favorite-item")].some((e) => (e.title || "").endsWith("typst-tour.typ"))`,
   );
-  check(listed, "the folder listing offers a .typ document", "Typst is a first-class format");
-  const listedAsciiDoc = await evaluate(
-    `[...document.querySelectorAll(".sidebar-body .entry")].some((e) => (e.title || "").endsWith("asciidoc-tour.adoc"))`,
-  );
+  check(listed, "the Favorites panel offers a .typ document", "Typst is a first-class format");
+  const rowShape = await evaluate(`(() => {
+    const row = [...document.querySelectorAll("#sidebar-body .favorite-item")]
+      .find((e) => (e.title || "").endsWith("typst-tour.typ"));
+    return row
+      ? Boolean(row.querySelector(".favorite-open") && row.querySelector(".favorite-remove") && row.querySelector(".favorite-star"))
+      : false;
+  })()`);
+  check(rowShape, "the favorite row has Open, a star and a single-entry ×");
+  const closedFavoriteTab = await clickClose("typst-tour.typ");
+  await sleep(700);
   check(
-    listedAsciiDoc,
-    "the folder listing offers an .adoc document",
-    "AsciiDoc is a first-class format",
+    closedFavoriteTab === "clicked" && (await tabCount()) === 1,
+    "the typst tab was closed before reopening it from Favorites",
+    String(await tabCount()),
   );
-  const opened = await evaluate(
-    `(() => {
-      const row = [...document.querySelectorAll(".sidebar-body .entry")]
-        .find((e) => (e.title || "").endsWith("typst-tour.typ"));
-      if (!row) return "missing";
-      row.click();
-      return "clicked";
-    })()`,
-  );
+  const opened = await evaluate(`(() => {
+    const row = [...document.querySelectorAll("#sidebar-body .favorite-item")]
+      .find((e) => (e.title || "").endsWith("typst-tour.typ"));
+    if (!row) return "missing";
+    row.querySelector(".favorite-open").click();
+    return "clicked";
+  })()`);
   await sleep(2500);
-  check(opened === "clicked", "the .typ row was clickable");
-  check((await tabCount()) === 2, "clicking a file in Files adds a tab", String(await tabCount()));
+  check(opened === "clicked", "the favorite row was clickable");
+  check((await tabCount()) === 2, "clicking a favorite adds a tab", String(await tabCount()));
   check((await activeTab()) === "typst-tour.typ", "the new tab is that file", await activeTab());
 
   // -------------------------------------------------------------------------

@@ -400,11 +400,11 @@ const search = await evaluate(`(() => {
   };
   const mermaid = run('mermaid');
   const locations = run('locations');
-  const fileTree = run('file tree');
+  const managing = run('managing');
   const clear = run('clear recent');
   input.value = '';
   input.dispatchEvent(new Event('input', { bubbles: true }));
-  return JSON.stringify({ mermaid, locations, fileTree, clear });
+  return JSON.stringify({ mermaid, locations, managing, clear });
 })()`);
 
 console.log("\n=== preferences search ===");
@@ -413,21 +413,21 @@ console.log(
   `  locations  ${search.locations.sections} / ${search.locations.groups} / ${search.locations.labels}`,
 );
 console.log(
-  `  file tree  ${search.fileTree.sections} / ${search.fileTree.groups} / ${search.fileTree.labels}`,
+  `  managing   ${search.managing.sections} / ${search.managing.groups} / ${search.managing.labels}`,
 );
 console.log(`  clear      ${search.clear.sections} / ${search.clear.buttons}`);
 check(
   "search narrows sections",
   search.mermaid.sections === "Markdown" &&
     search.locations.sections === "Files" &&
-    search.fileTree.sections === "Files" &&
+    search.managing.sections === "Files" &&
     search.clear.sections === "Files",
 );
 check(
   "search keeps the matching row or heading",
   /Enable Diagrams/.test(search.mermaid.labels) &&
     /Recent Locations/.test(search.locations.groups) &&
-    /Show Hidden Folders and Files/.test(search.fileTree.labels) &&
+    /Managing Favorites/.test(search.managing.labels) &&
     /Clear Recent Files/.test(search.clear.buttons),
 );
 
@@ -1304,7 +1304,7 @@ check("the menu exposes every checkable item", menuBefore.length >= 12);
 
 const exclusiveGroups = [
   ["view.source", "view.split", "view.preview"],
-  ["view.outline", "view.files", "view.recent"],
+  ["view.outline", "view.favorites", "view.recent"],
   ["themes.system", "themes.light", "themes.dark"],
 ];
 check(
@@ -1394,6 +1394,29 @@ await toggle("flag-spellcheck");
 // Report
 // ---------------------------------------------------------------------------
 
+// A raw typed document exercises preview disambiguation independently of paste.
+await evaluate(
+  `document.querySelector('.cm-content').dispatchEvent(new KeyboardEvent('keydown',{key:'n',code:'KeyN',ctrlKey:true,bubbles:true}))`,
+);
+const currencyProbe =
+  "R$50 R$ 10.000 R$ 15.200,75 US$5 US$5.00 C$8,123.50 and $ a + b $ and $c + d$";
+await settle(450);
+await evaluate("document.querySelector('.cm-content').focus()");
+await send("Input.insertText", { text: currencyProbe });
+await settle(650);
+const currencyRendered = await evaluate(
+  `(() => ({text:document.querySelector('#preview').textContent,math:[...document.querySelectorAll('#preview .math-inline')].map(node=>node.dataset.tex),errors:document.querySelectorAll('#preview .katex-error').length}))()`,
+);
+check(
+  "all six raw currency spellings remain visible",
+  ["R$50", "R$ 10.000", "R$ 15.200,75", "US$5", "US$5.00", "C$8,123.50"].every((amount) =>
+    currencyRendered.text.includes(amount),
+  ),
+);
+check(
+  "only intended tight and padded formulas become math",
+  JSON.stringify(currencyRendered.math) === '["a + b","c + d"]' && currencyRendered.errors === 0,
+);
 check("no console errors", consoleIssues.length === 0);
 
 console.log("\n=== assertions ===");

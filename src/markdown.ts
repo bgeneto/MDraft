@@ -8,6 +8,8 @@ import { Marked, Renderer, type RendererObject, type Token } from "marked";
 import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/common";
 import katex from "katex";
+import { analyzeMath } from "./math-delimiters";
+import { markdownCodeSpans } from "./markdown-context";
 import { translateOffset, type Fragment, type Substitution } from "./source-map";
 // The stylesheet carries the Computer Modern faces AND the layout rules. Without
 // it KaTeX still emits its DOM, but fractions collapse and radicals, integrals
@@ -82,212 +84,6 @@ export function escapeHtml(input: string): string {
 // ---------------------------------------------------------------------------
 // Fenced code awareness
 // ---------------------------------------------------------------------------
-
-interface Segment {
-  code: boolean;
-  text: string;
-}
-
-/** Split markdown into fenced-code and prose segments. */
-function splitFences(markdown: string): Segment[] {
-  const out: Segment[] = [];
-  let buffer: string[] = [];
-  let inside = false;
-  let marker = "";
-
-  const flush = (isCode: boolean) => {
-    if (buffer.length > 0) {
-      out.push({ code: isCode, text: buffer.join("\n") });
-      buffer = [];
-    }
-  };
-
-  for (const line of markdown.split("\n")) {
-    const open = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
-    if (!inside && open) {
-      flush(false);
-      inside = true;
-      marker = open[1][0];
-      buffer.push(line);
-      continue;
-    }
-    if (inside) {
-      buffer.push(line);
-      const close = /^\s{0,3}(`{3,}|~{3,})\s*$/.exec(line);
-      if (close && close[1][0] === marker) {
-        inside = false;
-        flush(true);
-      }
-      continue;
-    }
-    buffer.push(line);
-  }
-  flush(inside);
-  return out;
-}
-
-/**
- * Replace `code spans` with placeholders so math never rewrites them.
- *
- * `base` is the offset of `text` in the original source, so each entry carries an
- * absolute range and the word map never has to search for it later. The
- * substitution list is in prepared-local coordinates; `extractMath` needs it to
- * translate the formulas that follow a code span.
- */
-function protectInlineCode(
-  text: string,
-  codes: CodeEntry[],
-  base: number,
-): { text: string; subs: Substitution[] } {
-  let out = "";
-  const subs: Substitution[] = [];
-  let i = 0;
-
-  while (i < text.length) {
-    if (text[i] !== "`") {
-      out += text[i++];
-      continue;
-    }
-    let run = 0;
-    while (text[i + run] === "`") run++;
-    const fence = "`".repeat(run);
-    const end = text.indexOf(fence, i + run);
-    if (end === -1) {
-      out += fence;
-      i += run;
-      continue;
-    }
-    const placeholder = `@@CODE${codes.length}@@`;
-    codes.push({ text: text.slice(i + run, end), src0: base + i, src1: base + end + run });
-    subs.push({ p0: out.length, p1: out.length + placeholder.length, o0: i, o1: end + run });
-    out += placeholder;
-    i = end + run;
-  }
-  return { text: out, subs };
-}
-
-/**
- * Characters that only appear in real TeX. Used to accept space-padded math
- * (`$ ^{1} $`, `$ E_{n} $`) without also accepting currency (`$5 and $10`).
- */
-const MATH_INDICATOR = /[\\^_{}=+<>]/;
-
-/**
- * Plain amounts. A padded span such as `$ 5 $` is far more likely to be money
- * than a lone number set as mathematics, so it stays literal.
- */
-const AMOUNT_ONLY = /^[\d.,]+$/;
-
-/**
- * Replace `$…$`, `$$…$$`, `\(…\)` and `\[…\]` with placeholders.
- *
- * The three display forms used to be three chained `replace` calls. They are
- * matched independently here and accepted in that same precedence order — a
- * candidate that overlaps one an earlier form already consumed is skipped,
- * which is what the chain did — so the offsets survive the extraction.
- */
-function extractMath(
-  text: string,
-  maths: MathEntry[],
-  codeSubs: readonly Substitution[],
-  base: number,
-): string {
-  const sourceOf = (preparedLocal: number) => base + translateOffset(codeSubs, preparedLocal);
-
-  const push = (body: string, display: boolean, start: number, end: number): string => {
-    maths.push({ body, display, src0: sourceOf(start), src1: sourceOf(end) });
-    return `@@MATH${maths.length - 1}@@`;
-  };
-
-  const forms: { regex: RegExp; display: boolean }[] = [
-    { regex: /\$\$([\s\S]+?)\$\$/g, display: true },
-    { regex: /\\\[([\s\S]+?)\\\]/g, display: true },
-    { regex: /\\\(([\s\S]+?)\\\)/g, display: false },
-  ];
-  const accepted: { start: number; end: number; body: string; display: boolean }[] = [];
-  for (const form of forms) {
-    for (const match of text.matchAll(form.regex)) {
-      const start = match.index;
-      const end = start + match[0].length;
-      if (accepted.some((other) => start < other.end && end > other.start)) continue;
-      accepted.push({ start, end, body: (match[1] ?? "").trim(), display: form.display });
-    }
-  }
-  accepted.sort((a, b) => a.start - b.start);
-
-  let out = "";
-  let last = 0;
-  const displaySubs: Substitution[] = [];
-  for (const match of accepted) {
-    out += text.slice(last, match.start);
-    const placeholder = push(match.body, match.display, match.start, match.end);
-    displaySubs.push({
-      p0: out.length,
-      p1: out.length + placeholder.length,
-      o0: match.start,
-      o1: match.end,
-    });
-    out += placeholder;
-    last = match.end;
-  }
-  out += text.slice(last);
-
-  /** Post-display offsets are not the protected ones: map back through them. */
-  const protectedAt = (at: number) => translateOffset(displaySubs, at);
-
-  // Inline `$…$` with a hand-written scan so escapes, spacing and pairing are
-  // respected. A rejected candidate is consumed WHOLE: emitting only the
-  // opening `$` would let its closing `$` open a bogus span and swallow the
-  // prose between them as math.
-  let scanned = "";
-  let i = 0;
-  while (i < out.length) {
-    const ch = out[i];
-    if (ch === "\\" && i + 1 < out.length) {
-      scanned += out[i] + out[i + 1];
-      i += 2;
-      continue;
-    }
-    if (ch !== "$") {
-      scanned += ch;
-      i++;
-      continue;
-    }
-    let end = -1;
-    for (let j = i + 1; j < out.length; j++) {
-      const c = out[j];
-      if (c === "\\") {
-        j++;
-        continue;
-      }
-      if (c === "\n") break;
-      if (c === "$") {
-        end = j;
-        break;
-      }
-    }
-    if (end > i + 1) {
-      const body = out.slice(i + 1, end);
-      const trimmed = body.trim();
-      // Tight delimiters are always math. Padded ones (`$ L $`) need either a
-      // TeX character or to be a single unspaced token, and never a bare amount.
-      const tight = !/^\s|\s$/.test(body);
-      const paddedMath =
-        !AMOUNT_ONLY.test(trimmed) && (MATH_INDICATOR.test(trimmed) || !/\s/.test(trimmed));
-      const looksLikeMath = trimmed.length > 0 && !body.includes("@@") && (tight || paddedMath);
-      if (looksLikeMath) {
-        scanned += push(body, false, protectedAt(i), protectedAt(end + 1));
-      } else {
-        scanned += out.slice(i, end + 1);
-      }
-      i = end + 1;
-      continue;
-    }
-    scanned += ch;
-    i++;
-  }
-  return scanned;
-}
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -504,9 +300,11 @@ function collectSubstitutions(
 function renderMarked(
   prepared: string,
   substitutions: readonly Substitution[],
+  lineSubstitutions: readonly Substitution[] = [],
 ): { html: string; fragments: Fragment[] } {
   const fragments: Fragment[] = [];
-  const sourceOf = (preparedOffset: number) => translateOffset(substitutions, preparedOffset);
+  const sourceOf = (preparedOffset: number) =>
+    translateOffset(substitutions, translateOffset(lineSubstitutions, preparedOffset));
   const push = (fragment: Fragment): number => {
     fragments.push(fragment);
     return fragments.length - 1;
@@ -619,30 +417,53 @@ export function renderPreview(source: string, options: RenderOptions): RenderRes
 
   const codes: CodeEntry[] = [];
   const maths: MathEntry[] = [];
-  const segments = splitFences(source);
-  const preparedSegments: string[] = [];
-  const isCode: boolean[] = [];
-  let base = 0;
-
-  for (const segment of segments) {
-    isCode.push(segment.code);
-    if (segment.code) {
-      preparedSegments.push(segment.text);
+  const ranges = [
+    ...markdownCodeSpans(source).map((range) => ({
+      ...range,
+      code: true,
+      body: "",
+      display: false,
+    })),
+    ...(mathEnabled ? analyzeMath(source).math.map((range) => ({ ...range, code: false })) : []),
+  ].sort((a, b) => a.from - b.from);
+  let prepared = "";
+  let last = 0;
+  for (const range of ranges) {
+    prepared += source.slice(last, range.from);
+    if (range.code) {
+      const raw = source.slice(range.from, range.to);
+      const ticks = /^`+/.exec(raw)?.[0].length ?? 0;
+      let text = raw.slice(ticks, -ticks).replace(/\r?\n/g, " ");
+      if (text.startsWith(" ") && text.endsWith(" ") && /[^ ]/.test(text)) text = text.slice(1, -1);
+      prepared += "@@CODE" + codes.length + "@@";
+      codes.push({ text, src0: range.from, src1: range.to });
     } else {
-      const protectedCode = protectInlineCode(segment.text, codes, base);
-      preparedSegments.push(
-        mathEnabled
-          ? extractMath(protectedCode.text, maths, protectedCode.subs, base)
-          : protectedCode.text,
-      );
+      prepared += "@@MATH" + maths.length + "@@";
+      maths.push({ body: range.body, display: range.display, src0: range.from, src1: range.to });
     }
-    // Segments are rejoined with a newline, so the next one starts one past.
-    base += segment.text.length + 1;
+    last = range.to;
   }
-
-  const prepared = preparedSegments.join("\n");
+  prepared += source.slice(last);
+  const preparedSegments = [prepared];
+  const isCode = [false];
+  const lineSubstitutions: Substitution[] = [];
+  let lineDelta = 0;
+  const normalized = prepared.replace(/\r\n?/g, (match, offset: number) => {
+    lineSubstitutions.push({
+      p0: offset - lineDelta,
+      p1: offset - lineDelta + 1,
+      o0: offset,
+      o1: offset + match.length,
+    });
+    lineDelta += match.length - 1;
+    return "\n";
+  });
   const mapped = options.map
-    ? renderMarked(prepared, collectSubstitutions(preparedSegments, isCode, codes, maths))
+    ? renderMarked(
+        normalized,
+        collectSubstitutions(preparedSegments, isCode, codes, maths),
+        lineSubstitutions,
+      )
     : null;
   const rawHtml = mapped ? mapped.html : (marked.parse(prepared, { async: false }) as string);
 
@@ -858,6 +679,7 @@ export function mathNode(entry: { body: string; display: boolean } | undefined):
     span.textContent = "";
     return span;
   }
+  span.dataset.tex = entry.body;
   try {
     span.innerHTML = katex.renderToString(entry.body, {
       displayMode: entry.display,

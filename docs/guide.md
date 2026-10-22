@@ -148,12 +148,15 @@ In Split view:
   tab and every unsaved buffer with no prompt, so those keys are swallowed.
   **File › Reload From Disk** is the explicit way to reread the current file.
 
-The sidebar holds the document outline, a folder browser and recent files.
-The outline updates as headings change; recents are remembered between runs,
-up to 100 paths, and the Recent panel scrolls. **File › Open Recent** lists the
-newest 20 of those paths, newest first, in the native menu; **Clear Items** there
-clears the same history as the sidebar footer and Preferences. Sidebar width and
-the editor/preview split are not persisted.
+The sidebar holds the document outline, Favorites and Recent. The outline
+updates as headings change. **Add to Favorites** is on the editor's right-click
+menu and on every tab's; favorites stay in the order they were added, opening one
+never moves it, and each row's × removes only that entry — there is no Clear All.
+A missing favorite stays in the list and explains itself when clicked. Recents
+are remembered between runs, up to 100 paths, and the Recent panel scrolls.
+**File › Open Recent** lists the newest 20 of those paths, newest first, in the
+native menu; **Clear Items** there clears the same history as the sidebar footer
+and Preferences. Sidebar width and the editor/preview split are not persisted.
 
 **On Launch** (Preferences › Files) chooses what a new window opens with: the
 welcome document, a new file, the most recent file, or **Reopen the last tabs** —
@@ -265,7 +268,7 @@ built from source, use `Cmd` where the application registers `CmdOrCtrl`.
 | Find / Find and Replace | `Ctrl+F` / `Ctrl+H` |
 | Source code mode | `Ctrl+/` |
 | Toggle sidebar | `Ctrl+Shift+L` |
-| Outline / Files / Recent | `Ctrl+Shift+1` / `Ctrl+Shift+2` / `Ctrl+Shift+3` |
+| Outline / Favorites / Recent | `Ctrl+Shift+1` / `Ctrl+Shift+2` / `Ctrl+Shift+3` |
 | Strong / Emphasis / Strikethrough | `Ctrl+B` / `Ctrl+I` / `Alt+Shift+5` |
 | Inline code | `Ctrl+Shift+backtick` |
 | Hyperlink / Image | `Ctrl+K` / `Ctrl+Shift+I` |

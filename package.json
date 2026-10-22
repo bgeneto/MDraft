@@ -29,6 +29,7 @@
     "typography": "node scripts/typography-test.mjs",
     "shortcuts": "node scripts/shortcut-test.mjs",
     "tabs": "node scripts/document-tabs-test.mjs",
+    "favorites": "node scripts/favorites-test.mjs",
     "tabs:restore:unit": "node scripts/tabs-restore-unit.mjs",
     "typst:map:unit": "node scripts/typst-page-map-unit.mjs",
     "html:map:unit": "node scripts/html-source-map-unit.mjs",

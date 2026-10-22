@@ -19,11 +19,13 @@ pub fn run() {
 
     // Wayland has no window-icon property for GTK3 applications: the
     // compositor resolves the icon by matching the window's app id to a
-    // `.desktop` file. GTK derives that id from g_get_prgname(), which is the
-    // binary name (`mdraft`), while Tauri names the installed entry after
-    // productName (`MDraft.desktop`), and the lookup is case-sensitive. Use the
-    // same config value Tauri bundles so KWin and GNOME find the entry instead
-    // of falling back to the Breeze `wayland` logo.
+    // `.desktop` file. GTK derives that id from g_get_prgname(), and the lookup
+    // is case-sensitive. The Linux config sets `productName` to `mdraft`, which
+    // is at once the installed entry's basename (`mdraft.desktop`), its
+    // `StartupWMClass` and this GLib program name — one value, three places.
+    // Keep the call even while they agree: it is what makes a future rename
+    // fail loudly here instead of silently losing the icon, as it did when the
+    // product name was `MDraft` and the entry was `MDraft.desktop`.
     #[cfg(target_os = "linux")]
     {
         let product_name = context.config().product_name.as_deref().unwrap_or("mdraft");
@@ -64,11 +66,12 @@ pub fn run() {
             settings::save_settings,
             settings::add_recent,
             settings::clear_recent,
+            settings::add_favorite,
+            settings::remove_favorite,
             documents::read_document,
             documents::write_document,
             documents::stat_document,
             documents::path_exists,
-            documents::list_directory,
             documents::startup_file,
             tokens::count_tokens,
             spellcheck::spellcheck_languages,

@@ -110,6 +110,13 @@ say "cargo:     $(cargo --version)"
 BUNDLE_ARG=()
 [ -n "$BUNDLES" ] && BUNDLE_ARG=(--bundles "$BUNDLES")
 
+# The cache is not part of the source and survives between builds, so after a
+# rename it still holds the previous name's installers beside the new ones. The
+# collection loop below copies every bundle it finds, which is how an old
+# MDraft_*.deb once shipped next to a new one. Clear the bundle kinds so only
+# what this build produced can be collected.
+rm -rf "$BUILD_DIR"/src-tauri/target/release/bundle/{deb,rpm,appimage}
+
 say "building and bundling${BUNDLES:+ ($BUNDLES)}"
 ( cd "$BUILD_DIR" && "${TAURI[@]}" build "${BUNDLE_ARG[@]}" "${CONFIG_OVERRIDE[@]}" )
 
@@ -118,6 +125,12 @@ say "building and bundling${BUNDLES:+ ($BUNDLES)}"
 DEST="$REPO/bin/linux/amd64"
 mkdir -p "$DEST"
 say "collecting artefacts into bin/linux/amd64"
+
+# The destination is not cleaned by the copy loop either, so an installer from an
+# earlier release would stay beside the new one — the same stale-artefact trap as
+# the cache directories cleared above, one step later. Remove what this script
+# stages; the manifest and checksums are rewritten below.
+rm -f "$DEST"/*.deb "$DEST"/*.rpm "$DEST"/*.AppImage
 
 copied=0
 for pattern in \
@@ -148,6 +161,10 @@ fi
 # And the same manifest schema as scripts/stage-artifacts.mjs. CI runs that
 # script natively on Linux, so without this the local helper and CI disagree and
 # a release carries a manifest for one platform only.
+#
+# `product` is the display name from the base config, never the lowercase
+# bundle name the platform config gives Tauri: the manifest describes the
+# product, while the filenames beside it follow the platform's naming.
 config_value() {
   grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$BUILD_DIR/src-tauri/tauri.conf.json" |
     head -1 | sed 's/.*:[[:space:]]*"\([^"]*\)"$/\1/'

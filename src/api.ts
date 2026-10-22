@@ -30,16 +30,9 @@ export interface FileStat {
   readOnly: boolean;
 }
 
-export interface DirEntry {
-  name: string;
-  path: string;
-  isDir: boolean;
-  ext: string;
-}
-
 export type ThemeMode = "system" | "light" | "dark";
 export type ViewMode = "source" | "split" | "preview";
-export type SidebarTab = "outline" | "files" | "recent";
+export type SidebarTab = "outline" | "favorites" | "recent";
 export type OnLaunch = "welcome" | "new" | "last" | "tabs";
 export type ImageRule = "assetsFolder" | "assetsDir" | "custom" | "keepOriginal";
 /** Spacing between source lines, as a named choice rather than a multiplier. */
@@ -180,6 +173,13 @@ export interface Settings {
   editorLineHeight: EditorLineHeight;
   syntaxTheme: string;
   recentFiles: string[];
+  /**
+   * Paths marked with **Add to Favorites**, in the order they were added.
+   *
+   * Unlike `recentFiles`, opening one never moves it. The list is capped at 50
+   * by the backend, which refuses a new entry rather than evicting an old one.
+   */
+  favorites: string[];
   lastDirectory: string | null;
   /**
    * Paths of the tabs that were open when the window last closed, in order.
@@ -195,7 +195,6 @@ export interface Settings {
   defaultExtension: string;
   recordRecent: boolean;
   autoSave: boolean;
-  showHiddenFiles: boolean;
 
   enableMath: boolean;
   enableMermaid: boolean;
@@ -298,9 +297,6 @@ export const statDocument = (path: string) => invoke<FileStat>("stat_document", 
 export const pathExists = (path: string, documentPath: string | null = null) =>
   invoke<boolean>("path_exists", { path, documentPath });
 
-export const listDirectory = (path: string, showHidden = false) =>
-  invoke<DirEntry[]>("list_directory", { path, showHidden });
-
 export const saveClipboardImage = (
   data: string,
   nameHint: string | null,
@@ -337,6 +333,18 @@ export const addRecent = (path: string) => invoke<Settings>("add_recent", { path
 
 /** Clear the persisted list; Rust also refreshes the native Open Recent menu. */
 export const clearRecent = () => invoke<Settings>("clear_recent");
+
+/**
+ * Append a path to Favorites and return the saved settings.
+ *
+ * A path already in the list is a no-op. At the 50-entry cap Rust rejects the
+ * add with a message, so the caller can explain the limit instead of silently
+ * dropping the oldest favorite.
+ */
+export const addFavorite = (path: string) => invoke<Settings>("add_favorite", { path });
+
+/** Remove exactly one path from Favorites and return the saved settings. */
+export const removeFavorite = (path: string) => invoke<Settings>("remove_favorite", { path });
 
 export const pandocStatus = () => invoke<PandocStatus>("pandoc_status");
 

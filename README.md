@@ -39,14 +39,14 @@ Markdown document active.*
   modes; scroll sync; clicking a source line blinks the matching block;
   selecting a word or a range in either pane paints it in the other, for
   Markdown, AsciiDoc and Typst, without moving the selection or scrolling. The
-  outline, file browser and recent list are one shortcut away, and
+  outline, favorites and recent list are one shortcut away, and
   **File › Open Recent** reaches the newest twenty entries of the persisted
   history without opening the sidebar.
 - **Many documents, each with its own state.** Tabs keep every document's
   caret, undo and scroll position. A crowded strip scrolls with arrows, the
   wheel or drag reordering, and right-click offers the tab actions, including
-  **Format Document**. **Reopen the last tabs** on launch restores the set that
-  was open, in the same order and with the same one active.
+  **Format Document** and **Add to Favorites**. **Reopen the last tabs** on launch
+  restores the set that was open, in the same order and with the same one active.
 - **Typing that closes itself.** `(`, `[`, `{`, quotes and backticks insert
   their pair, step over the closer and delete both on Backspace; HTML tags close
   in HTML, Markdown and AsciiDoc. Both behaviors have a switch under
@@ -74,8 +74,9 @@ Markdown document active.*
   of Markdown and AsciiDoc embed the chosen faces.
 - **Content moves both ways.** Paste formatted text from a browser or word
   processor and MDraft converts it into the destination's markup; paste markup
-  source and it is converted the same way, or kept byte-for-byte when it is
-  already the destination's format. Copy from a text preview and the formatting
+  source and it is converted the same way, or kept in its original syntax when
+  it already matches the destination. Formatted Markdown paste escapes currency
+  dollars once. Copy from a text preview and the formatting
   goes with it. Images can be pasted, dropped, linked or downloaded into the
   document's assets folder.
 - **Useful exports, stated plainly.** HTML needs no extra tools; PDF (Print)
@@ -89,6 +90,15 @@ Markdown document active.*
   opening an HTML document whose own markup references remote resources.
 
 ## Getting started
+
+Markdown keeps prices such as `R$50`, `R$ 15.200,75`, `US$5.00` and
+`C$8,123.50` literal while supporting both `$x + y$` and `$ x + y $` equations.
+Use `\$` for ambiguous literal dollars and `\(…\)` for explicit math. Tight
+`$5$` is numeric math; `$ 5 $` is literal, `R$5$` is prefixed money, and a
+dollar followed immediately by a digit cannot close math (`\(x\)2` replaces
+`$x$2`). Code, URLs and existing escapes are preserved during paste;
+`Ctrl+Shift+V` or rich paste off keeps the raw clipboard text. Native HTML/Print
+use these rules; Pandoc retains its own Markdown reader.
 
 1. Download the installer for your platform from
    [Releases](https://github.com/bgeneto/MDraft/releases/latest). On Windows,

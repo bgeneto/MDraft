@@ -422,21 +422,6 @@ console.log("\n=== include containment ===");
   await press({ code: "KeyZ", key: "z", ctrl: true });
 }
 
-console.log("\n=== the Files panel ===");
-{
-  await evaluate(`(() => {
-    const sidebar = document.querySelector("#sidebar");
-    if (sidebar && sidebar.getBoundingClientRect().width === 0) document.getElementById("btn-sidebar").click();
-    document.getElementById("tab-files").click();
-    return 1;
-  })()`);
-  await sleep(700);
-  const listed = await evaluate(
-    `[...document.querySelectorAll(".sidebar-body .entry")].some((entry) => (entry.title || "").endsWith("asciidoc-tour.adoc"))`,
-  );
-  check(listed, "the Files panel offers the .adoc document");
-}
-
 console.log("\n=== the AsciiDoc reference ===");
 {
   const emitted = await evaluate(`(async () => {

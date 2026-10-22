@@ -130,17 +130,50 @@ const ink: SyntaxPalette = {
   variable: "#d6d6d6",
 };
 
-const githubLight: SyntaxPalette = {
-  ...paper,
-  id: "github-light",
-  label: "GitHub Light",
-  surface: "#ffffff",
-  text: "#1f2328",
-  gutter: "#8c959f",
-  heading: "#0550ae",
-  code: "#0a3069",
-  comment: "#59636e",
-  marker: "#8c959f",
+/**
+ * Catppuccin Latte, mapped from the official `@catppuccin/codemirror` palette:
+ * keyword mauve, functions and links blue, types yellow, numbers and constants
+ * peach, strings green, URLs teal, comments and punctuation overlay2. The
+ * published theme names no colour for strong and emphasis (bold and italic
+ * carry them), but this editor colours both, so they take maroon and lavender.
+ *
+ * This is a cool blue-white surface, which is why it replaces the old
+ * "GitHub Light": that entry was Paper plus five barely-perceptible overrides,
+ * because Paper is itself built from GitHub's light Primer colours.
+ */
+const catppuccinLatte: SyntaxPalette = {
+  id: "catppuccin-latte",
+  label: "Catppuccin Latte",
+  dark: false,
+  surface: "#eff1f5",
+  text: "#4c4f69",
+  muted: "#8c8fa1",
+  selection: "rgba(124, 127, 147, 0.25)",
+  activeLine: "rgba(76, 79, 105, 0.05)",
+  gutter: "#9ca0b0",
+  sync: "#f0d18a",
+  syncPeak: "#df8e1d",
+  heading: "#1e66f5",
+  strong: "#4c4f69",
+  emphasis: "#e64553",
+  strike: "#8c8fa1",
+  link: "#1e66f5",
+  url: "#179299",
+  code: "#fe640b",
+  quote: "#6c6f85",
+  // Lists take Catppuccin's mauve rather than lavender: `@lezer/markdown` tags
+  // the whole list item, so this colour covers paragraphs of prose, and Latte's
+  // lavender #7287fd sits at 2.8:1 on this surface — too faint to read a list by.
+  list: "#8839ef",
+  separator: "#ccd0da",
+  marker: "#8c8fa1",
+  keyword: "#8839ef",
+  string: "#40a02b",
+  number: "#fe640b",
+  comment: "#7c7f93",
+  type: "#df8e1d",
+  func: "#1e66f5",
+  variable: "#4c4f69",
 };
 
 const githubDark: SyntaxPalette = {
@@ -289,7 +322,7 @@ const nord: SyntaxPalette = {
 export const PALETTES: SyntaxPalette[] = [
   paper,
   ink,
-  githubLight,
+  catppuccinLatte,
   githubDark,
   oneDark,
   solarizedLight,
@@ -297,10 +330,20 @@ export const PALETTES: SyntaxPalette[] = [
   nord,
 ];
 
+/**
+ * Ids a `settings.json` may still carry from an older build. A saved theme is
+ * not a broken theme: map it onto whatever replaced it rather than letting the
+ * fallback quietly hand the reader Paper.
+ */
+const LEGACY_IDS: Record<string, string> = {
+  "github-light": "catppuccin-latte",
+};
+
 /** Resolve a stored setting to a concrete palette. */
 export function resolvePalette(id: string, appIsDark: boolean): SyntaxPalette {
   if (id === AUTO_ID) return appIsDark ? ink : paper;
-  return PALETTES.find((palette) => palette.id === id) ?? (appIsDark ? ink : paper);
+  const wanted = LEGACY_IDS[id] ?? id;
+  return PALETTES.find((palette) => palette.id === wanted) ?? (appIsDark ? ink : paper);
 }
 
 /** Options for the Preferences dropdown. */

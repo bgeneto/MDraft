@@ -48,16 +48,6 @@ pub struct FileStat {
     pub read_only: bool,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DirEntry {
-    pub name: String,
-    pub path: String,
-    pub is_dir: bool,
-    /// Lower-cased extension without the dot; empty for directories.
-    pub ext: String,
-}
-
 fn modified_ms(meta: &fs::Metadata) -> u64 {
     meta.modified()
         .ok()
@@ -209,45 +199,6 @@ pub fn path_exists(path: String, document_path: Option<String>) -> bool {
     resolve_path(&path, document_path.as_deref()).exists()
 }
 
-/// List one directory level for the sidebar file browser.
-#[tauri::command]
-pub fn list_directory(path: String, show_hidden: Option<bool>) -> Result<Vec<DirEntry>, String> {
-    let dir = PathBuf::from(&path);
-    let read = fs::read_dir(&dir).map_err(|e| format!("Could not list {path}: {e}"))?;
-    let include_hidden = show_hidden.unwrap_or(false);
-
-    let mut entries: Vec<DirEntry> = Vec::new();
-    for item in read.flatten() {
-        let name = item.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') && !include_hidden {
-            continue;
-        }
-        let full = item.path();
-        let is_dir = item.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        let ext = if is_dir {
-            String::new()
-        } else {
-            full.extension()
-                .map(|e| e.to_string_lossy().to_lowercase())
-                .unwrap_or_default()
-        };
-        entries.push(DirEntry {
-            name,
-            path: full.to_string_lossy().to_string(),
-            is_dir,
-            ext,
-        });
-    }
-
-    entries.sort_by(|a, b| {
-        b.is_dir
-            .cmp(&a.is_dir)
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
-    entries.truncate(2000);
-    Ok(entries)
-}
-
 /// The file passed on the command line, if any (`mdraft notes.md`).
 #[tauri::command]
 pub fn startup_file() -> Option<String> {
@@ -307,36 +258,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(fs::read_to_string(&file).unwrap(), "abc");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn listing_sorts_directories_first() {
-        let dir = std::env::temp_dir().join(format!("tt-test3-{}", std::process::id()));
-        fs::create_dir_all(dir.join("zeta")).unwrap();
-        fs::write(dir.join("alpha.md"), "x").unwrap();
-
-        let entries = list_directory(dir.to_string_lossy().to_string(), Some(false)).unwrap();
-        assert_eq!(entries[0].name, "zeta");
-        assert!(entries[0].is_dir);
-        assert_eq!(entries[1].name, "alpha.md");
-        assert_eq!(entries[1].ext, "md");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn hidden_entries_are_opt_in() {
-        let dir = std::env::temp_dir().join(format!("tt-test4-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join(".hidden.md"), "x").unwrap();
-        fs::write(dir.join("visible.md"), "x").unwrap();
-
-        let without = list_directory(dir.to_string_lossy().to_string(), None).unwrap();
-        assert_eq!(without.len(), 1);
-        assert_eq!(without[0].name, "visible.md");
-
-        let with = list_directory(dir.to_string_lossy().to_string(), Some(true)).unwrap();
-        assert_eq!(with.len(), 2);
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -374,6 +374,178 @@ console.log("=== rich paste ===");
   await closePrefs();
 }
 
+console.log("\n=== native currency paste contract ===");
+const amounts = ["R$50", "R$ 10.000", "R$ 15.200,75", "US$5", "US$5.00", "C$8,123.50"];
+for (const amount of amounts) {
+  await newTab();
+  await paste(null, amount + " and " + amount + " and $ a + b $");
+  const expected =
+    amount.replace("$", "\\$") + " and " + amount.replace("$", "\\$") + " and $ a + b $";
+  check(
+    (await lines()) === expected,
+    "native currency bytes: " + amount,
+    JSON.stringify(await lines()),
+  );
+  const preview = await evaluate(
+    "JSON.stringify({text:document.querySelector('#preview').textContent, math:[...document.querySelectorAll('#preview .math-inline')].map(node=>node.dataset.tex)})",
+  ).then(JSON.parse);
+  check(
+    preview.text.includes(amount) && JSON.stringify(preview.math) === '["a + b"]',
+    "currency text and padded formula: " + amount,
+    JSON.stringify(preview),
+  );
+  await newTab();
+  await paste("<p>" + amount + " and " + amount + "</p>", amount + " and " + amount);
+  check(
+    (await lines()) === amount.replace("$", "\\$") + " and " + amount.replace("$", "\\$"),
+    "HTML currency bytes: " + amount,
+    await lines(),
+  );
+}
+const originalSnippets = [
+  "Você está autorizando uma média de **R$50/dia, R$350/semana e ~R\\$1.500/mês**, e aceitando disputar cliques oferecendo **até R\\$13,50 por clique",
+  "Você pode subir gradualmente (em dólares canadenses): C$5 → C$6 → C$7,50 etc. Eu evitaria começar diretamente em C$13,50.",
+];
+for (const snippet of originalSnippets) {
+  await newTab();
+  await paste(null, snippet);
+  check(
+    (await lines()) === snippet.replace(/(?<!\\)\$/g, "\\$"),
+    "original snippet minimally escaped",
+    await lines(),
+  );
+  check(
+    (await evaluate(
+      "document.querySelectorAll('#preview .math-inline, #preview .math-display').length",
+    )) === 0,
+    "original snippet creates no math",
+  );
+}
+await newTab();
+await paste(null, "\n\nR$50\n\n");
+check(
+  (await lines()) === "\n\nR\\$50\n\n",
+  "native leading and trailing blank lines survive",
+  JSON.stringify(await lines()),
+);
+await newTab();
+await evaluate(
+  `(() => { const data = new DataTransfer(); data.setData('text/markdown',${JSON.stringify("\n\nR$50\n\n")}); document.querySelector('.cm-content').dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true})); })()`,
+);
+await sleep(500);
+check(
+  (await lines()) === "\n\nR\\$50\n\n",
+  "Markdown-only MIME preserves native whitespace",
+  JSON.stringify(await lines()),
+);
+await newTab();
+await type("Before ");
+await paste(null, "R$50");
+await key("KeyZ", "z", { ctrlKey: true });
+check(
+  (await lines()) === "Before ",
+  "currency escaping and insertion undo together",
+  await lines(),
+);
+await key("KeyY", "y", { ctrlKey: true });
+await type("!");
+check(
+  (await lines()) === "Before R\\$50!",
+  "redo and caret follow inserted escapes",
+  await lines(),
+);
+await newTab();
+await key("KeyV", "v", { ctrlKey: true, shiftKey: true });
+await paste(null, "R$50");
+check((await lines()) === "R$50", "plain currency paste bypass");
+await newTab();
+await paste(null, "R$50");
+check((await lines()) === "R\\$50", "plain bypass clears before ordinary currency paste");
+await openSection("Editor");
+await setCheckbox("Convert Rich Text on Paste", false);
+await closePrefs();
+await newTab();
+await paste(null, "R$50");
+check((await lines()) === "R$50", "rich paste off keeps currency bytes");
+await openSection("Editor");
+await setCheckbox("Convert Rich Text on Paste", true);
+await closePrefs();
+for (const [source, left] of [
+  ["`code`", 1],
+  ["```\ncode", 0],
+  ["$x + y$", 1],
+  ["# Markdown\n\n[label](https://example.com/)", 1],
+  ['# Markdown\n\n<span title="">', 2],
+]) {
+  await newTab();
+  await type(source);
+  const steps = source.includes("https:") ? source.length - source.indexOf("https:") : left;
+  for (let n = 0; n < steps; n++) await key("ArrowLeft", "ArrowLeft");
+  await paste(null, "R$50");
+  check(
+    (await lines()).includes("R$50") && !(await lines()).includes("R\\$50"),
+    "protected destination keeps raw currency: " + source,
+    await lines(),
+  );
+}
+// A real copy event with empty selection invokes CodeMirror's linewise copy.
+await newTab();
+await type("R$5");
+const copiedLine = await evaluate(
+  `(() => {const data=new DataTransfer();document.querySelector('.cm-content').dispatchEvent(new ClipboardEvent('copy',{clipboardData:data,bubbles:true,cancelable:true}));return data.getData('text/plain');})()`,
+);
+await paste(null, copiedLine);
+check(
+  (await lines()) === "R\\$5\nR$5",
+  "linewise source copy inserts an escaped whole line",
+  JSON.stringify(await lines()),
+);
+await newTab();
+await type("A A");
+const firstCursor = await evaluate(
+  `(() => {const node=document.querySelector('.cm-line').firstChild;const range=document.createRange();range.setStart(node,1);range.collapse(true);const box=range.getBoundingClientRect();return {x:box.left,y:box.top+box.height/2};})()`,
+);
+for (const type of ["mousePressed", "mouseReleased"])
+  await send("Input.dispatchMouseEvent", {
+    type,
+    ...firstCursor,
+    button: "left",
+    clickCount: 1,
+    modifiers: 2,
+  });
+await paste(null, "C$6");
+check(
+  (await lines()) === "AC\\$6 AC\\$6",
+  "multiple native selections retain currency normalization",
+  JSON.stringify(await lines()),
+);
+
+// The same input facet processes drops, which must not inherit a paste policy.
+await newTab();
+await paste(null, "R$5 ");
+await evaluate(
+  `(() => {const line=document.querySelector('.cm-line');const walker=document.createTreeWalker(line,NodeFilter.SHOW_TEXT);let last;for(let node=walker.nextNode();node;node=walker.nextNode())last=node;const range=document.createRange();range.setStart(last,last.length);range.collapse(true);const box=range.getBoundingClientRect();const data=new DataTransfer();data.setData('text/plain','R$7');document.querySelector('.cm-content').dispatchEvent(new DragEvent('drop',{dataTransfer:data,clientX:box.left+1,clientY:box.top+box.height/2,bubbles:true,cancelable:true}));})()`,
+);
+await sleep(500);
+check(
+  (await lines()).includes("R$7") && !(await lines()).includes("R\\$7"),
+  "text drops bypass the previous currency paste policy",
+  JSON.stringify(await lines()),
+);
+for (const source of [
+  "<h1>HTML</h1>\n<p>Before</p>\n",
+  "= Typst\n\n#set text(size: 10pt)\n\n",
+  "= AsciiDoc\n:toc:\n\n",
+]) {
+  await newTab();
+  await type(source);
+  await paste(null, "R$50");
+  check(
+    (await lines()).includes("R$50") && !(await lines()).includes("R\\$50"),
+    "native currency remains raw in another language: " + source.split("\n")[0],
+  );
+}
+
 if (exceptions.length > 0) {
   console.log("\n=== console exceptions ===");
   for (const line of exceptions.slice(0, 6)) console.log("  " + String(line).split("\n")[0]);

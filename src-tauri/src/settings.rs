@@ -14,6 +14,15 @@ use tauri::{AppHandle, Manager, Runtime};
 /// would throw away paths the sidebar can still offer.
 pub(crate) const MAX_RECENT: usize = 100;
 
+/// Maximum number of documents kept in the persisted "favorites" list.
+///
+/// Favorites are deliberate choices, so the list never evicts an entry to make
+/// room. Adding a fifty-first favorite fails with a message naming the limit,
+/// which is the only honest answer: silently dropping the oldest one would lose
+/// a path the reader asked to keep. The frontend and the settings loader both
+/// enforce the same ceiling.
+pub(crate) const MAX_FAVORITES: usize = 50;
+
 /// Maximum number of documents remembered as "the tabs that were open".
 ///
 /// The frontend deduplicates and caps the list it writes; this is the second
@@ -213,7 +222,7 @@ pub struct Settings {
     pub theme: String,
     /// "source" | "split" | "preview"
     pub view_mode: String,
-    /// "outline" | "files" | "recent"
+    /// "outline" | "favorites" | "recent"
     pub sidebar_tab: String,
     pub sidebar_visible: bool,
     pub sync_scroll: bool,
@@ -284,6 +293,15 @@ pub struct Settings {
     /// Editor syntax palette id, or "auto" to follow the application theme.
     pub syntax_theme: String,
     pub recent_files: Vec<String>,
+    /// Paths the reader marked with **Add to Favorites**.
+    ///
+    /// Append-only, unlike `recent_files`: opening a favorite does not move it,
+    /// and the order is the order the reader added them. The same path identity
+    /// rule as Recent applies, so Windows case and separator differences do not
+    /// create two rows. [`MAX_FAVORITES`] is a refusal point, not an eviction
+    /// point: a favorite is a deliberate choice.
+    #[serde(default)]
+    pub favorites: Vec<String>,
     pub last_directory: Option<String>,
     /// Paths of the tabs that were open when the window last closed.
     ///
@@ -302,7 +320,6 @@ pub struct Settings {
     pub default_extension: String,
     pub record_recent: bool,
     pub auto_save: bool,
-    pub show_hidden_files: bool,
 
     // ---- Preferences: Markdown -------------------------------------------
     pub enable_math: bool,
@@ -417,6 +434,7 @@ impl Default for Settings {
             slashed_zero: false,
             syntax_theme: "auto".into(),
             recent_files: Vec::new(),
+            favorites: Vec::new(),
             last_directory: None,
             last_tabs: Vec::new(),
             last_active_tab: None,
@@ -425,7 +443,6 @@ impl Default for Settings {
             default_extension: "md".into(),
             record_recent: true,
             auto_save: false,
-            show_hidden_files: false,
 
             enable_math: true,
             enable_mermaid: true,
@@ -552,7 +569,14 @@ fn parse_settings(raw: &str) -> Option<Settings> {
     // here so a load cannot grow the settings file without bound; the menu then
     // takes its own smaller slice when it is built.
     settings.recent_files.truncate(MAX_RECENT);
+    normalize_favorites(&mut settings.favorites);
     settings.last_tabs.truncate(MAX_LAST_TABS);
+    // The Files panel was replaced by Favorites. An older file that was last
+    // showing it must open on the panel that took its place, not fall through
+    // the renderer's `else` branch into Recent.
+    if settings.sidebar_tab == "files" {
+        settings.sidebar_tab = "favorites".to_string();
+    }
     Some(settings)
 }
 
@@ -585,6 +609,7 @@ impl AppState {
         // frontend's whole-object save. Keeping the cap here means a stale or
         // hand-built payload cannot grow the stored history without bound.
         next.recent_files.truncate(MAX_RECENT);
+        normalize_favorites(&mut next.favorites);
         next.last_tabs.truncate(MAX_LAST_TABS);
         write_json(&self.config_file, &next)?;
         let mut guard = self.settings.lock().map_err(|e| e.to_string())?;
@@ -665,6 +690,54 @@ fn record_recent(settings: &mut Settings, path: &str) {
         .map(|p| p.to_string_lossy().to_string());
 }
 
+/// Keep one entry per path, in first-seen order, and enforce the cap.
+///
+/// A hand-edited settings file, or a later import, must not create two rows for
+/// one file or grow the list past [`MAX_FAVORITES`]. [`AppState::save`] calls
+/// this too, so a whole-object save from the frontend cannot bypass the rule.
+fn normalize_favorites(files: &mut Vec<String>) {
+    let mut unique: Vec<String> = Vec::with_capacity(files.len());
+    for path in files.drain(..) {
+        if !unique.iter().any(|existing| same_path(existing, &path)) {
+            unique.push(path);
+        }
+    }
+    unique.truncate(MAX_FAVORITES);
+    *files = unique;
+}
+
+/// Append `path` when it is not already a favorite.
+///
+/// `Ok(true)` means the list changed, `Ok(false)` a duplicate. At
+/// [`MAX_FAVORITES`] a new path is refused rather than evicting the oldest one:
+/// every entry is a deliberate choice, so dropping one silently is worse than
+/// asking the reader to remove one first.
+fn add_favorite_path(settings: &mut Settings, path: &str) -> Result<bool, String> {
+    if settings
+        .favorites
+        .iter()
+        .any(|existing| same_path(existing, path))
+    {
+        return Ok(false);
+    }
+    if settings.favorites.len() >= MAX_FAVORITES {
+        return Err(format!(
+            "Favorites is full ({MAX_FAVORITES} files). Remove one before adding another."
+        ));
+    }
+    settings.favorites.push(path.to_string());
+    Ok(true)
+}
+
+/// Remove the one entry that names `path`; every other favorite is untouched.
+fn remove_favorite_path(settings: &mut Settings, path: &str) -> bool {
+    let before = settings.favorites.len();
+    settings
+        .favorites
+        .retain(|existing| !same_path(existing, path));
+    settings.favorites.len() != before
+}
+
 #[tauri::command]
 pub fn add_recent<R: Runtime>(
     app: AppHandle<R>,
@@ -708,6 +781,44 @@ pub fn clear_recent<R: Runtime>(
         crate::menu::rebuild(&app, &saved);
     }
     Ok(saved)
+}
+
+/// Add one path to Favorites, appending it after the existing entries.
+///
+/// The list is returned so the frontend never has to guess what was stored.
+/// A duplicate is a successful no-op: clicking Add twice cannot create two rows.
+/// The native menu does not show favorites, so no menu rebuild is needed.
+#[tauri::command]
+pub fn add_favorite(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<Settings, String> {
+    let mut next = state
+        .settings
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
+    if !add_favorite_path(&mut next, &path)? {
+        return Ok(next);
+    }
+    state.save(next)
+}
+
+/// Remove exactly one path from Favorites, leaving every other entry in place.
+#[tauri::command]
+pub fn remove_favorite(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<Settings, String> {
+    let mut next = state
+        .settings
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
+    if !remove_favorite_path(&mut next, &path) {
+        return Ok(next);
+    }
+    state.save(next)
 }
 
 /// Compare two paths for equality, tolerating case and separator differences on
@@ -906,6 +1017,140 @@ mod tests {
             json["presetOverrides"]["system"].get("mathFontScale").is_none(),
             "a missing size must stay absent rather than serialising as null"
         );
+    }
+
+    #[test]
+    fn favorites_start_empty_and_round_trip_in_order() {
+        let settings = Settings::default();
+        assert!(settings.favorites.is_empty());
+
+        let settings = Settings {
+            favorites: vec![
+                "C:/Docs/a.md".into(),
+                "C:/Docs/b.md".into(),
+                "C:/Docs/c.md".into(),
+            ],
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.favorites,
+            vec!["C:/Docs/a.md", "C:/Docs/b.md", "C:/Docs/c.md"]
+        );
+    }
+
+    #[test]
+    fn adding_a_favorite_appends_in_order_and_deduplicates() {
+        let mut settings = Settings::default();
+        assert!(add_favorite_path(&mut settings, "C:/Docs/a.md").unwrap());
+        assert!(add_favorite_path(&mut settings, "C:/Docs/b.md").unwrap());
+        assert_eq!(settings.favorites, vec!["C:/Docs/a.md", "C:/Docs/b.md"]);
+
+        // A repeat, including the platform's other spelling of the same path,
+        // is a no-op and must not move the entry.
+        assert!(!add_favorite_path(&mut settings, "C:/Docs/a.md").unwrap());
+        #[cfg(windows)]
+        assert!(!add_favorite_path(&mut settings, r"c:\docs\A.MD").unwrap());
+        assert_eq!(settings.favorites, vec!["C:/Docs/a.md", "C:/Docs/b.md"]);
+    }
+
+    #[test]
+    fn adding_at_the_cap_is_refused_without_evicting() {
+        let mut settings = Settings::default();
+        for index in 0..MAX_FAVORITES {
+            assert!(
+                add_favorite_path(&mut settings, &format!("C:/Docs/file{index}.md")).unwrap()
+            );
+        }
+        let first = settings.favorites[0].clone();
+        let error = add_favorite_path(&mut settings, "C:/Docs/one-too-many.md").unwrap_err();
+        assert!(error.contains(&MAX_FAVORITES.to_string()));
+        assert_eq!(settings.favorites.len(), MAX_FAVORITES);
+        assert_eq!(settings.favorites[0], first);
+        assert!(
+            !settings
+                .favorites
+                .iter()
+                .any(|path| path.ends_with("one-too-many.md"))
+        );
+
+        // Removing one makes room again, and the new entry goes to the end.
+        assert!(remove_favorite_path(&mut settings, "C:/Docs/file0.md"));
+        assert!(add_favorite_path(&mut settings, "C:/Docs/one-too-many.md").unwrap());
+        assert_eq!(settings.favorites.len(), MAX_FAVORITES);
+        assert_eq!(
+            settings.favorites.last().unwrap(),
+            "C:/Docs/one-too-many.md"
+        );
+    }
+
+    #[test]
+    fn removing_one_favorite_leaves_the_others() {
+        let mut settings = Settings {
+            favorites: vec![
+                "C:/Docs/a.md".into(),
+                "C:/Docs/b.md".into(),
+                "C:/Docs/c.md".into(),
+            ],
+            ..Settings::default()
+        };
+        assert!(remove_favorite_path(&mut settings, "C:/Docs/b.md"));
+        assert_eq!(settings.favorites, vec!["C:/Docs/a.md", "C:/Docs/c.md"]);
+        // Removing an absent path changes nothing.
+        assert!(!remove_favorite_path(&mut settings, "C:/Docs/missing.md"));
+        assert_eq!(settings.favorites.len(), 2);
+    }
+
+    #[test]
+    fn favorites_are_deduplicated_and_capped_on_load() {
+        let mut paths = vec![
+            "C:/Docs/a.md".to_string(),
+            "C:/Docs/a.md".to_string(),
+            "C:/Docs/b.md".to_string(),
+        ];
+        for index in 0..MAX_FAVORITES {
+            paths.push(format!("C:/Docs/file{index}.md"));
+        }
+        let raw = serde_json::json!({ "favorites": paths }).to_string();
+
+        let parsed = parse_settings(&raw).expect("a favorites list is still settings");
+        assert_eq!(parsed.favorites.len(), MAX_FAVORITES);
+        assert_eq!(parsed.favorites[0], "C:/Docs/a.md");
+        assert_eq!(parsed.favorites[1], "C:/Docs/b.md");
+        assert_eq!(
+            parsed
+                .favorites
+                .iter()
+                .filter(|path| path.ends_with("a.md"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn an_old_files_sidebar_tab_migrates_to_favorites() {
+        let parsed = parse_settings(r#"{"sidebarTab":"files"}"#).expect("old settings load");
+        assert_eq!(parsed.sidebar_tab, "favorites");
+        let parsed = parse_settings(r#"{"sidebarTab":"recent"}"#).expect("old settings load");
+        assert_eq!(parsed.sidebar_tab, "recent");
+        let parsed = parse_settings(r#"{"sidebarTab":"favorites"}"#).expect("new settings load");
+        assert_eq!(parsed.sidebar_tab, "favorites");
+    }
+
+    #[test]
+    fn a_settings_file_without_favorites_loads_with_an_empty_list() {
+        let parsed = parse_settings(r#"{"theme":"dark"}"#).expect("old settings load");
+        assert!(parsed.favorites.is_empty());
+    }
+
+    #[test]
+    fn the_removed_show_hidden_preference_is_ignored_and_not_serialized() {
+        let parsed =
+            parse_settings(r#"{"showHiddenFiles":true}"#).expect("old settings still load");
+        let json = serde_json::to_value(&parsed).unwrap();
+        assert!(json.get("showHiddenFiles").is_none());
+        assert!(json.get("favorites").is_some());
     }
 
     #[test]

@@ -206,15 +206,30 @@ check(
 
 // Start from a different tab, or "the tab changed" is untestable: the outline is
 // the default, so selecting it again produces no observable difference.
-const outlineSelected = () =>
-  evaluate(`document.getElementById("tab-outline").getAttribute("aria-selected")`);
+const tabSelected = () =>
+  evaluate(
+    `(() => {
+      const outline = document.getElementById("tab-outline").getAttribute("aria-selected");
+      const favorites = document.getElementById("tab-favorites")?.getAttribute("aria-selected");
+      return JSON.stringify({ outline, favorites });
+    })()`,
+  );
 await press({ code: "Digit2", key: "2", ctrl: true, shift: true });
 await sleep(300);
-const beforeOutline = await outlineSelected();
-check(beforeOutline === "false", "Ctrl+Shift+2 moved off the outline tab", beforeOutline);
+const afterTwo = JSON.parse(await tabSelected());
+check(
+  afterTwo.outline === "false" && afterTwo.favorites === "true",
+  "Ctrl+Shift+2 selects the Favorites tab",
+  JSON.stringify(afterTwo),
+);
 await press({ code: "Digit1", key: "1", ctrl: true, shift: true });
 await sleep(300);
-check((await outlineSelected()) === "true", "Ctrl+Shift+1 returns to the outline tab");
+const afterOne = JSON.parse(await tabSelected());
+check(
+  afterOne.outline === "true",
+  "Ctrl+Shift+1 returns to the outline tab",
+  JSON.stringify(afterOne),
+);
 
 const fontSize = () =>
   evaluate(`parseFloat(getComputedStyle(document.querySelector(".cm-content")).fontSize)`);

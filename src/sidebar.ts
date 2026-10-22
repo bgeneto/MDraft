@@ -222,122 +222,224 @@ export function highlightOutline(
 }
 
 // ---------------------------------------------------------------------------
-// Directory listing
+// Favorites
 // ---------------------------------------------------------------------------
 
-const DIRECTORY_STACK: string[] = [];
-
-export function currentDirectory(): string | null {
-  return DIRECTORY_STACK.length > 0 ? DIRECTORY_STACK[DIRECTORY_STACK.length - 1] : null;
+interface FavoriteHandlers {
+  onOpenFile: (path: string) => void;
+  onRemove: (path: string) => void;
 }
 
-export async function showDirectory(
-  container: HTMLElement,
-  path: string,
-  handlers: {
-    onOpenFile: (path: string) => void;
-    onError: (message: string) => void;
-    showHidden?: () => boolean;
-  },
-): Promise<void> {
-  if (DIRECTORY_STACK[DIRECTORY_STACK.length - 1] !== path) {
-    DIRECTORY_STACK.push(path);
-  }
-  await paintDirectory(container, handlers);
+let favoritesMenu: HTMLDivElement | null = null;
+let favoritesMenuTrigger: HTMLElement | null = null;
+let favoritesMenuCleanup: (() => void) | null = null;
+
+function closeFavoritesMenu(restoreFocus = false): void {
+  const menu = favoritesMenu;
+  if (!menu) return;
+  favoritesMenuCleanup?.();
+  favoritesMenuCleanup = null;
+  favoritesMenu = null;
+  menu.remove();
+  if (restoreFocus) favoritesMenuTrigger?.focus({ preventScroll: true });
+  favoritesMenuTrigger = null;
 }
 
-async function paintDirectory(
-  container: HTMLElement,
-  handlers: {
-    onOpenFile: (path: string) => void;
-    onError: (message: string) => void;
-    showHidden?: () => boolean;
-  },
-): Promise<void> {
-  const path = currentDirectory();
-  if (!path) {
-    emptyState(container, "Open a file to browse its folder, or use File › Open.");
-    return;
+/**
+ * The row menu for one favorite: Open, or remove exactly that entry.
+ *
+ * Favorites have no bulk action, so this menu never grows a Clear All. It is
+ * separate from the tab menu because it acts on a path, not a session, and the
+ * sidebar must keep working while every tab is closed.
+ */
+function openFavoritesMenu(
+  file: string,
+  x: number,
+  y: number,
+  trigger: HTMLElement,
+  handlers: FavoriteHandlers,
+): void {
+  closeFavoritesMenu();
+
+  const menu = document.createElement("div");
+  menu.className = "favorite-menu";
+  menu.role = "menu";
+  menu.tabIndex = -1;
+
+  const entries: Array<[string, string, () => void]> = [
+    ["open", "Open", () => handlers.onOpenFile(file)],
+    ["remove", "Remove from Favorites", () => handlers.onRemove(file)],
+  ];
+  for (const [id, label, action] of entries) {
+    const button = element("button", "favorite-menu-item", label);
+    button.type = "button";
+    button.role = "menuitem";
+    button.tabIndex = -1;
+    button.dataset.action = id;
+    button.addEventListener("click", () => {
+      closeFavoritesMenu();
+      action();
+    });
+    menu.appendChild(button);
   }
 
-  let entries: api.DirEntry[];
-  try {
-    entries = await api.listDirectory(path, handlers.showHidden?.() ?? false);
-  } catch (error) {
-    emptyState(container, String(error));
+  document.body.appendChild(menu);
+  const bounds = menu.getBoundingClientRect();
+  const margin = 6;
+  const left = Math.min(
+    Math.max(margin, x),
+    Math.max(margin, window.innerWidth - bounds.width - margin),
+  );
+  const top = Math.min(
+    Math.max(margin, y),
+    Math.max(margin, window.innerHeight - bounds.height - margin),
+  );
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+
+  favoritesMenu = menu;
+  favoritesMenuTrigger = trigger;
+
+  const onPointer = (event: MouseEvent): void => {
+    if (event.target instanceof Node && menu.contains(event.target)) return;
+    closeFavoritesMenu();
+  };
+  const onEscape = (event: KeyboardEvent): void => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    closeFavoritesMenu(true);
+  };
+  const onKey = (event: KeyboardEvent): void => {
+    const items = Array.from(menu.querySelectorAll<HTMLButtonElement>(".favorite-menu-item"));
+    if (items.length === 0) return;
+    const current = document.activeElement;
+    let index = current instanceof HTMLButtonElement ? items.indexOf(current) : -1;
+
+    switch (event.key) {
+      case "ArrowDown":
+        event.preventDefault();
+        index = index < 0 ? 0 : (index + 1) % items.length;
+        break;
+      case "ArrowUp":
+        event.preventDefault();
+        index = index < 0 ? items.length - 1 : (index - 1 + items.length) % items.length;
+        break;
+      case "Home":
+        event.preventDefault();
+        index = 0;
+        break;
+      case "End":
+        event.preventDefault();
+        index = items.length - 1;
+        break;
+      case "Enter":
+      case " ":
+        event.preventDefault();
+        (items[index] ?? items[0]).click();
+        return;
+      case "Tab":
+        // Returning to the row is less surprising than leaving focus on a menu
+        // that has just disappeared.
+        event.preventDefault();
+        closeFavoritesMenu(true);
+        return;
+      default:
+        return;
+    }
+    items[index]?.focus({ preventScroll: true });
+  };
+  const onDismiss = (): void => closeFavoritesMenu();
+
+  document.addEventListener("mousedown", onPointer, true);
+  document.addEventListener("keydown", onEscape, true);
+  menu.addEventListener("keydown", onKey);
+  // Scrolling the list would leave the menu pointing at a row that has moved.
+  window.addEventListener("scroll", onDismiss, true);
+  window.addEventListener("blur", onDismiss);
+  window.addEventListener("resize", onDismiss);
+
+  favoritesMenuCleanup = () => {
+    document.removeEventListener("mousedown", onPointer, true);
+    document.removeEventListener("keydown", onEscape, true);
+    menu.removeEventListener("keydown", onKey);
+    window.removeEventListener("scroll", onDismiss, true);
+    window.removeEventListener("blur", onDismiss);
+    window.removeEventListener("resize", onDismiss);
+  };
+
+  menu.querySelector<HTMLButtonElement>(".favorite-menu-item")?.focus({ preventScroll: true });
+}
+
+/**
+ * The Favorites list: one row per saved path, in the order it was added.
+ *
+ * Rows are a wrapper with two real buttons rather than one button containing an
+ * `×`, which would be invalid markup and would make only one half reachable from
+ * the keyboard. Right-clicking the row opens the same two actions as a menu.
+ */
+export function renderFavorites(
+  container: HTMLElement,
+  files: string[],
+  handlers: FavoriteHandlers,
+): void {
+  closeFavoritesMenu();
+  if (files.length === 0) {
+    emptyState(
+      container,
+      "No favorites yet. Right-click a document or its tab and choose Add to Favorites.",
+    );
     return;
   }
 
   const fragment = document.createDocumentFragment();
+  for (const file of files) {
+    const name = file.split(/[\\/]/).pop() ?? file;
+    const directory = file.slice(0, Math.max(0, file.length - name.length - 1));
 
-  const header = element("div", "sidebar-path");
-  if (DIRECTORY_STACK.length > 1) {
-    const up = element("button", undefined, "↑");
-    up.type = "button";
-    up.title = "Parent folder";
-    up.addEventListener("click", () => {
-      DIRECTORY_STACK.pop();
-      void paintDirectory(container, handlers);
+    const row = element("div", "entry favorite-item");
+    row.title = file;
+
+    const star = element("span", "favorite-star", "\u2605");
+    star.setAttribute("aria-hidden", "true");
+
+    const open = element("button", "favorite-open");
+    open.type = "button";
+    open.title = `Open ${file}`;
+    open.append(element("span", "name", name), element("span", "dir", directory));
+
+    const remove = element("button", "favorite-remove", "\u00d7");
+    remove.type = "button";
+    remove.title = `Remove ${name} from Favorites`;
+    remove.setAttribute("aria-label", `Remove ${name} from Favorites`);
+
+    open.addEventListener("click", () => handlers.onOpenFile(file));
+    remove.addEventListener("click", () => handlers.onRemove(file));
+    // The star and the row's padding are part of where a reader aims. The two
+    // buttons keep their own handlers, so the keyboard path is unchanged.
+    row.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest(".favorite-open") || target.closest(".favorite-remove")) return;
+      handlers.onOpenFile(file);
     });
-    header.appendChild(up);
-  }
-  header.appendChild(element("span", undefined, path));
-  fragment.appendChild(header);
-
-  // Documents this editor can open. A format missing from this list is a
-  // document the Files panel cannot reach at all — `typ` was, until a test asked
-  // for a Typst file and the listing did not offer one.
-  const markdownish = (entry: api.DirEntry) =>
-    [
-      "md",
-      "markdown",
-      "mdown",
-      "mkd",
-      "txt",
-      "text",
-      "html",
-      "htm",
-      "typ",
-      "adoc",
-      "asciidoc",
-      "json",
-      "yml",
-      "yaml",
-      "toml",
-      "",
-    ].includes(entry.ext);
-
-  for (const entry of entries) {
-    if (!entry.isDir && !markdownish(entry)) continue;
-
-    const row = element("button", `entry${entry.isDir ? " dir" : ""}`);
-    row.type = "button";
-    row.title = entry.path;
-
-    const icon = element("span", "icon", entry.isDir ? "▸" : "·");
-    const label = element("span", "label", entry.name);
-    row.append(icon, label);
-
-    row.addEventListener("click", () => {
-      if (entry.isDir) {
-        DIRECTORY_STACK.push(entry.path);
-        void paintDirectory(container, handlers);
-      } else {
-        handlers.onOpenFile(entry.path);
-      }
+    row.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openFavoritesMenu(file, event.clientX, event.clientY, open, handlers);
     });
+    // The row itself is not a tab stop; the open button is, so the keyboard
+    // menu key has to be handled there.
+    open.addEventListener("keydown", (event) => {
+      if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+      event.preventDefault();
+      const bounds = open.getBoundingClientRect();
+      openFavoritesMenu(file, bounds.left + 8, bounds.bottom + 2, open, handlers);
+    });
+
+    row.append(star, open, remove);
     fragment.appendChild(row);
   }
-
-  if (fragment.childElementCount <= 1) {
-    fragment.appendChild(element("div", "sidebar-empty", "Nothing to show here."));
-  }
   container.replaceChildren(fragment);
-}
-
-export function resetDirectory(path: string | null): void {
-  DIRECTORY_STACK.length = 0;
-  if (path) DIRECTORY_STACK.push(path);
 }
 
 // ---------------------------------------------------------------------------
