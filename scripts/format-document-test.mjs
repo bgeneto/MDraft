@@ -3,6 +3,8 @@
 // format? Does the tab menu format the clicked tab, even in the background?
 //
 //   node scripts/format-document-test.mjs [port]
+//   node scripts/format-document-test.mjs --unit   (math regressions, no app)
+// Add --without-optional-corpus to exercise the recorded inventory fallback.
 //
 // The suite works on temporary copies of the fixtures, never on the repository's
 // own files: it saves after formatting and after undo so the comparison is the
@@ -14,9 +16,176 @@
 // agent session cannot own the operating system clipboard, so the suite proves
 // the menu's read/write wiring and the synthetic paste path, not the OS itself.
 
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import katex from "katex";
+import { formatDocument } from "../src/format/formatters.ts";
+import { analyzeMath } from "../src/math-delimiters.ts";
+
+const physicsPath = new URL("../docs/samples/physrevb_70_035307.md", import.meta.url);
+const recordedMath = JSON.parse(
+  readFileSync(new URL("./fixtures/math-inventory.json", import.meta.url), "utf8"),
+)["docs/samples/physrevb_70_035307.md"].entries;
+// The paper is an ignored local file. A checkout without it still exercises
+// every recorded formula, rather than silently skipping the regression.
+const physicsSource =
+  !process.argv.includes("--without-optional-corpus") && existsSync(physicsPath)
+    ? readFileSync(physicsPath, "utf8")
+    : recordedMath
+        .map(({ body, display }) => (display ? `$$\n${body}\n$$` : `$${body}$`))
+        .join("\n\n");
+
+function rawMath(source) {
+  return analyzeMath(source).math.map(({ from, to }) => source.slice(from, to));
+}
+
+function mathErrors(source) {
+  return analyzeMath(source).math.filter(({ body, display }) => {
+    try {
+      katex.renderToString(body, { displayMode: display, throwOnError: true, strict: false });
+      return false;
+    } catch {
+      return true;
+    }
+  }).length;
+}
+
+async function mathFormattingChecks() {
+  console.log("=== Markdown math preservation ===");
+  const results = [];
+  const assert = (ok, label) => {
+    results.push({ ok, label, detail: "" });
+    console.log(`  ${ok ? "PASS" : "FAIL"}  ${label}`);
+  };
+  const energy = String.raw`$E_n(\mathbf{k}) = \varepsilon_n + \hbar^2\mathbf{k}^2/(2m^*)$`;
+  const boundary = String.raw`$[1/m^*(z)](\partial\chi_n/\partial z)$`;
+  const mass = "$m_A^*(m_B^*)$";
+  const fixtures = [
+    [
+      "reported equations",
+      `${energy}. Matching ${boundary}, with ${mass}.`,
+      [energy, boundary, mass],
+    ],
+    ["repeated inline equations", "$m^*$ and $m^*$", ["$m^*$", "$m^*$"]],
+    [
+      "backslash inline delimiters",
+      String.raw`\(m^*\) and \(a_i * b_j\)`,
+      [String.raw`\(m^*\)`, String.raw`\(a_i * b_j\)`],
+    ],
+    ["padded inline equations", "$  m^*  $ and $ a_i + b_j $", ["$  m^*  $", "$ a_i + b_j $"]],
+    [
+      "multiline dollar display",
+      "$$ \n a_i * b_j \\\\\n\t + c^* \n$$",
+      ["$$ \n a_i * b_j \\\\\n\t + c^* \n$$"],
+    ],
+    ["CRLF backslash display", "\\[\r\n a_i * b_j\r\n\\]", ["\\[\r\n a_i * b_j\r\n\\]"]],
+    ["inline double dollars", "$$m^*$$ and $$a_i$$", ["$$m^*$$", "$$a_i$$"]],
+    // The shared dialect gives $$ precedence; touching single-dollar pairs
+    // are unfinished display syntax, not two inline equations.
+    ["adjacent dollar boundary", "$a_i$$b_j$", []],
+    [
+      "adjacent explicit equations",
+      String.raw`\(a_i\)\(b_j\)`,
+      [String.raw`\(a_i\)`, String.raw`\(b_j\)`],
+    ],
+    ["emphasis and attached text", "*$a_i$* and foo$x^2$bar", ["$a_i$", "$x^2$"]],
+    ["link labels", "[$a_i$](https://example.org) and **$m^*$**", ["$a_i$", "$m^*$"]],
+    ["tables", "| A | B |\n|---|---|\n| $a_i$ | $m^*$ |", ["$a_i$", "$m^*$"]],
+    ["list display", "- $$\n  a_i * b_j\n  $$\n\n  *text*", ["$$\n  a_i * b_j\n  $$"]],
+    ["quote display", "> $$\n> a_i * b_j\n> $$\n>\n> *text*", ["$$\n> a_i * b_j\n> $$"]],
+    [
+      "code and currency boundaries",
+      "`$a^*$` and R$50, US$5, \\$2.00 and \\$3.50; $m^*$ and $m^*$\n\n```tex\n$m^*$\n```",
+      ["$m^*$", "$m^*$"],
+    ],
+    ["marker collisions", "MDRAFTMATH MDRAFTMATHX0END and $m^*$", ["$m^*$"]],
+    ["prettier-ignore", "<!-- prettier-ignore -->\n*mixed* $m^*$ and $m^*$", ["$m^*$", "$m^*$"]],
+    ["existing invalid TeX", "$m^_$ and $m^*$", ["$m^_$", "$m^*$"]],
+    ["unfinished math", "*text*\n\n\\[a_i * b_j", []],
+  ];
+  for (const [label, source, expected] of fixtures) {
+    const formatted = await formatDocument(source, "markdown");
+    assert(
+      JSON.stringify(rawMath(formatted)) === JSON.stringify(expected),
+      `${label}: exact source`,
+    );
+    assert(
+      (await formatDocument(formatted, "markdown")) === formatted,
+      `${label}: stable second format`,
+    );
+    if (label === "tables") {
+      const widths = formatted
+        .trimEnd()
+        .split("\n")
+        .map((line) => line.length);
+      assert(new Set(widths).size === 1, "math table columns align to the real equation widths");
+    }
+    if (label === "code and currency boundaries") {
+      assert(
+        formatted.includes("`$a^*$`") &&
+          formatted.includes("R$50, US$5, \\$2.00 and \\$3.50") &&
+          formatted.includes("```tex\n$m^*$\n```"),
+        "code and currency keep their literal content",
+      );
+    }
+    if (label === "marker collisions") {
+      assert(
+        formatted.includes("MDRAFTMATH MDRAFTMATHX0END"),
+        "existing marker-like text survives",
+      );
+    }
+    if (label === "prettier-ignore") {
+      assert(
+        formatted === `${source}\n`,
+        "prettier-ignore retains the complete original paragraph",
+      );
+    }
+    if (label === "unfinished math") {
+      assert(
+        formatted.includes("\\[a_i * b_j"),
+        "an unfinished equation is not rewritten as emphasis",
+      );
+    }
+  }
+  const expectedInventory = recordedMath.map(({ body, display }) => ({ body, display }));
+  const actualInventory = analyzeMath(physicsSource).math.map(({ body, display }) => ({
+    body,
+    display,
+  }));
+  assert(
+    JSON.stringify(actualInventory) === JSON.stringify(expectedInventory),
+    "all 292 corpus formulas match the recorded inventory",
+  );
+  const formattedPhysics = await formatDocument(physicsSource, "markdown");
+  assert(
+    JSON.stringify(rawMath(formattedPhysics)) === JSON.stringify(rawMath(physicsSource)),
+    "the complete physics corpus preserves every math source byte",
+  );
+  assert(
+    mathErrors(formattedPhysics) === mathErrors(physicsSource),
+    "formatting adds no KaTeX errors to the physics corpus",
+  );
+  assert(
+    (await formatDocument(formattedPhysics, "markdown")) === formattedPhysics,
+    "the complete physics corpus is stable on a second format",
+  );
+  return results;
+}
+
+if (process.argv.includes("--unit")) {
+  const results = await mathFormattingChecks();
+  const passed = results.filter(({ ok }) => ok).length;
+  console.log(`\n${passed}/${results.length} checks passed`);
+  process.exit(passed === results.length ? 0 : 1);
+}
 
 const port = process.argv[2] ?? "9222";
 
@@ -89,6 +258,7 @@ const workDir = mkdtempSync(path.join(tmpdir(), "mdraft-format-document-"));
 
 const files = {
   markdown: path.join(workDir, "format-markdown.md"),
+  math: path.join(workDir, "format-math.md"),
   html: path.join(workDir, "format-document.html"),
   typst: path.join(workDir, "format-document.typ"),
   asciidoc: path.join(workDir, "format-document.adoc"),
@@ -99,6 +269,7 @@ copyFileSync(path.join(repoRoot, "samples/html-tour/index.html"), files.html);
 copyFileSync(path.join(repoRoot, "samples/typst-tour.typ"), files.typst);
 copyFileSync(path.join(repoRoot, "samples/asciidoc-tour.adoc"), files.asciidoc);
 writeFileSync(files.invalid, "#let broken = (\n");
+writeFileSync(files.math, `# Formatting regression\n\n*emphasis*\n\n${physicsSource}`);
 
 const original = Object.fromEntries(
   Object.entries(files).map(([key, file]) => [key, readFileSync(file)]),
@@ -346,6 +517,7 @@ async function openEditorPreferences() {
 
 let fatal = null;
 try {
+  checks.push(...(await mathFormattingChecks()));
   // -------------------------------------------------------------------------
   // Launch: the formatters are lazy
   // -------------------------------------------------------------------------
@@ -480,6 +652,72 @@ try {
     `${mdRestored.length} bytes`,
   );
   check(!(await isDirty()), "the restored document is clean");
+
+  // The reported physics paper must survive the real right-click/save/undo
+  // route, including a completed preview redraw rather than stale old pixels.
+  console.log("\n=== equations through Format Document ===");
+  check(await openFile(files.math), "the physics copy opens as its own tab");
+  await pollFor(
+    `document.querySelectorAll('#preview .math-inline, #preview .math-display').length === ${recordedMath.length}`,
+  );
+  const mathPreview = () =>
+    evaluate(`(() => {
+      const inventory = [...document.querySelectorAll('#preview .math-inline, #preview .math-display')]
+        .map(node => ({ body: node.dataset.tex, display: node.classList.contains('math-display') }));
+      const bars = [...document.querySelectorAll('#preview .katex .frac-line')];
+      const radicals = [...document.querySelectorAll('#preview .katex .sqrt .hide-tail')];
+      return {
+        inventory,
+        errors: document.querySelectorAll('#preview .katex-error, #preview .math-error').length,
+        fractionsVisible: bars.length > 0 && bars.every(node => node.getBoundingClientRect().width > 0),
+        radicalsVisible: radicals.length > 0 && radicals.every(node => node.getBoundingClientRect().width > 0),
+      };
+    })()`);
+  const mathBefore = await mathPreview();
+  check(
+    JSON.stringify(mathBefore.inventory) ===
+      JSON.stringify(recordedMath.map(({ body, display }) => ({ body, display }))),
+    "the physics preview starts with all 292 recorded equations",
+  );
+  await evaluate(`window.__mathBeforeFormat = document.querySelector('#preview .math-inline')`);
+  const mathPoint = await clickLine(0);
+  await rightClick(mathPoint.x, mathPoint.y);
+  check(await chooseFormat(), "the physics copy formats through the right-click menu");
+  await pollFor(
+    `document.querySelector('.doc-tab[aria-selected="true"]')?.classList.contains('is-dirty') === true`,
+  );
+  const mathSaved = await save(files.math, (bytes) => !bytes.equals(original.math));
+  check(!mathSaved.equals(original.math), "the physics copy saves the formatted document");
+  check(
+    JSON.stringify(rawMath(mathSaved.toString("utf8"))) ===
+      JSON.stringify(rawMath(original.math.toString("utf8"))),
+    "the right-click action preserves every equation's exact source on disk",
+  );
+  check(
+    await pollFor(`document.querySelector('#preview .math-inline') !== window.__mathBeforeFormat`),
+    "the formatted physics preview completes a fresh redraw",
+  );
+  const mathAfter = await mathPreview();
+  check(
+    JSON.stringify(mathAfter.inventory) === JSON.stringify(mathBefore.inventory),
+    "the formatted preview preserves every equation and display mode",
+  );
+  check(
+    mathAfter.errors === mathBefore.errors,
+    "the formatted preview adds no red KaTeX errors",
+    `${mathBefore.errors} -> ${mathAfter.errors}`,
+  );
+  check(
+    mathAfter.fractionsVisible && mathAfter.radicalsVisible,
+    "formatted equations retain visible fraction bars and radicals",
+  );
+  await undo();
+  const mathRestored = await save(files.math, (bytes) => bytes.equals(original.math));
+  check(
+    mathRestored.equals(original.math),
+    "one undo restores the physics copy's exact original bytes",
+  );
+  check(await openFile(files.markdown), "the Markdown editing fixture is active again");
 
   // -------------------------------------------------------------------------
   // Editing actions in the menu

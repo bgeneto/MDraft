@@ -73,7 +73,7 @@ Editor font size, preview font size and math scale are not part of a preset's
 identity. They are reader adjustments remembered per preset: set Serif to 19 px,
 visit System and Renaissance, and Serif still comes back at 19 px. A preset that
 has never been adjusted starts at its own defaults (System 16/95, Serif 18/92,
-Renaissance 18/80, Editorial 17/90, Bauhaus 17/90, Notebook 17/86). The editor
+Renaissance 19/80, Editorial 17/90, Bauhaus 17/90, Notebook 17/86). The editor
 font size starts at 15 px for every preset, with a 1.5 line height that scales
 with the size. **Line Height** in *Preferences › Editor* chooses **Compact**
 (1.3×), **Normal** (1.5×) or **Wide** (1.8×). It is a global preference, not a
