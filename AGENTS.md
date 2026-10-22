@@ -290,7 +290,7 @@ node scripts\image-paste-test.mjs 9222 "http://127.0.0.1:8791/served.png" "C:\pa
 | Script | Arguments | Does |
 | --- | --- | --- |
 | `dist.mjs` | `[-- <tauri build args>] [--kill]` | Typechecks, builds the frontend, routes through the MSVC wrapper on Windows, then calls `stage-artifacts.mjs`. Streams output; exits non-zero on any failure. **Refuses to start while a copy of the app is running** (Windows locks a running executable, so cargo cannot replace it) unless `--kill` is given, which closes it first. Also refuses with the `npm ci` instruction when the local `@tauri-apps/cli` is missing, rather than letting `npx` fetch the unrelated registry package |
-| `stage-artifacts.mjs` | `[--dry-run]` | Copies the binary and every installer into `bin/<os>/<arch>/` with `SHA256SUMS.txt` and `manifest.json`. Keeps the display `productName` for the manifest and the Windows portable name, but matches bundle filenames against the platform config's product name, which is `mdraft` on Linux. Fails loudly, naming the path it searched, when it finds no bundles |
+| `stage-artifacts.mjs` | `[--dry-run]` | Copies the binary and every installer into `bin/<os>/<arch>/` under all-lowercase names (the extension keeps its case, so `.AppImage` stays), with `SHA256SUMS.txt` and `manifest.json`. The manifest keeps the display `productName`, and bundle filenames are matched against the platform config's product name, which is `mdraft` on Linux. Fails loudly, naming the path it searched, when it finds no bundles |
 | `build-linux.sh` | `[--bundles deb,appimage] [--build-dir path]` | The whole Linux build inside WSL2 or a container — see [Building for Linux](#building-for-linux). Clears the cached `bundle/{deb,rpm,appimage}` before building and previous installers from `bin/linux/amd64` before collecting, so a previous name or version cannot linger |
 | `with-msvc.cmd` | `<command> [args…]` | Loads `vcvars64.bat` then runs the command. **Required for every cargo or tauri invocation on this host.** Searches the standard Visual Studio locations, including the Enterprise edition the GitHub runners install |
 | `cargo-vcvars.cmd` | `<cargo args…>` | The same wrapper specialised for cargo: `cargo-vcvars.cmd test --manifest-path src-tauri\Cargo.toml` |
@@ -1870,7 +1870,7 @@ Three things are easy to get wrong here and are worth knowing:
 
 ## Portable builds
 
-`MDraft_<version>_x64-portable.exe` is the ordinary Windows build compiled with
+`mdraft_<version>_x64-portable.exe` is the ordinary Windows build compiled with
 one extra config file, `src-tauri/tauri.portable.conf.json`. There is no portable
 code path: the config sets `appDirectoriesOverride`, and Tauri applies it to its
 own path APIs (`app_config_dir`, `app_data_dir`, and the webview's data
@@ -1896,10 +1896,17 @@ automatically on Linux, where the AppImage is already a single self-contained
 file.
 
 Staging keeps only the portable on Windows, under
-`<product>_<version>_<arch>-portable.exe` (`x64`, like the installers). The bare
+`mdraft_<version>_<arch>-portable.exe` (`x64`, like the installers). The bare
 `MDraft.exe` is deliberately **not** published: it is the same program as the
 portable with settings in `%APPDATA%`, and two near-identical executables make
 the download page ambiguous. Linux still publishes the bare `mdraft`.
+
+Every staged artefact name is lowercase apart from its extension, because
+`productName` is `MDraft` on Windows and `mdraft` on Linux and one release must
+not offer two spellings of the same product. The rename happens at staging, not
+by changing `productName`: the installed application, its Start-menu entry, its
+uninstaller and its `MDraft.exe` keep their names. A file extension keeps the
+case Tauri gave it, so the AppImage stays `.AppImage`.
 
 `stage-artifacts.mjs` resolves bare binaries by listing `target/release` and
 matching case-insensitively, rather than returning a path it constructed. The
