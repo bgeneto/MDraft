@@ -1,6 +1,6 @@
 # Make selection highlighting reliable across document formats
 
-**Status:** done (implementation and validation; Git publication follow-up below)
+**Status:** done
 **Date:** 2026-10-22
 **ADR:** `../adr/2026-10-22-selection-highlighting.md`
 
@@ -275,7 +275,7 @@ Rejected alternatives:
 - [x] Run the validation layers below and inspect rendered highlights.
 - [x] Write the ADR, update user/test documentation and any newly discovered
       traps, tick completed steps and mark the plan done.
-- [ ] Bump the release version, validate the final binary, commit on master,
+- [x] Bump the release version, validate the final binary, commit on master,
       push `v0.4.6`, and confirm the Release workflow was triggered.
 
 ## Files and modules
@@ -455,6 +455,17 @@ such a change first requires updating the approved scope.
 - Full unrelated UI/export/paste layers and Linux builds were not run locally.
   The release workflow builds Windows and Linux; this task stops after verifying
   its trigger, as requested, rather than waiting for build artifacts.
+
+### Publication record
+
+- Implementation/release commit: `b5663a3d17489ee019d6f944b5f0eae13cbbea4e`.
+- Pushed master and annotated tag `v0.4.6` to `bgeneto/MDraft`.
+- Confirmed the push-triggered **Release** workflow for that exact commit/tag:
+  [run 39729847359](https://github.com/bgeneto/MDraft/actions/runs/39729847359),
+  observed `in_progress`. Build/artifact completion was not monitored, as the
+  user explicitly requested.
+- This documentation follow-up records the completed publication on master;
+  the release tag remains on the tested implementation commit.
 
 ## Acceptance criteria
 
