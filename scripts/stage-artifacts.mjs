@@ -138,6 +138,27 @@ function findBinary(candidates) {
  */
 const rename = new Map();
 
+/**
+ * The name an artefact is published under: lowercase.
+ *
+ * Tauri names bundles after `productName`, which is `MDraft` on Windows but
+ * `mdraft` on Linux, so one release would otherwise offer
+ * `MDraft_0.4.5_x64-setup.exe` beside `mdraft_0.4.5_amd64.deb`. Two spellings of
+ * the same product look like two projects and break a case-sensitive scripted
+ * download. Doing it here rather than renaming `productName` keeps the installed
+ * application, its Start-menu entry, its uninstaller and its `MDraft.exe` binary
+ * exactly as they are; only the files on the download page change.
+ *
+ * The extension keeps the case Tauri gave it: `.AppImage` is that format's
+ * conventional spelling, not part of the product name.
+ */
+function stagedName(file) {
+  const entry = file.split(/[\\/]/).pop();
+  const dot = entry.lastIndexOf(".");
+  if (dot <= 0) return entry.toLowerCase();
+  return `${entry.slice(0, dot).toLowerCase()}${entry.slice(dot)}`;
+}
+
 const binary = findBinary(binaryNames);
 if (binary && OS !== "windows") {
   sources.push(binary);
@@ -223,7 +244,7 @@ mkdirSync(destDir, { recursive: true });
 
 const staged = [];
 for (const source of sources) {
-  const name = rename.get(source) ?? source.split(/[\\/]/).pop();
+  const name = stagedName(rename.get(source) ?? source);
   const target = join(destDir, name);
   copyFileSync(source, target);
   staged.push({ name, bytes: statSync(target).size, sha256: sha256(target) });
