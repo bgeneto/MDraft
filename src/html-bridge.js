@@ -272,6 +272,21 @@
   // reports only that index and the selected characters; it never sees a source
   // offset. A document whose own scripts rewrote the DOM will fail the host's
   // sample check, which is the intended fail-closed result.
+  function ownedText(stamp) {
+    var nodes = [];
+    var walker = document.createTreeWalker(stamp, NodeFilter.SHOW_TEXT);
+    for (var text = walker.nextNode(); text; text = walker.nextNode()) {
+      var parent = text.parentElement;
+      if (
+        parent.closest("[data-mdraft-n]") !== stamp ||
+        parent.closest("script,style,textarea,title,template,svg,math,noscript")
+      )
+        continue;
+      nodes.push(text);
+    }
+    return nodes;
+  }
+
   function textEntry(node) {
     if (!node || node.nodeType !== 3) return null;
     var element = node.parentElement;
@@ -279,42 +294,62 @@
     if (!stamp) return null;
     var n = parseInt(stamp.getAttribute("data-mdraft-n"), 10);
     if (!isFinite(n)) return null;
-    var index = 0;
-    var walker = document.createTreeWalker(stamp, NodeFilter.SHOW_TEXT);
-    for (var text = walker.nextNode(); text; text = walker.nextNode()) {
-      if (text === node) return { n: n, index: index };
-      index += 1;
-    }
-    return null;
+    var index = ownedText(stamp).indexOf(node);
+    return index >= 0 ? { n: n, index: index } : null;
   }
 
   function reportSelection(reveal) {
+    // A timer from the previous gesture must not steal focus back from source.
+    if (!document.hasFocus()) return;
     var selection = window.getSelection();
-    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
-    var range = selection.getRangeAt(0);
-    if (range.startContainer.nodeType !== 3 || range.endContainer.nodeType !== 3) {
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+      post({ type: "clearSync" });
       return;
     }
-    var start = textEntry(range.startContainer);
-    var end = textEntry(range.endContainer);
-    if (!start || !end || start.n !== end.n || start.index !== end.index) return;
-    var sample = range.toString();
-    // A word double-click commonly takes the following space with it. The
-    // source mark should be the word, not the gap, so trim both edges and move
-    // the offsets by the same amount.
-    var leading = sample.length - sample.trimStart().length;
-    var trailing = sample.length - sample.trimEnd().length;
-    var startOffset = range.startOffset + leading;
-    var endOffset = range.endOffset - trailing;
-    sample = sample.slice(leading, sample.length - trailing);
-    if (!sample || sample.length > 2000 || endOffset <= startOffset) return;
+    var range = selection.getRangeAt(0);
+    if (range.toString().length > 2000) {
+      post({ type: "clearSync" });
+      return;
+    }
+    var common = range.commonAncestorContainer;
+    var walker = document.createTreeWalker(common, NodeFilter.SHOW_TEXT);
+    var segments = [];
+    for (
+      var node = common.nodeType === 3 ? common : walker.nextNode();
+      node;
+      node = common.nodeType === 3 ? null : walker.nextNode()
+    ) {
+      if (!range.intersectsNode(node)) continue;
+      var start = node === range.startContainer ? range.startOffset : 0;
+      var end = node === range.endContainer ? range.endOffset : node.length;
+      while (start < end && /\s/.test(node.data[start])) start += 1;
+      while (end > start && /\s/.test(node.data[end - 1])) end -= 1;
+      if (end <= start) continue;
+      var entry = textEntry(node);
+      if (!entry || segments.length >= 128) {
+        post({ type: "clearSync" });
+        return;
+      }
+      segments.push({
+        n: entry.n,
+        index: entry.index,
+        start: start,
+        end: end,
+        sample: node.data.slice(start, end),
+      });
+    }
+    if (!segments.length) {
+      post({ type: "clearSync" });
+      return;
+    }
     post({
       type: "select",
-      n: start.n,
-      index: start.index,
-      start: startOffset,
-      end: endOffset,
-      sample: sample,
+      n: segments[0].n,
+      index: segments[0].index,
+      start: segments[0].start,
+      end: segments[0].end,
+      sample: segments[0].sample,
+      segments: segments,
       reveal: reveal === true,
     });
   }
@@ -329,6 +364,110 @@
     },
     true,
   );
+
+  document.addEventListener("selectionchange", function () {
+    window.clearTimeout(selectionTimer);
+    selectionTimer = window.setTimeout(function () {
+      reportSelection(false);
+    }, 120);
+  });
+
+  var wordRanges = [];
+  var wordTimer = 0;
+  var wordKey = "";
+  var motion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+  function clearWords() {
+    window.clearTimeout(wordTimer);
+    wordTimer = 0;
+    wordRanges = [];
+    wordKey = "";
+    if (window.CSS && CSS.highlights) {
+      CSS.highlights.delete("mdraft-sync");
+      CSS.highlights.delete("mdraft-sync-peak");
+    }
+  }
+
+  function paintWords(specs) {
+    if (
+      !Array.isArray(specs) ||
+      !specs.length ||
+      specs.length > 128 ||
+      !window.CSS ||
+      !CSS.highlights ||
+      !window.Highlight
+    ) {
+      clearWords();
+      return;
+    }
+    var key = JSON.stringify(specs);
+    var ranges = [];
+    for (var i = 0; i < specs.length; i += 1) {
+      var spec = specs[i];
+      if (
+        !spec ||
+        !Number.isInteger(spec.n) ||
+        !Number.isInteger(spec.index) ||
+        !Number.isInteger(spec.start) ||
+        !Number.isInteger(spec.end) ||
+        spec.start < 0 ||
+        spec.end <= spec.start ||
+        typeof spec.sample !== "string"
+      ) {
+        clearWords();
+        return;
+      }
+      var stamp = document.querySelector('[data-mdraft-n="' + spec.n + '"]');
+      var node = stamp ? ownedText(stamp)[spec.index] : null;
+      if (
+        !node ||
+        spec.end > node.length ||
+        node.data.slice(spec.start, spec.end) !== spec.sample
+      ) {
+        clearWords();
+        return;
+      }
+      var range = document.createRange();
+      range.setStart(node, spec.start);
+      range.setEnd(node, spec.end);
+      ranges.push(range);
+    }
+    if (key === wordKey && wordTimer) return;
+    clearWords();
+    wordKey = key;
+    wordRanges = ranges;
+    var rest = new Highlight(...ranges),
+      peak = new Highlight(...ranges);
+    CSS.highlights.set("mdraft-sync", rest);
+    if (motion.matches) return;
+    var beat = 0;
+    function step() {
+      if (!wordRanges.length) return;
+      beat += 1;
+      var high = beat % 2 === 1 && !motion.matches && beat < 8;
+      CSS.highlights.set(high ? "mdraft-sync-peak" : "mdraft-sync", high ? peak : rest);
+      CSS.highlights.delete(high ? "mdraft-sync" : "mdraft-sync-peak");
+      wordTimer = !motion.matches && beat < 8 ? window.setTimeout(step, 250) : 0;
+    }
+    wordTimer = window.setTimeout(step, 250);
+  }
+
+  motion.addEventListener("change", function () {
+    if (motion.matches && wordRanges.length && window.Highlight && CSS.highlights) {
+      window.clearTimeout(wordTimer);
+      wordTimer = 0;
+      CSS.highlights.delete("mdraft-sync-peak");
+      CSS.highlights.set("mdraft-sync", new Highlight(...wordRanges));
+    }
+  });
+
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape") {
+      window.clearTimeout(selectionTimer);
+      clearWords();
+      post({ type: "clearSync" });
+    }
+  });
 
   document.addEventListener(
     "mouseup",
@@ -397,6 +536,8 @@
       if (anchor) window.scrollTo(0, Math.max(0, anchor.top - SYNC_MARGIN));
     } else if (data.type === "blink") {
       blink(Number(data.line));
+    } else if (data.type === "highlightWords") {
+      paintWords(data.ranges);
     } else if (data.type === "keys") {
       keys = Array.isArray(data.list) ? data.list : [];
     }
@@ -409,6 +550,10 @@
     style.textContent =
       ".mdraft-blink{outline:2px solid #4c8dff !important;outline-offset:2px !important}" +
       ".mdraft-blink{transition:outline-color 120ms ease}";
+    style.textContent +=
+      "::highlight(mdraft-sync){background-color:rgba(255,193,7,.3)}" +
+      "::highlight(mdraft-sync-peak){background-color:rgba(255,167,0,.55)}" +
+      "@media(prefers-reduced-motion:reduce){.mdraft-blink{transition:none}}";
     document.head.appendChild(style);
   }
 })();

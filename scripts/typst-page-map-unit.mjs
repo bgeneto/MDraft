@@ -2,7 +2,7 @@
 //
 //   node scripts/typst-page-map-unit.mjs
 //
-// `src/typst-page-map.ts` has no runtime imports, so Node 24 strips its types and
+// `src/typst-page-map.ts` uses the existing Typst parser; Node 24 strips its types and
 // runs it directly. These are the rules that decide whether a click in the PDF
 // text layer names a source occurrence or paints nothing:
 //
@@ -12,7 +12,7 @@
 // - a ligature or a soft hyphen must not break an otherwise exact word;
 // - generated text still maps to nothing.
 
-import { TypstSourceMap } from "../src/typst-page-map.ts";
+import { createTypstPageMap } from "../src/typst-page-map.ts";
 
 const checks = [];
 function check(ok, label, detail = "") {
@@ -20,74 +20,164 @@ function check(ok, label, detail = "") {
   console.log(`  ${ok ? "PASS" : "FAIL"}  ${label}${detail ? ` — ${detail}` : ""}`);
 }
 
-/** The source text of the word the match points at, or null. */
-function wordAt(map, match) {
-  if (!match) return null;
-  const word = map.wordForLineToken(match, 0);
-  return word ? { text: word.text, from: word.from, to: word.to } : null;
+async function mapLines(source, rows, region = "left") {
+  return createTypstPageMap(
+    source,
+    rows.map((text) => ({ text, region })),
+  );
 }
-
-function mapsTo(map, line, before, after) {
-  return wordAt(map, map.mapLineWithNeighbors(line, before, after));
-}
-
-console.log("\n=== a repeated one-word line ===");
+console.log("\n=== context and fallbacks ===");
 {
-  const map = new TypstSourceMap("Same\ntarget\nSame\nSame\ntarget\nSame");
-  const ambiguous = map.mapLineWithNeighbors("target", "Same", "Same");
-  check(ambiguous === null, "identical neighbours paint nothing", JSON.stringify(ambiguous));
-
-  const unique = new TypstSourceMap("One\ntarget\nTwo\nOther\ntarget\nThird");
-  const first = mapsTo(unique, "target", "One", "Two");
-  const second = mapsTo(unique, "target", "Other", "Third");
+  const rows = ["Same", "target", "Same", "Same", "target", "Same"];
+  const ambiguous = await createTypstPageMap(
+    rows.join("\n"),
+    rows.map((text, i) => ({ text, region: i < 3 ? "a" : "b" })),
+  );
   check(
-    first !== null && second !== null && first.from < second.from,
+    ambiguous.wordAt(1, 0) === null && ambiguous.wordAt(4, 0) === null,
+    "identical neighbours paint nothing",
+  );
+  const unique = await mapLines("One\ntarget\nTwo\nOther\ntarget\nThird", [
+    "One",
+    "target",
+    "Two",
+    "Other",
+    "target",
+    "Third",
+  ]);
+  const first = unique.wordAt(1, 0),
+    second = unique.wordAt(4, 0);
+  check(
+    first && second && first.from < second.from,
     "different neighbours pick different occurrences",
-    `${first?.from} < ${second?.from}`,
   );
   check(
     first?.text === "target" && second?.text === "target",
     "the mapped word is the clicked word",
   );
-}
-
-console.log("\n=== context and fallbacks ===");
-{
-  const map = new TypstSourceMap("alpha beta gamma\nbeta gamma");
-  const match = map.mapLine("beta gamma", 0);
-  const word = wordAt(map, match);
-  check(word?.text === "beta" && word.from === 6, "a two-word line still maps", String(word?.from));
-
-  const first = map.mapLine("beta gamma", 0);
-  const last = map.mapLine("beta gamma", map.source.length);
+  const two = await mapLines("alpha beta gamma", ["alpha", "beta gamma"]);
+  check(two.wordAt(1, 0)?.from === 6, "a two-word line maps with established context");
+  const repeated = await createTypstPageMap("beta gamma\nbeta gamma", [
+    { text: "beta gamma", region: "a" },
+    { text: "beta gamma", region: "b" },
+  ]);
   check(
-    first !== null && last !== null && first.sourceAt === 1 && last.sourceAt === 3,
-    "the caret hint still disambiguates a two-word line",
-    `${first?.sourceAt} / ${last?.sourceAt}`,
+    repeated.wordAt(0, 0) === null && repeated.wordAt(1, 0) === null,
+    "a repeated two-word line never uses the caret as evidence",
   );
-
-  const alone = new TypstSourceMap("target");
-  check(
-    alone.mapLineWithNeighbors("target", "", "") === null,
-    "a one-word line with no context paints nothing",
-  );
-
-  const generated = new TypstSourceMap("#let x = 1");
-  check(generated.mapLineWithNeighbors("Lorem", "", "") === null, "generated text paints nothing");
+  const alone = await mapLines("target", ["target"]);
+  check(alone.wordAt(0, 0) === null, "a one-word line with no context paints nothing");
+  const generated = await mapLines("#let x = 1", ["Lorem"]);
+  check(generated.wordAt(0, 0) === null, "generated text paints nothing");
+  const ligature = await mapLines("The file ends", ["The", "ﬁle", "ends"]);
+  check(ligature.wordAt(1, 0)?.text === "file", "a PDF ligature matches the source word");
+  const soft = await mapLines("begin co\u00adoperate now", ["begin", "cooperate", "now"]);
+  check(soft.wordAt(1, 0)?.text === "co\u00adoperate", "a soft hyphen matches the joined PDF word");
 }
-
-console.log("\n=== ligatures and soft hyphens ===");
+console.log("\n=== bidirectional prose index ===");
 {
-  const ligature = new TypstSourceMap("The file ends");
-  const word = mapsTo(ligature, "ﬁle", "The", "ends");
-  check(word?.text === "file", "a PDF ligature matches the source word", String(word?.text));
-
-  const soft = new TypstSourceMap("begin co\u00adoperate now");
-  const joined = mapsTo(soft, "cooperate", "begin", "now");
+  const source =
+    '// com velocidade 2,0\nNo instante zero, uma partícula está em $x = "4,0" thin "m"$ e\n$y = "3,0" thin "m"$, com velocidade\n$arrow(v)_0 = ("2,0" hat(i) - "9,0" hat(j)) thin "m/s"$.\nSua aceleração é constante.';
+  const lines = [
+    "No instante zero, uma partícula está em",
+    "com velocidade 𝑣 = ( 2,0 𝑖 − 9,0 𝑗 ) m/s",
+    "Sua aceleração é constante.",
+  ].map((text) => ({ text, region: "left" }));
+  const map = await createTypstPageMap(source, lines);
+  const range = map.sourceRange(1, 4, 1, 14);
   check(
-    joined?.text === "co\u00adoperate",
-    "a soft hyphen in the source matches the joined PDF word",
-    JSON.stringify(joined?.text),
+    range &&
+      source.slice(range.from, range.to) === "velocidade" &&
+      range.from === source.lastIndexOf("velocidade"),
+    "formula numbers cannot displace the selected prose",
+    JSON.stringify(range),
+  );
+  const phrase = map.sourceRange(1, 0, 1, 14);
+  check(
+    phrase && source.slice(phrase.from, phrase.to) === "com velocidade",
+    "two-word phrase beside math maps exactly",
+  );
+  const inverse = range ? map.partsForSource(range.from, range.to) : [];
+  check(
+    inverse.length === 1 &&
+      inverse[0].line === 1 &&
+      lines[1].text.slice(inverse[0].from, inverse[0].to) === "velocidade",
+    "reverse lookup uses the same accepted occurrence",
+    JSON.stringify(inverse),
+  );
+}
+{
+  const source = "The pendulum rotates slowly.\nAnother pendulum rotates quickly.";
+  const lines = [
+    { text: "The pendulum rotates slowly.", region: "left" },
+    { text: "Another pendulum rotates quickly.", region: "right" },
+  ];
+  const map = await createTypstPageMap(source, lines);
+  const first = map.wordAt(0, 4),
+    last = map.wordAt(1, 8);
+  check(
+    first?.from === source.indexOf("pendulum") && last?.from === source.lastIndexOf("pendulum"),
+    "repeated words map their own column without a caret hint",
+  );
+  check(
+    map.sourceRange(0, 4, 1, 16) === null,
+    "a selection crossing unrelated reading regions is rejected",
+  );
+}
+{
+  const source = "We cooperate with reliable instruments.";
+  const lines = [
+    { text: "We coop-", region: "left" },
+    { text: "erate with reliable instruments.", region: "left" },
+  ];
+  const map = await createTypstPageMap(source, lines);
+  const range = map.sourceRange(0, 3, 1, 5);
+  check(
+    range && source.slice(range.from, range.to) === "cooperate",
+    "line-break hyphenation maps the complete source word",
+  );
+  check(
+    range && map.partsForSource(range.from, range.to).length === 2,
+    "a hyphenated source word has two separate preview ranges",
+  );
+  const actualText = await createTypstPageMap(source, [
+    { text: "We coop", region: "left" },
+    { text: "erate with reliable instruments.", region: "left" },
+  ]);
+  check(
+    actualText.wordAt(0, 3)?.text === "cooperate" && actualText.wordAt(1, 0)?.text === "cooperate",
+    "PDF ActualText may omit the visual hyphen without losing either half",
+  );
+}
+{
+  const source = "Before text.\n= Method\nA pendulum is useful.";
+  const lines = ["Before text.", "Method", "A pendulum is useful."].map((text) => ({
+    text,
+    region: "left",
+  }));
+  const map = await createTypstPageMap(source, lines);
+  check(map.wordAt(1, 0)?.text === "Method", "a one-word heading uses surrounding verified prose");
+  const ambiguous = await createTypstPageMap("Same target Same\nSame target Same", [
+    { text: "Same target Same", region: "a" },
+    { text: "Same target Same", region: "b" },
+  ]);
+  check(
+    ambiguous.wordAt(0, 5) === null && ambiguous.wordAt(1, 5) === null,
+    "indistinguishable repeated passages remain unmapped",
+  );
+  const generated = await createTypstPageMap("#let label = [Visible label]\n#lorem(10)", [
+    { text: "Visible label", region: "a" },
+  ]);
+  check(
+    generated.wordAt(0, 0) === null,
+    "definitions and generated text do not become source prose",
+  );
+  const unicode = await createTypstPageMap("The file shows café now.", [
+    { text: "The ﬁle shows cafe\u0301 now.", region: "a" },
+  ]);
+  check(
+    unicode.wordAt(0, 4)?.text === "file" && unicode.wordAt(0, 14)?.text === "café",
+    "ligatures and combining accents preserve UTF-16 source ranges",
   );
 }
 

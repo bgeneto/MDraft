@@ -1212,6 +1212,91 @@ export function rangeForSource(map: WordMap, from: number, to: number): Range | 
   return range;
 }
 
+/** All verified portions of a selection, without bridging an unmapped gap. */
+export function rangesForSource(map: WordMap, from: number, to: number): Range[] {
+  const lo = Math.min(from, to);
+  const hi = Math.max(from, to);
+  const ranges: Range[] = [];
+  if (map.fragments.length > 0) {
+    for (const fragment of map.fragments) {
+      if (fragment.src1 <= lo || fragment.src0 >= hi) continue;
+      const range = rangeForSource(map, Math.max(lo, fragment.src0), Math.min(hi, fragment.src1));
+      if (range && !range.collapsed) ranges.push(range);
+    }
+    return ranges;
+  }
+  const seen = new Set<Text>();
+  for (const index of blocksForRange(map, lo, hi)) {
+    const layout = blockLayout(map, index);
+    if (!layout) continue;
+    for (const entry of layout.ordered) {
+      if (seen.has(entry.node)) continue;
+      seen.add(entry.node);
+      for (const span of entry.spans) {
+        if (span.src1 <= lo || span.src0 >= hi) continue;
+        const range = document.createRange();
+        range.setStart(
+          entry.node,
+          sourceOffsetToRawNode(
+            entry.folded,
+            layout.folded,
+            Math.max(lo, span.src0),
+            "start",
+            span,
+            layout.src0,
+          ),
+        );
+        range.setEnd(
+          entry.node,
+          sourceOffsetToRawNode(
+            entry.folded,
+            layout.folded,
+            Math.min(hi, span.src1),
+            "end",
+            span,
+            layout.src0,
+          ),
+        );
+        if (!range.collapsed) ranges.push(range);
+      }
+    }
+  }
+  ranges.sort((a, b) => a.compareBoundaryPoints(Range.START_TO_START, b));
+  // Preserve the documented containing-block fallback only when no word maps.
+  if (ranges.length === 0) {
+    const fallback = rangeForSource(map, lo, hi);
+    if (fallback && !fallback.collapsed) ranges.push(fallback);
+  }
+  return ranges;
+}
+
+/** Resolve actual Range boundaries, including element child offsets and spaces. */
+export function selectionEndpoints(range: Range): {
+  start: { node: Text; offset: number };
+  end: { node: Text; offset: number };
+} | null {
+  const common = range.commonAncestorContainer;
+  const walker = document.createTreeWalker(common, NodeFilter.SHOW_TEXT);
+  let first: { node: Text; offset: number } | null = null;
+  let last: { node: Text; offset: number } | null = null;
+  for (
+    let node = common.nodeType === Node.TEXT_NODE ? common : walker.nextNode();
+    node;
+    node = common.nodeType === Node.TEXT_NODE ? null : walker.nextNode()
+  ) {
+    if (!range.intersectsNode(node)) continue;
+    const text = node as Text;
+    let start = node === range.startContainer ? range.startOffset : 0;
+    let end = node === range.endContainer ? range.endOffset : text.length;
+    while (start < end && /\s/.test(text.data[start])) start += 1;
+    while (end > start && /\s/.test(text.data[end - 1])) end -= 1;
+    if (end <= start) continue;
+    first ??= { node: text, offset: start };
+    last = { node: text, offset: end };
+  }
+  return first && last ? { start: first, end: last } : null;
+}
+
 // ---------------------------------------------------------------------------
 // Words
 // ---------------------------------------------------------------------------

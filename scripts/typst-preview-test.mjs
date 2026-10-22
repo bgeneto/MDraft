@@ -8,6 +8,9 @@
 //! unique word (`gyroscope`), a repeated word (`pendulum`) and generated
 //! `#lorem` text that has no source word to map back to.
 
+import fs from "node:fs";
+import path from "node:path";
+
 const port = process.argv[2] ?? "9222";
 
 // ---------------------------------------------------------------------------
@@ -417,12 +420,14 @@ check("a single click does not paint a word", singleClickMark === "", singleClic
 
 console.log("\n=== Pages ===");
 await switchView("Pages");
+await evaluate(`document.getElementById('preview-pane').scrollTop = 0`);
 const pagesReady = await waitFor(`(() => {
   const shells = document.querySelectorAll(".typst-page-shell");
   if (shells.length < 2) return false;
   const canvases = [...document.querySelectorAll(".typst-page canvas")];
   if (canvases.length !== shells.length) return false;
   if (canvases.some((canvas) => canvas.width === 0 || canvas.height === 0)) return false;
+  if (canvases.some((canvas) => Math.abs(canvas.width/canvas.height-210/297)>0.01)) return false;
   const text = [...document.querySelectorAll(".typst-page .textLayer")]
     .map((layer) => layer.textContent).join(" ");
   return text.includes("gyroscope") && text.includes("Discussion");
@@ -642,6 +647,231 @@ check(
     previewHighlightAfterRender.join(" ").includes("illustrative"),
   JSON.stringify({ srcWordPoint, highlightBeforeSwitch, previewHighlightAfterRender }),
 );
+
+console.log("\n=== Pages correspondence regressions ===");
+await switchView("Pages");
+await waitFor(`document.querySelector('.textLayer')?.textContent`);
+await sleep(500);
+
+async function previewPaint() {
+  return evaluate(`(() => {
+    const h = CSS.highlights?.get('mdraft-sync') ?? CSS.highlights?.get('mdraft-sync-peak');
+    return h ? [...h].map(r => r.toString()).join('') : '';
+  })()`);
+}
+
+// A real preview gesture reveals the exact source occurrence. Clicking that
+// decoration then checks the inverse, without relying on a first text match.
+async function roundTrip(word, root = ".typst-preview") {
+  await clearSelection();
+  const hit = await selectWord(word, root);
+  const forward = await mark();
+  const sourcePoint = await evaluate(`(() => {
+    const el = document.querySelector('.cm-sync-word');
+    if (!el) return null;
+    const b = el.getBoundingClientRect();
+    return {x:b.left+b.width/2,y:b.top+b.height/2};
+  })()`);
+  if (sourcePoint) await doubleClickAt(sourcePoint);
+  await sleep(120);
+  const reverse = await previewPaint();
+  return {
+    word,
+    selected: hit.selected.trim(),
+    forward,
+    reverse,
+    ok: hit.selected.trim() === word && forward === word && reverse === word,
+  };
+}
+
+const formulaTrip = await roundTrip("velocidade");
+check(
+  "prose beside Portuguese inline math maps in both directions",
+  formulaTrip.ok,
+  JSON.stringify(formulaTrip),
+);
+const cycles = [];
+for (let n = 0; n < 20; n += 1)
+  cycles.push(await roundTrip(["gyroscope", "illustrative", "velocidade", "centrípeta"][n % 4]));
+check(
+  "twenty Pages/editor pairs retain exact words across both columns",
+  cycles.every((r) => r.ok),
+  JSON.stringify(cycles.filter((r) => !r.ok)),
+);
+
+// Browser endpoint at the next node's leading space must not turn a phrase
+// into a paragraph selection. The DOM Range is deliberate boundary coverage.
+await clearSelection();
+await evaluate(`(() => {
+  const nodes = [...document.querySelectorAll('.textLayer span[role="presentation"]')];
+  const span = nodes.find(el => el.textContent.includes('com velocidade'));
+  if (!span?.firstChild) return;
+  const at=span.textContent.indexOf('com velocidade'), r=document.createRange();
+  r.setStart(span.firstChild,at); r.setEnd(span.firstChild,at+14);
+  const s=getSelection();s.removeAllRanges();s.addRange(r);
+})()`);
+await sleep(180);
+check(
+  "a Pages phrase after math paints only its two source words",
+  (await mark()).replaceAll("|", "") === "com velocidade",
+  await mark(),
+);
+
+await send("Emulation.setEmulatedMedia", {
+  features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+});
+const reduced = await roundTrip("velocidade");
+await sleep(280);
+check(
+  "Pages reduced motion keeps a stable resting highlight",
+  reduced.ok &&
+    (await evaluate(
+      `CSS.highlights.has('mdraft-sync') && !CSS.highlights.has('mdraft-sync-peak')`,
+    )),
+);
+await send("Emulation.setEmulatedMedia", { features: [] });
+
+const beforeEscape = await evaluate(`getSelection().toString()`);
+await send("Input.dispatchKeyEvent", {
+  type: "keyDown",
+  key: "Escape",
+  code: "Escape",
+  windowsVirtualKeyCode: 27,
+});
+await sleep(350);
+check(
+  "Pages Escape clears paint and pending pulses while preserving selection",
+  (await previewPaint()) === "" &&
+    (await mark()) === "" &&
+    (await evaluate(`getSelection().toString()`)) === beforeEscape,
+);
+
+await send("Emulation.setDeviceMetricsOverride", {
+  width: 1000,
+  height: 800,
+  deviceScaleFactor: 1,
+  mobile: false,
+});
+const narrow = await roundTrip("velocidade");
+await send("Emulation.setDeviceMetricsOverride", {
+  width: 1600,
+  height: 1000,
+  deviceScaleFactor: 1,
+  mobile: false,
+});
+const wide = await roundTrip("illustrative");
+check(
+  "Pages correspondence survives narrow and wide pane fits",
+  narrow.ok && wide.ok,
+  JSON.stringify({ narrow, wide }),
+);
+await evaluate(`document.getElementById('preview-pane').scrollTop=99999`);
+await sleep(300);
+const lazy = await roundTrip("gyroscope");
+check("Pages correspondence survives canvas disposal and repaint", lazy.ok, JSON.stringify(lazy));
+
+await evaluate(
+  `window.__oldPageRange=(()=>{const e=[...document.querySelectorAll('.textLayer span[role="presentation"]')].find(e=>!e.classList.contains('markedContent') && e.textContent.includes('com velocidade'));const r=document.createRange(),at=e.textContent.indexOf('velocidade');r.setStart(e.firstChild,at);r.setEnd(e.firstChild,at+10);return r})()`,
+);
+await send("Input.dispatchKeyEvent", {
+  type: "keyDown",
+  key: "Home",
+  code: "Home",
+  modifiers: 2,
+  windowsVirtualKeyCode: 36,
+});
+await send("Input.dispatchKeyEvent", {
+  type: "keyUp",
+  key: "Home",
+  code: "Home",
+  modifiers: 2,
+  windowsVirtualKeyCode: 36,
+});
+await send("Input.insertText", { text: "// audit prefix\n" });
+await evaluate(
+  `(()=>{const s=getSelection();s.removeAllRanges();s.addRange(window.__oldPageRange);document.querySelector('.typst-preview').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))})()`,
+);
+check(
+  "Pages refuses a stale PDF selection during render debounce",
+  (await mark()) === "",
+  await mark(),
+);
+await sleep(1300);
+const edited = await roundTrip("velocidade");
+check("Pages binds a fresh bidirectional map after editing", edited.ok, JSON.stringify(edited));
+
+await send("Input.dispatchKeyEvent", {
+  type: "keyDown",
+  key: "End",
+  code: "End",
+  modifiers: 2,
+  windowsVirtualKeyCode: 35,
+});
+await send("Input.dispatchKeyEvent", {
+  type: "keyUp",
+  key: "End",
+  code: "End",
+  modifiers: 2,
+  windowsVirtualKeyCode: 35,
+});
+await send("Input.insertText", { text: "\n// audit suffix\n" });
+await sleep(1300);
+const sameWord = await roundTrip("velocidade");
+check(
+  "Pages reselects the same source offsets after another render",
+  sameWord.ok,
+  JSON.stringify(sameWord),
+);
+await evaluate(
+  `window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',code:'KeyN',ctrlKey:true,bubbles:true,cancelable:true}))`,
+);
+await sleep(300);
+check(
+  "leaving a Pages tab clears correspondence",
+  (await previewPaint()) === "" && (await mark()) === "",
+);
+await evaluate(
+  `[...document.querySelectorAll('.doc-tab')].find(e=>e.textContent.includes('typst-pages.typ')).click()`,
+);
+await waitFor(`document.querySelector('.textLayer')?.textContent.includes('gyroscope')`);
+await sleep(500);
+const returnedTrip = await roundTrip("velocidade");
+check(
+  "returning to a Pages tab restores current correspondence",
+  returnedTrip.ok,
+  JSON.stringify(returnedTrip),
+);
+await send("Emulation.clearDeviceMetricsOverride");
+await sleep(350);
+
+if (process.env.MDRAFT_TEST_SCREENSHOT) {
+  await roundTrip("velocidade");
+  await sleep(150);
+  const shot = await send("Page.captureScreenshot", { format: "png" });
+  fs.writeFileSync(process.env.MDRAFT_TEST_SCREENSHOT, Buffer.from(shot.result.data, "base64"));
+}
+
+// The ignored local exam is optional; the tracked fixture above always runs.
+const exam = path.resolve("docs/samples/prova-fisica.typ");
+if (fs.existsSync(exam)) {
+  await evaluate(
+    `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'open-files',payload:[${JSON.stringify(exam)}]})`,
+  );
+  await waitFor(`document.title.includes('prova-fisica.typ')`);
+  await switchView("Pages");
+  await waitFor(`document.querySelector('.textLayer')?.textContent.includes('instante')`, 30000);
+  await sleep(1200);
+  const examCycles = [];
+  for (let n = 0; n < 25; n += 1)
+    examCycles.push(
+      await roundTrip(["instante", "velocidade", "partícula", "coordenadas", "centrípeta"][n % 5]),
+    );
+  check(
+    "physics exam survives fifty alternating gestures with exact words",
+    examCycles.every((r) => r.ok),
+    JSON.stringify(examCycles.filter((r) => !r.ok)),
+  );
+}
 
 console.log(`\n${passed}/${passed + failed} checks passed`);
 ws.close();

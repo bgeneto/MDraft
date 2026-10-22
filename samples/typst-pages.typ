@@ -58,3 +58,8 @@ error, while measuring the
 length carefully matters because the calculated value is proportional to it.
 The small-angle approximation also matters: larger release angles make the
 period slightly longer than the model predicts.
+
+No instante $t = 2,0$ s, uma partícula passa \
+com velocidade
+$v = (2,0, -9,0)$ m/s. As coordenadas estão registradas para comparar o
+movimento circular com a aceleração centrípeta.

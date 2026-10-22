@@ -38,7 +38,9 @@ Markdown document active.*
 - **A preview that follows the work.** Split, source-only and preview-only
   modes; scroll sync; clicking a source line blinks the matching block;
   selecting a word or a range in either pane paints it in the other, for
-  Markdown, AsciiDoc and Typst, without moving the selection or scrolling. The
+  Markdown, AsciiDoc, HTML and both Typst views. Pages uses verified prose
+  context to identify repeated words across columns; unresolved or generated
+  text stays unpainted. Selection stays in the pane you are using. The
   outline, favorites and recent list are one shortcut away, and
   **File › Open Recent** reaches the newest twenty entries of the persisted
   history without opening the sidebar.

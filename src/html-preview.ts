@@ -11,7 +11,14 @@
 //! parent still treats every message as untrusted.
 
 import * as api from "./api";
-import { htmlSourceRange, type HtmlSelection, type HtmlTextFragment } from "./html-source-map";
+import {
+  htmlDecodedOffsets,
+  htmlRangesForSource,
+  htmlSourceRange,
+  type HtmlSelection,
+  type HtmlTextFragment,
+  type HtmlTextSelection,
+} from "./html-source-map";
 import bridgeTemplate from "./html-bridge.js?raw";
 
 export type { HtmlSelection, HtmlTextFragment } from "./html-source-map";
@@ -41,6 +48,7 @@ export interface HtmlAccelerator {
 export interface HtmlPreviewCallbacks {
   onLine(line: number): void;
   onSelection(selection: HtmlSelection): void;
+  onClear(): void;
   onLink(href: string, raw: string): void;
   onAction(id: string): void;
   onScroll(layout: HtmlLayout): void;
@@ -59,12 +67,16 @@ export interface HtmlPreviewHandle {
   blink(line: number): void;
   /** Translate a guest selection through the table built with the preview. */
   wordRange(selection: HtmlSelection): { from: number; to: number } | null;
+  source(): string | null;
+  highlightWords(source: string, from: number, to: number): boolean;
+  clearWords(): void;
   layout(): HtmlLayout | null;
   anchors(): Anchor[];
   baseUrl(): string | null;
 }
 
 interface FrameState {
+  source: string;
   frame: HTMLIFrameElement;
   token: string;
   generation: number;
@@ -205,6 +217,7 @@ export async function buildHtmlPreview(
         src1: location.endOffset,
         raw,
         text: node.value ?? "",
+        offsets: htmlDecodedOffsets(raw, node.value ?? ""),
       });
       return;
     }
@@ -458,7 +471,12 @@ export function createHtmlPreview(
       return;
     }
 
-    if (!frame.ready) return;
+    if (!frame.ready || frame !== active) return;
+
+    if (data.type === "clearSync") {
+      if (document.activeElement === frame.frame) callbacks.onClear();
+      return;
+    }
 
     if (data.type === "layout") {
       const layout = readLayout(data);
@@ -478,6 +496,7 @@ export function createHtmlPreview(
       return;
     }
     if (data.type === "select") {
+      if (document.activeElement !== frame.frame) return;
       const n = Number(data.n);
       const index = Number(data.index);
       const start = Number(data.start);
@@ -496,6 +515,9 @@ export function createHtmlPreview(
           end,
           sample: data.sample,
           reveal: data.reveal === true,
+          segments: Array.isArray(data.segments)
+            ? (data.segments as HtmlTextSelection[])
+            : undefined,
         });
       }
       return;
@@ -552,7 +574,7 @@ export function createHtmlPreview(
     frame.setAttribute("referrerpolicy", "no-referrer");
     frame.src = `${url}?v=${generation}`;
     host.appendChild(frame);
-    return { frame, token, generation, ready: false, timer: 0, fragments };
+    return { frame, token, generation, ready: false, timer: 0, fragments, source: "" };
   }
 
   function dropFrames(): void {
@@ -616,6 +638,7 @@ export function createHtmlPreview(
       if (mine !== generation) return;
 
       const next = makeFrame(url, token, built.fragments);
+      next.source = source;
       guestBase = url;
       // A newer render supersedes a frame that has not become ready yet.
       if (pending) {
@@ -659,6 +682,21 @@ export function createHtmlPreview(
 
     wordRange(selection) {
       return htmlSourceRange(htmlFragments, selection);
+    },
+
+    source() {
+      return active?.source ?? null;
+    },
+
+    highlightWords(source, from, to) {
+      if (!active) return false;
+      const ranges = source === active.source ? htmlRangesForSource(htmlFragments, from, to) : [];
+      postTo(active, { type: "highlightWords", ranges });
+      return ranges.length > 0;
+    },
+
+    clearWords() {
+      if (active) postTo(active, { type: "highlightWords", ranges: [] });
     },
 
     layout() {

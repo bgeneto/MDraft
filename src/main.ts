@@ -55,7 +55,8 @@ import {
   bindWordMap,
   blockRangeForNode,
   fragmentKindFor,
-  rangeForSource,
+  rangesForSource,
+  selectionEndpoints,
   snapToWords,
   sourceRangeFor,
   type BlockRange,
@@ -70,7 +71,7 @@ import * as sidebarPanel from "./sidebar";
 import { resolvePalette } from "./syntax-themes";
 import { createTabsUi, type TabsUi } from "./tabs";
 import { annotateTypstLines } from "./typst-map";
-import { lineTokenAt, paragraphRangeAt, TypstSourceMap } from "./typst-page-map";
+import { paragraphRangeAt } from "./typst-page-map";
 import { TypstPdfPreview, type TypstPageContext } from "./typst-pdf";
 
 // ---------------------------------------------------------------------------
@@ -771,6 +772,7 @@ function scheduleRender(immediate = false): void {
 // its worker connection and the page canvases; replacing the preview must
 // destroy it or a long session keeps every page it ever drew alive.
 let typstPdf: TypstPdfPreview | null = null;
+let typstPdfToken = -1;
 
 function disposeTypstPdf(): void {
   typstPdf?.dispose();
@@ -917,8 +919,9 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
   const host = document.createElement("div");
   host.className = "typst-preview";
   preview.appendChild(host);
-  const view = new TypstPdfPreview(host, previewPane, syncSourceFromPageSelection);
+  const view = new TypstPdfPreview(host, previewPane, syncSourceFromPageSelection, source);
   typstPdf = view;
+  typstPdfToken = token;
   try {
     await view.render(decodePdf(rendered.pdf));
   } catch (error) {
@@ -935,6 +938,7 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
   // supplies click sync separately.
   previewLinesMapped = false;
   applyPendingPreviewScroll();
+  syncPreviewFromSource();
 }
 
 /** The Document / Pages switch shown above a Typst preview. */
@@ -1370,6 +1374,11 @@ function snapshotDoc(): void {
 function invalidatePreview(): void {
   renderToken += 1;
   window.clearTimeout(renderTimer);
+  window.clearTimeout(selectionTimer);
+  wordMap = null;
+  syncedSource = null;
+  clearPreviewWords();
+  editor?.clearSyncRange();
 }
 
 /**
@@ -3077,11 +3086,17 @@ let syncedSource: { from: number; to: number } | null = null;
 let selectionTimer = 0;
 /** The source range currently painted in the preview, and its pulse state. */
 let previewSyncKey = "";
-let previewPulseRange: Range | null = null;
+let previewPulseRanges: Range[] = [];
 let previewPulseTimer = 0;
 let previewPulseStep = 0;
+let htmlWordsActive = false;
 const PREVIEW_PULSE_BEATS = 8;
 const PREVIEW_PULSE_STEP_MS = 250;
+const wordMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+wordMotion.addEventListener("change", () => {
+  if (wordMotion.matches && previewPulseRanges.length)
+    paintPreviewWords(previewPulseRanges, previewSyncKey);
+});
 
 /** `CSS.highlights` and `Highlight`, when this webview has them. */
 function highlightApi(): {
@@ -3101,8 +3116,10 @@ function clearPreviewWords(): void {
   window.clearTimeout(previewPulseTimer);
   previewPulseTimer = 0;
   previewPulseStep = 0;
-  previewPulseRange = null;
+  previewPulseRanges = [];
   previewSyncKey = "";
+  htmlWordsActive = false;
+  htmlPreview?.clearWords();
 }
 
 /**
@@ -3113,24 +3130,32 @@ function clearPreviewWords(): void {
  * registered, which is the resting wash; the range itself is never removed by
  * the pulse.
  */
-function paintPreviewWords(range: Range, key: string): void {
+function paintPreviewWords(ranges: Range[], key: string): void {
   const api = highlightApi();
   if (!api) return;
   // A new range must not race the previous pulse: its closure holds the old
   // Range and would repaint it under the new name.
   window.clearTimeout(previewPulseTimer);
   previewPulseTimer = 0;
-  const rest = new api.create(range);
-  const peak = new api.create(range);
+  const rest = new api.create(...ranges);
+  const peak = new api.create(...ranges);
   let atPeak = false;
-  previewPulseRange = range;
+  previewPulseRanges = ranges;
   previewSyncKey = key;
   previewPulseStep = 0;
   api.registry.set("mdraft-sync", rest);
   api.registry.delete("mdraft-sync-peak");
 
+  if (wordMotion.matches) return;
+
   const step = (): void => {
-    if (!previewPulseRange) return;
+    if (previewPulseRanges.length === 0) return;
+    if (wordMotion.matches) {
+      api.registry.set("mdraft-sync", rest);
+      api.registry.delete("mdraft-sync-peak");
+      previewPulseTimer = 0;
+      return;
+    }
     atPeak = !atPeak;
     if (atPeak) {
       api.registry.set("mdraft-sync-peak", peak);
@@ -3168,23 +3193,9 @@ function wordSyncAvailable(): boolean {
   return (
     settings.viewMode === "split" &&
     (doc.language === "markdown" || doc.language === "asciidoc" || doc.language === "typst") &&
-    wordMap !== null
+    wordMap !== null &&
+    wordMap.source === editor.getDoc()
   );
-}
-
-/** The text node a selection boundary points at, when it names an element. */
-function textNodeAt(container: Node, side: "start" | "end"): Text | null {
-  if (container.nodeType === Node.TEXT_NODE) return container as Text;
-  if (container.nodeType !== Node.ELEMENT_NODE) return null;
-  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
-  let found: Text | null = null;
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const text = node as Text;
-    if (text.data.length === 0) continue;
-    if (side === "start") return text;
-    found = text;
-  }
-  return found;
 }
 
 /** The source range the current preview selection points at. */
@@ -3196,11 +3207,10 @@ function sourceFromPreviewSelection(): { from: number; to: number } | null {
   const range = selection.getRangeAt(0);
   if (!preview.contains(range.commonAncestorContainer)) return null;
 
-  const startNode = textNodeAt(range.startContainer, "start");
-  const endNode = textNodeAt(range.endContainer, "end");
-  if (!startNode || !endNode) return null;
-  const startOffset = range.startContainer === startNode ? range.startOffset : 0;
-  const endOffset = range.endContainer === endNode ? range.endOffset : endNode.data.length;
+  const endpoints = selectionEndpoints(range);
+  if (!endpoints) return null;
+  const { node: startNode, offset: startOffset } = endpoints.start;
+  const { node: endNode, offset: endOffset } = endpoints.end;
   const atomic = (kind: ReturnType<typeof fragmentKindFor>) => kind !== null && kind !== "text";
   const startKind = fragmentKindFor(map, startNode);
   const endKind = fragmentKindFor(map, endNode);
@@ -3248,6 +3258,7 @@ function sourceFromPreviewSelection(): { from: number; to: number } | null {
  */
 function syncSourceFromPreview(reveal: boolean): void {
   if (!wordSyncAvailable()) return;
+  clearPreviewWords();
   const range = sourceFromPreviewSelection();
   if (!range) {
     syncedSource = null;
@@ -3255,6 +3266,7 @@ function syncSourceFromPreview(reveal: boolean): void {
     return;
   }
   if (syncedSource && syncedSource.from === range.from && syncedSource.to === range.to) {
+    editor.setSyncRange(range.from, range.to);
     if (reveal) editor.revealOffset(range.from);
     editor.pulseSyncRange();
     return;
@@ -3262,16 +3274,6 @@ function syncSourceFromPreview(reveal: boolean): void {
   syncedSource = range;
   editor.setSyncRange(range.from, range.to);
   if (reveal) editor.revealOffset(range.from);
-}
-
-let typstPageSource: { source: string; map: TypstSourceMap } | null = null;
-
-/** Build (or reuse) the word index for the current Typst source. */
-function typstPageMap(source: string): TypstSourceMap {
-  if (typstPageSource?.source !== source) {
-    typstPageSource = { source, map: new TypstSourceMap(source) };
-  }
-  return typstPageSource.map;
 }
 
 /**
@@ -3283,40 +3285,20 @@ function typstPageMap(source: string): TypstSourceMap {
  * occurrence, and the clicked word/paragraph is then selected inside that
  * occurrence. A generated line has no match and paints nothing.
  */
-function syncSourceFromPageSelection(context: TypstPageContext, reveal: boolean): void {
+function syncSourceFromPageSelection(context: TypstPageContext | null, reveal: boolean): void {
+  if (
+    doc.language !== "typst" ||
+    settings.viewMode !== "split" ||
+    typstPdfToken !== renderToken ||
+    typstPdf?.source !== editor.getDoc()
+  )
+    return;
+  clearPreviewWords();
   const source = editor.getDoc();
-  const map = typstPageMap(source);
-  const match = map.mapLineWithNeighbors(
-    context.lineText,
-    context.before,
-    context.after,
-    editor.cursorInfo().from,
-  );
-  const startToken = lineTokenAt(context.lineText, context.start, "start");
-  if (!match || !startToken) {
-    syncedSource = null;
-    editor.clearSyncRange();
-    return;
-  }
-
-  const startWord = map.wordForLineToken(match, startToken.index);
-  if (!startWord) {
-    syncedSource = null;
-    editor.clearSyncRange();
-    return;
-  }
-
-  let range: { from: number; to: number } | null;
-  if (context.paragraph || context.multiLine) {
-    range = paragraphRangeAt(source, startWord.from);
-  } else {
-    const endToken = lineTokenAt(context.lineText, context.end, "end") ?? startToken;
-    const endWord = map.wordForLineToken(match, endToken.index) ?? startWord;
-    range = {
-      from: startWord.from,
-      to: Math.max(startWord.to, endWord.to),
-    };
-  }
+  const range =
+    context?.sourceRange && context.paragraph
+      ? paragraphRangeAt(source, context.sourceRange.from)
+      : context?.sourceRange;
 
   if (!range || range.to <= range.from) {
     syncedSource = null;
@@ -3324,6 +3306,7 @@ function syncSourceFromPageSelection(context: TypstPageContext, reveal: boolean)
     return;
   }
   if (syncedSource && syncedSource.from === range.from && syncedSource.to === range.to) {
+    editor.setSyncRange(range.from, range.to);
     if (reveal) editor.revealOffset(range.from);
     editor.pulseSyncRange();
     return;
@@ -3340,6 +3323,27 @@ function syncSourceFromPageSelection(context: TypstPageContext, reveal: boolean)
  * on every arrow key, which reads as markup the document does not have.
  */
 function syncPreviewFromSource(): void {
+  if (doc.language === "html") {
+    const info = editor.cursorInfo();
+    if (settings.viewMode === "split" && info.selectionLength > 0) {
+      htmlWordsActive = htmlPreview?.highlightWords(editor.getDoc(), info.from, info.to) ?? false;
+    } else {
+      htmlWordsActive = false;
+      htmlPreview?.clearWords();
+    }
+    return;
+  }
+  if (doc.language === "typst" && settings.typstView === "pages") {
+    const info = editor.cursorInfo();
+    const range = info.selectionLength ? snapToWords(editor.getDoc(), info.from, info.to) : null;
+    const ranges =
+      range && settings.viewMode === "split" && typstPdfToken === renderToken
+        ? (typstPdf?.rangesForSource(editor.getDoc(), range.from, range.to) ?? [])
+        : [];
+    if (ranges.length && range) paintPreviewWords(ranges, `${range.from}:${range.to}`);
+    else clearPreviewWords();
+    return;
+  }
   const map = wordMap;
   if (!map || !wordSyncAvailable()) {
     clearPreviewWords();
@@ -3358,18 +3362,18 @@ function syncPreviewFromSource(): void {
   const api = highlightApi();
   if (!api) return;
   const key = `${range.from}:${range.to}`;
-  if (key === previewSyncKey && previewPulseRange) {
+  if (key === previewSyncKey && previewPulseRanges.length > 0) {
     // A second selection of the same word replays the pulse, but a cursor
     // movement during the pulse must not restart it on every key.
-    if (previewPulseTimer === 0) paintPreviewWords(previewPulseRange, key);
+    if (previewPulseTimer === 0) paintPreviewWords(previewPulseRanges, key);
     return;
   }
-  const domRange = rangeForSource(map, range.from, range.to);
-  if (!domRange) {
+  const domRanges = rangesForSource(map, range.from, range.to);
+  if (domRanges.length === 0) {
     clearPreviewWords();
     return;
   }
-  paintPreviewWords(domRange, key);
+  paintPreviewWords(domRanges, key);
 }
 
 /** Restore the scroll a tab switch saved, and keep pane sync from fighting it. */
@@ -3625,12 +3629,29 @@ function installPaneSync(): void {
 
   // Escape clears both surfaces. It neither collapses the selection nor moves
   // anything else: the highlight is the only thing the reader is dismissing.
-  document.addEventListener("keydown", (event) => {
-    if (event.key !== "Escape") return;
-    syncedSource = null;
-    editor.clearSyncRange();
-    clearPreviewWords();
-  });
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key !== "Escape") return;
+      const dismissing = syncedSource !== null || previewPulseRanges.length > 0 || htmlWordsActive;
+      const target = event.target;
+      // CodeMirror's Escape keymap simplifies a selection and consumes the key.
+      // Dismiss correspondence first while preserving the user's selection;
+      // dialogs and unrelated Escape gestures keep their normal handlers.
+      if (
+        dismissing &&
+        target instanceof Node &&
+        (editorPane.contains(target) || previewPane.contains(target))
+      ) {
+        event.preventDefault();
+      }
+      window.clearTimeout(selectionTimer);
+      syncedSource = null;
+      editor.clearSyncRange();
+      clearPreviewWords();
+    },
+    true,
+  );
 
   // Scrolling the preview -> the source follows the same fraction of the block
   // under the sync line. The scrolling element is the pane, not the rendered
@@ -4033,9 +4054,16 @@ function handleHtmlLine(line: number): void {
  */
 function handleHtmlSelection(selection: HtmlSelection): void {
   if (doc.language !== "html" || !htmlPreview) return;
+  if (settings.viewMode !== "split" || htmlPreview.source() !== editor.getDoc()) return;
+  clearPreviewWords();
   const range = htmlPreview.wordRange(selection);
-  if (!range) return;
+  if (!range) {
+    syncedSource = null;
+    editor.clearSyncRange();
+    return;
+  }
   if (syncedSource && syncedSource.from === range.from && syncedSource.to === range.to) {
+    editor.setSyncRange(range.from, range.to);
     editor.pulseSyncRange();
     if (selection.reveal) editor.revealOffset(range.from);
     return;
@@ -4100,6 +4128,9 @@ function handleHtmlAction(id: string): void {
 
 function handleHtmlReady(layout: HtmlLayout): void {
   if (doc.language !== "html") return;
+  syncedSource = null;
+  editor.clearSyncRange();
+  syncPreviewFromSource();
   if (pendingPreviewScroll !== null) {
     htmlRestoreLine = null;
     applyPendingPreviewScroll();
@@ -4584,6 +4615,12 @@ async function boot(): Promise<void> {
     autoCloseTags: settings.autoCloseTags,
   });
   editor.onDocChanged((text) => {
+    // Invalidate before the debounce: the visible DOM still describes old text.
+    renderToken += 1;
+    wordMap = null;
+    syncedSource = null;
+    window.clearTimeout(selectionTimer);
+    editor.clearSyncRange();
     setDirty(text !== doc.savedContent);
     refreshStatus();
     scheduleTokenCount(text);
@@ -4615,6 +4652,11 @@ async function boot(): Promise<void> {
   htmlPreview = createHtmlPreview(previewPane, {
     onLine: handleHtmlLine,
     onSelection: handleHtmlSelection,
+    onClear: () => {
+      syncedSource = null;
+      editor.clearSyncRange();
+      clearPreviewWords();
+    },
     onLink: (href) => handleHtmlLink(href),
     onAction: handleHtmlAction,
     onScroll: handleHtmlScroll,
