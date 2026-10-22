@@ -1,7 +1,7 @@
 # Word-level sync maps rendered text to source offsets at render time
 
 **Status:** accepted
-**Superseded in part by:** `2026-10-20-html-word-sync.md` (the HTML exclusion), `2026-10-20-block-sync-fallback.md` (the block-abandonment rule and Typst Document exclusion)
+**Superseded in part by:** `2026-10-20-html-word-sync.md` (the HTML exclusion), `2026-10-20-block-sync-fallback.md` (the block-abandonment rule and Typst Document exclusion), `2026-10-22-selection-highlighting.md` (multi-range painting and snapshot lifetime).
 **Date:** 2026-10-18
 
 ## Context

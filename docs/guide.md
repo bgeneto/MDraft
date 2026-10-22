@@ -70,9 +70,13 @@ The preview has two views:
 - **Pages** shows the compiler's real PDF, drawn by PDF.js. This is what a PDF
   export will contain, and its text layer can be selected, copied and searched.
   A single click paints the corresponding source paragraph; double-clicking a
-  word or dragging across a range paints that selection and reveals it. The line
-  around the click identifies the occurrence, so a repeated word in a second
-  column does not jump to the first occurrence. Generated text paints nothing.
+  word or dragging across a short range paints that selection and reveals it.
+  Selecting literal prose in the source also paints the matching PDF text.
+  Surrounding prose and reading regions identify repeated words across columns,
+  including words beside formulas and verified line-break fragments. Generated
+  text and indistinguishable repeated passages remain unpainted. This is text
+  correspondence, so arbitrary macro expansion and formulas have no exact
+  source mapping.
   In the dark theme the pages follow the application: the PDF's white paper and
   black text become the app's dark surface and off-white. In both themes a page
   fills the pane's width — its side edges are clipped, and only the rule between
@@ -138,11 +142,15 @@ In Split view:
   caret without scrolling the source; a single click in Typst's Pages view paints
   the source paragraph that contains the clicked line;
 - selecting a word or a range in either pane paints the corresponding text in
-  the other, without taking the selection or scrolling; Escape clears it. This
-  covers Markdown, AsciiDoc, and Typst's Document and Pages views. A paragraph
-  whose text comes from an attribute substitution, from an included file or from
-  generated Typst content is left alone rather than guessed at; HTML documents
-  have no word-level sync;
+  the other without taking the selection; Escape clears the paint. Source
+  selections do not scroll the preview; Pages may reveal a preview selection's
+  source match. This
+  covers Markdown, AsciiDoc, HTML and both Typst views. HTML supports inline
+  selections and entities; script-mutated text must still match the render
+  snapshot. AsciiDoc and Typst Document can fall back to an anchored containing
+  block for substitutions or formulas. Unanchored generated content stays
+  unpainted. During an edit the previous preview map is invalid until the fresh
+  render arrives. Reduced motion keeps a steady resting mark;
 - keyboard movement may reveal the caret's block when it has left the pane;
 - **F5 and Ctrl+R do not reload the window.** A reload would discard every open
   tab and every unsaved buffer with no prompt, so those keys are swallowed.

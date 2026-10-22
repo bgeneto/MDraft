@@ -1,122 +1,174 @@
-//! Source positions for the HTML preview's text nodes.
-//!
-//! `html-preview.ts` walks the parse5 tree with `sourceCodeLocationInfo` and
-//! records one `HtmlTextFragment` per text node. The guest cannot see those
-//! offsets, so the bridge reports a text-node index and the text it selected.
-//! This module is the pure rule that turns that report into a source range; it
-//! imports nothing, so a unit test runs it without a browser.
-//!
-//! The sample check is deliberate. A document's own scripts can rewrite the
-//! preview DOM, and a parser repair can split a text node differently from
-//! parse5's tree. Either makes the index point at the wrong characters. A
-//! mismatch returns null — no mark — rather than painting a plausible wrong
-//! word. The line reveal remains.
+//! HTML text identities and decoded/raw UTF-16 boundaries. Both selection
+//! directions use the table built with the guest, never a source search.
+import { parseFragment } from "parse5";
 
-/** One text node under a stamped block, with its source range. */
 export interface HtmlTextFragment {
-  /** The preview-only `data-mdraft-n` id of the nearest stamped ancestor. */
   n: number;
-  /** Position among the text nodes under that stamp, in tree order. */
   index: number;
-  /** Offset of the raw source slice in the document. */
   src0: number;
   src1: number;
-  /** The raw source slice, entities and line endings included. */
   raw: string;
-  /** The decoded text the browser will have in the text node. */
   text: string;
+  /** null inside an entity expansion; never invent an interior source offset. */
+  offsets?: (number | null)[] | null;
 }
 
-/** What the guest reports for a double-click or a settled drag. */
-export interface HtmlSelection {
+export interface HtmlTextSelection {
   n: number;
   index: number;
   start: number;
   end: number;
   sample: string;
+}
+
+export interface HtmlSelection extends HtmlTextSelection {
   reveal: boolean;
+  segments?: HtmlTextSelection[];
 }
 
-const NAMED_ENTITIES: Record<string, string> = {
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-  nbsp: "\u00a0",
-};
+const entityCache = new Map<string, { text: string; length: number }>();
 
-/** One decoded character, and how much raw text produced it. */
-function decodeAt(raw: string, at: number): { text: string; next: number } {
-  if (raw[at] === "\r" && raw[at + 1] === "\n") {
-    return { text: "\n", next: at + 2 };
-  }
-  if (raw[at] !== "&") return { text: raw[at], next: at + 1 };
+function entityAt(raw: string, at: number): { text: string; length: number } | null {
+  const candidate = /^&(?:#[xX][\da-fA-F]+;?|#\d+;?|[a-zA-Z][\da-zA-Z]{0,32};?)/.exec(
+    raw.slice(at),
+  )?.[0];
+  if (!candidate) return null;
+  const cached = entityCache.get(candidate);
+  if (cached) return cached;
+  const tree = parseFragment(candidate);
+  const text = tree.childNodes
+    .map((node) => (node.nodeName === "#text" && "value" in node ? node.value : ""))
+    .join("");
+  if (text === candidate) return null;
+  // Legacy references may omit a semicolon: the unchanged suffix in &copycat
+  // remains ordinary text, with independently addressable source characters.
+  let suffix = 0;
+  while (
+    suffix < text.length - 1 &&
+    suffix < candidate.length &&
+    text[text.length - suffix - 1] === candidate[candidate.length - suffix - 1]
+  )
+    suffix += 1;
+  const result = { text: text.slice(0, text.length - suffix), length: candidate.length - suffix };
+  if (entityCache.size >= 256) entityCache.clear();
+  entityCache.set(candidate, result);
+  return result;
+}
 
-  const semicolon = raw.indexOf(";", at + 1);
-  if (semicolon < 0 || semicolon - at > 12) return { text: "&", next: at + 1 };
-  const body = raw.slice(at + 1, semicolon);
-  if (body.startsWith("#")) {
-    const hex = body[1] === "x" || body[1] === "X";
-    const digits = hex ? body.slice(2) : body.slice(1);
-    const code = Number.parseInt(digits, hex ? 16 : 10);
-    if (Number.isFinite(code) && code > 0 && code <= 0x10ffff) {
-      return { text: String.fromCodePoint(code), next: semicolon + 1 };
+/** Decode with HTML5 rules, retaining only valid source boundaries. */
+export function htmlDecodedOffsets(raw: string, expected?: string): (number | null)[] | null {
+  const offsets: (number | null)[] = [0];
+  let decoded = "";
+  for (let at = 0; at < raw.length;) {
+    let text = raw[at];
+    let length = 1;
+    if (text === "\r") {
+      text = "\n";
+      length = raw[at + 1] === "\n" ? 2 : 1;
+    } else if (text === "&") {
+      const entity = entityAt(raw, at);
+      if (entity) ({ text, length } = entity);
     }
+    decoded += text;
+    for (let i = 1; i < text.length; i += 1) offsets.push(null);
+    at += length;
+    offsets.push(at);
   }
-  const named = NAMED_ENTITIES[body];
-  if (named) return { text: named, next: semicolon + 1 };
-  return { text: "&", next: at + 1 };
+  return expected === undefined || expected === decoded ? offsets : null;
 }
 
-/**
- * The raw offset that produced a decoded offset inside one text node.
- *
- * The decoded and raw lengths differ wherever an entity or a CRLF appears.
- * `null` means the offset falls inside an entity's expansion or past the end,
- * which is not a character boundary and cannot be mapped safely.
- */
 export function rawOffsetForDecoded(raw: string, offset: number): number | null {
-  if (offset < 0) return null;
-  let rawAt = 0;
-  let decoded = 0;
-  while (rawAt < raw.length) {
-    if (decoded === offset) return rawAt;
-    const step = decodeAt(raw, rawAt);
-    decoded += step.text.length;
-    if (decoded > offset) return null;
-    rawAt = step.next;
-  }
-  return decoded === offset ? raw.length : null;
+  if (!Number.isInteger(offset) || offset < 0) return null;
+  return htmlDecodedOffsets(raw)?.[offset] ?? null;
 }
 
-/**
- * The source range a guest selection names, or null when the DOM no longer
- * matches the table.
- */
+function boundaries(fragment: HtmlTextFragment): (number | null)[] | null {
+  if (fragment.offsets === undefined)
+    fragment.offsets = htmlDecodedOffsets(fragment.raw, fragment.text);
+  return fragment.offsets;
+}
+
+/** Validate every node/sample, including multi-node selections, before painting. */
 export function htmlSourceRange(
   fragments: readonly HtmlTextFragment[],
   selection: HtmlSelection,
 ): { from: number; to: number } | null {
-  if (
-    !Number.isInteger(selection.n) ||
-    !Number.isInteger(selection.index) ||
-    !Number.isInteger(selection.start) ||
-    !Number.isInteger(selection.end) ||
-    selection.start < 0 ||
-    selection.end <= selection.start
-  ) {
-    return null;
+  const segments = selection.segments ?? [selection];
+  if (!Array.isArray(segments) || segments.length === 0 || segments.length > 128) return null;
+  let first = -1,
+    last = -1,
+    previous = -1,
+    length = 0;
+  for (const segment of segments) {
+    if (
+      !segment ||
+      ![segment.n, segment.index, segment.start, segment.end].every(Number.isInteger) ||
+      segment.start < 0 ||
+      segment.end <= segment.start ||
+      typeof segment.sample !== "string"
+    )
+      return null;
+    const index = fragments.findIndex(
+      (entry) => entry.n === segment.n && entry.index === segment.index,
+    );
+    const fragment = fragments[index];
+    if (
+      !fragment ||
+      index <= previous ||
+      segment.end > fragment.text.length ||
+      fragment.text.slice(segment.start, segment.end) !== segment.sample
+    )
+      return null;
+    length += segment.sample.length;
+    if (length > 2000) return null;
+    const table = boundaries(fragment);
+    const from = table?.[segment.start],
+      to = table?.[segment.end];
+    if (from === null || from === undefined || to === null || to === undefined) return null;
+    if (first < 0) first = fragment.src0 + from;
+    if (fragment.src0 + from < last) return null;
+    last = fragment.src0 + to;
+    previous = index;
   }
-  const fragment = fragments.find(
-    (entry) => entry.n === selection.n && entry.index === selection.index,
-  );
-  if (!fragment) return null;
-  if (selection.end > fragment.text.length) return null;
-  if (fragment.text.slice(selection.start, selection.end) !== selection.sample) return null;
+  return first >= 0 && last > first ? { from: first, to: last } : null;
+}
 
-  const start = rawOffsetForDecoded(fragment.raw, selection.start);
-  const end = rawOffsetForDecoded(fragment.raw, selection.end);
-  if (start === null || end === null) return null;
-  return { from: fragment.src0 + start, to: fragment.src0 + end };
+/** The inverse table; the guest receives identities and decoded offsets only. */
+export function htmlRangesForSource(
+  fragments: readonly HtmlTextFragment[],
+  from: number,
+  to: number,
+): HtmlTextSelection[] {
+  const ranges: HtmlTextSelection[] = [];
+  const lo = Math.min(from, to),
+    hi = Math.max(from, to);
+  for (const fragment of fragments) {
+    if (fragment.src1 <= lo || fragment.src0 >= hi) continue;
+    const table = boundaries(fragment);
+    if (!table) continue;
+    const rawStart = Math.max(0, lo - fragment.src0),
+      rawEnd = Math.min(fragment.raw.length, hi - fragment.src0);
+    let start = 0,
+      end = fragment.text.length;
+    for (let i = 0; i < table.length; i += 1) {
+      const at = table[i];
+      if (at === null) continue;
+      if (at <= rawStart) start = i;
+      if (at >= rawEnd) {
+        end = i;
+        break;
+      }
+    }
+    if (end > start && fragment.text.slice(start, end).trim()) {
+      ranges.push({
+        n: fragment.n,
+        index: fragment.index,
+        start,
+        end,
+        sample: fragment.text.slice(start, end),
+      });
+    }
+    if (ranges.length > 128) return [];
+  }
+  return ranges;
 }

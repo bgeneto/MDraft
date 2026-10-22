@@ -1,6 +1,7 @@
 # Typst Pages are the compiler's PDF through PDF.js
 
 **Status:** accepted
+**Superseded in part by:** `2026-10-22-selection-highlighting.md` (bidirectional prose indexing replaces caret-assisted line matching).
 **Date:** 2026-10-18
 
 ## Context

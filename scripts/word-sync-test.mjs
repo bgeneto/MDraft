@@ -9,6 +9,10 @@
 //! table, a task list, an alert and a fence. A "word" that maps correctly here
 //! maps correctly anywhere.
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 const port = process.argv[2] ?? "9222";
 
 // ---------------------------------------------------------------------------
@@ -585,6 +589,149 @@ check(
   "emphasis-shaped formula remains an atomic source fragment",
   (await paintedWord()) === "$a*b*c$",
 );
+console.log("\n=== shared selection regression matrix ===");
+const matrixDir = fs.mkdtempSync(path.join(os.tmpdir(), "mdraft-sync-matrix-"));
+for (const [extension, source] of [
+  ["md", "# Audit\n\nalpha **bravo** charlie.\n\ndelta echo foxtrot.\n"],
+  ["adoc", "= Audit\n\nalpha *bravo* charlie.\n\ndelta echo foxtrot.\n"],
+  ["typ", "= Audit\n\nalpha *bravo* charlie.\n\ndelta echo foxtrot.\n"],
+]) {
+  const file = path.join(matrixDir, `audit.${extension}`);
+  fs.writeFileSync(file, source);
+  await evaluate(
+    `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'open-files',payload:[${JSON.stringify(file)}]})`,
+  );
+  for (let attempt = 0; attempt < 120; attempt++) {
+    if (
+      await evaluate(
+        `document.title.includes('audit.${extension}') && [...document.querySelectorAll('#preview strong')].some(e=>e.textContent==='bravo')`,
+      )
+    )
+      break;
+    await sleep(100);
+  }
+  await resetView();
+  const boundary = await evaluate(
+    `(()=>{const p=[...document.querySelectorAll('#preview p')].find(e=>e.textContent.includes('alpha'));if(!p)return null;const strong=p.querySelector('strong'),at=[...p.childNodes].indexOf(strong);const r=document.createRange();r.setStart(p,at);r.setEnd(p,at+1);const s=window.getSelection();s.removeAllRanges();s.addRange(r);document.querySelector('#preview').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));return s.toString();})()`,
+  );
+  await sleep(150);
+  check(
+    `${extension}: element endpoints select only the bold word`,
+    boundary === "bravo" && (await paintedWord()) === "bravo",
+    JSON.stringify(await paintedWord()),
+  );
+  await clearSelection();
+  const a = await rectOf("alpha", ".cm-content"),
+    b = await rectOf("echo", ".cm-content");
+  if (a && b) await drag(a.x, a.y, b.x, b.y);
+  await sleep(180);
+  const multi = (await highlightText())?.join(" ") ?? "";
+  check(
+    `${extension}: reverse selection paints both paragraphs`,
+    ["alpha", "bravo", "charlie", "delta", "echo"].every((word) => multi.includes(word)),
+    JSON.stringify(multi),
+  );
+  let alternations = true;
+  for (let pair = 0; pair < 20; pair++) {
+    const point = await rectOf("bravo", ".cm-content");
+    if (!point) {
+      alternations = false;
+      break;
+    }
+    await doubleClickAt(point.x, point.y);
+    await sleep(25);
+    if (!(await highlightText())?.join("").includes("bravo")) {
+      alternations = false;
+      break;
+    }
+    await selectPreviewWord("bravo");
+    await evaluate(
+      `document.querySelector('#preview').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`,
+    );
+    await sleep(25);
+    if ((await paintedWord()) !== "bravo") {
+      alternations = false;
+      break;
+    }
+  }
+  check(`${extension}: twenty alternating source/preview pairs keep the exact word`, alternations);
+  const escapePoint = await rectOf("bravo", ".cm-content");
+  if (escapePoint) await doubleClickAt(escapePoint.x, escapePoint.y);
+  const sourceSelection = await evaluate(`getSelection().toString()`);
+  await send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key: "Escape",
+    code: "Escape",
+    windowsVirtualKeyCode: 27,
+  });
+  await send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key: "Escape",
+    code: "Escape",
+    windowsVirtualKeyCode: 27,
+  });
+  await sleep(180);
+  check(
+    `${extension}: Escape dismisses source correspondence without collapsing selection`,
+    sourceSelection === "bravo" &&
+      (await evaluate(`getSelection().toString()`)) === sourceSelection &&
+      (await paintedWord()) === null &&
+      !(await highlightText())?.length,
+  );
+  if (extension === "md") {
+    await send("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+    });
+    await clearSelection();
+    const point = await rectOf("alpha", ".cm-content");
+    if (point) await doubleClickAt(point.x, point.y);
+    await sleep(350);
+    check(
+      "reduced motion keeps the preview resting highlight",
+      await evaluate(`CSS.highlights.has('mdraft-sync')&&!CSS.highlights.has('mdraft-sync-peak')`),
+    );
+    await send("Emulation.setEmulatedMedia", { features: [] });
+  }
+  // Save a Range on the old DOM, edit before it, and select it during debounce.
+  await evaluate(
+    `(()=>{const w=document.createTreeWalker(document.querySelector('#preview'),NodeFilter.SHOW_TEXT);for(let n=w.nextNode();n;n=w.nextNode()){const at=n.data.indexOf('alpha');if(at<0)continue;const r=document.createRange();r.setStart(n,at);r.setEnd(n,at+5);window.__oldSyncRange=r;break;}document.querySelector('.cm-content').focus();})()`,
+  );
+  await send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key: "Home",
+    code: "Home",
+    modifiers: 2,
+    windowsVirtualKeyCode: 36,
+  });
+  await send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key: "Home",
+    code: "Home",
+    modifiers: 2,
+    windowsVirtualKeyCode: 36,
+  });
+  await send("Input.insertText", { text: "PREFIX " });
+  await evaluate(
+    `(()=>{const s=window.getSelection();s.removeAllRanges();s.addRange(window.__oldSyncRange);document.querySelector('#preview').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));})()`,
+  );
+  check(
+    `${extension}: stale visible text cannot paint shifted source`,
+    (await paintedWord()) === null,
+    JSON.stringify(await paintedWord()),
+  );
+  await sleep(900);
+  await selectPreviewWord("alpha");
+  await evaluate(
+    `document.querySelector('#preview').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`,
+  );
+  await sleep(150);
+  check(
+    `${extension}: the new map paints the current word after editing`,
+    (await paintedWord()) === "alpha",
+    JSON.stringify(await paintedWord()),
+  );
+}
+
 ws.close();
 await new Promise((resolve) => setTimeout(resolve, 200));
 console.log(`\n${passed}/${passed + failed} checks passed`);

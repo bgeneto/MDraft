@@ -575,8 +575,235 @@ if (!nextSrc || nextSrc === active.src) {
   returned.close();
 }
 
+console.log("\n=== correspondence regressions ===");
+await page.evaluate(`document.querySelector('.prefs-close')?.click()`);
+const syncDir = fs.mkdtempSync(path.join(os.tmpdir(), "mdraft-html-sync-"));
+const syncFile = path.join(syncDir, "selection.html");
+fs.writeFileSync(
+  syncFile,
+  `<!doctype html><html><body>
+<p id="entity">Caf&eacute; afterword &copy; copyright.</p>
+<p id="inline">alpha <strong>bravo</strong> charlie.</p>
+<div id="nested">lead<p>inside</p>afterwordNested</div>
+<p id="single">standaloneword sample nextword.</p>
+</body></html>`,
+);
+async function reconnect(previous = "") {
+  let src = "";
+  for (let i = 0; i < 80; i += 1) {
+    src = await page.evaluate(
+      `document.querySelector('.html-preview-frame.active')?.getAttribute('src') ?? ''`,
+    );
+    if (src && src !== previous) break;
+    await sleep(100);
+  }
+  frame.close();
+  frame = await frameClient(src);
+  await sleep(450);
+  return src;
+}
+await page.evaluate(
+  `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'open-files',payload:[${JSON.stringify(syncFile)}]})`,
+);
+const syncSrc = await reconnect(nextSrc);
+async function dbl(point) {
+  if (!point) return;
+  for (const clickCount of [1, 2])
+    for (const type of ["mousePressed", "mouseReleased"]) {
+      await page.send("Input.dispatchMouseEvent", {
+        type,
+        x: point.x,
+        y: point.y,
+        button: "left",
+        clickCount,
+      });
+    }
+  await sleep(150);
+}
+async function guestPoint(word, id) {
+  const point = await frame.evaluate(`(() => {
+    const root=document.getElementById(${JSON.stringify(id)});
+    root?.scrollIntoView({block:'center'});
+    const w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+    for(let t=w.nextNode();t;t=w.nextNode()) {
+      const at=t.data.indexOf(${JSON.stringify(word)});if(at<0)continue;
+      const r=document.createRange();r.setStart(t,at);r.setEnd(t,at+${word.length});
+      const b=r.getBoundingClientRect();return{x:b.left+b.width/2,y:b.top+b.height/2};
+    } return null;
+  })()`);
+  const origin = await page.evaluate(
+    `(() => {const b=document.querySelector('.html-preview-frame.active').getBoundingClientRect();return{x:b.x,y:b.y}})()`,
+  );
+  return point ? { x: point.x + origin.x, y: point.y + origin.y } : null;
+}
+async function sourceMark() {
+  return page.evaluate(
+    `[...document.querySelectorAll('.cm-sync-word')].map(n=>n.textContent).join('')`,
+  );
+}
+async function guestPaint() {
+  return frame.evaluate(
+    `(() => {const h=CSS.highlights.get('mdraft-sync')??CSS.highlights.get('mdraft-sync-peak');return h?[...h].map(r=>r.toString()).join(''):''})()`,
+  );
+}
+async function htmlTrip(word, id) {
+  await dbl(await guestPoint(word, id));
+  const forward = await sourceMark();
+  const point = await page.evaluate(
+    `(() => {const el=document.querySelector('.cm-sync-word');if(!el)return null;const b=el.getBoundingClientRect();return{x:b.x+b.width/2,y:b.y+b.height/2}})()`,
+  );
+  await dbl(point);
+  const reverse = await guestPaint();
+  return { word, forward, reverse, ok: forward === word && reverse === word };
+}
+const entityTrip = await htmlTrip("afterword", "entity");
+check(
+  "HTML entity offsets and reverse highlight identify the exact word",
+  entityTrip.ok,
+  JSON.stringify(entityTrip),
+);
+const nestedTrip = await htmlTrip("afterwordNested", "nested");
+check(
+  "nested stamped elements use the same text ownership in both directions",
+  nestedTrip.ok,
+  JSON.stringify(nestedTrip),
+);
+
+// The guest must have actual focus before publishing a programmatic Range.
+await dbl(await guestPoint("bravo", "inline"));
+await frame.evaluate(
+  `(() => {const b=document.querySelector('strong'),r=document.createRange();r.setStartBefore(b);r.setEndAfter(b);const s=getSelection();s.removeAllRanges();s.addRange(r)})()`,
+);
+await sleep(180);
+check(
+  "HTML element-boundary selection maps only bold bravo",
+  (await sourceMark()) === "bravo",
+  await sourceMark(),
+);
+await frame.evaluate(
+  `(() => {const p=document.getElementById('inline'),r=document.createRange();r.setStart(p.firstChild,0);r.setEnd(p.lastChild,8);const s=getSelection();s.removeAllRanges();s.addRange(r)})()`,
+);
+await sleep(180);
+check(
+  "HTML selections across inline nodes preserve their source span",
+  (await sourceMark()) === "alpha <strong>bravo</strong> charlie",
+  await sourceMark(),
+);
+
+await page.send("Input.dispatchKeyEvent", {
+  type: "keyDown",
+  key: "Escape",
+  code: "Escape",
+  windowsVirtualKeyCode: 27,
+});
+await page.send("Input.dispatchKeyEvent", {
+  type: "keyUp",
+  key: "Escape",
+  code: "Escape",
+  windowsVirtualKeyCode: 27,
+});
+await sleep(180);
+check(
+  "Escape in the focused guest clears correspondence without losing selection",
+  (await sourceMark()) === "" &&
+    (await guestPaint()) === "" &&
+    (await frame.evaluate(`getSelection().toString().includes('bravo')`)),
+);
+
+const trips = [];
+for (let n = 0; n < 20; n += 1)
+  trips.push(
+    await htmlTrip(
+      ...[
+        ["afterword", "entity"],
+        ["bravo", "inline"],
+        ["afterwordNested", "nested"],
+        ["sample", "single"],
+      ][n % 4],
+    ),
+  );
+check(
+  "twenty HTML/editor pairs retain exact words",
+  trips.every((r) => r.ok),
+  JSON.stringify(trips.filter((r) => !r.ok)),
+);
+await frame.send("Emulation.setEmulatedMedia", {
+  features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+});
+const reducedTrip = await htmlTrip("sample", "single");
+await sleep(300);
+check(
+  "HTML reduced motion uses a stable resting mark",
+  reducedTrip.ok &&
+    (await frame.evaluate(
+      `CSS.highlights.has('mdraft-sync') && !CSS.highlights.has('mdraft-sync-peak')`,
+    )),
+);
+await frame.send("Emulation.setEmulatedMedia", { features: [] });
+const sourceSelection = await page.evaluate(`getSelection().toString()`);
+await page.send("Input.dispatchKeyEvent", {
+  type: "keyDown",
+  key: "Escape",
+  code: "Escape",
+  windowsVirtualKeyCode: 27,
+});
+await page.send("Input.dispatchKeyEvent", {
+  type: "keyUp",
+  key: "Escape",
+  code: "Escape",
+  windowsVirtualKeyCode: 27,
+});
+await sleep(180);
+check(
+  "Escape in the HTML source clears guest paint without collapsing selection",
+  sourceSelection === "sample" &&
+    (await page.evaluate(`getSelection().toString()`)) === sourceSelection &&
+    (await guestPaint()) === "" &&
+    (await sourceMark()) === "",
+);
+
+// Script-mutated text may be selected, but cannot validate against the snapshot.
+await dbl(await guestPoint("sample", "single"));
+await frame.evaluate(
+  `document.getElementById('single').firstChild.data='mutatedword sample nextword.'`,
+);
+await dbl(await guestPoint("mutatedword", "single"));
+check(
+  "an invalid guest sample clears the preceding source mark",
+  (await sourceMark()) === "",
+  await sourceMark(),
+);
+
+// Append after the selected word so the source offsets are unchanged. This
+// catches the equal-range fast path that pulsed a decoration removed by edits.
+await htmlTrip("afterword", "entity");
+await page.send("Input.dispatchKeyEvent", {
+  type: "keyDown",
+  key: "End",
+  code: "End",
+  modifiers: 2,
+  windowsVirtualKeyCode: 35,
+});
+await page.send("Input.dispatchKeyEvent", {
+  type: "keyUp",
+  key: "End",
+  code: "End",
+  modifiers: 2,
+  windowsVirtualKeyCode: 35,
+});
+await page.send("Input.insertText", { text: "\n" });
+await sleep(600);
+await reconnect(syncSrc);
+await dbl(await guestPoint("afterword", "entity"));
+check(
+  "the same HTML word paints again after editing and guest replacement",
+  (await sourceMark()) === "afterword",
+  await sourceMark(),
+);
+
 frame.close();
 page.close();
+fs.rmSync(syncDir, { recursive: true, force: true });
 
 console.log(`\n${passed}/${passed + failed} checks passed`);
 process.exit(failed === 0 ? 0 : 1);

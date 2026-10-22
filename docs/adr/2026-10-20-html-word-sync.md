@@ -1,6 +1,7 @@
 # HTML word positions live in a host-side table built from the preview parse
 
 **Status:** accepted
+**Superseded in part by:** `2026-10-22-selection-highlighting.md` (validated multi-node selections, full entity boundaries, reverse highlighting and frame/focus lifetime).
 **Date:** 2026-10-20
 **Supersedes in part:** `2026-10-18-word-level-sync.md` (its HTML exclusion)
 

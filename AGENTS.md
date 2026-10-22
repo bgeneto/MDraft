@@ -204,7 +204,7 @@ rewrite from scratch.
 | `npm run test:rust` | `cargo test` | 99 tests (97 run, two ignored downloads) on both platforms |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. The two restart layers are the exception: two launches of the same instance's settings directory, closed with WM_CLOSE in between so the close flush runs. Puts back the working tree and the developer's own settings afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
 | `npm run smoke` | `scripts/dom-smoke.mjs` | 107 checks against `samples/feature-tour.md` |
-| `npm run word-sync` | `scripts/word-sync-test.mjs` | 39 checks of word-level sync against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, the four-beat pulse and its resting mark, reduced motion, no scroll, Escape, and the fallbacks |
+| `npm run word-sync` | `scripts/word-sync-test.mjs` | 58 checks of word-level sync, including 20 alternating pairs, element endpoints, multi-paragraph ranges, stale render rejection and reduced motion in Markdown/AsciiDoc/Typst Document, against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, the four-beat pulse and its resting mark, reduced motion, no scroll, Escape, and the fallbacks |
 | `npm run autoclose:unit` | `scripts/autoclose-unit.mjs` | 17 checks of the tag matcher: attributes, custom elements, void and self-closing tags, autolinks, escapes, declarations, prose — no application |
 | `npm run autoclose` | `scripts/autoclose-test.mjs` | 33 checks of pairs, quotes, backticks, HTML tags and both preferences, typed through the real editor in Markdown, HTML, Typst and AsciiDoc |
 | `npm run spellcheck` | `scripts/spellcheck-test.mjs` | Underlines a misspelling, then clears it when spelling is turned off |
@@ -212,15 +212,15 @@ rewrite from scratch.
 | `npm run audit` | `scripts/audit-document.mjs` | Render metrics for whatever document is loaded |
 | `npm run math` | `scripts/math-render-check.mjs` | 12 checks against the physics paper |
 | `npm run syntax` | `scripts/syntax-theme-test.mjs` | 10 checks that highlighting is real and that the sync mark stays amber and visible on Nord, Ink and Solarized Dark |
-| `npm run html` | `scripts/html-preview-test.mjs` | 50 checks of the sandboxed HTML guest, including a double-click that paints the clicked word rather than the first occurrence |
+| `npm run html` | `scripts/html-preview-test.mjs` | 60 checks of the sandboxed HTML guest, including 20 alternating editor/guest pairs, full entity offsets, inline/nested ownership, reverse paint, Escape, reduced motion, invalid samples and same-word reselection after an edit |
 | `npm run export` | `scripts/export-test.mjs` | 38 checks of every export path, against real pandoc, including an AsciiDoc source and the rendered-HTML math reader |
 | `npm run typography` | `scripts/typography-test.mjs` | 48 checks that each face loads, each OpenType switch changes pixels, the six-preset matrix holds, the four new body faces render differently, and the Semibold weights are real |
 | `npm run shortcuts` | `scripts/shortcut-test.mjs` | 43 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, that the zoom chip follows the level, that a new tab keeps the previous buffer's undo, and that the webview's F5/Ctrl+R reload keys are swallowed |
 | `npm run tabs` | `scripts/document-tabs-test.mjs` | 106 checks of several open documents: sidebar and Recents, `open-files`, active-tab styling, the tab context menu, keyboard navigation, caret and scroll per tab, dirty dot, × and middle-click, Ctrl+Tab, drag and keyboard reordering, the disk poll, Auto Save across tabs, overflow arrows and the wheel, Close Others, the last tab |
 | `npm run favorites` | `scripts/favorites-test.mjs` | 56 checks of the Favorites panel that replaced Files: the editor and tab menu routes, the Add/Remove toggle, insertion order across opens, inactive-tab favoriting, duplicate adds, the per-row × and row menu, one-at-a-time removal, a missing file, the untitled disabled state, no Clear All, the Preferences changes and `view.favorites` in the native menu |
 | `npm run tabs:restore:unit` | `scripts/tabs-restore-unit.mjs` | 33 checks of what is remembered and what is restored: tab order, untitled exclusion, deduplication under the platform's path identity, the 20-document cap, and the restore plan's handling of missing files — no application |
-| `npm run typst:map:unit` | `scripts/typst-page-map-unit.mjs` | 9 checks of the Typst Pages source map: a repeated one-word line with identical neighbours paints nothing, a unique neighbour window picks the clicked occurrence, ligatures and soft hyphens match, and generated text stays unmapped — no application |
-| `npm run html:map:unit` | `scripts/html-source-map-unit.mjs` | 14 checks of the HTML text-node offsets: entities and CRLF, the decoded-to-raw translation, the sample mismatch that paints nothing, and two nodes under one stamp — no application |
+| `npm run typst:map:unit` | `scripts/typst-page-map-unit.mjs` | 21 checks of the bidirectional Typst Pages prose index: formula-adjacent prose, region isolation, ambiguity, reverse lookup, PDF ActualText breaks and Unicode offsets; a repeated one-word line with identical neighbours paints nothing, a unique neighbour window picks the clicked occurrence, ligatures and soft hyphens match, and generated text stays unmapped — no application |
+| `npm run html:map:unit` | `scripts/html-source-map-unit.mjs` | 38 checks of HTML5 entity boundaries, inverse ranges, validated multi-node payloads and text-node offsets: entities and CRLF, the decoded-to-raw translation, the sample mismatch that paints nothing, and two nodes under one stamp — no application |
 | `npm run block:map:unit` | `scripts/block-map-unit.mjs` | 12 checks of the block-level source map and Typst line annotation: folded index mapping, per-node alignment across substitutions and smart punctuation, gap block fallback, Typst comments/rules/math/code/tables, and `#lorem` exclusion — no application |
 | `npm run recent` | `scripts/recent-menu-test.mjs` | 26 checks that File › Open Recent mirrors the persisted list: the launch file, a new file becoming first, the menu id opening/focusing a tab, Clear Items emptying menu and sidebar, the list refilling, and a 27-row history rendered in full by the sidebar while the menu shows 20 plus Clear Items |
 | `npm run asciidoc` | `scripts/asciidoc-test.mjs` | 54 checks of the AsciiDoc preview, source highlighting, outline, preview copy, spellcheck, includes, paste, the AsciiDoc reference, the default extension and word-level sync |
@@ -229,7 +229,7 @@ rewrite from scratch.
 | `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 369 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
 | `npm run paste` | `scripts/rich-paste-test.mjs` | 68 checks of rich paste through the real UI: destination detection, conversion in every direction, whitespace across inline elements, preferences, Ctrl+Shift+V, undo |
 | `npm run image:syntax` | `scripts/image-syntax-test.mjs` | 14 checks of bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, including the Image preference |
-| `npm run typst:preview` | `scripts/typst-preview-test.mjs` | 36 checks of Typst Pages through PDF.js and Typst word sync: page shells, canvases, text layers, both columns, selection/copy, paragraph click, repeated-word/right-column mapping, one-word heading mapping, drag ranges, generated-text fallback, inline-math paragraphs, tables and code blocks, the transparent view bar, view switching and PDF disposal |
+| `npm run typst:preview` | `scripts/typst-preview-test.mjs` | 48 checks (49 with the optional local physics exam) of Typst Pages through PDF.js and bidirectional word sync, including 20 alternating pairs, narrow/wide fits, lazy canvases, stale renders, Escape, reduced motion and tab replacement: page shells, canvases, text layers, both columns, selection/copy, paragraph click, repeated-word/right-column mapping, one-word heading mapping, drag ranges, generated-text fallback, inline-math paragraphs, tables and code blocks, the transparent view bar, view switching and PDF disposal |
 | `npm run licence` | `scripts/licence-test.mjs` | 4 checks that the bundled typefaces' licences ship inside the application. Run against its own instance: it opens a document |
 | `npm run images` | `scripts/image-paste-test.mjs` | Image paste through the real UI |
 | `npm run screenshot` | `scripts/screenshot.mjs` | PNG of the running window |
@@ -494,21 +494,21 @@ Twenty-eight layers, cheapest first. Run them in this order when changing anythi
 | Paste conversion | `npm run paste:convert` | 369 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, image syntax, AsciiDoc |
 | AsciiDoc export source | `npm run asciidoc:export:unit` | 17 | Unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations - no application |
 | DOM smoke | `npm run smoke` | 107 | Rendering, pane sync, preferences (including the four On Launch choices and Line Height), math, fonts, status icons |
-| Word sync | `npm run word-sync` | 39 | The fragment map, preview → source and source → preview, atomic code, formula and image spans, the pulse and its resting mark, reduced motion, word snapping, no scroll, Escape |
+| Word sync | `npm run word-sync` | 58 | The fragment map, preview → source and source → preview, atomic code, formula and image spans, the pulse and its resting mark, reduced motion, word snapping, no scroll, Escape |
 | Auto-close matching | `npm run autoclose:unit` | 17 | Which tag a typed `>`, the void/self-closing/autolink/escape rules — no application |
 | Remembered tabs (unit) | `npm run tabs:restore:unit` | 33 | What is stored (order, untitled exclusion, deduplication, the 20-document cap) and what a restore plan does with it (missing files, the active-tab fallback) — no application |
-| Typst page map (unit) | `npm run typst:map:unit` | 9 | One-word lines with identical neighbours paint nothing, a unique neighbour window picks the occurrence, ligatures and soft hyphens fold, generated text stays unmapped — no application |
-| HTML source map (unit) | `npm run html:map:unit` | 14 | Entities and CRLF offsets, decoded-to-raw translation, the sample mismatch, and two text nodes under one stamp — no application |
+| Typst page map (unit) | `npm run typst:map:unit` | 21 | One-word lines with identical neighbours paint nothing, a unique neighbour window picks the occurrence, ligatures and soft hyphens fold, generated text stays unmapped — no application |
+| HTML source map (unit) | `npm run html:map:unit` | 38 | Entities and CRLF offsets, decoded-to-raw translation, the sample mismatch, and two text nodes under one stamp — no application |
 | Block source map (unit) | `npm run block:map:unit` | 12 | Folded index mapping, per-node alignment across substitutions and smart punctuation, gap block fallback, Typst comments/rules/math/code/tables, and `#lorem` exclusion — no application |
 | Auto-close typing | `npm run autoclose` | 33 | Pairs, step-over, Backspace, selection wrap, Markdown inline tags, HTML tags, both preferences, in all four document types |
 | Rich paste | `npm run paste` | 68 | The paste event, destination notice, preferences, Ctrl+Shift+V, undo, the same clipboard converted into Markdown and kept as source in HTML, spaces around inline elements |
 | Image syntax | `npm run image:syntax` | 14 | Bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, plus the Image preference |
-| Typst pages | `npm run typst:preview` | 36 | PDF.js page shells/canvases/text layers, both columns, A4 geometry, paragraph click, repeated-word/right-column mapping, a one-word heading, drag ranges, Pages and Document word sync, inline-math paragraphs, tables and code blocks, generated-text fallback, transparent view bar and PDF disposal |
+| Typst pages | `npm run typst:preview` | 48 (+1 optional) | PDF.js page shells/canvases/text layers, both columns, A4 geometry, paragraph click, repeated-word/right-column mapping, a one-word heading, drag ranges, Pages and Document word sync, inline-math paragraphs, tables and code blocks, generated-text fallback, transparent view bar and PDF disposal |
 | Math | `npm run math` | 12 | Font loading, fraction and radical geometry |
 | Syntax | `npm run syntax` | 10 | Token colours, palette switching, and the sync mark's amber contrast on three dark palettes |
 | AsciiDoc | `npm run asciidoc` | 54 | Preview, title/TOC, math, includes, source highlighting, outline, preview copy, spellcheck, paste, the built-in reference, defaults, word-level sync |
 | Editor menu / Format | `npm run format:document` | 139 | The full editing menu, clipboard fake, Markdown/HTML/Typst, inactive tabs, undo, caret, AsciiDoc disabled, spelling and formatter failures; 47 math checks also run with `node scripts/format-document-test.mjs --unit`. The physics copy retains all 292 formulas and its KaTeX error count after formatting, with visible fractions/radicals and exact bytes after undo |
-| HTML guest | `npm run html` | 50 | Sandbox, IPC boundary, local assets, sync/blink, the guest word double-click, scripts-off, outline, reload-key guard |
+| HTML guest | `npm run html` | 60 | Sandbox, IPC boundary, local assets, sync/blink, the guest word double-click, scripts-off, outline, reload-key guard |
 | Document tabs | `npm run tabs` | 106 | Several open documents, the context menu, drag and keyboard reordering, overflow arrows, the disk poll, Auto Save across tabs, caret and scroll per tab |
 | Favorites | `npm run favorites` | 56 | The panel that replaced Files, both Add/Remove menu routes, insertion order across opens, inactive tabs, one-at-a-time removal, a missing file, the untitled disabled state, no Clear All, the Preferences changes and `view.favorites` |
 | Favorites restore | `npm test -- --only favorites-restore` | 30 | Two launches on one settings directory: both menu routes add a favorite — the second while a whole-settings save is scheduled — the Favorites panel is left selected, a tab is closed just before the window closes, and the second launch reads the list back from disk — order, panel and rows — then opens one |
@@ -600,6 +600,45 @@ Each of these cost real time. Symptom → cause → fix.
 [Recording traps is required](#recording-traps-is-required) for what qualifies and
 how to write it. The list is append-only in spirit: do not delete an entry because
 the fix landed, because the fix is what makes it recur.
+
+**`50/50 checks passed` in the HTML suite, then every new real guest double-click selects nothing**
+The scripts-off preference probe leaves Preferences open; subsequent old checks
+used programmatic events and passed through the modal. New CDP mouse events hit
+the overlay, so this looked like a guest focus or IPC failure. Close
+`.prefs-close` before mouse probes and measure both the actual guest selection
+and source decoration. A programmatic click succeeding does not prove a real
+pointer can reach the same target.
+
+**The Pages canvas reports an A4 aspect ratio of `2.0000`**
+A newly created canvas has browser-default backing dimensions `300 × 150`,
+which satisfy a naive `width > 0` readiness check before lazy PDF painting.
+Scroll the relevant page into view and wait for actual PDF dimensions before
+checking its aspect ratio; the default canvas does not prove a distorted PDF.
+
+**Escape clears preview paint but leaves `.cm-sync-word` and collapses the source selection**
+CodeMirror's default Escape keymap consumes the event before a bubbling document
+listener can dismiss correspondence. Handle active correspondence in capture
+phase and consume Escape only for the editor/preview target; preserve dialog
+handlers and unrelated Escape gestures. Use real CDP key events with the editor
+focused: dispatching a KeyboardEvent directly on `document` bypasses the keymap
+and falsely passes this case.
+
+**PDF text extraction contains `pen` / `dulum` although the page visibly shows `pen-` / `dulum`**
+Typst's PDF ActualText can omit the layout hyphen. Requiring an extracted `-`
+loses these words even with `disableNormalization: true`. Inspect text items
+alongside the visible text layer; join otherwise unknown letter fragments only
+when the complete literal source word exists and surrounding anchors validate
+its occurrence. Zero-width text items can also carry combining marks and must
+not be discarded solely because their measured width is zero.
+
+**`connect ECONNREFUSED 127.0.0.1:9238` after the same probe's `/json/list` returned page targets**
+Several diagnostic launches reused one `WEBVIEW2_USER_DATA_FOLDER` and exposed
+multiple MDraft page targets through the same browser endpoint. Stopping an
+earlier launcher removed that endpoint; this was not evidence that PDF.js or
+Pages had failed to start. Keep launch, CDP readiness polling, gestures and
+cleanup in one diagnostic lifecycle, with one private WebView profile. Inspect
+the returned page targets before retrying a launch, and clean up only the
+instance that the probe owns.
 
 **`Cannot find path '...\AC\Temp\mdraft-format-math-probe.mjs' because it does not exist` immediately after a successful write and run**
 Separate agent shell calls on this Windows host can receive different sandbox
