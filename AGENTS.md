@@ -202,13 +202,13 @@ rewrite from scratch.
 | `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
 | `npm run test:rust` | `cargo test` | 99 tests (97 run, two ignored downloads) on both platforms |
-| `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. The tab-restore layer is the exception: two launches of the same instance's settings directory, closed with WM_CLOSE in between so the close flush runs. Puts back the working tree and the developer's own settings afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
+| `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. The two restart layers are the exception: two launches of the same instance's settings directory, closed with WM_CLOSE in between so the close flush runs. Puts back the working tree and the developer's own settings afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
 | `npm run smoke` | `scripts/dom-smoke.mjs` | 107 checks against `samples/feature-tour.md` |
 | `npm run word-sync` | `scripts/word-sync-test.mjs` | 39 checks of word-level sync against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, the four-beat pulse and its resting mark, reduced motion, no scroll, Escape, and the fallbacks |
 | `npm run autoclose:unit` | `scripts/autoclose-unit.mjs` | 17 checks of the tag matcher: attributes, custom elements, void and self-closing tags, autolinks, escapes, declarations, prose — no application |
 | `npm run autoclose` | `scripts/autoclose-test.mjs` | 33 checks of pairs, quotes, backticks, HTML tags and both preferences, typed through the real editor in Markdown, HTML, Typst and AsciiDoc |
 | `npm run spellcheck` | `scripts/spellcheck-test.mjs` | Underlines a misspelling, then clears it when spelling is turned off |
-| `npm run format:document` | `scripts/format-document-test.mjs` | 138 checks of the editor's right-click menu and **Format Document**: editing actions, clipboard wiring, Markdown/HTML/Typst, background tabs, AsciiDoc disabled, undo and spelling; plus exact math preservation across all delimiters, tables, code/currency boundaries, repeat formatting and all 292 physics formulas through save, preview redraw and undo. `--unit` runs 47 math checks without the app; `--without-optional-corpus` tests the recorded-inventory fallback |
+| `npm run format:document` | `scripts/format-document-test.mjs` | 139 checks of the editor's right-click menu and **Format Document**: editing actions, clipboard wiring, Markdown/HTML/Typst, background tabs, AsciiDoc disabled, undo and spelling; plus exact math preservation across all delimiters, tables, code/currency boundaries, repeat formatting and all 292 physics formulas through save, preview redraw and undo. `--unit` runs 47 math checks without the app; `--without-optional-corpus` tests the recorded-inventory fallback |
 | `npm run audit` | `scripts/audit-document.mjs` | Render metrics for whatever document is loaded |
 | `npm run math` | `scripts/math-render-check.mjs` | 12 checks against the physics paper |
 | `npm run syntax` | `scripts/syntax-theme-test.mjs` | 10 checks that highlighting is real and that the sync mark stays amber and visible on Nord, Ink and Solarized Dark |
@@ -259,10 +259,11 @@ All of these need the app already running with CDP enabled (see
 | `image-paste-test.mjs` | `[port] [imageUrl] [localPath]` | `samples/feature-tour.md` | Clipboard, local and remote image paths, and the markdown that results |
 | `image-path-paste-test.mjs` | `[port]` | `samples/feature-tour.md` | Selects the `./image.png` placeholder with the mouse, pastes a relative path beside the document, and checks the text is replaced and the preview loads it |
 | `spellcheck-test.mjs` | `[port]` | `samples/feature-tour.md` | Sets the dictionary to English, types a misspelling, requires the wavy underline, then turns spelling off and requires the mark to be gone |
-| `format-document-test.mjs` | `[port] [--without-optional-corpus]` or `--unit [--without-optional-corpus]` | `samples/feature-tour.md`; `--unit` needs no app | 138 checks on temporary copies: the editing menu, clipboard wiring, Markdown/HTML/Typst formatting, background tabs, AsciiDoc disabled, spelling priority and failure handling; 47 app-free checks preserve math source exactly across all delimiters and contexts, including the 292-formula corpus. The UI saves the formatted physics copy, waits for a fresh preview, compares every equation and KaTeX error count, measures fraction/radical geometry and undoes to exact original bytes. The ignored physics sample has a recorded-inventory fallback |
+| `format-document-test.mjs` | `[port] [--without-optional-corpus]` or `--unit [--without-optional-corpus]` | `samples/feature-tour.md`; `--unit` needs no app | 139 checks on temporary copies: the editing menu, clipboard wiring, Markdown/HTML/Typst formatting, background tabs, AsciiDoc disabled, spelling priority and failure handling; 47 app-free checks preserve math source exactly across all delimiters and contexts, including the 292-formula corpus. The UI saves the formatted physics copy, waits for a fresh preview, compares every equation and KaTeX error count, measures fraction/radical geometry and undoes to exact original bytes. The ignored physics sample has a recorded-inventory fallback |
 | `document-tabs-test.mjs` | `[port]` | `samples/feature-tour.md` | That several documents stay open sanely: a path already open is focused, the active tab is bold, the context menu and its disabled entries, Arrow-key navigation, drag and keyboard reordering, overflow arrows and the wheel, Close Others, the caret and both scroll offsets come back, the disk poll reloads a clean inactive tab and leaves a dirty one alone, Auto Save writes every dirty tab, and a large document no longer breaks the next New |
 | `favorites-test.mjs` | `[port]` | `samples/feature-tour.md` | The Favorites panel and the two right-click routes: the empty state, the Add/Remove toggle, insertion order across opens, an inactive tab's path, duplicate adds, the row `×` and its menu, one-at-a-time removal, a missing file kept with a toast, the untitled disabled state, no Clear All, the Preferences changes, `Ctrl+Shift+2` and `view.favorites` |
 | `tabs-restore-test.mjs` | `[port] phase1\|phase2 <doc> <extra…>` | phase 1: `samples/feature-tour.md`; the extras open as tabs | The two-launch store: phase 1 opens and reorders tabs, sets the launch preference and closes one tab just before the window does; phase 2 — launched **without** a document argument — sees the same tabs, order, active tab and preference. Normally run by `test-all.mjs`, which supplies both launches and the WM_CLOSE between them |
+| `favorites-restore-test.mjs` | `[port] phase1\|phase2 <doc> <extra>` | phase 1: `samples/feature-tour.md` plus `samples/word-sync.md` as the second tab | The two-launch favorites store: phase 1 adds one favorite from the editor menu and one from the inactive tab's menu while a whole-settings save is scheduled, leaves the Favorites panel selected and closes the active tab just before the window does; phase 2 — launched **without** a document argument — reads the list back from disk, checks its order, the remembered panel and both rendered rows, then opens one. Normally run by `test-all.mjs` |
 | `recent-menu-test.mjs` | `[port]` | `samples/feature-tour.md` | The native Open Recent submenu through the `recent_menu` probe: it lists the launch file, a newly opened file becomes the first row, the emitted menu id focuses an existing tab instead of duplicating it, Clear Items empties the menu/sidebar/settings, a 27-row history renders in full in the sidebar while the menu shows 20 plus Clear Items, and a later open refills the list |
 | `sessions-test.mjs` | — | none — runs without the application | The session store's rules: insertion after the active tab, untitled names, one tab per path under both case rules, the neighbour that takes over on close, `move` and `removeMany` order, wrap-around, and the empty-list invariant |
 | `paste-convert-test.mjs` | `[--without-optional-corpus]` | none — runs without the application | The paste matrix: clipboard and document detection, all reader/renderer pairs, escaping, sanitisation, caps and image syntax |
@@ -483,7 +484,7 @@ hash the pixels.
 
 ## Testing
 
-Twenty-seven layers, cheapest first. Run them in this order when changing anything.
+Twenty-eight layers, cheapest first. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
@@ -506,10 +507,11 @@ Twenty-seven layers, cheapest first. Run them in this order when changing anythi
 | Math | `npm run math` | 12 | Font loading, fraction and radical geometry |
 | Syntax | `npm run syntax` | 10 | Token colours, palette switching, and the sync mark's amber contrast on three dark palettes |
 | AsciiDoc | `npm run asciidoc` | 54 | Preview, title/TOC, math, includes, source highlighting, outline, preview copy, spellcheck, paste, the built-in reference, defaults, word-level sync |
-| Editor menu / Format | `npm run format:document` | 138 | The full editing menu, clipboard fake, Markdown/HTML/Typst, inactive tabs, undo, caret, AsciiDoc disabled, spelling and formatter failures; 47 math checks also run with `node scripts/format-document-test.mjs --unit`. The physics copy retains all 292 formulas and its KaTeX error count after formatting, with visible fractions/radicals and exact bytes after undo |
+| Editor menu / Format | `npm run format:document` | 139 | The full editing menu, clipboard fake, Markdown/HTML/Typst, inactive tabs, undo, caret, AsciiDoc disabled, spelling and formatter failures; 47 math checks also run with `node scripts/format-document-test.mjs --unit`. The physics copy retains all 292 formulas and its KaTeX error count after formatting, with visible fractions/radicals and exact bytes after undo |
 | HTML guest | `npm run html` | 50 | Sandbox, IPC boundary, local assets, sync/blink, the guest word double-click, scripts-off, outline, reload-key guard |
 | Document tabs | `npm run tabs` | 106 | Several open documents, the context menu, drag and keyboard reordering, overflow arrows, the disk poll, Auto Save across tabs, caret and scroll per tab |
 | Favorites | `npm run favorites` | 56 | The panel that replaced Files, both Add/Remove menu routes, insertion order across opens, inactive tabs, one-at-a-time removal, a missing file, the untitled disabled state, no Clear All, the Preferences changes and `view.favorites` |
+| Favorites restore | `npm test -- --only favorites-restore` | 30 | Two launches on one settings directory: both menu routes add a favorite — the second while a whole-settings save is scheduled — the Favorites panel is left selected, a tab is closed just before the window closes, and the second launch reads the list back from disk — order, panel and rows — then opens one |
 | Tab restore | `npm test -- --only tabs-restore` | 25 | Two launches on one settings directory: the tabs come back in order with the remembered one active, the preference survives, and the close flush records a tab closed just before the window closed |
 | Recent menu | `npm run recent` | 26 | The native Open Recent 20-row window, a longer sidebar history, menu-id dispatch, Clear Items across menu/sidebar/settings, refilling after a clear |
 | Close | `.\scripts\test-close.ps1` | 4 | The window really exits and saves its state |
@@ -886,6 +888,17 @@ passes once and fails on re-run is usually this.
   the target *paragraph* into view, but a long `#lorem` paragraph is taller than
   the pane, so the word itself stayed off screen and the click selected nothing.
   Center the word's range in `#preview-pane` before dispatching the click.
+
+**A synthetic right-click opens no menu only when the full suite runs**
+`format-document-test.mjs` measured the physics line's coordinates in one
+`Runtime.evaluate` and dispatched the `contextmenu` in a second. Opening the
+physics tab schedules a preview-driven scroll, so under the full suite's load the
+pane had moved by the second call, `elementFromPoint` named something outside the
+editor, and `menuState()` reported `{"count":0}`. The three format checks then
+cascaded — no format, no save, no redraw — while the same suite passed in
+isolation five times. Measure the line and dispatch the event in the **same**
+evaluate (`rightClickLine`), and keep one retry. Do not read this as a formatter
+or spellcheck fault.
 
 **A test reads `scrollLeft` before a smooth scroll has moved**
 `scrollBy({ behavior: "smooth" })` returns immediately, so `element.click()` followed by a `Runtime.evaluate` of `scrollLeft` still sees the old offset; two rapid clicks can also coalesce into one page. The document-tabs suite first failed "a second page reaches the edge" for exactly this reason. Poll until the offset changes and then settles, and issue one click per page.

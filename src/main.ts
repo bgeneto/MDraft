@@ -557,10 +557,32 @@ function applyTypography(): void {
   editor?.requestMeasure();
 }
 
+/**
+ * Every settings mutation and write runs in one queue.
+ *
+ * The whole `Settings` object is written back on many gestures, while the
+ * favorite and recent commands return a whole snapshot of their own. Two of
+ * those in flight together can land out of order: a save built before an
+ * Add to Favorites reaches Rust after it and overwrites the list with the copy
+ * that predates it, on disk as well as in memory. Queueing the commands in call
+ * order — and reading `settings` only when a queued write actually runs — makes
+ * that stale snapshot impossible.
+ *
+ * A failed task must not poison the chain, so the queue itself swallows the
+ * rejection; the caller still receives it from the returned promise.
+ */
+let settingsQueue: Promise<unknown> = Promise.resolve();
+
+function queueSettings<T>(task: () => Promise<T>): Promise<T> {
+  const result = settingsQueue.then(task);
+  settingsQueue = result.catch(() => undefined);
+  return result;
+}
+
 function persist(): void {
-  void api.saveSettings(settings).catch(() => {
-    /* settings are best-effort */
-  });
+  // Deliberately reads `settings` inside the task: a save scheduled while a
+  // favorite command is still in flight must send what that command returns.
+  void queueSettings(() => api.saveSettings(settings).catch(() => settings));
 }
 
 function setTheme(mode: api.ThemeMode): void {
@@ -1111,10 +1133,11 @@ function renderSidebar(): void {
  * the sidebar redraw from existing on only one of the three routes.
  */
 function clearRecentFiles(): void {
-  void api
-    .clearRecent()
-    .then((next) => {
-      settings = next;
+  void queueSettings(async () => {
+    const next = await api.clearRecent();
+    settings = { ...settings, recentFiles: next.recentFiles };
+  })
+    .then(() => {
       renderSidebar();
       toast("Recent files cleared");
     })
@@ -1137,9 +1160,17 @@ function favoriteName(path: string): string {
  * menu toggle never disagree about what is stored.
  */
 async function toggleFavoritePath(path: string): Promise<void> {
-  const removing = isFavoritePath(path);
   try {
-    settings = removing ? await api.removeFavorite(path) : await api.addFavorite(path);
+    // The decision is taken inside the queue as well: two quick clicks on the
+    // same row must see each other's result, not the same stale list.
+    const removing = await queueSettings(async () => {
+      const remove = isFavoritePath(path);
+      const next = remove ? await api.removeFavorite(path) : await api.addFavorite(path);
+      // Merge only the field this command owns. A preference patch applied
+      // while it was in flight must not be thrown away by the whole reply.
+      settings = { ...settings, favorites: next.favorites };
+      return remove;
+    });
     if (settings.sidebarTab === "favorites") renderSidebar();
     toast(
       removing
@@ -1154,7 +1185,10 @@ async function toggleFavoritePath(path: string): Promise<void> {
 /** A row's `×` or its context menu: remove exactly this entry. */
 async function removeFavoritePath(path: string): Promise<void> {
   try {
-    settings = await api.removeFavorite(path);
+    await queueSettings(async () => {
+      const next = await api.removeFavorite(path);
+      settings = { ...settings, favorites: next.favorites };
+    });
     if (settings.sidebarTab === "favorites") renderSidebar();
     toast(`Removed ${favoriteName(path)} from Favorites`);
   } catch (error) {
@@ -1529,7 +1563,20 @@ async function openPath(path: string, options: OpenOptions = {}): Promise<void> 
     await showInEditor(true, payload.tokens);
 
     if (rememberRecent && settings.recordRecent) {
-      settings = await api.addRecent(path).catch(() => settings);
+      // Queued: the reply must not replace a favorite that was added while the
+      // document was loading. Only this command's own fields are adopted.
+      await queueSettings(async () => {
+        try {
+          const next = await api.addRecent(path);
+          settings = {
+            ...settings,
+            recentFiles: next.recentFiles,
+            lastDirectory: next.lastDirectory,
+          };
+        } catch {
+          /* recents are best-effort */
+        }
+      });
     }
     if (settings.sidebarTab === "recent") renderSidebar();
 
@@ -1661,7 +1708,18 @@ async function saveAs(): Promise<boolean> {
     describe(doc, payload);
     await showInEditor(false, payload.tokens);
     if (settings.recordRecent) {
-      settings = await api.addRecent(target).catch(() => settings);
+      await queueSettings(async () => {
+        try {
+          const next = await api.addRecent(target);
+          settings = {
+            ...settings,
+            recentFiles: next.recentFiles,
+            lastDirectory: next.lastDirectory,
+          };
+        } catch {
+          /* recents are best-effort */
+        }
+      });
     }
     toast("Saved");
     return true;
@@ -4114,14 +4172,17 @@ function installTabMemory(): void {
 async function flushRememberedTabs(): Promise<void> {
   const remembered = rememberedTabsNow();
   const signature = JSON.stringify(remembered);
-  if (signature === lastTabsSignature) return;
-  lastTabsSignature = signature;
-  const next = { ...settings, lastTabs: remembered.tabs, lastActiveTab: remembered.active };
-  settings = next;
-  await Promise.race([
-    api.saveSettings(next).catch(() => undefined),
-    new Promise((resolve) => window.setTimeout(resolve, 750)),
-  ]);
+  if (signature !== lastTabsSignature) {
+    lastTabsSignature = signature;
+    void queueSettings(async () => {
+      settings = { ...settings, lastTabs: remembered.tabs, lastActiveTab: remembered.active };
+      await api.saveSettings(settings);
+    }).catch(() => undefined);
+  }
+  // A barrier, not a write: every queued save — including a favorite command
+  // still in flight — has to settle before the window goes. The wait is
+  // bounded, as the write itself was: a wedged IPC must not hang the close.
+  await Promise.race([settingsQueue, new Promise((resolve) => window.setTimeout(resolve, 750))]);
 }
 
 async function installCloseGuard(): Promise<void> {
@@ -4514,7 +4575,7 @@ async function boot(): Promise<void> {
   // corrected. The faces are local files, so this costs a millisecond.
   installBundledFonts();
 
-  settings = await api.getSettings();
+  settings = await queueSettings(() => api.getSettings());
   migrateLegacySystemPreset();
   applyTheme();
 
