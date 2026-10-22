@@ -7,7 +7,7 @@
 import { Marked } from "marked";
 import type { Align, Block, Inline, ListItem } from "./ir.ts";
 import { trimBlocks } from "./ir.ts";
-import { splitMath } from "./math.ts";
+import { analyzeMath } from "../math-delimiters.ts";
 import { readHtml, htmlToText } from "./read-html.ts";
 
 type AnyToken = any;
@@ -22,7 +22,7 @@ function safeUrl(value: string | null | undefined): string | null {
 }
 
 function textNode(value: string): Inline[] {
-  return splitMath(value);
+  return [{ kind: "text", value }];
 }
 
 function inlineFromTokens(tokens: AnyToken[] | undefined): Inline[] {
@@ -172,7 +172,24 @@ function blockFromToken(token: AnyToken): Block[] {
 }
 
 export async function readMarkdown(source: string): Promise<Block[]> {
-  const tokens = markdown.lexer(source) as AnyToken[];
+  // Protect TeX before Markdown interprets its escapes and emphasis. The
+  // namespace and restoration table belong to this read, including awaits.
+  const occupiedNames = new Set(
+    [...source.matchAll(/\ue000PASTEMATH(\d+):/g)].map((match) => match[1]),
+  );
+  let namespace = 0;
+  while (occupiedNames.has(String(namespace))) namespace++;
+  const marker = "\ue000PASTEMATH" + namespace + ":";
+  const formulas = analyzeMath(source).math;
+  let prepared = "",
+    last = 0;
+  for (let index = 0; index < formulas.length; index++) {
+    const range = formulas[index];
+    prepared += source.slice(last, range.from) + marker + index + "\ue001";
+    last = range.to;
+  }
+  prepared += source.slice(last);
+  const tokens = markdown.lexer(prepared) as AnyToken[];
   const blocks: Block[] = [];
   for (const token of tokens) {
     if (token.type === "html") {
@@ -181,5 +198,50 @@ export async function readMarkdown(source: string): Promise<Block[]> {
     }
     blocks.push(...blockFromToken(token));
   }
-  return trimBlocks(blocks);
+  const pattern = new RegExp(marker + "(\\d+)\\ue001", "g");
+  const restoreInline = (nodes: Inline[]): Inline[] =>
+    nodes.flatMap((node): Inline[] => {
+      if ("children" in node) return [{ ...node, children: restoreInline(node.children) }];
+      if (node.kind !== "text") return [node];
+      const restored: Inline[] = [];
+      let start = 0;
+      for (const match of node.value.matchAll(pattern)) {
+        if (match.index > start)
+          restored.push({ kind: "text", value: node.value.slice(start, match.index) });
+        const range = formulas[Number(match[1])];
+        restored.push({ kind: "math", tex: range.body, display: range.display });
+        start = match.index + match[0].length;
+      }
+      if (start < node.value.length)
+        restored.push({ kind: "text", value: node.value.slice(start) });
+      return restored;
+    });
+  const restoreBlocks = (items: Block[]): Block[] =>
+    items.map((block): Block => {
+      if (block.kind === "paragraph" || block.kind === "heading") {
+        const children = restoreInline(block.children);
+        if (
+          block.kind === "paragraph" &&
+          children.length === 1 &&
+          children[0].kind === "math" &&
+          children[0].display
+        )
+          return { kind: "math", tex: children[0].tex };
+        return { ...block, children };
+      }
+      if (block.kind === "quote") return { ...block, blocks: restoreBlocks(block.blocks) };
+      if (block.kind === "list")
+        return {
+          ...block,
+          items: block.items.map((item) => ({ ...item, blocks: restoreBlocks(item.blocks) })),
+        };
+      if (block.kind === "table")
+        return {
+          ...block,
+          header: block.header?.map(restoreInline) ?? null,
+          rows: block.rows.map((row) => row.map(restoreInline)),
+        };
+      return block;
+    });
+  return trimBlocks(restoreBlocks(blocks));
 }

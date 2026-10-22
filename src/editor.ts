@@ -3,6 +3,8 @@
 
 import {
   Compartment,
+  ChangeSet,
+  EditorSelection,
   EditorState,
   Prec,
   RangeSetBuilder,
@@ -35,6 +37,7 @@ import { languages } from "@codemirror/language-data";
 import type { DocumentLanguage } from "./api";
 import { asciidocLanguage } from "./asciidoc-language";
 import { isCodeContext } from "./code-context";
+import { markdownProseSelection } from "./math-delimiters";
 import { DEFAULT_EDITOR_FONT_SIZE } from "./fonts";
 import { htmlLanguage } from "./html-language";
 import { autoCloseTag } from "./tag-close";
@@ -159,6 +162,10 @@ export interface EditorHandle {
    * selection as-is.
    */
   insertPasted(text: string, block: boolean): void;
+  /** Arm a synchronous native paste transform; drops and later events bypass it. */
+  prepareNativePaste(transform: (text: string) => string): void;
+  /** Native text semantics for a Markdown-only MIME representation. */
+  insertNativeText(text: string): void;
   /** True when the caret sits inside fenced/raw code or an HTML code element. */
   inCodeContext(): boolean;
   /**
@@ -293,6 +300,8 @@ export interface EditorOptions {
 }
 
 export function createEditor(host: HTMLElement, options: EditorOptions = {}): EditorHandle {
+  let nativeTransform: ((text: string) => string) | null = null;
+  let nativeInput: { before: string; after: string } | null = null;
   const fontSizeCompartment = new Compartment();
   const focusCompartment = new Compartment();
   const historyCompartment = new Compartment();
@@ -475,6 +484,50 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
   }
 
   const extensions: Extension[] = [
+    // Return the ORIGINAL clipboard text so CodeMirror can retain its own
+    // linewise-copy metadata and distribute lines over selections first.
+    EditorView.clipboardInputFilter.of((text, state) => {
+      if (nativeTransform) {
+        const transform = nativeTransform;
+        nativeTransform = null;
+        nativeInput = {
+          before: state.toText(text).toString(),
+          after: state.toText(transform(text)).toString(),
+        };
+      }
+      return text;
+    }),
+    EditorState.transactionFilter.of((transaction) => {
+      if (!nativeInput || !transaction.isUserEvent("input.paste")) return transaction;
+      const { before, after } = nativeInput;
+      nativeInput = null;
+      if (before === after) return transaction;
+      const oldLines = before.split("\n"),
+        newLines = after.split("\n");
+      const byLine = oldLines.length === transaction.startState.selection.ranges.length;
+      const corrections: { from: number; insert: string }[] = [];
+      let line = 0;
+      transaction.changes.iterChanges((_from, _to, from, _end, inserted) => {
+        const original = byLine ? oldLines[line] : before;
+        const normalized = byLine ? newLines[line++] : after;
+        const actual = inserted.toString();
+        // A linewise native copy appends the document's line break. Leave that
+        // suffix and the native selection/caret decision exactly as inserted.
+        if (actual !== original && actual !== original + "\n") return;
+        for (let old = 0, next = 0; old < original.length; old++, next++) {
+          if (normalized[next] === "\\" && original[old] === "$") {
+            corrections.push({ from: from + old, insert: "\\" });
+            next++;
+          }
+        }
+      });
+      if (!corrections.length) return transaction;
+      const changes = ChangeSet.of(corrections, transaction.newDoc.length);
+      return [
+        transaction,
+        { changes, selection: transaction.newSelection.map(changes), sequential: true },
+      ];
+    }),
     lineNumbers(),
     highlightActiveLineGutter(),
     highlightSpecialChars(),
@@ -1054,6 +1107,33 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
         selection: { anchor: at + lead.length + caretOffset },
         scrollIntoView: true,
       });
+      view.focus();
+    },
+
+    prepareNativePaste(transform) {
+      if (!markdownProseSelection(view.state.doc.toString(), view.state.selection.ranges)) return;
+      nativeTransform = transform;
+      queueMicrotask(() => {
+        nativeTransform = null;
+        nativeInput = null;
+      });
+    },
+
+    insertNativeText(text) {
+      const state = view.state;
+      const input = state.toText(text);
+      let line = 1;
+      const changes =
+        input.lines === state.selection.ranges.length
+          ? state.changeByRange((range) => {
+              const insert = input.line(line++).text;
+              return {
+                changes: { from: range.from, to: range.to, insert },
+                range: EditorSelection.cursor(range.from + insert.length),
+              };
+            })
+          : state.replaceSelection(input);
+      view.dispatch(changes, { userEvent: "input.paste", scrollIntoView: true });
       view.focus();
     },
 

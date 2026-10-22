@@ -254,6 +254,15 @@ const SUITES = [
     doc: "samples/feature-tour.md",
   },
   {
+    // The Favorites panel and the two right-click routes that fill it. It owns
+    // its instance because it writes settings and deletes a temporary favorite.
+    id: "favorites",
+    title: "Favorites",
+    kind: "cdp",
+    script: "favorites-test.mjs",
+    doc: "samples/feature-tour.md",
+  },
+  {
     // Two launches on one settings directory. Phase 1 opens documents, reorders
     // and activates, sets the launch preference, then closes a tab and returns;
     // the harness closes the window with WM_CLOSE (so the close flush runs) and

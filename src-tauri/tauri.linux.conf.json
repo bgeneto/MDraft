@@ -1,9 +1,12 @@
 {
+  "productName": "mdraft",
   "bundle": {
     "targets": ["deb", "appimage"],
     "linux": {
       "deb": {
-        "desktopTemplate": "linux.desktop.hbs"
+        "desktopTemplate": "linux.desktop.hbs",
+        "replaces": ["m-draft"],
+        "conflicts": ["m-draft"]
       }
     }
   }

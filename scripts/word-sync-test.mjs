@@ -538,6 +538,53 @@ console.log("\n=== escape ===");
   }
 }
 
+// Exact occurrences after currency escapes, Unicode, code and math substitutions.
+await evaluate(
+  `document.querySelector('.cm-content').dispatchEvent(new KeyboardEvent('keydown',{key:'n',code:'KeyN',ctrlKey:true,bubbles:true}))`,
+);
+const currencySource =
+  "😀 Café R\\$50 `R$7` $a*b*c$ posterior R\\$50 final\n\n$$x^2$$\n\nacréscimo";
+await sleep(450);
+await evaluate("document.querySelector('.cm-content').focus()");
+await send("Input.insertText", { text: currencySource });
+await sleep(700);
+await resetView();
+for (const word of ["posterior", "final", "acréscimo"]) {
+  const position = await rectOf(word, "#preview");
+  if (position) await doubleClickAt(position.x, position.y);
+  await sleep(150);
+  check("preview maps exact following source word: " + word, (await paintedWord()) === word);
+}
+const repeatedCurrency = await evaluate(
+  `(() => {const walker=document.createTreeWalker(document.querySelector('#preview'),NodeFilter.SHOW_TEXT);let seen=0;for(let node=walker.nextNode();node;node=walker.nextNode()){const at=node.data.indexOf('50');if(at<0||++seen!==2)continue;const range=document.createRange();range.setStart(node,at);range.setEnd(node,at+2);const box=range.getBoundingClientRect();return {x:box.left+box.width/2,y:box.top+box.height/2};}return null;})()`,
+);
+if (repeatedCurrency) await doubleClickAt(repeatedCurrency.x, repeatedCurrency.y);
+await sleep(150);
+const markedOffset = await evaluate(
+  `(() => {const mark=document.querySelector('.cm-sync-word');if(!mark)return null;const line=mark.closest('.cm-line');const lines=[...document.querySelectorAll('.cm-line')];const before=document.createRange();before.setStart(line,0);before.setEndBefore(mark);return lines.slice(0,lines.indexOf(line)).reduce((n,node)=>n+node.textContent.length+1,0)+before.toString().length;})()`,
+);
+check(
+  "second repeated monetary value maps to its original occurrence",
+  markedOffset === currencySource.lastIndexOf("50"),
+  String(markedOffset),
+);
+await clearSelection();
+const sourceWord = await rectOf("posterior", ".cm-content");
+if (sourceWord) await doubleClickAt(sourceWord.x, sourceWord.y);
+await sleep(180);
+check(
+  "source maps following word back to preview after substitutions",
+  (await highlightText())?.join("") === "posterior",
+);
+const atomic = await evaluate(
+  `(() => {const node=document.querySelector('#preview .math-inline');const r=node.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2};})()`,
+);
+await doubleClickAt(atomic.x, atomic.y);
+await sleep(180);
+check(
+  "emphasis-shaped formula remains an atomic source fragment",
+  (await paintedWord()) === "$a*b*c$",
+);
 ws.close();
 await new Promise((resolve) => setTimeout(resolve, 200));
 console.log(`\n${passed}/${passed + failed} checks passed`);

@@ -42,6 +42,7 @@ import { imageSyntaxFor, needsRelativePath } from "./image-syntax";
 import { chooseSource, type ClipboardPayload } from "./paste/detect";
 import { resolvePasteDestination, type PasteDestination } from "./paste/detect-document";
 import { planPaste, type ImageRequest, type ResolvedImage } from "./paste/index";
+import { escapeMarkdownCurrency, markdownProseSelection } from "./math-delimiters";
 import {
   ASCIIDOC_CSS,
   KATEX_STYLESHEET_URL,
@@ -62,7 +63,7 @@ import {
   type WordMap,
 } from "./source-map";
 import { createPreferences, type PreferencesHandle } from "./preferences";
-import { createSessionStore, type Session } from "./sessions";
+import { createSessionStore, pathKey, type Session } from "./sessions";
 import { planRestore, rememberTabs, type RememberedTabs } from "./tab-restore";
 import { setInstalledLanguages, setSpellRemember } from "./spellcheck";
 import * as sidebarPanel from "./sidebar";
@@ -147,6 +148,20 @@ function installTabs(): void {
       formatBlocked: (id) => {
         const session = sessions.byId(id);
         return session ? formatUnavailableReason(session) : "No such document.";
+      },
+      isFavorite: (id) => {
+        const session = sessions.byId(id);
+        return session?.path ? isFavoritePath(session.path) : false;
+      },
+      favoriteBlocked: (id) => {
+        const session = sessions.byId(id);
+        if (!session) return "No such document.";
+        return session.path ? null : "Save the document first.";
+      },
+      favorite: (id) => {
+        const session = sessions.byId(id);
+        if (!session?.path) return;
+        return toggleFavoritePath(session.path);
       },
     },
   });
@@ -487,7 +502,7 @@ function applyLayout(): void {
     );
   }
 
-  for (const tab of ["outline", "files", "recent"] as const) {
+  for (const tab of ["outline", "favorites", "recent"] as const) {
     el<HTMLButtonElement>(`tab-${tab}`).setAttribute(
       "aria-selected",
       String(settings.sidebarTab === tab),
@@ -578,9 +593,6 @@ function applySettingsPatch(patch: Partial<api.Settings>): void {
   }
 
   if (affectsRendering) scheduleRender(true);
-  if (patch.showHiddenFiles !== undefined && settings.sidebarTab === "files") {
-    renderSidebar();
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1076,24 +1088,10 @@ function renderSidebar(): void {
     return;
   }
 
-  if (settings.sidebarTab === "files") {
-    if (!sidebarPanel.currentDirectory() && doc.directory) {
-      sidebarPanel.resetDirectory(doc.directory);
-    }
-    const dir = sidebarPanel.currentDirectory();
-    if (!dir) {
-      sidebarBody.replaceChildren(
-        Object.assign(document.createElement("div"), {
-          className: "sidebar-empty",
-          textContent: "Open a document to browse its folder.",
-        }),
-      );
-      return;
-    }
-    void sidebarPanel.showDirectory(sidebarBody, dir, {
-      onOpenFile: (path) => void openPath(path),
-      onError: toast,
-      showHidden: () => settings.showHiddenFiles,
+  if (settings.sidebarTab === "favorites") {
+    sidebarPanel.renderFavorites(sidebarBody, settings.favorites ?? [], {
+      onOpenFile: openFavorite,
+      onRemove: (path) => void removeFavoritePath(path),
     });
     return;
   }
@@ -1121,6 +1119,56 @@ function clearRecentFiles(): void {
       toast("Recent files cleared");
     })
     .catch((error) => toast(String(error)));
+}
+
+/** The platform's path identity, the same rule the session store uses. */
+function isFavoritePath(path: string): boolean {
+  const key = pathKey(path);
+  return (settings.favorites ?? []).some((entry) => pathKey(entry) === key);
+}
+
+function favoriteName(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path;
+}
+
+/**
+ * Add or remove one path, then redraw only when Favorites is the panel on
+ * screen. The command returns the settings it wrote, so the row list and the
+ * menu toggle never disagree about what is stored.
+ */
+async function toggleFavoritePath(path: string): Promise<void> {
+  const removing = isFavoritePath(path);
+  try {
+    settings = removing ? await api.removeFavorite(path) : await api.addFavorite(path);
+    if (settings.sidebarTab === "favorites") renderSidebar();
+    toast(
+      removing
+        ? `Removed ${favoriteName(path)} from Favorites`
+        : `Added ${favoriteName(path)} to Favorites`,
+    );
+  } catch (error) {
+    toast(String(error), 5200);
+  }
+}
+
+/** A row's `×` or its context menu: remove exactly this entry. */
+async function removeFavoritePath(path: string): Promise<void> {
+  try {
+    settings = await api.removeFavorite(path);
+    if (settings.sidebarTab === "favorites") renderSidebar();
+    toast(`Removed ${favoriteName(path)} from Favorites`);
+  } catch (error) {
+    toast(String(error), 5200);
+  }
+}
+
+/**
+ * Open a favorite. Silent means a missing file becomes a toast naming the
+ * failure rather than a modal dialog, which would be too heavy for a sidebar
+ * row — and impossible to dismiss from a test.
+ */
+function openFavorite(path: string): void {
+  void openPath(path, { silent: true });
 }
 
 /** Rebuild the outline list from the current buffer. */
@@ -1305,7 +1353,6 @@ async function showInEditor(resetHistory: boolean, tokens: number | null = null)
   editor.setDoc(doc.savedContent, resetHistory);
   syncGuest(doc.language);
   editor.setLanguage(doc.language);
-  sidebarPanel.resetDirectory(doc.directory);
   // The backend counted while reading the file, so opening does not send the
   // document back over IPC. This also cancels the debounced scan that the
   // `setDoc` update just scheduled. A buffer with no count of its own is scanned.
@@ -1337,7 +1384,6 @@ async function displayDoc(): Promise<void> {
   // state, and it repairs the case where it is not.
   editor.setLanguage(doc.language);
   syncGuest(doc.language);
-  sidebarPanel.resetDirectory(doc.directory);
   resetOutline();
   applyLayout();
   editor.setSpellcheck(
@@ -2588,7 +2634,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "view.preview": () => setViewMode("preview"),
   "view.sidebar": () => setSidebarVisible(!settings.sidebarVisible),
   "view.outline": () => setSidebarTab("outline"),
-  "view.files": () => setSidebarTab("files"),
+  "view.favorites": () => setSidebarTab("favorites"),
   "view.recent": () => setSidebarTab("recent"),
   "view.statusBar": () => {
     settings.showStatusBar = !settings.showStatusBar;
@@ -4236,7 +4282,12 @@ async function applyRichPaste(
     resolveImage: (image) => resolveRichImage(image, destination.language),
   });
   if (!result) return;
-  editor.insertPasted(result.text, result.block);
+  if (
+    destination.language === "markdown" &&
+    (result.source === "markdown" || result.source === "plain")
+  )
+    editor.insertNativeText(result.text);
+  else editor.insertPasted(result.text, result.block);
 
   if (destination.detected && result.converted) {
     const key = `${doc.id}:${destination.language}`;
@@ -4329,7 +4380,16 @@ function installPasteHandlers(): void {
     const choice = chooseSource(payload, destination.language);
     // Plain text, or text already in the destination's own syntax, is exactly
     // what CodeMirror's own paste does; do not interfere with it.
-    if (choice.native || choice.source === "plain") return;
+    if (choice.native || choice.source === "plain") {
+      if (destination.language === "markdown" && payload.text?.includes("$"))
+        editor.prepareNativePaste(escapeMarkdownCurrency);
+      return;
+    }
+    if (
+      destination.language === "markdown" &&
+      !markdownProseSelection(editor.getDoc(), editor.view.state.selection.ranges)
+    )
+      return;
 
     event.preventDefault();
     event.stopPropagation();
@@ -4345,7 +4405,9 @@ function installPasteHandlers(): void {
 
 function installChrome(): void {
   el<HTMLButtonElement>("tab-outline").addEventListener("click", () => setSidebarTab("outline"));
-  el<HTMLButtonElement>("tab-files").addEventListener("click", () => setSidebarTab("files"));
+  el<HTMLButtonElement>("tab-favorites").addEventListener("click", () =>
+    setSidebarTab("favorites"),
+  );
   el<HTMLButtonElement>("tab-recent").addEventListener("click", () => setSidebarTab("recent"));
   el<HTMLButtonElement>("btn-sidebar").addEventListener("click", () =>
     setSidebarVisible(!settings.sidebarVisible),
@@ -4481,6 +4543,11 @@ async function boot(): Promise<void> {
     readOnly: () => doc.readOnly,
     format: () => formatSession(doc.id),
     formatBlocked: () => formatUnavailableReason(doc),
+    favoriteBlocked: () => (doc.path ? null : "Save the document first."),
+    isFavorite: () => doc.path !== null && isFavoritePath(doc.path),
+    favorite: () => {
+      if (doc.path) return toggleFavoritePath(doc.path);
+    },
     toast,
   });
 

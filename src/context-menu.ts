@@ -31,6 +31,12 @@ export interface EditorMenuOptions {
   format: () => void | Promise<void>;
   /** Why Format Document cannot run, or null when it can. */
   formatBlocked: () => string | null;
+  /** Why the document cannot be favorited, or null when it can. */
+  favoriteBlocked: () => string | null;
+  /** Whether the document is already in Favorites. */
+  isFavorite: () => boolean;
+  /** Add the document to Favorites, or remove it when already there. */
+  favorite: () => void | Promise<void>;
   toast: (text: string, ms?: number) => { dismiss: () => void };
 }
 
@@ -169,6 +175,8 @@ export function installEditorContextMenu(options: EditorMenuOptions): () => void
     const hasSelection = !selection.empty;
     const hasComments = state.languageDataAt("commentTokens", selection.from, 1).length > 0;
     const formatBlocked = options.formatBlocked();
+    const favoriteBlocked = options.favoriteBlocked();
+    const favorite = options.isFavorite();
 
     const selectionTitle = !editable ? READ_ONLY_REASON : SELECTION_REASON;
     const editTitle = editable ? undefined : READ_ONLY_REASON;
@@ -325,6 +333,15 @@ export function installEditorContextMenu(options: EditorMenuOptions): () => void
         enabled: formatBlocked === null,
         title: formatBlocked ?? undefined,
         run: options.format,
+      },
+      { kind: "separator" },
+      {
+        kind: "item",
+        id: "favorite",
+        label: favorite ? "Remove from Favorites" : "Add to Favorites",
+        enabled: favoriteBlocked === null,
+        title: favoriteBlocked ?? undefined,
+        run: options.favorite,
       },
     ];
   };

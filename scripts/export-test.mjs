@@ -19,6 +19,8 @@
 import { mkdirSync, readFileSync, rmSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import ts from "typescript";
+import { runInNewContext } from "node:vm";
 
 const port = process.argv[2] ?? "9222";
 const withInstall = process.argv.includes("--install");
@@ -652,6 +654,76 @@ await evaluate(`
   })()
 `);
 
+// Print and HTML Save share buildExportArticle. Exercise that real app route,
+// then the actual pure HTML wrapper and Rust writer, without a native picker.
+// Tauri's immutable invoke property must not be weakened just to stub a dialog.
+const currencyOutput = join(workDir, "currency-native.html");
+await evaluate(
+  "document.querySelector('.cm-content').dispatchEvent(new KeyboardEvent('keydown',{key:'n',code:'KeyN',ctrlKey:true,bubbles:true}))",
+);
+await new Promise((resolve) => setTimeout(resolve, 450));
+await evaluate("document.querySelector('.cm-content').focus()");
+await send("Input.insertText", {
+  text: "# Currency\n\nR$50 R$ 10.000 R$ 15.200,75 US$5 US$5.00 C$8,123.50 and $ a + b $ and $c + d$",
+});
+await new Promise((resolve) => setTimeout(resolve, 500));
+const nativeStem = await evaluate("document.title.replace(/^• /,'').split(' — ')[0]");
+const nativePrintPath = join(tmpdir(), "mdraft-print", nativeStem + ".html");
+rmSync(nativePrintPath, { force: true });
+await evaluate(
+  "(() => {const overlay=document.querySelector('.prefs-overlay');if(overlay.hidden)document.getElementById('btn-prefs').click();[...document.querySelectorAll('.prefs-section')].find(node=>/^export$/i.test(node.textContent.trim())).click();[...document.querySelectorAll('.prefs-button')].find(node=>/as PDF/i.test(node.textContent)).click();})()",
+);
+for (let n = 0; n < 40 && !existsSync(nativePrintPath); n++)
+  await new Promise((resolve) => setTimeout(resolve, 250));
+const nativePrint = existsSync(nativePrintPath) ? readFileSync(nativePrintPath, "utf8") : "";
+const article = /<article\b[\s\S]*?<\/article>/.exec(nativePrint)?.[0] ?? "";
+// Load only these actual pure function declarations: the complete browser
+// module also imports CSS and DOM libraries and is not a Node test module.
+const wrapperSource = readFileSync(new URL("../src/markdown.ts", import.meta.url), "utf8");
+const wrapperTree = ts.createSourceFile("markdown.ts", wrapperSource, ts.ScriptTarget.Latest, true);
+const declarations = wrapperTree.statements
+  .filter(
+    (node) =>
+      ts.isFunctionDeclaration(node) &&
+      ["escapeHtml", "wrapStandaloneHtml"].includes(node.name?.text),
+  )
+  .map((node) => node.getText(wrapperTree))
+  .join("\n");
+const wrapper = { exports: {} };
+runInNewContext(
+  ts.transpileModule(declarations, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+  }).outputText,
+  wrapper,
+);
+const nativeHtml = wrapper.exports.wrapStandaloneHtml("Currency", article, false);
+const savedNative = await call("write_document", {
+  path: currencyOutput,
+  content: nativeHtml,
+  lineEnding: "\n",
+  hadBom: false,
+});
+const html = existsSync(currencyOutput) ? readFileSync(currencyOutput, "utf8") : "";
+check(
+  savedNative.ok &&
+    ["R$50", "R$ 10.000", "R$ 15.200,75", "US$5", "US$5.00", "C$8,123.50"].every((value) =>
+      html.includes(value),
+    ),
+  "native HTML preserves all six currency spellings",
+  savedNative.ok ? "shared app article + actual HTML wrapper + Rust writer" : savedNative.error,
+);
+check(
+  (html.match(/class="math-(?:inline|display)"/g) ?? []).length === 2 &&
+    html.includes('data-tex="a + b"') &&
+    html.includes('data-tex="c + d"'),
+  "native HTML exports only the two intended equations",
+);
+await evaluate(
+  "document.querySelector('.prefs-overlay').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))",
+);
+console.log(
+  "  Pandoc validation uses its existing source-reader dialect; padded-dollar parity is outside this change.",
+);
 ws.close();
 rmSync(workDir, { recursive: true, force: true });
 

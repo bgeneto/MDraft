@@ -1,8 +1,8 @@
 # The Linux package is named `mdraft`, not `m-draft`
 
-**Status:** draft
+**Status:** done
 **Date:** 2026-10-21
-**ADR:** `../adr/2026-10-21-linux-package-name.md` (new; written in step 1)
+**ADR:** `../adr/2026-10-21-linux-package-name.md` (written in step 1)
 
 ## Context and goal
 
@@ -113,24 +113,38 @@ Rejected:
 
 ## Steps
 
-- [ ] Write `docs/adr/2026-10-21-linux-package-name.md`.
-- [ ] Add `"productName": "mdraft"`, `"replaces": ["m-draft"]` and
+- [x] Write `docs/adr/2026-10-21-linux-package-name.md`.
+- [x] Add `"productName": "mdraft"`, `"replaces": ["m-draft"]` and
       `"conflicts": ["m-draft"]` to `src-tauri/tauri.linux.conf.json`.
-- [ ] Hard-code `Name=MDraft` in `src-tauri/linux.desktop.hbs`.
-- [ ] Rewrite the comment on the `glib::set_prgname` block in
+- [x] Hard-code `Name=MDraft` in `src-tauri/linux.desktop.hbs`.
+- [x] Rewrite the comment on the `glib::set_prgname` block in
       `src-tauri/src/lib.rs` to the new invariant (product name = desktop entry
       basename = `StartupWMClass`); keep the call so a future rename cannot
       reintroduce the icon mismatch.
-- [ ] Separate the display name from the bundle name in
+- [x] Separate the display name from the bundle name in
       `scripts/stage-artifacts.mjs` and use the platform config's value for
       bundle matching and its error message.
-- [ ] Clear `bundle/{deb,rpm,appimage}` in `scripts/build-linux.sh` before the
-      build, with a comment naming the stale-artefact trap.
-- [ ] Build the deb, inspect its control file and desktop entry, stage it and
-      install it over the existing `m-draft`.
-- [ ] Update `AGENTS.md`: the naming table, the Wayland trap, the Linux build
+- [x] Clear `bundle/{deb,rpm,appimage}` in `scripts/build-linux.sh` before the
+      build, with a comment naming the stale-artefact trap. **Deviation:** the
+      first build showed a stale `MDraft_0.4.0_amd64.deb` in
+      `bin/linux/amd64/` — the collection destination was never cleared either.
+      The script now also removes `*.deb`, `*.rpm` and `*.AppImage` there before
+      collecting, which is what the acceptance criterion about no `MDraft_*`
+      file requires.
+- [x] Build the deb, inspect its control file and desktop entry, stage it and
+      install it over the existing `m-draft`. Verified: `Package: mdraft`,
+      `Replaces: m-draft`, `Conflicts: m-draft`, entry
+      `Name=MDraft`/`Exec=mdraft`/`Icon=mdraft`/`StartupWMClass=mdraft`,
+      `apt install` removed `m-draft` and left only `mdraft.desktop`, and
+      `WAYLAND_DEBUG=1 mdraft` prints `set_app_id("mdraft")`.
+- [x] Update `AGENTS.md`: the naming table, the Wayland trap, the Linux build
       and release-checklist wording, and the stale-bundle trap.
-- [ ] Run the frontend and Rust gates.
+- [x] Run the frontend and Rust gates. `npm run build`, `npm run lint`,
+      `npm run knip` and `npm test -- --only rust` (97 passed, 2 ignored) pass;
+      Prettier passes on the changed JSON and script. Repository-wide
+      `format:check` still fails on unrelated uncommitted files
+      (`src/editor.ts`, `src/main.ts`, `src/markdown.ts`, the two scratch
+      `scripts/.currency-*.mjs`), which this change does not touch.
 
 ## Files and modules
 

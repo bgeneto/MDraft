@@ -315,7 +315,7 @@ const CHECK_IDS: &[&str] = &[
     "view.preview",
     "view.sidebar",
     "view.outline",
-    "view.files",
+    "view.favorites",
     "view.recent",
     "view.statusBar",
     "view.focus",
@@ -339,7 +339,7 @@ fn is_checked(state: &MenuState, id: &str) -> bool {
         "view.preview" => state.view_mode == "preview",
         "view.sidebar" => state.sidebar_visible,
         "view.outline" => state.sidebar_tab == "outline",
-        "view.files" => state.sidebar_tab == "files",
+        "view.favorites" => state.sidebar_tab == "favorites",
         "view.recent" => state.sidebar_tab == "recent",
         "view.statusBar" => state.show_status_bar,
         "view.focus" => state.focus_mode,
@@ -607,7 +607,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             Some("CmdOrCtrl+Shift+L"),
         )?)
         .item(&check("view.outline", "Outline", Some("CmdOrCtrl+Shift+1"))?)
-        .item(&check("view.files", "File List", Some("CmdOrCtrl+Shift+2"))?)
+        .item(&check("view.favorites", "Favorites", Some("CmdOrCtrl+Shift+2"))?)
         .item(&check(
             "view.recent",
             "Recent Files",
@@ -769,7 +769,7 @@ pub fn sync<R: Runtime>(app: &AppHandle<R>, state: &MenuState) {
     // stays visible there, its sidebar button is visible too; leaving the four
     // sidebar items clickable would be a control that changes a setting nobody
     // can see. Disable them until focus mode is left.
-    for id in ["view.sidebar", "view.outline", "view.files", "view.recent"] {
+    for id in ["view.sidebar", "view.outline", "view.favorites", "view.recent"] {
         let Some(item) = find_item(&menu, id) else {
             continue;
         };
@@ -916,7 +916,7 @@ mod tests {
         let settings = Settings {
             view_mode: "preview".into(),
             sidebar_visible: false,
-            sidebar_tab: "files".into(),
+            sidebar_tab: "favorites".into(),
             show_status_bar: false,
             focus_mode: true,
             typewriter_mode: true,
@@ -931,7 +931,7 @@ mod tests {
         assert!(is_checked(&state, "view.preview"));
         assert!(!is_checked(&state, "view.source"));
         assert!(!is_checked(&state, "view.sidebar"));
-        assert!(is_checked(&state, "view.files"));
+        assert!(is_checked(&state, "view.favorites"));
         assert!(!is_checked(&state, "view.outline"));
         assert!(!is_checked(&state, "view.statusBar"));
         assert!(is_checked(&state, "view.focus"));
@@ -949,7 +949,7 @@ mod tests {
         let checked = |ids: &[&str]| ids.iter().filter(|id| is_checked(&state, id)).count();
 
         assert_eq!(checked(&["view.source", "view.split", "view.preview"]), 1);
-        assert_eq!(checked(&["view.outline", "view.files", "view.recent"]), 1);
+        assert_eq!(checked(&["view.outline", "view.favorites", "view.recent"]), 1);
         assert_eq!(checked(&["themes.system", "themes.light", "themes.dark"]), 1);
     }
 

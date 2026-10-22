@@ -1,0 +1,1794 @@
+{
+  "docs/samples/physrevb_70_035307.md": {
+    "sha256": "6cc23d745117c570ca2147c57bb920baa10994856214a1af7b44c93dcf8c9137",
+    "entries": [
+      {
+        "body": "^{1}",
+        "display": false,
+        "src0": 153,
+        "src1": 159
+      },
+      {
+        "body": "^{1}",
+        "display": false,
+        "src0": 174,
+        "src1": 180
+      },
+      {
+        "body": "^{1,*}",
+        "display": false,
+        "src0": 196,
+        "src1": 204
+      },
+      {
+        "body": "^{1}",
+        "display": false,
+        "src0": 222,
+        "src1": 228
+      },
+      {
+        "body": "^{1}",
+        "display": false,
+        "src0": 243,
+        "src1": 249
+      },
+      {
+        "body": "^{2}",
+        "display": false,
+        "src0": 260,
+        "src1": 266
+      },
+      {
+        "body": "^{3}",
+        "display": false,
+        "src0": 287,
+        "src1": 293
+      },
+      {
+        "body": "^{4}",
+        "display": false,
+        "src0": 310,
+        "src1": 316
+      },
+      {
+        "body": "^{1}",
+        "display": false,
+        "src0": 319,
+        "src1": 327
+      },
+      {
+        "body": "^{2}",
+        "display": false,
+        "src0": 442,
+        "src1": 450
+      },
+      {
+        "body": "^{3}",
+        "display": false,
+        "src0": 556,
+        "src1": 564
+      },
+      {
+        "body": "^{4}",
+        "display": false,
+        "src0": 678,
+        "src1": 686
+      },
+      {
+        "body": "^8",
+        "display": false,
+        "src0": 2767,
+        "src1": 2773
+      },
+      {
+        "body": "^9",
+        "display": false,
+        "src0": 2787,
+        "src1": 2793
+      },
+      {
+        "body": "^{11}",
+        "display": false,
+        "src0": 3114,
+        "src1": 3121
+      },
+      {
+        "body": "^8",
+        "display": false,
+        "src0": 3221,
+        "src1": 3227
+      },
+      {
+        "body": "^{12}",
+        "display": false,
+        "src0": 3264,
+        "src1": 3273
+      },
+      {
+        "body": "^{13}",
+        "display": false,
+        "src0": 3417,
+        "src1": 3426
+      },
+      {
+        "body": "^{6,14}",
+        "display": false,
+        "src0": 3598,
+        "src1": 3609
+      },
+      {
+        "body": "^6",
+        "display": false,
+        "src0": 3765,
+        "src1": 3771
+      },
+      {
+        "body": "^{15}",
+        "display": false,
+        "src0": 3801,
+        "src1": 3810
+      },
+      {
+        "body": "^{16}",
+        "display": false,
+        "src0": 4038,
+        "src1": 4047
+      },
+      {
+        "body": "^{17}",
+        "display": false,
+        "src0": 4059,
+        "src1": 4068
+      },
+      {
+        "body": "^{18}",
+        "display": false,
+        "src0": 4533,
+        "src1": 4542
+      },
+      {
+        "body": "^{19}",
+        "display": false,
+        "src0": 4738,
+        "src1": 4747
+      },
+      {
+        "body": "CO_{2}",
+        "display": false,
+        "src0": 6250,
+        "src1": 6260
+      },
+      {
+        "body": "V_{0}(z)=V_{0}(|z|-L/2),",
+        "display": true,
+        "src0": 6684,
+        "src1": 6714
+      },
+      {
+        "body": "V_0",
+        "display": false,
+        "src0": 6724,
+        "src1": 6731
+      },
+      {
+        "body": "\\Theta(z)",
+        "display": false,
+        "src0": 6756,
+        "src1": 6769
+      },
+      {
+        "body": "L",
+        "display": false,
+        "src0": 6807,
+        "src1": 6812
+      },
+      {
+        "body": "z",
+        "display": false,
+        "src0": 6847,
+        "src1": 6852
+      },
+      {
+        "body": "^{20-22}",
+        "display": false,
+        "src0": 6944,
+        "src1": 6956
+      },
+      {
+        "body": "\\psi_{n,\\mathbf{k}}(\\mathbf{r}_{\\perp},z)=\\frac{1}{\\sqrt{S}}e^{i\\mathbf{k}\\cdot\\mathbf{r}_{\\perp}}\\chi_{n}(z),",
+        "display": true,
+        "src0": 6959,
+        "src1": 7075
+      },
+      {
+        "body": "S",
+        "display": false,
+        "src0": 7084,
+        "src1": 7087
+      },
+      {
+        "body": "\\mathbf{r}_{\\perp} = x\\hat{x} + y\\hat{y}",
+        "display": false,
+        "src0": 7115,
+        "src1": 7157
+      },
+      {
+        "body": "\\mathbf{k} = k_x\\hat{x} + k_y\\hat{y}",
+        "display": false,
+        "src0": 7188,
+        "src1": 7226
+      },
+      {
+        "body": "n(=1,2,\\ldots)",
+        "display": false,
+        "src0": 7296,
+        "src1": 7312
+      },
+      {
+        "body": "\\chi_n(z)",
+        "display": false,
+        "src0": 7316,
+        "src1": 7327
+      },
+      {
+        "body": "\\varepsilon_n",
+        "display": false,
+        "src0": 7332,
+        "src1": 7347
+      },
+      {
+        "body": "E_n(\\mathbf{k}) = \\varepsilon_n + \\hbar^2\\mathbf{k}^2/(2m^*)",
+        "display": false,
+        "src0": 7479,
+        "src1": 7541
+      },
+      {
+        "body": "\\varepsilon_n",
+        "display": false,
+        "src0": 7584,
+        "src1": 7599
+      },
+      {
+        "body": "\\chi_n(z)",
+        "display": false,
+        "src0": 7823,
+        "src1": 7834
+      },
+      {
+        "body": "[1/m^*(z)](\\partial\\chi_n/\\partial z)",
+        "display": false,
+        "src0": 7839,
+        "src1": 7878
+      },
+      {
+        "body": "^{20,22}",
+        "display": false,
+        "src0": 7903,
+        "src1": 7913
+      },
+      {
+        "body": "m_A^*(m_B^*)",
+        "display": false,
+        "src0": 7991,
+        "src1": 8005
+      },
+      {
+        "body": "\\rho(E) = \\sum\\delta[E - \\varepsilon(\\mathbf{k})]",
+        "display": false,
+        "src0": 8150,
+        "src1": 8201
+      },
+      {
+        "body": "^{22}",
+        "display": false,
+        "src0": 8314,
+        "src1": 8321
+      },
+      {
+        "body": "\\rho(E)=g_{s}\\sum_{n}\\frac{S}{4\\pi^{2}}\\int\\int\\delta\\Bigg[E-\\varepsilon_{n}-\\frac{\\hbar^{2}}{2m^{*}}(k_{x}+k_{y})\\Bigg]d k_{x}d k_{y},",
+        "display": true,
+        "src0": 8324,
+        "src1": 8465
+      },
+      {
+        "body": "g_s(=2)",
+        "display": false,
+        "src0": 8475,
+        "src1": 8486
+      },
+      {
+        "body": "m^*",
+        "display": false,
+        "src0": 8526,
+        "src1": 8533
+      },
+      {
+        "body": "m^*(z)",
+        "display": false,
+        "src0": 8553,
+        "src1": 8563
+      },
+      {
+        "body": "^{23}",
+        "display": false,
+        "src0": 8592,
+        "src1": 8601
+      },
+      {
+        "body": "\\frac{\\rho(E)}{S}\\equiv D(E)=\\rho_{0}\\sum_{n}\\Theta(E-\\varepsilon_{n}),",
+        "display": true,
+        "src0": 8787,
+        "src1": 8864
+      },
+      {
+        "body": "\\rho_0 \\equiv g_s m^* / (2 \\pi \\hbar^2)",
+        "display": false,
+        "src0": 8874,
+        "src1": 8917
+      },
+      {
+        "body": "^{22}",
+        "display": false,
+        "src0": 9089,
+        "src1": 9096
+      },
+      {
+        "body": "V_{0}",
+        "display": false,
+        "src0": 9509,
+        "src1": 9518
+      },
+      {
+        "body": "^{21}",
+        "display": false,
+        "src0": 9591,
+        "src1": 9600
+      },
+      {
+        "body": "L_{max}",
+        "display": false,
+        "src0": 9659,
+        "src1": 9670
+      },
+      {
+        "body": "L < L_{max}",
+        "display": false,
+        "src0": 9758,
+        "src1": 9773
+      },
+      {
+        "body": "^{24}",
+        "display": false,
+        "src0": 9989,
+        "src1": 9998
+      },
+      {
+        "body": "\\left[\\frac{1}{2m^{*}}(\\mathbf{p}-e\\mathbf{A})^{2}+V_{0}(z)\\right]\\Psi(\\mathbf{r},t)=i\\hbar\\frac{\\partial}{\\partial t}\\Psi(\\mathbf{r},t),",
+        "display": true,
+        "src0": 10442,
+        "src1": 10585
+      },
+      {
+        "body": "p=(\\hbar/i)\\nabla",
+        "display": false,
+        "src0": 10595,
+        "src1": 10616
+      },
+      {
+        "body": "\\mathbf{A}=\\mathbf{A}(t)",
+        "display": false,
+        "src0": 10647,
+        "src1": 10675
+      },
+      {
+        "body": "\\mathbf{A}(t)",
+        "display": false,
+        "src0": 10803,
+        "src1": 10820
+      },
+      {
+        "body": "\\mathbf{A}(t)=A_{x}(t)\\hat{x}",
+        "display": false,
+        "src0": 10848,
+        "src1": 10881
+      },
+      {
+        "body": "\\mathbf{A}(t)=A_{z}(t)\\hat{z}",
+        "display": false,
+        "src0": 10927,
+        "src1": 10960
+      },
+      {
+        "body": "A_{j}(t)=A_{0j}\\sin(\\omega_{j}t)",
+        "display": false,
+        "src0": 11002,
+        "src1": 11038
+      },
+      {
+        "body": "j=x,z",
+        "display": false,
+        "src0": 11046,
+        "src1": 11055
+      },
+      {
+        "body": "\\mathbf{F}=-\\partial\\mathbf{A}/\\partial t",
+        "display": false,
+        "src0": 11115,
+        "src1": 11160
+      },
+      {
+        "body": "A_{0j}=F_{0j}/\\omega_{j}",
+        "display": false,
+        "src0": 11192,
+        "src1": 11220
+      },
+      {
+        "body": "^{24}",
+        "display": false,
+        "src0": 11492,
+        "src1": 11501
+      },
+      {
+        "body": "\\Psi(\\mathbf{r},t)\\to\\phi(\\mathbf{r},t)",
+        "display": false,
+        "src0": 11941,
+        "src1": 11984
+      },
+      {
+        "body": "^{12,25}",
+        "display": false,
+        "src0": 12031,
+        "src1": 12043
+      },
+      {
+        "body": "\\left[-\\frac{\\hbar^{2}}{2}\\frac{d}{d z}\\frac{1}{m^{*}(z)}\\frac{d}{d z}+V[z-\\alpha(t)]\\right]\\phi(z,t)=i\\hbar\\frac{\\partial}{\\partial t}\\phi(z,t),",
+        "display": true,
+        "src0": 12070,
+        "src1": 12221
+      },
+      {
+        "body": "V[z-\\alpha(t)]=V_0\\Theta[|z-\\alpha_{0z}\\cos(\\omega_z t)|-L/2]",
+        "display": false,
+        "src0": 12231,
+        "src1": 12296
+      },
+      {
+        "body": "\\alpha_{0z} \\equiv eA_{0z}/(m^* \\omega_z)",
+        "display": false,
+        "src0": 12304,
+        "src1": 12349
+      },
+      {
+        "body": "\\alpha(t)",
+        "display": false,
+        "src0": 13076,
+        "src1": 13089
+      },
+      {
+        "body": "^{8,10,26}",
+        "display": false,
+        "src0": 13157,
+        "src1": 13171
+      },
+      {
+        "body": "\\alpha(t)",
+        "display": false,
+        "src0": 13190,
+        "src1": 13203
+      },
+      {
+        "body": "-\\left(e/m^{*}\\right)\\Bigg[\\int_{0}^{t}A_{z}(t^{\\prime})d t^{\\prime}\\Bigg],",
+        "display": true,
+        "src0": 13218,
+        "src1": 13299
+      },
+      {
+        "body": "^{10}",
+        "display": false,
+        "src0": 13344,
+        "src1": 13353
+      },
+      {
+        "body": "\\omega_z \\tau \\gg 1",
+        "display": false,
+        "src0": 13368,
+        "src1": 13391
+      },
+      {
+        "body": "V[z - \\alpha(t)]",
+        "display": false,
+        "src0": 13741,
+        "src1": 13761
+      },
+      {
+        "body": "z",
+        "display": false,
+        "src0": 13811,
+        "src1": 13816
+      },
+      {
+        "body": "\\langle V[z - \\alpha(t)] \\rangle",
+        "display": false,
+        "src0": 13926,
+        "src1": 13962
+      },
+      {
+        "body": "\\left[-\\frac{\\hbar^{2}}{2}\\frac{d}{d z}\\frac{1}{m^{*}(z)}\\frac{d}{d z}+V_{D C}(z)\\right]\\phi_{m}(z)=E_{m}\\phi_{m}(z).",
+        "display": true,
+        "src0": 14053,
+        "src1": 14176
+      },
+      {
+        "body": "V_{dc}(z)",
+        "display": false,
+        "src0": 14186,
+        "src1": 14199
+      },
+      {
+        "body": "\\langle V[z-\\alpha(t)]\\rangle",
+        "display": false,
+        "src0": 14281,
+        "src1": 14314
+      },
+      {
+        "body": "^{27}",
+        "display": false,
+        "src0": 14442,
+        "src1": 14451
+      },
+      {
+        "body": "\\mathbf{A}(t) = A_{0x} \\sin(\\omega_x t) \\hat{x}",
+        "display": false,
+        "src0": 14581,
+        "src1": 14632
+      },
+      {
+        "body": "\\begin{aligned}\\Psi_{n,\\mathbf{k}}(\\mathbf{r},t)&=\\Psi_{n,\\mathbf{k}}(\\mathbf{r},0)\\mathrm{e x p}\\{-i/\\hbar[E_{n}(\\mathbf{k})\\\\&\\quad+2\\gamma\\hbar\\omega_{x}]t\\}\\mathrm{e x p}\\{i\\alpha_{0x}k_{x}[1-\\cos(\\omega_{x}t)]\\}\\\\&\\quad\\times\\mathrm{e x p}[i\\gamma\\sin(2\\omega_{x}t)],\\end{aligned}",
+        "display": true,
+        "src0": 14700,
+        "src1": 14991
+      },
+      {
+        "body": "2\\gamma\\hbar\\omega_x",
+        "display": false,
+        "src0": 15001,
+        "src1": 15025
+      },
+      {
+        "body": "\\mathbf{r}=(\\mathbf{r}_\\perp,z)",
+        "display": false,
+        "src0": 15061,
+        "src1": 15096
+      },
+      {
+        "body": "\\psi_{n,\\mathbf{k}}(\\mathbf{r},0)=e^{i\\mathbf{k}\\cdot\\mathbf{r}_\\perp}\\chi_n(z)",
+        "display": false,
+        "src0": 15099,
+        "src1": 15182
+      },
+      {
+        "body": "\\alpha_{0x}\\equiv eA_{0x}/(m^*\\omega_x)",
+        "display": false,
+        "src0": 15185,
+        "src1": 15228
+      },
+      {
+        "body": "\\gamma\\equiv e^2A_{0x}^2/(8m^*\\hbar\\omega_x)",
+        "display": false,
+        "src0": 15235,
+        "src1": 15283
+      },
+      {
+        "body": "z",
+        "display": false,
+        "src0": 15461,
+        "src1": 15466
+      },
+      {
+        "body": "\\left\\{-\\frac{\\hbar^{2}}{2}\\frac{d}{d z}\\left[\\frac{1}{m^{*}(z)}\\frac{d}{d z}\\right]+V_{0}(z)\\right\\}\\chi_{n}(z)=\\varepsilon_{n}\\chi_{n}(z).",
+        "display": true,
+        "src0": 15474,
+        "src1": 15620
+      },
+      {
+        "body": "|n', k'\\rangle",
+        "display": false,
+        "src0": 15762,
+        "src1": 15780
+      },
+      {
+        "body": "t'",
+        "display": false,
+        "src0": 15790,
+        "src1": 15796
+      },
+      {
+        "body": "|n, k\\rangle",
+        "display": false,
+        "src0": 15838,
+        "src1": 15854
+      },
+      {
+        "body": "t",
+        "display": false,
+        "src0": 15864,
+        "src1": 15869
+      },
+      {
+        "body": "\\int d^{3}r\\Psi_{n^{\\prime},{\\bf k}^{\\prime}}^{*}({\\bf r},t^{\\prime})\\Psi_{n,{\\bf k}}({\\bf r},t)=\\delta_{n,n^{\\prime}}\\delta_{{\\bf k},{\\bf k}^{\\prime}}h(n,{\\bf k};t,t^{\\prime}),",
+        "display": true,
+        "src0": 15902,
+        "src1": 16085
+      },
+      {
+        "body": "\\begin{align*}h(n,\\mathbf{k};t,t^{\\prime})\\equiv&\\exp\\{-i/\\hbar[E_{n}(\\mathbf{k})+2\\gamma\\hbar\\omega_{x}](t-t^{\\prime})\\}\\\\\\times&\\exp\\{-i\\alpha_{0x}k_{x}[\\cos(\\omega_{x}t)-\\cos(\\omega_{x}t^{\\prime})]\\}\\\\\\times&\\exp\\{i\\gamma[\\sin(2\\omega_{x}t)-\\sin(2\\omega_{x}t^{\\prime})]\\}.\\end{align*}",
+        "display": true,
+        "src0": 16095,
+        "src1": 16388
+      },
+      {
+        "body": "(n,k;t)",
+        "display": false,
+        "src0": 16462,
+        "src1": 16473
+      },
+      {
+        "body": "^{28}",
+        "display": false,
+        "src0": 16518,
+        "src1": 16527
+      },
+      {
+        "body": "G^{+}(n^{\\prime},\\mathbf{k}^{\\prime};n,\\mathbf{k};t>t^{\\prime})=\\delta_{n,n^{\\prime}}\\delta_{\\mathbf{k},\\mathbf{k}^{\\prime}}G^{+}(n,\\mathbf{k};t>t^{\\prime}),",
+        "display": true,
+        "src0": 16530,
+        "src1": 16693
+      },
+      {
+        "body": "G^+(n, \\mathbf{k}; t > t') = -i/\\hbar\\Theta(t - t')h(n, \\mathbf{k}; t, t')",
+        "display": false,
+        "src0": 16703,
+        "src1": 16781
+      },
+      {
+        "body": "\\left[\\varepsilon_{n}+\\frac{(\\hbar\\mathbf{k}-e\\mathbf{A})^{2}}{2m^{*}}-i\\hbar\\frac{\\partial}{\\partial t}\\right]G^{+}(n,\\mathbf{k};t>t^{\\prime})=\\delta(t^{\\prime}-t)",
+        "display": true,
+        "src0": 16847,
+        "src1": 17017
+      },
+      {
+        "body": "(n,k;t)",
+        "display": false,
+        "src0": 17028,
+        "src1": 17039
+      },
+      {
+        "body": "\\begin{align*}&\\Bigg[\\frac{(\\mathbf{p}-e\\mathbf{A})^{2}}{2m^{*}}+V_{0}(z)-i\\hbar\\frac{\\partial}{\\partial t}\\Bigg]G^{+}(n,\\mathbf{k};t>t^{\\prime})\\Psi_{n,\\mathbf{k}}(\\mathbf{r},0)\\\\&\\quad=\\delta(t^{\\prime}-t)\\Psi_{n,\\mathbf{k}}(\\mathbf{r},0)\\end{align*}",
+        "display": true,
+        "src0": 17052,
+        "src1": 17310
+      },
+      {
+        "body": "n",
+        "display": false,
+        "src0": 17338,
+        "src1": 17341
+      },
+      {
+        "body": "\\mathbf{k}",
+        "display": false,
+        "src0": 17346,
+        "src1": 17358
+      },
+      {
+        "body": "G^+(n,\\mathbf{k};t>t')",
+        "display": false,
+        "src0": 17385,
+        "src1": 17409
+      },
+      {
+        "body": "(n,\\mathbf{k};t)",
+        "display": false,
+        "src0": 17448,
+        "src1": 17466
+      },
+      {
+        "body": "e^{ix\\cos y}",
+        "display": false,
+        "src0": 17488,
+        "src1": 17502
+      },
+      {
+        "body": "e^{ix\\sin y}",
+        "display": false,
+        "src0": 17507,
+        "src1": 17521
+      },
+      {
+        "body": "\\begin{align*}G_{n,\\mathbf{k}}^{+}(E,t^{\\prime})&=\\int_{-\\infty}^{+\\infty}d(t-t^{\\prime})\\exp[i/\\hbar(E+i\\eta)(t-t^{\\prime})]\\\\&\\quad\\times G^{+}(n,\\mathbf{k};t>t^{\\prime})\\\\&=\\sum_{m=-\\infty}^{+\\infty}\\frac{\\widetilde{F}_{m}(k_{x},t^{\\prime})}{E-E_{n}(\\mathbf{k})-2\\gamma\\hbar\\omega_{x}-m\\hbar\\omega_{x}+i\\eta},\\end{align*}",
+        "display": true,
+        "src0": 17638,
+        "src1": 17968
+      },
+      {
+        "body": "i\\eta",
+        "display": false,
+        "src0": 17996,
+        "src1": 18005
+      },
+      {
+        "body": "\\begin{align*}\\widetilde{F}_{m}(k_{x},t^{\\prime})=(-1)^{m}F_{m}(k_{x})\\sum_{n=-\\infty}^{+\\infty}i^{n}J_{m+n}(\\alpha_{0x}k_{x})\\\\\\times\\exp\\{i[n\\omega_{x}t^{\\prime}-\\gamma\\sin(2\\omega_{x}t^{\\prime})]\\},\\end{align*}",
+        "display": true,
+        "src0": 18102,
+        "src1": 18321
+      },
+      {
+        "body": "J_{m}(x)",
+        "display": false,
+        "src0": 18331,
+        "src1": 18343
+      },
+      {
+        "body": "F_{m}(k_{x})",
+        "display": false,
+        "src0": 18380,
+        "src1": 18396
+      },
+      {
+        "body": "F_{m}(k_{x})=\\sum_{l=0}^{\\infty}\\frac{J_{l}(\\gamma)}{1+\\delta_{l,0}}\\big[J_{2l-m}(\\alpha_{0x}k_{x})+(-1)^{m+l}J_{2l+m}(\\alpha_{0x}k_{x})\\big].",
+        "display": true,
+        "src0": 18451,
+        "src1": 18599
+      },
+      {
+        "body": "t",
+        "display": false,
+        "src0": 18693,
+        "src1": 18698
+      },
+      {
+        "body": "t",
+        "display": false,
+        "src0": 18714,
+        "src1": 18719
+      },
+      {
+        "body": "^6",
+        "display": false,
+        "src0": 18763,
+        "src1": 18769
+      },
+      {
+        "body": "(\\omega_x/2\\pi)\\int_{-\\pi/\\omega_x}^{+\\pi/\\omega_x} dt' G_{n,\\mathbf{k}}^+(E,t')",
+        "display": false,
+        "src0": 18788,
+        "src1": 18872
+      },
+      {
+        "body": "G_{n,\\mathbf{k}}^{*}(E)=\\sum_{m=-\\infty}^{+\\infty}\\frac{F_{m}^{2}(k_{x})}{E-E_{n}(\\mathbf{k})-2\\gamma\\hbar\\omega_{x}-m\\hbar\\omega_{x}+i\\eta}.",
+        "display": true,
+        "src0": 18919,
+        "src1": 19066
+      },
+      {
+        "body": "\\int dE \\operatorname{Re}\\{G_{n,\\mathbf{k}}^{*}(E)\\}=0",
+        "display": false,
+        "src0": 19135,
+        "src1": 19191
+      },
+      {
+        "body": "\\int dE \\operatorname{Im}\\{G_{n,\\mathbf{k}}^{*}(E)\\}=-\\pi",
+        "display": false,
+        "src0": 19196,
+        "src1": 19255
+      },
+      {
+        "body": "\\Sigma_{m=-\\infty}^{+\\infty}F_{m}^{2}(k_{x})=1",
+        "display": false,
+        "src0": 19262,
+        "src1": 19310
+      },
+      {
+        "body": "n",
+        "display": false,
+        "src0": 19372,
+        "src1": 19377
+      },
+      {
+        "body": "D_n(E) = -(g_s / \\pi) \\Sigma_{\\mathbf{k}} \\mathrm{Im}\\{G_n(\\mathbf{k})(E)\\}",
+        "display": false,
+        "src0": 19492,
+        "src1": 19571
+      },
+      {
+        "body": "\\mathbf{k}",
+        "display": false,
+        "src0": 19580,
+        "src1": 19594
+      },
+      {
+        "body": "\\mathbf{k}",
+        "display": false,
+        "src0": 19692,
+        "src1": 19706
+      },
+      {
+        "body": "n",
+        "display": false,
+        "src0": 19791,
+        "src1": 19796
+      },
+      {
+        "body": "D_{n}(E)=\\frac{2}{\\pi}\\rho_{0}\\sum_{m=0}^{\\infty}\\Theta(\\overline{{E}}_{n\\gamma m})\\int_{0}^{1}\\frac{d\\xi}{\\sqrt{1-\\xi^{2}}}F_{m}^{2}\\Bigg(\\xi\\frac{\\sqrt{2m^{*}\\overline{{E}}_{n\\gamma m}}}{\\hbar}\\Bigg),",
+        "display": true,
+        "src0": 19810,
+        "src1": 20018
+      },
+      {
+        "body": "\\overline{E}_{n\\gamma m} \\equiv E - \\varepsilon_n - 2 \\gamma \\hbar \\omega_x - m \\hbar \\omega_x",
+        "display": false,
+        "src0": 20028,
+        "src1": 20124
+      },
+      {
+        "body": "^{16,17}",
+        "display": false,
+        "src0": 20153,
+        "src1": 20165
+      },
+      {
+        "body": "F_{0x}",
+        "display": false,
+        "src0": 20351,
+        "src1": 20361
+      },
+      {
+        "body": "\\omega_x",
+        "display": false,
+        "src0": 20385,
+        "src1": 20397
+      },
+      {
+        "body": "^{19}",
+        "display": false,
+        "src0": 20539,
+        "src1": 20548
+      },
+      {
+        "body": "\\omega_x \\tau \\gg 1",
+        "display": false,
+        "src0": 20967,
+        "src1": 20990
+      },
+      {
+        "body": "m=0",
+        "display": false,
+        "src0": 21109,
+        "src1": 21116
+      },
+      {
+        "body": "\\begin{align*}D_{n}(E)=&\\frac{2}{\\pi}\\rho_{0}\\Theta(E-\\varepsilon_{n}-2\\gamma\\hbar\\omega_{x})\\\\&\\times\\int_{0}^{1}\\frac{d\\xi}{\\sqrt{1-\\xi^{2}}}F_{0}^{2}\\bigg(\\xi\\frac{\\sqrt{2m^{*}(E-\\varepsilon_{n}-2\\gamma\\hbar\\omega_{x})}}{\\hbar}\\bigg),\\end{align*}",
+        "display": true,
+        "src0": 21254,
+        "src1": 21509
+      },
+      {
+        "body": "F_{0}(k_{x})=J_{0}(\\gamma)J_{0}(\\alpha_{0x}k_{x})+2\\Sigma_{l>0,\\mathrm{even}}J_{l}(\\gamma)J_{2l}(\\alpha_{0x}k_{x})",
+        "display": false,
+        "src0": 21519,
+        "src1": 21637
+      },
+      {
+        "body": "D(E)",
+        "display": false,
+        "src0": 21721,
+        "src1": 21729
+      },
+      {
+        "body": "D_{n}(E)",
+        "display": false,
+        "src0": 21756,
+        "src1": 21768
+      },
+      {
+        "body": "D(E)=\\sum_{n}D_{n}(E).",
+        "display": true,
+        "src0": 21797,
+        "src1": 21825
+      },
+      {
+        "body": "\\gamma",
+        "display": false,
+        "src0": 21899,
+        "src1": 21909
+      },
+      {
+        "body": "\\alpha_{0x}",
+        "display": false,
+        "src0": 21915,
+        "src1": 21930
+      },
+      {
+        "body": "F_{0}(k_{x}) \\to 1",
+        "display": false,
+        "src0": 21954,
+        "src1": 21976
+      },
+      {
+        "body": "\\lim_{x \\to 0} J_{n}(x) = \\delta_{n,0}",
+        "display": false,
+        "src0": 21984,
+        "src1": 22026
+      },
+      {
+        "body": "_x",
+        "display": false,
+        "src0": 22708,
+        "src1": 22712
+      },
+      {
+        "body": "_{1-x}",
+        "display": false,
+        "src0": 22714,
+        "src1": 22722
+      },
+      {
+        "body": "_2",
+        "display": false,
+        "src0": 22766,
+        "src1": 22770
+      },
+      {
+        "body": "z",
+        "display": false,
+        "src0": 22802,
+        "src1": 22805
+      },
+      {
+        "body": "y",
+        "display": false,
+        "src0": 22834,
+        "src1": 22837
+      },
+      {
+        "body": "\\omega_z = 1.78 \\times 10^{14}",
+        "display": false,
+        "src0": 22868,
+        "src1": 22900
+      },
+      {
+        "body": "F_{0z} = 180",
+        "display": false,
+        "src0": 22918,
+        "src1": 22932
+      },
+      {
+        "body": "\\alpha_{0z}",
+        "display": false,
+        "src0": 22999,
+        "src1": 23012
+      },
+      {
+        "body": "\\sim 15",
+        "display": false,
+        "src0": 23027,
+        "src1": 23036
+      },
+      {
+        "body": "_x",
+        "display": false,
+        "src0": 23062,
+        "src1": 23066
+      },
+      {
+        "body": "_{1-x}",
+        "display": false,
+        "src0": 23068,
+        "src1": 23076
+      },
+      {
+        "body": "V_0(x) = 60\\%",
+        "display": false,
+        "src0": 23180,
+        "src1": 23195
+      },
+      {
+        "body": "\\Delta E_{gap}",
+        "display": false,
+        "src0": 23196,
+        "src1": 23212
+      },
+      {
+        "body": "\\Delta E_{gap} = 1.155x + 0.37x^2",
+        "display": false,
+        "src0": 23220,
+        "src1": 23255
+      },
+      {
+        "body": "m_A^* = 0.0665m_0",
+        "display": false,
+        "src0": 23274,
+        "src1": 23293
+      },
+      {
+        "body": "m_B^* = m_A^* + (0.1006x + 0.0137x^2)m_0",
+        "display": false,
+        "src0": 23298,
+        "src1": 23340
+      },
+      {
+        "body": "_x",
+        "display": false,
+        "src0": 23408,
+        "src1": 23412
+      },
+      {
+        "body": "_{1-x}",
+        "display": false,
+        "src0": 23414,
+        "src1": 23422
+      },
+      {
+        "body": "^29",
+        "display": false,
+        "src0": 23460,
+        "src1": 23465
+      },
+      {
+        "body": "\\sim 5 \\times 10^6",
+        "display": false,
+        "src0": 23490,
+        "src1": 23510
+      },
+      {
+        "body": "^2",
+        "display": false,
+        "src0": 23513,
+        "src1": 23517
+      },
+      {
+        "body": "\\omega_z\\tau \\sim 9535",
+        "display": false,
+        "src0": 23531,
+        "src1": 23555
+      },
+      {
+        "body": "x = 0.3",
+        "display": false,
+        "src0": 23560,
+        "src1": 23569
+      },
+      {
+        "body": "V_0 = 227.9",
+        "display": false,
+        "src0": 23571,
+        "src1": 23584
+      },
+      {
+        "body": "^19",
+        "display": false,
+        "src0": 23763,
+        "src1": 23768
+      },
+      {
+        "body": "\\alpha_{0z} \\sim 15",
+        "display": false,
+        "src0": 24421,
+        "src1": 24444
+      },
+      {
+        "body": "L_{max}=190\\ \\text{\\AA}",
+        "display": false,
+        "src0": 24610,
+        "src1": 24637
+      },
+      {
+        "body": "\\AA",
+        "display": false,
+        "src0": 24684,
+        "src1": 24691
+      },
+      {
+        "body": "E_1=15.911\\ \\text{meV}",
+        "display": false,
+        "src0": 24791,
+        "src1": 24817
+      },
+      {
+        "body": "E_2=63.442\\ \\text{meV}",
+        "display": false,
+        "src0": 24820,
+        "src1": 24846
+      },
+      {
+        "body": "E_3=140.721\\ \\text{meV}",
+        "display": false,
+        "src0": 24849,
+        "src1": 24876
+      },
+      {
+        "body": "E_4=227.787\\ \\text{meV}",
+        "display": false,
+        "src0": 24883,
+        "src1": 24910
+      },
+      {
+        "body": "\\text{CO}_2",
+        "display": false,
+        "src0": 25081,
+        "src1": 25096
+      },
+      {
+        "body": "z=-L/2",
+        "display": false,
+        "src0": 25182,
+        "src1": 25192
+      },
+      {
+        "body": "z=+L/2",
+        "display": false,
+        "src0": 25198,
+        "src1": 25208
+      },
+      {
+        "body": "\\sim1.7\\ \\text{meV}",
+        "display": false,
+        "src0": 25316,
+        "src1": 25339
+      },
+      {
+        "body": "x=0.35",
+        "display": false,
+        "src0": 25685,
+        "src1": 25695
+      },
+      {
+        "body": "L=200\\ \\text{\\AA}",
+        "display": false,
+        "src0": 25701,
+        "src1": 25722
+      },
+      {
+        "body": "L_{max}",
+        "display": false,
+        "src0": 25763,
+        "src1": 25774
+      },
+      {
+        "body": "\\sim215\\ \\text{\\AA}",
+        "display": false,
+        "src0": 25789,
+        "src1": 25812
+      },
+      {
+        "body": "\\text{CO}_2",
+        "display": false,
+        "src0": 26029,
+        "src1": 26044
+      },
+      {
+        "body": "\\sim11.5\\ \\text{\\AA}",
+        "display": false,
+        "src0": 26324,
+        "src1": 26348
+      },
+      {
+        "body": "\\omega_x/2\\pi=1\\times10^{12}",
+        "display": false,
+        "src0": 26589,
+        "src1": 26621
+      },
+      {
+        "body": "^{16,17}",
+        "display": false,
+        "src0": 26716,
+        "src1": 26728
+      },
+      {
+        "body": "_{0.3}",
+        "display": false,
+        "src0": 28255,
+        "src1": 28265
+      },
+      {
+        "body": "_{0.7}",
+        "display": false,
+        "src0": 28268,
+        "src1": 28278
+      },
+      {
+        "body": "F_{0x}=5",
+        "display": false,
+        "src0": 28824,
+        "src1": 28836
+      },
+      {
+        "body": "F_{0x}=15",
+        "display": false,
+        "src0": 28895,
+        "src1": 28908
+      },
+      {
+        "body": "_{2}",
+        "display": false,
+        "src0": 29246,
+        "src1": 29254
+      },
+      {
+        "body": "_{0.3}",
+        "display": false,
+        "src0": 29713,
+        "src1": 29723
+      },
+      {
+        "body": "_{0.7}",
+        "display": false,
+        "src0": 29726,
+        "src1": 29736
+      },
+      {
+        "body": "_{2}",
+        "display": false,
+        "src0": 29845,
+        "src1": 29853
+      },
+      {
+        "body": "_{z}",
+        "display": false,
+        "src0": 29918,
+        "src1": 29926
+      },
+      {
+        "body": "\\omega_{x}/2\\pi=1.0",
+        "display": false,
+        "src0": 30007,
+        "src1": 30030
+      },
+      {
+        "body": "_{x}",
+        "display": false,
+        "src0": 30072,
+        "src1": 30080
+      },
+      {
+        "body": "_{0z}=180",
+        "display": false,
+        "src0": 30184,
+        "src1": 30197
+      },
+      {
+        "body": "_{0x}=5(15)",
+        "display": false,
+        "src0": 30241,
+        "src1": 30256
+      },
+      {
+        "body": "e^2F_{0x}^2/4m^*\\omega_x",
+        "display": false,
+        "src0": 30471,
+        "src1": 30499
+      },
+      {
+        "body": "J_0^2(\\gamma)",
+        "display": false,
+        "src0": 30627,
+        "src1": 30644
+      },
+      {
+        "body": "D_n(E)",
+        "display": false,
+        "src0": 30677,
+        "src1": 30687
+      },
+      {
+        "body": "F_0(k_x) \\cong J_0(\\gamma)J_0(\\alpha_{0x}k_x)",
+        "display": false,
+        "src0": 30707,
+        "src1": 30756
+      },
+      {
+        "body": "\\omega_{x}/2\\pi=0.5(1.0)",
+        "display": false,
+        "src0": 31322,
+        "src1": 31350
+      },
+      {
+        "body": "\\omega_{x}/2\\pi=5",
+        "display": false,
+        "src0": 31385,
+        "src1": 31406
+      },
+      {
+        "body": "E=\\varepsilon_{n}+2\\gamma\\hbar\\omega_{x}",
+        "display": false,
+        "src0": 31532,
+        "src1": 31576
+      },
+      {
+        "body": "F_{0}^{2}",
+        "display": false,
+        "src0": 31613,
+        "src1": 31626
+      },
+      {
+        "body": "\\int_{0}^{1}d\\xi/\\sqrt{1-\\xi^{2}}",
+        "display": false,
+        "src0": 31671,
+        "src1": 31708
+      },
+      {
+        "body": "\\pi/2",
+        "display": false,
+        "src0": 31744,
+        "src1": 31753
+      },
+      {
+        "body": "\\rho_{0}",
+        "display": false,
+        "src0": 31813,
+        "src1": 31825
+      },
+      {
+        "body": "J_{0}^{2}(\\gamma)",
+        "display": false,
+        "src0": 31850,
+        "src1": 31871
+      },
+      {
+        "body": "F_{0,x}",
+        "display": false,
+        "src0": 31893,
+        "src1": 31904
+      },
+      {
+        "body": "\\gamma",
+        "display": false,
+        "src0": 31907,
+        "src1": 31917
+      },
+      {
+        "body": "1/\\omega_{x}^{3}",
+        "display": false,
+        "src0": 31934,
+        "src1": 31954
+      },
+      {
+        "body": "\\omega_{x}",
+        "display": false,
+        "src0": 31981,
+        "src1": 31995
+      },
+      {
+        "body": "J_{0}^{2}(\\gamma)",
+        "display": false,
+        "src0": 31998,
+        "src1": 32019
+      },
+      {
+        "body": "\\gamma",
+        "display": false,
+        "src0": 32059,
+        "src1": 32069
+      },
+      {
+        "body": "\\gamma>0.5",
+        "display": false,
+        "src0": 32099,
+        "src1": 32113
+      },
+      {
+        "body": "J_{0}^{2}(0.5)\\cong0.88",
+        "display": false,
+        "src0": 32122,
+        "src1": 32149
+      },
+      {
+        "body": "J_{0}^{2}(0.9)\\cong0.65",
+        "display": false,
+        "src0": 32155,
+        "src1": 32182
+      },
+      {
+        "body": "\\omega_{x}",
+        "display": false,
+        "src0": 32260,
+        "src1": 32274
+      },
+      {
+        "body": "^{16,17}",
+        "display": false,
+        "src0": 32541,
+        "src1": 32553
+      },
+      {
+        "body": "^{13,16,17}",
+        "display": false,
+        "src0": 32796,
+        "src1": 32811
+      },
+      {
+        "body": "^{17}",
+        "display": false,
+        "src0": 32988,
+        "src1": 32997
+      },
+      {
+        "body": "\\sim2.5",
+        "display": false,
+        "src0": 33189,
+        "src1": 33200
+      },
+      {
+        "body": "_{2}",
+        "display": false,
+        "src0": 33358,
+        "src1": 33366
+      },
+      {
+        "body": "E=E_{n}",
+        "display": false,
+        "src0": 33478,
+        "src1": 33489
+      },
+      {
+        "body": "E=E_{n}^{(0)}",
+        "display": false,
+        "src0": 33550,
+        "src1": 33567
+      },
+      {
+        "body": "F_{0x}=5(15)",
+        "display": false,
+        "src0": 33656,
+        "src1": 33672
+      },
+      {
+        "body": "^{17}",
+        "display": false,
+        "src0": 33955,
+        "src1": 33964
+      },
+      {
+        "body": "^{6,17}",
+        "display": false,
+        "src0": 34084,
+        "src1": 34095
+      },
+      {
+        "body": "D_{n}(E)",
+        "display": false,
+        "src0": 34378,
+        "src1": 34390
+      },
+      {
+        "body": "E-E_{n}<0",
+        "display": false,
+        "src0": 34396,
+        "src1": 34409
+      },
+      {
+        "body": "D_{n}(E)",
+        "display": false,
+        "src0": 34456,
+        "src1": 34468
+      },
+      {
+        "body": "\\rho_{0}",
+        "display": false,
+        "src0": 34482,
+        "src1": 34494
+      },
+      {
+        "body": "G_{n,k}^{*}(E)",
+        "display": false,
+        "src0": 34707,
+        "src1": 34725
+      },
+      {
+        "body": "m\\neq0",
+        "display": false,
+        "src0": 34916,
+        "src1": 34926
+      },
+      {
+        "body": "F_{0}(k_{x})",
+        "display": false,
+        "src0": 34962,
+        "src1": 34978
+      },
+      {
+        "body": "F_{0}(k_{x})\\cong J_{0}(\\gamma)J_{0}(\\alpha_{0x}k_{x})",
+        "display": false,
+        "src0": 35173,
+        "src1": 35231
+      },
+      {
+        "body": "m \\neq 0",
+        "display": false,
+        "src0": 35688,
+        "src1": 35700
+      },
+      {
+        "body": "G_{n,\\mathbf{k}}^{*}(E)",
+        "display": false,
+        "src0": 35721,
+        "src1": 35748
+      },
+      {
+        "body": "F_{0}(k_{x})",
+        "display": false,
+        "src0": 35902,
+        "src1": 35918
+      },
+      {
+        "body": "CO_{2}",
+        "display": false,
+        "src0": 36191,
+        "src1": 36201
+      },
+      {
+        "body": "L_{max}",
+        "display": false,
+        "src0": 36750,
+        "src1": 36761
+      },
+      {
+        "body": "^{13,16,17}",
+        "display": false,
+        "src0": 38552,
+        "src1": 38567
+      },
+      {
+        "body": "^{27-31}",
+        "display": false,
+        "src0": 39322,
+        "src1": 39334
+      },
+      {
+        "body": "^{32-34}",
+        "display": false,
+        "src0": 39523,
+        "src1": 39535
+      },
+      {
+        "body": "^{*}",
+        "display": false,
+        "src0": 39890,
+        "src1": 39898
+      },
+      {
+        "body": "^{1}",
+        "display": false,
+        "src0": 39936,
+        "src1": 39944
+      },
+      {
+        "body": "^{2}",
+        "display": false,
+        "src0": 40035,
+        "src1": 40043
+      },
+      {
+        "body": "^{3}",
+        "display": false,
+        "src0": 40190,
+        "src1": 40198
+      },
+      {
+        "body": "^{4}",
+        "display": false,
+        "src0": 40352,
+        "src1": 40360
+      },
+      {
+        "body": "^{5}",
+        "display": false,
+        "src0": 40643,
+        "src1": 40651
+      },
+      {
+        "body": "^{6}",
+        "display": false,
+        "src0": 40755,
+        "src1": 40763
+      },
+      {
+        "body": "^{8}",
+        "display": false,
+        "src0": 41068,
+        "src1": 41076
+      },
+      {
+        "body": "^{9}",
+        "display": false,
+        "src0": 41143,
+        "src1": 41151
+      },
+      {
+        "body": "^{10}",
+        "display": false,
+        "src0": 41317,
+        "src1": 41326
+      },
+      {
+        "body": "^{11}",
+        "display": false,
+        "src0": 41421,
+        "src1": 41430
+      },
+      {
+        "body": "^{12}",
+        "display": false,
+        "src0": 41511,
+        "src1": 41520
+      },
+      {
+        "body": "^{13}",
+        "display": false,
+        "src0": 41614,
+        "src1": 41623
+      },
+      {
+        "body": "^{14}",
+        "display": false,
+        "src0": 41784,
+        "src1": 41793
+      },
+      {
+        "body": "^{15}",
+        "display": false,
+        "src0": 41833,
+        "src1": 41842
+      },
+      {
+        "body": "^{16}",
+        "display": false,
+        "src0": 42193,
+        "src1": 42202
+      },
+      {
+        "body": "^{17}",
+        "display": false,
+        "src0": 42252,
+        "src1": 42261
+      },
+      {
+        "body": "^{18}",
+        "display": false,
+        "src0": 42302,
+        "src1": 42311
+      },
+      {
+        "body": "^{19}",
+        "display": false,
+        "src0": 42418,
+        "src1": 42427
+      },
+      {
+        "body": "^{20}",
+        "display": false,
+        "src0": 42744,
+        "src1": 42753
+      },
+      {
+        "body": "^{21}",
+        "display": false,
+        "src0": 42876,
+        "src1": 42885
+      },
+      {
+        "body": "^{22}",
+        "display": false,
+        "src0": 42996,
+        "src1": 43005
+      },
+      {
+        "body": "^{23}",
+        "display": false,
+        "src0": 43096,
+        "src1": 43105
+      },
+      {
+        "body": "^{24}",
+        "display": false,
+        "src0": 43180,
+        "src1": 43189
+      },
+      {
+        "body": "^{25}",
+        "display": false,
+        "src0": 43255,
+        "src1": 43264
+      },
+      {
+        "body": "^{26}",
+        "display": false,
+        "src0": 43380,
+        "src1": 43389
+      },
+      {
+        "body": "^{27}",
+        "display": false,
+        "src0": 43471,
+        "src1": 43480
+      },
+      {
+        "body": "^{28}",
+        "display": false,
+        "src0": 43541,
+        "src1": 43550
+      },
+      {
+        "body": "^{29}",
+        "display": false,
+        "src0": 43650,
+        "src1": 43659
+      },
+      {
+        "body": "^{30}",
+        "display": false,
+        "src0": 43859,
+        "src1": 43868
+      },
+      {
+        "body": "^{31}",
+        "display": false,
+        "src0": 43933,
+        "src1": 43942
+      },
+      {
+        "body": "^{32}",
+        "display": false,
+        "src0": 44027,
+        "src1": 44036
+      },
+      {
+        "body": "^{33}",
+        "display": false,
+        "src0": 44316,
+        "src1": 44325
+      },
+      {
+        "body": "^{34}",
+        "display": false,
+        "src0": 44396,
+        "src1": 44405
+      }
+    ]
+  },
+  "samples/feature-tour.md": {
+    "sha256": "548ba95c7d14ba426d898d3e6ace7d6b83f7ee5df9f99cd055518ddf909518ce",
+    "entries": [
+      {
+        "body": "e^{i\\pi} + 1 = 0",
+        "display": false,
+        "src0": 1178,
+        "src1": 1196
+      },
+      {
+        "body": "x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}",
+        "display": false,
+        "src0": 1224,
+        "src1": 1264
+      },
+      {
+        "body": "\\int_{-\\infty}^{\\infty} e^{-x^{2}}\\,dx = \\sqrt{\\pi}",
+        "display": true,
+        "src0": 1309,
+        "src1": 1366
+      },
+      {
+        "body": "a^2 + b^2 = c^2",
+        "display": false,
+        "src0": 1402,
+        "src1": 1421
+      },
+      {
+        "body": "\\sum_{n=1}^{\\infty} \\frac{1}{n^2} = \\frac{\\pi^2}{6}",
+        "display": true,
+        "src0": 1427,
+        "src1": 1484
+      }
+    ]
+  }
+}

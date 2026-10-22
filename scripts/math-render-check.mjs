@@ -4,7 +4,12 @@
 //
 // Checks font loading, then the geometry that collapses when KaTeX's stylesheet
 // is absent: fraction bars, radicals and large delimiters.
-import { writeFileSync } from "node:fs";
+import { writeFileSync, readFileSync } from "node:fs";
+import katex from "katex";
+
+const baseline = JSON.parse(
+  readFileSync(new URL("./fixtures/math-inventory.json", import.meta.url), "utf8"),
+)["docs/samples/physrevb_70_035307.md"].entries;
 
 const PORT = Number(process.argv[2] ?? 9222);
 const list = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
@@ -107,6 +112,8 @@ const report = await evaluate(`(async () => {
     fractionsWithoutBar: fractions.filter((w) => !w || w <= 0).length,
     smallestFractionBar: fractions.length ? Math.min(...fractions.filter(Boolean)) : null,
     sampleFont: sample ? getComputedStyle(sample).fontFamily : null
+    , inventory: [...document.querySelectorAll('#preview .math-inline, #preview .math-display')].map(node => ({ body: node.dataset.tex, display: node.classList.contains('math-display') }))
+    , errors: document.querySelectorAll('#preview .katex-error, #preview .math-error').length
   });
 })()`);
 
@@ -137,6 +144,25 @@ console.log(`  large delimiters   ${report.delimCount}`);
 console.log(`  sample font-family ${report.sampleFont}`);
 
 const checks = [
+  [
+    "every baseline formula body and display kind renders in order",
+    JSON.stringify(report.inventory) ===
+      JSON.stringify(baseline.map(({ body, display }) => ({ body, display }))),
+  ],
+  [
+    "KaTeX errors do not increase from the independent baseline",
+    report.errors ===
+      baseline.filter(({ body, display }) =>
+        katex
+          .renderToString(body, {
+            displayMode: display,
+            throwOnError: false,
+            strict: false,
+            output: "html",
+          })
+          .includes('class="katex-error"'),
+      ).length,
+  ],
   [
     "all 12 KaTeX families declared and fetchable",
     Object.values(report.check).every((s) => s === "loaded"),

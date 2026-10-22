@@ -6,6 +6,7 @@
 //! formula still parses instead of breaking the whole document.
 
 import type { Inline } from "./ir.ts";
+import { analyzeMath } from "../math-delimiters.ts";
 
 const GREEK: Record<string, string> = {
   alpha: "alpha",
@@ -153,68 +154,15 @@ export function texToTypstMath(tex: string): string {
   return out.replace(/\s+/g, " ").trim();
 }
 
-function looksLikeMath(body: string): boolean {
-  const trimmed = body.trim();
-  if (!trimmed) return false;
-  // Never treat a bare amount as math: this is the currency guard.
-  if (/^[\d.,]+$/.test(trimmed)) return false;
-  const tight = !/^\s|\s$/.test(body);
-  return tight || /[\\^_=]/.test(trimmed);
-}
-
-/**
- * Split a text token into text and math nodes. Code is handled by the caller and
- * never reaches this function.
- */
+/** Split decoded HTML text; backslashes are visible characters, not Markdown escapes. */
 export function splitMath(value: string): Inline[] {
   const out: Inline[] = [];
-  let buffer = "";
-  let i = 0;
-  const flush = () => {
-    if (buffer) out.push({ kind: "text", value: buffer });
-    buffer = "";
-  };
-
-  while (i < value.length) {
-    if (value[i] === "\\" && (value[i + 1] === "(" || value[i + 1] === "[")) {
-      const close = value[i + 1] === "(" ? "\\)" : "\\]";
-      const end = value.indexOf(close, i + 2);
-      if (end > i + 2) {
-        flush();
-        out.push({
-          kind: "math",
-          tex: value.slice(i + 2, end).trim(),
-          display: value[i + 1] === "[",
-        });
-        i = end + 2;
-        continue;
-      }
-    }
-    if (value[i] === "$" && value[i + 1] === "$") {
-      const end = value.indexOf("$$", i + 2);
-      if (end > i + 2) {
-        flush();
-        out.push({ kind: "math", tex: value.slice(i + 2, end).trim(), display: true });
-        i = end + 2;
-        continue;
-      }
-    }
-    if (value[i] === "$") {
-      let end = value.indexOf("$", i + 1);
-      while (end > i && value[end - 1] === "\\") end = value.indexOf("$", end + 1);
-      if (end > i + 1) {
-        const body = value.slice(i + 1, end);
-        if (looksLikeMath(body)) {
-          flush();
-          out.push({ kind: "math", tex: body.trim() });
-          i = end + 1;
-          continue;
-        }
-      }
-    }
-    buffer += value[i];
-    i += 1;
+  let from = 0;
+  for (const range of analyzeMath(value, false).math) {
+    if (range.from > from) out.push({ kind: "text", value: value.slice(from, range.from) });
+    out.push({ kind: "math", tex: range.body, display: range.display });
+    from = range.to;
   }
-  flush();
+  if (from < value.length) out.push({ kind: "text", value: value.slice(from) });
   return out;
 }

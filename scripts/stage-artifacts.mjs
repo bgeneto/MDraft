@@ -43,8 +43,31 @@ const BUNDLE_KINDS = {
 };
 
 const config = JSON.parse(readFileSync(join(repoRoot, "src-tauri", "tauri.conf.json"), "utf8"));
+/** The visible product name: manifest, portable filename, the brand people read. */
 const productName = config.productName;
 const version = config.version ?? "0.0.0";
+
+/**
+ * The name the bundlers put into artefact filenames.
+ *
+ * Tauri merges `tauri.<platform>.conf.json` over the base config before it
+ * bundles, so the two can legitimately differ: Linux sets `productName` to the
+ * all-lowercase `mdraft` so dpkg's package identity is `mdraft` rather than
+ * `m-draft`, while the launcher and every other artefact keep saying **MDraft**.
+ * Matching on the display name there would skip every freshly built bundle.
+ * Windows and macOS do not override the name, so this falls back to it.
+ */
+const platformConfigPath = join(repoRoot, "src-tauri", `tauri.${OS}.conf.json`);
+let platformConfig = {};
+if (existsSync(platformConfigPath)) {
+  try {
+    platformConfig = JSON.parse(readFileSync(platformConfigPath, "utf8"));
+  } catch (cause) {
+    console.error(`Could not read ${platformConfigPath}: ${cause.message}`);
+    process.exit(1);
+  }
+}
+const bundleName = platformConfig.productName ?? productName;
 
 const releaseDir = join(repoRoot, "src-tauri", "target", "release");
 const bundleRoot = join(releaseDir, "bundle");
@@ -84,7 +107,7 @@ const cargoPackage = (() => {
 
 const binaryNames = [
   ...new Set(
-    [config.mainBinaryName, productName, cargoPackage].filter(
+    [config.mainBinaryName, productName, bundleName, cargoPackage].filter(
       (name) => typeof name === "string" && name.length > 0,
     ),
   ),
@@ -153,15 +176,15 @@ for (const [kind, extensions] of Object.entries(BUNDLE_KINDS)) {
     // keeps whatever an earlier build left there. Copying everything would ship
     // an installer carrying the previous product name or version, which is how a
     // rename silently produces two installers with different names.
-    if (!entry.includes(productName) || !entry.includes(version)) {
-      skipped.push(`${kind}/${entry} (not ${productName} ${version})`);
+    if (!entry.includes(bundleName) || !entry.includes(version)) {
+      skipped.push(`${kind}/${entry} (not ${bundleName} ${version})`);
       continue;
     }
     sources.push(full);
     matched++;
   }
   if (matched === 0) {
-    console.error(`No ${kind} bundle matching "${productName}" ${version} in ${dir}.`);
+    console.error(`No ${kind} bundle matching "${bundleName}" ${version} in ${dir}.`);
     console.error(`Contents: ${readdirSync(dir).join(", ") || "(empty)"}`);
     process.exit(1);
   }

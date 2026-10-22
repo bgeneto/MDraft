@@ -18,6 +18,7 @@ import { renderTypst } from "./render-typst.ts";
 import { renderAsciidoc } from "./render-asciidoc.ts";
 import { renderHtmlFragment } from "./render-html.ts";
 import { sanitizeHtmlFragment } from "./html-fragment.ts";
+import { escapeMarkdownCurrency } from "../math-delimiters.ts";
 
 export interface ImageRequest {
   src: string;
@@ -210,6 +211,21 @@ export async function planPaste(
   // snippet's spaces and structure get lost.
   const original = choice.fromText ? (payload.text ?? "") : sourceText(payload, source);
   if (!payload.html && !payload.markdown && !payload.text) return null;
+
+  if (destination === "markdown" && (source === "markdown" || source === "plain")) {
+    const raw = choice.native ? (payload.text ?? "") : original;
+    if (raw.length > MAX_TEXT) {
+      return {
+        text: raw,
+        block: false,
+        source,
+        converted: false,
+        notices: ["The clipboard was too large to convert; pasted it as plain text."],
+      };
+    }
+    const text = escapeMarkdownCurrency(raw);
+    return { text, block: false, source, converted: text !== raw, notices };
+  }
 
   // CodeMirror will insert the text flavour, untouched: the clipboard is
   // already written in the destination's syntax, or it is plain text.
