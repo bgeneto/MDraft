@@ -264,6 +264,126 @@ pub(crate) fn quiet(command: &mut Command) -> &mut Command {
     command
 }
 
+/// A writable directory of our own, handed to pandoc as its working directory.
+///
+/// Pandoc's PDF writer does not use the system temporary directory. It creates the
+/// engine's input and output with `withTempFile "."`, and for Typst its media
+/// directory with `withTempDirectory "."` — both relative to the process's
+/// **current working directory**. An application installed by the MSI is started
+/// from a Start-menu shortcut whose working directory is the install folder
+/// (`C:\Program Files\MDraft`), which a normal user cannot write to, so every PDF
+/// export failed with `pandoc.exe: .: openTempFile: permission denied` — while the
+/// same program started from a writable folder, such as the repository during
+/// development, exported fine.
+///
+/// The working directory is therefore chosen here instead of inherited, and
+/// `TMPDIR`, `TEMP` and `TMP` are pointed at the same place so anything the PDF
+/// engine writes to the temporary directory also lands where this process has
+/// proved it can write.
+struct Scratch {
+    path: PathBuf,
+}
+
+impl Scratch {
+    /// Create a fresh scratch directory, preferring the system temporary
+    /// directory and falling back to the application's cache directory. A machine
+    /// whose `TEMP` is missing, full or redirected at a place this user cannot
+    /// write still exports.
+    fn new<R: Runtime>(app: &AppHandle<R>) -> Result<Self, String> {
+        let mut roots = vec![std::env::temp_dir().join("mdraft-export")];
+        if let Ok(cache) = app.path().app_cache_dir() {
+            roots.push(cache.join("export"));
+        }
+        Self::create(&roots)
+    }
+
+    /// Split out of [`Scratch::new`] so the rules can be exercised without an
+    /// `AppHandle`.
+    fn create(roots: &[PathBuf]) -> Result<Self, String> {
+        let mut failures: Vec<String> = Vec::new();
+        for root in roots {
+            // One directory per run: two exports at once must not share scratch
+            // space, and leftovers from a crashed run must never be reused.
+            let unique = format!(
+                "{}-{:x}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|elapsed| elapsed.as_nanos())
+                    .unwrap_or(0)
+            );
+            let path = root.join(unique);
+            match std::fs::create_dir_all(&path) {
+                Ok(()) => return Ok(Self { path }),
+                Err(e) => failures.push(format!("{}: {e}", root.display())),
+            }
+        }
+        Err(format!(
+            "Could not create a working directory for pandoc.\n\n{}",
+            failures.join("\n")
+        ))
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        // Best effort: a PDF engine that outlived a timeout may still hold a file
+        // open, and a directory left in the temporary directory is harmless.
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+/// The pandoc invocation for one export.
+///
+/// Kept apart from [`export`] so the working directory and the temporary-directory
+/// environment — the two halves of the permission fix above — can be asserted
+/// without running pandoc.
+fn pandoc_command(pandoc: &Path, args: &[String], scratch: &Scratch, directory: &Path) -> Command {
+    let mut command = Command::new(pandoc);
+    command
+        .args(args)
+        .current_dir(directory)
+        // Everything pandoc and its PDF engine write to the temporary directory
+        // goes where this process has proved it can write, rather than wherever a
+        // launcher's `TEMP` happens to point.
+        .env("TMPDIR", scratch.path())
+        .env("TEMP", scratch.path())
+        .env("TMP", scratch.path());
+    command
+}
+
+/// The working directory for one pandoc run.
+///
+/// Two different needs decide it, and they disagree:
+///
+/// * The PDF writer is the only one that *writes* to its working directory — the
+///   engine's input, the engine's output and, for Typst, the media directory. It
+///   therefore needs [`Scratch`], which is guaranteed writable.
+/// * Every other writer only *reads* relative resources from there. Images the
+///   editor inserts are document-relative by default (`./doc.assets/a.png`), so
+///   the document's own folder is the directory that makes them resolve exactly
+///   as the preview resolves them. An untitled document has no folder, and then
+///   the scratch directory is the only safe answer.
+fn pandoc_directory<'a>(request: &'a ExportRequest, scratch: &'a Scratch) -> &'a Path {
+    let writes_a_pdf = Path::new(&request.output_path)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"));
+    if writes_a_pdf {
+        return scratch.path();
+    }
+    request
+        .input_path
+        .as_deref()
+        .map(Path::new)
+        .and_then(Path::parent)
+        .filter(|directory| directory.is_dir())
+        .unwrap_or_else(|| scratch.path())
+}
+
 /// Where our own copy of pandoc lives: `<app data>/pandoc/<version>/`.
 fn managed_root<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     app.path().app_data_dir().ok().map(|d| d.join("pandoc"))
@@ -457,9 +577,13 @@ pub fn export<R: Runtime>(app: &AppHandle<R>, request: &ExportRequest) -> Result
         ));
     }
 
-    let mut command = Command::new(&pandoc);
+    // Pandoc creates the PDF engine's files in its working directory, so it must
+    // not inherit one the launcher happened to provide. Kept alive for the whole
+    // run; the guard removes the directory when the export returns.
+    let scratch = Scratch::new(app)?;
+    let directory = pandoc_directory(request, &scratch);
+    let mut command = pandoc_command(&pandoc, &args, &scratch, directory);
     let mut child = quiet(&mut command)
-        .args(&args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1178,6 +1302,118 @@ mod tests {
         v.pdf_engine = String::new();
         let args = build_arguments(&format_with("-s -o ${outputPath} ${pdfEngine}", ""), &v);
         assert_eq!(args, vec!["-s", "-o", "/out/report.docx"]);
+    }
+
+    #[test]
+    fn a_scratch_directory_is_writable_and_removed_with_its_export() {
+        let root = std::env::temp_dir().join("mdraft-scratch-test");
+        let scratch =
+            Scratch::create(std::slice::from_ref(&root)).expect("a writable temp directory");
+        let path = scratch.path().to_path_buf();
+        assert!(path.is_dir(), "{} was not created", path.display());
+        // Pandoc writes its engine input here; a directory that exists but cannot
+        // take a file fixes nothing.
+        std::fs::write(path.join("probe.typ"), b"= probe").expect("the scratch is writable");
+        drop(scratch);
+        assert!(!path.exists(), "{} outlived its export", path.display());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_scratch_directory_falls_back_to_the_next_root() {
+        let base = std::env::temp_dir().join("mdraft-scratch-fallback-test");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        // A *file* where the first root's directory should be: no platform can
+        // create a directory inside a file, so the first root must be rejected.
+        let blocked = base.join("blocked");
+        std::fs::write(&blocked, b"not a directory").unwrap();
+        let usable = base.join("usable");
+        let scratch = Scratch::create(&[blocked, usable.clone()]).expect("the second root works");
+        assert!(
+            scratch.path().starts_with(&usable),
+            "{} did not use the fallback root",
+            scratch.path().display()
+        );
+        drop(scratch);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_pdf_export_runs_where_pandoc_can_write() {
+        let root = std::env::temp_dir().join("mdraft-command-test");
+        let scratch =
+            Scratch::create(std::slice::from_ref(&root)).expect("a writable temp directory");
+        let args = ["-s", "-o", "/out/report.pdf"].map(String::from).to_vec();
+        let request = ExportRequest {
+            format_id: "pdf".into(),
+            markdown: "# report".into(),
+            output_path: "/out/report.pdf".into(),
+            input_path: Some("/docs/report.md".into()),
+            language: None,
+        };
+        let directory = pandoc_directory(&request, &scratch);
+        let command = pandoc_command(Path::new("/usr/bin/pandoc"), &args, &scratch, directory);
+
+        // The working directory is the whole fix: pandoc's PDF writer resolves its
+        // `withTempFile "."` calls against it, and an MSI install inherits
+        // `C:\Program Files\MDraft`, which a normal user cannot write to. Even a
+        // document beside its own folder must not decide this: the PDF writer
+        // *creates files* there.
+        assert_eq!(command.get_current_dir(), Some(scratch.path()));
+        let environment: Vec<(String, Option<String>)> = command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|v| v.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        for name in ["TMPDIR", "TEMP", "TMP"] {
+            let found = environment
+                .iter()
+                .find(|(key, _)| key == name)
+                .unwrap_or_else(|| panic!("{name} was not set"));
+            assert_eq!(
+                found.1.as_deref(),
+                Some(scratch.path().to_string_lossy().as_ref()),
+                "{name} must point at the scratch directory"
+            );
+        }
+        drop(scratch);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn another_format_runs_in_the_documents_folder_so_images_resolve() {
+        let root = std::env::temp_dir().join("mdraft-document-directory-test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let document = root.join("notes.md");
+        std::fs::write(&document, "# notes").unwrap();
+        let scratch = Scratch::create(std::slice::from_ref(&root)).expect("a writable temp");
+        let request = ExportRequest {
+            format_id: "docx".into(),
+            markdown: "# notes".into(),
+            output_path: root.join("notes.docx").to_string_lossy().into_owned(),
+            input_path: Some(document.to_string_lossy().into_owned()),
+            language: None,
+        };
+
+        // Images are inserted as `./doc.assets/a.png` by default; pandoc can only
+        // find those from the document's folder. Only the PDF writer needs the
+        // scratch directory instead.
+        assert_eq!(pandoc_directory(&request, &scratch), root.as_path());
+
+        let untitled = ExportRequest {
+            input_path: None,
+            ..request
+        };
+        assert_eq!(pandoc_directory(&untitled, &scratch), scratch.path());
+
+        drop(scratch);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
