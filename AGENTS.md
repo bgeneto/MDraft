@@ -201,7 +201,7 @@ rewrite from scratch.
 | `npm run stage` | `scripts/stage-artifacts.mjs` | Re-stage what is already built |
 | `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
-| `npm run test:rust` | `cargo test` | 99 tests (97 run, two ignored downloads) on both platforms |
+| `npm run test:rust` | `cargo test` | 103 tests (101 run, two ignored downloads) on both platforms |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. The two restart layers are the exception: two launches of the same instance's settings directory, closed with WM_CLOSE in between so the close flush runs. Puts back the working tree and the developer's own settings afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
 | `npm run smoke` | `scripts/dom-smoke.mjs` | 107 checks against `samples/feature-tour.md` |
 | `npm run word-sync` | `scripts/word-sync-test.mjs` | 58 checks of word-level sync, including 20 alternating pairs, element endpoints, multi-paragraph ranges, stale render rejection and reduced motion in Markdown/AsciiDoc/Typst Document, against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, the four-beat pulse and its resting mark, reduced motion, no scroll, Escape, and the fallbacks |
@@ -489,7 +489,7 @@ Twenty-eight layers, cheapest first. Run them in this order when changing anythi
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 99 | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, xz/tar release extraction |
+| Rust unit | `npm run test:rust` | 103 | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction |
 | Session store | `npm run test:sessions` | 59 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
 | Paste conversion | `npm run paste:convert` | 369 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, image syntax, AsciiDoc |
 | AsciiDoc export source | `npm run asciidoc:export:unit` | 17 | Unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations - no application |
@@ -1769,6 +1769,9 @@ clipboard and selection commands, case conversion, comments, line operations and
 Format Document; `src/spellcheck.ts` still stops the event first when a
 misspelled word is under the pointer, so spelling keeps its own menu.
 
+**`Pandoc exited with 1` and `pandoc.exe: .: openTempFile: permission denied (Permission denied)` for every Markdown and AsciiDoc PDF export, while `.typ` documents export fine**
+Pandoc's PDF writer does not use the system temporary directory. `toPdfViaTempFile` creates the engine's input and output with `withTempFile "."`, and for Typst its media directory with `withTempDirectory "."` — all relative to the process's **working directory**. The MSI's Start-menu shortcut sets `WorkingDirectory=C:\Program Files\MDraft`, which a normal user cannot write to, so pandoc died before it started Typst. `.typ` documents were unaffected because they are compiled by Typst directly, without pandoc; a development build launched from the repository and the portable build launched from a writable folder both worked, which is why it looked like a regression in one install. Reproduce it without the application: `cd` into a directory with a deny-write ACE, then run `pandoc -o out.pdf --pdf-engine=<full path to typst.exe>` with the document on stdin — the literal message and the `temporary-1.3` backtrace match. `src-tauri/src/export.rs` now runs pandoc in a per-export scratch directory under the system temp directory (falling back to the app cache directory when `TEMP` itself is unusable) and points `TMPDIR`/`TEMP`/`TMP` at it. Do not replace that with `--resource-path=<document folder>`: pandoc then hands Typst an absolute `C:/…` image path, which Typst rejects, so a document with images fails a different way. Non-PDF formats run in the document's folder instead, because only the PDF writer creates files in its working directory and the document folder is what makes relative image paths resolve as they do in the preview.
+
 ## Adding a preference, end to end
 
 Five files, in this order — more than three, so a plan comes first; see
@@ -1973,7 +1976,7 @@ platform and fails on the other.
    reads the latter for the bundle, and the two must agree. `npm run
    check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
-3. `npm run test:rust` — 97 runnable tests (two ignored downloads: pandoc and Typst). Run them on Linux too
+3. `npm run test:rust` — 101 runnable tests (two ignored downloads: pandoc and Typst). Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run math`,
