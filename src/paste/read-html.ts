@@ -230,7 +230,10 @@ function trimStart(nodes: Inline[]): Inline[] {
       trimming = false;
       continue;
     }
-    // code, image, math and break are visible atoms.
+    // A break at the flow's edge breaks nothing; its renderer's `\` would be a
+    // stray line of its own in the pasted Markdown.
+    if (node.kind === "break") continue;
+    // code, image and math are visible atoms.
     out.push(node);
     trimming = false;
   }
@@ -261,6 +264,7 @@ function trimEnd(nodes: Inline[]): Inline[] {
       trimming = false;
       continue;
     }
+    if (node.kind === "break") continue;
     out.push(node);
     trimming = false;
   }
@@ -275,6 +279,52 @@ function trimEnd(nodes: Inline[]): Inline[] {
  */
 function trimFlow(nodes: Inline[]): Inline[] {
   return trimEnd(trimStart(joinText(nodes)));
+}
+
+/**
+ * Split a flow at runs of two or more hard breaks. A CMS writes its visual
+ * paragraph breaks as `<br><br>` inside one `<p>` — the UnB news article does
+ * exactly that. Keeping both breaks would render as a `\` at the end of every
+ * paragraph plus another alone on the blank line, so the run is the boundary
+ * between two blocks instead. A single `<br>` stays a hard break.
+ */
+function splitParagraphs(nodes: Inline[]): Inline[][] {
+  const paragraphs: Inline[][] = [];
+  let flow: Inline[] = [];
+  let breaks = 0;
+  const flushBreaks = () => {
+    if (breaks >= 2) {
+      paragraphs.push(flow);
+      flow = [];
+    } else if (breaks === 1) {
+      flow.push({ kind: "break" });
+    }
+    breaks = 0;
+  };
+  for (const node of nodes) {
+    if (node.kind === "break") {
+      breaks += 1;
+      continue;
+    }
+    // Whitespace between two `<br>` tags must not stop them being one run; at
+    // the start of a line HTML collapses it away anyway.
+    if (breaks > 0 && node.kind === "text" && node.value.trim() === "") continue;
+    flushBreaks();
+    flow.push(node);
+  }
+  flushBreaks();
+  paragraphs.push(flow);
+  return paragraphs;
+}
+
+/** The paragraph blocks of a converted inline flow, blank lines included. */
+function paragraphBlocks(nodes: Inline[]): Block[] {
+  const out: Block[] = [];
+  for (const flow of splitParagraphs(nodes)) {
+    const body = trimFlow(flow);
+    if (hasVisible(body)) out.push({ kind: "paragraph", children: body });
+  }
+  return out;
 }
 
 function hasVisible(nodes: Inline[]): boolean {
@@ -531,8 +581,8 @@ function listBlock(node: AnyNode, ctx: Context): Block[] {
       }
     }
     if (blocks.length === 0) {
-      const inline = trimFlow(children(li).flatMap((child) => convertInline(child, ctx)));
-      if (inline.length > 0) blocks.push({ kind: "paragraph", children: inline });
+      const inline = children(li).flatMap((child) => convertInline(child, ctx));
+      blocks.push(...paragraphBlocks(inline));
     }
     items.push({ blocks, task });
   }
@@ -553,8 +603,8 @@ function blockNode(node: AnyNode, ctx: Context): Block[] {
     return body.length > 0 ? [{ kind: "heading", level: Number(tag[1]), children: body }] : [];
   }
   if (tag === "p") {
-    const body = trimFlow(children(node).flatMap((child) => convertInline(child, ctx)));
-    return hasVisible(body) ? [{ kind: "paragraph", children: body }] : [];
+    const body = children(node).flatMap((child) => convertInline(child, ctx));
+    return paragraphBlocks(body);
   }
   if (tag === "ul" || tag === "ol") return listBlock(node, ctx);
   if (tag === "blockquote") {
@@ -602,9 +652,9 @@ function convertBlocks(nodes: AnyNode[], ctx: Context): Block[] {
   const out: Block[] = [];
   let inline: Inline[] = [];
   const flush = () => {
-    const body = trimFlow(inline);
+    const body = inline;
     inline = [];
-    if (hasVisible(body)) out.push({ kind: "paragraph", children: body });
+    out.push(...paragraphBlocks(body));
   };
   for (const node of nodes) {
     const tag = name(node);
