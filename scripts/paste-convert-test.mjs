@@ -353,6 +353,32 @@ console.log("\n=== HTML to Markdown ===");
   check(text.includes("- One") && text.includes("- Two"), "bullets");
   check(text.includes("| A | B |") && text.includes("| --- | --- |"), "GFM table");
   check(result?.block === true, "the fragment is block-level");
+
+  // The UnB news page writes its visual paragraphs as `<br><br>` inside one
+  // `<p>`. Two hard breaks used to become a `\` at the end of every paragraph
+  // and another alone on the blank line.
+  const cms = await planPaste(
+    payload("<p><br>One.<br><br>Two.<br><br>Three.</p>", "One.\n\nTwo.\n\nThree."),
+    "markdown",
+  );
+  check(
+    cms?.text === "One.\n\nTwo.\n\nThree.",
+    "a CMS's <br><br> paragraphs become blank lines",
+    JSON.stringify(cms?.text),
+  );
+  check(
+    !(cms?.text ?? "").includes("\\"),
+    "no hard-break backslash is left at a paragraph edge",
+    JSON.stringify(cms?.text),
+  );
+  check(cms?.block === true, "split paragraphs paste as a block");
+
+  const lineBreak = await planPaste(payload("<p>One<br>Two</p>", "One\nTwo"), "markdown");
+  check(
+    lineBreak?.text === "One\\\nTwo",
+    "a single <br> stays a hard break",
+    JSON.stringify(lineBreak?.text),
+  );
 }
 
 console.log("\n=== HTML to Typst ===");

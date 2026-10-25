@@ -227,7 +227,7 @@ rewrite from scratch.
 | `npm run asciidoc:export:unit` | `scripts/asciidoc-export-unit.mjs` | 17 unit checks of the AsciiDoc -> HTML step every pandoc export uses: unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations; no application |
 | `npm run test:sessions` | `scripts/sessions-test.mjs` | 59 unit checks of `src/sessions.ts`, with no application and no build |
 | `npm run p0:unit` | `scripts/p0-unit.mjs` | 52 unit checks of the P0 data-safety layer: recovery entry/scheduler (debounce, serialised write/remove, failure notice), disk-change classification and Typst command strings; no application and no build |
-| `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 374 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
+| `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 378 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
 | `npm run paste` | `scripts/rich-paste-test.mjs` | 87 checks of rich paste through the real UI: destination detection, conversion in every direction, whitespace across inline elements, preferences, Ctrl+Shift+V, undo, and Find/Replace paste ownership, including real Ctrl+V and Ctrl+Shift+V with plain and rich clipboard text. The 8 native-key checks are skipped (79/79) when the session cannot own the clipboard, which the suite proves by writing and reading it back |
 | `npm run image:syntax` | `scripts/image-syntax-test.mjs` | 22 checks of bitmap, remote-image and modern-format handling in Typst, Markdown, HTML and AsciiDoc; Typst refuses AVIF with a message, WebP is inserted, and Format > Image writes Typst syntax |
 | `npm run image:rules` | `scripts/image-rules-test.mjs` | 28 checks of every Image rule, the untitled fallback, a 401 and a non-image response, quoted and `file://` paths and `data:` URLs; `--live` adds the three public sample images |
@@ -496,7 +496,7 @@ Thirty-four layers, cheapest first. Run them in this order when changing anythin
 | Rust unit | `npm run test:rust` | 119 | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction, image content sniffing (WebP/AVIF brands), `${filename}`, the untitled image guard, the Typst image root, the OS opener's executable refusal, the recovery journal's round-trip/id/cap rules |
 | Session store | `npm run test:sessions` | 59 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
 | P0 data safety (unit) | `npm run p0:unit` | 52 | Recovery entry shape, debounced/coalesced writes, serialised forget, one failure notice, unchanged/modified/deleted classification, and the Typst heading/list/quote/table/rule/TOC/inline/display-math strings — no application |
-| Paste conversion | `npm run paste:convert` | 374 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, image syntax, AsciiDoc, and an image that fails to save |
+| Paste conversion | `npm run paste:convert` | 378 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, `<br><br>` paragraph splitting, image syntax, AsciiDoc, and an image that fails to save |
 | AsciiDoc export source | `npm run asciidoc:export:unit` | 17 | Unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations - no application |
 | DOM smoke | `npm run smoke` | 107 | Rendering, pane sync, preferences (including the four On Launch choices and Line Height), math, fonts, status icons |
 | Word sync | `npm run word-sync` | 58 | The fragment map, preview → source and source → preview, atomic code, formula and image spans, the pulse and its resting mark, reduced motion, word snapping, no scroll, Escape |
@@ -1866,6 +1866,19 @@ Strip one pair of matching quotes, decode `file://` through `URL` (restoring a
 UNC host), percent-decode the pathname, drop the slash before a drive, and allow
 spaces when the value contains a path separator. A sentence that merely ends in
 `.png` still has no separator and stays text.
+
+**Pasting an article leaves `\` at the end of every paragraph, and one alone on the blank line**
+The CMS wrote its visual paragraphs as `<br><br>` inside a single `<p>` (the UnB
+Notícias article does), and the HTML reader turned each `<br>` into a hard
+break. Markdown renders a break as `\` plus a newline, so each paragraph
+boundary became two of them. A selection's clipboard HTML is not the page's
+outer markup: clone the range and inspect it before assuming `<p>…</p><p>…</p>`
+— every paragraph can be one text node run inside one `<p>`. The reader now
+treats a run of two or more `break` nodes as a paragraph boundary and drops a
+break at a block's edges, while a single `<br>` stays a hard break.
+`scripts/paste-convert-test.mjs` pins both rules. To reproduce without the app,
+import `planPaste` in a scratch `.mjs` and pass the cloned fragment as `html`;
+Node 24 strips the types.
 
 ## Adding a preference, end to end
 
