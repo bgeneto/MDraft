@@ -1,9 +1,10 @@
 //! Native application menu.
 //!
-//! The structure follows Typora's menu bar (File / Edit / Paragraph / Format /
-//! View / Themes / Help). Every custom item carries a stable id; `on_event`
-//! forwards that id to the frontend as the `menu` event so the UI owns the
-//! actual behaviour.
+//! The structure follows the user's intent rather than the implementation:
+//! File / Edit / Insert / Format / Navigate / View / Tools / Help. Every custom
+//! item carries a stable id; `on_event` forwards that id to the frontend as the
+//! `menu` event so the UI owns the actual behaviour. Moving an item or changing
+//! its label therefore does not rename its command or its accelerator.
 
 use crate::settings::{
     default_export_formats, AppState, ExportAvailability, ExportFormat, Settings,
@@ -28,6 +29,32 @@ pub const RECENT_PREFIX: &str = "recent.file:";
 /// Stable id for the submenu, so the test probe can find it without knowing
 /// where it sits in the menu tree.
 const RECENT_SUBMENU_ID: &str = "file.openRecent";
+
+/// Menu ids for the open tabs listed under Navigate carry the session id after
+/// this prefix. The path travels in the id for the same reason the recent paths
+/// do: the list changes while the menu is open, and the clicked row must name the
+/// document it was built for, not its old position.
+pub const OPEN_TAB_PREFIX: &str = "navigate.tab:";
+
+const OPEN_TABS_SUBMENU_ID: &str = "navigate.openTabs";
+const OPEN_TABS_EMPTY_ID: &str = "navigate.openTabs.empty";
+
+/// The editor palettes offered under View › Code Colors.
+///
+/// Kept in step with `src/syntax-themes.ts`; the preference resolves unknown or
+/// legacy ids to a concrete palette, so an added palette here is a menu entry and
+/// not a settings migration.
+const SYNTAX_THEMES: &[(&str, &str)] = &[
+    ("auto", "Follow Theme"),
+    ("paper", "Paper"),
+    ("ink", "Ink"),
+    ("catppuccin-latte", "Catppuccin Latte"),
+    ("github-dark", "GitHub Dark"),
+    ("one-dark", "One Dark"),
+    ("solarized-light", "Solarized Light"),
+    ("solarized-dark", "Solarized Dark"),
+    ("nord", "Nord"),
+];
 
 /// Longest path shown in the menu, in characters.
 ///
@@ -76,6 +103,17 @@ fn export_availability<R: Runtime>(app: &AppHandle<R>) -> ExportAvailability {
 /// still has to fit the format's own name and its accelerator column.
 fn export_label(format: &ExportFormat, availability: ExportAvailability) -> String {
     let base = plain_label(&format.label);
+    // A default label gets the ellipsis the save dialog earns; a label the reader
+    // wrote is left exactly as written. Appending punctuation to a custom name
+    // would be a menu changing the reader's words.
+    let default_label = default_export_formats()
+        .into_iter()
+        .any(|entry| entry.id == format.id && entry.label == format.label);
+    let base = if default_label && !base.ends_with('…') && !base.ends_with("...") {
+        format!("{base}…")
+    } else {
+        base
+    };
     match availability.pandoc {
         Some(false) => format!("{base} — needs Pandoc"),
         Some(true) if format.id.eq_ignore_ascii_case("pdf") && availability.typst == Some(false) => {
@@ -268,7 +306,7 @@ pub struct Shortcut {
 /// same booleans separately — a menu that is right at start-up and stale after
 /// the first toggle is worse than no check mark at all.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct MenuState {
     pub view_mode: String,
     pub sidebar_visible: bool,
@@ -280,6 +318,32 @@ pub struct MenuState {
     pub theme: String,
     pub auto_save: bool,
     pub fullscreen: bool,
+    /// The document on screen. Drives which commands this dialect can run.
+    pub document_language: String,
+    pub read_only: bool,
+    pub has_selection: bool,
+    pub has_comment_syntax: bool,
+    /// Empty when the caret is not on a target; otherwise a `LinkKind`
+    /// (`external`, `anchor`, `file`, `image`).
+    pub link_kind: String,
+    pub can_format: bool,
+    pub tab_count: usize,
+    pub tab_index: usize,
+    pub unchanged_other_tabs: usize,
+    pub has_path: bool,
+    pub is_favorite: bool,
+    pub can_fold: bool,
+    pub spellcheck: bool,
+    pub spellcheck_available: bool,
+    pub syntax_theme: String,
+    pub typst_view: String,
+    pub typst_available: bool,
+}
+
+impl Default for MenuState {
+    fn default() -> Self {
+        Self::from_settings(&Settings::default())
+    }
 }
 
 impl MenuState {
@@ -287,7 +351,9 @@ impl MenuState {
     ///
     /// `fullscreen` is not a persisted setting, so a caller that can see the
     /// window must fill it in; the default is "not fullscreen", which is what a
-    /// freshly built menu should show.
+    /// freshly built menu should show. The document-dependent fields start from
+    /// the safe defaults and are replaced by the frontend immediately after the
+    /// first paint.
     pub fn from_settings(settings: &crate::settings::Settings) -> Self {
         Self {
             view_mode: settings.view_mode.clone(),
@@ -300,7 +366,48 @@ impl MenuState {
             theme: settings.theme.clone(),
             auto_save: settings.auto_save,
             fullscreen: false,
+            document_language: "markdown".into(),
+            read_only: false,
+            has_selection: false,
+            has_comment_syntax: false,
+            link_kind: String::new(),
+            can_format: true,
+            tab_count: 1,
+            tab_index: 0,
+            unchanged_other_tabs: 0,
+            has_path: false,
+            is_favorite: false,
+            can_fold: true,
+            spellcheck: settings.spellcheck,
+            spellcheck_available: true,
+            syntax_theme: settings.syntax_theme.clone(),
+            typst_view: settings.typst_view.clone(),
+            typst_available: true,
         }
+    }
+
+    /// Merge settings that changed since this state was last reported.
+    ///
+    /// `rebuild` runs when export formats or recent files change, and those
+    /// settings are saved from the frontend at the same time as this state. The
+    /// document-dependent fields must survive that rebuild; the settings-backed
+    /// ones must not be stale, which is why they are copied from `settings`
+    /// rather than from the cached payload.
+    fn with_settings(mut self, settings: &crate::settings::Settings) -> Self {
+        let fresh = Self::from_settings(settings);
+        self.view_mode = fresh.view_mode;
+        self.sidebar_visible = fresh.sidebar_visible;
+        self.sidebar_tab = fresh.sidebar_tab;
+        self.show_status_bar = fresh.show_status_bar;
+        self.focus_mode = fresh.focus_mode;
+        self.typewriter_mode = fresh.typewriter_mode;
+        self.sync_scroll = fresh.sync_scroll;
+        self.theme = fresh.theme;
+        self.auto_save = fresh.auto_save;
+        self.spellcheck = fresh.spellcheck;
+        self.syntax_theme = fresh.syntax_theme;
+        self.typst_view = fresh.typst_view;
+        self
     }
 }
 
@@ -313,6 +420,8 @@ const CHECK_IDS: &[&str] = &[
     "view.source",
     "view.split",
     "view.preview",
+    "view.typstDocument",
+    "view.typstPages",
     "view.sidebar",
     "view.outline",
     "view.favorites",
@@ -322,10 +431,29 @@ const CHECK_IDS: &[&str] = &[
     "view.typewriter",
     "view.syncScroll",
     "view.fullscreen",
+    "view.syntax.auto",
+    "view.syntax.paper",
+    "view.syntax.ink",
+    "view.syntax.catppuccin-latte",
+    "view.syntax.github-dark",
+    "view.syntax.one-dark",
+    "view.syntax.solarized-light",
+    "view.syntax.solarized-dark",
+    "view.syntax.nord",
     "themes.system",
     "themes.light",
     "themes.dark",
+    "tools.spellcheck",
 ];
+
+/// A legacy palette id some `settings.json` files still carry.
+fn normalized_syntax_theme(id: &str) -> &str {
+    if id == "github-light" {
+        "catppuccin-latte"
+    } else {
+        id
+    }
+}
 
 /// Whether one checkable item is on.
 ///
@@ -337,21 +465,168 @@ fn is_checked(state: &MenuState, id: &str) -> bool {
         "view.source" => state.view_mode == "source",
         "view.split" => state.view_mode == "split",
         "view.preview" => state.view_mode == "preview",
-        "view.sidebar" => state.sidebar_visible,
-        "view.outline" => state.sidebar_tab == "outline",
-        "view.favorites" => state.sidebar_tab == "favorites",
-        "view.recent" => state.sidebar_tab == "recent",
+        "view.typstDocument" => state.document_language == "typst" && state.typst_view == "document",
+        "view.typstPages" => state.document_language == "typst" && state.typst_view == "pages",
+        "view.sidebar" => state.sidebar_visible && !state.focus_mode,
+        "view.outline" => {
+            state.sidebar_visible && !state.focus_mode && state.sidebar_tab == "outline"
+        }
+        "view.favorites" => {
+            state.sidebar_visible && !state.focus_mode && state.sidebar_tab == "favorites"
+        }
+        "view.recent" => {
+            state.sidebar_visible && !state.focus_mode && state.sidebar_tab == "recent"
+        }
         "view.statusBar" => state.show_status_bar,
         "view.focus" => state.focus_mode,
         "view.typewriter" => state.typewriter_mode,
         "view.syncScroll" => state.sync_scroll,
         "view.fullscreen" => state.fullscreen,
+        "tools.spellcheck" => state.spellcheck,
         "themes.system" => state.theme == "system",
         "themes.light" => state.theme == "light",
         "themes.dark" => state.theme == "dark",
-        _ => false,
+        other => {
+            if let Some(theme) = other.strip_prefix("view.syntax.") {
+                normalized_syntax_theme(&state.syntax_theme) == theme
+            } else {
+                false
+            }
+        }
     }
 }
+
+/// Whether one ordinary or check item is available in the current context.
+///
+/// Returning `None` leaves an item alone: predefined items are owned by the
+/// platform, and an id this function does not know must not be disabled by
+/// accident. The handler still validates the context, because a stale menu or a
+/// keyboard route can outlive the state that disabled it.
+fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
+    let writable = !state.read_only;
+    let html = state.document_language == "html";
+    let typst = state.document_language == "typst";
+    let markdown = state.document_language == "markdown";
+    let asciidoc = state.document_language == "asciidoc";
+    let task_language = !html && !typst;
+    Some(match id {
+        "file.reload" | "file.reveal" | "file.favorite" => state.has_path,
+        "file.close" | "file.closeAll" => true,
+        "file.closeOthers" => state.tab_count > 1,
+        "file.closeLeft" => state.tab_index > 0,
+        "file.closeRight" => state.tab_index + 1 < state.tab_count,
+        "file.closeUnchanged" => state.unchanged_other_tabs > 0,
+        "edit.delete" | "edit.selectAllOccurrences" => writable && state.has_selection,
+        "edit.selectNext" => writable,
+        "edit.uppercase" | "edit.lowercase" | "edit.titleCase" => writable && state.has_selection,
+        "edit.duplicateLine" | "edit.moveLineUp" | "edit.moveLineDown" => writable,
+        "edit.comment" => writable && state.has_comment_syntax,
+        "edit.pastePlain" => true,
+        "edit.selectOccurrences" | "edit.convertSelection" | "edit.lines" => writable,
+        "format.document" => state.can_format,
+        "format.bold" | "format.italic" | "format.strike" | "format.code" | "format.link"
+        | "format.image" => writable,
+        "format.math" | "para.mathBlock" => writable && !html,
+        "format.paragraphStyle" => writable && !html,
+        "format.lists" => writable,
+        "format.tasks" | "insert.alerts" => writable && task_language,
+        "para.task" | "para.taskDone" | "para.taskTodo" | "para.taskPlain" => {
+            writable && task_language
+        }
+        "para.alertNote" | "para.alertTip" | "para.alertImportant" | "para.alertWarning"
+        | "para.alertCaution" => writable && task_language,
+        "para.yaml" => writable && (markdown || asciidoc),
+        "para.toc" => writable && !html,
+        "para.h1" | "para.h2" | "para.h3" | "para.h4" | "para.h5" | "para.h6"
+        | "para.paragraph" | "para.increaseHeading" | "para.decreaseHeading" => writable && !html,
+        "para.quote" | "para.ol" | "para.ul" | "para.indent" | "para.outdent"
+        | "para.insertBefore" | "para.insertAfter" | "para.table" | "para.codeBlock"
+        | "para.hr" => writable,
+        "view.zoomIn" | "view.zoomOut" | "view.zoomReset" | "view.editorTextSize" => true,
+        "view.syncScroll" => state.view_mode == "split",
+        "view.sidebar" | "view.outline" | "view.favorites" | "view.recent"
+        | "view.sidebarPanel" => !state.focus_mode,
+        "view.typstPreview" | "view.typstDocument" | "view.typstPages" => {
+            typst && state.typst_available
+        }
+        "view.foldCurrent" | "view.unfoldCurrent" | "view.foldAll" | "view.unfoldAll"
+        | "view.blocks" => state.can_fold,
+        "navigate.moveTabLeft" => state.tab_index > 0,
+        "navigate.moveTabRight" => state.tab_index + 1 < state.tab_count,
+        "navigate.openTarget" => !state.link_kind.is_empty(),
+        "tools.spellcheck" => !html && state.spellcheck_available,
+        "file.new" | "file.open" | "file.save" | "file.saveAs" | "file.autoSave"
+        | "file.export" | "file.closeTabs" | "file.preferences" | "file.nextTab"
+        | "file.prevTab" | "file.openRecent" | "edit.find" | "edit.replace"
+        | "edit.findNext" | "edit.findPrevious" | "view.source" | "view.split"
+        | "view.preview" | "view.statusBar" | "view.focus" | "view.typewriter"
+        | "view.fullscreen" | "view.interfaceTheme" | "view.codeColors"
+        | "view.typography" | "navigate.gotoLine" | "navigate.openTabs"
+        | "tools.spellLanguage" | "tools.exportConfig" | "tools.pandoc" | "tools.typst" => true,
+        _ if id.starts_with("view.syntax.")
+            || id.starts_with("themes.")
+            || id.starts_with("help.") =>
+        {
+            true
+        }
+        // Export formats, recent rows and generated tab rows own their own
+        // enabled state. Returning a value here would overwrite the tool check
+        // or the list builder on the next menu-state sync.
+        _ => return None,
+    })
+}
+
+/// A label that depends on the document or on the reader's state.
+///
+/// Ordinary items keep the label they were built with; `None` means "leave it".
+fn label_for(state: &MenuState, id: &str) -> Option<String> {
+    let text = match id {
+        "file.favorite" => {
+            if state.is_favorite {
+                "Remove from Favorites"
+            } else {
+                "Add to Favorites"
+            }
+        }
+        "para.yaml" => match state.document_language.as_str() {
+            "asciidoc" => "Document Attributes",
+            "markdown" => "YAML Front Matter",
+            _ => "Document Metadata",
+        },
+        "navigate.openTarget" => match state.link_kind.as_str() {
+            "file" => "Open File Under Cursor",
+            "image" => "Open Image Under Cursor",
+            "anchor" => "Go to Heading Under Cursor",
+            _ => "Open Link Under Cursor",
+        },
+        "view.typstPreview"
+            if state.document_language == "typst" && !state.typst_available =>
+        {
+            "Typst Preview — needs Typst"
+        }
+        _ => return None,
+    };
+    Some(text.to_string())
+}
+
+/// One row of Navigate › Open Tabs.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenTabItem {
+    pub id: String,
+    pub label: String,
+    pub checked: bool,
+}
+
+/// The frontend's latest menu state, kept across `rebuild`.
+///
+/// The menu is rebuilt when export formats or recent files change. Deriving the
+/// document-dependent fields again from settings would lose them, so the cached
+/// payload supplies those and `with_settings` refreshes the settings-backed ones.
+static LAST_MENU_STATE: Mutex<Option<MenuState>> = Mutex::new(None);
+
+/// The latest open-tab list, so a rebuild keeps Navigate › Open Tabs populated.
+static OPEN_TABS: Mutex<Vec<OpenTabItem>> = Mutex::new(Vec::new());
 
 pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result<Menu<R>> {
     // The menu is rebuilt whenever the export formats change, so the registry is
@@ -425,64 +700,105 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         }
     };
 
+    // Generated open-tab rows carry their own checked state: their ids are not in
+    // CHECK_IDS (the session list is the source of truth), so `is_checked` must
+    // not decide them.
+    let check_raw = |id: &str, label: &str, checked: bool| -> tauri::Result<CheckMenuItem<R>> {
+        CheckMenuItem::with_id(app, id, label, true, checked, None::<&str>)
+    };
+
     // ---- File -------------------------------------------------------------
     // The export submenu is built from settings, so the entries a user adds in
-    // Preferences appear here without any further wiring. HTML and PDF come
-    // first and are both native: HTML is written by the application from its own
-    // preview pipeline, and PDF is printed from that same HTML by the system
-    // browser. Neither needs pandoc, which is why they are separated from the
-    // pandoc formats below them.
-    let mut export = SubmenuBuilder::new(app, "Export")
-        .item(&item("export.html", "HTML", None)?)
-        .item(&item("export.pdf", "PDF (Print)", None)?)
-        .separator();
+    // Preferences appear here without any further wiring. HTML is native: it is
+    // written by the application from its own preview pipeline. The other rows
+    // are pandoc formats. Print is not in this submenu because it is a different
+    // action with a different destination: the system browser, not a file this
+    // application chooses.
+    let mut export = SubmenuBuilder::with_id(app, "file.export", "Export")
+        .item(&item("export.html", "HTML…", None)?);
     for format in export_formats(app) {
         let id = format!("{EXPORT_PREFIX}{}", format.id);
-        let built = item(
-            &id,
-            &export_label(&format, availability),
-            None,
-        )?;
+        let built = item(&id, &export_label(&format, availability), None)?;
         if !export_enabled(&format, availability) {
             built.set_enabled(false)?;
         }
         export = export.item(&built);
     }
-    let export = export
+    let export = export.build()?;
+
+    let close_tabs = SubmenuBuilder::with_id(app, "file.closeTabs", "Close Tabs")
+        .item(&item("file.closeOthers", "Other Tabs", None)?)
+        .item(&item("file.closeLeft", "Tabs to the Left", None)?)
+        .item(&item("file.closeRight", "Tabs to the Right", None)?)
+        .item(&item(
+            "file.closeUnchanged",
+            "Other Unchanged Tabs",
+            None,
+        )?)
         .separator()
-        .item(&item("export.installPandoc", "Install Pandoc…", None)?)
-        .item(&item("export.installTypst", "Install Typst…", None)?)
+        .item(&item("file.closeAll", "All Tabs", None)?)
         .build()?;
 
     let recent = recent_submenu(app)?;
     let file = SubmenuBuilder::new(app, "File")
-        .item(&item("file.new", "New", Some("CmdOrCtrl+N"))?)
+        .item(&item("file.new", "New Document", Some("CmdOrCtrl+N"))?)
         .item(&item("file.open", "Open…", Some("CmdOrCtrl+O"))?)
         .item(&recent)
         .separator()
         .item(&item("file.save", "Save", Some("CmdOrCtrl+S"))?)
         .item(&item("file.saveAs", "Save As…", Some("CmdOrCtrl+Shift+S"))?)
-        .item(&item("file.close", "Close Tab", Some("CmdOrCtrl+W"))?)
-        .item(&item("file.closeAll", "Close All Tabs", None)?)
-        .separator()
-        .item(&item("file.nextTab", "Next Tab", Some("CmdOrCtrl+Tab"))?)
-        .item(&item("file.prevTab", "Previous Tab", Some("CmdOrCtrl+Shift+Tab"))?)
-        .separator()
         .item(&check("file.autoSave", "Auto Save", None)?)
-        .item(&item("file.reload", "Reload From Disk", None)?)
+        .item(&item("file.reload", "Reload from Disk", None)?)
         .separator()
         .item(&export)
-        .item(&item("file.reveal", "Reveal in File Manager", None)?)
+        .item(&item(
+            "export.pdf",
+            "Print (opens browser)…",
+            None,
+        )?)
         .separator()
-        .item(&item("file.preferences", "Preferences…", Some("CmdOrCtrl+,"))?)
+        .item(&item("file.reveal", "Show in Folder", None)?)
+        .item(&item("file.favorite", "Add to Favorites", None)?)
         .separator()
-        .item(&PredefinedMenuItem::close_window(app, None)?)
-        .item(&PredefinedMenuItem::quit(app, None)?)
-        .build()?;
+        .item(&item("file.close", "Close Tab", Some("CmdOrCtrl+W"))?)
+        .item(&close_tabs)
+        .separator()
+        .item(&PredefinedMenuItem::close_window(app, None)?);
+
+    #[cfg(not(target_os = "macos"))]
+    let file = file.item(&PredefinedMenuItem::quit(app, None)?);
+    let file = file.build()?;
 
     // ---- Edit -------------------------------------------------------------
     // Undo/redo/cut/copy/paste/select-all are predefined so the webview handles
-    // them natively; search is custom because the editor owns it.
+    // them natively; the rest are custom because the editor owns them.
+    let select_occurrences =
+        SubmenuBuilder::with_id(app, "edit.selectOccurrences", "Select Occurrences")
+            .item(&item(
+                "edit.selectNext",
+                "Select Next Occurrence",
+                None,
+            )?)
+            .item(&item(
+                "edit.selectAllOccurrences",
+                "Select All Occurrences",
+                None,
+            )?)
+            .build()?;
+
+    let convert_selection =
+        SubmenuBuilder::with_id(app, "edit.convertSelection", "Convert Selection")
+            .item(&item("edit.uppercase", "UPPERCASE", None)?)
+            .item(&item("edit.lowercase", "lowercase", None)?)
+            .item(&item("edit.titleCase", "Title Case", None)?)
+            .build()?;
+
+    let lines = SubmenuBuilder::with_id(app, "edit.lines", "Lines")
+        .item(&item("edit.duplicateLine", "Duplicate Line", None)?)
+        .item(&item("edit.moveLineUp", "Move Line Up", None)?)
+        .item(&item("edit.moveLineDown", "Move Line Down", None)?)
+        .build()?;
+
     let edit = SubmenuBuilder::new(app, "Edit")
         .item(&PredefinedMenuItem::undo(app, None)?)
         .item(&PredefinedMenuItem::redo(app, None)?)
@@ -490,14 +806,23 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&PredefinedMenuItem::cut(app, None)?)
         .item(&PredefinedMenuItem::copy(app, None)?)
         .item(&PredefinedMenuItem::paste(app, None)?)
+        .item(&item("edit.pastePlain", "Paste without Formatting", None)?)
+        .item(&item("edit.delete", "Delete Selection", None)?)
         .item(&PredefinedMenuItem::select_all(app, None)?)
         .separator()
         .item(&item("edit.find", "Find", Some("CmdOrCtrl+F"))?)
         .item(&item("edit.replace", "Find and Replace", Some("CmdOrCtrl+H"))?)
+        .item(&item("edit.findNext", "Find Next", None)?)
+        .item(&item("edit.findPrevious", "Find Previous", None)?)
+        .item(&select_occurrences)
+        .separator()
+        .item(&convert_selection)
+        .item(&lines)
+        .item(&item("edit.comment", "Toggle Comment", None)?)
         .build()?;
 
-    // ---- Paragraph (mirrors Typora's layout) ------------------------------
-    let alert = SubmenuBuilder::new(app, "Alert")
+    // ---- Insert -----------------------------------------------------------
+    let alert = SubmenuBuilder::with_id(app, "insert.alerts", "Alert Block")
         .item(&item("para.alertNote", "Note", None)?)
         .item(&item("para.alertTip", "Tip", None)?)
         .item(&item("para.alertImportant", "Important", None)?)
@@ -505,65 +830,80 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&item("para.alertCaution", "Caution", None)?)
         .build()?;
 
-    let task_status = SubmenuBuilder::new(app, "Task Status")
-        .item(&item("para.taskDone", "Toggle Checked", None)?)
-        .item(&item("para.taskTodo", "Toggle Unchecked", None)?)
-        .item(&item("para.taskPlain", "Plain List Item", None)?)
-        .build()?;
-
-    let list_indent = SubmenuBuilder::new(app, "List Indentation")
-        // No accelerators here: the editor already binds Tab / Shift+Tab, and a
-        // window-level accelerator would steal Tab from every input in the UI.
-        .item(&item("para.indent", "Indent", None)?)
-        .item(&item("para.outdent", "Outdent", None)?)
-        .build()?;
-
-    let paragraph = SubmenuBuilder::new(app, "Paragraph")
-        .item(&item("para.h1", "Heading 1", Some("CmdOrCtrl+1"))?)
-        .item(&item("para.h2", "Heading 2", Some("CmdOrCtrl+2"))?)
-        .item(&item("para.h3", "Heading 3", Some("CmdOrCtrl+3"))?)
-        .item(&item("para.h4", "Heading 4", Some("CmdOrCtrl+4"))?)
-        .item(&item("para.h5", "Heading 5", Some("CmdOrCtrl+5"))?)
-        .item(&item("para.h6", "Heading 6", Some("CmdOrCtrl+6"))?)
-        .separator()
-        .item(&item("para.paragraph", "Paragraph", Some("CmdOrCtrl+0"))?)
-        .separator()
-        .item(&item(
-            "para.increaseHeading",
-            "Increase Heading Level",
-            Some("CmdOrCtrl+="),
-        )?)
-        .item(&item(
-            "para.decreaseHeading",
-            "Decrease Heading Level",
-            Some("CmdOrCtrl+-"),
-        )?)
-        .separator()
+    let insert = SubmenuBuilder::new(app, "Insert")
+        .item(&item("format.link", "Link", Some("CmdOrCtrl+K"))?)
+        .item(&item("format.image", "Image", Some("CmdOrCtrl+Shift+I"))?)
         .item(&item("para.table", "Table", Some("CmdOrCtrl+T"))?)
-        .item(&item("para.mathBlock", "Math Block", Some("CmdOrCtrl+Shift+M"))?)
-        .item(&item("para.codeBlock", "Code Fences", Some("CmdOrCtrl+Shift+K"))?)
+        .separator()
+        .item(&item(
+            "para.codeBlock",
+            "Code Block",
+            Some("CmdOrCtrl+Shift+K"),
+        )?)
+        .item(&item("format.math", "Inline Equation", None)?)
+        .item(&item(
+            "para.mathBlock",
+            "Block Equation",
+            Some("CmdOrCtrl+Shift+M"),
+        )?)
         .item(&alert)
-        .separator()
-        .item(&item("para.quote", "Quote", Some("CmdOrCtrl+Shift+Q"))?)
-        .separator()
-        .item(&item("para.ol", "Ordered List", Some("CmdOrCtrl+Shift+["))?)
-        .item(&item("para.ul", "Unordered List", Some("CmdOrCtrl+Shift+]"))?)
-        .item(&item("para.task", "Task List", Some("CmdOrCtrl+Shift+X"))?)
-        .item(&task_status)
-        .item(&list_indent)
-        .separator()
-        .item(&item("para.insertBefore", "Insert Paragraph Before", None)?)
-        .item(&item("para.insertAfter", "Insert Paragraph After", None)?)
         .separator()
         .item(&item("para.hr", "Horizontal Line", None)?)
         .item(&item("para.toc", "Table of Contents", None)?)
-        .item(&item("para.yaml", "YAML Front Matter", None)?)
+        .item(&item("para.yaml", "Document Metadata", None)?)
+        .separator()
+        .item(&item("para.insertBefore", "Paragraph Before", None)?)
+        .item(&item("para.insertAfter", "Paragraph After", None)?)
         .build()?;
 
     // ---- Format -----------------------------------------------------------
+    let paragraph_style =
+        SubmenuBuilder::with_id(app, "format.paragraphStyle", "Paragraph Style")
+            .item(&item(
+                "para.paragraph",
+                "Normal",
+                Some("CmdOrCtrl+0"),
+            )?)
+            .separator()
+            .item(&item("para.h1", "Heading 1", Some("CmdOrCtrl+1"))?)
+            .item(&item("para.h2", "Heading 2", Some("CmdOrCtrl+2"))?)
+            .item(&item("para.h3", "Heading 3", Some("CmdOrCtrl+3"))?)
+            .item(&item("para.h4", "Heading 4", Some("CmdOrCtrl+4"))?)
+            .item(&item("para.h5", "Heading 5", Some("CmdOrCtrl+5"))?)
+            .item(&item("para.h6", "Heading 6", Some("CmdOrCtrl+6"))?)
+            .build()?;
+
+    let lists = SubmenuBuilder::with_id(app, "format.lists", "Lists")
+        .item(&item(
+            "para.ul",
+            "Bulleted List",
+            Some("CmdOrCtrl+Shift+]"),
+        )?)
+        .item(&item(
+            "para.ol",
+            "Numbered List",
+            Some("CmdOrCtrl+Shift+["),
+        )?)
+        .item(&item(
+            "para.task",
+            "Task List",
+            Some("CmdOrCtrl+Shift+X"),
+        )?)
+        .build()?;
+
+    let tasks = SubmenuBuilder::with_id(app, "format.tasks", "Tasks")
+        .item(&item("para.taskDone", "Mark as Done", None)?)
+        .item(&item("para.taskTodo", "Mark as Pending", None)?)
+        .item(&item(
+            "para.taskPlain",
+            "Convert to Plain Text",
+            None,
+        )?)
+        .build()?;
+
     let format = SubmenuBuilder::new(app, "Format")
-        .item(&item("format.bold", "Strong", Some("CmdOrCtrl+B"))?)
-        .item(&item("format.italic", "Emphasis", Some("CmdOrCtrl+I"))?)
+        .item(&item("format.bold", "Bold", Some("CmdOrCtrl+B"))?)
+        .item(&item("format.italic", "Italic", Some("CmdOrCtrl+I"))?)
         .item(&item(
             "format.strike",
             "Strikethrough",
@@ -571,11 +911,67 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         )?)
         .item(&item("format.code", "Inline Code", Some("CmdOrCtrl+Shift+`"))?)
         .separator()
-        .item(&item("format.link", "Hyperlink", Some("CmdOrCtrl+K"))?)
-        .item(&item("format.image", "Image", Some("CmdOrCtrl+Shift+I"))?)
+        .item(&paragraph_style)
+        .item(&item(
+            "para.increaseHeading",
+            "Promote Heading (H2 → H1)",
+            Some("CmdOrCtrl+="),
+        )?)
+        .item(&item(
+            "para.decreaseHeading",
+            "Demote Heading (H1 → H2)",
+            Some("CmdOrCtrl+-"),
+        )?)
+        .item(&item(
+            "para.quote",
+            "Blockquote",
+            Some("CmdOrCtrl+Shift+Q"),
+        )?)
         .separator()
-        .item(&item("format.math", "Inline Math", None)?)
-        .item(&item("format.displayMath", "Display Math", None)?)
+        .item(&lists)
+        .item(&tasks)
+        .item(&item("para.indent", "Increase Indent", None)?)
+        .item(&item("para.outdent", "Decrease Indent", None)?)
+        .separator()
+        .item(&item("format.document", "Format Document", None)?)
+        .build()?;
+
+    // ---- Navigate ---------------------------------------------------------
+    let open_tabs = {
+        let tabs = OPEN_TABS.lock().map(|list| list.clone()).unwrap_or_default();
+        let mut builder = SubmenuBuilder::with_id(app, OPEN_TABS_SUBMENU_ID, "Open Tabs");
+        if tabs.is_empty() {
+            let empty = item(OPEN_TABS_EMPTY_ID, "No Open Tabs", None)?;
+            empty.set_enabled(false)?;
+            builder = builder.item(&empty);
+        } else {
+            for tab in &tabs {
+                let id = format!("{OPEN_TAB_PREFIX}{}", tab.id);
+                let built = check_raw(&id, &plain_label(&tab.label), tab.checked)?;
+                builder = builder.item(&built);
+            }
+        }
+        builder.build()?
+    };
+
+    let navigate = SubmenuBuilder::new(app, "Navigate")
+        .item(&item("navigate.gotoLine", "Go to Line…", None)?)
+        .separator()
+        .item(&item("file.nextTab", "Next Tab", Some("CmdOrCtrl+Tab"))?)
+        .item(&item(
+            "file.prevTab",
+            "Previous Tab",
+            Some("CmdOrCtrl+Shift+Tab"),
+        )?)
+        .item(&open_tabs)
+        .item(&item("navigate.moveTabLeft", "Move Tab Left", None)?)
+        .item(&item("navigate.moveTabRight", "Move Tab Right", None)?)
+        .separator()
+        .item(&item(
+            "navigate.openTarget",
+            "Open Link Under Cursor",
+            None,
+        )?)
         .build()?;
 
     // ---- View -------------------------------------------------------------
@@ -592,6 +988,76 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     let fullscreen: Box<dyn IsMenuItem<R>> =
         Box::new(PredefinedMenuItem::fullscreen(app, None)?);
 
+    let typst_preview =
+        SubmenuBuilder::with_id(app, "view.typstPreview", "Typst Preview")
+            .item(&check("view.typstDocument", "Document", None)?)
+            .item(&check("view.typstPages", "Pages", None)?)
+            .build()?;
+
+    let sidebar = SubmenuBuilder::with_id(app, "view.sidebarPanel", "Sidebar")
+        .item(&check(
+            "view.sidebar",
+            "Show Sidebar",
+            Some("CmdOrCtrl+Shift+L"),
+        )?)
+        .item(&check(
+            "view.outline",
+            "Document Outline",
+            Some("CmdOrCtrl+Shift+1"),
+        )?)
+        .item(&check(
+            "view.favorites",
+            "Favorites",
+            Some("CmdOrCtrl+Shift+2"),
+        )?)
+        .item(&check(
+            "view.recent",
+            "Recent Files",
+            Some("CmdOrCtrl+Shift+3"),
+        )?)
+        .build()?;
+
+    let editor_text_size =
+        SubmenuBuilder::with_id(app, "view.editorTextSize", "Zoom")
+            .item(&item(
+                "view.zoomIn",
+                "Zoom In",
+                Some("CmdOrCtrl+Shift+="),
+            )?)
+            .item(&item(
+                "view.zoomOut",
+                "Zoom Out",
+                Some("CmdOrCtrl+Shift+-"),
+            )?)
+            .item(&item(
+                "view.zoomReset",
+                "Reset Zoom",
+                Some("CmdOrCtrl+Shift+0"),
+            )?)
+            .build()?;
+
+    let interface_theme =
+        SubmenuBuilder::with_id(app, "view.interfaceTheme", "Interface Theme")
+            .item(&check("themes.system", "Follow System", None)?)
+            .item(&check("themes.light", "Light", None)?)
+            .item(&check("themes.dark", "Dark", None)?)
+            .build()?;
+
+    let mut code_colors =
+        SubmenuBuilder::with_id(app, "view.codeColors", "Code Colors");
+    for (id, label) in SYNTAX_THEMES {
+        let menu_id = format!("view.syntax.{id}");
+        code_colors = code_colors.item(&check(&menu_id, label, None)?);
+    }
+    let code_colors = code_colors.build()?;
+
+    let blocks = SubmenuBuilder::with_id(app, "view.blocks", "Blocks and Sections")
+        .item(&item("view.foldCurrent", "Collapse Current", None)?)
+        .item(&item("view.unfoldCurrent", "Expand Current", None)?)
+        .item(&item("view.foldAll", "Collapse All", None)?)
+        .item(&item("view.unfoldAll", "Expand All", None)?)
+        .build()?;
+
     let view = SubmenuBuilder::new(app, "View")
         .item(&check(
             "view.source",
@@ -601,18 +1067,9 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&check("view.split", "Split View", None)?)
         .item(&check("view.preview", "Preview Only", None)?)
         .separator()
-        .item(&check(
-            "view.sidebar",
-            "Sidebar",
-            Some("CmdOrCtrl+Shift+L"),
-        )?)
-        .item(&check("view.outline", "Outline", Some("CmdOrCtrl+Shift+1"))?)
-        .item(&check("view.favorites", "Favorites", Some("CmdOrCtrl+Shift+2"))?)
-        .item(&check(
-            "view.recent",
-            "Recent Files",
-            Some("CmdOrCtrl+Shift+3"),
-        )?)
+        .item(&typst_preview)
+        .separator()
+        .item(&sidebar)
         .item(&check("view.statusBar", "Status Bar", None)?)
         .separator()
         .item(&check("view.focus", "Focus Mode", Some("F8"))?)
@@ -623,48 +1080,85 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         )?)
         .item(&check("view.syncScroll", "Sync Scroll", None)?)
         .separator()
-        .item(&item("view.zoomIn", "Zoom In", Some("CmdOrCtrl+Shift+="))?)
-        .item(&item("view.zoomOut", "Zoom Out", Some("CmdOrCtrl+Shift+-"))?)
-        .item(&item(
-            "view.zoomReset",
-            "Reset Zoom",
-            Some("CmdOrCtrl+Shift+0"),
-        )?)
+        .item(&editor_text_size)
+        .item(&interface_theme)
+        .item(&code_colors)
+        .item(&item("view.typography", "Fonts and Reading…", None)?)
+        .item(&blocks)
         .separator()
         .item(fullscreen.as_ref())
         .build()?;
 
-    // ---- Themes -----------------------------------------------------------
-    let themes = SubmenuBuilder::new(app, "Themes")
-        .item(&check("themes.system", "Follow System", None)?)
-        .item(&check("themes.light", "Light", None)?)
-        .item(&check("themes.dark", "Dark", None)?)
-        .build()?;
+    // ---- Tools ------------------------------------------------------------
+    let tools = SubmenuBuilder::new(app, "Tools")
+        .item(&check(
+            "tools.spellcheck",
+            "Check Spelling While Typing",
+            None,
+        )?)
+        .item(&item(
+            "tools.spellLanguage",
+            "Spelling Language…",
+            None,
+        )?)
+        .separator()
+        .item(&item(
+            "tools.exportConfig",
+            "Configure Export…",
+            None,
+        )?)
+        .item(&item(
+            "tools.pandoc",
+            "Check or Install Pandoc…",
+            None,
+        )?)
+        .item(&item(
+            "tools.typst",
+            "Check or Install Typst…",
+            None,
+        )?);
+
+    #[cfg(not(target_os = "macos"))]
+    let tools = tools
+        .separator()
+        .item(&item(
+            "file.preferences",
+            "Preferences…",
+            Some("CmdOrCtrl+,"),
+        )?);
+    let tools = tools.build()?;
 
     // ---- Help -------------------------------------------------------------
     let help = SubmenuBuilder::new(app, "Help")
+        .item(&item("help.welcome", "Welcome and Examples", None)?)
+        .separator()
         .item(&item("help.reference", "Markdown Reference", None)?)
         .item(&item("help.asciidocReference", "AsciiDoc Reference", None)?)
         .item(&item("help.typstReference", "Typst Reference", None)?)
         .item(&item("help.shortcuts", "Keyboard Shortcuts", None)?)
-            .separator()
-            .item(&item("help.licences", "Font Licences", None)?)
-            .separator()
-            .item(&item("help.installTypst", "Install Typst...", None)?)
         .separator()
-        .item(&item("help.pandoc", "Install Pandoc…", None)?)
+        .item(&item("help.licences", "Font Licences", None)?);
+
+    #[cfg(not(target_os = "macos"))]
+    let help = help
         .separator()
-        .item(&item("help.about", "About MDraft", None)?)
-        .build()?;
+        .item(&item("help.about", "About MDraft", None)?);
+    let help = help.build()?;
 
     // ---- Assemble ---------------------------------------------------------
-    let mut items: Vec<&dyn IsMenuItem<R>> = Vec::with_capacity(8);
+    let mut items: Vec<&dyn IsMenuItem<R>> = Vec::with_capacity(9);
 
     // macOS expects a leading application submenu.
     #[cfg(target_os = "macos")]
     let app_menu = {
         let submenu = SubmenuBuilder::new(app, "MDraft")
             .item(&PredefinedMenuItem::about(app, None, None)?)
+            .separator()
+            .item(&item(
+                "file.preferences",
+                "Preferences…",
+                Some("CmdOrCtrl+,"),
+            )?)
             .separator()
             .item(&PredefinedMenuItem::services(app, None)?)
             .separator()
@@ -679,10 +1173,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
 
     items.push(&file);
     items.push(&edit);
-    items.push(&paragraph);
+    items.push(&insert);
     items.push(&format);
+    items.push(&navigate);
     items.push(&view);
-    items.push(&themes);
+    items.push(&tools);
     items.push(&help);
 
     MenuBuilder::new(app).items(&items).build()
@@ -694,9 +1189,17 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
 /// change, and a native menu cannot be edited in place safely. One helper keeps
 /// the two callers — a settings save and the recent-file commands — from
 /// deriving the check-mark state differently. Fullscreen is not a setting, so
-/// ask the window rather than assuming false.
+/// ask the window rather than assuming false. The document-dependent state comes
+/// from the latest frontend report: rebuilding it from settings alone would lose
+/// the language, selection, tab position and tool state.
 pub fn rebuild<R: Runtime>(app: &AppHandle<R>, settings: &Settings) {
-    let mut menu_state = MenuState::from_settings(settings);
+    let cached = LAST_MENU_STATE
+        .lock()
+        .ok()
+        .and_then(|state| state.clone());
+    let mut menu_state = cached
+        .unwrap_or_else(|| MenuState::from_settings(settings))
+        .with_settings(settings);
     if let Some(window) = app.get_webview_window("main") {
         menu_state.fullscreen = window.is_fullscreen().unwrap_or(false);
     }
@@ -704,6 +1207,8 @@ pub fn rebuild<R: Runtime>(app: &AppHandle<R>, settings: &Settings) {
         Ok(menu) => {
             if let Err(error) = app.set_menu(menu) {
                 eprintln!("[menu] could not replace the menu: {error}");
+            } else {
+                sync(app, &menu_state);
             }
         }
         Err(error) => eprintln!("[menu] could not rebuild the menu: {error}"),
@@ -742,7 +1247,7 @@ fn find_item<R: Runtime>(menu: &Menu<R>, id: &str) -> Option<MenuItemKind<R>> {
     walk(menu.items().ok()?, id)
 }
 
-/// Apply a state to every checkable item.
+/// Apply a state to every checkable item and to the context-sensitive ones.
 ///
 /// Check items are not exclusive by themselves: setting `view.preview` does not
 /// clear `view.split`. Writing the whole group on every update is what keeps the
@@ -766,19 +1271,46 @@ pub fn sync<R: Runtime>(app: &AppHandle<R>, state: &MenuState) {
         }
     }
 
-    // Focus mode removes the sidebar from the layout. Now that the status bar
-    // stays visible there, its sidebar button is visible too; leaving the four
-    // sidebar items clickable would be a control that changes a setting nobody
-    // can see. Disable them until focus mode is left.
-    for id in ["view.sidebar", "view.outline", "view.favorites", "view.recent"] {
-        let Some(item) = find_item(&menu, id) else {
-            continue;
-        };
-        let Some(check) = item.as_check_menuitem() else {
-            continue;
-        };
-        if let Err(error) = check.set_enabled(!state.focus_mode) {
-            eprintln!("[menu] could not set the enabled state of {id}: {error}");
+    if let Ok(items) = menu.items() {
+        apply_context(items, state);
+    }
+}
+
+/// Walk every custom item and apply its enabled state and conditional label.
+///
+/// Submenus are visited too: disabling `format.tasks` in a Typst document keeps
+/// the whole family out of reach even though each child also has its own rule.
+fn apply_context<R: Runtime>(items: Vec<MenuItemKind<R>>, state: &MenuState) {
+    for item in items {
+        let id = item.id().as_ref().to_string();
+        if let Some(enabled) = enabled_for(state, &id) {
+            let result = match &item {
+                MenuItemKind::Submenu(submenu) => submenu.set_enabled(enabled),
+                MenuItemKind::Check(check) => check.set_enabled(enabled),
+                MenuItemKind::MenuItem(normal) => normal.set_enabled(enabled),
+                MenuItemKind::Icon(icon) => icon.set_enabled(enabled),
+                MenuItemKind::Predefined(_) => Ok(()),
+            };
+            if let Err(error) = result {
+                eprintln!("[menu] could not set the enabled state of {id}: {error}");
+            }
+        }
+        if let Some(text) = label_for(state, &id) {
+            let result = match &item {
+                MenuItemKind::Submenu(submenu) => submenu.set_text(text),
+                MenuItemKind::Check(check) => check.set_text(text),
+                MenuItemKind::MenuItem(normal) => normal.set_text(text),
+                MenuItemKind::Icon(icon) => icon.set_text(text),
+                MenuItemKind::Predefined(_) => Ok(()),
+            };
+            if let Err(error) = result {
+                eprintln!("[menu] could not set the label of {id}: {error}");
+            }
+        }
+        if let MenuItemKind::Submenu(submenu) = &item
+            && let Ok(children) = submenu.items()
+        {
+            apply_context(children, state);
         }
     }
 }
@@ -786,7 +1318,64 @@ pub fn sync<R: Runtime>(app: &AppHandle<R>, state: &MenuState) {
 /// Let the frontend mirror its state onto the native menu.
 #[tauri::command]
 pub fn set_menu_state<R: Runtime>(app: AppHandle<R>, state: MenuState) {
+    if let Ok(mut cached) = LAST_MENU_STATE.lock() {
+        *cached = Some(state.clone());
+    }
     sync(&app, &state);
+}
+
+/// Replace the rows of Navigate › Open Tabs.
+///
+/// The submenu is rebuilt in place rather than by replacing the whole menu: a
+/// tab switch is frequent, and `Menu::set_menu` would also reset the accelerator
+/// registry and every other item's state. The frontend disambiguates equal file
+/// names before sending them; this side only owns the native controls.
+#[tauri::command]
+pub fn set_open_tabs<R: Runtime>(app: AppHandle<R>, tabs: Vec<OpenTabItem>) {
+    if let Ok(mut cached) = OPEN_TABS.lock() {
+        *cached = tabs.clone();
+    }
+    apply_open_tabs(&app, &tabs);
+}
+
+fn apply_open_tabs<R: Runtime>(app: &AppHandle<R>, tabs: &[OpenTabItem]) {
+    let Some(menu) = app.menu() else {
+        return;
+    };
+    let Some(MenuItemKind::Submenu(submenu)) = find_item(&menu, OPEN_TABS_SUBMENU_ID) else {
+        return;
+    };
+    if let Ok(items) = submenu.items() {
+        for _ in 0..items.len() {
+            if let Err(error) = submenu.remove_at(0) {
+                eprintln!("[menu] could not clear the open-tab list: {error}");
+                return;
+            }
+        }
+    }
+
+    if tabs.is_empty() {
+        if let Ok(empty) = MenuItemBuilder::with_id(OPEN_TABS_EMPTY_ID, "No Open Tabs").build(app) {
+            let _ = empty.set_enabled(false);
+            if let Err(error) = submenu.append(&empty) {
+                eprintln!("[menu] could not add the empty open-tab row: {error}");
+            }
+        }
+        return;
+    }
+
+    for tab in tabs {
+        let id = format!("{OPEN_TAB_PREFIX}{}", tab.id);
+        let label = plain_label(&tab.label);
+        match CheckMenuItem::with_id(app, &id, &label, true, tab.checked, None::<&str>) {
+            Ok(item) => {
+                if let Err(error) = submenu.append(&item) {
+                    eprintln!("[menu] could not add the open-tab row {id}: {error}");
+                }
+            }
+            Err(error) => eprintln!("[menu] could not build the open-tab row {id}: {error}"),
+        }
+    }
 }
 
 /// Apply a tool-availability report to the Export submenu.
@@ -871,6 +1460,84 @@ pub fn menu_state<R: Runtime>(app: AppHandle<R>) -> Vec<MenuCheck> {
 }
 
 #[derive(serde::Serialize)]
+pub struct MenuItemInfo {
+    pub id: String,
+    pub text: String,
+    pub enabled: bool,
+    pub checked: Option<bool>,
+    pub kind: String,
+    /// The label of the containing submenu, empty for a top-level item.
+    pub parent: String,
+}
+
+/// Every menu item, including ordinary items and submenus, for the test suites.
+///
+/// `menu_state` answers only the check marks because that is what the UI suite
+/// needs for modes. Availability and conditional labels live on ordinary items,
+/// so a second probe is the only way to prove that a command is disabled in the
+/// context the plan describes.
+#[tauri::command]
+pub fn menu_items<R: Runtime>(app: AppHandle<R>) -> Vec<MenuItemInfo> {
+    fn walk<R: Runtime>(items: Vec<MenuItemKind<R>>, parent: &str, out: &mut Vec<MenuItemInfo>) {
+        for item in items {
+            let (text, enabled, checked, kind) = match &item {
+                MenuItemKind::Submenu(submenu) => (
+                    submenu.text().unwrap_or_default(),
+                    submenu.is_enabled().unwrap_or(true),
+                    None,
+                    "submenu",
+                ),
+                MenuItemKind::Check(check) => (
+                    check.text().unwrap_or_default(),
+                    check.is_enabled().unwrap_or(true),
+                    Some(check.is_checked().unwrap_or(false)),
+                    "check",
+                ),
+                MenuItemKind::MenuItem(normal) => (
+                    normal.text().unwrap_or_default(),
+                    normal.is_enabled().unwrap_or(true),
+                    None,
+                    "item",
+                ),
+                MenuItemKind::Icon(icon) => (
+                    icon.text().unwrap_or_default(),
+                    icon.is_enabled().unwrap_or(true),
+                    None,
+                    "item",
+                ),
+                MenuItemKind::Predefined(predefined) => (
+                    predefined.text().unwrap_or_default(),
+                    true,
+                    None,
+                    "predefined",
+                ),
+            };
+            out.push(MenuItemInfo {
+                id: item.id().as_ref().to_string(),
+                text: text.clone(),
+                enabled,
+                checked,
+                kind: kind.to_string(),
+                parent: parent.to_string(),
+            });
+            if let MenuItemKind::Submenu(submenu) = &item
+                && let Ok(children) = submenu.items()
+            {
+                walk(children, &text, out);
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    if let Some(menu) = app.menu()
+        && let Ok(items) = menu.items()
+    {
+        walk(items, "", &mut out);
+    }
+    out
+}
+
+#[derive(serde::Serialize)]
 pub struct RecentMenuItem {
     pub id: String,
     pub text: String,
@@ -932,7 +1599,8 @@ mod tests {
         assert!(is_checked(&state, "view.preview"));
         assert!(!is_checked(&state, "view.source"));
         assert!(!is_checked(&state, "view.sidebar"));
-        assert!(is_checked(&state, "view.favorites"));
+        // Focus mode and a hidden sidebar mean no panel is effectively visible.
+        assert!(!is_checked(&state, "view.favorites"));
         assert!(!is_checked(&state, "view.outline"));
         assert!(!is_checked(&state, "view.statusBar"));
         assert!(is_checked(&state, "view.focus"));
@@ -942,6 +1610,114 @@ mod tests {
         assert!(!is_checked(&state, "themes.system"));
         assert!(is_checked(&state, "file.autoSave"));
         assert!(!is_checked(&state, "view.fullscreen"));
+
+        let visible = MenuState::from_settings(&Settings {
+            sidebar_visible: true,
+            focus_mode: false,
+            sidebar_tab: "favorites".into(),
+            syntax_theme: "auto".into(),
+            ..Settings::default()
+        });
+        assert!(is_checked(&visible, "view.sidebar"));
+        assert!(is_checked(&visible, "view.favorites"));
+        assert!(is_checked(&visible, "view.syntax.auto"));
+        assert!(!is_checked(&visible, "view.syntax.paper"));
+    }
+
+    #[test]
+    fn typst_and_legacy_syntax_states_check_one_item() {
+        let mut state = MenuState::from_settings(&Settings::default());
+        state.document_language = "typst".into();
+        state.typst_view = "pages".into();
+        assert!(is_checked(&state, "view.typstPages"));
+        assert!(!is_checked(&state, "view.typstDocument"));
+
+        state.syntax_theme = "github-light".into();
+        assert!(is_checked(&state, "view.syntax.catppuccin-latte"));
+        assert!(!is_checked(&state, "view.syntax.paper"));
+    }
+
+    #[test]
+    fn availability_follows_the_document_and_the_tab() {
+        let mut state = MenuState {
+            document_language: "typst".into(),
+            has_selection: true,
+            tab_count: 3,
+            tab_index: 1,
+            ..MenuState::default()
+        };
+
+        assert_eq!(enabled_for(&state, "format.math"), Some(true));
+        assert_eq!(enabled_for(&state, "para.task"), Some(false));
+        assert_eq!(enabled_for(&state, "para.alertWarning"), Some(false));
+        assert_eq!(enabled_for(&state, "para.yaml"), Some(false));
+        assert_eq!(enabled_for(&state, "para.toc"), Some(true));
+        assert_eq!(enabled_for(&state, "file.closeLeft"), Some(true));
+        assert_eq!(enabled_for(&state, "file.closeRight"), Some(true));
+        assert_eq!(enabled_for(&state, "file.closeOthers"), Some(true));
+        assert_eq!(enabled_for(&state, "file.closeUnchanged"), Some(false));
+        assert_eq!(enabled_for(&state, "edit.comment"), Some(false));
+        assert_eq!(enabled_for(&state, "edit.delete"), Some(true));
+        assert_eq!(enabled_for(&state, "file.reveal"), Some(false));
+        assert_eq!(enabled_for(&state, "navigate.openTarget"), Some(false));
+        assert_eq!(enabled_for(&state, "view.typstPreview"), Some(true));
+        assert_eq!(enabled_for(&state, "view.zoomIn"), Some(true));
+
+        state.document_language = "html".into();
+        state.link_kind = "file".into();
+        state.has_path = true;
+        assert_eq!(enabled_for(&state, "format.math"), Some(false));
+        assert_eq!(enabled_for(&state, "para.toc"), Some(false));
+        assert_eq!(enabled_for(&state, "para.yaml"), Some(false));
+        assert_eq!(enabled_for(&state, "file.reveal"), Some(true));
+        assert_eq!(enabled_for(&state, "navigate.openTarget"), Some(true));
+        assert_eq!(enabled_for(&state, "view.typstPreview"), Some(false));
+
+        state.read_only = true;
+        assert_eq!(enabled_for(&state, "edit.delete"), Some(false));
+        assert_eq!(enabled_for(&state, "format.bold"), Some(false));
+
+        state.view_mode = "preview".into();
+        // Document zoom applies to the active reading view, so it stays
+        // available when the editor is hidden.
+        assert_eq!(enabled_for(&state, "view.zoomIn"), Some(true));
+        assert_eq!(enabled_for(&state, "view.syncScroll"), Some(false));
+
+        // Tool-owned export rows and recent rows must not be re-enabled by a
+        // menu-state sync; apply_export_availability owns them.
+        assert_eq!(enabled_for(&state, "export.pandoc.pdf"), None);
+        assert_eq!(enabled_for(&state, "recent.file:C:/a.md"), None);
+        assert_eq!(enabled_for(&state, "navigate.tab:doc-1"), None);
+    }
+
+    #[test]
+    fn conditional_labels_name_the_document_action() {
+        let mut state = MenuState::default();
+        assert_eq!(label_for(&state, "file.favorite").as_deref(), Some("Add to Favorites"));
+        state.is_favorite = true;
+        assert_eq!(
+            label_for(&state, "file.favorite").as_deref(),
+            Some("Remove from Favorites")
+        );
+
+        state.document_language = "markdown".into();
+        assert_eq!(label_for(&state, "para.yaml").as_deref(), Some("YAML Front Matter"));
+        state.document_language = "asciidoc".into();
+        assert_eq!(
+            label_for(&state, "para.yaml").as_deref(),
+            Some("Document Attributes")
+        );
+
+        state.link_kind = "anchor".into();
+        assert_eq!(
+            label_for(&state, "navigate.openTarget").as_deref(),
+            Some("Go to Heading Under Cursor")
+        );
+        state.link_kind = "file".into();
+        assert_eq!(
+            label_for(&state, "navigate.openTarget").as_deref(),
+            Some("Open File Under Cursor")
+        );
     }
 
     #[test]
@@ -952,6 +1728,20 @@ mod tests {
         assert_eq!(checked(&["view.source", "view.split", "view.preview"]), 1);
         assert_eq!(checked(&["view.outline", "view.favorites", "view.recent"]), 1);
         assert_eq!(checked(&["themes.system", "themes.light", "themes.dark"]), 1);
+        assert_eq!(
+            checked(&[
+                "view.syntax.auto",
+                "view.syntax.paper",
+                "view.syntax.ink",
+                "view.syntax.catppuccin-latte",
+                "view.syntax.github-dark",
+                "view.syntax.one-dark",
+                "view.syntax.solarized-light",
+                "view.syntax.solarized-dark",
+                "view.syntax.nord",
+            ]),
+            1
+        );
     }
 
     #[test]
@@ -970,7 +1760,14 @@ mod tests {
 
         let unknown = ExportAvailability::default();
         assert!(export_enabled(&docx, unknown));
-        assert_eq!(export_label(&docx, unknown), "Word (.docx)");
+        assert_eq!(export_label(&docx, unknown), "Word (.docx)…");
+
+        let custom = ExportFormat {
+            id: "custom1".into(),
+            label: "My Word Target".into(),
+            ..ExportFormat::default()
+        };
+        assert_eq!(export_label(&custom, unknown), "My Word Target");
 
         let pandoc_missing = ExportAvailability {
             pandoc: Some(false),
@@ -993,7 +1790,7 @@ mod tests {
             typst: Some(true),
         };
         assert!(export_enabled(&pdf, installed));
-        assert_eq!(export_label(&pdf, installed), "PDF (via Typst)");
+        assert_eq!(export_label(&pdf, installed), "PDF (via Typst)…");
     }
 
     #[test]

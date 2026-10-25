@@ -81,6 +81,14 @@ const SUITES = [
     script: "sessions-test.mjs",
   },
   {
+    // The path and URL policy behind HTML/Print: drive, UNC, POSIX, spaces,
+    // Unicode and different roots. Pure, so no application or build is needed.
+    id: "export-paths-unit",
+    title: "Export paths (unit)",
+    kind: "node",
+    script: "export-paths-unit.mjs",
+  },
+  {
     // Recovery scheduling, disk-change classification and the Typst command
     // strings: pure logic, no application and no build.
     id: "p0-unit",
@@ -166,6 +174,26 @@ const SUITES = [
     doc: "samples/feature-tour.md",
   },
   {
+    // The first launch gets two files; a second process must forward a third
+    // path into this window and exit. The suite owns its temporary directory
+    // and spawns the staged executable itself.
+    id: "single-instance",
+    title: "Second launch handoff",
+    kind: "cdp",
+    script: "single-instance-test.mjs",
+    doc: "samples/word-sync.md",
+    docs: ["samples/feature-tour.md", "samples/word-sync.md"],
+  },
+  {
+    // One document zoom across the editor and every preview renderer. The
+    // suite opens the AsciiDoc, Typst and HTML fixtures itself.
+    id: "preview-zoom",
+    title: "Document zoom",
+    kind: "cdp",
+    script: "preview-zoom-test.mjs",
+    doc: "samples/export-tour.md",
+  },
+  {
     id: "word-sync",
     title: "Word-level sync",
     kind: "cdp",
@@ -186,6 +214,16 @@ const SUITES = [
     kind: "cdp",
     script: "rich-paste-test.mjs",
     doc: "samples/feature-tour.md",
+  },
+  {
+    // The native HTML and Print article, inspected as a browser would see it:
+    // local images/links resolve, the print waits for resources and owns its
+    // light diagram theme. No browser is launched; print_document is captured.
+    id: "export-browser",
+    title: "Browser-readable exports",
+    kind: "cdp",
+    script: "export-browser-test.mjs",
+    doc: "samples/export-tour.md",
   },
   {
     id: "asciidoc",
@@ -275,6 +313,17 @@ const SUITES = [
     // be told which file the instance was given.
     docArg: true,
     writesDoc: true,
+  },
+  {
+    id: "menu",
+    // The approved information architecture, its context-sensitive labels and
+    // enabled states, the Preferences deep links, Paste without Formatting, the
+    // zoom-only reset and both Close All Tabs routes. It opens other document
+    // types and writes temporary files, so it owns its instance.
+    title: "Menu structure and availability",
+    kind: "cdp",
+    script: "menu-test.mjs",
+    doc: "samples/feature-tour.md",
   },
   {
     id: "typography",
@@ -993,12 +1042,17 @@ async function launchApp(
   context,
   { temp, userData, noDocument = false, label = suite.id },
 ) {
-  const doc = path.join(repoRoot, suite.doc);
-  if (!noDocument && !fs.existsSync(doc)) throw new Error(`missing fixture: ${suite.doc}`);
+  const docs = (suite.docs ?? [suite.doc]).map((entry) => path.join(repoRoot, entry));
+  if (!noDocument) {
+    for (const docPath of docs) {
+      if (!fs.existsSync(docPath))
+        throw new Error(`missing fixture: ${path.relative(repoRoot, docPath)}`);
+    }
+  }
 
   const outFd = fs.openSync(path.join(context.logDir, `${label}.app.out.log`), "w");
   const errFd = fs.openSync(path.join(context.logDir, `${label}.app.err.log`), "w");
-  const child = spawn(context.staged, noDocument ? [] : [doc], {
+  const child = spawn(context.staged, noDocument ? [] : docs, {
     cwd: context.stage,
     env: {
       ...process.env,
@@ -1021,8 +1075,9 @@ async function launchApp(
   activeApp = child;
   try {
     // A second launch with no document argument has no title to wait for; the
-    // suite's own probes establish what is on screen.
-    await waitForCdp(port, child, noDocument ? null : path.basename(suite.doc));
+    // suite's own probes establish what is on screen. With several initial
+    // documents the last one is the active tab and supplies the title.
+    await waitForCdp(port, child, noDocument ? null : path.basename(docs[docs.length - 1]));
   } catch (error) {
     fs.closeSync(outFd);
     fs.closeSync(errFd);
@@ -1054,7 +1109,16 @@ async function runCdpSuite(suite, port, options, context) {
   const userData = path.join(context.stage, "webview", suite.id);
   fs.mkdirSync(temp, { recursive: true });
   fs.mkdirSync(userData, { recursive: true });
-  const env = { ...process.env, TEMP: temp, TMP: temp };
+  const env = {
+    ...process.env,
+    TEMP: temp,
+    TMP: temp,
+    // The single-instance layer launches the staged executable itself; the
+    // other suites ignore these.
+    MDRAFT_EXE: context.staged,
+    MDRAFT_REPO: repoRoot,
+    MDRAFT_TEST_USER_DATA: userData,
+  };
 
   // A window that dies before its debug port opens is almost always a transient:
   // the previous instance's WebView2 teardown still holding the debug port. One

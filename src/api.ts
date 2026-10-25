@@ -179,6 +179,8 @@ export interface Settings {
   typewriterMode: boolean;
   /** Editor source pane size, in pixels. */
   editorFontSize: number;
+  /** View zoom percentage; 100 is the base size. */
+  zoomLevel: number;
   /**
    * Font stacks per role, as complete CSS `font-family` values.
    *
@@ -295,7 +297,7 @@ export interface Settings {
    *
    * These used to live on each `ExportFormat`, which made a ticked box apply
    * only to that one target. Global now, so HTML and every pandoc format run
-   * the same three actions. PDF (Print) is the exception: the browser chooses
+   * the same three actions. Print (opens browser) is the exception: the browser chooses
    * the PDF's path, so there is nothing for MDraft to open.
    */
   afterOpenLocation: boolean;
@@ -406,6 +408,12 @@ export const downloadImage = (
 ) => invoke<SavedImage>("download_image", { url, documentPath, options, timeoutMs });
 
 export const startupFile = () => invoke<string | null>("startup_file");
+
+/** Every document path the initial launch was given, missing ones included. */
+export const startupFiles = () => invoke<string[]>("startup_files");
+
+/** Paths a second launch forwarded before the webview installed its listener. */
+export const takeForwardedPaths = () => invoke<string[]>("take_forwarded_paths");
 
 export const getSettings = () => invoke<Settings>("get_settings");
 
@@ -527,10 +535,12 @@ export interface Shortcut {
 export const shortcuts = () => invoke<Shortcut[]>("accelerators");
 
 /**
- * The state the native menu's check marks mirror.
+ * The state the native menu's check marks, labels and availability mirror.
  *
  * `fullscreen` is not a setting: only the window knows it, so the frontend sends
- * it along with the settings-backed flags instead of letting Rust guess.
+ * it along with the settings-backed flags instead of letting Rust guess. The
+ * document fields have the same reason: Rust cannot see the active session, its
+ * selection or the link under the caret.
  */
 export interface MenuState {
   viewMode: ViewMode;
@@ -543,6 +553,41 @@ export interface MenuState {
   theme: ThemeMode;
   autoSave: boolean;
   fullscreen: boolean;
+  documentLanguage: DocumentLanguage;
+  readOnly: boolean;
+  hasSelection: boolean;
+  hasCommentSyntax: boolean;
+  linkKind: "" | "external" | "anchor" | "file" | "image";
+  canFormat: boolean;
+  tabCount: number;
+  tabIndex: number;
+  unchangedOtherTabs: number;
+  hasPath: boolean;
+  isFavorite: boolean;
+  canFold: boolean;
+  spellcheck: boolean;
+  spellcheckAvailable: boolean;
+  syntaxTheme: string;
+  typstView: TypstView;
+  typstAvailable: boolean;
+}
+
+/** One row of Navigate › Open Tabs. */
+export interface OpenTabItem {
+  id: string;
+  label: string;
+  checked: boolean;
+}
+
+/** One native menu item, including ordinary items and submenus. */
+export interface MenuItemInfo {
+  id: string;
+  text: string;
+  enabled: boolean;
+  checked: boolean | null;
+  kind: "item" | "check" | "submenu" | "predefined";
+  /** Label of the containing submenu; empty for a top-level item. */
+  parent: string;
 }
 
 /** One checkable menu item, as the native menu reports it. */
@@ -559,6 +604,22 @@ export interface MenuCheck {
  * read its check marks and must tell Rust what they should be.
  */
 export const setMenuState = (state: MenuState) => invoke<void>("set_menu_state", { state });
+
+/**
+ * Repopulate Navigate › Open Tabs.
+ *
+ * The native submenu is edited in place instead of rebuilding the whole menu;
+ * see the Rust command for why that matters to accelerators and check state.
+ */
+export const setOpenTabs = (tabs: OpenTabItem[]) => invoke<void>("set_open_tabs", { tabs });
+
+/**
+ * Read every native menu item, including ordinary items and submenus.
+ *
+ * `menuState` answers only check items; availability and conditional labels live
+ * on ordinary items, so the suites need this second probe to see them.
+ */
+export const menuItems = () => invoke<MenuItemInfo[]>("menu_items");
 
 /**
  * Read the menu's check marks back.

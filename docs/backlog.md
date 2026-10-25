@@ -69,14 +69,14 @@ non-obvious lesson is added to the Traps section.
 | --- | --- | --- | --- | --- | --- |
 | GAP-004 | P1 | S/M | Data safety | Save All and bulk-save UX; cancellation-safe close delivered | open |
 | GAP-005 | P1 | M | Data safety | Shared file classification and size policy; binary/lossy guard delivered | open |
-| GAP-026 | P1 | M | Output | Browser-readable HTML and print output | open |
+| GAP-026 | P1 | M | Output | Browser-readable HTML and print output | in progress |
 | GAP-027 | P1 | M/L | Testing | Lifecycle regression coverage and CI | open |
 | GAP-032 | P1 | M | Data safety | Stronger pre-save disk revision validation | in progress |
 | GAP-011 | P1 | M | Preview | Search inside the preview | open |
 | GAP-012 | P1 | S | Documentation | Documentation truth pass | in progress |
 | GAP-013 | P1 | S/M | Markdown | YAML front matter handling | open |
-| GAP-017 | P1 | M | Platform | Reliable second-launch handoff and multi-file opening | open |
-| GAP-019 | P1 | M | Preview | Working preview zoom and zoom-only reset | open |
+| GAP-017 | P1 | M | Platform | Reliable second-launch handoff and multi-file opening | in progress |
+| GAP-019 | P1 | M | Preview | Working preview zoom and zoom-only reset | in progress |
 | GAP-021 | P1 | M | Platform | UTF-16 round-trip; broader encoding support follows at P2 | open |
 | GAP-006 | P2 | M/L | Workspace | Read-only folder tree before file management | open |
 | GAP-007 | P2 | M | Workspace | Read-only cross-file search before multi-file Replace | open |
@@ -241,9 +241,10 @@ Image insertion already had its own Typst branch.
 **Delivered scope.** Pure Typst strings and line transforms own the Typst side
 of the commands. `main.ts` retains language dispatch; supported commands insert
 correct syntax. Unsupported task lists, alerts and YAML front matter show an
-explanatory toast. The approved plan deliberately retained the global menu;
-unsupported items are not dynamically disabled. A single cross-language command
-table feeding menus and Help was not implemented or required by that plan.
+explanatory toast. The menu reorganization of 2026-10-25 now also disables those
+items in a Typst document; the handler guards remain for stale menus and
+keyboard routes. A single cross-language command table feeding menus and Help was
+not implemented or required by that plan.
 
 **Acceptance.**
 
@@ -514,12 +515,12 @@ the later folder slice. No dependency on GAP-007's search UI.
 
 **Priority:** P2 · **Effort:** M/L · **Workstream:** Output · **Status:** open
 
-**Evidence.** There is no `File › Print`. `File › Export › PDF (Print)` writes a
-temporary HTML and opens the system browser; `PDF (via Typst)` needs pandoc and
-Typst for Markdown conversion; a `.typ` PDF is compiled directly by Typst.
-The existing browser route already supports printing and Save as PDF. It does
-not call native WebView2 printing, and MDraft does not learn the final PDF path,
-completion or cancellation.
+**Evidence.** `File › Print (opens browser)…` writes a temporary HTML and opens
+the system browser; `Export › PDF (via Typst)` needs pandoc and Typst for
+Markdown conversion; a `.typ` PDF is compiled directly by Typst. The existing
+browser route already supports printing and Save as PDF. It does not call native
+WebView2 printing, and MDraft does not learn the final PDF path, completion or
+cancellation.
 
 WebView2 exposes `ShowPrintUI` and `PrintToPdf`, as described in
 [Microsoft's printing documentation](https://learn.microsoft.com/en-us/microsoft-edge/webview2/how-to/print).
@@ -639,25 +640,14 @@ persist after a re-render.
 ### GAP-012 — Documentation truth pass
 
 **Priority:** P1 · **Effort:** S · **Workstream:** Documentation · **Status:** in progress — the P0 pass fixed the tab-list, Pages-search and
-typewriter claims in `docs/guide.md`; the built-in shortcut table, the
-Preferences notes and the AsciiDoc/Typst Enter sentence remain
+typewriter claims in `docs/guide.md`; the menu reorganisation of 2026-10-25
+fixed the built-in shortcut table and the guide's menu names. The AsciiDoc/Typst
+Enter sentence and some Preferences notes remain.
 
-**Evidence.** The built-in **Help › Keyboard Shortcuts** disagrees with the
-native menu:
+**Evidence.** The menu reorganisation corrected the shortcut table and the
+headings, lists, maths, typography and print paths across Help, the guide, the
+README and the export document. Remaining stale claims:
 
-| The document says | The app does |
-| --- | --- |
-| Zoom `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | `Ctrl+Shift+=` / `Ctrl+Shift+-` / `Ctrl+Shift+0` |
-| Bullet list `Ctrl+Shift+8` | `Ctrl+Shift+[` |
-| Ordered list `Ctrl+Shift+7` | `Ctrl+Shift+]` |
-| Task list `Ctrl+Shift+9` | `Ctrl+Shift+X` |
-| Strikethrough `Ctrl+Shift+X` | `Alt+Shift+5` |
-
-Following the sheet for strikethrough inserts a task item; following it for zoom
-turns a paragraph into a heading. Other stale claims:
-
-- Already corrected in the P0 pass: the guide's tab-list persistence,
-  Pages-search and typewriter claims. Preserve those corrections.
 - `src/content.ts`: "`Enter` continues lists and quotes" is true only in
   Markdown; AsciiDoc and Typst install no continuation keymap.
 - `src/preferences.ts`: "Math and diagram settings above apply to Markdown and
@@ -700,7 +690,8 @@ already use.
 
 **Priority:** P1 · **Effort:** S/M · **Workstream:** Markdown · **Status:** open
 
-**Evidence.** `Paragraph › YAML Front Matter` inserts:
+**Evidence.** `Insert › Document Metadata` (labelled `YAML Front Matter` in
+Markdown) inserts:
 
 ```markdown
 ---
@@ -856,11 +847,22 @@ anchors.
 
 ### GAP-017 — Reliable second-launch handoff and multi-file opening
 
-**Priority:** P1 · **Effort:** M · **Workstream:** Platform · **Status:** open
+**Priority:** P1 · **Effort:** M · **Workstream:** Platform · **Status:** in progress
 
 **Plan:** [Reliable second-launch handoff and multi-file opening](plans/2026-10-25-single-instance-handoff.md)
-— draft, awaiting approval. Phase 1 is the P1 handoff; Phase 2 is the optional
-association registration with its own approval gate.
+— Phase 1 approved 2026-10-25 and delivered. Phase 2 (association
+registration) remains open, with its own approval gate.
+
+**Delivered (Phase 1).** `tauri-plugin-single-instance` is registered first,
+turns a second launch into a path list resolved against the launching `cwd`,
+queues it, emits `open-files`, and focuses the existing window before the second
+process exits. `startup_files` opens every initial path as a tab (the first
+fills the window, the rest are added); `take_forwarded_paths` drains launches
+that arrive before the webview listener exists. The frontend serialises path
+opening, reports a missing path as a toast without blocking the valid ones, and
+focuses an already open document. Windows validation: 12/12 UI checks covering
+two initial tabs, a relative second launch, second-process exit, one page
+target, duplicate focus, a missing path and a dirty buffer surviving.
 
 **Slices.** P1: single-instance path handoff and initial multi-file argv.
 Optional file-association registration is P2, explicitly scoped and estimated.
@@ -943,15 +945,35 @@ suggestions share GAP-006's listing/indexing.
 
 ### GAP-019 — Working preview zoom and zoom-only reset
 
-**Priority:** P1 · **Effort:** M · **Workstream:** Preview · **Status:** open
+**Priority:** P1 · **Effort:** M · **Workstream:** Preview · **Status:** in progress
 
-**Slices.** Reset that preserves Content Width is an S fix. Working preview
+**Plan:** [Working preview zoom and zoom-only reset](plans/2026-10-25-preview-zoom.md)
+— approved 2026-10-25 and delivered for Windows. It covers the shared zoom
+state and the DOM, HTML guest and Typst Pages renderers.
+
+**Delivered.** One persisted `zoomLevel` (50–300 %, 10 % steps, default 100)
+scales the editor in Source-only, both panes in Split and the rendered document
+in Preview-only. Markdown/AsciiDoc/Typst Document use CSS zoom on `#preview`
+with a separate zoomed Content Width cap; the HTML guest iframe scales with its
+internal viewport narrowed; Typst Pages multiplies its PDF.js fit, re-rasters the
+canvases, allows horizontal scrolling above 100 % and keeps the reader's place.
+The Typst Document/Pages bar moved outside the zoomed content. The menu is
+`Zoom / Zoom In / Zoom Out / Reset Zoom`, enabled in Preview-only; the chip shows
+the percentage and hides at 100 %. Reset changes only the zoom. Windows
+validation: 24/24 zoom checks plus menu 87, shortcuts 43, smoke 108, word-sync
+58, html 60, asciidoc 54, tabs 107 and typst-preview 52; Rust 140 passed.
+WebKitGTK/high-DPI inspection remains.
+
+**Slices.** The reset that preserves Content Width is already true in the
+current tree (`view.zoomReset` writes only `editorFontSize`). Working preview
 zoom is M across DOM, HTML guest and Typst Pages; ship renderer support in
 explicit increments rather than estimating the whole feature as S.
 
-**Evidence.** `view.zoomIn/Out` change only `editorFontSize`; `view.zoomReset`
-also resets `editorMaxWidth` to 980. In Preview-only the zoom does nothing
-visible. The status chip says "Reset zoom".
+**Evidence.** `view.zoomIn/Out` change only `editorFontSize`; the reset comment
+now deliberately preserves `editorMaxWidth`, which is the delivered S fix. In
+Preview-only the zoom does nothing visible, and the native menu disables the
+zoom items in that mode. The status chip still says "Font size" and derives its
+percentage from the editor font size rather than a view-zoom level.
 
 **Target.** Zoom has a visible effect in the active document view, including
 Preview-only, and reset changes zoom only. Content Width remains a separate
@@ -966,7 +988,8 @@ scaling mechanism only after validating layout, PDF resolution and source sync.
 - Reset returns to 100% without touching Content Width.
 - The chip shows the current percentage and hides at 100%.
 
-**Tests.** UI computed font sizes in both modes; screenshot at 150%; `npm run
+**Tests.** UI geometry (not computed font-size, which CSS zoom leaves unchanged)
+in both modes; a zoomed word sync and PDF page; screenshot at 150%; `npm run
 smoke` layout checks.
 
 **Risks.** CSS `zoom` vs font-size scaling changes line measurement; PDF canvases
@@ -1208,10 +1231,22 @@ that still need a visible conflict decision.
 
 ### GAP-026 — Browser-readable HTML and print output
 
-**Priority:** P1 · **Effort:** M · **Workstream:** Output · **Status:** open
+**Priority:** P1 · **Effort:** M · **Workstream:** Output · **Status:** in progress
 
 **Plan:** [Browser-readable HTML and print output](plans/2026-10-25-browser-readable-exports.md)
-— draft, awaiting approval.
+— approved 2026-10-25.
+
+**Delivered.** The export-only transform restores the real image/anchor
+destinations from the preview's `data-src`/`data-href` and resolves them through
+`src/export-paths.ts`: a relative URL when the output shares the document's
+root, a `file://` URL otherwise; print always uses absolute file URLs. Mermaid
+is rendered with the output's own theme (light for print, current theme for
+HTML). Both print wrappers share `src/print-ready.ts`, which waits (bounded) for
+images and web fonts, forces eager/sync images, and prints a visible list of
+failed resources. The standalone HTML now uses the typography variables it
+already emitted. Windows validation: `export:paths:unit` 42/42,
+`export:browser` 21/21, plus smoke/html/asciidoc/word-sync/export green. Manual
+ordinary-browser/PDF inspection and the Linux run remain.
 
 **Evidence.** `buildExportArticle` reuses preview renderers. Their shared
 `decorateLinks` converts local image sources into app asset URLs and removes
@@ -1478,7 +1513,7 @@ modules already exist and are not architecture approved by this backlog.
 | Session/revision lifecycle | Implemented (GAP-025) | Reuse `document-lifecycle.ts` and shell export snapshots for session/revision ownership |
 | File policy and encoding | Binary/lossy guard implemented; classification/size/decoding follow in GAP-005/021 | Reuse Rust refusal and legacy-copy protection; shared UX and supported decoding remain separate |
 | Directory listing/ignore rules | Proposed (GAP-006/007/022) | Shared bounded listing; neither a visual tree nor a whole-workspace index is required by every consumer |
-| Browser-readable article | Proposed (GAP-026) | HTML/Print correctness first; native printing (GAP-009) and offline packaging (GAP-033) reuse it |
+| Browser-readable article | Implemented (GAP-026) | The export-only URL/theme transform and shared print-readiness script; native printing (GAP-009) and offline packaging (GAP-033) reuse it |
 | Preview search adapters | Proposed (GAP-011) | DOM, guest and PDF can ship separately; independent copy/task controls do not depend on search |
 | Language commands | Typst helpers implemented (GAP-003) | Language dispatch remains in `main.ts`; a cross-language table feeding Help has not landed |
 | Table model | Proposed (GAP-010) | Parse/serialize only the table being edited; fail closed on unsupported structures |
@@ -1591,8 +1626,9 @@ introduced regression without evidence.
   literal text in DOCX/ODT/LaTeX.
 - Typst's Document view drops layout containers (`#columns`, `#grid`, `#align`,
   `#stack`, `#place`, `#rect`, `#pad`) together with their content.
-- PDF (Print) already provides a browser handoff. GAP-026 fixes its current
-  output; GAP-009 can add optional native integration while retaining fallback.
+- Print (opens browser) already provides a browser handoff. GAP-026 fixes its
+  current output; GAP-009 can add optional native integration while retaining
+  fallback.
 - macOS is not published.
 - The HTML guest has no same-origin storage, service workers or Web Workers.
 - There is no WYSIWYG editing, image upload or community CSS theme format.

@@ -1,7 +1,7 @@
 //! AsciiDoc source highlighting.
 //!
 //! A CodeMirror `StreamLanguage`, because there is no maintained Lezer grammar
-//! for AsciiDoc. It covers the constructs the Paragraph and Format menus insert,
+//! for AsciiDoc. It covers the constructs the Insert and Format menus insert,
 //! and names listing/literal/passthrough content `monospace` so
 //! `inCodeContext()` and the spelling pass treat it as code.
 //!

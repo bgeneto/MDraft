@@ -143,6 +143,10 @@ fn default_body_font_size() -> u32 {
     16
 }
 
+fn default_zoom_level() -> u32 {
+    100
+}
+
 fn default_spellcheck_language() -> String {
     "auto".to_string()
 }
@@ -230,6 +234,10 @@ pub struct Settings {
     pub focus_mode: bool,
     pub typewriter_mode: bool,
     pub editor_font_size: u32,
+    /// View zoom percentage. 100 is the base size; the base font sizes above
+    /// stay the reader's preference. Additive, so older files load at 100.
+    #[serde(default = "default_zoom_level")]
+    pub zoom_level: u32,
     /// Maximum content width in pixels; 0 means full width.
     pub editor_max_width: u32,
     /// "compact" | "normal" | "wide"; line spacing in the source pane.
@@ -417,6 +425,7 @@ impl Default for Settings {
             focus_mode: false,
             typewriter_mode: false,
             editor_font_size: 15,
+            zoom_level: default_zoom_level(),
             editor_max_width: 980,
             editor_line_height: default_editor_line_height(),
             // Empty means "the built-in default for that role"; see src/fonts.ts.
@@ -862,6 +871,14 @@ mod tests {
         assert!(settings.spellcheck);
         assert_eq!(settings.spellcheck_language, "auto");
         assert!(settings.spellcheck_words.is_empty());
+    }
+
+    #[test]
+    fn old_settings_without_a_zoom_load_at_one_hundred() {
+        let settings = parse_settings("{}").expect("an empty object is still settings");
+        assert_eq!(settings.zoom_level, 100);
+        let zoomed = parse_settings(r#"{"zoomLevel":150}"#).expect("zoomLevel is additive");
+        assert_eq!(zoomed.zoom_level, 150);
     }
 
     #[test]

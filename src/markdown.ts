@@ -17,6 +17,7 @@ import { translateOffset, type Fragment, type Substitution } from "./source-map"
 // fonts. Vite rewrites the font URLs and emits the files next to the bundle.
 import "katex/dist/katex.min.css";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { PRINT_READY_SCRIPT } from "./print-ready";
 
 /**
  * The KaTeX stylesheet, for exported documents that no longer live inside the
@@ -1105,7 +1106,7 @@ export function wrapPrintHtml(
     "</head>",
     "<body>",
     bodyHtml,
-    "<script>window.addEventListener('load',function(){window.print()})</script>",
+    `<script>${PRINT_READY_SCRIPT}</script>`,
     "</body>",
     "</html>",
   ]
@@ -1132,15 +1133,25 @@ export function wrapStandaloneHtml(
     "<style>",
     `:root{color-scheme:${isDark ? "dark" : "light"}}`,
     `body{max-width:820px;margin:40px auto;padding:0 24px;background:${background};color:${color};`,
-    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;',
-    "line-height:1.7;font-size:16px}",
+    'font-family:var(--font-body,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif);',
+    "font-size:var(--body-size,16px);",
+    "font-variant-numeric:var(--prose-figures,normal);",
+    "font-variant-ligatures:common-ligatures contextual;",
+    "line-height:1.7}",
+    "h1,h2,h3,h4,h5,h6{font-family:var(--font-heading,inherit);",
+    "font-weight:var(--weight-strong,600);font-variant-numeric:normal}",
     "pre{background:rgba(127,127,127,.12);padding:12px 14px;border-radius:6px;overflow:auto;",
     // A literal block has no `<code>` child, so the face and size must be on
     // `pre` or the exported file shows it in the browser default at 100%.
-    "font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.9em}",
-    "code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.9em}",
+    "font-family:var(--font-code,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);font-size:.9em;",
+    "font-variant-ligatures:var(--code-ligatures,normal);",
+    "font-variant-numeric:var(--code-figures,normal)}",
+    "code{font-family:var(--font-code,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);font-size:.9em;",
+    "font-variant-ligatures:var(--code-ligatures,normal);",
+    "font-variant-numeric:var(--code-figures,normal)}",
     "pre code{font-size:inherit}",
-    "table{border-collapse:collapse}th,td{border:1px solid rgba(127,127,127,.35);padding:6px 10px}",
+    "table{border-collapse:collapse;font-variant-numeric:var(--table-figures,normal)}",
+    "th,td{border:1px solid rgba(127,127,127,.35);padding:6px 10px}",
     "blockquote{margin:0;padding-left:14px;border-left:3px solid rgba(127,127,127,.4);opacity:.9}",
     // The same divider the preview draws: stronger than the panel border, so a
     // rule in the exported document does not disappear against white or black.

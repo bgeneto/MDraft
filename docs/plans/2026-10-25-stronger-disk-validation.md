@@ -285,10 +285,10 @@ the next save writes the local text. The suite passes 34/34.
 
 - The P0 tree is still uncommitted; the diff contains both changes until the
   owner commits.
-- `npm run format:check` fails repository-wide on `scripts/typst-preview-test.mjs`,
-  a file this plan does not touch. Formatting it would create a 92-insertion,
-  24-deletion unrelated diff; every file touched here passes Prettier. The
-  pre-existing failure is recorded rather than silently fixed.
+- **Update after the concurrent menu work:** `npm run format:check` now passes on
+  the whole tree; the earlier repository-wide failure in
+  `scripts/typst-preview-test.mjs` was formatting-only and has been fixed. Every
+  file this plan touched passes.
 - The GitHub `safety` job has not run yet; it invokes exactly the two local
   commands above. The Linux Rust run (127 expected runnable tests) is pending the
   Linux environment.

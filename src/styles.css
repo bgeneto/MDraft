@@ -54,6 +54,8 @@
   --font-heading: system-ui, "Segoe UI", -apple-system, Roboto, sans-serif;
   --font-code: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --body-size: 16px;
+  /* The document zoom multiplies both panes; 100% is 1. */
+  --preview-zoom: 1;
   /* KaTeX's own scale is 1. This multiplies it; see the math rules below. */
   --math-scale: 1;
 
@@ -1010,6 +1012,7 @@ body {
   inset: 0;
   width: 100%;
   height: 100%;
+  zoom: var(--preview-zoom, 1);
   border: 0;
   background: #fff;
 }
@@ -1249,6 +1252,24 @@ body {
 
 .markdown-body > *:first-child {
   margin-top: 0;
+}
+
+/* Zoom the one preview article, not every nested `.markdown-body` (Typst's
+   document host carries the class too). The compensated width keeps line
+   wrapping inside the pane; getBoundingClientRect, used by the scroll and word
+   sync, reports the scaled geometry. */
+#preview {
+  zoom: var(--preview-zoom, 1);
+  width: 100%;
+  max-width: var(--preview-max-width, none);
+  margin: 0 auto;
+}
+
+/* Typst's Document host carries `.markdown-body` too. It fills the zoomed
+   preview instead of applying a second reading measure and margin. */
+.markdown-body.typst-document {
+  max-width: none;
+  margin: 0;
 }
 
 .markdown-body h1,
@@ -2113,6 +2134,17 @@ body {
    measure: the PDF's. */
 .preview-pane:has(.typst-preview) #preview {
   max-width: none;
+  zoom: 1;
+  width: auto;
+}
+
+/* Pages above 100% are wider than the pane; let the reader reach both edges
+   instead of clipping one. At 100% the page stays centred and clipped as before. */
+.preview-pane.preview-zoomed:has(.typst-preview) {
+  overflow-x: auto;
+}
+.preview-pane.preview-zoomed:has(.typst-preview) .typst-preview {
+  align-items: flex-start;
 }
 
 /* The shell owns the fitted size and the shadow; the page inside keeps the

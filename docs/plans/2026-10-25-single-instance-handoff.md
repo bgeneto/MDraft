@@ -1,6 +1,7 @@
 # Reliable second-launch handoff and multi-file opening
 
-**Status:** draft
+**Status:** in progress — Phase 1 approved 2026-10-25; Phase 2 (file
+associations) remains a separate approval gate
 **Date:** 2026-10-25
 **ADR:** `../adr/2026-10-25-single-instance-boundary.md` (to be written when this
 plan is approved)
@@ -172,27 +173,30 @@ queue as the contract, and the existing frontend as the tab authority.**
 
 **Phase 1**
 
-- [ ] Add the dependency; register the plugin first; confirm the second process
+- [x] Add the dependency; register the plugin first; confirm the second process
       exits before creating a WebView.
-- [ ] Add `launch_paths` with Rust unit tests: no args, one path, several,
+- [x] Add `launch_paths` with Rust unit tests: no args, one path, several,
       flags, `--`, spaces, relative `cwd`, duplicate paths under the platform
       rule, and a missing path retained.
-- [ ] Add managed forwarded-path state, the plugin callback, the
+- [x] Add managed forwarded-path state, the plugin callback, the
       `open-files` emit and `take_forwarded_paths`; focus/show/unminimise the
       window.
-- [ ] Add `startup_files` and its API wrapper; open every initial path; set
+- [x] Add `startup_files` and its API wrapper; open every initial path; set
       `installingStartup = false` after the first.
-- [ ] Add `openPaths` with per-path toast reporting; use it for startup,
+- [x] Add `openPaths` with per-path toast reporting; use it for startup,
       handoff and the existing `open-files` listener.
-- [ ] Add `scripts/single-instance-test.mjs` and launch it from `test-all.mjs`
-      with the staged executable, two initial fixtures and one second-launch
+- [x] Add `scripts/single-instance-test.mjs` and launch it from `test-all.mjs`
+      with the staged executable, two initial fixtures and a second-launch
       fixture. Assert: both initial tabs exist; a second process exits; a third
-      tab opens; only one page target remains; a missing path shows a toast and
-      keeps the valid tabs; a dirty buffer survives.
-- [ ] Register the suite and its counts in `AGENTS.md` and the README.
+      tab opens; only one page target remains; a duplicate path is focused; a
+      missing path shows a toast and keeps the valid tabs; a dirty buffer
+      survives.
+- [x] Register the suite and its counts in `AGENTS.md` and the README/guide.
 - [ ] Manual: installed and portable builds independently; launch from a
       terminal with spaces and Unicode in the path; close the last window and
-      confirm window state/settings are written.
+      confirm window state/settings are written. *The file-level suite covers
+      the process boundary; the installed/portable focus and close checks are
+      for the owner.*
 
 **Phase 2 (only after Phase 1 is accepted and a clean-profile test plan is
 agreed)**
@@ -294,6 +298,59 @@ agreed)**
   Linux deb registers the MIME types and the AppImage/portable limitation is
   documented.
 - True multi-window remains out of scope and is not implied by this change.
+
+## Validation record
+
+Phase 1 implemented on Windows on 2026-10-25.
+
+| Layer | Result |
+| --- | --- |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | **136 passed**, 0 failed, 2 ignored downloads |
+| `cargo clippy --all-targets -- -D warnings` | clean |
+| `npm test -- --only single-instance` | **12/12** on the staged release build |
+| `npm test -- --only p0-lifecycle` | 34/34 (after expecting the new toast) |
+| `npm test -- --only tabs` | 106/106 |
+| `npm test -- --only smoke` | 107/107 |
+| `npm test -- --only export-browser` | 21/21 |
+| `npm run build`, `npm run lint`, `npm run knip` | PASS |
+| Prettier on the files this plan touched | PASS |
+| Manual WM_CLOSE on the release binary | exited with code 0 and wrote `.window-state.json` |
+
+The plugin resolves to `tauri-plugin-single-instance` **2.5.4**. The UI layer
+reports 12 checks: two initial paths as ordered tabs, the last active, one page
+target, the second process exiting cleanly, a relative path opening a third tab,
+the dirty startup buffer surviving, a duplicate path focusing its existing tab,
+and a missing path producing a toast without a tab.
+
+**The measurement that proves it works:** after spawning the staged executable
+with a new path, the child exited with code 0, the running window gained exactly
+one tab for that path, and `/json/list` still reported one page target.
+
+**Deviations / remaining verification.**
+
+- `openPaths(paths)` takes no options object; it always reports per-path
+  failures as toasts. This is what startup and handoff need, and the old
+  `open-files` modal was precisely the behaviour that would stack dialogs.
+  `p0-lifecycle` now accepts the toast for its binary `open-files` probe; AGENTS
+  records that trap.
+- `startup_file` remains registered as an additive compatibility command even
+  though the frontend now calls `startup_files`.
+- `test-all.mjs` gained a `docs` array so one suite can be launched with several
+  initial documents, and passes `MDRAFT_EXE`/`MDRAFT_REPO`/private user-data to
+  the CDP layers.
+- The "second launch during startup" case is covered by the Rust queue unit
+  (`a_forwarded_path_is_queued_once_and_drained_once`) plus the frontend
+  `pendingOpenFiles` gate, not by a timing-sensitive end-to-end race.
+- Installed/portable focus, a terminal path with spaces/Unicode, Linux DBus and
+  the clean-profile association tests remain manual (Phase 2 is not started).
+- `scripts/test-close.ps1` itself hangs in the agent shell at its unredirected
+  `Start-Process` (an existing trap). A redirected one-off proved WM_CLOSE exits
+  with code 0 and writes `.window-state.json`, but it used the real profile
+  because Tauri ignores `APPDATA`/`LOCALAPPDATA` for its directories; Recents and
+  `lastDirectory` were touched. The AGENTS trap now records both facts, and the
+  release check remains a normal-terminal run.
+- **Update:** the repository-wide `npm run format:check` now passes after the
+  concurrent formatting change to `scripts/typst-preview-test.mjs`.
 
 ## Open questions
 

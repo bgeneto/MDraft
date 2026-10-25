@@ -757,6 +757,7 @@ const exportNames = [
   "exportSource",
   "documentStem",
   "exportSuggestion",
+  "directoryOf",
   "buildExportArticle",
   "exportHtml",
   "exportPdf",
@@ -819,6 +820,7 @@ function exportHarness(language, delay) {
     renderPreview: (text) => ({ html: `<p>${text}</p>` }),
     renderAsciidocPreview: async (text) => ({ html: `<p>${text}</p>` }),
     renderMermaidIn: async () => pause("article"),
+    rewriteExportReferences: () => {},
     buildHtmlPrintDocument: async (text, base) => {
       calls.push({ printSource: text, base });
       await pause("html-print");

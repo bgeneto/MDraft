@@ -345,7 +345,9 @@ try {
 
   const tabCount = (await names()).length;
   await invoke("plugin:event|emit", { event: "open-files", payload: [pdf] });
-  await wait(`window.__p0TestOnly.messages.some(m=>m.includes('binary/non-text'))`);
+  await wait(
+    `document.getElementById('toast').textContent.includes('binary/non-text') || window.__p0TestOnly.messages.some(m=>m.includes('binary/non-text'))`,
+  );
   check((await names()).length === tabCount, "opening a PDF cannot create an editable text tab");
   const refused = await evaluate(
     `window.__TAURI_INTERNALS__.invoke('write_document',${JSON.stringify({ path: pdf, content: "replacement", lineEnding: "\n", hadBom: false })}).then(()=>'',e=>String(e))`,

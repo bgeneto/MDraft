@@ -18,9 +18,11 @@ import {
   TYPST_REFERENCE,
   WELCOME,
 } from "./content";
-import { installEditorContextMenu } from "./context-menu";
+import { installEditorContextMenu, titleCase } from "./context-menu";
+import { readClipboardData } from "./clipboard";
 import { createDocumentLifecycle } from "./document-lifecycle";
 import { askUnsaved } from "./unsaved-dialog";
+import { rewriteExportReferences } from "./export-article";
 import { createEditor, type EditorHandle } from "./editor";
 import {
   formatDocument,
@@ -30,7 +32,6 @@ import {
   hasFormatter,
 } from "./format/formatters";
 import {
-  DEFAULT_EDITOR_FONT_SIZE,
   DEFAULT_EDITOR_LINE_HEIGHT,
   EDITOR_LINE_HEIGHTS,
   embeddedFontCss,
@@ -85,7 +86,7 @@ import { createPreferences, type PreferencesHandle } from "./preferences";
 import { createRecoveryScheduler } from "./recovery";
 import { createSessionStore, pathKey, type Session } from "./sessions";
 import { planRestore, rememberTabs, type RememberedTabs } from "./tab-restore";
-import { setInstalledLanguages, setSpellRemember } from "./spellcheck";
+import { installedLanguages, setInstalledLanguages, setSpellRemember } from "./spellcheck";
 import * as sidebarPanel from "./sidebar";
 import { resolvePalette } from "./syntax-themes";
 import { createTabsUi, type TabsUi } from "./tabs";
@@ -342,9 +343,22 @@ let outlineTimer = 0;
 /** Headings are document-shaped, so they can wait for a typing pause. */
 const OUTLINE_REFRESH_DELAY_MS = 250;
 
-const DEFAULT_FONT_SIZE = DEFAULT_EDITOR_FONT_SIZE;
-const MIN_FONT = 10;
-const MAX_FONT = 40;
+const DEFAULT_ZOOM = 100;
+const MIN_ZOOM = 50;
+const MAX_ZOOM = 300;
+const ZOOM_STEP = 10;
+
+/** The persisted zoom, clamped for a hand-edited settings file. */
+function zoomLevel(): number {
+  return Math.min(
+    MAX_ZOOM,
+    Math.max(MIN_ZOOM, Math.round(settings.zoomLevel / ZOOM_STEP) * ZOOM_STEP),
+  );
+}
+
+function zoomFactor(): number {
+  return zoomLevel() / 100;
+}
 const AUTO_SAVE_INTERVAL_MS = 20_000;
 /** Scroll alignment window, in ms, after a programmatic pane scroll. */
 const SYNC_SUPPRESS_MS = 150;
@@ -624,55 +638,163 @@ function updateStatusFlags(): void {
 }
 
 /**
- * Show the zoom level only while it differs from the default.
+ * Show the zoom level only while it differs from 100%.
  *
- * The menu calls this "Zoom", but what it changes is the editor font size; a
- * percentage is the unit the menu and the shortcut imply, and the title gives
- * the pixel value. It is clickable, like every other status-bar indicator.
+ * The percentage is the unit the menu and the shortcut imply; the editable
+ * font sizes remain separate preferences. It is clickable, like every other
+ * status-bar indicator.
  */
 function updateZoomIndicator(): void {
-  const percent = Math.round((settings.editorFontSize / DEFAULT_FONT_SIZE) * 100);
-  const zoomed = settings.editorFontSize !== DEFAULT_FONT_SIZE;
+  const level = zoomLevel();
+  const zoomed = level !== DEFAULT_ZOOM;
   statusZoom.hidden = !zoomed;
-  statusZoom.textContent = `${percent}%`;
-  statusZoom.title = `Font size ${settings.editorFontSize}px — click to reset to ${DEFAULT_FONT_SIZE}px`;
+  statusZoom.textContent = `${level}%`;
+  statusZoom.title = `Zoom ${level}% — click to reset to ${DEFAULT_ZOOM}%`;
   statusZoom.setAttribute(
     "aria-label",
-    `Editor font size ${settings.editorFontSize} pixels, ${percent} percent. Click to reset.`,
+    `Document zoom ${level} percent. Click to reset to ${DEFAULT_ZOOM} percent.`,
   );
 }
 
 /**
- * Mirror the interface's state onto the native menu's check marks.
+ * Mirror the interface's state onto the native menu.
  *
  * The menu is a native control: it cannot read the DOM, and Rust cannot see
- * whether the window is fullscreen without asking it. Sending one struct avoids
- * deriving the same booleans in two places and keeps the menu right after every
- * change, including the ones made in Preferences. A failure here is cosmetic —
- * the settings remain the source of truth.
+ * whether the window is fullscreen, which document is active, what is selected
+ * or which link is under the caret. Sending one snapshot avoids deriving the
+ * same booleans in two places and keeps the menu right after every change,
+ * including the ones made in Preferences. A failure here is cosmetic — the
+ * settings remain the source of truth.
  */
-function syncMenuState(): void {
+let menuSyncGeneration = 0;
+
+function menuStateSnapshot(): api.MenuState {
+  const list = sessions?.list?.() ?? [];
+  const index = list.findIndex((session) => session.id === doc?.id);
+  const selection = editor ? editor.view.state.selection.main : null;
+  const link = editor ? linkUnderCaret() : null;
+  const canFormat = doc ? formatUnavailableReason(doc) === null : false;
+  const hasCommentSyntax =
+    editor && selection
+      ? editor.view.state.languageDataAt("commentTokens", selection.from, 1).length > 0
+      : false;
+  const canFold =
+    doc?.language === "markdown" || doc?.language === "html" || doc?.language === "typst";
+  const syntaxTheme =
+    settings.syntaxTheme === "github-light" ? "catppuccin-latte" : settings.syntaxTheme;
+
+  return {
+    viewMode: settings.viewMode,
+    sidebarVisible: settings.sidebarVisible,
+    sidebarTab: settings.sidebarTab,
+    showStatusBar: settings.showStatusBar,
+    focusMode: settings.focusMode,
+    typewriterMode: settings.typewriterMode,
+    syncScroll: settings.syncScroll,
+    theme: settings.theme,
+    autoSave: settings.autoSave,
+    fullscreen: isFullscreen,
+    documentLanguage: doc?.language ?? "markdown",
+    readOnly: doc?.readOnly ?? false,
+    hasSelection: selection !== null && selection.from !== selection.to,
+    hasCommentSyntax,
+    linkKind: link?.kind ?? "",
+    canFormat,
+    tabCount: list.length,
+    tabIndex: index < 0 ? 0 : index,
+    unchangedOtherTabs: list.filter((session) => session.id !== doc?.id && !session.dirty).length,
+    hasPath: Boolean(doc?.path),
+    isFavorite: doc?.path ? isFavoritePath(doc.path) : false,
+    canFold,
+    spellcheck: settings.spellcheck !== false,
+    spellcheckAvailable: installedLanguages().length > 0 && doc?.language !== "html",
+    syntaxTheme,
+    typstView: settings.typstView,
+    typstAvailable: typstCache?.found !== false,
+  };
+}
+
+function syncMenuState(refreshWindow = true): void {
+  const generation = ++menuSyncGeneration;
+  if (!refreshWindow) {
+    // Cursor-driven syncs reuse the window's last known fullscreen state; asking
+    // the window on every caret move would turn typing into a stream of IPC.
+    void api.setMenuState(menuStateSnapshot()).catch(() => {
+      /* cosmetic: the menu is not the source of truth */
+    });
+    return;
+  }
   void (async () => {
     try {
       isFullscreen = await getCurrentWindow().isFullscreen();
     } catch {
       /* the window may be closing; keep the last known value */
     }
+    if (generation !== menuSyncGeneration) return;
     try {
-      await api.setMenuState({
-        viewMode: settings.viewMode,
-        sidebarVisible: settings.sidebarVisible,
-        sidebarTab: settings.sidebarTab,
-        showStatusBar: settings.showStatusBar,
-        focusMode: settings.focusMode,
-        typewriterMode: settings.typewriterMode,
-        syncScroll: settings.syncScroll,
-        theme: settings.theme,
-        autoSave: settings.autoSave,
-        fullscreen: isFullscreen,
-      });
+      await api.setMenuState(menuStateSnapshot());
     } catch {
       /* cosmetic: the menu is not the source of truth */
+    }
+  })();
+}
+
+/** Coalesce cursor-driven updates; a selection change is not worth one IPC per key. */
+let menuSyncTimer = 0;
+function scheduleMenuStateSync(): void {
+  window.clearTimeout(menuSyncTimer);
+  menuSyncTimer = window.setTimeout(() => syncMenuState(false), 80);
+}
+
+/**
+ * Repopulate Navigate › Open Tabs.
+ *
+ * Calls are coalesced and serialized: a burst of tab changes must not leave an
+ * older list in the native submenu after a newer one.
+ */
+let openTabsPending: api.OpenTabItem[] | null = null;
+let openTabsRunning = false;
+let openTabsKey = "";
+
+function openTabItems(): api.OpenTabItem[] {
+  const list = sessions.list();
+  const nameCounts = new Map<string, number>();
+  for (const session of list) {
+    nameCounts.set(session.name, (nameCounts.get(session.name) ?? 0) + 1);
+  }
+  return list.map((session) => {
+    const duplicate = (nameCounts.get(session.name) ?? 0) > 1;
+    const label =
+      duplicate && session.directory ? `${session.name} — ${session.directory}` : session.name;
+    return { id: session.id, label, checked: session.id === doc.id };
+  });
+}
+
+function syncOpenTabs(): void {
+  const tabs = openTabItems();
+  const key = tabs
+    .map((tab) => `${tab.id}\u0000${tab.label}\u0000${tab.checked ? "1" : "0"}`)
+    .join("\u0001");
+  if (key === openTabsKey) return;
+  openTabsKey = key;
+  openTabsPending = tabs;
+  if (openTabsRunning) return;
+  openTabsRunning = true;
+  void (async () => {
+    try {
+      while (openTabsPending) {
+        const next = openTabsPending;
+        openTabsPending = null;
+        try {
+          await api.setOpenTabs(next);
+        } catch {
+          // Let the next tab render retry rather than leaving the native list
+          // empty for the rest of the session.
+          openTabsKey = "";
+        }
+      }
+    } finally {
+      openTabsRunning = false;
     }
   })();
 }
@@ -715,6 +837,16 @@ function applyLayout(): void {
     width > 0 ? `${width}px` : "none",
   );
 
+  const zoom = zoomFactor();
+  document.documentElement.style.setProperty("--preview-zoom", String(zoom));
+  // CSS zoom scales the rendered box. A max-width is a layout length, so the
+  // preview's cap is divided by the zoom; `width: 100%` already resolves to the
+  // narrower layout box and fills the pane after scaling.
+  document.documentElement.style.setProperty(
+    "--preview-max-width",
+    width > 0 ? `${width / zoom}px` : "none",
+  );
+
   // The setting stores a name, not a multiplier. An older or hand-edited file
   // may carry a name this build does not know; Normal is the fallback.
   const lineHeight =
@@ -722,9 +854,10 @@ function applyLayout(): void {
     EDITOR_LINE_HEIGHTS[DEFAULT_EDITOR_LINE_HEIGHT];
   document.documentElement.style.setProperty("--editor-line-height", String(lineHeight));
 
-  editor?.setFontSize(settings.editorFontSize);
+  editor?.setFontSize(settings.editorFontSize * zoom);
   editor?.setFocusMode(settings.focusMode);
   editor?.setTypewriter(settings.typewriterMode);
+  typstPdf?.setZoom(zoom);
   applySpellcheck();
   applySyntaxTheme();
   applyTypography();
@@ -1108,7 +1241,7 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
   syncedSource = null;
   editor.clearSyncRange();
   preview.innerHTML = "";
-  preview.appendChild(typstViewBar(rendered.kind));
+  preview.before(typstViewBar(rendered.kind));
 
   if (rendered.kind === "document") {
     const dropped = typstDroppedNote(rendered);
@@ -1158,6 +1291,7 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
   const view = new TypstPdfPreview(host, previewPane, syncSourceFromPageSelection, source);
   typstPdf = view;
   typstPdfToken = token;
+  view.setZoom(zoomFactor());
   try {
     await view.render(decodePdf(rendered.pdf));
   } catch (error) {
@@ -1201,6 +1335,7 @@ function typstViewBar(active: string): HTMLElement {
 function chooseTypstView(view: api.TypstView): void {
   if (settings.typstView === view) return;
   settings.typstView = view;
+  syncMenuState();
   persist();
   scheduleRender(true);
 }
@@ -1271,6 +1406,10 @@ async function renderHtmlPreview(source: string, token: number): Promise<void> {
 async function doRender(): Promise<void> {
   const token = ++renderToken;
   const source = editor.getDoc();
+
+  // The Typst view bar lives outside `#preview` so document zoom does not scale
+  // its buttons. Every render begins by removing the previous one.
+  previewPane.querySelector(":scope > .typst-viewbar")?.remove();
 
   // The DOM the old map described is about to be replaced.
   wordMap = null;
@@ -1343,6 +1482,8 @@ async function doRender(): Promise<void> {
 /** Draw the document tabs. One document still gets a tab: New and Close need a target. */
 function renderDocTabs(): void {
   tabsUi?.render();
+  syncOpenTabs();
+  scheduleMenuStateSync();
 }
 
 function renderSidebar(): void {
@@ -1415,6 +1556,7 @@ async function toggleFavoritePath(path: string): Promise<void> {
       return remove;
     });
     if (settings.sidebarTab === "favorites") renderSidebar();
+    syncMenuState();
     toast(
       removing
         ? `Removed ${favoriteName(path)} from Favorites`
@@ -1433,6 +1575,7 @@ async function removeFavoritePath(path: string): Promise<void> {
       settings = { ...settings, favorites: next.favorites };
     });
     if (settings.sidebarTab === "favorites") renderSidebar();
+    syncMenuState();
     toast(`Removed ${favoriteName(path)} from Favorites`);
   } catch (error) {
     toast(String(error), 5200);
@@ -1758,6 +1901,7 @@ async function formatSession(id: string): Promise<void> {
   }
 
   formatBusy = true;
+  syncMenuState();
   const pending = toast(active ? "Formatting…" : `Formatting ${session.name}…`, 0);
   try {
     if (active) {
@@ -1795,6 +1939,7 @@ async function formatSession(id: string): Promise<void> {
     toast(`Could not format: ${formatErrorMessage(error)}`, 6200);
   } finally {
     formatBusy = false;
+    syncMenuState();
   }
 }
 
@@ -1860,6 +2005,22 @@ async function openPath(path: string, options: OpenOptions = {}): Promise<void> 
       toast(String(error));
     }
   }
+}
+
+/**
+ * Open several paths in order, keeping the last successful one active.
+ *
+ * Startup and second-launch handoff report a bad path as a toast and continue;
+ * a native modal per path would block the window and lose the good documents
+ * behind it. The chain also prevents two handoffs from racing the same path
+ * through "not open yet" before either has created its tab.
+ */
+let openPathChain: Promise<void> = Promise.resolve();
+function openPaths(paths: readonly string[]): Promise<void> {
+  openPathChain = openPathChain.then(async () => {
+    for (const path of paths) await openPath(path, { silent: true });
+  });
+  return openPathChain;
 }
 
 async function loadUntitled(
@@ -2086,17 +2247,28 @@ function exportSource() {
  * AsciiDoc through Asciidoctor, Typst through its own HTML export. Typst's MathML
  * stylesheet must travel with its markup. Shared by HTML and Print exports.
  */
+interface ExportArticleOptions {
+  /** Folder of the file being written; null for a print document in the temp folder. */
+  outputDir: string | null;
+  /** Absolute file URLs and eager images, for the print copy. */
+  print: boolean;
+  /** The article's own theme, independent of the editor when printing. */
+  theme: "light" | "dark";
+}
+
 async function buildExportArticle(
   source: ReturnType<typeof exportSource>,
+  options: ExportArticleOptions,
 ): Promise<{ html: string; css: string }> {
   const holder = document.createElement("div");
+  const themeIsDark = options.theme === "dark";
   let css = "";
   if (source.language === "asciidoc") {
     const result = await renderAsciidocPreview(source.text, {
       baseDir: source.directory ?? null,
       math: settings.enableMath,
       mermaid: settings.enableMermaid,
-      isDark,
+      isDark: themeIsDark,
     });
     holder.innerHTML = result.html;
   } else if (source.language === "typst") {
@@ -2110,7 +2282,14 @@ async function buildExportArticle(
       mermaid: settings.enableMermaid,
     }).html;
   }
-  await renderMermaidIn(holder, isDark);
+  await renderMermaidIn(holder, themeIsDark);
+  // Restore the destinations the preview deliberately decorated for its own
+  // protocol, then make them meaningful to a browser outside the application.
+  rewriteExportReferences(holder, {
+    documentDir: source.directory,
+    outputDir: options.outputDir,
+    absolute: options.print,
+  });
   // The same class the preview's Typst view uses, so the rules written for it
   // apply to the export too.
   const classes = source.language === "typst" ? "markdown-body typst-document" : "markdown-body";
@@ -2176,6 +2355,7 @@ async function exportHtml(): Promise<void> {
   });
   if (!chosen) return;
   const target = Array.isArray(chosen) ? chosen[0] : chosen;
+  const outputDir = directoryOf(target);
 
   try {
     if (source.language === "html") {
@@ -2198,7 +2378,11 @@ async function exportHtml(): Promise<void> {
       return;
     }
 
-    const article = await buildExportArticle(source);
+    const article = await buildExportArticle(source, {
+      outputDir,
+      print: false,
+      theme: isDark ? "dark" : "light",
+    });
     const highlightStyle = document.getElementById("hljs-theme")?.textContent ?? "";
     const fontCss = await exportFontCss();
     const headExtra = [
@@ -2260,7 +2444,11 @@ async function exportPdf(): Promise<void> {
       console.info(`[export] print document written to ${written}`);
       return;
     }
-    const article = await buildExportArticle(source);
+    const article = await buildExportArticle(source, {
+      outputDir: null,
+      print: true,
+      theme: "light",
+    });
     // The print document is always light, whatever the editor is showing: dark
     // token colours would print as pale text on white paper. Its typefaces,
     // however, are the reader's — embedded, because a browser reading a file in
@@ -2291,6 +2479,9 @@ async function exportPdf(): Promise<void> {
 
 /** Menu ids for configured pandoc formats; must match `menu::EXPORT_PREFIX`. */
 const EXPORT_MENU_PREFIX = "export.pandoc.";
+
+/** Menu ids for open-tab rows; must match `menu::OPEN_TAB_PREFIX`. */
+const OPEN_TAB_MENU_PREFIX = "navigate.tab:";
 
 /** Menu ids for recent files; must match `menu::RECENT_PREFIX`. */
 const RECENT_MENU_PREFIX = "recent.file:";
@@ -2323,6 +2514,7 @@ async function refreshTypstStatus(): Promise<void> {
   } catch {
     return;
   }
+  syncMenuState();
   preferences?.refresh();
 }
 
@@ -2436,7 +2628,7 @@ async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
 }
 
 /**
- * Help › Install Pandoc.
+ * Tools › Check or Install Pandoc….
  *
  * Reports what was found before offering to download anything, so a user who
  * already has pandoc on PATH is told that rather than being pushed into a 40 MB
@@ -2453,7 +2645,7 @@ async function pandocSetup(): Promise<void> {
 
   const engine = status.pdfEngine
     ? `\nPDF engine: ${basename(status.pdfEngine)}`
-    : "\nPDF engine: none — Typst is not installed, so PDF export is unavailable. Use Help › Install Typst. Every other format works without it.";
+    : "\nPDF engine: none — Typst is not installed, so PDF export is unavailable. Use Tools › Check or Install Typst…. Every other format works without it.";
 
   pandocCache = status;
   preferences?.refresh();
@@ -2494,7 +2686,7 @@ async function pandocSetup(): Promise<void> {
       `Pandoc ${installed.version ?? ""} is ready.\n\n${installed.path ?? ""}\n\n` +
         (installed.pdfEngine
           ? `PDF export will use ${basename(installed.pdfEngine)}.`
-          : "PDF export still needs Typst — use Help › Install Typst. Every other format works now."),
+          : "PDF export still needs Typst — use Tools › Check or Install Typst…. Every other format works now."),
       { title: "Pandoc installed", kind: "info" },
     );
   } catch (error) {
@@ -2522,6 +2714,7 @@ async function typstSetup(): Promise<void> {
 
   if (status.found) {
     typstCache = status;
+    syncMenuState();
     preferences?.refresh();
     await refreshPandocStatus();
     await syncExportAvailability();
@@ -2565,6 +2758,7 @@ async function typstSetup(): Promise<void> {
     const installed = await api.installTypst();
     notice.dismiss();
     typstCache = installed;
+    syncMenuState();
     await refreshPandocStatus();
     await syncExportAvailability();
     await message(
@@ -2661,23 +2855,6 @@ function codeBlockCommand(): void {
     return;
   }
   editor.insertBlockWithCaret("```\n\n```", 4);
-}
-
-function mathBlockCommand(): void {
-  if (doc.language === "html") {
-    htmlCommandNote();
-    return;
-  }
-  if (doc.language === "asciidoc") {
-    const block = "[latexmath]\n++++\n\n++++\n";
-    editor.insertBlockWithCaret(block, block.indexOf("\n\n") + 1);
-    return;
-  }
-  if (doc.language === "typst") {
-    editor.insertBlockWithCaret(TYPST_DISPLAY_MATH.text, TYPST_DISPLAY_MATH.caret);
-    return;
-  }
-  editor.insertBlockWithCaret("$$\n\n$$\n", 3);
 }
 
 function listCommand(kind: "ul" | "ol"): void {
@@ -2911,6 +3088,104 @@ function displayMathCommand(): void {
   }
 }
 
+/** Close the tabs relative to the active one, resolving the set at click time. */
+function closeRelative(kind: "others" | "left" | "right" | "unchanged"): void {
+  const list = sessions.list();
+  const index = list.findIndex((session) => session.id === doc.id);
+  if (index < 0) return;
+  let ids: string[];
+  if (kind === "others") {
+    ids = list.filter((session) => session.id !== doc.id).map((session) => session.id);
+  } else if (kind === "left") {
+    ids = list.slice(0, index).map((session) => session.id);
+  } else if (kind === "right") {
+    ids = list.slice(index + 1).map((session) => session.id);
+  } else {
+    ids = list
+      .filter((session) => session.id !== doc.id && !session.dirty)
+      .map((session) => session.id);
+  }
+  if (ids.length > 0) void closeSessions(ids);
+}
+
+/** Reorder the active tab by one place, without changing which tab is active. */
+function moveActiveTab(delta: number): void {
+  const list = sessions.list();
+  const index = list.findIndex((session) => session.id === doc.id);
+  const target = index + delta;
+  if (index < 0 || target < 0 || target >= list.length) return;
+  sessions.move(doc.id, target);
+  renderDocTabs();
+}
+
+/** The link target under the caret, falling back to the start of a selection. */
+function linkUnderCaret(): LinkTarget | null {
+  const selection = editor.view.state.selection.main;
+  const atHead = linkAt(editor.getDoc(), selection.head, doc.language);
+  if (atHead || selection.empty) return atHead;
+  return linkAt(editor.getDoc(), selection.from, doc.language);
+}
+
+/** Follow the link, file, image or heading under the caret, if there is one. */
+function openLinkUnderCursor(): void {
+  const target = linkUnderCaret();
+  if (!target) {
+    toast("No link or file under the cursor.");
+    return;
+  }
+  openLinkTarget(target);
+}
+
+/**
+ * Edit › Paste without Formatting.
+ *
+ * The keyboard route is Chromium's own native paste, consumed by the existing
+ * capture handler. A menu click has no native paste event, so this reads the
+ * clipboard through the same DataTransfer the handler already understands and
+ * dispatches a synthetic event. Text fields outside the editor keep their own
+ * selection and receive plain text directly; a field paste must not move the
+ * document caret.
+ */
+async function pastePlain(): Promise<void> {
+  const data = await readClipboardData();
+  if (!data) {
+    toast("Could not read the clipboard.", 4200);
+    return;
+  }
+  const target = document.activeElement;
+  const text = data.getData("text/plain");
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+    if (!text) return;
+    const start = target.selectionStart ?? target.value.length;
+    const end = target.selectionEnd ?? start;
+    target.setRangeText(text, start, end, "end");
+    target.dispatchEvent(new Event("input", { bubbles: true }));
+    return;
+  }
+  if (target instanceof HTMLElement && target.isContentEditable) {
+    if (!text) return;
+    document.execCommand("insertText", false, text);
+    return;
+  }
+
+  plainPastePending = true;
+  editor.view.contentDOM.dispatchEvent(
+    new ClipboardEvent("paste", {
+      clipboardData: data,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  window.setTimeout(() => {
+    plainPastePending = false;
+  }, 2000);
+}
+
+/** Apply one of the editor palettes from View › Code Colors. */
+function setSyntaxTheme(id: string): void {
+  applySettingsPatch({ syntaxTheme: id });
+}
+
 const handlers: Record<string, () => void | Promise<void>> = {
   "file.new": async () => {
     await loadUntitled("", defaultDocumentLanguage());
@@ -2930,7 +3205,11 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "file.save": () => void save(),
   "file.saveAs": () => void saveAs(),
   "file.close": () => void closeSession(doc.id),
-  "file.closeAll": () => closeSessions(sessions.list().map((session) => session.id)),
+  "file.closeAll": () => void closeSessions(sessions.list().map((session) => session.id)),
+  "file.closeOthers": () => closeRelative("others"),
+  "file.closeLeft": () => closeRelative("left"),
+  "file.closeRight": () => closeRelative("right"),
+  "file.closeUnchanged": () => closeRelative("unchanged"),
   "file.nextTab": () => void activateSession(sessions.next().id),
   "file.prevTab": () => void activateSession(sessions.previous().id),
   "file.autoSave": () => {
@@ -2945,9 +3224,26 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "export.installPandoc": () => void pandocSetup(),
   "export.installTypst": () => void typstSetup(),
   "file.reveal": () => revealSession(doc.id),
+  "file.favorite": () => {
+    if (doc.path) void toggleFavoritePath(doc.path);
+    else toast("Save the document first.");
+  },
 
   "edit.find": () => editor.openSearch(false),
   "edit.replace": () => editor.openSearch(true),
+  "edit.findNext": () => editor.findNext(),
+  "edit.findPrevious": () => editor.findPrevious(),
+  "edit.selectNext": () => editor.selectNextOccurrence(),
+  "edit.selectAllOccurrences": () => editor.selectAllOccurrences(),
+  "edit.pastePlain": () => void pastePlain(),
+  "edit.delete": () => editor.deleteSelection(),
+  "edit.uppercase": () => editor.transformSelection((text) => text.toUpperCase()),
+  "edit.lowercase": () => editor.transformSelection((text) => text.toLowerCase()),
+  "edit.titleCase": () => editor.transformSelection(titleCase),
+  "edit.duplicateLine": () => editor.duplicateLine(),
+  "edit.moveLineUp": () => editor.moveLineUp(),
+  "edit.moveLineDown": () => editor.moveLineDown(),
+  "edit.comment": () => editor.toggleComment(),
 
   "para.h1": () => setHeadingCommand(1),
   "para.h2": () => setHeadingCommand(2),
@@ -2960,7 +3256,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "para.decreaseHeading": () => shiftHeadingCommand(1),
   "para.quote": () => quoteCommand(),
   "para.codeBlock": () => codeBlockCommand(),
-  "para.mathBlock": () => mathBlockCommand(),
+  "para.mathBlock": () => displayMathCommand(),
   "para.ul": () => listCommand("ul"),
   "para.ol": () => listCommand("ol"),
   "para.task": () => taskCommand("insert"),
@@ -2989,10 +3285,20 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "format.image": () => imageCommand(),
   "format.math": () => inlineCommand("math"),
   "format.displayMath": () => displayMathCommand(),
+  "format.document": () => void formatSession(doc.id),
 
   "themes.system": () => setTheme("system"),
   "themes.light": () => setTheme("light"),
   "themes.dark": () => setTheme("dark"),
+  "view.syntax.auto": () => setSyntaxTheme("auto"),
+  "view.syntax.paper": () => setSyntaxTheme("paper"),
+  "view.syntax.ink": () => setSyntaxTheme("ink"),
+  "view.syntax.catppuccin-latte": () => setSyntaxTheme("catppuccin-latte"),
+  "view.syntax.github-dark": () => setSyntaxTheme("github-dark"),
+  "view.syntax.one-dark": () => setSyntaxTheme("one-dark"),
+  "view.syntax.solarized-light": () => setSyntaxTheme("solarized-light"),
+  "view.syntax.solarized-dark": () => setSyntaxTheme("solarized-dark"),
+  "view.syntax.nord": () => setSyntaxTheme("nord"),
 
   "view.source": () => setViewMode("source"),
   "view.split": () => setViewMode("split"),
@@ -3024,6 +3330,13 @@ const handlers: Record<string, () => void | Promise<void>> = {
     persist();
     announceIfBarHidden("Sync scroll", settings.syncScroll);
   },
+  "view.typstDocument": () => chooseTypstView("document"),
+  "view.typstPages": () => chooseTypstView("pages"),
+  "view.foldCurrent": () => editor.foldCurrent(),
+  "view.unfoldCurrent": () => editor.unfoldCurrent(),
+  "view.foldAll": () => editor.foldAll(),
+  "view.unfoldAll": () => editor.unfoldAll(),
+  "view.typography": () => preferences.openAt("typography"),
   "view.fullscreen": async () => {
     const window = getCurrentWindow();
     const next = !(await window.isFullscreen());
@@ -3031,22 +3344,29 @@ const handlers: Record<string, () => void | Promise<void>> = {
     isFullscreen = next;
     syncMenuState();
   },
-  "view.zoomIn": () => setFontSize(settings.editorFontSize + 1),
-  "view.zoomOut": () => setFontSize(settings.editorFontSize - 1),
-  "view.zoomReset": () => {
-    settings.editorFontSize = DEFAULT_FONT_SIZE;
-    settings.editorMaxWidth = 980;
-    applyLayout();
-    persist();
-  },
+  "view.zoomIn": () => setZoom(zoomLevel() + ZOOM_STEP),
+  "view.zoomOut": () => setZoom(zoomLevel() - ZOOM_STEP),
+  "view.zoomReset": () => setZoom(DEFAULT_ZOOM),
 
-  "file.preferences": () => preferences.toggle(),
+  "navigate.gotoLine": () => editor.gotoLine(),
+  "navigate.moveTabLeft": () => moveActiveTab(-1),
+  "navigate.moveTabRight": () => moveActiveTab(1),
+  "navigate.openTarget": () => openLinkUnderCursor(),
+
+  "tools.spellcheck": () => applySettingsPatch({ spellcheck: settings.spellcheck === false }),
+  "tools.spellLanguage": () => preferences.openAt("editor"),
+  "tools.exportConfig": () => preferences.openAt("export"),
+  "tools.pandoc": () => void pandocSetup(),
+  "tools.typst": () => void typstSetup(),
+
+  "file.preferences": () => preferences.open(),
 
   "help.reference": () => void showBuiltin(REFERENCE),
   "help.asciidocReference": () => void showBuiltin(ASCIIDOC_REFERENCE, "asciidoc"),
   "help.typstReference": () => void showBuiltin(TYPST_REFERENCE, "typst"),
   "help.shortcuts": () => void showBuiltin(SHORTCUTS),
   "help.licences": () => void showBuiltin(FONT_LICENCES),
+  "help.welcome": () => void showBuiltin(WELCOME),
   "help.installTypst": () => void typstSetup(),
   "help.pandoc": () => void pandocSetup(),
   "help.about": async () => {
@@ -3112,11 +3432,14 @@ function setSidebarTab(tab: api.SidebarTab): void {
   renderSidebar();
 }
 
-function setFontSize(size: number): void {
-  settings.editorFontSize = Math.min(MAX_FONT, Math.max(MIN_FONT, size));
+function setZoom(level: number): void {
+  settings.zoomLevel = Math.min(
+    MAX_ZOOM,
+    Math.max(MIN_ZOOM, Math.round(level / ZOOM_STEP) * ZOOM_STEP),
+  );
   applyLayout();
   persist();
-  toast(`Font size ${settings.editorFontSize}px`);
+  toast(`Zoom ${settings.zoomLevel}%`);
 }
 
 // ---------------------------------------------------------------------------
@@ -3854,6 +4177,7 @@ function installPaneSync(): void {
     refreshStatus();
     updateActiveOutline();
     syncPreviewFromSource();
+    scheduleMenuStateSync();
     // A caret we just moved from the preview must not move the preview.
     if (caretCameFromPreview) return;
     if (doc.language === "html") {
@@ -4228,6 +4552,15 @@ function runMenuAction(id: string): void {
       return;
     }
     void exportWithPandoc(format).catch((error) => toast(String(error)));
+    return;
+  }
+
+  // The Open Tabs rows carry the session id rather than a position: the list
+  // can change while the menu is open, and the click must focus the document it
+  // named, not whichever tab now occupies that place.
+  if (id.startsWith(OPEN_TAB_MENU_PREFIX)) {
+    const sessionId = id.slice(OPEN_TAB_MENU_PREFIX.length);
+    if (sessionId && sessions.byId(sessionId)) void activateSession(sessionId);
     return;
   }
 
@@ -4943,7 +5276,7 @@ function installChrome(): void {
   el<HTMLButtonElement>("btn-theme").addEventListener("click", () =>
     setTheme(isDark ? "light" : "dark"),
   );
-  statusZoom.addEventListener("click", () => setFontSize(DEFAULT_FONT_SIZE));
+  statusZoom.addEventListener("click", () => setZoom(DEFAULT_ZOOM));
 
   // The flags take the same route as the native menu items, so the two can never
   // disagree and the 250 ms double-run guard lives in one place.
@@ -5272,10 +5605,12 @@ async function boot(): Promise<void> {
     .then((languages) => {
       setInstalledLanguages(languages);
       applySpellcheck();
+      syncMenuState();
       preferences?.refresh();
     })
     .catch(() => {
       setInstalledLanguages([]);
+      syncMenuState();
       preferences?.refresh();
     });
 
@@ -5291,15 +5626,27 @@ async function boot(): Promise<void> {
   // is used. The menu labels follow as soon as both answers are in.
   void refreshPandocStatus().then(syncExportAvailability);
   void refreshTypstStatus().then(syncExportAvailability);
+  // A second launch may arrive before the startup choice has finished. Hold
+  // those paths here; the Rust queue covers the window before this listener
+  // exists, and `openPath` makes a duplicate delivery focus the same tab.
+  const pendingOpenFiles: string[] = [];
+  let readyForPaths = false;
   await listen<string[]>("open-files", (event) => {
-    void (async () => {
-      for (const path of event.payload) await openPath(path);
-    })();
+    if (!readyForPaths) {
+      pendingOpenFiles.push(...event.payload);
+      return;
+    }
+    void openPaths(event.payload);
   });
 
-  const startup = await api.startupFile().catch(() => null);
-  if (startup) {
-    await openPath(startup, { silent: true });
+  const startup = await api.startupFiles().catch(() => [] as string[]);
+  if (startup.length > 0) {
+    const [first, ...rest] = startup;
+    // The first path fills the window's blank session. Every later path must
+    // be a tab, or each one would replace the same session.
+    await openPath(first, { silent: true });
+    installingStartup = false;
+    if (rest.length > 0) await openPaths(rest);
   } else if (settings.onLaunch === "tabs") {
     await restoreLastTabs();
   } else if (settings.onLaunch === "new") {
@@ -5311,6 +5658,13 @@ async function boot(): Promise<void> {
   }
   installingStartup = false;
   await restoreRecovery();
+
+  readyForPaths = true;
+  const forwarded = [
+    ...pendingOpenFiles,
+    ...(await api.takeForwardedPaths().catch(() => [] as string[])),
+  ];
+  if (forwarded.length > 0) await openPaths(forwarded);
 
   installTabMemory();
   installDiskWatcher();

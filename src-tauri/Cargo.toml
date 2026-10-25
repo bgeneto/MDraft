@@ -23,6 +23,9 @@ tauri = { version = "2.12.4", features = ["protocol-asset"] }
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2.8.3"
 tauri-plugin-opener = "2.7.2"
+# One process per app identity: a second launch forwards its paths and exits
+# before creating a WebView, which also prevents the 0x800700AA profile clash.
+tauri-plugin-single-instance = "2"
 tauri-plugin-window-state = "2.5.0"
 # Approximate token count for the status bar. Zero dependencies and no
 # vocabulary: a full BPE tokenizer would add 8.7 MB of tables and take 40-60 ms

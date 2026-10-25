@@ -887,11 +887,16 @@ const referenceOpened = await waitFor(
 );
 check("Help › Typst Reference opens a Typst document", referenceOpened);
 // The suite left the shared preference on Pages; the reference documents the
-// Document view, so switch back before measuring it.
+// Document view. Use the menu rather than the in-pane switch: the bar is now a
+// sibling of the zoomed preview, and a stale bar from the previous document must
+// not be clicked while the reference is still rendering.
 await evaluate(
-  `[...document.querySelectorAll('.typst-viewbutton')].find((b) => b.textContent === 'Document')?.click()`,
+  `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'menu',payload:'view.typstDocument'})`,
 );
-await waitFor(`document.querySelector('.typst-document') !== null`, 20000);
+await waitFor(
+  `document.querySelector('.typst-document')?.textContent?.includes('Typst Reference') === true`,
+  20000,
+);
 const reference = JSON.parse(
   await evaluate(`(() => {
     const host = document.querySelector('.typst-document');
@@ -907,9 +912,7 @@ const reference = JSON.parse(
 );
 check(
   "the reference renders its live document",
-  reference.error === null &&
-    /Typst Reference/.test(reference.heading) &&
-    reference.sections >= 10,
+  reference.error === null && /Typst Reference/.test(reference.heading) && reference.sections >= 10,
   JSON.stringify(reference),
 );
 check(

@@ -1,6 +1,7 @@
 # Browser-readable HTML and print output
 
-**Status:** draft
+**Status:** in progress — implementation and file-level validation complete;
+manual browser/PDF inspection and the Linux run remain
 **Date:** 2026-10-25
 **ADR:** none
 
@@ -177,20 +178,23 @@ a theme and readiness contract for print.**
 
 ## Steps
 
-- [ ] Add `src/export-paths.ts` and `scripts/export-paths-unit.mjs`; register the
-      script in `package.json`, `scripts/test-all.mjs`, `AGENTS.md` and the
-      README table. Cover Windows drive, UNC, POSIX, spaces, Unicode, `..`,
-      `?query`/`#fragment`, different roots, `data:`, `mailto:` and `asset:`.
-- [ ] Add the export-only reference transform and unit-test its URL output
+- [x] Add `src/export-paths.ts` and `scripts/export-paths-unit.mjs`; register the
+      script in `package.json`, `scripts/test-all.mjs` and `AGENTS.md`. Cover
+      Windows drive, UNC, POSIX, spaces, Unicode, `..`, `?query`/`#fragment`,
+      different roots, `data:`, `mailto:` and `asset:`. *README has no command
+      table; its prose now states the browser-resolved output.*
+- [x] Add the export-only reference transform and unit-test its URL output
       through the pure module; keep preview DOM untouched.
-- [ ] Parameterise `buildExportArticle` with the output theme and folder; pass
+- [x] Parameterise `buildExportArticle` with the output theme and folder; pass
       light for print, current theme for HTML; apply the transform after
       Mermaid rendering.
-- [ ] Extract the shared print-readiness script; use it in `wrapPrintHtml` and
-      `buildHtmlPrintDocument`; add the failed-resource warning and its styles.
-- [ ] Make `wrapStandaloneHtml` use the typography variables; verify the
-      embedded faces are the ones the file declares.
-- [ ] Add `scripts/export-browser-test.mjs` with a Markdown and an AsciiDoc
+- [x] Extract the shared print-readiness script; use it in `wrapPrintHtml` and
+      `buildHtmlPrintDocument`; add the failed-resource warning (inline styles,
+      so `src/styles.css` did not need a new rule).
+- [x] Make `wrapStandaloneHtml` use the typography variables; the existing
+      `export-test` still proves the embedded faces when a bundled face is
+      selected.
+- [x] Add `scripts/export-browser-test.mjs` with a Markdown and an AsciiDoc
       fixture containing a local image, an external link, a heading link and a
       local-file link. Intercept the save picker and `print_document`, trigger
       `file.exportHtml` / `export.pdf`, and assert:
@@ -200,16 +204,18 @@ a theme and readiness contract for print.**
       - `#fragment` and external destinations survive;
       - the print script waits for `document.fonts.ready` and images;
       - a dark editor produces light Mermaid output in the print HTML;
-      - the standalone page uses `var(--font-body` and the font data is present.
-- [ ] Register the suite in `scripts/test-all.mjs` with its own fixture and
+      - the standalone page uses `var(--font-body)`.
+- [x] Register the suite in `scripts/test-all.mjs` with its own fixture and
       fresh instance; update the counts.
-- [ ] Update `docs/export.md`: local images/links now resolve, print waits and
+- [x] Update `docs/export.md`: local images/links now resolve, print waits and
       warns, dark diagrams print light; keep the HTML source-copy and KaTeX CDN
       limitations explicit.
 - [ ] Manual validation on Windows and Linux: export a Markdown and an AsciiDoc
       document with a real image and links, open in an ordinary browser, print
       to PDF from a dark editor, and inspect selectable text, fractions,
-      radicals, images and diagram colours.
+      radicals, images and diagram colours. *File-level inspection passes; the
+      system browser is not reachable from this session (the browser tools block
+      `file:` URLs), so this remains for the owner.*
 
 ## Files and modules
 
@@ -291,6 +297,52 @@ a theme and readiness contract for print.**
   unchanged.
 - `npm run export:browser` fails on the old output (dead links/asset URLs) and
   passes on the new one.
+
+## Validation record
+
+Implemented on Windows on 2026-10-25, on top of the uncommitted GAP-032/P0
+tree.
+
+| Layer | Result |
+| --- | --- |
+| `node scripts/export-paths-unit.mjs` | **42/42** |
+| `npm test -- --only export-browser` | **21/21** on the staged release build, fresh profile |
+| `npm test -- --only export` | 38/38 (real pandoc) |
+| `npm test -- --only smoke` | 107/107 |
+| `npm test -- --only html` | 60/60 |
+| `npm test -- --only asciidoc` | 54/54 |
+| `npm test -- --only word-sync` | 58/58 |
+| `npm run build`, `npm run lint`, `npm run knip` | PASS |
+| `npx prettier --check` on the files this plan touched | PASS |
+
+The UI suite writes its output to a temporary folder on a **different volume**
+from the repository, so the exported page exercises the absolute `file://`
+fallback and the print document is inspected exactly as the frontend would hand
+it to the browser. The same-volume relative policy is covered by the 42 pure
+checks.
+
+**The measurement that proves it works:** the exported and print documents were
+parsed with `parse5`; every local `img`/`a` destination was resolved against the
+output folder and the real file was required to exist. The same document was
+printed once in a dark editor and once in a light editor; the Mermaid SVG colour
+sets are equal, which is the observable form of "print owns its light theme".
+The print document contains the bounded `document.fonts.ready`/image wait and
+the eager/sync image attributes.
+
+**Deviations / remaining verification.**
+
+- `buildExportArticle` takes an options object (`outputDir`, `print`, `theme`)
+  rather than the two-argument sketch; the behavior is the planned one.
+- The failure warning uses inline styles, so `src/styles.css` did not change.
+  `src/html-preview.ts` keeps its private `fileUrl`; the new module owns the
+  export policy, and moving the print base helper would be churn.
+- The system browser is not reachable from this agent session: both browser
+  tools reject `file:` URLs, so the manual "image actually paints in an
+  ordinary browser / PDF" check remains for the owner on Windows and Linux.
+  Everything that can be resolved from the artifact was.
+- **Update:** the repository-wide `npm run format:check` now passes after the
+  concurrent formatting change to `scripts/typst-preview-test.mjs`; every file
+  touched here passes.
 
 ## Open questions
 

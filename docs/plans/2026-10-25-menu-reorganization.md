@@ -1,8 +1,10 @@
 # Reorganização dos menus por intenção do usuário
 
-**Status:** draft
+**Status:** in progress — árvore, rotas, disponibilidade, docs e validação
+automatizada entregues; tree test/teste de tarefas e inspeção Linux/macOS ainda
+pendentes.
 **Date:** 2026-10-25
-**ADR:** none — registrar a decisão de organização e de propriedade dos comandos após aprovação.
+**ADR:** `../adr/2026-10-25-menu-information-architecture.md`
 
 ## Context and goal
 
@@ -36,6 +38,12 @@ teste de usabilidade ou verificação da interface em execução nesta etapa.
   mesma, mas os dois locais competem como endereço principal.
 - Operações importantes estão em menus de contexto, atalhos, preferências
   ou controles pequenos, sem um caminho correspondente na barra principal.
+- Há uma assimetria dentro da própria faixa de abas: `entriesForBar()` já
+  oferece Close All Tabs no clique direito sobre a área vazia, mas
+  `entriesForTab()` não oferece a ação no clique direito sobre uma aba.
+  A reorganização precisa conferir a consistência nas duas direções:
+  operações contextuais promovidas à barra e operações pertinentes da
+  barra disponíveis também no contexto das abas.
 - A nomenclatura tem problemas próprios: Strong/Emphasis são menos diretos
   que Bold/Italic; Code Fences descreve sintaxe; Increase Heading Level é
   ambíguo quanto a H1/H2; Toggle Checked estabelece um estado; Plain List
@@ -53,6 +61,9 @@ intenção, ver o estado atual e reconhecer o efeito antes de executar.
 
 1. Reorganizar a barra, seus itens e seus separadores; melhorar os rótulos.
 2. Dar acesso pela barra às operações existentes selecionadas abaixo.
+   Garantir a paridade das operações de fechamento entre Arquivo e o menu
+   contextual de uma aba, acrescentando Fechar todas as abas a este último
+   e preservando o acesso existente pela área vazia da faixa.
 3. Sincronizar disponibilidade, rótulos condicionais e estado com as outras
    superfícies. Um novo caminho de menu exige implementação e validação,
    mesmo quando a operação já existe.
@@ -61,7 +72,9 @@ intenção, ver o estado atual e reconhecer o efeito antes de executar.
    correspondente.
 5. Normalizar duas pequenas diferenças necessárias à proposta: a equação
    em bloco passa a ter uma apresentação única com tratamento de seleção;
-   restaurar tamanho do texto deixa de alterar a largura do conteúdo.
+   restaurar o zoom deixa de alterar a largura do conteúdo e as fontes-base.
+   O zoom real de documento entregue em trabalho concorrente é incorporado à
+   barra como `View › Zoom`.
 6. Atualizar os documentos e atalhos internos, guia e testes afetados.
 
 ### Fora deste escopo
@@ -128,7 +141,7 @@ Arquivo
   Mostrar na pasta
   ─────────────────────────
   Fechar aba
-  Fechar abas > Outras*; À esquerda*; À direita*; Sem alterações*; Todas
+  Fechar abas > Outras*; À esquerda*; À direita*; Outras sem alterações*; Todas
   Fechar janela
   Sair
 
@@ -215,7 +228,7 @@ Exibir
   [ ] Acompanhar cursor — modo máquina de escrever
   [✓] Sincronizar rolagem
   ─────────────────────────
-  Tamanho do texto do editor > Aumentar; Diminuir; Restaurar tamanho padrão!
+  Zoom > Aumentar; Diminuir; Restaurar zoom!
   Tema da interface > Seguir sistema; Claro; Escuro
   Cores do código > Acompanhar tema*; Paper*; Ink*; Catppuccin Latte*;
                    GitHub Dark*; One Dark*; Solarized Light*; Solarized Dark*; Nord*
@@ -300,11 +313,13 @@ reconhecíveis nos padrões. Não reescrever rótulos personalizados do usuário
 Evitar submenus dentro de Exportar; se a lista personalizada crescer muito,
 propor depois um seletor de formatos em vez de mais níveis de cascata.
 
-**Zoom.** O ajuste atual afeta a fonte do editor. O rótulo deve explicitar
-esse alcance; em Somente prévia, essa família de comandos fica indisponível.
-Restaurar tamanho padrão deve afetar apenas o tamanho da fonte, sem redefinir
-`editorMaxWidth`. Isso entrega somente a correção pequena do GAP-019;
-zoom real da prévia continua pendente e não é anunciado como resolvido.
+**Zoom.** O ajuste entregue no checkout é um zoom de documento: `View › Zoom`
+com `Zoom In`, `Zoom Out` e `Reset Zoom`. O rótulo e o alcance acompanham o
+plano concorrente de preview zoom; os IDs e atalhos existentes foram mantidos e
+os comandos ficam disponíveis em todos os modos de exibição. `Reset Zoom` altera
+somente `zoomLevel`, sem redefinir `editorMaxWidth` nem as fontes-base
+(`editorFontSize`, `bodyFontSize`). O rótulo original "Editor Text Size" foi
+substituído por "Zoom" durante a implementação; registrar como desvio.
 
 **Temas, cores e fontes.** Tema da interface escolhe sistema/claro/escuro;
 Cores do código escolhe a paleta; Fontes e leitura abre Typography nas
@@ -340,6 +355,100 @@ informa o motivo e a orientação aponta para Ferramentas. A instalação
 continua ocorrendo somente por uma ação explícita do usuário. Preferências
 continuam podendo oferecer os mesmos controles na seção Export.
 
+### Paridade entre o menu principal e os contextos da faixa de abas
+
+**Complemento solicitado pelo usuário em 2026-10-25.** O escopo inclui
+explicitamente revisar os dois contextos de `src/tabs.ts`, além do menu
+nativo. A consistência deve abranger presença, nome, alvo, disponibilidade
+e tratamento de alterações não salvas.
+
+A inspeção encontrou duas superfícies diferentes:
+
+- **Clique direito sobre uma aba:** hoje tem Close, Close Others, Close All
+  to the Left, Close All to the Right e Close Unchanged; falta Close All Tabs.
+- **Clique direito na área vazia da faixa:** hoje tem New Tab, Close All Tabs
+  e Close Unchanged. O acesso a fechar todas nesse contexto deve permanecer.
+
+#### Família de fechamento no menu de uma aba
+
+Manter as operações diretamente no menu contextual, com separadores entre
+os grupos. O submenu Fechar abas continua sendo uma organização do menu
+principal; o contexto tem espaço para oferecer seus comandos diretamente.
+
+```text
+Fechar aba
+Fechar outras abas
+Fechar abas à esquerda
+Fechar abas à direita
+Fechar outras abas sem alterações
+─────────────────────────
+Fechar todas as abas
+─────────────────────────
+Salvar
+Salvar como…
+─────────────────────────
+Formatar código-fonte do documento
+Adicionar aos favoritos / Remover dos favoritos
+Mostrar na pasta
+```
+
+Fechar todas as abas fecha também a aba clicada e a aba ativa. Seu alcance
+global deve ficar explícito no rótulo, e o separador o distingue dos
+fechamentos que preservam a aba de referência. Não atribuir atalho novo
+a essa operação nesta etapa.
+
+O código atual de Close Unchanged preserva a aba de referência: a clicada
+no contexto de uma aba, ou a ativa no contexto da área vazia. O nome comum
+proposto é **Fechar outras abas sem alterações**, com **Outras sem alterações**
+como item de Arquivo > Fechar abas. Isso explicita o alcance e preserva o
+comportamento existente.
+
+#### Matriz de presença e alvo
+
+| Operação | Menu principal | Contexto de uma aba | Contexto da área vazia |
+| --- | --- | --- | --- |
+| Novo documento | Arquivo > Novo documento | Não incluir neste contexto | Novo documento; manter a ação existente New Tab |
+| Fechar aba | Aba ativa | Aba clicada | Não incluir: não há aba clicada |
+| Fechar outras abas | Todas, exceto a ativa | Todas, exceto a clicada | Não incluir neste contexto |
+| Fechar abas à esquerda | À esquerda da ativa | À esquerda da clicada | Não incluir neste contexto |
+| Fechar abas à direita | À direita da ativa | À direita da clicada | Não incluir neste contexto |
+| Fechar outras abas sem alterações | Abas sem alterações, exceto a ativa | Abas sem alterações, exceto a clicada | Abas sem alterações, exceto a ativa |
+| Fechar todas as abas | Todas | Todas — acrescentar o item ausente | Todas — preservar o item existente |
+| Salvar / Salvar como | Aba ativa | Aba clicada; preservar os dois itens | Não incluir neste contexto |
+| Mostrar na pasta | Documento ativo | Documento clicado; preservar o item | Não incluir neste contexto |
+| Formatar código-fonte / Favoritar | Documento ativo, nos respectivos menus | Documento clicado; preservar os itens | Não incluir neste contexto |
+
+A área vazia reúne as ações globais da faixa: Novo documento, Fechar outras
+abas sem alterações e Fechar todas as abas. Operações como esquerda/direita
+e fechar outras dependem de uma referência e permanecem nos menus em que
+essa referência está clara. A paridade cobre as ações pertinentes a cada
+contexto; não exige reproduzir o menu Arquivo inteiro em cada aba.
+
+#### Execução, disponibilidade e segurança
+
+- Reutilizar as mesmas operações de fechamento individual e em lote do
+  ciclo de vida existente, passando os IDs corretos; evitar uma segunda
+  implementação das decisões de salvar, descartar ou cancelar.
+- Um clique direito numa aba inativa conserva seu papel de referência.
+  Não ativá-la nem trocar silenciosamente o alvo para a aba ativa para
+  executar salvar, fechar outras, esquerda/direita ou formatar.
+- Desabilitar esquerda/direita sem vizinhos, outras quando há somente uma
+  aba e outras sem alterações quando não há candidata além da referência.
+- Fechar todas continua disponível com uma única aba. Depois do fechamento
+  bem-sucedido do conjunto, manter o comportamento atual de criar um novo
+  documento vazio; a operação não fecha a janela do aplicativo.
+- Resolver e validar o conjunto de IDs ao acionar a operação. Se a aba de
+  referência de uma ação relativa já não existir, não usar outra aba como
+  referência implícita. Uma aba criada depois do início do fechamento não
+  passa a integrar o lote que já foi iniciado.
+- Usar o mesmo fluxo Salvar / Descartar / Cancelar em todos os acessos.
+  Cancelar, cancelar Salvar como ou uma falha de gravação mantém todas as
+  abas do lote abertas; salvamentos anteriores bem-sucedidos permanecem,
+  e descartes pendentes não se aplicam parcialmente.
+- Conservar texto, estado de alterações, histórico de undo, ordem e foco
+  de acordo com as regras atuais quando o fechamento for cancelado. Manter
+  as guardas de revisão para digitação durante decisões e gravações.
+
 ### Ações existentes que ganham visibilidade
 
 | Ação | Onde existe hoje | Destino proposto |
@@ -357,7 +466,7 @@ continuam podendo oferecer os mesmos controles na seção Export.
 | Fechar outras/esquerda/direita/sem alterações | Menu de contexto das abas | Arquivo > Fechar abas |
 | Reordenar abas | Arraste e Alt+Shift+setas com foco na aba | Navegar |
 | Escolher entre abas abertas | Faixa de abas e armazenamento de sessões | Navegar > Abas abertas |
-| Adicionar/remover favorito | Contexto do editor e das abas | Navegar |
+| Adicionar/remover favorito | Contexto do editor e das abas | Arquivo |
 | Abrir link/arquivo/imagem/âncora | Ctrl/Cmd+clique e contexto | Navegar > Abrir destino sob o cursor |
 | Ortografia ligada/desligada | Indicador da barra de status e preferências | Ferramentas |
 | Idioma/dicionário | Preferências > Editor | Ferramentas > Idioma da revisão |
@@ -370,10 +479,11 @@ continuam podendo oferecer os mesmos controles na seção Export.
 Estas constatações são sobre existência no código, não uma afirmação de que
 todos os atalhos sejam alcançáveis na interface atual. Em particular,
 Ctrl+Shift+[ e Ctrl+Shift+] do foldKeymap concorrem com os atalhos globais
-das listas; Ctrl+Shift+L de selecionar ocorrências concorre com a barra
-lateral. A etapa de implementação deve resolver a prioridade sem retirar
-atalhos de listas/barra lateral já anunciados. Não copiar cegamente os
-atalhos padrão da biblioteca para os novos itens.
+das listas. Ctrl+Shift+L é o atalho da barra lateral, não de selecionar
+ocorrências; selecionar a próxima ocorrência é Ctrl+D e não conflita com
+aquele atalho. A etapa de implementação deve resolver a prioridade sem
+retirar atalhos de listas/barra lateral já anunciados. Não copiar cegamente
+os atalhos padrão da biblioteca para os novos itens.
 
 ### Migração de todos os comandos atualmente expostos
 
@@ -408,7 +518,7 @@ exige renomeá-los. Esta tabela cobre os itens construídos pelo menu atual.
 | `view.source`, `view.split`, `view.preview` | Exibir > Somente editor / Editor e prévia / Somente prévia |
 | `view.sidebar`, `view.outline`, `view.favorites`, `view.recent` | Exibir > Barra lateral |
 | `view.statusBar`, `view.focus`, `view.typewriter`, `view.syncScroll`, `view.fullscreen` | Exibir; rótulos e estado consistentes |
-| `view.zoomIn`, `view.zoomOut`, `view.zoomReset` | Exibir > Tamanho do texto do editor; reset limitado ao tamanho |
+| `view.zoomIn`, `view.zoomOut`, `view.zoomReset` | Exibir > Zoom > Aumentar / Diminuir / Restaurar; reset limitado ao zoom |
 | `themes.system`, `themes.light`, `themes.dark` | Exibir > Tema da interface |
 | `export.html` | Arquivo > Exportar > HTML |
 | `export.pdf` | Arquivo > Imprimir / Salvar PDF pelo navegador |
@@ -444,7 +554,7 @@ não podem depender apenas de tooltips, pouco confiáveis no menu nativo.
 | Favoritar / Mostrar na pasta | Documento com caminho; desabilitar sem nome |
 | Abrir destino sob cursor | Destino válido na posição atual; rótulo pode esclarecer link/arquivo/imagem/título |
 | Operações de fechar/mover abas | Habilitar somente se há alvo; preservar fechamento cancelável |
-| Tamanho de texto do editor | Editor visível; alcance explicitado, sem prometer zoom da prévia |
+| Zoom | Efeito no documento ativo em qualquer modo; reset altera somente o zoom |
 | Exportação e impressão | Validar linguagem, programas necessários e particularidades reais de cada fluxo |
 | Estrutura/favoritos/recentes no modo foco | Explicar que o modo foco oculta a barra lateral; evitar marcar painel como visível quando está oculto |
 
@@ -467,7 +577,7 @@ ações, já que os handlers atuais inserem/envolvem sintaxe.
 | Média | Arquivo > Novo com formato > Markdown/HTML/Typst/AsciiDoc | Escolha por documento sem alterar o padrão global; nova interação |
 | Média | Exibir > Quebra de linha / Números de linha | Hoje sempre ativos; novas preferências e persistência, GAP-023 |
 | Média | Ferramentas > Estatísticas do documento | Painel novo; métricas básicas já existem no status; seleção/tempo de leitura ampliam escopo, GAP-023 |
-| Posterior | Exibir > Zoom da prévia | Suporte real por renderizador; GAP-019, separado do tamanho da fonte do editor |
+| Entregue | Exibir > Zoom | Plano concorrente de preview zoom; não é mais incremento posterior |
 | Posterior | Inserir > Diagrama Mermaid | Modelo útil sobre renderização existente, com disponibilidade por linguagem; novo comando de autoria |
 | Posterior | Formatar > Remover formatação | Remoção sintática por linguagem; não tratar como troca trivial de strings |
 | Posterior | Ações de tabela, equações e prévia | Somente com implementações próprias e contexto adequado; GAP-010 e GAP-016 |
@@ -497,6 +607,9 @@ e quick open, sem atribuí-lo a duas funções.
 - O contexto da aba continua concentrado em salvar, fechar, favorito,
   formatação e localização daquele documento. O menu nativo opera sobre
   a aba ativa; ambos compartilham execução e guardas, não o alvo implícito.
+- Conferir a matriz de paridade dos dois contextos da faixa. Fechar todas
+  as abas deve existir tanto no contexto de uma aba quanto na área vazia,
+  além de Arquivo > Fechar abas > Todas, com o mesmo alcance global.
 - No macOS, Preferências/Sobre/Sair seguem o menu do aplicativo; no
   Windows/Linux seguem a distribuição acima. Não criar duplicação só
   para forçar uma árvore idêntica entre sistemas.
@@ -523,43 +636,53 @@ e quick open, sem atribuí-lo a duas funções.
 
 - [x] Investigar menus, handlers, controles, preferências e keymaps existentes.
 - [x] Registrar proposta, inventário, destinos, limites e incrementos futuros.
-- [ ] Obter aprovação explícita da proposta e registrar o status como approved.
-- [ ] Registrar ADR com categorias, limites Inserir/Formatar e endereço principal
+- [x] Avaliar os dois contextos da faixa de abas e incorporar a paridade de
+      fechamento solicitada pelo usuário, incluindo o item Fechar todas ausente
+      no contexto de uma aba. O plano foi aprovado e implementado; a validação
+      de descoberta permanece.
+- [x] Obter aprovação explícita da proposta e registrar o status como approved.
+- [x] Registrar ADR com categorias, limites Inserir/Formatar e endereço principal
       de cada operação. Revisar os arquivos afetados antes de implementar.
-- [ ] Reorganizar árvore e rótulos preservando IDs, configurações e atalhos;
+- [x] Reorganizar árvore e rótulos preservando IDs, configurações e atalhos;
       consolidar somente a apresentação das rotas duplicadas descritas.
-- [ ] Expor operações existentes pela barra, compartilhando execução e guardas
+- [x] Expor operações existentes pela barra, compartilhando execução e guardas
       com os controles atuais. Implementar links para seções de preferências.
-- [ ] Sincronizar disponibilidade, estado e rótulos condicionais entre Rust e
-      frontend; normalizar matemática em bloco e reset de tamanho conforme escopo.
-- [ ] Atualizar documentos internos de ajuda, guia, capturas pertinentes e
+- [x] Acrescentar Fechar todas as abas ao contexto de uma aba; preservar a ação
+      na área vazia e aplicar a matriz de nomes, alvos e disponibilidade,
+      incluindo Outras sem alterações nos três acessos pertinentes.
+- [x] Sincronizar disponibilidade, estado e rótulos condicionais entre Rust e
+      frontend; normalizar matemática em bloco e reset de zoom conforme escopo.
+- [x] Atualizar documentos internos de ajuda, guia, capturas pertinentes e
       somente os trechos do backlog realmente entregues.
-- [ ] Executar validação automatizada adequada e inspeção manual por linguagem,
-      modo de exibição e sistema operacional.
+- [x] Executar validação automatizada e inspeção manual no Windows, por
+      linguagem e modo de exibição.
+- [ ] Inspecionar Linux/macOS, janela estreita e escalas 150%/200%.
 - [ ] Realizar tree test e teste de tarefas; registrar resultados e ajustes.
-- [ ] Atualizar checkboxes, desvios e status; manter incrementos futuros separados.
+- [x] Atualizar checkboxes, desvios e status; manter incrementos futuros separados.
 
 ## Files and modules
 
-Nenhum dos arquivos abaixo foi editado nesta fase de proposta. São os alvos
-previstos; confirmar as necessidades e registrar desvios durante a execução.
+Esta seção registra os arquivos que a implementação tocou; a lista original de
+alvos foi confirmada e ampliada durante a execução.
 
 | Arquivo / módulo | Motivo |
 | --- | --- |
-| `src-tauri/src/menu.rs` | Árvore, labels, registro de atalhos, estado e disponibilidade |
-| `src/main.ts` | Handlers, roteamento, foco, estado e os dois ajustes de comportamento explícitos |
-| `src/context-menu.ts` | Reutilizar execução das ações e reduzir exclusividade de operações |
-| `src/tabs.ts` | Compartilhar ações de aba preservando alvo e foco |
-| `src/editor.ts` | Expor comandos já instalados sem depender de simular atalhos |
-| `src/preferences.ts` | Abertura endereçada de seções e coerência de rótulos |
-| `src/api.ts` | Sincronização aditiva necessária ao estado/disponibilidade do menu |
-| `src/content.ts` | Ajuda e atalhos internos coerentes com os caminhos finais |
-| `docs/guide.md`, `README.md`, `docs/export.md`, `docs/backlog.md` | Caminhos, promessas de comportamento e entregas reais |
-| `scripts/shortcut-test.mjs`, `scripts/dom-smoke.mjs` | Atalhos preservados, estado, modos e guardas de foco |
-| `scripts/format-document-test.mjs` | Novo endereço de formatação e preservação de matemática/undo |
-| `scripts/document-tabs-test.mjs`, `scripts/favorites-test.mjs` | Novos caminhos de abas/favoritos e alvo ativo versus clicado |
-| `scripts/typst-preview-test.mjs`, `scripts/image-syntax-test.mjs` | Comandos de prévia Typst e inserção de imagem após mudança de endereço |
-| Testes Rust do menu | Inventário de itens, IDs, formatos, labels e estado |
+| `src-tauri/src/menu.rs` | Árvore, labels, registro de atalhos, estado, disponibilidade, Open Tabs e `menu_items` |
+| `src/main.ts` | Handlers, roteamento, estado, deep links, colar sem formatação, reset e normalização da equação |
+| `src/tabs.ts` | Fechar todas no contexto da aba, nomes da família e resolução do alvo no clique |
+| `src/editor.ts` | Comandos do CodeMirror expostos sem simular atalhos (busca, ocorrências, linhas, comentário, folding) |
+| `src/preferences.ts` | `openAt(sectionId)` para os deep links |
+| `src/api.ts` | Campos de `MenuState`, `OpenTabItem`, `set_open_tabs` e `menu_items` |
+| `src/content.ts` | Ajuda e tabela de atalhos coerentes com a árvore final |
+| `src/clipboard.ts` | Reutilizado por Editar › Colar sem formatação; sem alteração de contrato |
+| `src/context-menu.ts` | Fonte de `titleCase` reutilizada pelo menu principal; sem alteração de comportamento |
+| `docs/guide.md`, `README.md`, `docs/export.md`, `docs/backlog.md` | Caminhos, promessas e entregas reais |
+| `AGENTS.md` | Contagens, nova suíte, trap do estado de exportação e tabela de scripts |
+| `docs/adr/2026-10-25-menu-information-architecture.md` | Decisão durável de arquitetura da informação |
+| `scripts/menu-test.mjs` | Nova suíte de inventário, disponibilidade, deep links e rotas |
+| `package.json`, `scripts/test-all.mjs` | Camada `npm run menu` registrada no runner |
+| `scripts/document-tabs-test.mjs`, `scripts/dom-smoke.mjs`, `scripts/format-document-test.mjs` | Cobertura dos novos caminhos e contagens |
+| `scripts/p0-lifecycle-test.mjs` | Executado sem alteração para confirmar cancelamento/falha do fechamento em lote |
 | ADR e este plano | Decisão aprovada, progresso, desvios e evidência de validação |
 
 Se um harness novo for necessário, incluí-lo em `package.json`,
@@ -575,6 +698,10 @@ adicionar harness por hábito quando um existente cobre a observação necessár
   tamanho da fonte e tarefa convertida em texto normal.
 - **Ações sobre a aba errada:** passar identidade explícita para execução;
   testar troca de aba durante diálogos e ações em aba inativa.
+- **Paridade incompleta na faixa de abas:** testar separadamente clique em
+  aba e em área vazia. A existência de closeAll em `entriesForBar()` não
+  comprova que o item existe em `entriesForTab()`. Fechar todas inclui a
+  referência; outras e outras sem alterações a preservam.
 - **Estado nativo obsoleto:** sincronizar na troca de linguagem, modo,
   preferências, fullscreen e rebuild de exportações/recentes.
 - **Conflitos de atalhos:** reter os anunciados pelo app; não adotar defaults
@@ -597,6 +724,9 @@ adicionar harness por hábito quando um existente cobre a observação necessár
 
 - Inspeção estática das fontes listadas e comparação com o backlog.
 - Conferência de cobertura dos IDs atualmente construídos pelo menu.
+- Inspeção de `entriesForTab()` e `entriesForBar()` e dos testes existentes:
+  Fechar todas já existe na área vazia e falta no contexto de uma aba;
+  registrado como requisito da futura implementação, sem alteração de código.
 - Não executar build ou testes de aplicação para uma mudança apenas documental.
 - Nenhum teste com pessoas foi realizado; ganhos de descoberta são hipóteses.
 
@@ -610,14 +740,58 @@ adicionar harness por hábito quando um existente cobre a observação necessár
   seguem aceitos, e menus reconstruídos não perdem ligações ou estado.
 - Conferir checkmarks, indisponibilidade com motivo, dialeto, somente leitura,
   foco em campos e abas, ações atrasadas e seleção preservada.
+- Em `scripts/document-tabs-test.mjs`, conferir os nomes, a presença e a
+  disponibilidade da família completa de fechamento no menu principal e no
+  contexto de uma aba; conferir também o conjunto previsto para a área vazia.
+  Testar primeira, intermediária e última aba, uma única aba e mistura de
+  documentos com e sem alterações, incluindo aba clicada diferente da ativa.
+- Executar Fechar todas pelos três acessos e comprovar o mesmo alcance,
+  inclusive fechar a aba clicada e a ativa. Após sucesso, deve restar somente
+  o novo documento vazio previsto pelo ciclo de vida, com a janela aberta.
+- Validar Fechar outras abas sem alterações nos três acessos: somente as
+  candidatas sem alterações fecham e a referência permanece aberta.
+- Usar a cobertura de `scripts/p0-lifecycle-test.mjs` para o novo acesso do
+  contexto da aba a Fechar todas: Salvar, Descartar, Cancelar, cancelamento
+  do seletor Salvar como, falha de gravação e digitação durante a decisão.
+  Cancelamento/falha deve preservar todas as abas e seu texto; salvamentos
+  já concluídos podem permanecer, mas não pode haver descarte parcial.
+- Validar a operação do contexto com mouse e Shift+F10/Menu, fechamento do
+  menu por Escape e retorno de foco; não depender somente do ID closeAll
+  aparecer em algum dos menus.
 - Testar matemática vazia e selecionada nos formatos suportados; formatação
-  com undo e bytes matemáticos preservados; reset de tamanho sem mudar largura.
+  com undo e bytes matemáticos preservados; reset de zoom sem mudar largura.
 - Inspecionar menus em Windows e Linux, janela estreita, escala de 100% e
   150%/200%, mouse e teclado, com documentos Markdown, HTML, Typst e AsciiDoc.
 - macOS: preservar convenções de menu nativo e validar onde houver ambiente
   disponível; registrar honestamente qualquer plataforma não verificada.
 - Confirmar que F5/Ctrl+R continuam impedindo reload destrutivo da aplicação.
 - Registrar traps apenas se os três critérios de AGENTS.md forem atendidos.
+
+### Resultados da implementação e validação (2026-10-25)
+
+- `npm run build`, `npm run lint`, `npm run format:check` e `npm run knip`
+  passaram. `cargo clippy --all-targets -- -D warnings` passou.
+- `node scripts/test-all.mjs --only rust --no-build`: **140 passed, 2 ignored**
+  (Windows). Os testes novos de menu cobrem estado, disponibilidade, labels e
+  a regra de não reabilitar linhas de exportação/recentes.
+- `npm test -- --only menu --no-build`: **87/87**. A suíte nova verifica as oito
+  categorias, posicionamento, rótulos, disponibilidade por idioma/modo/seleção,
+  deep links, Open Tabs, favoritos, reset de zoom, equação em bloco, colar sem
+  formatação, Fechar todas pelos dois acessos e cancelamento de lote sujo.
+- Também passaram: `npm run smoke` **108/108**, `npm run tabs` **107/107**,
+  `npm run favorites` **56/56**, `npm run shortcuts` **43/43**,
+  `npm run format:document` **141/141**, `npm run p0:lifecycle` **34/34** e
+  `npm run recent` **26/26** numa instância recém-lançada. A primeira execução
+  de `recent-menu` numa instância não isolada viu 12 de 27 linhas e passou no
+  relançamento limpo; o sintoma e a causa provável estão nos Traps do AGENTS.md.
+- Inspeção manual no Windows: inventário real do menu, Open Tabs, link sob o
+  cursor, deep links de Preferências, colar sem formatação, disponibilidade em
+  Markdown/Typst/AsciiDoc/HTML, ambos os acessos a Fechar todas e cancelamento
+  com buffer sujo.
+- Não verificado: Linux, macOS, janela estreita e escalas 150%/200%; o host não
+  tem Typst instalado, então a prévia Typst foi validada apenas no estado
+  desabilitado com o motivo `needs Typst`. Tree test e teste de tarefas com
+  pessoas não foram executados; os ganhos de descoberta continuam hipóteses.
 
 ### Validação de descoberta
 
@@ -628,7 +802,8 @@ já conhece o aplicativo. Usar documentos temporários para testes destrutivos.
 
 Tarefas: inserir imagem; criar tabela; aplicar título; converter em lista;
 concluir tarefa; inserir equação; formatar código-fonte; colar sem formatação;
-fechar outras abas; favoritar; trocar idioma da revisão; mostrar páginas Typst;
+fechar outras abas; fechar todas pelo contexto de uma aba e cancelar diante
+de alterações não salvas; favoritar; trocar idioma da revisão; mostrar páginas Typst;
 salvar PDF; voltar ao texto do código-fonte a partir da prévia.
 
 Registrar primeiro menu escolhido, sucesso sem ajuda, tempo até a ação e
@@ -650,11 +825,21 @@ participantes antes de tratar o resultado como aceitação definitiva.
   títulos e listas em Formatar; temas e paletas em Exibir.
 - As operações existentes promovidas da tabela têm execução real e consistente
   por menu, contexto e atalho quando aplicável.
+- Fechar todas as abas está disponível no menu principal, no contexto de uma
+  aba e no da área vazia, incluindo com uma única aba, e tem o mesmo alcance
+  e fluxo de fechamento cancelável nos três caminhos.
+- Outras, esquerda/direita e outras sem alterações usam a aba ativa no menu
+  principal e a clicada no contexto da aba; disponibilidade e nomes refletem
+  a matriz. A área vazia preserva suas ações globais e não adota uma aba
+  clicada inexistente como referência.
+- Cancelar ou falhar ao salvar durante Fechar todas mantém todas as abas do
+  lote abertas e conserva seu texto; o sucesso mantém a janela aberta com
+  o novo documento vazio do comportamento atual.
 - O usuário consegue distinguir mostrar a estrutura de inserir um sumário,
   mostrar Favoritos de favoritar e gerar PDF de imprimir pelo navegador.
 - A disponibilidade informa o contexto atual e não oferece ações sem efeito.
 - Colar em campos e comandos de abas inativas continuam respeitando seus alvos.
-- Restaurar tamanho preserva a largura; equação em bloco aproveita a seleção
+- Restaurar zoom preserva a largura e as fontes-base; equação em bloco aproveita a seleção
   e preserva a expressão; a documentação descreve o comportamento real.
 - Atalhos atuais permanecem operantes e coerentes com a ajuda, sem capturas
   indevidas de Tab/Shift+Tab ou reativação de reload destrutivo.
@@ -664,19 +849,50 @@ participantes antes de tratar o resultado como aceitação definitiva.
 
 ## Open questions
 
-- **Idioma dos rótulos:** padrão proposto é implementar a mesma estrutura em
-  inglês, linguagem atual do app. Tradução completa segue GAP-024.
-- **Oito categorias:** recomendação inicial; validar Navegar e Ferramentas
-  no tree test antes da implementação. Não reduzir o número a qualquer custo.
-- **Formato da primeira entrega:** reorganização mais os acessos a operações
-  existentes e os dois ajustes explícitos; funções futuras exigem escopo próprio.
-- **Prioridade dos incrementos novos:** Salvar todos e abertura rápida antes
-  das conveniências; paleta de comandos tem alto valor de descoberta e pode
-  ser priorizada separadamente se esse for o foco do produto.
-- **Atalhos novos:** definir após inventário de colisões; Ctrl+P ainda precisa
-  de decisão conjunta entre quick open e impressão.
-- **Menu contextual menor:** retirar apenas a exclusividade inicialmente;
-  reduzir itens com base nas tarefas e na frequência observada.
+- **Idioma dos rótulos:** decidido em 2026-10-25: manter inglês. Tradução
+  completa segue GAP-024.
+- **Oito categorias:** decidido manter as oito categorias; Navegar e
+  Ferramentas continuam no tree test como hipóteses de descoberta.
+- **Formato da primeira entrega:** decidido entregar a reorganização, os
+  acessos às operações existentes, a matriz completa de disponibilidade e os
+  dois ajustes explícitos; funções futuras continuam fora do escopo.
+- **Prioridade dos incrementos novos:** mantida a lista de incrementos
+  posteriores; Salvar todos, abertura rápida e paleta não entram nesta entrega.
+- **Atalhos novos:** decidido não introduzir atalhos novos; os atalhos atuais
+  permanecem e Ctrl+P continua reservado para decisão futura.
+- **Menu contextual menor:** nesta entrega apenas se acrescenta o endereço
+  principal; a redução de itens fica para uma validação posterior.
+
+### Decisões aprovadas em 2026-10-25
+
+- **Favoritos:** `Add to/Remove from Favorites` fica em Arquivo, junto de
+  Mostrar na pasta; Exibir > Barra lateral > Favoritos apenas mostra o painel.
+- **Rótulos:** Find e Find and Replace ficam sem reticências; as ocorrências
+  passam a ser Find Next/Find Previous; a impressão usa
+  `Print (opens browser)…`; o idioma da revisão usa `Spelling Language…`; a
+  prévia Typst usa Document/Pages, como os botões existentes.
+- **Zoom (desvio):** o trabalho concorrente de preview zoom implementou um zoom
+  de documento. A barra usa `View › Zoom` com `Zoom In/Out/Reset`, mantém os IDs
+  e atalhos e fica disponível em todos os modos; `Reset Zoom` altera somente
+  `zoomLevel`, não `editorMaxWidth` nem as fontes-base. O rótulo original
+  `Editor Text Size` foi substituído.
+- **Metadados:** o rótulo é dinâmico (`YAML Front Matter` em Markdown,
+  `Document Attributes` em AsciiDoc) e o item fica indisponível em HTML/Typst.
+- **Abas abertas:** submenu nativo dinâmico, com a aba ativa marcada. A lista
+  de sessões é a fonte; não é um quick open com busca.
+- **Disponibilidade:** matriz completa, incluindo idioma, somente leitura,
+  seleção, link sob o cursor, posição da aba e presença de caminho. A seleção
+  é sincronizada com debounce e o handler continua validando o contexto.
+- **Colar sem formatação:** entra no menu Editar, usando a Clipboard API; as
+  imagens continuam seguindo as regras de paste existentes.
+- **macOS:** implementação condicional de Preferences/About/Quit no menu do
+  aplicativo. Não há ambiente macOS para validação nesta máquina; isso deve ser
+  registrado na validação.
+- **Preferências:** `Review Language…`, `Fonts and Reading…` e
+  `Configure Export…` abrem a seção correspondente do painel existente.
+- **Estado e rebuild:** o último estado do menu e a lista de abas ficam
+  cacheados no lado Rust, para que um rebuild de Export/Open Recent não perca
+  checks, disponibilidade nem a lista de abas.
 
 ### Referências de design
 

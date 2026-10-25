@@ -201,22 +201,25 @@ rewrite from scratch.
 | `npm run stage` | `scripts/stage-artifacts.mjs` | Re-stage what is already built |
 | `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
-| `npm run test:rust` | `cargo test` | 130 tests on Windows (128 run), 129 on Linux (127 run); two ignored downloads each |
+| `npm run test:rust` | `cargo test` | 140 passed on Windows, 139 on Linux; two ignored downloads each |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. The two restart layers are the exception: two launches of the same instance's settings directory, closed with WM_CLOSE in between so the close flush runs. Puts back the working tree, the developer's own settings, window state and recovery journal afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
-| `npm run smoke` | `scripts/dom-smoke.mjs` | 107 checks against `samples/feature-tour.md` |
+| `npm run smoke` | `scripts/dom-smoke.mjs` | 108 checks against `samples/feature-tour.md` |
 | `npm run word-sync` | `scripts/word-sync-test.mjs` | 58 checks of word-level sync, including 20 alternating pairs, element endpoints, multi-paragraph ranges, stale render rejection and reduced motion in Markdown/AsciiDoc/Typst Document, against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, the four-beat pulse and its resting mark, reduced motion, no scroll, Escape, and the fallbacks |
 | `npm run autoclose:unit` | `scripts/autoclose-unit.mjs` | 17 checks of the tag matcher: attributes, custom elements, void and self-closing tags, autolinks, escapes, declarations, prose — no application |
 | `npm run autoclose` | `scripts/autoclose-test.mjs` | 33 checks of pairs, quotes, backticks, HTML tags and both preferences, typed through the real editor in Markdown, HTML, Typst and AsciiDoc |
 | `npm run spellcheck` | `scripts/spellcheck-test.mjs` | Underlines a misspelling, then clears it when spelling is turned off |
-| `npm run format:document` | `scripts/format-document-test.mjs` | 139 checks of the editor's right-click menu and **Format Document**: editing actions, clipboard wiring, Markdown/HTML/Typst, background tabs, AsciiDoc disabled, undo and spelling; plus exact math preservation across all delimiters, tables, code/currency boundaries, repeat formatting and all 292 physics formulas through save, preview redraw and undo. `--unit` runs 47 math checks without the app; `--without-optional-corpus` tests the recorded-inventory fallback |
+| `npm run format:document` | `scripts/format-document-test.mjs` | 141 checks of the editor's right-click menu and **Format Document**: editing actions, clipboard wiring, the main-menu route, Markdown/HTML/Typst, background tabs, AsciiDoc disabled, undo and spelling; plus exact math preservation across all delimiters, tables, code/currency boundaries, repeat formatting and all 292 physics formulas through save, preview redraw and undo. `--unit` runs 47 math checks without the app; `--without-optional-corpus` tests the recorded-inventory fallback |
 | `npm run audit` | `scripts/audit-document.mjs` | Render metrics for whatever document is loaded |
 | `npm run math` | `scripts/math-render-check.mjs` | 12 checks against the physics paper |
 | `npm run syntax` | `scripts/syntax-theme-test.mjs` | 10 checks that highlighting is real and that the sync mark stays amber and visible on Nord, Ink and Solarized Dark |
 | `npm run html` | `scripts/html-preview-test.mjs` | 60 checks of the sandboxed HTML guest, including 20 alternating editor/guest pairs, full entity offsets, inline/nested ownership, reverse paint, Escape, reduced motion, invalid samples and same-word reselection after an edit |
 | `npm run export` | `scripts/export-test.mjs` | 38 checks of every export path, against real pandoc, including an AsciiDoc source and the rendered-HTML math reader |
+| `npm run export:paths:unit` | `scripts/export-paths-unit.mjs` | 42 checks of the browser path/URL policy: drive, UNC, POSIX, spaces, Unicode, `..`, different roots, fragments, `data:`, `file:` and protocol-relative addresses — no application |
+| `npm run export:browser` | `scripts/export-browser-test.mjs` | 21 checks of the native HTML and Print artifacts through the real UI: restored local images/links, absolute print URLs, the readiness/failure script, and the same light diagram palette in a dark and a light editor |
 | `npm run typography` | `scripts/typography-test.mjs` | 48 checks that each face loads, each OpenType switch changes pixels, the six-preset matrix holds, the four new body faces render differently, and the Semibold weights are real |
 | `npm run shortcuts` | `scripts/shortcut-test.mjs` | 43 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, that the zoom chip follows the level, that a new tab keeps the previous buffer's undo, and that the webview's F5/Ctrl+R reload keys are swallowed |
-| `npm run tabs` | `scripts/document-tabs-test.mjs` | 106 checks of several open documents: sidebar and Recents, `open-files`, active-tab styling, the tab context menu, keyboard navigation, caret and scroll per tab, dirty dot, × and middle-click, Ctrl+Tab, drag and keyboard reordering, the disk poll, Auto Save across tabs, overflow arrows and the wheel, Close Others, the last tab |
+| `npm run menu` | `scripts/menu-test.mjs` | 87 checks of the approved eight-menu tree, command placement, conditional labels, availability by language/mode/selection, Preferences deep links, Paste without Formatting, document zoom reset, block-equation selection handling and both Close All Tabs routes |
+| `npm run tabs` | `scripts/document-tabs-test.mjs` | 107 checks of several open documents: sidebar and Recents, `open-files`, active-tab styling, the tab context menu (including Close All Tabs), keyboard navigation, caret and scroll per tab, dirty dot, × and middle-click, Ctrl+Tab, drag and keyboard reordering, the disk poll, Auto Save across tabs, overflow arrows and the wheel, Close Others, the last tab |
 | `npm run favorites` | `scripts/favorites-test.mjs` | 56 checks of the Favorites panel that replaced Files: the editor and tab menu routes, the Add/Remove toggle, insertion order across opens, inactive-tab favoriting, duplicate adds, the per-row × and row menu, one-at-a-time removal, a missing file, the untitled disabled state, no Clear All, the Preferences changes and `view.favorites` in the native menu |
 | `npm run tabs:restore:unit` | `scripts/tabs-restore-unit.mjs` | 33 checks of what is remembered and what is restored: tab order, untitled exclusion, deduplication under the platform's path identity, the 20-document cap, and the restore plan's handling of missing files — no application |
 | `npm run typst:map:unit` | `scripts/typst-page-map-unit.mjs` | 21 checks of the bidirectional Typst Pages prose index: formula-adjacent prose, region isolation, ambiguity, reverse lookup, PDF ActualText breaks and Unicode offsets; a repeated one-word line with identical neighbours paints nothing, a unique neighbour window picks the clicked occurrence, ligatures and soft hyphens match, and generated text stays unmapped — no application |
@@ -228,6 +231,8 @@ rewrite from scratch.
 | `npm run test:sessions` | `scripts/sessions-test.mjs` | 60 unit checks of `src/sessions.ts`, with no application and no build |
 | `npm run p0:unit` | `scripts/p0-unit.mjs` | 110 checks of recovery scheduling, disk classification, Typst commands and delayed-IO lifecycle/export safety: save/reload/Save As, queues, checked-write conflicts, baseline hashes, close cancellation, failure retention, legacy lossy copies and HTML/Print/Pandoc snapshots; no app/build |
 | `npm run p0:lifecycle` | `scripts/p0-lifecycle-test.mjs` | 34 checks through the real editor of delayed save/reload/Save As/export, recovery, three-way tab/bulk/window close, failed saves, binary/mixed-drop refusal, a same-size/same-mtime disk rewrite, UTF-16 explanation, focus and clean bundled documents |
+| `npm run single:instance` | `scripts/single-instance-test.mjs` | 12 checks of the second-launch handoff: two initial paths as tabs, a relative second-launch path, the second process exiting, one page target, duplicate-path focus, a missing path toast and a dirty buffer surviving |
+| `npm run preview:zoom` | `scripts/preview-zoom-test.mjs` | 24 checks of document zoom through the editor and every preview renderer: Split, Preview-only, Source-only, Markdown, AsciiDoc, Typst Document, Typst Pages, the HTML guest, word sync, keyboard reveal, the status chip, reset and Content Width |
 | `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 378 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
 | `npm run paste` | `scripts/rich-paste-test.mjs` | 87 checks of rich paste through the real UI: destination detection, conversion in every direction, whitespace across inline elements, preferences, Ctrl+Shift+V, undo, and Find/Replace paste ownership, including real Ctrl+V and Ctrl+Shift+V with plain and rich clipboard text. The 8 native-key checks are skipped (79/79) when the session cannot own the clipboard, which the suite proves by writing and reading it back |
 | `npm run image:syntax` | `scripts/image-syntax-test.mjs` | 22 checks of bitmap, remote-image and modern-format handling in Typst, Markdown, HTML and AsciiDoc; Typst refuses AVIF with a message, WebP is inserted, and Format > Image writes Typst syntax |
@@ -257,20 +262,25 @@ All of these need the app already running with CDP enabled (see
 | `syntax-theme-test.mjs` | `[port]` | `samples/feature-tour.md` | Distinct computed token colours, and that switching palette changes them |
 | `html-preview-test.mjs` | `[port]` | `samples/html-tour/index.html` | The guest iframe, its sandbox and IPC boundary, local CSS/images/modules, sync, blink, scripts-off, outline, the return to Markdown and the HTML tab coming back. It connects to the iframe target as well as the page |
 | `export-test.mjs` | `[port] [--install]` | `samples/feature-tour.md` | That pandoc really converts: the bytes of each output are inspected. `--install` additionally exercises the pandoc download, which is why it is opt-in |
+| `export-paths-unit.mjs` | — | none — runs without the application | Drive, UNC and POSIX path resolution, relative URLs across one root, `file://` encoding, and the publication policy for spaces, Unicode, `..`, fragments, `data:`, `file:` and protocol-relative references |
+| `export-browser-test.mjs` | `[port]` | `samples/export-tour.md`; opens `samples/export-tour.adoc` | That an exported HTML page and the captured print document have real local image/link destinations, no `asset:` URLs, absolute `file://` print images, the font/image readiness script, and the same light Mermaid palette whatever the editor theme |
 | `typography-test.mjs` | `[port]` | any | Screenshots text with each OpenType feature off and on and compares pixels, then asserts the six-preset matrix, that the four new body faces produce different images, and the Semibold weights. Width cannot measure a monospaced face, so nothing narrower would work |
 | `shortcut-test.mjs` | `[port] [document]` | `samples/feature-tour.md` | Presses each accelerator through a synthetic keydown and checks what changed. Also reads the `accelerators` registry, which is the only way to see an accelerator the platform rejected |
+| `menu-test.mjs` | `[port]` | `samples/feature-tour.md`; opens the Typst, AsciiDoc and HTML fixtures | The native menu inventory through `menu_items`: the eight categories and command placement, labels, conditional availability by language/mode/selection, Preferences deep links, Paste without Formatting, document zoom reset, block-equation selection, Close All Tabs from both the tab context and File, and cancellation of a dirty batch |
 | `licence-test.mjs` | `[port]` | any | Opens *Font licences* and looks for the thirteen OFL texts in the rendered document. Searching the executable cannot answer this: the frontend bundle is compressed inside it |
 | `fetch-fonts.ps1` | `[--work-directory]` | — | Downloads the thirteen families pinned in `scripts/font-sources.json`, verifies every source, subsets the Google faces through `scripts/subset-fonts.py`, and rewrites `src/assets/fonts/fonts.json`. Only needed to upgrade them; needs Python/fonttools; the fonts are committed |
 | `image-paste-test.mjs` | `[port] [imageUrl] [localPath]` | `samples/feature-tour.md` | Clipboard, local and remote image paths, and the markdown that results |
 | `image-path-paste-test.mjs` | `[port]` | `samples/feature-tour.md` | Selects the `./image.png` placeholder with the mouse, pastes a relative path beside the document, and checks the text is replaced and the preview loads it |
 | `spellcheck-test.mjs` | `[port]` | `samples/feature-tour.md` | Sets the dictionary to English, types a misspelling, requires the wavy underline, then turns spelling off and requires the mark to be gone |
-| `format-document-test.mjs` | `[port] [--without-optional-corpus]` or `--unit [--without-optional-corpus]` | `samples/feature-tour.md`; `--unit` needs no app | 139 checks on temporary copies: the editing menu, clipboard wiring, Markdown/HTML/Typst formatting, background tabs, AsciiDoc disabled, spelling priority and failure handling; 47 app-free checks preserve math source exactly across all delimiters and contexts, including the 292-formula corpus. The UI saves the formatted physics copy, waits for a fresh preview, compares every equation and KaTeX error count, measures fraction/radical geometry and undoes to exact original bytes. The ignored physics sample has a recorded-inventory fallback |
-| `document-tabs-test.mjs` | `[port]` | `samples/feature-tour.md` | That several documents stay open sanely: a path already open is focused, the active tab is bold, the context menu and its disabled entries, Arrow-key navigation, drag and keyboard reordering, overflow arrows and the wheel, Close Others, the caret and both scroll offsets come back, the disk poll reloads a clean inactive tab and leaves a dirty one alone, Auto Save writes every dirty tab, and a large document no longer breaks the next New |
+| `format-document-test.mjs` | `[port] [--without-optional-corpus]` or `--unit [--without-optional-corpus]` | `samples/feature-tour.md`; `--unit` needs no app | 141 checks on temporary copies: the editing menu, clipboard wiring, the main-menu route, Markdown/HTML/Typst formatting, background tabs, AsciiDoc disabled, spelling priority and failure handling; 47 app-free checks preserve math source exactly across all delimiters and contexts, including the 292-formula corpus. The UI saves the formatted physics copy, waits for a fresh preview, compares every equation and KaTeX error count, measures fraction/radical geometry and undoes to exact original bytes. The ignored physics sample has a recorded-inventory fallback |
+| `document-tabs-test.mjs` | `[port]` | `samples/feature-tour.md` | That several documents stay open sanely: a path already open is focused, the active tab is bold, the context menu and its disabled entries (including Close All Tabs), Arrow-key navigation, drag and keyboard reordering, overflow arrows and the wheel, Close Others, the caret and both scroll offsets come back, the disk poll reloads a clean inactive tab and leaves a dirty one alone, Auto Save writes every dirty tab, and a large document no longer breaks the next New |
 | `favorites-test.mjs` | `[port]` | `samples/feature-tour.md` | The Favorites panel and the two right-click routes: the empty state, the Add/Remove toggle, insertion order across opens, an inactive tab's path, duplicate adds, the row `×` and its menu, one-at-a-time removal, a missing file kept with a toast, the untitled disabled state, no Clear All, the Preferences changes, `Ctrl+Shift+2` and `view.favorites` |
 | `tabs-restore-test.mjs` | `[port] phase1\|phase2 <doc> <extra…>` | phase 1: `samples/feature-tour.md`; the extras open as tabs | The two-launch store: phase 1 opens and reorders tabs, sets the launch preference and closes one tab just before the window does; phase 2 — launched **without** a document argument — sees the same tabs, order, active tab and preference. Normally run by `test-all.mjs`, which supplies both launches and the WM_CLOSE between them |
 | `favorites-restore-test.mjs` | `[port] phase1\|phase2 <doc> <extra>` | phase 1: `samples/feature-tour.md` plus `samples/word-sync.md` as the second tab | The two-launch favorites store: phase 1 adds one favorite from the editor menu and one from the inactive tab's menu while a whole-settings save is scheduled, leaves the Favorites panel selected and closes the active tab just before the window does; phase 2 — launched **without** a document argument — reads the list back from disk, checks its order, the remembered panel and both rendered rows, then opens one. Normally run by `test-all.mjs` |
 | `recent-menu-test.mjs` | `[port]` | `samples/feature-tour.md` | The native Open Recent submenu through the `recent_menu` probe: it lists the launch file, a newly opened file becomes the first row, the emitted menu id focuses an existing tab instead of duplicating it, Clear Items empties the menu/sidebar/settings, a 27-row history renders in full in the sidebar while the menu shows 20 plus Clear Items, and a later open refills the list |
 | `p0-lifecycle-test.mjs` | `[port]` | `samples/feature-tour.md`, plus owned temporary files | Delays IPC through browser fetch without changing immutable Tauri methods; checks disk bytes, visible text/dirty tabs/recovery, Save As ownership, explicit close decisions and non-text refusal. The harness owns and restores settings/recovery/profile |
+| `single-instance-test.mjs` | `[port]` | Two initial documents, `samples/feature-tour.md` and `samples/word-sync.md`; needs `MDRAFT_EXE` and `MDRAFT_REPO` from the harness | The running window receives a relative second-launch path as a tab, the second process exits, one page target remains, an already-open path is focused, a missing path toasts without opening a tab, and the dirty startup buffer survives |
+| `preview-zoom-test.mjs` | `[port]` | `samples/export-tour.md`; opens the AsciiDoc, Typst and HTML fixtures | Document zoom geometry in Split/Preview-only/Source-only, AsciiDoc, Typst Document, Typst Pages and the HTML guest; a zoomed word sync; reset and Content Width; a 150% screenshot |
 | `sessions-test.mjs` | — | none — runs without the application | The session store's rules: insertion after the active tab, untitled names, one tab per path under both case rules, the neighbour that takes over on close, `move` and `removeMany` order, wrap-around, and the empty-list invariant |
 | `paste-convert-test.mjs` | `[--without-optional-corpus]` | none — runs without the application | The paste matrix: clipboard and document detection, all reader/renderer pairs, escaping, sanitisation, caps and image syntax |
 | `tabs-restore-unit.mjs` | — | none — runs without the application | What is remembered and what is restored: tab order, untitled exclusion, deduplication under the platform's path identity, the 20-document cap, missing files and the active-tab fallback |
@@ -490,18 +500,22 @@ hash the pixels.
 
 ## Testing
 
-Thirty-five default layers, cheapest first. Run them in this order when changing anything.
+Forty default layers, cheapest first. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 130 Windows / 129 Linux | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction, image content sniffing (WebP/AVIF brands), `${filename}`, the untitled image guard, the Typst image root, the OS opener's executable refusal, the recovery journal's round-trip/id/cap rules, checked-write hashes and same-metadata conflicts |
+| Rust unit | `npm run test:rust` | 140 Windows / 139 Linux | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction, image content sniffing (WebP/AVIF brands), `${filename}`, the untitled image guard, the Typst image root, the OS opener's executable refusal, the recovery journal's round-trip/id/cap rules, checked-write hashes and same-metadata conflicts, launch argument parsing and path identity |
 | Session store | `npm run test:sessions` | 60 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
 | P0 data safety (unit) | `npm run p0:unit` | 110 | Recovery scheduling/classification/Typst strings, deferred save/reload/Save As, checked-write conflicts and baseline hashes, save queues, bulk-close cancellation/failures, lossy copies and export snapshots across picker/tool/render delays — no application |
 | Paste conversion | `npm run paste:convert` | 378 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, `<br><br>` paragraph splitting, image syntax, AsciiDoc, and an image that fails to save |
 | AsciiDoc export source | `npm run asciidoc:export:unit` | 17 | Unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations - no application |
-| DOM smoke | `npm run smoke` | 107 | Rendering, pane sync, preferences (including the four On Launch choices and Line Height), math, fonts, status icons |
+| Export paths (unit) | `npm run export:paths:unit` | 42 | Drive, UNC and POSIX paths, spaces, Unicode, `..`, different roots, encoded spaces, fragments, `data:`, `file:` and protocol-relative references — no application |
+| Browser exports | `npm run export:browser` | 21 | Native HTML and Print artifacts: local image/link resolution, no app protocol, absolute print URLs, the resource-wait/failure script, and a light print diagram in a dark editor |
+| DOM smoke | `npm run smoke` | 108 | Rendering, pane sync, preferences (including the four On Launch choices and Line Height), math, fonts, status icons |
 | P0 lifecycle (UI) | `npm run p0:lifecycle` | 34 | Delayed save/reload/Save As/export, real text/dirty/recovery preservation, a same-size/same-mtime external rewrite, three-way close/cancellation/failures, binary/mixed-drop/UTF-16 refusal, focus restoration, clean bundled documents and native close |
+| Second launch | `npm run single:instance` | 12 | Two initial paths as tabs, relative second-launch handoff, second-process exit, one page target, duplicate-path focus, missing-path toast, dirty buffer preserved |
+| Document zoom | `npm run preview:zoom` | 24 | Source-only, Split and Preview-only geometry; Markdown/AsciiDoc/Typst Document; HTML guest frame; Typst Pages canvases, horizontal scroll and scroll position; zoomed word sync and keyboard reveal; reset leaves Content Width alone |
 | Word sync | `npm run word-sync` | 58 | The fragment map, preview → source and source → preview, atomic code, formula and image spans, the pulse and its resting mark, reduced motion, word snapping, no scroll, Escape |
 | Auto-close matching | `npm run autoclose:unit` | 17 | Which tag a typed `>`, the void/self-closing/autolink/escape rules — no application |
 | Remembered tabs (unit) | `npm run tabs:restore:unit` | 33 | What is stored (order, untitled exclusion, deduplication, the 20-document cap) and what a restore plan does with it (missing files, the active-tab fallback) — no application |
@@ -518,9 +532,10 @@ Thirty-five default layers, cheapest first. Run them in this order when changing
 | Math | `npm run math` | 12 | Font loading, fraction and radical geometry |
 | Syntax | `npm run syntax` | 10 | Token colours, palette switching, and the sync mark's amber contrast on three dark palettes |
 | AsciiDoc | `npm run asciidoc` | 54 | Preview, title/TOC, math, includes, source highlighting, outline, preview copy, spellcheck, paste, the built-in reference, defaults, word-level sync |
-| Editor menu / Format | `npm run format:document` | 139 | The full editing menu, clipboard fake, Markdown/HTML/Typst, inactive tabs, undo, caret, AsciiDoc disabled, spelling and formatter failures; 47 math checks also run with `node scripts/format-document-test.mjs --unit`. The physics copy retains all 292 formulas and its KaTeX error count after formatting, with visible fractions/radicals and exact bytes after undo |
+| Editor menu / Format | `npm run format:document` | 141 | The full editing menu, clipboard fake, the main-menu route, Markdown/HTML/Typst, inactive tabs, undo, caret, AsciiDoc disabled, spelling and formatter failures; 47 math checks also run with `node scripts/format-document-test.mjs --unit`. The physics copy retains all 292 formulas and its KaTeX error count after formatting, with visible fractions/radicals and exact bytes after undo |
+| Menu structure | `npm run menu` | 87 | The eight categories and command placement, conditional labels, availability by language/mode/selection, Preferences deep links, Paste without Formatting, document zoom reset, block-equation selection and both Close All Tabs routes |
 | HTML guest | `npm run html` | 60 | Sandbox, IPC boundary, local assets, sync/blink, the guest word double-click, scripts-off, outline, reload-key guard |
-| Document tabs | `npm run tabs` | 106 | Several open documents, the context menu, drag and keyboard reordering, overflow arrows, the disk poll, Auto Save across tabs, caret and scroll per tab |
+| Document tabs | `npm run tabs` | 107 | Several open documents, the context menu (including Close All Tabs), drag and keyboard reordering, overflow arrows, the disk poll, Auto Save across tabs, caret and scroll per tab |
 | Favorites | `npm run favorites` | 56 | The panel that replaced Files, both Add/Remove menu routes, insertion order across opens, inactive tabs, one-at-a-time removal, a missing file, the untitled disabled state, no Clear All, the Preferences changes and `view.favorites` |
 | Favorites restore | `npm test -- --only favorites-restore` | 30 | Two launches on one settings directory: both menu routes add a favorite — the second while a whole-settings save is scheduled — the Favorites panel is left selected, a tab is closed just before the window closes, and the second launch reads the list back from disk — order, panel and rows — then opens one |
 | Tab restore | `npm test -- --only tabs-restore` | 25 | Two launches on one settings directory: the tabs come back in order with the remembered one active, the preference survives, and the close flush records a tab closed just before the window closed |
@@ -694,6 +709,13 @@ whole layer looked like a hung application. Update every `block(...)` and the
 `failPath` branch when a command is split; keep a direct legacy-command call only
 where that command's own contract is the subject. The harness is not broken and
 the app did not regress.
+
+**`p0-lifecycle` times out waiting for a modal after emitting `open-files` with a PDF**
+GAP-017 made startup and handoff paths report a refusal as a toast
+(`openPath(..., { silent: true })`) so several paths cannot stack native modal
+dialogs. The suite still waited for the intercepted `plugin:dialog|message`
+text and failed at 23/24. Accept the toast (or both) when the handoff UX changes;
+do not restore a modal per path just to keep the old assertion.
 
 **`ReferenceError: require is not defined` when SSR-loading `src/markdown.ts` for a pure export-wrapper test**
 The browser module imports CSS and Highlight.js's CommonJS entry point; loading
@@ -1322,6 +1344,23 @@ window-state flush still runs. Use that when a harness needs a graceful exit
 and `CloseMainWindow()` refuses; reserve `Stop-Process -Force` for the case where
 the profile is already known to be disposable.
 
+**`APPDATA` and `LOCALAPPDATA` do not isolate a one-off close test**
+Tauri resolves `app_config_dir()` and the WebView2 profile through Windows Known
+Folders, not through those environment variables. A redirected `Start-Process`
+with both variables pointed at a temp folder still opened the developer's real
+settings, added the fixture to Recents, changed `lastDirectory` and rewrote
+`%APPDATA%\io.github.bernh.mdraft\.window-state.json`. It proved WM_CLOSE exits
+with code 0 and writes the state file, but it did so at the owner's expense. Use
+`scripts/test-all.mjs` (which backs up and restores the whole state), or a build
+with its own `identifier`; never treat environment redirection as isolation.
+
+**`test-close.ps1` hangs in an agent shell before it can print its checks**
+Its own `Start-Process` inherits the harness's output handles (see the trap
+above), so the script prints `launching mdraft.exe` and then never returns. This
+is the harness, not a close regression. Run the script from a normal terminal for
+the release check, or use a redirected `Start-Process` plus `taskkill /PID`
+without `/F`, and own the profile as described above.
+
 **A second MDraft for a CDP test dies with `HRESULT(0x800700AA)`, even when the exe is outside the workspace**
 WebView2 allows one browser process per user-data folder, and every instance
 defaults to `%LOCALAPPDATA%\io.github.bernh.mdraft\EBWebView`. While another
@@ -1344,6 +1383,14 @@ Screenshots of the application therefore look as if the checks were never added.
 The `menu_state` command returns every check item's `id` and `checked` for the
 suites; use a Win32 screen capture only if a pixel proof is genuinely needed, and
 do not conclude from a CDP screenshot that the menu is unchanged.
+
+**An exported local HTML cannot be opened with the agent's browser tools**
+`tools.browser.tabs.open` rejects a `file:` address with `Invalid browser URL`,
+and Playwright reports `Access to "file:" protocol is blocked`.
+`browser.preview` only renders a Review pane and cannot be evaluated. Do not read
+that as a broken export: resolve the artifact's URLs in Node (`parse5` plus
+`fileURLToPath`), as `export-browser-test.mjs` does, and leave the
+ordinary-browser/PDF check to the owner.
 
 **Two view modes are checked at once after a toggle**
 `CheckMenuItem` is a checkbox, not a radio button: setting `view.preview` does not
@@ -1934,6 +1981,51 @@ not trust a Playwright screenshot as evidence about a scrollbar at all. Assert
 the computed pseudo-element style plus the reserved gutter, or look at the real
 WebView2 window.
 
+**An export row says “— needs Typst” but stays enabled**
+`apply_context` walked every menu item and answered `true` for ids it did not
+recognise, so every `set_menu_state` re-enabled `export.pandoc.pdf` immediately
+after `apply_export_availability` had disabled it. The label made it look as if
+the availability path had run; `menu_items` showed `enabled=true` beside
+`"PDF (via Typst)… — needs Typst"`. A menu-state sync must return “leave this
+alone” for rows another owner controls: export formats, recent-file rows and the
+generated open-tab rows. Test `enabled_for` for `None`, not merely for the
+visible label.
+
+**A new menu item appears enabled in `menu_items` but does nothing**
+`menu_items` reads the native menu that was built; it proves that the item exists
+and its state, not that the frontend has a handler for its id. `format.document`
+was added to the tree, `menu_items` reported `enabled=true`, and `runMenuAction`
+silently returned because there was no key in `handlers`. Every new id needs a
+route assertion, not only an inventory assertion; `format-document-test.mjs`
+now emits the menu id and requires the formatter's toast.
+
+**`recent-menu` reports 12 of 27 rows once, then passes on a fresh relaunch**
+The suite seeds 25 paths by calling `add_recent` directly without updating the
+frontend's `settings` copy. A whole-settings save queued by the frontend can
+overwrite those seeds before the final open refreshes the module copy, so the
+store appears capped at 12. This is not the `MAX_RECENT`/menu-20 regression the
+failure message suggests. Rerun against a freshly launched instance, or wait for
+the app to settle before seeding; the passing run keeps all 27 paths and the
+20-row menu.
+
+**`width: calc(100% / var(--zoom))` inside a `zoom`ed element leaves a gap**
+CSS `zoom` already scales the box, and a percentage width resolves against the
+narrowed layout box: measured in Chromium, a 800 px pane with `zoom:1.5` gives
+`width:100%` a rendered width of 800 px, `100%/1.5` gives 533 px and `100%/2.25`
+gives 356 px. Dividing the width again is the double-compensation trap. Use
+`width:100%` and divide only a **max-width/length cap** (the Document Zoom uses
+`--preview-max-width`) or the HTML iframe's viewport remains too narrow. Measure
+`getBoundingClientRect`, not `getComputedStyle(...).fontSize`, which CSS zoom
+never changes.
+
+**A sticky Typst view bar inside `#preview` grows with document zoom**
+`#preview` is the zoomed article, so the Document/Pages switch inside it scaled
+with the document and its buttons were no longer 100 % UI. Move the bar to a
+sibling in `.preview-pane` and remove it at the start of every render; a stale
+bar can otherwise outlive a tab switch for one frame, so a test that clicks it
+while a Typst reference is rendering may hit the previous document. Switch via
+the `view.typstDocument`/`view.typstPages` menu in that test instead.
+
 ## Adding a preference, end to end
 
 Five files, in this order — more than three, so a plan comes first; see
@@ -2147,12 +2239,13 @@ platform and fails on the other.
    reads the latter for the bundle, and the two must agree. `npm run
    check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
-3. `npm run test:rust` — 128 runnable Windows tests / 127 Linux tests (two ignored downloads: pandoc and Typst). Run them on Linux too
+3. `npm run test:rust` — 140 runnable Windows tests / 139 Linux tests (two ignored downloads: pandoc and Typst). Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
-4. Launch with each fixture and run `npm run smoke`, `npm run math`,
-   `npm run syntax`, `npm run html`, `npm run asciidoc` and `npm run favorites` —
-   105 + 10 + 10 + 50 + 54 + 56 checks.
+4. Launch with each fixture and run `npm run smoke`, `npm run menu`,
+   `npm run preview:zoom`, `npm run math`, `npm run syntax`, `npm run html`,
+   `npm run asciidoc` and `npm run favorites` — 108 + 87 + 24 + 12 + 10 + 60 +
+   54 + 56 checks.
 5. `npm run audit` against both `docs/sample-files` documents and compare the
    counts with the table in the README.
 6. `npm run dist` — installers and checksums land in `bin/<os>/<arch>/`.

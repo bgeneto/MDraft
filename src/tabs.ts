@@ -236,43 +236,73 @@ export function createTabsUi(options: TabsOptions): TabsUi {
     const favoriteBlocked = callbacks.favoriteBlocked(id);
     const favorite = callbacks.isFavorite(id);
 
-    const runMany = (ids: readonly string[]) => callbacks.closeMany(ids);
+    // Resolve the reference and the target set at click time. The menu can stay
+    // open while another command closes or creates a tab; a captured list would
+    // close the wrong document or use a different tab as its reference.
+    const runRelative = (kind: "others" | "left" | "right" | "unchanged") => {
+      const current = store.list();
+      const currentIndex = current.findIndex((entry) => entry.id === id);
+      if (currentIndex < 0) return;
+      let ids: string[];
+      if (kind === "others") {
+        ids = current.filter((entry) => entry.id !== id).map((entry) => entry.id);
+      } else if (kind === "left") {
+        ids = current.slice(0, currentIndex).map((entry) => entry.id);
+      } else if (kind === "right") {
+        ids = current.slice(currentIndex + 1).map((entry) => entry.id);
+      } else {
+        ids = current.filter((entry) => entry.id !== id && !entry.dirty).map((entry) => entry.id);
+      }
+      if (ids.length > 0) callbacks.closeMany(ids);
+    };
+
+    const closeAll = () => {
+      const ids = store.list().map((entry) => entry.id);
+      if (ids.length > 0) callbacks.closeMany(ids);
+    };
 
     return [
       {
         kind: "item",
         id: "close",
-        label: "Close",
+        label: "Close Tab",
         shortcut: shortcutLabel("W"),
         action: () => callbacks.close(id),
       },
       {
         kind: "item",
         id: "closeOthers",
-        label: "Close Others",
+        label: "Close Other Tabs",
         disabled: list.length === 1,
-        action: () => runMany(list.filter((entry) => entry.id !== id).map((entry) => entry.id)),
+        action: () => runRelative("others"),
       },
       {
         kind: "item",
         id: "closeLeft",
-        label: "Close All to the Left",
+        label: "Close Tabs to the Left",
         disabled: left.length === 0,
-        action: () => runMany(left),
+        action: () => runRelative("left"),
       },
       {
         kind: "item",
         id: "closeRight",
-        label: "Close All to the Right",
+        label: "Close Tabs to the Right",
         disabled: right.length === 0,
-        action: () => runMany(right),
+        action: () => runRelative("right"),
       },
       {
         kind: "item",
         id: "closeUnchanged",
-        label: "Close Unchanged",
+        label: "Close Other Unchanged Tabs",
         disabled: unchanged.length === 0,
-        action: () => runMany(unchanged),
+        action: () => runRelative("unchanged"),
+      },
+      { kind: "separator" },
+      {
+        kind: "item",
+        id: "closeAll",
+        label: "Close All Tabs",
+        action: closeAll,
       },
       { kind: "separator" },
       {
@@ -312,7 +342,7 @@ export function createTabsUi(options: TabsOptions): TabsUi {
       {
         kind: "item",
         id: "reveal",
-        label: "Reveal in File Manager",
+        label: "Show in Folder",
         disabled: !session.path,
         action: () => callbacks.reveal(id),
       },
@@ -322,8 +352,8 @@ export function createTabsUi(options: TabsOptions): TabsUi {
   function entriesForBar(): MenuEntry[] {
     const list = store.list();
     const activeId = callbacks.activeId();
-    // Keep the active tab. "Close Unchanged" is a way to shed clean tabs, not
-    // a way to end up with no buffer at all.
+    // Keep the active tab. "Close Other Unchanged Tabs" is a way to shed clean
+    // tabs, not a way to end up with no buffer at all.
     const unchanged = list
       .filter((session) => session.id !== activeId && !session.dirty)
       .map((session) => session.id);
@@ -341,14 +371,23 @@ export function createTabsUi(options: TabsOptions): TabsUi {
         kind: "item",
         id: "closeAll",
         label: "Close All Tabs",
-        action: () => callbacks.closeMany(list.map((session) => session.id)),
+        // Resolve at click time so a tab created after the menu opened is not
+        // silently left out of the global close.
+        action: () => callbacks.closeMany(store.list().map((session) => session.id)),
       },
       {
         kind: "item",
         id: "closeUnchanged",
-        label: "Close Unchanged",
+        label: "Close Other Unchanged Tabs",
         disabled: unchanged.length === 0,
-        action: () => callbacks.closeMany(unchanged),
+        action: () => {
+          const reference = callbacks.activeId();
+          const ids = store
+            .list()
+            .filter((session) => session.id !== reference && !session.dirty)
+            .map((session) => session.id);
+          if (ids.length > 0) callbacks.closeMany(ids);
+        },
       },
     ];
   }
