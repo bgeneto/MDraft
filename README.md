@@ -33,7 +33,7 @@ Markdown document active.*
   KaTeX, Mermaid, GitHub alerts and `[TOC]`. AsciiDoc supports Asciidoctor's
   admonitions, tables, listings, local includes and `latexmath`/`asciimath`. Typst, once
   its compiler is installed, gets a flowing document view and a PDF page view
-  whose text can be selected and clicked; the Paragraph and Format menus write
+  whose text can be selected and clicked; the Insert and Format menus write
   Typst syntax rather than Markdown. HTML keeps its own CSS, images and
   scripts, isolated in a sandbox.
 - **A preview that follows the work.** Split, source-only and preview-only
@@ -85,8 +85,12 @@ Markdown document active.*
   independent faces for editor, prose, headings and code, plus OpenType
   controls. The source pane's line height is **Compact**, **Normal** or
   **Wide** under Preferences › Editor. Preview headings and emphasis use
-  Semibold; mathematics has its own scale. Native HTML and PDF (Print) exports
-  of Markdown and AsciiDoc embed the chosen faces.
+  Semibold; mathematics has its own scale. Native HTML and Print (opens browser)
+  exports of Markdown and AsciiDoc embed the chosen faces.
+- **Zoom the whole document.** `Ctrl+Shift+=` enlarges the source in Source-only,
+  both panes in Split, and the rendered page in Preview-only — text, images,
+  diagrams and Typst pages together. `Ctrl+Shift+0` resets the zoom without
+  changing Content Width or the font-size preferences.
 - **Content moves both ways.** Paste formatted text from a browser or word
   processor and MDraft converts it into the destination's markup; paste markup
   source and it is converted the same way, or kept in its original syntax when
@@ -94,8 +98,11 @@ Markdown document active.*
   dollars once. Copy from a text preview and the formatting
   goes with it. Images can be pasted, dropped, linked or downloaded into the
   document's assets folder.
-- **Useful exports, stated plainly.** HTML needs no extra tools; PDF (Print)
-  needs only a browser. DOCX, ODT, EPUB, LaTeX and the rest go through pandoc,
+- **Useful exports, stated plainly.** HTML needs no extra tools; Print (opens
+  browser) needs only a browser. Local images and links are resolved for the
+  browser, and the print document waits for its fonts and figures and owns its
+  light theme.
+  DOCX, ODT, EPUB, LaTeX and the rest go through pandoc,
   which MDraft can install for you. A format whose converter is missing is
   disabled and says which tool it needs. Typst documents compile straight to
   PDF; PDF via Typst handles the other languages.
@@ -127,13 +134,19 @@ use these rules; Pandoc retains its own Markdown reader.
    MDraft.exe notes.md      # Windows
    ```
 
+   Starting MDraft with a file while it is already open hands that path to the
+   running window and opens it as a tab; it does not start a second window.
+   Several paths on one command line all open, and an already open document is
+   focused rather than duplicated.
+
 3. Split view is the default. Use the status-bar buttons for Source or
    Preview; `Ctrl+/` jumps to the source.
-4. For `.typ` files, install the Typst compiler: **Help › Install Typst** on
-   Windows and Linux; on macOS use your package manager or the [Typst download
-   page](https://typst.app/open-source/#download), with `typst` on your `PATH`.
-   For DOCX, ODT and the other pandoc formats, use **Help › Install Pandoc**.
-   Neither is required to edit or preview Markdown, AsciiDoc or HTML.
+4. For `.typ` files, install the Typst compiler: **Tools › Check or Install
+   Typst…** on Windows and Linux; on macOS use your package manager or the
+   [Typst download page](https://typst.app/open-source/#download), with `typst`
+   on your `PATH`. For DOCX, ODT and the other pandoc formats, use **Tools ›
+   Check or Install Pandoc…**. Neither is required to edit or preview Markdown,
+   AsciiDoc or HTML.
 
 ## Requirements
 
@@ -143,13 +156,13 @@ use these rules; Pandoc retains its own Markdown reader.
   dependencies.
 - **macOS is not currently published.** The code includes macOS support, but
   the release page has Windows and Linux builds only.
-- PDF (Print) hands the document to your browser's print dialog. It is not a
-  silent in-app PDF.
-- Pandoc and Typst are optional. **Help › Install Pandoc** installs pandoc
-  into MDraft's own data folder on every published platform; **Help › Install
-  Typst** does the same on Windows and Linux. On macOS, install Typst with your
-  package manager or from its download page, and put `typst` on `PATH`.
-  Administrator rights are not needed for the in-app installs.
+- Print (opens browser) hands the document to your browser's print dialog. It is
+  not a silent in-app PDF.
+- Pandoc and Typst are optional. **Tools › Check or Install Pandoc…** installs
+  pandoc into MDraft's own data folder on every published platform; **Tools ›
+  Check or Install Typst…** does the same on Windows and Linux. On macOS,
+  install Typst with your package manager or from its download page, and put
+  `typst` on `PATH`. Administrator rights are not needed for the in-app installs.
 
 ## Documentation
 

@@ -327,6 +327,11 @@ try {
     menuAction("closeRight") && !menuAction("closeRight").disabled,
     "Close All to the Right is available",
   );
+  check(
+    menuAction("closeAll")?.label === "Close All Tabs" && !menuAction("closeAll").disabled,
+    "Close All Tabs is present in the tab context",
+    JSON.stringify(menuAction("closeAll") ?? null),
+  );
   check(menuAction("save") && menuAction("save").disabled, "Save is disabled on a clean tab");
   check(
     menuAction("reveal") && !menuAction("reveal").disabled,

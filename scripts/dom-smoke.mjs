@@ -1306,6 +1306,17 @@ const exclusiveGroups = [
   ["view.source", "view.split", "view.preview"],
   ["view.outline", "view.favorites", "view.recent"],
   ["themes.system", "themes.light", "themes.dark"],
+  [
+    "view.syntax.auto",
+    "view.syntax.paper",
+    "view.syntax.ink",
+    "view.syntax.catppuccin-latte",
+    "view.syntax.github-dark",
+    "view.syntax.one-dark",
+    "view.syntax.solarized-light",
+    "view.syntax.solarized-dark",
+    "view.syntax.nord",
+  ],
 ];
 check(
   "each exclusive menu group checks exactly one item",
@@ -1378,8 +1389,9 @@ check(
 );
 await toggle("flag-auto-save");
 
-// Spelling is the one flag with no menu item; the click is the toggle. Read it
-// first so the check holds whatever a previous run left in settings.json.
+// Spelling now has a Tools › Check Spelling While Typing item as well as the
+// status flag. Read the flag first so the check holds whatever a previous run
+// left in settings.json.
 const spellBefore = await readFlag("flag-spellcheck");
 const spellToggled = await toggle("flag-spellcheck");
 check(
@@ -1387,6 +1399,11 @@ check(
   spellToggled.flag.on !== spellBefore.on &&
     spellToggled.flag.state === (spellToggled.flag.on === "true" ? "on" : "off") &&
     spellToggled.flag.inactive === "false",
+);
+check(
+  "the Spell flag and the Tools menu item agree",
+  menuChecked(spellToggled.menu, "tools.spellcheck") === (spellToggled.flag.on === "true"),
+  spellToggled.flag.on,
 );
 await toggle("flag-spellcheck");
 

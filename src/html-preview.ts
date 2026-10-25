@@ -20,6 +20,7 @@ import {
   type HtmlTextSelection,
 } from "./html-source-map";
 import bridgeTemplate from "./html-bridge.js?raw";
+import { PRINT_READY_SCRIPT } from "./print-ready";
 
 export type { HtmlSelection, HtmlTextFragment } from "./html-source-map";
 
@@ -390,8 +391,7 @@ export async function buildHtmlPrintDocument(
   const document: any = parse(source, { sourceCodeLocationInfo: true });
   const head = findElement(document, "head");
   const base = directory ? `<base href="${escapeAttribute(fileUrl(directory))}">` : "";
-  const print =
-    "<script>window.addEventListener('load',function(){setTimeout(function(){window.print()},250)})</script>";
+  const print = `<script>${PRINT_READY_SCRIPT}</script>`;
   const headStart = head?.sourceCodeLocation?.startTag?.endOffset;
   const headMatch = /<head\b[^>]*>/i.exec(source);
   const doctype = /^\s*<!doctype[^>]*>/i.exec(source);

@@ -1,4 +1,4 @@
-//! The Typst side of the Paragraph and Format menus.
+//! The Typst side of the Insert and Format menus.
 //!
 //! Pure strings and line transforms. Keeping them here, instead of in the
 //! shell's command switch, gives the unit suite one place to check every

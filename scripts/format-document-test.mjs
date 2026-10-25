@@ -664,6 +664,21 @@ try {
     "a second format leaves the saved bytes alone",
   );
 
+  // The main menu must reach the same command, not a second implementation.
+  await evaluate(`(() => {
+    const node = document.getElementById("toast");
+    if (node) node.textContent = "";
+    return true;
+  })()`);
+  await emit("menu", "format.document");
+  const menuAlready = await waitForToast("Already formatted");
+  check(
+    menuAlready === "Already formatted",
+    "Format › Format Document runs the same command",
+    menuAlready,
+  );
+  check(!(await isDirty()), "the menu route also leaves the tab clean");
+
   // One undo restores the exact original.
   await undo();
   const undid = await pollFor(

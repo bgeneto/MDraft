@@ -47,6 +47,8 @@ export interface PreferencesHost {
 
 export interface PreferencesHandle {
   open(): void;
+  /** Open on one section, for a menu command that points at it. */
+  openAt(sectionId: string): void;
   close(): void;
   toggle(): void;
   isOpen(): boolean;
@@ -534,7 +536,7 @@ function exportRows(host: PreferencesHost): Row[] {
             }.${
               status.pdfEngine
                 ? ` PDF export will use ${status.pdfEngine}.`
-                : " No PDF engine was found. PDF needs Typst — use Help › Install Typst. Every other format works without it."
+                : " No PDF engine was found. PDF needs Typst — use Tools › Check or Install Typst…. Every other format works without it."
             }`
           : "Not found. Word, PDF, EPUB and the other formats below need it; HTML does not."
         : "Checking…",
@@ -611,8 +613,8 @@ function exportRows(host: PreferencesHost): Row[] {
       // no path for MDraft to reveal or open. Saying so is better than a second
       // pair of checkboxes that could never be honoured.
       kind: "note",
-      label: "PDF (Print)",
-      text: "PDF (Print) hands the document to your browser, which asks you where to save it. MDraft never learns that path, so these options do not run for it — they do run for HTML, Typst and every pandoc format.",
+      label: "Print (opens browser)",
+      text: "Print hands the document to your browser, which asks you where to save it. MDraft never learns that path, so these options do not run for it — they do run for HTML, Typst and every pandoc format.",
     },
     { kind: "heading", label: "Formats" },
   );
@@ -1498,6 +1500,12 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
     searchEl.focus();
   }
 
+  function openAt(sectionId: string): void {
+    const target = buildSections(host).find((section) => section.id === sectionId);
+    if (target) activeId = target.id;
+    open();
+  }
+
   function close(): void {
     overlay.hidden = true;
   }
@@ -1520,6 +1528,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
 
   return {
     open,
+    openAt,
     close,
     toggle: () => (overlay.hidden ? open() : close()),
     isOpen: () => !overlay.hidden,

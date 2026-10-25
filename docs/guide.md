@@ -50,10 +50,10 @@ sheet of the syntax above. `.asc` and `.ad` are not recognised as AsciiDoc.
 ## Typst
 
 `.typ` files are edited as source and previewed by the Typst compiler. Typst is
-not bundled. On Windows and Linux, **Help › Install Typst** downloads it into
-MDraft's own data folder. On macOS, install it with your package manager or from
-the [Typst download page](https://typst.app/open-source/#download), or put
-`typst` on your `PATH`; MDraft picks it up. Without it, the preview shows the
+not bundled. On Windows and Linux, **Tools › Check or Install Typst…** downloads
+it into MDraft's own data folder. On macOS, install it with your package manager
+or from the [Typst download page](https://typst.app/open-source/#download), or
+put `typst` on your `PATH`; MDraft picks it up. Without it, the preview shows the
 compiler's absence rather than an empty pane.
 
 The preview has two views:
@@ -88,15 +88,15 @@ An `#include` or `#image` resolves against the document's folder, as it does
 on export. **Help › Typst Reference** opens a live cheat sheet of the syntax
 above: scripting, native mathematics, automatic numbering, cross-references,
 footnotes, tables, page layout and the difference between the two views. It is
-compiled by the same Typst the preview uses. The Paragraph and Format menus write
+compiled by the same Typst the preview uses. The Insert and Format menus write
 Typst syntax in a `.typ` document — `= Heading`, `+` for an ordered list,
 `#quote(...)`, `#table(...)`, `#outline()`, `#link(...)` and `$ … $` — instead of
 the Markdown spelling. Task lists, GitHub alerts and YAML front matter have no
-Typst equivalent; those menu items explain that instead of inserting markup that
-would not compile. PDF export from a `.typ` document
-goes directly through Typst, so the page layout is preserved. Exporting a Typst
-document to DOCX, ODT or another flow format goes through Typst's HTML output
-first and loses page layout; that is the price of the word-processor file.
+Typst equivalent; those menu items are disabled in a `.typ` document. PDF export
+from a `.typ` document goes directly through Typst, so the page layout is
+preserved. Exporting a Typst document to DOCX, ODT or another flow format goes
+through Typst's HTML output first and loses page layout; that is the price of the
+word-processor file.
 
 ## HTML
 
@@ -133,13 +133,14 @@ When more tabs are open than fit, the strip scrolls horizontally: the arrow
 buttons at its right edge move it, a vertical wheel over the strip does the
 same, and the active tab is always scrolled back into view. Tabs can be dragged
 to a new position (or moved one place with `Alt+Shift+Left` / `Alt+Shift+Right`
-while a tab has focus). Right-click a tab for **Close**, **Close Others**,
-**Close All to the Left**, **Close All to the Right**, **Close Unchanged**,
-**Save**, **Save As…** and **Reveal in File Manager**; right-click the empty
-part of the strip for **New Tab**, **Close All Tabs** and **Close Unchanged**.
-Double-clicking the empty part starts a new tab. The active tab's name is shown
-in Semibold and carries an accent edge. **File › Close All Tabs** closes the
-whole strip, with the usual save prompt for each dirty tab.
+while a tab has focus). Right-click a tab for **Close Tab**, **Close Other
+Tabs**, **Close Tabs to the Left**, **Close Tabs to the Right**, **Close Other
+Unchanged Tabs**, **Close All Tabs**, **Save**, **Save As…** and **Show in
+Folder**; right-click the empty part of the strip for **New Tab**, **Close All
+Tabs** and **Close Other Unchanged Tabs**. Double-clicking the empty part starts
+a new tab. The active tab's name is shown in Semibold and carries an accent edge.
+**File › Close Tabs › All Tabs** closes the whole strip, with the usual save
+prompt for each dirty tab.
 
 The view can be **Source**, **Split** or **Preview**; Split is the default.
 In Split view:
@@ -181,7 +182,15 @@ every saved document that was open when MDraft last closed, in the same order
 with the same tab active. The list remembers paths; untitled or unsaved text is
 restored by the recovery journal described below, not by the tab list. A file
 that has since been deleted is skipped and reported. A document named on the
-command line still wins over the remembered set.
+command line still wins over the remembered set. Several paths on one command
+line open as tabs, in order, with the last one active.
+
+Starting MDraft again with a document — from a terminal or an “Open with”
+command — forwards the path to the running window, brings it forward and opens
+a tab instead of starting a second process. A path that is already open is
+focused. The installers do not register file associations yet: double-clicking
+uses whatever handler the operating system already has until MDraft is chosen
+there.
 
 Other editor features:
 
@@ -319,15 +328,18 @@ path inside a fenced block or an inline code span is text, not a link.
 
 ## Export
 
-The short version: **HTML** needs no extra tools; **PDF (Print)** needs only a
-browser; **DOCX**, **ODT**, **EPUB**, LaTeX, reStructuredText, AsciiDoc, RTF,
-Textile, MediaWiki and OPML use pandoc; **PDF (via Typst)** uses pandoc with
-the Typst compiler for Markdown, AsciiDoc and HTML, and Typst directly for a
-`.typ` document.
+The short version: **HTML** needs no extra tools; **Print (opens browser)**
+needs only a browser; **DOCX**, **ODT**, **EPUB**, LaTeX, reStructuredText,
+AsciiDoc, RTF, Textile, MediaWiki and OPML use pandoc; **PDF (via Typst)** uses
+pandoc with the Typst compiler for Markdown, AsciiDoc and HTML, and Typst
+directly for a `.typ` document.
 
 Exports use the document text and identity captured when the command begins.
 Switching tabs while a picker or renderer is working does not change which
 document is exported; subsequent typing stays in the editor for the next export.
+Local images and links are rewritten into destinations an ordinary browser can
+follow, and the print document waits for its fonts and figures before opening
+the print dialog.
 
 See [Export and conversion](export.md) for the exact directions, dependencies,
 configuration and fidelity notes.
@@ -347,39 +359,49 @@ built from source, use `Cmd` where the application registers `CmdOrCtrl`.
 | Tab context menu | `Shift+F10` (or the Menu key) |
 | Preferences | `Ctrl+,` |
 | Find / Find and Replace | `Ctrl+F` / `Ctrl+H` |
+| Find next / previous | `F3` / `Shift+F3` |
+| Select next occurrence | `Ctrl+D` |
+| Go to line | `Ctrl+Alt+G` |
+| Paste without formatting | `Ctrl+Shift+V` |
 | Source code mode | `Ctrl+/` |
 | Toggle sidebar | `Ctrl+Shift+L` |
 | Outline / Favorites / Recent | `Ctrl+Shift+1` / `Ctrl+Shift+2` / `Ctrl+Shift+3` |
-| Strong / Emphasis / Strikethrough | `Ctrl+B` / `Ctrl+I` / `Alt+Shift+5` |
+| Bold / Italic / Strikethrough | `Ctrl+B` / `Ctrl+I` / `Alt+Shift+5` |
 | Inline code | `Ctrl+Shift+backtick` |
-| Hyperlink / Image | `Ctrl+K` / `Ctrl+Shift+I` |
-| Inline / display maths | Format menu |
-| Headings 1–6 / Paragraph | `Ctrl+1` … `Ctrl+6` / `Ctrl+0` |
-| Increase / decrease heading level | `Ctrl+=` / `Ctrl+-` |
-| Quote / code fences / maths block | `Ctrl+Shift+Q` / `Ctrl+Shift+K` / `Ctrl+Shift+M` |
-| Table | `Ctrl+T` |
-| Ordered / unordered / task list | `Ctrl+Shift+[` / `Ctrl+Shift+]` / `Ctrl+Shift+X` |
+| Link / Image | `Ctrl+K` / `Ctrl+Shift+I` |
+| Inline / block equation | Insert menu / `Ctrl+Shift+M` |
+| Headings 1–6 / Normal | `Ctrl+1` … `Ctrl+6` / `Ctrl+0` |
+| Promote / demote heading | `Ctrl+=` / `Ctrl+-` |
+| Blockquote / code block / table | `Ctrl+Shift+Q` / `Ctrl+Shift+K` / `Ctrl+T` |
+| Bulleted / numbered / task list | `Ctrl+Shift+]` / `Ctrl+Shift+[` / `Ctrl+Shift+X` |
 | Indent / outdent | `Tab` / `Shift+Tab` |
 | Focus / typewriter mode | `F8` / `F9` |
 | Zoom in / out / reset | `Ctrl+Shift+=` / `Ctrl+Shift+-` / `Ctrl+Shift+0` |
 | Full screen | `F11` |
 
+Zoom applies to the whole document view: the source in Source-only, both panes
+in Split, and the rendered document in Preview-only. It scales text, images,
+diagrams and Typst pages together. Reset returns to 100% and leaves Content
+Width and the base editor/preview font sizes alone; the percentage appears in
+the status bar while it differs from 100%.
+
 ## Limitations and troubleshooting
 
 - **No typst?** `.typ` previews and PDF through Typst need the compiler. On
-  Windows and Linux, **Help › Install Typst** installs it into MDraft's own data
-  folder. On macOS, use your package manager or the official download page;
-  MDraft finds `typst` on `PATH`.
+  Windows and Linux, **Tools › Check or Install Typst…** installs it into
+  MDraft's own data folder. On macOS, use your package manager or the official
+  download page; MDraft finds `typst` on `PATH`.
 - **No pandoc?** DOCX, ODT, EPUB and the other pandoc formats need it. Use
-  **Help › Install Pandoc**, which installs into MDraft's own data folder; a
-  copy on `PATH` is also found.
-- **PDF (Print) opens a browser.** WebView2 has no print interface of its own,
-  so MDraft writes a print copy and hands it to the system browser. Choose
-  "Save as PDF" there. It is not a silent in-app PDF.
-- **The native HTML and PDF (Print) commands are for Markdown, AsciiDoc and
-  HTML.** For a `.typ` document, use **PDF (via Typst)**; its PDF is compiled
-  directly. To turn a Typst document into DOCX or ODT, pandoc is given Typst's
-  HTML output, so page layout is lost.
+  **Tools › Check or Install Pandoc…**, which installs into MDraft's own data
+  folder; a copy on `PATH` is also found.
+- **Print (opens browser) opens a browser.** WebView2 has no print interface of
+  its own, so MDraft writes a light print copy and hands it to the system
+  browser. The copy waits for its images and fonts and lists any resource that
+  failed. Choose "Save as PDF" there. It is not a silent in-app PDF.
+- **The native HTML and Print (opens browser) commands are for Markdown,
+  AsciiDoc and HTML.** For a `.typ` document, use **PDF (via Typst)**; its PDF
+  is compiled directly. To turn a Typst document into DOCX or ODT, pandoc is
+  given Typst's HTML output, so page layout is lost.
 - **Pandoc cannot carry everything.** The Markdown extensions `[TOC]` and the
   GitHub alert markers have no pandoc equivalent and appear literally in DOCX,
   ODT and LaTeX output. An AsciiDoc document is rendered by Asciidoctor before

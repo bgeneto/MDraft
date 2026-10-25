@@ -4,6 +4,7 @@ mod documents;
 mod export;
 mod html_preview;
 mod images;
+mod launch;
 mod menu;
 mod recovery;
 mod settings;
@@ -35,12 +36,18 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         .manage(html_preview::PreviewStore::default())
+        .manage(launch::LaunchState::default())
         .register_asynchronous_uri_scheme_protocol(
             html_preview::SCHEME,
             |context, request, responder| {
                 html_preview::serve(context.app_handle().clone(), request, responder);
             },
         )
+        // Must be the first plugin: it has to stop a second process before any
+        // other plugin can create a WebView for the same user-data folder.
+        .plugin(tauri_plugin_single_instance::init(
+            launch::on_second_instance,
+        ))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -77,6 +84,8 @@ pub fn run() {
             documents::path_exists,
             documents::open_external,
             documents::startup_file,
+            launch::startup_files,
+            launch::take_forwarded_paths,
             recovery::list_recovery,
             recovery::write_recovery,
             recovery::remove_recovery,
@@ -94,7 +103,9 @@ pub fn run() {
             export::print_document,
             menu::accelerators,
             menu::set_menu_state,
+            menu::set_open_tabs,
             menu::menu_state,
+            menu::menu_items,
             menu::recent_menu,
             menu::set_export_availability,
             typst::typst_status,

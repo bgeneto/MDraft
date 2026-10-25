@@ -116,6 +116,8 @@ export class TypstPdfPreview {
   private observer: IntersectionObserver | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private fit = 1;
+  /** View zoom factor; 1 is 100%. */
+  private zoom = 1;
   private fitTimer = 0;
   private maxPageWidth = MAX_PAGE_WIDTH;
   private disposed = false;
@@ -185,6 +187,7 @@ export class TypstPdfPreview {
     this.pane = pane;
     this.onContext = onContext;
     this.host.style.setProperty("--typst-fit", "1");
+    this.pane.classList.remove("preview-zoomed");
     this.host.addEventListener("click", this.click);
     this.host.addEventListener("dblclick", this.doubleClick);
     this.host.addEventListener("mouseup", this.mouseUp);
@@ -246,9 +249,33 @@ export class TypstPdfPreview {
     this.observePages();
   }
 
+  /**
+   * Change the view zoom without rebuilding the PDF.
+   *
+   * The fit feeds both the page shell's CSS size and the canvas raster scale;
+   * preserving scroll by the fit ratio keeps the reader at roughly the same
+   * place in the document instead of jumping to the top.
+   */
+  setZoom(zoom: number): void {
+    const next = Math.max(0.5, Math.min(3, zoom));
+    if (Math.abs(next - this.zoom) < 0.001) return;
+    const before = this.fit;
+    const scroll = this.pane.scrollTop;
+    this.zoom = next;
+    this.pane.classList.toggle("preview-zoomed", next > 1);
+    this.applyFit();
+    if (before > 0 && Math.abs(this.fit - before) > 0.0001) {
+      const ratio = this.fit / before;
+      requestAnimationFrame(() => {
+        if (!this.disposed) this.pane.scrollTop = scroll * ratio;
+      });
+    }
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.pane.classList.remove("preview-zoomed");
     window.clearTimeout(this.selectionTimer);
     this.selectionTimer = 0;
     window.clearTimeout(this.clickTimer);
@@ -356,9 +383,10 @@ export class TypstPdfPreview {
     if (this.disposed || this.pages.length === 0) return;
     // Fit to the pane, allowing a scale above 1. The bleed makes the page a few
     // pixels wider than the pane; the pane clips it, so no side gutter can show
-    // and a resize cannot leave a one-pixel seam.
+    // and a resize cannot leave a one-pixel seam. The view zoom multiplies the
+    // fit, so a 150% page is larger than the pane and scrolls horizontally.
     const available = Math.max(160, this.pane.clientWidth + PAGE_BLEED);
-    const fit = available / this.maxPageWidth;
+    const fit = (available / this.maxPageWidth) * this.zoom;
     if (Math.abs(fit - this.fit) < 0.001) return;
     this.fit = fit;
     this.host.style.setProperty("--typst-fit", this.fit.toFixed(4));

@@ -43,3 +43,5 @@ docs/samples/*
 *.njsproj
 *.sln
 *.sw?
+# Local browser automation artifacts from the MCP tooling; not part of the app.
+.playwright-mcp/

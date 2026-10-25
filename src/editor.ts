@@ -29,7 +29,16 @@ import {
   type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import {
+  copyLineDown,
+  defaultKeymap,
+  history,
+  historyKeymap,
+  indentWithTab,
+  moveLineDown,
+  moveLineUp,
+  toggleComment,
+} from "@codemirror/commands";
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { html } from "@codemirror/lang-html";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
@@ -46,18 +55,27 @@ import { typstHeadingLine, typstShiftHeadingLine } from "./typst-commands";
 import { typstLanguage } from "./typst-language";
 import {
   bracketMatching,
+  foldAll as foldAllCommand,
+  foldCode,
   foldGutter,
   foldKeymap,
   indentOnInput,
   indentUnit,
   syntaxHighlighting,
+  unfoldAll as unfoldAllCommand,
+  unfoldCode,
 } from "@codemirror/language";
 import {
   closeSearchPanel,
+  findNext as findNextCommand,
+  findPrevious as findPreviousCommand,
+  gotoLine as gotoLineCommand,
   highlightSelectionMatches,
   openSearchPanel,
   search,
   searchKeymap,
+  selectNextOccurrence as selectNextOccurrenceCommand,
+  selectSelectionMatches,
 } from "@codemirror/search";
 import { buildChromeTheme, buildHighlightStyle, type SyntaxPalette } from "./syntax-themes";
 import { resetSpellLanguage, spellExtension, type SpellOptions } from "./spellcheck";
@@ -121,6 +139,26 @@ export interface EditorHandle {
   setSpellcheck(options: SpellOptions, force?: boolean): void;
   openSearch(replace?: boolean): void;
   closeSearch(): void;
+  /** Move to the next/previous match of the current search query. */
+  findNext(): void;
+  findPrevious(): void;
+  /** Add the next occurrence of the selection, or start one from the word. */
+  selectNextOccurrence(): void;
+  /** Select every occurrence of the current selection. */
+  selectAllOccurrences(): void;
+  /** Open CodeMirror's line prompt. */
+  gotoLine(): void;
+  toggleComment(): void;
+  duplicateLine(): void;
+  moveLineUp(): void;
+  moveLineDown(): void;
+  deleteSelection(): void;
+  /** Replace the current selection with the result of `transform`. */
+  transformSelection(transform: (text: string) => string): void;
+  foldCurrent(): void;
+  unfoldCurrent(): void;
+  foldAll(): void;
+  unfoldAll(): void;
   scrollToLine(line: number): void;
   /** Scroll `line` to the top of the editor; optionally move the caret. */
   revealLine(line: number, moveCaret?: boolean, focus?: boolean): void;
@@ -926,6 +964,100 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
 
     closeSearch() {
       closeSearchPanel(view);
+    },
+
+    findNext() {
+      // Opening the panel is the command's own fallback when no query exists;
+      // focusing the editor here would take the caret out of that input.
+      findNextCommand(view);
+    },
+
+    findPrevious() {
+      findPreviousCommand(view);
+    },
+
+    selectNextOccurrence() {
+      selectNextOccurrenceCommand(view);
+      view.focus();
+    },
+
+    selectAllOccurrences() {
+      selectSelectionMatches(view);
+      view.focus();
+    },
+
+    gotoLine() {
+      gotoLineCommand(view);
+    },
+
+    toggleComment() {
+      toggleComment(view);
+      view.focus();
+    },
+
+    duplicateLine() {
+      copyLineDown(view);
+      view.focus();
+    },
+
+    moveLineUp() {
+      moveLineUp(view);
+      view.focus();
+    },
+
+    moveLineDown() {
+      moveLineDown(view);
+      view.focus();
+    },
+
+    deleteSelection() {
+      const selection = view.state.selection.main;
+      if (selection.empty) return;
+      view.dispatch({
+        changes: { from: selection.from, to: selection.to, insert: "" },
+        selection: { anchor: selection.from },
+        scrollIntoView: false,
+        userEvent: "delete",
+      });
+      view.focus();
+    },
+
+    transformSelection(transform) {
+      const selection = view.state.selection.main;
+      if (selection.empty) return;
+      const before = view.state.sliceDoc(selection.from, selection.to);
+      const after = transform(before);
+      if (after === before) {
+        view.focus();
+        return;
+      }
+      view.dispatch({
+        changes: { from: selection.from, to: selection.to, insert: after },
+        selection: { anchor: selection.from, head: selection.from + after.length },
+        scrollIntoView: false,
+        userEvent: "input.transform",
+      });
+      view.focus();
+    },
+
+    foldCurrent() {
+      foldCode(view);
+      view.focus();
+    },
+
+    unfoldCurrent() {
+      unfoldCode(view);
+      view.focus();
+    },
+
+    foldAll() {
+      foldAllCommand(view);
+      view.focus();
+    },
+
+    unfoldAll() {
+      unfoldAllCommand(view);
+      view.focus();
     },
 
     scrollToLine(line) {
