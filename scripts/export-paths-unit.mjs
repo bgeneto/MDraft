@@ -154,8 +154,8 @@ console.log("\n=== publication policy ===");
   );
   equal(
     publicationUrl("//cdn.example.com/a.png", target("C:/repo", "C:/out")),
-    "//cdn.example.com/a.png",
-    "a protocol-relative image keeps its host",
+    "https://cdn.example.com/a.png",
+    "a protocol-relative image becomes an explicit network URL",
   );
   equal(
     publicationUrl("file:///C:/repo/image.png", target("C:/repo/docs", "C:/repo/out")),
@@ -188,6 +188,20 @@ console.log("\n=== publication policy ===");
     "a drive path is rebased against the output folder",
   );
 }
+
+equal(
+  new URL(
+    publicationUrl("//cdn.example.com/a.png", target("C:/repo", null, true)),
+    "file:///C:/temp/print.html",
+  ).href,
+  "https://cdn.example.com/a.png",
+  "a network image still resolves to HTTPS from the print file origin",
+);
+equal(
+  publicationUrl("\\\\server\\share\\a.png", target("C:/repo", null, true)),
+  "file://server/share/a.png",
+  "a backslash UNC image retains its filesystem meaning",
+);
 
 console.log(`\n${checks.filter((c) => c.ok).length}/${checks.length} checks passed`);
 process.exit(checks.every((c) => c.ok) ? 0 : 1);

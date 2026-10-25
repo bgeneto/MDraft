@@ -255,7 +255,7 @@ check(
   zoomed.text,
 );
 
-await press({ code: "Digit0", key: "0", ctrl: true, shift: true });
+await press({ code: "Digit0", key: "0", ctrl: true, alt: true });
 await sleep(200);
 const zoomReset = await zoomChip();
 check(zoomReset.hidden === true, "reset hides the zoom indicator");

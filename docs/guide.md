@@ -195,8 +195,9 @@ there.
 Other editor features:
 
 - **Focus mode** dims every line except the one holding the caret.
-- **Typewriter mode** recentres the view when you move the caret; while typing,
-  the editor keeps the caret in view rather than forcing it to the centre.
+- **Typewriter mode** keeps the primary caret near the vertical centre while
+  typing or moving it, including wrapped lines. Manual scrolling stays put
+  until the next editing/caret action; `F9` turns centering off again.
 - **Line height** in the source pane is **Compact** (1.3×), **Normal** (1.5×)
   or **Wide** (1.8×), under **Preferences › Editor**. The preview keeps its own
   reading line height.
@@ -379,7 +380,7 @@ built from source, use `Cmd` where the application registers `CmdOrCtrl`.
 | Bulleted / numbered / task list | `Ctrl+Shift+]` / `Ctrl+Shift+[` / `Ctrl+Shift+X` |
 | Indent / outdent | `Tab` / `Shift+Tab` |
 | Focus / typewriter mode | `F8` / `F9` |
-| Zoom in / out / reset | `Ctrl+Shift+=` / `Ctrl+Shift+-` / `Ctrl+Shift+0` |
+| Zoom in / out / reset | `Ctrl+Shift+=` / `Ctrl+Shift+-` / `Ctrl+Alt+0` |
 | Full screen | `F11` |
 
 Zoom applies to the whole document view: the source in Source-only, both panes

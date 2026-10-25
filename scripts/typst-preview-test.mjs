@@ -296,6 +296,14 @@ async function clearSelection() {
 // ---------------------------------------------------------------------------
 
 console.log("=== fixture and Document ===");
+const compiler = await evaluate(`window.__TAURI_INTERNALS__.invoke('typst_status')`);
+if (!compiler.found) {
+  console.error(
+    "Typst prerequisite missing: install Typst through MDraft Tools or make typst available on PATH before running typst-preview.",
+  );
+  ws.close();
+  process.exit(2);
+}
 const title = await evaluate("document.title");
 check("the Typst fixture is open", title.includes("typst-pages.typ"), title);
 

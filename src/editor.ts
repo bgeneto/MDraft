@@ -506,6 +506,79 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
   let onCursor: (info: CursorInfo) => void = () => {};
   let onScroll: (info: ScrollInfo) => void = () => {};
   let typewriter = false;
+  const typewriterPlugin = ViewPlugin.fromClass(
+    class {
+      enabled = typewriter;
+      disposed = false;
+      frame = 0;
+      resize: ResizeObserver;
+      constructor(readonly view: EditorView) {
+        this.resize = new ResizeObserver(() => {
+          if (this.enabled) this.center();
+        });
+        this.resize.observe(view.scrollDOM);
+        if (this.enabled) this.pad();
+      }
+      pad() {
+        const padding = Math.max(
+          0,
+          (this.view.scrollDOM.clientHeight - this.view.defaultLineHeight) / 2,
+        );
+        this.view.contentDOM.style.paddingTop = `${padding}px`;
+        this.view.contentDOM.style.paddingBottom = `${padding}px`;
+      }
+      center() {
+        cancelAnimationFrame(this.frame);
+        if (!this.enabled) return;
+        const { doc, selection } = this.view.state;
+        const head = selection.main.head;
+        const current = () =>
+          this.enabled &&
+          !this.disposed &&
+          this.view.state.doc === doc &&
+          this.view.state.selection.main.head === head &&
+          !this.view.composing;
+        this.frame = requestAnimationFrame(() => {
+          if (!current()) return;
+          this.pad();
+          this.view.requestMeasure();
+          // Let the changed padding be measured before the centering effect.
+          this.frame = requestAnimationFrame(() => {
+            this.frame = 0;
+            if (current())
+              this.view.dispatch({ effects: EditorView.scrollIntoView(head, { y: "center" }) });
+          });
+        });
+      }
+      setEnabled(on: boolean) {
+        if (this.enabled === on) return;
+        this.enabled = on;
+        if (on) this.center();
+        else {
+          cancelAnimationFrame(this.frame);
+          this.frame = 0;
+          this.view.contentDOM.style.removeProperty("padding-top");
+          this.view.contentDOM.style.removeProperty("padding-bottom");
+          this.view.requestMeasure();
+        }
+      }
+      update(update: { docChanged: boolean; selectionSet: boolean }) {
+        if (this.enabled && (update.docChanged || update.selectionSet)) this.center();
+      }
+      destroy() {
+        this.disposed = true;
+        cancelAnimationFrame(this.frame);
+        this.resize.disconnect();
+      }
+    },
+    {
+      eventHandlers: {
+        compositionend() {
+          this.center();
+        },
+      },
+    },
+  );
   // The HTML and Typst grammars arrive in a promise. A tab switch that lands
   // before that promise resolves must not install the grammar into the new buffer.
   let languageGeneration = 0;
@@ -676,19 +749,13 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     syntaxCompartment.of([]),
     spellCompartment.of([]),
     baseTheme,
+    typewriterPlugin,
     EditorView.updateListener.of((update) => {
       if (update.docChanged) {
         applyWordChanges(update);
         onDocChanged(update.state.doc.toString());
       }
       if (update.selectionSet || update.docChanged) onCursor(readCursor(update.view));
-      if (typewriter && update.selectionSet && !update.docChanged) {
-        const head = update.state.selection.main.head;
-        const target = update.view;
-        requestAnimationFrame(() => {
-          target.dispatch({ effects: EditorView.scrollIntoView(head, { y: "center" }) });
-        });
-      }
     }),
   ];
 
@@ -937,6 +1004,7 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
 
     setTypewriter(on) {
       typewriter = on;
+      view.plugin(typewriterPlugin)?.setEnabled(on);
     },
 
     /**

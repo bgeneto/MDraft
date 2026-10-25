@@ -202,7 +202,7 @@ rewrite from scratch.
 | `npm run stage` | `scripts/stage-artifacts.mjs` | Re-stage what is already built |
 | `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
-| `npm run test:rust` | `cargo test` | 147 passed on Windows, 146 on Linux; two ignored downloads, plus the ignored display-owned Linux print probe |
+| `npm run test:rust` | `cargo test` | 154 passed on Windows, 153 on Linux; two ignored downloads, plus the ignored display-owned Linux print probe |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. The two restart layers are the exception: two launches of the same instance's settings directory, closed with WM_CLOSE in between so the close flush runs. Puts back the working tree, the developer's own settings, window state and recovery journal afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
 | `npm run smoke` | `scripts/dom-smoke.mjs` | 108 checks against `samples/feature-tour.md` |
 | `npm run word-sync` | `scripts/word-sync-test.mjs` | 58 checks of word-level sync, including 20 alternating pairs, element endpoints, multi-paragraph ranges, stale render rejection and reduced motion in Markdown/AsciiDoc/Typst Document, against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, the four-beat pulse and its resting mark, reduced motion, no scroll, Escape, and the fallbacks |
@@ -215,11 +215,12 @@ rewrite from scratch.
 | `npm run syntax` | `scripts/syntax-theme-test.mjs` | 10 checks that highlighting is real and that the sync mark stays amber and visible on Nord, Ink and Solarized Dark |
 | `npm run html` | `scripts/html-preview-test.mjs` | 60 checks of the sandboxed HTML guest, including 20 alternating editor/guest pairs, full entity offsets, inline/nested ownership, reverse paint, Escape, reduced motion, invalid samples and same-word reselection after an edit |
 | `npm run export` | `scripts/export-test.mjs` | 38 checks of every export path, against real pandoc, including an AsciiDoc source and the rendered-HTML math reader |
-| `npm run export:paths:unit` | `scripts/export-paths-unit.mjs` | 42 checks of the browser path/URL policy: drive, UNC, POSIX, spaces, Unicode, `..`, different roots, fragments, `data:`, `file:` and protocol-relative addresses — no application |
+| `npm run export:paths:unit` | `scripts/export-paths-unit.mjs` | 44 checks of the browser path/URL policy: drive, UNC, POSIX, spaces, Unicode, `..`, different roots, fragments, `data:`, `file:` and protocol-relative addresses — no application |
 | `npm run export:browser` | `scripts/export-browser-test.mjs` | 21 checks of the native HTML and Print artifacts through the real UI: restored local images/links, absolute print URLs, the readiness/failure script, and the same light diagram palette in a dark and a light editor |
-| `npm run pdf:native` | `scripts/pdf-native-test.mjs` | 11 checks of the real direct-PDF path: a Markdown fixture, static HTML, the scripted-HTML browser fallback, and the Poppler visual checker |
+| `npm run pdf:native` | `scripts/pdf-native-test.mjs` | 21 checks of real PDF output, static HTML, active/encoded-child fallbacks, native script blocking, queued-job ownership and existing-target preservation, plus Poppler page checks. `MDRAFT_PDF_KEEP=1` retains evidence; `MDRAFT_PDF_RASTERIZER=wsl` selects WSL |
 | `npm run pdf:visual` | `scripts/pdf-visual-check.mjs` | App-free PDF measurement: A4 geometry, embedded fonts, selectable text, rasterized page PNGs, ink, image colours, table rules and margins |
 | `npm run typography` | `scripts/typography-test.mjs` | 48 checks that each face loads, each OpenType switch changes pixels, the six-preset matrix holds, the four new body faces render differently, and the Semibold weights are real |
+| `npm run typewriter` | `scripts/typewriter-test.mjs` | 21 checks of editor input and caret geometry at start/middle/end, wraps, Focus mode, composition, multi-cursor, undo/redo, reduced motion, tabs, disable and zoom reset. `MDRAFT_TYPEWRITER_VISUAL_DIR=<dir>` retains screenshots and pauses for manual review (`ready.json` / `done.json`), adding one check |
 | `npm run shortcuts` | `scripts/shortcut-test.mjs` | 44 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, that the zoom chip follows the level, that a new tab keeps the previous buffer's undo, and that the webview's F5/Ctrl+R reload keys are swallowed |
 | `npm run menu` | `scripts/menu-test.mjs` | 97 checks of the approved eight-menu tree, command placement, conditional labels, availability by language/mode/selection, Preferences deep links, Paste without Formatting, document zoom reset, block-equation selection handling and both Close All Tabs routes |
 | `npm run tabs` | `scripts/document-tabs-test.mjs` | 107 checks of several open documents: sidebar and Recents, `open-files`, active-tab styling, the tab context menu (including Close All Tabs), keyboard navigation, caret and scroll per tab, dirty dot, × and middle-click, Ctrl+Tab, drag and keyboard reordering, the disk poll, Auto Save across tabs, overflow arrows and the wheel, Close Others, the last tab |
@@ -232,8 +233,8 @@ rewrite from scratch.
 | `npm run asciidoc` | `scripts/asciidoc-test.mjs` | 54 checks of the AsciiDoc preview, source highlighting, outline, preview copy, spellcheck, includes, paste, the AsciiDoc reference, the default extension and word-level sync |
 | `npm run asciidoc:export:unit` | `scripts/asciidoc-export-unit.mjs` | 17 unit checks of the AsciiDoc -> HTML step every pandoc export uses: unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations; no application |
 | `npm run test:sessions` | `scripts/sessions-test.mjs` | 60 unit checks of `src/sessions.ts`, with no application and no build |
-| `npm run p0:unit` | `scripts/p0-unit.mjs` | 110 checks of recovery scheduling, disk classification, Typst commands and delayed-IO lifecycle/export safety: save/reload/Save As, queues, checked-write conflicts, baseline hashes, close cancellation, failure retention, legacy lossy copies and HTML/Print/Pandoc snapshots; no app/build |
-| `npm run p0:lifecycle` | `scripts/p0-lifecycle-test.mjs` | 34 checks through the real editor of delayed save/reload/Save As/export, recovery, three-way tab/bulk/window close, failed saves, binary/mixed-drop refusal, a same-size/same-mtime disk rewrite, UTF-16 explanation, focus and clean bundled documents |
+| `npm run p0:unit` | `scripts/p0-unit.mjs` | 112 checks of recovery scheduling, disk classification, Typst commands and delayed-IO lifecycle/export safety: save/reload/Save As, queues, checked-write conflicts, baseline hashes, close cancellation, failure retention, legacy lossy copies and HTML/Print/Pandoc snapshots; no app/build |
+| `npm run p0:lifecycle` | `scripts/p0-lifecycle-test.mjs` | 35 checks through the real editor of delayed save/reload/Save As/export, recovery, three-way tab/bulk/window close, failed saves, binary/mixed-drop refusal, a same-size/same-mtime disk rewrite, UTF-16 explanation, focus and clean bundled documents |
 | `npm run single:instance` | `scripts/single-instance-test.mjs` | 12 checks of the second-launch handoff: two initial paths as tabs, a relative second-launch path, the second process exiting, one page target, duplicate-path focus, a missing path toast and a dirty buffer surviving |
 | `npm run preview:zoom` | `scripts/preview-zoom-test.mjs` | 24 checks of document zoom through the editor and every preview renderer: Split, Preview-only, Source-only, Markdown, AsciiDoc, Typst Document, Typst Pages, the HTML guest, word sync, keyboard reveal, the status chip, reset and Content Width |
 | `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 378 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
@@ -284,6 +285,7 @@ All of these need the app already running with CDP enabled (see
 | `favorites-restore-test.mjs` | `[port] phase1\|phase2 <doc> <extra>` | phase 1: `samples/feature-tour.md` plus `samples/word-sync.md` as the second tab | The two-launch favorites store: phase 1 adds one favorite from the editor menu and one from the inactive tab's menu while a whole-settings save is scheduled, leaves the Favorites panel selected and closes the active tab just before the window does; phase 2 — launched **without** a document argument — reads the list back from disk, checks its order, the remembered panel and both rendered rows, then opens one. Normally run by `test-all.mjs` |
 | `recent-menu-test.mjs` | `[port]` | `samples/feature-tour.md` | The native Open Recent submenu through the `recent_menu` probe: it lists the launch file, a newly opened file becomes the first row, the emitted menu id focuses an existing tab instead of duplicating it, Clear Items empties the menu/sidebar/settings, a 27-row history renders in full in the sidebar while the menu shows 20 plus Clear Items, and a later open refills the list |
 | `p0-lifecycle-test.mjs` | `[port]` | `samples/feature-tour.md`, plus owned temporary files | Delays IPC through browser fetch without changing immutable Tauri methods; checks disk bytes, visible text/dirty tabs/recovery, Save As ownership, explicit close decisions and non-text refusal. The harness owns and restores settings/recovery/profile |
+| `typewriter-test.mjs` | `[port]` | `samples/feature-tour.md`; creates an owned temporary document | Caret/viewport geometry during editor input, manual scroll, wrapping, Focus, IME, undo, tab state and disabling; screenshots and optional manual visual hold |
 | `single-instance-test.mjs` | `[port]` | Two initial documents, `samples/feature-tour.md` and `samples/word-sync.md`; needs `MDRAFT_EXE` and `MDRAFT_REPO` from the harness | The running window receives a relative second-launch path as a tab, the second process exits, one page target remains, an already-open path is focused, a missing path toasts without opening a tab, and the dirty startup buffer survives |
 | `preview-zoom-test.mjs` | `[port]` | `samples/export-tour.md`; opens the AsciiDoc, Typst and HTML fixtures | Document zoom geometry in Split/Preview-only/Source-only, AsciiDoc, Typst Document, Typst Pages and the HTML guest; a zoomed word sync; reset and Content Width; a 150% screenshot |
 | `sessions-test.mjs` | — | none — runs without the application | The session store's rules: insertion after the active tab, untitled names, one tab per path under both case rules, the neighbour that takes over on close, `move` and `removeMany` order, wrap-around, and the empty-list invariant |
@@ -505,24 +507,25 @@ hash the pixels.
 
 ## Testing
 
-Forty-one default layers, cheapest first. Run them in this order when changing anything.
+Forty-two default layers, cheapest first. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 147 Windows / 146 Linux | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction, image content sniffing (WebP/AVIF brands), `${filename}`, the untitled image guard, the Typst image root, the OS opener's executable refusal, the recovery journal's round-trip/id/cap rules, checked-write hashes and same-metadata conflicts, launch argument parsing and path identity |
+| Rust unit | `npm run test:rust` | 154 Windows / 153 Linux | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction, image content sniffing (WebP/AVIF brands), `${filename}`, the untitled image guard, the Typst image root, the OS opener's executable refusal, the recovery journal's round-trip/id/cap rules, checked-write hashes and same-metadata conflicts, launch argument parsing and path identity |
 | Session store | `npm run test:sessions` | 60 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
-| P0 data safety (unit) | `npm run p0:unit` | 110 | Recovery scheduling/classification/Typst strings, deferred save/reload/Save As, checked-write conflicts and baseline hashes, save queues, bulk-close cancellation/failures, lossy copies and export snapshots across picker/tool/render delays — no application |
+| P0 data safety (unit) | `npm run p0:unit` | 112 | Recovery scheduling/classification/Typst strings, deferred save/reload/Save As, checked-write conflicts and baseline hashes, save queues, bulk-close cancellation/failures, lossy copies and export snapshots across picker/tool/render delays — no application |
 | Paste conversion | `npm run paste:convert` | 378 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, `<br><br>` paragraph splitting, image syntax, AsciiDoc, and an image that fails to save |
 | AsciiDoc export source | `npm run asciidoc:export:unit` | 17 | Unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations - no application |
-| Export paths (unit) | `npm run export:paths:unit` | 42 | Drive, UNC and POSIX paths, spaces, Unicode, `..`, different roots, encoded spaces, fragments, `data:`, `file:` and protocol-relative references — no application |
+| Export paths (unit) | `npm run export:paths:unit` | 44 | Drive, UNC and POSIX paths, spaces, Unicode, `..`, different roots, encoded spaces, fragments, `data:`, `file:` and protocol-relative references — no application |
 | Browser exports | `npm run export:browser` | 21 | Native HTML and Print artifacts: local image/link resolution, no app protocol, absolute print URLs, the resource-wait/failure script, and a light print diagram in a dark editor |
-| Native PDF | `npm run pdf:native` | 11 | A real direct PDF from Markdown, static HTML through the same writer, scripted HTML kept on the browser route, and the Poppler visual metrics |
+| Native PDF | `npm run pdf:native` | 21 | A real direct PDF from Markdown, static HTML through the same writer, scripted HTML kept on the browser route, and the Poppler visual metrics |
 | PDF visual (app-free) | `npm run pdf:visual -- --pdf <file> --fixture quality` | 36 | A4 geometry, embedded fonts, selectable text, one PNG/PPM per page, non-blank pages, quiet margins, known image colours, table rules and mathematics ink |
 | DOM smoke | `npm run smoke` | 108 | Rendering, pane sync, preferences (including the four On Launch choices and Line Height), math, fonts, status icons |
-| P0 lifecycle (UI) | `npm run p0:lifecycle` | 34 | Delayed save/reload/Save As/export, real text/dirty/recovery preservation, a same-size/same-mtime external rewrite, three-way close/cancellation/failures, binary/mixed-drop/UTF-16 refusal, focus restoration, clean bundled documents and native close |
+| P0 lifecycle (UI) | `npm run p0:lifecycle` | 35 | Delayed save/reload/Save As/export, real text/dirty/recovery preservation, a same-size/same-mtime external rewrite, three-way close/cancellation/failures, binary/mixed-drop/UTF-16 refusal, focus restoration, clean bundled documents and native close |
 | Second launch | `npm run single:instance` | 12 | Two initial paths as tabs, relative second-launch handoff, second-process exit, one page target, duplicate-path focus, missing-path toast, dirty buffer preserved |
 | Document zoom | `npm run preview:zoom` | 24 | Source-only, Split and Preview-only geometry; Markdown/AsciiDoc/Typst Document; HTML guest frame; Typst Pages canvases, horizontal scroll and scroll position; zoomed word sync and keyboard reveal; reset leaves Content Width alone |
+| Typewriter | `npm run typewriter` | 21 (+1 manual hold) | Typing/caret centering at three positions, wraps, Focus, IME, multi-cursor, undo/redo, reduced motion, tabs, disable and reset |
 | Word sync | `npm run word-sync` | 58 | The fragment map, preview → source and source → preview, atomic code, formula and image spans, the pulse and its resting mark, reduced motion, word snapping, no scroll, Escape |
 | Auto-close matching | `npm run autoclose:unit` | 17 | Which tag a typed `>`, the void/self-closing/autolink/escape rules — no application |
 | Remembered tabs (unit) | `npm run tabs:restore:unit` | 33 | What is stored (order, untitled exclusion, deduplication, the 20-document cap) and what a restore plan does with it (missing files, the active-tab fallback) — no application |
@@ -540,7 +543,7 @@ Forty-one default layers, cheapest first. Run them in this order when changing a
 | Syntax | `npm run syntax` | 10 | Token colours, palette switching, and the sync mark's amber contrast on three dark palettes |
 | AsciiDoc | `npm run asciidoc` | 54 | Preview, title/TOC, math, includes, source highlighting, outline, preview copy, spellcheck, paste, the built-in reference, defaults, word-level sync |
 | Editor menu / Format | `npm run format:document` | 141 | The full editing menu, clipboard fake, the main-menu route, Markdown/HTML/Typst, inactive tabs, undo, caret, AsciiDoc disabled, spelling and formatter failures; 47 math checks also run with `node scripts/format-document-test.mjs --unit`. The physics copy retains all 292 formulas and its KaTeX error count after formatting, with visible fractions/radicals and exact bytes after undo |
-| Menu structure | `npm run menu` | 87 | The eight categories and command placement, conditional labels, availability by language/mode/selection, Preferences deep links, Paste without Formatting, document zoom reset, block-equation selection and both Close All Tabs routes |
+| Menu structure | `npm run menu` | 97 | The eight categories and command placement, conditional labels, availability by language/mode/selection, Preferences deep links, Paste without Formatting, document zoom reset, block-equation selection and both Close All Tabs routes |
 | HTML guest | `npm run html` | 60 | Sandbox, IPC boundary, local assets, sync/blink, the guest word double-click, scripts-off, outline, reload-key guard |
 | Document tabs | `npm run tabs` | 107 | Several open documents, the context menu (including Close All Tabs), drag and keyboard reordering, overflow arrows, the disk poll, Auto Save across tabs, caret and scroll per tab |
 | Favorites | `npm run favorites` | 56 | The panel that replaced Files, both Add/Remove menu routes, insertion order across opens, inactive tabs, one-at-a-time removal, a missing file, the untitled disabled state, no Clear All, the Preferences changes and `view.favorites` |
@@ -560,8 +563,10 @@ workspace — an executable
 launched from inside it cannot write `%APPDATA%`, which is exactly what the close
 test asserts — and closes everything it started on every exit path. `--no-build`
 tests the binary already built, `--only`/`--skip` narrow the run, `--all` adds the
-pandoc export and the image paste checks, and `--kill` closes an MDraft that is
-running from `target/release` instead of refusing to build over it.
+pandoc export and the image paste checks, and `--kill` is a legacy option that cannot bypass the user-instance guard.
+Before touching state, the harness refuses any running user MDraft, including
+installed/portable copies outside the repository. It closes only owned test
+leftovers. A private webview folder or CDP port does not isolate the app identifier.
 
 The frontend quality gates are separate from the functional table: `npm run
 format:check`, `npm run lint` and `npm run knip`. The `Quality` workflow
@@ -647,7 +652,54 @@ than asserting the feature's own internal counters.
 
 ## Traps
 
+**Ctrl+Shift+0 passes a synthetic shortcut test but does nothing with the real keyboard**
+Windows can consume this input-language chord before WebView2 receives the digit.
+A trusted-key capture showed only the modifiers; `Ctrl+Alt+0` delivered the digit
+and reset 150% to 100%. Keep Ctrl+Alt+0 as the advertised binding, accept the old
+alias where delivered, and preserve Ctrl+0 for Normal Paragraph. CDP dispatch
+cannot prove an OS-reserved chord is usable.
+
+**Ctrl+P invokes `print_native`, yet no usable print dialog remains**
+`ShowPrintUI` returning was mistaken for dialog completion, so immediate webview
+destruction removed the dialog's owner. A later Windows message said `Print
+failed` / `Check your printer and try again. Printing failed.` Keep the visible
+print owner until explicit closure; inspect the native window, not only the IPC
+result or a webview screenshot. Windows cannot report print-versus-cancel from
+this API's return value.
+
+**`window is not a usable app window` on `Microsoft Edge WebView2 - Print`**
+Windows hosts the system print dialog in Explorer. Sky can capture it but may
+refuse input; that is not proof that Cancel is broken. Confirm cancellation
+with the user if needed. The remaining MDraft-owned preview may appear only as
+an additional screenshot in the main window's state, not in `list_windows`.
+Select that screenshot's id/origin when closing its X, then verify the print
+surface is gone and the editor remains usable. Do not infer completion from
+`ShowPrintUI` returning or from the toast's retained text.
+
+**`spawnSync pdffonts ENOENT` despite the PDF checker finding Poppler**
+Finding only `pdfinfo` did not prove the full suite was installed. Detect all five
+tools before choosing native/WSL. `MDRAFT_PDF_RASTERIZER=wsl` propagates through
+the PDF test; keep its files on a WSL-mounted workspace path, since redirected
+TEMP volumes such as T: need not exist under `/mnt/t`.
+
 Each of these cost real time. Symptom → cause → fix.
+
+**`the application exited with code 0 before opening port 9222` for every UI layer, although the release binary is valid**
+An installed `C:\Program Files\MDraft\mdraft.exe` was already running. Since the
+single-instance plugin uses the application identifier, a staged test copy with
+the same identifier forwards its fixture paths to that installation and exits;
+a private `WEBVIEW2_USER_DATA_FOLDER` does not isolate the handoff. The harness
+preflight only rejected processes locking `target/release`, so it still moved
+and reset the shared settings/recovery before discovering there was no test
+window. This looked like seven application startup regressions; CIM showed the
+installed process and the failures were all successful second-process exits.
+Before taking user state or launching a test, stop the run if any instance of
+the same identifier is open; do not kill the user's window. For a concurrent
+audit, use a disposable build with a distinct identifier, and make the temporary
+harness and close-check settings path use that same identifier. Restore the
+original release executable after the audit. Supplying only APPDATA or a private
+WebView2 folder does not create this isolation. See
+`docs/backlog-review-2026-10-25.md` (R-05).
 
 **Add yours before you finish the task** — see
 [Recording traps is required](#recording-traps-is-required) for what qualifies and
@@ -2302,13 +2354,14 @@ platform and fails on the other.
    reads the latter for the bundle, and the two must agree. `npm run
    check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
-3. `npm run test:rust` — 147 runnable Windows tests / 146 Linux tests (two ignored downloads: pandoc and Typst, plus the ignored display-owned Linux print probe). Run them on Linux too
+3. `npm run test:rust` — 154 runnable Windows tests / 153 Linux tests (two ignored downloads: pandoc and Typst, plus the ignored display-owned Linux print probe). Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run menu`,
    `npm run preview:zoom`, `npm run math`, `npm run syntax`, `npm run html`,
    `npm run asciidoc`, `npm run favorites` and `npm run pdf:native` — 108 + 97 +
-   24 + 12 + 10 + 60 + 54 + 56 + 11 checks.
+   24 + 12 + 10 + 60 + 54 + 56 + 21 checks; also run `npm run typewriter`
+   (21 checks, plus the manual visual hold when changing its behavior).
 5. `npm run audit` against both `docs/sample-files` documents and compare the
    counts with the table in the README.
 6. `npm run dist` — installers and checksums land in `bin/<os>/<arch>/`.

@@ -174,6 +174,13 @@ const SUITES = [
     doc: "samples/feature-tour.md",
   },
   {
+    id: "typewriter",
+    title: "Typewriter typing and reset",
+    kind: "cdp",
+    script: "typewriter-test.mjs",
+    doc: "samples/feature-tour.md",
+  },
+  {
     // The first launch gets two files; a second process must forward a third
     // path into this window and exit. The suite owns its temporary directory
     // and spawns the staged executable itself.
@@ -518,7 +525,7 @@ Usage: node scripts/test-all.mjs [options]
   --port <n>      first CDP port; each instance gets its own (default 9222)
   --verbose       stream each layer's output instead of capturing it
   --keep          keep the staging directory and the per-suite logs
-  --kill          close a running MDraft instead of refusing to start
+  --kill          legacy option; never bypasses a running user-instance guard
   --list          print the suites and exit
 `.trim();
 
@@ -649,8 +656,9 @@ async function listRunningInstances() {
       .map((line) => ({ pid: Number(line.split(/\s+/)[0]), path: line }));
   }
   const query =
-    "Get-CimInstance Win32_Process -Filter \"Name='mdraft.exe'\" | Select-Object ProcessId,ExecutablePath | ConvertTo-Json -Compress";
+    "Get-CimInstance Win32_Process -ErrorAction Stop -Filter \"Name='mdraft.exe'\" | Select-Object ProcessId,ExecutablePath | ConvertTo-Json -Compress";
   const result = await run("pwsh", ["-NoProfile", "-Command", query]);
+  if (result.code !== 0) fail(`Could not inspect running MDraft instances: ${result.err}`);
   const text = result.out.trim();
   if (!text) return [];
   const parsed = JSON.parse(text);
@@ -679,44 +687,25 @@ async function closeInstances(instances) {
   await sleep(500);
 }
 
-async function prepareForRun(options) {
+async function prepareForRun(_options) {
   const instances = await listRunningInstances();
   if (!instances.length) return;
   const ours = instances.filter((instance) => /mdraft-test-/.test(instance.path));
+  // A private browser folder does not isolate single-instance handoff or the
+  // settings/recovery identifier from an installed or portable user instance.
+  const userInstances = instances.filter((instance) => !ours.includes(instance));
+  if (userInstances.length)
+    fail(
+      `MDraft is already running (pid ${userInstances.map((i) => i.pid).join(", ")}).\n` +
+        `No test state was changed. Close it yourself or use a build/harness with a separate test identifier. ` +
+        `--no-build and --kill cannot bypass single-instance/state isolation.`,
+    );
   if (ours.length) {
     console.log(
       `closing ${ours.length} leftover test instance(s): ${ours.map((i) => i.pid).join(", ")}`,
     );
     await closeInstances(ours);
   }
-  // Only a copy running out of `target/release` holds the file cargo has to
-  // replace. An instance started anywhere else — another checkout, a staged
-  // copy — cannot block the build, so it is left running and its ports avoided.
-  const releaseDir = path.join(repoRoot, "src-tauri", "target", "release").toLowerCase();
-  const locking = instances.filter(
-    (instance) => !ours.includes(instance) && instance.path.toLowerCase().startsWith(releaseDir),
-  );
-  if (!locking.length) return;
-  // The lock only matters when the binary is about to be replaced. Without a
-  // build the staged copy is a separate file, so an open editor is harmless —
-  // and closing someone's window to run tests would be a strange price.
-  if (!options.build) {
-    console.log(
-      `note: ${locking.length} instance(s) running from target/release; not building, leaving them alone`,
-    );
-    return;
-  }
-  if (options.kill) {
-    console.log(
-      `closing ${locking.length} running instance(s) (--kill): ${locking.map((i) => i.pid).join(", ")}`,
-    );
-    await closeInstances(locking);
-    return;
-  }
-  fail(
-    `MDraft is running from ${path.relative(repoRoot, releaseDir)} (pid ${locking.map((i) => i.pid).join(", ")}).\n` +
-      `Windows locks that executable, so the build cannot replace it. Close it, or re-run with --kill.`,
-  );
 }
 
 async function waitForExit(child, timeoutMs) {
@@ -1305,11 +1294,14 @@ async function main() {
   let context = null;
   let savedUserState = [];
   let fixtures = new Map();
+  const touchesApp = suites.some(
+    (suite) => suite.kind === "cdp" || suite.kind === "close" || suite.kind === "restart",
+  );
 
   try {
     // Before anything else: a leftover window locks the release binary (so the
     // build cannot replace it) and would hold a CDP port the suites need.
-    await prepareForRun(options);
+    if (touchesApp) await prepareForRun(options);
 
     if (options.build) {
       process.stdout.write("building  ... ");
@@ -1326,9 +1318,6 @@ async function main() {
 
     // A run that only touches Rust needs neither a release binary nor the
     // developer's application profile; do not copy or move either for it.
-    const touchesApp = suites.some(
-      (suite) => suite.kind === "cdp" || suite.kind === "close" || suite.kind === "restart",
-    );
     const binary = touchesApp ? findReleaseBinary() : null;
     if (touchesApp && !binary) {
       fail(

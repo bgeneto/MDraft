@@ -394,6 +394,13 @@ try {
     "a same-size same-mtime rewrite is refused, not overwritten",
   );
   check(await dirty("mixed.md"), "the refused save keeps the buffer dirty");
+  await sleep(3200);
+  check(
+    await evaluate(
+      `!document.getElementById('notice-bar').hidden && document.getElementById('notice-text').textContent.includes('changed on disk')`,
+    ),
+    "the hash conflict survives the next unchanged-stat poll",
+  );
   await evaluate(
     `[...document.querySelectorAll('#notice-actions button')].find(b=>b.textContent==='Keep my version').click()`,
   );

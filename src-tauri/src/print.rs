@@ -1,7 +1,7 @@
 //! Native printing and direct PDF output through the platform webview.
 //!
 //! The article is written to a temporary file and loaded by a dedicated,
-//! hidden webview. The file carries no application scripts, and the window has
+//! webview (visible for a dialog, hidden for direct PDF). The window has
 //! no capability entry, so document markup cannot reach a Tauri command. The
 //! host injects the readiness check after navigation and owns every platform
 //! call:
@@ -15,13 +15,14 @@
 //! not implement either API.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 use tauri::{AppHandle, Manager, Runtime, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
-/// Label of the hidden print surface. It is deliberately absent from every
+/// Label of the print surface. It is deliberately absent from every
 /// capability file, which is what keeps its IPC bridge unprivileged.
 pub const PRINT_WINDOW: &str = "print";
 
@@ -31,6 +32,19 @@ const READY_TIMEOUT: Duration = Duration::from_secs(20);
 /// How long a direct PDF write may take. Large documents are slower than a
 /// print dialog, but a hung WebView2 must not leave a command pending forever.
 const PDF_TIMEOUT: Duration = Duration::from_secs(180);
+static NEXT_PDF: AtomicU64 = AtomicU64::new(1);
+static PRINT_JOB: Mutex<()> = Mutex::new(());
+
+const PRINT_CSP: &str = "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'; frame-src 'none'; object-src 'none'\">";
+
+/// Install the policy before any document content, including malformed heads.
+/// Host ExecuteScript readiness checks are separate from document scripts.
+fn protected_article(html: &str) -> String {
+    // Own the first doctype/head boundary instead of scanning untrusted HTML
+    // for `>` (which can occur inside a quoted public identifier). A later
+    // article doctype is ignored by HTML parsing; our policy is already active.
+    format!("<!doctype html>{PRINT_CSP}{html}")
+}
 
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -126,7 +140,7 @@ fn write_print_file(html: &str, name: &str) -> Result<(PathBuf, PathBuf), String
     std::fs::create_dir_all(&directory)
         .map_err(|e| format!("Could not create {}: {e}", directory.display()))?;
     let file = directory.join(format!("{}.html", safe_stem(name)));
-    std::fs::write(&file, html.as_bytes())
+    std::fs::write(&file, protected_article(html).as_bytes())
         .map_err(|e| format!("Could not write {}: {e}", file.display()))?;
     Ok((directory, file))
 }
@@ -213,26 +227,52 @@ fn wait_until_ready<R: Runtime>(window: &WebviewWindow<R>) -> Result<Vec<String>
     }
 }
 
-/// Create the hidden surface. It starts on `about:blank`; the caller navigates
+/// Create the surface. A dialog needs a visible native owner. It starts on
+/// `about:blank`; the caller navigates
 /// it to the prepared file so relative images have a real file base.
-fn create_window<R: Runtime>(app: &AppHandle<R>) -> Result<WebviewWindow<R>, String> {
+fn create_window<R: Runtime>(
+    app: &AppHandle<R>,
+    dialog: bool,
+    file: &Path,
+) -> Result<WebviewWindow<R>, String> {
+    let article_url = Url::from_file_path(file)
+        .map_err(|_| format!("Could not turn {} into a file URL.", file.display()))?;
     if let Some(previous) = app.get_webview_window(PRINT_WINDOW) {
-        let _ = previous.destroy();
+        previous
+            .destroy()
+            .map_err(|e| format!("Could not close the previous print surface: {e}"))?;
+        let started = Instant::now();
+        while app.get_webview_window(PRINT_WINDOW).is_some() {
+            if started.elapsed() > Duration::from_secs(5) {
+                return Err("The previous print surface has not finished closing.".into());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
-    WebviewWindowBuilder::new(
+    let mut builder = WebviewWindowBuilder::new(
         app,
         PRINT_WINDOW,
         WebviewUrl::External(Url::parse("about:blank").expect("about:blank is a valid URL")),
     )
-    .title("Print")
-    .inner_size(794.0, 1123.0)
-    .visible(false)
-    .focused(false)
-    .skip_taskbar(true)
-    .decorations(false)
-    .resizable(false)
-    .build()
-    .map_err(|e| format!("Could not create the print surface: {e}"))
+    .title("Print preview — close this window after printing")
+    .inner_size(794.0, if dialog { 600.0 } else { 1123.0 })
+    .visible(dialog)
+    .focused(dialog)
+    .skip_taskbar(!dialog)
+    .decorations(dialog)
+    .resizable(dialog);
+    // A meta refresh or link must not navigate away from the protected article
+    // to an unprotected document. Resource loading keeps its existing policy.
+    builder =
+        builder.on_navigation(move |url| url.as_str() == "about:blank" || url == &article_url);
+    if dialog && let Some(main) = app.get_webview_window("main") {
+        builder = builder
+            .parent(&main)
+            .map_err(|e| format!("Could not own the print dialog: {e}"))?;
+    }
+    builder
+        .build()
+        .map_err(|e| format!("Could not create the print surface: {e}"))
 }
 
 /// Load the article and wait for it, cleaning up on every failed path.
@@ -240,9 +280,10 @@ fn prepare<R: Runtime>(
     app: &AppHandle<R>,
     html: &str,
     name: &str,
+    dialog: bool,
 ) -> Result<(WebviewWindow<R>, PathBuf, Vec<String>), String> {
     let (directory, file) = write_print_file(html, name)?;
-    let window = match create_window(app) {
+    let window = match create_window(app, dialog, &file) {
         Ok(window) => window,
         Err(error) => {
             remove_directory(&directory);
@@ -273,20 +314,67 @@ fn close_surface<R: Runtime>(window: WebviewWindow<R>, directory: &Path) {
     remove_directory(directory);
 }
 
-/// Remove a file the platform or the PDF writer left behind on failure.
-fn discard_partial(target: &Path) {
-    if let Ok(metadata) = std::fs::metadata(target)
-        && metadata.is_file()
-    {
-        let _ = std::fs::remove_file(target);
+/// The writer may truncate this reserved sibling, never the user's destination.
+struct PendingPdf(PathBuf);
+
+impl PendingPdf {
+    fn new(target: &Path) -> Result<Self, String> {
+        let parent = target
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        loop {
+            let sequence = NEXT_PDF.fetch_add(1, Ordering::Relaxed);
+            let candidate =
+                parent.join(format!(".mdraft-pdf-{}-{sequence}.pdf", std::process::id()));
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&candidate)
+            {
+                Ok(file) => {
+                    drop(file);
+                    return Ok(Self(candidate));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(format!(
+                        "Could not reserve PDF output beside {}: {error}",
+                        target.display()
+                    ));
+                }
+            }
+        }
     }
+}
+
+impl Drop for PendingPdf {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn write_pdf_atomically(
+    target: &Path,
+    write: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<u64, String> {
+    let pending = PendingPdf::new(target)?;
+    write(&pending.0)?;
+    let bytes = verify_pdf(&pending.0)?;
+    std::fs::rename(&pending.0, target).map_err(|error| {
+        format!(
+            "Could not replace {} with the completed PDF: {error}",
+            target.display()
+        )
+    })?;
+    Ok(bytes)
 }
 
 fn verify_pdf(target: &Path) -> Result<u64, String> {
     let bytes = std::fs::metadata(target)
         .map_err(|e| format!("The PDF writer did not create {}: {e}", target.display()))?
         .len();
-    if bytes < 5 {
+    if bytes < 12 {
         return Err(format!(
             "The PDF writer reported success but {} is empty.",
             target.display()
@@ -294,14 +382,24 @@ fn verify_pdf(target: &Path) -> Result<u64, String> {
     }
     let mut head = [0u8; 5];
     use std::io::Read;
-    std::fs::File::open(target)
-        .and_then(|mut file| file.read_exact(&mut head))
+    let mut file = std::fs::File::open(target)
         .map_err(|e| format!("Could not read {} back: {e}", target.display()))?;
+    file.read_exact(&mut head).map_err(|e| e.to_string())?;
     if &head != b"%PDF-" {
         return Err(format!(
             "The PDF writer wrote {} but it is not a PDF file.",
             target.display()
         ));
+    }
+    // This is an envelope check, not a PDF parser. Both platform writers finish
+    // with %%EOF; a truncated success callback must not replace the old file.
+    use std::io::{Seek, SeekFrom};
+    file.seek(SeekFrom::End(-(bytes.min(1024) as i64)))
+        .map_err(|e| e.to_string())?;
+    let mut tail = Vec::new();
+    file.read_to_end(&mut tail).map_err(|e| e.to_string())?;
+    if !tail.windows(5).any(|part| part == b"%%EOF") {
+        return Err("The PDF writer returned an unfinished file (missing %%EOF).".into());
     }
     Ok(bytes)
 }
@@ -313,23 +411,22 @@ pub fn print_pdf<R: Runtime>(
     name: &str,
     target: &Path,
 ) -> Result<PrintOutcome, String> {
-    let (window, directory, failed_resources) = prepare(app, html, name)?;
-    let result = platform::print_to_pdf(&window, target);
+    let _operation = PRINT_JOB
+        .lock()
+        .map_err(|_| "The print queue could not be acquired.".to_string())?;
+    let (window, directory, failed_resources) = prepare(app, html, name, false)?;
+    let result = write_pdf_atomically(target, |temporary| {
+        platform::print_to_pdf(&window, temporary)
+    });
     close_surface(window, &directory);
     match result {
-        Ok(()) => {
-            let bytes = verify_pdf(target).inspect_err(|_| discard_partial(target))?;
-            Ok(PrintOutcome {
-                path: Some(target.to_string_lossy().into_owned()),
-                bytes: Some(bytes),
-                status: "written".into(),
-                failed_resources,
-            })
-        }
-        Err(error) => {
-            discard_partial(target);
-            Err(error)
-        }
+        Ok(bytes) => Ok(PrintOutcome {
+            path: Some(target.to_string_lossy().into_owned()),
+            bytes: Some(bytes),
+            status: "written".into(),
+            failed_resources,
+        }),
+        Err(error) => Err(error),
     }
 }
 
@@ -339,7 +436,10 @@ pub fn print_dialog<R: Runtime>(
     html: &str,
     name: &str,
 ) -> Result<PrintOutcome, String> {
-    let (window, directory, failed_resources) = prepare(app, html, name)?;
+    let _operation = PRINT_JOB
+        .lock()
+        .map_err(|_| "The print queue could not be acquired.".to_string())?;
+    let (window, directory, failed_resources) = prepare(app, html, name, true)?;
     match platform::show_dialog(&window) {
         Ok(printed) => {
             close_surface(window, &directory);
@@ -361,20 +461,28 @@ pub fn print_dialog<R: Runtime>(
 mod platform {
     use super::*;
     use webview2_com::Microsoft::Web::WebView2::Win32::{
-        COREWEBVIEW2_PRINT_DIALOG_KIND_SYSTEM, ICoreWebView2_16, ICoreWebView2_7,
+        COREWEBVIEW2_PRINT_DIALOG_KIND_SYSTEM, ICoreWebView2_7, ICoreWebView2_16,
         ICoreWebView2Environment, ICoreWebView2Environment6,
     };
-    use webview2_com::{Microsoft::Web::WebView2::Win32::ICoreWebView2PrintSettings, PrintToPdfCompletedHandler};
+    use webview2_com::{
+        Microsoft::Web::WebView2::Win32::ICoreWebView2PrintSettings, PrintToPdfCompletedHandler,
+    };
     use windows_core::{HSTRING, Interface};
 
     /// A4 in inches. WebView2's print settings use inches, not points.
     const A4_WIDTH: f64 = 8.27;
     const A4_HEIGHT: f64 = 11.69;
 
-    fn settings(environment: &ICoreWebView2Environment) -> Result<ICoreWebView2PrintSettings, String> {
+    fn settings(
+        environment: &ICoreWebView2Environment,
+    ) -> Result<ICoreWebView2PrintSettings, String> {
         let environment6 = environment
             .cast::<ICoreWebView2Environment6>()
-            .map_err(|e| format!("This WebView2 runtime has no print settings (ICoreWebView2Environment6): {e}"))?;
+            .map_err(|e| {
+                format!(
+                    "This WebView2 runtime has no print settings (ICoreWebView2Environment6): {e}"
+                )
+            })?;
         let settings = unsafe {
             environment6
                 .CreatePrintSettings()
@@ -421,24 +529,25 @@ mod platform {
                             .CoreWebView2()
                             .map_err(|e| format!("Could not reach the print webview: {e}"))?
                     };
-                    let core7 = core
-                        .cast::<ICoreWebView2_7>()
-                        .map_err(|e| format!("This WebView2 runtime cannot write PDFs (ICoreWebView2_7): {e}"))?;
+                    let core7 = core.cast::<ICoreWebView2_7>().map_err(|e| {
+                        format!("This WebView2 runtime cannot write PDFs (ICoreWebView2_7): {e}")
+                    })?;
                     let print_settings = settings(&webview.environment())?;
                     let wide_path = HSTRING::from(path.to_string_lossy().as_ref());
                     let handler_tx = tx.clone();
-                    let handler = PrintToPdfCompletedHandler::create(Box::new(move |code, succeeded| {
-                        let message = if code.is_ok() && succeeded {
+                    let handler =
+                        PrintToPdfCompletedHandler::create(Box::new(move |code, succeeded| {
+                            let message = if code.is_ok() && succeeded {
+                                Ok(())
+                            } else {
+                                Err(format!(
+                                    "WebView2 could not write the PDF (HRESULT {:?}, success {})",
+                                    code, succeeded
+                                ))
+                            };
+                            let _ = handler_tx.send(message);
                             Ok(())
-                        } else {
-                            Err(format!(
-                                "WebView2 could not write the PDF (HRESULT {:?}, success {})",
-                                code, succeeded
-                            ))
-                        };
-                        let _ = handler_tx.send(message);
-                        Ok(())
-                    }));
+                        }));
                     unsafe {
                         core7
                             .PrintToPdf(&wide_path, &print_settings, &handler)
@@ -457,6 +566,12 @@ mod platform {
     }
 
     pub fn show_dialog<R: Runtime>(window: &WebviewWindow<R>) -> Result<bool, String> {
+        let (closed_tx, closed_rx) = mpsc::channel();
+        window.on_window_event(move |event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                let _ = closed_tx.send(());
+            }
+        });
         let (tx, rx) = mpsc::channel();
         window
             .with_webview(move |webview| {
@@ -467,9 +582,9 @@ mod platform {
                             .CoreWebView2()
                             .map_err(|e| format!("Could not reach the print webview: {e}"))?
                     };
-                    let core16 = core
-                        .cast::<ICoreWebView2_16>()
-                        .map_err(|e| format!("This WebView2 runtime has no print dialog (ICoreWebView2_16): {e}"))?;
+                    let core16 = core.cast::<ICoreWebView2_16>().map_err(|e| {
+                        format!("This WebView2 runtime has no print dialog (ICoreWebView2_16): {e}")
+                    })?;
                     unsafe {
                         core16
                             .ShowPrintUI(COREWEBVIEW2_PRINT_DIALOG_KIND_SYSTEM)
@@ -480,12 +595,17 @@ mod platform {
                 let _ = tx.send(result);
             })
             .map_err(|e| format!("Could not reach the print webview: {e}"))?;
-        rx.recv_timeout(Duration::from_secs(10))
+        rx.recv_timeout(Duration::from_secs(30 * 60))
             .map_err(|_| "The system print dialog did not answer.".to_string())??;
-        // In this runtime ShowPrintUI runs the system dialog modally and returns
-        // when it closes; the print surface can be destroyed immediately. It
-        // cannot tell us whether the reader printed or cancelled, so report a
-        // completed dialog rather than inventing an outcome.
+        // ShowPrintUI returning does not prove the dialog is closed. Keep its
+        // visible owner alive until the reader closes that preview window;
+        // otherwise an asynchronous dialog disappears with its webview.
+        closed_rx
+            .recv_timeout(Duration::from_secs(30 * 60))
+            .map_err(|_| {
+                "Close the print preview window to finish this print operation.".to_string()
+            })?;
+        // The API cannot distinguish print from cancel. Report only a dialog.
         Ok(true)
     }
 }
@@ -493,7 +613,7 @@ mod platform {
 #[cfg(target_os = "linux")]
 mod platform {
     use super::*;
-    use std::ffi::{c_char, c_void, CStr};
+    use std::ffi::{CStr, c_char, c_void};
     use webkit2gtk::PrintOperationExt;
 
     /// GTK's print-to-file backend exists under a translated name, so a
@@ -588,10 +708,7 @@ mod platform {
 
     /// The part that only needs a `WebKitWebView`, so a display-owned test can
     /// exercise the same print settings without creating a Tauri window.
-    pub(super) fn print_view_to_pdf(
-        view: &webkit2gtk::WebView,
-        uri: &str,
-    ) -> Result<(), String> {
+    pub(super) fn print_view_to_pdf(view: &webkit2gtk::WebView, uri: &str) -> Result<(), String> {
         let operation = webkit2gtk::PrintOperation::new(view);
         let settings = gtk::PrintSettings::new();
         // WebKitGTK's silent print path still resolves a GtkPrinter first; the
@@ -628,8 +745,13 @@ mod platform {
         // The print operation completes through the GTK main loop. Pump it
         // here, on the thread that owns the GTK objects, so the signal is
         // delivered instead of blocking the only thread that could deliver it.
+        let started = Instant::now();
         while !done.get() {
-            gtk::main_iteration_do(true);
+            if started.elapsed() > PDF_TIMEOUT {
+                return Err("The PDF writer did not finish within three minutes.".into());
+            }
+            gtk::main_iteration_do(false);
+            std::thread::sleep(Duration::from_millis(5));
         }
         match failure.borrow().as_ref() {
             Some(error) => Err(format!("The PDF writer failed: {error}")),
@@ -727,8 +849,34 @@ mod tests {
     fn a_written_article_has_its_own_directory() {
         let (directory, file) = write_print_file("<html></html>", "notes.md").unwrap();
         assert!(file.starts_with(&directory));
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), "<html></html>");
+        let contents = std::fs::read_to_string(&file).unwrap();
+        assert!(contents.starts_with("<!doctype html>"));
+        assert!(contents.contains(PRINT_CSP));
+        assert!(contents.ends_with("<html></html>"));
         remove_directory(&directory);
+    }
+
+    #[test]
+    fn document_policy_precedes_active_markup_even_without_a_head() {
+        for (html, active) in [
+            ("<script>attack()</script>", "<script>"),
+            (
+                "<!DOCTYPE html PUBLIC \"<script>attack()</script>\"><html></html>",
+                "<script>",
+            ),
+            (
+                "  <!DOCTYPE HTML><iframe src='data:text/html;base64,AA=='></iframe>",
+                "<iframe",
+            ),
+            (
+                "<html><head><meta http-equiv='Content-Security-Policy' content=\"script-src *\"></head></html>",
+                "<html>",
+            ),
+        ] {
+            let protected = protected_article(html);
+            assert!(protected.find(PRINT_CSP).unwrap() < protected.find(active).unwrap());
+            assert!(protected.contains("script-src 'none'; frame-src 'none'; object-src 'none'"));
+        }
     }
 
     #[test]
@@ -739,15 +887,111 @@ mod tests {
     }
 
     #[test]
-    fn a_non_pdf_file_is_rejected_and_removed() {
-        let path = std::env::temp_dir().join(format!(
-            "mdraft-not-a-pdf-{}.pdf",
-            std::process::id()
-        ));
+    fn a_non_pdf_file_is_rejected_without_deleting_it() {
+        let path =
+            std::env::temp_dir().join(format!("mdraft-not-a-pdf-{}.pdf", std::process::id()));
         std::fs::write(&path, b"not a pdf at all").unwrap();
         assert!(verify_pdf(&path).is_err());
-        discard_partial(&path);
-        assert!(!path.exists());
+        assert_eq!(std::fs::read(&path).unwrap(), b"not a pdf at all");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    fn pdf_test_target() -> (PathBuf, PathBuf) {
+        let directory = unique_directory();
+        std::fs::create_dir_all(&directory).unwrap();
+        let target = directory.join("previous.pdf");
+        std::fs::write(&target, b"ORIGINAL USER BYTES").unwrap();
+        (directory, target)
+    }
+
+    #[test]
+    fn failed_pdf_writer_preserves_previous_target_and_cleans_its_sibling() {
+        let (directory, target) = pdf_test_target();
+        let result = write_pdf_atomically(&target, |_| Err("writer unavailable".into()));
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"ORIGINAL USER BYTES");
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        remove_directory(&directory);
+    }
+
+    #[test]
+    fn partially_failed_pdf_writer_preserves_previous_bytes() {
+        let (directory, target) = pdf_test_target();
+        let result = write_pdf_atomically(&target, |temporary| {
+            std::fs::write(temporary, b"%PDF-1.7 partially written").unwrap();
+            Err("disk full".into())
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"ORIGINAL USER BYTES");
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        remove_directory(&directory);
+    }
+
+    #[test]
+    fn invalid_successful_pdf_output_cannot_replace_the_previous_file() {
+        for output in [b"not a PDF at all".as_slice(), b"%PDF-1.7 truncated"] {
+            let (directory, target) = pdf_test_target();
+            assert!(
+                write_pdf_atomically(&target, |temporary| {
+                    std::fs::write(temporary, output).map_err(|e| e.to_string())
+                })
+                .is_err()
+            );
+            assert_eq!(std::fs::read(&target).unwrap(), b"ORIGINAL USER BYTES");
+            assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+            remove_directory(&directory);
+        }
+    }
+
+    #[test]
+    fn pdf_replacement_failure_preserves_the_destination() {
+        let directory = unique_directory();
+        let target = directory.join("occupied.pdf");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("keep.txt"), "keep me").unwrap();
+        let result = write_pdf_atomically(&target, |temporary| {
+            std::fs::write(temporary, b"%PDF-1.7\ntrailer\n%%EOF\n").map_err(|e| e.to_string())
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read_to_string(target.join("keep.txt")).unwrap(),
+            "keep me"
+        );
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        remove_directory(&directory);
+    }
+
+    #[test]
+    fn verified_pdf_success_replaces_only_the_intended_target() {
+        let (directory, target) = pdf_test_target();
+        let body = b"%PDF-1.7\ntrailer\n%%EOF\n";
+        let size = write_pdf_atomically(&target, |temporary| {
+            assert_eq!(temporary.parent(), target.parent());
+            assert_ne!(temporary, target);
+            std::fs::write(temporary, body).map_err(|e| e.to_string())
+        })
+        .unwrap();
+        assert_eq!(size, body.len() as u64);
+        assert_eq!(std::fs::read(&target).unwrap(), body);
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        remove_directory(&directory);
+    }
+
+    #[test]
+    fn temporary_pdf_reservations_are_exclusive_and_owned() {
+        let (directory, target) = pdf_test_target();
+        let first = PendingPdf::new(&target).unwrap();
+        std::fs::write(&first.0, "other pending job").unwrap();
+        let second = PendingPdf::new(&target).unwrap();
+        assert_ne!(first.0, second.0);
+        drop(second);
+        assert_eq!(
+            std::fs::read_to_string(&first.0).unwrap(),
+            "other pending job"
+        );
+        drop(first);
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        remove_directory(&directory);
     }
 
     #[test]
@@ -758,7 +1002,8 @@ mod tests {
             if entry.path().extension().and_then(|value| value.to_str()) != Some("json") {
                 continue;
             }
-            let text = std::fs::read_to_string(entry.path()).expect("a capability file is readable");
+            let text =
+                std::fs::read_to_string(entry.path()).expect("a capability file is readable");
             let capability: serde_json::Value =
                 serde_json::from_str(&text).expect("a capability file is valid JSON");
             for key in ["windows", "webviews"] {
@@ -802,12 +1047,16 @@ mod tests {
                  application uses.</p></body></html>"
                     .to_string()
             });
-        view.load_html(&html, Some("file:///tmp/"));
+        view.load_html(&protected_article(&html), Some("file:///tmp/"));
         let started = Instant::now();
         while !loaded.get() && started.elapsed() < Duration::from_secs(15) {
-            gtk::main_iteration_do(true);
+            gtk::main_iteration_do(false);
+            std::thread::sleep(Duration::from_millis(5));
         }
-        assert!(loaded.get(), "WebKitGTK did not finish loading the test page");
+        assert!(
+            loaded.get(),
+            "WebKitGTK did not finish loading the test page"
+        );
 
         let target = std::env::var("MDRAFT_PRINT_PDF")
             .map(std::path::PathBuf::from)
@@ -818,7 +1067,10 @@ mod tests {
             .to_string();
         platform::print_view_to_pdf(&view, &uri).expect("WebKitGTK did not write the PDF");
         let bytes = verify_pdf(&target).expect("the WebKitGTK PDF is not valid");
-        assert!(bytes > 1000, "the WebKitGTK PDF is suspiciously small: {bytes}");
+        assert!(
+            bytes > 1000,
+            "the WebKitGTK PDF is suspiciously small: {bytes}"
+        );
         println!("wrote {}", target.display());
         // WebKitGTK aborts while tearing down its web process after a GTK print
         // job, even though the PDF is complete. This test is ignored and meant

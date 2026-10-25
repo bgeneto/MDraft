@@ -11,6 +11,8 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import http from "node:http";
+import { pathToFileURL } from "node:url";
 
 const port = Number(process.argv[2] ?? 9222);
 const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
@@ -70,10 +72,37 @@ async function action(id) {
   await invoke("plugin:event|emit", { event: "menu", payload: id });
 }
 
-const work = fs.mkdtempSync(path.join(os.tmpdir(), "mdraft pdf-"));
+// Workspace paths are also reachable by WSL Poppler; a redirected TEMP drive
+// (for example T:) need not have a Linux mount.
+const root = process.platform === "win32" ? path.resolve("node_modules/.cache") : os.tmpdir();
+fs.mkdirSync(root, { recursive: true });
+const work = fs.mkdtempSync(path.join(root, "mdraft pdf-"));
 const target = path.join(work, "pdf quality.pdf");
 const pages = path.join(work, "pages");
 let hooked = false;
+let server;
+let slowResponse;
+const imageUrl = pathToFileURL(path.resolve("samples/pdf-quality-blocks.png")).href;
+const article = (label, extra = "") =>
+  `<!doctype html><html><head><meta name="mdraft-print" content="1"><style>@page{size:A4;margin:18mm 16mm}body{font:16px serif}img{width:240px}</style></head><body><h1>${label}</h1><p>Selectable document prose verifies that this output belongs to its own print request and retains visible content.</p><img src="${imageUrl}">${extra}</body></html>`;
+function inspectPdf(file, label, rejected = []) {
+  const output = execFileSync(
+    process.execPath,
+    [
+      path.resolve("scripts/pdf-visual-check.mjs"),
+      "--pdf",
+      file,
+      "--out",
+      `${file}-pages`,
+      "--expect",
+      label,
+      ...rejected.flatMap((text) => ["--reject", text]),
+    ],
+    { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+  );
+  console.log(output);
+  return output.includes("checks passed") && !output.includes(" FAIL ");
+}
 try {
   await wait(
     `document.querySelector('.cm-content') && document.title.includes('pdf-quality.md')`,
@@ -88,6 +117,7 @@ try {
       asks: [],
       printHtml: null,
       printCalls: 0,
+      nativeHtml: null,
       answerAsk: false,
     };
     window.fetch = async function(input, options) {
@@ -115,6 +145,7 @@ try {
         state.printCalls += 1;
         return response('/print/pdf-test.html');
       }
+      if (command === 'print_native_pdf') state.nativeHtml = args.html;
       return state.original.call(window, input, options);
     };
   })()`);
@@ -127,8 +158,9 @@ try {
     120000,
   );
   const state = await evaluate(
-    `({ messages: window.__pdfTest.messages, asks: window.__pdfTest.asks, printCalls: window.__pdfTest.printCalls })`,
+    `({ messages: window.__pdfTest.messages, asks: window.__pdfTest.asks, printCalls: window.__pdfTest.printCalls, nativeHtml: window.__pdfTest.nativeHtml })`,
   );
+  if (state.nativeHtml) fs.writeFileSync(path.join(work, "quality-native.html"), state.nativeHtml);
   check(
     state.printCalls === 0,
     "the native route did not open the browser document",
@@ -248,16 +280,129 @@ try {
     "a scripted HTML document opens the browser print document instead",
   );
   await evaluate(`window.__pdfTest.answerAsk=false`);
+
+  // Parsed active-content detection includes opaque children and encoded URLs.
+  const child = Buffer.from('<script>document.write("CHILD_SCRIPT_RAN")</script>').toString(
+    "base64",
+  );
+  for (const [name, markup] of [
+    ["encoded-child", `<iframe src="data:text/html;base64,${child}"></iframe>`],
+    ["local-child", '<iframe src="child.html"></iframe>'],
+    ["active-object", '<object data="child.html"></object>'],
+    ["encoded-handler", '<a href="java&#x73;cript:alert(1)">link</a>'],
+    ["refresh", '<meta http-equiv="refresh" content="0;url=child.html">'],
+  ]) {
+    const input = path.join(work, `${name}.html`);
+    const output = path.join(work, `${name}.pdf`);
+    fs.writeFileSync(input, article("Active content fallback", markup));
+    await invoke("plugin:event|emit", { event: "open-files", payload: [input] });
+    await wait(`document.title.includes(${JSON.stringify(name)})`);
+    await evaluate(
+      `window.__pdfTest.answerAsk=true;window.__pdfTest.printCalls=0;window.__pdfTest.nextSave=${JSON.stringify(output)}`,
+    );
+    await action("export.pdf");
+    await wait("window.__pdfTest.printCalls === 1");
+    check(!fs.existsSync(output), `${name} stays on the explicit browser fallback`);
+  }
+  await evaluate("window.__pdfTest.answerAsk=false");
+
+  // Bypass the frontend deliberately: the Rust boundary must enforce its own
+  // no-script/no-child policy, even for a caller providing active raw HTML.
+  const protectedPdf = path.join(work, "protected.pdf");
+  const protectedOutcome = await invoke("print_native_pdf", {
+    html:
+      '<!DOCTYPE html PUBLIC "x>">' +
+      article(
+        "Protected native article",
+        `<script>document.body.append('PARENT_SCRIPT_RAN')</script><iframe src="data:text/html;base64,${child}"></iframe>`,
+      ),
+    name: "protected",
+    target: protectedPdf,
+  });
+  check(
+    protectedOutcome.status === "written" &&
+      inspectPdf(protectedPdf, "Protected native article", [
+        "PARENT_SCRIPT_RAN",
+        "CHILD_SCRIPT_RAN",
+      ]),
+    "the native boundary blocks parent and encoded child scripts",
+  );
+
+  // Hold the first request in readiness while the second request queues. The
+  // former single-label implementation destroyed the first job's surface.
+  let sawImage;
+  const requestedImage = new Promise((resolve) => {
+    sawImage = resolve;
+  });
+  server = http.createServer((_request, response) => {
+    slowResponse = response;
+    sawImage();
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const slowUrl = `http://127.0.0.1:${server.address().port}/slow.png`;
+  const first = path.join(work, "first.pdf");
+  const second = path.join(work, "second.pdf");
+  await evaluate(
+    `window.__pdfJobs=[];void window.__TAURI_INTERNALS__.invoke('print_native_pdf',${JSON.stringify({ html: article("First queued article", `<img src="${slowUrl}">`), name: "first", target: first })}).then(value=>window.__pdfJobs.push({id:1,value}),error=>window.__pdfJobs.push({id:1,error:String(error)}))`,
+  );
+  await Promise.race([
+    requestedImage,
+    sleep(15000).then(() => {
+      throw new Error("First print never requested the held image");
+    }),
+  ]);
+  await evaluate(
+    `void window.__TAURI_INTERNALS__.invoke('print_native_pdf',${JSON.stringify({ html: article("Second queued article"), name: "second", target: second })}).then(value=>window.__pdfJobs.push({id:2,value}),error=>window.__pdfJobs.push({id:2,error:String(error)}))`,
+  );
+  await sleep(400);
+  slowResponse.writeHead(200, { "Content-Type": "image/png" });
+  slowResponse.end(fs.readFileSync("samples/pdf-quality-blocks.png"));
+  await wait("window.__pdfJobs.length === 2", 120000);
+  const jobs = await evaluate("window.__pdfJobs");
+  check(
+    jobs.every((job) => job.value?.status === "written"),
+    "overlapping native requests both finish",
+    JSON.stringify(jobs),
+  );
+  check(
+    fs.existsSync(first) && inspectPdf(first, "First queued article", ["Second queued article"]),
+    "the first job keeps its own content",
+  );
+  check(
+    fs.existsSync(second) && inspectPdf(second, "Second queued article", ["First queued article"]),
+    "the queued job keeps its own content",
+  );
+
+  const preserved = path.join(work, "existing.pdf");
+  fs.writeFileSync(preserved, "ORIGINAL USER BYTES");
+  let failed = false;
+  try {
+    await invoke("print_native_pdf", {
+      html: "<p>Missing readiness marker</p>",
+      name: "invalid",
+      target: preserved,
+    });
+  } catch {
+    failed = true;
+  }
+  check(
+    failed && fs.readFileSync(preserved, "utf8") === "ORIGINAL USER BYTES",
+    "a real preparation failure preserves the existing destination",
+  );
 } catch (error) {
   console.error(error.stack ?? error);
   check(false, "the PDF suite completed", String(error));
 } finally {
+  slowResponse?.destroy();
+  server?.closeAllConnections();
+  server?.close();
   if (hooked) {
     try {
       await evaluate(`window.fetch=window.__pdfTest.original;delete window.__pdfTest`);
     } catch {}
   }
-  fs.rmSync(work, { recursive: true, force: true });
+  if (process.env.MDRAFT_PDF_KEEP === "1") console.log(`  retained PDF evidence: ${work}`);
+  else fs.rmSync(work, { recursive: true, force: true });
   const passed = checks.filter(Boolean).length;
   console.log(`\n${passed}/${checks.length} checks passed`);
   ws.close();

@@ -31,7 +31,7 @@ export interface PreferencesHost {
   clearRecent(): void;
   /** Write the document as a standalone HTML file. */
   exportHtml(): void;
-  /** Print the document to PDF through the system browser. */
+  /** Save the document to PDF through the native writer. */
   exportPdf(): void;
   openDocumentation(which: "reference" | "shortcuts" | "licences"): void;
   version(): string;
@@ -535,10 +535,10 @@ function exportRows(host: PreferencesHost): Row[] {
               status.source === "managed" ? " (installed by MDraft)" : ""
             }.${
               status.pdfEngine
-                ? ` PDF export will use ${status.pdfEngine}.`
-                : " No PDF engine was found. PDF needs Typst — use Tools › Check or Install Typst…. Every other format works without it."
+                ? ` PDF (via Typst) will use ${status.pdfEngine}.`
+                : " PDF (via Typst) needs Typst — use Tools › Check or Install Typst…. Native PDF and browser printing remain available."
             }`
-          : "Not found. Word, PDF, EPUB and the other formats below need it; HTML does not."
+          : "Not found. Word, EPUB, PDF (via Typst) conversion and the other Pandoc formats need it; native HTML/PDF do not."
         : "Checking…",
     },
     {
@@ -562,7 +562,7 @@ function exportRows(host: PreferencesHost): Row[] {
     {
       kind: "note",
       label: "HTML and PDF",
-      text: "Both are produced by MDraft from the same pipeline that draws the preview, so neither needs pandoc. PDF is printed by your browser, which is why it asks you to choose “Save as PDF”. Everything below this point is a pandoc format and needs pandoc installed; the PDFs it makes are typeset by Typst.",
+      text: "Both use the preview pipeline and need no pandoc. PDF saves directly through the system webview. File › Export › PDF (opens browser) keeps browser printing available; PDF (via Typst) uses the compiler, with pandoc for conversion from other languages.",
     },
   ];
 
@@ -1018,7 +1018,7 @@ function buildSections(host: PreferencesHost): Section[] {
           kind: "button",
           label: "",
           text: "Export the current document as PDF…",
-          help: "Opens the document in your browser and prints it there, so you can choose “Save as PDF”. No LaTeX or other extra software is needed.",
+          help: "Writes a PDF directly through the system webview. File › Export › PDF (opens browser) provides browser printing and the fallback for scripted HTML. Typst documents use PDF (via Typst).",
           action: () => host.exportPdf(),
         },
         ...exportRows(host),

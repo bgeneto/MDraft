@@ -479,6 +479,12 @@ function lifecycleHarness(overrides = {}) {
   );
   const automatic = await h.controller.save(h.first, true);
   check(!automatic, "Auto Save is refused by the same checked-write conflict");
+  await h.controller.poll();
+  check(h.first.conflict === "modified", "an unchanged-stat poll cannot clear a content conflict");
+  check(
+    h.first.dirty && h.first.sha256 === digest("base"),
+    "polling an unresolved conflict preserves its dirty baseline",
+  );
   h.recovery.dispose();
 }
 
