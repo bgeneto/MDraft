@@ -1,7 +1,7 @@
 # Native print and direct PDF with visual quality gates
 
-**Status:** in progress — implementation and automated PDF validation are done;
-the Linux print dialog still needs a desktop confirmation.
+**Status:** done — implementation, automated PDF validation and the real Debian
+desktop print-dialog check are complete.
 **Date:** 2026-10-25
 **ADR:** [Print through a script-free hidden webview, keeping the browser handoff](../adr/2026-10-25-native-print-surface.md)
 
@@ -283,8 +283,9 @@ not a prerequisite for this slice.
   system dialog cannot be screenshotted while the session is locked.
 - [x] Validate Debian/WSL2: WebKitGTK PDF through the same print settings,
   Poppler rasterization/page review, A4 margins, embedded fonts and a two-page
-  article. The native GTK dialog still needs a desktop confirmation; WSLg has
-  no reliable way to focus or dismiss it from this session.
+  article. The native GTK dialog was confirmed on a real Debian desktop on
+  2026-10-25; WSLg could not focus or dismiss it from this session, so the
+  dialog part was checked on the desktop and the PDF part on both.
 - [x] Update `docs/export.md`, `docs/guide.md`, README, backlog and AGENTS.
 
 ## Files and modules

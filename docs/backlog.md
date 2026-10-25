@@ -1,7 +1,7 @@
 # MDraft backlog — prioritized gaps
 
 **Status:** living document, not a plan
-**Audited / revised:** 2026-10-25, `0.4.7`; original audit `2a0f1be`,
+**Audited / revised:** 2026-10-25, `0.5.0`; original audit `2a0f1be`,
 rechecked during integration at `2647311`
 **Basis:** [2026-10-25 backlog audit](backlog-audit-2026-10-25.md)
 **Owner:** whoever picks an item up; update `Status` and add the plan/commit
@@ -81,7 +81,7 @@ non-obvious lesson is added to the Traps section.
 | GAP-006 | P2 | M/L | Workspace | Read-only folder tree before file management | open |
 | GAP-007 | P2 | M | Workspace | Read-only cross-file search before multi-file Replace | open |
 | GAP-008 | P2 | M | Workspace | Quick open over tabs, recents and favorites | open |
-| GAP-009 | P2 | M/L | Output | In-app printing and direct PDF save | in progress |
+| GAP-009 | P2 | M/L | Output | In-app printing and direct PDF save | done |
 | GAP-010 | P2 | M | Editing | Markdown table navigation and row operations first | open |
 | GAP-014 | P2 | M | Markdown | Academic Markdown dialect | open |
 | GAP-015 | P2 | S | Editing | Typewriter mode while typing | open |
@@ -515,12 +515,12 @@ the later folder slice. No dependency on GAP-007's search UI.
 
 ### GAP-009 — In-app printing and direct PDF save
 
-**Priority:** P2 · **Effort:** M/L · **Workstream:** Output · **Status:** in progress — native PDF and the Windows/Linux PDF path are implemented and visually validated; the Linux print dialog still needs a desktop confirmation.
+**Priority:** P2 · **Effort:** M/L · **Workstream:** Output · **Status:** done — native PDF and the Windows/Linux print paths are implemented and visually validated, including the GTK dialog on a real Debian desktop.
 
 **Plan:** [Native print and direct PDF with visual quality gates](plans/2026-10-25-native-print-pdf.md)
-— approved and implemented. It covers the hidden print surface, Windows WebView2
-and Linux WebKitGTK paths, the browser fallback, and the Poppler-based visual
-PDF validation for Windows and Debian/WSL2.
+— approved, implemented and validated on Windows and a real Debian desktop. It
+covers the hidden print surface, Windows WebView2 and Linux WebKitGTK paths, the
+browser fallback, and the Poppler-based visual PDF validation.
 
 **Implementation.** `File › Print…` (`Ctrl+P`) opens the platform dialog and
 `File › Export › PDF…` writes the file directly. The hidden surface has no
