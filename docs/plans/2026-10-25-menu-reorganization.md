@@ -1,8 +1,8 @@
 # Reorganização dos menus por intenção do usuário
 
 **Status:** in progress — árvore, rotas, disponibilidade, docs e validação
-automatizada entregues; tree test/teste de tarefas e inspeção Linux/macOS ainda
-pendentes.
+automatizada entregues; Linux verificado no WSL2; tree test/teste de tarefas,
+macOS, janela estreita e escalas 150%/200% ainda pendentes.
 **Date:** 2026-10-25
 **ADR:** `../adr/2026-10-25-menu-information-architecture.md`
 
@@ -656,7 +656,8 @@ e quick open, sem atribuí-lo a duas funções.
       somente os trechos do backlog realmente entregues.
 - [x] Executar validação automatizada e inspeção manual no Windows, por
       linguagem e modo de exibição.
-- [ ] Inspecionar Linux/macOS, janela estreita e escalas 150%/200%.
+- [x] Inspecionar menus no Linux (WSL2/Debian 13, GTK nativo).
+- [ ] Inspecionar macOS, janela estreita e escalas 150%/200%.
 - [ ] Realizar tree test e teste de tarefas; registrar resultados e ajustes.
 - [x] Atualizar checkboxes, desvios e status; manter incrementos futuros separados.
 
@@ -788,8 +789,16 @@ adicionar harness por hábito quando um existente cobre a observação necessár
   cursor, deep links de Preferências, colar sem formatação, disponibilidade em
   Markdown/Typst/AsciiDoc/HTML, ambos os acessos a Fechar todas e cancelamento
   com buffer sujo.
-- Não verificado: Linux, macOS, janela estreita e escalas 150%/200%; o host não
-  tem Typst instalado, então a prévia Typst foi validada apenas no estado
+- Linux (WSL2, Debian 13 trixie): `bash scripts/build-linux.sh --bundles deb`
+  produziu o `.deb` (12 MB) e o binário (19 MB). `cargo test` nativo passou
+  **139 passed, 2 ignored**. A árvore GTK nativa foi inspecionada por captura:
+  as oito categorias e os submenus Export, Close Tabs, Open Tabs, Zoom, Code
+  Colors, Paragraph Style, Lists e Alert Block mostram os rótulos, checks e
+  estados de disponibilidade esperados. O conteúdo WebKit não pôde ser
+  capturado/focado de forma confiável no WSLg, então a interação de conteúdo no
+  Linux não foi validada; não houve erro de menu observado.
+- Não verificado: macOS, janela estreita e escalas 150%/200%; o host não tem
+  Typst instalado, então a prévia Typst foi validada apenas no estado
   desabilitado com o motivo `needs Typst`. Tree test e teste de tarefas com
   pessoas não foram executados; os ganhos de descoberta continuam hipóteses.
 

@@ -515,6 +515,11 @@ the later folder slice. No dependency on GAP-007's search UI.
 
 **Priority:** P2 · **Effort:** M/L · **Workstream:** Output · **Status:** open
 
+**Plan:** [Native print and direct PDF with visual quality gates](plans/2026-10-25-native-print-pdf.md)
+— draft, awaiting approval. It covers the hidden print surface, Windows WebView2
+and Linux WebKitGTK paths, the browser fallback, and the Poppler-based visual
+PDF validation for Windows and Debian/WSL2.
+
 **Evidence.** `File › Print (opens browser)…` writes a temporary HTML and opens
 the system browser; `Export › PDF (via Typst)` needs pandoc and Typst for
 Markdown conversion; a `.typ` PDF is compiled directly by Typst. The existing
