@@ -2026,6 +2026,17 @@ bar can otherwise outlive a tab switch for one frame, so a test that clicks it
 while a Typst reference is rendering may hit the previous document. Switch via
 the `view.typstDocument`/`view.typstPages` menu in that test instead.
 
+**A Linux build opens its GTK menus but a white content pane under WSLg**
+The window title can still be the document name and the native menu complete while
+`ps` shows no `WebKitWebProcess`: WebKitGTK's sandbox failed to start the web
+process in this WSL2 session. Launching with
+`WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1` (plus `GDK_BACKEND=x11` and the
+usual `WEBKIT_DISABLE_COMPOSITING_MODE=1`) starts it. Even then, `import`/`scrot`
+may capture the GTK window but not the WebKit surface, and WSLg's X11 has no
+EWMH window manager, so clicks and typing cannot focus the webview reliably. Do
+not read the white pane as a CSS, CSP or frontend regression; verify the native
+menus and use a real desktop (or the Windows CDP suites) for content interaction.
+
 ## Adding a preference, end to end
 
 Five files, in this order — more than three, so a plan comes first; see
