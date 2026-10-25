@@ -30,7 +30,11 @@ export interface ResolvedImage {
   alt: string;
 }
 
-export type ImageResolver = (image: ImageRequest) => Promise<ResolvedImage | null>;
+export type ImageResolver = (
+  image: ImageRequest,
+  /** Add a notice the reader should see, e.g. why an address was kept. */
+  report: (note: string) => void,
+) => Promise<ResolvedImage | null>;
 
 export interface PasteOptions {
   /** Resolve a data/local/remote image to a document-relative path. */
@@ -148,18 +152,28 @@ async function resolveImages(
   }
   if (skipped > 0)
     notices.push(`${skipped} image${skipped === 1 ? "" : "s"} kept the original address.`);
+  const failures: string[] = [];
   await mapLimit(candidates, 4, async (image) => {
     if (image.kind !== "image") return;
     try {
-      const resolved = await resolver({ src: image.src, alt: image.alt });
+      const resolved = await resolver({ src: image.src, alt: image.alt }, (note) =>
+        notices.push(note),
+      );
       if (resolved) {
         image.src = resolved.src;
         image.alt = resolved.alt;
       }
     } catch (error) {
-      console.warn(`[paste] image ${image.src} could not be saved: ${String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[paste] image ${image.src} could not be saved: ${message}`);
+      failures.push(message);
     }
   });
+  if (failures.length === 1) {
+    notices.push(`An image could not be saved: ${failures[0]}`);
+  } else if (failures.length > 1) {
+    notices.push(`${failures.length} images could not be saved. The first: ${failures[0]}`);
+  }
 }
 
 function plainBlock(text: string): boolean {

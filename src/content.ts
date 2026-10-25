@@ -1,11 +1,12 @@
 //! Built-in documents shown to the user on first run and from the Help menu.
 //!
 //! Most are line arrays so Markdown fences and backticks need no escaping. The
-//! AsciiDoc reference is a real `.adoc` file imported raw: it is large enough
-//! that a sample file is easier to read and lets a test convert the exact text
-//! the Help menu opens.
+//! AsciiDoc and Typst references are real sample files imported raw: they are
+//! large enough that a sample file is easier to read and lets a test render the
+//! exact text the Help menu opens.
 
 import ASCIIDOC_REFERENCE_SOURCE from "../samples/asciidoc-reference.adoc?raw";
+import TYPST_REFERENCE_SOURCE from "../samples/typst-reference.typ?raw";
 
 const WELCOME_LINES: string[] = [
   "# Welcome to MDraft",
@@ -294,13 +295,16 @@ const SHORTCUTS_LINES: string[] = [
   "| Full screen | `F11` |",
   "",
   "Inside the editor, `Tab` indents and `Shift+Tab` outdents. `Enter` continues",
-  "lists and quotes, and `Ctrl+click` follows a link.",
+  "lists and quotes, and `Ctrl+click` follows a link or an image path. The",
+  "right-click menu offers the same action as **Open Link**, **Open File** or",
+  "**Open Image**.",
   "",
 ];
 
 export const WELCOME = WELCOME_LINES.join("\n");
 export const REFERENCE = REFERENCE_LINES.join("\n");
 export const ASCIIDOC_REFERENCE = ASCIIDOC_REFERENCE_SOURCE;
+export const TYPST_REFERENCE = TYPST_REFERENCE_SOURCE;
 export const SHORTCUTS = SHORTCUTS_LINES.join("\n");
 
 // ---------------------------------------------------------------------------

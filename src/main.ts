@@ -10,8 +10,16 @@ import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import * as api from "./api";
 import { renderAsciidocForExport, renderAsciidocPreview } from "./asciidoc-preview";
-import { ASCIIDOC_REFERENCE, FONT_LICENCES, REFERENCE, SHORTCUTS, WELCOME } from "./content";
+import {
+  ASCIIDOC_REFERENCE,
+  FONT_LICENCES,
+  REFERENCE,
+  SHORTCUTS,
+  TYPST_REFERENCE,
+  WELCOME,
+} from "./content";
 import { installEditorContextMenu } from "./context-menu";
+import { classifyDiskChange } from "./disk-change";
 import { createEditor, type EditorHandle } from "./editor";
 import {
   formatDocument,
@@ -37,8 +45,17 @@ import {
   type HtmlPreviewHandle,
   type HtmlSelection,
 } from "./html-preview";
-import { handleImageDrop, handleImagePaste, imageOptions, type ImageContext } from "./images";
+import {
+  handleImageDrop,
+  handleImagePaste,
+  hasImageDestination,
+  imageOptions,
+  NO_FOLDER_KEPT,
+  typstImageProblem,
+  type ImageContext,
+} from "./images";
 import { imageSyntaxFor, needsRelativePath } from "./image-syntax";
+import { linkAt, type LinkTarget } from "./links";
 import { chooseSource, type ClipboardPayload } from "./paste/detect";
 import { resolvePasteDestination, type PasteDestination } from "./paste/detect-document";
 import { planPaste, type ImageRequest, type ResolvedImage } from "./paste/index";
@@ -64,12 +81,22 @@ import {
   type WordMap,
 } from "./source-map";
 import { createPreferences, type PreferencesHandle } from "./preferences";
+import { createRecoveryScheduler } from "./recovery";
 import { createSessionStore, pathKey, type Session } from "./sessions";
 import { planRestore, rememberTabs, type RememberedTabs } from "./tab-restore";
 import { setInstalledLanguages, setSpellRemember } from "./spellcheck";
 import * as sidebarPanel from "./sidebar";
 import { resolvePalette } from "./syntax-themes";
 import { createTabsUi, type TabsUi } from "./tabs";
+import {
+  TYPST_DISPLAY_MATH,
+  TYPST_OUTLINE,
+  TYPST_QUOTE,
+  TYPST_RULE,
+  TYPST_TABLE,
+  typstInline,
+  typstUnsupported,
+} from "./typst-commands";
 import { annotateTypstLines } from "./typst-map";
 import { paragraphRangeAt } from "./typst-page-map";
 import { TypstPdfPreview, type TypstPageContext } from "./typst-pdf";
@@ -96,6 +123,10 @@ const statusWords = el<HTMLSpanElement>("status-words");
 const statusCursor = el<HTMLSpanElement>("status-cursor");
 const statusEncoding = el<HTMLSpanElement>("status-encoding");
 const statusZoom = el<HTMLButtonElement>("status-zoom");
+const noticeBar = el<HTMLDivElement>("notice-bar");
+const noticeText = el<HTMLSpanElement>("notice-text");
+const noticeActions = el<HTMLSpanElement>("notice-actions");
+const noticeClose = el<HTMLButtonElement>("notice-close");
 const toastEl = el<HTMLDivElement>("toast");
 const resizer = el<HTMLDivElement>("resizer");
 const splitter = el<HTMLDivElement>("splitter");
@@ -118,6 +149,17 @@ let doc: Session = sessions.active();
  * strip never reaches into the editor itself.
  */
 let tabsUi: TabsUi | null = null;
+/**
+ * The crash-recovery journal. The scheduler debounces per session and serialises
+ * writes per id; the Rust store owns the files.
+ */
+const recovery = createRecoveryScheduler({
+  save: api.writeRecovery,
+  remove: api.removeRecovery,
+  notify: (message) => toast(message, 6200),
+});
+/** An informational recovery notice, cleared by the reader or a tab switch. */
+let recoveryNotice: string | null = null;
 
 function installTabs(): void {
   tabsUi = createTabsUi({
@@ -257,6 +299,92 @@ function toast(text: string, ms = 2600): { dismiss: () => void } {
   return { dismiss };
 }
 let toastTimer = 0;
+
+interface NoticeAction {
+  label: string;
+  run: () => void | Promise<void>;
+  primary?: boolean;
+}
+
+/**
+ * The one notice row under the tabs.
+ *
+ * Toasts have no actions and a modal blocks typing; both are wrong for a disk
+ * conflict, where the reader has to choose without losing the caret. The bar
+ * spans the window, collapses when hidden and is reused by recovery.
+ */
+function showNotice(
+  text: string,
+  tone: "info" | "warning",
+  actions: NoticeAction[] = [],
+  closable = true,
+): void {
+  noticeText.textContent = text;
+  noticeBar.dataset.tone = tone;
+  noticeBar.setAttribute("role", tone === "warning" ? "alert" : "status");
+  noticeBar.setAttribute("aria-live", tone === "warning" ? "assertive" : "polite");
+  noticeClose.hidden = !closable;
+  noticeActions.replaceChildren();
+  for (const action of actions) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `notice-action${action.primary ? " primary" : ""}`;
+    button.textContent = action.label;
+    button.addEventListener("click", () => {
+      try {
+        void Promise.resolve(action.run()).catch((error) => toast(String(error), 6200));
+      } catch (error) {
+        toast(String(error), 6200);
+      }
+    });
+    noticeActions.appendChild(button);
+  }
+  noticeBar.hidden = false;
+}
+
+function hideNotice(): void {
+  noticeBar.hidden = true;
+  noticeText.textContent = "";
+  noticeActions.replaceChildren();
+}
+
+function renderNotice(): void {
+  if (doc.conflict === "modified") {
+    showNotice(
+      `"${doc.name}" changed on disk. Choose what to keep before saving.`,
+      "warning",
+      [
+        { label: "Reload from disk", run: () => reloadConflict(doc) },
+        { label: "Keep my version", run: () => keepMine(doc) },
+        { label: "Save a copy…", run: () => saveConflictCopy() },
+      ],
+      false,
+    );
+    return;
+  }
+  if (doc.conflict === "deleted") {
+    showNotice(
+      `"${doc.name}" was deleted on disk. Saving would recreate it.`,
+      "warning",
+      [
+        { label: "Save anyway", run: () => recreateDeleted(doc), primary: true },
+        { label: "Save a copy…", run: () => saveConflictCopy() },
+      ],
+      false,
+    );
+    return;
+  }
+  if (recoveryNotice) {
+    showNotice(recoveryNotice, "info", [], true);
+    return;
+  }
+  hideNotice();
+}
+
+noticeClose.addEventListener("click", () => {
+  recoveryNotice = null;
+  hideNotice();
+});
 
 function joinDir(dir: string, name: string): string {
   const sep = /^[A-Za-z]:/.test(dir) || dir.includes("\\") ? "\\" : "/";
@@ -856,7 +984,7 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
 
   let rendered: api.RenderedTypst;
   try {
-    rendered = await api.renderTypst(doc.path, source, wanted);
+    rendered = await api.renderTypst(doc.path, source, wanted, customImageFolder());
   } catch (error) {
     if (token !== renderToken) return;
     // Shown in place of the preview, not as a toast: a Typst error is about a
@@ -1025,6 +1153,9 @@ async function renderHtmlPreview(source: string, token: number): Promise<void> {
     doc.directory ?? null,
     doc.name ?? "index.html",
     settings.htmlPreviewScripts !== false,
+    // Only a saved document has a root the guest can resolve against; a custom
+    // folder is the one extra folder the reader allowed.
+    doc.path ? [customImageFolder()].filter((dir): dir is string => dir !== null) : [],
   );
   if (token !== renderToken) return;
 }
@@ -1348,12 +1479,14 @@ function describe(session: Session, payload: api.DocumentPayload): void {
   session.size = payload.size;
   session.modifiedMs = payload.modifiedMs;
   session.readOnly = payload.readOnly;
+  session.draft = null;
+  session.conflict = null;
 }
 
 /** Text of a session: the live view when it is on screen, otherwise its snapshot. */
 function textOf(session: Session): string {
   if (session.id === doc.id && editor) return editor.getDoc();
-  return session.editorState?.doc.toString() ?? session.savedContent;
+  return session.draft ?? session.editorState?.doc.toString() ?? session.savedContent;
 }
 
 /**
@@ -1366,6 +1499,7 @@ function textOf(session: Session): string {
 function snapshotDoc(): void {
   if (!editor) return;
   doc.editorState = editor.captureState();
+  doc.draft = null;
   doc.editorScroll = editor.view.scrollDOM.scrollTop;
   doc.previewScroll = doc.language === "html" ? htmlScrollTop : previewPane.scrollTop;
 }
@@ -1393,20 +1527,24 @@ async function showInEditor(resetHistory: boolean, tokens: number | null = null)
   doc.previewScroll = 0;
   resetTokenCount();
   resetOutline();
-  editor.setDoc(doc.savedContent, resetHistory);
+  const content = doc.draft ?? doc.savedContent;
+  editor.setDoc(content, resetHistory);
+  // The live view is now the authority; a recovered draft must not shadow it.
+  doc.draft = null;
   syncGuest(doc.language);
   editor.setLanguage(doc.language);
   // The backend counted while reading the file, so opening does not send the
   // document back over IPC. This also cancels the debounced scan that the
   // `setDoc` update just scheduled. A buffer with no count of its own is scanned.
   if (tokens !== null) setTokenCount(tokens);
-  else scheduleTokenCount(doc.savedContent, true);
+  else scheduleTokenCount(content, true);
 
   applyLayout();
   await refreshTitle();
   refreshStatus();
   renderDocTabs();
   renderSidebar();
+  renderNotice();
   scheduleRender(true);
 }
 
@@ -1420,8 +1558,13 @@ async function displayDoc(): Promise<void> {
   pendingPreviewScroll = doc.previewScroll;
   suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
   suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
-  if (doc.editorState) editor.restoreState(doc.editorState, doc.editorScroll);
-  else editor.setDoc(doc.savedContent, false);
+  if (doc.editorState) {
+    editor.restoreState(doc.editorState, doc.editorScroll);
+    doc.draft = null;
+  } else {
+    editor.setDoc(doc.draft ?? doc.savedContent, false);
+    doc.draft = null;
+  }
   // The snapshot may have been taken before an async grammar arrived. Installing
   // the session's language again is a no-op once that grammar is already in the
   // state, and it repairs the case where it is not.
@@ -1443,6 +1586,7 @@ async function displayDoc(): Promise<void> {
   refreshStatus();
   renderDocTabs();
   renderSidebar();
+  renderNotice();
   scheduleOutlineRefresh(editor.getDoc());
   scheduleRender(true);
   editor.focus();
@@ -1451,6 +1595,7 @@ async function displayDoc(): Promise<void> {
 async function activateSession(id: string): Promise<void> {
   if (id === doc.id) {
     renderDocTabs();
+    renderNotice();
     return;
   }
   if (!sessions.byId(id)) return;
@@ -1530,6 +1675,8 @@ async function formatSession(id: string): Promise<void> {
     }
     session.editorState = state.update(formattedTransaction(state, formatted)).state;
     session.dirty = formatted !== session.savedContent;
+    if (session.dirty) recovery.schedule(session, session.editorState.doc.toString());
+    else void recovery.forget(session);
     renderDocTabs();
     toast(`Formatted ${session.name}`);
   } catch (error) {
@@ -1630,6 +1777,9 @@ async function loadUntitled(
     doc.size = content.length;
     doc.modifiedMs = 0;
     doc.readOnly = false;
+    doc.recoveryId = null;
+    doc.draft = null;
+    doc.conflict = null;
     doc.previewScroll = 0;
     doc.editorScroll = 0;
   }
@@ -1654,6 +1804,25 @@ async function confirmDiscard(): Promise<boolean> {
 async function writeSession(session: Session): Promise<boolean> {
   if (!session.path) return false;
   const content = textOf(session);
+
+  // The file may have moved since the last poll. Check immediately before the
+  // write so Ctrl+S and Auto Save cannot overwrite an external change during
+  // the poll interval. A path that never existed (modifiedMs 0) is a create,
+  // not a conflict; `recreateDeleted` uses the same rule after an explicit
+  // choice.
+  try {
+    const stat = await api.statDocument(session.path);
+    const change =
+      !stat.exists && session.modifiedMs === 0 ? "unchanged" : classifyDiskChange(session, stat);
+    if (change !== "unchanged") {
+      markConflict(session, change);
+      return false;
+    }
+  } catch (error) {
+    toast(`Could not check ${session.name} before saving: ${String(error)}`, 6200);
+    return false;
+  }
+
   try {
     const info = await api.writeDocument(
       session.path,
@@ -1665,9 +1834,13 @@ async function writeSession(session: Session): Promise<boolean> {
     session.modifiedMs = info.modifiedMs;
     session.size = info.size;
     session.dirty = false;
+    session.draft = null;
+    session.conflict = null;
+    void recovery.forget(session);
     if (session.id === doc.id) {
       void refreshTitle();
       refreshStatus();
+      renderNotice();
     }
     renderDocTabs();
     return true;
@@ -1677,6 +1850,107 @@ async function writeSession(session: Session): Promise<boolean> {
   }
 }
 
+function markConflict(session: Session, kind: "modified" | "deleted"): void {
+  const changed = session.conflict !== kind;
+  session.conflict = kind;
+  if (!changed) return;
+  // A conflict is more urgent than the recovery summary; do not restore the
+  // old "Recovered N documents" line once it is resolved.
+  recoveryNotice = null;
+  if (session.id === doc.id) {
+    renderNotice();
+  } else {
+    toast(
+      `"${session.name}" ${kind === "deleted" ? "was deleted" : "changed"} on disk. Open its tab to choose.`,
+      5200,
+    );
+  }
+}
+
+function clearConflict(session: Session): void {
+  if (!session.conflict) return;
+  session.conflict = null;
+  if (session.id === doc.id) renderNotice();
+}
+
+/** Replace a conflicted buffer with the file, keeping one undo step. */
+async function reloadConflict(session: Session): Promise<void> {
+  if (!session.path) return;
+  try {
+    const payload = await api.readDocument(session.path);
+    if (session.id === doc.id) {
+      const line = editor.cursorInfo().line;
+      describe(session, payload);
+      await showInEditor(false, payload.tokens);
+      editor.scrollToLine(line);
+    } else {
+      describe(session, payload);
+      if (session.editorState) {
+        session.editorState = session.editorState.update({
+          changes: { from: 0, to: session.editorState.doc.length, insert: payload.content },
+        }).state;
+      }
+      renderDocTabs();
+    }
+    session.dirty = false;
+    session.draft = null;
+    session.conflict = null;
+    void recovery.forget(session);
+    renderNotice();
+    toast("Reloaded from disk");
+  } catch (error) {
+    await message(String(error), { title: "Could not reload", kind: "error" });
+  }
+}
+
+/** Accept the current disk revision as the base for the reader's dirty text. */
+async function keepMine(session: Session): Promise<void> {
+  if (!session.path) return;
+  try {
+    const stat = await api.statDocument(session.path);
+    if (!stat.exists) {
+      markConflict(session, "deleted");
+      return;
+    }
+    session.modifiedMs = stat.modifiedMs;
+    session.size = stat.size;
+    session.conflict = null;
+    // The journal's base must move with the choice, or a second crash would
+    // restore the old conflict and ask again.
+    if (session.dirty) recovery.schedule(session, textOf(session));
+    else void recovery.forget(session);
+    renderNotice();
+    toast("Kept your version; the next save will write it.", 4200);
+  } catch (error) {
+    toast(`Could not check ${session.name}: ${String(error)}`, 6200);
+  }
+}
+
+/** Explicitly recreate a file the reader deleted outside MDraft. */
+async function recreateDeleted(session: Session): Promise<void> {
+  session.conflict = null;
+  session.modifiedMs = 0;
+  session.size = 0;
+  renderNotice();
+  if (session.id !== doc.id) await activateSession(session.id);
+  await save();
+}
+
+/** Suggested sibling name for "Save a copy…" on a conflicted document. */
+function conflictCopyPath(session: Session): string {
+  const name = session.name;
+  const dot = name.lastIndexOf(".");
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const extension = dot > 0 ? name.slice(dot) : "";
+  const copy = `${stem} (copy)${extension}`;
+  return session.directory ? joinDir(session.directory, copy) : copy;
+}
+
+async function saveConflictCopy(): Promise<void> {
+  if (!doc.conflict) return;
+  await saveAs(conflictCopyPath(doc));
+}
+
 async function save(): Promise<boolean> {
   if (!doc.path) return saveAs();
   const ok = await writeSession(doc);
@@ -1684,8 +1958,9 @@ async function save(): Promise<boolean> {
   return ok;
 }
 
-async function saveAs(): Promise<boolean> {
+async function saveAs(suggestedPath?: string): Promise<boolean> {
   const suggested =
+    suggestedPath ??
     doc.path ??
     (settings.lastDirectory
       ? joinDir(settings.lastDirectory, `untitled.${settings.defaultExtension}`)
@@ -1699,6 +1974,10 @@ async function saveAs(): Promise<boolean> {
   if (!chosen) return false;
 
   const target = Array.isArray(chosen) ? chosen[0] : chosen;
+  // Choosing the same file is an ordinary save, not a bypass of the conflict
+  // guard. Without this a "Save a copy" dialog navigated back to the original
+  // would overwrite the external change.
+  if (doc.path && pathKey(target) === pathKey(doc.path)) return save();
   const other = sessions.findByPath(target);
   if (other && other.id !== doc.id && other.dirty) {
     const replaceOther = await ask(
@@ -1712,6 +1991,7 @@ async function saveAs(): Promise<boolean> {
 
   try {
     await api.writeDocument(target, content, doc.lineEnding || "\n", doc.hadBom);
+    void recovery.forget(doc);
     if (other && other.id !== doc.id) sessions.remove(other.id);
     const payload = await api.readDocument(target);
     describe(doc, payload);
@@ -1756,6 +2036,7 @@ async function closeSession(id: string): Promise<void> {
     });
     if (shouldSave && !(await saveSession(session))) return;
   }
+  void recovery.forget(session);
   // The shell always has a buffer. Closing the last tab starts a fresh one.
   if (sessions.list().length === 1) {
     await loadUntitled("", defaultDocumentLanguage(), true);
@@ -1797,6 +2078,7 @@ async function closeSessions(ids: readonly string[]): Promise<void> {
     if (shouldSave && !(await saveSession(session))) return;
   }
 
+  for (const session of targets) void recovery.forget(session);
   // Saving an untitled tab activates it, so `doc` may have moved while the
   // prompts were open. Membership of `targets` did not change.
   const activeRemoved = targets.some((session) => session.id === doc.id);
@@ -1840,6 +2122,7 @@ async function reloadFromDisk(): Promise<void> {
     const payload = await api.readDocument(doc.path);
     const line = editor.cursorInfo().line;
     describe(doc, payload);
+    void recovery.forget(doc);
     await showInEditor(false, payload.tokens);
     editor.scrollToLine(line);
     toast("Reloaded from disk");
@@ -1875,7 +2158,12 @@ async function buildExportArticle(): Promise<{ html: string; css: string }> {
     });
     holder.innerHTML = result.html;
   } else if (doc.language === "typst") {
-    const rendered = await api.renderTypst(doc.path, editor.getDoc(), "document");
+    const rendered = await api.renderTypst(
+      doc.path,
+      editor.getDoc(),
+      "document",
+      customImageFolder(),
+    );
     holder.innerHTML = rendered.html ?? "";
     css = rendered.css ?? "";
   } else {
@@ -2180,6 +2468,7 @@ async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
       // Tells the backend which reader to use, and that a Typst document exported
       // to PDF is rendered by Typst itself rather than translated through pandoc.
       language,
+      imageRoot: customImageFolder(),
     });
     notice.dismiss();
     toast(`Exported ${basename(outcome.outputPath)}`);
@@ -2362,6 +2651,10 @@ function setHeadingCommand(level: number): void {
     editor.setAsciiDocHeading(level);
     return;
   }
+  if (doc.language === "typst") {
+    editor.setTypstHeading(level);
+    return;
+  }
   editor.setHeading(level);
 }
 
@@ -2372,6 +2665,10 @@ function setParagraphCommand(): void {
   }
   if (doc.language === "asciidoc") {
     editor.setAsciiDocHeading(0);
+    return;
+  }
+  if (doc.language === "typst") {
+    editor.setTypstHeading(0);
     return;
   }
   editor.setHeading(0);
@@ -2386,6 +2683,10 @@ function shiftHeadingCommand(delta: number): void {
     editor.shiftAsciiDocHeading(delta);
     return;
   }
+  if (doc.language === "typst") {
+    editor.shiftTypstHeading(delta);
+    return;
+  }
   editor.shiftHeading(delta);
 }
 
@@ -2396,6 +2697,10 @@ function quoteCommand(): void {
   }
   if (doc.language === "asciidoc") {
     editor.insertBlockWithCaret("____\n\n____", 5);
+    return;
+  }
+  if (doc.language === "typst") {
+    editor.insertBlockWithCaret(TYPST_QUOTE.text, TYPST_QUOTE.caret);
     return;
   }
   editor.toggleLinePrefix("> ");
@@ -2423,6 +2728,10 @@ function mathBlockCommand(): void {
     editor.insertBlockWithCaret(block, block.indexOf("\n\n") + 1);
     return;
   }
+  if (doc.language === "typst") {
+    editor.insertBlockWithCaret(TYPST_DISPLAY_MATH.text, TYPST_DISPLAY_MATH.caret);
+    return;
+  }
   editor.insertBlockWithCaret("$$\n\n$$\n", 3);
 }
 
@@ -2433,6 +2742,11 @@ function listCommand(kind: "ul" | "ol"): void {
   }
   if (doc.language === "asciidoc") {
     editor.toggleLinePrefix(kind === "ul" ? "* " : ". ");
+    return;
+  }
+  // Typst uses `+` for an ordered list, not `1.`.
+  if (doc.language === "typst") {
+    editor.toggleLinePrefix(kind === "ul" ? "- " : "+ ");
     return;
   }
   editor.toggleLinePrefix(kind === "ul" ? "- " : "1. ");
@@ -2446,6 +2760,10 @@ function taskCommand(state: "insert" | "done" | "todo" | "plain"): void {
   if (doc.language === "asciidoc") {
     if (state === "insert") editor.toggleLinePrefix("* [ ] ");
     else editor.setAsciiDocTaskState(state);
+    return;
+  }
+  if (doc.language === "typst") {
+    toast(typstUnsupported("task"), 5200);
     return;
   }
   if (state === "insert") editor.toggleLinePrefix("- [ ] ");
@@ -2463,12 +2781,17 @@ function tableCommand(): void {
     editor.insertBlock('[options="header"]\n|===\n| Column | Column\n\n| Cell | Cell\n|===');
     return;
   }
+  if (doc.language === "typst") {
+    editor.insertBlockWithCaret(TYPST_TABLE.text, TYPST_TABLE.caret);
+    return;
+  }
   editor.insertBlock("| Column | Column |\n| --- | --- |\n| Cell | Cell |");
 }
 
 function ruleCommand(): void {
   if (doc.language === "html") editor.insertBlock("<hr>");
   else if (doc.language === "asciidoc") editor.insertBlock("'''");
+  else if (doc.language === "typst") editor.insertBlock(TYPST_RULE);
   else editor.insertBlock("---");
 }
 
@@ -2479,6 +2802,10 @@ function tocCommand(): void {
   }
   if (doc.language === "asciidoc") {
     editor.insertAsciiDocToc();
+    return;
+  }
+  if (doc.language === "typst") {
+    editor.insertBlock(TYPST_OUTLINE);
     return;
   }
   editor.insertToc();
@@ -2492,6 +2819,10 @@ function frontMatterCommand(): void {
   if (doc.language === "asciidoc") {
     editor.insertAsciiDocAttributes();
     toast("AsciiDoc stores the title and author as document attributes.");
+    return;
+  }
+  if (doc.language === "typst") {
+    toast(typstUnsupported("frontMatter"), 5200);
     return;
   }
   editor.insertYamlFrontMatter();
@@ -2511,10 +2842,20 @@ function alertCommand(label: string): void {
     editor.insertBlock(`[${label}]\n.Title\nText`);
     return;
   }
+  if (doc.language === "typst") {
+    toast(typstUnsupported("alert"), 5200);
+    return;
+  }
   editor.insertBlock(`> [!${label}]\n> `);
 }
 
 function inlineCommand(kind: "bold" | "italic" | "strike" | "code" | "link" | "math"): void {
+  if (doc.language === "typst") {
+    const typstKind = kind === "bold" ? "strong" : kind === "italic" ? "emphasis" : kind;
+    const inline = typstInline(typstKind);
+    editor.wrapSelection(inline.before, inline.after, inline.placeholder);
+    return;
+  }
   if (doc.language === "html") {
     switch (kind) {
       case "bold":
@@ -2589,6 +2930,10 @@ function imageCommand(): void {
     editor.insertBlock("image::./image.png[alt text]");
     return;
   }
+  if (doc.language === "typst") {
+    editor.wrapSelection('#image("./image.png", alt: "', '")', "alt text");
+    return;
+  }
   editor.wrapSelection("![", "](./image.png)", "alt text");
 }
 
@@ -2603,6 +2948,14 @@ function displayMathCommand(): void {
     } else {
       const block = "[latexmath]\n++++\n\n++++\n";
       editor.insertBlockWithCaret(block, block.indexOf("\n\n") + 1);
+    }
+    return;
+  }
+  if (doc.language === "typst") {
+    if (editor.cursorInfo().selectionLength > 0) {
+      editor.wrapSelection("$ ", " $", "");
+    } else {
+      editor.insertBlockWithCaret(TYPST_DISPLAY_MATH.text, TYPST_DISPLAY_MATH.caret);
     }
     return;
   }
@@ -2746,6 +3099,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
 
   "help.reference": () => void showBuiltin(REFERENCE),
   "help.asciidocReference": () => void showBuiltin(ASCIIDOC_REFERENCE, "asciidoc"),
+  "help.typstReference": () => void showBuiltin(TYPST_REFERENCE, "typst"),
   "help.shortcuts": () => void showBuiltin(SHORTCUTS),
   "help.licences": () => void showBuiltin(FONT_LICENCES),
   "help.installTypst": () => void typstSetup(),
@@ -3734,43 +4088,123 @@ function installPreviewCopy(): void {
   });
 }
 
+/** Decode a document reference into a filesystem path. */
+function decodeLinkPath(href: string): string {
+  let value = href;
+  try {
+    value = decodeURI(value);
+  } catch {
+    /* keep the raw value */
+  }
+  if (/^file:\/\//i.test(href)) {
+    try {
+      const url = new URL(href);
+      const path = decodeURIComponent(url.pathname);
+      value = url.host ? `//${url.host}${path}` : path;
+    } catch {
+      value = href.replace(/^file:\/\//i, "");
+    }
+  }
+  if (/^\/[A-Za-z]:/.test(value)) value = value.slice(1);
+  return value;
+}
+
+function isAbsoluteLinkPath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\") || value.startsWith("/");
+}
+
+/** Extensions this editor opens in a tab; everything else goes to the OS. */
+function editableDocument(path: string): boolean {
+  return /\.(?:md|markdown|mkd|typ|adoc|asciidoc|html?)$/i.test(path.split(/[?#]/)[0]);
+}
+
+/** Scroll the preview to an id, waiting briefly for a fresh render. */
+function revealPreviewId(id: string, attempt = 0): void {
+  const node = preview.querySelector(`[id="${CSS.escape(id)}"]`);
+  if (node) {
+    node.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+  if (attempt < 20) window.setTimeout(() => revealPreviewId(id, attempt + 1), 50);
+}
+
+/**
+ * Follow one link or image reference.
+ *
+ * URLs go to the browser, `#id` scrolls the view, an editable document opens in
+ * a tab, and anything else is handed to the OS. A relative path needs a saved
+ * document; an untitled buffer says so instead of guessing a directory.
+ */
+function openLinkTarget(target: LinkTarget): void {
+  const href = target.href;
+  if (target.kind === "external") {
+    if (/^(?:javascript|data|blob):/i.test(href)) return;
+    void openUrl(href).catch((error) => toast(String(error)));
+    return;
+  }
+  if (target.kind === "anchor") {
+    const id = href.replace(/^#/, "");
+    if (!id) return;
+    if (doc.language === "html" && htmlPreview) htmlPreview.scrollToId(id);
+    else revealPreviewId(id);
+    return;
+  }
+
+  const hash = href.indexOf("#");
+  const fragment = hash >= 0 ? href.slice(hash + 1) : "";
+  const clean = (hash >= 0 ? href.slice(0, hash) : href).split("?")[0];
+  let path = decodeLinkPath(clean);
+  if (!path) return;
+  if (!isAbsoluteLinkPath(path)) {
+    if (!doc.directory) {
+      toast("Save this document first so a relative link can be resolved.", 5200);
+      return;
+    }
+    path = joinDir(doc.directory, path);
+  }
+
+  if (editableDocument(path)) {
+    void openPath(path).then(() => {
+      if (!fragment) return;
+      if (doc.language === "html" && htmlPreview) htmlPreview.scrollToId(fragment);
+      else revealPreviewId(fragment);
+    });
+    return;
+  }
+  void api.openExternal(path).catch((error) => toast(String(error), 5200));
+}
+
 function installPreviewClicks(): void {
   preview.addEventListener("click", (event) => {
-    const target = (event.target as HTMLElement).closest("a, .local-link, .external-link");
+    const element = event.target as HTMLElement;
+    const image = element.closest("img");
+    if (image && (event.ctrlKey || event.metaKey)) {
+      const raw = image.getAttribute("data-src") ?? "";
+      if (!raw) return;
+      event.preventDefault();
+      event.stopPropagation();
+      openLinkTarget({
+        href: raw,
+        kind: /^(?:https?|mailto|tel):/i.test(raw) ? "external" : "image",
+      });
+      return;
+    }
+
+    const target = element.closest("a, .local-link, .external-link");
     if (!target) return;
     const href = target.getAttribute("data-href") ?? "";
     if (!href) return;
 
     event.preventDefault();
     event.stopPropagation();
-
-    if (href.startsWith("#")) {
-      const id = href.slice(1);
-      const heading = preview.querySelector(`[id="${CSS.escape(id)}"]`);
-      heading?.scrollIntoView({ behavior: "smooth", block: "start" });
-      return;
-    }
-    if (/^https?:/i.test(href)) {
-      void openUrl(href).catch((error) => toast(String(error)));
-      return;
-    }
-    if (href.startsWith("mailto:")) {
-      void openUrl(href).catch((error) => toast(String(error)));
-      return;
-    }
-
-    // Relative or absolute filesystem path: resolve against the document.
-    const dir = doc.directory ?? null;
-    let path = href;
-    try {
-      path = decodeURI(href);
-    } catch {
-      /* keep raw */
-    }
-    if (!/^[A-Za-z]:[\\/]/.test(path) && !path.startsWith("/") && dir) {
-      path = joinDir(dir, path);
-    }
-    void openPath(path);
+    openLinkTarget({
+      href,
+      kind: href.startsWith("#")
+        ? "anchor"
+        : /^(?:https?|mailto|tel):/i.test(href)
+          ? "external"
+          : "file",
+    });
   });
 }
 
@@ -4092,8 +4526,8 @@ function guestLinkToPath(href: string): string | null {
   return joinDir(directory, path);
 }
 
-function handleHtmlLink(href: string): void {
-  if (/^(https?:|mailto:)/i.test(href)) {
+function handleHtmlLink(href: string, raw?: string): void {
+  if (/^(https?:|mailto:|tel:)/i.test(href)) {
     void openUrl(href).catch((error) => toast(String(error)));
     return;
   }
@@ -4110,6 +4544,21 @@ function handleHtmlLink(href: string): void {
     return;
   }
   if (/^(javascript|data|blob):/i.test(href)) return;
+
+  // Prefer the document's own attribute. The guest's resolved URL has already
+  // collapsed `../` into its own root, so `../other.md` would point at the wrong
+  // file; the raw value is what the author wrote.
+  if (raw && doc.directory && !/^[a-z][a-z0-9+.-]*:/i.test(raw)) {
+    const clean = raw.split("#")[0].split("?")[0];
+    let path = decodeLinkPath(clean);
+    if (!isAbsoluteLinkPath(path)) path = joinDir(doc.directory, path);
+    if (editableDocument(path)) {
+      void openPath(path);
+      return;
+    }
+    void api.openExternal(path).catch((error) => toast(String(error), 5200));
+    return;
+  }
 
   const path = guestLinkToPath(href);
   if (path) {
@@ -4231,6 +4680,8 @@ async function installCloseGuard(): Promise<void> {
         { title: "Unsaved changes", kind: "warning" },
       );
       if (shouldSave && !(await saveSession(session))) return;
+      // A deliberate discard must not come back as a recovery entry.
+      void recovery.forget(session);
     }
     try {
       await flushRememberedTabs();
@@ -4250,34 +4701,82 @@ function installDiskWatcher(): void {
 /** Reload a clean tab whose file changed underneath it. A dirty tab is left alone. */
 async function reloadChangedSessions(): Promise<void> {
   for (const session of sessions.list()) {
-    if (!session.path || session.dirty) continue;
+    if (!session.path) continue;
     try {
       const stat = await api.statDocument(session.path);
-      if (!stat.exists || stat.modifiedMs === session.modifiedMs) continue;
-      const payload = await api.readDocument(session.path);
-      if (payload.content === session.savedContent) {
-        session.modifiedMs = payload.modifiedMs;
-        session.size = payload.size;
+      const change = classifyDiskChange(session, stat);
+
+      if (change === "unchanged") {
+        // A conflict that resolved itself (the file came back, or an external
+        // write produced the same revision) must not leave a stale bar.
+        clearConflict(session);
         continue;
       }
-      if (session.id === doc.id) {
-        const line = editor.cursorInfo().line;
-        describe(doc, payload);
-        await showInEditor(false, payload.tokens);
-        editor.scrollToLine(line);
-        toast("The file changed on disk — reloaded");
-      } else {
-        const state = session.editorState;
-        describe(session, payload);
-        if (state) {
-          session.editorState = state.update({
-            changes: { from: 0, to: state.doc.length, insert: payload.content },
-          }).state;
+
+      if (!session.dirty) {
+        if (change === "deleted") {
+          markConflict(session, "deleted");
+          continue;
+        }
+        const payload = await api.readDocument(session.path);
+        if (payload.content === session.savedContent) {
+          // A metadata-only touch: the bytes are what the buffer already has.
+          session.modifiedMs = payload.modifiedMs;
+          session.size = payload.size;
+          void recovery.forget(session);
+          clearConflict(session);
+          continue;
+        }
+        if (session.id === doc.id) {
+          const line = editor.cursorInfo().line;
+          describe(doc, payload);
+          await showInEditor(false, payload.tokens);
+          editor.scrollToLine(line);
+          toast("The file changed on disk — reloaded");
+        } else {
+          const state = session.editorState;
+          describe(session, payload);
+          if (state) {
+            session.editorState = state.update({
+              changes: { from: 0, to: state.doc.length, insert: payload.content },
+            }).state;
+          }
+          renderDocTabs();
+        }
+        void recovery.forget(session);
+        continue;
+      }
+
+      // The buffer is dirty. A deleted file is a conflict even if the buffer
+      // still has content: the next save would recreate it.
+      if (change === "deleted") {
+        markConflict(session, "deleted");
+        continue;
+      }
+
+      // An external writer may have saved exactly what the reader has. In that
+      // case there is no conflict at all; adopt the new disk revision.
+      const payload = await api.readDocument(session.path).catch(() => null);
+      if (payload && payload.content === textOf(session)) {
+        session.savedContent = payload.content;
+        session.modifiedMs = payload.modifiedMs;
+        session.size = payload.size;
+        session.dirty = false;
+        session.draft = null;
+        session.conflict = null;
+        void recovery.forget(session);
+        if (session.id === doc.id) {
+          void refreshTitle();
+          refreshStatus();
+          renderNotice();
         }
         renderDocTabs();
+        toast(`"${session.name}" matches the file on disk now.`, 3600);
+        continue;
       }
+      markConflict(session, "modified");
     } catch {
-      /* the file may have vanished; leave the buffer alone */
+      /* the stat or the read failed; leave the buffer alone and retry */
     }
   }
 }
@@ -4305,6 +4804,7 @@ function imageContext(hasSelection = false): ImageContext {
     // A relative image path is the only kind the HTML guest and the Typst
     // compiler can reach from the document's own folder.
     settings: needsRelativePath(language) ? { ...settings, imageUseRelativePath: true } : settings,
+    language,
     documentPath: doc.path,
     hasSelection,
     insert: (text) => editor.insertBlock(text),
@@ -4325,34 +4825,91 @@ function altFromPath(path: string): string {
 function richImageOptions(language: api.DocumentLanguage): api.ImageOptions {
   const options = imageOptions(settings);
   if (needsRelativePath(language)) options.relative = true;
-  // A fragment image has no local original to keep; the select is the switch
-  // that says "do not download", so this path only runs when it says download.
-  if (options.rule === "keepOriginal") options.rule = "assetsFolder";
   return options;
+}
+
+const KEEP_ORIGINAL_RICH = "The image keeps its original address (Preferences › Image).";
+
+/** The configured custom image folder, made absolute, or null. */
+function customImageFolder(): string | null {
+  if (settings.imageRule !== "custom") return null;
+  const dir = settings.imageCustomDir?.trim();
+  if (!dir) return null;
+  if (/^[A-Za-z]:[\\/]/.test(dir) || dir.startsWith("\\\\") || dir.startsWith("/")) return dir;
+  return doc.directory ? joinDir(doc.directory, dir) : null;
 }
 
 async function resolveRichImage(
   image: ImageRequest,
   language: api.DocumentLanguage,
+  report: (note: string) => void,
 ): Promise<ResolvedImage | null> {
   const remote = /^https?:/i.test(image.src);
   if (remote && settings.richPasteImages === "url") return null;
   const options = richImageOptions(language);
+  const destination = hasImageDestination(
+    language,
+    doc.path,
+    options.rule,
+    settings.imageCustomDir,
+  );
+  const keeping = options.rule === "keepOriginal";
+
+  /** Keep the address as it is, saying why when it cannot render. */
+  const keep = (why: string): null => {
+    report(typstImageProblem(language, image.src, doc.path) ?? why);
+    return null;
+  };
 
   if (/^data:/i.test(image.src)) {
+    if (keeping) return keep(KEEP_ORIGINAL_RICH);
+    if (!destination) return keep(NO_FOLDER_KEPT);
     const saved = await api.saveClipboardImage(image.src, null, doc.path, options);
+    const problem = typstImageProblem(language, saved.markdownPath, doc.path);
+    if (problem) {
+      report(`${problem} Saved to ${saved.markdownPath}.`);
+      return null;
+    }
     return { src: saved.markdownPath, alt: image.alt || altFromPath(saved.markdownPath) };
   }
+
   if (remote) {
+    if (keeping) return keep(KEEP_ORIGINAL_RICH);
+    if (!destination) return keep(NO_FOLDER_KEPT);
     const saved = await api.downloadImage(image.src, doc.path, options, 8000);
+    const problem = typstImageProblem(language, saved.markdownPath, doc.path);
+    if (problem) {
+      report(`${problem} Saved to ${saved.markdownPath}.`);
+      return null;
+    }
     return { src: saved.markdownPath, alt: image.alt || altFromPath(saved.markdownPath) };
   }
+
   if (!settings.imageApplyLocal) return null;
   if (!/^(?:[A-Za-z]:[\\/]|\/|file:)/i.test(image.src)) return null;
   const local = image.src.replace(/^file:\/\//i, "");
   const exists = await api.pathExists(local, doc.path).catch(() => false);
   if (!exists) return null;
+
+  if (keeping) {
+    // No copy, but the backend may turn an absolute path inside the document's
+    // folder into the relative form Typst can read.
+    const saved = await api.importImage(local, doc.path, options);
+    const problem = typstImageProblem(language, saved.markdownPath, doc.path);
+    if (problem) {
+      report(problem);
+      return null;
+    }
+    return { src: saved.markdownPath, alt: image.alt || altFromPath(saved.markdownPath) };
+  }
+  if (!destination) return keep(NO_FOLDER_KEPT);
+
   const saved = await api.importImage(local, doc.path, options);
+  const problem = typstImageProblem(language, saved.markdownPath, doc.path);
+  if (problem) {
+    report(`${problem} Saved to ${saved.markdownPath}.`);
+    return null;
+  }
   return { src: saved.markdownPath, alt: image.alt || altFromPath(saved.markdownPath) };
 }
 
@@ -4371,7 +4928,7 @@ async function applyRichPaste(
   destination: PasteDestination,
 ): Promise<void> {
   const result = await planPaste(payload, destination.language, {
-    resolveImage: (image) => resolveRichImage(image, destination.language),
+    resolveImage: (image, report) => resolveRichImage(image, destination.language, report),
   });
   if (!result) return;
   if (
@@ -4561,6 +5118,111 @@ function migrateLegacySystemPreset(): void {
   persist();
 }
 
+function recoveryLanguage(value: string): api.DocumentLanguage {
+  switch (value) {
+    case "typst":
+    case "html":
+    case "asciidoc":
+      return value;
+    default:
+      return "markdown";
+  }
+}
+
+function directoryOf(path: string): string {
+  const cut = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
+  return cut > 0 ? path.slice(0, cut) : "";
+}
+
+/**
+ * Bring back the buffers the journal holds after a crash or a forced kill.
+ *
+ * Runs after the normal startup choice, so a remembered tab set is already on
+ * screen and a recovered path can overlay its draft instead of being opened
+ * twice. A journal entry is removed only when its content is already on disk,
+ * or when the reader saves/discards the restored tab; a failed restore keeps
+ * the entry for the next launch.
+ */
+async function restoreRecovery(): Promise<void> {
+  let entries: api.RecoveryEntry[];
+  try {
+    entries = await api.listRecovery();
+  } catch (error) {
+    console.warn(`[recovery] could not read the journal: ${error}`);
+    return;
+  }
+  if (entries.length === 0) return;
+  entries.sort((a, b) => b.updatedMs - a.updatedMs);
+
+  const recovered: Session[] = [];
+  for (const entry of entries) {
+    const existing = entry.path ? sessions.findByPath(entry.path) : undefined;
+    if (existing) {
+      if (existing.dirty) continue;
+      if (existing.savedContent === entry.content) {
+        void api.removeRecovery(entry.id).catch(() => {});
+        continue;
+      }
+      existing.draft = entry.content;
+      existing.editorState = null;
+      existing.recoveryId = entry.id;
+      // Keep the base the journal recorded: if the file moved while MDraft was
+      // closed, the conflict guard must notice before the first save.
+      existing.modifiedMs = entry.baseModifiedMs;
+      existing.size = entry.baseSize;
+      existing.dirty = true;
+      existing.conflict = null;
+      recovered.push(existing);
+      continue;
+    }
+
+    let base: api.DocumentPayload | null = null;
+    if (entry.path) {
+      base = await api.readDocument(entry.path).catch(() => null);
+    }
+    if (base && base.content === entry.content) {
+      // The file was written before the crash; nothing is unsaved.
+      void api.removeRecovery(entry.id).catch(() => {});
+      continue;
+    }
+
+    const session = sessions.create();
+    session.recoveryId = entry.id;
+    session.path = entry.path;
+    session.name =
+      base?.name ?? (entry.path ? entry.name || basename(entry.path) : sessions.untitledName());
+    session.directory = base?.directory ?? (entry.path ? directoryOf(entry.path) : null);
+    session.language = base ? languageFor(base.path) : recoveryLanguage(entry.language);
+    session.savedContent = base?.content ?? "";
+    session.draft = entry.content;
+    session.dirty = entry.content !== session.savedContent;
+    session.lineEnding = base?.lineEnding ?? (entry.lineEnding === "\r\n" ? "\r\n" : "\n");
+    session.hadBom = base?.hadBom ?? entry.hadBom;
+    session.lossy = base?.lossy ?? entry.lossy;
+    session.readOnly = base?.readOnly ?? entry.readOnly;
+    // The journal's base, not the file's current stat: the disk poll compares
+    // against it and raises the conflict before an overwrite.
+    session.modifiedMs = entry.baseModifiedMs;
+    session.size = entry.baseSize;
+    session.conflict = null;
+    sessions.add(session);
+    // `add` inserts after the active tab. Recovered tabs belong at the end so
+    // a remembered set keeps its order and the recovery does not land in the
+    // middle of it.
+    sessions.move(session.id, sessions.list().length - 1);
+    recovered.push(session);
+  }
+
+  if (recovered.length === 0) return;
+  const first = recovered[0];
+  if (first.id === doc.id) await displayDoc();
+  else await activateSession(first.id);
+  recoveryNotice = `Recovered ${recovered.length} unsaved ${
+    recovered.length === 1 ? "document" : "documents"
+  } from the previous session.`;
+  renderNotice();
+}
+
 /**
  * Reopen the remembered tab set at boot.
  *
@@ -4617,6 +5279,8 @@ async function boot(): Promise<void> {
   editor = createEditor(editorHost, {
     autoClosePairs: settings.autoClosePairs,
     autoCloseTags: settings.autoCloseTags,
+    linkAt: (pos) => linkAt(editor.getDoc(), pos, doc.language),
+    linkClick: openLinkTarget,
   });
   editor.onDocChanged((text) => {
     // Invalidate before the debounce: the visible DOM still describes old text.
@@ -4626,6 +5290,8 @@ async function boot(): Promise<void> {
     window.clearTimeout(selectionTimer);
     editor.clearSyncRange();
     setDirty(text !== doc.savedContent);
+    if (text === doc.savedContent) void recovery.forget(doc);
+    else recovery.schedule(doc, text);
     refreshStatus();
     scheduleTokenCount(text);
     scheduleRender();
@@ -4650,6 +5316,8 @@ async function boot(): Promise<void> {
     favorite: () => {
       if (doc.path) return toggleFavoritePath(doc.path);
     },
+    linkAt: (pos) => linkAt(editor.getDoc(), pos, doc.language),
+    openLink: openLinkTarget,
     toast,
   });
 
@@ -4661,7 +5329,7 @@ async function boot(): Promise<void> {
       editor.clearSyncRange();
       clearPreviewWords();
     },
-    onLink: (href) => handleHtmlLink(href),
+    onLink: (href, raw) => handleHtmlLink(href, raw),
     onAction: handleHtmlAction,
     onScroll: handleHtmlScroll,
     onReady: handleHtmlReady,
@@ -4763,6 +5431,7 @@ async function boot(): Promise<void> {
     await loadUntitled(WELCOME);
   }
   installingStartup = false;
+  await restoreRecovery();
 
   installTabMemory();
   installDiskWatcher();

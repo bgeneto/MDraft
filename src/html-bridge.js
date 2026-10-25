@@ -484,6 +484,21 @@
     "click",
     function (event) {
       var target = event.target;
+      var image = target && target.closest ? target.closest("img") : null;
+      if (image && (event.ctrlKey || event.metaKey)) {
+        var source = image.getAttribute("src") || "";
+        if (!source) return;
+        event.preventDefault();
+        event.stopPropagation();
+        var resolved;
+        try {
+          resolved = new URL(source, document.baseURI).href;
+        } catch (error) {
+          return;
+        }
+        post({ type: "link", href: resolved, raw: source });
+        return;
+      }
       var link = target && target.closest ? target.closest("a") : null;
       if (!link) return;
       var raw = link.getAttribute("href") || "";
@@ -536,6 +551,9 @@
       if (anchor) window.scrollTo(0, Math.max(0, anchor.top - SYNC_MARGIN));
     } else if (data.type === "blink") {
       blink(Number(data.line));
+    } else if (data.type === "hash") {
+      var element = document.getElementById(String(data.id));
+      if (element) element.scrollIntoView({ block: "start" });
     } else if (data.type === "highlightWords") {
       paintWords(data.ranges);
     } else if (data.type === "keys") {

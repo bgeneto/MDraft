@@ -460,11 +460,20 @@ pub async fn render_typst<R: Runtime>(
     path: Option<String>,
     source: String,
     mode: Option<String>,
+    image_root: Option<String>,
 ) -> Result<RenderedTypst, String> {
     let mode = mode.unwrap_or_else(|| "document".into());
-    tauri::async_runtime::spawn_blocking(move || render(&app, path.as_deref(), &source, &mode))
-        .await
-        .map_err(|e| format!("The Typst render task could not be started: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        render(
+            &app,
+            path.as_deref(),
+            &source,
+            &mode,
+            image_root.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("The Typst render task could not be started: {e}"))?
 }
 
 /// Run Typst once, feeding the document on stdin.
@@ -709,18 +718,19 @@ pub fn compile_to<R: Runtime>(
     source: &str,
     format: &str,
     target: &Path,
+    image_root: Option<&str>,
 ) -> Result<(), String> {
     let typst = find_typst(app).ok_or_else(|| {
         "Typst is not installed, so this cannot be exported as PDF. Use Help › Install Typst."
             .to_string()
     })?;
 
-    let root = document_path
-        .map(Path::new)
-        .and_then(Path::parent)
-        .filter(|p| p.is_dir())
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| std::env::temp_dir().join("mdraft-typst"));
+    let fallback = std::env::temp_dir().join("mdraft-typst");
+    let root = workspace_root(
+        document_path.map(Path::new).and_then(Path::parent),
+        image_root,
+        &fallback,
+    );
 
     let mut extra: Vec<&str> = Vec::new();
     if format == "html" {
@@ -750,6 +760,7 @@ fn render<R: Runtime>(
     document_path: Option<&str>,
     source: &str,
     mode: &str,
+    image_root: Option<&str>,
 ) -> Result<RenderedTypst, String> {
     let typst = find_typst(app).ok_or_else(|| {
         format!(
@@ -763,13 +774,15 @@ fn render<R: Runtime>(
 
     // `--root` bounds what the document may read. Pointing it at the document's
     // own folder is what lets `#image("img/plot.png")` resolve; an untitled
-    // document has no folder, so the temporary directory serves.
-    let root = document_path
-        .map(Path::new)
-        .and_then(Path::parent)
-        .filter(|p| p.is_dir())
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| dir.clone());
+    // document has no folder, so the temporary directory serves. A custom image
+    // folder elsewhere on the same volume widens the root to the common
+    // ancestor, because Typst accepts one root and would otherwise refuse the
+    // image the reader explicitly asked to copy there.
+    let root = workspace_root(
+        document_path.map(Path::new).and_then(Path::parent),
+        image_root,
+        &dir,
+    );
 
     if mode == "pages" {
         return render_pages(&typst.path, &root, &dir, source);
@@ -789,10 +802,62 @@ fn render<R: Runtime>(
     }
 }
 
+/// The directory `--root` should point at.
+///
+/// Typst accepts a single root, so an image in a custom folder outside the
+/// document's folder is unreachable. The smallest widening that covers both is
+/// their deepest common ancestor. When the two do not share a volume (or the
+/// folder cannot be resolved) the document's folder wins, and the frontend
+/// says the compiler cannot reach the image rather than pretending it can.
+fn workspace_root(
+    document_dir: Option<&Path>,
+    image_root: Option<&str>,
+    fallback: &Path,
+) -> PathBuf {
+    let Some(document_dir) = document_dir.filter(|path| path.is_dir()) else {
+        return fallback.to_path_buf();
+    };
+    let Some(image_root) = image_root.map(Path::new).filter(|path| path.is_dir()) else {
+        return document_dir.to_path_buf();
+    };
+    common_ancestor(document_dir, image_root).unwrap_or_else(|| document_dir.to_path_buf())
+}
+
+fn common_ancestor(document_dir: &Path, image_root: &Path) -> Option<PathBuf> {
+    let images = image_root.canonicalize().ok()?;
+    let mut candidate = document_dir.to_path_buf();
+    loop {
+        let canonical = candidate.canonicalize().ok()?;
+        if is_within(&images, &canonical) {
+            return Some(candidate);
+        }
+        let parent = candidate.parent()?.to_path_buf();
+        if parent == candidate {
+            return None;
+        }
+        candidate = parent;
+    }
+}
+
+fn is_within(child: &Path, ancestor: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        // Windows paths compare case-insensitively, and a document under
+        // `C:\Users\Bernh` must still contain `c:\users\bernh\Pictures`.
+        let child = child.to_string_lossy().to_lowercase();
+        let ancestor = ancestor.to_string_lossy().to_lowercase();
+        let ancestor = ancestor.trim_end_matches('\\');
+        child == ancestor || child.starts_with(&format!("{ancestor}\\"))
+    }
+    #[cfg(not(windows))]
+    {
+        child.starts_with(ancestor)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -903,5 +968,55 @@ mod tests {
             "unexpected version {version:?}"
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_root_widens_to_the_common_ancestor_of_the_image_folder() {
+        let base = std::env::temp_dir().join(format!("tt-typst-root-{}", std::process::id()));
+        let notes = base.join("notes");
+        let pictures = base.join("pictures");
+        std::fs::create_dir_all(&notes).unwrap();
+        std::fs::create_dir_all(&pictures).unwrap();
+
+        assert_eq!(
+            workspace_root(Some(&notes), Some(&pictures.to_string_lossy()), &base),
+            base,
+            "the smallest root that covers both is their parent"
+        );
+
+        let inside = notes.join("media");
+        std::fs::create_dir_all(&inside).unwrap();
+        assert_eq!(
+            workspace_root(Some(&notes), Some(&inside.to_string_lossy()), &base),
+            notes,
+            "a folder inside the document needs no widening"
+        );
+
+        let missing = base.join("missing");
+        assert_eq!(
+            workspace_root(Some(&notes), Some(&missing.to_string_lossy()), &base),
+            notes,
+            "a folder that does not exist cannot widen the root"
+        );
+
+        assert_eq!(
+            workspace_root(None, Some(&pictures.to_string_lossy()), &base),
+            base,
+            "an untitled document keeps the temporary fallback"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_root_comparison_ignores_case_on_windows() {
+        let base = std::env::temp_dir().join(format!("tt-typst-case-{}", std::process::id()));
+        let notes = base.join("Notes");
+        std::fs::create_dir_all(&notes).unwrap();
+        let lower = PathBuf::from(notes.to_string_lossy().to_lowercase());
+        assert!(is_within(&notes, &lower));
+        assert!(is_within(&lower, &notes));
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

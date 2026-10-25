@@ -126,7 +126,8 @@ body {
 .app {
   display: grid;
   grid-template-columns: var(--sidebar-w) 5px 1fr;
-  grid-template-rows: auto 1fr auto;
+  /* tabs, notice, work area, status bar */
+  grid-template-rows: auto auto 1fr auto;
   height: 100vh;
   width: 100vw;
 }
@@ -469,12 +470,98 @@ body {
 }
 
 /* --------------------------------------------------------------------------
+   Notice bar (recovery and disk conflicts)
+   -------------------------------------------------------------------------- */
+
+.notice-bar {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 6px 12px;
+  background: var(--accent-soft);
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  color: var(--fg);
+  font-size: 12px;
+}
+
+.notice-bar[hidden] {
+  display: none;
+}
+
+.notice-bar[data-tone="warning"] {
+  border-left-color: #d97706;
+}
+
+.notice-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notice-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.notice-action {
+  font: inherit;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.notice-action:hover {
+  border-color: var(--accent);
+}
+
+.notice-action.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}
+
+.notice-action:focus-visible,
+.notice-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.notice-close {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.notice-close:hover {
+  background: var(--code-bg);
+  color: var(--fg);
+}
+
+/* --------------------------------------------------------------------------
    Sidebar
    -------------------------------------------------------------------------- */
 
 .sidebar {
   grid-column: 1;
-  grid-row: 2;
+  grid-row: 3;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -724,7 +811,7 @@ body {
 
 .resizer {
   grid-column: 2;
-  grid-row: 2;
+  grid-row: 3;
   cursor: col-resize;
   background: transparent;
 }
@@ -751,7 +838,7 @@ body {
 
 .workspace {
   grid-column: 3;
-  grid-row: 2;
+  grid-row: 3;
   display: flex;
   min-width: 0;
   min-height: 0;
@@ -881,7 +968,7 @@ body {
 
 .statusbar {
   grid-column: 1 / -1;
-  grid-row: 3;
+  grid-row: 4;
   display: flex;
   align-items: center;
   justify-content: space-between;

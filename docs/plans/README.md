@@ -5,6 +5,10 @@ this directory with its final status.
 [AGENTS.md](../../AGENTS.md#governance-and-workflow) says which changes need one;
 everything below that line is implemented directly.
 
+Product gaps that do not have a plan yet are tracked in
+[../backlog.md](../backlog.md); this directory holds only plans that have been
+written.
+
 One file per plan, named `YYYY-MM-DD-short-slug.md` — the date it was written and
 a slug that still means something in six months, such as
 `2026-10-17-settings-migration.md`. Copy the template below and keep every

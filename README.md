@@ -33,7 +33,8 @@ Markdown document active.*
   KaTeX, Mermaid, GitHub alerts and `[TOC]`. AsciiDoc supports Asciidoctor's
   admonitions, tables, listings, local includes and `latexmath`/`asciimath`. Typst, once
   its compiler is installed, gets a flowing document view and a PDF page view
-  whose text can be selected and clicked. HTML keeps its own CSS, images and
+  whose text can be selected and clicked; the Paragraph and Format menus write
+  Typst syntax rather than Markdown. HTML keeps its own CSS, images and
   scripts, isolated in a sandbox.
 - **A preview that follows the work.** Split, source-only and preview-only
   modes; scroll sync; clicking a source line blinks the matching block;
@@ -49,6 +50,11 @@ Markdown document active.*
   wheel or drag reordering, and right-click offers the tab actions, including
   **Format Document** and **Add to Favorites**. **Reopen the last tabs** on launch
   restores the set that was open, in the same order and with the same one active.
+- **Work that survives a crash.** Every dirty buffer, untitled included, is
+  journaled beside the settings while you type; the next launch restores it as a
+  dirty tab and says how many documents came back. A file that changed or was
+  deleted on disk while its tab was dirty raises a notice with **Reload from
+  disk**, **Keep my version** and **Save a copy…**, instead of being overwritten.
 - **Typing that closes itself.** `(`, `[`, `{`, quotes and backticks insert
   their pair, step over the closer and delete both on Backspace; HTML tags close
   in HTML, Markdown and AsciiDoc. Both behaviors have a switch under

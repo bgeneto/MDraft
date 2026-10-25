@@ -68,7 +68,7 @@ The preview has two views:
   prose word paints the corresponding source word; generated text such as
   `#lorem` has no source word and paints nothing.
 - **Pages** shows the compiler's real PDF, drawn by PDF.js. This is what a PDF
-  export will contain, and its text layer can be selected, copied and searched.
+  export will contain, and its text layer can be selected and copied.
   A single click paints the corresponding source paragraph; double-clicking a
   word or dragging across a short range paints that selection and reveals it.
   Selecting literal prose in the source also paints the matching PDF text.
@@ -85,10 +85,18 @@ The preview has two views:
   as one raster, figures inside it are inverted with the text in the dark theme.
 
 An `#include` or `#image` resolves against the document's folder, as it does
-on export. PDF export from a `.typ` document goes directly through Typst, so
-the page layout is preserved. Exporting a Typst document to DOCX, ODT or another
-flow format goes through Typst's HTML output first and loses page layout; that
-is the price of the word-processor file.
+on export. **Help › Typst Reference** opens a live cheat sheet of the syntax
+above: scripting, native mathematics, automatic numbering, cross-references,
+footnotes, tables, page layout and the difference between the two views. It is
+compiled by the same Typst the preview uses. The Paragraph and Format menus write
+Typst syntax in a `.typ` document — `= Heading`, `+` for an ordered list,
+`#quote(...)`, `#table(...)`, `#outline()`, `#link(...)` and `$ … $` — instead of
+the Markdown spelling. Task lists, GitHub alerts and YAML front matter have no
+Typst equivalent; those menu items explain that instead of inserting markup that
+would not compile. PDF export from a `.typ` document
+goes directly through Typst, so the page layout is preserved. Exporting a Typst
+document to DOCX, ODT or another flow format goes through Typst's HTML output
+first and loses page layout; that is the price of the word-processor file.
 
 ## HTML
 
@@ -117,8 +125,9 @@ the window keeps independent panes.
 ## Editing
 
 Documents open in tabs. Each tab keeps its text, caret, scroll position and
-undo history while another tab is in front. The tab list itself is not saved
-when the window closes.
+undo history while another tab is in front. The tab list is remembered when
+**Reopen the last tabs** is selected under **On Launch**; the recovery journal
+covers unsaved text separately.
 
 When more tabs are open than fit, the strip scrolls horizontally: the arrow
 buttons at its right edge move it, a vertical wheel over the strip does the
@@ -169,18 +178,30 @@ and Preferences. Sidebar width and the editor/preview split are not persisted.
 **On Launch** (Preferences › Files) chooses what a new window opens with: the
 welcome document, a new file, the most recent file, or **Reopen the last tabs** —
 every saved document that was open when MDraft last closed, in the same order
-with the same tab active. Only paths are remembered: untitled or unsaved content
-is not restored, and a file that has since been deleted is skipped and reported.
-A document named on the command line still wins over the remembered set.
+with the same tab active. The list remembers paths; untitled or unsaved text is
+restored by the recovery journal described below, not by the tab list. A file
+that has since been deleted is skipped and reported. A document named on the
+command line still wins over the remembered set.
 
 Other editor features:
 
 - **Focus mode** dims every line except the one holding the caret.
-- **Typewriter mode** keeps the caret vertically centred while typing.
+- **Typewriter mode** recentres the view when you move the caret; while typing,
+  the editor keeps the caret in view rather than forcing it to the centre.
 - **Line height** in the source pane is **Compact** (1.3×), **Normal** (1.5×)
   or **Wide** (1.8×), under **Preferences › Editor**. The preview keeps its own
   reading line height.
 - **Auto Save** is opt-in and writes dirty files in place every 20 seconds.
+- **Crash recovery.** Every dirty buffer, including an untitled one, is written
+  to a journal beside `settings.json` while you type. If MDraft closes
+  unexpectedly, the next launch restores those buffers as dirty tabs and shows a
+  notice saying how many came back. Saving, Save As or Discard removes the
+  journal entry; a clean launch shows no notice. The journal is local, capped at
+  64 documents and 16 MiB each, and is never written beside the document.
+- **External changes.** If a file changes or is deleted on disk while its tab has
+  unsaved text, a notice bar offers **Reload from disk**, **Keep my version** and
+  **Save a copy…**. A save is refused until the conflict is resolved. A clean
+  buffer still reloads silently, as before.
 - **Auto-close** inserts `)`, `]`, `}`, `'`, `"` and `` ` `` after the opening
   character, steps over the closer, deletes both with Backspace and wraps a
   selection. HTML tags close in HTML documents and in the inline HTML that
@@ -232,21 +253,51 @@ a local file, dropping image files on the window, or using **Format › Image**.
 | --- | --- |
 | Copy image to `./${filename}.assets` | A folder named after the document |
 | Copy image to `./assets` | A shared `assets` folder beside the document |
-| Copy image to a custom folder | Your path; a relative one resolves against the document |
+| Copy image to a custom folder | Your path; a relative one resolves against the document. `${filename}` expands to the document's name |
 | Keep the original location | The original path or URL is inserted; nothing is copied |
 
 Imported filenames are sanitised, an existing file is never overwritten, and
-the bytes decide the format rather than the URL or clipboard label. A
-clipboard bitmap has no original location, so it is always saved. Remote images
-inside pasted rich text are downloaded and saved by default; **Remote Images in
-Pasted Rich Text** can keep the original URLs instead. The separate rule for an
-explicitly pasted image URL can be turned off entirely.
+the bytes decide the format rather than the URL or clipboard label. WebP and
+AVIF are recognised from their bytes and render in the Markdown, AsciiDoc and
+HTML previews; Typst 0.15 reads PNG, JPEG, GIF, WebP and SVG, so an AVIF
+destination is saved and explained instead of producing a `#image` that cannot
+compile. A clipboard bitmap has no original location, so it is always saved.
+Remote images inside pasted rich text are downloaded and saved by default;
+**Remote Images in Pasted Rich Text** can keep the original URLs instead. The
+separate rule for an explicitly pasted image URL can be turned off entirely.
+
+A paste that cannot be turned into a file says why and keeps the address: an
+expired session (HTTP 401), a server that returns an HTML page behind a `.png`
+name, a timeout or a refused connection all reach you as a notice, and the
+document keeps the URL so nothing is lost. `file:///…` addresses, Explorer's
+quoted `"C:\My Pictures\a.png"` and `data:image/…` URLs are imported like any
+other image.
+
+An unsaved document has no folder, so a rule applies only when it names one that
+exists without the document. A URL or local path keeps its original address
+(the toast says so); a clipboard bitmap is refused with "Save it first" unless
+**Custom Folder** is absolute. Typst and HTML also need a saved document before
+they can show a local image, because both resolve images against a root that
+only a saved file has.
 
 The application's only network requests of its own are user-initiated image
 downloads and the optional downloads of pandoc and Typst. It makes no request
 at start-up, sends no telemetry and checks for no updates. An HTML document's
 own linked resources are requested by the guest because its author asked for
 them.
+
+## Following links
+
+**Ctrl/Cmd+click** a link or an image path in the source to follow it. A right
+click offers the same action as **Open Link**, **Open File**, **Open Image** or
+**Go to Heading**, with the shortcut beside it. In the preview a plain click
+follows a link, and Ctrl/Cmd+click opens an image.
+
+An `http`, `https`, `mailto` or `tel` target opens in the default application; a
+`#fragment` scrolls the preview; a Markdown, AsciiDoc, Typst or HTML document
+opens in a tab; an image or any other file goes to the OS. A relative target
+needs a saved document, and an untitled buffer says so instead of guessing. A
+path inside a fenced block or an inline code span is text, not a link.
 
 ## Export
 

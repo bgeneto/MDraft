@@ -559,46 +559,61 @@ await evaluate(`(async () => {
       [type, await item.getType(type)]))))));
 })()`);
 try {
-  for (const field of ["search", "replace"]) {
-    for (const rich of [false, true]) {
-      for (const shift of [false, true]) {
-        await newTab();
-        await type("Source must stay unchanged.");
-        const before = await lines();
-        await key(field === "search" ? "KeyF" : "KeyH", field === "search" ? "f" : "h", {
-          ctrlKey: true,
-        });
-        const text = "busca çã $1 [.*]";
-        await evaluate(`(async () => {
-          const input = document.querySelector('.cm-search input[name="${field}"]');
-          input.focus();
-          input.value = 'left SELECT right';
-          input.setSelectionRange(5, 11);
-          await navigator.clipboard.write([new ClipboardItem({
-            'text/plain': new Blob([${JSON.stringify(text)}], {type: 'text/plain'}),
-            ${rich ? `'text/html': new Blob([${JSON.stringify(`<p><strong>${text}</strong></p>`)}], {type: 'text/html'}),` : ""}
-          })]);
-        })()`);
-        for (const type of ["keyDown", "keyUp"]) {
-          const result = await send("Input.dispatchKeyEvent", {
-            type,
-            key: "v",
-            code: "KeyV",
-            windowsVirtualKeyCode: 86,
-            modifiers: shift ? 10 : 2,
+  // A locked session (or the agent sandbox) can grant the permission and still
+  // lose the write: the read comes back empty, and a real Ctrl+V then pastes
+  // nothing. That is the environment, not the paste path; report it and skip.
+  const clipboardUsable = await evaluate(`(async () => {
+    try {
+      await navigator.clipboard.writeText('mdraft-clipboard-probe');
+      return (await navigator.clipboard.readText()) === 'mdraft-clipboard-probe';
+    } catch {
+      return false;
+    }
+  })()`);
+  if (!clipboardUsable) {
+    console.log("  SKIP  real Ctrl+V in Find and Replace — the session cannot own the clipboard");
+  } else {
+    for (const field of ["search", "replace"]) {
+      for (const rich of [false, true]) {
+        for (const shift of [false, true]) {
+          await newTab();
+          await type("Source must stay unchanged.");
+          const before = await lines();
+          await key(field === "search" ? "KeyF" : "KeyH", field === "search" ? "f" : "h", {
+            ctrlKey: true,
           });
-          if (result.error) throw new Error(result.error.message);
+          const text = "busca çã $1 [.*]";
+          await evaluate(`(async () => {
+            const input = document.querySelector('.cm-search input[name="${field}"]');
+            input.focus();
+            input.value = 'left SELECT right';
+            input.setSelectionRange(5, 11);
+            await navigator.clipboard.write([new ClipboardItem({
+              'text/plain': new Blob([${JSON.stringify(text)}], {type: 'text/plain'}),
+              ${rich ? `'text/html': new Blob([${JSON.stringify(`<p><strong>${text}</strong></p>`)}], {type: 'text/html'}),` : ""}
+            })]);
+          })()`);
+          for (const type of ["keyDown", "keyUp"]) {
+            const result = await send("Input.dispatchKeyEvent", {
+              type,
+              key: "v",
+              code: "KeyV",
+              windowsVirtualKeyCode: 86,
+              modifiers: shift ? 10 : 2,
+            });
+            if (result.error) throw new Error(result.error.message);
+          }
+          await sleep(500);
+          const input = await evaluate(`(() => {
+            const input = document.querySelector('.cm-search input[name="${field}"]');
+            return {value: input.value, focused: document.activeElement === input};
+          })()`);
+          check(
+            input.value === `left ${text} right` && input.focused && (await lines()) === before,
+            `${field}: Ctrl+${shift ? "Shift+" : ""}V pastes ${rich ? "rich" : "plain"} clipboard text into the field`,
+            JSON.stringify({ ...input, source: await lines() }),
+          );
         }
-        await sleep(500);
-        const input = await evaluate(`(() => {
-          const input = document.querySelector('.cm-search input[name="${field}"]');
-          return {value: input.value, focused: document.activeElement === input};
-        })()`);
-        check(
-          input.value === `left ${text} right` && input.focused && (await lines()) === before,
-          `${field}: Ctrl+${shift ? "Shift+" : ""}V pastes ${rich ? "rich" : "plain"} clipboard text into the field`,
-          JSON.stringify({ ...input, source: await lines() }),
-        );
       }
     }
   }

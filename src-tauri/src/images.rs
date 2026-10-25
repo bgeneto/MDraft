@@ -202,7 +202,7 @@ fn sanitize_stem(raw: &str) -> String {
     let mut last_dash = false;
     let mut last_dot = false;
     for ch in without_ext.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+        if ch.is_alphanumeric() || ch == '_' || ch == '-' {
             out.push(ch);
             last_dash = false;
             last_dot = false;
@@ -264,8 +264,12 @@ fn sniff_ext(bytes: &[u8]) -> Option<&'static str> {
     if bytes.len() >= 6 && (bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a")) {
         return Some("gif");
     }
-    if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
-        return Some("webp");
+    if bytes.len() >= 16 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        // The first chunk names the WebP variant. A RIFF file that merely
+        // carries the `WEBP` fourcc is not an image the webview can draw.
+        if matches!(&bytes[12..16], b"VP8 " | b"VP8L" | b"VP8X") {
+            return Some("webp");
+        }
     }
     if bytes.len() >= 2 && bytes.starts_with(b"BM") {
         return Some("bmp");
@@ -273,14 +277,8 @@ fn sniff_ext(bytes: &[u8]) -> Option<&'static str> {
     if bytes.len() >= 4 && bytes.starts_with(&[0x00, 0x00, 0x01, 0x00]) {
         return Some("ico");
     }
-    if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
-        let brand = &bytes[8..12];
-        if brand == b"avif" || brand == b"avis" {
-            return Some("avif");
-        }
-        if brand == b"heic" || brand == b"heix" || brand == b"mif1" {
-            return Some("heic");
-        }
+    if let Some(ext) = isobmff_ext(bytes) {
+        return Some(ext);
     }
 
     // SVG is text; only the first kilobyte can hold the opening tag.
@@ -297,13 +295,32 @@ fn sniff_ext(bytes: &[u8]) -> Option<&'static str> {
     None
 }
 
-fn ext_from_url(url: &str) -> Option<String> {
-    let without_fragment = url.split('#').next().unwrap_or(url);
-    let without_query = without_fragment.split('?').next().unwrap_or(without_fragment);
-    let last = without_query.rsplit('/').next()?;
-    let ext = last.rsplit_once('.')?.1.to_ascii_lowercase();
-    if (1..=5).contains(&ext.len()) && ext.chars().all(|c| c.is_ascii_alphanumeric()) {
-        Some(if ext == "jpeg" { "jpg".to_string() } else { ext })
+/// The brand of an ISO base media file (AVIF, HEIC).
+///
+/// AVIF files commonly declare `mif1` as the major brand and only list `avif`
+/// among the compatible brands, so the whole `ftyp` box has to be read. Reading
+/// just the major brand labelled those files as HEIC and saved them with the
+/// wrong extension.
+fn isobmff_ext(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.len() < 16 || &bytes[4..8] != b"ftyp" {
+        return None;
+    }
+    let declared = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+    let end = declared.clamp(16, bytes.len());
+    // The box is: major brand, minor version, then compatible brands.
+    let mut heic = false;
+    for (index, brand) in bytes[8..end].chunks_exact(4).enumerate() {
+        if index == 1 {
+            continue; // minor version, not a brand
+        }
+        match brand {
+            b"avif" | b"avis" => return Some("avif"),
+            b"heic" | b"heix" | b"heim" | b"heis" | b"mif1" => heic = true,
+            _ => {}
+        }
+    }
+    if heic {
+        Some("heic")
     } else {
         None
     }
@@ -313,45 +330,63 @@ fn ext_from_url(url: &str) -> Option<String> {
 // Destination
 // ---------------------------------------------------------------------------
 
+/// The sentence every rule that needs a document folder shows when there is
+/// none. The process working directory is never a substitute: in an installed
+/// build it is the application folder, which the user did not choose and
+/// cannot necessarily write.
+const NO_DOCUMENT_FOLDER: &str =
+    "This document has no file yet. Save it first, or choose an absolute folder in Preferences › Image.";
+
 fn document_dir(document_path: Option<&str>) -> Result<PathBuf, String> {
-    match document_path {
-        Some(path) => PathBuf::from(path)
-            .parent()
-            .map(Path::to_path_buf)
-            .ok_or_else(|| format!("Could not determine the folder of {path}.")),
-        None => std::env::current_dir()
-            .map_err(|e| format!("This document has no file yet, and the working directory is unavailable: {e}")),
+    let path = document_path.ok_or_else(|| NO_DOCUMENT_FOLDER.to_string())?;
+    Ok(PathBuf::from(path)
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default())
+}
+
+fn document_stem(document_path: &str) -> String {
+    PathBuf::from(document_path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "document".to_string())
+}
+
+/// Expand the `${filename}` token promised by the Custom Folder preference.
+///
+/// A relative custom folder already needs the document's folder; a token in an
+/// *absolute* path needs the document's name, which an untitled buffer does not
+/// have. Both cases fail with the save-first sentence instead of creating a
+/// literal `${filename}` directory.
+fn expand_filename(value: &str, document_path: Option<&str>) -> Result<String, String> {
+    if !value.contains("${filename}") {
+        return Ok(value.to_string());
     }
+    let path = document_path.ok_or_else(|| NO_DOCUMENT_FOLDER.to_string())?;
+    Ok(value.replace("${filename}", &sanitize_stem(&document_stem(path))))
 }
 
 fn target_dir(options: &ImageOptions, document_path: Option<&str>) -> Result<PathBuf, String> {
-    let base = document_dir(document_path)?;
     match options.rule.as_str() {
-        "assetsDir" => Ok(base.join("assets")),
+        "assetsDir" => Ok(document_dir(document_path)?.join("assets")),
         "custom" => {
-            let dir = options
+            let raw = options
                 .custom_dir
                 .as_deref()
                 .filter(|d| !d.trim().is_empty())
                 .ok_or("No custom image folder is configured in Preferences.")?;
-            let candidate = PathBuf::from(dir);
+            let candidate = PathBuf::from(expand_filename(raw, document_path)?);
             Ok(if candidate.is_absolute() {
                 candidate
             } else {
-                base.join(candidate)
+                document_dir(document_path)?.join(candidate)
             })
         }
         // "assetsFolder" is the default and the fallback for anything unknown.
         _ => {
-            let stem = document_path
-                .map(|p| {
-                    PathBuf::from(p)
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "document".to_string())
-                })
-                .unwrap_or_else(|| "document".to_string());
-            Ok(base.join(format!("{}.assets", sanitize_stem(&stem))))
+            let base = document_dir(document_path)?;
+            let stem = sanitize_stem(&document_stem(document_path.unwrap_or_default()));
+            Ok(base.join(format!("{stem}.assets")))
         }
     }
 }
@@ -451,7 +486,25 @@ pub fn import_image(
         return Err(format!("{source_path} is not a file."));
     }
     if options.rule == "keepOriginal" {
-        return Ok(keep_original(source_path, "local", &options));
+        // Keep the file untouched, but express a path that lies inside the
+        // document's folder relatively: Typst rejects an absolute drive path,
+        // and a relative one is also what survives moving the document. A
+        // reference the reader typed as relative is left exactly as typed.
+        let reference = if Path::new(&source_path).is_absolute() {
+            document_path
+                .as_deref()
+                .and_then(|doc| {
+                    Path::new(doc)
+                        .parent()
+                        .map(|dir| dir.to_string_lossy().to_string())
+                })
+                .and_then(|dir| relative_path(&dir, &source.to_string_lossy()))
+                .filter(|rel| !rel.starts_with(".."))
+                .unwrap_or_else(|| source_path.clone())
+        } else {
+            source_path.clone()
+        };
+        return Ok(keep_original(reference, "local", &options));
     }
 
     let bytes = fs::read(&source).map_err(|e| format!("Could not read {source_path}: {e}"))?;
@@ -520,7 +573,14 @@ pub fn download_image(
     let mut response = agent
         .get(target)
         .call()
-        .map_err(|e| format!("Download failed for {url}: {e}"))?;
+        .map_err(|e| download_error(&url, e))?;
+
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
 
     let bytes = response
         .body_mut()
@@ -529,25 +589,25 @@ pub fn download_image(
         .read_to_vec()
         .map_err(|e| format!("Could not read the response body for {url}: {e}"))?;
 
-    let sniffed = sniff_ext(&bytes);
-    let ext = sniffed
-        .map(str::to_string)
-        .or_else(|| ext_from_url(&url))
-        .ok_or_else(|| format!("{url} did not return a recognised image format."))?;
+    // The bytes decide. A URL ending in `.png` proves nothing: an expired
+    // session, a login page or a JSON error can all answer 200 with a body that
+    // is not an image, and writing it under an image extension produces a file
+    // that only looks saved.
+    let ext = sniff_ext(&bytes).ok_or_else(|| {
+        let described = if content_type.is_empty() {
+            "the response".to_string()
+        } else {
+            format!("the response ({content_type})")
+        };
+        format!(
+            "{url} did not return an image: {described} is not a recognised image format. Save the image from the browser and paste the file instead."
+        )
+    })?;
 
-    let stem = sanitize_stem(
-        &ext_from_url(&url)
-            .and_then(|_| {
-                url.split('?')
-                    .next()
-                    .and_then(|u| u.rsplit('/').next())
-                    .map(str::to_string)
-            })
-            .unwrap_or_else(|| "image".to_string()),
-    );
+    let stem = sanitize_stem(&url_name(&url));
 
     let dir = target_dir(&options, document_path.as_deref())?;
-    let path = write_unique(&dir, &stem, &ext, &bytes)?;
+    let path = write_unique(&dir, &stem, ext, &bytes)?;
     Ok(build_result(
         "remote",
         path,
@@ -557,12 +617,43 @@ pub fn download_image(
     ))
 }
 
+/// The last path segment of a URL, without its query or fragment.
+fn url_name(url: &str) -> String {
+    url.split(['?', '#'])
+        .next()
+        .unwrap_or(url)
+        .rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or("image")
+        .to_string()
+}
+
+/// A sentence a person can act on, rather than ureq's `http status: 401`.
+fn download_error(url: &str, error: ureq::Error) -> String {
+    match error {
+        ureq::Error::StatusCode(code @ (401 | 403)) => format!(
+            "{url} needs a sign-in (HTTP {code}); MDraft cannot use your browser's session. Save the image from the browser and paste the file instead."
+        ),
+        ureq::Error::StatusCode(code) => format!("{url} answered HTTP {code}."),
+        ureq::Error::Timeout(_) => format!("{url} did not answer in time."),
+        ureq::Error::HostNotFound => format!("Could not find the server for {url}."),
+        ureq::Error::ConnectionFailed => format!("Could not connect to {url}."),
+        ureq::Error::TooManyRedirects => format!("{url} redirected too many times."),
+        other => format!("Download failed for {url}: {other}."),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
     use super::*;
 
     fn opts(rule: &str) -> ImageOptions {
@@ -581,6 +672,13 @@ mod tests {
         assert_eq!(sniff_ext(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("jpg"));
         assert_eq!(sniff_ext(b"GIF89a...."), Some("gif"));
         assert_eq!(sniff_ext(b"RIFF\0\0\0\0WEBPVP8 "), Some("webp"));
+        assert_eq!(sniff_ext(b"RIFF\0\0\0\0WEBPVP8L"), Some("webp"));
+        assert_eq!(sniff_ext(b"RIFF\0\0\0\0WEBPVP8X"), Some("webp"));
+        assert_eq!(
+            sniff_ext(b"RIFF\0\0\0\0WEBPxxxx"),
+            None,
+            "a RIFF file with the WEBP fourcc but no WebP chunk is not an image"
+        );
         assert_eq!(sniff_ext(b"BM6\0"), Some("bmp"));
         assert_eq!(sniff_ext(b"<svg xmlns=\"...\">"), Some("svg"));
         assert_eq!(sniff_ext(b"   \n<svg>"), Some("svg"));
@@ -589,6 +687,35 @@ mod tests {
             Some("avif"),
             "avif brand at offset 8"
         );
+    }
+
+    /// An `ftyp` box with the given major brand and compatible brands.
+    fn ftyp(major: &[u8; 4], compatible: &[&[u8; 4]]) -> Vec<u8> {
+        let size = 16 + 4 * compatible.len();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&(size as u32).to_be_bytes());
+        bytes.extend_from_slice(b"ftyp");
+        bytes.extend_from_slice(major);
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        for brand in compatible {
+            bytes.extend_from_slice(*brand);
+        }
+        bytes
+    }
+
+    #[test]
+    fn an_avif_is_recognised_from_its_compatible_brands() {
+        // The sample from aviftools.net declares `avif` as the major brand.
+        assert_eq!(sniff_ext(&ftyp(b"avif", &[b"mif1", b"avif", b"miaf"])), Some("avif"));
+        // Other AVIF writers declare `mif1` and only list `avif` as compatible.
+        assert_eq!(sniff_ext(&ftyp(b"mif1", &[b"avif", b"mif1"])), Some("avif"));
+        assert_eq!(sniff_ext(&ftyp(b"heic", &[b"mif1", b"heic"])), Some("heic"));
+        assert_eq!(
+            sniff_ext(&ftyp(b"mif1", &[b"mif1"])),
+            Some("heic"),
+            "a generic HEIF stays labelled as HEIC"
+        );
+        assert_eq!(sniff_ext(&ftyp(b"isom", &[b"isom", b"mp41"])), None);
     }
 
     #[test]
@@ -624,6 +751,11 @@ mod tests {
             sanitize_stem("a.b.c"),
             "a.b",
             "only the final extension is removed, inner dots survive"
+        );
+        assert_eq!(
+            sanitize_stem("Resolução 2026"),
+            "Resolução-2026",
+            "letters outside ASCII stay readable instead of becoming dashes"
         );
         // Only the final segment is ever used, so no name can escape a folder.
         assert!(!sanitize_stem("../../x.png").contains(".."));
@@ -790,6 +922,19 @@ mod tests {
             target_dir(&custom, doc).unwrap(),
             PathBuf::from("C:\\pictures")
         );
+
+        custom.custom_dir = Some("media/${filename}".to_string());
+        assert_eq!(
+            target_dir(&custom, doc).unwrap(),
+            PathBuf::from("C:\\notes\\media\\report"),
+            "the token expands to the sanitised document stem"
+        );
+        custom.custom_dir = Some("C:\\pictures\\${filename}".to_string());
+        assert_eq!(
+            target_dir(&custom, doc).unwrap(),
+            PathBuf::from("C:\\pictures\\report"),
+            "an absolute custom folder expands the token too"
+        );
     }
 
     #[cfg(unix)]
@@ -822,23 +967,62 @@ mod tests {
             target_dir(&custom, doc).unwrap(),
             PathBuf::from("/opt/pictures")
         );
+
+        custom.custom_dir = Some("media/${filename}".to_string());
+        assert_eq!(
+            target_dir(&custom, doc).unwrap(),
+            PathBuf::from("/home/me/notes/media/report"),
+            "the token expands to the sanitised document stem"
+        );
     }
 
     #[test]
-    fn target_dir_without_a_document_uses_a_labelled_folder() {
-        // No document path: falls back to the working directory, which must not
-        // panic and must still produce the per-document naming.
-        let dir = target_dir(&opts("assetsFolder"), None).unwrap();
-        assert!(dir.to_string_lossy().ends_with("document.assets"));
+    fn an_untitled_document_has_no_folder_to_write_into() {
+        // The process working directory is not a destination: in an installed
+        // build it is the application folder.
+        for rule in ["assetsFolder", "assetsDir"] {
+            let error = target_dir(&opts(rule), None).unwrap_err();
+            assert!(
+                error.contains("Save it first"),
+                "{rule} produced: {error}"
+            );
+        }
+
+        let mut relative = opts("custom");
+        relative.custom_dir = Some("media".to_string());
+        assert!(target_dir(&relative, None).unwrap_err().contains("Save it first"));
+
+        let mut token = opts("custom");
+        token.custom_dir = Some(format!(
+            "{}{}",
+            std::env::temp_dir().to_string_lossy(),
+            "${filename}"
+        ));
+        assert!(
+            target_dir(&token, None).unwrap_err().contains("Save it first"),
+            "a token needs the document name even inside an absolute folder"
+        );
+
+        let mut absolute = opts("custom");
+        absolute.custom_dir = Some(std::env::temp_dir().to_string_lossy().to_string());
+        assert_eq!(
+            target_dir(&absolute, None).unwrap(),
+            std::env::temp_dir(),
+            "an absolute custom folder is a real destination without a document"
+        );
     }
 
     #[test]
-    fn extracts_extension_from_urls() {
-        assert_eq!(ext_from_url("https://a.test/x.PNG").as_deref(), Some("png"));
-        assert_eq!(ext_from_url("https://a.test/x.jpeg?v=2").as_deref(), Some("jpg"));
-        assert_eq!(ext_from_url("https://a.test/x.png#frag").as_deref(), Some("png"));
-        assert_eq!(ext_from_url("https://a.test/image"), None);
-        assert_eq!(ext_from_url("https://a.test/a.b.c.webp").as_deref(), Some("webp"));
+    fn extracts_the_name_from_urls() {
+        assert_eq!(url_name("https://a.test/x.PNG"), "x.PNG");
+        assert_eq!(url_name("https://a.test/x.jpeg?v=2"), "x.jpeg");
+        assert_eq!(url_name("https://a.test/x.png#frag"), "x.png");
+        assert_eq!(url_name("https://a.test/image"), "image");
+        assert_eq!(url_name("https://a.test/a.b.c.webp"), "a.b.c.webp");
+        assert_eq!(
+            url_name("https://a.test/api/files/0578/rk8_comparacao.png"),
+            "rk8_comparacao.png"
+        );
     }
 
     #[test]
@@ -987,6 +1171,56 @@ mod tests {
     }
 
     #[test]
+    fn an_absolute_kept_path_inside_the_document_folder_becomes_relative() {
+        let dir = scratch("keep-absolute-inside");
+        let doc = dir.join("notes.md");
+        fs::write(&doc, "x").unwrap();
+        let source = dir.join("picture.png");
+        fs::write(&source, tiny_png()).unwrap();
+
+        let saved = import_image(
+            source.to_string_lossy().to_string(),
+            Some(doc.to_string_lossy().to_string()),
+            opts("keepOriginal"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            saved.markdown_path, "picture.png",
+            "Typst can only read a relative path inside its root"
+        );
+        assert_eq!(saved.bytes, 0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_absolute_kept_path_outside_the_document_folder_stays_absolute() {
+        let dir = scratch("keep-absolute-outside");
+        let doc = dir.join("notes").join("notes.md");
+        fs::create_dir_all(doc.parent().unwrap()).unwrap();
+        fs::write(&doc, "x").unwrap();
+        let source = dir.join("pictures").join("a.png");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(&source, tiny_png()).unwrap();
+
+        let saved = import_image(
+            source.to_string_lossy().to_string(),
+            Some(doc.to_string_lossy().to_string()),
+            opts("keepOriginal"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            saved.markdown_path,
+            source.to_string_lossy().to_string(),
+            "a path outside the folder is not turned into ../, which would still be outside the root"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn importing_a_file_already_in_the_target_folder_does_not_truncate() {
         let dir = scratch("import-inplace");
         let doc = dir.join("notes.md");
@@ -1018,6 +1252,121 @@ mod tests {
             let err = download_image(url.to_string(), None, opts("assetsDir"), None).unwrap_err();
             assert!(err.contains("non-HTTP"), "{url} produced: {err}");
         }
+    }
+
+    /// One request, one response, then the listener closes.
+    fn serve_once(status: &str, content_type: &str, body: &[u8]) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let body = body.to_vec();
+        let status = status.to_string();
+        let content_type = content_type.to_string();
+        thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut request = [0u8; 2048];
+                let _ = stream.read(&mut request);
+                let head = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(&body);
+            }
+        });
+        format!("http://{address}/image")
+    }
+
+    fn download_doc(tag: &str) -> (PathBuf, Option<String>) {
+        let dir = scratch(tag);
+        let doc = dir.join("notes.md");
+        fs::write(&doc, "x").unwrap();
+        (dir, Some(doc.to_string_lossy().to_string()))
+    }
+
+    #[test]
+    fn downloads_accept_a_real_image() {
+        let (dir, doc) = download_doc("download-png");
+        let url = serve_once("200 OK", "image/png", &tiny_png());
+        let saved = download_image(url, doc, opts("assetsDir"), Some(5000)).unwrap();
+
+        assert_eq!(saved.source, "remote");
+        assert_eq!(saved.markdown_path, "./assets/image.png");
+        assert_eq!(fs::read(&saved.absolute_path).unwrap(), tiny_png());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn downloads_use_the_sniffed_modern_format() {
+        let (dir, doc) = download_doc("download-webp");
+        let webp = b"RIFF\x24\0\0\0WEBPVP8 \0\0\0\0";
+        let url = serve_once("200 OK", "image/webp", webp);
+        let saved = download_image(url, doc, opts("assetsDir"), Some(5000)).unwrap();
+        assert!(
+            saved.markdown_path.ends_with(".webp"),
+            "got {}",
+            saved.markdown_path
+        );
+
+        let (dir2, doc2) = download_doc("download-avif");
+        let avif = ftyp(b"mif1", &[b"avif", b"mif1"]);
+        let url = serve_once("200 OK", "image/avif", &avif);
+        let saved = download_image(url, doc2, opts("assetsDir"), Some(5000)).unwrap();
+        assert!(
+            saved.markdown_path.ends_with(".avif"),
+            "got {}",
+            saved.markdown_path
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&dir2);
+    }
+
+    #[test]
+    fn a_200_that_is_not_an_image_is_refused() {
+        let (dir, doc) = download_doc("download-html");
+        let url = serve_once(
+            "200 OK",
+            "text/html",
+            b"<!DOCTYPE html><html><body>Please sign in</body></html>",
+        );
+        let error = download_image(url, doc, opts("assetsDir"), Some(5000)).unwrap_err();
+
+        assert!(error.contains("did not return an image"), "{error}");
+        assert!(error.contains("text/html"), "{error}");
+        assert!(
+            !dir.join("assets").exists(),
+            "a refused download must not create the folder"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_sign_in_failure_is_explained() {
+        let (dir, doc) = download_doc("download-401");
+        let url = serve_once(
+            "401 Unauthorized",
+            "application/json",
+            br#"{"detail":"Not authenticated"}"#,
+        );
+        let error = download_image(url, doc, opts("assetsDir"), Some(5000)).unwrap_err();
+
+        assert!(error.contains("needs a sign-in"), "{error}");
+        assert!(error.contains("401"), "{error}");
+        assert!(error.contains("Save the image from the browser"), "{error}");
+        assert!(!dir.join("assets").exists());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn other_status_codes_name_the_status() {
+        let (dir, doc) = download_doc("download-404");
+        let url = serve_once("404 Not Found", "text/plain", b"missing");
+        let error = download_image(url, doc, opts("assetsDir"), Some(5000)).unwrap_err();
+        assert!(error.contains("HTTP 404"), "{error}");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

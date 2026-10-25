@@ -59,11 +59,19 @@ export interface HtmlPreviewCallbacks {
 export interface HtmlPreviewHandle {
   /** Start a new document: new nonce, new origin, no stale state. */
   reset(): void;
-  render(source: string, root: string | null, filename: string, scripts: boolean): Promise<void>;
+  render(
+    source: string,
+    root: string | null,
+    filename: string,
+    scripts: boolean,
+    imageRoots?: string[],
+  ): Promise<void>;
   dispose(): void;
   setAccelerators(list: HtmlAccelerator[]): void;
   scrollTo(top: number): void;
   scrollToLine(line: number): void;
+  /** Scroll the guest to an element id (a same-document link in the source). */
+  scrollToId(id: string): void;
   blink(line: number): void;
   /** Translate a guest selection through the table built with the preview. */
   wordRange(selection: HtmlSelection): { from: number; to: number } | null;
@@ -601,7 +609,7 @@ export function createHtmlPreview(
       htmlFragments = [];
     },
 
-    async render(source, root, filename, scripts) {
+    async render(source, root, filename, scripts, imageRoots = []) {
       const mine = ++generation;
       // Captured now: reset() replaces `nonce` while this build is awaiting,
       // and a stale render must not publish the old document under the new one.
@@ -626,6 +634,7 @@ export function createHtmlPreview(
             bridgeNonce,
             source: built.html,
             root,
+            imageRoots,
             filename,
             scripts,
           })
@@ -674,6 +683,9 @@ export function createHtmlPreview(
 
     scrollToLine(line) {
       if (active) postTo(active, { type: "scrollToLine", line });
+    },
+    scrollToId(id) {
+      if (active) postTo(active, { type: "hash", id });
     },
 
     blink(line) {

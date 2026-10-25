@@ -5,6 +5,7 @@ mod export;
 mod html_preview;
 mod images;
 mod menu;
+mod recovery;
 mod settings;
 mod spellcheck;
 mod tokens;
@@ -72,7 +73,11 @@ pub fn run() {
             documents::write_document,
             documents::stat_document,
             documents::path_exists,
+            documents::open_external,
             documents::startup_file,
+            recovery::list_recovery,
+            recovery::write_recovery,
+            recovery::remove_recovery,
             tokens::count_tokens,
             spellcheck::spellcheck_languages,
             spellcheck::spellcheck_check,

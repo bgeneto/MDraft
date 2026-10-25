@@ -30,6 +30,29 @@ export interface FileStat {
   readOnly: boolean;
 }
 
+/**
+ * One unsaved buffer in the crash-recovery journal.
+ *
+ * `baseModifiedMs`/`baseSize` are the disk revision the buffer was based on,
+ * not the file's current state. Restoring them is what lets the external-change
+ * guard notice a file that moved while MDraft was closed.
+ */
+export interface RecoveryEntry {
+  id: string;
+  path: string | null;
+  name: string;
+  language: DocumentLanguage;
+  content: string;
+  lineEnding: string;
+  hadBom: boolean;
+  lossy: boolean;
+  readOnly: boolean;
+  baseModifiedMs: number;
+  baseSize: number;
+  /** Set by Rust on write; the value sent by the frontend is ignored. */
+  updatedMs: number;
+}
+
 export type ThemeMode = "system" | "light" | "dark";
 export type ViewMode = "source" | "split" | "preview";
 export type SidebarTab = "outline" | "favorites" | "recent";
@@ -89,6 +112,13 @@ export interface ExportRequest {
    * to HTML in the frontend and therefore arrives here as `"html"`.
    */
   language?: DocumentLanguage;
+  /**
+   * A custom image folder the Typst compiler must be allowed to read.
+   *
+   * Typst accepts one `--root`; the backend widens it to the common ancestor of
+   * the document's folder and this one. Only a `.typ` export uses it.
+   */
+  imageRoot?: string | null;
 }
 
 export interface ExportOutcome {
@@ -294,6 +324,15 @@ export const writeDocument = (path: string, content: string, lineEnding: string,
 
 export const statDocument = (path: string) => invoke<FileStat>("stat_document", { path });
 
+/** Journal entries left by a previous run, newest first. */
+export const listRecovery = () => invoke<RecoveryEntry[]>("list_recovery");
+
+/** Write or replace one journal entry. The host sets `updatedMs`. */
+export const writeRecovery = (entry: RecoveryEntry) => invoke<void>("write_recovery", { entry });
+
+/** Remove one journal entry. A missing file is success. */
+export const removeRecovery = (id: string) => invoke<void>("remove_recovery", { id });
+
 export const pathExists = (path: string, documentPath: string | null = null) =>
   invoke<boolean>("path_exists", { path, documentPath });
 
@@ -347,6 +386,14 @@ export const addFavorite = (path: string) => invoke<Settings>("add_favorite", { 
 export const removeFavorite = (path: string) => invoke<Settings>("remove_favorite", { path });
 
 export const pandocStatus = () => invoke<PandocStatus>("pandoc_status");
+
+/**
+ * Open a local file or folder with its default application.
+ *
+ * The frontend resolves the document's relative path first; Rust refuses a
+ * missing path and an executable extension.
+ */
+export const openExternal = (path: string) => invoke<void>("open_external", { path });
 
 export const runExport = (request: ExportRequest) =>
   invoke<ExportOutcome>("run_export", { request });
@@ -409,8 +456,12 @@ export interface RenderedTypst {
  * tells the compiler which directory to treat as the project root, so that
  * `#image("img/plot.png")` resolves the way it will on export.
  */
-export const renderTypst = (path: string | null, source: string, mode: TypstView = "document") =>
-  invoke<RenderedTypst>("render_typst", { path, source, mode });
+export const renderTypst = (
+  path: string | null,
+  source: string,
+  mode: TypstView = "document",
+  imageRoot: string | null = null,
+) => invoke<RenderedTypst>("render_typst", { path, source, mode, imageRoot });
 
 /** One menu accelerator, as the native menu registered it. */
 export interface Shortcut {
@@ -498,6 +549,11 @@ export interface HtmlPreviewRequest {
   bridgeNonce: string;
   source: string;
   root: string | null;
+  /**
+   * Extra folders the guest may load images from. The reader's custom image
+   * folder is the only one passed here; the document's own folder is `root`.
+   */
+  imageRoots?: string[];
   filename: string;
   scripts: boolean;
 }

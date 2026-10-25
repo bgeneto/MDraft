@@ -25,6 +25,26 @@ export interface Session {
   modifiedMs: number;
   readOnly: boolean;
   /**
+   * Key of this buffer's crash-recovery entry. Null until the first dirty
+   * write; a recovered session inherits the key from its journal.
+   */
+  recoveryId: string | null;
+  /**
+   * Recovered text for a session that has never been in the editor view.
+   *
+   * `savedContent` is the disk revision and must stay that way: writing the
+   * recovered text into it would make the buffer look clean and lose the
+   * dirty state. `draft` answers "what should the editor show?" until the
+   * state is captured; `textOf` prefers it for a background tab.
+   */
+  draft: string | null;
+  /**
+   * A disk change the reader has not resolved yet. `modified` means the file
+   * was rewritten, `deleted` means it vanished. A null value is the normal
+   * state; a save is refused while this is set.
+   */
+  conflict: "modified" | "deleted" | null;
+  /**
    * The view state from the last time this tab was hidden. Null while the tab
    * is on screen: the live EditorView is the authority then.
    */
@@ -82,6 +102,9 @@ function blank(): Session {
     size: 0,
     modifiedMs: 0,
     readOnly: false,
+    recoveryId: null,
+    draft: null,
+    conflict: null,
     editorState: null,
     previewScroll: 0,
     editorScroll: 0,
