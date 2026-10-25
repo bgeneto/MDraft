@@ -240,7 +240,9 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
           if (!current(before) || isBusy(s)) continue;
           const change = classifyDiskChange(s, stat);
           if (change === "unchanged") {
-            deps.conflict(s, null);
+            // Metadata equality cannot resolve a conflict found by the checked
+            // writer's digest. Keep its actions until an actual resolution.
+            if (s.conflict === "deleted") deps.conflict(s, "modified");
             continue;
           }
           if (change === "deleted") {

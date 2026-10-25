@@ -89,7 +89,7 @@ Markdown document active.*
   of Markdown and AsciiDoc embed the chosen faces.
 - **Zoom the whole document.** `Ctrl+Shift+=` enlarges the source in Source-only,
   both panes in Split, and the rendered page in Preview-only — text, images,
-  diagrams and Typst pages together. `Ctrl+Shift+0` resets the zoom without
+  diagrams and Typst pages together. `Ctrl+Alt+0` resets the zoom without
   changing Content Width or the font-size preferences.
 - **Content moves both ways.** Paste formatted text from a browser or word
   processor and MDraft converts it into the destination's markup; paste markup

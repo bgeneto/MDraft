@@ -2598,7 +2598,7 @@ async function printCurrentDocument(): Promise<void> {
  * installed.
  *
  * The printing itself happens in the system browser rather than in this window:
- * WebView2 provides no print interface of its own, so `window.print()` here
+ * This embedding's JavaScript `window.print()` does not open usable UI, so it
  * fires no dialog and produces nothing. The document carries a `window.print()`
  * of its own, so the browser opens straight onto its print preview and the user
  * only has to choose "Save as PDF".
@@ -2666,7 +2666,7 @@ const RECENT_MENU_PREFIX = "recent.file:";
  */
 let pandocCache: api.PandocStatus | null = null;
 
-/** Typst is needed by the PDF target and by `.typ` previews; PDF is the only export. */
+/** Typst is needed by the typeset PDF target and by `.typ` previews. */
 let typstCache: api.TypstStatus | null = null;
 
 async function refreshPandocStatus(): Promise<void> {
@@ -2735,7 +2735,7 @@ async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
   if (format.id === "pdf") {
     if (!typstCache) await refreshTypstStatus();
     if (typstCache && !typstCache.found) {
-      toast("PDF export needs Typst — install it first.");
+      toast("PDF (via Typst) needs Typst — install it first.");
       await typstSetup();
       return;
     }
@@ -2817,7 +2817,7 @@ async function pandocSetup(): Promise<void> {
 
   const engine = status.pdfEngine
     ? `\nPDF engine: ${basename(status.pdfEngine)}`
-    : "\nPDF engine: none — Typst is not installed, so PDF export is unavailable. Use Tools › Check or Install Typst…. Every other format works without it.";
+    : "\nPDF engine: none — PDF (via Typst) needs Typst. Native PDF and browser printing remain available. Use Tools › Check or Install Typst….";
 
   pandocCache = status;
   preferences?.refresh();
@@ -2837,7 +2837,7 @@ async function pandocSetup(): Promise<void> {
   }
 
   const agreed = await ask(
-    "Pandoc was not found, so Word, PDF, EPUB and the other export formats are unavailable.\n\n" +
+    "Pandoc was not found, so Word, EPUB, PDF (via Typst) conversion and the other Pandoc formats are unavailable. Native PDF and browser printing remain available.\n\n" +
       "MDraft can download the official pandoc build and unpack it into its own data folder. " +
       "Nothing is installed system-wide, no administrator rights are needed, and removing the " +
       "folder undoes it.\n\n" +
@@ -2857,8 +2857,8 @@ async function pandocSetup(): Promise<void> {
     await message(
       `Pandoc ${installed.version ?? ""} is ready.\n\n${installed.path ?? ""}\n\n` +
         (installed.pdfEngine
-          ? `PDF export will use ${basename(installed.pdfEngine)}.`
-          : "PDF export still needs Typst — use Tools › Check or Install Typst…. Every other format works now."),
+          ? `PDF (via Typst) will use ${basename(installed.pdfEngine)}.`
+          : "PDF (via Typst) still needs Typst — use Tools › Check or Install Typst…. Native PDF and browser printing remain available."),
       { title: "Pandoc installed", kind: "info" },
     );
   } catch (error) {
@@ -2870,8 +2870,8 @@ async function pandocSetup(): Promise<void> {
 /**
  * Look for Typst, and offer to fetch it when it is missing.
  *
- * Typst is what turns Markdown into PDF, so this is the one extra program the
- * application really wants. It is a single executable — no TeX distribution, no
+ * Typst supplies .typ preview/compilation and the typeset PDF conversion. It is
+ * a single executable — no TeX distribution, no
  * package manager, no administrator rights — which is why downloading it is a
  * reasonable offer rather than an imposition.
  */
@@ -2894,7 +2894,7 @@ async function typstSetup(): Promise<void> {
       `Typst ${status.version ?? "(unknown version)"} is ready.\n\n` +
         `Location: ${status.path}\n` +
         `Installed by: ${status.source === "managed" ? "MDraft" : "you (found on PATH)"}\n\n` +
-        "PDF export uses it, and .typ documents are previewed with it.",
+        "PDF (via Typst) uses it, and .typ documents are previewed with it.",
       { title: "Typst", kind: "info" },
     );
     return;
@@ -2916,7 +2916,7 @@ async function typstSetup(): Promise<void> {
   }
 
   const agreed = await ask(
-    "Typst was not found, so PDF export is unavailable.\n\n" +
+    "Typst was not found, so .typ preview and PDF (via Typst) are unavailable. Native PDF and browser printing remain available for other documents.\n\n" +
       "MDraft can download the official Typst build and put it in its own data folder. " +
       "Nothing is installed system-wide, no administrator rights are needed, and removing the " +
       "folder undoes it.\n\n" +
@@ -2935,7 +2935,7 @@ async function typstSetup(): Promise<void> {
     await syncExportAvailability();
     await message(
       `Typst ${installed.version ?? ""} is ready.\n\n${installed.path ?? ""}\n\n` +
-        "PDF export will use it, and .typ documents can now be previewed.",
+        "PDF (via Typst) will use it, and .typ documents can now be previewed.",
       { title: "Typst installed", kind: "info" },
     );
   } catch (error) {
@@ -3549,7 +3549,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
         "MDraft",
         `Version ${APP_VERSION}`,
         "",
-        "Live-preview editor for Markdown, Asciidoc, Typst and HTML",
+        "Live-preview editor for Markdown,\nAsciidoc, Typst and HTML",
         "",
         "Conceived by Bernhard Enders",
         "Coded by DeepSeek Flash v4.1",
@@ -4888,6 +4888,14 @@ function installShortcuts(shortcuts: api.Shortcut[]): void {
   const parsed = shortcuts
     .map((entry) => parseAccelerator(entry.id, entry.accelerator))
     .filter((entry): entry is ParsedAccelerator => entry !== null);
+
+  // Windows can consume Ctrl+Shift+0 as an input-language shortcut before the
+  // webview sees it. Advertise Ctrl+Alt+0 (Ctrl+0 is Normal Paragraph), while
+  // accepting the old chord on systems that still deliver it.
+  if (shortcuts.some((entry) => entry.id === "view.zoomReset")) {
+    const legacy = parseAccelerator("view.zoomReset", "CmdOrCtrl+Shift+0");
+    if (legacy) parsed.push(legacy);
+  }
 
   for (const unparsed of shortcuts.filter(
     (entry) => !parsed.some((candidate) => candidate.id === entry.id),

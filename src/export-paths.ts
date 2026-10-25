@@ -196,7 +196,10 @@ export function publicationUrl(reference: string, target: PublicationTarget): st
   const raw = reference.trim();
   if (!raw || raw.startsWith("#")) return raw;
   // A protocol-relative address belongs to a host, not to the local disk.
-  if (raw.startsWith("//")) return raw;
+  // Publication lives on file:, where //cdn/... would otherwise become a
+  // network filesystem URL. Explicit HTTPS preserves its network meaning.
+  // Backslash UNC paths retain their separate filesystem branch below.
+  if (raw.startsWith("//")) return `https:${raw}`;
 
   const isFile = raw.toLowerCase().startsWith("file:");
   if (!isFile) {

@@ -1,6 +1,6 @@
 # Print through a script-free hidden webview, keeping the browser handoff
 
-**Status:** accepted
+**Status:** superseded by [Owned print operations](2026-10-25-owned-print-operations.md)
 **Date:** 2026-10-25
 
 ## Context

@@ -1,7 +1,7 @@
 # Stronger pre-save disk revision validation
 
-**Status:** in progress — implementation and Windows validation complete; the
-first GitHub run of the `safety` job and the Linux Rust run remain to be recorded
+**Status:** in progress — implementation and Windows/Linux Rust validation complete;
+the first GitHub run of the `safety` job and the original commit checklist remain
 **Date:** 2026-10-25
 **ADR:** [`../adr/2026-10-25-disk-revision-identity.md`](../adr/2026-10-25-disk-revision-identity.md)
 
@@ -290,8 +290,12 @@ the next save writes the local text. The suite passes 34/34.
   `scripts/typst-preview-test.mjs` was formatting-only and has been fixed. Every
   file this plan touched passes.
 - The GitHub `safety` job has not run yet; it invokes exactly the two local
-  commands above. The Linux Rust run (127 expected runnable tests) is pending the
-  Linux environment.
+  commands above. At this plan's initial Windows delivery, the Linux Rust run
+  (then 127 expected runnable tests) was pending. The later
+  [corrective validation](2026-10-25-print-safety-and-pdf-workflow.md) records
+  153 runnable Debian tests and Clippy passing, plus the repaired persistent
+  conflict notice (`p0:unit` 112/112, `p0-lifecycle` 35/35). Remote CI has still
+  not been executed by this local task.
 - `p0-lifecycle`'s IPC hooks were updated from `write_document` to
   `write_document_checked`; the AGENTS trap records the timeout this otherwise
   produces. The legacy `write_document` contract is still exercised directly by

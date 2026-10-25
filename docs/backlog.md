@@ -67,6 +67,7 @@ non-obvious lesson is added to the Traps section.
 
 | ID | P | Effort | Workstream | Item | Status |
 | --- | --- | --- | --- | --- | --- |
+| GAP-009 | P1 | S | Output | Native print repairs delivered; GTK dialog recheck | recheck |
 | GAP-004 | P1 | S/M | Data safety | Save All and bulk-save UX; cancellation-safe close delivered | open |
 | GAP-005 | P1 | M | Data safety | Shared file classification and size policy; binary/lossy guard delivered | open |
 | GAP-026 | P1 | M | Output | Browser-readable HTML and print output | in progress |
@@ -81,10 +82,9 @@ non-obvious lesson is added to the Traps section.
 | GAP-006 | P2 | M/L | Workspace | Read-only folder tree before file management | open |
 | GAP-007 | P2 | M | Workspace | Read-only cross-file search before multi-file Replace | open |
 | GAP-008 | P2 | M | Workspace | Quick open over tabs, recents and favorites | open |
-| GAP-009 | P2 | M/L | Output | In-app printing and direct PDF save | done |
 | GAP-010 | P2 | M | Editing | Markdown table navigation and row operations first | open |
 | GAP-014 | P2 | M | Markdown | Academic Markdown dialect | open |
-| GAP-015 | P2 | S | Editing | Typewriter mode while typing | open |
+| GAP-015 | P2 | S | Editing | Typewriter mode while typing | done |
 | GAP-016 | P2 | M | Preview | Task toggling and Pages controls; conveniences follow separately | open |
 | GAP-018 | P2 | M | Editing | Link authoring | open |
 | GAP-020 | P2 | M | Platform | Spellcheck languages beyond en/pt | open |
@@ -106,6 +106,15 @@ Completed rows retain the original priority and effort as historical information
 See [Suggested order](#suggested-order) for sequencing.
 
 ## Completed foundations
+
+**Corrective review.** The [implementation review](backlog-review-2026-10-25.md)
+reopened GAP-009 after reproducing a P0 output-loss bug, active child scripts and
+concurrent print interruption. The [approved corrective plan](plans/2026-10-25-print-safety-and-pdf-workflow.md)
+also tracks Ctrl+P, zoom reset, Typewriter, conflict-notice persistence, safe test
+preflight and network URL publication. These findings reuse their existing GAP
+owners; no duplicate feature rows or replacement IDs were added. R-01's P0 is
+repaired and verified; GAP-009's remaining row describes dialog/platform
+verification at P1, not an unresolved destination-loss bug.
 
 ### GAP-001 — Recover unsaved work
 
@@ -515,18 +524,40 @@ the later folder slice. No dependency on GAP-007's search UI.
 
 ### GAP-009 — In-app printing and direct PDF save
 
-**Priority:** P2 · **Effort:** M/L · **Workstream:** Output · **Status:** done — native PDF and the Windows/Linux print paths are implemented and visually validated, including the GTK dialog on a real Debian desktop.
+**Priority:** P1 · **Effort:** S · **Workstream:** Output · **Status:** recheck
+
+**Correction.** The original completion claim was too broad. R-01 reproduced
+deletion of an existing target on failure (P0); R-02/R-03 found script-policy and
+concurrent-operation failures (P1). The owner also reproduced invisible Ctrl+P.
+All are tracked by the [approved corrective plan](plans/2026-10-25-print-safety-and-pdf-workflow.md).
+The P0 target-preservation fix uses an exclusively reserved sibling and replaces
+the target only after successful writing and PDF-envelope validation. Native
+regressions pass 21/21, including protected raw HTML, queued jobs and failure
+preservation. Windows/Debian Rust pass 154/153; real PDF quality checks pass
+36/36 on each platform. Remaining dialog/platform interaction checks are
+recorded in that plan before this entire GAP closes. Windows Ctrl+P and preview
+closure were observed; the remaining recheck is the updated GTK dialog on a
+Linux desktop. This does not reopen the repaired P0.
+
+**Three PDF routes retained and checked.** Native PDF 21/21; browser article
+21/21 and the optional export suite 38/38, including real Pandoc/Typst PDF.
+Preferences now describes native saving correctly. Its former browser-only
+description and the optional suite's ambiguous primary-PDF selector were fixed.
 
 **Plan:** [Native print and direct PDF with visual quality gates](plans/2026-10-25-native-print-pdf.md)
-— approved, implemented and validated on Windows and a real Debian desktop. It
+— historical initial implementation/validation record. It
 covers the hidden print surface, Windows WebView2 and Linux WebKitGTK paths, the
 browser fallback, and the Poppler-based visual PDF validation.
 
 **Implementation.** `File › Print…` (`Ctrl+P`) opens the platform dialog and
-`File › Export › PDF…` writes the file directly. The hidden surface has no
+`File › Export › PDF…` writes the file directly. The temporary surface has no
 capability entry and no document scripts; static HTML prints natively, while
 scripted HTML keeps **PDF (opens browser)…** as an explicit fallback. Typst
-keeps **PDF (via Typst)** and disables the other two rows with a reason.
+keeps **PDF (via Typst)** and disables the other two rows with a reason. Direct
+PDF is hidden; the Windows dialog has a visible owner that stays alive until
+closed explicitly. Jobs serialize, navigation stays on the protected article,
+and the native boundary blocks document scripts/frames/objects independently
+of frontend classification.
 `scripts/pdf-native-test.mjs` exports a real PDF and runs
 `scripts/pdf-visual-check.mjs`; the fixture covers image colours, table rules,
 KaTeX fractions and radicals, a light Mermaid diagram and two A4 pages.
@@ -792,16 +823,24 @@ cannot be resolved safely.
 
 ### GAP-015 — Typewriter mode while typing
 
-**Priority:** P2 · **Effort:** S · **Workstream:** Editing · **Status:** open
+**Priority:** P2 · **Effort:** S · **Workstream:** Editing · **Status:** done
 
-**Evidence.** `editor.ts` recenters only when
+**Historical evidence.** `editor.ts` recentered only when
 `typewriter && update.selectionSet && !update.docChanged`. Typing produces both
-flags, so the caret is not recentered while typing. `docs/guide.md` now states
-the actual behaviour; the code gap remains.
+flags, so the caret was not recentered while typing.
 
-**Target.** Recenter after a text change when typewriter mode is on, without
-fighting a manual scroll. A small threshold (only when the caret leaves the
-middle band) avoids constant scroll updates.
+**Delivered correction.** A coalesced CodeMirror plugin now centers on typing
+and caret moves, supplies top/bottom scroll space, defers composition and leaves
+manual scrolling alone until the next edit. Windows visual review confirmed
+real typing, wrapped lines and Enter at the viewport centre. The registered
+`typewriter` suite covers start/middle/end, Focus mode, IME, multi-cursor,
+undo/redo, reduced motion, tab replacement and mode disable. Final validation is
+recorded in the [corrective plan](plans/2026-10-25-print-safety-and-pdf-workflow.md).
+
+**Delivered target.** Recenter after a text change when typewriter mode is on,
+without fighting a manual scroll. Coalesced animation-frame work avoids stale
+or repeated layout dispatch; start/end padding makes centering possible at both
+document boundaries. No animation is required for the final caret position.
 
 **Acceptance.**
 
@@ -814,9 +853,9 @@ middle band) avoids constant scroll updates.
 **Tests.** UI geometry at three viewport positions; repeat with focus mode;
 `npm run smoke` stays green.
 
-**Risks.** Scroll jitter, performance on every keystroke, source/preview sync
-fighting the scroll. Use one `requestAnimationFrame` and the existing
-suppression window.
+**Regression risks.** Scroll jitter, per-keystroke layout, source/preview sync
+fighting the scroll, composition and stale work after a tab switch. Keep the
+registered geometry and input tests when modifying the plugin.
 
 **Related.** GAP-012.
 
@@ -885,7 +924,7 @@ Optional file-association registration is P2, explicitly scoped and estimated.
 True multi-window is separate P3 / parked work unless requested; it is not a
 prerequisite for reliable file opening.
 
-**Evidence.** There is no single-instance plugin and no `New Window` command.
+**Historical evidence (before Phase 1).** There was no single-instance plugin and no `New Window` command.
 AGENTS.md records that a second copy with the same identifier fails to create its
 WebView2 environment (`0x800700AA`) while another MDraft window is open. Opening
 a second file from Explorer therefore has no reliable path into the running
@@ -980,16 +1019,16 @@ validation: 24/24 zoom checks plus menu 87, shortcuts 43, smoke 108, word-sync
 58, html 60, asciidoc 54, tabs 107 and typst-preview 52; Rust 140 passed.
 WebKitGTK/high-DPI inspection remains.
 
-**Slices.** The reset that preserves Content Width is already true in the
-current tree (`view.zoomReset` writes only `editorFontSize`). Working preview
-zoom is M across DOM, HTML guest and Typst Pages; ship renderer support in
-explicit increments rather than estimating the whole feature as S.
+**Remaining slice.** WebKitGTK/high-DPI verification remains; the shared zoom
+implementation is delivered. Reset writes only `zoomLevel`, preserving Content
+Width and base font sizes. The corrective review found Windows consuming
+Ctrl+Shift+0 before the webview receives the digit. The canonical binding is now
+Ctrl+Alt+0; the old binding remains an alias where delivered. Ctrl+0 retains
+Normal Paragraph. Physical-key validation is tracked in the corrective plan.
 
-**Evidence.** `view.zoomIn/Out` change only `editorFontSize`; the reset comment
-now deliberately preserves `editorMaxWidth`, which is the delivered S fix. In
-Preview-only the zoom does nothing visible, and the native menu disables the
-zoom items in that mode. The status chip still says "Font size" and derives its
-percentage from the editor font size rather than a view-zoom level.
+**Historical evidence.** Before the zoom plan, the commands changed only
+`editorFontSize` and did nothing visible in Preview-only. Those observations
+describe the old code and are not current implementation evidence.
 
 **Target.** Zoom has a visible effect in the active document view, including
 Preview-only, and reset changes zoom only. Content Width remains a separate
@@ -1264,13 +1303,16 @@ already emitted. Windows validation: `export:paths:unit` 42/42,
 `export:browser` 21/21, plus smoke/html/asciidoc/word-sync/export green. Manual
 ordinary-browser/PDF inspection and the Linux run remain.
 
-**Evidence.** `buildExportArticle` reuses preview renderers. Their shared
+**Historical evidence (before the export correction).** `buildExportArticle` reused preview renderers. Their shared
 `decorateLinks` converts local image sources into app asset URLs and removes
 ordinary anchor `href`, keeping destinations in `data-href`. The standalone
-wrappers do not restore them. An external browser has neither the asset handler
+wrappers did not restore them. An external browser has neither the asset handler
 nor MDraft's click listener. Mermaid also uses current `isDark` even when the
 print page is forced light. This is existing-output correctness, not GAP-009's
-native printing integration.
+native printing integration. The current URL layer restores these destinations
+and publishes `//host` as explicit HTTPS (44 unit checks). Backslash UNC remains
+a file path. Ordinary-browser interaction and Linux application review remain
+distinct from native-PDF metrics and the Windows export suite.
 
 **Target.** Assemble a browser-readable article with valid image/link targets,
 explicit output theme and resource readiness. Reuse it for HTML and browser
@@ -1311,8 +1353,12 @@ workflow) is delivered by
 **Evidence.** The 2026-10-25 P0 plan added deterministic controller/export
 regressions to `p0:unit` and registered `p0-lifecycle` in the default isolated
 UI harness, including three-way close and binary/encoding refusal. Reuse those
-tests. Crash/relaunch probes remain manual. Quality CI runs build/format/lint/knip/Clippy and release
-CI runs Rust tests; neither runs the app-free JavaScript safety/session suites.
+tests. Crash/relaunch probes remain manual. Quality CI already includes
+`p0:unit` and `test:sessions` alongside build/format/lint/knip/Clippy; release CI
+runs Rust tests. A recorded remote workflow execution is distinct from a
+checked-in workflow. R-05's corrective preflight refuses any running user
+MDraft before profile backup/reset/launch, including installations outside the
+repository; `--kill` cannot bypass it.
 
 **Target.** Run the existing cheap app-free suites in CI and extend the registered
 lifecycle coverage for crash/relaunch. Keep native UI coverage isolated on suitable platform
@@ -1458,10 +1504,12 @@ the temporary sibling and again immediately before the rename; a mismatch
 returns `written: false` and keeps the buffer dirty and journaled.
 `fingerprint_document` supplies the revision **Keep my version** adopts.
 `write_document` keeps its old contract for exports. Windows validation:
-`p0:unit` 110/110, `p0:lifecycle` 34/34 (including a same-size/same-mtime
-rewrite), Rust 130 passed, Clippy/build/lint/knip clean. The CI job for
+`p0:unit` 112/112, `p0:lifecycle` 35/35 (including a same-size/same-mtime
+rewrite and conflict survival across the next poll), Rust 154 Windows / 153
+Debian passed, Clippy/build/lint/knip clean. The CI job for
 `p0:unit` and `test:sessions` is in the quality workflow; its first GitHub run
-and the Linux Rust run remain to be recorded.
+remains to be recorded under GAP-027; the Linux Rust run is now recorded in the
+corrective plan. This does not claim an absolute filesystem compare-and-swap.
 
 **Evidence.** GAP-002's approved first pass compares `mtime` and size. A direct
 probe returns `unchanged` for different bytes with matching metadata. The stat
@@ -1538,9 +1586,11 @@ modules already exist and are not architecture approved by this backlog.
 
 ## Suggested order
 
-1. **P0 foundations delivered.** GAP-025 async session/revision safety, GAP-004
+1. **P0 output repair delivered.** GAP-009's reopened target-preservation bug is
+   fixed; remaining P1 dialog/platform checks are tracked by the corrective plan.
+   GAP-025 async session/revision safety, GAP-004
    cancellation-safe close and GAP-005 binary/lossy-write guard are implemented
-   by the approved 2026-10-25 plan. No known P0 remains open in this backlog.
+   by the approved 2026-10-25 document-safety plan.
    Preserve their reproducing tests and the earlier GAP-001/002/003 foundations.
 2. **P1 — reinforce safety and existing output.** GAP-032 stronger disk
    validation, GAP-026 browser-readable exports, and GAP-027 automated lifecycle

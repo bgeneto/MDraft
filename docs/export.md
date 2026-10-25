@@ -32,7 +32,9 @@ Local images and links are restored to destinations a browser can follow. When
 the output is on the same volume as the document, a relative path is used; a
 different volume falls back to a `file://` URL. Remote addresses, `data:` URLs
 and in-page `#heading` links keep their meaning. No application protocol is
-required.
+required. Protocol-relative network references (`//cdn.example/...`) become
+explicit `https:` URLs so a `file:` page cannot reinterpret them as file hosts.
+Backslash UNC paths retain their filesystem meaning.
 
 For an HTML document, the same command writes a copy of the source. Passing an
 already-complete HTML file through the Markdown renderer would produce a
@@ -43,10 +45,14 @@ direct; its other formats go through the pandoc list.
 
 ### Print and PDF
 
-**File › Print…** (`Ctrl+P`) opens the platform's print dialog for a hidden
+**File › Print…** (`Ctrl+P`) opens the platform's print dialog for a temporary
 copy of the article. **File › Export › PDF…** asks for an output path and writes
 the same article directly. Neither route needs pandoc, a browser or a LaTeX
 distribution.
+
+On Windows the temporary print preview remains open to own the system dialog.
+Close that preview window after printing or cancelling; its title reminds you.
+Other native print/PDF requests wait until the current operation closes.
 
 The direct PDF is written by the system webview, not by a screenshot: Windows
 uses WebView2's `PrintToPdf`, and Linux uses WebKitGTK's print operation with an
@@ -54,16 +60,22 @@ A4 page setup. The result has selectable text, embedded fonts, local images,
 tables and the light diagram palette. The page is always A4 and always light,
 whatever the editor theme is.
 
-The hidden surface carries no document scripts and no Tauri IPC permission. A
+The print surface has no Tauri IPC permission and blocks document scripts,
+child frames and active objects at the native boundary. A
 static HTML document keeps its own CSS and images through a local file base. A
 document containing a script, an inline event handler, a `javascript:` URL or a
-meta refresh is not printed natively; MDraft offers the browser route instead,
+meta refresh, child frame or active embed is not printed natively; MDraft offers the browser route instead,
 because its printed result may depend on code the safe surface will not run.
 
 The native writer waits up to ten seconds for images and web fonts, then reports
 any resource that failed to load. The direct PDF runs the global **After Export**
 options because MDraft knows the file it wrote. The **Print** dialog does not
 claim a path, so it does not run them.
+
+Print jobs run one at a time. Direct PDF output is generated into an exclusively
+reserved sibling, checked for its PDF header/end marker, then renamed over the
+chosen destination. A failed operation retains the previous destination. The
+envelope check detects empty/truncated output; it is not a full PDF parser.
 
 **File › Export › PDF (opens browser)…** remains the explicit fallback. It
 renders the light print document and hands it to the system browser; the reader

@@ -301,7 +301,7 @@ const SHORTCUTS_LINES: string[] = [
   "| Outline / Favorites / Recent | `Ctrl+Shift+1` / `Ctrl+Shift+2` / `Ctrl+Shift+3` |",
   "| Focus mode | `F8` |",
   "| Typewriter mode | `F9` |",
-  "| Zoom in / out / reset | `Ctrl+Shift+=` / `Ctrl+Shift+-` / `Ctrl+Shift+0` |",
+  "| Zoom in / out / reset | `Ctrl+Shift+=` / `Ctrl+Shift+-` / `Ctrl+Alt+0` |",
   "| Full screen | `F11` |",
   "",
   "Inside the editor, `Tab` indents and `Shift+Tab` outdents. `Enter` continues",

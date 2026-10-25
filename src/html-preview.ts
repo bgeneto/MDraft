@@ -416,16 +416,33 @@ export async function buildHtmlNativePrintDocument(
   source: string,
   directory: string | null,
 ): Promise<HtmlNativePrintDocument> {
-  if (
-    /<script\b/i.test(source) ||
-    /\son[a-z]+\s*=/i.test(source) ||
-    /javascript\s*:/i.test(source) ||
-    /<meta[^>]+http-equiv\s*=\s*["']?refresh/i.test(source)
-  ) {
-    return { html: null, needsBrowser: true };
-  }
   const { parse } = await loadParse5();
   const document: any = parse(source, { sourceCodeLocationInfo: true });
+  // Inspect parsed names and decoded values, including template contents.
+  // Child browsing contexts can execute code absent from the parent source.
+  const active = (node: any): boolean => {
+    if (
+      ["script", "iframe", "frame", "frameset", "object", "embed", "applet", "portal"].includes(
+        node.tagName,
+      )
+    )
+      return true;
+    const attrs: { name: string; value: string }[] = node.attrs ?? [];
+    if (
+      attrs.some(
+        // eslint-disable-next-line no-control-regex -- Ignore C0/space obfuscation in active URL schemes.
+        (a) => /^on/i.test(a.name) || /^javascript:/i.test(a.value.replace(/[\u0000-\u0020]/g, "")),
+      )
+    )
+      return true;
+    if (
+      node.tagName === "meta" &&
+      attrs.some((a) => a.name === "http-equiv" && a.value.toLowerCase().trim() === "refresh")
+    )
+      return true;
+    return (node.childNodes ?? []).some(active) || Boolean(node.content && active(node.content));
+  };
+  if (active(document)) return { html: null, needsBrowser: true };
   const base = directory ? `<base href="${escapeAttribute(fileUrl(directory))}">` : "";
   const marker = '<meta name="mdraft-print" content="native">';
   // The native writer supplies the page geometry; the document's own CSS keeps

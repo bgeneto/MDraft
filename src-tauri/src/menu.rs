@@ -1047,7 +1047,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             .item(&item(
                 "view.zoomReset",
                 "Reset Zoom",
-                Some("CmdOrCtrl+Shift+0"),
+                Some("CmdOrCtrl+Alt+0"),
             )?)
             .build()?;
 

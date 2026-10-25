@@ -436,6 +436,25 @@ if (withInstall) {
 //     everything else, and forgetting one of the two stylesheets produces a
 //     document that still looks plausible while the mathematics has collapsed
 //     and the code has lost its colours.
+// Capture only the final browser handoff, writing its real article through
+// Rust. This suite must not leave browser tabs behind or select native PDF
+// merely because its button also says "as PDF".
+const printRoot = join(tmpdir(), "mdraft-print");
+mkdirSync(printRoot, { recursive: true });
+await evaluate(`(() => {
+  const state = window.__browserExport = { original: window.fetch, lastPath: null };
+  window.fetch = async function(input, options) {
+    const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+    if (url.hostname === 'ipc.localhost' && decodeURIComponent(url.pathname.slice(1)) === 'print_document') {
+      const args = JSON.parse(options.body);
+      const target = ${JSON.stringify(printRoot)} + '/' + args.name + '.html';
+      await window.__TAURI_INTERNALS__.invoke('write_document', { path: target, content: args.html, lineEnding: '\\n', hadBom: false });
+      state.lastPath = target;
+      return new Response(JSON.stringify(target), { headers: { 'Content-Type': 'application/json', 'Tauri-Response': 'ok' } });
+    }
+    return state.original.call(window, input, options);
+  };
+})()`);
 const pdfButton = await evaluate(`
   (() => {
     const prefsButton = document.getElementById('btn-prefs');
@@ -452,13 +471,13 @@ const pdfButton = await evaluate(`
     const button = [...document.querySelectorAll('.prefs-button')]
       .find((b) => /as PDF/i.test(b.textContent));
     if (!button) return 'no PDF button';
-    button.click();
-    return 'clicked';
+    return 'available';
   })()
 `);
-check(pdfButton === "clicked", "the Export panel offers a PDF button", pdfButton);
+check(pdfButton === "available", "the Export panel offers the native PDF button", pdfButton);
 
-if (pdfButton === "clicked") {
+if (pdfButton === "available") {
+  await invoke("plugin:event|emit", { event: "menu", payload: "export.pdf.browser" });
   // The command writes the file before handing it to the browser, so it is on
   // disk almost immediately; poll rather than assume a fixed delay.
   const stem = (documentPath ?? "untitled").replace(/\.[^.]+$/, "");
@@ -667,15 +686,13 @@ await send("Input.insertText", {
   text: "# Currency\n\nR$50 R$ 10.000 R$ 15.200,75 US$5 US$5.00 C$8,123.50 and $ a + b $ and $c + d$",
 });
 await new Promise((resolve) => setTimeout(resolve, 500));
-const nativeStem = await evaluate("document.title.replace(/^• /,'').split(' — ')[0]");
-const nativePrintPath = join(tmpdir(), "mdraft-print", nativeStem + ".html");
-rmSync(nativePrintPath, { force: true });
-await evaluate(
-  "(() => {const overlay=document.querySelector('.prefs-overlay');if(overlay.hidden)document.getElementById('btn-prefs').click();[...document.querySelectorAll('.prefs-section')].find(node=>/^export$/i.test(node.textContent.trim())).click();[...document.querySelectorAll('.prefs-button')].find(node=>/as PDF/i.test(node.textContent)).click();})()",
-);
-for (let n = 0; n < 40 && !existsSync(nativePrintPath); n++)
+await evaluate("window.__browserExport.lastPath=null");
+await invoke("plugin:event|emit", { event: "menu", payload: "export.pdf.browser" });
+for (let n = 0; n < 40 && !(await evaluate("window.__browserExport.lastPath")); n++)
   await new Promise((resolve) => setTimeout(resolve, 250));
-const nativePrint = existsSync(nativePrintPath) ? readFileSync(nativePrintPath, "utf8") : "";
+const nativePrintPath = await evaluate("window.__browserExport.lastPath");
+const nativePrint =
+  nativePrintPath && existsSync(nativePrintPath) ? readFileSync(nativePrintPath, "utf8") : "";
 const article = /<article\b[\s\S]*?<\/article>/.exec(nativePrint)?.[0] ?? "";
 // Load only these actual pure function declarations: the complete browser
 // module also imports CSS and DOM libraries and is not a Node test module.
@@ -724,6 +741,7 @@ await evaluate(
 console.log(
   "  Pandoc validation uses its existing source-reader dialect; padded-dollar parity is outside this change.",
 );
+await evaluate("window.fetch=window.__browserExport.original;delete window.__browserExport");
 ws.close();
 rmSync(workDir, { recursive: true, force: true });
 

@@ -152,6 +152,11 @@ async function doubleClickAt(x, y) {
 }
 
 try {
+  if (!(await invoke("typst_status")).found) {
+    throw new Error(
+      "Document zoom's Typst checks require Typst. Install it through MDraft Tools or put typst on PATH before running preview-zoom.",
+    );
+  }
   await wait(
     `document.querySelector('.cm-content') && document.title.includes('export-tour.md')`,
     60000,

@@ -25,12 +25,14 @@ if (!pdf) {
 }
 const out = path.resolve(option("--out", path.join(os.tmpdir(), `mdraft-pdf-check-${Date.now()}`)));
 const fixture = option("--fixture", "none");
-const requested = option("--rasterizer", "auto");
+const requested = option("--rasterizer", process.env.MDRAFT_PDF_RASTERIZER || "auto");
 const expectedPages = Number(option("--pages", "0")) || 0;
 const dpi = Number(option("--dpi", "150")) || 150;
 const expectations = [];
+const rejections = [];
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === "--expect" && argv[i + 1]) expectations.push(argv[i + 1]);
+  if (argv[i] === "--reject" && argv[i + 1]) rejections.push(argv[i + 1]);
 }
 
 fs.mkdirSync(out, { recursive: true });
@@ -64,18 +66,29 @@ function canRun(command, args) {
   }
 }
 let rasterizer = requested;
+const poppler = ["pdfinfo", "pdffonts", "pdftotext", "pdfimages", "pdftoppm"];
+const available = (kind) =>
+  poppler.every((command) =>
+    canRun(kind === "wsl" ? "wsl.exe" : command, kind === "wsl" ? ["-e", command, "-v"] : ["-v"]),
+  );
 if (rasterizer === "auto") {
-  if (canRun("pdfinfo", ["-v"])) rasterizer = "native";
-  else if (canRun("wsl.exe", ["-e", "pdfinfo", "-v"])) rasterizer = "wsl";
+  if (available("native")) rasterizer = "native";
+  else if (process.platform === "win32" && available("wsl")) rasterizer = "wsl";
   else {
     console.error(
-      "pdf-visual-check: no Poppler found. Install poppler-utils (Linux/WSL) or put pdfinfo on PATH.",
+      "pdf-visual-check: incomplete Poppler. Install poppler-utils (Linux/WSL) or put pdfinfo, pdffonts, pdftotext, pdfimages and pdftoppm on PATH.",
     );
     process.exit(2);
   }
 }
 if (rasterizer !== "native" && rasterizer !== "wsl") {
   console.error(`pdf-visual-check: unknown rasterizer ${rasterizer}`);
+  process.exit(2);
+}
+if (requested !== "auto" && !available(rasterizer)) {
+  console.error(
+    `pdf-visual-check: ${rasterizer} requires all of ${poppler.join(", ")}. Install poppler-utils or select --rasterizer wsl/native.`,
+  );
   process.exit(2);
 }
 const p = (value) => (rasterizer === "wsl" ? toWslPath(value) : path.resolve(value));
@@ -160,6 +173,10 @@ try {
   }
 
   text = run("pdftotext", ["-layout", p(pdf), "-"], "pdftotext");
+  // Selectable ligatures and line wrapping are valid PDF text. Compare prose
+  // in its normalized reading form while retaining raw text for math checks.
+  const readable = (value) => value.normalize("NFKC").replace(/\s+/g, " ");
+  const containsText = (phrase) => readable(text).includes(readable(phrase));
   check(text.trim().length > 0, "the PDF contains selectable text", `${text.trim().length} chars`);
   if (fixture === "quality") {
     for (const phrase of [
@@ -171,13 +188,16 @@ try {
       "Epsilon",
       "Diego",
     ]) {
-      check(text.includes(phrase), `the text contains “${phrase}”`);
+      check(containsText(phrase), `the text contains “${phrase}”`);
     }
     check(!text.includes("$$"), "no literal display-math delimiters reached the page");
     check(!/\\[()[\]]/.test(text), "no literal backslash math delimiters reached the page");
   }
   for (const phrase of expectations) {
-    check(text.includes(phrase), `the text contains “${phrase}”`);
+    check(containsText(phrase), `the text contains “${phrase}”`);
+  }
+  for (const phrase of rejections) {
+    check(!containsText(phrase), `the text excludes “${phrase}”`);
   }
 
   const images = run("pdfimages", ["-list", p(pdf)], "pdfimages");

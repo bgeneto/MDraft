@@ -3,8 +3,8 @@
 **Status:** in progress — Phase 1 approved 2026-10-25; Phase 2 (file
 associations) remains a separate approval gate
 **Date:** 2026-10-25
-**ADR:** `../adr/2026-10-25-single-instance-boundary.md` (to be written when this
-plan is approved)
+**ADR:** [Single-instance boundary](../adr/2026-10-25-single-instance-boundary.md)
+— delivered architecture recorded during the corrective review.
 
 ## Context and goal
 
