@@ -3,8 +3,10 @@
 **Tree:** `0.4.7`, commit `2a0f1be`; working tree clean before the audit.
 **Scope:** Compare all 24 backlog items with their implementation, approved
 plans, tests and reader documentation; propose priorities and missing work.
-**Disposition:** Review findings and proposals, not an implementation plan.
-The backlog and application code have not been changed.
+**Disposition:** Audit record, not an implementation plan. Recommendations were
+incorporated into [the revised backlog](backlog.md) on 2026-10-25 at the user's
+request. The findings below preserve the original audit snapshot; the initial
+audit changed neither the backlog nor application code.
 
 ## Assessment
 
@@ -170,10 +172,11 @@ Error messages already exist; navigable diagnostics are the missing capability.
 
 **Proposed GAP-030 — Complete keyboard operation and focus behavior.** Tabs and
 menus already have meaningful keyboard/ARIA support. Complete the remaining
-paths rather than claiming accessibility is absent: Preferences has a dialog
-role and Escape handling, but no modal focus trap/restoration; pane resizing
-uses mouse handlers only. Add keyboard resizing, predictable modal focus and
-screen-reader announcements for recovery/conflicts, with an end-to-end audit.
+paths rather than claiming accessibility is absent. Follow-up source inspection
+confirmed that Preferences is intentionally non-modal; it should not trap focus.
+Its close path lacks explicit focus restoration, and pane resizing uses mouse
+handlers only. Add keyboard resizing, focus behavior appropriate to each surface
+and screen-reader announcements for recovery/conflicts, with an end-to-end audit.
 
 ### P2 — Saved-version recovery
 
@@ -229,7 +232,41 @@ Recommended execution order:
 4. **P2/P3:** native print integration, broader completion/languages, diagnostics,
    accessibility improvements, preview conveniences and remaining polish.
 
-## Validation and limits
+## Backlog integration — 2026-10-25
+
+The revised backlog preserves GAP-001–024 and their completed-plan history,
+adopts GAP-025–031, and gives two already-described follow-ups independent IDs:
+**GAP-032** for stronger pre-save disk validation and **GAP-033** for offline
+export packaging. This keeps those scopes separate from completed GAP-002 and
+the current-output repairs in GAP-026.
+
+Cancellation-safe close and binary/lossy-write protection now join GAP-025 as
+the three open P0 items. Save All remains a later P1 slice under GAP-004;
+encoding round-trips stay under GAP-021 and reuse GAP-005's safety guard.
+Native printing is P2. Handoff, preview zoom and UTF-16 are P1. Workspace/table
+expansion is P2 and is divided into independently shippable increments.
+
+Duplicate ownership, stale in-flight notes, unnecessary dependency arrows and
+the settled recovery-storage question have been removed. Shared foundations
+now distinguish delivered modules from proposals. Every new item has evidence,
+scope, acceptance, validation and risk notes. This integrates the recommendations
+as backlog work; it does not claim that the application fixes have shipped.
+
+Integration verification checked all **33 IDs / 33 triage rows**, matching
+priority/effort/workstream/status metadata, acceptance/validation sections,
+internal references, local links, code fences and duplicate long paragraphs.
+Manual scope review removed duplicate ownership and corrected one audit
+assumption: Preferences is deliberately non-modal, so a missing modal focus trap
+is not a defect. GAP-030 now preserves that behavior while addressing focus
+restoration and actual modal dialogs. No structural inconsistencies remained in
+these checks; this is not a claim of exhaustive product validation.
+
+The document was rechecked during integration at `0.4.7`, HEAD `2647311`.
+The user subsequently requested all open P0 fixes; their concrete scope is in
+the [approved implementation plan](plans/2026-10-25-open-p0-document-safety.md),
+linked from GAP-004/005/025. The user approved that plan on 2026-10-25; its execution record tracks implementation and validation. The backlog revision itself is complete.
+
+## Audit validation and limits — before implementation
 
 - `npm run p0:unit`: **52/52 passed**.
 - `npm run test:sessions`: **59/59 passed**.
@@ -249,3 +286,25 @@ Recommended execution order:
 Implementation of these proposals still follows the repository's plan approval
 rules. This audit does not authorize architecture, dependency or command/schema
 changes.
+
+## P0 implementation follow-up — 2026-10-25
+
+The approved document-safety plan implements the three reproduced async races,
+explicit Save/Discard/Cancel, binary/unsupported-encoding refusal, protected
+legacy lossy recovery and unique atomic-write temporaries. GAP-025 is delivered;
+GAP-004 and GAP-005 retain their remaining P1 slices. The backlog still has 33
+stable, unique IDs; no new feature ID or duplicate safety owner was introduced.
+
+The adjacent-operation review also found the same identity problem in HTML,
+Print and Pandoc exports. They now capture source text/name/path/language and
+resource base before any await. Nine deferred-picker/tool/render assertions fail
+against the original HEAD and pass after the fix. This protects ownership; the
+separate browser-output defects in GAP-026 and native integration in GAP-009
+remain open.
+
+An integration failure in clean-close testing came from an inherited recovery
+entry for the built-in font licenses. Their raw CRLF text differed from
+CodeMirror's LF representation, marking an untouched Help document dirty. New
+document baselines now use LF, and the clean-close layer resets its owned state.
+Dirty-window cancellation remains tested separately. See the plan's final
+execution record for commands, results and platform/formatting limits.

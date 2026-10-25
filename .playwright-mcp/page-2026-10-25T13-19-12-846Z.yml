@@ -1,0 +1,133 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - generic [ref=e4]: Light · whole menu
+    - menu [ref=e5]:
+      - menuitem "Undo Ctrl+Z" [disabled] [ref=e6]:
+        - generic [ref=e7]: Undo
+        - generic [ref=e8]: Ctrl+Z
+      - menuitem "Redo Ctrl+Y" [disabled] [ref=e9]:
+        - generic [ref=e10]: Redo
+        - generic [ref=e11]: Ctrl+Y
+      - separator [ref=e12]
+      - menuitem "Cut Ctrl+X" [active] [ref=e13] [cursor=pointer]:
+        - generic [ref=e14]: Cut
+        - generic [ref=e15]: Ctrl+X
+      - menuitem "Copy Ctrl+C" [ref=e16] [cursor=pointer]:
+        - generic [ref=e17]: Copy
+        - generic [ref=e18]: Ctrl+C
+      - menuitem "Paste Ctrl+V" [ref=e19] [cursor=pointer]:
+        - generic [ref=e20]: Paste
+        - generic [ref=e21]: Ctrl+V
+      - menuitem "Delete Del" [ref=e22] [cursor=pointer]:
+        - generic [ref=e23]: Delete
+        - generic [ref=e24]: Del
+      - menuitem "Select All Ctrl+A" [ref=e25] [cursor=pointer]:
+        - generic [ref=e26]: Select All
+        - generic [ref=e27]: Ctrl+A
+      - separator [ref=e28]
+      - menuitem "UPPERCASE" [ref=e29] [cursor=pointer]
+      - menuitem "lowercase" [ref=e31] [cursor=pointer]
+      - menuitem "Title Case" [ref=e33] [cursor=pointer]
+      - separator [ref=e35]
+      - menuitem "Toggle Single Line Comment" [ref=e36] [cursor=pointer]
+      - menuitem "Duplicate Line Shift+Alt+↓" [ref=e38] [cursor=pointer]:
+        - generic [ref=e39]: Duplicate Line
+        - generic [ref=e40]: Shift+Alt+↓
+      - menuitem "Move Line Up Alt+↑" [ref=e41] [cursor=pointer]:
+        - generic [ref=e42]: Move Line Up
+        - generic [ref=e43]: Alt+↑
+      - menuitem "Move Line Down Alt+↓" [ref=e44] [cursor=pointer]:
+        - generic [ref=e45]: Move Line Down
+        - generic [ref=e46]: Alt+↓
+      - separator [ref=e47]
+      - menuitem "Format Document" [ref=e48] [cursor=pointer]
+      - separator [ref=e50]
+      - menuitem "Add to Favorites" [ref=e51] [cursor=pointer]
+  - generic [ref=e53]:
+    - generic [ref=e54]: Dark · whole menu
+    - menu [ref=e56]:
+      - menuitem "Undo Ctrl+Z" [disabled] [ref=e57]:
+        - generic [ref=e58]: Undo
+        - generic [ref=e59]: Ctrl+Z
+      - menuitem "Redo Ctrl+Y" [disabled] [ref=e60]:
+        - generic [ref=e61]: Redo
+        - generic [ref=e62]: Ctrl+Y
+      - separator [ref=e63]
+      - menuitem "Cut Ctrl+X" [ref=e64] [cursor=pointer]:
+        - generic [ref=e65]: Cut
+        - generic [ref=e66]: Ctrl+X
+      - menuitem "Copy Ctrl+C" [ref=e67] [cursor=pointer]:
+        - generic [ref=e68]: Copy
+        - generic [ref=e69]: Ctrl+C
+      - menuitem "Paste Ctrl+V" [ref=e70] [cursor=pointer]:
+        - generic [ref=e71]: Paste
+        - generic [ref=e72]: Ctrl+V
+      - menuitem "Delete Del" [ref=e73] [cursor=pointer]:
+        - generic [ref=e74]: Delete
+        - generic [ref=e75]: Del
+      - menuitem "Select All Ctrl+A" [ref=e76] [cursor=pointer]:
+        - generic [ref=e77]: Select All
+        - generic [ref=e78]: Ctrl+A
+      - separator [ref=e79]
+      - menuitem "UPPERCASE" [ref=e80] [cursor=pointer]
+      - menuitem "lowercase" [ref=e82] [cursor=pointer]
+      - menuitem "Title Case" [ref=e84] [cursor=pointer]
+      - separator [ref=e86]
+      - menuitem "Toggle Single Line Comment" [ref=e87] [cursor=pointer]
+      - menuitem "Duplicate Line Shift+Alt+↓" [ref=e89] [cursor=pointer]:
+        - generic [ref=e90]: Duplicate Line
+        - generic [ref=e91]: Shift+Alt+↓
+      - menuitem "Move Line Up Alt+↑" [ref=e92] [cursor=pointer]:
+        - generic [ref=e93]: Move Line Up
+        - generic [ref=e94]: Alt+↑
+      - menuitem "Move Line Down Alt+↓" [ref=e95] [cursor=pointer]:
+        - generic [ref=e96]: Move Line Down
+        - generic [ref=e97]: Alt+↓
+      - separator [ref=e98]
+      - menuitem "Format Document" [ref=e99] [cursor=pointer]
+      - separator [ref=e101]
+      - menuitem "Add to Favorites" [ref=e102] [cursor=pointer]
+  - generic [ref=e104]:
+    - generic [ref=e105]: Dark · constrained, scrollbar
+    - menu [ref=e107]:
+      - menuitem "Undo Ctrl+Z" [disabled] [ref=e108]:
+        - generic [ref=e109]: Undo
+        - generic [ref=e110]: Ctrl+Z
+      - menuitem "Redo Ctrl+Y" [disabled] [ref=e111]:
+        - generic [ref=e112]: Redo
+        - generic [ref=e113]: Ctrl+Y
+      - separator [ref=e114]
+      - menuitem "Cut Ctrl+X" [ref=e115] [cursor=pointer]:
+        - generic [ref=e116]: Cut
+        - generic [ref=e117]: Ctrl+X
+      - menuitem "Copy Ctrl+C" [ref=e118] [cursor=pointer]:
+        - generic [ref=e119]: Copy
+        - generic [ref=e120]: Ctrl+C
+      - menuitem "Paste Ctrl+V" [ref=e121] [cursor=pointer]:
+        - generic [ref=e122]: Paste
+        - generic [ref=e123]: Ctrl+V
+      - menuitem "Delete Del" [ref=e124] [cursor=pointer]:
+        - generic [ref=e125]: Delete
+        - generic [ref=e126]: Del
+      - menuitem "Select All Ctrl+A" [ref=e127] [cursor=pointer]:
+        - generic [ref=e128]: Select All
+        - generic [ref=e129]: Ctrl+A
+      - separator [ref=e130]
+      - menuitem "UPPERCASE" [ref=e131] [cursor=pointer]
+      - menuitem "lowercase" [ref=e133] [cursor=pointer]
+      - menuitem "Title Case" [ref=e135] [cursor=pointer]
+      - separator [ref=e137]
+      - menuitem "Toggle Single Line Comment" [ref=e138] [cursor=pointer]
+      - menuitem "Duplicate Line Shift+Alt+↓" [ref=e140] [cursor=pointer]:
+        - generic [ref=e141]: Duplicate Line
+        - generic [ref=e142]: Shift+Alt+↓
+      - menuitem "Move Line Up Alt+↑" [ref=e143] [cursor=pointer]:
+        - generic [ref=e144]: Move Line Up
+        - generic [ref=e145]: Alt+↑
+      - menuitem "Move Line Down Alt+↓" [ref=e146] [cursor=pointer]:
+        - generic [ref=e147]: Move Line Down
+        - generic [ref=e148]: Alt+↓
+      - separator [ref=e149]
+      - menuitem "Format Document" [ref=e150] [cursor=pointer]
+      - separator [ref=e152]
+      - menuitem "Add to Favorites" [ref=e153] [cursor=pointer]

@@ -16,11 +16,35 @@ export interface DocumentPayload {
   size: number;
   modifiedMs: number;
   readOnly: boolean;
+  /** SHA-256 of the raw file bytes (BOM and line endings included). */
+  sha256: string;
 }
 
 export interface SavedInfo {
   size: number;
   modifiedMs: number;
+}
+
+/**
+ * A save that may have been refused by the disk guard.
+ *
+ * `written: false` is not an I/O failure: the caller must ask the reader what
+ * to do, exactly as it does for the stat-based preflight.
+ */
+export interface CheckedWrite {
+  written: boolean;
+  change: "saved" | "modified" | "deleted";
+  size: number;
+  modifiedMs: number;
+  sha256: string;
+}
+
+/** The current stat and raw-byte digest, for "Keep my version". */
+export interface DocumentFingerprint {
+  exists: boolean;
+  size: number;
+  modifiedMs: number;
+  sha256: string;
 }
 
 export interface FileStat {
@@ -49,6 +73,8 @@ export interface RecoveryEntry {
   readOnly: boolean;
   baseModifiedMs: number;
   baseSize: number;
+  /** SHA-256 of the disk revision the buffer was based on, if recorded. */
+  baseSha256?: string | null;
   /** Set by Rust on write; the value sent by the frontend is ignored. */
   updatedMs: number;
 }
@@ -321,6 +347,29 @@ export const spellcheckSuggest = (language: string, word: string) =>
 
 export const writeDocument = (path: string, content: string, lineEnding: string, hadBom: boolean) =>
   invoke<SavedInfo>("write_document", { path, content, lineEnding, hadBom });
+
+/**
+ * Save only if the raw bytes on disk still match the revision the buffer was
+ * based on. `expectedSha256` is null for an untitled buffer or a new path.
+ */
+export const writeDocumentChecked = (
+  path: string,
+  content: string,
+  lineEnding: string,
+  hadBom: boolean,
+  expectedSha256: string | null,
+) =>
+  invoke<CheckedWrite>("write_document_checked", {
+    path,
+    content,
+    lineEnding,
+    hadBom,
+    expectedSha256,
+  });
+
+/** Read the current raw-byte digest without decoding the document. */
+export const fingerprintDocument = (path: string) =>
+  invoke<DocumentFingerprint>("fingerprint_document", { path });
 
 export const statDocument = (path: string) => invoke<FileStat>("stat_document", { path });
 

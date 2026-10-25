@@ -71,6 +71,11 @@
   --code-ligatures: normal;
   --spell-error: #c24040;
   --scroll-shadow: rgba(0, 0, 0, 0.2);
+  /* Scrollbars are a border treatment, not a control: a step away from the
+     surface behind them in both themes, thin, and rounded. Darker than white
+     in light mode, lighter than the panel in dark mode. */
+  --scrollbar-thumb: rgba(0, 0, 0, 0.16);
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.3);
 }
 
 [data-theme="dark"] {
@@ -97,6 +102,8 @@
   --quote-bar: rgba(200, 200, 200, 0.35);
   --spell-error: #f07178;
   --scroll-shadow: rgba(0, 0, 0, 0.55);
+  --scrollbar-thumb: rgba(255, 255, 255, 0.15);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.28);
 }
 
 * {
@@ -394,25 +401,74 @@ body {
 .favorite-menu {
   position: fixed;
   z-index: 90;
-  min-width: 238px;
+  min-width: 232px;
   max-width: 320px;
-  max-height: min(70vh, 520px);
+  /* The editor menu is long (clipboard, case, line and document actions). The
+     cap exists so one menu cannot exceed the window, not to force a scrollbar
+     at 520px: with compact rows it fits whole on a normal screen, and a reader
+     who zoomed in still scrolls inside the menu rather than off screen. */
+  max-height: min(calc(100vh - 16px), 600px);
   overflow-y: auto;
-  padding: 4px;
+  overscroll-behavior: contain;
+  padding: 5px;
   background: var(--bg);
   color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  border-radius: 10px;
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.16),
+    0 2px 8px rgba(0, 0, 0, 0.08);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 1.4;
   user-select: none;
 }
 
 [data-theme="dark"] .tab-menu,
 [data-theme="dark"] .editor-menu,
 [data-theme="dark"] .favorite-menu {
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.5),
+    0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+/* A scrollbar inside a popup is a last resort at small window sizes. Keep it
+   nearly the surface colour and 4px wide: a 17px system bar reads as a second
+   panel bolted to the menu. The transparent border plus `background-clip`
+   is what turns the 8px track into a rounded 4px pill. */
+.tab-menu::-webkit-scrollbar,
+.editor-menu::-webkit-scrollbar,
+.favorite-menu::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.tab-menu::-webkit-scrollbar-track,
+.editor-menu::-webkit-scrollbar-track,
+.favorite-menu::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tab-menu::-webkit-scrollbar-thumb,
+.editor-menu::-webkit-scrollbar-thumb,
+.favorite-menu::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: var(--scrollbar-thumb);
+  background-clip: padding-box;
+}
+
+.tab-menu::-webkit-scrollbar-thumb:hover,
+.editor-menu::-webkit-scrollbar-thumb:hover,
+.favorite-menu::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
+
+.tab-menu::-webkit-scrollbar-corner,
+.editor-menu::-webkit-scrollbar-corner,
+.favorite-menu::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 .tab-menu[hidden] {
@@ -425,11 +481,11 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 24px;
+  gap: 20px;
   width: 100%;
-  padding: 7px 10px;
+  padding: 5px 9px;
   border: none;
-  border-radius: 5px;
+  border-radius: 6px;
   background: transparent;
   color: inherit;
   font: inherit;
@@ -458,14 +514,14 @@ body {
 .tab-menu-shortcut,
 .editor-menu-shortcut {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
 .tab-menu-sep,
 .editor-menu-sep {
   height: 1px;
-  margin: 4px 6px;
+  margin: 4px 7px;
   background: var(--border);
 }
 
@@ -1647,6 +1703,51 @@ body {
 /* --------------------------------------------------------------------------
    Preferences
    -------------------------------------------------------------------------- */
+
+.unsaved-dialog {
+  width: min(440px, calc(100vw - 48px));
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.3);
+}
+.unsaved-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.35);
+}
+.unsaved-dialog h2 {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+.unsaved-dialog p {
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+.unsaved-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 24px;
+}
+.unsaved-actions button {
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--sidebar-bg);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+.unsaved-actions button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.unsaved-actions button[data-decision="save"] {
+  background: var(--accent);
+  color: #fff;
+}
 
 .prefs-overlay {
   position: fixed;

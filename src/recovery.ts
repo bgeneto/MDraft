@@ -54,6 +54,7 @@ export function buildRecoveryEntry(
     readOnly: session.readOnly,
     baseModifiedMs: session.modifiedMs,
     baseSize: session.size,
+    baseSha256: session.sha256,
     updatedMs,
   };
 }

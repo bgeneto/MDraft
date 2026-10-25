@@ -195,27 +195,45 @@ Other editor features:
 - **Crash recovery.** Every dirty buffer, including an untitled one, is written
   to a journal beside `settings.json` while you type. If MDraft closes
   unexpectedly, the next launch restores those buffers as dirty tabs and shows a
-  notice saying how many came back. Saving, Save As or Discard removes the
-  journal entry; a clean launch shows no notice. The journal is local, capped at
+  notice saying how many came back. Saving the current text or explicitly
+  discarding it removes the journal entry. If typing continues during Save or
+  Save As, the newer text stays dirty and journaled; a clean launch shows no
+  notice. The journal is local, capped at
   64 documents and 16 MiB each, and is never written beside the document.
 - **External changes.** If a file changes or is deleted on disk while its tab has
   unsaved text, a notice bar offers **Reload from disk**, **Keep my version** and
   **Save a copy…**. A save is refused until the conflict is resolved. A clean
-  buffer still reloads silently, as before.
+  buffer still reloads silently if it remains unchanged while the disk read is
+  pending. Typing during the read is preserved and leaves a visible conflict.
+  Detection compares the file's bytes as well as its modification time and size,
+  so an external rewrite of the same length with a restored timestamp is still
+  refused. Checking and replacing a file are still separate operations from
+  other programs' point of view: the window is narrow and the answer is safe
+  (it refuses), but it is not an atomic compare-and-swap.
+- **Safe text opening.** Binary files and invalid UTF-8 are refused rather than
+  opened with replacement characters. UTF-16/32 receives an encoding explanation;
+  convert a copy to UTF-8 until those encodings are supported. UTF-8 BOM and line
+  endings are preserved. A legacy recovered lossy buffer keeps its text, pauses
+  Auto Save and offers **Save a UTF-8 copy…**; the original is protected.
+- **Save As** stays attached to the initiating tab even if another tab becomes
+  active. It preserves typing and undo history. A destination already open in
+  another tab is refused; choose another name or close that tab first.
 - **Auto-close** inserts `)`, `]`, `}`, `'`, `"` and `` ` `` after the opening
   character, steps over the closer, deletes both with Backspace and wraps a
   selection. HTML tags close in HTML documents and in the inline HTML that
   Markdown and AsciiDoc pass through; Typst gets the pairs only. Both switches
   are under **Preferences › Editor**.
-- A clean buffer reloads when the file changes on disk.
 - **Themes** follow the system, or are fixed to light or dark.
 - The source pane has eight syntax palettes, each with its own surface rather
   than a single set of token colours.
 - **Spellchecking** uses the operating system's dictionaries. Code, URLs and
   mathematics are not sent to the checker. HTML documents are not spellchecked.
   A language the system does not have underlines nothing rather than guessing.
-- Unsaved changes produce a **Save / Discard** prompt. The dialog plugin does
-  not expose a third Cancel button, so there is no three-way prompt.
+- Unsaved changes produce **Save / Discard / Cancel**. Escape and dismissal
+  cancel, as do Save As cancellation, save failure or unresolved conflicts.
+  Cancelling a bulk close keeps every tab; earlier successful saves are retained,
+  but earlier Discard choices are not applied. New typing invalidates an older
+  close/reload decision. The final native window close still saves window state.
 - **Preferences** does not show dead controls: every row writes a setting or
   performs the action it names.
 
@@ -306,6 +324,10 @@ browser; **DOCX**, **ODT**, **EPUB**, LaTeX, reStructuredText, AsciiDoc, RTF,
 Textile, MediaWiki and OPML use pandoc; **PDF (via Typst)** uses pandoc with
 the Typst compiler for Markdown, AsciiDoc and HTML, and Typst directly for a
 `.typ` document.
+
+Exports use the document text and identity captured when the command begins.
+Switching tabs while a picker or renderer is working does not change which
+document is exported; subsequent typing stays in the editor for the next export.
 
 See [Export and conversion](export.md) for the exact directions, dependencies,
 configuration and fidelity notes.

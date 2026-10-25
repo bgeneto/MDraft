@@ -37,6 +37,14 @@ pub struct RecoveryEntry {
     pub read_only: bool,
     pub base_modified_ms: u64,
     pub base_size: u64,
+    /// SHA-256 of the disk revision this buffer was based on, or `None` for an
+    /// entry written by a build before content validation existed.
+    ///
+    /// The first save after a restore is checked against this, so a file that
+    /// changed while MDraft was closed cannot be overwritten merely because its
+    /// size and `mtime` happened to match.
+    #[serde(default)]
+    pub base_sha256: Option<String>,
     /// Set by the host on write, never trusted from the frontend.
     #[serde(default)]
     pub updated_ms: u64,
@@ -237,6 +245,7 @@ mod tests {
             read_only: false,
             base_modified_ms: 1_760_000_000_000,
             base_size: 42,
+            base_sha256: Some("a".repeat(64)),
             updated_ms: 0,
         }
     }
@@ -279,6 +288,35 @@ mod tests {
             assert!(!error.is_empty(), "{id:?} should be refused");
         }
         assert_eq!(list_entries(&dir).unwrap().len(), 0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn older_entries_without_a_base_hash_still_load() {
+        let dir = temp_dir("legacy-hash");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        // A journal written before GAP-032 has no baseSha256 key. It must load
+        // with None, not be treated as corrupt and silently skipped.
+        let mut value = serde_json::to_value(entry("legacy")).unwrap();
+        value.as_object_mut().unwrap().remove("baseSha256");
+        fs::write(
+            dir.join("legacy.json"),
+            serde_json::to_vec(&value).unwrap(),
+        )
+        .unwrap();
+
+        let listed = list_entries(&dir).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "legacy");
+        assert_eq!(listed[0].base_sha256, None);
+        // A new write of the same entry carries a hash again.
+        let mut rewritten = listed[0].clone();
+        rewritten.base_sha256 = Some("b".repeat(64));
+        let stored = write_entry(&dir, rewritten).unwrap();
+        assert_eq!(stored.base_sha256, Some("b".repeat(64)));
 
         let _ = fs::remove_dir_all(&dir);
     }

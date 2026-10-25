@@ -19,7 +19,8 @@ import {
   WELCOME,
 } from "./content";
 import { installEditorContextMenu } from "./context-menu";
-import { classifyDiskChange } from "./disk-change";
+import { createDocumentLifecycle } from "./document-lifecycle";
+import { askUnsaved } from "./unsaved-dialog";
 import { createEditor, type EditorHandle } from "./editor";
 import {
   formatDocument,
@@ -158,6 +159,98 @@ const recovery = createRecoveryScheduler({
   remove: api.removeRecovery,
   notify: (message) => toast(message, 6200),
 });
+let closeCommitFocus: HTMLElement | null = null;
+const lifecycle = createDocumentLifecycle({
+  sessions,
+  text: textOf,
+  read: api.readDocument,
+  stat: api.statDocument,
+  write: api.writeDocumentChecked,
+  recovery,
+  decide: askUnsaved,
+  choosePath: async (session, suggested) => {
+    if (
+      session.lossy &&
+      !(await ask(
+        "This recovered text contains characters replaced during decoding. Save the displayed text as a UTF-8 copy? The original file will be kept.",
+        { title: "Save recovered text", kind: "warning" },
+      ))
+    )
+      return null;
+    const chosen = await saveDialog({
+      title: session.lossy ? "Save a UTF-8 copy" : "Save As",
+      defaultPath:
+        suggested ??
+        (session.lossy ? conflictCopyPath(session) : session.path) ??
+        (settings.lastDirectory
+          ? joinDir(settings.lastDirectory, `untitled.${settings.defaultExtension}`)
+          : `untitled.${settings.defaultExtension}`),
+      filters: documentFilters(),
+    });
+    return Array.isArray(chosen) ? (chosen[0] ?? null) : chosen;
+  },
+  adoptPath: (session, path) => {
+    session.path = path;
+    session.name = basename(path);
+    session.directory = directoryOf(path);
+    session.language = languageFor(path);
+  },
+  replace: (session, payload) => {
+    const active = session === doc,
+      state = session.editorState;
+    const line = active ? editor.cursorInfo().line : 1;
+    describe(session, payload);
+    if (active) {
+      void showInEditor(false, payload.tokens);
+      editor.scrollToLine(line);
+    } else if (state)
+      session.editorState = state.update({
+        changes: { from: 0, to: state.doc.length, insert: payload.content },
+      }).state;
+  },
+  changed: (session, pathChanged) => {
+    if (session === doc) {
+      if (pathChanged) {
+        syncGuest(session.language);
+        editor.setLanguage(session.language);
+        applyLayout();
+        scheduleRender(true);
+        scheduleOutlineRefresh(editor.getDoc());
+      }
+      void refreshTitle();
+      refreshStatus();
+      renderNotice();
+    }
+    renderDocTabs();
+    if (pathChanged && settings.recordRecent && session.path) {
+      const path = session.path;
+      void queueSettings(async () => {
+        const next = await api.addRecent(path);
+        settings = {
+          ...settings,
+          recentFiles: next.recentFiles,
+          lastDirectory: next.lastDirectory,
+        };
+        renderSidebar();
+      }).catch(() => {});
+    }
+  },
+  conflict: (session, kind) => (kind ? markConflict(session, kind) : clearConflict(session)),
+  notify: (text) => toast(text, 6200),
+  committing: (active) => {
+    if (active) {
+      closeCommitFocus =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }
+    document.body.inert = active;
+    if (!active) {
+      if (closeCommitFocus?.isConnected) closeCommitFocus.focus({ preventScroll: true });
+      else editor?.focus();
+      closeCommitFocus = null;
+    }
+  },
+});
+
 /** An informational recovery notice, cleared by the reader or a tab switch. */
 let recoveryNotice: string | null = null;
 
@@ -178,8 +271,8 @@ function installTabs(): void {
         return session ? saveSession(session).then(() => undefined) : undefined;
       },
       saveAs: async (id) => {
-        if (id !== doc.id) await activateSession(id);
-        await saveAs();
+        const session = sessions.byId(id);
+        if (session) await saveAs(undefined, session);
       },
       reveal: (id) => revealSession(id),
       newTab: () => loadUntitled("", defaultDocumentLanguage()),
@@ -349,6 +442,21 @@ function hideNotice(): void {
 }
 
 function renderNotice(): void {
+  if (doc.lossy) {
+    const session = doc;
+    showNotice(
+      "Recovered text was decoded with replaced characters. Auto Save is paused; the original file is protected.",
+      "warning",
+      [
+        {
+          label: "Save a UTF-8 copy…",
+          run: () => saveAs(conflictCopyPath(session), session).then(() => {}),
+        },
+      ],
+      false,
+    );
+    return;
+  }
   if (doc.conflict === "modified") {
     showNotice(
       `"${doc.name}" changed on disk. Choose what to keep before saving.`,
@@ -1467,6 +1575,7 @@ function syncGuest(next: api.DocumentLanguage): void {
 
 /** Copy a file read onto a session. The EditorState is left for the caller. */
 function describe(session: Session, payload: api.DocumentPayload): void {
+  session.revision += 1;
   session.path = payload.path;
   session.name = payload.name;
   session.directory = payload.directory || null;
@@ -1478,6 +1587,7 @@ function describe(session: Session, payload: api.DocumentPayload): void {
   session.lossy = payload.lossy;
   session.size = payload.size;
   session.modifiedMs = payload.modifiedMs;
+  session.sha256 = payload.sha256;
   session.readOnly = payload.readOnly;
   session.draft = null;
   session.conflict = null;
@@ -1674,6 +1784,7 @@ async function formatSession(id: string): Promise<void> {
       return;
     }
     session.editorState = state.update(formattedTransaction(state, formatted)).state;
+    session.revision += 1;
     session.dirty = formatted !== session.savedContent;
     if (session.dirty) recovery.schedule(session, session.editorState.doc.toString());
     else void recovery.forget(session);
@@ -1737,7 +1848,9 @@ async function openPath(path: string, options: OpenOptions = {}): Promise<void> 
     if (settings.sidebarTab === "recent") renderSidebar();
 
     if (payload.lossy) {
-      toast("This file is not valid UTF-8. It was opened lossily; saving will rewrite its bytes.");
+      toast(
+        "This text contains replaced characters. Save a UTF-8 copy; the original is protected.",
+      );
     }
     if (payload.readOnly) toast("This file is read-only.");
   } catch (error) {
@@ -1754,6 +1867,9 @@ async function loadUntitled(
   language: api.DocumentLanguage = "markdown",
   replace = false,
 ): Promise<void> {
+  // CodeMirror uses LF internally; raw bundled documents can contain CRLF.
+  // Their baseline must match the editor so opening Help is not an unsaved edit.
+  content = content.replace(/\r\n?/g, "\n");
   const fill = replace || installingStartup;
   if (!fill) {
     snapshotDoc();
@@ -1765,6 +1881,7 @@ async function loadUntitled(
     sessions.add(session);
     doc = session;
   } else {
+    doc.revision += 1;
     doc.path = null;
     doc.name = "Untitled";
     doc.directory = null;
@@ -1776,6 +1893,7 @@ async function loadUntitled(
     doc.lossy = false;
     doc.size = content.length;
     doc.modifiedMs = 0;
+    doc.sha256 = null;
     doc.readOnly = false;
     doc.recoveryId = null;
     doc.draft = null;
@@ -1789,61 +1907,10 @@ async function loadUntitled(
   await showInEditor(true);
 }
 
-/** Returns true when it is safe to lose the current buffer. Reload uses this. */
-async function confirmDiscard(): Promise<boolean> {
-  if (!doc.dirty) return true;
-  const shouldSave = await ask("This document has unsaved changes. Save them first?", {
-    title: "Unsaved changes",
-    kind: "warning",
-  });
-  if (!shouldSave) return true;
-  return save();
-}
-
-/** Write one session in place. Untitled sessions are the caller's problem. */
-async function writeSession(session: Session): Promise<boolean> {
-  if (!session.path) return false;
-  const content = textOf(session);
-
-  // The file may have moved since the last poll. Check immediately before the
-  // write so Ctrl+S and Auto Save cannot overwrite an external change during
-  // the poll interval. A path that never existed (modifiedMs 0) is a create,
-  // not a conflict; `recreateDeleted` uses the same rule after an explicit
-  // choice.
+/** Save only this session; the controller protects newer edits and recovery. */
+async function writeSession(session: Session, automatic = false): Promise<boolean> {
   try {
-    const stat = await api.statDocument(session.path);
-    const change =
-      !stat.exists && session.modifiedMs === 0 ? "unchanged" : classifyDiskChange(session, stat);
-    if (change !== "unchanged") {
-      markConflict(session, change);
-      return false;
-    }
-  } catch (error) {
-    toast(`Could not check ${session.name} before saving: ${String(error)}`, 6200);
-    return false;
-  }
-
-  try {
-    const info = await api.writeDocument(
-      session.path,
-      content,
-      session.lineEnding || "\n",
-      session.hadBom,
-    );
-    session.savedContent = content;
-    session.modifiedMs = info.modifiedMs;
-    session.size = info.size;
-    session.dirty = false;
-    session.draft = null;
-    session.conflict = null;
-    void recovery.forget(session);
-    if (session.id === doc.id) {
-      void refreshTitle();
-      refreshStatus();
-      renderNotice();
-    }
-    renderDocTabs();
-    return true;
+    return await lifecycle.save(session, automatic);
   } catch (error) {
     await message(String(error), { title: "Could not save", kind: "error" });
     return false;
@@ -1875,29 +1942,8 @@ function clearConflict(session: Session): void {
 
 /** Replace a conflicted buffer with the file, keeping one undo step. */
 async function reloadConflict(session: Session): Promise<void> {
-  if (!session.path) return;
   try {
-    const payload = await api.readDocument(session.path);
-    if (session.id === doc.id) {
-      const line = editor.cursorInfo().line;
-      describe(session, payload);
-      await showInEditor(false, payload.tokens);
-      editor.scrollToLine(line);
-    } else {
-      describe(session, payload);
-      if (session.editorState) {
-        session.editorState = session.editorState.update({
-          changes: { from: 0, to: session.editorState.doc.length, insert: payload.content },
-        }).state;
-      }
-      renderDocTabs();
-    }
-    session.dirty = false;
-    session.draft = null;
-    session.conflict = null;
-    void recovery.forget(session);
-    renderNotice();
-    toast("Reloaded from disk");
+    if (await lifecycle.reload(session)) toast("Reloaded from disk");
   } catch (error) {
     await message(String(error), { title: "Could not reload", kind: "error" });
   }
@@ -1907,13 +1953,17 @@ async function reloadConflict(session: Session): Promise<void> {
 async function keepMine(session: Session): Promise<void> {
   if (!session.path) return;
   try {
-    const stat = await api.statDocument(session.path);
+    await lifecycle.idle(session);
+    const before = lifecycle.snapshot(session);
+    const stat = await api.fingerprintDocument(session.path);
+    if (!lifecycle.current(before)) return;
     if (!stat.exists) {
       markConflict(session, "deleted");
       return;
     }
     session.modifiedMs = stat.modifiedMs;
     session.size = stat.size;
+    session.sha256 = stat.sha256;
     session.conflict = null;
     // The journal's base must move with the choice, or a second crash would
     // restore the old conflict and ask again.
@@ -1931,9 +1981,9 @@ async function recreateDeleted(session: Session): Promise<void> {
   session.conflict = null;
   session.modifiedMs = 0;
   session.size = 0;
+  session.sha256 = null;
   renderNotice();
-  if (session.id !== doc.id) await activateSession(session.id);
-  await save();
+  await saveSession(session);
 }
 
 /** Suggested sibling name for "Save a copy…" on a conflicted document. */
@@ -1947,155 +1997,49 @@ function conflictCopyPath(session: Session): string {
 }
 
 async function saveConflictCopy(): Promise<void> {
-  if (!doc.conflict) return;
-  await saveAs(conflictCopyPath(doc));
+  const session = doc;
+  if (session.conflict) await saveAs(conflictCopyPath(session), session);
 }
-
 async function save(): Promise<boolean> {
-  if (!doc.path) return saveAs();
-  const ok = await writeSession(doc);
+  const ok = await saveSession(doc);
   if (ok) toast("Saved");
   return ok;
 }
-
-async function saveAs(suggestedPath?: string): Promise<boolean> {
-  const suggested =
-    suggestedPath ??
-    doc.path ??
-    (settings.lastDirectory
-      ? joinDir(settings.lastDirectory, `untitled.${settings.defaultExtension}`)
-      : `untitled.${settings.defaultExtension}`);
-
-  const chosen = await saveDialog({
-    title: "Save As",
-    defaultPath: suggested,
-    filters: documentFilters(),
-  });
-  if (!chosen) return false;
-
-  const target = Array.isArray(chosen) ? chosen[0] : chosen;
-  // Choosing the same file is an ordinary save, not a bypass of the conflict
-  // guard. Without this a "Save a copy" dialog navigated back to the original
-  // would overwrite the external change.
-  if (doc.path && pathKey(target) === pathKey(doc.path)) return save();
-  const other = sessions.findByPath(target);
-  if (other && other.id !== doc.id && other.dirty) {
-    const replaceOther = await ask(
-      `"${other.name}" is already open with unsaved changes. Close that tab and keep this version?`,
-      { title: "Already open", kind: "warning" },
-    );
-    if (!replaceOther) return false;
-  }
-
-  const content = editor.getDoc();
-
+async function saveAs(suggestedPath?: string, session: Session = doc): Promise<boolean> {
   try {
-    await api.writeDocument(target, content, doc.lineEnding || "\n", doc.hadBom);
-    void recovery.forget(doc);
-    if (other && other.id !== doc.id) sessions.remove(other.id);
-    const payload = await api.readDocument(target);
-    describe(doc, payload);
-    await showInEditor(false, payload.tokens);
-    if (settings.recordRecent) {
-      await queueSettings(async () => {
-        try {
-          const next = await api.addRecent(target);
-          settings = {
-            ...settings,
-            recentFiles: next.recentFiles,
-            lastDirectory: next.lastDirectory,
-          };
-        } catch {
-          /* recents are best-effort */
-        }
-      });
-    }
-    toast("Saved");
-    return true;
+    const ok = await lifecycle.saveAs(session, suggestedPath);
+    if (ok) toast("Saved");
+    return ok;
   } catch (error) {
     await message(String(error), { title: "Could not save", kind: "error" });
     return false;
   }
 }
-
 async function saveSession(session: Session): Promise<boolean> {
-  if (!session.path) {
-    if (session.id !== doc.id) await activateSession(session.id);
-    return saveAs();
-  }
   return writeSession(session);
 }
-
 async function closeSession(id: string): Promise<void> {
-  const session = sessions.byId(id);
-  if (!session) return;
-  if (session.dirty) {
-    const shouldSave = await ask(`"${session.name}" has unsaved changes. Save them first?`, {
-      title: "Unsaved changes",
-      kind: "warning",
-    });
-    if (shouldSave && !(await saveSession(session))) return;
-  }
-  void recovery.forget(session);
-  // The shell always has a buffer. Closing the last tab starts a fresh one.
-  if (sessions.list().length === 1) {
-    await loadUntitled("", defaultDocumentLanguage(), true);
-    return;
-  }
-  const wasActive = session.id === doc.id;
-  const next = sessions.remove(id);
-  if (wasActive && next) {
-    doc = next;
-    await displayDoc();
-    return;
-  }
-  renderDocTabs();
+  await closeSessions([id]);
 }
-
-/**
- * Close a set of tabs as one action — the right-click menu's "Close Others",
- * "Close All to the Left" and friends.
- *
- * Dirty tabs get the same one-at-a-time prompt a single close uses. Cancelling
- * a save aborts the whole action instead of leaving the strip half-closed,
- * which is the only outcome the reader can still reason about.
- */
 async function closeSessions(ids: readonly string[]): Promise<void> {
-  const wanted = new Set(ids);
-  const targets = sessions.list().filter((session) => wanted.has(session.id));
-  if (targets.length === 0) return;
-  if (targets.length === 1) {
-    await closeSession(targets[0].id);
-    return;
-  }
-
-  for (const session of targets) {
-    if (!session.dirty) continue;
-    const shouldSave = await ask(`"${session.name}" has unsaved changes. Save them first?`, {
-      title: "Unsaved changes",
-      kind: "warning",
+  const wanted = new Set(ids),
+    targets = sessions.list().filter((session) => wanted.has(session.id));
+  if (!targets.length) return;
+  try {
+    await lifecycle.close(targets, async (ready) => {
+      if (!ready()) return false;
+      const activeRemoved = targets.some((session) => session === doc);
+      const next = sessions.removeMany(targets.map((session) => session.id));
+      if (!sessions.list().length) await loadUntitled("", defaultDocumentLanguage());
+      else if (activeRemoved && next) {
+        doc = next;
+        await displayDoc();
+      } else renderDocTabs();
+      return true;
     });
-    if (shouldSave && !(await saveSession(session))) return;
+  } catch (error) {
+    await message(String(error), { title: "Could not close", kind: "error" });
   }
-
-  for (const session of targets) void recovery.forget(session);
-  // Saving an untitled tab activates it, so `doc` may have moved while the
-  // prompts were open. Membership of `targets` did not change.
-  const activeRemoved = targets.some((session) => session.id === doc.id);
-  const next = sessions.removeMany(targets.map((session) => session.id));
-
-  if (sessions.list().length === 0) {
-    // Closing everything leaves the shell with its one fresh buffer, exactly as
-    // closing the last tab does.
-    await loadUntitled("", defaultDocumentLanguage());
-    return;
-  }
-  if (activeRemoved && next) {
-    doc = next;
-    await displayDoc();
-    return;
-  }
-  renderDocTabs();
 }
 
 /** Reveal the file behind a tab, whether or not that tab is on screen. */
@@ -2113,62 +2057,55 @@ async function revealSession(id: string): Promise<void> {
 }
 
 async function reloadFromDisk(): Promise<void> {
-  if (!doc.path) {
+  const session = doc;
+  if (!session.path) {
     toast("This document has no file on disk yet.");
     return;
   }
-  if (doc.dirty && !(await confirmDiscard())) return;
-  try {
-    const payload = await api.readDocument(doc.path);
-    const line = editor.cursorInfo().line;
-    describe(doc, payload);
-    void recovery.forget(doc);
-    await showInEditor(false, payload.tokens);
-    editor.scrollToLine(line);
-    toast("Reloaded from disk");
-  } catch (error) {
-    toast(String(error));
-  }
+  await reloadConflict(session);
+}
+
+/** Capture before any picker, tool lookup or rendering can yield to another tab. */
+function exportSource() {
+  return {
+    text: textOf(doc),
+    name: doc.name,
+    path: doc.path,
+    directory: doc.directory,
+    language: doc.language,
+    lineEnding: doc.lineEnding,
+    hadBom: doc.hadBom,
+    imageRoot: customImageFolder(),
+  };
 }
 
 /**
  * The article the exports write, and the stylesheet it depends on.
  *
- * Each markup is rendered by the same pipeline its own preview uses: Markdown
- * through the preview renderer, AsciiDoc through Asciidoctor, Typst through
- * Typst's own HTML export. The Markdown renderer cannot read Typst — `==
- * Introduction` and `+/-` would print as the source text — which is exactly what
- * a PDF export of a `.typ` document used to do.
- *
- * Typst's own stylesheet comes back with the markup and must be carried into the
- * exported document: most of it is MathML layout that no browser resolves
- * unaided, the same reason the preview injects it.
- *
- * Shared by the HTML and PDF exports so the two can never drift apart.
+ * Each markup uses its preview pipeline: Markdown through the preview renderer,
+ * AsciiDoc through Asciidoctor, Typst through its own HTML export. Typst's MathML
+ * stylesheet must travel with its markup. Shared by HTML and Print exports.
  */
-async function buildExportArticle(): Promise<{ html: string; css: string }> {
+async function buildExportArticle(
+  source: ReturnType<typeof exportSource>,
+): Promise<{ html: string; css: string }> {
   const holder = document.createElement("div");
   let css = "";
-  if (doc.language === "asciidoc") {
-    const result = await renderAsciidocPreview(editor.getDoc(), {
-      baseDir: doc.directory ?? null,
+  if (source.language === "asciidoc") {
+    const result = await renderAsciidocPreview(source.text, {
+      baseDir: source.directory ?? null,
       math: settings.enableMath,
       mermaid: settings.enableMermaid,
       isDark,
     });
     holder.innerHTML = result.html;
-  } else if (doc.language === "typst") {
-    const rendered = await api.renderTypst(
-      doc.path,
-      editor.getDoc(),
-      "document",
-      customImageFolder(),
-    );
+  } else if (source.language === "typst") {
+    const rendered = await api.renderTypst(source.path, source.text, "document", source.imageRoot);
     holder.innerHTML = rendered.html ?? "";
     css = rendered.css ?? "";
   } else {
-    holder.innerHTML = renderPreview(editor.getDoc(), {
-      baseDir: doc.directory ?? null,
+    holder.innerHTML = renderPreview(source.text, {
+      baseDir: source.directory ?? null,
       math: settings.enableMath,
       mermaid: settings.enableMermaid,
     }).html;
@@ -2176,7 +2113,7 @@ async function buildExportArticle(): Promise<{ html: string; css: string }> {
   await renderMermaidIn(holder, isDark);
   // The same class the preview's Typst view uses, so the rules written for it
   // apply to the export too.
-  const classes = doc.language === "typst" ? "markdown-body typst-document" : "markdown-body";
+  const classes = source.language === "typst" ? "markdown-body typst-document" : "markdown-body";
   return { html: `<article class="${classes}">${holder.innerHTML}</article>`, css };
 }
 
@@ -2221,12 +2158,13 @@ function exportTypographyCss(): string {
 }
 
 /** Basename of the open document, without its extension. */
-function documentStem(): string {
-  return doc.name.replace(/\.[^.]+$/, "") ?? "untitled";
+function documentStem(name: string): string {
+  return name.replace(/\.[^.]+$/, "") ?? "untitled";
 }
 
 async function exportHtml(): Promise<void> {
-  const base = documentStem();
+  const source = exportSource();
+  const base = documentStem(source.name);
   const suggested = settings.lastDirectory
     ? joinDir(settings.lastDirectory, `${base}.html`)
     : `${base}.html`;
@@ -2240,10 +2178,15 @@ async function exportHtml(): Promise<void> {
   const target = Array.isArray(chosen) ? chosen[0] : chosen;
 
   try {
-    if (doc.language === "html") {
+    if (source.language === "html") {
       // An HTML document is already HTML. Exporting a copy is useful; passing
       // it through the Markdown renderer would produce a different document.
-      await api.writeDocument(target, editor.getDoc(), doc.lineEnding ?? "\n", doc.hadBom ?? false);
+      await api.writeDocument(
+        target,
+        source.text,
+        source.lineEnding ?? "\n",
+        source.hadBom ?? false,
+      );
       toast("Exported HTML");
       const after = await api.runAfterExport(target);
       if (after.afterErrors.length > 0) {
@@ -2255,7 +2198,7 @@ async function exportHtml(): Promise<void> {
       return;
     }
 
-    const article = await buildExportArticle();
+    const article = await buildExportArticle(source);
     const highlightStyle = document.getElementById("hljs-theme")?.textContent ?? "";
     const fontCss = await exportFontCss();
     const headExtra = [
@@ -2269,7 +2212,7 @@ async function exportHtml(): Promise<void> {
       `<link rel="stylesheet" href="${KATEX_STYLESHEET_URL}">`,
     ].join("\n");
 
-    const html = wrapStandaloneHtml(doc.name ?? "Untitled", article.html, isDark, headExtra);
+    const html = wrapStandaloneHtml(source.name ?? "Untitled", article.html, isDark, headExtra);
     await api.writeDocument(target, html, "\n", false);
     toast("Exported HTML");
 
@@ -2304,19 +2247,20 @@ async function exportHtml(): Promise<void> {
  * only has to choose "Save as PDF".
  */
 async function exportPdf(): Promise<void> {
+  const source = exportSource();
   const notice = toast("Preparing the PDF…", 0);
   try {
-    if (doc.language === "html") {
+    if (source.language === "html") {
       // The system browser cannot reach the preview scheme, but it can read a
       // local file base. The document's own CSS and scripts stay in charge.
-      const html = await buildHtmlPrintDocument(editor.getDoc(), doc.directory ?? null);
-      const written = await api.printDocument(html, documentStem());
+      const html = await buildHtmlPrintDocument(source.text, source.directory ?? null);
+      const written = await api.printDocument(html, documentStem(source.name));
       notice.dismiss();
       toast("Choose “Save as PDF” in the print dialog");
       console.info(`[export] print document written to ${written}`);
       return;
     }
-    const article = await buildExportArticle();
+    const article = await buildExportArticle(source);
     // The print document is always light, whatever the editor is showing: dark
     // token colours would print as pale text on white paper. Its typefaces,
     // however, are the reader's — embedded, because a browser reading a file in
@@ -2325,13 +2269,13 @@ async function exportPdf(): Promise<void> {
       ? `${exportTypographyCss()}\n${article.css}`
       : exportTypographyCss();
     const html = wrapPrintHtml(
-      doc.name ?? "Untitled",
+      source.name ?? "Untitled",
       article.html,
       highlightThemeCss(false),
       typography,
       await exportFontCss(),
     );
-    const written = await api.printDocument(html, documentStem());
+    const written = await api.printDocument(html, documentStem(source.name));
     notice.dismiss();
     toast("Choose “Save as PDF” in the print dialog");
     console.info(`[export] print document written to ${written}`);
@@ -2399,10 +2343,10 @@ async function syncExportAvailability(): Promise<void> {
 }
 
 /** A sensible default filename for an export of the current document. */
-function exportSuggestion(format: api.ExportFormat): string {
-  const base = doc.name.replace(/\.[^.]+$/, "") ?? "untitled";
-  const name = `${base}.${format.extension}`;
-  return settings.lastDirectory ? joinDir(settings.lastDirectory, name) : name;
+function exportSuggestion(format: api.ExportFormat, name: string): string {
+  const base = documentStem(name);
+  const filename = `${base}.${format.extension}`;
+  return settings.lastDirectory ? joinDir(settings.lastDirectory, filename) : filename;
 }
 
 /**
@@ -2414,6 +2358,7 @@ function exportSuggestion(format: api.ExportFormat): string {
  * output path is known to be the file that was just written.
  */
 async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
+  const snapshot = exportSource();
   // The menu disables formats whose tool is missing, but a stale menu, a
   // keyboard route or a settings file edited elsewhere must not open a save
   // dialog for an export that cannot run. Ask before choosing a path.
@@ -2434,7 +2379,7 @@ async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
 
   const chosen = await saveDialog({
     title: `Export as ${format.label}`,
-    defaultPath: exportSuggestion(format),
+    defaultPath: exportSuggestion(format, snapshot.name),
     filters: [
       { name: format.label, extensions: [format.extension] },
       { name: "All files", extensions: ["*"] },
@@ -2445,8 +2390,8 @@ async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
 
   const notice = toast(`Exporting with pandoc…`, 0);
   try {
-    let source = editor.getDoc();
-    let language: api.DocumentLanguage = doc.language;
+    let source = snapshot.text;
+    let language: api.DocumentLanguage = snapshot.language;
     // Pandoc's AsciiDoc reader prints an unset attribute (`:toc!:`) and every
     // attribute line below it as prose, ignores `ifdef::backend-pdf[]` and does
     // not resolve `{attributes}`. Asciidoctor already resolved all of that for
@@ -2454,9 +2399,9 @@ async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
     // the original source: writing it back as AsciiDoc should not pass through
     // HTML first.
     const asciidocTarget = format.id === "asciidoc" || format.extension.toLowerCase() === "adoc";
-    if (doc.language === "asciidoc" && !asciidocTarget) {
+    if (snapshot.language === "asciidoc" && !asciidocTarget) {
       source = await renderAsciidocForExport(source, {
-        baseDir: doc.directory ?? null,
+        baseDir: snapshot.directory ?? null,
       });
       language = "html";
     }
@@ -2464,11 +2409,11 @@ async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
       formatId: format.id,
       markdown: source,
       outputPath,
-      inputPath: doc.path,
+      inputPath: snapshot.path,
       // Tells the backend which reader to use, and that a Typst document exported
       // to PDF is rendered by Typst itself rather than translated through pandoc.
       language,
-      imageRoot: customImageFolder(),
+      imageRoot: snapshot.imageRoot,
     });
     notice.dismiss();
     toast(`Exported ${basename(outcome.outputPath)}`);
@@ -3110,7 +3055,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
         "MDraft",
         `Version ${APP_VERSION}`,
         "",
-        "Live-preview editor for Asciidoc, Markdown, Typst, and HTML",
+        "Live-preview editor for Markdown, Asciidoc, Typst and HTML",
         "",
         "Conceived by Bernhard Enders",
         "Coded by DeepSeek Flash v4.1",
@@ -4267,6 +4212,7 @@ function installResizers(): void {
 const lastActionAt = new Map<string, number>();
 
 function runMenuAction(id: string): void {
+  if (lifecycle.committing || document.querySelector(".unsaved-dialog[open]")) return;
   const now = performance.now();
   const previous = lastActionAt.get(id) ?? 0;
   if (now - previous < 250) return;
@@ -4669,116 +4615,41 @@ async function installCloseGuard(): Promise<void> {
   const win = getCurrentWindow();
   await win.onCloseRequested(async (event) => {
     if (allowClose) return;
-    // Every close is deferred once: the remembered tab list has to reach the
-    // disk before the process ends, and a dirty buffer may need a prompt first.
-    // Closing again with `allowClose` set is what actually ends the window.
     event.preventDefault();
-    const dirty = sessions.list().filter((session) => session.dirty);
-    for (const session of dirty) {
-      const shouldSave = await ask(
-        `"${session.name}" has unsaved changes. Save them before closing?`,
-        { title: "Unsaved changes", kind: "warning" },
-      );
-      if (shouldSave && !(await saveSession(session))) return;
-      // A deliberate discard must not come back as a recovery entry.
-      void recovery.forget(session);
+    const pendingDialog = document.querySelector<HTMLDialogElement>(".unsaved-dialog[open]");
+    if (pendingDialog) {
+      pendingDialog.close();
+      return;
     }
     try {
-      await flushRememberedTabs();
-    } finally {
-      allowClose = true;
-      await win.close();
+      await lifecycle.close(
+        [...sessions.list()],
+        async (ready) => {
+          await flushRememberedTabs();
+          if (!ready()) return false;
+          allowClose = true;
+          try {
+            await win.close();
+          } catch (error) {
+            allowClose = false;
+            throw error;
+          }
+          return true;
+        },
+        true,
+      );
+    } catch (error) {
+      await message(String(error), { title: "Could not close", kind: "error" });
     }
   });
 }
-
 function installDiskWatcher(): void {
   window.setInterval(() => {
     void reloadChangedSessions();
   }, 2500);
 }
-
-/** Reload a clean tab whose file changed underneath it. A dirty tab is left alone. */
 async function reloadChangedSessions(): Promise<void> {
-  for (const session of sessions.list()) {
-    if (!session.path) continue;
-    try {
-      const stat = await api.statDocument(session.path);
-      const change = classifyDiskChange(session, stat);
-
-      if (change === "unchanged") {
-        // A conflict that resolved itself (the file came back, or an external
-        // write produced the same revision) must not leave a stale bar.
-        clearConflict(session);
-        continue;
-      }
-
-      if (!session.dirty) {
-        if (change === "deleted") {
-          markConflict(session, "deleted");
-          continue;
-        }
-        const payload = await api.readDocument(session.path);
-        if (payload.content === session.savedContent) {
-          // A metadata-only touch: the bytes are what the buffer already has.
-          session.modifiedMs = payload.modifiedMs;
-          session.size = payload.size;
-          void recovery.forget(session);
-          clearConflict(session);
-          continue;
-        }
-        if (session.id === doc.id) {
-          const line = editor.cursorInfo().line;
-          describe(doc, payload);
-          await showInEditor(false, payload.tokens);
-          editor.scrollToLine(line);
-          toast("The file changed on disk — reloaded");
-        } else {
-          const state = session.editorState;
-          describe(session, payload);
-          if (state) {
-            session.editorState = state.update({
-              changes: { from: 0, to: state.doc.length, insert: payload.content },
-            }).state;
-          }
-          renderDocTabs();
-        }
-        void recovery.forget(session);
-        continue;
-      }
-
-      // The buffer is dirty. A deleted file is a conflict even if the buffer
-      // still has content: the next save would recreate it.
-      if (change === "deleted") {
-        markConflict(session, "deleted");
-        continue;
-      }
-
-      // An external writer may have saved exactly what the reader has. In that
-      // case there is no conflict at all; adopt the new disk revision.
-      const payload = await api.readDocument(session.path).catch(() => null);
-      if (payload && payload.content === textOf(session)) {
-        session.savedContent = payload.content;
-        session.modifiedMs = payload.modifiedMs;
-        session.size = payload.size;
-        session.dirty = false;
-        session.draft = null;
-        session.conflict = null;
-        void recovery.forget(session);
-        if (session.id === doc.id) {
-          void refreshTitle();
-          refreshStatus();
-          renderNotice();
-        }
-        renderDocTabs();
-        toast(`"${session.name}" matches the file on disk now.`, 3600);
-        continue;
-      }
-      markConflict(session, "modified");
-    } catch {
-      /* the stat or the read failed; leave the buffer alone and retry */
-    }
-  }
+  await lifecycle.poll();
 }
 
 function installSystemThemeWatcher(): void {
@@ -5163,6 +5034,8 @@ async function restoreRecovery(): Promise<void> {
         void api.removeRecovery(entry.id).catch(() => {});
         continue;
       }
+      existing.revision += 1;
+      existing.lossy = existing.lossy || entry.lossy;
       existing.draft = entry.content;
       existing.editorState = null;
       existing.recoveryId = entry.id;
@@ -5170,6 +5043,10 @@ async function restoreRecovery(): Promise<void> {
       // closed, the conflict guard must notice before the first save.
       existing.modifiedMs = entry.baseModifiedMs;
       existing.size = entry.baseSize;
+      // Older journals have no hash. Keep null rather than adopting the
+      // current disk revision: the stat guard must still see a file that
+      // moved while MDraft was closed.
+      existing.sha256 = entry.baseSha256 ?? null;
       existing.dirty = true;
       existing.conflict = null;
       recovered.push(existing);
@@ -5198,12 +5075,13 @@ async function restoreRecovery(): Promise<void> {
     session.dirty = entry.content !== session.savedContent;
     session.lineEnding = base?.lineEnding ?? (entry.lineEnding === "\r\n" ? "\r\n" : "\n");
     session.hadBom = base?.hadBom ?? entry.hadBom;
-    session.lossy = base?.lossy ?? entry.lossy;
+    session.lossy = (base?.lossy ?? false) || entry.lossy;
     session.readOnly = base?.readOnly ?? entry.readOnly;
     // The journal's base, not the file's current stat: the disk poll compares
     // against it and raises the conflict before an overwrite.
     session.modifiedMs = entry.baseModifiedMs;
     session.size = entry.baseSize;
+    session.sha256 = entry.baseSha256 ?? null;
     session.conflict = null;
     sessions.add(session);
     // `add` inserts after the active tab. Recovered tabs belong at the end so
@@ -5283,6 +5161,7 @@ async function boot(): Promise<void> {
     linkClick: openLinkTarget,
   });
   editor.onDocChanged((text) => {
+    doc.revision += 1;
     // Invalidate before the debounce: the visible DOM still describes old text.
     renderToken += 1;
     wordMap = null;
@@ -5445,12 +5324,12 @@ function installAutoSave(): void {
     if (!settings.autoSave) return;
     const pending = sessions
       .list()
-      .filter((session) => session.dirty && session.path && !session.readOnly);
+      .filter((session) => session.dirty && session.path && !session.readOnly && !session.conflict);
     if (pending.length === 0) return;
     void (async () => {
       let saved = 0;
       for (const session of pending) {
-        if (await writeSession(session)) saved += 1;
+        if (await writeSession(session, true)) saved += 1;
       }
       if (saved === 1) toast("Auto saved", 1400);
       else if (saved > 1) toast(`Auto saved ${saved} files`, 1400);
