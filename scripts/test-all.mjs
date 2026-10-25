@@ -226,6 +226,16 @@ const SUITES = [
     doc: "samples/export-tour.md",
   },
   {
+    // The real direct-PDF path: Rust writes the file through WebView2, then
+    // Poppler rasterizes its pages. The suite also runs the visual checker,
+    // so a plausible-looking but collapsed or clipped PDF fails here.
+    id: "pdf-native",
+    title: "Native PDF quality",
+    kind: "cdp",
+    script: "pdf-native-test.mjs",
+    doc: "samples/pdf-quality.md",
+  },
+  {
     id: "asciidoc",
     title: "AsciiDoc",
     kind: "cdp",

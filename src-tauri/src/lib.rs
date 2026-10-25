@@ -6,6 +6,7 @@ mod html_preview;
 mod images;
 mod launch;
 mod menu;
+mod print;
 mod recovery;
 mod settings;
 mod spellcheck;
@@ -51,7 +52,14 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                // The print surface exists only for one operation and is not a
+                // document window; remembering its geometry would add a stale
+                // entry to the reader's window state.
+                .with_denylist(&[print::PRINT_WINDOW])
+                .build(),
+        )
         .on_menu_event(menu::on_event)
         .setup(|app| {
             let state = AppState::load(app.handle());
@@ -101,6 +109,8 @@ pub fn run() {
             export::run_after_export,
             export::install_pandoc,
             export::print_document,
+            print::print_native,
+            print::print_native_pdf,
             menu::accelerators,
             menu::set_menu_state,
             menu::set_open_tabs,

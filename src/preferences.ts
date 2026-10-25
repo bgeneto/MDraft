@@ -611,10 +611,11 @@ function exportRows(host: PreferencesHost): Row[] {
     {
       // The browser chooses the PDF's path in its own print dialog, so there is
       // no path for MDraft to reveal or open. Saying so is better than a second
-      // pair of checkboxes that could never be honoured.
+      // pair of checkboxes that could never be honoured. The direct PDF writer
+      // does know its path and runs these options normally.
       kind: "note",
-      label: "Print (opens browser)",
-      text: "Print hands the document to your browser, which asks you where to save it. MDraft never learns that path, so these options do not run for it — they do run for HTML, Typst and every pandoc format.",
+      label: "PDF (opens browser)",
+      text: "The browser PDF route asks you where to save, so MDraft never learns that path and these options do not run for it. They do run for the direct PDF, HTML, Typst and every pandoc format.",
     },
     { kind: "heading", label: "Formats" },
   );
@@ -623,7 +624,7 @@ function exportRows(host: PreferencesHost): Row[] {
     rows.push({
       kind: "note",
       label: "None",
-      text: "Every pandoc format has been removed, so File › Export offers HTML only.",
+      text: "Every pandoc format has been removed, so File › Export offers HTML, PDF and PDF (opens browser) only.",
     });
   } else {
     const current = formats.find((f) => f.id === editingExport) ?? formats[0];

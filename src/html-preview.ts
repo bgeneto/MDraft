@@ -389,25 +389,72 @@ export async function buildHtmlPrintDocument(
 ): Promise<string> {
   const { parse } = await loadParse5();
   const document: any = parse(source, { sourceCodeLocationInfo: true });
-  const head = findElement(document, "head");
   const base = directory ? `<base href="${escapeAttribute(fileUrl(directory))}">` : "";
   const print = `<script>${PRINT_READY_SCRIPT}</script>`;
+  const insertion = headInsertion(source, document, base + print);
+  return source.slice(0, insertion.at) + insertion.text + source.slice(insertion.at);
+}
+
+/** The static HTML print copy used by the native print surface. */
+export interface HtmlNativePrintDocument {
+  /** The rewritten document, or `null` when scripts are required. */
+  html: string | null;
+  /** True when the source contains scripting that the native surface refuses. */
+  needsBrowser: boolean;
+}
+
+/**
+ * Prepare an HTML document for native printing without executing its scripts.
+ *
+ * A document that contains a script, an inline event handler, a `javascript:`
+ * URL or a meta refresh is not printed natively: its on-screen result may
+ * depend on code the hidden surface will not run, so the browser route keeps
+ * the document's own behaviour. Static HTML keeps its local CSS and images
+ * through the same file base the browser copy uses.
+ */
+export async function buildHtmlNativePrintDocument(
+  source: string,
+  directory: string | null,
+): Promise<HtmlNativePrintDocument> {
+  if (
+    /<script\b/i.test(source) ||
+    /\son[a-z]+\s*=/i.test(source) ||
+    /javascript\s*:/i.test(source) ||
+    /<meta[^>]+http-equiv\s*=\s*["']?refresh/i.test(source)
+  ) {
+    return { html: null, needsBrowser: true };
+  }
+  const { parse } = await loadParse5();
+  const document: any = parse(source, { sourceCodeLocationInfo: true });
+  const base = directory ? `<base href="${escapeAttribute(fileUrl(directory))}">` : "";
+  const marker = '<meta name="mdraft-print" content="native">';
+  // The native writer supplies the page geometry; the document's own CSS keeps
+  // its colours and layout. Putting this first lets a document that defines its
+  // own `@page` rule override it.
+  const page = "<style>@page{size:A4;margin:18mm 16mm}html,body{background:#fff}</style>";
+  const insertion = headInsertion(source, document, base + marker + page);
+  return {
+    html: source.slice(0, insertion.at) + insertion.text + source.slice(insertion.at),
+    needsBrowser: false,
+  };
+}
+
+/** Where to splice head content, preserving a doctype and an existing charset. */
+function headInsertion(
+  source: string,
+  document: any,
+  prefix: string,
+): { at: number; text: string } {
+  const head = findElement(document, "head");
   const headStart = head?.sourceCodeLocation?.startTag?.endOffset;
   const headMatch = /<head\b[^>]*>/i.exec(source);
   const doctype = /^\s*<!doctype[^>]*>/i.exec(source);
-  let insertAt: number;
-  let prefix: string;
-  if (Number.isFinite(headStart)) {
-    insertAt = headStart;
-    prefix = base + print;
-  } else if (headMatch) {
-    insertAt = headMatch.index + headMatch[0].length;
-    prefix = base + print;
-  } else {
-    insertAt = doctype ? doctype.index + doctype[0].length : 0;
-    prefix = `<head>${base}${print}</head>`;
-  }
-  return source.slice(0, insertAt) + prefix + source.slice(insertAt);
+  if (Number.isFinite(headStart)) return { at: headStart, text: prefix };
+  if (headMatch) return { at: headMatch.index + headMatch[0].length, text: prefix };
+  return {
+    at: doctype ? doctype.index + doctype[0].length : 0,
+    text: `<head>${prefix}</head>`,
+  };
 }
 
 function fileUrl(directory: string): string {

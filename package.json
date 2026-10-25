@@ -28,6 +28,8 @@
     "export": "node scripts/export-test.mjs",
     "export:paths:unit": "node scripts/export-paths-unit.mjs",
     "export:browser": "node scripts/export-browser-test.mjs",
+    "pdf:visual": "node scripts/pdf-visual-check.mjs",
+    "pdf:native": "node scripts/pdf-native-test.mjs",
     "typography": "node scripts/typography-test.mjs",
     "shortcuts": "node scripts/shortcut-test.mjs",
     "menu": "node scripts/menu-test.mjs",

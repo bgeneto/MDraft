@@ -761,6 +761,7 @@ const exportNames = [
   "buildExportArticle",
   "exportHtml",
   "exportPdf",
+  "exportPdfBrowser",
   "exportWithPandoc",
 ];
 const exportCode = ts.transpileModule(
@@ -816,6 +817,10 @@ function exportHarness(language, delay) {
     },
     toast: () => ({ dismiss() {} }),
     message: async (error) => errors.push(error),
+    ask: async () => false,
+    nativePrintArticle: async () => null,
+    wrapNativePrintHtml: (title, html) => `${title}\n${html}`,
+    keepHeadingsWithNext: () => {},
     document: { createElement: () => ({ innerHTML: "" }), getElementById: () => null },
     renderPreview: (text) => ({ html: `<p>${text}</p>` }),
     renderAsciidocPreview: async (text) => ({ html: `<p>${text}</p>` }),
@@ -860,7 +865,7 @@ function exportHarness(language, delay) {
     },
   };
   runInNewContext(
-    `${exportCode}\nglobalThis.routes={exportHtml,exportPdf,exportWithPandoc,buildExportArticle,exportSource};`,
+    `${exportCode}\nglobalThis.routes={exportHtml,exportPdf,exportPdfBrowser,exportWithPandoc,buildExportArticle,exportSource};`,
     context,
   );
   return { context, first, second, entered, release, calls, errors, routes: context.routes };
@@ -895,7 +900,7 @@ function exportHarness(language, delay) {
 }
 {
   const h = exportHarness("html", "html-print");
-  const job = h.routes.exportPdf();
+  const job = h.routes.exportPdfBrowser();
   await h.entered.promise;
   h.context.doc = h.second;
   h.release.resolve();
@@ -909,7 +914,7 @@ function exportHarness(language, delay) {
 }
 {
   const h = exportHarness("typst", "article");
-  const job = h.routes.exportPdf();
+  const job = h.routes.exportPdfBrowser();
   await h.entered.promise;
   h.context.doc = h.second;
   h.release.resolve();

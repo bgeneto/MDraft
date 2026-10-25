@@ -123,6 +123,7 @@ for (const [id, expected] of [
   ["file.nextTab", "CmdOrCtrl+Tab"],
   ["file.prevTab", "CmdOrCtrl+Shift+Tab"],
   ["edit.find", "CmdOrCtrl+F"],
+  ["file.print", "CmdOrCtrl+P"],
   ["view.source", "CmdOrCtrl+/"],
 ]) {
   check(byId.get(id) === expected, `${id} is bound to ${expected}`, byId.get(id) ?? "MISSING");

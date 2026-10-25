@@ -2225,6 +2225,7 @@ dependencies = [
  "dispatch2",
  "flate2",
  "glib",
+ "gtk",
  "lzma-rs",
  "objc2",
  "objc2-app-kit",
@@ -2244,7 +2245,10 @@ dependencies = [
  "tauri-plugin-window-state",
  "tokenx-rs",
  "ureq",
+ "webkit2gtk",
+ "webview2-com",
  "windows 0.61.3",
+ "windows-core 0.62.2",
  "zip",
 ]
 

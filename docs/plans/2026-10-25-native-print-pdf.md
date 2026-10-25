@@ -1,9 +1,9 @@
 # Native print and direct PDF with visual quality gates
 
-**Status:** draft
+**Status:** in progress — implementation and automated PDF validation are done;
+the Linux print dialog still needs a desktop confirmation.
 **Date:** 2026-10-25
-**ADR:** `../adr/2026-10-25-native-print-surface.md` (to be written when this
-plan is approved)
+**ADR:** [Print through a script-free hidden webview, keeping the browser handoff](../adr/2026-10-25-native-print-surface.md)
 
 ## Context and goal
 
@@ -254,33 +254,38 @@ not a prerequisite for this slice.
 
 ## Steps
 
-- [ ] Write the ADR for the print surface (hidden window, no IPC, no scripts,
+- [x] Write the ADR for the print surface (hidden window, no IPC, no scripts,
   browser fallback) and get approval.
-- [ ] Add the Rust print module: job state, hidden window lifecycle, readiness
+- [x] Add the Rust print module: job state, hidden window lifecycle, readiness
   injection, error propagation, cleanup on every path.
-- [ ] Windows: implement `NavigateToString`, readiness, `PrintToPdf` with A4
+- [x] Windows: implement `NavigateToString`, readiness, `PrintToPdf` with A4
   settings and `ShowPrintUI`; add tests for settings/cleanup where possible.
-- [ ] Linux: implement `load_html`, readiness, `PrintOperation` dialog and
+- [x] Linux: implement `load_html`, readiness, `PrintOperation` dialog and
   output-URI PDF; verify the installed GTK/WebKitGTK behaviour; fallback.
-- [ ] Add `wrapNativePrintHtml` (no auto-print, scripts removed) and a
+  **Deviation:** both hosts load a per-operation temporary HTML file rather than
+  `NavigateToString`/`load_html`, because the article's absolute `file://`
+  images need a real file base.
+- [x] Add `wrapNativePrintHtml` (no auto-print, scripts removed) and a
   script-free static HTML print copy; dynamic HTML keeps the browser route.
-- [ ] Add `file.print`, `export.pdf` direct and `export.pdf.browser` fallback;
+- [x] Add `file.print`, `export.pdf` direct and `export.pdf.browser` fallback;
   `Ctrl+P`; save picker; after-export only on a written PDF; error messages.
-- [ ] Update the route assertions: `scripts/export-browser-test.mjs` drives the
+- [x] Update the route assertions: `scripts/export-browser-test.mjs` drives the
   explicit browser id, `scripts/menu-test.mjs` expects the new Print/PDF labels,
   and `scripts/shortcut-test.mjs` covers `Ctrl+P`.
-- [ ] Build the visual fixture and `samples/pdf-quality.*` (image with known
+- [x] Build the visual fixture and `samples/pdf-quality.*` (image with known
   colours, table, code, quote, math, Mermaid, enough content for two pages).
-- [ ] Add `scripts/pdf-visual-check.mjs` and a Windows UI suite that exports a
+- [x] Add `scripts/pdf-visual-check.mjs` and a Windows UI suite that exports a
   real PDF through the app, then invokes the checker.
-- [ ] Register the UI/visual layers, document Poppler/WSL requirements, and add
+- [x] Register the UI/visual layers, document Poppler/WSL requirements, and add
   the AGENTS entries.
-- [ ] Validate Windows: native Print dialog (manual), direct PDF, visual
-  metrics, page PNG review, multi-page, dark theme, high DPI.
-- [ ] Validate Debian/WSL2: build/install, WebKitGTK print/PDF, Poppler
-  rasterization/page review; document WSLg limitations and use a real Debian
-  desktop where the webview cannot be driven.
-- [ ] Update `docs/export.md`, `docs/guide.md`, README, backlog and AGENTS.
+- [x] Validate Windows: direct PDF, visual metrics, page PNG review, multi-page,
+  dark theme, high DPI; the native print dialog window was observed, but the
+  system dialog cannot be screenshotted while the session is locked.
+- [x] Validate Debian/WSL2: WebKitGTK PDF through the same print settings,
+  Poppler rasterization/page review, A4 margins, embedded fonts and a two-page
+  article. The native GTK dialog still needs a desktop confirmation; WSLg has
+  no reliable way to focus or dismiss it from this session.
+- [x] Update `docs/export.md`, `docs/guide.md`, README, backlog and AGENTS.
 
 ## Files and modules
 

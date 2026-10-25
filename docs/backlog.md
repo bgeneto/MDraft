@@ -81,7 +81,7 @@ non-obvious lesson is added to the Traps section.
 | GAP-006 | P2 | M/L | Workspace | Read-only folder tree before file management | open |
 | GAP-007 | P2 | M | Workspace | Read-only cross-file search before multi-file Replace | open |
 | GAP-008 | P2 | M | Workspace | Quick open over tabs, recents and favorites | open |
-| GAP-009 | P2 | M/L | Output | In-app printing and direct PDF save | open |
+| GAP-009 | P2 | M/L | Output | In-app printing and direct PDF save | in progress |
 | GAP-010 | P2 | M | Editing | Markdown table navigation and row operations first | open |
 | GAP-014 | P2 | M | Markdown | Academic Markdown dialect | open |
 | GAP-015 | P2 | S | Editing | Typewriter mode while typing | open |
@@ -480,15 +480,17 @@ GAP-032 protections and a separate approved plan.
 
 **Priority:** P2 · **Effort:** M · **Workstream:** Workspace · **Status:** open
 
-**Evidence.** There is no `Ctrl+P`, no command palette and no go-to-file by name.
-Recent and Favorites are the only shortcuts to a path.
+**Evidence.** There is no quick-open picker, no command palette and no
+go-to-file by name. `Ctrl+P` now belongs to Print (GAP-009), so Quick Open must
+choose another accelerator. Recent and Favorites are the only shortcuts to a
+path.
 
 **Target.** A fuzzy picker over open tabs, recents and favorites first; folder
 files can follow when listing/indexing exists. Enter opens or activates the
 highlighted document; Escape restores focus; recent choices rank first.
-`Ctrl+P` is a candidate, not a reserved accelerator: decide it jointly with
-Print (GAP-009). Command palette and line-prefix navigation are optional later
-increments, not prerequisites for quick open.
+Print owns `Ctrl+P` (GAP-009); Quick Open needs another accelerator. Command
+palette and line-prefix navigation are optional later increments, not
+prerequisites for quick open.
 
 **Acceptance.**
 
@@ -513,18 +515,27 @@ the later folder slice. No dependency on GAP-007's search UI.
 
 ### GAP-009 — In-app printing and direct PDF save
 
-**Priority:** P2 · **Effort:** M/L · **Workstream:** Output · **Status:** open
+**Priority:** P2 · **Effort:** M/L · **Workstream:** Output · **Status:** in progress — native PDF and the Windows/Linux PDF path are implemented and visually validated; the Linux print dialog still needs a desktop confirmation.
 
 **Plan:** [Native print and direct PDF with visual quality gates](plans/2026-10-25-native-print-pdf.md)
-— draft, awaiting approval. It covers the hidden print surface, Windows WebView2
+— approved and implemented. It covers the hidden print surface, Windows WebView2
 and Linux WebKitGTK paths, the browser fallback, and the Poppler-based visual
 PDF validation for Windows and Debian/WSL2.
 
-**Evidence.** `File › Print (opens browser)…` writes a temporary HTML and opens
-the system browser; `Export › PDF (via Typst)` needs pandoc and Typst for
-Markdown conversion; a `.typ` PDF is compiled directly by Typst. The existing
-browser route already supports printing and Save as PDF. It does not call native
-WebView2 printing, and MDraft does not learn the final PDF path, completion or
+**Implementation.** `File › Print…` (`Ctrl+P`) opens the platform dialog and
+`File › Export › PDF…` writes the file directly. The hidden surface has no
+capability entry and no document scripts; static HTML prints natively, while
+scripted HTML keeps **PDF (opens browser)…** as an explicit fallback. Typst
+keeps **PDF (via Typst)** and disables the other two rows with a reason.
+`scripts/pdf-native-test.mjs` exports a real PDF and runs
+`scripts/pdf-visual-check.mjs`; the fixture covers image colours, table rules,
+KaTeX fractions and radicals, a light Mermaid diagram and two A4 pages.
+
+**Before this change.** `File › Print (opens browser)…` wrote a temporary HTML
+and opened the system browser; `Export › PDF (via Typst)` needed pandoc and
+Typst for Markdown conversion; a `.typ` PDF was compiled directly by Typst. The
+browser route supported printing and Save as PDF, but did not call native
+WebView2 printing, and MDraft did not learn the final PDF path, completion or
 cancellation.
 
 WebView2 exposes `ShowPrintUI` and `PrintToPdf`, as described in
@@ -1631,9 +1642,8 @@ introduced regression without evidence.
   literal text in DOCX/ODT/LaTeX.
 - Typst's Document view drops layout containers (`#columns`, `#grid`, `#align`,
   `#stack`, `#place`, `#rect`, `#pad`) together with their content.
-- Print (opens browser) already provides a browser handoff. GAP-026 fixes its
-  current output; GAP-009 can add optional native integration while retaining
-  fallback.
+- Native print and direct PDF are implemented; the browser handoff remains for
+  scripted HTML and hosts without a print API.
 - macOS is not published.
 - The HTML guest has no same-origin storage, service workers or Web Workers.
 - There is no WYSIWYG editing, image upload or community CSS theme format.
@@ -1658,8 +1668,8 @@ introduced regression without evidence.
 1. **Next product audience.** Prioritize folder-based technical writing,
    table-heavy documents or academic footnotes after safety/current workflows?
    Default: keep these at P2 until actual user needs choose the next increment.
-2. **Quick Open / Print shortcuts.** Which owns Ctrl+P? Decide together before
-   either registers it; no accelerator is reserved by this document.
+2. **Quick Open shortcut.** Print owns `Ctrl+P` (GAP-009); Quick Open needs another
+   accelerator. Decide before either registers a second one.
 3. **Preview zoom policy.** Shared pane scale or independent document scales?
    Default: make Preview-only zoom work and reset zoom without changing width;
    choose the rest through layout/source-sync validation.

@@ -40,6 +40,7 @@ import {
 } from "./fonts";
 import { applyHighlightTheme, highlightThemeCss } from "./highlight-theme";
 import {
+  buildHtmlNativePrintDocument,
   buildHtmlPrintDocument,
   createHtmlPreview,
   type HtmlAccelerator,
@@ -67,6 +68,7 @@ import {
   KATEX_STYLESHEET_URL,
   renderMermaidIn,
   renderPreview,
+  wrapNativePrintHtml,
   wrapPrintHtml,
   wrapStandaloneHtml,
 } from "./markdown";
@@ -2293,7 +2295,30 @@ async function buildExportArticle(
   // The same class the preview's Typst view uses, so the rules written for it
   // apply to the export too.
   const classes = source.language === "typst" ? "markdown-body typst-document" : "markdown-body";
+  if (options.print) keepHeadingsWithNext(holder);
   return { html: `<article class="${classes}">${holder.innerHTML}</article>`, css };
+}
+
+/**
+ * Group a heading with the block it introduces, so a print engine cannot leave
+ * the heading alone at the foot of a page.
+ *
+ * `break-after: avoid` is not reliable in WebKitGTK's paged media: the heading
+ * stays behind while its paragraph or diagram moves to the next page. A wrapper
+ * with `break-inside: avoid` makes the pair one unbreakable block. Tables and
+ * code blocks are excluded because they can legitimately be taller than a page;
+ * forcing them to stay with the heading would clip them instead.
+ */
+function keepHeadingsWithNext(host: HTMLElement): void {
+  for (const heading of Array.from(host.querySelectorAll("h1,h2,h3,h4,h5,h6"))) {
+    const next = heading.nextElementSibling;
+    if (!next || next.matches("h1,h2,h3,h4,h5,h6,table,pre")) continue;
+    if (next.matches("ul,ol") && next.querySelectorAll("li").length > 12) continue;
+    const wrapper = document.createElement("div");
+    wrapper.className = "print-keep";
+    heading.before(wrapper);
+    wrapper.append(heading, next);
+  }
 }
 
 /**
@@ -2416,6 +2441,154 @@ async function exportHtml(): Promise<void> {
 }
 
 /**
+ * The article used by the native print surface, or `null` when the document
+ * needs scripts the surface deliberately does not run.
+ *
+ * Markdown and AsciiDoc come from the same preview pipeline as the browser
+ * export, with absolute image URLs because the temporary print file has a file
+ * base, not the application's asset protocol. Static HTML keeps its own markup
+ * and gains a base, a default A4 page rule and the readiness marker.
+ */
+async function nativePrintArticle(source: ReturnType<typeof exportSource>): Promise<string | null> {
+  if (source.language === "html") {
+    const built = await buildHtmlNativePrintDocument(source.text, source.directory ?? null);
+    return built.html;
+  }
+  const article = await buildExportArticle(source, {
+    outputDir: null,
+    print: true,
+    theme: "light",
+  });
+  const typography = article.css
+    ? `${exportTypographyCss()}\n${article.css}`
+    : exportTypographyCss();
+  return wrapNativePrintHtml(
+    source.name ?? "Untitled",
+    article.html,
+    highlightThemeCss(false),
+    typography,
+    await exportFontCss(),
+  );
+}
+
+async function reportPrintWarnings(failed: string[]): Promise<void> {
+  if (failed.length === 0) return;
+  await message(
+    `These resources did not load and may be missing from the printout:\n\n${failed.join("\n")}`,
+    { title: "Printed with missing resources", kind: "warning" },
+  );
+}
+
+/**
+ * Export PDF through the platform webview.
+ *
+ * The article and the page CSS are the same ones the preview uses; only the
+ * output path changes. Windows writes through WebView2's `PrintToPdf`, Linux
+ * through WebKitGTK print settings. A host without either API gets the browser
+ * handoff instead of a silent no-op.
+ */
+async function exportPdf(): Promise<void> {
+  const source = exportSource();
+  if (source.language === "typst") {
+    await message("Typst documents write their PDF through Export › PDF (via Typst)…", {
+      title: "Use the Typst PDF route",
+      kind: "info",
+    });
+    return;
+  }
+
+  const base = documentStem(source.name);
+  const suggested = settings.lastDirectory
+    ? joinDir(settings.lastDirectory, `${base}.pdf`)
+    : `${base}.pdf`;
+  const chosen = await saveDialog({
+    title: "Export as PDF",
+    defaultPath: suggested,
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
+  });
+  if (!chosen) return;
+  const target = Array.isArray(chosen) ? chosen[0] : chosen;
+
+  const notice = toast("Writing the PDF…", 0);
+  try {
+    const html = await nativePrintArticle(source);
+    if (!html) {
+      notice.dismiss();
+      const useBrowser = await ask(
+        "This HTML document contains scripts, so its printed result may depend on them. " +
+          "The native print surface does not run document scripts.\n\n" +
+          "Open the print-ready document in your browser instead?",
+        { title: "Print in the browser?", kind: "warning" },
+      );
+      if (useBrowser) await exportPdfBrowser(source);
+      return;
+    }
+    const result = await api.printNativePdf(html, source.name ?? "Untitled", target);
+    notice.dismiss();
+    toast("Exported PDF");
+    await reportPrintWarnings(result.failedResources);
+    const after = await api.runAfterExport(result.path ?? target);
+    if (after.afterErrors.length > 0) {
+      await message(after.afterErrors.join("\n\n"), {
+        title: "Exported, with a problem",
+        kind: "warning",
+      });
+    }
+  } catch (error) {
+    notice.dismiss();
+    const useBrowser = await ask(
+      `Could not write the PDF natively.\n\n${String(error)}\n\n` +
+        "Open the print-ready document in your browser instead?",
+      { title: "Could not export PDF", kind: "error" },
+    );
+    if (useBrowser) await exportPdfBrowser(source);
+  }
+}
+
+/** Print the current document through the platform's native dialog. */
+async function printCurrentDocument(): Promise<void> {
+  const source = exportSource();
+  if (source.language === "typst") {
+    await message("Typst documents write their PDF through Export › PDF (via Typst)…", {
+      title: "Use the Typst PDF route",
+      kind: "info",
+    });
+    return;
+  }
+
+  const notice = toast("Preparing to print…", 0);
+  try {
+    const html = await nativePrintArticle(source);
+    if (!html) {
+      notice.dismiss();
+      const useBrowser = await ask(
+        "This HTML document contains scripts, so its printed result may depend on them. " +
+          "The native print surface does not run document scripts.\n\n" +
+          "Open the print-ready document in your browser instead?",
+        { title: "Print in the browser?", kind: "warning" },
+      );
+      if (useBrowser) await exportPdfBrowser(source);
+      return;
+    }
+    const result = await api.printNative(html, source.name ?? "Untitled");
+    notice.dismiss();
+    // The dialog is its own feedback. A cancelled dialog stays silent; loaded
+    // resource failures are reported after it closes, never over it.
+    if (result.status !== "cancelled" && result.failedResources.length > 0) {
+      await reportPrintWarnings(result.failedResources);
+    }
+  } catch (error) {
+    notice.dismiss();
+    const useBrowser = await ask(
+      `Could not open the native print dialog.\n\n${String(error)}\n\n` +
+        "Open the print-ready document in your browser instead?",
+      { title: "Could not print", kind: "error" },
+    );
+    if (useBrowser) await exportPdfBrowser(source);
+  }
+}
+
+/**
  * Export PDF through the system's own print-to-PDF.
  *
  * Deliberately not pandoc: that route needs a LaTeX engine of several hundred
@@ -2430,8 +2603,7 @@ async function exportHtml(): Promise<void> {
  * of its own, so the browser opens straight onto its print preview and the user
  * only has to choose "Save as PDF".
  */
-async function exportPdf(): Promise<void> {
-  const source = exportSource();
+async function exportPdfBrowser(source = exportSource()): Promise<void> {
   const notice = toast("Preparing the PDF…", 0);
   try {
     if (source.language === "html") {
@@ -3219,8 +3391,10 @@ const handlers: Record<string, () => void | Promise<void>> = {
     announceIfBarHidden("Auto save", settings.autoSave);
   },
   "file.reload": () => void reloadFromDisk(),
+  "file.print": () => void printCurrentDocument(),
   "export.html": () => void exportHtml(),
   "export.pdf": () => void exportPdf(),
+  "export.pdf.browser": () => void exportPdfBrowser(),
   "export.installPandoc": () => void pandocSetup(),
   "export.installTypst": () => void typstSetup(),
   "file.reveal": () => revealSession(doc.id),

@@ -152,6 +152,7 @@ are for knowledge that has no natural home in the code.
 - **Windows**: Visual Studio C++ build tools, Windows SDK, WebView2 runtime
 - **macOS**: Xcode command line tools
 - **Linux**: `webkit2gtk-4.1`, `libayatana-appindicator3`, `librsvg2`, `patchelf`, `libhunspell-dev` (spelling; the dictionaries themselves are `hunspell-en-us` and `hunspell-pt-br`, which are not bundled)
+- **PDF visual tests only**: Poppler (`pdfinfo`, `pdffonts`, `pdftotext`, `pdfimages`, `pdftoppm`). On Windows the commands are usually run through WSL (`--rasterizer wsl`); on Debian install `poppler-utils`. Poppler is never bundled or called by the application.
 
 ### Windows: everything through `scripts\with-msvc.cmd`
 
@@ -201,7 +202,7 @@ rewrite from scratch.
 | `npm run stage` | `scripts/stage-artifacts.mjs` | Re-stage what is already built |
 | `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
-| `npm run test:rust` | `cargo test` | 140 passed on Windows, 139 on Linux; two ignored downloads each |
+| `npm run test:rust` | `cargo test` | 147 passed on Windows, 146 on Linux; two ignored downloads, plus the ignored display-owned Linux print probe |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. The two restart layers are the exception: two launches of the same instance's settings directory, closed with WM_CLOSE in between so the close flush runs. Puts back the working tree, the developer's own settings, window state and recovery journal afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
 | `npm run smoke` | `scripts/dom-smoke.mjs` | 108 checks against `samples/feature-tour.md` |
 | `npm run word-sync` | `scripts/word-sync-test.mjs` | 58 checks of word-level sync, including 20 alternating pairs, element endpoints, multi-paragraph ranges, stale render rejection and reduced motion in Markdown/AsciiDoc/Typst Document, against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, the four-beat pulse and its resting mark, reduced motion, no scroll, Escape, and the fallbacks |
@@ -216,9 +217,11 @@ rewrite from scratch.
 | `npm run export` | `scripts/export-test.mjs` | 38 checks of every export path, against real pandoc, including an AsciiDoc source and the rendered-HTML math reader |
 | `npm run export:paths:unit` | `scripts/export-paths-unit.mjs` | 42 checks of the browser path/URL policy: drive, UNC, POSIX, spaces, Unicode, `..`, different roots, fragments, `data:`, `file:` and protocol-relative addresses — no application |
 | `npm run export:browser` | `scripts/export-browser-test.mjs` | 21 checks of the native HTML and Print artifacts through the real UI: restored local images/links, absolute print URLs, the readiness/failure script, and the same light diagram palette in a dark and a light editor |
+| `npm run pdf:native` | `scripts/pdf-native-test.mjs` | 11 checks of the real direct-PDF path: a Markdown fixture, static HTML, the scripted-HTML browser fallback, and the Poppler visual checker |
+| `npm run pdf:visual` | `scripts/pdf-visual-check.mjs` | App-free PDF measurement: A4 geometry, embedded fonts, selectable text, rasterized page PNGs, ink, image colours, table rules and margins |
 | `npm run typography` | `scripts/typography-test.mjs` | 48 checks that each face loads, each OpenType switch changes pixels, the six-preset matrix holds, the four new body faces render differently, and the Semibold weights are real |
-| `npm run shortcuts` | `scripts/shortcut-test.mjs` | 43 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, that the zoom chip follows the level, that a new tab keeps the previous buffer's undo, and that the webview's F5/Ctrl+R reload keys are swallowed |
-| `npm run menu` | `scripts/menu-test.mjs` | 87 checks of the approved eight-menu tree, command placement, conditional labels, availability by language/mode/selection, Preferences deep links, Paste without Formatting, document zoom reset, block-equation selection handling and both Close All Tabs routes |
+| `npm run shortcuts` | `scripts/shortcut-test.mjs` | 44 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, that the zoom chip follows the level, that a new tab keeps the previous buffer's undo, and that the webview's F5/Ctrl+R reload keys are swallowed |
+| `npm run menu` | `scripts/menu-test.mjs` | 97 checks of the approved eight-menu tree, command placement, conditional labels, availability by language/mode/selection, Preferences deep links, Paste without Formatting, document zoom reset, block-equation selection handling and both Close All Tabs routes |
 | `npm run tabs` | `scripts/document-tabs-test.mjs` | 107 checks of several open documents: sidebar and Recents, `open-files`, active-tab styling, the tab context menu (including Close All Tabs), keyboard navigation, caret and scroll per tab, dirty dot, × and middle-click, Ctrl+Tab, drag and keyboard reordering, the disk poll, Auto Save across tabs, overflow arrows and the wheel, Close Others, the last tab |
 | `npm run favorites` | `scripts/favorites-test.mjs` | 56 checks of the Favorites panel that replaced Files: the editor and tab menu routes, the Add/Remove toggle, insertion order across opens, inactive-tab favoriting, duplicate adds, the per-row × and row menu, one-at-a-time removal, a missing file, the untitled disabled state, no Clear All, the Preferences changes and `view.favorites` in the native menu |
 | `npm run tabs:restore:unit` | `scripts/tabs-restore-unit.mjs` | 33 checks of what is remembered and what is restored: tab order, untitled exclusion, deduplication under the platform's path identity, the 20-document cap, and the restore plan's handling of missing files — no application |
@@ -264,6 +267,8 @@ All of these need the app already running with CDP enabled (see
 | `export-test.mjs` | `[port] [--install]` | `samples/feature-tour.md` | That pandoc really converts: the bytes of each output are inspected. `--install` additionally exercises the pandoc download, which is why it is opt-in |
 | `export-paths-unit.mjs` | — | none — runs without the application | Drive, UNC and POSIX path resolution, relative URLs across one root, `file://` encoding, and the publication policy for spaces, Unicode, `..`, fragments, `data:`, `file:` and protocol-relative references |
 | `export-browser-test.mjs` | `[port]` | `samples/export-tour.md`; opens `samples/export-tour.adoc` | That an exported HTML page and the captured print document have real local image/link destinations, no `asset:` URLs, absolute `file://` print images, the font/image readiness script, and the same light Mermaid palette whatever the editor theme |
+| `pdf-native-test.mjs` | `[port]` | `samples/pdf-quality.md` | The real direct-PDF path: save picker stubbed, `PrintToPdf` writes the file, Poppler checks its pages, static HTML prints natively, and scripted HTML stays on the browser route |
+| `pdf-visual-check.mjs` | `--pdf <file> [--out <dir>] [--fixture quality] [--rasterizer auto\|native\|wsl] [--expect <text>]` | any PDF | A4 geometry, embedded fonts, selectable text, one PNG/PPM per page, non-blank pages, quiet margins, image colours, table rules and math ink. Needs Poppler on `PATH` or in WSL; no application |
 | `typography-test.mjs` | `[port]` | any | Screenshots text with each OpenType feature off and on and compares pixels, then asserts the six-preset matrix, that the four new body faces produce different images, and the Semibold weights. Width cannot measure a monospaced face, so nothing narrower would work |
 | `shortcut-test.mjs` | `[port] [document]` | `samples/feature-tour.md` | Presses each accelerator through a synthetic keydown and checks what changed. Also reads the `accelerators` registry, which is the only way to see an accelerator the platform rejected |
 | `menu-test.mjs` | `[port]` | `samples/feature-tour.md`; opens the Typst, AsciiDoc and HTML fixtures | The native menu inventory through `menu_items`: the eight categories and command placement, labels, conditional availability by language/mode/selection, Preferences deep links, Paste without Formatting, document zoom reset, block-equation selection, Close All Tabs from both the tab context and File, and cancellation of a dirty batch |
@@ -500,18 +505,20 @@ hash the pixels.
 
 ## Testing
 
-Forty default layers, cheapest first. Run them in this order when changing anything.
+Forty-one default layers, cheapest first. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 140 Windows / 139 Linux | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction, image content sniffing (WebP/AVIF brands), `${filename}`, the untitled image guard, the Typst image root, the OS opener's executable refusal, the recovery journal's round-trip/id/cap rules, checked-write hashes and same-metadata conflicts, launch argument parsing and path identity |
+| Rust unit | `npm run test:rust` | 147 Windows / 146 Linux | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction, image content sniffing (WebP/AVIF brands), `${filename}`, the untitled image guard, the Typst image root, the OS opener's executable refusal, the recovery journal's round-trip/id/cap rules, checked-write hashes and same-metadata conflicts, launch argument parsing and path identity |
 | Session store | `npm run test:sessions` | 60 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
 | P0 data safety (unit) | `npm run p0:unit` | 110 | Recovery scheduling/classification/Typst strings, deferred save/reload/Save As, checked-write conflicts and baseline hashes, save queues, bulk-close cancellation/failures, lossy copies and export snapshots across picker/tool/render delays — no application |
 | Paste conversion | `npm run paste:convert` | 378 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, `<br><br>` paragraph splitting, image syntax, AsciiDoc, and an image that fails to save |
 | AsciiDoc export source | `npm run asciidoc:export:unit` | 17 | Unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations - no application |
 | Export paths (unit) | `npm run export:paths:unit` | 42 | Drive, UNC and POSIX paths, spaces, Unicode, `..`, different roots, encoded spaces, fragments, `data:`, `file:` and protocol-relative references — no application |
 | Browser exports | `npm run export:browser` | 21 | Native HTML and Print artifacts: local image/link resolution, no app protocol, absolute print URLs, the resource-wait/failure script, and a light print diagram in a dark editor |
+| Native PDF | `npm run pdf:native` | 11 | A real direct PDF from Markdown, static HTML through the same writer, scripted HTML kept on the browser route, and the Poppler visual metrics |
+| PDF visual (app-free) | `npm run pdf:visual -- --pdf <file> --fixture quality` | 36 | A4 geometry, embedded fonts, selectable text, one PNG/PPM per page, non-blank pages, quiet margins, known image colours, table rules and mathematics ink |
 | DOM smoke | `npm run smoke` | 108 | Rendering, pane sync, preferences (including the four On Launch choices and Line Height), math, fonts, status icons |
 | P0 lifecycle (UI) | `npm run p0:lifecycle` | 34 | Delayed save/reload/Save As/export, real text/dirty/recovery preservation, a same-size/same-mtime external rewrite, three-way close/cancellation/failures, binary/mixed-drop/UTF-16 refusal, focus restoration, clean bundled documents and native close |
 | Second launch | `npm run single:instance` | 12 | Two initial paths as tabs, relative second-launch handoff, second-process exit, one page target, duplicate-path focus, missing-path toast, dirty buffer preserved |
@@ -596,6 +603,23 @@ The image test also needs a fixture server:
 ```powershell
 node scripts\image-paste-test.mjs 9222 "http://127.0.0.1:8791/served.png" "C:\path\to\served.png"
 ```
+
+### The Linux print probe
+
+The WebKitGTK print path is display-owned and ignored by the normal test run. It
+can print the exact native article you captured from the application, or a
+small built-in page, and writes a real PDF:
+
+```powershell
+wsl -e bash -lc 'cd ~/.cache/mdraft-build/src-tauri && DISPLAY=:0 GDK_BACKEND=x11 WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 MDRAFT_PRINT_HTML=/mnt/c/path/quality-native-linux.html MDRAFT_PRINT_PDF=/tmp/mdraft-linux.pdf cargo test --lib webkitgtk_writes_a_pdf_with_the_same_settings -- --ignored --nocapture --test-threads=1'
+```
+
+`MDRAFT_PRINT_HTML` is optional; without it the test prints a small built-in
+page. `MDRAFT_PRINT_PDF` is optional and defaults to
+`/tmp/mdraft-linux-print-test.pdf`. The test exits 0 after verifying `%PDF-`; it
+deliberately calls `process::exit(0)` before WebKitGTK's teardown abort. Use
+`pdftoppm` and `scripts/pdf-visual-check.mjs` on the result exactly as for the
+Windows direct PDF.
 
 ### What the assertions are worth
 
@@ -2037,6 +2061,33 @@ EWMH window manager, so clicks and typing cannot focus the webview reliably. Do
 not read the white pane as a CSS, CSP or frontend regression; verify the native
 menus and use a real desktop (or the Windows CDP suites) for content interaction.
 
+**A second MDraft for a CDP test never appears, and the old window answers the new port**
+The suite reports restored tabs, an unsaved dialog for an earlier test fixture, or a "Saved" toast you did not trigger. A previous MDraft with the same identifier was still alive; the single-instance plugin forwarded the new launch's paths to it and the new process exited, while `http://127.0.0.1:<port>/json/list` still returned the old page. Check `Get-Process | Where-Object { $_.ProcessName -match 'mdraft' }` before every probe, close the old window (or give the test build its own identifier), and do not "fix" the feature the old window appears to break.
+
+**A scripted-HTML fallback never runs because the dialog stub answered "Ok"**
+The export waits for `print_document` and the prompt is recorded, but the browser path never starts. `@tauri-apps/plugin-dialog` implements `ask()` as `plugin:dialog|message` with `buttons: "YesNo"` and resolves to the label of the pressed button, not a boolean; a stub that returns `"Ok"` is therefore `"Ok" !== "Yes"` and takes the No branch. Stub the message command with `"Yes"` when `args.buttons` is present. There is no `plugin:dialog|ask` command in this version.
+
+**`The PDF writer failed: Printer not found` from WebKitGTK silent printing**
+`GTK_PRINT_SETTINGS_OUTPUT_URI` plus `OUTPUT_FILE_FORMAT=pdf` is not enough: `webkit_print_operation_print()` still resolves a `GtkPrinter`, and a machine with no configured CUPS printer fails before writing. Set the print settings printer to GTK's **virtual PDF printer**. Its name is translated, so `"Print to File"` only works in English; enumerate printers with `gtk_enumerate_printers` and select the one where `gtk_printer_is_virtual()` and `gtk_printer_accepts_pdf()` are both true. The helper is `virtual_pdf_printer()` in `print.rs`.
+
+**The Linux PDF's 18/16 mm `@page` margins do not apply, and content starts 6 mm from the paper edge**
+WebKitGTK uses the `GtkPageSetup` margins and ignores the article's CSS `@page` rule in the silent print path. The rendered page looks plausible but the PDF visual checker reports ~96% white in the outer band. Set `set_top_margin(18, Mm)`, `set_bottom_margin(18, Mm)`, `set_left_margin(16, Mm)` and `set_right_margin(16, Mm)` on the page setup for both the dialog and the PDF writer. Do not "fix" this by shrinking the body; the geometry is the paper's.
+
+**A heading is left at the foot of a page while its diagram moves to the next**
+WebKitGTK does not honour `break-after: avoid` or `h2 + * { break-before: avoid }` in paged media. `keepHeadingsWithNext` wraps a heading and its following block in `.print-keep` with `break-inside: avoid`; tables and code are excluded so a block taller than a page can still break. The same wrapper plus `orphans:3; widows:3` removes the isolated two-line last page. Verify by viewing the rasterized pages, not by checking that the CSS rule exists.
+
+**A PDF pixel check finds zero red/green/blue pixels although the page image clearly has them**
+`pages.flatMap((page) => page.pixels)` looks reasonable but flattens each `Buffer` byte by byte, so the subsequent `i += 3` reads misaligned channels. Count per page, or concatenate the buffers, before stepping through RGB triples. The same class of bug appears if a line-density check uses a threshold darker than a `#c8c8c8` table rule; measure the threshold from the fixture.
+
+**`Page.captureScreenshot` shows no print dialog, although the system dialog is open**
+The native dialog is a separate top-level window, outside the webview, and a locked Windows session makes a screen capture show the lock screen while CDP still works. `EnumWindows` showed a visible `Microsoft Edge WebView2 - Print` window while the `print_native` command remained pending; that is the proof the dialog opened. Do not conclude from a CDP-captured PNG that native printing failed.
+
+**A static HTML document prints on Letter paper from the native writer**
+The native HTML copy only adds a base and a marker; a source file with no `@page` rule inherits WebView2's default paper. `buildHtmlNativePrintDocument` now inserts `@page{size:A4;margin:18mm 16mm}` first in the head, before the document's own styles, so a document that defines its own page rule still wins. The PDF visual checker's A4 assertion is what caught it.
+
+**The ignored WebKitGTK print test writes the PDF and then aborts with `SIGABRT`**
+The test result prints `ok` and the file is valid, but the process exits with signal 6 while WebKitGTK tears down its web process. The test is `#[ignore]`d and display-owned; it calls `std::process::exit(0)` after verifying the PDF so a manual run reports the result it produced. Do not read the signal as a printing failure, and do not run it in the normal headless suite.
+
 ## Adding a preference, end to end
 
 Five files, in this order — more than three, so a plan comes first; see
@@ -2111,6 +2162,7 @@ src-tauri/src/
   images.rs          image import: sniffing, sanitiser, dedup, download
   tokens.rs          approximate token count for the status bar
   spellcheck.rs      OS spell checker: Windows ISpellChecker, Linux hunspell, macOS NSSpellChecker
+  print.rs           hidden print surface, WebView2/WebKitGTK printing, PDF verification
   menu.rs            native menu construction, Open Recent, event routing, menu probes
 scripts/             build helpers and CDP test harnesses — every one is in
                      "Repository scripts", and a new one belongs there too
@@ -2250,13 +2302,13 @@ platform and fails on the other.
    reads the latter for the bundle, and the two must agree. `npm run
    check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
-3. `npm run test:rust` — 140 runnable Windows tests / 139 Linux tests (two ignored downloads: pandoc and Typst). Run them on Linux too
+3. `npm run test:rust` — 147 runnable Windows tests / 146 Linux tests (two ignored downloads: pandoc and Typst, plus the ignored display-owned Linux print probe). Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run menu`,
    `npm run preview:zoom`, `npm run math`, `npm run syntax`, `npm run html`,
-   `npm run asciidoc` and `npm run favorites` — 108 + 87 + 24 + 12 + 10 + 60 +
-   54 + 56 checks.
+   `npm run asciidoc`, `npm run favorites` and `npm run pdf:native` — 108 + 97 +
+   24 + 12 + 10 + 60 + 54 + 56 + 11 checks.
 5. `npm run audit` against both `docs/sample-files` documents and compare the
    counts with the table in the README.
 6. `npm run dist` — installers and checksums land in `bin/<os>/<arch>/`.

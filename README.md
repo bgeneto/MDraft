@@ -85,8 +85,8 @@ Markdown document active.*
   independent faces for editor, prose, headings and code, plus OpenType
   controls. The source pane's line height is **Compact**, **Normal** or
   **Wide** under Preferences › Editor. Preview headings and emphasis use
-  Semibold; mathematics has its own scale. Native HTML and Print (opens browser)
-  exports of Markdown and AsciiDoc embed the chosen faces.
+  Semibold; mathematics has its own scale. Native HTML, PDF and Print exports
+  of Markdown and AsciiDoc embed the chosen faces.
 - **Zoom the whole document.** `Ctrl+Shift+=` enlarges the source in Source-only,
   both panes in Split, and the rendered page in Preview-only — text, images,
   diagrams and Typst pages together. `Ctrl+Shift+0` resets the zoom without
@@ -98,10 +98,10 @@ Markdown document active.*
   dollars once. Copy from a text preview and the formatting
   goes with it. Images can be pasted, dropped, linked or downloaded into the
   document's assets folder.
-- **Useful exports, stated plainly.** HTML needs no extra tools; Print (opens
-  browser) needs only a browser. Local images and links are resolved for the
-  browser, and the print document waits for its fonts and figures and owns its
-  light theme.
+- **Useful exports, stated plainly.** HTML, PDF and Print need no extra tools.
+  Local images and links are resolved for the browser or the native writer, and
+  the print document waits for its fonts and figures and owns its light theme.
+  A static HTML document prints natively; scripted HTML keeps the browser route.
   DOCX, ODT, EPUB, LaTeX and the rest go through pandoc,
   which MDraft can install for you. A format whose converter is missing is
   disabled and says which tool it needs. Typst documents compile straight to
@@ -119,8 +119,8 @@ Use `\$` for ambiguous literal dollars and `\(…\)` for explicit math. Tight
 `$5$` is numeric math; `$ 5 $` is literal, `R$5$` is prefixed money, and a
 dollar followed immediately by a digit cannot close math (`\(x\)2` replaces
 `$x$2`). Code, URLs and existing escapes are preserved during paste;
-`Ctrl+Shift+V` or rich paste off keeps the raw clipboard text. Native HTML/Print
-use these rules; Pandoc retains its own Markdown reader.
+`Ctrl+Shift+V` or rich paste off keeps the raw clipboard text. Native HTML, PDF
+and Print use these rules; Pandoc retains its own Markdown reader.
 
 1. Download the installer for your platform from
    [Releases](https://github.com/bgeneto/MDraft/releases/latest). On Windows,
@@ -156,8 +156,10 @@ use these rules; Pandoc retains its own Markdown reader.
   dependencies.
 - **macOS is not currently published.** The code includes macOS support, but
   the release page has Windows and Linux builds only.
-- Print (opens browser) hands the document to your browser's print dialog. It is
-  not a silent in-app PDF.
+- PDF and Print use the system webview: Windows writes through WebView2 and
+  Linux through WebKitGTK, with selectable text, embedded fonts and a light
+  diagram palette. The browser handoff remains for scripted HTML and for hosts
+  without a print API.
 - Pandoc and Typst are optional. **Tools › Check or Install Pandoc…** installs
   pandoc into MDraft's own data folder on every published platform; **Tools ›
   Check or Install Typst…** does the same on Windows and Linux. On macOS,

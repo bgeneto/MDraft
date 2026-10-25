@@ -8,15 +8,15 @@ explicit about which of them need an extra program.
 
 | Source | Preview | Native export | Pandoc export | Tools |
 | --- | --- | --- | --- | --- |
-| Markdown | Markdown pipeline | HTML, Print (opens browser) | DOCX, ODT, EPUB, LaTeX, reStructuredText, AsciiDoc, RTF, Textile, MediaWiki, OPML, PDF (via Typst) | browser for Print; pandoc for pandoc formats; Typst for PDF (via Typst) |
-| AsciiDoc | Asciidoctor.js | HTML, Print (opens browser) | same list | browser for Print; pandoc; Typst for PDF (via Typst) |
-| HTML | Sandboxed guest | HTML copy, Print (opens browser) | same list | browser for Print; pandoc; Typst for PDF (via Typst) |
-| Typst | Typst compiler | PDF (direct) | DOCX, ODT, EPUB, LaTeX, reStructuredText, AsciiDoc, RTF, Textile, MediaWiki, OPML | Typst for preview and PDF; pandoc for the other formats |
+| Markdown | Markdown pipeline | HTML, PDF, Print | DOCX, ODT, EPUB, LaTeX, reStructuredText, AsciiDoc, RTF, Textile, MediaWiki, OPML, PDF (via Typst) | browser for the explicit fallback; pandoc for pandoc formats; Typst for PDF (via Typst) |
+| AsciiDoc | Asciidoctor.js | HTML, PDF, Print | same list | browser for the explicit fallback; pandoc; Typst for PDF (via Typst) |
+| HTML | Sandboxed guest | HTML copy, PDF, Print (static documents) | same list | browser for scripted HTML and the explicit fallback; pandoc; Typst for PDF (via Typst) |
+| Typst | Typst compiler | PDF (direct, via Typst) | DOCX, ODT, EPUB, LaTeX, reStructuredText, AsciiDoc, RTF, Textile, MediaWiki, OPML | Typst for preview and PDF; pandoc for the other formats |
 
-The native **HTML** and **Print (opens browser)** commands cover Markdown,
-AsciiDoc and HTML. They do not cover Typst documents; use **PDF (via Typst)** for
-a `.typ` file, which compiles it directly to PDF. The pandoc list is available
-for all four source languages.
+The native **PDF** and **Print** commands cover Markdown, AsciiDoc and static
+HTML. They do not cover Typst documents; use **PDF (via Typst)** for a `.typ`
+file, which compiles it directly to PDF. The pandoc list is available for all
+four source languages.
 
 ## Native exports
 
@@ -41,26 +41,38 @@ different document, so it is not done.
 A Typst document is not handled by the native HTML command. Its PDF path is
 direct; its other formats go through the pandoc list.
 
-### Print (opens browser)
+### Print and PDF
 
-**File › Print (opens browser)…** renders a light print document and hands it to
-the system browser, which opens its print dialog. Choose "Save as PDF" there.
-Nothing needs to be installed beyond a browser, and the result follows the
-article's mathematics, diagrams and syntax colours on a page that is always
-light.
+**File › Print…** (`Ctrl+P`) opens the platform's print dialog for a hidden
+copy of the article. **File › Export › PDF…** asks for an output path and writes
+the same article directly. Neither route needs pandoc, a browser or a LaTeX
+distribution.
 
-The print document is always light, whatever the editor theme is, and its
-diagrams are rendered for that light page. It waits (up to ten seconds) for
-images and web fonts before opening the dialog, and prints a visible list of
-any image that failed to load. Local images use absolute `file://` URLs because
-the document lives in the temporary folder.
+The direct PDF is written by the system webview, not by a screenshot: Windows
+uses WebView2's `PrintToPdf`, and Linux uses WebKitGTK's print operation with an
+A4 page setup. The result has selectable text, embedded fonts, local images,
+tables and the light diagram palette. The page is always A4 and always light,
+whatever the editor theme is.
 
-This works for Markdown, AsciiDoc and HTML. It is not connected to the Typst
-compiler; for a `.typ` document use **PDF (via Typst)** instead.
+The hidden surface carries no document scripts and no Tauri IPC permission. A
+static HTML document keeps its own CSS and images through a local file base. A
+document containing a script, an inline event handler, a `javascript:` URL or a
+meta refresh is not printed natively; MDraft offers the browser route instead,
+because its printed result may depend on code the safe surface will not run.
 
-The print document is written to the temporary directory. MDraft does not learn
-where the browser saved the PDF, so the after-export options do not run for
-this one path.
+The native writer waits up to ten seconds for images and web fonts, then reports
+any resource that failed to load. The direct PDF runs the global **After Export**
+options because MDraft knows the file it wrote. The **Print** dialog does not
+claim a path, so it does not run them.
+
+**File › Export › PDF (opens browser)…** remains the explicit fallback. It
+renders the light print document and hands it to the system browser; the reader
+chooses "Save as PDF" there. It also covers scripted HTML and a host whose
+webview cannot print. This path cannot tell MDraft where the PDF was saved.
+
+Typst documents keep **PDF (via Typst)**, which compiles the source directly.
+Print and the native PDF writer are disabled for them with a label naming that
+route.
 
 ## Pandoc exports
 
@@ -119,8 +131,9 @@ nothing is dropped entirely, which is what lets
 **Preferences › Export › After Export** can open the exported file's folder,
 open the file itself, or run a command with `${outputPath}` substituted. These
 are global: they run after every successful export that writes a file, not only
-for the format currently selected in the panel. Print (opens browser) is the
-exception, because the browser owns the save path.
+for the format currently selected in the panel. The direct PDF, pandoc formats,
+Typst PDF and HTML export know their output path. **PDF (opens browser)** does
+not, because the browser owns the save path.
 
 ## Installing pandoc and Typst
 
@@ -155,23 +168,27 @@ the [Typst download page](https://typst.app/open-source/#download).
   numbers; add `--toc` to the format's Extra Arguments if pandoc's own numbered
   table of contents is preferred. The AsciiDoc target keeps the original
   source and pandoc's AsciiDoc reader.
-- **The native HTML and Print (opens browser) exports do not have those gaps for
-  Markdown and AsciiDoc**, because they use the preview's own HTML. This is why
-  both routes exist.
-- **An HTML document's print copy uses a local file base.** The browser can
-  read the document's own CSS, images and classic scripts, but local ES modules
-  and fonts may still be subject to its file-origin rules. The HTML **export**
-  copy is the source bytes unchanged: relative URLs in it still resolve against
-  the folder it is opened from, not against the original document.
+- **PDF and Print use the preview's own article.** They do not have the pandoc
+  gaps above for Markdown and AsciiDoc, because they print the same HTML the
+  preview shows. The HTML document route is static-only; scripted HTML keeps
+  the browser handoff.
+- **An HTML document's browser print copy uses a local file base.** The browser
+  can read the document's own CSS, images and classic scripts, but local ES
+  modules and fonts may still be subject to its file-origin rules. The direct
+  PDF writer refuses a document with scripts rather than printing a partial
+  result. The HTML **export** copy is the source bytes unchanged: relative URLs
+  in it still resolve against the folder it is opened from, not against the
+  original document.
 - **An exported Markdown or AsciiDoc HTML file fetches KaTeX from jsDelivr.**
   Its mathematics needs the stylesheet and fonts; the file links them rather
-  than embedding them. MDraft itself makes no request when writing the export.
+  than embedding them. The direct PDF also links KaTeX's stylesheet while the
+  hidden page loads. MDraft itself makes no request when writing the export.
 - **PDF through a user-added engine is possible.** A format can name its own
   `--pdf-engine`; that wins over Typst because extra arguments come last. MDraft
   does not install a TeX distribution for you.
-- **No silent PDF.** Print (opens browser) asks the browser, and PDF (via Typst)
-  asks for an output path. There is no in-app print interface that writes a PDF
-  without a dialog.
+- **Native printing needs a runtime API.** A host without WebView2's print
+  interfaces or WebKitGTK's print operation falls back to the browser route with
+  an explanation. It never silently does nothing.
 
 ## Dependency summary
 
@@ -179,7 +196,8 @@ the [Typst download page](https://typst.app/open-source/#download).
 | --- | --- |
 | Edit and preview Markdown, AsciiDoc or HTML | MDraft only |
 | Preview a `.typ` file, or export it to PDF | Typst |
-| HTML or Print (opens browser) from Markdown, AsciiDoc or HTML | MDraft and a browser for Print |
+| HTML, direct PDF or Print from Markdown, AsciiDoc or static HTML | MDraft only |
+| PDF (opens browser) from Markdown or AsciiDoc | MDraft and a browser |
 | DOCX, ODT, EPUB, LaTeX, reStructuredText, AsciiDoc, RTF, Textile, MediaWiki or OPML | pandoc |
 | PDF (via Typst) from Markdown, AsciiDoc or HTML | pandoc and Typst |
 | PDF from a Typst document | Typst |
