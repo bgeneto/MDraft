@@ -926,7 +926,7 @@ function buildSections(host: PreferencesHost): Section[] {
         {
           kind: "select",
           label: "Remote Images in Pasted Rich Text",
-          help: "Applies to remote images inside formatted text pasted from a browser or another editor. Download and save writes them to the document's assets folder and contacts their hosts; Keep the original URL makes no request. A URL you paste on its own still follows the option above.",
+          help: "Applies to remote images inside formatted text pasted from a browser or another editor. Download and save writes them to the folder chosen above and contacts their hosts; Keep the original URL makes no request. Keep the original location above also keeps every URL. A URL you paste on its own still follows the option above.",
           options: [
             ["download", "Download and save"],
             ["url", "Keep the original URL"],

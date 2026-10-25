@@ -81,6 +81,14 @@ const SUITES = [
     script: "sessions-test.mjs",
   },
   {
+    // Recovery scheduling, disk-change classification and the Typst command
+    // strings: pure logic, no application and no build.
+    id: "p0-unit",
+    title: "P0 data safety (unit)",
+    kind: "node",
+    script: "p0-unit.mjs",
+  },
+  {
     // The conversion matrix: pure logic, the same TypeScript modules the editor
     // imports, and no application. Node runs them directly.
     id: "paste-convert",
@@ -136,6 +144,14 @@ const SUITES = [
     script: "block-map-unit.mjs",
   },
   {
+    // Which link or image a Ctrl+click lands on, in Markdown, HTML, AsciiDoc
+    // and Typst. Pure resolution; the UI suite proves the wiring.
+    id: "link-unit",
+    title: "Link targets (unit)",
+    kind: "node",
+    script: "link-target-unit.mjs",
+  },
+  {
     id: "smoke",
     title: "DOM smoke",
     kind: "cdp",
@@ -177,6 +193,15 @@ const SUITES = [
     kind: "cdp",
     script: "image-syntax-test.mjs",
     doc: "samples/typst-tour.typ",
+  },
+  {
+    // Every Image rule, the untitled fallback and the addresses that answer
+    // with an error instead of an image.
+    id: "image-rules",
+    title: "Image rules and failures",
+    kind: "cdp",
+    script: "image-rules-test.mjs",
+    doc: "samples/feature-tour.md",
   },
   {
     id: "typst-preview",
@@ -222,6 +247,15 @@ const SUITES = [
     title: "Format Document",
     kind: "cdp",
     script: "format-document-test.mjs",
+    doc: "samples/feature-tour.md",
+  },
+  {
+    // Ctrl+click and the right-click Open item, on a temporary document with
+    // an external URL, a relative file, an image and a fragment.
+    id: "links",
+    title: "Link navigation",
+    kind: "cdp",
+    script: "link-navigation-test.mjs",
     doc: "samples/feature-tour.md",
   },
   {
@@ -841,18 +875,21 @@ function stageBinary(binary, stage) {
 // from an earlier run changes what they measure. The originals are moved aside
 // and put back in the finally, so running the suite does not cost the developer
 // their preferences.
-const USER_FILES = ["settings.json", ".window-state.json"];
+const USER_STATE = ["settings.json", ".window-state.json", "recovery"];
 
 function takeUserState(destination) {
   const saved = [];
   fs.mkdirSync(destination, { recursive: true });
-  for (const name of USER_FILES) {
+  for (const name of USER_STATE) {
     const from = path.join(appConfigDir(), name);
     if (!fs.existsSync(from)) continue;
     const to = path.join(destination, name);
-    // copy+unlink rather than rename: the temp directory may be on another volume.
-    fs.copyFileSync(from, to);
-    fs.rmSync(from, { force: true });
+    // copy+unlink rather than rename: the temp directory may be on another
+    // volume. A directory is the recovery journal; copy it whole so a crash
+    // during the run does not lose the developer's own unsaved buffers.
+    if (fs.statSync(from).isDirectory()) fs.cpSync(from, to, { recursive: true });
+    else fs.copyFileSync(from, to);
+    fs.rmSync(from, { recursive: true, force: true });
     saved.push({ name, backup: to });
   }
   return saved;
@@ -861,14 +898,23 @@ function takeUserState(destination) {
 function restoreUserState(saved) {
   const dir = appConfigDir();
   fs.mkdirSync(dir, { recursive: true });
-  for (const name of USER_FILES) fs.rmSync(path.join(dir, name), { force: true });
+  for (const name of USER_STATE) {
+    fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+  }
   for (const { name, backup } of saved) {
-    if (fs.existsSync(backup)) fs.copyFileSync(backup, path.join(dir, name));
+    if (!fs.existsSync(backup)) continue;
+    if (fs.statSync(backup).isDirectory()) {
+      fs.cpSync(backup, path.join(dir, name), { recursive: true });
+    } else {
+      fs.copyFileSync(backup, path.join(dir, name));
+    }
   }
 }
 
 function resetAppState() {
-  for (const name of USER_FILES) fs.rmSync(path.join(appConfigDir(), name), { force: true });
+  for (const name of USER_STATE) {
+    fs.rmSync(path.join(appConfigDir(), name), { recursive: true, force: true });
+  }
 }
 
 // Two layers write the fixture they are given: the shortcut test saves it to

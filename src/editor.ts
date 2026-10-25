@@ -38,9 +38,11 @@ import type { DocumentLanguage } from "./api";
 import { asciidocLanguage } from "./asciidoc-language";
 import { isCodeContext } from "./code-context";
 import { markdownProseSelection } from "./math-delimiters";
+import type { LinkTarget } from "./links";
 import { DEFAULT_EDITOR_FONT_SIZE } from "./fonts";
 import { htmlLanguage } from "./html-language";
 import { autoCloseTag } from "./tag-close";
+import { typstHeadingLine, typstShiftHeadingLine } from "./typst-commands";
 import { typstLanguage } from "./typst-language";
 import {
   bracketMatching,
@@ -141,6 +143,9 @@ export interface EditorHandle {
   pulseSyncRange(): void;
   setHeading(level: number): void;
   shiftHeading(delta: number): void;
+  /** Typst headings are `=` markers, not `#`; level 0 removes the marker. */
+  setTypstHeading(level: number): void;
+  shiftTypstHeading(delta: number): void;
   /** The AsciiDoc heading commands; `=` is the title, `==` the first section. */
   setAsciiDocHeading(level: number): void;
   shiftAsciiDocHeading(delta: number): void;
@@ -297,6 +302,81 @@ const baseTheme = EditorView.theme({
 export interface EditorOptions {
   autoClosePairs?: boolean;
   autoCloseTags?: boolean;
+  /** Resolve the link or image at a document offset. */
+  linkAt?: (pos: number) => LinkTarget | null;
+  /** Follow the target a Ctrl/Cmd+click found. */
+  linkClick?: (target: LinkTarget) => void;
+}
+
+/**
+ * Ctrl/Cmd+click follows a link.
+ *
+ * CodeMirror registers its own handlers after the extension handlers
+ * (`computeHandlers` in `@codemirror/view`), and returning `true` stops them —
+ * necessary because `allowMultipleSelections` is on, so a plain Ctrl+click
+ * would otherwise add a second cursor. The press is consumed and the release
+ * opens the target only when the pointer barely moved, so a Ctrl+drag that
+ * starts on a link does not launch anything by accident.
+ */
+function linkSupport(options: EditorOptions): Extension {
+  let pressed: { x: number; y: number; target: LinkTarget } | null = null;
+  let pointer: { x: number; y: number } | null = null;
+
+  const targetAt = (view: EditorView, x: number, y: number): LinkTarget | null => {
+    if (!options.linkAt) return null;
+    const pos = view.posAtCoords({ x, y });
+    return pos === null ? null : options.linkAt(pos);
+  };
+
+  const setCursor = (view: EditorView, modifier: boolean): void => {
+    if (!modifier || !pointer || !options.linkAt) {
+      view.contentDOM.style.cursor = "";
+      return;
+    }
+    view.contentDOM.style.cursor = targetAt(view, pointer.x, pointer.y) ? "pointer" : "";
+  };
+
+  return ViewPlugin.fromClass(class {}, {
+    eventHandlers: {
+      mousedown(event: MouseEvent, view: EditorView) {
+        if (event.button !== 0 || !(event.ctrlKey || event.metaKey)) return false;
+        if (!options.linkClick) return false;
+        const found = targetAt(view, event.clientX, event.clientY);
+        if (!found) return false;
+        pressed = { x: event.clientX, y: event.clientY, target: found };
+        event.preventDefault();
+        return true;
+      },
+      mouseup(event: MouseEvent, _view: EditorView) {
+        const pending = pressed;
+        pressed = null;
+        if (!pending) return false;
+        const moved = Math.abs(event.clientX - pending.x) + Math.abs(event.clientY - pending.y);
+        if (moved <= 5) options.linkClick?.(pending.target);
+        event.preventDefault();
+        return true;
+      },
+      mousemove(event: MouseEvent, view: EditorView) {
+        pointer = { x: event.clientX, y: event.clientY };
+        setCursor(view, event.ctrlKey || event.metaKey);
+      },
+      mouseleave(_event: MouseEvent, view: EditorView) {
+        pointer = null;
+        pressed = null;
+        view.contentDOM.style.cursor = "";
+      },
+      keydown(event: KeyboardEvent, view: EditorView) {
+        if (event.key !== "Control" && event.key !== "Meta") return false;
+        if (!event.repeat) setCursor(view, true);
+        return false;
+      },
+      keyup(event: KeyboardEvent, view: EditorView) {
+        if (event.key !== "Control" && event.key !== "Meta") return false;
+        setCursor(view, event.ctrlKey || event.metaKey);
+        return false;
+      },
+    },
+  });
 }
 
 export function createEditor(host: HTMLElement, options: EditorOptions = {}): EditorHandle {
@@ -549,6 +629,7 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     languageCompartment.of(markdownSupport),
     pairCompartment.of(autoPairs ? pairSupport() : []),
     tagCompartment.of(tagSupport("markdown")),
+    linkSupport(options),
     keymap.of([...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, indentWithTab]),
     fontSizeCompartment.of(
       EditorView.theme({ "&": { fontSize: `${DEFAULT_EDITOR_FONT_SIZE}px` } }),
@@ -939,6 +1020,14 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
         const next = Math.min(6, Math.max(1, match[1].length + delta));
         return `${indent}${"#".repeat(next)} ${match[2]}`;
       });
+    },
+
+    setTypstHeading(level) {
+      transformSelectedLines((line) => typstHeadingLine(line, level));
+    },
+
+    shiftTypstHeading(delta) {
+      transformSelectedLines((line) => typstShiftHeadingLine(line, delta));
     },
 
     setAsciiDocHeading(level) {

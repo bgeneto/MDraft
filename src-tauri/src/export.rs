@@ -110,6 +110,10 @@ pub struct ExportRequest {
     /// so a settings file or a caller written before this existed still works.
     #[serde(default)]
     pub language: Option<String>,
+    /// A custom image folder the Typst compiler must be allowed to read. Only a
+    /// `.typ` export uses it; absent for every other format.
+    #[serde(default)]
+    pub image_root: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -553,6 +557,7 @@ pub fn export<R: Runtime>(app: &AppHandle<R>, request: &ExportRequest) -> Result
             &request.markdown,
             "html",
             &rendered,
+            request.image_root.as_deref(),
         )?;
         // Only the body is handed over. Typst writes a complete HTML document, and
         // pandoc's HTML reader passes anything structural it does not expect — the
@@ -673,6 +678,7 @@ fn export_typst_direct<R: Runtime>(
         &request.markdown,
         extension,
         &target,
+        request.image_root.as_deref(),
     )?;
 
     let bytes = std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
@@ -1351,6 +1357,7 @@ mod tests {
             output_path: "/out/report.pdf".into(),
             input_path: Some("/docs/report.md".into()),
             language: None,
+            image_root: None,
         };
         let directory = pandoc_directory(&request, &scratch);
         let command = pandoc_command(Path::new("/usr/bin/pandoc"), &args, &scratch, directory);
@@ -1399,6 +1406,7 @@ mod tests {
             output_path: root.join("notes.docx").to_string_lossy().into_owned(),
             input_path: Some(document.to_string_lossy().into_owned()),
             language: None,
+            image_root: None,
         };
 
         // Images are inserted as `./doc.assets/a.png` by default; pandoc can only

@@ -7,6 +7,9 @@
 //! The fixture is package-free, two columns and two pages. Its prose contains a
 //! unique word (`gyroscope`), a repeated word (`pendulum`) and generated
 //! `#lorem` text that has no source word to map back to.
+//!
+//! The last section opens **Help › Typst Reference** and measures the built-in
+//! document, so the menu route and the sample are covered by the same suite.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -872,6 +875,48 @@ if (fs.existsSync(exam)) {
     JSON.stringify(examCycles.filter((r) => !r.ok)),
   );
 }
+
+// ---------------------------------------------------------------------------
+console.log("\n=== Help opens the built-in Typst reference ===");
+await evaluate(
+  `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'menu',payload:'help.typstReference'})`,
+);
+const referenceOpened = await waitFor(
+  `document.querySelector('.doc-tab[aria-selected="true"]')?.textContent?.includes('Untitled') === true`,
+  15000,
+);
+check("Help › Typst Reference opens a Typst document", referenceOpened);
+// The suite left the shared preference on Pages; the reference documents the
+// Document view, so switch back before measuring it.
+await evaluate(
+  `[...document.querySelectorAll('.typst-viewbutton')].find((b) => b.textContent === 'Document')?.click()`,
+);
+await waitFor(`document.querySelector('.typst-document') !== null`, 20000);
+const reference = JSON.parse(
+  await evaluate(`(() => {
+    const host = document.querySelector('.typst-document');
+    return JSON.stringify({
+      heading: host?.querySelector('h2')?.textContent?.trim() ?? '',
+      sections: host?.querySelectorAll('h3').length ?? 0,
+      table: host?.querySelector('table') !== null,
+      contents: host?.querySelector('nav[role="doc-toc"]') !== null,
+      error: document.querySelector('.typst-error')?.textContent ?? null,
+      viewbar: document.querySelectorAll('.typst-viewbutton').length,
+    });
+  })()`),
+);
+check(
+  "the reference renders its live document",
+  reference.error === null &&
+    /Typst Reference/.test(reference.heading) &&
+    reference.sections >= 10,
+  JSON.stringify(reference),
+);
+check(
+  "the reference shows its generated contents, table and view switch",
+  reference.contents && reference.table && reference.viewbar === 2,
+  JSON.stringify(reference),
+);
 
 console.log(`\n${passed}/${passed + failed} checks passed`);
 ws.close();

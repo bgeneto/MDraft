@@ -199,6 +199,38 @@ pub fn path_exists(path: String, document_path: Option<String>) -> bool {
     resolve_path(&path, document_path.as_deref()).exists()
 }
 
+/// Extensions a document link must never launch. The OS opener would run them.
+const EXECUTABLE_EXTENSIONS: [&str; 12] = [
+    "exe", "bat", "cmd", "com", "scr", "msi", "ps1", "vbs", "js", "jar", "lnk", "pif",
+];
+
+/// Open a local file or folder with the platform's default application.
+///
+/// A document may name any path; the reader still chooses to click it, but the
+/// command is the last line of defence, so an executable is refused here rather
+/// than trusted to the shell.
+#[tauri::command]
+pub fn open_external(path: String) -> Result<(), String> {
+    let canonical = PathBuf::from(&path)
+        .canonicalize()
+        .map_err(|_| format!("{path} was not found."))?;
+    if !canonical.is_file() && !canonical.is_dir() {
+        return Err(format!("{path} is not a file or a folder."));
+    }
+    let extension = canonical
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default();
+    if EXECUTABLE_EXTENSIONS.contains(&extension.as_str()) {
+        return Err(format!(
+            "Refusing to open {path}: executable files are not opened from a document link."
+        ));
+    }
+    tauri_plugin_opener::open_path(&canonical, None::<&str>)
+        .map_err(|e| format!("Could not open {path}: {e}"))
+}
+
 /// The file passed on the command line, if any (`mdraft notes.md`).
 #[tauri::command]
 pub fn startup_file() -> Option<String> {
@@ -217,6 +249,23 @@ pub fn startup_file() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn open_external_refuses_missing_paths_and_executables() {
+        let dir = std::env::temp_dir().join(format!("tt-open-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let missing = dir.join("missing.png");
+        let error = open_external(missing.to_string_lossy().to_string()).unwrap_err();
+        assert!(error.contains("was not found"), "{error}");
+
+        let program = dir.join("payload.exe");
+        fs::write(&program, b"MZ").unwrap();
+        let error = open_external(program.to_string_lossy().to_string()).unwrap_err();
+        assert!(error.contains("Refusing to open"), "{error}");
+        assert!(error.contains("executable"), "{error}");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn round_trip_preserves_crlf_and_bom() {

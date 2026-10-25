@@ -22,6 +22,7 @@ import {
 } from "@codemirror/commands";
 import type { EditorView } from "@codemirror/view";
 import { readClipboardData, writeClipboardText } from "./clipboard";
+import type { LinkTarget } from "./links";
 
 export interface EditorMenuOptions {
   view: EditorView;
@@ -37,6 +38,10 @@ export interface EditorMenuOptions {
   isFavorite: () => boolean;
   /** Add the document to Favorites, or remove it when already there. */
   favorite: () => void | Promise<void>;
+  /** The link or image under a source offset, when there is one. */
+  linkAt: (pos: number) => LinkTarget | null;
+  /** Follow the target chosen from the menu. */
+  openLink: (target: LinkTarget) => void;
   toast: (text: string, ms?: number) => { dismiss: () => void };
 }
 
@@ -49,6 +54,8 @@ interface MenuItem {
   shortcut?: string;
   enabled: boolean;
   title?: string;
+  /** Present on the Open Link item, for the suites and for debugging. */
+  href?: string;
   run: () => void | Promise<void>;
 }
 
@@ -168,7 +175,7 @@ export function installEditorContextMenu(options: EditorMenuOptions): () => void
     view.focus();
   };
 
-  const entries = (): MenuEntry[] => {
+  const entries = (pos: number | null): MenuEntry[] => {
     const state = view.state;
     const editable = !options.readOnly() && !state.readOnly;
     const selection = state.selection.main;
@@ -181,7 +188,31 @@ export function installEditorContextMenu(options: EditorMenuOptions): () => void
     const selectionTitle = !editable ? READ_ONLY_REASON : SELECTION_REASON;
     const editTitle = editable ? undefined : READ_ONLY_REASON;
 
+    const link = pos === null ? null : options.linkAt(pos);
+    const linkEntry: MenuEntry[] = link
+      ? [
+          {
+            kind: "item",
+            id: "openLink",
+            label:
+              link.kind === "image"
+                ? "Open Image"
+                : link.kind === "anchor"
+                  ? "Go to Heading"
+                  : link.kind === "external"
+                    ? "Open Link"
+                    : "Open File",
+            shortcut: IS_MAC ? "\u2318click" : "Ctrl+click",
+            enabled: true,
+            href: link.href,
+            run: () => options.openLink(link),
+          },
+          { kind: "separator" },
+        ]
+      : [];
+
     return [
+      ...linkEntry,
       {
         kind: "item",
         id: "undo",
@@ -367,6 +398,7 @@ export function installEditorContextMenu(options: EditorMenuOptions): () => void
     button.className = "editor-menu-item";
     button.setAttribute("role", "menuitem");
     button.dataset.action = item.id;
+    if (item.href !== undefined) button.dataset.href = item.href;
     button.disabled = !item.enabled;
     if (item.title) button.title = item.title;
 
@@ -388,7 +420,7 @@ export function installEditorContextMenu(options: EditorMenuOptions): () => void
     return button;
   };
 
-  const openMenu = (x: number, y: number): void => {
+  const openMenu = (x: number, y: number, pos: number | null): void => {
     closeMenu();
     const host = document.createElement("div") as MenuHost;
     host.className = "editor-menu";
@@ -397,7 +429,7 @@ export function installEditorContextMenu(options: EditorMenuOptions): () => void
     host.style.left = `${x}px`;
     host.style.top = `${y}px`;
 
-    for (const entry of entries()) {
+    for (const entry of entries(pos)) {
       if (entry.kind === "separator") {
         const separator = document.createElement("div");
         separator.className = "editor-menu-sep";
@@ -505,7 +537,7 @@ export function installEditorContextMenu(options: EditorMenuOptions): () => void
       }
     }
     event.preventDefault();
-    openMenu(event.clientX, event.clientY);
+    openMenu(event.clientX, event.clientY, pos);
   };
 
   document.addEventListener("contextmenu", onContextMenu);

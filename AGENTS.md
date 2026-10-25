@@ -201,8 +201,8 @@ rewrite from scratch.
 | `npm run stage` | `scripts/stage-artifacts.mjs` | Re-stage what is already built |
 | `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
-| `npm run test:rust` | `cargo test` | 103 tests (101 run, two ignored downloads) on both platforms |
-| `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. The two restart layers are the exception: two launches of the same instance's settings directory, closed with WM_CLOSE in between so the close flush runs. Puts back the working tree and the developer's own settings afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
+| `npm run test:rust` | `cargo test` | 119 tests (117 run, two ignored downloads) on both platforms |
+| `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. The two restart layers are the exception: two launches of the same instance's settings directory, closed with WM_CLOSE in between so the close flush runs. Puts back the working tree, the developer's own settings, window state and recovery journal afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
 | `npm run smoke` | `scripts/dom-smoke.mjs` | 107 checks against `samples/feature-tour.md` |
 | `npm run word-sync` | `scripts/word-sync-test.mjs` | 58 checks of word-level sync, including 20 alternating pairs, element endpoints, multi-paragraph ranges, stale render rejection and reduced motion in Markdown/AsciiDoc/Typst Document, against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, the four-beat pulse and its resting mark, reduced motion, no scroll, Escape, and the fallbacks |
 | `npm run autoclose:unit` | `scripts/autoclose-unit.mjs` | 17 checks of the tag matcher: attributes, custom elements, void and self-closing tags, autolinks, escapes, declarations, prose — no application |
@@ -226,10 +226,14 @@ rewrite from scratch.
 | `npm run asciidoc` | `scripts/asciidoc-test.mjs` | 54 checks of the AsciiDoc preview, source highlighting, outline, preview copy, spellcheck, includes, paste, the AsciiDoc reference, the default extension and word-level sync |
 | `npm run asciidoc:export:unit` | `scripts/asciidoc-export-unit.mjs` | 17 unit checks of the AsciiDoc -> HTML step every pandoc export uses: unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations; no application |
 | `npm run test:sessions` | `scripts/sessions-test.mjs` | 59 unit checks of `src/sessions.ts`, with no application and no build |
-| `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 369 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
-| `npm run paste` | `scripts/rich-paste-test.mjs` | 87 checks of rich paste through the real UI: destination detection, conversion in every direction, whitespace across inline elements, preferences, Ctrl+Shift+V, undo, and Find/Replace paste ownership, including real Ctrl+V and Ctrl+Shift+V with plain and rich clipboard text |
-| `npm run image:syntax` | `scripts/image-syntax-test.mjs` | 14 checks of bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, including the Image preference |
-| `npm run typst:preview` | `scripts/typst-preview-test.mjs` | 48 checks (49 with the optional local physics exam) of Typst Pages through PDF.js and bidirectional word sync, including 20 alternating pairs, narrow/wide fits, lazy canvases, stale renders, Escape, reduced motion and tab replacement: page shells, canvases, text layers, both columns, selection/copy, paragraph click, repeated-word/right-column mapping, one-word heading mapping, drag ranges, generated-text fallback, inline-math paragraphs, tables and code blocks, the transparent view bar, view switching and PDF disposal |
+| `npm run p0:unit` | `scripts/p0-unit.mjs` | 52 unit checks of the P0 data-safety layer: recovery entry/scheduler (debounce, serialised write/remove, failure notice), disk-change classification and Typst command strings; no application and no build |
+| `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 374 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
+| `npm run paste` | `scripts/rich-paste-test.mjs` | 87 checks of rich paste through the real UI: destination detection, conversion in every direction, whitespace across inline elements, preferences, Ctrl+Shift+V, undo, and Find/Replace paste ownership, including real Ctrl+V and Ctrl+Shift+V with plain and rich clipboard text. The 8 native-key checks are skipped (79/79) when the session cannot own the clipboard, which the suite proves by writing and reading it back |
+| `npm run image:syntax` | `scripts/image-syntax-test.mjs` | 22 checks of bitmap, remote-image and modern-format handling in Typst, Markdown, HTML and AsciiDoc; Typst refuses AVIF with a message, WebP is inserted, and Format > Image writes Typst syntax |
+| `npm run image:rules` | `scripts/image-rules-test.mjs` | 28 checks of every Image rule, the untitled fallback, a 401 and a non-image response, quoted and `file://` paths and `data:` URLs; `--live` adds the three public sample images |
+| `npm run links` | `scripts/link-navigation-test.mjs` | 18 checks of Ctrl+click and the Open Link/File/Image menu item in Markdown, plus the anchor scroll, the multi-cursor behaviour and the Ctrl+drag threshold |
+| `npm run links:unit` | `scripts/link-target-unit.mjs` | 39 unit checks of the link resolver in Markdown, HTML, AsciiDoc and Typst; no application |
+| `npm run typst:preview` | `scripts/typst-preview-test.mjs` | 51 checks (52 with the optional local physics exam) of Typst Pages through PDF.js and bidirectional word sync, including 20 alternating pairs, narrow/wide fits, lazy canvases, stale renders, Escape, reduced motion and tab replacement: page shells, canvases, text layers, both columns, selection/copy, paragraph click, repeated-word/right-column mapping, one-word heading mapping, drag ranges, generated-text fallback, inline-math paragraphs, tables and code blocks, the transparent view bar, view switching and PDF disposal; and that Help › Typst Reference opens the live reference |
 | `npm run licence` | `scripts/licence-test.mjs` | 4 checks that the bundled typefaces' licences ship inside the application. Run against its own instance: it opens a document |
 | `npm run images` | `scripts/image-paste-test.mjs` | Image paste through the real UI |
 | `npm run screenshot` | `scripts/screenshot.mjs` | PNG of the running window |
@@ -484,14 +488,15 @@ hash the pixels.
 
 ## Testing
 
-Twenty-eight layers, cheapest first. Run them in this order when changing anything.
+Thirty-four layers, cheapest first. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 103 | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction |
+| Rust unit | `npm run test:rust` | 119 | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction, image content sniffing (WebP/AVIF brands), `${filename}`, the untitled image guard, the Typst image root, the OS opener's executable refusal, the recovery journal's round-trip/id/cap rules |
 | Session store | `npm run test:sessions` | 59 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
-| Paste conversion | `npm run paste:convert` | 369 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, image syntax, AsciiDoc |
+| P0 data safety (unit) | `npm run p0:unit` | 52 | Recovery entry shape, debounced/coalesced writes, serialised forget, one failure notice, unchanged/modified/deleted classification, and the Typst heading/list/quote/table/rule/TOC/inline/display-math strings — no application |
+| Paste conversion | `npm run paste:convert` | 374 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, image syntax, AsciiDoc, and an image that fails to save |
 | AsciiDoc export source | `npm run asciidoc:export:unit` | 17 | Unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations - no application |
 | DOM smoke | `npm run smoke` | 107 | Rendering, pane sync, preferences (including the four On Launch choices and Line Height), math, fonts, status icons |
 | Word sync | `npm run word-sync` | 58 | The fragment map, preview → source and source → preview, atomic code, formula and image spans, the pulse and its resting mark, reduced motion, word snapping, no scroll, Escape |
@@ -501,9 +506,12 @@ Twenty-eight layers, cheapest first. Run them in this order when changing anythi
 | HTML source map (unit) | `npm run html:map:unit` | 38 | Entities and CRLF offsets, decoded-to-raw translation, the sample mismatch, and two text nodes under one stamp — no application |
 | Block source map (unit) | `npm run block:map:unit` | 12 | Folded index mapping, per-node alignment across substitutions and smart punctuation, gap block fallback, Typst comments/rules/math/code/tables, and `#lorem` exclusion — no application |
 | Auto-close typing | `npm run autoclose` | 33 | Pairs, step-over, Backspace, selection wrap, Markdown inline tags, HTML tags, both preferences, in all four document types |
-| Rich paste | `npm run paste` | 87 | The paste event, destination notice, preferences, Ctrl+Shift+V, undo, the same clipboard converted into Markdown and kept as source in HTML, spaces around inline elements, native Find/Replace field paste and unchanged source bytes |
-| Image syntax | `npm run image:syntax` | 14 | Bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, plus the Image preference |
-| Typst pages | `npm run typst:preview` | 48 (+1 optional) | PDF.js page shells/canvases/text layers, both columns, A4 geometry, paragraph click, repeated-word/right-column mapping, a one-word heading, drag ranges, Pages and Document word sync, inline-math paragraphs, tables and code blocks, generated-text fallback, transparent view bar and PDF disposal |
+| Rich paste | `npm run paste` | 87 (79 without a usable clipboard) | The paste event, destination notice, preferences, Ctrl+Shift+V, undo, the same clipboard converted into Markdown and kept as source in HTML, spaces around inline elements, native Find/Replace field paste and unchanged source bytes. The native block is skipped when writing the clipboard then reading it back returns empty |
+| Image syntax | `npm run image:syntax` | 22 | Bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, the Image preference, WebP insertion, the AVIF refusal, and Format > Image in Typst |
+| Image rules | `npm run image:rules` | 28 | Every Image rule and the untitled fallback, a 401 and an HTML response behind a `.png` name, the preview actually rendering a relative and an absolute path, quoted and `file://` paths, `data:` URLs; `--live` adds JPEG, WebP and AVIF from the public samples |
+| Link targets (unit) | `npm run links:unit` | 39 | Inline, reference, autolink, bare-URL, image, `file://`, HTML-entity, AsciiDoc-macro and Typst-`#link` targets, balanced parentheses, nested image links, code spans and fences - no application |
+| Link navigation | `npm run links` | 18 | Ctrl+click on a fragment, a source selection and a relative document, the Ctrl+drag threshold, and the contextual Open Link/File/Image/Go to Heading item |
+| Typst pages | `npm run typst:preview` | 51 (+1 optional) | PDF.js page shells/canvases/text layers, both columns, A4 geometry, paragraph click, repeated-word/right-column mapping, a one-word heading, drag ranges, Pages and Document word sync, inline-math paragraphs, tables and code blocks, generated-text fallback, transparent view bar and PDF disposal; plus Help › Typst Reference |
 | Math | `npm run math` | 12 | Font loading, fraction and radical geometry |
 | Syntax | `npm run syntax` | 10 | Token colours, palette switching, and the sync mark's amber contrast on three dark palettes |
 | AsciiDoc | `npm run asciidoc` | 54 | Preview, title/TOC, math, includes, source highlighting, outline, preview copy, spellcheck, paste, the built-in reference, defaults, word-level sync |
@@ -1772,6 +1780,93 @@ misspelled word is under the pointer, so spelling keeps its own menu.
 **`Pandoc exited with 1` and `pandoc.exe: .: openTempFile: permission denied (Permission denied)` for every Markdown and AsciiDoc PDF export, while `.typ` documents export fine**
 Pandoc's PDF writer does not use the system temporary directory. `toPdfViaTempFile` creates the engine's input and output with `withTempFile "."`, and for Typst its media directory with `withTempDirectory "."` — all relative to the process's **working directory**. The MSI's Start-menu shortcut sets `WorkingDirectory=C:\Program Files\MDraft`, which a normal user cannot write to, so pandoc died before it started Typst. `.typ` documents were unaffected because they are compiled by Typst directly, without pandoc; a development build launched from the repository and the portable build launched from a writable folder both worked, which is why it looked like a regression in one install. Reproduce it without the application: `cd` into a directory with a deny-write ACE, then run `pandoc -o out.pdf --pdf-engine=<full path to typst.exe>` with the document on stdin — the literal message and the `temporary-1.3` backtrace match. `src-tauri/src/export.rs` now runs pandoc in a per-export scratch directory under the system temp directory (falling back to the app cache directory when `TEMP` itself is unusable) and points `TMPDIR`/`TEMP`/`TMP` at it. Do not replace that with `--resource-path=<document folder>`: pandoc then hands Typst an absolute `C:/…` image path, which Typst rejects, so a document with images fails a different way. Non-PDF formats run in the document's folder instead, because only the PDF writer creates files in its working directory and the document folder is what makes relative image paths resolve as they do in the preview.
 
+**Deleting `settings.json` "to get first-run state" destroys the user's Favorites, Recents and remembered tabs**
+The instruction above is right about the test and wrong about the blast radius:
+`favorites`, `recentFiles`, `lastTabs`, `lastActiveTab`, `lastDirectory` and every
+preference all live in that one file, and there is no backup and no recycle bin.
+Measured: two smoke runs against one long-lived profile failed 7 checks that
+disappeared at 107/107 once the profile was reset — the reset was correct, the
+deletion was not. Back the file up (and `.window-state.json`) before resetting and
+put it back afterwards, or run the suites against a build with its own
+`identifier`, which is the mechanism the `0x800700AA` entry below already uses.
+Never treat `%APPDATA%\<identifier>` as disposable when the person who owns it is
+not the one running the test.
+
+**A UI suite leaves recovery-journal entries behind, and the next launch restores test buffers**
+The crash-recovery journal lives in `<app config>/recovery/` beside
+`settings.json`, and every suite that types into the editor writes to it. A run
+against the real config directory therefore leaves dirty test documents that the
+developer's next launch offers to restore; deleting only `settings.json` does not
+remove them. `scripts/test-all.mjs` now backs up and restores the whole `recovery`
+directory with the two settings files, and `resetAppState` clears it between
+suites. Any new launcher outside that harness must do the same, or build with its
+own `identifier`.
+
+**A pasted image URL shows a broken image and no folder is written, whatever the Image rule says**
+The rich-paste resolver caught every failure with `console.warn` only and kept
+the URL, so the reader saw a broken image and no explanation; changing the rule
+could not help because the bytes never arrived. Reproduce the reported case
+without the app: the address answers
+`401 {"detail": "Not authenticated"}` to a request without the web app's
+session, while the same URL renders in the user's browser. MDraft's WebView has
+no session to lend, so no folder rule can copy it. `resolveImages` now turns a
+failure into a notice (and `applyRichPaste` shows it), the direct URL paste keeps
+the address instead of swallowing the paste, and `download_image` refuses a 200
+that is not an image. Do not look for a path-handling bug when the status is 401.
+
+**A local image is copied but the preview is an empty `<img>` with no `src`**
+DOMPurify's default URI rule sees `C:` in `C:\Pictures\x.png` as an unknown
+scheme and removes the attribute before `decorateLinks` can turn it into an
+`asset:` URL. The image is on disk and the source is correct, which is what
+makes it look like an asset-protocol failure. `src/markdown.ts` now passes an
+`ALLOWED_URI_REGEXP` that admits `[A-Za-z]:[\\/%]`. Two details are easy to get
+wrong: the hyphen must be escaped (`[a-z+.\-:]`), because `[a-z+.-:]` is a range
+from `.` to `:` that **excludes `/`**, so every relative path without `./`
+(`notes.assets/a.png`) is stripped as well; and a test must cover both a bare
+relative path and a drive path, because `./` survives through the `[^a-z]`
+branch and hides the range bug.
+
+**Typst says `error: unknown image format` for AVIF (and HEIC, BMP, ICO)**
+Typst 0.15.1 reads PNG, JPEG, GIF, WebP and SVG only; measured by compiling
+`#image("sunset-beach.avif")` with the managed `typst.exe`. The webview decodes
+AVIF, so it renders correctly in a Markdown or HTML preview and fails only in a
+Typst document — do not infer compiler support from browser support. The app
+saves the file (the rule asked for a copy) and inserts no reference, with a
+toast naming the formats Typst does read. WebP *is* supported and must be
+inserted normally.
+
+**A clipboard bitmap pasted into an untitled document is written under `C:\Program Files\MDraft`, or the paste fails with `Access is denied`**
+`target_dir` fell back to `std::env::current_dir()` when `document_path` was
+`None`. An installed shortcut starts the app in its own program folder, so the
+rule had no real destination. A rule now applies only when it names a folder
+that exists without the document: a saved document's folder, or an **absolute**
+Custom Folder. A URL or local path keeps its original address in an untitled
+buffer (a toast says why); a clipboard bitmap is refused with "Save it first"
+unless an absolute custom folder is configured. Typst and HTML need one more
+condition: both resolve local images against a root only a saved document has,
+so an untitled buffer of either language refuses the bitmap even with an
+absolute folder. Never restore the working-directory fallback to make a test
+pass.
+
+**`Ctrl+click` on a link adds a second cursor instead of following it**
+CodeMirror's built-in `mousedown` handler appends **after** extension handlers
+(`computeHandlers` in `@codemirror/view`), and `allowMultipleSelections` is on,
+so the default Ctrl+click gesture is a multi-cursor edit. A `ViewPlugin` with
+`domEventHandlers.mousedown` must resolve the target and return `true` before the
+built-in runs; the built-in sees `defaultPrevented` and stops. Open on
+`mouseup` with a small movement threshold, not on `mousedown`: returning `true`
+already suppressed the built-in selection, and opening immediately would launch
+a link when the reader meant to Ctrl+drag from it. `Ctrl+click` on prose must
+still add a cursor, so the handler returns `false` when `linkAt` is null.
+
+**A `file:///C:/My%20Pictures/a.png` or Explorer's `"C:\My Pictures\a.png"` is pasted as text**
+`localImageFromText` rejected any whitespace and stripped the scheme without
+decoding it, so the resolved path began `/C:/…` and `path_is_file` said no.
+Strip one pair of matching quotes, decode `file://` through `URL` (restoring a
+UNC host), percent-decode the pathname, drop the slash before a drive, and allow
+spaces when the value contains a path separator. A sentence that merely ends in
+`.png` still has no separator and stays text.
+
 ## Adding a preference, end to end
 
 Five files, in this order — more than three, so a plan comes first; see
@@ -1797,8 +1892,12 @@ If the setting changes the editor's appearance, call it through
 src/
   main.ts            shell: document lifecycle, menus, status bar, pane sync
   sessions.ts        open documents: one session per tab, one EditorState each
+  recovery.ts        debounced crash-recovery journal scheduler
+  disk-change.ts     pure unchanged/modified/deleted classification
+  typst-commands.ts  the Typst side of the Paragraph/Format menus
   tabs.ts            tab strip: rendering, overflow arrows, context menu, drag/keyboard order
   editor.ts          CodeMirror 6 setup, incremental word/line metrics, EditorHandle API
+  links.ts           the pure link/image resolver behind Ctrl+click and the menu
   typst-pdf.ts       PDF.js Pages: page shells, text layer, fit transform, click context
   typst-page-map.ts  PDF visual line -> source occurrence and paragraph mapping
   typst-map.ts       Typst Document block ranges for the shared word map
@@ -1821,7 +1920,8 @@ src/
   asciidoc-render.ts shared Asciidoctor load/include and the pandoc export HTML
   syntax-themes.ts   editor palettes: token colours and writing surface
   image-syntax.ts    the one image markup builder for Markdown, Typst, HTML and AsciiDoc
-  images.ts          paste, drop and download of images
+  images.ts          paste, drop and download of images; the four rules and the
+                     untitled fallback
   paste/             rich paste: IR, destination/source detection, readers,
                      renderers (AsciiDoc included), HTML sanitizer and image resolution
   preferences.ts     the Preferences panel and its declarative rows
@@ -1835,6 +1935,7 @@ src-tauri/src/
   html_preview.rs    preview scheme, CSP, path confinement, preview commands (+ tests)
   settings.rs        persisted settings and AppState
   documents.rs       file IO, path existence, startup file
+  recovery.rs        the crash-recovery journal, atomic per-entry files (+ tests)
   images.rs          image import: sniffing, sanitiser, dedup, download
   tokens.rs          approximate token count for the status bar
   spellcheck.rs      OS spell checker: Windows ISpellChecker, Linux hunspell, macOS NSSpellChecker
@@ -1847,6 +1948,7 @@ samples/html-tour/   offline HTML guest fixture
 docs/samples/   real documents used to judge rendering quality
 docs/plans/          one file per approved plan
 docs/adr/            one decision that outlives its change
+docs/backlog.md      prioritized product gaps that do not have a plan yet
 docs/ícones/         source archive for the application icon
 ```
 
@@ -1976,7 +2078,7 @@ platform and fails on the other.
    reads the latter for the bundle, and the two must agree. `npm run
    check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
-3. `npm run test:rust` — 101 runnable tests (two ignored downloads: pandoc and Typst). Run them on Linux too
+3. `npm run test:rust` — 117 runnable tests (two ignored downloads: pandoc and Typst). Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run math`,

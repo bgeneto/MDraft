@@ -468,6 +468,12 @@ export function renderPreview(source: string, options: RenderOptions): RenderRes
   const rawHtml = mapped ? mapped.html : (marked.parse(prepared, { async: false }) as string);
 
   const clean = DOMPurify.sanitize(rawHtml, {
+    // DOMPurify's default URI rule treats `C:` as an unknown scheme and strips
+    // the attribute. A drive path is a file the reader chose, so it is allow-
+    // listed explicitly; `javascript:` and friends still fall through to the
+    // rejection branch.
+    ALLOWED_URI_REGEXP:
+      /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|asset):|[A-Za-z]:[\\/%]|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i,
     ADD_ATTR: [
       "align",
       "data-f",
@@ -820,7 +826,20 @@ export function decorateCodeBlocks(host: HTMLElement, mermaidEnabled = true): vo
 export function decorateLinks(host: HTMLElement, baseDir: string | null): void {
   for (const img of Array.from(host.querySelectorAll("img"))) {
     const src = img.getAttribute("src");
-    if (src) img.setAttribute("src", assetUrl(src, baseDir));
+    if (src) {
+      // Keep the document's own address: `src` below is rewritten to an
+      // `asset:` URL, and Ctrl+click (and the failed-image tooltip) need the
+      // value the document actually wrote.
+      img.dataset.src = src;
+      img.setAttribute("src", assetUrl(src, baseDir));
+      img.addEventListener(
+        "error",
+        () => {
+          if (!img.title) img.title = src;
+        },
+        { once: true },
+      );
+    }
     img.setAttribute("loading", "lazy");
   }
 

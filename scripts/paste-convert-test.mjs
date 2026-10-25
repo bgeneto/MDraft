@@ -627,6 +627,55 @@ console.log("\n=== images and math ===");
   );
 }
 
+console.log("\n=== image failures ===");
+{
+  const html = `<p>Before <img src="https://x.test/a.png" alt="a"> after</p>`;
+
+  const thrown = await planPaste(payload(html), "markdown", {
+    resolveImage: async () => {
+      throw new Error("https://x.test/a.png answered HTTP 401.");
+    },
+  });
+  check(
+    (thrown?.text ?? "").includes("https://x.test/a.png"),
+    "a failed image keeps its original address",
+    thrown?.text ?? "",
+  );
+  check(
+    (thrown?.notices ?? []).some(
+      (notice) => notice.includes("could not be saved") && notice.includes("401"),
+    ),
+    "a failed image reaches the reader as a notice",
+    JSON.stringify(thrown?.notices),
+  );
+
+  const reported = await planPaste(payload(html), "markdown", {
+    resolveImage: async (_image, report) => {
+      report("No document folder yet.");
+      return null;
+    },
+  });
+  check(
+    (reported?.notices ?? []).includes("No document folder yet."),
+    "a resolver can explain a kept address",
+    JSON.stringify(reported?.notices),
+  );
+  check(
+    (reported?.text ?? "").includes("https://x.test/a.png"),
+    "the explained address is still the one in the document",
+    reported?.text ?? "",
+  );
+
+  const kept = await planPaste(payload(html), "markdown", {
+    resolveImage: async () => null,
+  });
+  check(
+    (kept?.notices ?? []).length === 0,
+    "a deliberate keep stays silent",
+    JSON.stringify(kept?.notices),
+  );
+}
+
 console.log("\n=== fallbacks ===");
 {
   const huge = "A Markdown paragraph. ".repeat(60_000);

@@ -43,6 +43,10 @@ struct PreviewState {
   bridge_nonce: String,
   source: Arc<str>,
   root: Option<PathBuf>,
+  /// Folders the reader allowed for images, from Preferences › Image. A saved
+  /// document's own folder is `root`; a custom image folder outside it is
+  /// unreachable to the guest without this list.
+  image_roots: Vec<PathBuf>,
   filename: String,
   scripts: bool,
 }
@@ -54,6 +58,9 @@ pub struct HtmlPreviewRequest {
   pub bridge_nonce: String,
   pub source: String,
   pub root: Option<String>,
+  /// Additional image folders. Absent from older callers, hence the default.
+  #[serde(default)]
+  pub image_roots: Vec<String>,
   pub filename: String,
   pub scripts: bool,
 }
@@ -125,12 +132,25 @@ pub fn set_html_preview(
     }
     path.canonicalize().ok()
   });
+  let image_roots: Vec<PathBuf> = request
+    .image_roots
+    .iter()
+    .filter_map(|raw| {
+      let path = PathBuf::from(raw);
+      if !path.is_dir() {
+        return None;
+      }
+      path.canonicalize().ok()
+    })
+    .filter(|path| root.as_ref() != Some(path))
+    .collect();
 
   let next = PreviewState {
     nonce: request.nonce.clone(),
     bridge_nonce: request.bridge_nonce,
     source: Arc::from(request.source),
     root,
+    image_roots,
     filename: filename.clone(),
     scripts: request.scripts,
   };
@@ -226,14 +246,21 @@ async fn serve_asset(
   request: &Request<Vec<u8>>,
   head: bool,
 ) -> Response<Vec<u8>> {
-  let Some(root) = state.root.as_deref() else {
+  let mut roots: Vec<&Path> = Vec::new();
+  if let Some(root) = state.root.as_deref() {
+    roots.push(root);
+  }
+  for root in &state.image_roots {
+    roots.push(root.as_path());
+  }
+  if roots.is_empty() {
     return text(StatusCode::NOT_FOUND, "This document has no folder.");
-  };
+  }
   let Some(relative) = safe_relative_path(url_path) else {
     return text(StatusCode::FORBIDDEN, "That path is not allowed.");
   };
 
-  let file_path = match resolve_asset(root, &relative) {
+  let file_path = match resolve_asset(&roots, &relative) {
     Some(path) => path,
     None => return text(StatusCode::NOT_FOUND, "Not found."),
   };
@@ -319,12 +346,22 @@ fn safe_relative_path(url_path: &str) -> Option<PathBuf> {
   }
 }
 
-fn resolve_asset(root: &Path, relative: &Path) -> Option<PathBuf> {
-  let candidate = root.join(relative).canonicalize().ok()?;
-  if !candidate.starts_with(root) || !candidate.is_file() {
-    return None;
+/// Resolve a URL path below any allowed root, refusing every escape.
+///
+/// A saved document has one root, its own folder. The reader may additionally
+/// choose a custom image folder in Preferences; only that folder is added, and
+/// each candidate is canonicalised and checked against every root, so a `..` or
+/// a symlink that leaves all of them is still refused.
+fn resolve_asset(roots: &[&Path], relative: &Path) -> Option<PathBuf> {
+  for root in roots {
+    let Ok(candidate) = root.join(relative).canonicalize() else {
+      continue;
+    };
+    if candidate.starts_with(root) && candidate.is_file() {
+      return Some(candidate);
+    }
   }
-  Some(candidate)
+  None
 }
 
 fn is_windows_reserved(segment: &str) -> bool {
@@ -577,21 +614,34 @@ mod tests {
   }
 
   #[test]
-  fn a_file_outside_the_root_is_not_resolved() {
+  fn a_file_outside_every_root_is_not_resolved() {
     let dir = std::env::temp_dir().join(format!("mdraft-html-preview-{}", std::process::id()));
     let root = dir.join("site");
+    let images = dir.join("pictures");
     let outside = dir.join("outside.txt");
     fs::create_dir_all(&root).unwrap();
+    fs::create_dir_all(&images).unwrap();
     fs::write(root.join("inside.txt"), b"inside").unwrap();
+    fs::write(images.join("custom.png"), b"custom").unwrap();
     fs::write(&outside, b"outside").unwrap();
 
+    let root = root.canonicalize().unwrap();
+    let images = images.canonicalize().unwrap();
+    let roots = [root.as_path(), images.as_path()];
+
     assert_eq!(
-      resolve_asset(&root.canonicalize().unwrap(), Path::new("inside.txt")),
+      resolve_asset(&roots, Path::new("inside.txt")),
       Some(root.join("inside.txt").canonicalize().unwrap())
     );
     assert_eq!(
-      resolve_asset(&root.canonicalize().unwrap(), Path::new("../outside.txt")),
-      None
+      resolve_asset(&roots, Path::new("../pictures/custom.png")),
+      Some(images.join("custom.png").canonicalize().unwrap()),
+      "a custom image folder is reachable through .. when it is an allowed root"
+    );
+    assert_eq!(
+      resolve_asset(&roots, Path::new("../outside.txt")),
+      None,
+      "a file outside every allowed root stays refused"
     );
 
     let _ = fs::remove_dir_all(&dir);
@@ -607,10 +657,9 @@ mod tests {
     fs::create_dir_all(&root).unwrap();
     fs::write(&outside, b"outside").unwrap();
     if symlink(&outside, root.join("escape.txt")).is_ok() {
-      assert_eq!(
-        resolve_asset(&root.canonicalize().unwrap(), Path::new("escape.txt")),
-        None
-      );
+      let root = root.canonicalize().unwrap();
+      let roots = [root.as_path()];
+      assert_eq!(resolve_asset(&roots, Path::new("escape.txt")), None);
     }
     let _ = fs::remove_dir_all(&dir);
   }
