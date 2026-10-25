@@ -1047,6 +1047,8 @@ export function wrapPrintHtml(
   tokenCss: string,
   typographyCss = "",
   fontCss = "",
+  autoPrint = true,
+  marker = false,
 ): string {
   return [
     "<!doctype html>",
@@ -1054,6 +1056,7 @@ export function wrapPrintHtml(
     "<head>",
     '<meta charset="utf-8">',
     `<title>${escapeHtml(title)}</title>`,
+    marker ? '<meta name="mdraft-print" content="native">' : "",
     // Without this the mathematics collapses, exactly as it would in the
     // preview: KaTeX needs its layout rules, not just its DOM.
     `<link rel="stylesheet" href="${KATEX_STYLESHEET_URL}">`,
@@ -1076,12 +1079,26 @@ export function wrapPrintHtml(
     "h1,h2,h3,h4,h5,h6{break-after:avoid;page-break-after:avoid;break-inside:avoid;",
     "font-family:var(--font-heading,inherit);font-variant-numeric:normal;",
     "font-weight:var(--weight-strong,600)}",
+    // `break-after: avoid` alone lets WebView2 leave a heading at the foot of a
+    // page and move only its paragraph, which is exactly the stranded heading
+    // the rule is meant to prevent. Asking the following block not to break
+    // before itself closes that gap.
+    "h1+*,h2+*,h3+*,h4+*,h5+*,h6+*{break-before:avoid;page-break-before:avoid}",
+    // A page whose last five lines are followed by two isolated lines on a new
+    // sheet reads as a mistake. WebKitGTK honours widows and orphans even where
+    // it ignores the newer `break-*` properties.
+    "p,li,blockquote{orphans:3;widows:3}",
     "strong,b{font-weight:var(--weight-strong,600)}",
     // The divider independent of the one under h1/h2, which uses the table and
     // panel border colour and must stay lighter than this.
     "hr{border:none;border-top:1px solid #cfcfcf;margin:1.6em 0}",
     "table,pre,blockquote,figure{break-inside:avoid;page-break-inside:avoid}",
-    "img,svg{max-width:100%;break-inside:avoid}",
+    // A diagram taller than the sheet must be scaled to fit; `max-width:100%`
+    // alone leaves a wide Mermaid sequence diagram taller than A4, and the
+    // printer then clips its top and bottom. The maximum is one printable page
+    // (A4 minus the 18mm top and bottom margins), with a little room for the
+    // surrounding blocks.
+    "img,svg{max-width:100%;max-height:250mm;height:auto;break-inside:avoid}",
     "table{border-collapse:collapse;width:100%;font-variant-numeric:var(--table-figures,normal)}",
     "th,td{border:1px solid #c8c8c8;padding:5px 9px;text-align:left}",
     "th{background:#f2f2f2}",
@@ -1101,17 +1118,46 @@ export function wrapPrintHtml(
     // Long URLs and code lines must wrap rather than be clipped at the margin.
     "a[href^='http']{overflow-wrap:anywhere}",
     ".math-display{text-align:center;margin:1em 0}",
+    ".print-keep{break-inside:avoid;page-break-inside:avoid}",
+    // Mermaid's own SVG styles outrank the page's body rule. Let the diagram
+    // inherit the document's face and keep a long label inside its node when
+    // the reader chose a wider family than the one Mermaid measured with.
+    "svg text,svg .label,svg .nodeLabel,svg foreignObject div{font-family:var(--font-body,sans-serif)!important}",
+    "svg foreignObject{overflow:visible}",
     "</style>",
     `<style>${tokenCss}</style>`,
     "</head>",
     "<body>",
     bodyHtml,
-    `<script>${PRINT_READY_SCRIPT}</script>`,
+    autoPrint ? `<script>${PRINT_READY_SCRIPT}</script>` : "",
     "</body>",
     "</html>",
   ]
     .filter((line) => line !== "")
     .join("\n");
+}
+
+/**
+ * The same article for the hidden native print surface.
+ *
+ * It carries no script: the host injects its own readiness check after
+ * navigation, and document markup must not reach the Tauri bridge even though
+ * the print window has no capability. The marker meta tag tells the host that
+ * the intended document, not `about:blank`, has arrived.
+ */
+export function wrapNativePrintHtml(
+  title: string,
+  bodyHtml: string,
+  tokenCss: string,
+  typographyCss = "",
+  fontCss = "",
+): string {
+  // The renderers already sanitise their HTML, but the native surface is the
+  // last place a document script could reach a Tauri webview. Strip any script
+  // element here as well, so a renderer regression cannot turn into code run
+  // beside the unprivileged bridge.
+  const body = bodyHtml.replace(/<script\b[\s\S]*?<\/script>/gi, "");
+  return wrapPrintHtml(title, body, tokenCss, typographyCss, fontCss, false, true);
 }
 
 /** Wrap rendered body HTML into a standalone document for "Export as HTML". */

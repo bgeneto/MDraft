@@ -64,6 +64,11 @@ lzma-rs = "0.3"
 # matches that id against a .desktop file. Declared directly because lib.rs
 # sets it; the version is the one Tauri's GTK already pulls in.
 glib = "0.18"
+# Native printing goes through WebKitGTK's PrintOperation: the dialog, and a
+# direct PDF written through GTK print settings. Both crates are already in the
+# tree through Tauri; declaring them directly pins the API this crate uses.
+gtk = "0.18"
+webkit2gtk = "2.0"
 
 # The system spell checker. Dictionaries stay on the machine: Windows uses the
 # Spell Checking API (the same service WebView2 would), Linux opens the hunspell
@@ -75,6 +80,11 @@ windows = { version = "0.61", features = [
     "Win32_Globalization",
     "Win32_System_Com",
 ] }
+# The native print surface reaches WebView2's printing interfaces directly.
+# Pin the same minor Tauri uses, and use the same windows-core minor as
+# webview2-com so the COM types cannot diverge.
+webview2-com = "0.39"
+windows-core = "0.62"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

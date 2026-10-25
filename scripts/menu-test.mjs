@@ -208,6 +208,7 @@ try {
     ["para.h1", "Paragraph Style"],
     ["edit.uppercase", "Convert Selection"],
     ["file.favorite", "File"],
+    ["file.print", "File"],
     ["themes.system", "Interface Theme"],
     ["view.syntax.nord", "Code Colors"],
     ["navigate.openTarget", "Navigate"],
@@ -225,9 +226,11 @@ try {
     ["para.taskPlain", "Convert to Plain Text"],
     ["file.reveal", "Show in Folder"],
     ["file.favorite", "Add to Favorites"],
+    ["file.print", "Print…"],
     ["para.yaml", "YAML Front Matter"],
     ["export.html", "HTML…"],
-    ["export.pdf", "Print (opens browser)…"],
+    ["export.pdf", "PDF…"],
+    ["export.pdf.browser", "PDF (opens browser)…"],
     ["tools.spellcheck", "Check Spelling While Typing"],
     ["tools.spellLanguage", "Spelling Language…"],
     ["edit.pastePlain", "Paste without Formatting"],
@@ -612,6 +615,17 @@ try {
   check((await itemById("format.math"))?.enabled === true, "Typst keeps equations");
   check((await itemById("format.document"))?.enabled === true, "Typst keeps Format Document");
   check((await itemById("view.blocks"))?.enabled === true, "Typst keeps folding");
+  check((await itemById("file.print"))?.enabled === false, "Typst disables native printing");
+  check(
+    (await itemById("file.print"))?.text === "Print… (use PDF via Typst)",
+    "the disabled print row names the Typst PDF route",
+    (await itemById("file.print"))?.text ?? "MISSING",
+  );
+  check((await itemById("export.pdf"))?.enabled === false, "Typst disables the direct PDF writer");
+  check(
+    (await itemById("export.pdf.browser"))?.enabled === true,
+    "Typst keeps the browser print route",
+  );
 
   await openPaths([join(repoRoot, "samples", "asciidoc-tour.adoc")]);
   check(
@@ -632,6 +646,12 @@ try {
   );
   check((await itemById("format.document"))?.enabled === true, "HTML keeps Format Document");
   check((await itemById("tools.spellcheck"))?.enabled === false, "HTML disables spelling");
+  check((await itemById("file.print"))?.enabled === true, "HTML keeps native printing");
+  check((await itemById("export.pdf"))?.enabled === true, "HTML keeps the direct PDF writer");
+  check(
+    (await itemById("export.pdf.browser"))?.enabled === true,
+    "HTML keeps the browser print route",
+  );
 } finally {
   rmSync(workDir, { recursive: true, force: true });
 }

@@ -2,8 +2,8 @@
 
 MDraft edits four kinds of markup in one window and shows the rendered result
 beside the text. The preview is not an afterthought: each language gets the
-renderer that suits it, and for Markdown and AsciiDoc the native HTML and PDF
-(Print) exports reuse that rendered document.
+renderer that suits it, and for Markdown and AsciiDoc the native HTML, PDF and
+Print exports reuse that rendered document.
 
 This guide covers the editor and the four document types. Export formats and
 their dependencies are in [Export and conversion](export.md). Typefaces,
@@ -328,18 +328,20 @@ path inside a fenced block or an inline code span is text, not a link.
 
 ## Export
 
-The short version: **HTML** needs no extra tools; **Print (opens browser)**
-needs only a browser; **DOCX**, **ODT**, **EPUB**, LaTeX, reStructuredText,
-AsciiDoc, RTF, Textile, MediaWiki and OPML use pandoc; **PDF (via Typst)** uses
-pandoc with the Typst compiler for Markdown, AsciiDoc and HTML, and Typst
-directly for a `.typ` document.
+The short version: **HTML**, **PDF** and **Print** need no extra tools;
+**PDF (opens browser)** needs only a browser; **DOCX**, **ODT**, **EPUB**,
+LaTeX, reStructuredText, AsciiDoc, RTF, Textile, MediaWiki and OPML use pandoc;
+**PDF (via Typst)** uses pandoc with the Typst compiler for Markdown, AsciiDoc
+and HTML, and Typst directly for a `.typ` document.
 
 Exports use the document text and identity captured when the command begins.
 Switching tabs while a picker or renderer is working does not change which
 document is exported; subsequent typing stays in the editor for the next export.
-Local images and links are rewritten into destinations an ordinary browser can
-follow, and the print document waits for its fonts and figures before opening
-the print dialog.
+Local images and links are rewritten into destinations a browser or the native
+writer can follow, and the print document waits for its fonts and figures before
+printing. **File › Export › PDF…** writes the file directly through WebView2 or
+WebKitGTK; **File › Print…** (`Ctrl+P`) opens the platform print dialog. The
+browser handoff remains for scripted HTML and hosts without a print API.
 
 See [Export and conversion](export.md) for the exact directions, dependencies,
 configuration and fidelity notes.
@@ -353,6 +355,7 @@ built from source, use `Cmd` where the application registers `CmdOrCtrl`.
 | --- | --- |
 | New / Open / Save | `Ctrl+N` / `Ctrl+O` / `Ctrl+S` |
 | Save As | `Ctrl+Shift+S` |
+| Print | `Ctrl+P` |
 | Close tab | `Ctrl+W` |
 | Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
 | Move focused tab left / right | `Alt+Shift+Left` / `Alt+Shift+Right` |
@@ -394,14 +397,16 @@ the status bar while it differs from 100%.
 - **No pandoc?** DOCX, ODT, EPUB and the other pandoc formats need it. Use
   **Tools › Check or Install Pandoc…**, which installs into MDraft's own data
   folder; a copy on `PATH` is also found.
-- **Print (opens browser) opens a browser.** WebView2 has no print interface of
-  its own, so MDraft writes a light print copy and hands it to the system
-  browser. The copy waits for its images and fonts and lists any resource that
-  failed. Choose "Save as PDF" there. It is not a silent in-app PDF.
-- **The native HTML and Print (opens browser) commands are for Markdown,
-  AsciiDoc and HTML.** For a `.typ` document, use **PDF (via Typst)**; its PDF
-  is compiled directly. To turn a Typst document into DOCX or ODT, pandoc is
-  given Typst's HTML output, so page layout is lost.
+- **PDF and Print are in-app; the browser route is the fallback.** WebView2 and
+  WebKitGTK provide the print APIs; MDraft renders the light article into a
+  hidden, script-free surface and writes the PDF there. **PDF (opens browser)**
+  hands the same article to the system browser and asks you to choose "Save as
+  PDF"; it is used for scripted HTML and hosts without a print API. The browser
+  copy waits for its images and fonts and lists any resource that failed.
+- **The native PDF and Print commands are for Markdown, AsciiDoc and static
+  HTML.** For a `.typ` document, use **PDF (via Typst)**; its PDF is compiled
+  directly. To turn a Typst document into DOCX or ODT, pandoc is given Typst's
+  HTML output, so page layout is lost.
 - **Pandoc cannot carry everything.** The Markdown extensions `[TOC]` and the
   GitHub alert markers have no pandoc equivalent and appear literally in DOCX,
   ODT and LaTeX output. An AsciiDoc document is rendered by Asciidoctor before

@@ -296,9 +296,10 @@ export interface Settings {
    * What to do after a successful export, for every format.
    *
    * These used to live on each `ExportFormat`, which made a ticked box apply
-   * only to that one target. Global now, so HTML and every pandoc format run
-   * the same three actions. Print (opens browser) is the exception: the browser chooses
-   * the PDF's path, so there is nothing for MDraft to open.
+   * only to that one target. Global now, so HTML, the direct PDF and every
+   * pandoc format run the same three actions. PDF (opens browser) is the
+   * exception: the browser chooses the PDF's path, so there is nothing for
+   * MDraft to open.
    */
   afterOpenLocation: boolean;
   afterOpenFile: boolean;
@@ -646,6 +647,24 @@ export const setExportAvailability = (pandoc: boolean, typst: boolean) =>
  */
 export const printDocument = (html: string, name: string) =>
   invoke<string>("print_document", { html, name });
+
+/** The result of a native print or direct PDF operation. */
+export interface NativePrintOutcome {
+  /** The PDF written by a direct export; `null` for a print dialog. */
+  path: string | null;
+  bytes: number | null;
+  status: "written" | "dialog" | "cancelled";
+  /** Images that did not load before the print surface's deadline. */
+  failedResources: string[];
+}
+
+/** Open the platform print dialog for the prepared article. */
+export const printNative = (html: string, name: string) =>
+  invoke<NativePrintOutcome>("print_native", { html, name });
+
+/** Write a PDF through the platform webview. */
+export const printNativePdf = (html: string, name: string, target: string) =>
+  invoke<NativePrintOutcome>("print_native_pdf", { html, name, target });
 
 /**
  * Prepare the sandboxed HTML preview and get the URL the iframe should load.

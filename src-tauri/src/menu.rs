@@ -511,6 +511,11 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
     let task_language = !html && !typst;
     Some(match id {
         "file.reload" | "file.reveal" | "file.favorite" => state.has_path,
+        // Native printing and the direct PDF writer have no article for Typst:
+        // that language already compiles a PDF through Export › PDF (via
+        // Typst). The browser route stays available for every language.
+        "file.print" | "export.pdf" => !typst,
+        "export.pdf.browser" => true,
         "file.close" | "file.closeAll" => true,
         "file.closeOthers" => state.tab_count > 1,
         "file.closeLeft" => state.tab_index > 0,
@@ -599,6 +604,12 @@ fn label_for(state: &MenuState, id: &str) -> Option<String> {
             "anchor" => "Go to Heading Under Cursor",
             _ => "Open Link Under Cursor",
         },
+        "file.print" if state.document_language == "typst" => {
+            "Print… (use PDF via Typst)"
+        }
+        "export.pdf" if state.document_language == "typst" => {
+            "PDF… (use PDF via Typst)"
+        }
         "view.typstPreview"
             if state.document_language == "typst" && !state.typst_available =>
         {
@@ -711,9 +722,9 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     // The export submenu is built from settings, so the entries a user adds in
     // Preferences appear here without any further wiring. HTML is native: it is
     // written by the application from its own preview pipeline. The other rows
-    // are pandoc formats. Print is not in this submenu because it is a different
-    // action with a different destination: the system browser, not a file this
-    // application chooses.
+    // are pandoc formats. PDF is the application's own article; the browser row
+    // stays visible because a document whose scripts the native surface refuses
+    // still has a working print route.
     let mut export = SubmenuBuilder::with_id(app, "file.export", "Export")
         .item(&item("export.html", "HTML…", None)?);
     for format in export_formats(app) {
@@ -724,7 +735,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         }
         export = export.item(&built);
     }
-    let export = export.build()?;
+    let export = export
+        .separator()
+        .item(&item("export.pdf", "PDF…", None)?)
+        .item(&item("export.pdf.browser", "PDF (opens browser)…", None)?)
+        .build()?;
 
     let close_tabs = SubmenuBuilder::with_id(app, "file.closeTabs", "Close Tabs")
         .item(&item("file.closeOthers", "Other Tabs", None)?)
@@ -750,12 +765,12 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&check("file.autoSave", "Auto Save", None)?)
         .item(&item("file.reload", "Reload from Disk", None)?)
         .separator()
-        .item(&export)
         .item(&item(
-            "export.pdf",
-            "Print (opens browser)…",
-            None,
+            "file.print",
+            "Print…",
+            Some("CmdOrCtrl+P"),
         )?)
+        .item(&export)
         .separator()
         .item(&item("file.reveal", "Show in Folder", None)?)
         .item(&item("file.favorite", "Add to Favorites", None)?)

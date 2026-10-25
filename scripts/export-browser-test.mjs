@@ -209,7 +209,7 @@ try {
   // -------------------------------------------------------------------------
   // Markdown -> Print, while the editor is dark
   // -------------------------------------------------------------------------
-  await action("export.pdf");
+  await action("export.pdf.browser");
   await wait(`window.__exportTest.printCalls === 1`, 30000);
   const printDark = await evaluate(`window.__exportTest.printHtml`);
   check(typeof printDark === "string" && printDark.length > 0, "print produced a document");
@@ -250,7 +250,7 @@ try {
   await evaluate(`document.getElementById('btn-theme').click()`);
   await wait(`document.documentElement.dataset.theme === 'light'`);
   await sleep(500);
-  await action("export.pdf");
+  await action("export.pdf.browser");
   await wait(`window.__exportTest.printCalls === 2`, 30000);
   const printLight = await evaluate(`window.__exportTest.printHtml`);
   const svgLight = printLight.match(/<svg[\s\S]*?<\/svg>/)?.[0] ?? "";
