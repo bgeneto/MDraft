@@ -159,6 +159,13 @@ const SUITES = [
     doc: "samples/feature-tour.md",
   },
   {
+    id: "p0-lifecycle",
+    title: "P0 document lifecycle",
+    kind: "cdp",
+    script: "p0-lifecycle-test.mjs",
+    doc: "samples/feature-tour.md",
+  },
+  {
     id: "word-sync",
     title: "Word-level sync",
     kind: "cdp",
@@ -1151,6 +1158,9 @@ async function runRestartSuite(suite, port, options, context) {
 }
 
 async function runCloseSuite(options, context) {
+  // This layer proves clean close. It must not restore journals/settings left
+  // by the preceding UI suite; dirty-window cancellation has its own P0 layer.
+  resetAppState();
   // The PowerShell layer launches the binary itself; hand it the staged copy and
   // the same private WebView2 folder, or it inherits the developer's profile.
   const env = {

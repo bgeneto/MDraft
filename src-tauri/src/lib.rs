@@ -71,6 +71,8 @@ pub fn run() {
             settings::remove_favorite,
             documents::read_document,
             documents::write_document,
+            documents::write_document_checked,
+            documents::fingerprint_document,
             documents::stat_document,
             documents::path_exists,
             documents::open_external,

@@ -37,6 +37,7 @@ console.log("=== a new store holds one empty document ===");
 {
   const store = createSessionStore();
   const first = store.active();
+  check(first.revision === 0, "a new session starts at runtime revision zero");
   check(store.list().length === 1, "one session", String(store.list().length));
   check(first.name === "Untitled", "it is called Untitled", first.name);
   check(first.path === null, "it has no path");

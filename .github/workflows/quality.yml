@@ -45,6 +45,32 @@ jobs:
       - name: Check dependencies
         run: npm run knip
 
+  safety:
+    name: App-free safety
+    # The P0 and session suites import the TypeScript modules directly and rely
+    # on Node's type stripping; they need no build and no application. Node 24
+    # matches the version the suites are developed and documented against.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install the frontend dependencies
+        run: npm ci
+
+      - name: P0 data safety
+        run: npm run p0:unit
+
+      - name: Session store
+        run: npm run test:sessions
+
   rust:
     name: Rust
     runs-on: windows-latest

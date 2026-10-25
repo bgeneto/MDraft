@@ -55,6 +55,13 @@ Markdown document active.*
   dirty tab and says how many documents came back. A file that changed or was
   deleted on disk while its tab was dirty raises a notice with **Reload from
   disk**, **Keep my version** and **Save a copy…**, instead of being overwritten.
+  The check compares the file's bytes, not only its timestamp and size, so a
+  same-size rewrite is still caught.
+- **Document changes stay with their tab.** Typing during Save or Save As stays
+  dirty and recoverable; a delayed disk reload cannot replace newer edits.
+  Closing offers **Save / Discard / Cancel**; Escape and dismissal cancel.
+  Binary files and unsupported encodings are refused before editing, rather
+  than decoded with replacement characters and later overwritten.
 - **Typing that closes itself.** `(`, `[`, `{`, quotes and backticks insert
   their pair, step over the closer and delete both on Backspace; HTML tags close
   in HTML, Markdown and AsciiDoc. Both behaviors have a switch under

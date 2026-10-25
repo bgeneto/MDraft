@@ -201,7 +201,7 @@ rewrite from scratch.
 | `npm run stage` | `scripts/stage-artifacts.mjs` | Re-stage what is already built |
 | `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
-| `npm run test:rust` | `cargo test` | 119 tests (117 run, two ignored downloads) on both platforms |
+| `npm run test:rust` | `cargo test` | 130 tests on Windows (128 run), 129 on Linux (127 run); two ignored downloads each |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. The two restart layers are the exception: two launches of the same instance's settings directory, closed with WM_CLOSE in between so the close flush runs. Puts back the working tree, the developer's own settings, window state and recovery journal afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
 | `npm run smoke` | `scripts/dom-smoke.mjs` | 107 checks against `samples/feature-tour.md` |
 | `npm run word-sync` | `scripts/word-sync-test.mjs` | 58 checks of word-level sync, including 20 alternating pairs, element endpoints, multi-paragraph ranges, stale render rejection and reduced motion in Markdown/AsciiDoc/Typst Document, against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, the four-beat pulse and its resting mark, reduced motion, no scroll, Escape, and the fallbacks |
@@ -225,8 +225,9 @@ rewrite from scratch.
 | `npm run recent` | `scripts/recent-menu-test.mjs` | 26 checks that File › Open Recent mirrors the persisted list: the launch file, a new file becoming first, the menu id opening/focusing a tab, Clear Items emptying menu and sidebar, the list refilling, and a 27-row history rendered in full by the sidebar while the menu shows 20 plus Clear Items |
 | `npm run asciidoc` | `scripts/asciidoc-test.mjs` | 54 checks of the AsciiDoc preview, source highlighting, outline, preview copy, spellcheck, includes, paste, the AsciiDoc reference, the default extension and word-level sync |
 | `npm run asciidoc:export:unit` | `scripts/asciidoc-export-unit.mjs` | 17 unit checks of the AsciiDoc -> HTML step every pandoc export uses: unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations; no application |
-| `npm run test:sessions` | `scripts/sessions-test.mjs` | 59 unit checks of `src/sessions.ts`, with no application and no build |
-| `npm run p0:unit` | `scripts/p0-unit.mjs` | 52 unit checks of the P0 data-safety layer: recovery entry/scheduler (debounce, serialised write/remove, failure notice), disk-change classification and Typst command strings; no application and no build |
+| `npm run test:sessions` | `scripts/sessions-test.mjs` | 60 unit checks of `src/sessions.ts`, with no application and no build |
+| `npm run p0:unit` | `scripts/p0-unit.mjs` | 110 checks of recovery scheduling, disk classification, Typst commands and delayed-IO lifecycle/export safety: save/reload/Save As, queues, checked-write conflicts, baseline hashes, close cancellation, failure retention, legacy lossy copies and HTML/Print/Pandoc snapshots; no app/build |
+| `npm run p0:lifecycle` | `scripts/p0-lifecycle-test.mjs` | 34 checks through the real editor of delayed save/reload/Save As/export, recovery, three-way tab/bulk/window close, failed saves, binary/mixed-drop refusal, a same-size/same-mtime disk rewrite, UTF-16 explanation, focus and clean bundled documents |
 | `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 378 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
 | `npm run paste` | `scripts/rich-paste-test.mjs` | 87 checks of rich paste through the real UI: destination detection, conversion in every direction, whitespace across inline elements, preferences, Ctrl+Shift+V, undo, and Find/Replace paste ownership, including real Ctrl+V and Ctrl+Shift+V with plain and rich clipboard text. The 8 native-key checks are skipped (79/79) when the session cannot own the clipboard, which the suite proves by writing and reading it back |
 | `npm run image:syntax` | `scripts/image-syntax-test.mjs` | 22 checks of bitmap, remote-image and modern-format handling in Typst, Markdown, HTML and AsciiDoc; Typst refuses AVIF with a message, WebP is inserted, and Format > Image writes Typst syntax |
@@ -269,6 +270,7 @@ All of these need the app already running with CDP enabled (see
 | `tabs-restore-test.mjs` | `[port] phase1\|phase2 <doc> <extra…>` | phase 1: `samples/feature-tour.md`; the extras open as tabs | The two-launch store: phase 1 opens and reorders tabs, sets the launch preference and closes one tab just before the window does; phase 2 — launched **without** a document argument — sees the same tabs, order, active tab and preference. Normally run by `test-all.mjs`, which supplies both launches and the WM_CLOSE between them |
 | `favorites-restore-test.mjs` | `[port] phase1\|phase2 <doc> <extra>` | phase 1: `samples/feature-tour.md` plus `samples/word-sync.md` as the second tab | The two-launch favorites store: phase 1 adds one favorite from the editor menu and one from the inactive tab's menu while a whole-settings save is scheduled, leaves the Favorites panel selected and closes the active tab just before the window does; phase 2 — launched **without** a document argument — reads the list back from disk, checks its order, the remembered panel and both rendered rows, then opens one. Normally run by `test-all.mjs` |
 | `recent-menu-test.mjs` | `[port]` | `samples/feature-tour.md` | The native Open Recent submenu through the `recent_menu` probe: it lists the launch file, a newly opened file becomes the first row, the emitted menu id focuses an existing tab instead of duplicating it, Clear Items empties the menu/sidebar/settings, a 27-row history renders in full in the sidebar while the menu shows 20 plus Clear Items, and a later open refills the list |
+| `p0-lifecycle-test.mjs` | `[port]` | `samples/feature-tour.md`, plus owned temporary files | Delays IPC through browser fetch without changing immutable Tauri methods; checks disk bytes, visible text/dirty tabs/recovery, Save As ownership, explicit close decisions and non-text refusal. The harness owns and restores settings/recovery/profile |
 | `sessions-test.mjs` | — | none — runs without the application | The session store's rules: insertion after the active tab, untitled names, one tab per path under both case rules, the neighbour that takes over on close, `move` and `removeMany` order, wrap-around, and the empty-list invariant |
 | `paste-convert-test.mjs` | `[--without-optional-corpus]` | none — runs without the application | The paste matrix: clipboard and document detection, all reader/renderer pairs, escaping, sanitisation, caps and image syntax |
 | `tabs-restore-unit.mjs` | — | none — runs without the application | What is remembered and what is restored: tab order, untitled exclusion, deduplication under the platform's path identity, the 20-document cap, missing files and the active-tab fallback |
@@ -488,17 +490,18 @@ hash the pixels.
 
 ## Testing
 
-Thirty-four layers, cheapest first. Run them in this order when changing anything.
+Thirty-five default layers, cheapest first. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 119 | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction, image content sniffing (WebP/AVIF brands), `${filename}`, the untitled image guard, the Typst image root, the OS opener's executable refusal, the recovery journal's round-trip/id/cap rules |
-| Session store | `npm run test:sessions` | 59 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
-| P0 data safety (unit) | `npm run p0:unit` | 52 | Recovery entry shape, debounced/coalesced writes, serialised forget, one failure notice, unchanged/modified/deleted classification, and the Typst heading/list/quote/table/rule/TOC/inline/display-math strings — no application |
+| Rust unit | `npm run test:rust` | 130 Windows / 129 Linux | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction, image content sniffing (WebP/AVIF brands), `${filename}`, the untitled image guard, the Typst image root, the OS opener's executable refusal, the recovery journal's round-trip/id/cap rules, checked-write hashes and same-metadata conflicts |
+| Session store | `npm run test:sessions` | 60 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
+| P0 data safety (unit) | `npm run p0:unit` | 110 | Recovery scheduling/classification/Typst strings, deferred save/reload/Save As, checked-write conflicts and baseline hashes, save queues, bulk-close cancellation/failures, lossy copies and export snapshots across picker/tool/render delays — no application |
 | Paste conversion | `npm run paste:convert` | 378 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, `<br><br>` paragraph splitting, image syntax, AsciiDoc, and an image that fails to save |
 | AsciiDoc export source | `npm run asciidoc:export:unit` | 17 | Unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations - no application |
 | DOM smoke | `npm run smoke` | 107 | Rendering, pane sync, preferences (including the four On Launch choices and Line Height), math, fonts, status icons |
+| P0 lifecycle (UI) | `npm run p0:lifecycle` | 34 | Delayed save/reload/Save As/export, real text/dirty/recovery preservation, a same-size/same-mtime external rewrite, three-way close/cancellation/failures, binary/mixed-drop/UTF-16 refusal, focus restoration, clean bundled documents and native close |
 | Word sync | `npm run word-sync` | 58 | The fragment map, preview → source and source → preview, atomic code, formula and image spans, the pulse and its resting mark, reduced motion, word snapping, no scroll, Escape |
 | Auto-close matching | `npm run autoclose:unit` | 17 | Which tag a typed `>`, the void/self-closing/autolink/escape rules — no application |
 | Remembered tabs (unit) | `npm run tabs:restore:unit` | 33 | What is stored (order, untitled exclusion, deduplication, the 20-document cap) and what a restore plan does with it (missing files, the active-tab fallback) — no application |
@@ -540,8 +543,9 @@ running from `target/release` instead of refusing to build over it.
 
 The frontend quality gates are separate from the functional table: `npm run
 format:check`, `npm run lint` and `npm run knip`. The `Quality` workflow
-(`.github/workflows/quality.yml`) runs those with `npm run build` and `cargo
-clippy --all-targets -- -D warnings`.
+(`.github/workflows/quality.yml`) runs those with `npm run build`, `npm run
+p0:unit`, `npm run test:sessions` and `cargo clippy --all-targets -- -D
+warnings`.
 
 The close test is PowerShell rather than CDP because it has to kill the
 application, which no DOM test can survive. It launches the release binary, sends
@@ -549,9 +553,11 @@ WM_CLOSE — exactly what the title-bar X sends — and asserts that the process
 exits and that `.window-state.json` was written. Run it after any change to
 `capabilities/default.json`.
 
-It closes a window whose one document is clean. The guard's save-all path —
-several dirty tabs, one native prompt each — needs those prompts answered, which
-CDP cannot do, so that path stays manual. `sessions-test.mjs` covers the store
+It closes a window whose one document is clean. `p0-lifecycle-test.mjs` separately
+checks dirty tab/bulk/native-window cancellation through the in-app three-way
+dialog, plus a failed close-save. It delays browser fetch for selected IPC
+commands and stubs native pickers at that transport boundary; protected Tauri
+methods remain immutable. `sessions-test.mjs` covers the store
 invariants the guard relies on (which sessions are in the list, what `remove`
 returns, that the active session is always defined), not the prompts themselves.
 
@@ -675,7 +681,19 @@ non-configurable; a sloppy-mode assignment silently does nothing. Inspect
 `Object.getOwnPropertyDescriptor` rather than assuming the mock was installed.
 Do not weaken IPC protection to make a test pass. The native HTML currency test
 uses Print's real shared article, the actual pure HTML wrapper, and the Rust
-writer, leaving only the native picker outside CDP coverage.
+writer. For delayed IO/picker tests, `p0-lifecycle-test.mjs` instead wraps the
+browser `fetch` transport for `ipc.localhost`, preserves Tauri response headers,
+and restores the hook in `finally`; it never changes the protected IPC methods.
+Check the interception actually ran before drawing conclusions from a timing test.
+
+**`p0-lifecycle ... FAIL 0/1 checks` with `Timed out: window.__p0TestOnly.block?.entered` after a save command is split**
+The suite delays and fails IPC by command name. When GAP-032 moved the editor's
+save from `write_document` to `write_document_checked`, the `block("write_document", …)`
+hook never fired, so the first delayed-save check sat until its timeout and the
+whole layer looked like a hung application. Update every `block(...)` and the
+`failPath` branch when a command is split; keep a direct legacy-command call only
+where that command's own contract is the subject. The harness is not broken and
+the app did not regress.
 
 **`ReferenceError: require is not defined` when SSR-loading `src/markdown.ts` for a pure export-wrapper test**
 The browser module imports CSS and Highlight.js's CommonJS entry point; loading
@@ -711,6 +729,13 @@ even after TypeScript succeeds. The same build succeeds outside the sandbox;
 this is not evidence of a broken dependency or parser change. Request the
 normal execution escalation and rerun the same build/test command without
 rewriting dependencies or replacing the source file.
+
+**`OUT_DIR env var is not set, do you have a build script?` despite `src-tauri/build.rs` being present**
+On this host the restricted shell also logged `could not canonicalize path` for
+the workspace ancestors. The same MSVC-wrapped cargo command outside the sandbox
+compiled successfully; the build script was not missing. Use the normal command
+escalation rather than changing Cargo metadata or deleting the cache. The test
+executable still needs workspace `TEMP`/`TMP`, as the separate file-IO trap says.
 
 **`cannot open include file 'windows.h'` / `LNK1181`**
 Cargo never found the Windows SDK because the registry version and the on-disk
@@ -810,6 +835,24 @@ and `core:window:allow-destroy` is **not** part of `core:default`. Without it th
 close is a silent no-op: the Rust side reports `CloseRequested` and then never
 `Destroyed`, and the only way out is killing the process. Add the permission.
 `scripts/test-close.ps1` exists because nothing else in the suite catches this.
+
+**`close ... FAIL 1/3 checks` after `licence ... PASS`, while close alone passes**
+The tell was the title `• Untitled — MDraft` instead of the requested fixture,
+and a recovery entry beginning `# Bundled typefaces`. Raw bundled licenses can
+contain CRLF; CodeMirror normalizes them to LF, so an unnormalized untitled
+baseline marks an untouched Help document dirty. The next close test also used
+to inherit the preceding layer's recovery instead of resetting owned state.
+This looked like a native close/permission regression, but the new Cancel guard
+was preserving a restored buffer. Normalize new-document baselines to LF and
+keep `runCloseSuite` isolated with `resetAppState()`, after the harness backs up
+user state. Keep the separate dirty-window P0 checks; never bypass the prompt
+just to make clean-close tests pass.
+
+**Typing stops after the final dirty tab closes, although the editor is visible**
+Making the body inert during close commit blurs the editor. Removing `inert`
+does not restore focus, and a final-tab replacement disconnects the old focused
+element. Capture focus before commit, restore it if still connected, otherwise
+focus the new editor. Assert this with real typing/focus, including WebKitGTK.
 
 **A plain `cargo build` debug binary shows a blank window**
 Debug builds load `devUrl` (`http://localhost:1420`), not the embedded `dist/`, so
@@ -1880,6 +1923,17 @@ break at a block's edges, while a single `<br>` stays a hard break.
 import `planPaste` in a scratch `.mjs` and pass the cloned fragment as `html`;
 Node 24 strips the types.
 
+**A styled menu scrollbar is `width: 8px` in computed style and completely invisible in a screenshot**
+Playwright launches its Chromium with `--hide-scrollbars`, so `::-webkit-scrollbar`
+paints nothing while the layout still reserves the gutter. Measured on the editor
+menu: `offsetWidth - clientWidth` was 9px and
+`getComputedStyle(menu, "::-webkit-scrollbar-thumb")` returned the declared
+colour, yet every pixel of that 9px column was the panel background. Do not
+"fix" the CSS or add `scrollbar-color`/`scrollbar-width` because of it, and do
+not trust a Playwright screenshot as evidence about a scrollbar at all. Assert
+the computed pseudo-element style plus the reserved gutter, or look at the real
+WebView2 window.
+
 ## Adding a preference, end to end
 
 Five files, in this order — more than three, so a plan comes first; see
@@ -1905,6 +1959,8 @@ If the setting changes the editor's appearance, call it through
 src/
   main.ts            shell: document lifecycle, menus, status bar, pane sync
   sessions.ts        open documents: one session per tab, one EditorState each
+  document-lifecycle.ts session/revision snapshots, save queues, safe reload and close coordination
+  unsaved-dialog.ts  explicit Save/Discard/Cancel modal; dismissal cancels
   recovery.ts        debounced crash-recovery journal scheduler
   disk-change.ts     pure unchanged/modified/deleted classification
   typst-commands.ts  the Typst side of the Paragraph/Format menus
@@ -2091,7 +2147,7 @@ platform and fails on the other.
    reads the latter for the bundle, and the two must agree. `npm run
    check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
-3. `npm run test:rust` — 117 runnable tests (two ignored downloads: pandoc and Typst). Run them on Linux too
+3. `npm run test:rust` — 128 runnable Windows tests / 127 Linux tests (two ignored downloads: pandoc and Typst). Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run math`,

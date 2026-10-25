@@ -17,12 +17,16 @@ export interface Session {
   language: DocumentLanguage;
   savedContent: string;
   dirty: boolean;
+  /** Runtime content generation; never persisted in settings or recovery. */
+  revision: number;
   /** "\n" or "\r\n". Untitled documents use "\n" until the first save. */
   lineEnding: string;
   hadBom: boolean;
   lossy: boolean;
   size: number;
   modifiedMs: number;
+  /** SHA-256 of the raw disk revision this buffer is based on. */
+  sha256: string | null;
   readOnly: boolean;
   /**
    * Key of this buffer's crash-recovery entry. Null until the first dirty
@@ -96,11 +100,13 @@ function blank(): Session {
     language: "markdown",
     savedContent: "",
     dirty: false,
+    revision: 0,
     lineEnding: "\n",
     hadBom: false,
     lossy: false,
     size: 0,
     modifiedMs: 0,
+    sha256: null,
     readOnly: false,
     recoveryId: null,
     draft: null,
