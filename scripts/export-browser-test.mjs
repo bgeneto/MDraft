@@ -205,6 +205,14 @@ try {
     localLink?.href ?? links.map((link) => link.href).join(", "),
   );
   check(html.includes("var(--font-body"), "the standalone page uses the typography variables");
+  const alerts = elements(document, "blockquote").filter((quote) =>
+    (attrs(quote).class ?? "").split(/\s+/).includes("md-alert-warning"),
+  );
+  check(alerts.length === 1, "the GitHub alert survived the export", `${alerts.length} alert`);
+  check(
+    html.includes(".md-alert-warning{border-left-color:#d29922;background:rgba(210,153,34,.1)}"),
+    "the exported alert keeps its coloured rule and tint",
+  );
 
   // -------------------------------------------------------------------------
   // Markdown -> Print, while the editor is dark
@@ -232,6 +240,13 @@ try {
     printLinks.some((link) => link.href === "https://example.com/reference?q=1#part") &&
       printLinks.some((link) => link.href === "#details"),
     "print keeps external and heading destinations",
+  );
+  check(
+    printDark.includes('class="md-alert md-alert-warning"') &&
+      printDark.includes(
+        ".markdown-body .md-alert-warning{border-left-color:#d29922;background:rgba(210,153,34,.1)}",
+      ),
+    "the print document carries the alert markup and colours",
   );
   check(
     printDark.includes("document.fonts.ready") &&

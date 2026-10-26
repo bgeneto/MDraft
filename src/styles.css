@@ -2419,6 +2419,8 @@ body {
 
 /* --------------------------------------------------------------------------
    GitHub alerts
+   The HTML, print and native PDF wrappers carry a copy of these rules as
+   GITHUB_ALERT_CSS in src/markdown.ts; keep the two in step.
    -------------------------------------------------------------------------- */
 
 .markdown-body .md-alert {
