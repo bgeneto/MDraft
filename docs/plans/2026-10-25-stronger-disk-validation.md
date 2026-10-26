@@ -1,7 +1,6 @@
 # Stronger pre-save disk revision validation
 
-**Status:** in progress — implementation and Windows/Linux Rust validation complete;
-the first GitHub run of the `safety` job and the original commit checklist remain
+**Status:** done — implementation, Windows/Linux Rust validation and remote safety/Quality execution complete
 **Date:** 2026-10-25
 **ADR:** [`../adr/2026-10-25-disk-revision-identity.md`](../adr/2026-10-25-disk-revision-identity.md)
 
@@ -141,9 +140,9 @@ boundary.**
 
 ## Steps
 
-- [ ] Confirm the delivered P0 tree is committed; create the branch for this
-      plan. *(Deferred: the owner approved proceeding before that commit; see the
-      deviation above.)*
+- [x] Confirm the delivered P0 tree is committed and published. The original
+      separate-branch step stayed deferred; the integrated work was committed
+      on master and published for v0.5.0 at the owner's request.
 - [x] Rust: add `sha256` to `DocumentPayload` and compute it from the raw bytes
       in `read_document`; add `base_sha256` to `RecoveryEntry` with
       `#[serde(default)]` so old journals load.
@@ -283,19 +282,20 @@ the next save writes the local text. The suite passes 34/34.
 
 **Deviations / remaining verification.**
 
-- The P0 tree is still uncommitted; the diff contains both changes until the
-  owner commits.
+- The initial delivery was uncommitted. The owner subsequently requested
+  committing all changes and publishing v0.5.0; the integrated corrections are
+  committed and pushed through `d5511df`.
 - **Update after the concurrent menu work:** `npm run format:check` now passes on
   the whole tree; the earlier repository-wide failure in
   `scripts/typst-preview-test.mjs` was formatting-only and has been fixed. Every
   file this plan touched passes.
-- The GitHub `safety` job has not run yet; it invokes exactly the two local
-  commands above. At this plan's initial Windows delivery, the Linux Rust run
+- The GitHub safety job now passed P0 112/112 and sessions 60/60 in the
+  [successful Quality run](https://github.com/bgeneto/MDraft/actions/runs/40249322235).
+  Frontend gates and current-stable Clippy passed too. At this plan's initial Windows delivery, the Linux Rust run
   (then 127 expected runnable tests) was pending. The later
   [corrective validation](2026-10-25-print-safety-and-pdf-workflow.md) records
   153 runnable Debian tests and Clippy passing, plus the repaired persistent
-  conflict notice (`p0:unit` 112/112, `p0-lifecycle` 35/35). Remote CI has still
-  not been executed by this local task.
+  conflict notice (`p0:unit` 112/112, `p0-lifecycle` 35/35).
 - `p0-lifecycle`'s IPC hooks were updated from `write_document` to
   `write_document_checked`; the AGENTS trap records the timeout this otherwise
   produces. The legacy `write_document` contract is still exercised directly by

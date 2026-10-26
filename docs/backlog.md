@@ -72,7 +72,7 @@ non-obvious lesson is added to the Traps section.
 | GAP-005 | P1 | M | Data safety | Shared file classification and size policy; binary/lossy guard delivered | open |
 | GAP-026 | P1 | M | Output | Browser-readable HTML and print output | in progress |
 | GAP-027 | P1 | M/L | Testing | Lifecycle regression coverage and CI | open |
-| GAP-032 | P1 | M | Data safety | Stronger pre-save disk revision validation | in progress |
+| GAP-032 | P1 | M | Data safety | Stronger pre-save disk revision validation | done |
 | GAP-011 | P1 | M | Preview | Search inside the preview | open |
 | GAP-012 | P1 | S | Documentation | Documentation truth pass | in progress |
 | GAP-013 | P1 | S/M | Markdown | YAML front matter handling | open |
@@ -115,6 +115,14 @@ preflight and network URL publication. These findings reuse their existing GAP
 owners; no duplicate feature rows or replacement IDs were added. R-01's P0 is
 repaired and verified; GAP-009's remaining row describes dialog/platform
 verification at P1, not an unresolved destination-loss bug.
+
+**Release evidence.** [v0.5.0](https://github.com/bgeneto/MDraft/releases/tag/v0.5.0)
+was published on 2026-10-25 (America/Sao_Paulo) from `d5511df`, after successful
+[Quality](https://github.com/bgeneto/MDraft/actions/runs/40249322235) and
+[Release](https://github.com/bgeneto/MDraft/actions/runs/40249815244) runs. All six
+published binaries match their manifests, checksums and GitHub SHA-256 digests.
+Publication does not close the manual GTK/high-DPI follow-ups or future
+crash/relaunch automation.
 
 ### GAP-001 — Recover unsaved work
 
@@ -1355,13 +1363,15 @@ regressions to `p0:unit` and registered `p0-lifecycle` in the default isolated
 UI harness, including three-way close and binary/encoding refusal. Reuse those
 tests. Crash/relaunch probes remain manual. Quality CI already includes
 `p0:unit` and `test:sessions` alongside build/format/lint/knip/Clippy; release CI
-runs Rust tests. A recorded remote workflow execution is distinct from a
-checked-in workflow. R-05's corrective preflight refuses any running user
+runs Rust tests. [Quality passed remotely on the release code](https://github.com/bgeneto/MDraft/actions/runs/40249322235),
+including P0 112/112, sessions 60/60, frontend gates and current-stable Clippy.
+The first remote safety execution is therefore recorded, not merely configured.
+R-05's corrective preflight refuses any running user
 MDraft before profile backup/reset/launch, including installations outside the
 repository; `--kill` cannot bypass it.
 
-**Target.** Run the existing cheap app-free suites in CI and extend the registered
-lifecycle coverage for crash/relaunch. Keep native UI coverage isolated on suitable platform
+**Remaining target.** Extend the registered lifecycle coverage for crash/relaunch.
+Keep the verified app-free CI suites and isolate native UI coverage on suitable platform
 runners. Each P0 fix still includes its reproducing tests immediately; this item
 is not permission to defer them until a later testing project.
 
@@ -1492,7 +1502,7 @@ saved versions with unsaved recovery entries.
 
 ### GAP-032 — Stronger pre-save disk revision validation
 
-**Priority:** P1 · **Effort:** M · **Workstream:** Data safety · **Status:** in progress
+**Priority:** P1 · **Effort:** M · **Workstream:** Data safety · **Status:** done
 
 **Plan:** [Stronger pre-save disk revision validation](plans/2026-10-25-stronger-disk-validation.md)
 — approved 2026-10-25. It also carries the first GAP-027 CI slice.
@@ -1507,11 +1517,13 @@ returns `written: false` and keeps the buffer dirty and journaled.
 `p0:unit` 112/112, `p0:lifecycle` 35/35 (including a same-size/same-mtime
 rewrite and conflict survival across the next poll), Rust 154 Windows / 153
 Debian passed, Clippy/build/lint/knip clean. The CI job for
-`p0:unit` and `test:sessions` is in the quality workflow; its first GitHub run
-remains to be recorded under GAP-027; the Linux Rust run is now recorded in the
-corrective plan. This does not claim an absolute filesystem compare-and-swap.
+`p0:unit` and `test:sessions` passed in the
+[remote Quality run](https://github.com/bgeneto/MDraft/actions/runs/40249322235),
+and the Linux Rust run is recorded in the corrective plan. This does not claim
+an absolute filesystem compare-and-swap. Crash/relaunch automation remains
+separate open work under GAP-027.
 
-**Evidence.** GAP-002's approved first pass compares `mtime` and size. A direct
+**Historical evidence (before stronger validation).** GAP-002's approved first pass compares `mtime` and size. A direct
 probe returns `unchanged` for different bytes with matching metadata. The stat
 and write are separate IPC operations, leaving an acknowledged external-writer
 race. The classifier comment's claim of a benign prompt for matching metadata
@@ -1593,7 +1605,7 @@ modules already exist and are not architecture approved by this backlog.
    by the approved 2026-10-25 document-safety plan.
    Preserve their reproducing tests and the earlier GAP-001/002/003 foundations.
 2. **P1 — reinforce safety and existing output.** GAP-032 stronger disk
-   validation, GAP-026 browser-readable exports, and GAP-027 automated lifecycle
+   validation is delivered and verified in CI. Continue GAP-026 browser-readable exports and GAP-027 automated lifecycle
    coverage/CI. Add Save All under GAP-004 and finish the file-size policy under
    GAP-005 as separately scoped slices. GAP-027 does not gate writing P0 tests.
 3. **P1 — make current workflows consistent.** Finish GAP-012 documentation,
@@ -1606,8 +1618,9 @@ modules already exist and are not architecture approved by this backlog.
    (GAP-010) and footnotes (GAP-014) using the intended users' workflows. Defer
    multi-file replacement and destructive file management until their safety
    and undo designs are approved.
-5. **P2 — quality and optional integration.** GAP-015/016/018/020/022,
-   GAP-028/029/030/031/033 and GAP-009 native printing. Each is independent unless
+5. **P2 — quality and optional integration.** GAP-016/018/020/022 and
+   GAP-028/029/030/031/033. GAP-015 is delivered; GAP-009's remaining GTK
+   verification stays at P1. Each remaining item is independent unless
    its particular slice needs an existing shared foundation. New UI must meet
    its own keyboard/focus requirements immediately, not wait for GAP-030.
 6. **P3 — remaining conveniences.** GAP-023, the later preview conveniences and

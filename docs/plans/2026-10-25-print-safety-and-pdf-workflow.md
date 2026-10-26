@@ -378,6 +378,31 @@ command names or PDF format IDs changed. The owner's About-copy edit remains.
   is not being presented as a Linux application interaction. GAP-009 remains
   `recheck` (P1/S) for GTK dialog review, and GAP-019 retains its Linux/high-DPI
   follow-up. Typewriter's retained behavior is visually verified on Windows.
-- The remote GitHub workflow has not been run/published from this task. Its
-  checked-in safety jobs already exist; first remote execution and future
-  crash/relaunch automation remain under GAP-027.
+- Remote publication was authorized after the implementation commit. The first
+  [App-free safety job](https://github.com/bgeneto/MDraft/actions/runs/40248728631/job/121335752411)
+  passed P0 112/112 and sessions 60/60 on GitHub. That run's newer Clippy found
+  two compatibility warnings; the release attempt was cancelled before
+  publication. Commit `d5511df` applies equivalent image-brand chunking and
+  recovery sorting fixes, with Windows/Debian Rust 154/153 and Clippy passing
+  again. The [Quality retry](https://github.com/bgeneto/MDraft/actions/runs/40249322235)
+  passed in full (Frontend, App-free safety and Rust/Clippy). Tag `v0.5.0` was
+  updated with an exact lease to `d5511df` only after that approval; no release
+  had yet been published. The [new Release run](https://github.com/bgeneto/MDraft/actions/runs/40249815244)
+  builds and publishes that verified code. Crash/relaunch automation remains GAP-027.
+
+## Release publication record — 2026-10-25 (America/Sao_Paulo)
+
+- [Release v0.5.0](https://github.com/bgeneto/MDraft/releases/tag/v0.5.0)
+  published at 21:56:02 local time, from tag commit
+  `d5511df9a802ab7d16577519702f22d29c4a696f`.
+- [Quality](https://github.com/bgeneto/MDraft/actions/runs/40249322235) and
+  [Release](https://github.com/bgeneto/MDraft/actions/runs/40249815244) succeeded.
+  Release Rust tests passed on both platforms: Windows 154, Linux 153.
+- All 10 assets are uploaded: Windows MSI, setup and portable; Linux executable,
+  AppImage and DEB; and each platform's manifest/checksums. For all six binaries,
+  the manifest size/hash and checksum entry match the published GitHub asset's
+  size and stored SHA-256 digest. No installer was launched on the owner's system.
+- Publication evidence is recorded after the release in a documentation-only
+  commit; the published tag stays fixed on its verified implementation. GTK
+  dialog/Linux high-DPI interaction and crash/relaunch automation remain the
+  explicitly open backlog work, separate from the now-verified remote CI.
