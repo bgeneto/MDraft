@@ -116,11 +116,21 @@ fn export_label(format: &ExportFormat, availability: ExportAvailability) -> Stri
     };
     match availability.pandoc {
         Some(false) => format!("{base} — needs Pandoc"),
-        Some(true) if format.id.eq_ignore_ascii_case("pdf") && availability.typst == Some(false) => {
+        Some(true) if is_pandoc_pdf(format) && availability.typst == Some(false) => {
             format!("{base} — needs Typst")
         }
         _ => base,
     }
+}
+
+/// Whether a configured export target is the built-in pandoc PDF.
+///
+/// The menu does not draw this row at the position the stored list gives it: it
+/// belongs beside the two native PDF rows, where a reader looking for a PDF
+/// expects it. The id, not the label, is what identifies it, so a renamed label
+/// or custom arguments keep the row in the same place.
+fn is_pandoc_pdf(format: &ExportFormat) -> bool {
+    format.id.eq_ignore_ascii_case("pdf")
 }
 
 /// Whether this format can run with the tools that are installed.
@@ -129,7 +139,7 @@ fn export_label(format: &ExportFormat, availability: ExportAvailability) -> Stri
 /// Markdown and writes a file, so Pandoc alone is enough.
 fn export_enabled(format: &ExportFormat, availability: ExportAvailability) -> bool {
     availability.pandoc.unwrap_or(true)
-        && (!format.id.eq_ignore_ascii_case("pdf") || availability.typst.unwrap_or(true))
+        && (!is_pandoc_pdf(format) || availability.typst.unwrap_or(true))
 }
 
 /// A menu label safe to hand to the platform backends.
@@ -725,19 +735,32 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     // are pandoc formats. PDF is the application's own article; the browser row
     // stays visible because a document whose scripts the native surface refuses
     // still has a working print route.
-    let mut export = SubmenuBuilder::with_id(app, "file.export", "Export")
-        .item(&item("export.html", "HTML…", None)?);
-    for format in export_formats(app) {
+    let export_item = |format: &ExportFormat| -> tauri::Result<MenuItem<R>> {
         let id = format!("{EXPORT_PREFIX}{}", format.id);
-        let built = item(&id, &export_label(&format, availability), None)?;
-        if !export_enabled(&format, availability) {
+        let built = item(&id, &export_label(format, availability), None)?;
+        if !export_enabled(format, availability) {
             built.set_enabled(false)?;
         }
-        export = export.item(&built);
+        Ok(built)
+    };
+    // The pandoc PDF is listed with the two native PDF rows rather than at its
+    // stored position: a reader looking for a PDF then finds all three routes in
+    // one place instead of scanning the whole pandoc list. Every other target
+    // keeps the order arranged in Preferences.
+    let (pandoc_pdf, other_formats): (Vec<ExportFormat>, Vec<ExportFormat>) =
+        export_formats(app).into_iter().partition(is_pandoc_pdf);
+    let mut export = SubmenuBuilder::with_id(app, "file.export", "Export")
+        .item(&item("export.html", "HTML…", None)?);
+    for format in &other_formats {
+        export = export.item(&export_item(format)?);
+    }
+    let mut export = export
+        .separator()
+        .item(&item("export.pdf", "PDF…", None)?);
+    for format in &pandoc_pdf {
+        export = export.item(&export_item(format)?);
     }
     let export = export
-        .separator()
-        .item(&item("export.pdf", "PDF…", None)?)
         .item(&item("export.pdf.browser", "PDF (opens browser)…", None)?)
         .build()?;
 
@@ -1806,6 +1829,29 @@ mod tests {
         };
         assert!(export_enabled(&pdf, installed));
         assert_eq!(export_label(&pdf, installed), "PDF (via Typst)…");
+    }
+
+    #[test]
+    fn only_the_built_in_pdf_is_drawn_with_the_native_pdf_rows() {
+        // The menu partitions the stored formats on this predicate, so a second
+        // match would duplicate a row and a miss would drop PDF (via Typst) back
+        // into the pandoc list.
+        let formats = default_export_formats();
+        assert_eq!(
+            formats.iter().filter(|format| is_pandoc_pdf(format)).count(),
+            1,
+            "exactly one default format is the pandoc PDF"
+        );
+        assert!(is_pandoc_pdf(&ExportFormat {
+            id: "PDF".into(),
+            label: "Typeset with Typst".into(),
+            ..ExportFormat::default()
+        }));
+        assert!(!is_pandoc_pdf(&ExportFormat {
+            id: "custom1".into(),
+            label: "PDF (via Typst)".into(),
+            ..ExportFormat::default()
+        }));
     }
 
     #[test]

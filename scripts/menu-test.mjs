@@ -255,6 +255,16 @@ try {
     !textOf("edit.find").endsWith("…") && !textOf("edit.replace").endsWith("…"),
     "find and replace do not pretend to be dialogs",
   );
+  // The three PDF routes are one group at the foot of the submenu: the native
+  // writer, the pandoc/Typst conversion, then the browser fallback. The pandoc
+  // PDF is drawn from the stored format list, so this is also the check that
+  // its configured position does not scatter it back among Word and LaTeX.
+  const exportOrder = all.filter((item) => item.parent === "Export").map((item) => item.id);
+  check(
+    exportOrder.slice(-3).join(" ") === "export.pdf export.pandoc.pdf export.pdf.browser",
+    "the Export submenu ends with the three PDF routes in order",
+    exportOrder.slice(-3).join(" "),
+  );
 
   // -------------------------------------------------------------------------
   // Availability on the Markdown fixture

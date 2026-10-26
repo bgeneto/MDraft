@@ -790,6 +790,25 @@ export const ASCIIDOC_CSS = `
 .asciidoc-error{background:#fff2f0;border:1px solid #ffccc7;border-radius:6px;padding:12px 14px;white-space:pre-wrap}
 `;
 
+/**
+ * The GitHub alert colours an exported document must carry.
+ *
+ * The preview gets these from `src/styles.css`; the HTML, print and native PDF
+ * wrappers never load that file, so without this copy an alert loses its tinted
+ * background and coloured rule and reads as a plain blockquote. The rows are
+ * deliberately duplicated rather than generated: the export has no stylesheet
+ * import to share, exactly like `ASCIIDOC_CSS` above.
+ */
+export const GITHUB_ALERT_CSS = `
+.markdown-body .md-alert{border-left-width:4px;border-radius:3px;padding:8px 14px;color:inherit}
+.markdown-body .md-alert-title{margin:0 0 4px;font-weight:600}
+.markdown-body .md-alert-note{border-left-color:#4a90d9;background:rgba(74,144,217,.09)}
+.markdown-body .md-alert-tip{border-left-color:#3fb950;background:rgba(63,185,80,.09)}
+.markdown-body .md-alert-important{border-left-color:#a371f7;background:rgba(163,113,247,.09)}
+.markdown-body .md-alert-warning{border-left-color:#d29922;background:rgba(210,153,34,.1)}
+.markdown-body .md-alert-caution{border-left-color:#f85149;background:rgba(248,81,73,.09)}
+`;
+
 export function decorateCodeBlocks(host: HTMLElement, mermaidEnabled = true): void {
   for (const pre of Array.from(host.querySelectorAll("pre"))) {
     const code = pre.querySelector("code");

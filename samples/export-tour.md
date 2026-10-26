@@ -19,3 +19,6 @@ graph TD
 
 The diagram above must print on a light background even when the editor is
 dark.
+
+> [!WARNING]
+> An alert must keep its coloured rule and tint after export.

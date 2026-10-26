@@ -65,6 +65,7 @@ import { planPaste, type ImageRequest, type ResolvedImage } from "./paste/index"
 import { escapeMarkdownCurrency, markdownProseSelection } from "./math-delimiters";
 import {
   ASCIIDOC_CSS,
+  GITHUB_ALERT_CSS,
   KATEX_STYLESHEET_URL,
   renderMermaidIn,
   renderPreview,
@@ -2334,7 +2335,7 @@ function exportFontCss(): Promise<string> {
   return embeddedFontCss(stacks);
 }
 
-/** The typography declarations an exported document must carry. */
+/** The typography and shared structure an exported document must carry. */
 function exportTypographyCss(): string {
   const declarations = TYPOGRAPHY_ROLES.map(
     (role) => `${role.variable}:${settings[role.id] || role.fallback}`,
@@ -2358,7 +2359,7 @@ function exportTypographyCss(): string {
   // stylesheet of its own, and without this the formula in a printed PDF would
   // stay at KaTeX's 1.21em while the preview showed the reader's scale.
   const mathScale = ".math-inline,.math-display{font-size:calc(1em * var(--math-scale))}";
-  return `:root{${declarations.join(";")}}\n${emphasis}\n${mathScale}\n${ASCIIDOC_CSS}`;
+  return `:root{${declarations.join(";")}}\n${emphasis}\n${mathScale}\n${ASCIIDOC_CSS}\n${GITHUB_ALERT_CSS}`;
 }
 
 /** Basename of the open document, without its extension. */

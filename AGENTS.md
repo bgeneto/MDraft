@@ -216,13 +216,13 @@ rewrite from scratch.
 | `npm run html` | `scripts/html-preview-test.mjs` | 60 checks of the sandboxed HTML guest, including 20 alternating editor/guest pairs, full entity offsets, inline/nested ownership, reverse paint, Escape, reduced motion, invalid samples and same-word reselection after an edit |
 | `npm run export` | `scripts/export-test.mjs` | 38 checks of every export path, against real pandoc, including an AsciiDoc source and the rendered-HTML math reader |
 | `npm run export:paths:unit` | `scripts/export-paths-unit.mjs` | 44 checks of the browser path/URL policy: drive, UNC, POSIX, spaces, Unicode, `..`, different roots, fragments, `data:`, `file:` and protocol-relative addresses — no application |
-| `npm run export:browser` | `scripts/export-browser-test.mjs` | 21 checks of the native HTML and Print artifacts through the real UI: restored local images/links, absolute print URLs, the readiness/failure script, and the same light diagram palette in a dark and a light editor |
+| `npm run export:browser` | `scripts/export-browser-test.mjs` | 24 checks of the native HTML and Print artifacts through the real UI: restored local images/links, absolute print URLs, the readiness/failure script, the exported alert colours, and the same light diagram palette in a dark and a light editor |
 | `npm run pdf:native` | `scripts/pdf-native-test.mjs` | 21 checks of real PDF output, static HTML, active/encoded-child fallbacks, native script blocking, queued-job ownership and existing-target preservation, plus Poppler page checks. `MDRAFT_PDF_KEEP=1` retains evidence; `MDRAFT_PDF_RASTERIZER=wsl` selects WSL |
 | `npm run pdf:visual` | `scripts/pdf-visual-check.mjs` | App-free PDF measurement: A4 geometry, embedded fonts, selectable text, rasterized page PNGs, ink, image colours, table rules and margins |
 | `npm run typography` | `scripts/typography-test.mjs` | 48 checks that each face loads, each OpenType switch changes pixels, the six-preset matrix holds, the four new body faces render differently, and the Semibold weights are real |
 | `npm run typewriter` | `scripts/typewriter-test.mjs` | 21 checks of editor input and caret geometry at start/middle/end, wraps, Focus mode, composition, multi-cursor, undo/redo, reduced motion, tabs, disable and zoom reset. `MDRAFT_TYPEWRITER_VISUAL_DIR=<dir>` retains screenshots and pauses for manual review (`ready.json` / `done.json`), adding one check |
 | `npm run shortcuts` | `scripts/shortcut-test.mjs` | 44 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, that the zoom chip follows the level, that a new tab keeps the previous buffer's undo, and that the webview's F5/Ctrl+R reload keys are swallowed |
-| `npm run menu` | `scripts/menu-test.mjs` | 97 checks of the approved eight-menu tree, command placement, conditional labels, availability by language/mode/selection, Preferences deep links, Paste without Formatting, document zoom reset, block-equation selection handling and both Close All Tabs routes |
+| `npm run menu` | `scripts/menu-test.mjs` | 98 checks of the approved eight-menu tree, command placement, conditional labels, availability by language/mode/selection, Preferences deep links, Paste without Formatting, document zoom reset, the three-PDF grouping, block-equation selection handling and both Close All Tabs routes |
 | `npm run tabs` | `scripts/document-tabs-test.mjs` | 107 checks of several open documents: sidebar and Recents, `open-files`, active-tab styling, the tab context menu (including Close All Tabs), keyboard navigation, caret and scroll per tab, dirty dot, × and middle-click, Ctrl+Tab, drag and keyboard reordering, the disk poll, Auto Save across tabs, overflow arrows and the wheel, Close Others, the last tab |
 | `npm run favorites` | `scripts/favorites-test.mjs` | 56 checks of the Favorites panel that replaced Files: the editor and tab menu routes, the Add/Remove toggle, insertion order across opens, inactive-tab favoriting, duplicate adds, the per-row × and row menu, one-at-a-time removal, a missing file, the untitled disabled state, no Clear All, the Preferences changes and `view.favorites` in the native menu |
 | `npm run tabs:restore:unit` | `scripts/tabs-restore-unit.mjs` | 33 checks of what is remembered and what is restored: tab order, untitled exclusion, deduplication under the platform's path identity, the 20-document cap, and the restore plan's handling of missing files — no application |
@@ -267,7 +267,7 @@ All of these need the app already running with CDP enabled (see
 | `html-preview-test.mjs` | `[port]` | `samples/html-tour/index.html` | The guest iframe, its sandbox and IPC boundary, local CSS/images/modules, sync, blink, scripts-off, outline, the return to Markdown and the HTML tab coming back. It connects to the iframe target as well as the page |
 | `export-test.mjs` | `[port] [--install]` | `samples/feature-tour.md` | That pandoc really converts: the bytes of each output are inspected. `--install` additionally exercises the pandoc download, which is why it is opt-in |
 | `export-paths-unit.mjs` | — | none — runs without the application | Drive, UNC and POSIX path resolution, relative URLs across one root, `file://` encoding, and the publication policy for spaces, Unicode, `..`, fragments, `data:`, `file:` and protocol-relative references |
-| `export-browser-test.mjs` | `[port]` | `samples/export-tour.md`; opens `samples/export-tour.adoc` | That an exported HTML page and the captured print document have real local image/link destinations, no `asset:` URLs, absolute `file://` print images, the font/image readiness script, and the same light Mermaid palette whatever the editor theme |
+| `export-browser-test.mjs` | `[port]` | `samples/export-tour.md`; opens `samples/export-tour.adoc` | That an exported HTML page and the captured print document have real local image/link destinations, no `asset:` URLs, absolute `file://` print images, the font/image readiness script, the exported alert tint, and the same light Mermaid palette whatever the editor theme |
 | `pdf-native-test.mjs` | `[port]` | `samples/pdf-quality.md` | The real direct-PDF path: save picker stubbed, `PrintToPdf` writes the file, Poppler checks its pages, static HTML prints natively, and scripted HTML stays on the browser route |
 | `pdf-visual-check.mjs` | `--pdf <file> [--out <dir>] [--fixture quality] [--rasterizer auto\|native\|wsl] [--expect <text>]` | any PDF | A4 geometry, embedded fonts, selectable text, one PNG/PPM per page, non-blank pages, quiet margins, image colours, table rules and math ink. Needs Poppler on `PATH` or in WSL; no application |
 | `typography-test.mjs` | `[port]` | any | Screenshots text with each OpenType feature off and on and compares pixels, then asserts the six-preset matrix, that the four new body faces produce different images, and the Semibold weights. Width cannot measure a monospaced face, so nothing narrower would work |
@@ -518,7 +518,7 @@ Forty-two default layers, cheapest first. Run them in this order when changing a
 | Paste conversion | `npm run paste:convert` | 378 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, `<br><br>` paragraph splitting, image syntax, AsciiDoc, and an image that fails to save |
 | AsciiDoc export source | `npm run asciidoc:export:unit` | 17 | Unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations - no application |
 | Export paths (unit) | `npm run export:paths:unit` | 44 | Drive, UNC and POSIX paths, spaces, Unicode, `..`, different roots, encoded spaces, fragments, `data:`, `file:` and protocol-relative references — no application |
-| Browser exports | `npm run export:browser` | 21 | Native HTML and Print artifacts: local image/link resolution, no app protocol, absolute print URLs, the resource-wait/failure script, and a light print diagram in a dark editor |
+| Browser exports | `npm run export:browser` | 24 | Native HTML and Print artifacts: local image/link resolution, no app protocol, absolute print URLs, the resource-wait/failure script, the exported alert tint, and a light print diagram in a dark editor |
 | Native PDF | `npm run pdf:native` | 21 | A real direct PDF from Markdown, static HTML through the same writer, scripted HTML kept on the browser route, and the Poppler visual metrics |
 | PDF visual (app-free) | `npm run pdf:visual -- --pdf <file> --fixture quality` | 36 | A4 geometry, embedded fonts, selectable text, one PNG/PPM per page, non-blank pages, quiet margins, known image colours, table rules and mathematics ink |
 | DOM smoke | `npm run smoke` | 108 | Rendering, pane sync, preferences (including the four On Launch choices and Line Height), math, fonts, status icons |
@@ -543,7 +543,7 @@ Forty-two default layers, cheapest first. Run them in this order when changing a
 | Syntax | `npm run syntax` | 10 | Token colours, palette switching, and the sync mark's amber contrast on three dark palettes |
 | AsciiDoc | `npm run asciidoc` | 54 | Preview, title/TOC, math, includes, source highlighting, outline, preview copy, spellcheck, paste, the built-in reference, defaults, word-level sync |
 | Editor menu / Format | `npm run format:document` | 141 | The full editing menu, clipboard fake, the main-menu route, Markdown/HTML/Typst, inactive tabs, undo, caret, AsciiDoc disabled, spelling and formatter failures; 47 math checks also run with `node scripts/format-document-test.mjs --unit`. The physics copy retains all 292 formulas and its KaTeX error count after formatting, with visible fractions/radicals and exact bytes after undo |
-| Menu structure | `npm run menu` | 97 | The eight categories and command placement, conditional labels, availability by language/mode/selection, Preferences deep links, Paste without Formatting, document zoom reset, block-equation selection and both Close All Tabs routes |
+| Menu structure | `npm run menu` | 98 | The eight categories and command placement, conditional labels, availability by language/mode/selection, Preferences deep links, Paste without Formatting, document zoom reset, the three-PDF grouping, block-equation selection and both Close All Tabs routes |
 | HTML guest | `npm run html` | 60 | Sandbox, IPC boundary, local assets, sync/blink, the guest word double-click, scripts-off, outline, reload-key guard |
 | Document tabs | `npm run tabs` | 107 | Several open documents, the context menu (including Close All Tabs), drag and keyboard reordering, overflow arrows, the disk poll, Auto Save across tabs, caret and scroll per tab |
 | Favorites | `npm run favorites` | 56 | The panel that replaced Files, both Add/Remove menu routes, insertion order across opens, inactive tabs, one-at-a-time removal, a missing file, the untitled disabled state, no Clear All, the Preferences changes and `view.favorites` |
@@ -1231,6 +1231,17 @@ whole page — the same failure the preview once had, now reproduced in the expo
 path. `KATEX_STYLESHEET_URL` in `markdown.ts` is the single source for both
 exports; a second copy would drift again.
 
+**An exported GitHub alert loses its colour and looks like a plain blockquote**
+`.md-alert-*` lived only in `src/styles.css`, which none of the export wrappers
+load. The preview was correct, while `Export › HTML`, the native PDF and the
+browser PDF all printed a grey `blockquote` with no tinted background and no
+coloured rule. Every rule the preview applies from `styles.css` must have an
+export copy beside `ASCIIDOC_CSS`; `GITHUB_ALERT_CSS` in `markdown.ts` is that
+copy, and `exportTypographyCss()` concatenates it. A regression is invisible in
+the DOM: assert the rule in the exported bytes (`scripts/export-browser-test.mjs`)
+or measure the computed background in a browser reading the exported file, not
+that `.md-alert` exists in the article.
+
 **Pandoc's markdown reader does not accept `\(…\)` or `\[…\]` by default**
 `tex_math_dollars` is on, `tex_math_single_backslash` and
 `tex_math_double_backslash` are off, so a document using the backslash delimiters
@@ -1246,6 +1257,9 @@ export shows `[TOC]` and `[!NOTE]` where the preview shows a table of contents
 and a callout. This is a real fidelity gap, not a bug to fix by argument
 tweaking; the PDF export, which prints the preview's own HTML, does not have it.
 `[TOC]` has a partial answer: add `--toc` in the format's Extra Arguments.
+Native PDF and `Export › HTML` do draw coloured alerts because they reuse the
+preview article and the shared `GITHUB_ALERT_CSS`; `PDF (via Typst)` still prints
+the `[!NOTE]` marker literally, because pandoc never evaluates it.
 
 **A monospaced font makes width useless as a measurement**
 Testing that a typography feature works by comparing text widths works for
@@ -1976,6 +1990,17 @@ directory with the two settings files, and `resetAppState` clears it between
 suites. Any new launcher outside that harness must do the same, or build with its
 own `identifier`.
 
+**Moving an export row by editing `default_export_formats()` changes nothing**
+The Export submenu does not read `default_export_formats()`: it reads each
+install's stored `settings.exportFormats`, and a built-in row can be pinned by
+the builder instead of the list order (the pandoc PDF is, through
+`is_pandoc_pdf`). A fresh profile can show a new order while the developer's own
+does not, and editing the defaults alone moves no row that is pinned. Read the
+real file before suspecting a stale build:
+`(Get-Content "$env:APPDATA\io.github.bernh.mdraft\settings.json" -Raw | ConvertFrom-Json).exportFormats.id`.
+Place a fixed row in `build` and assert it through `menu_items` in
+`scripts/menu-test.mjs`; that probe is the only way to see a native menu.
+
 **A pasted image URL shows a broken image and no folder is written, whatever the Image rule says**
 The rich-paste resolver caught every failure with `console.warn` only and kept
 the URL, so the reader saw a broken image and no explanation; changing the rule
@@ -2367,7 +2392,7 @@ platform and fails on the other.
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run menu`,
    `npm run preview:zoom`, `npm run math`, `npm run syntax`, `npm run html`,
-   `npm run asciidoc`, `npm run favorites` and `npm run pdf:native` — 108 + 97 +
+   `npm run asciidoc`, `npm run favorites` and `npm run pdf:native` — 108 + 98 +
    24 + 12 + 10 + 60 + 54 + 56 + 21 checks; also run `npm run typewriter`
    (21 checks, plus the manual visual hold when changing its behavior).
 5. `npm run audit` against both `docs/sample-files` documents and compare the
