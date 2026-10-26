@@ -309,7 +309,7 @@ fn isobmff_ext(bytes: &[u8]) -> Option<&'static str> {
     let end = declared.clamp(16, bytes.len());
     // The box is: major brand, minor version, then compatible brands.
     let mut heic = false;
-    for (index, brand) in bytes[8..end].chunks_exact(4).enumerate() {
+    for (index, brand) in bytes[8..end].as_chunks::<4>().0.iter().enumerate() {
         if index == 1 {
             continue; // minor version, not a brand
         }

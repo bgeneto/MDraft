@@ -652,6 +652,14 @@ than asserting the feature's own internal counters.
 
 ## Traps
 
+**Local Clippy passes, but CI fails with `chunks_exact_to_as_chunks` / `unnecessary_sort_by`**
+The local toolchain is Rust 1.91.1 while the CI `stable` toolchain can be newer
+(the first 0.5.0 run used Clippy 1.99). New warnings become errors under
+`-D warnings`. Use `as_chunks::<4>().0.iter()` for the fixed-width image brands
+and `sort_by_key(Reverse(...))` for descending recovery timestamps; both retain
+the existing behavior and compile on the declared minimum Rust. Recheck the
+current runner rather than treating a clean local older Clippy as CI evidence.
+
 **Ctrl+Shift+0 passes a synthetic shortcut test but does nothing with the real keyboard**
 Windows can consume this input-language chord before WebView2 receives the digit.
 A trusted-key capture showed only the modifiers; `Ctrl+Alt+0` delivered the digit

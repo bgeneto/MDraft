@@ -183,7 +183,7 @@ fn list_entries(dir: &Path) -> Result<Vec<RecoveryEntry>, String> {
         }
     }
 
-    entries.sort_by(|a, b| b.updated_ms.cmp(&a.updated_ms));
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.updated_ms));
     Ok(entries)
 }
 
