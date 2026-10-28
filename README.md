@@ -120,7 +120,8 @@ Markdown document active.*
   the operating system's credential store, never in `settings.json`. The
   assistant is off by default: no request and no keychain read happens at
   start-up, and the store is read only when you open its Preferences section or
-  use an action.
+  use an action. Saving the key also fetches the endpoint's model list; the
+  Fetch button refreshes it later.
 - **Quiet by design.** No accounts, activation, telemetry or update checks.
   MDraft makes no network request at start-up; it goes online only for an action
   you take, such as installing pandoc or Typst, fetching a pasted image URL,

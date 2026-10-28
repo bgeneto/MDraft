@@ -233,7 +233,7 @@ rewrite from scratch.
 | `npm run html:map:unit` | `scripts/html-source-map-unit.mjs` | 38 checks of HTML5 entity boundaries, inverse ranges, validated multi-node payloads and text-node offsets: entities and CRLF, the decoded-to-raw translation, the sample mismatch that paints nothing, and two nodes under one stamp — no application |
 | `npm run block:map:unit` | `scripts/block-map-unit.mjs` | 12 checks of the block-level source map and Typst line annotation: folded index mapping, per-node alignment across substitutions and smart punctuation, gap block fallback, Typst comments/rules/math/code/tables, and `#lorem` exclusion — no application |
 | `npm run ai:unit` | `scripts/ai-unit.mjs` | 93 checks of the AI catalog and search, paragraph expansion, continuation spacing, block insertion, parameter validation, stale targets, history caps, button geometry and the word diff; no application and no network |
-| `npm run ai` | `scripts/ai-assistant-test.mjs` | 107 checks against a local mock endpoint: the icon-only draggable button and its launch anchor, the five-group palette, search and its discreet scrollbar, Improve/Continue/Summarize/Translate/Tone/Convert/Ask, streaming, Stop, a 401 with Retry, the Anthropic request shape, model fetch, the stale-target guard, a tab switch, dark theme/reduced motion and key hygiene |
+| `npm run ai` | `scripts/ai-assistant-test.mjs` | 114 checks against a local mock endpoint: the icon-only draggable button and its launch anchor, the five-group palette, search and its discreet scrollbar, Improve/Continue/Summarize/Translate/Tone/Convert/Ask, streaming, Stop, a 401 with Retry, the Anthropic request shape, a typed Base URL, a gzip model list, the empty-list error, key-save auto-fetch, the stale-target guard, a tab switch, dark theme/reduced motion and key hygiene |
 | `npm run ai:live` | `scripts/ai-live-test.mjs` | Opt-in 70 checks against the real `http://192.168.61.9:4000/v1` / `Qwen3.8-27B`: all fourteen actions, non-empty tag-free output, the model/host chip, apply and undo, and key hygiene. Reads `MDRAFT_AI_E2E_*`; `MDRAFT_AI_LIVE_OPTIONAL=1` turns a missing key into `SKIP` plus `0/0 checks passed` |
 | `npm run recent` | `scripts/recent-menu-test.mjs` | 26 checks that File › Open Recent mirrors the persisted list: the launch file, a new file becoming first, the menu id opening/focusing a tab, Clear Items emptying menu and sidebar, the list refilling, and a 27-row history rendered in full by the sidebar while the menu shows 20 plus Clear Items |
 | `npm run asciidoc` | `scripts/asciidoc-test.mjs` | 54 checks of the AsciiDoc preview, source highlighting, outline, preview copy, spellcheck, includes, paste, the AsciiDoc reference, the default extension and word-level sync |
@@ -522,7 +522,7 @@ Forty-four default layers, cheapest first, plus the opt-in live AI layer. Run th
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 197 Windows / 196 Linux | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction, image content sniffing (WebP/AVIF brands), `${filename}`, the untitled image guard, the Typst image root, the OS opener's executable refusal, the recovery journal's round-trip/id/cap rules, checked-write hashes and same-metadata conflicts, launch argument parsing and path identity, the AI prompts/tags/caps/URL joins and SSE parsing |
+| Rust unit | `npm run test:rust` | 198 Windows / 197 Linux | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction, image content sniffing (WebP/AVIF brands), `${filename}`, the untitled image guard, the Typst image root, the OS opener's executable refusal, the recovery journal's round-trip/id/cap rules, checked-write hashes and same-metadata conflicts, launch argument parsing and path identity, the AI prompts/tags/caps/URL joins, SSE parsing and model-list diagnostics |
 | Session store | `npm run test:sessions` | 60 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
 | P0 data safety (unit) | `npm run p0:unit` | 112 | Recovery scheduling/classification/Typst strings, deferred save/reload/Save As, checked-write conflicts and baseline hashes, save queues, bulk-close cancellation/failures, lossy copies and export snapshots across picker/tool/render delays — no application |
 | Paste conversion | `npm run paste:convert` | 378 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, `<br><br>` paragraph splitting, image syntax, AsciiDoc, and an image that fails to save |
@@ -543,7 +543,7 @@ Forty-four default layers, cheapest first, plus the opt-in live AI layer. Run th
 | HTML source map (unit) | `npm run html:map:unit` | 38 | Entities and CRLF offsets, decoded-to-raw translation, the sample mismatch, and two text nodes under one stamp — no application |
 | Block source map (unit) | `npm run block:map:unit` | 12 | Folded index mapping, per-node alignment across substitutions and smart punctuation, gap block fallback, Typst comments/rules/math/code/tables, and `#lorem` exclusion — no application |
 | AI Assistant (unit) | `npm run ai:unit` | 93 | The catalog/search cross-language contract, paragraph expansion, Continue spacing, block insertion, parameters, stale targets, history caps, button anchor/clamp/drag threshold and the capped word diff — no application |
-| AI Assistant (mock) | `npm run ai` | 107 | The icon-only button and its launch anchor, drag/reset, the five-group palette, search and its discreet scrollbar, streaming, Stop, a 401, Anthropic, model fetch, parameters, stale targets, a tab switch, dark theme/reduced motion and key hygiene |
+| AI Assistant (mock) | `npm run ai` | 114 | The icon-only button and its launch anchor, drag/reset, the five-group palette, search and its discreet scrollbar, streaming, Stop, a 401, Anthropic, the typed Base URL, a gzip model list, the empty-list error, key-save auto-fetch, parameters, stale targets, a tab switch, dark theme/reduced motion and key hygiene |
 | AI Assistant (live) | `npm run ai:live` | 70 (opt-in) | All fourteen actions against `http://192.168.61.9:4000/v1` / `Qwen3.8-27B`: non-empty tag-free output, the model/host chip, apply and undo, and key hygiene. Without `MDRAFT_AI_E2E_*` the harness entry prints SKIP and `0/0` |
 | Auto-close typing | `npm run autoclose` | 33 | Pairs, step-over, Backspace, selection wrap, Markdown inline tags, HTML tags, both preferences, in all four document types |
 | Rich paste | `npm run paste` | 87 (79 without a usable clipboard) | The paste event, destination notice, preferences, Ctrl+Shift+V, undo, the same clipboard converted into Markdown and kept as source in HTML, spaces around inline elements, native Find/Replace field paste and unchanged source bytes. The native block is skipped when writing the clipboard then reading it back returns empty |
@@ -2201,6 +2201,12 @@ The fresh profile stores `theme: "system"`, and the status-bar button toggles be
 **A live-model answer is flagged as a leaked tag because it legitimately contains `<table>`**
 The live suite checked the answer against every output tag in the catalog. A Markdown continuation that writes an HTML `<table>` example, or a prose sentence about a `<summary>`, is then reported as a filter failure even though the action's own `<continuation>` tag was stripped correctly. Check the expected action's tag (plus `<notes>` for Improve), not the whole catalog, or the test punishes the model for writing valid content.
 
+**`The endpoint did not return a model list as JSON` although the same `/models` URL is valid JSON in a browser**
+The gateway answers `Content-Encoding: gzip` when the request advertises `Accept-Encoding`; the reqwest build had `rustls-no-provider` and `json` but not `gzip`, `brotli` or `deflate`, so `.json()` parsed compressed bytes. Enable those features. Reproduce the compression with `curl -H 'Accept-Encoding: gzip, br, deflate'`: the headers gain `content-encoding: gzip` and the body starts `1F 8B`, while a request without the header is plain JSON. The same message also appeared for a **200 with an empty body** from the wrong Base URL (`llm.sistema.pro.br/v1`), so `list_models` now names an empty body or HTML page and the Base URL instead of only saying "not JSON".
+
+**`Fetch model list` used the previous Base URL after a new one was typed**
+The Preferences text row committed on `change` (blur/Enter), and the fetch read `settings.aiBaseUrl` instead of the field. Pressing Fetch while the field still had focus sent the old endpoint — in this report `llm.sistema.pro.br/v1`, whose `/models` was an empty 200, while the field showed the test endpoint. Read the controls and persist them before the request; set `rerender: false` on the Base URL and Model rows so the blur does not replace the button being clicked.
+
 ## Adding a preference, end to end
 
 Five files, in this order — more than three, so a plan comes first; see
@@ -2419,13 +2425,13 @@ platform and fails on the other.
    reads the latter for the bundle, and the two must agree. `npm run
    check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
-3. `npm run test:rust` — 197 runnable Windows tests / 196 Linux tests (two ignored downloads: pandoc and Typst, plus the ignored display-owned Linux print probe). Run them on Linux too
+3. `npm run test:rust` — 198 runnable Windows tests / 197 Linux tests (two ignored downloads: pandoc and Typst, plus the ignored display-owned Linux print probe). Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run menu`,
    `npm run preview:zoom`, `npm run math`, `npm run syntax`, `npm run html`,
    `npm run asciidoc`, `npm run favorites`, `npm run ai:unit`, `npm run ai` and
-   `npm run pdf:native` — 108 + 101 + 24 + 12 + 10 + 60 + 54 + 56 + 93 + 107 +
+   `npm run pdf:native` — 108 + 101 + 24 + 12 + 10 + 60 + 54 + 56 + 93 + 114 +
    21 checks; also run `npm run typewriter` (21 checks, plus the manual visual
    hold when changing its behavior), and `npm run ai:live` when the Qwen
    credentials are present.

@@ -422,8 +422,46 @@ fn provider_error_message(value: &Value) -> String {
     format!("The provider reported an error: {message}")
 }
 
-fn http_error(status: u16, body: &str, host: &str, base_url: &str) -> String {
-    match status {
+/// Explain a `/models` body that is not a model list.
+///
+/// The first live report only said "not JSON"; an empty 200 from a wrong Base
+/// URL and an HTML page from a gateway login both looked identical. Naming the
+/// status, content type, byte count and a short body slice turns that into one
+/// actionable message.
+fn model_list_error(
+    status: u16,
+    content_type: &str,
+    bytes: &[u8],
+    base_url: &str,
+    error: &serde_json::Error,
+) -> String {
+    let content_type = content_type.trim();
+    if bytes.is_empty() {
+        return format!(
+            "The endpoint returned an empty response for the model list (HTTP {status}). Check the Base URL ({base_url}); it usually ends with /v1."
+        );
+    }
+    let snippet = sanitize(&String::from_utf8_lossy(bytes));
+    if content_type.to_ascii_lowercase().contains("html")
+        || snippet.trim_start().starts_with('<')
+    {
+        return format!(
+            "The endpoint returned an HTML page instead of a model list (HTTP {status}). Check the Base URL ({base_url}); it usually ends with /v1."
+        );
+    }
+    let type_note = if content_type.is_empty() {
+        "no content type"
+    } else {
+        content_type
+    };
+    let detail: String = snippet.chars().take(160).collect();
+    format!(
+        "The endpoint did not return a model list as JSON (HTTP {status}, {type_note}, {} bytes): {detail}. Check the Base URL ({base_url}). {error}",
+        bytes.len()
+    )
+}
+
+fn http_error(status: u16, body: &str, host: &str, base_url: &str) -> String {    match status {
         401 | 403 => format!(
             "The API key was rejected by {host}. Open AI Settings and check the key for this endpoint."
         ),
@@ -510,10 +548,30 @@ pub async fn list_models(config: &ChatConfig) -> Result<Vec<String>, String> {
             &config.base_url,
         ));
     }
-    let value: Value = response
-        .json()
-        .await
-        .map_err(|_| "The endpoint did not return a model list as JSON.".to_string())?;
+    let value: Value = {
+        // Read the bytes once so a bad body can be described (empty, HTML,
+        // compressed by a proxy that ignored our features) instead of the
+        // useless "not JSON" that made the first live report hard to diagnose.
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|error| transport_error(&error, &config.host))?;
+        serde_json::from_slice(&bytes).map_err(|error| {
+            model_list_error(
+                status.as_u16(),
+                &content_type,
+                &bytes,
+                &config.base_url,
+                &error,
+            )
+        })?
+    };
     let items = value
         .get("data")
         .and_then(Value::as_array)
@@ -724,6 +782,27 @@ mod tests {
         );
         assert_eq!(redact("no key", None), "no key");
         assert_eq!(redact("no key", Some("")), "no key");
+    }
+
+    #[test]
+    fn model_list_errors_name_the_problem() {
+        let empty = serde_json::from_slice::<Value>(b"").unwrap_err();
+        let empty_message = model_list_error(200, "", b"", "http://host/v1", &empty);
+        assert!(empty_message.contains("empty response"));
+        assert!(empty_message.contains("http://host/v1"));
+
+        let html = b"<!doctype html><title>gateway</title>";
+        let html_error = serde_json::from_slice::<Value>(html).unwrap_err();
+        let html_message =
+            model_list_error(200, "text/html; charset=utf-8", html, "http://host/v1", &html_error);
+        assert!(html_message.contains("HTML page"));
+
+        let bad = b"{not json";
+        let bad_error = serde_json::from_slice::<Value>(bad).unwrap_err();
+        let bad_message =
+            model_list_error(200, "application/json", bad, "http://host/v1", &bad_error);
+        assert!(bad_message.contains("did not return a model list as JSON"));
+        assert!(bad_message.contains("{not json"));
     }
 
     #[test]
