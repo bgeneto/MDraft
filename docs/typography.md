@@ -69,17 +69,19 @@ Every preset is a starting point: changing a face or a switch moves the panel
 to **Custom**, which keeps the values you chose. The four role pickers are not
 locked to a preset.
 
-Editor font size, preview font size and math scale are not part of a preset's
-identity. They are reader adjustments remembered per preset: set Serif to 19 px,
-visit System and Renaissance, and Serif still comes back at 19 px. A preset that
-has never been adjusted starts at its own defaults (System 16/95, Serif 18/92,
-Renaissance 19/80, Editorial 17/90, Bauhaus 17/90, Notebook 17/86). The editor
+Editor font size, preview font size, math scale and code scale are not part of a
+preset's identity. They are reader adjustments remembered per preset: set Serif
+to 19 px, visit System and Renaissance, and Serif still comes back at 19 px. A
+preset that has never been adjusted starts at its own defaults, shown as preview
+size / math scale / code scale (System 16/95/100, Serif 17/88/98, Renaissance
+19/80/90, Editorial 17/90/96, Bauhaus 17/90/93, Notebook 17/86/93). The editor
 font size starts at 15 px for every preset, with a 1.5 line height that scales
-with the size. **Line Height** in *Preferences › Editor* chooses **Compact**
-(1.3×), **Normal** (1.5×) or **Wide** (1.8×). It is a global preference, not a
-per-preset adjustment, and it applies to the source pane only: the preview keeps
-its own reading line height. Under Custom, all three sizes are global. Changing
-any of the three sizes does not leave the active preset.
+with the size. **Line Height** in
+*Preferences › Editor* chooses **Compact** (1.3×), **Normal** (1.5×) or **Wide**
+(1.8×). It is a global preference, not a per-preset adjustment, and it applies to
+the source pane only: the preview keeps its own reading line height. Under
+Custom, all four sizes are global. Changing any of the four sizes does not leave
+the active preset.
 
 ## OpenType
 
@@ -104,6 +106,25 @@ Two faces need a note rather than a checkbox:
 Kerning and standard ligatures are stated explicitly rather than left to the
 browser's defaults, and variable fonts are asked to interpolate their optical
 size axis for the size in use.
+
+## Code
+
+Fenced blocks are set at 86% of the prose size and inline spans at 88%, because a
+monospaced face has a larger x-height than the text beside it: at the same
+nominal size it reads as bigger. That ratio is a starting point, not a rule.
+**Preferences › Typography › Code scale** multiplies both from 70% to 130%.
+100% keeps the built-in ratios; about 116% makes a fenced block the same nominal
+size as the prose (86% × 1.16 ≈ 100%). The apparent size also depends on the code
+face, so the useful value is the one that looks equal, not the arithmetic one.
+
+The setting is remembered per preset like the other sizes. System starts at 100%
+because its code face is whatever the reader's machine provides; the bundled
+presets tune the ratio to their mono — Serif 98%, Renaissance 90%, Editorial 96%,
+Bauhaus 93% and Notebook 93%. It applies to the preview, the Typst Document view,
+exported HTML and the printed PDF, whose wrappers use the same 86% / 88% base. It
+does not reach the source pane (**Editor font size**), the sandboxed HTML guest
+(the document's own CSS), Typst Pages (the compiler's layout) or pandoc exports,
+which keep pandoc's own layout.
 
 ## Semibold, not Bold
 

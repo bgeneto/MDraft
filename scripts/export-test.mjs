@@ -587,6 +587,16 @@ if (pdfButton === "available") {
         ? "variable and rule present"
         : "MISSING — math scale would be ignored",
     );
+    // The same contract for code: the wrapper repeats the preview's 86% / 88%
+    // ratios, and without the variable beside them the reader's Code scale
+    // would silently stop at 100%.
+    check(
+      /--code-scale:\d/.test(html) && /var\(--code-scale[,)]/.test(html),
+      "the export carries the reader's code scale",
+      /--code-scale:\d/.test(html)
+        ? "variable and rule present"
+        : "MISSING — code scale would be ignored",
+    );
   }
 
   // Close the browser tab the export opened, so a test run does not leave one

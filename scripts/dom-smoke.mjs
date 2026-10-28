@@ -589,11 +589,95 @@ check(
     Math.abs(mathScale.restored / mathScale.before - Number(mathScale.bounds.value) / 100) < 0.02,
 );
 
-// Editor font size, Preview font size and Math scale are reader adjustments,
-// not part of a preset's identity. Editing one must leave the picker on the
-// preset, and each preset must remember its own sizes across a round trip.
-// An unvisited preset starts at its default sizes (15/17/88 for Serif,
-// 15/19/80 for Renaissance, 15/16/95 for System).
+// Code has the same asymmetry mathematics had: the preview's 86% / 88% ratio
+// cannot be changed, while Preview font size moves prose and code together.
+// The measurement is the rendered block — its computed size and its box — not
+// the stored number: a field nothing reads would pass a settings-only check.
+const codeScale = await evaluate(`(() => {
+  [...document.querySelectorAll('.prefs-section')]
+    .find((s) => s.textContent === 'Typography').click();
+  const findRow = () => [...document.querySelectorAll('.prefs-row')].find((r) =>
+    (r.querySelector('.prefs-label')?.textContent ?? '').replace('?', '').trim() === 'Code scale');
+  const input = () => findRow()?.querySelector('input[type=number]') ?? null;
+  const block = () => document.querySelector('#preview pre');
+  const measure = () => {
+    const pre = block();
+    if (!pre) return { size: 0, height: 0 };
+    const rect = pre.getBoundingClientRect();
+    return {
+      size: Math.round(parseFloat(getComputedStyle(pre).fontSize) * 10) / 10,
+      height: Math.round(rect.height * 10) / 10,
+    };
+  };
+  if (!input() || !block()) return JSON.stringify({ found: false });
+
+  const bounds = { min: input().min, max: input().max, value: input().value };
+  const set = (value) => {
+    const field = input();
+    field.value = String(value);
+    field.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  set(100);
+  const before = measure();
+  set(130);
+  const at130 = measure();
+  set(70);
+  const at70 = measure();
+  set(40);                       // below the range: must clamp up
+  const clampedLow = input().value;
+  set(400);                      // above the range: must clamp down
+  const clampedHigh = input().value;
+  // Leave the stored setting as it was found.
+  set(bounds.value);
+  const restored = measure();
+  return JSON.stringify({ found: true, bounds, before, at130, at70, clampedLow, clampedHigh, restored });
+})()`);
+
+console.log("\n=== code scale preference ===");
+console.log(
+  `  bounds   ${codeScale.bounds?.min}–${codeScale.bounds?.max}  value ${codeScale.bounds?.value}`,
+);
+console.log(
+  `  pre      ${codeScale.before?.size} px / ${codeScale.before?.height} px at 100%; ` +
+    `${codeScale.at130?.size} px / ${codeScale.at130?.height} px at 130%; ` +
+    `${codeScale.at70?.size} px / ${codeScale.at70?.height} px at 70%`,
+);
+console.log(`  clamps   ${codeScale.clampedLow} / ${codeScale.clampedHigh}`);
+
+check(
+  "code scale row is present and bounded 70–130",
+  codeScale.found &&
+    codeScale.bounds.min === "70" &&
+    codeScale.bounds.max === "130" &&
+    codeScale.bounds.value === "100",
+);
+check(
+  "code scale visibly resizes rendered code",
+  codeScale.before?.size > 10 &&
+    Math.abs(codeScale.at130.size / codeScale.before.size - 1.3) < 0.02 &&
+    Math.abs(codeScale.at70.size / codeScale.before.size - 0.7) < 0.02 &&
+    codeScale.at130.height > codeScale.before.height * 1.15 &&
+    codeScale.at70.height < codeScale.before.height * 0.9,
+);
+check(
+  "code scale input clamps out-of-range values",
+  codeScale.clampedLow === "70" && codeScale.clampedHigh === "130",
+);
+check(
+  "code returns to its starting scale",
+  codeScale.before?.size > 10 &&
+    Math.abs(
+      codeScale.restored.size / codeScale.before.size - Number(codeScale.bounds.value) / 100,
+    ) < 0.01,
+);
+
+// Editor font size, Preview font size, Math scale and Code scale are reader
+// adjustments, not part of a preset's identity. Editing one must leave the
+// picker on the preset, and each preset must remember its own sizes across a
+// round trip. An unvisited preset starts at its own defaults: Serif
+// 15/17/88/98, Renaissance 15/19/80/90, Editorial 15/17/90/96, Bauhaus
+// 15/17/90/93, Notebook 15/17/86/93 and System 15/16/95/100 (editor/preview/
+// math/code).
 const presetSizes = await evaluate(`(async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const section = [...document.querySelectorAll('.prefs-section')]
@@ -624,14 +708,16 @@ const presetSizes = await evaluate(`(async () => {
     editor: input('Editor font size')?.value,
     body: input('Preview font size')?.value,
     math: input('Math scale')?.value,
+    code: input('Code scale')?.value,
     oldstyle: checkbox('Oldstyle figures in prose')?.checked ?? false,
   });
 
-  // System is the starting preset. Give it sizes that are not 16/16/90.
+  // System is the starting preset. Give it sizes that are not 17/16/95/100.
   if (
     !setNumber('Editor font size', 17) ||
     !setNumber('Preview font size', 18) ||
-    !setNumber('Math scale', 92)
+    !setNumber('Math scale', 92) ||
+    !setNumber('Code scale', 108)
   ) {
     return JSON.stringify({ ok: false });
   }
@@ -644,12 +730,24 @@ const presetSizes = await evaluate(`(async () => {
   setNumber('Editor font size', 20);
   setNumber('Preview font size', 19);
   setNumber('Math scale', 83);
+  setNumber('Code scale', 84);
   await sleep(200);
   const serif = read();
 
   choose('Renaissance');
   await sleep(250);
   const renaissance = read();
+  // The three presets this suite never edits: their code scale is still the
+  // unvisited default, so one pass over them is what proves the tuned values.
+  choose('Editorial');
+  await sleep(250);
+  const editorial = read();
+  choose('Bauhaus');
+  await sleep(250);
+  const bauhaus = read();
+  choose('Notebook');
+  await sleep(250);
+  const notebook = read();
   choose('Serif');
   await sleep(250);
   const serifBack = read();
@@ -661,6 +759,7 @@ const presetSizes = await evaluate(`(async () => {
   setNumber('Editor font size', 15);
   setNumber('Preview font size', 16);
   setNumber('Math scale', 95);
+  setNumber('Code scale', 100);
   await sleep(200);
   const reset = read();
 
@@ -670,6 +769,9 @@ const presetSizes = await evaluate(`(async () => {
     serifFresh,
     serif,
     renaissance,
+    editorial,
+    bauhaus,
+    notebook,
     serifBack,
     systemBack,
     reset,
@@ -682,12 +784,15 @@ for (const [name, size] of [
   ["Serif (fresh)", presetSizes.serifFresh],
   ["Serif", presetSizes.serif],
   ["Renaissance", presetSizes.renaissance],
+  ["Editorial", presetSizes.editorial],
+  ["Bauhaus", presetSizes.bauhaus],
+  ["Notebook", presetSizes.notebook],
   ["Serif (back)", presetSizes.serifBack],
   ["System (back)", presetSizes.systemBack],
   ["reset", presetSizes.reset],
 ]) {
   console.log(
-    `  ${name.padEnd(14)} ${size?.editor}px / ${size?.body}px / ${size?.math}%  active ${size?.active}`,
+    `  ${name.padEnd(14)} ${size?.editor}px / ${size?.body}px / ${size?.math}% / ${size?.code}%  active ${size?.active}`,
   );
 }
 
@@ -703,11 +808,16 @@ check(
   presetSizes.serifFresh?.editor === "15" &&
     presetSizes.serifFresh?.body === "17" &&
     presetSizes.serifFresh?.math === "88" &&
+    presetSizes.serifFresh?.code === "98" &&
     presetSizes.serifFresh?.oldstyle === true &&
     presetSizes.renaissance?.editor === "15" &&
     presetSizes.renaissance?.body === "19" &&
     presetSizes.renaissance?.math === "80" &&
-    presetSizes.renaissance?.oldstyle === true,
+    presetSizes.renaissance?.code === "90" &&
+    presetSizes.renaissance?.oldstyle === true &&
+    presetSizes.editorial?.code === "96" &&
+    presetSizes.bauhaus?.code === "93" &&
+    presetSizes.notebook?.code === "93",
 );
 check(
   "editor and preview font sizes are remembered per preset",
@@ -728,10 +838,18 @@ check(
     presetSizes.systemBack?.math === "92",
 );
 check(
-  "the preset test restores 15 px / 95%",
+  "code scale is remembered per preset",
+  presetSizes.system?.code === "108" &&
+    presetSizes.serif?.code === "84" &&
+    presetSizes.serifBack?.code === "84" &&
+    presetSizes.systemBack?.code === "108",
+);
+check(
+  "the preset test restores the first-run sizes",
   presetSizes.reset?.editor === "15" &&
     presetSizes.reset?.body === "16" &&
     presetSizes.reset?.math === "95" &&
+    presetSizes.reset?.code === "100" &&
     presetSizes.reset?.active === "System",
 );
 

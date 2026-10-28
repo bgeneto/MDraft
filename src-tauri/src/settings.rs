@@ -165,6 +165,13 @@ fn default_math_font_scale() -> u32 {
     95
 }
 
+/// Code is drawn at 86% of the prose for a block and 88% for an inline span.
+/// The default keeps those ratios; a reader who wants a listing to match the
+/// paragraph raises it to about 116.
+fn default_code_font_scale() -> u32 {
+    100
+}
+
 pub fn default_export_formats() -> Vec<ExportFormat> {    let args = |rest: &str| format!("{PANDOC_INPUT} {rest}");
     vec![
         ExportFormat::new(
@@ -213,9 +220,10 @@ pub fn default_export_formats() -> Vec<ExportFormat> {    let args = |rest: &str
 
 /// Sizes remembered for one typography preset.
 ///
-/// Editor font size, Preview font size and Math scale are reader adjustments,
-/// not part of what identifies a preset. Any field may be absent; a missing
-/// field means the preset has never been adjusted and its default applies.
+/// Editor font size, Preview font size, Math scale and Code scale are reader
+/// adjustments, not part of what identifies a preset. Any field may be absent;
+/// a missing field means the preset has never been adjusted and its default
+/// applies.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct PresetOverride {
@@ -225,6 +233,8 @@ pub struct PresetOverride {
     pub body_font_size: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub math_font_scale: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_font_scale: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -281,12 +291,23 @@ pub struct Settings {
     /// the same rule applies to every other size in this struct.
     #[serde(default = "default_math_font_scale")]
     pub math_font_scale: u32,
+    /// Scale applied to fenced and inline code, as a percentage.
+    ///
+    /// Code is drawn at 86% of the prose size for a block and 88% for an inline
+    /// span, because a monospaced face reads larger at the same nominal size.
+    /// This multiplies those ratios the way `math_font_scale` multiplies
+    /// KaTeX's: 100 keeps the built-in ratio, and about 116 makes a block match
+    /// the prose. The Preferences field limits the range to 70–130, and a
+    /// hand-edited value is not clamped on load, for the same reason as the
+    /// sizes above.
+    #[serde(default = "default_code_font_scale")]
+    pub code_font_scale: u32,
     /// Sizes remembered per typography preset, keyed by preset id.
     ///
-    /// The top-level `editor_font_size`, `body_font_size` and `math_font_scale`
-    /// above are the active values. This map is only consulted when a preset is
-    /// selected; a missing entry means the preset has never been adjusted and
-    /// starts at its default.
+    /// The top-level `editor_font_size`, `body_font_size`, `math_font_scale` and
+    /// `code_font_scale` above are the active values. This map is only consulted
+    /// when a preset is selected; a missing entry means the preset has never
+    /// been adjusted and starts at its default.
     #[serde(default)]
     pub preset_overrides: BTreeMap<String, PresetOverride>,
     #[serde(default)]
@@ -463,6 +484,7 @@ impl Default for Settings {
             code_font: String::new(),
             body_font_size: default_body_font_size(),
             math_font_scale: default_math_font_scale(),
+            code_font_scale: default_code_font_scale(),
             preset_overrides: BTreeMap::new(),
             ligatures_in_code: false,
             tabular_figures: true,
@@ -931,6 +953,9 @@ mod tests {
         assert_eq!(s.body_font_size, 16);
         // The System preset's own starting point; the preference opts into a change.
         assert_eq!(s.math_font_scale, 95);
+        // Code starts at its built-in 86% / 88% ratios; the reader raises or
+        // lowers them from there.
+        assert_eq!(s.code_font_scale, 100);
         // The HTML guest runs the document's scripts unless the reader opts out.
         assert!(s.html_preview_scripts);
         // Sizes are per-preset adjustments, so a fresh profile has none yet.
@@ -1008,6 +1033,7 @@ mod tests {
         assert_eq!(parsed.rich_paste_images, "download");
         assert!(parsed.auto_close_pairs);
         assert!(parsed.auto_close_tags);
+        assert_eq!(parsed.code_font_scale, 100);
         assert!(parsed.preset_overrides.is_empty());
     }
 
@@ -1024,6 +1050,7 @@ mod tests {
         assert_eq!(parsed.body_font, "");
         assert_eq!(parsed.body_font_size, 16);
         assert_eq!(parsed.math_font_scale, 95);
+        assert_eq!(parsed.code_font_scale, 100);
         assert!(parsed.preset_overrides.is_empty());
         assert!(parsed.html_preview_scripts);
         // `tabular_figures` is `#[serde(default = "default_true")]`, so the
@@ -1038,10 +1065,10 @@ mod tests {
 
     #[test]
     fn preset_overrides_round_trip_and_may_be_partial() {
-        // A preset may remember only a subset of the three sizes; the others
+        // A preset may remember only a subset of the four sizes; the others
         // must stay absent so the preset's default continues to apply.
         let parsed: Settings = serde_json::from_str(
-            r#"{"presetOverrides":{"superfamily":{"editorFontSize":18,"bodyFontSize":19,"mathFontScale":83},"system":{"bodyFontSize":18}}}"#,
+            r#"{"presetOverrides":{"superfamily":{"editorFontSize":18,"bodyFontSize":19,"mathFontScale":83,"codeFontScale":116},"system":{"bodyFontSize":18}}}"#,
         )
         .unwrap();
         assert_eq!(
@@ -1056,19 +1083,29 @@ mod tests {
             parsed.preset_overrides["superfamily"].math_font_scale,
             Some(83)
         );
+        assert_eq!(
+            parsed.preset_overrides["superfamily"].code_font_scale,
+            Some(116)
+        );
         assert_eq!(parsed.preset_overrides["system"].editor_font_size, None);
         assert_eq!(parsed.preset_overrides["system"].body_font_size, Some(18));
         assert_eq!(parsed.preset_overrides["system"].math_font_scale, None);
+        assert_eq!(parsed.preset_overrides["system"].code_font_scale, None);
 
         let json = serde_json::to_value(&parsed).unwrap();
         assert_eq!(json["presetOverrides"]["superfamily"]["editorFontSize"], 18);
         assert_eq!(json["presetOverrides"]["superfamily"]["mathFontScale"], 83);
+        assert_eq!(json["presetOverrides"]["superfamily"]["codeFontScale"], 116);
         assert!(
             json["presetOverrides"]["system"].get("editorFontSize").is_none(),
             "a missing size must stay absent rather than serialising as null"
         );
         assert!(
             json["presetOverrides"]["system"].get("mathFontScale").is_none(),
+            "a missing size must stay absent rather than serialising as null"
+        );
+        assert!(
+            json["presetOverrides"]["system"].get("codeFontScale").is_none(),
             "a missing size must stay absent rather than serialising as null"
         );
     }
