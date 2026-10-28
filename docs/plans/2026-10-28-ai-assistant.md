@@ -1187,7 +1187,7 @@ document matches the code:
 - The assistant root is created by `createAssistant` and appended to
   `#editor-pane`; `index.html` has no empty mount.
 - The unit suite is 93 checks, the mock UI suite 114, and the live suite 70.
-  The Rust suite is 198 passed with 2 ignored.
+  The Rust suite is 199 passed with 2 ignored.
 - The mock suite also covers the icon-only button's 40 px size and launch
   anchor, drag/reset, the palette cap and placement, key hygiene, and the
   supplied M-sparkle icon (which keeps `textContent` empty and its accessible
@@ -1207,7 +1207,7 @@ document matches the code:
   and reqwest decodes gzip/brotli/deflate model lists. An empty 200 or an HTML
   page now names the Base URL instead of only saying "not JSON".
 - Validation run: `npm run ai:unit` 93/93, `npm test -- --only ai` 114/114,
-  `npm test -- --only ai-live` 70/70, `npm test -- --only rust` 198 passed,
+  `npm test -- --only ai-live` 70/70, `npm test -- --only rust` 199 passed,
   `menu` 101/101, `shortcuts` 47/47, and `lint`, `format:check`, `tsc` and
   `clippy --all-targets -- -D warnings` pass.
 

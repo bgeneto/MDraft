@@ -923,7 +923,7 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
     {
       kind: "text",
       label: "Base URL",
-      help: "Include the version segment; the assistant appends /chat/completions or /v1/messages. A plain-http address outside your machine is not encrypted — use it only on a trusted network.",
+      help: "Include the version segment; the assistant appends /chat/completions or /v1/messages. A public gateway usually requires https:// — an http:// address outside your machine is unencrypted and may answer an empty 200.",
       placeholder: "https://api.openai.com/v1",
       get: () => s().aiBaseUrl,
       set: (value) => {
@@ -938,7 +938,7 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
     {
       kind: "secret",
       label: "API Key",
-      help: "Saving the key also requests the model list and fills the model suggestions. Stored in the OS credential store, keyed by provider and endpoint. When the store is unavailable the key is kept for this session only. Local servers often need no key; Anthropic always does.",
+      help: "Saving the key also requests the model list and fills the model suggestions. Stored in the OS credential store, keyed by provider and endpoint; after changing the scheme or host, save it again. When the store is unavailable the key is kept for this session only. Local servers often need no key; Anthropic always does.",
       placeholder: ai.status?.hasKey ? "A key is saved — type to replace it" : "Paste the API key",
       status: () => ({
         hasKey: ai.status?.hasKey ?? false,

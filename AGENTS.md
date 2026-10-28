@@ -522,7 +522,7 @@ Forty-four default layers, cheapest first, plus the opt-in live AI layer. Run th
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 198 Windows / 197 Linux | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction, image content sniffing (WebP/AVIF brands), `${filename}`, the untitled image guard, the Typst image root, the OS opener's executable refusal, the recovery journal's round-trip/id/cap rules, checked-write hashes and same-metadata conflicts, launch argument parsing and path identity, the AI prompts/tags/caps/URL joins, SSE parsing and model-list diagnostics |
+| Rust unit | `npm run test:rust` | 199 Windows / 198 Linux | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction, image content sniffing (WebP/AVIF brands), `${filename}`, the untitled image guard, the Typst image root, the OS opener's executable refusal, the recovery journal's round-trip/id/cap rules, checked-write hashes and same-metadata conflicts, launch argument parsing and path identity, the AI prompts/tags/caps/URL joins, SSE parsing and model-list diagnostics |
 | Session store | `npm run test:sessions` | 60 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
 | P0 data safety (unit) | `npm run p0:unit` | 112 | Recovery scheduling/classification/Typst strings, deferred save/reload/Save As, checked-write conflicts and baseline hashes, save queues, bulk-close cancellation/failures, lossy copies and export snapshots across picker/tool/render delays — no application |
 | Paste conversion | `npm run paste:convert` | 378 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, `<br><br>` paragraph splitting, image syntax, AsciiDoc, and an image that fails to save |
@@ -2425,7 +2425,7 @@ platform and fails on the other.
    reads the latter for the bundle, and the two must agree. `npm run
    check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
-3. `npm run test:rust` — 198 runnable Windows tests / 197 Linux tests (two ignored downloads: pandoc and Typst, plus the ignored display-owned Linux print probe). Run them on Linux too
+3. `npm run test:rust` — 199 runnable Windows tests / 198 Linux tests (two ignored downloads: pandoc and Typst, plus the ignored display-owned Linux print probe). Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run menu`,
