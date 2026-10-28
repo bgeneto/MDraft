@@ -107,14 +107,16 @@ webkit2gtk = "2.0"
 # files the distro installed, and macOS uses NSSpellChecker. None of these
 # crates embeds a word list.
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = [
+windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Globalization",
     "Win32_System_Com",
 ] }
 # The native print surface reaches WebView2's printing interfaces directly.
-# Pin the same minor Tauri uses, and use the same windows-core minor as
-# webview2-com so the COM types cannot diverge.
+# webview2-com 0.39 (the version wry/Tauri use) is built on windows and
+# windows-core 0.62; keep this direct dependency on the same line so the COM
+# interfaces cannot diverge. windows-core 0.100 is a different major line and
+# is not interchangeable with webview2-com's 0.62 types.
 webview2-com = "0.39"
 windows-core = "0.62"
 
