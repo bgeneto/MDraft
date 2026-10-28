@@ -1783,12 +1783,15 @@ body {
    status bar stay visible around it while a setting is changed. */
 .prefs-panel {
   position: absolute;
-  top: 56px;
-  left: 24px;
+  top: 8px;
+  left: 8px;
   display: flex;
   flex-direction: column;
-  width: min(820px, calc(100vw - 48px));
-  height: min(660px, calc(100vh - 96px));
+  /* Large enough that the Editor section opens without a scrollbar; the min()
+     caps keep the whole card inside the webview on a small display. The
+     script centres it once the card has been measured. */
+  width: min(920px, calc(100vw - 16px));
+  height: min(800px, calc(100vh - 16px));
   max-width: calc(100vw - 16px);
   max-height: calc(100vh - 16px);
   overflow: hidden;
@@ -1857,8 +1860,8 @@ body {
 }
 
 .prefs-nav {
-  flex: 0 0 252px;
-  padding: 30px 20px 40px;
+  flex: 0 0 200px;
+  padding: 22px 12px 32px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -1912,7 +1915,7 @@ body {
   min-width: 0;
   min-height: 0;
   max-width: 1040px;
-  padding: 30px 48px 90px;
+  padding: 24px 26px 64px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -1971,7 +1974,7 @@ body {
 }
 
 .prefs-label {
-  flex: 0 0 232px;
+  flex: 0 0 178px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -2362,27 +2365,14 @@ body {
 }
 
 /* The card keeps its two columns while there is room for a control beside the
-   label. These classes follow the card's own width, not the window's, so a
-   reader who narrows the card gets the stacked layout even in a wide window. */
-.prefs-panel.is-compact .prefs-nav {
-  flex-basis: 200px;
-  padding: 22px 12px 32px;
-}
-
-.prefs-panel.is-compact .prefs-content {
-  padding: 24px 26px 64px;
-}
-
-.prefs-panel.is-compact .prefs-label {
-  flex-basis: 178px;
-}
-
-.prefs-panel.is-compact .prefs-header {
+   label. The sidebar, the gutters and the label column have one fixed size at
+   every card width, so widening the card can only ever give the controls more
+   room. A variant that widened those columns once the card passed a threshold
+   made every field narrower exactly when the reader made the card wider. The
+   class follows the card's own width, not the window's, so a reader who narrows
+   the card gets the stacked layout even in a wide window. */
+.prefs-panel.is-narrow .prefs-header {
   padding: 20px 24px 18px;
-}
-
-.prefs-panel.is-compact .prefs-section-title {
-  font-size: 24px;
 }
 
 .prefs-panel.is-narrow .prefs-body {
@@ -2410,23 +2400,19 @@ body {
   padding: 20px 20px 48px;
 }
 
+.prefs-panel.is-narrow .prefs-section-title {
+  font-size: 24px;
+}
+
 .prefs-panel.is-narrow .prefs-row {
   flex-direction: column;
+  align-items: stretch;
   gap: 4px;
 }
 
 .prefs-panel.is-narrow .prefs-label {
   flex: none;
   padding-top: 0;
-}
-
-/* A first opening in a very narrow window starts as a nearly full-screen card;
-   after that, the reader's own size wins because it is set inline. */
-@media (max-width: 700px) {
-  .prefs-panel {
-    width: calc(100vw - 16px);
-    height: calc(100vh - 16px);
-  }
 }
 
 /* --------------------------------------------------------------------------

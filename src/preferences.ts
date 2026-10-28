@@ -1446,7 +1446,6 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
 
   function syncPanelWidth(): void {
     const width = panelEl.offsetWidth;
-    panelEl.classList.toggle("is-compact", width < 820);
     panelEl.classList.toggle("is-narrow", width < 640);
   }
 
