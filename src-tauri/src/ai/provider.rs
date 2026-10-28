@@ -436,9 +436,18 @@ fn model_list_error(
     error: &serde_json::Error,
 ) -> String {
     let content_type = content_type.trim();
+    // A public gateway commonly serves HTTPS while the plain-HTTP listener
+    // answers 200 with an empty body (Caddy does exactly this). Say so: the
+    // first report looked like a parser bug while the curl in the issue used
+    // https:// and the app used http://.
+    let scheme_hint = if base_url.starts_with("http://") && !is_private_host(&host_of(base_url)) {
+        " This Base URL uses plain http://; if the host also serves https://, use the https:// address (the http:// address may return an empty 200)."
+    } else {
+        ""
+    };
     if bytes.is_empty() {
         return format!(
-            "The endpoint returned an empty response for the model list (HTTP {status}). Check the Base URL ({base_url}); it usually ends with /v1."
+            "The endpoint returned an empty response for the model list (HTTP {status}). Check the Base URL ({base_url}); it usually ends with /v1.{scheme_hint}"
         );
     }
     let snippet = sanitize(&String::from_utf8_lossy(bytes));
@@ -446,7 +455,7 @@ fn model_list_error(
         || snippet.trim_start().starts_with('<')
     {
         return format!(
-            "The endpoint returned an HTML page instead of a model list (HTTP {status}). Check the Base URL ({base_url}); it usually ends with /v1."
+            "The endpoint returned an HTML page instead of a model list (HTTP {status}). Check the Base URL ({base_url}); it usually ends with /v1.{scheme_hint}"
         );
     }
     let type_note = if content_type.is_empty() {
@@ -456,7 +465,7 @@ fn model_list_error(
     };
     let detail: String = snippet.chars().take(160).collect();
     format!(
-        "The endpoint did not return a model list as JSON (HTTP {status}, {type_note}, {} bytes): {detail}. Check the Base URL ({base_url}). {error}",
+        "The endpoint did not return a model list as JSON (HTTP {status}, {type_note}, {} bytes): {detail}. Check the Base URL ({base_url}). {error}{scheme_hint}",
         bytes.len()
     )
 }
@@ -803,6 +812,17 @@ mod tests {
             model_list_error(200, "application/json", bad, "http://host/v1", &bad_error);
         assert!(bad_message.contains("did not return a model list as JSON"));
         assert!(bad_message.contains("{not json"));
+    }
+
+    #[test]
+    fn a_public_http_model_error_suggests_https() {
+        let empty = serde_json::from_slice::<Value>(b"").unwrap_err();
+        let public = model_list_error(200, "", b"", "http://llm.example.com/v1", &empty);
+        assert!(public.contains("use the https:// address"), "{public}");
+        let local = model_list_error(200, "", b"", "http://127.0.0.1:8080/v1", &empty);
+        assert!(!local.contains("use the https:// address"), "{local}");
+        let secure = model_list_error(200, "", b"", "https://llm.example.com/v1", &empty);
+        assert!(!secure.contains("use the https:// address"), "{secure}");
     }
 
     #[test]
