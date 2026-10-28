@@ -25,6 +25,7 @@ import {
 } from "./fonts";
 import { PALETTE_OPTIONS } from "./syntax-themes";
 import { dictionaryOptions, spellcheckAvailabilityNote } from "./spellcheck";
+import { MAX_RATE, MIN_RATE, voiceAvailabilityNote, type VoiceOption } from "./read-aloud";
 
 export interface PreferencesHost {
   settings(): api.Settings;
@@ -44,6 +45,8 @@ export interface PreferencesHost {
   setupTypst(): Promise<void>;
   /** Ask the user for a reference/style file. Empty string when cancelled. */
   chooseStyleReference(current: string): Promise<string>;
+  /** Installed speech-synthesis voices; empty until the list has loaded. */
+  readAloudVoices(): VoiceOption[];
 }
 
 export interface PreferencesHandle {
@@ -99,6 +102,8 @@ type Row =
       help?: string;
       min: number;
       max: number;
+      /** Granularity of the spinner; 1 when omitted. */
+      step?: number;
       suffix?: string;
       get: () => number;
       set: (value: number) => void;
@@ -990,6 +995,57 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
   ];
 }
 
+/**
+ * The Read Aloud section.
+ *
+ * Every voice here comes from the operating system, so the section has to say
+ * what that means: the application never downloads a voice, and the quality is
+ * the system's. The note is built from the list actually installed, because a
+ * generic sentence about speech settings would be the same on a machine with
+ * three en-US voices and one with none.
+ */
+function readAloudRows(host: PreferencesHost): Row[] {
+  const s = () => host.settings();
+  const voices = () => host.readAloudVoices();
+  const saved = () => s().readAloudVoice;
+
+  const options: [string, string][] = [["", "Follow the document language"]];
+  for (const voice of voices()) options.push([voice.name, `${voice.name} (${voice.lang})`]);
+  // A saved voice that has been uninstalled stays visible, so the reader can see
+  // what the setting holds instead of finding the picker silently on Automatic.
+  if (saved() && !voices().some((voice) => voice.name === saved())) {
+    options.push([saved(), `${saved()} (not installed)`]);
+  }
+
+  return [
+    { kind: "heading", label: "Reading" },
+    {
+      kind: "select",
+      label: "Voice",
+      help: "Used by Read Aloud in the editor's right-click menu. Automatic follows the spelling language and then the system default. MDraft offers only the voices the operating system already has.",
+      options,
+      get: () => saved(),
+      set: (value) => host.update({ readAloudVoice: value }),
+    },
+    {
+      kind: "number",
+      label: "Speed",
+      help: "The synthesiser's own rate: 1 is the voice's normal pace, 2 reads twice as fast, 0.5 half as fast.",
+      min: MIN_RATE,
+      max: MAX_RATE,
+      step: 0.1,
+      suffix: "×",
+      get: () => s().readAloudRate ?? 1,
+      set: (value) => host.update({ readAloudRate: value }),
+    },
+    {
+      kind: "note",
+      label: "Installed Voices",
+      text: voiceAvailabilityNote(voices(), saved(), navigator.userAgent),
+    },
+  ];
+}
+
 function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void): Section[] {
   const s = () => host.settings();
 
@@ -1387,6 +1443,11 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
       title: "AI Assistant",
       rows: aiRows(host, ai, refresh),
     },
+    {
+      id: "reading",
+      title: "Read Aloud",
+      rows: readAloudRows(host),
+    },
   ];
 }
 
@@ -1688,6 +1749,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       input.type = "number";
       input.min = String(row.min);
       input.max = String(row.max);
+      input.step = String(row.step ?? 1);
       input.value = String(row.get());
       input.addEventListener("change", () => {
         const value = Math.min(row.max, Math.max(row.min, Number(input.value) || row.min));

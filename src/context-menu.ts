@@ -42,7 +42,27 @@ export interface EditorMenuOptions {
   linkAt: (pos: number) => LinkTarget | null;
   /** Follow the target chosen from the menu. */
   openLink: (target: LinkTarget) => void;
+  /** What Read Aloud can do for this document right now. */
+  reading: () => ReadingMenuState;
+  /** Start reading the document aloud, from the caret's block or from the top. */
+  readAloud: (fromStart: boolean) => void;
+  /** Stop the reading in progress. */
+  stopReading: () => void;
   toast: (text: string, ms?: number) => { dismiss: () => void };
+}
+
+/**
+ * Read Aloud availability.
+ *
+ * `blocked` is why no reading can start at all (an HTML document, a webview with
+ * no voices, an empty preview); `fromHereBlocked` is the narrower case of a
+ * preview with no `data-line` blocks, such as the Typst page view, where only
+ * "from the beginning" means anything.
+ */
+export interface ReadingMenuState {
+  blocked: string | null;
+  fromHereBlocked: string | null;
+  active: boolean;
 }
 
 type MenuEntry = { kind: "separator" } | MenuItem;
@@ -184,6 +204,7 @@ export function installEditorContextMenu(options: EditorMenuOptions): () => void
     const formatBlocked = options.formatBlocked();
     const favoriteBlocked = options.favoriteBlocked();
     const favorite = options.isFavorite();
+    const reading = options.reading();
 
     const selectionTitle = !editable ? READ_ONLY_REASON : SELECTION_REASON;
     const editTitle = editable ? undefined : READ_ONLY_REASON;
@@ -365,6 +386,36 @@ export function installEditorContextMenu(options: EditorMenuOptions): () => void
         title: formatBlocked ?? undefined,
         run: options.format,
       },
+      { kind: "separator" },
+      {
+        kind: "item",
+        id: "readAloudFromHere",
+        label: "Read Aloud from Here",
+        enabled: reading.blocked === null && reading.fromHereBlocked === null,
+        title: reading.fromHereBlocked ?? reading.blocked ?? undefined,
+        run: () => options.readAloud(false),
+      },
+      {
+        kind: "item",
+        id: "readAloudFromStart",
+        label: "Read Aloud from the Beginning",
+        enabled: reading.blocked === null,
+        title: reading.blocked ?? undefined,
+        run: () => options.readAloud(true),
+      },
+      // Only while something is being read: an always-present item that is
+      // disabled the rest of the time is one more row to scan past.
+      ...(reading.active
+        ? [
+            {
+              kind: "item" as const,
+              id: "stopReading",
+              label: "Stop Reading",
+              enabled: true,
+              run: options.stopReading,
+            },
+          ]
+        : []),
       { kind: "separator" },
       {
         kind: "item",

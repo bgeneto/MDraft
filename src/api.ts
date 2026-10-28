@@ -329,6 +329,15 @@ export interface Settings {
   aiProvider: AiProvider;
   aiBaseUrl: string;
   aiModel: string;
+
+  /**
+   * Read Aloud.
+   *
+   * The empty voice name follows the document's language and then the system
+   * default. The rate is the synthesiser's own 0.5–2.0 scale.
+   */
+  readAloudVoice: string;
+  readAloudRate: number;
 }
 
 export interface ImageOptions {

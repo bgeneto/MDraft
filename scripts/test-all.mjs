@@ -242,6 +242,14 @@ const SUITES = [
     doc: "samples/feature-tour.md",
   },
   {
+    // Read Aloud's pure half: the sentence splitter, the voice choice, the
+    // queue's own state machine and the Preferences note. No application.
+    id: "read-aloud-unit",
+    title: "Read Aloud (unit)",
+    kind: "node",
+    script: "read-aloud-unit.mjs",
+  },
+  {
     // Opt-in: the same actions against the owner's Qwen endpoint. Without
     // credentials it prints SKIP and 0/0 checks; `npm test -- --only ai-live`
     // runs it explicitly, and `--all` includes it.
@@ -252,6 +260,16 @@ const SUITES = [
     doc: "samples/feature-tour.md",
     optIn: true,
     env: { MDRAFT_AI_LIVE_OPTIONAL: "1" },
+  },
+  {
+    // The right-click commands through the real editor, the status chip and the
+    // Preferences section. Audio cannot be asserted: the suite measures the
+    // chip, the engine's speaking flag and the disabled HTML case.
+    id: "read-aloud",
+    title: "Read Aloud",
+    kind: "cdp",
+    script: "read-aloud-test.mjs",
+    doc: "samples/feature-tour.md",
   },
   {
     // The native HTML and Print article, inspected as a browser would see it:
