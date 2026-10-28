@@ -207,7 +207,7 @@ rewrite from scratch.
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
 | `npm run test:rust` | `cargo test` | 154 passed on Windows, 153 on Linux; two ignored downloads, plus the ignored display-owned Linux print probe |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. The two restart layers are the exception: two launches of the same instance's settings directory, closed with WM_CLOSE in between so the close flush runs. Puts back the working tree, the developer's own settings, window state and recovery journal afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
-| `npm run smoke` | `scripts/dom-smoke.mjs` | 108 checks against `samples/feature-tour.md` |
+| `npm run smoke` | `scripts/dom-smoke.mjs` | 114 checks against `samples/feature-tour.md`, including the Math scale and Code scale rows, the per-preset size memory and the Read Aloud preferences |
 | `npm run word-sync` | `scripts/word-sync-test.mjs` | 58 checks of word-level sync, including 20 alternating pairs, element endpoints, multi-paragraph ranges, stale render rejection and reduced motion in Markdown/AsciiDoc/Typst Document, against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, the four-beat pulse and its resting mark, reduced motion, no scroll, Escape, and the fallbacks |
 | `npm run autoclose:unit` | `scripts/autoclose-unit.mjs` | 17 checks of the tag matcher: attributes, custom elements, void and self-closing tags, autolinks, escapes, declarations, prose — no application |
 | `npm run autoclose` | `scripts/autoclose-test.mjs` | 33 checks of pairs, quotes, backticks, HTML tags and both preferences, typed through the real editor in Markdown, HTML, Typst and AsciiDoc |
@@ -217,7 +217,7 @@ rewrite from scratch.
 | `npm run math` | `scripts/math-render-check.mjs` | 12 checks against the physics paper |
 | `npm run syntax` | `scripts/syntax-theme-test.mjs` | 10 checks that highlighting is real and that the sync mark stays amber and visible on Nord, Ink and Solarized Dark |
 | `npm run html` | `scripts/html-preview-test.mjs` | 60 checks of the sandboxed HTML guest, including 20 alternating editor/guest pairs, full entity offsets, inline/nested ownership, reverse paint, Escape, reduced motion, invalid samples and same-word reselection after an edit |
-| `npm run export` | `scripts/export-test.mjs` | 38 checks of every export path, against real pandoc, including an AsciiDoc source and the rendered-HTML math reader |
+| `npm run export` | `scripts/export-test.mjs` | 40 checks of every export path, against real pandoc, including an AsciiDoc source, the rendered-HTML math reader, and the math and code scale variables in the print document |
 | `npm run export:paths:unit` | `scripts/export-paths-unit.mjs` | 44 checks of the browser path/URL policy: drive, UNC, POSIX, spaces, Unicode, `..`, different roots, fragments, `data:`, `file:` and protocol-relative addresses — no application |
 | `npm run export:browser` | `scripts/export-browser-test.mjs` | 24 checks of the native HTML and Print artifacts through the real UI: restored local images/links, absolute print URLs, the readiness/failure script, the exported alert colours, and the same light diagram palette in a dark and a light editor |
 | `npm run pdf:native` | `scripts/pdf-native-test.mjs` | 21 checks of real PDF output, static HTML, active/encoded-child fallbacks, native script blocking, queued-job ownership and existing-target preservation, plus Poppler page checks. `MDRAFT_PDF_KEEP=1` retains evidence; `MDRAFT_PDF_RASTERIZER=wsl` selects WSL |
@@ -232,9 +232,11 @@ rewrite from scratch.
 | `npm run typst:map:unit` | `scripts/typst-page-map-unit.mjs` | 21 checks of the bidirectional Typst Pages prose index: formula-adjacent prose, region isolation, ambiguity, reverse lookup, PDF ActualText breaks and Unicode offsets; a repeated one-word line with identical neighbours paints nothing, a unique neighbour window picks the clicked occurrence, ligatures and soft hyphens match, and generated text stays unmapped — no application |
 | `npm run html:map:unit` | `scripts/html-source-map-unit.mjs` | 38 checks of HTML5 entity boundaries, inverse ranges, validated multi-node payloads and text-node offsets: entities and CRLF, the decoded-to-raw translation, the sample mismatch that paints nothing, and two nodes under one stamp — no application |
 | `npm run block:map:unit` | `scripts/block-map-unit.mjs` | 12 checks of the block-level source map and Typst line annotation: folded index mapping, per-node alignment across substitutions and smart punctuation, gap block fallback, Typst comments/rules/math/code/tables, and `#lorem` exclusion — no application |
-| `npm run ai:unit` | `scripts/ai-unit.mjs` | 93 checks of the AI catalog and search, paragraph expansion, continuation spacing, block insertion, parameter validation, stale targets, history caps, button geometry and the word diff; no application and no network |
-| `npm run ai` | `scripts/ai-assistant-test.mjs` | 114 checks against a local mock endpoint: the icon-only draggable button and its launch anchor, the five-group palette, search and its discreet scrollbar, Improve/Continue/Summarize/Translate/Tone/Convert/Ask, streaming, Stop, a 401 with Retry, the Anthropic request shape, a typed Base URL, a gzip model list, the empty-list error, key-save auto-fetch, the stale-target guard, a tab switch, dark theme/reduced motion and key hygiene |
+| `npm run ai:unit` | `scripts/ai-unit.mjs` | 114 checks of the AI catalog and search, paragraph expansion, continuation spacing, block insertion, parameter validation, stale targets, session-history insertion/replacement/titles/previews/ages, button geometry and the word diff; no application and no network |
+| `npm run ai` | `scripts/ai-assistant-test.mjs` | 173 checks against a local mock endpoint: the icon-only draggable button and its launch anchor, the five-group palette, search and its discreet scrollbar, Improve/Continue/Summarize/Translate/Tone/Convert/Ask, streaming, Stop, a 401 with Retry, the Anthropic request shape, a typed Base URL, a gzip model list, the empty-list error, key-save auto-fetch, the stale-target guard, the ten-entry success-only History with regenerate overwrite, Copy/Insert below/Clear, rendered Markdown results with lists, tables and a Source view, the top-left resize grip with its corner anchoring, keyboard nudges and session layout, the Preferences Reset position row, a tab switch, dark theme/reduced motion and key hygiene |
 | `npm run ai:live` | `scripts/ai-live-test.mjs` | Opt-in 70 checks against the real `http://192.168.61.9:4000/v1` / `Qwen3.8-27B`: all fourteen actions, non-empty tag-free output, the model/host chip, apply and undo, and key hygiene. Reads `MDRAFT_AI_E2E_*`; `MDRAFT_AI_LIVE_OPTIONAL=1` turns a missing key into `SKIP` plus `0/0 checks passed` |
+| `npm run read-aloud` | `scripts/read-aloud-test.mjs` | 44 checks of Read Aloud through the real editor: the menu entries and their availability per language, the status chip and its position, the queue advancing, Stop from the menu and from the chip, the HTML tab's refusal with its reason, and the voice and rate surviving a Preferences change. Audio is not asserted; the engine's state and the chip are |
+| `npm run read-aloud:unit` | `scripts/read-aloud-unit.mjs` | 59 checks of the sentence splitter (decimals, abbreviations, quotes, the length cap), the voice choice by name and language, the queue's own state machine (stop mid-queue, a late `onend`, `canceled` versus a real failure, a synchronous backend) and the Preferences note — no application |
 | `npm run recent` | `scripts/recent-menu-test.mjs` | 26 checks that File › Open Recent mirrors the persisted list: the launch file, a new file becoming first, the menu id opening/focusing a tab, Clear Items emptying menu and sidebar, the list refilling, and a 27-row history rendered in full by the sidebar while the menu shows 20 plus Clear Items |
 | `npm run asciidoc` | `scripts/asciidoc-test.mjs` | 54 checks of the AsciiDoc preview, source highlighting, outline, preview copy, spellcheck, includes, paste, the AsciiDoc reference, the default extension and word-level sync |
 | `npm run asciidoc:export:unit` | `scripts/asciidoc-export-unit.mjs` | 17 unit checks of the AsciiDoc -> HTML step every pandoc export uses: unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations; no application |
@@ -300,9 +302,11 @@ All of these need the app already running with CDP enabled (see
 | `typst-page-map-unit.mjs` | — | none — runs without the application | The Typst Pages source map's one-word rule: identical neighbours paint nothing, a unique window picks the occurrence, ligatures and soft hyphens fold, generated text stays unmapped |
 | `html-source-map-unit.mjs` | — | none — runs without the application | The HTML text-node rule: decoded-to-raw offsets across entities and CRLF, the sample check that fails closed, and the index that selects one node under a stamp |
 | `block-map-unit.mjs` | — | none — runs without the application | The block-level source map and Typst line annotation: folded index mapping, per-node alignment across substitutions and smart punctuation, gap block fallback, Typst comments/rules/math/code/tables, and `#lorem` exclusion |
-| `ai-unit.mjs` | — | none — runs without the application | The AI catalog and search, paragraph expansion, Continue spacing, block insertion, parameters, stale targets, history caps, button geometry and the word diff |
+| `ai-unit.mjs` | — | none — runs without the application | The AI catalog and search, paragraph expansion, Continue spacing, block insertion, parameters, stale targets, session-history insertion/replacement/titles/previews/ages, button geometry and the word diff |
 | `ai-assistant-test.mjs` | `[port]` | `samples/feature-tour.md` | The icon-only draggable button and its launch anchor, the palette, representative actions and parameters, streaming, Stop, a 401, Anthropic, model fetch, stale targets, a tab switch, appearance and key hygiene, against a local mock |
 | `ai-live-test.mjs` | `[port]` | `samples/feature-tour.md` | The same actions against the real Qwen endpoint, reading `MDRAFT_AI_E2E_*`; opt-in, and `MDRAFT_AI_LIVE_OPTIONAL=1` makes a missing key a visible SKIP |
+| `read-aloud-test.mjs` | `[port]` | `samples/feature-tour.md`; opens `samples/html-tour/index.html` | The editor menu's Read Aloud entries, the status chip and its position, the queue advancing to the next sentence, Stop from the menu and from the chip, the HTML tab disabling both entries with a reason, and the voice and rate saved through Preferences. A real CDP press comes first: `speak()` needs sticky user activation, which a synthetic click does not grant |
+| `read-aloud-unit.mjs` | — | none — runs without the application | The sentence splitter, the voice choice by saved name and document language, the queue's state machine (stop mid-queue, a late `onend`, `canceled` versus a real failure, a synchronous backend) and the Preferences note |
 | `rich-paste-test.mjs` | `[port]` | `samples/feature-tour.md` | That the paste event converts HTML, leaves Markdown/plain text alone, detects an unsaved Typst/Markdown/HTML buffer, honours Ctrl+Shift+V and the preference, and undoes in one step. Real Ctrl+V/Ctrl+Shift+V replace the selected text inside Find/Replace without editing the source; rich text, Markdown-only text and image paths stay native there. Clipboard formats are saved and restored around the native-key checks |
 | `image-syntax-test.mjs` | `[port]` | `samples/typst-tour.typ` | A clipboard bitmap becomes `#image`, a remote image is downloaded or kept according to the Image preference, and the files land in the document's assets folder |
 | `typst-preview-test.mjs` | `[port]` | `samples/typst-pages.typ` | The Pages view is the compiler's PDF drawn by PDF.js with selectable text, both columns and two pages; a single click paints the source paragraph, a repeated word in a later line or the right column maps that occurrence, generated `#lorem` paints nothing, the view bar does not blur the page, and switching back disposes the PDF view. Document gets the same word-map checks plus inline-math paragraphs, tables and code blocks, and a single click does not paint a word there |
@@ -517,7 +521,7 @@ hash the pixels.
 
 ## Testing
 
-Forty-four default layers, cheapest first, plus the opt-in live AI layer. Run them in this order when changing anything.
+Forty-six default layers, cheapest first, plus the opt-in live AI layer. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
@@ -531,7 +535,7 @@ Forty-four default layers, cheapest first, plus the opt-in live AI layer. Run th
 | Browser exports | `npm run export:browser` | 24 | Native HTML and Print artifacts: local image/link resolution, no app protocol, absolute print URLs, the resource-wait/failure script, the exported alert tint, and a light print diagram in a dark editor |
 | Native PDF | `npm run pdf:native` | 21 | A real direct PDF from Markdown, static HTML through the same writer, scripted HTML kept on the browser route, and the Poppler visual metrics |
 | PDF visual (app-free) | `npm run pdf:visual -- --pdf <file> --fixture quality` | 36 | A4 geometry, embedded fonts, selectable text, one PNG/PPM per page, non-blank pages, quiet margins, known image colours, table rules and mathematics ink |
-| DOM smoke | `npm run smoke` | 108 | Rendering, pane sync, preferences (including the four On Launch choices and Line Height), math, fonts, status icons |
+| DOM smoke | `npm run smoke` | 114 | Rendering, pane sync, preferences (including the four On Launch choices, Line Height, Math scale, Code scale and the Read Aloud section), math, fonts, status icons |
 | P0 lifecycle (UI) | `npm run p0:lifecycle` | 35 | Delayed save/reload/Save As/export, real text/dirty/recovery preservation, a same-size/same-mtime external rewrite, three-way close/cancellation/failures, binary/mixed-drop/UTF-16 refusal, focus restoration, clean bundled documents and native close |
 | Second launch | `npm run single:instance` | 12 | Two initial paths as tabs, relative second-launch handoff, second-process exit, one page target, duplicate-path focus, missing-path toast, dirty buffer preserved |
 | Document zoom | `npm run preview:zoom` | 24 | Source-only, Split and Preview-only geometry; Markdown/AsciiDoc/Typst Document; HTML guest frame; Typst Pages canvases, horizontal scroll and scroll position; zoomed word sync and keyboard reveal; reset leaves Content Width alone |
@@ -542,9 +546,11 @@ Forty-four default layers, cheapest first, plus the opt-in live AI layer. Run th
 | Typst page map (unit) | `npm run typst:map:unit` | 21 | One-word lines with identical neighbours paint nothing, a unique neighbour window picks the occurrence, ligatures and soft hyphens fold, generated text stays unmapped — no application |
 | HTML source map (unit) | `npm run html:map:unit` | 38 | Entities and CRLF offsets, decoded-to-raw translation, the sample mismatch, and two text nodes under one stamp — no application |
 | Block source map (unit) | `npm run block:map:unit` | 12 | Folded index mapping, per-node alignment across substitutions and smart punctuation, gap block fallback, Typst comments/rules/math/code/tables, and `#lorem` exclusion — no application |
-| AI Assistant (unit) | `npm run ai:unit` | 93 | The catalog/search cross-language contract, paragraph expansion, Continue spacing, block insertion, parameters, stale targets, history caps, button anchor/clamp/drag threshold and the capped word diff — no application |
-| AI Assistant (mock) | `npm run ai` | 114 | The icon-only button and its launch anchor, drag/reset, the five-group palette, search and its discreet scrollbar, streaming, Stop, a 401, Anthropic, the typed Base URL, a gzip model list, the empty-list error, key-save auto-fetch, parameters, stale targets, a tab switch, dark theme/reduced motion and key hygiene |
+| AI Assistant (unit) | `npm run ai:unit` | 114 | The catalog/search cross-language contract, paragraph expansion, Continue spacing, block insertion, parameters, stale targets, session-history insertion/replacement/titles/previews/ages, button anchor/clamp/drag threshold and the capped word diff - no application |
+| AI Assistant (mock) | `npm run ai` | 173 | The icon-only button and its launch anchor, drag then Preferences Reset position, the five-group palette, search and its discreet scrollbar, streaming, Stop, a 401, Anthropic, the typed Base URL, a gzip model list, the empty-list error, key-save auto-fetch, parameters, stale targets, the ten-entry success-only History and regenerate overwrite, Copy/Insert below/Clear, rendered Markdown results with lists, tables and a Source view, the top-left resize grip with corner anchoring, arrow-key resizing and a session-remembered layout, a tab switch, dark theme/reduced motion and key hygiene |
 | AI Assistant (live) | `npm run ai:live` | 70 (opt-in) | All fourteen actions against `http://192.168.61.9:4000/v1` / `Qwen3.8-27B`: non-empty tag-free output, the model/host chip, apply and undo, and key hygiene. Without `MDRAFT_AI_E2E_*` the harness entry prints SKIP and `0/0` |
+| Read Aloud (unit) | `npm run read-aloud:unit` | 59 | Sentence splitting across decimals, abbreviations and quotes, the length cap, the voice choice by saved name and language, the queue's own index (stop mid-queue, a late `onend`, `canceled` versus a real failure, a synchronous backend) and the Preferences note — no application |
+| Read Aloud | `npm run read-aloud` | 44 | The editor menu's two Read Aloud commands and Stop, the status chip and its sentence position, the queue advancing, Stop from the menu and from the chip, the HTML tab's disabled entries and their reason, and the voice and speed saved through Preferences. Audio is not asserted; engine state and the chip are |
 | Auto-close typing | `npm run autoclose` | 33 | Pairs, step-over, Backspace, selection wrap, Markdown inline tags, HTML tags, both preferences, in all four document types |
 | Rich paste | `npm run paste` | 87 (79 without a usable clipboard) | The paste event, destination notice, preferences, Ctrl+Shift+V, undo, the same clipboard converted into Markdown and kept as source in HTML, spaces around inline elements, native Find/Replace field paste and unchanged source bytes. The native block is skipped when writing the clipboard then reading it back returns empty |
 | Image syntax | `npm run image:syntax` | 22 | Bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, the Image preference, WebP insertion, the AVIF refusal, and Format > Image in Typst |
@@ -2207,6 +2213,24 @@ The gateway answers `Content-Encoding: gzip` when the request advertises `Accept
 **`Fetch model list` used the previous Base URL after a new one was typed**
 The Preferences text row committed on `change` (blur/Enter), and the fetch read `settings.aiBaseUrl` instead of the field. Pressing Fetch while the field still had focus sent the old endpoint — in this report `llm.sistema.pro.br/v1`, whose `/models` was an empty 200, while the field showed the test endpoint. Read the controls and persist them before the request; set `rerender: false` on the Base URL and Model rows so the blur does not replace the button being clicked.
 
+**`taskkill /PID $pid` kills the agent shell, and the cleanup after it never runs**
+`$pid` is PowerShell's read-only automatic variable holding the *current* process, so `$pid = [int](Get-Content pid.txt)` fails with `Cannot overwrite variable PID`, and the following `taskkill /PID $pid` signals the shell itself — it exits 255 halfway through a cleanup script, leaving the test instance, its appdata and its profile behind. Use any other name (`$appPid`, `$targetPid`) when closing a launched instance, and re-check the process list afterwards.
+
+**`the export carries the reader's code scale` reports FAIL while the document plainly contains the rule**
+The assertion required `var(--code-scale)`, but the export wrappers write `var(--code-scale,1)` so a document from before the setting keeps its old size. The declaration matched, the use did not, and the detail line still read "variable and rule present". Match the fallback form (`var\(--code-scale[,)]`) or strip the fallback before comparing; the same applies to any new `var(--x, fallback)` contract asserted in exported bytes.
+
+**`ERR_MODULE_NOT_FOUND: Cannot find module ...\\src\\ai\\actions' imported from ...\\src\\ai\\history.ts` when running `npm run ai:unit`**
+Vite resolves extensionless imports, Node ESM does not, and `context.ts` had hidden the difference because all of its imports are type-only and erased. A runtime import in a module the Node suites load directly must name the file: use `./actions.ts` (enabled by `allowImportingTsExtensions`) rather than `./actions`. The application build accepts either; only the app-free test fails.
+
+**A CDP suite against an isolated identifier reports an empty state as non-empty and undo checks that fail in isolation**
+`taskkill /PID <id>` without `/F` posts WM_CLOSE; a dirty test buffer opened the Save prompt, the process stayed alive, and the next `Start-Process` was forwarded by the single-instance plugin to that old window. The new run therefore inherited the previous document and the previous in-memory AI history while its own `--json/list` page answered normally. After closing a disposable test instance, confirm no process remains (and that `StartTime` changed before the next launch); force-kill and delete its appdata/profile when the close prompt blocks, then relaunch.
+
+**`speechSynthesis.getVoices()` is empty on the first call, and `speak()` without sticky user activation reports `not-allowed`**
+Measured in the release build inside WebView2: the first `getVoices()` returned 0, and three voices (David, Mark, Zira) appeared only after `voiceschanged`, so an utterance built in the same task as the first read has no voice to choose. Chromium's `SpeechSynthesis::IsAllowedToStartByAutoplay` asks `AutoplayPolicy::IsDocumentAllowedToPlay`, which is *sticky* activation: a `MouseEvent` dispatched from `Runtime.evaluate`, or `element.click()`, does not grant it, while one real `Input.dispatchMouseEvent` press does — `scripts/read-aloud-test.mjs` starts with that press for this reason, and `src/read-aloud.ts` re-reads the list after the event instead of believing the first answer. The Windows catalogue is only the SAPI/OneCore tokens enumerated by `content/browser/speech/tts_win.cc`; Edge's 321 "Online (Natural)" voices are all `localService: false` and are not offered to an embedder, so no local implementation can sound like Edge's Read Aloud.
+
+**A new CDP suite opens its fixture with `emit("open-files", ["samples/…"])` and four checks fail on the wrong document**
+The harness stages the binary outside the workspace, so a relative path resolves against the staged folder, the open is refused with a toast, and every later assertion measures the launch document instead. The failures read as an application bug — here, "the HTML fixture opens" and three disabled-entry checks against a Markdown tab. Resolve against the repository before emitting: `path.resolve(import.meta.dirname, "..", file)`.
+
 ## Adding a preference, end to end
 
 Five files, in this order — more than three, so a plan comes first; see
@@ -2222,6 +2246,15 @@ Five files, in this order — more than three, so a plan comes first; see
 4. **`src/main.ts`** — handle the field in `applySettingsPatch`, and add it to
    `affectsRendering` if the preview must be re-rendered.
 5. **Test** — extend `scripts/dom-smoke.mjs` so the row is exercised.
+
+A **size** preference that also has to be remembered per typography preset
+touches two more places: `src/fonts.ts` (`DEFAULT_*`, the preset `defaults` type,
+and the comments that count the reader adjustments) and the preset write/restore
+branch in `src/preferences.ts`. If the size is published as a CSS variable, the
+export wrappers in `src/markdown.ts` need the same `var()` or the setting stops
+at the preview; `Code scale` in `docs/plans/2026-10-28-code-font-scale.md` is the
+worked example. The export suite should assert the variable and its rule in the
+printed bytes.
 
 If the setting changes the editor's appearance, call it through
 `applySyntaxTheme`/`applyLayout` rather than mutating the DOM directly.
@@ -2253,7 +2286,8 @@ src/
   format/            the lazy Prettier/Typstyle dispatcher, snapshot guard and
                      the one transaction that applies a formatted document
   ai/                the AI Assistant: catalog/search, context capture, edit
-                     plans, capped diff, icon-only draggable button, palette and panel
+                     plans, capped diff, session history, icon-only draggable
+                     button, palette, history and panel
   markdown.ts        markdown → HTML; math extraction, mermaid, alerts, anchors
   html-preview.ts    sandboxed HTML guest: parse5 splice, iframe, bridge protocol
   html-source-map.ts host-side source offsets for the guest's text nodes
@@ -2430,9 +2464,10 @@ platform and fails on the other.
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run menu`,
    `npm run preview:zoom`, `npm run math`, `npm run syntax`, `npm run html`,
-   `npm run asciidoc`, `npm run favorites`, `npm run ai:unit`, `npm run ai` and
-   `npm run pdf:native` — 108 + 101 + 24 + 12 + 10 + 60 + 54 + 56 + 93 + 114 +
-   21 checks; also run `npm run typewriter` (21 checks, plus the manual visual
+   `npm run asciidoc`, `npm run favorites`, `npm run ai:unit`, `npm run ai`,
+   `npm run read-aloud:unit`, `npm run read-aloud` and
+   `npm run pdf:native` — 114 + 101 + 24 + 12 + 10 + 60 + 54 + 56 + 114 + 173 +
+   59 + 44 + 21 checks; also run `npm run typewriter` (21 checks, plus the manual visual
    hold when changing its behavior), and `npm run ai:live` when the Qwen
    credentials are present.
 5. `npm run audit` against both `docs/sample-files` documents and compare the
