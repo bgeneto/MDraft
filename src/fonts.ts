@@ -247,17 +247,21 @@ const ROLE_DEFAULTS: Record<string, string> = Object.fromEntries(
 );
 
 /**
- * The application defaults for the three per-preset reader adjustments.
+ * The application defaults for the four per-preset reader adjustments.
  *
  * These mirror the defaults in `src-tauri/src/settings.rs`. They are
  * deliberately *not* part of a preset's identity (`values`): Editor font size,
- * Preview font size and Math scale are remembered per preset in
+ * Preview font size, Math scale and Code scale are remembered per preset in
  * `Settings::preset_overrides`, so an unadjusted preset starts at its own
  * `defaults` (or here when omitted).
  */
 export const DEFAULT_EDITOR_FONT_SIZE = 15;
 export const DEFAULT_BODY_FONT_SIZE = 16;
 export const DEFAULT_MATH_SCALE = 95;
+// 100 keeps the preview's own 86% block / 88% inline ratios. A code face with a
+// large x-height reads bigger than the prose at that ratio, which is why the
+// reader can raise it to about 116; the panel allows 70–130.
+export const DEFAULT_CODE_SCALE = 100;
 
 /**
  * Line-height multipliers for the source pane, keyed by the stored name.
@@ -282,18 +286,22 @@ export interface TypographyPreset {
   note: string;
   /**
    * Starting sizes for this preset before the reader adjusts them.
-   * Absent fields fall back to the application defaults (15 px / 16 px / 90%).
+   * Absent fields fall back to the application defaults (15 px / 16 px / 95% /
+   * 100%). Each preset tunes its code scale to the mono it names, because those
+   * faces have different apparent heights at the same nominal size; System keeps
+   * 100% because its code face is whatever the reader's machine provides.
    */
   defaults?: {
     editorFontSize?: number;
     bodyFontSize?: number;
     mathFontScale?: number;
+    codeFontScale?: number;
   };
   /**
    * What identifies the preset: the four font stacks and the OpenType
-   * booleans. Editor font size, Preview font size and Math scale are reader
-   * adjustments and are stored separately, so editing one does not change the
-   * active preset.
+   * booleans. Editor font size, Preview font size, Math scale and Code scale are
+   * reader adjustments and are stored separately, so editing one does not
+   * change the active preset.
    */
   values: Record<string, string | boolean>;
 }
@@ -338,6 +346,7 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
     defaults: {
       bodyFontSize: 17,
       mathFontScale: 88,
+      codeFontScale: 98,
     },
     values: {
       ...ROLE_DEFAULTS,
@@ -358,6 +367,7 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
     defaults: {
       bodyFontSize: 19,
       mathFontScale: 80,
+      codeFontScale: 90,
     },
     values: {
       ...ROLE_DEFAULTS,
@@ -378,6 +388,7 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
     defaults: {
       bodyFontSize: 17,
       mathFontScale: 90,
+      codeFontScale: 96,
     },
     values: {
       ...ROLE_DEFAULTS,
@@ -398,6 +409,7 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
     defaults: {
       bodyFontSize: 17,
       mathFontScale: 90,
+      codeFontScale: 93,
     },
     values: {
       ...ROLE_DEFAULTS,
@@ -421,6 +433,7 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
     defaults: {
       bodyFontSize: 17,
       mathFontScale: 86,
+      codeFontScale: 93,
     },
     values: {
       ...ROLE_DEFAULTS,

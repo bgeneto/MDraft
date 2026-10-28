@@ -85,8 +85,9 @@ Markdown document active.*
   independent faces for editor, prose, headings and code, plus OpenType
   controls. The source pane's line height is **Compact**, **Normal** or
   **Wide** under Preferences › Editor. Preview headings and emphasis use
-  Semibold; mathematics has its own scale. Native HTML, PDF and Print exports
-  of Markdown and AsciiDoc embed the chosen faces.
+  Semibold; mathematics and code have their own scales, so a listing or a
+  formula can be matched to the prose beside it. Native HTML, PDF and Print
+  exports of Markdown and AsciiDoc embed the chosen faces.
 - **Zoom the whole document.** `Ctrl+Shift+=` enlarges the source in Source-only,
   both panes in Split, and the rendered page in Preview-only — text, images,
   diagrams and Typst pages together. `Ctrl+Alt+0` resets the zoom without

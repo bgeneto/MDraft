@@ -12,6 +12,7 @@
 import * as api from "./api";
 import {
   DEFAULT_BODY_FONT_SIZE,
+  DEFAULT_CODE_SCALE,
   DEFAULT_EDITOR_FONT_SIZE,
   DEFAULT_EDITOR_LINE_HEIGHT,
   DEFAULT_MATH_SCALE,
@@ -321,7 +322,10 @@ function typographyRows(host: PreferencesHost): Row[] {
    * exports read. The map entry is what makes the next visit to the same preset
    * restore the reader's choice.
    */
-  const updateSize = (key: "editorFontSize" | "bodyFontSize" | "mathFontScale", value: number) => {
+  const updateSize = (
+    key: "editorFontSize" | "bodyFontSize" | "mathFontScale" | "codeFontScale",
+    value: number,
+  ) => {
     const preset = activePreset(host);
     if (!preset) {
       host.update({ [key]: value } as Partial<api.Settings>);
@@ -336,14 +340,14 @@ function typographyRows(host: PreferencesHost): Row[] {
     {
       kind: "choices",
       label: "Preset",
-      help: "Sets the faces and OpenType options below at once. Editor font size, Preview font size and Math scale are remembered separately for each preset; switching back restores them. Changing a face leaves the preset — nothing is locked.",
+      help: "Sets the faces and OpenType options below at once. Editor font size, Preview font size, Math scale and Code scale are remembered separately for each preset; switching back restores them. Changing a face leaves the preset — nothing is locked.",
       options: [
         ...TYPOGRAPHY_PRESETS.map((preset) => [preset.id, preset.label] as [string, string]),
         // Always present, so the control is never blank: it is what the picker
         // shows once a field below has been edited away from every preset.
         ["custom", "Custom"],
       ],
-      // The preset's identity is detected from its fixed values; the three sizes
+      // The preset's identity is detected from its fixed values; the four sizes
       // are remembered separately in `presetOverrides`. Picking a preset writes
       // both, and the picker then reports whichever identity is in force.
       get: () => activePreset(host)?.id ?? "custom",
@@ -361,6 +365,7 @@ function typographyRows(host: PreferencesHost): Row[] {
           if (entry.editorFontSize === undefined) entry.editorFontSize = s().editorFontSize;
           if (entry.bodyFontSize === undefined) entry.bodyFontSize = s().bodyFontSize;
           if (entry.mathFontScale === undefined) entry.mathFontScale = s().mathFontScale;
+          if (entry.codeFontScale === undefined) entry.codeFontScale = s().codeFontScale;
           next[current.id] = entry;
         }
 
@@ -375,6 +380,8 @@ function typographyRows(host: PreferencesHost): Row[] {
             remembered.bodyFontSize ?? preset.defaults?.bodyFontSize ?? DEFAULT_BODY_FONT_SIZE,
           mathFontScale:
             remembered.mathFontScale ?? preset.defaults?.mathFontScale ?? DEFAULT_MATH_SCALE,
+          codeFontScale:
+            remembered.codeFontScale ?? preset.defaults?.codeFontScale ?? DEFAULT_CODE_SCALE,
           presetOverrides: next,
         } as Partial<api.Settings>);
       },
@@ -443,6 +450,16 @@ function typographyRows(host: PreferencesHost): Row[] {
       set: (value) => updateSize("mathFontScale", value),
     },
     {
+      kind: "number",
+      label: "Code scale",
+      help: "Scales fenced and inline code in the preview and in exports. 100% keeps the built-in ratio — a block at 86% of the prose and an inline span at 88% — and about 116% makes a block the same nominal size as the prose. A monospaced face still reads larger at that size, so match it by eye. Remembered for the active preset; under Custom it applies to the current setup.",
+      min: 70,
+      max: 130,
+      suffix: "%",
+      get: () => s().codeFontScale,
+      set: (value) => updateSize("codeFontScale", value),
+    },
+    {
       kind: "note",
       label: "Bundled faces",
       text: "The bundled families are under the SIL Open Font License, so they look the same on every machine and travel inside exported HTML and PDF. Any other family comes from your operating system: it renders here, but a reader without it sees a fallback.",
@@ -488,9 +505,10 @@ function typographyRows(host: PreferencesHost): Row[] {
  * means "the built-in default for that role" — comparing the raw string would
  * make every fresh installation report "custom", which is precisely backwards.
  *
- * Editor font size, Preview font size and Math scale are deliberately absent
- * from `values`: they are reader adjustments in `presetOverrides`, so editing
- * one does not make the active preset look custom.
+ * Editor font size, Preview font size, Math scale and Code scale are
+ * deliberately absent from `values`: they are reader adjustments in
+ * `presetOverrides`, so editing one does not make the active preset look
+ * custom.
  */
 function activePreset(host: PreferencesHost): TypographyPreset | null {
   const settings = host.settings() as unknown as Record<string, unknown>;

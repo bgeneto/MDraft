@@ -1374,7 +1374,10 @@ body {
 
 .markdown-body code {
   font-family: var(--font-code);
-  font-size: 0.88em;
+  /* Code sits below the prose on purpose, and `--code-scale` (Preferences ›
+     Code scale) multiplies that ratio: 100% keeps 88%, about 114% makes an
+     inline span match the prose, and the same percentage moves blocks too. */
+  font-size: calc(0.88em * var(--code-scale, 1));
   background: var(--code-bg);
   border-radius: 4px;
   padding: 0.15em 0.35em;
@@ -1388,14 +1391,17 @@ body {
 /* The family and size sit on `pre`, not only on `code`. Asciidoctor emits a
    literal block as a bare `<pre>` with no `<code>` inside, so styling only
    `pre code` left it in the webview's default monospace at the full prose size
-   while the listing beside it used the chosen code face at 86%. */
+   while the listing beside it used the chosen code face at 86%.
+   The 86% is the ratio a monospaced face wants; a reader whose code face reads
+   larger than the prose raises it through `--code-scale` — about 116% makes a
+   block the same nominal size as the paragraph beside it. */
 .markdown-body pre {
   background: var(--code-bg);
   border-radius: 6px;
   padding: 12px 14px;
   overflow: auto;
   font-family: var(--font-code);
-  font-size: 0.86em;
+  font-size: calc(0.86em * var(--code-scale, 1));
   line-height: 1.6;
   font-variant-ligatures: var(--code-ligatures);
   font-variant-numeric: var(--code-figures);

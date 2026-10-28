@@ -166,6 +166,7 @@ export interface PresetOverride {
   editorFontSize?: number;
   bodyFontSize?: number;
   mathFontScale?: number;
+  codeFontScale?: number;
 }
 
 export interface Settings {
@@ -204,11 +205,20 @@ export interface Settings {
    */
   mathFontScale: number;
   /**
+   * Scale applied to fenced and inline code, as a percentage.
+   *
+   * Code is drawn at 86% of the prose size for a block and 88% for an inline
+   * span, because a monospaced face reads larger at the same nominal size. 100
+   * keeps those ratios; about 116 makes a block match the prose. The Preferences
+   * field limits the range to 70–130.
+   */
+  codeFontScale: number;
+  /**
    * Sizes remembered per preset id.
    *
-   * Editor font size, Preview font size and Math scale are reader adjustments,
-   * not part of what identifies a preset. The top-level fields remain the
-   * active values; this map is consulted when a preset is chosen.
+   * Editor font size, Preview font size, Math scale and Code scale are reader
+   * adjustments, not part of what identifies a preset. The top-level fields
+   * remain the active values; this map is consulted when a preset is chosen.
    */
   presetOverrides: Record<string, PresetOverride>;
   /** Programming ligatures in code, both panes. Off by default: `->` is a choice. */

@@ -1124,11 +1124,13 @@ export function wrapPrintHtml(
     "pre{background:#f6f8fa;padding:10px 12px;border-radius:4px;overflow:visible;white-space:pre-wrap;",
     // The family and size belong on `pre`: a literal block is a bare `<pre>`
     // with no `<code>` in it, so `code`-only styling would print it in the
-    // default monospace at full prose size.
-    "font-family:var(--font-code,monospace);font-size:.86em;line-height:1.6;",
+    // default monospace at full prose size. `--code-scale` is the reader's
+    // Code scale; the ratios are the preview's, so one percentage means the
+    // same size in the pane and on paper.
+    "font-family:var(--font-code,monospace);font-size:calc(.86em * var(--code-scale,1));line-height:1.6;",
     "font-variant-ligatures:var(--code-ligatures,normal);",
     "font-variant-numeric:var(--code-figures,normal)}",
-    "code{font-family:var(--font-code,monospace);font-size:.9em;",
+    "code{font-family:var(--font-code,monospace);font-size:calc(.88em * var(--code-scale,1));",
     "font-variant-ligatures:var(--code-ligatures,normal);",
     "font-variant-numeric:var(--code-figures,normal)}",
     "pre code{font-size:inherit;line-height:inherit}",
@@ -1207,11 +1209,13 @@ export function wrapStandaloneHtml(
     "font-weight:var(--weight-strong,600);font-variant-numeric:normal}",
     "pre{background:rgba(127,127,127,.12);padding:12px 14px;border-radius:6px;overflow:auto;",
     // A literal block has no `<code>` child, so the face and size must be on
-    // `pre` or the exported file shows it in the browser default at 100%.
-    "font-family:var(--font-code,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);font-size:.9em;",
+    // `pre` or the exported file shows it in the browser default at 100%. The
+    // ratios are the preview's, and `--code-scale` carries the reader's Code
+    // scale into a document that never loads `styles.css`.
+    "font-family:var(--font-code,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);font-size:calc(.86em * var(--code-scale,1));",
     "font-variant-ligatures:var(--code-ligatures,normal);",
     "font-variant-numeric:var(--code-figures,normal)}",
-    "code{font-family:var(--font-code,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);font-size:.9em;",
+    "code{font-family:var(--font-code,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);font-size:calc(.88em * var(--code-scale,1));",
     "font-variant-ligatures:var(--code-ligatures,normal);",
     "font-variant-numeric:var(--code-figures,normal)}",
     "pre code{font-size:inherit}",

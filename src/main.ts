@@ -917,6 +917,10 @@ function applyTypography(): void {
   // KaTeX itself draws at 1.21em; this multiplies that ratio. A percentage is
   // what the reader thinks in, a unitless multiplier is what calc() wants.
   root.setProperty("--math-scale", String(settings.mathFontScale / 100));
+  // Code is drawn at 86% of the prose for a block and 88% inline, because a
+  // monospaced face reads larger at the same nominal size. This multiplies that
+  // ratio; 100 leaves it alone and about 116 makes a block match the prose.
+  root.setProperty("--code-scale", String(settings.codeFontScale / 100));
 
   // Whole property values rather than composed keywords: `font-variant-numeric`
   // takes a list, and building one from separate booleans is where a stray space
@@ -2354,6 +2358,10 @@ function exportTypographyCss(): string {
   );
   declarations.push(`--body-size:${settings.bodyFontSize}px`);
   declarations.push(`--math-scale:${settings.mathFontScale / 100}`);
+  // The export wrappers repeat the preview's ratios and read this variable, so
+  // one stored percentage means the same size in every output. A missing
+  // variable in an older export falls back to 1, its size before the setting.
+  declarations.push(`--code-scale:${settings.codeFontScale / 100}`);
   declarations.push(
     `--prose-figures:${settings.oldstyleFigures ? "oldstyle-nums" : "normal"}`,
     `--table-figures:${settings.tabularFigures ? "tabular-nums" : "normal"}`,
