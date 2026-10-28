@@ -31,6 +31,8 @@ export interface PreferencesHost {
   settings(): api.Settings;
   update(patch: Partial<api.Settings>): void;
   clearRecent(): void;
+  /** Return the AI Assistant's floating button and panel to their defaults. */
+  resetAssistantPosition(): void;
   /** Write the document as a standalone HTML file. */
   exportHtml(): void;
   /** Save the document to PDF through the native writer. */
@@ -780,7 +782,7 @@ function aiStatusText(ai: AiUiState): string {
           : "Key: kept for this session only.",
       );
     } else {
-      lines.push("Key: none saved for this endpoint.");
+      lines.push("Key: none saved for this endpoint; requests are sent without one.");
     }
     if (ai.status.warning) lines.push(ai.status.warning);
     if (!ai.status.keychainAvailable) {
@@ -909,7 +911,7 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
     {
       kind: "note",
       label: "Privacy",
-      text: "The assistant contacts only the endpoint you configure, and only when you press Generate, save a key or fetch the model list. Nothing is sent to MDraft. The selection and your instruction are the only document text that leaves this machine. The API key is stored in the operating system's credential store, never in settings.json.",
+      text: "The assistant contacts only the endpoint you configure, and only when you press Generate, save a key or fetch the model list. Nothing is sent to MDraft. The selection and your instruction are the only document text that leaves this machine. The API key is stored in the operating system's credential store, never in settings.json. The last ten successful answers stay in memory for this session only; they are never written to disk.",
     },
     {
       kind: "checkbox",
@@ -917,6 +919,13 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
       help: "Shows the floating button in the source pane and makes the Tools item and Ctrl/Cmd+Shift+Space open the action palette. Off by default: no request and no keychain read until you enable it and choose an endpoint and model.",
       get: () => s().aiEnabled,
       set: (value) => host.update({ aiEnabled: value }),
+    },
+    {
+      kind: "button",
+      label: "Floating button",
+      text: "Reset position",
+      help: "Returns the assistant button to the bottom-right corner of the source pane and the assistant panel to its default size. Both last for this session only.",
+      action: () => host.resetAssistantPosition(),
     },
     {
       kind: "select",
@@ -961,8 +970,10 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
     {
       kind: "secret",
       label: "API Key",
-      help: "Saving the key also requests the model list and fills the model suggestions. Stored in the OS credential store, keyed by provider and endpoint; after changing the scheme or host, save it again. When the store is unavailable the key is kept for this session only. Local servers often need no key; Anthropic always does.",
-      placeholder: ai.status?.hasKey ? "A key is saved — type to replace it" : "Paste the API key",
+      help: "Optional. Local inference servers usually need no key; when none is saved the request goes out without an auth header. A hosted endpoint that needs one answers 401, and the error names it. Saving a key also requests the model list and fills the model suggestions. Stored in the OS credential store, keyed by provider and endpoint; after changing the scheme or host, save it again. When the store is unavailable the key is kept for this session only.",
+      placeholder: ai.status?.hasKey
+        ? "A key is saved — type to replace it"
+        : "No key — optional for local servers",
       status: () => ({
         hasKey: ai.status?.hasKey ?? false,
         source: ai.status?.source ?? "none",
@@ -1776,6 +1787,10 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       save.type = "button";
       save.className = "prefs-button";
       save.textContent = "Save";
+      // Nothing to save until something is typed. Leaving this enabled made an
+      // empty click a no-op, which reads as "the key is required" even though
+      // the field is optional.
+      save.disabled = true;
       const clear = document.createElement("button");
       clear.type = "button";
       clear.className = "prefs-button";
@@ -1788,13 +1803,17 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
         ? current.source === "keychain"
           ? "Saved in the system keychain"
           : "Session only"
-        : "No key";
+        : "No key — optional";
       const commit = () => {
         const key = input.value.trim();
         if (!key) return;
         input.value = "";
+        save.disabled = true;
         void row.set(key);
       };
+      input.addEventListener("input", () => {
+        save.disabled = input.value.trim() === "";
+      });
       save.addEventListener("click", commit);
       input.addEventListener("keydown", (event) => {
         if (event.key !== "Enter") return;

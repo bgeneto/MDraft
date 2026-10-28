@@ -2717,7 +2717,10 @@ body {
 .ai-chat::-webkit-scrollbar,
 .ai-answer::-webkit-scrollbar,
 .ai-diff::-webkit-scrollbar,
-.ai-context-text::-webkit-scrollbar {
+.ai-context-text::-webkit-scrollbar,
+.ai-history-list::-webkit-scrollbar,
+.ai-history-detail::-webkit-scrollbar,
+.ai-history-answer::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
@@ -2727,7 +2730,10 @@ body {
 .ai-chat::-webkit-scrollbar-track,
 .ai-answer::-webkit-scrollbar-track,
 .ai-diff::-webkit-scrollbar-track,
-.ai-context-text::-webkit-scrollbar-track {
+.ai-context-text::-webkit-scrollbar-track,
+.ai-history-list::-webkit-scrollbar-track,
+.ai-history-detail::-webkit-scrollbar-track,
+.ai-history-answer::-webkit-scrollbar-track {
   background: transparent;
 }
 
@@ -2736,7 +2742,10 @@ body {
 .ai-chat::-webkit-scrollbar-thumb,
 .ai-answer::-webkit-scrollbar-thumb,
 .ai-diff::-webkit-scrollbar-thumb,
-.ai-context-text::-webkit-scrollbar-thumb {
+.ai-context-text::-webkit-scrollbar-thumb,
+.ai-history-list::-webkit-scrollbar-thumb,
+.ai-history-detail::-webkit-scrollbar-thumb,
+.ai-history-answer::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
   border-radius: 8px;
   background: var(--scrollbar-thumb);
@@ -2748,7 +2757,10 @@ body {
 .ai-chat::-webkit-scrollbar-thumb:hover,
 .ai-answer::-webkit-scrollbar-thumb:hover,
 .ai-diff::-webkit-scrollbar-thumb:hover,
-.ai-context-text::-webkit-scrollbar-thumb:hover {
+.ai-context-text::-webkit-scrollbar-thumb:hover,
+.ai-history-list::-webkit-scrollbar-thumb:hover,
+.ai-history-detail::-webkit-scrollbar-thumb:hover,
+.ai-history-answer::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
   background-clip: padding-box;
 }
@@ -2758,7 +2770,10 @@ body {
 .ai-chat::-webkit-scrollbar-corner,
 .ai-answer::-webkit-scrollbar-corner,
 .ai-diff::-webkit-scrollbar-corner,
-.ai-context-text::-webkit-scrollbar-corner {
+.ai-context-text::-webkit-scrollbar-corner,
+.ai-history-list::-webkit-scrollbar-corner,
+.ai-history-detail::-webkit-scrollbar-corner,
+.ai-history-answer::-webkit-scrollbar-corner {
   background: transparent;
 }
 
@@ -2857,6 +2872,211 @@ body {
   color: var(--fg);
 }
 
+.ai-history {
+  min-height: 0;
+}
+
+.ai-history-header {
+  align-items: center;
+}
+
+.ai-history-heading {
+  flex: 1;
+  min-width: 0;
+}
+
+.ai-history-count {
+  max-width: none;
+}
+
+.ai-history-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 5px;
+}
+
+.ai-history-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+  padding: 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ai-history-row:hover,
+.ai-history-row:focus-visible {
+  background: var(--accent-soft);
+  outline: none;
+}
+
+.ai-history-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.ai-history-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.ai-history-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ai-history-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ai-history-action {
+  min-width: 0;
+  overflow: hidden;
+  font: 600 12.5px var(--font-ui);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ai-history-time {
+  flex: none;
+  margin-left: auto;
+  color: var(--muted);
+  font: 10.5px var(--font-ui);
+  white-space: nowrap;
+}
+
+.ai-history-request,
+.ai-history-preview {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ai-history-request {
+  color: var(--muted);
+  font: 11px var(--font-ui);
+}
+
+.ai-history-preview {
+  color: var(--muted);
+  font: 11.5px/1.35 var(--font-ui);
+}
+
+.ai-history-detail {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 9px;
+  min-height: 0;
+  padding: 10px 12px;
+  overflow-y: auto;
+}
+
+.ai-history-meta {
+  color: var(--muted);
+  font: 11px var(--font-ui);
+  overflow-wrap: anywhere;
+}
+
+.ai-history-question {
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--code-bg);
+}
+
+.ai-history-question-label {
+  display: block;
+  color: var(--muted);
+  font: 600 10px var(--font-ui);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.ai-history-question p {
+  margin: 4px 0 0;
+  font: 12.5px/1.45 var(--font-ui);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ai-history-answer {
+  max-height: 300px;
+  padding: 8px 10px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.5 var(--font-ui);
+}
+
+.ai-history-answer pre {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.ai-history-badge {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font: 10px var(--font-ui);
+}
+
+.ai-history-detail-actions {
+  margin-top: 2px;
+}
+
+.ai-history-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.ai-history-footer-note {
+  color: var(--muted);
+  font: 10.5px var(--font-ui);
+}
+
+.ai-history-empty {
+  padding: 16px 12px;
+  text-align: center;
+}
+
+.ai-history-empty-title {
+  margin: 0 0 4px;
+  font: 600 12.5px var(--font-ui);
+}
+
+.ai-history-empty .ai-empty {
+  padding: 0 0 8px;
+}
+
+.ai-history-empty .ai-link {
+  color: var(--accent);
+}
+
 .ai-panel {
   min-height: 0;
 }
@@ -2872,6 +3092,7 @@ body {
 
 .ai-panel-heading {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
@@ -2891,7 +3112,9 @@ body {
   text-overflow: ellipsis;
 }
 
-.ai-close {
+.ai-close,
+.ai-history-close,
+.ai-history-back {
   flex: none;
   width: 26px;
   height: 26px;
@@ -2906,13 +3129,46 @@ body {
   cursor: pointer;
 }
 
-.ai-close:hover {
+.ai-history-back svg {
+  width: 16px;
+  height: 16px;
+}
+
+.ai-close:hover,
+.ai-history-close:hover,
+.ai-history-back:hover {
   background: var(--code-bg);
   color: var(--fg);
 }
 
+/* The grip sits in the header's top-left corner, so the panel grows up and to
+   the left while its bottom-right corner stays anchored. */
+.ai-resize {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background-color: transparent;
+  background-image: repeating-linear-gradient(135deg, currentColor 0 1px, transparent 1px 4px);
+  color: var(--muted);
+  opacity: 0.45;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.ai-resize:hover,
+.ai-resize:focus-visible {
+  background-color: var(--code-bg);
+  opacity: 0.9;
+  outline: none;
+}
+
 .ai-panel-body {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 9px;
   padding: 10px 12px;
@@ -3049,8 +3305,25 @@ body {
   background: var(--bg);
   color: var(--fg);
   font: 13px/1.5 var(--font-ui);
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* The completed answer is sanitised Markdown; the live stream stays plain so a
+   growing 32,000-character answer is not reparsed on every animation frame. */
+.ai-answer {
+  white-space: normal;
+}
+
+.ai-answer.is-plain,
+.ai-diff {
+  white-space: pre-wrap;
+}
+
+/* A resized panel has the room; let the answer use it rather than keeping a
+   second, 280 px scrollbar inside the body. */
+.ai-panel.is-resized .ai-answer,
+.ai-history.is-resized .ai-history-answer {
+  max-height: none;
 }
 
 .ai-diff-added {
@@ -3105,41 +3378,123 @@ body {
   background: var(--code-bg);
 }
 
-.ai-chat-markdown {
+.ai-markdown {
   white-space: normal;
 }
 
-.ai-chat-markdown p,
-.ai-chat-markdown ul,
-.ai-chat-markdown ol {
-  margin: 0 0 6px;
+.ai-markdown > :first-child {
+  margin-top: 0;
 }
 
-.ai-chat-markdown > :last-child {
+.ai-markdown > :last-child {
   margin-bottom: 0;
 }
 
-.ai-chat-markdown ul,
-.ai-chat-markdown ol {
-  padding-left: 18px;
+.ai-markdown p,
+.ai-markdown ul,
+.ai-markdown ol,
+.ai-markdown blockquote,
+.ai-markdown pre,
+.ai-table-scroll {
+  margin: 0 0 6px;
 }
 
-.ai-chat-markdown code {
+.ai-markdown ul,
+.ai-markdown ol {
+  padding-left: 20px;
+}
+
+.ai-markdown li + li {
+  margin-top: 2px;
+}
+
+.ai-markdown li > p {
+  margin: 0;
+}
+
+.ai-markdown h1,
+.ai-markdown h2,
+.ai-markdown h3,
+.ai-markdown h4,
+.ai-markdown h5,
+.ai-markdown h6 {
+  margin: 8px 0 4px;
+  font: 600 13.5px/1.3 var(--font-ui);
+}
+
+.ai-markdown h1,
+.ai-markdown h2 {
+  font-size: 14.5px;
+}
+
+.ai-markdown blockquote {
+  padding: 2px 0 2px 8px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+
+.ai-markdown hr {
+  height: 1px;
+  margin: 8px 0;
+  border: 0;
+  background: var(--border);
+}
+
+.ai-markdown code {
   padding: 1px 3px;
   border-radius: 3px;
-  background: var(--bg);
+  background: var(--code-bg);
   font-family: var(--font-mono);
 }
 
-.ai-chat-markdown pre {
+.ai-markdown pre {
   overflow-x: auto;
   padding: 6px 8px;
   border-radius: 5px;
+  background: var(--code-bg);
+  white-space: pre;
+}
+
+.ai-markdown pre code {
+  padding: 0;
+  background: transparent;
+  font-size: inherit;
+}
+
+/* An assistant bubble is already drawn on the code surface, so code inside it
+   steps back to the page colour instead of disappearing into its own block. */
+.ai-chat-assistant .ai-markdown code,
+.ai-chat-assistant .ai-markdown pre {
   background: var(--bg);
 }
 
-.ai-chat-markdown a {
+.ai-markdown a {
   color: var(--accent);
+}
+
+.ai-markdown table {
+  width: max-content;
+  max-width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.ai-markdown th,
+.ai-markdown td {
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.ai-markdown th {
+  background: var(--code-bg);
+  font-weight: 600;
+}
+
+.ai-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .ai-chat-source {
@@ -3223,22 +3578,35 @@ body {
   color: #fff;
 }
 
+/* The generic hover rule above is more specific than `.is-primary` (three
+   class-level selectors against two), so without a primary hover of its own the
+   accent fill turns into the light `--code-bg` wash and the white label
+   disappears in the light theme. Darken the accent instead of going neutral. */
+.ai-action.is-primary:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 86%, #000);
+  background: color-mix(in srgb, var(--accent) 86%, #000);
+}
+
 .ai-action:disabled {
   opacity: 0.45;
   cursor: default;
 }
 
+/* The key field and its two buttons form one control group capped at the same
+   420px as every other field, so widening the card cannot stretch this one row
+   past the fields above it. The input gives up the width the buttons need and
+   the status note takes a line of its own inside the same group. */
 .prefs-secret {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+  max-width: 420px;
 }
 
 .prefs-secret input {
   flex: 1 1 220px;
   width: auto;
-  max-width: none;
   min-width: 140px;
 }
 

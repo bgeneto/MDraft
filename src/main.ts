@@ -5871,6 +5871,10 @@ async function boot(): Promise<void> {
     update: applySettingsPatch,
     clearRecent: clearRecentFiles,
     readAloudVoices: () => readAloud?.voices() ?? [],
+    resetAssistantPosition: () => {
+      assistant?.resetPosition();
+      toast("Assistant layout reset.");
+    },
     exportHtml: () => void exportHtml(),
     exportPdf: () => void exportPdf(),
     setupTypst: () => typstSetup(),
@@ -5929,6 +5933,7 @@ async function boot(): Promise<void> {
     focusEditor: () => editor.focus(),
     toast,
     openSettings: () => preferences.openAt("ai"),
+    documentName: () => doc.name,
   });
 
   installChrome();

@@ -39,12 +39,6 @@ impl Provider {
             Self::Anthropic => "anthropic",
         }
     }
-
-    /// Anthropic has no unauthenticated mode; an OpenAI-compatible local server
-    /// usually has one, so a missing key is sent as no header.
-    pub fn requires_key(self) -> bool {
-        matches!(self, Self::Anthropic)
-    }
 }
 
 pub struct ChatConfig {
@@ -184,6 +178,12 @@ fn merge_roles(messages: &[PromptMessage]) -> Vec<PromptMessage> {
     merged
 }
 
+/// Attach the credential only when one is saved.
+///
+/// A missing key means no auth header at all, for either protocol. Local
+/// inference engines usually have authentication disabled, and pre-judging an
+/// endpoint by its provider or host would refuse a working one; the endpoint
+/// itself is the authority, and a 401 explains what it needs.
 fn auth(
     request: reqwest::RequestBuilder,
     config: &ChatConfig,
@@ -283,6 +283,7 @@ pub async fn stream(
             &body,
             &config.host,
             &config.base_url,
+            config.key.is_some(),
         ));
     }
 
@@ -470,10 +471,19 @@ fn model_list_error(
     )
 }
 
-fn http_error(status: u16, body: &str, host: &str, base_url: &str) -> String {    match status {
-        401 | 403 => format!(
-            "The API key was rejected by {host}. Open AI Settings and check the key for this endpoint."
-        ),
+fn http_error(status: u16, body: &str, host: &str, base_url: &str, key_sent: bool) -> String {
+    match status {
+        401 | 403 => {
+            if key_sent {
+                format!(
+                    "The API key was rejected by {host}. Open AI Settings and check the key for this endpoint."
+                )
+            } else {
+                format!(
+                    "{host} refused the request (HTTP {status}). No API key is saved; if this endpoint needs one, save it in AI Settings."
+                )
+            }
+        }
         404 => format!(
             "The endpoint answered 404 Not Found. Check the Base URL ({base_url}); it usually ends with /v1."
         ),
@@ -555,6 +565,7 @@ pub async fn list_models(config: &ChatConfig) -> Result<Vec<String>, String> {
             &body,
             &config.host,
             &config.base_url,
+            config.key.is_some(),
         ));
     }
     let value: Value = {
@@ -791,6 +802,16 @@ mod tests {
         );
         assert_eq!(redact("no key", None), "no key");
         assert_eq!(redact("no key", Some("")), "no key");
+    }
+
+    #[test]
+    fn a_401_names_the_missing_key_instead_of_a_rejected_one() {
+        let without = http_error(401, "", "127.0.0.1", "http://127.0.0.1:8080/v1", false);
+        assert!(without.contains("No API key is saved"), "{without}");
+        assert!(!without.contains("was rejected"), "{without}");
+
+        let with = http_error(401, "", "api.example.com", "https://api.example.com/v1", true);
+        assert!(with.contains("API key was rejected"), "{with}");
     }
 
     #[test]

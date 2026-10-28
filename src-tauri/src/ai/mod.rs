@@ -164,10 +164,11 @@ pub async fn ai_fetch_models(
     let provider_id = provider::Provider::from_id(&provider)
         .ok_or_else(|| "Choose a provider in AI Settings.".to_string())?;
     let base = provider::normalize_base_url(&base_url)?;
+    // The key is optional for every provider and host: a local engine usually
+    // needs none, and a hosted endpoint answers 401 when it wants one. Let the
+    // request be the authority instead of refusing before the reader's server
+    // has had a chance to answer.
     let (key, _) = secret::resolve(&state.ai.keys, provider_id.id(), &base);
-    if provider_id.requires_key() && key.is_none() {
-        return Err("Set an API key for this endpoint first.".to_string());
-    }
     let config = ChatConfig {
         provider: provider_id,
         base_url: base.clone(),
@@ -228,10 +229,10 @@ pub async fn ai_complete(
         return Err("Set a model in AI Settings first.".to_string());
     }
     let prepared = prompt::prepare(&request)?;
+    // No key is not a configuration error. Sending no auth header is the only
+    // accurate request for an endpoint whose operator never configured one;
+    // the 401 handler names the endpoint when it does require a key.
     let (key, _) = secret::resolve(&state.ai.keys, provider_kind.id(), &base);
-    if provider_kind.requires_key() && key.is_none() {
-        return Err("Set an API key for this endpoint in AI Settings.".to_string());
-    }
 
     let host = provider::host_of(&base);
     let config = ChatConfig {
