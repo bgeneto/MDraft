@@ -112,17 +112,25 @@ Markdown document active.*
   `chat/completions` server (OpenAI, DeepSeek, Ollama, LM Studio, llama.cpp,
   vLLM, OpenRouter, your own gateway) or at Anthropic's Messages API. A single
   icon-only button sits in the source pane; drag it anywhere, and it starts at
-  the same corner on every launch. Its searchable palette offers fourteen
+  the same corner on every launch. The panel and History can be widened or
+  heightened from the grip in their top-left corner; the button's corner and
+  that size last for the session. Its searchable palette offers fourteen
   task-specific actions — Continue writing, Improve writing, Ask AI, Expand,
   Shorten, Simplify, Change tone, Translate, Summarize, Explain, Key points,
   Critique, Convert to table and Convert markup — and the answer streams into a
   non-modal panel before you apply it with **Replace selection**, **Insert
-  below** or **Insert**. One undo restores the exact original. The key lives in
-  the operating system's credential store, never in `settings.json`. The
-  assistant is off by default: no request and no keychain read happens at
-  start-up, and the store is read only when you open its Preferences section or
-  use an action. Saving the key also fetches the endpoint's model list; the
-  Fetch button refreshes it later.
+  below** or **Insert**. The finished answer renders as sanitized Markdown, with
+  headings, lists, tables, code and emphasis, and the raw source stays one click
+  away under **Source**; History uses the same rendering. One undo restores the
+  exact original. The key is optional: a local inference server usually needs
+  none, and when none is saved requests go out without an auth header. A saved
+  key lives in the operating system's credential store, never in
+  `settings.json`. The assistant is off by default: no request and no keychain
+  read happens at start-up, and the store is read only when you open its
+  Preferences section or use an action. Saving the key also fetches the
+  endpoint's model list; the Fetch button refreshes it later. The ten most recent successful answers stay
+  in an in-session **History**, reachable from the palette, where you can read,
+  copy or insert them again; nothing in that history is written to disk.
 - **Quiet by design.** No accounts, activation, telemetry or update checks.
   MDraft makes no network request at start-up; it goes online only for an action
   you take, such as installing pandoc or Typst, fetching a pasted image URL,

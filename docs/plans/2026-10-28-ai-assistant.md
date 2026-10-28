@@ -4,6 +4,11 @@
 **Date:** 2026-10-28
 **ADR:** `../adr/2026-10-28-ai-assistant-transport.md` (written with the implementation)
 
+> **2026-10-28 update:** the palette's **Reset button position** command moved to
+> Preferences › AI Assistant, and its slot now opens the session-only History.
+> See `2026-10-28-ai-history.md`; the footer descriptions below are the original
+> plan, kept as the record of what was agreed then.
+
 ## Context and goal
 
 MDraft is a local-first editor: no account, no telemetry, no network request at

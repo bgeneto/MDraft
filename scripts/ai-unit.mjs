@@ -30,6 +30,13 @@ import {
   trimPreceding,
 } from "../src/ai/context.ts";
 import { diffSummary, wordDiff } from "../src/ai/diff.ts";
+import {
+  MAX_AI_HISTORY,
+  formatHistoryAge,
+  historyTitle,
+  previewText,
+  rememberRequest,
+} from "../src/ai/history.ts";
 
 let passed = 0;
 let failed = 0;
@@ -363,6 +370,88 @@ equal(
   trimHistory(longTurns, 12, 20_000).history.length,
   2,
 );
+
+// ---------------------------------------------------------------------------
+// Session history
+// ---------------------------------------------------------------------------
+
+console.log("\nSession history");
+
+const historyEntry = (id, overrides = {}) => ({
+  id,
+  action: "improve",
+  parameter: null,
+  question: "",
+  contextSummary: "Selection · 12 characters",
+  context: "<passage>\nRegular text\n</passage>",
+  answer: `Answer ${id}`,
+  notes: "",
+  model: "test-model",
+  host: "127.0.0.1:1",
+  documentName: "feature-tour.md",
+  language: "markdown",
+  createdAt: 1_000,
+  truncated: false,
+  ...overrides,
+});
+
+const firstEntry = historyEntry("first", { createdAt: 2_000 });
+equal(
+  "a new request becomes the first history row",
+  rememberRequest([], firstEntry).map((entry) => entry.id),
+  ["first"],
+);
+const secondEntry = historyEntry("second", { createdAt: 3_000 });
+equal(
+  "newer requests stay in front",
+  rememberRequest([firstEntry], secondEntry).map((entry) => entry.id),
+  ["second", "first"],
+);
+const many = Array.from({ length: MAX_AI_HISTORY + 3 }, (_, index) =>
+  historyEntry(`entry-${index}`, { createdAt: index }),
+);
+const cappedByTen = many.reduce((entries, entry) => rememberRequest(entries, entry), []);
+equal("the history keeps ten entries", cappedByTen.length, MAX_AI_HISTORY);
+equal("the newest entry survives the cap", cappedByTen[0].id, "entry-12");
+equal("the oldest entry is dropped", cappedByTen.at(-1).id, "entry-3");
+equal("an empty cap keeps nothing", rememberRequest([firstEntry], secondEntry, 0).length, 0);
+
+const regenerated = rememberRequest(
+  [secondEntry, firstEntry],
+  historyEntry("first", { answer: "Regenerated answer", createdAt: 9_000 }),
+);
+equal("regenerate keeps the row count", regenerated.length, 2);
+equal("regenerate keeps the row position", regenerated[1].id, "first");
+equal("regenerate replaces the answer", regenerated[1].answer, "Regenerated answer");
+equal("regenerate refreshes the timestamp", regenerated[1].createdAt, 9_000);
+check(
+  "an unknown cap argument still yields an array",
+  Array.isArray(rememberRequest([firstEntry], secondEntry)),
+);
+
+equal("a tone title names the parameter", historyTitle("tone", "Casual"), "Change tone · Casual");
+equal(
+  "a translation title names the language",
+  historyTitle("translate", "Portuguese"),
+  "Translate · Portuguese",
+);
+equal(
+  "a markup title uses the readable label",
+  historyTitle("convert", "html"),
+  "Convert markup · HTML",
+);
+equal(
+  "an action without a parameter keeps its label",
+  historyTitle("improve", null),
+  "Improve writing",
+);
+equal("preview text collapses whitespace", previewText("  one\n\t two  "), "one two");
+const cutPreview = previewText("abcdefghijklmnopqrstuvwxyz", 10);
+check("a long preview is cut", cutPreview.endsWith("…") && cutPreview.length === 10, cutPreview);
+equal("a fresh answer reads as just now", formatHistoryAge(0, 30_000), "Just now");
+equal("a two-minute-old answer reads in minutes", formatHistoryAge(0, 125_000), "2 min ago");
+equal("an hour-old answer reads in hours", formatHistoryAge(0, 3_600_000), "1 h ago");
+check("an old answer gets a date", formatHistoryAge(0, 15 * 24 * 3_600_000).length > 0);
 
 // ---------------------------------------------------------------------------
 // Preceding trim

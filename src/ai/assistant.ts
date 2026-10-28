@@ -14,6 +14,7 @@ import { writeClipboardText } from "../clipboard";
 import {
   LANGUAGES,
   TONES,
+  actionById,
   convertTargets,
   defaultParameter,
   groupedActions,
@@ -36,12 +37,30 @@ import {
   type Point,
 } from "./context";
 import { diffSummary, wordDiff } from "./diff";
+import {
+  MAX_AI_HISTORY,
+  formatHistoryAge,
+  historyTitle,
+  previewText,
+  rememberRequest,
+  type AiHistoryEntry,
+} from "./history";
 
 const BUTTON_SIZE = 40;
 const PALETTE_WIDTH = 340;
 const PANEL_WIDTH = 440;
+const MIN_PANEL_WIDTH = 320;
+const MIN_PANEL_HEIGHT = 240;
 const PANE_MARGIN = 8;
 const ANCHOR_MARGIN = 20;
+
+/** A resized assistant popover, in pane coordinates, for this session only. */
+interface PopoverRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
 
 export interface AssistantConfig {
   enabled: boolean;
@@ -61,6 +80,8 @@ export interface AssistantHost {
   focusEditor(): void;
   toast(text: string): void;
   openSettings(): void;
+  /** The name shown in a history row: the tab's document name. */
+  documentName(): string;
 }
 
 export interface AssistantHandle {
@@ -71,6 +92,8 @@ export interface AssistantHandle {
   close(): void;
   /** Stop an in-flight request; the panel stays open on its partial answer. */
   cancel(): void;
+  /** Return the floating button to its bottom-right anchor. */
+  resetPosition(): void;
   onViewMode(mode: api.ViewMode): void;
   isOpen(): boolean;
 }
@@ -95,7 +118,7 @@ function iconSvg(inner: string): string {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
 }
 
-function chatHtml(text: string): string {
+function markdownHtml(text: string): string {
   const rendered = marked.parse(text, { async: false });
   const html = DOMPurify.sanitize(typeof rendered === "string" ? rendered : text, {
     USE_PROFILES: { html: true },
@@ -110,6 +133,15 @@ function chatHtml(text: string): string {
   }
   const container = document.createElement("div");
   container.appendChild(template.content);
+  // A model answer can contain a table wider than the 440 px panel. A table is
+  // not a scroll container of its own, so wrap it: the wrapper scrolls while
+  // the rows keep their table layout.
+  for (const table of container.querySelectorAll("table")) {
+    const scroller = document.createElement("div");
+    scroller.className = "ai-table-scroll";
+    table.replaceWith(scroller);
+    scroller.appendChild(table);
+  }
   return container.innerHTML;
 }
 
@@ -143,12 +175,32 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       </div>
       <div class="ai-actions" role="listbox" aria-label="AI actions"></div>
       <div class="ai-palette-footer">
-        <button class="ai-link" type="button" data-command="reset">Reset button position</button>
+        <button class="ai-link" type="button" data-command="history">History</button>
         <button class="ai-link" type="button" data-command="settings">AI Assistant Settings…</button>
       </div>
     </div>
+    <div class="ai-popover ai-history" role="dialog" aria-labelledby="ai-history-title" hidden>
+      <header class="ai-panel-header ai-history-header">
+        <button class="ai-resize" type="button" aria-label="Resize the history panel" title="Drag the corner to resize; double-click to reset; the arrow keys also adjust."></button>
+        <button class="ai-history-back" type="button" title="Back to history" aria-label="Back to history" hidden>
+          ${iconSvg('<path d="M15 18l-6-6 6-6"/>')}
+        </button>
+        <div class="ai-panel-heading ai-history-heading">
+          <h2 id="ai-history-title" class="ai-panel-title ai-history-title">History</h2>
+          <span class="ai-chip ai-history-count" hidden></span>
+        </div>
+        <button class="ai-history-close" type="button" title="Close" aria-label="Close history">✕</button>
+      </header>
+      <div class="ai-history-list" aria-label="AI Assistant history"></div>
+      <div class="ai-history-detail" hidden></div>
+      <footer class="ai-history-footer">
+        <button class="ai-link ai-history-clear" type="button">Clear history</button>
+        <span class="ai-history-footer-note">This session only</span>
+      </footer>
+    </div>
     <section class="ai-popover ai-panel" role="dialog" aria-modal="false" aria-labelledby="ai-panel-title" hidden>
       <header class="ai-panel-header">
+        <button class="ai-resize" type="button" aria-label="Resize the assistant panel" title="Drag the corner to resize; double-click to reset; the arrow keys also adjust."></button>
         <div class="ai-panel-heading">
           <h2 id="ai-panel-title" class="ai-panel-title">AI Assistant</h2>
           <span class="ai-chip" hidden></span>
@@ -170,7 +222,11 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
               <button class="ai-toggle-btn" type="button" data-view="changes">Changes</button>
             </div>
           </div>
-          <pre class="ai-answer"></pre>
+          <div class="ai-answer ai-markdown"></div>
+          <details class="ai-chat-source ai-answer-source" hidden>
+            <summary>Source</summary>
+            <pre class="ai-answer-source-text"></pre>
+          </details>
           <div class="ai-diff" hidden></div>
           <details class="ai-notes" hidden>
             <summary>What changed</summary>
@@ -194,6 +250,15 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
   const palette = root.querySelector<HTMLDivElement>(".ai-palette")!;
   const search = root.querySelector<HTMLInputElement>(".ai-search")!;
   const actionsEl = root.querySelector<HTMLDivElement>(".ai-actions")!;
+  const historyEl = root.querySelector<HTMLDivElement>(".ai-history")!;
+  const historyTitleEl = root.querySelector<HTMLElement>(".ai-history-title")!;
+  const historyCount = root.querySelector<HTMLElement>(".ai-history-count")!;
+  const historyBack = root.querySelector<HTMLButtonElement>(".ai-history-back")!;
+  const historyClose = root.querySelector<HTMLButtonElement>(".ai-history-close")!;
+  const historyList = root.querySelector<HTMLDivElement>(".ai-history-list")!;
+  const historyDetail = root.querySelector<HTMLDivElement>(".ai-history-detail")!;
+  const historyFooter = root.querySelector<HTMLElement>(".ai-history-footer")!;
+  const historyClear = root.querySelector<HTMLButtonElement>(".ai-history-clear")!;
   const panel = root.querySelector<HTMLElement>(".ai-panel")!;
   const panelTitle = root.querySelector<HTMLElement>(".ai-panel-title")!;
   const chip = root.querySelector<HTMLElement>(".ai-chip")!;
@@ -206,6 +271,8 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
   const changesSummary = root.querySelector<HTMLElement>(".ai-changes-summary")!;
   const toggleButtons = Array.from(root.querySelectorAll<HTMLButtonElement>(".ai-toggle-btn"));
   const answerEl = root.querySelector<HTMLElement>(".ai-answer")!;
+  const answerSource = root.querySelector<HTMLDetailsElement>(".ai-answer-source")!;
+  const answerSourceText = root.querySelector<HTMLElement>(".ai-answer-source-text")!;
   const diffEl = root.querySelector<HTMLDivElement>(".ai-diff")!;
   const notesEl = root.querySelector<HTMLDetailsElement>(".ai-notes")!;
   const notesText = root.querySelector<HTMLElement>(".ai-notes-text")!;
@@ -223,6 +290,8 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     model: "",
   };
   let position: Point | null = null;
+  /** Set by the resize handle; cleared by Reset position or a double-click. */
+  let customPopoverRect: PopoverRect | null = null;
   let action: AiActionSpec | null = null;
   let capture: Capture | null = null;
   let target: {
@@ -246,6 +315,13 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
   let askHistory: api.AiTurn[] = [];
   let pendingQuestion = "";
   let parameterValue = "";
+  let historyOpen = false;
+  let historyDetailId: string | null = null;
+  let historyEntries: AiHistoryEntry[] = [];
+  /** Stable across Regenerate/Retry; a new panel or Ask exchange gets a new one. */
+  let entryId: string | null = null;
+  let requestContext: { summary: string; text: string } | null = null;
+  let historySeq = 0;
   let paletteOpen = false;
   let panelOpen = false;
   let activeIndex = 0;
@@ -282,6 +358,119 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     button.style.top = `${Math.round(position.y)}px`;
   }
 
+  function clampPopoverRect(rect: PopoverRect): PopoverRect {
+    const paneRect = pane.getBoundingClientRect();
+    if (paneRect.width < 40 || paneRect.height < 40) return rect;
+    const maxWidth = Math.max(40, paneRect.width - PANE_MARGIN * 2);
+    const maxHeight = Math.max(40, paneRect.height - PANE_MARGIN * 2);
+    const width = Math.min(Math.max(rect.width, Math.min(MIN_PANEL_WIDTH, maxWidth)), maxWidth);
+    const height = Math.min(
+      Math.max(rect.height, Math.min(MIN_PANEL_HEIGHT, maxHeight)),
+      maxHeight,
+    );
+    return {
+      left: Math.min(Math.max(rect.left, PANE_MARGIN), paneRect.width - width - PANE_MARGIN),
+      top: Math.min(Math.max(rect.top, PANE_MARGIN), paneRect.height - height - PANE_MARGIN),
+      width,
+      height,
+    };
+  }
+
+  function applyCustomRect(element: HTMLElement): boolean {
+    if (!customPopoverRect || element.hidden) return false;
+    const rect = clampPopoverRect(customPopoverRect);
+    element.classList.add("is-resized");
+    element.style.width = `${rect.width}px`;
+    element.style.height = `${rect.height}px`;
+    element.style.maxHeight = "none";
+    element.style.left = `${Math.round(rect.left)}px`;
+    element.style.top = `${Math.round(rect.top)}px`;
+    return true;
+  }
+
+  /**
+   * A panel or History that the reader has resized keeps its own rectangle for
+   * the session. Until then it follows the floating button and its content.
+   */
+  function placeDocumentPopover(element: HTMLElement): void {
+    if (applyCustomRect(element)) return;
+    element.classList.remove("is-resized");
+    placePopover(element, PANEL_WIDTH);
+  }
+
+  function placeOpenPopovers(): void {
+    if (paletteOpen) placePopover(palette, PALETTE_WIDTH, 520);
+    if (panelOpen) placeDocumentPopover(panel);
+    if (historyOpen) placeDocumentPopover(historyEl);
+  }
+
+  function popoverRectOf(element: HTMLElement): PopoverRect {
+    const paneRect = pane.getBoundingClientRect();
+    const rect = element.getBoundingClientRect();
+    return {
+      left: rect.left - paneRect.left,
+      top: rect.top - paneRect.top,
+      width: rect.width,
+      height: rect.height,
+    };
+  }
+
+  /** Drag the top-left grip: the bottom-right corner stays where it is. */
+  function startResize(event: PointerEvent, element: HTMLElement, handle: HTMLElement): void {
+    const paneRect = pane.getBoundingClientRect();
+    const start = element.getBoundingClientRect();
+    const right = start.right - paneRect.left;
+    const bottom = start.bottom - paneRect.top;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startWidth = start.width;
+    const startHeight = start.height;
+    const move = (moveEvent: PointerEvent) => {
+      const maxWidth = Math.max(40, right - PANE_MARGIN);
+      const maxHeight = Math.max(40, bottom - PANE_MARGIN);
+      const width = Math.min(
+        Math.max(startWidth - (moveEvent.clientX - startX), Math.min(MIN_PANEL_WIDTH, maxWidth)),
+        maxWidth,
+      );
+      const height = Math.min(
+        Math.max(startHeight - (moveEvent.clientY - startY), Math.min(MIN_PANEL_HEIGHT, maxHeight)),
+        maxHeight,
+      );
+      customPopoverRect = { left: right - width, top: bottom - height, width, height };
+      applyCustomRect(element);
+    };
+    const end = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", end);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+    try {
+      handle.setPointerCapture(event.pointerId);
+    } catch {
+      // The pointer can be gone already, for example after a synthetic event.
+    }
+  }
+
+  /** Arrow keys resize from the same top-left edge; Shift takes a bigger step. */
+  function nudgeResize(event: KeyboardEvent, element: HTMLElement): void {
+    const step = event.shiftKey ? 48 : 16;
+    const current = customPopoverRect ?? popoverRectOf(element);
+    const next = { ...current };
+    if (event.key === "ArrowLeft") next.width += step;
+    else if (event.key === "ArrowRight") next.width -= step;
+    else if (event.key === "ArrowUp") next.height += step;
+    else if (event.key === "ArrowDown") next.height -= step;
+    else return;
+    event.preventDefault();
+    next.left = current.left + current.width - next.width;
+    next.top = current.top + current.height - next.height;
+    customPopoverRect = clampPopoverRect(next);
+    applyCustomRect(element);
+  }
+
   function placePopover(
     element: HTMLElement,
     preferredWidth: number,
@@ -293,6 +482,9 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     if (paneRect.width < 40) return;
     const width = Math.max(220, Math.min(preferredWidth, paneRect.width - 16));
     element.style.width = `${width}px`;
+    // A previously resized panel carries an inline height. Reset must return it
+    // to the content's own height, not keep the last dragged value.
+    element.style.height = "";
     // The palette is capped at 520 px so it reads as a palette, not a column;
     // the panel may use the pane. Both leave room for the button and margins.
     const maxHeight = Math.max(160, Math.min(cap, paneRect.height - PANE_MARGIN * 2 - 80));
@@ -416,6 +608,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       host.openSettings();
       return;
     }
+    closeHistory();
     panelOpen = false;
     panel.hidden = true;
     paletteOpen = true;
@@ -432,10 +625,282 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
   }
 
   // -------------------------------------------------------------------------
+  // History
+  // -------------------------------------------------------------------------
+
+  function nextHistoryId(): string {
+    historySeq += 1;
+    return `ai-history-${Date.now()}-${historySeq}`;
+  }
+
+  function historyEntryById(id: string): AiHistoryEntry | undefined {
+    return historyEntries.find((entry) => entry.id === id);
+  }
+
+  function historyRequestLine(entry: AiHistoryEntry): string {
+    const document = entry.documentName ? ` · ${entry.documentName}` : "";
+    if (entry.question.trim()) {
+      return `“${previewText(entry.question, 100)}”${document}`;
+    }
+    return `${previewText(entry.contextSummary, 100)}${document}`;
+  }
+
+  function focusHistory(id?: string): void {
+    const rows = Array.from(historyList.querySelectorAll<HTMLButtonElement>(".ai-history-row"));
+    const target = id ? rows.find((row) => row.dataset.entryId === id) : rows[0];
+    (target ?? historyClose).focus();
+  }
+
+  function openHistory(): void {
+    if (!ready()) {
+      host.openSettings();
+      return;
+    }
+    paletteOpen = false;
+    palette.hidden = true;
+    panelOpen = false;
+    panel.hidden = true;
+    historyOpen = true;
+    historyDetailId = null;
+    historyEl.hidden = false;
+    renderHistory();
+    placeDocumentPopover(historyEl);
+    focusHistory();
+  }
+
+  function closeHistory(): void {
+    historyOpen = false;
+    historyDetailId = null;
+    historyEl.hidden = true;
+  }
+
+  function renderHistory(): void {
+    if (!historyOpen) return;
+    if (historyDetailId && !historyEntryById(historyDetailId)) historyDetailId = null;
+    const entry = historyDetailId ? historyEntryById(historyDetailId) : undefined;
+
+    historyTitleEl.textContent = entry ? historyTitle(entry.action, entry.parameter) : "History";
+    historyBack.hidden = !entry;
+    historyCount.hidden = Boolean(entry) || historyEntries.length === 0;
+    historyCount.textContent = `${historyEntries.length} of ${MAX_AI_HISTORY}`;
+    historyList.hidden = Boolean(entry);
+    historyDetail.hidden = !entry;
+    historyFooter.hidden = Boolean(entry);
+    if (entry) renderHistoryDetail(entry);
+    else renderHistoryList();
+    placeDocumentPopover(historyEl);
+  }
+
+  function renderHistoryList(): void {
+    historyList.replaceChildren();
+    if (historyEntries.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "ai-history-empty";
+      const title = document.createElement("p");
+      title.className = "ai-history-empty-title";
+      title.textContent = "No answers yet";
+      const text = document.createElement("p");
+      text.className = "ai-empty";
+      text.textContent =
+        "Answers you generate are kept here for this session only. The last 10 are kept.";
+      const browse = document.createElement("button");
+      browse.type = "button";
+      browse.className = "ai-link";
+      browse.textContent = "Browse actions";
+      browse.addEventListener("click", () => {
+        closeHistory();
+        openPalette();
+      });
+      empty.append(title, text, browse);
+      historyList.appendChild(empty);
+      historyClear.hidden = true;
+      return;
+    }
+
+    historyClear.hidden = false;
+    const fragment = document.createDocumentFragment();
+    for (const entry of historyEntries) {
+      const spec = actionById(entry.action);
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "ai-history-row";
+      row.dataset.entryId = entry.id;
+      row.innerHTML = `<span class="ai-history-icon">${iconSvg(spec?.icon ?? "")}</span><span class="ai-history-main"><span class="ai-history-row-head"><span class="ai-history-action"></span><span class="ai-history-time"></span></span><span class="ai-history-request"></span><span class="ai-history-preview"></span></span>`;
+      const title = historyTitle(entry.action, entry.parameter);
+      const time = formatHistoryAge(entry.createdAt);
+      row.querySelector(".ai-history-action")!.textContent = title;
+      const timeEl = row.querySelector<HTMLElement>(".ai-history-time")!;
+      timeEl.textContent = time;
+      timeEl.title = new Date(entry.createdAt).toLocaleString();
+      row.querySelector(".ai-history-request")!.textContent = historyRequestLine(entry);
+      row.querySelector(".ai-history-preview")!.textContent = previewText(entry.answer, 140);
+      row.setAttribute("aria-label", `${title}, ${historyRequestLine(entry)}, ${time}`);
+      row.addEventListener("click", () => {
+        historyDetailId = entry.id;
+        renderHistory();
+        historyBack.focus();
+      });
+      fragment.appendChild(row);
+    }
+    historyList.appendChild(fragment);
+  }
+
+  function renderHistoryDetail(entry: AiHistoryEntry): void {
+    historyDetail.replaceChildren();
+    const meta = document.createElement("div");
+    meta.className = "ai-history-meta";
+    const pieces = [formatHistoryAge(entry.createdAt), entry.documentName];
+    if (entry.model) pieces.push(entry.host ? `${entry.model} · ${entry.host}` : entry.model);
+    meta.textContent = pieces.filter(Boolean).join(" · ");
+    meta.title = new Date(entry.createdAt).toLocaleString();
+    historyDetail.appendChild(meta);
+
+    if (entry.question.trim()) {
+      const block = document.createElement("div");
+      block.className = "ai-history-question";
+      const label = document.createElement("span");
+      label.className = "ai-history-question-label";
+      label.textContent = "Question";
+      const text = document.createElement("p");
+      text.textContent = entry.question;
+      block.append(label, text);
+      historyDetail.appendChild(block);
+    }
+
+    if (entry.context.trim()) {
+      const details = document.createElement("details");
+      details.className = "ai-context ai-history-context";
+      const summary = document.createElement("summary");
+      summary.className = "ai-context-summary";
+      summary.textContent = entry.contextSummary || "Captured context";
+      const pre = document.createElement("pre");
+      pre.className = "ai-context-text";
+      pre.textContent = entry.context;
+      details.append(summary, pre);
+      historyDetail.appendChild(details);
+    }
+
+    const head = document.createElement("div");
+    head.className = "ai-result-head";
+    const label = document.createElement("span");
+    label.className = "ai-result-label";
+    label.textContent = "Answer";
+    head.appendChild(label);
+    if (entry.truncated) {
+      const badge = document.createElement("span");
+      badge.className = "ai-history-badge";
+      badge.textContent = "Truncated";
+      head.appendChild(badge);
+    }
+    historyDetail.appendChild(head);
+
+    const answer = document.createElement("div");
+    answer.className = "ai-history-answer ai-markdown";
+    answer.innerHTML = markdownHtml(entry.answer);
+    if (!answer.textContent?.trim()) answer.textContent = entry.answer;
+    historyDetail.appendChild(answer);
+
+    if (entry.notes.trim()) {
+      const notes = document.createElement("details");
+      notes.className = "ai-notes";
+      const summary = document.createElement("summary");
+      summary.textContent = "What changed";
+      const text = document.createElement("div");
+      text.className = "ai-notes-text";
+      text.textContent = entry.notes;
+      notes.append(summary, text);
+      historyDetail.appendChild(notes);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "ai-footer-actions ai-history-detail-actions";
+    actions.append(
+      actionButton("Copy", false, () => void copyHistory(entry)),
+      actionButton(
+        "Insert below",
+        true,
+        () => insertHistory(entry),
+        !host.canWrite(),
+        host.canWrite()
+          ? "Insert the answer below the current paragraph."
+          : "The document is read-only.",
+      ),
+    );
+    historyDetail.appendChild(actions);
+  }
+
+  function backToHistory(): void {
+    const previous = historyDetailId;
+    historyDetailId = null;
+    renderHistory();
+    focusHistory(previous ?? undefined);
+  }
+
+  async function copyHistory(entry: AiHistoryEntry): Promise<void> {
+    const copied = await writeClipboardText(entry.answer);
+    host.toast(copied ? "Copied the answer to the clipboard." : "The clipboard is unavailable.");
+  }
+
+  function insertHistory(entry: AiHistoryEntry): void {
+    if (!host.canWrite()) {
+      host.toast("The document is read-only — copy the answer instead.");
+      return;
+    }
+    const current = host.capture();
+    const at = Math.min(current.paragraphTo, current.text.length);
+    const plan: ApplyPlan = {
+      kind: "insert",
+      from: at,
+      to: at,
+      text: blockInsertion(current.text, at, entry.answer),
+    };
+    if (!host.apply(plan)) {
+      host.toast("The answer could not be inserted — the document changed.");
+      return;
+    }
+    closeHistory();
+    host.focusEditor();
+    host.toast("Inserted the answer — undo with Ctrl/Cmd+Z.");
+  }
+
+  /**
+   * Record a completed answer once. Regenerate keeps the entry id, so replacing
+   * the same request cannot grow the list.
+   */
+  function recordHistory(): void {
+    if (!action || !capture || !entryId) return;
+    if (answerStopped || !answerText.trim()) return;
+    const spec = action;
+    const context = requestContext ?? { summary: "", text: "" };
+    const entry: AiHistoryEntry = {
+      id: entryId,
+      action: spec.id,
+      parameter: spec.parameter === "none" ? null : parameterValue || null,
+      question: spec.id === "ask" ? pendingQuestion.trim() : "",
+      contextSummary: context.summary,
+      context: context.text,
+      answer: answerText.trim(),
+      notes: notes.trim(),
+      model: startedInfo?.model ?? config.model,
+      host: startedInfo?.host ?? hostOf(config.baseUrl),
+      documentName: host.documentName(),
+      language: capture.language,
+      createdAt: Date.now(),
+      truncated: answerTruncated,
+    };
+    historyEntries = rememberRequest(historyEntries, entry);
+    if (historyOpen && !historyDetailId) renderHistory();
+  }
+
+  // -------------------------------------------------------------------------
   // Panel
   // -------------------------------------------------------------------------
 
   function openPanel(spec: AiActionSpec): void {
+    // A new action invalidates any answer still arriving for the previous one.
+    requestId = null;
+    entryId = null;
+    requestContext = null;
     action = spec;
     capture = host.capture();
     const targetFrom = spec.apply === "replace" ? capture.passageFrom : capture.selectionFrom;
@@ -464,7 +929,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     buildParams();
     renderContext();
     renderPanel();
-    placePopover(panel, PANEL_WIDTH);
+    placeDocumentPopover(panel);
     if (spec.id === "ask") {
       askInput.value = "";
       askInput.focus();
@@ -497,6 +962,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       select.value = parameterValue;
       select.addEventListener("change", () => {
         parameterValue = select.value;
+        entryId = null;
         updateGenerate();
       });
       control = select;
@@ -509,6 +975,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       input.setAttribute("list", "ai-language-list");
       input.addEventListener("input", () => {
         parameterValue = input.value;
+        entryId = null;
         updateGenerate();
       });
       control = input;
@@ -528,6 +995,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       select.value = parameterValue;
       select.addEventListener("change", () => {
         parameterValue = select.value;
+        entryId = null;
         updateGenerate();
       });
       control = select;
@@ -573,15 +1041,16 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       !running && !parameterIsValid(action.id, parameterValue, capture?.language ?? "markdown");
   }
 
-  function renderContext(): void {
-    if (!action || !capture) return;
-    const current = capture;
+  function describeContext(
+    spec: AiActionSpec,
+    current: Capture,
+  ): { summary: string; text: string } {
     const preceded = trimPreceding(current.preceding);
     const preview = (() => {
-      if (action.id === "ask") {
+      if (spec.id === "ask") {
         return current.hasSelection ? `<passage>\n${current.selection}\n</passage>` : "";
       }
-      if (action.id === "continue") {
+      if (spec.id === "continue") {
         const lines: string[] = [];
         if (preceded.text.trim()) {
           lines.push(`<preceding_text>\n${preceded.text}\n</preceding_text>`);
@@ -596,11 +1065,11 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     })();
 
     let summary: string;
-    if (action.id === "ask") {
+    if (spec.id === "ask") {
       summary = current.hasSelection
         ? `Selection · ${formatCount(current.selection.length)} characters`
         : "No document context";
-    } else if (action.id === "continue") {
+    } else if (spec.id === "continue") {
       summary = current.hasSelection
         ? `Selection · ${formatCount(current.selection.length)} characters, plus the text before it`
         : `${formatCount(preceded.text.length)} characters before the caret`;
@@ -610,8 +1079,15 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
         (current.hasSelection ? current.selection : current.paragraph).length,
       )} characters`;
     }
-    contextSummary.textContent = `${summary} · exact context`;
-    contextText.textContent = preview;
+    return { summary, text: preview };
+  }
+
+  function renderContext(): void {
+    if (!action || !capture) return;
+    const context = describeContext(action, capture);
+    requestContext = context;
+    contextSummary.textContent = `${context.summary} · exact context`;
+    contextText.textContent = context.text;
   }
 
   function renderPanel(): void {
@@ -643,7 +1119,19 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     renderAnswer();
     updateGenerate();
     renderFooter();
-    if (panelOpen) placePopover(panel, PANEL_WIDTH);
+    if (panelOpen) placeDocumentPopover(panel);
+  }
+
+  function renderAnswerText(): void {
+    // Parsing and sanitising a growing answer on every animation frame makes
+    // streaming stutter, so the live text stays plain; the completed answer is
+    // rendered like the Ask bubble and the history detail.
+    const plain = state === "running";
+    answerEl.classList.toggle("is-plain", plain);
+    if (plain) answerEl.textContent = answerText;
+    else answerEl.innerHTML = markdownHtml(answerText);
+    answerSource.hidden = plain || !answerText.trim();
+    answerSourceText.textContent = answerText;
   }
 
   function renderAnswer(): void {
@@ -659,6 +1147,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     }
     if (canDiff && showChanges && capture) {
       answerEl.hidden = true;
+      answerSource.hidden = true;
       diffEl.hidden = false;
       const source = capture.hasSelection ? capture.selection : capture.paragraph;
       const parts = wordDiff(source, answerText);
@@ -676,7 +1165,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       answerEl.hidden = false;
       diffEl.hidden = true;
       changesSummary.textContent = "";
-      answerEl.textContent = answerText;
+      renderAnswerText();
     }
   }
 
@@ -684,8 +1173,8 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     const bubble = document.createElement("div");
     bubble.className = `ai-chat-bubble ai-chat-${role}`;
     if (role === "assistant" && render) {
-      bubble.classList.add("ai-chat-markdown");
-      bubble.innerHTML = chatHtml(text);
+      bubble.classList.add("ai-markdown");
+      bubble.innerHTML = markdownHtml(text);
       if (!text.trim()) bubble.textContent = "…";
       const details = document.createElement("details");
       details.className = "ai-chat-source";
@@ -776,7 +1265,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       if (answerText.trim()) {
         footerActions.appendChild(actionButton("Copy", false, () => void copyAnswer()));
       }
-      footerActions.appendChild(actionButton("Retry", true, () => startRequest()));
+      footerActions.appendChild(actionButton("Retry", true, () => startRequest("retry")));
       footerActions.appendChild(actionButton("Open AI Settings", false, () => host.openSettings()));
       return;
     }
@@ -812,7 +1301,9 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
         actionButton("Insert", true, () => applyAnswer("insert"), !canApply(), blockedReason),
       );
       footerActions.appendChild(actionButton("Copy", false, () => void copyAnswer()));
-      footerActions.appendChild(actionButton("Regenerate", false, () => startRequest()));
+      footerActions.appendChild(
+        actionButton("Regenerate", false, () => startRequest("regenerate")),
+      );
       return;
     }
 
@@ -821,7 +1312,9 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
         actionButton("Insert below", true, () => applyAnswer("below"), !canApply(), blockedReason),
       );
       footerActions.appendChild(actionButton("Copy", false, () => void copyAnswer()));
-      footerActions.appendChild(actionButton("Regenerate", false, () => startRequest()));
+      footerActions.appendChild(
+        actionButton("Regenerate", false, () => startRequest("regenerate")),
+      );
       return;
     }
 
@@ -840,7 +1333,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       actionButton("Insert below", false, () => applyAnswer("below"), !canApply(), blockedReason),
     );
     footerActions.appendChild(actionButton("Copy", false, () => void copyAnswer()));
-    footerActions.appendChild(actionButton("Regenerate", false, () => startRequest()));
+    footerActions.appendChild(actionButton("Regenerate", false, () => startRequest("regenerate")));
   }
 
   async function copyAnswer(): Promise<void> {
@@ -910,7 +1403,9 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
   // Requests
   // -------------------------------------------------------------------------
 
-  function startRequest(): void {
+  type RequestMode = "new" | "retry" | "regenerate";
+
+  function startRequest(mode: RequestMode = "new"): void {
     if (!action || !capture) return;
     if (state === "running") {
       cancel();
@@ -935,6 +1430,13 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       return;
     }
 
+    // A new Ask exchange is a new request; Retry and Regenerate keep the entry
+    // they are repairing so a successful answer replaces it instead of adding
+    // a second row for the same question.
+    if (!entryId || (spec.id === "ask" && mode === "new")) {
+      entryId = nextHistoryId();
+    }
+
     const id = `ai-${Date.now()}-${++requestSeq}`;
     requestId = id;
     state = "running";
@@ -951,7 +1453,10 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     const request = buildRequest(id, capture, spec.id, parameter, question, history);
 
     renderPanel();
-    const call = api.aiComplete(request, (event) => onEvent(event));
+    const call = api.aiComplete(request, (event) => {
+      if (requestId !== id) return;
+      onEvent(event);
+    });
     channel = call.channel;
     void call.promise
       .catch((error: unknown) => {
@@ -964,7 +1469,6 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
   }
 
   function onEvent(event: api.AiEvent): void {
-    if (!panelOpen) return;
     switch (event.kind) {
       case "started":
         startedInfo = event;
@@ -980,6 +1484,9 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
         answerTruncated = event.truncated;
         answerStopped = event.stopped;
         state = "done";
+        // The answer is remembered even if the palette or the history list is
+        // covering the panel: opening another surface must not lose it.
+        recordHistory();
         if (action?.id === "ask" && !event.stopped && event.text.trim()) {
           if (pendingQuestion) {
             askHistory = [
@@ -1027,6 +1534,8 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     errorMessage = "";
     startedInfo = null;
     state = "idle";
+    entryId = null;
+    requestContext = null;
     capture = host.capture();
     target = {
       sessionId: host.sessionId(),
@@ -1043,6 +1552,8 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
 
   function close(): void {
     cancel();
+    requestId = null;
+    closeHistory();
     paletteOpen = false;
     panelOpen = false;
     palette.hidden = true;
@@ -1083,7 +1594,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       );
       button.style.left = `${Math.round(position.x)}px`;
       button.style.top = `${Math.round(position.y)}px`;
-      if (panelOpen) placePopover(panel, PANEL_WIDTH);
+      if (panelOpen) placeDocumentPopover(panel);
     };
     const up = (upEvent: PointerEvent) => {
       if (upEvent.pointerId !== event.pointerId) return;
@@ -1130,14 +1641,10 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
   });
 
   palette
-    .querySelector<HTMLButtonElement>('[data-command="reset"]')!
+    .querySelector<HTMLButtonElement>('[data-command="history"]')!
     .addEventListener("click", () => {
-      const rect = pane.getBoundingClientRect();
-      userMoved = false;
-      position = defaultButtonPosition(rect.width, rect.height, BUTTON_SIZE, ANCHOR_MARGIN);
-      placeButton();
       closePalette();
-      host.toast("Assistant button position reset.");
+      openHistory();
     });
   palette
     .querySelector<HTMLButtonElement>('[data-command="settings"]')!
@@ -1146,10 +1653,73 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       host.openSettings();
     });
 
+  historyClose.addEventListener("click", () => {
+    closeHistory();
+    button.focus();
+  });
+  historyBack.addEventListener("click", backToHistory);
+  historyClear.addEventListener("click", () => {
+    historyEntries = [];
+    historyDetailId = null;
+    renderHistory();
+    historyClose.focus();
+    host.toast("Assistant history cleared.");
+  });
+  historyEl.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (historyDetailId) backToHistory();
+      else {
+        closeHistory();
+        button.focus();
+      }
+      return;
+    }
+    if (historyDetailId || (event.key !== "ArrowDown" && event.key !== "ArrowUp")) return;
+    const historyRows = Array.from(
+      historyList.querySelectorAll<HTMLButtonElement>(".ai-history-row"),
+    );
+    if (historyRows.length === 0) return;
+    event.preventDefault();
+    const index = historyRows.indexOf(document.activeElement as HTMLButtonElement);
+    const step = event.key === "ArrowDown" ? 1 : -1;
+    const next = index < 0 ? 0 : (index + step + historyRows.length) % historyRows.length;
+    historyRows[next].focus();
+  });
+
   closeButton.addEventListener("click", () => {
     close();
     host.focusEditor();
   });
+
+  for (const handle of root.querySelectorAll<HTMLButtonElement>(".ai-resize")) {
+    const element = handle.closest<HTMLElement>(".ai-popover");
+    if (!element) continue;
+    handle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      startResize(event, element, handle);
+    });
+    handle.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      customPopoverRect = null;
+      placeDocumentPopover(element);
+    });
+    handle.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (!event.key.startsWith("Arrow")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      nudgeResize(event, element);
+    });
+  }
 
   for (const toggle of toggleButtons) {
     toggle.addEventListener("click", () => {
@@ -1183,23 +1753,36 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
   document.addEventListener(
     "pointerdown",
     (event) => {
-      if (!paletteOpen) return;
+      if (!paletteOpen && !historyOpen) return;
       if (event.target instanceof Node && root.contains(event.target)) return;
       closePalette();
+      closeHistory();
     },
     true,
   );
 
   window.addEventListener("resize", () => {
     placeButton();
-    if (paletteOpen) placePopover(palette, PALETTE_WIDTH, 520);
-    if (panelOpen) placePopover(panel, PANEL_WIDTH);
+    placeOpenPopovers();
   });
 
   // The button has no position until the pane has a size. A ResizeObserver
   // covers the first layout, the sidebar toggle, the splitter and a window
   // restore without asking the shell to call anything.
-  new ResizeObserver(() => placeButton()).observe(pane);
+  new ResizeObserver(() => {
+    placeButton();
+    placeOpenPopovers();
+  }).observe(pane);
+
+  function resetPosition(): void {
+    const rect = pane.getBoundingClientRect();
+    userMoved = false;
+    position = defaultButtonPosition(rect.width, rect.height, BUTTON_SIZE, ANCHOR_MARGIN);
+    placeButton();
+    customPopoverRect = null;
+    if (panelOpen) placeDocumentPopover(panel);
+    if (historyOpen) placeDocumentPopover(historyEl);
+  }
 
   function sync(): void {
     config = host.config();
@@ -1210,8 +1793,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       return;
     }
     placeButton();
-    if (paletteOpen) placePopover(palette, PALETTE_WIDTH, 520);
-    if (panelOpen) placePopover(panel, PANEL_WIDTH);
+    placeOpenPopovers();
   }
 
   function onViewMode(mode: api.ViewMode): void {
@@ -1226,7 +1808,8 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     open: openPalette,
     close,
     cancel,
+    resetPosition,
     onViewMode,
-    isOpen: () => paletteOpen || panelOpen,
+    isOpen: () => paletteOpen || panelOpen || historyOpen,
   };
 }

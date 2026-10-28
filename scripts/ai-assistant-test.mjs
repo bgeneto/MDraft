@@ -306,6 +306,17 @@ async function closePrefs() {
   }
 }
 
+async function clickPrefsButton(text) {
+  const clicked = await evaluate(`(() => {
+    const button = [...document.querySelectorAll('.prefs-row .prefs-button')].find(b => b.textContent === ${JSON.stringify(text)});
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`);
+  await sleep(200);
+  return clicked;
+}
+
 function rowSelector(label) {
   return `[...document.querySelectorAll('.prefs-row')].find(row => row.querySelector('.prefs-label')?.textContent.replace(/\\?$/, '') === ${JSON.stringify(label)})`;
 }
@@ -356,6 +367,7 @@ async function setKey(key) {
     const save = [...(row?.querySelectorAll('button') ?? [])].find(b => b.textContent === 'Save');
     if (!input || !save) return false;
     input.value = ${JSON.stringify(key)};
+    input.dispatchEvent(new Event('input', { bubbles: true }));
     save.click();
     return true;
   })()`);
@@ -418,6 +430,53 @@ async function closePalette() {
   }
 }
 
+async function historyIsOpen() {
+  return evaluate(`!document.querySelector('.ai-history').hidden`);
+}
+
+async function openHistory() {
+  await openPalette();
+  const clicked = await evaluate(`(() => {
+    const button = document.querySelector('.ai-palette [data-command="history"]');
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`);
+  if (!clicked) throw new Error("no History command");
+  await waitFor(`!document.querySelector('.ai-history').hidden`);
+  await sleep(150);
+}
+
+async function closeHistory() {
+  if (await historyIsOpen()) {
+    await evaluate(`document.querySelector('.ai-history-close').click()`);
+    await waitFor(`document.querySelector('.ai-history').hidden`);
+  }
+}
+
+async function historyRows() {
+  return evaluate(
+    `[...document.querySelectorAll('.ai-history-row')].map(row => ({
+      title: row.querySelector('.ai-history-action')?.textContent ?? '',
+      request: row.querySelector('.ai-history-request')?.textContent ?? '',
+      preview: row.querySelector('.ai-history-preview')?.textContent ?? '',
+      time: row.querySelector('.ai-history-time')?.textContent ?? '',
+    }))`,
+  );
+}
+
+async function openHistoryDetail(index = 0) {
+  const clicked = await evaluate(`(() => {
+    const row = [...document.querySelectorAll('.ai-history-row')][${index}];
+    if (!row) return false;
+    row.click();
+    return true;
+  })()`);
+  if (clicked) await waitFor(`!document.querySelector('.ai-history-detail').hidden`);
+  await sleep(120);
+  return clicked;
+}
+
 async function chooseAction(label) {
   await openPalette();
   const clicked = await evaluate(`(() => {
@@ -467,6 +526,54 @@ async function closePanel() {
     await evaluate(`document.querySelector('.ai-close').click()`);
     await sleep(150);
   }
+}
+
+async function panelRect() {
+  return evaluate(`(() => {
+    const box = document.querySelector('.ai-panel')?.getBoundingClientRect();
+    if (!box) return null;
+    return {
+      left: Math.round(box.left),
+      top: Math.round(box.top),
+      right: Math.round(box.right),
+      bottom: Math.round(box.bottom),
+      width: Math.round(box.width),
+      height: Math.round(box.height),
+    };
+  })()`);
+}
+
+async function dragPanelCorner(dx, dy) {
+  const handle = await evaluate(`(() => {
+    const box = document.querySelector('.ai-panel .ai-resize')?.getBoundingClientRect();
+    return box ? { x: box.left + box.width / 2, y: box.top + box.height / 2 } : null;
+  })()`);
+  if (!handle) throw new Error("no panel resize handle");
+  await send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: handle.x,
+    y: handle.y,
+    button: "left",
+    clickCount: 1,
+  });
+  for (let step = 1; step <= 5; step++) {
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: handle.x + (dx * step) / 5,
+      y: handle.y + (dy * step) / 5,
+      button: "left",
+      buttons: 1,
+    });
+    await sleep(25);
+  }
+  await send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: handle.x + dx,
+    y: handle.y + dy,
+    button: "left",
+    clickCount: 1,
+  });
+  await sleep(250);
 }
 
 async function editorText() {
@@ -653,6 +760,7 @@ try {
   check("Preferences has an AI Assistant section", prefsSection.title === "AI Assistant");
   for (const label of [
     "Enable AI Assistant",
+    "Floating button",
     "Provider",
     "Base URL",
     "API Key",
@@ -661,6 +769,12 @@ try {
   ]) {
     check(`the AI section has ${label}`, prefsSection.labels.includes(label));
   }
+  check(
+    "the AI section can reset the floating button",
+    await evaluate(
+      `[...document.querySelectorAll('.prefs-row .prefs-button')].some(b => b.textContent === 'Reset position')`,
+    ),
+  );
 
   await setSelect("Provider", "openai");
   check("the Base URL is set to the mock", await setText("Base URL", baseUrl));
@@ -724,9 +838,11 @@ try {
   );
   check("fourteen actions are shown", palette.rows.length === 14, String(palette.rows.length));
   check(
-    "the palette footer has both commands",
-    palette.footer.includes("Reset button position") &&
-      palette.footer.includes("AI Assistant Settings…"),
+    "the palette footer has History and the settings command",
+    palette.footer.includes("History") &&
+      palette.footer.includes("AI Assistant Settings…") &&
+      !palette.footer.some((label) => label.includes("Reset button position")),
+    JSON.stringify(palette.footer),
   );
   check("the palette is at most 520 px tall", palette.height <= 520, String(palette.height));
   check("the palette stays inside the pane", palette.inside === true);
@@ -777,6 +893,25 @@ try {
   await sleep(150);
   check("Escape closes the palette", (await paletteOpen()) === false);
 
+  console.log("\nHistory empty state");
+  await openHistory();
+  const emptyHistory = await evaluate(
+    `document.querySelector('.ai-history-empty')?.textContent ?? ''`,
+  );
+  check("History starts empty", emptyHistory.includes("No answers yet"), emptyHistory);
+  check(
+    "the empty state says the history is session-only",
+    emptyHistory.includes("session only") && emptyHistory.includes("last 10"),
+    emptyHistory,
+  );
+  check(
+    "History offers a way back to the actions",
+    await evaluate(
+      `[...document.querySelectorAll('.ai-history-empty button')].some(b => b.textContent === 'Browse actions')`,
+    ),
+  );
+  await closeHistory();
+
   console.log("\nDrag and reset");
   const beforeDrag = await evaluate(
     `(() => { const b = document.querySelector('.ai-fab').getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; })()`,
@@ -817,9 +952,9 @@ try {
     JSON.stringify(dragged),
   );
   check("a drag does not open the palette", dragged.palette === false);
-  await clickFab();
-  await waitFor(`!document.querySelector('.ai-palette').hidden`);
-  await evaluate(`document.querySelector('.ai-palette [data-command="reset"]').click()`);
+  await openAiSection();
+  check("Preferences offers Reset position", await clickPrefsButton("Reset position"));
+  await closePrefs();
   await sleep(250);
   const reset = await evaluate(`(() => {
     const pane = document.getElementById('editor-pane').getBoundingClientRect();
@@ -968,6 +1103,186 @@ try {
   );
   await undo();
 
+  console.log("\nMarkdown result");
+  await clickEditorWord("Regular");
+  await chooseAction("Key points");
+  await waitPanelDone();
+  const listResult = await evaluate(`(() => {
+    const answer = document.querySelector('.ai-answer');
+    return {
+      tag: answer?.tagName ?? '',
+      items: [...(answer?.querySelectorAll('li') ?? [])].map(li => li.textContent),
+      hyphens: (answer?.textContent ?? '').includes('- First mock point'),
+      source: document.querySelector('.ai-answer-source-text')?.textContent ?? '',
+      sourceShown: !document.querySelector('.ai-answer-source')?.hidden,
+    };
+  })()`);
+  check(
+    "the panel renders a Markdown list",
+    listResult.items.length === 2 && listResult.items[0] === "First mock point",
+    JSON.stringify(listResult.items),
+  );
+  check(
+    "the panel does not print the list as hyphens",
+    listResult.hyphens === false,
+    listResult.hyphens ? "literal -" : "",
+  );
+  check(
+    "the panel result is a rendered block, not a pre",
+    listResult.tag === "DIV",
+    listResult.tag,
+  );
+  check(
+    "the Source disclosure keeps the raw Markdown",
+    listResult.sourceShown === true && listResult.source.includes("- First mock point"),
+    listResult.source,
+  );
+  await closePanel();
+
+  await clickEditorWord("Regular");
+  await chooseAction("Convert to table");
+  await waitPanelDone();
+  const tableResult = await evaluate(`(() => {
+    const answer = document.querySelector('.ai-answer');
+    const table = answer?.querySelector('table');
+    return {
+      headers: [...(answer?.querySelectorAll('th') ?? [])].map(cell => cell.textContent),
+      rows: answer?.querySelectorAll('tbody tr').length ?? 0,
+      wrapper: table?.parentElement?.className ?? '',
+    };
+  })()`);
+  check(
+    "the panel renders a Markdown table",
+    tableResult.headers.join("|") === "A|B" && tableResult.rows === 1,
+    JSON.stringify(tableResult),
+  );
+  check(
+    "a table sits in its own scroll container",
+    tableResult.wrapper === "ai-table-scroll",
+    tableResult.wrapper,
+  );
+
+  console.log("\nPanel resize");
+  const handleBox = await evaluate(`(() => {
+    const handle = document.querySelector('.ai-panel .ai-resize');
+    if (!handle) return null;
+    const box = handle.getBoundingClientRect();
+    return {
+      width: Math.round(box.width),
+      height: Math.round(box.height),
+      cursor: getComputedStyle(handle).cursor,
+    };
+  })()`);
+  check(
+    "the panel has a top-left resize grip",
+    handleBox?.width === 14 && handleBox?.height === 14 && handleBox?.cursor === "nwse-resize",
+    JSON.stringify(handleBox),
+  );
+
+  const beforeResize = await panelRect();
+  await dragPanelCorner(60, 40);
+  const shrunk = await panelRect();
+  check(
+    "dragging the grip inward shrinks the panel from that corner",
+    shrunk.width < beforeResize.width && shrunk.height < beforeResize.height,
+    JSON.stringify({ beforeResize, shrunk }),
+  );
+  check(
+    "the bottom-right corner stays anchored while shrinking",
+    Math.abs(shrunk.right - beforeResize.right) <= 1 &&
+      Math.abs(shrunk.bottom - beforeResize.bottom) <= 1,
+    JSON.stringify({ beforeResize, shrunk }),
+  );
+
+  await dragPanelCorner(-80, -60);
+  const grown = await panelRect();
+  check(
+    "dragging the grip outward grows the panel again",
+    grown.width > shrunk.width && grown.height > shrunk.height,
+    JSON.stringify({ shrunk, grown }),
+  );
+  check(
+    "the bottom-right corner stays anchored while growing",
+    Math.abs(grown.right - beforeResize.right) <= 1 &&
+      Math.abs(grown.bottom - beforeResize.bottom) <= 1,
+    JSON.stringify({ beforeResize, grown }),
+  );
+  await closePanel();
+
+  await chooseAction("Ask AI…");
+  const reopened = await panelRect();
+  check(
+    "the panel reopens with the resized place and size",
+    ["left", "top", "width", "height"].every((key) => Math.abs(reopened[key] - grown[key]) <= 2),
+    JSON.stringify({ grown, reopened }),
+  );
+
+  await evaluate(`document.querySelector('.ai-panel .ai-resize').focus()`);
+  await pressKey("ArrowRight", "ArrowRight", 39);
+  await pressKey("ArrowDown", "ArrowDown", 40);
+  const keyboardSmaller = await panelRect();
+  check(
+    "the arrow keys resize from the corner",
+    keyboardSmaller.width === reopened.width - 16 &&
+      keyboardSmaller.height === reopened.height - 16,
+    JSON.stringify({ reopened, keyboardSmaller }),
+  );
+  await pressKey("ArrowLeft", "ArrowLeft", 37);
+  await pressKey("ArrowUp", "ArrowUp", 38);
+  const keyboardRestored = await panelRect();
+  check(
+    "the opposite arrow keys restore the size",
+    keyboardRestored.width === reopened.width && keyboardRestored.height === reopened.height,
+    JSON.stringify({ reopened, keyboardRestored }),
+  );
+  await closePanel();
+
+  await openHistory();
+  const historySized = await evaluate(`(() => {
+    const box = document.querySelector('.ai-history').getBoundingClientRect();
+    return { width: Math.round(box.width), height: Math.round(box.height) };
+  })()`);
+  check(
+    "History opens in the same resized window",
+    Math.abs(historySized.width - keyboardRestored.width) <= 2 &&
+      Math.abs(historySized.height - keyboardRestored.height) <= 2,
+    JSON.stringify({ keyboardRestored, historySized }),
+  );
+  await closeHistory();
+
+  await openAiSection();
+  check("Preferences reset clears the panel layout", await clickPrefsButton("Reset position"));
+  await closePrefs();
+  await sleep(250);
+  await chooseAction("Ask AI…");
+  const resetRect = await panelRect();
+  const resetInline = await evaluate(`(() => {
+    const panel = document.querySelector('.ai-panel');
+    return { width: panel.style.width, height: panel.style.height, maxHeight: panel.style.maxHeight };
+  })()`);
+  const defaultWidth = await evaluate(
+    `Math.max(220, Math.min(440, document.getElementById('editor-pane').getBoundingClientRect().width - 16))`,
+  );
+  check(
+    "Reset position restores the default panel size",
+    Math.abs(resetRect.width - defaultWidth) <= 1 && resetInline.height === "",
+    JSON.stringify({ resetRect, resetInline, defaultWidth }),
+  );
+
+  await dragPanelCorner(40, 30);
+  await evaluate(
+    `document.querySelector('.ai-panel .ai-resize').dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }))`,
+  );
+  await sleep(250);
+  const doubleClickReset = await panelRect();
+  const doubleInline = await evaluate(`document.querySelector('.ai-panel').style.height`);
+  check(
+    "double-clicking the grip restores the default size",
+    Math.abs(doubleClickReset.width - defaultWidth) <= 1 && doubleInline === "",
+    JSON.stringify({ doubleClickReset, doubleInline, defaultWidth }),
+  );
+  await closePanel();
+
   console.log("\nTranslate");
   await clickEditorWord("Regular");
   await chooseAction("Translate…");
@@ -1082,11 +1397,11 @@ try {
   );
   check(
     "Ask renders Markdown",
-    await evaluate(`Boolean(document.querySelector('.ai-chat-markdown strong'))`),
+    await evaluate(`Boolean(document.querySelector('.ai-chat .ai-markdown strong'))`),
   );
   check(
     "Ask offers a Source toggle",
-    await evaluate(`Boolean(document.querySelector('.ai-chat-source summary'))`),
+    await evaluate(`Boolean(document.querySelector('.ai-chat .ai-chat-source summary'))`),
   );
   check(
     "Ask offers Copy and Insert below",
@@ -1163,7 +1478,18 @@ try {
   await chooseAction("Shorten");
   await waitPanelDone(8000);
   const errorStatus = await panelStatus();
-  check("a 401 explains the key", errorStatus.includes("API key was rejected"), errorStatus);
+  const rejectedStatus = await evaluate(
+    `window.__TAURI_INTERNALS__.invoke('ai_status', { provider: 'openai', baseUrl: ${JSON.stringify(baseUrl)} })`,
+  );
+  check(
+    rejectedStatus.hasKey
+      ? "a 401 explains the rejected key"
+      : "a 401 explains that no key is saved",
+    rejectedStatus.hasKey
+      ? errorStatus.includes("API key was rejected")
+      : errorStatus.includes("No API key is saved"),
+    errorStatus,
+  );
   check(
     "an error offers Retry",
     (await footerButtons()).some((b) => b.text === "Retry"),
@@ -1206,6 +1532,203 @@ try {
   );
   await closePanel();
   await undo();
+
+  // -------------------------------------------------------------------------
+  // History
+  // -------------------------------------------------------------------------
+
+  console.log("\nHistory");
+  await openHistory();
+  const history = await historyRows();
+  check("History keeps ten successful requests", history.length === 10, String(history.length));
+  check("the newest answer is first", history[0]?.title === "Improve writing", history[0]?.title);
+  check(
+    "the oldest answers were evicted by the cap",
+    history.at(-1)?.title === "Key points" &&
+      !history.some((row) => row.title === "Continue writing") &&
+      !history.some((row) => row.title === "Summarize"),
+    JSON.stringify(history.map((row) => row.title)),
+  );
+  check(
+    "only one Improve answer survived the cap",
+    history.filter((row) => row.title === "Improve writing").length === 1,
+    JSON.stringify(history.map((row) => row.title)),
+  );
+  check(
+    "a stopped request is not recorded",
+    !history.some((row) => row.title === "Expand"),
+    JSON.stringify(history.map((row) => row.title)),
+  );
+  check(
+    "a failed request does not add a second Shorten",
+    history.filter((row) => row.title === "Shorten").length === 1,
+  );
+  check(
+    "Ask is recorded per exchange",
+    history.filter((row) => row.title.startsWith("Ask AI")).length === 3,
+    JSON.stringify(history.map((row) => row.title)),
+  );
+  check("a row shows the document", history[0]?.request.includes("feature-tour.md"));
+  check(
+    "a row shows an answer preview",
+    history.find((row) => row.title === "Key points")?.preview.includes("First mock point"),
+    history.find((row) => row.title === "Key points")?.preview,
+  );
+  check("a row shows a relative time", history[0]?.time === "Just now", history[0]?.time);
+  const historyGeometry = await evaluate(`(() => {
+    const pane = document.getElementById('editor-pane').getBoundingClientRect();
+    const box = document.querySelector('.ai-history').getBoundingClientRect();
+    const list = document.querySelector('.ai-history-list');
+    return {
+      inside: box.left >= pane.left && box.right <= pane.right && box.top >= pane.top && box.bottom <= pane.bottom,
+      width: Math.round(box.width),
+      scrollbar: getComputedStyle(list, '::-webkit-scrollbar').width,
+      thumb: getComputedStyle(list, '::-webkit-scrollbar-thumb').backgroundColor,
+      gutter: list.offsetWidth - list.clientWidth,
+      scrolls: list.scrollHeight > list.clientHeight,
+    };
+  })()`);
+  check(
+    "the history stays inside the pane",
+    historyGeometry.inside === true,
+    JSON.stringify(historyGeometry),
+  );
+  check(
+    "the history uses the discreet context-menu scrollbar",
+    historyGeometry.scrollbar === "8px" &&
+      historyGeometry.thumb !== "rgba(0, 0, 0, 0)" &&
+      historyGeometry.gutter <= 9,
+    JSON.stringify(historyGeometry),
+  );
+  check(
+    "History focuses its first row",
+    await evaluate(`document.activeElement?.classList.contains('ai-history-row') === true`),
+  );
+  await pressKey("ArrowDown", "ArrowDown", 40);
+  check(
+    "ArrowDown moves through the history",
+    await evaluate(`document.activeElement === document.querySelectorAll('.ai-history-row')[1]`),
+  );
+  await pressKey("ArrowUp", "ArrowUp", 38);
+  check(
+    "ArrowUp returns to the previous row",
+    await evaluate(`document.activeElement === document.querySelectorAll('.ai-history-row')[0]`),
+  );
+
+  // The second Ask entry is the newest Ask; its question and Markdown should be intact.
+  check("a history row opens a detail", await openHistoryDetail(2));
+  const askDetail = await evaluate(`(() => ({
+    title: document.querySelector('.ai-history-title')?.textContent ?? '',
+    question: document.querySelector('.ai-history-question p')?.textContent ?? '',
+    meta: document.querySelector('.ai-history-meta')?.textContent ?? '',
+    context: document.querySelector('.ai-history-context summary')?.textContent ?? '',
+    answer: document.querySelector('.ai-history-answer')?.textContent ?? '',
+    markdown: Boolean(document.querySelector('.ai-history-answer.ai-markdown strong')),
+    actions: [...document.querySelectorAll('.ai-history-detail-actions button')].map(b => b.textContent),
+    back: !document.querySelector('.ai-history-back').hidden,
+  }))()`);
+  check(
+    "the Ask detail keeps the question",
+    askDetail.question === "Second question",
+    askDetail.question,
+  );
+  check(
+    "the Ask detail renders Markdown",
+    askDetail.markdown === true && askDetail.answer.includes("feature tour"),
+    askDetail.answer,
+  );
+  check(
+    "the detail names the document",
+    askDetail.meta.includes("feature-tour.md"),
+    askDetail.meta,
+  );
+  check(
+    "the detail shows the captured context",
+    askDetail.context.includes("Selection"),
+    askDetail.context,
+  );
+  check(
+    "the detail offers Copy and Insert below",
+    askDetail.actions.includes("Copy") && askDetail.actions.includes("Insert below"),
+    JSON.stringify(askDetail.actions),
+  );
+  check("the detail has a back button", askDetail.back === true);
+  await pressKey("Escape", "Escape", 27);
+  await waitFor(`!document.querySelector('.ai-history-list').hidden`);
+  check("Escape returns from the detail to the list", (await historyRows()).length === 10);
+
+  // Insert below uses the current paragraph, not the range the answer was made for.
+  check("the list can open the Ask answer", await openHistoryDetail(2));
+  await evaluate(
+    `[...document.querySelectorAll('.ai-history-detail-actions button')].find(b => b.textContent === 'Insert below')?.click()`,
+  );
+  await sleep(350);
+  check("Insert below closes the history", (await historyIsOpen()) === false);
+  let insertedHistory = "";
+  const insertDeadline = Date.now() + 3000;
+  while (Date.now() < insertDeadline) {
+    insertedHistory = await editorText();
+    if (insertedHistory.includes("this file is a feature tour")) break;
+    await sleep(100);
+  }
+  check(
+    "Insert below adds the answer to the document",
+    insertedHistory.includes("this file is a feature tour"),
+    insertedHistory.slice(0, 200),
+  );
+  await undo();
+  check(
+    "one undo removes the history insertion",
+    !(await editorText()).includes("this file is a feature tour"),
+  );
+
+  // Clear leaves a usable empty state, then a fresh request and its regenerate
+  // prove the overwrite rule while the list is below the cap.
+  await openHistory();
+  check(
+    "Clear history is offered",
+    await evaluate(`!document.querySelector('.ai-history-clear').hidden`),
+  );
+  await evaluate(`document.querySelector('.ai-history-clear').click()`);
+  await sleep(200);
+  check("Clear history empties the list", (await historyRows()).length === 0);
+  check(
+    "the cleared history explains its session scope",
+    (await evaluate(`document.querySelector('.ai-history-empty')?.textContent ?? ''`)).includes(
+      "session only",
+    ),
+  );
+  await pressKey("Escape", "Escape", 27);
+  check("Escape closes the history list", (await historyIsOpen()) === false);
+
+  await clickEditorWord("Regular");
+  await chooseAction("Improve writing");
+  await waitPanelDone();
+  const beforeRegenerate = control.requests.length;
+  check("Regenerate sends the request again", await clickFooter("Regenerate"));
+  const regenerateDeadline = Date.now() + 8000;
+  while (control.requests.length === beforeRegenerate && Date.now() < regenerateDeadline) {
+    await sleep(80);
+  }
+  await waitPanelDone();
+  check(
+    "Regenerate made exactly one request",
+    control.requests.length === beforeRegenerate + 1,
+    String(control.requests.length - beforeRegenerate),
+  );
+  await openHistory();
+  const afterRegenerate = await historyRows();
+  check(
+    "Regenerate does not add a history row",
+    afterRegenerate.length === 1,
+    String(afterRegenerate.length),
+  );
+  check(
+    "the regenerated answer is still the latest",
+    afterRegenerate[0]?.title === "Improve writing",
+    afterRegenerate[0]?.title,
+  );
+  await closeHistory();
 
   // -------------------------------------------------------------------------
   // Tab switch and view mode
