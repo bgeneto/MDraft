@@ -3,6 +3,7 @@
 mod documents;
 mod export;
 mod html_preview;
+mod ai;
 mod images;
 mod launch;
 mod menu;
@@ -84,6 +85,13 @@ pub fn run() {
             settings::clear_recent,
             settings::add_favorite,
             settings::remove_favorite,
+            ai::ai_status,
+            ai::ai_set_key,
+            ai::ai_clear_key,
+            ai::ai_fetch_models,
+            ai::ai_complete,
+            ai::ai_cancel,
+            ai::ai_cancel_all,
             documents::read_document,
             documents::write_document,
             documents::write_document_checked,

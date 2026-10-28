@@ -314,10 +314,11 @@ for (const section of prefs.perSection) {
 
 check("preferences opens", prefs.open);
 check("preferences title", prefs.title === "Preferences");
-check("nine sections", prefs.sectionNames.split(",").length === 9);
+check("ten sections", prefs.sectionNames.split(",").length === 10);
 check(
-  "sections named and ordered like Typora",
-  prefs.sectionNames === "Files,Editor,Image,Markdown,HTML,Export,Appearance,General,Typography",
+  "sections named and ordered",
+  prefs.sectionNames ===
+    "Files,Editor,Image,Markdown,HTML,Export,Appearance,General,Typography,AI Assistant",
 );
 check(
   "first section selected",

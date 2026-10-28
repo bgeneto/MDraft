@@ -129,6 +129,14 @@ fn default_editor_line_height() -> String {
     "normal".to_string()
 }
 
+fn default_ai_provider() -> String {
+    "openai".to_string()
+}
+
+fn default_ai_base_url() -> String {
+    "https://api.openai.com/v1".to_string()
+}
+
 fn default_true() -> bool {
     true
 }
@@ -411,6 +419,26 @@ pub struct Settings {
     /// The user's own command. `${outputPath}` is substituted into it.
     #[serde(default)]
     pub after_command: String,
+
+    // ---- Preferences: AI Assistant ---------------------------------------
+    /// Off by default. No keychain read, no request and no floating button
+    /// until the reader enables it and configures an endpoint and a model.
+    ///
+    /// The key is deliberately absent from this struct: it lives in the OS
+    /// credential store or in memory for one session, never in a file.
+    #[serde(default)]
+    pub ai_enabled: bool,
+    /// `"openai"` (any OpenAI-compatible `chat/completions` server) or
+    /// `"anthropic"` (the Messages API).
+    #[serde(default = "default_ai_provider")]
+    pub ai_provider: String,
+    /// The endpoint, without the operation path. `/chat/completions`,
+    /// `/v1/messages` and a trailing slash are accepted and normalized.
+    #[serde(default = "default_ai_base_url")]
+    pub ai_base_url: String,
+    /// Model id sent verbatim to the endpoint.
+    #[serde(default)]
+    pub ai_model: String,
 }
 
 impl Default for Settings {
@@ -478,6 +506,11 @@ impl Default for Settings {
             after_open_file: false,
             after_run_command: false,
             after_command: String::new(),
+
+            ai_enabled: false,
+            ai_provider: default_ai_provider(),
+            ai_base_url: default_ai_base_url(),
+            ai_model: String::new(),
         }
     }
 }
@@ -498,6 +531,9 @@ pub struct AppState {
     pub settings: Mutex<Settings>,
     pub config_file: PathBuf,
     pub export_availability: Mutex<ExportAvailability>,
+    /// Keys kept for this session and cancellation handles for in-flight AI
+    /// requests. Never written to disk.
+    pub ai: crate::ai::AiState,
 }
 
 /// Deserialize a settings file, carrying the old per-format after-export flags
@@ -610,6 +646,7 @@ impl AppState {
             settings: Mutex::new(settings),
             config_file,
             export_availability: Mutex::new(ExportAvailability::default()),
+            ai: crate::ai::AiState::default(),
         }
     }
 

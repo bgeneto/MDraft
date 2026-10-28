@@ -45,10 +45,13 @@ The frontend **cannot** touch the filesystem. Every file operation is a
 Two rules that are not negotiable, both documented in the README:
 
 1. **No licensing, telemetry, or start-up network activity.** The only outbound
-   request the application makes itself is `images::download_image`, reached by a
-   user pasting or dropping an image URL, or by pasting rich content that contains
-   remote images. Both are user actions; *Preferences › Image* can turn each one
-   off. An HTML document the reader
+   requests the application makes itself are `images::download_image`, reached by
+   a user pasting or dropping an image URL, or by pasting rich content that
+   contains remote images, and the AI Assistant's `ai_complete`/`ai_fetch_models`,
+   reached only after the reader enables the assistant, configures an endpoint
+   and presses Generate or Fetch. Both are user actions; *Preferences › Image*
+   can turn each image request off, and the assistant is off by default. An HTML
+   document the reader
    opens may request the resources its own markup links; that is the document's
    request, not the application's.
 2. **No dead UI.** If a Typora option is not implemented, the Preferences panel
@@ -221,14 +224,17 @@ rewrite from scratch.
 | `npm run pdf:visual` | `scripts/pdf-visual-check.mjs` | App-free PDF measurement: A4 geometry, embedded fonts, selectable text, rasterized page PNGs, ink, image colours, table rules and margins |
 | `npm run typography` | `scripts/typography-test.mjs` | 48 checks that each face loads, each OpenType switch changes pixels, the six-preset matrix holds, the four new body faces render differently, and the Semibold weights are real |
 | `npm run typewriter` | `scripts/typewriter-test.mjs` | 21 checks of editor input and caret geometry at start/middle/end, wraps, Focus mode, composition, multi-cursor, undo/redo, reduced motion, tabs, disable and zoom reset. `MDRAFT_TYPEWRITER_VISUAL_DIR=<dir>` retains screenshots and pauses for manual review (`ready.json` / `done.json`), adding one check |
-| `npm run shortcuts` | `scripts/shortcut-test.mjs` | 44 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, that the zoom chip follows the level, that a new tab keeps the previous buffer's undo, and that the webview's F5/Ctrl+R reload keys are swallowed |
-| `npm run menu` | `scripts/menu-test.mjs` | 98 checks of the approved eight-menu tree, command placement, conditional labels, availability by language/mode/selection, Preferences deep links, Paste without Formatting, document zoom reset, the three-PDF grouping, block-equation selection handling and both Close All Tabs routes |
+| `npm run shortcuts` | `scripts/shortcut-test.mjs` | 47 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, that the zoom chip follows the level, that Ctrl+Shift+Space reaches the AI Assistant, that a new tab keeps the previous buffer's undo, and that the webview's F5/Ctrl+R reload keys are swallowed |
+| `npm run menu` | `scripts/menu-test.mjs` | 101 checks of the approved eight-menu tree, command placement, conditional labels, availability by language/mode/selection, Preferences deep links, Paste without Formatting, document zoom reset, the three-PDF grouping, block-equation selection handling and both Close All Tabs routes |
 | `npm run tabs` | `scripts/document-tabs-test.mjs` | 107 checks of several open documents: sidebar and Recents, `open-files`, active-tab styling, the tab context menu (including Close All Tabs), keyboard navigation, caret and scroll per tab, dirty dot, × and middle-click, Ctrl+Tab, drag and keyboard reordering, the disk poll, Auto Save across tabs, overflow arrows and the wheel, Close Others, the last tab |
 | `npm run favorites` | `scripts/favorites-test.mjs` | 56 checks of the Favorites panel that replaced Files: the editor and tab menu routes, the Add/Remove toggle, insertion order across opens, inactive-tab favoriting, duplicate adds, the per-row × and row menu, one-at-a-time removal, a missing file, the untitled disabled state, no Clear All, the Preferences changes and `view.favorites` in the native menu |
 | `npm run tabs:restore:unit` | `scripts/tabs-restore-unit.mjs` | 33 checks of what is remembered and what is restored: tab order, untitled exclusion, deduplication under the platform's path identity, the 20-document cap, and the restore plan's handling of missing files — no application |
 | `npm run typst:map:unit` | `scripts/typst-page-map-unit.mjs` | 21 checks of the bidirectional Typst Pages prose index: formula-adjacent prose, region isolation, ambiguity, reverse lookup, PDF ActualText breaks and Unicode offsets; a repeated one-word line with identical neighbours paints nothing, a unique neighbour window picks the clicked occurrence, ligatures and soft hyphens match, and generated text stays unmapped — no application |
 | `npm run html:map:unit` | `scripts/html-source-map-unit.mjs` | 38 checks of HTML5 entity boundaries, inverse ranges, validated multi-node payloads and text-node offsets: entities and CRLF, the decoded-to-raw translation, the sample mismatch that paints nothing, and two nodes under one stamp — no application |
 | `npm run block:map:unit` | `scripts/block-map-unit.mjs` | 12 checks of the block-level source map and Typst line annotation: folded index mapping, per-node alignment across substitutions and smart punctuation, gap block fallback, Typst comments/rules/math/code/tables, and `#lorem` exclusion — no application |
+| `npm run ai:unit` | `scripts/ai-unit.mjs` | 93 checks of the AI catalog and search, paragraph expansion, continuation spacing, block insertion, parameter validation, stale targets, history caps, button geometry and the word diff; no application and no network |
+| `npm run ai` | `scripts/ai-assistant-test.mjs` | 107 checks against a local mock endpoint: the icon-only draggable button and its launch anchor, the five-group palette, search and its discreet scrollbar, Improve/Continue/Summarize/Translate/Tone/Convert/Ask, streaming, Stop, a 401 with Retry, the Anthropic request shape, model fetch, the stale-target guard, a tab switch, dark theme/reduced motion and key hygiene |
+| `npm run ai:live` | `scripts/ai-live-test.mjs` | Opt-in 70 checks against the real `http://192.168.61.9:4000/v1` / `Qwen3.8-27B`: all fourteen actions, non-empty tag-free output, the model/host chip, apply and undo, and key hygiene. Reads `MDRAFT_AI_E2E_*`; `MDRAFT_AI_LIVE_OPTIONAL=1` turns a missing key into `SKIP` plus `0/0 checks passed` |
 | `npm run recent` | `scripts/recent-menu-test.mjs` | 26 checks that File › Open Recent mirrors the persisted list: the launch file, a new file becoming first, the menu id opening/focusing a tab, Clear Items emptying menu and sidebar, the list refilling, and a 27-row history rendered in full by the sidebar while the menu shows 20 plus Clear Items |
 | `npm run asciidoc` | `scripts/asciidoc-test.mjs` | 54 checks of the AsciiDoc preview, source highlighting, outline, preview copy, spellcheck, includes, paste, the AsciiDoc reference, the default extension and word-level sync |
 | `npm run asciidoc:export:unit` | `scripts/asciidoc-export-unit.mjs` | 17 unit checks of the AsciiDoc -> HTML step every pandoc export uses: unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations; no application |
@@ -294,6 +300,9 @@ All of these need the app already running with CDP enabled (see
 | `typst-page-map-unit.mjs` | — | none — runs without the application | The Typst Pages source map's one-word rule: identical neighbours paint nothing, a unique window picks the occurrence, ligatures and soft hyphens fold, generated text stays unmapped |
 | `html-source-map-unit.mjs` | — | none — runs without the application | The HTML text-node rule: decoded-to-raw offsets across entities and CRLF, the sample check that fails closed, and the index that selects one node under a stamp |
 | `block-map-unit.mjs` | — | none — runs without the application | The block-level source map and Typst line annotation: folded index mapping, per-node alignment across substitutions and smart punctuation, gap block fallback, Typst comments/rules/math/code/tables, and `#lorem` exclusion |
+| `ai-unit.mjs` | — | none — runs without the application | The AI catalog and search, paragraph expansion, Continue spacing, block insertion, parameters, stale targets, history caps, button geometry and the word diff |
+| `ai-assistant-test.mjs` | `[port]` | `samples/feature-tour.md` | The icon-only draggable button and its launch anchor, the palette, representative actions and parameters, streaming, Stop, a 401, Anthropic, model fetch, stale targets, a tab switch, appearance and key hygiene, against a local mock |
+| `ai-live-test.mjs` | `[port]` | `samples/feature-tour.md` | The same actions against the real Qwen endpoint, reading `MDRAFT_AI_E2E_*`; opt-in, and `MDRAFT_AI_LIVE_OPTIONAL=1` makes a missing key a visible SKIP |
 | `rich-paste-test.mjs` | `[port]` | `samples/feature-tour.md` | That the paste event converts HTML, leaves Markdown/plain text alone, detects an unsaved Typst/Markdown/HTML buffer, honours Ctrl+Shift+V and the preference, and undoes in one step. Real Ctrl+V/Ctrl+Shift+V replace the selected text inside Find/Replace without editing the source; rich text, Markdown-only text and image paths stay native there. Clipboard formats are saved and restored around the native-key checks |
 | `image-syntax-test.mjs` | `[port]` | `samples/typst-tour.typ` | A clipboard bitmap becomes `#image`, a remote image is downloaded or kept according to the Image preference, and the files land in the document's assets folder |
 | `typst-preview-test.mjs` | `[port]` | `samples/typst-pages.typ` | The Pages view is the compiler's PDF drawn by PDF.js with selectable text, both columns and two pages; a single click paints the source paragraph, a repeated word in a later line or the right column maps that occurrence, generated `#lorem` paints nothing, the view bar does not blur the page, and switching back disposes the PDF view. Document gets the same word-map checks plus inline-math paragraphs, tables and code blocks, and a single click does not paint a word there |
@@ -318,6 +327,7 @@ node scripts\image-paste-test.mjs 9222 "http://127.0.0.1:8791/served.png" "C:\pa
 | `with-msvc.cmd` | `<command> [args…]` | Loads `vcvars64.bat` then runs the command. **Required for every cargo or tauri invocation on this host.** Searches the standard Visual Studio locations, including the Enterprise edition the GitHub runners install |
 | `cargo-vcvars.cmd` | `<cargo args…>` | The same wrapper specialised for cargo: `cargo-vcvars.cmd test --manifest-path src-tauri\Cargo.toml` |
 | `check-version.mjs` | `[tag]` | Asserts `package.json` and `src-tauri/tauri.conf.json` carry the same version, and that a supplied tag (`v0.1.0`, or `GITHUB_REF_NAME`) matches. CI runs it before building anything |
+| `build-icons.mjs` | `[--source path] [--out dir]` | Regenerates every file in `src-tauri/icons/` from one square master PNG (default `docs/icon/mdraft-icon.png`): the bundle PNGs including `256x256.png`/`512x512.png`, the Windows Store logos, `icon.ico` and `icon.icns`. Resamples with Lanczos, quantises each size to a small palette and wraps the frames itself, so the set stays around 300 KB instead of the 2.4 MB `tauri icon` produced. `npm run icons` is the same command |
 | `subset-fonts.py` | `--source … --output … [--instance JSON] [--features csv] [--require csv]` | Instances and subsets one source into woff2, verifies the Latin probe and the required OpenType features. Called by `fetch-fonts.ps1` for each Google output; needs Python, fonttools and brotli |
 
 ### Conventions for new test scripts
@@ -507,12 +517,12 @@ hash the pixels.
 
 ## Testing
 
-Forty-two default layers, cheapest first. Run them in this order when changing anything.
+Forty-four default layers, cheapest first, plus the opt-in live AI layer. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 154 Windows / 153 Linux | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction, image content sniffing (WebP/AVIF brands), `${filename}`, the untitled image guard, the Typst image root, the OS opener's executable refusal, the recovery journal's round-trip/id/cap rules, checked-write hashes and same-metadata conflicts, launch argument parsing and path identity |
+| Rust unit | `npm run test:rust` | 197 Windows / 196 Linux | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction, image content sniffing (WebP/AVIF brands), `${filename}`, the untitled image guard, the Typst image root, the OS opener's executable refusal, the recovery journal's round-trip/id/cap rules, checked-write hashes and same-metadata conflicts, launch argument parsing and path identity, the AI prompts/tags/caps/URL joins and SSE parsing |
 | Session store | `npm run test:sessions` | 60 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
 | P0 data safety (unit) | `npm run p0:unit` | 112 | Recovery scheduling/classification/Typst strings, deferred save/reload/Save As, checked-write conflicts and baseline hashes, save queues, bulk-close cancellation/failures, lossy copies and export snapshots across picker/tool/render delays — no application |
 | Paste conversion | `npm run paste:convert` | 378 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, `<br><br>` paragraph splitting, image syntax, AsciiDoc, and an image that fails to save |
@@ -532,6 +542,9 @@ Forty-two default layers, cheapest first. Run them in this order when changing a
 | Typst page map (unit) | `npm run typst:map:unit` | 21 | One-word lines with identical neighbours paint nothing, a unique neighbour window picks the occurrence, ligatures and soft hyphens fold, generated text stays unmapped — no application |
 | HTML source map (unit) | `npm run html:map:unit` | 38 | Entities and CRLF offsets, decoded-to-raw translation, the sample mismatch, and two text nodes under one stamp — no application |
 | Block source map (unit) | `npm run block:map:unit` | 12 | Folded index mapping, per-node alignment across substitutions and smart punctuation, gap block fallback, Typst comments/rules/math/code/tables, and `#lorem` exclusion — no application |
+| AI Assistant (unit) | `npm run ai:unit` | 93 | The catalog/search cross-language contract, paragraph expansion, Continue spacing, block insertion, parameters, stale targets, history caps, button anchor/clamp/drag threshold and the capped word diff — no application |
+| AI Assistant (mock) | `npm run ai` | 107 | The icon-only button and its launch anchor, drag/reset, the five-group palette, search and its discreet scrollbar, streaming, Stop, a 401, Anthropic, model fetch, parameters, stale targets, a tab switch, dark theme/reduced motion and key hygiene |
+| AI Assistant (live) | `npm run ai:live` | 70 (opt-in) | All fourteen actions against `http://192.168.61.9:4000/v1` / `Qwen3.8-27B`: non-empty tag-free output, the model/host chip, apply and undo, and key hygiene. Without `MDRAFT_AI_E2E_*` the harness entry prints SKIP and `0/0` |
 | Auto-close typing | `npm run autoclose` | 33 | Pairs, step-over, Backspace, selection wrap, Markdown inline tags, HTML tags, both preferences, in all four document types |
 | Rich paste | `npm run paste` | 87 (79 without a usable clipboard) | The paste event, destination notice, preferences, Ctrl+Shift+V, undo, the same clipboard converted into Markdown and kept as source in HTML, spaces around inline elements, native Find/Replace field paste and unchanged source bytes. The native block is skipped when writing the clipboard then reading it back returns empty |
 | Image syntax | `npm run image:syntax` | 22 | Bitmap and remote-image handling in Typst, Markdown, HTML and AsciiDoc, the Image preference, WebP insertion, the AVIF refusal, and Format > Image in Typst |
@@ -543,7 +556,7 @@ Forty-two default layers, cheapest first. Run them in this order when changing a
 | Syntax | `npm run syntax` | 10 | Token colours, palette switching, and the sync mark's amber contrast on three dark palettes |
 | AsciiDoc | `npm run asciidoc` | 54 | Preview, title/TOC, math, includes, source highlighting, outline, preview copy, spellcheck, paste, the built-in reference, defaults, word-level sync |
 | Editor menu / Format | `npm run format:document` | 141 | The full editing menu, clipboard fake, the main-menu route, Markdown/HTML/Typst, inactive tabs, undo, caret, AsciiDoc disabled, spelling and formatter failures; 47 math checks also run with `node scripts/format-document-test.mjs --unit`. The physics copy retains all 292 formulas and its KaTeX error count after formatting, with visible fractions/radicals and exact bytes after undo |
-| Menu structure | `npm run menu` | 98 | The eight categories and command placement, conditional labels, availability by language/mode/selection, Preferences deep links, Paste without Formatting, document zoom reset, the three-PDF grouping, block-equation selection and both Close All Tabs routes |
+| Menu structure | `npm run menu` | 101 | The eight categories and command placement, conditional labels, availability by language/mode/selection, Preferences deep links, Paste without Formatting, document zoom reset, the three-PDF grouping, block-equation selection and both Close All Tabs routes |
 | HTML guest | `npm run html` | 60 | Sandbox, IPC boundary, local assets, sync/blink, the guest word double-click, scripts-off, outline, reload-key guard |
 | Document tabs | `npm run tabs` | 107 | Several open documents, the context menu (including Close All Tabs), drag and keyboard reordering, overflow arrows, the disk poll, Auto Save across tabs, caret and scroll per tab |
 | Favorites | `npm run favorites` | 56 | The panel that replaced Files, both Add/Remove menu routes, insertion order across opens, inactive tabs, one-at-a-time removal, a missing file, the untitled disabled state, no Clear All, the Preferences changes and `view.favorites` |
@@ -1933,6 +1946,9 @@ application: the call is what makes the four values keep agreeing, rather than a
 coincidence that a future rename would break. Do not conclude the icon assets or
 `bundle.icon` are wrong from this; X11 uses `_NET_WM_ICON` and looked correct.
 
+**The regenerated 512px icon shows the cyan chevron as pale grey, though the source PNG is correct**
+Median-cut quantisation spent every palette entry on the navy↔white antialiasing edge, whose range is the full 0–255; the cyan accent is only about 1% of the pixels, so it was never split out and was averaged into a pale box. Measured: `pixel(256,440)` became `[236,240,243]` instead of the source's `[0,184,244]`, and the 176-entry palette contained zero cyan entries. `scripts/build-icons.mjs` seeds the palette with the most frequent colour, repeatedly adds the most frequent colour farthest from it (weighted farthest-point), then runs three Lloyd passes; the same pixel now maps to `[11,186,244]`. Do not judge a regenerated set by the files existing or by `tauri icon` succeeding: open the 512 PNG and sample a pixel inside the accent.
+
 **A CDP test reports the preview word highlight as `null` even though the word is painted**
 `syncPreviewFromSource` pulses by swapping the registered name between `mdraft-sync` and `mdraft-sync-peak` every 250 ms. A probe that reads only `CSS.highlights.get("mdraft-sync")` lands on the peak half of the beat and sees nothing; `word-sync` failed "a source word paints the preview" at 250 ms after the double-click for this reason, not because the mark was missing. Read either name (`get("mdraft-sync") ?? get("mdraft-sync-peak")`), and assert persistence on the computed background of `.cm-sync-word` rather than on the registry entry.
 
@@ -2173,6 +2189,18 @@ The native HTML copy only adds a base and a marker; a source file with no `@page
 **The ignored WebKitGTK print test writes the PDF and then aborts with `SIGABRT`**
 The test result prints `ok` and the file is valid, but the process exits with signal 6 while WebKitGTK tears down its web process. The test is `#[ignore]`d and display-owned; it calls `std::process::exit(0)` after verifying the PDF so a manual run reports the result it produced. Do not read the signal as a printing failure, and do not run it in the normal headless suite.
 
+**The first AI request panics the tokio worker with `No rustls crypto provider is configured`, and the panel sits on "Contacting the model…" forever**
+`reqwest` is built with `rustls-no-provider` (see the dependency comment in `Cargo.toml`), and that feature deliberately installs nothing: `Client::builder().build()` panics unless a provider is already the process default. The panic kills the async task before any event is sent, so the frontend has no error to show. Install `rustls::crypto::ring::default_provider()` once (`install_crypto_provider` in `src-tauri/src/ai/provider.rs`) before the first AI client. The equivalent message names `aws_lc_rs`; do not "fix" it by enabling reqwest's default `rustls` feature, which re-enables aws-lc-rs and clashes with the ring provider `ureq` already brings.
+
+**The AI palette measures 857 px although its placement code computes a 520 px cap**
+The function set `maxHeight` from the cap, measured `offsetHeight`, and then a leftover second assignment at the end overwrote it with `pane height - 16`. The later assignment won, so the cap existed in the source and in the test description but not on screen. Search the function for every `style.maxHeight` assignment, not just the one you added; the same class of bug applies to any computed size whose measurement comes before a later unconditional write.
+
+**A theme check clicks the theme button once and expects dark, but the app is already dark**
+The fresh profile stores `theme: "system"`, and the status-bar button toggles between light and dark. On a host whose system theme is dark, the first click goes to light, so the assertion fails in the harness while passing on a light host. Read `documentElement.dataset.theme` first and click until it is the target, then restore the original in the same loop; do not assume the starting side.
+
+**A live-model answer is flagged as a leaked tag because it legitimately contains `<table>`**
+The live suite checked the answer against every output tag in the catalog. A Markdown continuation that writes an HTML `<table>` example, or a prose sentence about a `<summary>`, is then reported as a filter failure even though the action's own `<continuation>` tag was stripped correctly. Check the expected action's tag (plus `<notes>` for Improve), not the whole catalog, or the test punishes the model for writing valid content.
+
 ## Adding a preference, end to end
 
 Five files, in this order — more than three, so a plan comes first; see
@@ -2218,6 +2246,8 @@ src/
   clipboard.ts       web Clipboard API first, Tauri plugin fallback for text
   format/            the lazy Prettier/Typstyle dispatcher, snapshot guard and
                      the one transaction that applies a formatted document
+  ai/                the AI Assistant: catalog/search, context capture, edit
+                     plans, capped diff, icon-only draggable button, palette and panel
   markdown.ts        markdown → HTML; math extraction, mermaid, alerts, anchors
   html-preview.ts    sandboxed HTML guest: parse5 splice, iframe, bridge protocol
   html-source-map.ts host-side source offsets for the guest's text nodes
@@ -2242,6 +2272,8 @@ src-tauri/src/
   lib.rs             builder, plugin registration, command table
   html_preview.rs    preview scheme, CSP, path confinement, preview commands (+ tests)
   settings.rs        persisted settings and AppState
+  ai/                OpenAI-compatible and Anthropic streaming, prompts, output-tag
+                     filter, keychain/session credentials and the AI commands
   documents.rs       file IO, path existence, startup file
   recovery.rs        the crash-recovery journal, atomic per-entry files (+ tests)
   images.rs          image import: sniffing, sanitiser, dedup, download
@@ -2258,7 +2290,7 @@ docs/samples/   real documents used to judge rendering quality
 docs/plans/          one file per approved plan
 docs/adr/            one decision that outlives its change
 docs/backlog.md      prioritized product gaps that do not have a plan yet
-docs/ícones/         source archive for the application icon
+docs/icon/           master icon (`mdraft-icon.png`) that `build-icons.mjs` reads
 ```
 
 Anything under `src/` or `src-tauri/src/` that you cannot place from this map is
@@ -2387,14 +2419,16 @@ platform and fails on the other.
    reads the latter for the bundle, and the two must agree. `npm run
    check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
-3. `npm run test:rust` — 154 runnable Windows tests / 153 Linux tests (two ignored downloads: pandoc and Typst, plus the ignored display-owned Linux print probe). Run them on Linux too
+3. `npm run test:rust` — 197 runnable Windows tests / 196 Linux tests (two ignored downloads: pandoc and Typst, plus the ignored display-owned Linux print probe). Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run menu`,
    `npm run preview:zoom`, `npm run math`, `npm run syntax`, `npm run html`,
-   `npm run asciidoc`, `npm run favorites` and `npm run pdf:native` — 108 + 98 +
-   24 + 12 + 10 + 60 + 54 + 56 + 21 checks; also run `npm run typewriter`
-   (21 checks, plus the manual visual hold when changing its behavior).
+   `npm run asciidoc`, `npm run favorites`, `npm run ai:unit`, `npm run ai` and
+   `npm run pdf:native` — 108 + 101 + 24 + 12 + 10 + 60 + 54 + 56 + 93 + 107 +
+   21 checks; also run `npm run typewriter` (21 checks, plus the manual visual
+   hold when changing its behavior), and `npm run ai:live` when the Qwen
+   credentials are present.
 5. `npm run audit` against both `docs/sample-files` documents and compare the
    counts with the table in the README.
 6. `npm run dist` — installers and checksums land in `bin/<os>/<arch>/`.

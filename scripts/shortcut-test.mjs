@@ -125,6 +125,7 @@ for (const [id, expected] of [
   ["edit.find", "CmdOrCtrl+F"],
   ["file.print", "CmdOrCtrl+P"],
   ["view.source", "CmdOrCtrl+/"],
+  ["tools.ai", "CmdOrCtrl+Shift+Space"],
 ]) {
   check(byId.get(id) === expected, `${id} is bound to ${expected}`, byId.get(id) ?? "MISSING");
 }
@@ -411,6 +412,29 @@ check(
   "Ctrl+W closes the active tab and leaves the other",
   afterClose.tabs.join(", "),
 );
+
+// ---------------------------------------------------------------------------
+// The assistant's chord opens the palette, or Preferences when it is off.
+console.log("\n=== Ctrl+Shift+Space reaches the AI Assistant ===");
+const aiHandled = await press({ code: "Space", key: " ", ctrl: true, shift: true });
+check(aiHandled === "handled", "Ctrl+Shift+Space is claimed by the shortcut handler", aiHandled);
+await sleep(400);
+const aiOpened = await evaluate(`({
+  palette: !document.querySelector('.ai-palette')?.hidden,
+  section: document.querySelector('.prefs-section-title')?.textContent ?? "",
+})`);
+check(
+  aiOpened.palette || aiOpened.section === "AI Assistant",
+  "Ctrl+Shift+Space opens the assistant or its settings",
+  JSON.stringify(aiOpened),
+);
+await evaluate(`(() => {
+  if (document.querySelector('.ai-palette') && !document.querySelector('.ai-palette').hidden) {
+    document.querySelector('.ai-fab').click();
+  }
+  document.querySelector('.prefs-close')?.click();
+})()`);
+await sleep(250);
 
 // ---------------------------------------------------------------------------
 // The webview's own reload keys. Without the guard, F5 reloads the page and

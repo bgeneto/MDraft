@@ -106,9 +106,25 @@ Markdown document active.*
   which MDraft can install for you. A format whose converter is missing is
   disabled and says which tool it needs. Typst documents compile straight to
   PDF; PDF via Typst handles the other languages.
+- **An opt-in writing assistant, without leaving the document.** Enable it under
+  Preferences › AI Assistant and point it at any OpenAI-compatible
+  `chat/completions` server (OpenAI, DeepSeek, Ollama, LM Studio, llama.cpp,
+  vLLM, OpenRouter, your own gateway) or at Anthropic's Messages API. A single
+  icon-only button sits in the source pane; drag it anywhere, and it starts at
+  the same corner on every launch. Its searchable palette offers fourteen
+  task-specific actions — Continue writing, Improve writing, Ask AI, Expand,
+  Shorten, Simplify, Change tone, Translate, Summarize, Explain, Key points,
+  Critique, Convert to table and Convert markup — and the answer streams into a
+  non-modal panel before you apply it with **Replace selection**, **Insert
+  below** or **Insert**. One undo restores the exact original. The key lives in
+  the operating system's credential store, never in `settings.json`. The
+  assistant is off by default: no request and no keychain read happens at
+  start-up, and the store is read only when you open its Preferences section or
+  use an action.
 - **Quiet by design.** No accounts, activation, telemetry or update checks.
   MDraft makes no network request at start-up; it goes online only for an action
-  you take, such as installing pandoc or Typst, fetching a pasted image URL, or
+  you take, such as installing pandoc or Typst, fetching a pasted image URL,
+  asking the AI Assistant (only after you enable it and press Generate), or
   opening an HTML document whose own markup references remote resources.
 
 ## Getting started
