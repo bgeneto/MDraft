@@ -1,6 +1,6 @@
 //! Typed wrappers around the Rust commands.
 
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 
 export interface DocumentPayload {
   path: string;
@@ -305,6 +305,20 @@ export interface Settings {
   afterOpenFile: boolean;
   afterRunCommand: boolean;
   afterCommand: string;
+
+  /**
+   * Opt-in AI Assistant.
+   *
+   * Off by default: no request, no keychain read and no floating button until
+   * the reader enables it and configures an endpoint and a model. The API key
+   * is not here — it lives in the OS credential store, or in memory for one
+   * session when the store is unavailable.
+   */
+  aiEnabled: boolean;
+  /** `"openai"` for any OpenAI-compatible server, or `"anthropic"`. */
+  aiProvider: AiProvider;
+  aiBaseUrl: string;
+  aiModel: string;
 }
 
 export interface ImageOptions {
@@ -695,3 +709,129 @@ export const setHtmlPreview = (request: HtmlPreviewRequest) =>
   invoke<HtmlPreviewUrl>("set_html_preview", { request });
 
 export const clearHtmlPreview = () => invoke<void>("clear_html_preview");
+
+// ---------------------------------------------------------------------------
+// AI Assistant
+// ---------------------------------------------------------------------------
+
+export type AiProvider = "openai" | "anthropic";
+
+/** Where the key for an endpoint comes from. */
+export type AiKeySource = "keychain" | "session" | "none";
+
+/** The ids the Rust prompt builder knows; `src/ai/actions.ts` owns the labels. */
+export type AiActionId =
+  | "continue"
+  | "improve"
+  | "ask"
+  | "expand"
+  | "shorten"
+  | "simplify"
+  | "tone"
+  | "translate"
+  | "summarize"
+  | "explain"
+  | "keyPoints"
+  | "critique"
+  | "table"
+  | "convert";
+
+export interface AiTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+/**
+ * One request to the assistant.
+ *
+ * `selection` is the selected passage, or the current paragraph when nothing is
+ * selected. `preceding` is the text immediately before the insertion point and
+ * is only used by Continue. `instruction` is Ask's question. The backend
+ * validates every field again and owns the caps.
+ */
+export interface AiRequest {
+  id: string;
+  action: AiActionId;
+  /** Tone for `tone`, language for `translate`, target markup for `convert`. */
+  parameter: string | null;
+  language: DocumentLanguage;
+  selection: string;
+  preceding: string;
+  instruction: string;
+  history: AiTurn[];
+}
+
+/**
+ * What the panel receives while a request runs.
+ *
+ * `started` reports the endpoint and model the backend actually used, and
+ * whether a long context was trimmed. `done` is authoritative: the panel
+ * replaces whatever it streamed with `text`, because the final pass strips an
+ * outer code fence and trailing whitespace.
+ */
+export type AiEvent =
+  | {
+      kind: "started";
+      model: string;
+      host: string;
+      contextChars: number;
+      contextTruncated: boolean;
+    }
+  | { kind: "delta"; text: string }
+  | { kind: "done"; text: string; notes: string; truncated: boolean; stopped: boolean }
+  | { kind: "error"; message: string };
+
+export interface AiKeyStatus {
+  source: AiKeySource;
+  hasKey: boolean;
+  endpoint: string;
+  keychainAvailable: boolean;
+  warning: string | null;
+}
+
+export interface AiModelsReply {
+  models: string[];
+}
+
+export const aiStatus = (provider: AiProvider, baseUrl: string) =>
+  invoke<AiKeyStatus>("ai_status", { provider, baseUrl });
+
+/**
+ * Store a key in the OS credential store.
+ *
+ * A store that is unavailable is not an error: the key is kept for this session
+ * and `source` reports `"session"` with a warning, so the reader knows it will
+ * not survive a restart.
+ */
+export const aiSetKey = (provider: AiProvider, baseUrl: string, key: string) =>
+  invoke<AiKeyStatus>("ai_set_key", { provider, baseUrl, key });
+
+export const aiClearKey = (provider: AiProvider, baseUrl: string) =>
+  invoke<AiKeyStatus>("ai_clear_key", { provider, baseUrl });
+
+/** Ask the endpoint for its model list. Nothing is requested until this runs. */
+export const aiFetchModels = (provider: AiProvider, baseUrl: string, model: string) =>
+  invoke<AiModelsReply>("ai_fetch_models", { provider, baseUrl, model });
+
+export const aiCancel = (id: string) => invoke<void>("ai_cancel", { id });
+
+export const aiCancelAll = () => invoke<void>("ai_cancel_all");
+
+/**
+ * Start one action.
+ *
+ * The `Channel` must be kept alive by the caller until the promise settles;
+ * dropping it stops the events but not the backend task, which is why the
+ * assistant stores it and calls `aiCancel` explicitly.
+ */
+export function aiComplete(
+  request: AiRequest,
+  onEvent: (event: AiEvent) => void,
+): { promise: Promise<void>; channel: Channel<AiEvent> } {
+  const channel = new Channel<AiEvent>();
+  channel.onmessage = onEvent;
+  return {
+    promise: invoke<void>("ai_complete", { request, onEvent: channel }),
+    channel,
+  };
+}

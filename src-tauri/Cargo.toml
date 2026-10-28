@@ -33,6 +33,38 @@ tauri-plugin-window-state = "2.5.0"
 tokenx-rs = "0.1.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+# Streaming HTTP for the opt-in AI Assistant. Default features use rustls with
+# the platform certificate verifier, so no OpenSSL headers are needed on either
+# platform; `Response::chunk` streams the SSE body without the `stream` feature.
+# Declared directly because this crate calls it, even though Tauri already
+# builds it for some targets.
+#
+# The provider is named explicitly. Cargo features are additive: reqwest's
+# `rustls` feature enables aws-lc-rs, while `ureq` (image and pandoc
+# downloads) already enables ring. rustls refuses to choose between two
+# providers at runtime, and aws-lc-sys would add a CMake/C build to every
+# platform. `rustls-no-provider` plus the direct `rustls` dependency below
+# keeps the tree on ring, which is already compiled.
+reqwest = { version = "0.13.5", default-features = false, features = [
+    "rustls-no-provider",
+    "charset",
+    "http2",
+    "json",
+    "system-proxy",
+] }
+rustls = { version = "0.23", default-features = false, features = [
+    "ring",
+    "std",
+    "tls12",
+] }
+# Cancellation (`select!`) and a per-chunk read timeout in the streaming loop.
+# Tauri already owns a tokio runtime; these features only add what this crate
+# names, and cargo unions them with Tauri's.
+tokio = { version = "1", features = ["macros", "sync", "time"] }
+# API keys live in the OS credential store, never in settings.json. The default
+# `v1` feature selects the native store per target: Windows Credential Manager,
+# macOS Keychain, Secret Service on Linux.
+keyring = "4.2"
 # URL-path decoding for the HTML preview scheme. Already present through Tauri;
 # declared directly because this crate uses it.
 percent-encoding = "2"

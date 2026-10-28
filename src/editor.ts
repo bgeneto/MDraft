@@ -44,6 +44,7 @@ import { html } from "@codemirror/lang-html";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import type { DocumentLanguage } from "./api";
+import { blockInsertion } from "./ai/context";
 import { asciidocLanguage } from "./asciidoc-language";
 import { isCodeContext } from "./code-context";
 import { markdownProseSelection } from "./math-delimiters";
@@ -199,6 +200,12 @@ export interface EditorHandle {
   insertAsciiDocToc(): void;
   insertBlock(text: string): void;
   insertBlockWithCaret(text: string, caretOffset: number): void;
+  /** Replace a source range in one transaction; returns false if the range is invalid. */
+  replaceRange(from: number, to: number, text: string): boolean;
+  /** Insert at a source position, leaving the caret after the text. */
+  insertText(pos: number, text: string): boolean;
+  /** Insert a new block at a captured source position, with blank-line separation. */
+  insertBlockAt(text: string, at: number): boolean;
   /**
    * Insert pasted text at the selection. A block fragment gets blank lines
    * around it and reuses the current indentation; inline text replaces the
@@ -813,6 +820,46 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
   }
 
   /**
+   * Replace one range as a single undoable transaction.
+   *
+   * The AI panel checks the session, revision and exact range text before it
+   * calls this; the bounds check here is the last line of defence against a
+   * range from a document that is no longer on screen.
+   */
+  function replaceTextRange(from: number, to: number, text: string): boolean {
+    const length = view.state.doc.length;
+    if (!Number.isFinite(from) || !Number.isFinite(to)) return false;
+    if (from < 0 || to < from || to > length) return false;
+    view.dispatch({
+      changes: { from, to, insert: text },
+      selection: { anchor: from + text.length },
+      scrollIntoView: true,
+      userEvent: "input.ai",
+    });
+    view.focus();
+    return true;
+  }
+
+  function insertTextAt(pos: number, text: string): boolean {
+    return replaceTextRange(pos, pos, text);
+  }
+
+  function insertBlockAtPosition(text: string, at: number): boolean {
+    const doc = view.state.doc.toString();
+    const offset = Math.max(0, Math.min(at, doc.length));
+    const insert = blockInsertion(doc, offset, text);
+    if (!insert) return false;
+    view.dispatch({
+      changes: { from: offset, insert },
+      selection: { anchor: offset + insert.length },
+      scrollIntoView: true,
+      userEvent: "input.ai",
+    });
+    view.focus();
+    return true;
+  }
+
+  /**
    * Replay the word-sync pulse on the marks already in the DOM.
    *
    * A second gesture on the same range never dispatches, so CodeMirror reuses
@@ -1382,6 +1429,18 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
 
     insertBlock(text) {
       insertBlockText(text);
+    },
+
+    replaceRange(from, to, text) {
+      return replaceTextRange(from, to, text);
+    },
+
+    insertText(pos, text) {
+      return insertTextAt(pos, text);
+    },
+
+    insertBlockAt(text, at) {
+      return insertBlockAtPosition(text, at);
     },
 
     /** Insert `text` and leave the caret `caretOffset` characters into it. */

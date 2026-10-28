@@ -86,6 +86,8 @@ import {
   type WordMap,
 } from "./source-map";
 import { createPreferences, type PreferencesHandle } from "./preferences";
+import { createAssistant, type AssistantHandle } from "./ai/assistant";
+import { captureContext } from "./ai/context";
 import { createRecoveryScheduler } from "./recovery";
 import { createSessionStore, pathKey, type Session } from "./sessions";
 import { planRestore, rememberTabs, type RememberedTabs } from "./tab-restore";
@@ -141,6 +143,7 @@ const splitter = el<HTMLDivElement>("splitter");
 // ---------------------------------------------------------------------------
 
 let editor: EditorHandle;
+let assistant: AssistantHandle | null = null;
 let htmlPreview: HtmlPreviewHandle;
 let preferences: PreferencesHandle;
 let settings: api.Settings;
@@ -893,6 +896,7 @@ function applyLayout(): void {
   updateStatusFlags();
   updateZoomIndicator();
   syncMenuState();
+  assistant?.onViewMode(settings.viewMode);
 }
 
 /**
@@ -979,6 +983,7 @@ function applySettingsPatch(patch: Partial<api.Settings>): void {
   applyTheme();
   applyLayout();
   persist();
+  assistant?.sync();
 
   if (patch.autoClosePairs !== undefined || patch.autoCloseTags !== undefined) {
     editor.setAutoClose({
@@ -1776,6 +1781,8 @@ function invalidatePreview(): void {
  * buffer and false for a reload or Save As, which should stay undoable.
  */
 async function showInEditor(resetHistory: boolean, tokens: number | null = null): Promise<void> {
+  // A new document replaces the buffer the answer was captured from.
+  assistant?.close();
   invalidatePreview();
   pendingPreviewScroll = null;
   doc.editorState = null;
@@ -1810,6 +1817,10 @@ async function showInEditor(resetHistory: boolean, tokens: number | null = null)
  * carries the font size and palette from the moment it was snapshotted.
  */
 async function displayDoc(): Promise<void> {
+  // A different document means the answer no longer belongs to the range it
+  // was requested for. Closing here covers tab switches, new documents and
+  // closing the active tab, not only `activateSession`.
+  assistant?.close();
   invalidatePreview();
   pendingPreviewScroll = doc.previewScroll;
   suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
@@ -1855,6 +1866,7 @@ async function activateSession(id: string): Promise<void> {
     return;
   }
   if (!sessions.byId(id)) return;
+  assistant?.close();
   snapshotDoc();
   doc = sessions.setActive(id);
   await displayDoc();
@@ -3533,6 +3545,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "tools.exportConfig": () => preferences.openAt("export"),
   "tools.pandoc": () => void pandocSetup(),
   "tools.typst": () => void typstSetup(),
+  "tools.ai": () => assistant?.open(),
 
   "file.preferences": () => preferences.open(),
 
@@ -4788,6 +4801,9 @@ const SYMBOL_CODES: Record<string, string> = {
 function keyNames(event: KeyboardEvent): Set<string> {
   const names = new Set<string>();
   if (event.key && event.key !== "Unidentified") names.add(event.key.toUpperCase());
+  // `event.key` for the space bar is a single space; accelerators spell it
+  // "Space", so the literal would never match.
+  if (event.key === " ") names.add("SPACE");
   const code = event.code;
   if (code.startsWith("Key")) names.add(code.slice(3));
   else if (code.startsWith("Digit")) names.add(code.slice(5));
@@ -5145,6 +5161,7 @@ async function installCloseGuard(): Promise<void> {
           if (!ready()) return false;
           allowClose = true;
           try {
+            void api.aiCancelAll().catch(() => undefined);
             await win.close();
           } catch (error) {
             allowClose = false;
@@ -5767,6 +5784,36 @@ async function boot(): Promise<void> {
       if (!chosen) return "";
       return Array.isArray(chosen) ? chosen[0] : chosen;
     },
+  });
+
+  assistant = createAssistant(editorPane, {
+    config: () => ({
+      enabled: settings.aiEnabled,
+      provider: settings.aiProvider,
+      baseUrl: settings.aiBaseUrl,
+      model: settings.aiModel,
+    }),
+    language: () => doc.language,
+    capture: () => {
+      const info = editor.cursorInfo();
+      return captureContext({
+        text: editor.getDoc(),
+        from: info.from,
+        to: info.to,
+        caret: info.to,
+        language: doc.language,
+      });
+    },
+    sessionId: () => doc.id,
+    revision: () => doc.revision,
+    canWrite: () => !doc.readOnly,
+    apply: (plan) =>
+      plan.kind === "replace"
+        ? editor.replaceRange(plan.from, plan.to, plan.text)
+        : editor.insertText(plan.from, plan.text),
+    focusEditor: () => editor.focus(),
+    toast,
+    openSettings: () => preferences.openAt("ai"),
   });
 
   installChrome();

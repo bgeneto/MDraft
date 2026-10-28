@@ -160,6 +160,15 @@ const SUITES = [
     script: "link-target-unit.mjs",
   },
   {
+    // The AI catalog, paragraph expansion, continuation spacing, block
+    // insertion, stale-target guard, button geometry and word diff. Pure
+    // TypeScript modules, no application and no network.
+    id: "ai-unit",
+    title: "AI Assistant (unit)",
+    kind: "node",
+    script: "ai-unit.mjs",
+  },
+  {
     id: "smoke",
     title: "DOM smoke",
     kind: "cdp",
@@ -221,6 +230,28 @@ const SUITES = [
     kind: "cdp",
     script: "rich-paste-test.mjs",
     doc: "samples/feature-tour.md",
+  },
+  {
+    // The whole assistant against a local mock endpoint: the icon-only
+    // draggable button, the palette, streaming, parameters, providers, Stop,
+    // stale targets, undo and key hygiene. No real provider is contacted.
+    id: "ai",
+    title: "AI Assistant (mock)",
+    kind: "cdp",
+    script: "ai-assistant-test.mjs",
+    doc: "samples/feature-tour.md",
+  },
+  {
+    // Opt-in: the same actions against the owner's Qwen endpoint. Without
+    // credentials it prints SKIP and 0/0 checks; `npm test -- --only ai-live`
+    // runs it explicitly, and `--all` includes it.
+    id: "ai-live",
+    title: "AI Assistant (live)",
+    kind: "cdp",
+    script: "ai-live-test.mjs",
+    doc: "samples/feature-tour.md",
+    optIn: true,
+    env: { MDRAFT_AI_LIVE_OPTIONAL: "1" },
   },
   {
     // The native HTML and Print article, inspected as a browser would see it:
@@ -1110,6 +1141,7 @@ async function runCdpSuite(suite, port, options, context) {
   fs.mkdirSync(userData, { recursive: true });
   const env = {
     ...process.env,
+    ...(suite.env ?? {}),
     TEMP: temp,
     TMP: temp,
     // The single-instance layer launches the staged executable itself; the

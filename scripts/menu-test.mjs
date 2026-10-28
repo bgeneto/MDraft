@@ -213,6 +213,7 @@ try {
     ["view.syntax.nord", "Code Colors"],
     ["navigate.openTarget", "Navigate"],
     ["tools.spellcheck", "Tools"],
+    ["tools.ai", "Tools"],
     ["help.welcome", "Help"],
   ]) {
     check(parentOf(id) === parent, `${id} lives under ${parent}`, parentOf(id));
@@ -233,6 +234,7 @@ try {
     ["export.pdf.browser", "PDF (opens browser)…"],
     ["tools.spellcheck", "Check Spelling While Typing"],
     ["tools.spellLanguage", "Spelling Language…"],
+    ["tools.ai", "AI Assistant…"],
     ["edit.pastePlain", "Paste without Formatting"],
     ["edit.find", "Find"],
     ["navigate.gotoLine", "Go to Line…"],
@@ -374,6 +376,11 @@ try {
   check(
     (await openPreferencesAt("view.typography")) === "Typography",
     "Fonts and Reading opens Typography",
+  );
+  await closePreferences();
+  check(
+    (await openPreferencesAt("tools.ai")) === "AI Assistant",
+    "AI Assistant opens the AI section when the assistant is off",
   );
   await closePreferences();
 

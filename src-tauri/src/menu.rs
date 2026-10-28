@@ -577,7 +577,8 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
         | "view.preview" | "view.statusBar" | "view.focus" | "view.typewriter"
         | "view.fullscreen" | "view.interfaceTheme" | "view.codeColors"
         | "view.typography" | "navigate.gotoLine" | "navigate.openTabs"
-        | "tools.spellLanguage" | "tools.exportConfig" | "tools.pandoc" | "tools.typst" => true,
+        | "tools.spellLanguage" | "tools.exportConfig" | "tools.pandoc" | "tools.typst"
+        | "tools.ai" => true,
         _ if id.starts_with("view.syntax.")
             || id.starts_with("themes.")
             || id.starts_with("help.") =>
@@ -1154,6 +1155,12 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             "tools.typst",
             "Check or Install Typst…",
             None,
+        )?)
+        .separator()
+        .item(&item(
+            "tools.ai",
+            "AI Assistant…",
+            Some("CmdOrCtrl+Shift+Space"),
         )?);
 
     #[cfg(not(target_os = "macos"))]

@@ -107,8 +107,19 @@ type Row =
       label: string;
       help?: string;
       placeholder?: string;
+      /** Optional suggestions shown through a `<datalist>`. */
+      suggestions?: string[];
       get: () => string;
       set: (value: string) => void;
+    }
+  | {
+      kind: "secret";
+      label: string;
+      help?: string;
+      placeholder: string;
+      status: () => { hasKey: boolean; source: api.AiKeySource; warning: string | null };
+      set: (value: string) => Promise<void>;
+      clear: () => Promise<void>;
     }
   | {
       kind: "button";
@@ -124,6 +135,23 @@ interface Section {
   rows: Row[];
 }
 
+/**
+ * Live state of the AI section.
+ *
+ * The key status is not a setting: it is an answer from the OS credential
+ * store, refreshed when the section opens or the endpoint changes. Models come
+ * from an explicit Fetch press.
+ */
+interface AiUiState {
+  status: api.AiKeyStatus | null;
+  /** `provider|baseUrl` the status belongs to. */
+  endpoint: string;
+  models: string[];
+  error: string | null;
+  message: string | null;
+  loading: boolean;
+}
+
 /** Everything a row can be found by, lower-cased once. */
 function rowSearchText(row: Row): string {
   const parts: string[] = [row.label];
@@ -132,6 +160,7 @@ function rowSearchText(row: Row): string {
   if (row.kind === "select" || row.kind === "choices") {
     for (const [, label] of row.options) parts.push(label);
   }
+  if (row.kind === "text" && row.suggestions) parts.push(...row.suggestions);
   return parts.join(" ").toLowerCase();
 }
 
@@ -715,7 +744,185 @@ function exportRows(host: PreferencesHost): Row[] {
   return rows;
 }
 
-function buildSections(host: PreferencesHost): Section[] {
+function aiStatusText(ai: AiUiState): string {
+  const lines: string[] = [];
+  if (ai.error) lines.push(ai.error);
+  if (ai.status) {
+    if (ai.status.hasKey) {
+      lines.push(
+        ai.status.source === "keychain"
+          ? "Key: saved in the system credential store."
+          : "Key: kept for this session only.",
+      );
+    } else {
+      lines.push("Key: none saved for this endpoint.");
+    }
+    if (ai.status.warning) lines.push(ai.status.warning);
+    if (!ai.status.keychainAvailable) {
+      lines.push("The system credential store is unavailable on this machine.");
+    }
+  } else if (!ai.error) {
+    lines.push("Key status: not checked yet.");
+  }
+  if (ai.message) lines.push(ai.message);
+  if (ai.models.length > 0) {
+    lines.push(`${ai.models.length} models available from the last check.`);
+  }
+  return lines.join(" ");
+}
+
+/**
+ * The AI Assistant section.
+ *
+ * Every row is a real control: Enable, Provider, Base URL, the secret key, the
+ * model, Fetch models and a status note. The key never enters settings.json;
+ * the status note is the only place that says where it lives.
+ */
+function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[] {
+  const s = () => host.settings();
+  const OPENAI = "https://api.openai.com/v1";
+  const ANTHROPIC = "https://api.anthropic.com";
+
+  const saveKey = async (key: string): Promise<void> => {
+    ai.error = null;
+    ai.message = "Saving the key…";
+    try {
+      ai.status = await api.aiSetKey(s().aiProvider, s().aiBaseUrl, key);
+      ai.endpoint = `${s().aiProvider}|${s().aiBaseUrl}`;
+      ai.message = "Key saved.";
+    } catch (error) {
+      ai.error = String(error);
+      ai.message = null;
+    }
+    refresh();
+  };
+
+  const clearKey = async (): Promise<void> => {
+    ai.error = null;
+    ai.message = "Removing the key…";
+    try {
+      ai.status = await api.aiClearKey(s().aiProvider, s().aiBaseUrl);
+      ai.endpoint = `${s().aiProvider}|${s().aiBaseUrl}`;
+      ai.message = "Key removed.";
+    } catch (error) {
+      ai.error = String(error);
+      ai.message = null;
+    }
+    refresh();
+  };
+
+  const fetchModels = async (): Promise<void> => {
+    ai.loading = true;
+    ai.error = null;
+    ai.message = "Fetching the model list…";
+    refresh();
+    try {
+      const reply = await api.aiFetchModels(s().aiProvider, s().aiBaseUrl, s().aiModel);
+      ai.models = reply.models;
+      ai.message =
+        reply.models.length > 0
+          ? `${reply.models.length} models found.`
+          : "The endpoint returned no models; type the model id by hand.";
+    } catch (error) {
+      ai.error = String(error);
+      ai.message = null;
+    } finally {
+      ai.loading = false;
+      refresh();
+    }
+  };
+
+  return [
+    {
+      kind: "note",
+      label: "Privacy",
+      text: "The assistant contacts only the endpoint you configure, and only when you press Generate. Nothing is sent to MDraft. The selection and your instruction are the only document text that leaves this machine. The API key is stored in the operating system's credential store, never in settings.json.",
+    },
+    {
+      kind: "checkbox",
+      label: "Enable AI Assistant",
+      help: "Shows the floating button in the source pane and makes the Tools item and Ctrl/Cmd+Shift+Space open the action palette. Off by default: no request and no keychain read until you enable it and choose an endpoint and model.",
+      get: () => s().aiEnabled,
+      set: (value) => host.update({ aiEnabled: value }),
+    },
+    {
+      kind: "select",
+      label: "Provider",
+      help: "OpenAI-compatible covers OpenAI, DeepSeek, Ollama, LM Studio, llama.cpp, vLLM, OpenRouter and your own gateway. Anthropic uses the Messages API.",
+      options: [
+        ["openai", "OpenAI-compatible"],
+        ["anthropic", "Anthropic"],
+      ],
+      get: () => s().aiProvider,
+      set: (value) => {
+        const provider = value as api.AiProvider;
+        const current = s().aiBaseUrl.trim();
+        let baseUrl = current;
+        if (provider === "anthropic" && (current === "" || current === OPENAI)) {
+          baseUrl = ANTHROPIC;
+        }
+        if (provider === "openai" && (current === "" || current === ANTHROPIC)) {
+          baseUrl = OPENAI;
+        }
+        ai.endpoint = "";
+        ai.status = null;
+        ai.models = [];
+        host.update({ aiProvider: provider, aiBaseUrl: baseUrl });
+      },
+    },
+    {
+      kind: "text",
+      label: "Base URL",
+      help: "Include the version segment; the assistant appends /chat/completions or /v1/messages. A plain-http address outside your machine is not encrypted — use it only on a trusted network.",
+      placeholder: "https://api.openai.com/v1",
+      get: () => s().aiBaseUrl,
+      set: (value) => {
+        ai.endpoint = "";
+        ai.status = null;
+        ai.models = [];
+        ai.error = null;
+        ai.message = null;
+        host.update({ aiBaseUrl: value.trim() });
+      },
+    },
+    {
+      kind: "secret",
+      label: "API Key",
+      help: "Stored in the OS credential store, keyed by provider and endpoint. When the store is unavailable the key is kept for this session only. Local servers often need no key; Anthropic always does.",
+      placeholder: ai.status?.hasKey ? "A key is saved — type to replace it" : "Paste the API key",
+      status: () => ({
+        hasKey: ai.status?.hasKey ?? false,
+        source: ai.status?.source ?? "none",
+        warning: ai.status?.warning ?? null,
+      }),
+      set: saveKey,
+      clear: clearKey,
+    },
+    {
+      kind: "text",
+      label: "Model",
+      help: "The model id sent verbatim. Fetch models fills the suggestions; a server without a model list is fine, type the id by hand.",
+      placeholder: "gpt-4o-mini, claude-sonnet-4-5, Qwen3.8-27B…",
+      suggestions: ai.models,
+      get: () => s().aiModel,
+      set: (value) => host.update({ aiModel: value.trim() }),
+    },
+    {
+      kind: "button",
+      label: "",
+      text: "Fetch model list",
+      help: "Makes one request to the configured endpoint. Nothing is requested until you press this.",
+      action: fetchModels,
+    },
+    {
+      kind: "note",
+      label: "Status",
+      text: aiStatusText(ai),
+    },
+  ];
+}
+
+function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void): Section[] {
   const s = () => host.settings();
 
   return [
@@ -1107,6 +1314,11 @@ function buildSections(host: PreferencesHost): Section[] {
       title: "Typography",
       rows: typographyRows(host),
     },
+    {
+      id: "ai",
+      title: "AI Assistant",
+      rows: aiRows(host, ai, refresh),
+    },
   ];
 }
 
@@ -1142,9 +1354,41 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
   const MIN_PANEL_WIDTH = 480;
   const MIN_PANEL_HEIGHT = 320;
 
-  let activeId = buildSections(host)[0].id;
+  const ai: AiUiState = {
+    status: null,
+    endpoint: "",
+    models: [],
+    error: null,
+    message: null,
+    loading: false,
+  };
+  let activeId = buildSections(host, ai, () => render())[0].id;
   let query = "";
   let placed = false;
+
+  /**
+   * Ask the OS credential store about this endpoint.
+   *
+   * Runs only when the AI section is shown and the endpoint changed: opening
+   * Preferences on another section never touches the keychain.
+   */
+  async function refreshAiStatus(): Promise<void> {
+    const settings = host.settings();
+    const endpoint = `${settings.aiProvider}|${settings.aiBaseUrl}`;
+    ai.loading = true;
+    try {
+      const status = await api.aiStatus(settings.aiProvider, settings.aiBaseUrl);
+      ai.status = status;
+      ai.endpoint = endpoint;
+      ai.error = status.warning;
+    } catch (error) {
+      ai.error = String(error);
+      ai.endpoint = endpoint;
+    } finally {
+      ai.loading = false;
+    }
+    if (activeId === "ai" && !overlay.hidden) render();
+  }
 
   function clamp(value: number, min: number, max: number): number {
     return Math.max(min, Math.min(max, value));
@@ -1293,7 +1537,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
   });
 
   function visibleSections(): Section[] {
-    const all = buildSections(host);
+    const all = buildSections(host, ai, () => render());
     if (query.length === 0) return all;
     const terms = query.split(/\s+/).filter((term) => term.length > 0);
     if (terms.length === 0) return all;
@@ -1392,18 +1636,73 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       return wrap;
     }
 
+    if (row.kind === "secret") {
+      const wrap = document.createElement("div");
+      wrap.className = "prefs-secret";
+      const input = document.createElement("input");
+      input.type = "password";
+      input.autocomplete = "off";
+      input.placeholder = row.placeholder;
+      const save = document.createElement("button");
+      save.type = "button";
+      save.className = "prefs-button";
+      save.textContent = "Save";
+      const clear = document.createElement("button");
+      clear.type = "button";
+      clear.className = "prefs-button";
+      clear.textContent = "Clear";
+      const current = row.status();
+      clear.disabled = !current.hasKey;
+      const note = document.createElement("span");
+      note.className = "prefs-key-state";
+      note.textContent = current.hasKey
+        ? current.source === "keychain"
+          ? "Saved in the system keychain"
+          : "Session only"
+        : "No key";
+      const commit = () => {
+        const key = input.value.trim();
+        if (!key) return;
+        input.value = "";
+        void row.set(key);
+      };
+      save.addEventListener("click", commit);
+      input.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        commit();
+      });
+      clear.addEventListener("click", () => void row.clear());
+      wrap.append(input, save, clear, note);
+      return wrap;
+    }
+
     if (row.kind === "text") {
       const input = document.createElement("input");
       input.type = "text";
       input.value = row.get();
       if (row.placeholder) input.placeholder = row.placeholder;
-      // Commit on blur/Enter rather than on every keystroke: a change here
-      // re-renders the panel and would otherwise fight the caret.
+      // A model list arrives from Fetch; the datalist only suggests it.
+      const listId = row.suggestions?.length
+        ? `prefs-suggestions-${row.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`
+        : null;
+      if (listId) input.setAttribute("list", listId);
       input.addEventListener("change", () => {
         row.set(input.value);
         render();
       });
-      return input;
+      if (!listId || !row.suggestions) return input;
+      const wrap = document.createElement("div");
+      wrap.className = "prefs-combo";
+      const list = document.createElement("datalist");
+      list.id = listId;
+      for (const suggestion of row.suggestions) {
+        const option = document.createElement("option");
+        option.value = suggestion;
+        list.appendChild(option);
+      }
+      wrap.append(input, list);
+      return wrap;
     }
 
     if (row.kind === "button") {
@@ -1429,6 +1728,12 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       return;
     }
     activeId = section.id;
+
+    if (section.id === "ai") {
+      const settings = host.settings();
+      const endpoint = `${settings.aiProvider}|${settings.aiBaseUrl}`;
+      if (ai.endpoint !== endpoint && !ai.loading) void refreshAiStatus();
+    }
 
     const fragment = document.createDocumentFragment();
     const title = document.createElement("h2");
@@ -1502,7 +1807,9 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
   }
 
   function openAt(sectionId: string): void {
-    const target = buildSections(host).find((section) => section.id === sectionId);
+    const target = buildSections(host, ai, () => render()).find(
+      (section) => section.id === sectionId,
+    );
     if (target) activeId = target.id;
     open();
   }

@@ -2001,7 +2001,8 @@ body {
 
 .prefs-control select,
 .prefs-number input,
-.prefs-row-text input {
+.prefs-row-text input,
+.prefs-secret input {
   width: 100%;
   max-width: 420px;
   padding: 6px 9px;
@@ -2015,7 +2016,8 @@ body {
 
 .prefs-control select:focus,
 .prefs-number input:focus,
-.prefs-row-text input:focus {
+.prefs-row-text input:focus,
+.prefs-secret input:focus {
   outline: none;
   border-color: var(--accent);
 }
@@ -2333,6 +2335,16 @@ body {
   color: var(--accent);
 }
 
+.prefs-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.prefs-button:disabled:hover {
+  border-color: var(--border);
+  color: var(--fg);
+}
+
 .prefs-note {
   flex: 1 1 auto;
   max-width: 640px;
@@ -2587,4 +2599,668 @@ body {
    same four items; this hides the only other route. */
 .app.focus-mode #btn-sidebar {
   display: none;
+}
+
+/* ---------------------------------------------------------------------------
+   AI Assistant
+   ---------------------------------------------------------------------------
+   The control lives inside the source pane, is icon-only and is dragged with
+   pointer events. The palette and the panel are positioned by the component in
+   pane-relative pixels, so they follow the button to any corner. Every colour
+   comes from the same variables as the rest of the chrome. */
+
+.editor-pane {
+  position: relative;
+}
+
+.ai-assistant {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+}
+
+.ai-assistant[hidden],
+.ai-assistant [hidden] {
+  display: none !important;
+}
+
+.ai-fab {
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: #fff;
+  cursor: grab;
+  touch-action: none;
+  pointer-events: auto;
+  transition: transform 120ms ease;
+}
+
+.ai-fab:hover {
+  transform: scale(1.04);
+}
+
+.ai-fab:active {
+  cursor: grabbing;
+  transform: scale(0.98);
+}
+
+.ai-fab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.ai-fab svg {
+  display: block;
+  width: 40px;
+  height: 40px;
+  overflow: visible;
+}
+
+.ai-popover {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow:
+    0 18px 44px rgba(0, 0, 0, 0.24),
+    0 2px 8px rgba(0, 0, 0, 0.12);
+  pointer-events: auto;
+}
+
+.ai-search-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.ai-search-row svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
+.ai-search {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font: 13px var(--font-ui);
+  outline: none;
+}
+
+.ai-actions {
+  overflow-y: auto;
+  padding: 5px;
+  min-height: 0;
+}
+
+/* The palette and the panel scroll like the context menu: an 8px track whose
+   2px transparent border leaves a 4px pill, nearly the surface colour. A
+   system scrollbar reads as a second panel bolted to the popover. */
+.ai-actions::-webkit-scrollbar,
+.ai-panel-body::-webkit-scrollbar,
+.ai-chat::-webkit-scrollbar,
+.ai-answer::-webkit-scrollbar,
+.ai-diff::-webkit-scrollbar,
+.ai-context-text::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.ai-actions::-webkit-scrollbar-track,
+.ai-panel-body::-webkit-scrollbar-track,
+.ai-chat::-webkit-scrollbar-track,
+.ai-answer::-webkit-scrollbar-track,
+.ai-diff::-webkit-scrollbar-track,
+.ai-context-text::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.ai-actions::-webkit-scrollbar-thumb,
+.ai-panel-body::-webkit-scrollbar-thumb,
+.ai-chat::-webkit-scrollbar-thumb,
+.ai-answer::-webkit-scrollbar-thumb,
+.ai-diff::-webkit-scrollbar-thumb,
+.ai-context-text::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: var(--scrollbar-thumb);
+  background-clip: padding-box;
+}
+
+.ai-actions::-webkit-scrollbar-thumb:hover,
+.ai-panel-body::-webkit-scrollbar-thumb:hover,
+.ai-chat::-webkit-scrollbar-thumb:hover,
+.ai-answer::-webkit-scrollbar-thumb:hover,
+.ai-diff::-webkit-scrollbar-thumb:hover,
+.ai-context-text::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
+
+.ai-actions::-webkit-scrollbar-corner,
+.ai-panel-body::-webkit-scrollbar-corner,
+.ai-chat::-webkit-scrollbar-corner,
+.ai-answer::-webkit-scrollbar-corner,
+.ai-diff::-webkit-scrollbar-corner,
+.ai-context-text::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.ai-group {
+  padding: 8px 8px 3px;
+  color: var(--muted);
+  font: 600 10px var(--font-ui);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.ai-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg);
+  font: 13px var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ai-row:hover,
+.ai-row.is-active {
+  background: var(--accent-soft);
+}
+
+.ai-row.is-disabled {
+  opacity: 0.55;
+}
+
+.ai-row-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.ai-row-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.ai-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ai-row-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ai-row-description {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.ai-empty {
+  margin: 0;
+  padding: 12px 10px;
+  color: var(--muted);
+  font: 12px var(--font-ui);
+  text-align: center;
+}
+
+.ai-palette-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.ai-link {
+  padding: 3px 2px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: 11.5px var(--font-ui);
+  cursor: pointer;
+}
+
+.ai-link:hover {
+  color: var(--fg);
+}
+
+.ai-panel {
+  min-height: 0;
+}
+
+.ai-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ai-panel-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ai-panel-title {
+  margin: 0;
+  font: 600 13.5px var(--font-ui);
+}
+
+.ai-chip {
+  max-width: 320px;
+  overflow: hidden;
+  color: var(--muted);
+  font: 11px var(--font-ui);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ai-close {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.ai-close:hover {
+  background: var(--code-bg);
+  color: var(--fg);
+}
+
+.ai-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 10px 12px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.ai-params {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ai-param {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 140px;
+  color: var(--muted);
+  font: 11px var(--font-ui);
+}
+
+.ai-param-control,
+.ai-ask-input {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 12.5px var(--font-ui);
+}
+
+.ai-param-control {
+  height: 30px;
+  padding: 0 7px;
+}
+
+.ai-generate {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font: 12.5px var(--font-ui);
+  cursor: pointer;
+}
+
+.ai-generate:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ai-context {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--code-bg);
+  color: var(--muted);
+  font: 11.5px var(--font-ui);
+}
+
+.ai-context summary {
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ai-context-text {
+  max-height: 180px;
+  margin: 6px 0 0;
+  overflow: auto;
+  color: var(--fg);
+  font: 11.5px/1.45 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ai-result {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.ai-result-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font: 11.5px var(--font-ui);
+}
+
+.ai-result-label {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.ai-changes-summary {
+  white-space: nowrap;
+}
+
+.ai-toggle {
+  display: inline-flex;
+  margin-left: auto;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.ai-toggle-btn {
+  padding: 3px 8px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: 11px var(--font-ui);
+  cursor: pointer;
+}
+
+.ai-toggle-btn.active {
+  background: var(--accent-soft);
+  color: var(--fg);
+}
+
+.ai-answer,
+.ai-diff {
+  max-height: 280px;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.5 var(--font-ui);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ai-diff-added {
+  background: rgba(46, 160, 67, 0.24);
+}
+
+.ai-diff-removed {
+  background: rgba(248, 81, 73, 0.18);
+  text-decoration: line-through;
+}
+
+.ai-notes {
+  color: var(--muted);
+  font: 11.5px var(--font-ui);
+}
+
+.ai-notes summary {
+  cursor: pointer;
+}
+
+.ai-notes-text {
+  margin-top: 4px;
+  color: var(--fg);
+  white-space: pre-wrap;
+}
+
+.ai-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.ai-chat-bubble {
+  max-width: 92%;
+  padding: 7px 10px;
+  border-radius: 9px;
+  font: 13px/1.45 var(--font-ui);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ai-chat-user {
+  align-self: flex-end;
+  background: var(--accent-soft);
+}
+
+.ai-chat-assistant {
+  align-self: flex-start;
+  background: var(--code-bg);
+}
+
+.ai-chat-markdown {
+  white-space: normal;
+}
+
+.ai-chat-markdown p,
+.ai-chat-markdown ul,
+.ai-chat-markdown ol {
+  margin: 0 0 6px;
+}
+
+.ai-chat-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.ai-chat-markdown ul,
+.ai-chat-markdown ol {
+  padding-left: 18px;
+}
+
+.ai-chat-markdown code {
+  padding: 1px 3px;
+  border-radius: 3px;
+  background: var(--bg);
+  font-family: var(--font-mono);
+}
+
+.ai-chat-markdown pre {
+  overflow-x: auto;
+  padding: 6px 8px;
+  border-radius: 5px;
+  background: var(--bg);
+}
+
+.ai-chat-markdown a {
+  color: var(--accent);
+}
+
+.ai-chat-source {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ai-chat-source summary {
+  cursor: pointer;
+}
+
+.ai-chat-source pre {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  font: 11.5px/1.45 var(--font-mono);
+}
+
+.ai-ask-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.ai-ask-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  max-height: 120px;
+  padding: 6px 8px;
+  resize: vertical;
+}
+
+.ai-panel-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.ai-status {
+  min-height: 15px;
+  color: var(--muted);
+  font: 11.5px var(--font-ui);
+}
+
+.ai-status.is-error {
+  color: #c0392b;
+}
+
+[data-theme="dark"] .ai-status.is-error {
+  color: #ff8a80;
+}
+
+.ai-footer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.ai-action {
+  height: 27px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 12px var(--font-ui);
+  cursor: pointer;
+}
+
+.ai-action:hover:not(:disabled) {
+  background: var(--code-bg);
+}
+
+.ai-action.is-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.ai-action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.prefs-secret {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.prefs-secret input {
+  flex: 1 1 220px;
+  width: auto;
+  max-width: none;
+  min-width: 140px;
+}
+
+.prefs-key-state {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.prefs-combo {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+.prefs-combo input {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-fab {
+    transition: none;
+  }
 }
