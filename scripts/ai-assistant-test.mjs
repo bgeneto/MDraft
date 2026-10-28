@@ -11,8 +11,10 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import zlib from "node:zlib";
 
 const port = process.argv[2] ?? "9222";
+const appIdentifier = process.env.MDRAFT_TEST_IDENTIFIER ?? "io.github.bernh.mdraft";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ---------------------------------------------------------------------------
@@ -79,11 +81,30 @@ const server = http.createServer(async (request, response) => {
       response.end(JSON.stringify({ error: { message: "not found" } }));
       return;
     }
-    control.requests.push({ url, headers: request.headers, body: raw });
+    if (control.mode === "emptyModels") {
+      control.requests.push({ url, headers: request.headers, body: raw, empty: true });
+      response.writeHead(200, { "content-type": "application/json", "content-length": "0" });
+      response.end();
+      return;
+    }
+    const payload = JSON.stringify({
+      object: "list",
+      data: [{ id: "test-model" }, { id: "second-model" }],
+    });
+    const gzip = control.mode === "gzipModels";
+    control.requests.push({ url, headers: request.headers, body: raw, gzip });
+    if (gzip) {
+      const compressed = zlib.gzipSync(payload);
+      response.writeHead(200, {
+        "content-type": "application/json",
+        "content-encoding": "gzip",
+        "content-length": String(compressed.length),
+      });
+      response.end(compressed);
+      return;
+    }
     response.writeHead(200, { "content-type": "application/json" });
-    response.end(
-      JSON.stringify({ object: "list", data: [{ id: "test-model" }, { id: "second-model" }] }),
-    );
+    response.end(payload);
     return;
   }
 
@@ -349,6 +370,12 @@ async function pressFetchModels() {
   await sleep(700);
 }
 
+async function aiStatusNote() {
+  return evaluate(
+    `[...document.querySelectorAll('.prefs-row')].find(r => r.querySelector('.prefs-label')?.textContent.replace(/\\?$/, '') === 'Status')?.querySelector('.prefs-note')?.textContent ?? ''`,
+  );
+}
+
 async function clickFab() {
   const rect = await evaluate(`(() => {
     const fab = document.querySelector('.ai-fab');
@@ -604,6 +631,7 @@ async function closeTab() {
 
 const original = await evaluate(`window.__TAURI_INTERNALS__.invoke('get_settings')`);
 let createdAnthropicKey = false;
+let createdOpenAiKey = false;
 let anthropicBase = rootUrl;
 
 try {
@@ -1267,24 +1295,107 @@ try {
 
   console.log("\nModel list");
   await openAiSection();
-  const beforeModels = control.requests.length;
+  // The Anthropic test left the provider selected; the model-list checks are
+  // OpenAI-compatible (a local server needs no key) and the auto-save check
+  // stores and clears its own key.
+  await setSelect("Provider", "openai");
+  await setText("Base URL", baseUrl);
+  await setText("Model", "test-model");
+
+  // A Base URL typed but not yet blurred must be the endpoint Fetch uses.
+  await setText("Base URL", "http://127.0.0.1:1/v1");
+  await evaluate(`(() => {
+    const row = [...document.querySelectorAll('.prefs-row')].find(r => r.querySelector('.prefs-label')?.textContent.replace(/\\?$/, '') === 'Base URL');
+    const input = row?.querySelector('input[type=text]');
+    if (!input) return false;
+    input.value = ${JSON.stringify(baseUrl)};
+    return true;
+  })()`);
+  const beforeTyped = control.requests.length;
   await pressFetchModels();
   await waitFor(
-    `[...document.querySelectorAll('.prefs-row')].some(r => r.querySelector('.prefs-note')?.textContent.includes('models found'))`,
+    `[...document.querySelectorAll('.prefs-row')].some(r => r.querySelector('.prefs-note')?.textContent.includes('2 models found'))`,
     8000,
   );
-  const fetchStatus = await evaluate(
-    `[...document.querySelectorAll('.prefs-row')].find(r => r.querySelector('.prefs-label')?.textContent.replace(/\\?$/, '') === 'Status')?.querySelector('.prefs-note')?.textContent`,
+  const typedStatus = await aiStatusNote();
+  check(
+    "Fetch uses the Base URL typed before blur",
+    control.requests.length === beforeTyped + 1 && control.requests.at(-1)?.url === "/v1/models",
   );
-  check("Fetch models made one request", control.requests.length === beforeModels + 1);
-  check("Fetch models reports the list", fetchStatus.includes("2 models found"), fetchStatus);
+  check("the typed Base URL finds the models", typedStatus.includes("2 models found"), typedStatus);
+  const persistedBase = await evaluate(
+    `window.__TAURI_INTERNALS__.invoke('get_settings').then(s => s.aiBaseUrl)`,
+  );
+  check("the typed Base URL is persisted", persistedBase === baseUrl, persistedBase);
+
+  // The endpoint may gzip /models; reqwest must decode the body.
+  control.mode = "gzipModels";
+  const beforeGzip = control.requests.length;
+  await pressFetchModels();
+  await waitFor(
+    `[...document.querySelectorAll('.prefs-row')].some(r => r.querySelector('.prefs-note')?.textContent.includes('2 models found'))`,
+    8000,
+  );
+  const gzipStatus = await aiStatusNote();
+  check("a gzip model list is decoded", gzipStatus.includes("2 models found"), gzipStatus);
+  check("the gzip response was actually compressed", control.requests.at(-1)?.gzip === true);
   check(
     "the fetched models reach the datalist",
     await evaluate(
       `[...document.querySelectorAll('datalist option')].some(o => o.value === 'second-model')`,
     ),
   );
-  check("the model list request used GET", control.requests.at(-1)?.url === "/v1/models");
+  control.mode = "normal";
+
+  // An empty 200 from a wrong Base URL must name the cause.
+  control.mode = "emptyModels";
+  const beforeEmpty = control.requests.length;
+  await pressFetchModels();
+  await waitFor(
+    `[...document.querySelectorAll('.prefs-row')].some(r => r.querySelector('.prefs-note')?.textContent.includes('empty response'))`,
+    8000,
+  );
+  const emptyStatus = await aiStatusNote();
+  check(
+    "an empty model list explains the Base URL",
+    emptyStatus.includes("empty response") && emptyStatus.includes("Base URL"),
+    emptyStatus,
+  );
+  check(
+    "the empty model request still reached the endpoint",
+    control.requests.length === beforeEmpty + 1,
+  );
+  control.mode = "normal";
+
+  // Saving the key fetches once; the button remains for a manual refresh.
+  const openAiStatus = await evaluate(
+    `window.__TAURI_INTERNALS__.invoke('ai_status', { provider: 'openai', baseUrl: ${JSON.stringify(baseUrl)} })`,
+  );
+  if (!openAiStatus.hasKey) {
+    await setText("Base URL", baseUrl);
+    const beforeSave = control.requests.length;
+    await setKey(`sk-mock-auto-${Date.now()}`);
+    await waitFor(
+      `[...document.querySelectorAll('.prefs-row')].some(r => r.querySelector('.prefs-note')?.textContent.includes('models found'))`,
+      10_000,
+    );
+    const saveStatus = await aiStatusNote();
+    check(
+      "saving the key fetches the model list",
+      control.requests.length === beforeSave + 1,
+      String(control.requests.length - beforeSave),
+    );
+    check("saving the key reports the models", saveStatus.includes("models found"), saveStatus);
+    check(
+      "saving the key fills the datalist",
+      await evaluate(
+        `[...document.querySelectorAll('datalist option')].some(o => o.value === 'second-model')`,
+      ),
+    );
+    createdOpenAiKey = true;
+  } else {
+    check("saving the key leaves an existing key alone", true, "an existing key was used");
+  }
   await closePrefs();
 
   // -------------------------------------------------------------------------
@@ -1323,14 +1434,10 @@ try {
 
   const settings = await evaluate(`window.__TAURI_INTERNALS__.invoke('get_settings')`);
   check("get_settings has no API key", !JSON.stringify(settings).includes("sk-mock-"));
-  const configPath = path.join(
-    process.env.APPDATA ?? "",
-    "io.github.bernh.mdraft",
-    "settings.json",
-  );
+  const configPath = path.join(process.env.APPDATA ?? "", appIdentifier, "settings.json");
   const onDisk = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : "";
   check("settings.json has no API key", onDisk.length > 0 && !onDisk.includes("sk-mock-"));
-  const recoveryPath = path.join(process.env.APPDATA ?? "", "io.github.bernh.mdraft", "recovery");
+  const recoveryPath = path.join(process.env.APPDATA ?? "", appIdentifier, "recovery");
   const recoveryText = fs.existsSync(recoveryPath)
     ? fs
         .readdirSync(recoveryPath)
@@ -1342,6 +1449,15 @@ try {
   failed += 1;
   console.log(`  FAIL  the suite threw — ${error}`);
 } finally {
+  try {
+    if (createdOpenAiKey) {
+      await evaluate(
+        `window.__TAURI_INTERNALS__.invoke('ai_clear_key', { provider: 'openai', baseUrl: ${JSON.stringify(baseUrl)} })`,
+      );
+    }
+  } catch {
+    /* the app may be gone */
+  }
   try {
     if (createdAnthropicKey) {
       await evaluate(

@@ -1186,8 +1186,8 @@ document matches the code:
   is installed once in `provider::install_crypto_provider`.
 - The assistant root is created by `createAssistant` and appended to
   `#editor-pane`; `index.html` has no empty mount.
-- The unit suite is 93 checks, the mock UI suite 107, and the live suite 70.
-  The Rust suite is 197 passed with 2 ignored.
+- The unit suite is 93 checks, the mock UI suite 114, and the live suite 70.
+  The Rust suite is 198 passed with 2 ignored.
 - The mock suite also covers the icon-only button's 40 px size and launch
   anchor, drag/reset, the palette cap and placement, key hygiene, and the
   supplied M-sparkle icon (which keeps `textContent` empty and its accessible
@@ -1201,8 +1201,13 @@ document matches the code:
 - The live suite passed 70/70 against `http://192.168.61.9:4000/v1` and
   `Qwen3.8-27B`, all fourteen actions, with the API key read from
   `T:\Temp\mdraft-ai-e2e.env` (the key is never in the repository).
-- Validation run: `npm run ai:unit` 93/93, `npm test -- --only ai` 107/107,
-  `npm test -- --only ai-live` 70/70, `npm test -- --only rust` 197 passed,
+- Saving a key also fetches the endpoint's model list and fills the model
+  suggestions; the Fetch button remains for a later refresh. The request uses
+  the Base URL and Model currently in the fields even before blur commits them,
+  and reqwest decodes gzip/brotli/deflate model lists. An empty 200 or an HTML
+  page now names the Base URL instead of only saying "not JSON".
+- Validation run: `npm run ai:unit` 93/93, `npm test -- --only ai` 114/114,
+  `npm test -- --only ai-live` 70/70, `npm test -- --only rust` 198 passed,
   `menu` 101/101, `shortcuts` 47/47, and `lint`, `format:check`, `tsc` and
   `clippy --all-targets -- -D warnings` pass.
 

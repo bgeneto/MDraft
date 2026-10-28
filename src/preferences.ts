@@ -109,6 +109,8 @@ type Row =
       placeholder?: string;
       /** Optional suggestions shown through a `<datalist>`. */
       suggestions?: string[];
+      /** Redraw the panel after committing; false keeps a focus-adjacent button clickable. */
+      rerender?: boolean;
       get: () => string;
       set: (value: string) => void;
     }
@@ -783,26 +785,90 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
   const OPENAI = "https://api.openai.com/v1";
   const ANTHROPIC = "https://api.anthropic.com";
 
+  /** The value currently typed in a text row, if that row is on screen. */
+  const fieldValue = (label: string): string | null => {
+    const row = [...document.querySelectorAll(".prefs-row")].find(
+      (candidate) =>
+        candidate.querySelector(".prefs-label")?.textContent?.replace(/\?$/, "") === label,
+    );
+    const input = row?.querySelector<HTMLInputElement>('input[type="text"]');
+    return input ? input.value.trim() : null;
+  };
+
+  /**
+   * The connection the reader sees, not only the one already persisted.
+   *
+   * A value typed into Base URL or Model is committed on blur, but pressing
+   * Fetch (or Save) while the field still has focus used to send the previous
+   * endpoint. Read the controls, persist what changed, and use those values.
+   */
+  const currentConnection = (): {
+    provider: api.AiProvider;
+    baseUrl: string;
+    model: string;
+  } => {
+    const baseUrl = fieldValue("Base URL") ?? s().aiBaseUrl.trim();
+    const model = fieldValue("Model") ?? s().aiModel.trim();
+    const patch: Partial<api.Settings> = {};
+    if (baseUrl !== s().aiBaseUrl) patch.aiBaseUrl = baseUrl;
+    if (model !== s().aiModel) patch.aiModel = model;
+    if (Object.keys(patch).length > 0) host.update(patch);
+    return { provider: s().aiProvider, baseUrl, model };
+  };
+
+  const loadModels = async (
+    provider: api.AiProvider,
+    baseUrl: string,
+    model: string,
+    afterSave = false,
+  ): Promise<void> => {
+    ai.loading = true;
+    ai.error = null;
+    ai.message = afterSave ? "Key saved. Fetching the model list…" : "Fetching the model list…";
+    refresh();
+    try {
+      const reply = await api.aiFetchModels(provider, baseUrl, model);
+      ai.models = reply.models;
+      const prefix = afterSave ? "Key saved. " : "";
+      ai.message =
+        reply.models.length > 0
+          ? `${prefix}${reply.models.length} models found.`
+          : `${prefix}The endpoint returned no models; type the model id by hand.`;
+    } catch (error) {
+      // A failed list request must not read as a failed save: the key is
+      // already stored and remains usable.
+      ai.error = afterSave
+        ? `Key saved, but the model list could not be read: ${String(error)}`
+        : String(error);
+      ai.message = afterSave ? "Key saved." : null;
+    } finally {
+      ai.loading = false;
+      refresh();
+    }
+  };
+
   const saveKey = async (key: string): Promise<void> => {
+    const { provider, baseUrl, model } = currentConnection();
     ai.error = null;
     ai.message = "Saving the key…";
     try {
-      ai.status = await api.aiSetKey(s().aiProvider, s().aiBaseUrl, key);
-      ai.endpoint = `${s().aiProvider}|${s().aiBaseUrl}`;
-      ai.message = "Key saved.";
+      ai.status = await api.aiSetKey(provider, baseUrl, key);
+      ai.endpoint = `${provider}|${baseUrl}`;
+      await loadModels(provider, baseUrl, model, true);
     } catch (error) {
       ai.error = String(error);
       ai.message = null;
+      refresh();
     }
-    refresh();
   };
 
   const clearKey = async (): Promise<void> => {
+    const { provider, baseUrl } = currentConnection();
     ai.error = null;
     ai.message = "Removing the key…";
     try {
-      ai.status = await api.aiClearKey(s().aiProvider, s().aiBaseUrl);
-      ai.endpoint = `${s().aiProvider}|${s().aiBaseUrl}`;
+      ai.status = await api.aiClearKey(provider, baseUrl);
+      ai.endpoint = `${provider}|${baseUrl}`;
       ai.message = "Key removed.";
     } catch (error) {
       ai.error = String(error);
@@ -812,31 +878,15 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
   };
 
   const fetchModels = async (): Promise<void> => {
-    ai.loading = true;
-    ai.error = null;
-    ai.message = "Fetching the model list…";
-    refresh();
-    try {
-      const reply = await api.aiFetchModels(s().aiProvider, s().aiBaseUrl, s().aiModel);
-      ai.models = reply.models;
-      ai.message =
-        reply.models.length > 0
-          ? `${reply.models.length} models found.`
-          : "The endpoint returned no models; type the model id by hand.";
-    } catch (error) {
-      ai.error = String(error);
-      ai.message = null;
-    } finally {
-      ai.loading = false;
-      refresh();
-    }
+    const { provider, baseUrl, model } = currentConnection();
+    await loadModels(provider, baseUrl, model);
   };
 
   return [
     {
       kind: "note",
       label: "Privacy",
-      text: "The assistant contacts only the endpoint you configure, and only when you press Generate. Nothing is sent to MDraft. The selection and your instruction are the only document text that leaves this machine. The API key is stored in the operating system's credential store, never in settings.json.",
+      text: "The assistant contacts only the endpoint you configure, and only when you press Generate, save a key or fetch the model list. Nothing is sent to MDraft. The selection and your instruction are the only document text that leaves this machine. The API key is stored in the operating system's credential store, never in settings.json.",
     },
     {
       kind: "checkbox",
@@ -888,7 +938,7 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
     {
       kind: "secret",
       label: "API Key",
-      help: "Stored in the OS credential store, keyed by provider and endpoint. When the store is unavailable the key is kept for this session only. Local servers often need no key; Anthropic always does.",
+      help: "Saving the key also requests the model list and fills the model suggestions. Stored in the OS credential store, keyed by provider and endpoint. When the store is unavailable the key is kept for this session only. Local servers often need no key; Anthropic always does.",
       placeholder: ai.status?.hasKey ? "A key is saved — type to replace it" : "Paste the API key",
       status: () => ({
         hasKey: ai.status?.hasKey ?? false,
@@ -911,7 +961,7 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
       kind: "button",
       label: "",
       text: "Fetch model list",
-      help: "Makes one request to the configured endpoint. Nothing is requested until you press this.",
+      help: "Refreshes the model list. Saving a key already does this once; use this button after changing the endpoint or to retry.",
       action: fetchModels,
     },
     {
@@ -1689,7 +1739,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       if (listId) input.setAttribute("list", listId);
       input.addEventListener("change", () => {
         row.set(input.value);
-        render();
+        if (row.rerender !== false) render();
       });
       if (!listId || !row.suggestions) return input;
       const wrap = document.createElement("div");
