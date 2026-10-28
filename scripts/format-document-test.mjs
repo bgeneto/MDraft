@@ -591,6 +591,10 @@ try {
     "Move Line Up",
     "Move Line Down",
     "Format Document",
+    // Read Aloud sits between formatting and Favorites: all three act on the
+    // document rather than on the selection above them.
+    "Read Aloud from Here",
+    "Read Aloud from the Beginning",
     "Add to Favorites",
   ];
   const labels = menu.items.map((item) => item.label);

@@ -43,6 +43,8 @@
     "ai": "node scripts/ai-assistant-test.mjs",
     "ai:unit": "node scripts/ai-unit.mjs",
     "ai:live": "node scripts/ai-live-test.mjs",
+    "read-aloud": "node scripts/read-aloud-test.mjs",
+    "read-aloud:unit": "node scripts/read-aloud-unit.mjs",
     "recent": "node scripts/recent-menu-test.mjs",
     "test:sessions": "node scripts/sessions-test.mjs",
     "p0:unit": "node scripts/p0-unit.mjs",

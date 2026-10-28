@@ -18,7 +18,8 @@ import {
   TYPST_REFERENCE,
   WELCOME,
 } from "./content";
-import { installEditorContextMenu, titleCase } from "./context-menu";
+import { installEditorContextMenu, titleCase, type ReadingMenuState } from "./context-menu";
+import { createReadAloud, type ReadAloudHandle, type ReadingState } from "./read-aloud";
 import { readClipboardData } from "./clipboard";
 import { createDocumentLifecycle } from "./document-lifecycle";
 import { askUnsaved } from "./unsaved-dialog";
@@ -130,6 +131,7 @@ const statusWords = el<HTMLSpanElement>("status-words");
 const statusCursor = el<HTMLSpanElement>("status-cursor");
 const statusEncoding = el<HTMLSpanElement>("status-encoding");
 const statusZoom = el<HTMLButtonElement>("status-zoom");
+const statusReading = el<HTMLButtonElement>("status-reading");
 const noticeBar = el<HTMLDivElement>("notice-bar");
 const noticeText = el<HTMLSpanElement>("notice-text");
 const noticeActions = el<HTMLSpanElement>("notice-actions");
@@ -1825,6 +1827,9 @@ async function displayDoc(): Promise<void> {
   // was requested for. Closing here covers tab switches, new documents and
   // closing the active tab, not only `activateSession`.
   assistant?.close();
+  // The reading belongs to the document that was on screen; a tab switch, a
+  // reload or a closed tab must not leave a voice talking about another file.
+  stopReadAloud();
   invalidatePreview();
   pendingPreviewScroll = doc.previewScroll;
   suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
@@ -5162,6 +5167,7 @@ async function installCloseGuard(): Promise<void> {
       return;
     }
     try {
+      stopReadAloud();
       await lifecycle.close(
         [...sessions.list()],
         async (ready) => {
@@ -5200,6 +5206,90 @@ function installSystemThemeWatcher(): void {
     applyTheme();
     scheduleRender(true);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Read aloud
+// ---------------------------------------------------------------------------
+
+let readAloud: ReadAloudHandle | null = null;
+
+/**
+ * Blocks that are not prose.
+ *
+ * KaTeX draws a hidden MathML copy beside the visual one, so a formula would be
+ * spoken twice and as symbols; a Mermaid block would read its node labels; and a
+ * code fence read character by character is noise, not a sentence.
+ */
+const SILENT_IN_PREVIEW = ".katex, .mermaid, pre";
+
+function blockText(block: HTMLElement): string {
+  const clone = block.cloneNode(true) as HTMLElement;
+  for (const node of clone.querySelectorAll(SILENT_IN_PREVIEW)) node.remove();
+  return (clone.textContent ?? "").replace(/\s+/g, " ").trim();
+}
+
+/** Why no reading can start for the document on screen, or null. */
+function readAloudBlockedReason(): string | null {
+  if (!readAloud) return "The editor is still loading.";
+  // The HTML tab renders into an opaque-origin iframe: its text is not the
+  // parent document's to read, so there is nothing to speak.
+  if (doc.language === "html") return "The HTML preview cannot be read aloud.";
+  const reason = readAloud.availableReason();
+  if (reason) return reason;
+  if ((preview.textContent ?? "").trim() === "") return "There is nothing to read.";
+  return null;
+}
+
+/** Source positions exist only in the renderers that emit `data-line`. */
+function readAloudFromHereBlockedReason(): string | null {
+  return previewAnchors.length === 0 ? "This preview has no source positions." : null;
+}
+
+function readingMenuState(): ReadingMenuState {
+  const blocked = readAloudBlockedReason();
+  return {
+    blocked,
+    fromHereBlocked: blocked ? null : readAloudFromHereBlockedReason(),
+    active: readAloud?.isActive() ?? false,
+  };
+}
+
+/** The text to speak: the preview's prose, block by block. */
+function previewReadAloudText(fromStart: boolean): string {
+  if (previewAnchors.length === 0) return blockText(preview);
+  const start = fromStart ? 0 : Math.max(0, anchorIndexForLine(editor.cursorInfo().line));
+  return previewAnchors
+    .slice(start)
+    .map((anchor) => blockText(anchor.el))
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function startReadAloud(fromStart: boolean): void {
+  const reason = readAloudBlockedReason();
+  if (reason) {
+    toast(reason, 4200);
+    return;
+  }
+  if (!readAloud?.start(previewReadAloudText(fromStart))) {
+    toast("There is nothing to read.", 4200);
+  }
+}
+
+function stopReadAloud(): void {
+  readAloud?.stop();
+}
+
+function renderReadingChip(state: ReadingState): void {
+  statusReading.hidden = !state.active;
+  if (!state.active) {
+    statusReading.textContent = "";
+    statusReading.title = "";
+    return;
+  }
+  statusReading.textContent = `Reading ${Math.min(state.index + 1, state.total)}/${state.total}`;
+  statusReading.title = `Reading aloud with ${state.voice || "the system voice"} — click to stop.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -5485,6 +5575,7 @@ function installChrome(): void {
     setTheme(isDark ? "light" : "dark"),
   );
   statusZoom.addEventListener("click", () => setZoom(DEFAULT_ZOOM));
+  statusReading.addEventListener("click", stopReadAloud);
 
   // The flags take the same route as the native menu items, so the two can never
   // disagree and the 250 ms double-run guard lives in one place.
@@ -5722,6 +5813,18 @@ async function boot(): Promise<void> {
     refreshStatus();
     updateActiveOutline();
   });
+  readAloud = createReadAloud({
+    rate: () => settings.readAloudRate ?? 1,
+    voiceName: () => settings.readAloudVoice ?? "",
+    // The spelling language is the application's only statement about the
+    // document's natural language; "auto" leaves the voice to the platform.
+    languageTag: () => (settings.spellcheckLanguage === "auto" ? "" : settings.spellcheckLanguage),
+    onChange: renderReadingChip,
+    onError: (message) => toast(message, 5200),
+  });
+  // Measured: `getVoices()` is empty on the first read, so the list is fetched in
+  // the background and only that first moment reports "looking for voices".
+  void readAloud.refreshVoices();
   // The editor's whole right-click menu lives outside the spelling plugin: that
   // plugin owns `contextmenu` when a misspelled word is under the pointer and
   // stops the event, so the two menus never compete for the same click.
@@ -5738,6 +5841,9 @@ async function boot(): Promise<void> {
     },
     linkAt: (pos) => linkAt(editor.getDoc(), pos, doc.language),
     openLink: openLinkTarget,
+    reading: readingMenuState,
+    readAloud: startReadAloud,
+    stopReading: stopReadAloud,
     toast,
   });
 
@@ -5764,6 +5870,7 @@ async function boot(): Promise<void> {
     settings: () => settings,
     update: applySettingsPatch,
     clearRecent: clearRecentFiles,
+    readAloudVoices: () => readAloud?.voices() ?? [],
     exportHtml: () => void exportHtml(),
     exportPdf: () => void exportPdf(),
     setupTypst: () => typstSetup(),

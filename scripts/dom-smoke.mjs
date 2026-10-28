@@ -314,11 +314,11 @@ for (const section of prefs.perSection) {
 
 check("preferences opens", prefs.open);
 check("preferences title", prefs.title === "Preferences");
-check("ten sections", prefs.sectionNames.split(",").length === 10);
+check("eleven sections", prefs.sectionNames.split(",").length === 11);
 check(
   "sections named and ordered",
   prefs.sectionNames ===
-    "Files,Editor,Image,Markdown,HTML,Export,Appearance,General,Typography,AI Assistant",
+    "Files,Editor,Image,Markdown,HTML,Export,Appearance,General,Typography,AI Assistant,Read Aloud",
 );
 check(
   "first section selected",
@@ -335,6 +335,15 @@ check(
   Boolean(editorSection) &&
     editorSection.labels.includes("Check spelling while typing") &&
     editorSection.labels.includes("Dictionary"),
+);
+const readAloudSection = prefs.perSection.find((section) => section.name === "Read Aloud");
+check(
+  "read aloud preferences",
+  Boolean(readAloudSection) &&
+    readAloudSection.labels.includes("Voice") &&
+    readAloudSection.labels.includes("Speed") &&
+    readAloudSection.labels.includes("Installed Voices"),
+  readAloudSection ? readAloudSection.labels.join(", ") : "section missing",
 );
 
 // The On Launch row gained a fourth choice: reopen the tab set that was open

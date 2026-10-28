@@ -1109,6 +1109,14 @@ body {
   text-align: center;
 }
 
+/* Only present while a reading is in progress: it is the visible way to stop
+   one, and it carries the position as well, so a long document says whether the
+   voice is moving. Tabular figures stop the label from shifting per sentence. */
+.status-reading {
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+
 /* --------------------------------------------------------------------------
    Status flags
 

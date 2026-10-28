@@ -133,6 +133,12 @@ fn default_ai_provider() -> String {
     "openai".to_string()
 }
 
+/// Read Aloud's speaking rate. 1.0 is the synthesiser's own pace; the panel
+/// offers 0.5–2.0, and a hand-edited file is clamped where it is used.
+fn default_read_aloud_rate() -> f64 {
+    1.0
+}
+
 fn default_ai_base_url() -> String {
     "https://api.openai.com/v1".to_string()
 }
@@ -460,6 +466,21 @@ pub struct Settings {
     /// Model id sent verbatim to the endpoint.
     #[serde(default)]
     pub ai_model: String,
+
+    // ---- Preferences: Read Aloud -----------------------------------------
+    /// Voice the right-click **Read Aloud** commands use.
+    ///
+    /// The empty string follows the document's language and then the platform's
+    /// default. The value is the voice's own `name` from the Web Speech API
+    /// (`"Microsoft Zira - English (United States)"`), because that is the only
+    /// identifier the API exposes. A voice that has since been uninstalled falls
+    /// back to the language rule instead of muting the feature.
+    #[serde(default)]
+    pub read_aloud_voice: String,
+    /// Speaking rate, 0.5–2.0. `f64` because that is what
+    /// `SpeechSynthesisUtterance.rate` takes; the panel constrains the range.
+    #[serde(default = "default_read_aloud_rate")]
+    pub read_aloud_rate: f64,
 }
 
 impl Default for Settings {
@@ -533,6 +554,9 @@ impl Default for Settings {
             ai_provider: default_ai_provider(),
             ai_base_url: default_ai_base_url(),
             ai_model: String::new(),
+
+            read_aloud_voice: String::new(),
+            read_aloud_rate: default_read_aloud_rate(),
         }
     }
 }
