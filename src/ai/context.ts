@@ -381,19 +381,78 @@ export interface Point {
   y: number;
 }
 
-/** Bottom-right anchor, 20 px from the pane's edges, on every launch. */
-export function defaultButtonPosition(
+/**
+ * A dragged position as a fraction of the pane's free space: (0, 0) is the
+ * top-left margin and (1, 1) the bottom-right one. A pixel position is only
+ * correct for the pane size it was measured in; the fraction survives a window
+ * resize or a maximize without leaving the button stranded mid-pane.
+ */
+export interface PaneAnchor {
+  x: number;
+  y: number;
+}
+
+function clampFraction(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(Math.max(value, 0), 1);
+}
+
+/** Record a pixel position as the free-space fraction of the current pane. */
+export function anchorFromPosition(
+  point: Point,
   paneWidth: number,
   paneHeight: number,
   size: number,
-  margin = 20,
+  margin = 8,
+): PaneAnchor {
+  const freeX = Math.max(1, paneWidth - size - margin * 2);
+  const freeY = Math.max(1, paneHeight - size - margin * 2);
+  return {
+    x: clampFraction((point.x - margin) / freeX),
+    y: clampFraction((point.y - margin) / freeY),
+  };
+}
+
+/** Resolve a free-space fraction against the pane's current size. */
+export function positionFromAnchor(
+  anchor: PaneAnchor,
+  paneWidth: number,
+  paneHeight: number,
+  size: number,
+  margin = 8,
 ): Point {
+  const freeX = Math.max(0, paneWidth - size - margin * 2);
+  const freeY = Math.max(0, paneHeight - size - margin * 2);
   return clampButtonPosition(
-    { x: paneWidth - size - margin, y: paneHeight - size - margin },
+    {
+      x: margin + clampFraction(anchor.x) * freeX,
+      y: margin + clampFraction(anchor.y) * freeY,
+    },
     paneWidth,
     paneHeight,
     size,
     margin,
+  );
+}
+
+/**
+ * Bottom-right anchor on every launch. The horizontal margin leaves room beside
+ * the scrollbar; vertically the button rests at the bottom limit the drag clamp
+ * allows, so its default place is also the lowest one it can reach.
+ */
+export function defaultButtonPosition(
+  paneWidth: number,
+  paneHeight: number,
+  size: number,
+  sideMargin = 20,
+  bottomMargin = 8,
+): Point {
+  return clampButtonPosition(
+    { x: paneWidth - size - sideMargin, y: paneHeight - size - bottomMargin },
+    paneWidth,
+    paneHeight,
+    size,
+    Math.min(sideMargin, bottomMargin),
   );
 }
 
