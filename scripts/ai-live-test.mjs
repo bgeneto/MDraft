@@ -415,7 +415,7 @@ async function undo() {
 }
 
 const RAW_TAGS =
-  /<\/?(revised|continuation|expanded|shortened|simplified|rewritten|translation|summary|explanation|points|critique|table|converted|notes)>/i;
+  /<\/?mdraft-(revised|continuation|expanded|shortened|simplified|rewritten|translation|summary|explanation|points|critique|table|converted|notes)>/i;
 
 // ---------------------------------------------------------------------------
 // Setup
@@ -547,49 +547,59 @@ try {
   await runAction({
     id: "improve",
     label: "Improve writing",
-    tag: "revised",
+    tag: "mdraft-revised",
     select: "Regular",
     apply: "replace",
   });
   await runAction({
     id: "continue",
     label: "Continue writing",
-    tag: "continuation",
+    tag: "mdraft-continuation",
     apply: "insert",
   });
-  await runAction({ id: "expand", label: "Expand", tag: "expanded", apply: "replace" });
-  await runAction({ id: "shorten", label: "Shorten", tag: "shortened", apply: "replace" });
-  await runAction({ id: "simplify", label: "Simplify", tag: "simplified", apply: "replace" });
+  await runAction({ id: "expand", label: "Expand", tag: "mdraft-expanded", apply: "replace" });
+  await runAction({ id: "shorten", label: "Shorten", tag: "mdraft-shortened", apply: "replace" });
+  await runAction({
+    id: "simplify",
+    label: "Simplify",
+    tag: "mdraft-simplified",
+    apply: "replace",
+  });
   await runAction({
     id: "tone",
     label: "Change tone…",
-    tag: "rewritten",
+    tag: "mdraft-rewritten",
     parameter: "Casual",
     apply: "replace",
   });
   await runAction({
     id: "tone",
     label: "Change tone…",
-    tag: "rewritten",
+    tag: "mdraft-rewritten",
     parameter: "Professional",
     apply: "replace",
   });
   await runAction({
     id: "translate",
     label: "Translate…",
-    tag: "translation",
+    tag: "mdraft-translation",
     parameter: "Portuguese",
     apply: "replace",
   });
-  await runAction({ id: "summarize", label: "Summarize", tag: "summary", apply: "below" });
-  await runAction({ id: "explain", label: "Explain", tag: "explanation", apply: "below" });
-  await runAction({ id: "keyPoints", label: "Key points", tag: "points", apply: "below" });
-  await runAction({ id: "critique", label: "Critique", tag: "critique", apply: "below" });
-  await runAction({ id: "table", label: "Convert to table", tag: "table", apply: "replace" });
+  await runAction({ id: "summarize", label: "Summarize", tag: "mdraft-summary", apply: "below" });
+  await runAction({ id: "explain", label: "Explain", tag: "mdraft-explanation", apply: "below" });
+  await runAction({ id: "keyPoints", label: "Key points", tag: "mdraft-points", apply: "below" });
+  await runAction({ id: "critique", label: "Critique", tag: "mdraft-critique", apply: "below" });
+  await runAction({
+    id: "table",
+    label: "Convert to table",
+    tag: "mdraft-table",
+    apply: "replace",
+  });
   await runAction({
     id: "convert",
     label: "Convert markup…",
-    tag: "converted",
+    tag: "mdraft-converted",
     parameter: "typst",
     apply: "replace",
   });

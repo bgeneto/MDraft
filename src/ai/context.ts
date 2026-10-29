@@ -6,6 +6,7 @@
 //! `src/main.ts` supplies the text, the selection offsets and the caret.
 
 import type { AiActionId, AiRequest, AiTurn, DocumentLanguage } from "../api";
+import { resolvePasteDestination } from "../paste/detect-document.ts";
 
 export interface CaptureInput {
   text: string;
@@ -210,6 +211,23 @@ export function buildRequest(
     instruction: action === "ask" ? instruction.trim() : "",
     history: action === "ask" ? history : [],
   };
+}
+
+/**
+ * The markup the assistant must write.
+ *
+ * A saved document's extension is authoritative. An unsaved buffer is classified
+ * from its text, exactly as a paste is, because the default extension is only a
+ * suggestion until Save As chooses one. This never changes the editor's parser:
+ * `doc.language` still governs highlighting and preview, and detection is a
+ * request-only hint with the editor language as its fallback.
+ */
+export function resolveAiLanguage(
+  saved: boolean,
+  editorLanguage: DocumentLanguage,
+  buffer: string,
+): DocumentLanguage {
+  return resolvePasteDestination({ saved, language: editorLanguage, buffer }).language;
 }
 
 function isCjk(code: number | undefined): boolean {

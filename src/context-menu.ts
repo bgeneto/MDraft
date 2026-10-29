@@ -45,7 +45,7 @@ export interface EditorMenuOptions {
   /** What Read Aloud can do for this document right now. */
   reading: () => ReadingMenuState;
   /** Start reading the document aloud, from the caret's block or from the top. */
-  readAloud: (fromStart: boolean) => void;
+  readAloud: (fromStart: boolean) => void | Promise<void>;
   /** Stop the reading in progress. */
   stopReading: () => void;
   toast: (text: string, ms?: number) => { dismiss: () => void };

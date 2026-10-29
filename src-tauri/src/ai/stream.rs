@@ -1,7 +1,7 @@
 //! Streaming filter for the delimited answers the action prompts ask for.
 //!
 //! Every action except Ask asks the model to wrap its answer in a tag such as
-//! `<revised>`. The panel must never show those tags, and the text that arrives
+//! `<mdraft-revised>`. The panel must never show those tags, and the text that arrives
 //! before the tag (a stray sentence, a code fence) must not become the answer.
 //! This filter emits only the content of the expected tag, handling tags split
 //! across network chunks and models that ignore the instruction entirely.
@@ -32,6 +32,12 @@ pub struct TagFilter {
     after: String,
     started: bool,
     truncated: bool,
+    /// Whether the expected opening wrapper was found.
+    ///
+    /// `clean_answer` uses this: inside a wrapper every line is content, while a
+    /// model that ignored the protocol usually writes a preamble. A closing tag
+    /// alone is not enough, because the text before it can still be a preamble.
+    saw_tag: bool,
 }
 
 impl TagFilter {
@@ -47,6 +53,7 @@ impl TagFilter {
             after: String::new(),
             started: false,
             truncated: false,
+            saw_tag: false,
         }
     }
 
@@ -61,11 +68,17 @@ impl TagFilter {
             after: String::new(),
             started: false,
             truncated: false,
+            saw_tag: false,
         }
     }
 
     pub fn truncated(&self) -> bool {
         self.truncated
+    }
+
+    /// Whether the model followed the wrapper protocol.
+    pub fn used_tag(&self) -> bool {
+        self.saw_tag
     }
 
     /// Feed one network chunk, returning only the new visible text.
@@ -82,6 +95,7 @@ impl TagFilter {
                     let close = format!("</{}>", self.tag);
                     if let Some(index) = find_ci(&self.buffer, &open) {
                         self.buffer.drain(..index + open.len());
+                        self.saw_tag = true;
                         self.state = State::Inside;
                         continue;
                     }
@@ -92,6 +106,9 @@ impl TagFilter {
                     if let Some(index) = find_ci(&self.buffer, &close) {
                         let text = self.buffer[..index].to_string();
                         self.buffer.drain(..index + close.len());
+                        // No opening tag: the model forgot the protocol, so the
+                        // text before the close still needs the raw-answer
+                        // cleanup in `clean_answer`.
                         self.state = State::After;
                         produced.push_str(&self.push(&text));
                         continue;
@@ -169,9 +186,13 @@ impl TagFilter {
         match self.state {
             State::Seek => {
                 let text = std::mem::take(&mut self.buffer);
-                if !text.trim().is_empty() {
-                    // The model ignored the tag entirely. The whole answer is
-                    // then the answer.
+                let trimmed = text.trim();
+                // A buffer that is only a prefix of the expected opening tag is
+                // a wrapper the model had just started when the request was
+                // stopped; it is not content. Anything else is an answer that
+                // ignored the tag.
+                let open = format!("<{}>", self.tag.to_ascii_lowercase());
+                if !trimmed.is_empty() && !open.starts_with(&trimmed.to_ascii_lowercase()) {
                     let _ = self.push(&text);
                 }
             }
@@ -293,10 +314,14 @@ fn extract_tag(text: &str, tag: &str) -> Option<String> {
 
 fn is_fence_line(line: &str) -> bool {
     let trimmed = line.trim();
-    if !trimmed.starts_with("```") {
+    let marker = if trimmed.starts_with("```") {
+        '`'
+    } else if trimmed.starts_with("~~~") {
+        '~'
+    } else {
         return false;
-    }
-    let language = trimmed.trim_start_matches('`').trim();
+    };
+    let language = trimmed.trim_start_matches(marker).trim();
     language
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '+' | '.'))
@@ -305,9 +330,13 @@ fn is_fence_line(line: &str) -> bool {
 /// Remove a Markdown fence only when it wraps the entire answer.
 fn strip_wrapping_fence(text: &str) -> &str {
     let trimmed = text.trim();
-    if !trimmed.starts_with("```") {
+    let marker = if trimmed.starts_with("```") {
+        '`'
+    } else if trimmed.starts_with("~~~") {
+        '~'
+    } else {
         return trimmed;
-    }
+    };
     let Some(first_newline) = trimmed.find('\n') else {
         return trimmed;
     };
@@ -319,7 +348,7 @@ fn strip_wrapping_fence(text: &str) -> &str {
         return trimmed;
     }
     let last_line = trimmed[last_line_start..].trim();
-    if !last_line.starts_with("```") || !last_line.trim_start_matches('`').trim().is_empty() {
+    if !last_line.starts_with(marker) || !last_line.trim_start_matches(marker).trim().is_empty() {
         return trimmed;
     }
     trimmed[first_newline + 1..last_line_start].trim()
@@ -330,7 +359,7 @@ mod tests {
     use super::*;
 
     fn collect(chunks: &[&str]) -> (String, String) {
-        let mut filter = TagFilter::new("revised", Some("notes"));
+        let mut filter = TagFilter::new("mdraft-revised", Some("mdraft-notes"));
         for chunk in chunks {
             filter.feed(chunk);
         }
@@ -343,8 +372,8 @@ mod tests {
     #[test]
     fn emits_only_the_expected_tag() {
         let (text, notes) = collect(&[
-            "Here is the revision:\n<revised>\nThe quick brown fox.\n</revised>\n",
-            "<notes>\nFixed agreement.\n</notes>",
+            "Here is the revision:\n<mdraft-revised>\nThe quick brown fox.\n</mdraft-revised>\n",
+            "<mdraft-notes>\nFixed agreement.\n</mdraft-notes>",
         ]);
         assert_eq!(text, "The quick brown fox.");
         assert_eq!(notes, "Fixed agreement.");
@@ -352,20 +381,20 @@ mod tests {
 
     #[test]
     fn handles_a_tag_split_across_chunks() {
-        let (text, _) = collect(&["<rev", "ised>The ", "answer</re", "vised>"]);
+        let (text, _) = collect(&["<mdraft-rev", "ised>The ", "answer</mdraft-re", "vised>"]);
         assert_eq!(text, "The answer");
     }
 
     #[test]
     fn tags_are_case_insensitive() {
-        let (text, _) = collect(&["<REVISED>Hello</Revised>"]);
+        let (text, _) = collect(&["<MDRAFT-REVISED>Hello</MDRAFT-RevIsed>"]);
         assert_eq!(text, "Hello");
     }
 
     #[test]
     fn a_missing_opening_tag_still_stops_at_the_closing_one() {
         let (text, notes) = collect(&[
-            "The revised passage.</revised><notes>Only the notes.</notes>",
+            "The revised passage.</mdraft-revised><mdraft-notes>Only the notes.</mdraft-notes>",
         ]);
         assert_eq!(text, "The revised passage.");
         assert_eq!(notes, "Only the notes.");
@@ -373,17 +402,17 @@ mod tests {
 
     #[test]
     fn a_missing_closing_tag_stops_at_the_end() {
-        let mut filter = TagFilter::new("summary", None);
+        let mut filter = TagFilter::new("mdraft-summary", None);
         // The tail guard holds back a possible partial closing tag, so the last
         // few characters arrive on finish rather than in a delta.
-        filter.feed("<summary>The point");
+        filter.feed("<mdraft-summary>The point");
         let (text, _) = filter.finish();
         assert_eq!(text, "The point");
     }
 
     #[test]
     fn a_missing_opening_tag_streams_the_whole_answer() {
-        let mut filter = TagFilter::new("continuation", None);
+        let mut filter = TagFilter::new("mdraft-continuation", None);
         let long = "word ".repeat(200);
         let mut streamed = filter.feed(&long);
         let (text, _) = filter.finish();
@@ -395,28 +424,29 @@ mod tests {
 
     #[test]
     fn an_outer_code_fence_is_removed() {
-        let (text, _) = collect(&["<revised>```markdown\nHello\n```\n</revised>"]);
+        let (text, _) = collect(&["<mdraft-revised>```markdown\nHello\n```\n</mdraft-revised>"]);
         assert_eq!(text, "Hello");
     }
 
     #[test]
     fn a_code_block_inside_the_answer_is_kept() {
-        let (text, _) = collect(&["<revised>See this:\n```js\nx()\n```\nDone.</revised>"]);
+        let (text, _) = collect(&["<mdraft-revised>See this:\n```js\nx()\n```\nDone.</mdraft-revised>"]);
         assert!(text.contains("```js"));
         assert!(text.ends_with("Done."));
     }
 
     #[test]
     fn an_empty_answer_is_empty() {
-        let (text, notes) = collect(&["<revised></revised>"]);
+        let (text, notes) = collect(&["<mdraft-revised></mdraft-revised>"]);
         assert!(text.is_empty());
         assert!(notes.is_empty());
     }
 
     #[test]
     fn notes_are_not_streamed() {
-        let mut filter = TagFilter::new("revised", Some("notes"));
-        let visible = filter.feed("<revised>Answer\n</revised><notes>secret</notes>");
+        let mut filter = TagFilter::new("mdraft-revised", Some("mdraft-notes"));
+        let visible =
+            filter.feed("<mdraft-revised>Answer\n</mdraft-revised><mdraft-notes>secret</mdraft-notes>");
         assert_eq!(visible, "Answer\n");
         assert!(!visible.contains("secret"));
     }
@@ -446,10 +476,57 @@ mod tests {
 
     #[test]
     fn partial_closing_tag_is_not_emitted() {
-        let mut filter = TagFilter::new("summary", None);
-        let visible = filter.feed("<summary>Point one</summ");
+        let mut filter = TagFilter::new("mdraft-summary", None);
+        let visible = filter.feed("<mdraft-summary>Point one</mdraft-summ");
         assert!(!visible.contains("</summ"));
         let (text, _) = filter.finish();
         assert_eq!(text, "Point one");
+    }
+
+    #[test]
+    fn a_table_inside_the_wrapper_is_kept() {
+        // A plain <table> wrapper closed at the first inner </table> and lost
+        // the rest of an HTML answer. The mdraft- prefix makes the wrapper
+        // unambiguous.
+        let mut filter = TagFilter::new("mdraft-table", None);
+        filter.feed("<mdraft-table>\n<table><tr><td>x</td></tr></table>\n</mdraft-table>");
+        let (text, _) = filter.finish();
+        assert_eq!(text, "<table><tr><td>x</td></tr></table>");
+    }
+
+    #[test]
+    fn a_tilde_fence_is_removed() {
+        let (text, _) = collect(&["<mdraft-revised>~~~markdown\nHello\n~~~\n</mdraft-revised>"]);
+        assert_eq!(text, "Hello");
+    }
+
+    #[test]
+    fn a_partial_wrapper_is_not_content() {
+        let mut filter = TagFilter::new("mdraft-expanded", None);
+        filter.feed("<MDRAFT-expa");
+        let (text, _) = filter.finish();
+        assert!(text.is_empty(), "{text:?}");
+    }
+
+    #[test]
+    fn used_tag_reports_the_protocol() {
+        let mut tagged = TagFilter::new("mdraft-summary", None);
+        tagged.feed("<mdraft-summary>Answer</mdraft-summary>");
+        let _ = tagged.finish();
+        assert!(tagged.used_tag());
+
+        let mut raw = TagFilter::new("mdraft-summary", None);
+        raw.feed("Here is a summary without the wrapper.");
+        let _ = raw.finish();
+        assert!(!raw.used_tag());
+    }
+
+    #[test]
+    fn a_closing_tag_alone_is_not_tagged() {
+        let mut filter = TagFilter::new("mdraft-summary", None);
+        filter.feed("Sure, here is a summary:</mdraft-summary>");
+        let (text, _) = filter.finish();
+        assert_eq!(text, "Sure, here is a summary:");
+        assert!(!filter.used_tag());
     }
 }

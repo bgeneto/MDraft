@@ -3,9 +3,10 @@
 // `tauri icon` keeps the artwork in truecolour, which made this repository's
 // icon set weigh 2.4 MB (a 1.2 MB icon.icns and a 661 KB icon.png) for flat
 // artwork with three colours. This generator resamples with Lanczos, quantises
-// each size to the palette it can actually show, and writes palette PNGs (or
-// RGBA where a container expects 32-bit frames), then wraps them in ICO and
-// ICNS. It also writes the 256x256.png and 512x512.png files listed in
+// each size to the palette it can actually show, and writes RGBA PNGs for the
+// bundle (Tauri's Linux icon loader rejects palette PNGs) plus palette PNGs
+// inside the ICNS container where a smaller frame is safe, then wraps them in
+// ICO and ICNS. It also writes the 256x256.png and 512x512.png files listed in
 // tauri.conf.json, which `tauri icon` no longer emits.
 //
 //   node scripts/build-icons.mjs [--source docs/icon/mdraft-icon.png]
@@ -528,17 +529,19 @@ function write(name, data) {
 
 // Bundle PNGs. 256x256.png and 512x512.png are listed in tauri.conf.json even
 // though `tauri icon` stopped emitting them.
+// Tauri's Linux `generate_context!` reads these as RGBA and refuses an
+// indexed PNG (`icon ... is not RGBA`), so every bundle PNG is colour type 6.
 for (const size of [32, 64, 128, 256, 512]) {
-  write(`${size}x${size}.png`, palettePng(sized(size)));
+  write(`${size}x${size}.png`, rgbaPng(sized(size)));
 }
-write("128x128@2x.png", palettePng(sized(256)));
-write("icon.png", palettePng(sized(1024)));
+write("128x128@2x.png", rgbaPng(sized(256)));
+write("icon.png", rgbaPng(sized(1024)));
 
 // Windows Store logos.
 for (const size of [30, 44, 71, 89, 107, 142, 150, 284, 310]) {
-  write(`Square${size}x${size}Logo.png`, palettePng(sized(size)));
+  write(`Square${size}x${size}Logo.png`, rgbaPng(sized(size)));
 }
-write("StoreLogo.png", palettePng(sized(50)));
+write("StoreLogo.png", rgbaPng(sized(50)));
 
 // Windows .ico: 32-bit frames, so the shell blends the edges correctly.
 const icoFrames = [16, 24, 32, 48, 64, 128, 256].map((size) => ({

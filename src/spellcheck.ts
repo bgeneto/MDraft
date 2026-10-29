@@ -22,6 +22,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import * as api from "./api";
+import { voteProse } from "./language.ts";
 
 export interface SpellOptions {
   enabled: boolean;
@@ -46,83 +47,6 @@ const ALLOWED = new Set([
   "asciimath",
   "latexmath",
 ]);
-
-const EN_WORDS = new Set([
-  "the",
-  "and",
-  "of",
-  "to",
-  "in",
-  "is",
-  "that",
-  "for",
-  "with",
-  "this",
-  "you",
-  "are",
-  "was",
-  "be",
-  "have",
-  "from",
-  "it",
-  "on",
-  "as",
-  "at",
-  "by",
-  "or",
-  "an",
-  "not",
-  "but",
-  "we",
-  "they",
-  "his",
-  "her",
-  "their",
-  "which",
-  "would",
-  "there",
-]);
-
-const PT_WORDS = new Set([
-  "não",
-  "que",
-  "uma",
-  "para",
-  "com",
-  "dos",
-  "das",
-  "por",
-  "como",
-  "mais",
-  "mas",
-  "foi",
-  "são",
-  "também",
-  "já",
-  "seu",
-  "sua",
-  "isso",
-  "este",
-  "esta",
-  "ela",
-  "ele",
-  "os",
-  "um",
-  "na",
-  "em",
-  "se",
-  "ao",
-  "ou",
-  "quando",
-  "muito",
-  "porque",
-  "está",
-  "são",
-  "pelo",
-  "pela",
-]);
-
-const PT_MARK = /[ãõçáàâéêíóôú]/i;
 
 /** Nodes whose text is not prose. Link labels and image alt text stay. */
 const SKIP_NODES = new Set([
@@ -283,22 +207,6 @@ function acceptedForm(word: string): string | null {
   return normalized;
 }
 
-function vote(words: readonly string[]): "en" | "pt-BR" | null {
-  if (words.length < 40) return null;
-  let en = 0;
-  let pt = 0;
-  for (const word of words) {
-    const lower = word.toLowerCase();
-    if (EN_WORDS.has(lower)) en += 1;
-    if (PT_WORDS.has(lower)) pt += 1;
-    if (PT_MARK.test(lower)) pt += 2;
-  }
-  if (en + pt < 4) return null;
-  if (pt >= en * 1.5 && pt >= 3) return "pt-BR";
-  if (en >= pt * 1.5 && en >= 3) return "en";
-  return null;
-}
-
 function confirm(sample: "en" | "pt-BR"): "en" | "pt-BR" | null {
   if (sample === committed) {
     streak = 0;
@@ -326,8 +234,8 @@ function detectLanguage(words: readonly string[]): "en" | "pt-BR" | null {
   if (words.length < 40) return null;
   if (words.length >= 80) {
     const mid = Math.floor(words.length / 2);
-    const left = vote(words.slice(0, mid));
-    const right = vote(words.slice(mid));
+    const left = voteProse(words.slice(0, mid));
+    const right = voteProse(words.slice(mid));
     if (left && left === right) {
       committed = left;
       streak = 0;
@@ -339,7 +247,7 @@ function detectLanguage(words: readonly string[]): "en" | "pt-BR" | null {
     if (!one) return null;
     return confirm(one);
   }
-  const sample = vote(words);
+  const sample = voteProse(words);
   if (!sample) return null;
   return confirm(sample);
 }

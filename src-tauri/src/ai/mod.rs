@@ -261,7 +261,7 @@ pub async fn ai_complete(
         Some(tag) => stream::TagFilter::new(
             tag,
             if prepared.action == AiAction::Improve {
-                Some("notes")
+                Some(prompt::NOTES_TAG)
             } else {
                 None
             },
@@ -289,7 +289,17 @@ pub async fn ai_complete(
 
     match result {
         Ok(outcome) => {
+            let tagged = filter.used_tag();
             let (text, notes) = filter.finish();
+            // `done` is authoritative: the panel replaces whatever it streamed
+            // with this text, and this text is what Apply writes. It is the one
+            // place that can remove commentary a model added despite the prompt.
+            let source = if prepared.action == AiAction::Continue {
+                format!("{}{}", request.preceding, request.selection)
+            } else {
+                request.selection.clone()
+            };
+            let text = prompt::clean_answer(prepared.action, &text, &source, tagged);
             if text.trim().is_empty() && !outcome.stopped {
                 let _ = on_event.send(AiEvent::Error {
                     message: "The model returned an empty answer. Try again.".to_string(),

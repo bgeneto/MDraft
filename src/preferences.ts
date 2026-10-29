@@ -26,6 +26,7 @@ import {
 import { PALETTE_OPTIONS } from "./syntax-themes";
 import { dictionaryOptions, spellcheckAvailabilityNote } from "./spellcheck";
 import { MAX_RATE, MIN_RATE, voiceAvailabilityNote, type VoiceOption } from "./read-aloud";
+import { attachModelCombo, closeModelCombo } from "./model-combo";
 
 export interface PreferencesHost {
   settings(): api.Settings;
@@ -115,8 +116,10 @@ type Row =
       label: string;
       help?: string;
       placeholder?: string;
-      /** Optional suggestions shown through a `<datalist>`. */
-      suggestions?: string[];
+      /** Fetched choices, read when the picker opens rather than at render time. */
+      suggestions?: () => readonly string[];
+      /** A short explanation printed under the field, e.g. why it was cleared. */
+      fieldNote?: string;
       /** Redraw the panel after committing; false keeps a focus-adjacent button clickable. */
       rerender?: boolean;
       get: () => string;
@@ -157,6 +160,10 @@ interface AiUiState {
   /** `provider|baseUrl` the status belongs to. */
   endpoint: string;
   models: string[];
+  /** `provider|baseUrl` that produced `models`, so another endpoint cannot reuse them. */
+  modelsEndpoint: string;
+  /** The saved id a successful fetch proved absent, for the field note. */
+  clearedModel: string | null;
   error: string | null;
   message: string | null;
   loading: boolean;
@@ -170,7 +177,7 @@ function rowSearchText(row: Row): string {
   if (row.kind === "select" || row.kind === "choices") {
     for (const [, label] of row.options) parts.push(label);
   }
-  if (row.kind === "text" && row.suggestions) parts.push(...row.suggestions);
+  if (row.kind === "text" && row.suggestions) parts.push(...row.suggestions());
   return parts.join(" ").toLowerCase();
 }
 
@@ -469,7 +476,7 @@ function typographyRows(host: PreferencesHost): Row[] {
     {
       kind: "note",
       label: "Bundled faces",
-      text: "The bundled families are under the SIL Open Font License, so they look the same on every machine and travel inside exported HTML and PDF. Any other family comes from your operating system: it renders here, but a reader without it sees a fallback.",
+      text: "The bundled families are under the SIL Open Font License, so they look the same on every machine and travel inside exported HTML and PDF.",
     },
     { kind: "heading", label: "OpenType" },
     {
@@ -606,7 +613,7 @@ function exportRows(host: PreferencesHost): Row[] {
     {
       kind: "note",
       label: "Typst",
-      text: "Typst is what typesets PDFs: a single executable with no dependencies, where the LaTeX route it replaced wanted a TeX distribution of several gigabytes. The same program draws the preview of .typ documents.",
+      text: "Typst is a typesetting program: text and markup go in, a laid-out document comes out. In MDraft it draws both previews of .typ documents and compiles them to PDF; for the other languages, pandoc uses it as the PDF engine.",
     },
     {
       kind: "button",
@@ -792,7 +799,10 @@ function aiStatusText(ai: AiUiState): string {
     lines.push("Key status: not checked yet.");
   }
   if (ai.message) lines.push(ai.message);
-  if (ai.models.length > 0) {
+  // The success message already names the count. Repeating it as "N models
+  // available from the last check" made the same answer read as two facts.
+  const counted = ai.message?.includes(`${ai.models.length} models found`) ?? false;
+  if (ai.models.length > 0 && !counted) {
     lines.push(`${ai.models.length} models available from the last check.`);
   }
   return lines.join(" ");
@@ -847,21 +857,48 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
     model: string,
     afterSave = false,
   ): Promise<void> => {
+    const requested = `${provider}|${baseUrl.trim()}`;
     ai.loading = true;
     ai.error = null;
     ai.message = afterSave ? "Key saved. Fetching the model list…" : "Fetching the model list…";
+    // A list belongs to the endpoint that returned it. A Base URL typed and
+    // fetched without blurring never ran the row's setter, so drop the old
+    // suggestions here as well as on the row.
+    if (ai.modelsEndpoint !== requested) {
+      ai.models = [];
+      ai.modelsEndpoint = requested;
+    }
     refresh();
     try {
       const reply = await api.aiFetchModels(provider, baseUrl, model);
+      // A reply for an endpoint the reader has already left must not replace
+      // the current list or clear the current model.
+      if (`${s().aiProvider}|${s().aiBaseUrl.trim()}` !== requested) return;
       ai.models = reply.models;
+      ai.modelsEndpoint = requested;
+      // A later list that now offers the id the previous check cleared makes
+      // that note stale; the field is still empty, so drop the explanation.
+      if (ai.clearedModel && reply.models.includes(ai.clearedModel)) {
+        ai.clearedModel = null;
+      }
       const prefix = afterSave ? "Key saved. " : "";
-      ai.message =
-        reply.models.length > 0
-          ? `${prefix}${reply.models.length} models found.`
-          : `${prefix}The endpoint returned no models; type the model id by hand.`;
+      if (reply.models.length === 0) {
+        ai.message = `${prefix}The endpoint returned no models; type the model id by hand.`;
+      } else {
+        ai.message = `${prefix}${reply.models.length} models found.`;
+        // The field is a combobox, so the list is reachable even with a stale
+        // value; clearing is reconciliation, not a workaround for the popup.
+        // Only a successful, non-empty answer proves the saved id absent.
+        const saved = s().aiModel.trim();
+        if (saved && !reply.models.includes(saved)) {
+          ai.clearedModel = saved;
+          host.update({ aiModel: "" });
+        }
+      }
     } catch (error) {
       // A failed list request must not read as a failed save: the key is
-      // already stored and remains usable.
+      // already stored and remains usable. It must not erase a hand-typed id
+      // either; an endpoint without a list is a supported configuration.
       ai.error = afterSave
         ? `Key saved, but the model list could not be read: ${String(error)}`
         : String(error);
@@ -907,11 +944,18 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
     await loadModels(provider, baseUrl, model);
   };
 
+  const offered =
+    ai.models.length > 1 ? `one of the ${ai.models.length} fetched models` : "a fetched model";
+  const clearedNote =
+    ai.clearedModel && s().aiModel.trim() === ""
+      ? `“${ai.clearedModel}” is not offered by this endpoint, so the field was cleared. Choose ${offered}, or type an id.`
+      : undefined;
+
   return [
     {
       kind: "note",
       label: "Privacy",
-      text: "The assistant contacts only the endpoint you configure, and only when you press Generate, save a key or fetch the model list. Nothing is sent to MDraft. The selection and your instruction are the only document text that leaves this machine. The API key is stored in the operating system's credential store, never in settings.json. The last ten successful answers stay in memory for this session only; they are never written to disk.",
+      text: "The assistant contacts only the endpoint you configure, and only when you press Generate or fetch the model list. The selection and your instruction are the only document text that leaves this machine. The API key is stored safely in the operating system's credential store.",
     },
     {
       kind: "checkbox",
@@ -949,6 +993,8 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
         ai.endpoint = "";
         ai.status = null;
         ai.models = [];
+        ai.modelsEndpoint = "";
+        ai.clearedModel = null;
         host.update({ aiProvider: provider, aiBaseUrl: baseUrl });
       },
     },
@@ -957,11 +1003,14 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
       label: "Base URL",
       help: "Include the version segment; the assistant appends /chat/completions or /v1/messages. A public gateway usually requires https:// — an http:// address outside your machine is unencrypted and may answer an empty 200.",
       placeholder: "https://api.openai.com/v1",
+      rerender: false,
       get: () => s().aiBaseUrl,
       set: (value) => {
         ai.endpoint = "";
         ai.status = null;
         ai.models = [];
+        ai.modelsEndpoint = "";
+        ai.clearedModel = null;
         ai.error = null;
         ai.message = null;
         host.update({ aiBaseUrl: value.trim() });
@@ -985,11 +1034,17 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
     {
       kind: "text",
       label: "Model",
-      help: "The model id sent verbatim. Fetch models fills the suggestions; a server without a model list is fine, type the id by hand.",
+      help: "The model id sent verbatim. The arrow lists every model the last Fetch returned and filters as you type; a server without a model list is fine, type the id by hand.",
       placeholder: "gpt-4o-mini, claude-sonnet-4-5, Qwen3.8-27B…",
-      suggestions: ai.models,
+      suggestions: () => ai.models,
+      fieldNote: clearedNote,
+      rerender: false,
       get: () => s().aiModel,
-      set: (value) => host.update({ aiModel: value.trim() }),
+      set: (value) => {
+        const model = value.trim();
+        if (model) ai.clearedModel = null;
+        host.update({ aiModel: model });
+      },
     },
     {
       kind: "button",
@@ -1033,7 +1088,7 @@ function readAloudRows(host: PreferencesHost): Row[] {
     {
       kind: "select",
       label: "Voice",
-      help: "Used by Read Aloud in the editor's right-click menu. Automatic follows the spelling language and then the system default. MDraft offers only the voices the operating system already has.",
+      help: "Used by Read Aloud in the editor's right-click menu. Automatic follows a language the document declares (`lang`), then the text itself (English and Portuguese are detected), then the Dictionary language, then the system default. MDraft offers only the voices the operating system already has.",
       options,
       get: () => saved(),
       set: (value) => host.update({ readAloudVoice: value }),
@@ -1416,7 +1471,7 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
         {
           kind: "note",
           label: "Formatting",
-          text: "Format Document uses Prettier (MIT) for Markdown and HTML and Typstyle (Apache-2.0) for Typst. Both are bundled with MDraft and are loaded only the first time this command is used.",
+          text: "Format Document uses Prettier (MIT) for Markdown and HTML and Typstyle (Apache-2.0) for Typst.",
         },
         {
           kind: "button",
@@ -1498,6 +1553,8 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
     status: null,
     endpoint: "",
     models: [],
+    modelsEndpoint: "",
+    clearedModel: null,
     error: null,
     message: null,
     loading: false,
@@ -1830,27 +1887,46 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       input.type = "text";
       input.value = row.get();
       if (row.placeholder) input.placeholder = row.placeholder;
-      // A model list arrives from Fetch; the datalist only suggests it.
-      const listId = row.suggestions?.length
-        ? `prefs-suggestions-${row.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`
-        : null;
-      if (listId) input.setAttribute("list", listId);
       input.addEventListener("change", () => {
         row.set(input.value);
         if (row.rerender !== false) render();
       });
-      if (!listId || !row.suggestions) return input;
-      const wrap = document.createElement("div");
-      wrap.className = "prefs-combo";
-      const list = document.createElement("datalist");
-      list.id = listId;
-      for (const suggestion of row.suggestions) {
-        const option = document.createElement("option");
-        option.value = suggestion;
-        list.appendChild(option);
+      if (!row.suggestions) return input;
+
+      // A model list arrives from Fetch and can be longer than a datalist can
+      // usefully show; the picker opens it whole even when the field holds an
+      // id from another endpoint.
+      const field = document.createElement("div");
+      field.className = "prefs-field";
+      const combo = document.createElement("div");
+      combo.className = "prefs-combo";
+      combo.append(input);
+
+      const note = row.fieldNote ? document.createElement("p") : null;
+      if (note && row.fieldNote) {
+        note.className = "prefs-field-note";
+        note.id = `prefs-field-note-${row.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+        note.textContent = row.fieldNote;
+        input.setAttribute("aria-describedby", note.id);
+        note.hidden = input.value.trim() !== "";
+        input.addEventListener("input", () => {
+          note.hidden = input.value.trim() !== "";
+        });
       }
-      wrap.append(input, list);
-      return wrap;
+
+      const toggle = attachModelCombo({
+        input,
+        label: row.label,
+        models: row.suggestions,
+        choose: (model) => {
+          if (note) note.hidden = true;
+          row.set(model);
+        },
+      });
+      combo.append(toggle);
+      field.append(combo);
+      if (note) field.append(note);
+      return field;
     }
 
     if (row.kind === "button") {
@@ -1937,6 +2013,9 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
   }
 
   function render(): void {
+    // The rows are about to be replaced; a fixed popup would otherwise keep
+    // pointing at an input that no longer exists.
+    closeModelCombo();
     const sections = visibleSections();
     if (!sections.some((s) => s.id === activeId) && sections.length > 0) {
       activeId = sections[0].id;
@@ -1963,6 +2042,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
   }
 
   function close(): void {
+    closeModelCombo();
     overlay.hidden = true;
   }
 

@@ -16,12 +16,21 @@
 import {
   MAX_RATE,
   MIN_RATE,
+  browserBackend,
   chooseVoice,
   clampRate,
   createReadingQueue,
   splitSentences,
   voiceAvailabilityNote,
 } from "../src/read-aloud.ts";
+import {
+  declaredLanguage,
+  detectProseLanguage,
+  normalizeLanguageTag,
+  proseWords,
+  resolveDocumentLanguage,
+  voteInstalledLanguage,
+} from "../src/language.ts";
 
 const checks = [];
 function check(ok, label, detail = "") {
@@ -59,7 +68,7 @@ function manualBackend() {
   };
 }
 
-const OPTIONS = { voiceName: "Microsoft Zira - English (United States)", rate: 1 };
+const OPTIONS = { voiceName: "Microsoft Zira - English (United States)", lang: "en-US", rate: 1 };
 
 // ---------------------------------------------------------------------------
 console.log("=== splitSentences keeps sentences whole ===");
@@ -150,6 +159,69 @@ console.log("=== chooseVoice follows the saved name, then the language ===");
   check(
     chooseVoice(voices, "Maria", "en-US")?.name === "Maria",
     "an explicit voice beats the document's language",
+  );
+}
+
+// The exact list WebView2 exposes on this host on 2026-10-28: three en-US
+// voices with David as the platform default, and Daniel and Maria both pt-BR.
+// This is the regression that mattered: Automatic used to supply "" and read
+// Portuguese with David.
+{
+  const host = [
+    {
+      name: "Microsoft David - English (United States)",
+      lang: "en-US",
+      local: true,
+      isDefault: true,
+    },
+    {
+      name: "Microsoft Mark - English (United States)",
+      lang: "en-US",
+      local: true,
+      isDefault: false,
+    },
+    {
+      name: "Microsoft Zira - English (United States)",
+      lang: "en-US",
+      local: true,
+      isDefault: false,
+    },
+    {
+      name: "Microsoft Daniel - Portuguese (Brazil)",
+      lang: "pt-BR",
+      local: true,
+      isDefault: false,
+    },
+    {
+      name: "Microsoft Maria - Portuguese (Brazil)",
+      lang: "pt-BR",
+      local: true,
+      isDefault: false,
+    },
+  ];
+  check(
+    chooseVoice(host, "", "")?.name === host[0].name,
+    "an empty tag keeps the platform default",
+  );
+  check(chooseVoice(host, "", "auto")?.name === host[0].name, "auto keeps the platform default");
+  const brazil = chooseVoice(host, "", "pt-BR");
+  check(brazil?.lang === "pt-BR", "pt-BR chooses a Portuguese voice", brazil?.name);
+  check(chooseVoice(host, "", "pt")?.lang === "pt-BR", "a base tag chooses a Portuguese voice");
+  check(
+    chooseVoice(host, "", "pt-PT")?.lang === "pt-BR",
+    "a region with no voice falls back to the language",
+  );
+  check(chooseVoice(host, "", "en")?.name === host[0].name, "en chooses the English default");
+  check(chooseVoice(host, "", "pt_br")?.lang === "pt-BR", "an underscore tag is normalised");
+
+  const withRemote = [
+    { name: "Remote Portuguese", lang: "pt-BR", local: false, isDefault: false },
+    ...host,
+  ];
+  check(chooseVoice(withRemote, "", "pt-BR")?.local === true, "a local voice beats a remote one");
+  check(
+    chooseVoice(withRemote, "Remote Portuguese", "en-US")?.name === "Remote Portuguese",
+    "a saved remote voice is still honoured",
   );
 }
 
@@ -292,6 +364,202 @@ console.log("=== the queue advances from its own index ===");
   queue.start([], OPTIONS);
   check(queue.state().active === false, "an empty reading never becomes active");
   check(backend.calls.length === 0, "an empty reading speaks nothing");
+}
+
+// ---------------------------------------------------------------------------
+console.log("=== the document's language is detected, declared or voted ===");
+const portuguese =
+  "O Presidente da República sancionou a lei que altera a remuneração dos servidores " +
+  "públicos federais. A lei também estabelece que os empregados terão direito à revisão " +
+  "anual, conforme o texto aprovado pelo Congresso Nacional. O governo publicou a nova " +
+  "regra no Diário Oficial e os órgãos terão prazo para se adaptar. A medida entra em " +
+  "vigor no próximo mês, mas os contratos antigos continuam válidos até o fim do ano.";
+const english =
+  "The President signed the law that changes the pay of federal public servants. The law " +
+  "also says that employees will have the right to an annual review, according to the text " +
+  "approved by Congress. The government published the new rule in the official gazette and " +
+  "the agencies will have time to adapt. The measure takes effect next month, but the old " +
+  "contracts remain valid until the end of the year.";
+{
+  check(detectProseLanguage(portuguese) === "pt-BR", "Portuguese prose is detected");
+  check(detectProseLanguage(english) === "en", "English prose is detected");
+  check(detectProseLanguage("Hello world.") === null, "a short sample is inconclusive");
+  check(detectProseLanguage("the ".repeat(39)) === null, "a thin sample is inconclusive");
+  check(detectProseLanguage("the que ".repeat(20)) === null, "a mixed sample is inconclusive");
+}
+
+{
+  check(
+    declaredLanguage("---\nlang: pt-BR\n---\n# Title", "markdown") === "pt-BR",
+    "Markdown front matter declares a language",
+  );
+  check(
+    declaredLanguage("---\r\nlanguage: en-gb\r\n---\r\n# Title", "markdown") === "en-GB",
+    "CRLF and case are normalised",
+  );
+  check(
+    declaredLanguage("# Title\n\nlang: pt-BR\n", "markdown") === null,
+    "a line in the body is not a declaration",
+  );
+  check(
+    declaredLanguage("---\nlang: pt-BR\n# no closing", "markdown") === null,
+    "an unclosed front matter is ignored",
+  );
+  check(
+    declaredLanguage("= Title\n:lang: pt-PT\n\nText", "asciidoc") === "pt-PT",
+    "AsciiDoc :lang: is read",
+  );
+  check(
+    declaredLanguage('#set text(lang: "pt")\nHello', "typst") === "pt",
+    "Typst text(lang:) is read",
+  );
+  check(declaredLanguage('<html lang="es-ES">', "html") === "es-ES", "HTML lang is read");
+  check(normalizeLanguageTag("pt_br") === "pt-BR", "an underscore tag is canonicalised");
+  check(normalizeLanguageTag("Portuguese") === null, "a language name is not a tag");
+}
+
+{
+  const words = proseWords(
+    "O Presidente da República sancionou a lei que altera a remuneração dos servidores " +
+      "públicos federais. A lei também estabelece que os empregados terão direito à revisão " +
+      "anual, conforme o texto aprovado pelo Congresso Nacional.",
+  );
+  const reject = (rates) => async (language, list) => {
+    const count = Math.min(Math.round((rates[language] ?? 1) * list.length), list.length);
+    return Array.from({ length: count }, (_, index) => index);
+  };
+
+  check(
+    (await voteInstalledLanguage(words, ["en", "pt-BR"], reject({ en: 0.9, "pt-BR": 0.05 }))) ===
+      "pt-BR",
+    "the dictionary that recognises the text wins",
+  );
+  check(
+    (await voteInstalledLanguage(words, ["en", "pt-BR"], reject({ en: 0.2, "pt-BR": 0.2 }))) ===
+      null,
+    "a tie is inconclusive",
+  );
+  check(
+    (await voteInstalledLanguage(words, ["en", "pt-BR"], reject({ en: 0.9, "pt-BR": 0.8 }))) ===
+      null,
+    "a mostly rejected sample is inconclusive",
+  );
+  check(
+    (await voteInstalledLanguage(words.slice(0, 5), ["en"], reject({}))) === null,
+    "a short sample is not voted on",
+  );
+  check(
+    (await voteInstalledLanguage(words, [], reject({}))) === null,
+    "no dictionaries is no vote",
+  );
+
+  let seen = [];
+  await voteInstalledLanguage(words, ["en"], async (_language, list) => {
+    seen = [...list];
+    return [];
+  });
+  check(
+    seen.length > 0 && seen.every((word) => word === word.toLowerCase()),
+    "the vote sends lowercase words",
+  );
+
+  const failed = await voteInstalledLanguage(words, ["en", "pt-BR"], async (language) => {
+    if (language === "en") throw new Error("no dictionary");
+    return [];
+  });
+  check(failed === "pt-BR", "a failing dictionary is ignored", failed);
+
+  const started = Date.now();
+  const slow = await voteInstalledLanguage(words, ["en"], () => new Promise(() => {}), 25);
+  check(
+    slow === null && Date.now() - started < 1000,
+    "a slow dictionary does not hold the reading",
+  );
+}
+
+{
+  const dictionary = async (language, list) =>
+    language === "pt-BR"
+      ? list.slice(0, 1).map((_, index) => index)
+      : list.map((_, index) => index);
+  const base = {
+    source: "",
+    markup: "markdown",
+    spokenText: portuguese,
+    pinned: "auto",
+    candidates: ["en", "pt-BR"],
+    check: dictionary,
+  };
+
+  check(
+    (await resolveDocumentLanguage({
+      ...base,
+      source: "---\nlang: pt-BR\n---\n# Title",
+      spokenText: english,
+    })) === "pt-BR",
+    "a declaration beats the text",
+  );
+  check(
+    (await resolveDocumentLanguage({ ...base, pinned: "en" })) === "pt-BR",
+    "detected Portuguese beats a pinned English dictionary",
+  );
+  check(
+    (await resolveDocumentLanguage({ ...base, spokenText: "Hello.", pinned: "en-GB" })) === "en-GB",
+    "the pinned dictionary is the fallback",
+  );
+  check(
+    (await resolveDocumentLanguage({
+      ...base,
+      spokenText:
+        "O relatório revisa a qualidade do código e propõe uma correção simples. A equipe " +
+        "aprovou a mudança; o documento será publicado amanhã, com revisores atentos, " +
+        "clareza e precisão.",
+      pinned: "auto",
+    })) === "pt-BR",
+    "the dictionary vote is the last automatic answer",
+  );
+  check(
+    (await resolveDocumentLanguage({
+      ...base,
+      spokenText: "Hello.",
+      pinned: "",
+      candidates: [],
+    })) === "",
+    "nothing known means the platform default",
+  );
+}
+
+// ---------------------------------------------------------------------------
+console.log("=== the utterance carries the chosen language ===");
+{
+  const spoken = [];
+  class FakeUtterance {
+    constructor(text) {
+      this.text = text;
+    }
+  }
+  const synthesis = {
+    getVoices: () => [{ name: "Maria", lang: "pt-BR", localService: true, default: false }],
+    speak: (utterance) => spoken.push(utterance),
+    cancel: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
+  globalThis.window = { speechSynthesis: synthesis };
+  globalThis.SpeechSynthesisUtterance = FakeUtterance;
+  const backend = browserBackend();
+  check(backend !== null, "the browser backend exists when the webview has speech");
+  backend.speak(
+    "Olá",
+    { voiceName: "Maria", lang: "pt-BR", rate: 1 },
+    { onStart: () => {}, onEnd: () => {}, onError: () => {} },
+  );
+  check(spoken.length === 1, "the backend speaks once");
+  check(spoken[0]?.lang === "pt-BR", "the utterance carries the language", spoken[0]?.lang);
+  check(spoken[0]?.voice?.name === "Maria", "the utterance carries the chosen voice");
+  backend.cancel();
+  delete globalThis.window;
+  delete globalThis.SpeechSynthesisUtterance;
 }
 
 // ---------------------------------------------------------------------------

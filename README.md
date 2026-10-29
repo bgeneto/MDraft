@@ -119,8 +119,11 @@ Markdown document active.*
   Shorten, Simplify, Change tone, Translate, Summarize, Explain, Key points,
   Critique, Convert to table and Convert markup — and the answer streams into a
   non-modal panel before you apply it with **Replace selection**, **Insert
-  below** or **Insert**. The finished answer renders as sanitized Markdown, with
-  headings, lists, tables, code and emphasis, and the raw source stays one click
+  below** or **Insert**. Answers are requested in the document's own markup —
+  the saved extension, or the detected syntax of an unsaved buffer — and a final
+  guard removes greetings, labels and change summaries before the answer reaches
+  the panel. The finished answer renders as sanitized Markdown, with headings,
+  lists, tables, code and emphasis, and the raw source stays one click
   away under **Source**; History uses the same rendering. One undo restores the
   exact original. The key is optional: a local inference server usually needs
   none, and when none is saved requests go out without an auth header. A saved
@@ -128,7 +131,10 @@ Markdown document active.*
   `settings.json`. The assistant is off by default: no request and no keychain
   read happens at start-up, and the store is read only when you open its
   Preferences section or use an action. Saving the key also fetches the
-  endpoint's model list; the Fetch button refreshes it later. The ten most recent successful answers stay
+  endpoint's model list; the Model field's arrow opens a searchable list of it,
+  and Fetch refreshes that list later. A model the endpoint no longer offers is
+  cleared with a note, while an empty or failed list leaves a typed id alone.
+  The ten most recent successful answers stay
   in an in-session **History**, reachable from the palette, where you can read,
   copy or insert them again; nothing in that history is written to disk.
 - **Quiet by design.** No accounts, activation, telemetry or update checks.
