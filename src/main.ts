@@ -717,6 +717,7 @@ function menuStateSnapshot(): api.MenuState {
     canFold,
     spellcheck: settings.spellcheck !== false,
     spellcheckAvailable: installedLanguages().length > 0 && doc?.language !== "html",
+    aiEnabled: settings.aiEnabled,
     syntaxTheme,
     typstView: settings.typstView,
     typstAvailable: typstCache?.found !== false,
@@ -3559,7 +3560,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "tools.exportConfig": () => preferences.openAt("export"),
   "tools.pandoc": () => void pandocSetup(),
   "tools.typst": () => void typstSetup(),
-  "tools.ai": () => assistant?.open(),
+  "tools.ai": () => applySettingsPatch({ aiEnabled: settings.aiEnabled === false }),
 
   "file.preferences": () => preferences.open(),
 
@@ -6000,6 +6001,7 @@ async function boot(): Promise<void> {
     focusEditor: () => editor.focus(),
     toast,
     openSettings: () => preferences.openAt("ai"),
+    setEnabled: (enabled) => applySettingsPatch({ aiEnabled: enabled }),
     documentName: () => doc.name,
   });
 

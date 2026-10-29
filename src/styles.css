@@ -400,7 +400,8 @@ body {
 
 .tab-menu,
 .editor-menu,
-.favorite-menu {
+.favorite-menu,
+.ai-menu {
   position: fixed;
   z-index: 90;
   min-width: 232px;
@@ -428,7 +429,8 @@ body {
 
 [data-theme="dark"] .tab-menu,
 [data-theme="dark"] .editor-menu,
-[data-theme="dark"] .favorite-menu {
+[data-theme="dark"] .favorite-menu,
+[data-theme="dark"] .ai-menu {
   box-shadow:
     0 12px 32px rgba(0, 0, 0, 0.5),
     0 2px 8px rgba(0, 0, 0, 0.35);
@@ -440,20 +442,23 @@ body {
    is what turns the 8px track into a rounded 4px pill. */
 .tab-menu::-webkit-scrollbar,
 .editor-menu::-webkit-scrollbar,
-.favorite-menu::-webkit-scrollbar {
+.favorite-menu::-webkit-scrollbar,
+.ai-menu::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 .tab-menu::-webkit-scrollbar-track,
 .editor-menu::-webkit-scrollbar-track,
-.favorite-menu::-webkit-scrollbar-track {
+.favorite-menu::-webkit-scrollbar-track,
+.ai-menu::-webkit-scrollbar-track {
   background: transparent;
 }
 
 .tab-menu::-webkit-scrollbar-thumb,
 .editor-menu::-webkit-scrollbar-thumb,
-.favorite-menu::-webkit-scrollbar-thumb {
+.favorite-menu::-webkit-scrollbar-thumb,
+.ai-menu::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
   border-radius: 8px;
   background: var(--scrollbar-thumb);
@@ -462,14 +467,16 @@ body {
 
 .tab-menu::-webkit-scrollbar-thumb:hover,
 .editor-menu::-webkit-scrollbar-thumb:hover,
-.favorite-menu::-webkit-scrollbar-thumb:hover {
+.favorite-menu::-webkit-scrollbar-thumb:hover,
+.ai-menu::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
   background-clip: padding-box;
 }
 
 .tab-menu::-webkit-scrollbar-corner,
 .editor-menu::-webkit-scrollbar-corner,
-.favorite-menu::-webkit-scrollbar-corner {
+.favorite-menu::-webkit-scrollbar-corner,
+.ai-menu::-webkit-scrollbar-corner {
   background: transparent;
 }
 
@@ -479,7 +486,8 @@ body {
 
 .tab-menu-item,
 .editor-menu-item,
-.favorite-menu-item {
+.favorite-menu-item,
+.ai-menu-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -501,13 +509,16 @@ body {
 .editor-menu-item:hover:not(:disabled),
 .editor-menu-item:focus-visible,
 .favorite-menu-item:hover,
-.favorite-menu-item:focus-visible {
+.favorite-menu-item:focus-visible,
+.ai-menu-item:hover,
+.ai-menu-item:focus-visible {
   background: var(--accent-soft);
   outline: none;
 }
 
 .tab-menu-item:disabled,
-.editor-menu-item:disabled {
+.editor-menu-item:disabled,
+.ai-menu-item:disabled {
   color: var(--muted);
   opacity: 0.5;
   cursor: default;
@@ -521,7 +532,8 @@ body {
 }
 
 .tab-menu-sep,
-.editor-menu-sep {
+.editor-menu-sep,
+.ai-menu-sep {
   height: 1px;
   margin: 4px 7px;
   background: var(--border);

@@ -1192,7 +1192,7 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
     {
       kind: "checkbox",
       label: "Enable AI Assistant",
-      help: "Shows the floating button in the source pane and makes the Tools item and Ctrl/Cmd+Shift+Space open the action palette. Off by default: no request and no keychain read until you enable it and choose an endpoint and model.",
+      help: "Shows the floating button in the source pane; the Tools › AI Assistant check and this box turn it on or off. Off by default: no request and no keychain read until you enable it and choose an endpoint and model.",
       get: () => s().aiEnabled,
       set: (value) => host.update({ aiEnabled: value }),
     },

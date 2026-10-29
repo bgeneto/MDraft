@@ -125,10 +125,14 @@ for (const [id, expected] of [
   ["edit.find", "CmdOrCtrl+F"],
   ["file.print", "CmdOrCtrl+P"],
   ["view.source", "CmdOrCtrl+/"],
-  ["tools.ai", "CmdOrCtrl+Shift+Space"],
 ]) {
   check(byId.get(id) === expected, `${id} is bound to ${expected}`, byId.get(id) ?? "MISSING");
 }
+check(
+  !byId.has("tools.ai"),
+  "the AI Assistant check has no accelerator",
+  byId.get("tools.ai") ?? "none",
+);
 
 // ---------------------------------------------------------------------------
 console.log("\n=== a shortcut must change state, and a near miss must not ===");
@@ -414,27 +418,25 @@ check(
 );
 
 // ---------------------------------------------------------------------------
-// The assistant's chord opens the palette, or Preferences when it is off.
-console.log("\n=== Ctrl+Shift+Space reaches the AI Assistant ===");
+// The assistant's old chord must stay unclaimed: enable/disable lives in
+// Tools › AI Assistant, which carries no accelerator.
+console.log("\n=== Ctrl+Shift+Space no longer reaches the AI Assistant ===");
 const aiHandled = await press({ code: "Space", key: " ", ctrl: true, shift: true });
-check(aiHandled === "handled", "Ctrl+Shift+Space is claimed by the shortcut handler", aiHandled);
+check(
+  aiHandled === "passed-through",
+  "Ctrl+Shift+Space is not claimed by the shortcut handler",
+  aiHandled,
+);
 await sleep(400);
 const aiOpened = await evaluate(`({
   palette: !document.querySelector('.ai-palette')?.hidden,
-  section: document.querySelector('.prefs-section-title')?.textContent ?? "",
+  prefs: !document.querySelector('.prefs-overlay')?.hidden,
 })`);
 check(
-  aiOpened.palette || aiOpened.section === "AI Assistant",
-  "Ctrl+Shift+Space opens the assistant or its settings",
+  !aiOpened.palette && !aiOpened.prefs,
+  "Ctrl+Shift+Space opens neither the assistant nor Preferences",
   JSON.stringify(aiOpened),
 );
-await evaluate(`(() => {
-  if (document.querySelector('.ai-palette') && !document.querySelector('.ai-palette').hidden) {
-    document.querySelector('.ai-fab').click();
-  }
-  document.querySelector('.prefs-close')?.click();
-})()`);
-await sleep(250);
 
 // ---------------------------------------------------------------------------
 // The webview's own reload keys. Without the guard, F5 reloads the page and
