@@ -345,6 +345,9 @@ pub struct MenuState {
     pub can_fold: bool,
     pub spellcheck: bool,
     pub spellcheck_available: bool,
+    /// Whether the AI Assistant is enabled. The Tools item is a check item, so
+    /// this is settings-backed and survives a menu rebuild.
+    pub ai_enabled: bool,
     pub syntax_theme: String,
     pub typst_view: String,
     pub typst_available: bool,
@@ -390,6 +393,7 @@ impl MenuState {
             can_fold: true,
             spellcheck: settings.spellcheck,
             spellcheck_available: true,
+            ai_enabled: settings.ai_enabled,
             syntax_theme: settings.syntax_theme.clone(),
             typst_view: settings.typst_view.clone(),
             typst_available: true,
@@ -415,6 +419,7 @@ impl MenuState {
         self.theme = fresh.theme;
         self.auto_save = fresh.auto_save;
         self.spellcheck = fresh.spellcheck;
+        self.ai_enabled = fresh.ai_enabled;
         self.syntax_theme = fresh.syntax_theme;
         self.typst_view = fresh.typst_view;
         self
@@ -454,6 +459,7 @@ const CHECK_IDS: &[&str] = &[
     "themes.light",
     "themes.dark",
     "tools.spellcheck",
+    "tools.ai",
 ];
 
 /// A legacy palette id some `settings.json` files still carry.
@@ -493,6 +499,7 @@ fn is_checked(state: &MenuState, id: &str) -> bool {
         "view.syncScroll" => state.sync_scroll,
         "view.fullscreen" => state.fullscreen,
         "tools.spellcheck" => state.spellcheck,
+        "tools.ai" => state.ai_enabled,
         "themes.system" => state.theme == "system",
         "themes.light" => state.theme == "light",
         "themes.dark" => state.theme == "dark",
@@ -1157,11 +1164,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             None,
         )?)
         .separator()
-        .item(&item(
-            "tools.ai",
-            "AI Assistant…",
-            Some("CmdOrCtrl+Shift+Space"),
-        )?);
+        .item(&check("tools.ai", "AI Assistant", None)?);
 
     #[cfg(not(target_os = "macos"))]
     let tools = tools
@@ -1636,6 +1639,7 @@ mod tests {
             sync_scroll: false,
             theme: "dark".into(),
             auto_save: true,
+            ai_enabled: true,
             ..Settings::default()
         };
 
@@ -1654,6 +1658,7 @@ mod tests {
         assert!(is_checked(&state, "themes.dark"));
         assert!(!is_checked(&state, "themes.system"));
         assert!(is_checked(&state, "file.autoSave"));
+        assert!(is_checked(&state, "tools.ai"));
         assert!(!is_checked(&state, "view.fullscreen"));
 
         let visible = MenuState::from_settings(&Settings {
@@ -1667,6 +1672,15 @@ mod tests {
         assert!(is_checked(&visible, "view.favorites"));
         assert!(is_checked(&visible, "view.syntax.auto"));
         assert!(!is_checked(&visible, "view.syntax.paper"));
+    }
+
+    #[test]
+    fn a_menu_rebuild_keeps_the_ai_check() {
+        let rebuilt = MenuState::from_settings(&Settings::default()).with_settings(&Settings {
+            ai_enabled: true,
+            ..Settings::default()
+        });
+        assert!(is_checked(&rebuilt, "tools.ai"));
     }
 
     #[test]

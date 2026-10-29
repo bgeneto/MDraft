@@ -115,9 +115,12 @@ Markdown document active.*
   `chat/completions` server (OpenAI, DeepSeek, Ollama, LM Studio, llama.cpp,
   vLLM, OpenRouter, your own gateway) or at Anthropic's Messages API. A single
   icon-only button sits in the source pane; drag it anywhere, and it starts at
-  the same corner on every launch. The panel and History can be widened or
-  heightened from the grip in their top-left corner; the button's corner and
-  that size last for the session. Its searchable palette offers fourteen
+  the same corner on every launch. Right-click the button for its own menu:
+  **Reset position**, **AI Assistant Settings…** and **Disable AI Assistant**.
+  **Tools › AI Assistant** is the same on/off switch with a check mark and no
+  shortcut. The panel and History can be widened or heightened from the grip in
+  their top-left corner; the button's corner and that size last for the session.
+  Its searchable palette offers fourteen
   task-specific actions — Continue writing, Improve writing, Ask AI, Expand,
   Shorten, Simplify, Change tone, Translate, Summarize, Explain, Key points,
   Critique, Convert to table and Convert markup — and the answer streams into a

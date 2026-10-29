@@ -234,7 +234,7 @@ try {
     ["export.pdf.browser", "PDF (opens browser)…"],
     ["tools.spellcheck", "Check Spelling While Typing"],
     ["tools.spellLanguage", "Spelling Language…"],
-    ["tools.ai", "AI Assistant…"],
+    ["tools.ai", "AI Assistant"],
     ["edit.pastePlain", "Paste without Formatting"],
     ["edit.find", "Find"],
     ["navigate.gotoLine", "Go to Line…"],
@@ -378,11 +378,33 @@ try {
     "Fonts and Reading opens Typography",
   );
   await closePreferences();
+  const aiBefore = (await settings()).aiEnabled === true;
   check(
-    (await openPreferencesAt("tools.ai")) === "AI Assistant",
-    "AI Assistant opens the AI section when the assistant is off",
+    (await itemById("tools.ai"))?.checked === aiBefore,
+    "the AI Assistant check mirrors the setting",
+    `${aiBefore}`,
   );
-  await closePreferences();
+  await emitMenu("tools.ai");
+  await sleep(500);
+  const aiAfter = (await settings()).aiEnabled === true;
+  check(
+    aiAfter === !aiBefore,
+    "Tools › AI Assistant toggles the setting",
+    `${aiBefore} -> ${aiAfter}`,
+  );
+  check(
+    (await itemById("tools.ai"))?.checked === aiAfter,
+    "the AI Assistant check follows the toggle",
+    `${aiAfter}`,
+  );
+  check((await preferencesSection()) === null, "Tools › AI Assistant no longer opens Preferences");
+  await emitMenu("tools.ai");
+  await sleep(500);
+  check(
+    (await settings()).aiEnabled === aiBefore && (await itemById("tools.ai"))?.checked === aiBefore,
+    "a second click restores the assistant and its check",
+    `${aiBefore}`,
+  );
 
   // -------------------------------------------------------------------------
   // Code colours and zoom-only reset

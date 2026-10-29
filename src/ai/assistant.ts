@@ -83,6 +83,8 @@ export interface AssistantHost {
   focusEditor(): void;
   toast(text: string): void;
   openSettings(): void;
+  /** Turn the assistant on or off from its own menu. */
+  setEnabled(enabled: boolean): void;
   /** The name shown in a history row: the tab's document name. */
   documentName(): string;
 }
@@ -90,8 +92,6 @@ export interface AssistantHost {
 export interface AssistantHandle {
   /** Re-read the configuration and show or hide the button. */
   sync(): void;
-  /** Open the palette, or Preferences when the assistant is not configured. */
-  open(): void;
   close(): void;
   /** Stop an in-flight request; the panel stays open on its partial answer. */
   cancel(): void;
@@ -153,7 +153,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
   root.className = "ai-assistant";
   root.hidden = true;
   root.innerHTML = `
-    <button class="ai-fab" type="button" aria-label="AI Assistant" title="AI Assistant (Ctrl+Shift+Space)">
+    <button class="ai-fab" type="button" aria-label="AI Assistant" aria-haspopup="menu" aria-expanded="false" title="AI Assistant">
       <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
         <defs>
           <linearGradient id="ai-fab-blue" x1="10" y1="7" x2="52" y2="57" gradientUnits="userSpaceOnUse">
@@ -338,6 +338,9 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
   let suppressClick = false;
   let answerFrame = 0;
   let dragMoved = false;
+  /** The assistant's own right-click menu, appended to body so no pane clips it. */
+  let buttonMenu: HTMLDivElement | null = null;
+  let buttonMenuCleanup: (() => void) | null = null;
 
   function ready(): boolean {
     if (!config.enabled || !config.model.trim()) return false;
@@ -347,6 +350,179 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     } catch {
       return false;
     }
+  }
+
+  function closeButtonMenu(restoreFocus = false): void {
+    const element = buttonMenu;
+    if (!element) return;
+    buttonMenu = null;
+    buttonMenuCleanup?.();
+    buttonMenuCleanup = null;
+    button.setAttribute("aria-expanded", "false");
+    element.remove();
+    if (restoreFocus && !root.hidden && button.isConnected) {
+      button.focus({ preventScroll: true });
+    }
+  }
+
+  /**
+   * The button's own menu. A right-click here belongs to the assistant, not to
+   * the webview: the native menu offers Back and Refresh, neither of which has
+   * anything to do with the control. Every command already existed elsewhere —
+   * Preferences and the palette — and this is the short route to them at the
+   * exact place the reader aimed.
+   */
+  function openButtonMenu(x: number, y: number): void {
+    closeButtonMenu();
+    closePalette();
+    closeHistory();
+
+    const menu = document.createElement("div");
+    menu.className = "ai-menu";
+    menu.setAttribute("role", "menu");
+    menu.tabIndex = -1;
+
+    const run = (action: () => void): void => {
+      closeButtonMenu();
+      action();
+    };
+
+    const items: { id: string; label: string; run: () => void }[] = [
+      {
+        id: "reset",
+        label: "Reset position",
+        run: () => {
+          resetPosition();
+          host.toast("Assistant layout reset.");
+          if (!root.hidden) button.focus({ preventScroll: true });
+        },
+      },
+      {
+        id: "settings",
+        label: "AI Assistant Settings…",
+        run: () => host.openSettings(),
+      },
+      {
+        id: "toggle",
+        label: config.enabled ? "Disable AI Assistant" : "Enable AI Assistant",
+        run: () => {
+          const enabled = !config.enabled;
+          host.setEnabled(enabled);
+          host.toast(
+            enabled
+              ? "AI Assistant enabled."
+              : "AI Assistant disabled. Re-enable it in AI Assistant Settings.",
+          );
+          if (!enabled) host.focusEditor();
+        },
+      },
+    ];
+
+    items.forEach((item, index) => {
+      if (index === 2) {
+        const separator = document.createElement("div");
+        separator.className = "ai-menu-sep";
+        separator.setAttribute("role", "separator");
+        menu.appendChild(separator);
+      }
+      const entry = document.createElement("button");
+      entry.type = "button";
+      entry.className = "ai-menu-item";
+      entry.setAttribute("role", "menuitem");
+      entry.dataset.action = item.id;
+      entry.textContent = item.label;
+      entry.addEventListener("click", () => run(item.run));
+      menu.appendChild(entry);
+    });
+
+    document.body.appendChild(menu);
+    const rect = menu.getBoundingClientRect();
+    const margin = 8;
+    const left = Math.min(
+      Math.max(margin, x),
+      Math.max(margin, window.innerWidth - rect.width - margin),
+    );
+    const desiredTop = y + rect.height > window.innerHeight ? y - rect.height : y;
+    const top = Math.min(
+      Math.max(margin, desiredTop),
+      Math.max(margin, window.innerHeight - rect.height - margin),
+    );
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+    buttonMenu = menu;
+    button.setAttribute("aria-expanded", "true");
+
+    menu.querySelector<HTMLButtonElement>(".ai-menu-item")?.focus({ preventScroll: true });
+
+    const onPointer = (event: MouseEvent): void => {
+      if (event.target instanceof Node && menu.contains(event.target)) return;
+      closeButtonMenu();
+    };
+    const onEscape = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeButtonMenu(true);
+    };
+    const onKey = (event: KeyboardEvent): void => {
+      const entries = Array.from(menu.querySelectorAll<HTMLButtonElement>(".ai-menu-item"));
+      if (entries.length === 0) return;
+      const current = document.activeElement;
+      let index = current instanceof HTMLButtonElement ? entries.indexOf(current) : -1;
+
+      switch (event.key) {
+        case "ArrowDown":
+          event.preventDefault();
+          index = index < 0 ? 0 : (index + 1) % entries.length;
+          break;
+        case "ArrowUp":
+          event.preventDefault();
+          index = index < 0 ? entries.length - 1 : (index - 1 + entries.length) % entries.length;
+          break;
+        case "Home":
+          event.preventDefault();
+          index = 0;
+          break;
+        case "End":
+          event.preventDefault();
+          index = entries.length - 1;
+          break;
+        case "Enter":
+        case " ":
+          event.preventDefault();
+          (entries[index] ?? entries[0]).click();
+          return;
+        case "Tab":
+          event.preventDefault();
+          closeButtonMenu(true);
+          return;
+        default:
+          return;
+      }
+      entries[index]?.focus({ preventScroll: true });
+    };
+    const onBlur = (): void => closeButtonMenu();
+    const onResize = (): void => closeButtonMenu();
+    const onScroll = (): void => closeButtonMenu();
+    const onContextMenu = (event: MouseEvent): void => event.preventDefault();
+
+    menu.addEventListener("contextmenu", onContextMenu);
+    menu.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onPointer, true);
+    document.addEventListener("keydown", onEscape, true);
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("resize", onResize);
+    window.addEventListener("scroll", onScroll, true);
+
+    buttonMenuCleanup = () => {
+      menu.removeEventListener("contextmenu", onContextMenu);
+      menu.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onPointer, true);
+      document.removeEventListener("keydown", onEscape, true);
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("scroll", onScroll, true);
+    };
   }
 
   function placeButton(): void {
@@ -1569,6 +1745,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
   }
 
   function close(): void {
+    closeButtonMenu();
     cancel();
     requestId = null;
     closeHistory();
@@ -1636,6 +1813,24 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     }
     if (paletteOpen) closePalette();
     else openPalette();
+  });
+
+  // The webview's own menu (Back, Refresh, Save as, Print) has no meaning on a
+  // floating assistant control. This listener owns the whole gesture, exactly
+  // as the editor's menu owns its surface.
+  button.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openButtonMenu(event.clientX, event.clientY);
+  });
+
+  // The keyboard route to the same menu: the Menu key, or Shift+F10.
+  button.addEventListener("keydown", (event) => {
+    if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = button.getBoundingClientRect();
+    openButtonMenu(rect.left, rect.bottom + 2);
   });
 
   search.addEventListener("input", () => renderPalette());
@@ -1829,7 +2024,6 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
 
   return {
     sync,
-    open: openPalette,
     close,
     cancel,
     resetPosition,

@@ -635,6 +635,7 @@ export interface MenuState {
   canFold: boolean;
   spellcheck: boolean;
   spellcheckAvailable: boolean;
+  aiEnabled: boolean;
   syntaxTheme: string;
   typstView: TypstView;
   typstAvailable: boolean;

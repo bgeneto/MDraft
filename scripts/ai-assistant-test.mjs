@@ -499,6 +499,49 @@ async function paletteOpen() {
   return evaluate(`!document.querySelector('.ai-palette').hidden`);
 }
 
+/**
+ * Open the button's own menu with a synthetic contextmenu.
+ *
+ * The event is cancelable, and `preventDefault()` on it is exactly what stops
+ * WebView2 from drawing its native Back/Refresh menu; the assertion therefore
+ * measures the suppression rather than only the popup.
+ */
+async function openAssistantMenu() {
+  const opened = await evaluate(`(() => {
+    const fab = document.querySelector('.ai-fab');
+    if (!fab) return null;
+    const box = fab.getBoundingClientRect();
+    const event = new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      clientX: box.left + box.width / 2,
+      clientY: box.top + box.height / 2,
+      button: 2,
+      buttons: 2,
+    });
+    fab.dispatchEvent(event);
+    const menu = document.querySelector('.ai-menu');
+    return {
+      prevented: event.defaultPrevented,
+      labels: menu ? [...menu.querySelectorAll('.ai-menu-item')].map((b) => b.textContent) : [],
+      separators: menu ? menu.querySelectorAll('.ai-menu-sep').length : 0,
+    };
+  })()`);
+  await sleep(120);
+  return opened;
+}
+
+async function chooseAssistantMenuItem(action) {
+  const clicked = await evaluate(`(() => {
+    const button = document.querySelector('.ai-menu-item[data-action="${action}"]');
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`);
+  await sleep(250);
+  return clicked;
+}
+
 async function openPalette() {
   if (await paletteOpen()) return;
   await clickFab();
@@ -1087,6 +1130,97 @@ try {
     reset.right === 20 && reset.bottom === 8,
     JSON.stringify(reset),
   );
+
+  console.log("\nAssistant context menu");
+  const assistantMenu = await openAssistantMenu();
+  check(
+    "right-clicking the assistant owns the WebView's menu",
+    assistantMenu?.prevented === true,
+    JSON.stringify(assistantMenu),
+  );
+  check(
+    "the assistant menu offers Reset position",
+    assistantMenu?.labels.includes("Reset position") === true,
+    JSON.stringify(assistantMenu?.labels),
+  );
+  check(
+    "the assistant menu opens AI Assistant settings",
+    assistantMenu?.labels.includes("AI Assistant Settings…") === true,
+    JSON.stringify(assistantMenu?.labels),
+  );
+  check(
+    "the assistant menu can turn the assistant off",
+    assistantMenu?.labels.includes("Disable AI Assistant") === true,
+    JSON.stringify(assistantMenu?.labels),
+  );
+  check(
+    "the assistant menu separates the destructive toggle",
+    assistantMenu?.separators === 1,
+    String(assistantMenu?.separators),
+  );
+
+  await send("Input.dispatchKeyEvent", {
+    type: "rawKeyDown",
+    key: "Escape",
+    code: "Escape",
+    windowsVirtualKeyCode: 27,
+  });
+  await send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key: "Escape",
+    code: "Escape",
+    windowsVirtualKeyCode: 27,
+  });
+  await sleep(150);
+  check(
+    "Escape closes the assistant menu",
+    (await evaluate(`document.querySelectorAll('.ai-menu').length`)) === 0,
+  );
+
+  // Move the button by hand so this check measures the menu command, not the
+  // earlier Preferences reset.
+  await evaluate(`(() => {
+    const box = document.querySelector('.ai-fab').style;
+    box.left = '77px';
+    box.top = '99px';
+  })()`);
+  await openAssistantMenu();
+  check("the menu's Reset position runs", await chooseAssistantMenuItem("reset"));
+  const menuReset = await evaluate(`(() => {
+    const pane = document.getElementById('editor-pane').getBoundingClientRect();
+    const box = document.querySelector('.ai-fab').getBoundingClientRect();
+    return { right: Math.round(pane.right - box.right), bottom: Math.round(pane.bottom - box.bottom) };
+  })()`);
+  check(
+    "the menu's Reset position returns the button to the anchor",
+    menuReset.right === 20 && menuReset.bottom === 8,
+    JSON.stringify(menuReset),
+  );
+  check(
+    "the menu closed after its command",
+    (await evaluate(`document.querySelectorAll('.ai-menu').length`)) === 0,
+  );
+
+  await openAssistantMenu();
+  check("the menu's Settings command runs", await chooseAssistantMenuItem("settings"));
+  check(
+    "the menu opens the AI Assistant Preferences section",
+    (await waitFor(
+      `document.querySelector('.prefs-section-title')?.textContent === 'AI Assistant'`,
+    )) === true,
+  );
+  await closePrefs();
+
+  await openAssistantMenu();
+  check("the menu's toggle command runs", await chooseAssistantMenuItem("toggle"));
+  check(
+    "disabling from the menu hides the assistant button",
+    (await evaluate(`document.querySelector('.ai-assistant').hidden`)) === true,
+  );
+  await openAiSection();
+  check("the assistant can be turned back on", await setCheckbox("Enable AI Assistant", true));
+  await closePrefs();
+  await waitFor(`!document.querySelector('.ai-assistant').hidden`);
 
   check(
     "no HTTP request happened before the first action",
