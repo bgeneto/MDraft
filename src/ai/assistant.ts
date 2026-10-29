@@ -23,17 +23,20 @@ import {
   type AiActionSpec,
 } from "./actions";
 import {
+  anchorFromPosition,
   blockInsertion,
   buildRequest,
   clampButtonPosition,
   defaultButtonPosition,
   joinContinuation,
   movedEnough,
+  positionFromAnchor,
   targetIsCurrent,
   trimHistory,
   trimPreceding,
   type ApplyPlan,
   type Capture,
+  type PaneAnchor,
   type Point,
 } from "./context";
 import { diffSummary, wordDiff } from "./diff";
@@ -52,7 +55,7 @@ const PANEL_WIDTH = 440;
 const MIN_PANEL_WIDTH = 320;
 const MIN_PANEL_HEIGHT = 240;
 const PANE_MARGIN = 8;
-const ANCHOR_MARGIN = 20;
+const ANCHOR_SIDE_MARGIN = 20;
 
 /** A resized assistant popover, in pane coordinates, for this session only. */
 interface PopoverRect {
@@ -290,6 +293,12 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     model: "",
   };
   let position: Point | null = null;
+  /**
+   * The reader's dragged position, kept as a fraction of the pane's free space
+   * so a resize resolves it against the new size. Null means "never dragged":
+   * the button then follows the bottom-right anchor on every layout.
+   */
+  let anchor: PaneAnchor | null = null;
   /** Set by the resize handle; cleared by Reset position or a double-click. */
   let customPopoverRect: PopoverRect | null = null;
   let action: AiActionSpec | null = null;
@@ -329,7 +338,6 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
   let suppressClick = false;
   let answerFrame = 0;
   let dragMoved = false;
-  let userMoved = false;
 
   function ready(): boolean {
     if (!config.enabled || !config.model.trim()) return false;
@@ -347,13 +355,23 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     if (rect.width < BUTTON_SIZE + PANE_MARGIN * 2 || rect.height < BUTTON_SIZE + PANE_MARGIN * 2) {
       return;
     }
-    if (!position || !userMoved) {
+    if (anchor) {
+      // Resolving the stored fraction is what keeps a dragged button in place
+      // when the window grows, shrinks or maximizes. A fixed pixel offset was
+      // what left it at the old height, in the middle of the editor.
+      position = positionFromAnchor(anchor, rect.width, rect.height, BUTTON_SIZE, PANE_MARGIN);
+    } else {
       // Until the reader drags it, the button follows the bottom-right anchor.
       // The first layout can still be settling (fonts, tabs, status bar), so a
       // position captured once would leave the button 100+ px from the corner.
-      position = defaultButtonPosition(rect.width, rect.height, BUTTON_SIZE, ANCHOR_MARGIN);
+      position = defaultButtonPosition(
+        rect.width,
+        rect.height,
+        BUTTON_SIZE,
+        ANCHOR_SIDE_MARGIN,
+        PANE_MARGIN,
+      );
     }
-    position = clampButtonPosition(position, rect.width, rect.height, BUTTON_SIZE, PANE_MARGIN);
     button.style.left = `${Math.round(position.x)}px`;
     button.style.top = `${Math.round(position.y)}px`;
   }
@@ -1580,7 +1598,6 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       }
       if (!dragMoved) closePalette();
       dragMoved = true;
-      userMoved = true;
       const rect = pane.getBoundingClientRect();
       position = clampButtonPosition(
         {
@@ -1592,6 +1609,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
         BUTTON_SIZE,
         PANE_MARGIN,
       );
+      anchor = anchorFromPosition(position, rect.width, rect.height, BUTTON_SIZE, PANE_MARGIN);
       button.style.left = `${Math.round(position.x)}px`;
       button.style.top = `${Math.round(position.y)}px`;
       if (panelOpen) placeDocumentPopover(panel);
@@ -1776,8 +1794,14 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
 
   function resetPosition(): void {
     const rect = pane.getBoundingClientRect();
-    userMoved = false;
-    position = defaultButtonPosition(rect.width, rect.height, BUTTON_SIZE, ANCHOR_MARGIN);
+    anchor = null;
+    position = defaultButtonPosition(
+      rect.width,
+      rect.height,
+      BUTTON_SIZE,
+      ANCHOR_SIDE_MARGIN,
+      PANE_MARGIN,
+    );
     placeButton();
     customPopoverRect = null;
     if (panelOpen) placeDocumentPopover(panel);

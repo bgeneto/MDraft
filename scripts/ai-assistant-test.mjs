@@ -897,7 +897,7 @@ try {
     JSON.stringify(fab?.size),
   );
   check("the default anchor is 20 px from the right", fab?.right === 20, String(fab?.right));
-  check("the default anchor is 20 px from the bottom", fab?.bottom === 20, String(fab?.bottom));
+  check("the default anchor is at the bottom limit", fab?.bottom === 8, String(fab?.bottom));
 
   console.log("\nPalette");
   await openPalette();
@@ -1034,6 +1034,45 @@ try {
     JSON.stringify(dragged),
   );
   check("a drag does not open the palette", dragged.palette === false);
+
+  // The reported bug: a dragged button kept its old pixel offset when the
+  // window grew, so it ended up stranded in the middle of a taller editor.
+  console.log("\nResize resilience");
+  const buttonFractions = async () =>
+    evaluate(`(() => {
+      const pane = document.getElementById('editor-pane').getBoundingClientRect();
+      const box = document.querySelector('.ai-fab').getBoundingClientRect();
+      return {
+        x: (box.left - pane.left - 8) / (pane.width - 56),
+        y: (box.top - pane.top - 8) / (pane.height - 56),
+        top: box.top,
+        right: pane.right - box.right,
+        bottom: pane.bottom - box.bottom,
+      };
+    })()`);
+  const beforeGrow = await buttonFractions();
+  const viewport = await evaluate(`({ width: window.innerWidth, height: window.innerHeight })`);
+  await send("Emulation.setDeviceMetricsOverride", {
+    width: Math.round(viewport.width),
+    height: Math.round(viewport.height + 320),
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await sleep(450);
+  const afterGrow = await buttonFractions();
+  check(
+    "a taller window keeps the dragged button's relative place",
+    Math.abs(afterGrow.x - beforeGrow.x) < 0.01 && Math.abs(afterGrow.y - beforeGrow.y) < 0.01,
+    JSON.stringify({ beforeGrow, afterGrow }),
+  );
+  check(
+    "the dragged button follows the taller pane instead of staying put",
+    afterGrow.top > beforeGrow.top + 100 && afterGrow.bottom >= 8,
+    JSON.stringify({ beforeGrow, afterGrow }),
+  );
+  await send("Emulation.clearDeviceMetricsOverride");
+  await sleep(450);
+
   await openAiSection();
   check("Preferences offers Reset position", await clickPrefsButton("Reset position"));
   await closePrefs();
@@ -1045,7 +1084,7 @@ try {
   })()`);
   check(
     "Reset returns the button to the anchor",
-    reset.right === 20 && reset.bottom === 20,
+    reset.right === 20 && reset.bottom === 8,
     JSON.stringify(reset),
   );
 

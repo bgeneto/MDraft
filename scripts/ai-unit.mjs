@@ -16,6 +16,7 @@ import {
   searchActions,
 } from "../src/ai/actions.ts";
 import {
+  anchorFromPosition,
   applyPlan,
   blockInsertion,
   captureContext,
@@ -25,6 +26,7 @@ import {
   joinContinuation,
   movedEnough,
   paragraphRange,
+  positionFromAnchor,
   resolveAiLanguage,
   targetIsCurrent,
   trimHistory,
@@ -471,10 +473,14 @@ equal("trimming starts at the paragraph boundary", long.text, "Tail paragraph");
 // ---------------------------------------------------------------------------
 
 console.log("\nButton geometry");
-equal("the default anchor is bottom-right with 20 px", defaultButtonPosition(800, 600, 40), {
-  x: 740,
-  y: 540,
-});
+equal(
+  "the default anchor is at the bottom limit, 20 px from the right",
+  defaultButtonPosition(800, 600, 40),
+  {
+    x: 740,
+    y: 552,
+  },
+);
 equal("clamping the top-left corner", clampButtonPosition({ x: -20, y: -20 }, 800, 600, 40), {
   x: 8,
   y: 8,
@@ -483,6 +489,37 @@ equal("clamping the bottom-right corner", clampButtonPosition({ x: 900, y: 700 }
   x: 752,
   y: 552,
 });
+equal("the default anchor follows a taller pane", defaultButtonPosition(800, 1400, 40), {
+  x: 740,
+  y: 1352,
+});
+equal(
+  "a position is stored as a free-space fraction",
+  anchorFromPosition({ x: 380, y: 280 }, 800, 600, 40),
+  { x: 0.5, y: 0.5 },
+);
+equal(
+  "a resized pane resolves the stored fraction",
+  positionFromAnchor(anchorFromPosition({ x: 380, y: 280 }, 800, 600, 40), 1200, 900, 40),
+  { x: 580, y: 430 },
+);
+equal(
+  "a dragged corner keeps its edge distance on resize",
+  positionFromAnchor(anchorFromPosition({ x: 752, y: 552 }, 800, 600, 40), 1600, 1000, 40),
+  { x: 1552, y: 952 },
+);
+equal(
+  "a fraction beyond the free space clamps to the corner",
+  anchorFromPosition({ x: 900, y: 700 }, 800, 600, 40),
+  { x: 1, y: 1 },
+);
+check(
+  "a resolved anchor stays inside a smaller pane",
+  (() => {
+    const point = positionFromAnchor({ x: 0.8, y: 0.9 }, 300, 200, 40);
+    return point.x >= 8 && point.x <= 252 && point.y >= 8 && point.y <= 152;
+  })(),
+);
 check("a three-pixel movement is a click", !movedEnough({ x: 0, y: 0 }, { x: 3, y: 0 }));
 check("a five-pixel movement is a drag", movedEnough({ x: 0, y: 0 }, { x: 5, y: 0 }));
 
