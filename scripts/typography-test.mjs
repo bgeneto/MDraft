@@ -501,6 +501,341 @@ check(
     .join(" "),
 );
 
+// ---------------------------------------------------------------------------
+// Installed families, Custom, and per-preset state
+// ---------------------------------------------------------------------------
+//
+// The old panel offered a hard-coded list and could not select Custom. These
+// checks use whatever the host actually reports: they never name a font, so the
+// same suite runs on Windows, Linux and macOS. The measurement that matters is
+// that a family absent from the old list can be selected and reaches the CSS
+// variable; the picker's own search and the preset round trips are the rest.
+
+console.log("\n=== installed families, Custom and per-preset state ===");
+const fonts = await evaluate(`(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const invoke = window.__TAURI_INTERNALS__?.invoke;
+  const overlay = () => document.querySelector('.prefs-overlay');
+  const openPrefs = async () => {
+    if (!overlay() || overlay().hidden) document.getElementById('btn-prefs').click();
+    await sleep(150);
+    [...document.querySelectorAll('.prefs-section')]
+      .find((section) => section.textContent === 'Typography').click();
+    await sleep(150);
+  };
+  const row = (label) => [...document.querySelectorAll('.prefs-row')].find((element) =>
+    (element.querySelector('.prefs-label')?.textContent ?? '').replace('?', '').trim() === label);
+  const trigger = (label) => row(label)?.querySelector('.prefs-font-trigger') ?? null;
+  const face = (label) => trigger(label)?.querySelector('.prefs-font-current')?.textContent ?? '';
+  const active = () => document.querySelector('.prefs-choice.active')?.textContent ?? '';
+  const contentText = () => document.querySelector('.prefs-content')?.textContent ?? '';
+  const input = (label) => row(label)?.querySelector('input[type=number]') ?? null;
+  const checkbox = (label) => row(label)?.querySelector('input[type=checkbox]') ?? null;
+  const setNumber = (label, value) => {
+    const field = input(label);
+    if (!field) return false;
+    field.value = String(value);
+    field.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  };
+  const choosePill = async (label) => {
+    const button = [...document.querySelectorAll('.prefs-choice')]
+      .find((entry) => entry.textContent === label);
+    if (!button) return false;
+    button.click();
+    await sleep(250);
+    return true;
+  };
+  const openPicker = async (label) => {
+    trigger(label)?.click();
+    await sleep(150);
+  };
+  const closePicker = async (label) => {
+    if (document.querySelector('.prefs-font-popup')) {
+      trigger(label)?.click();
+      await sleep(80);
+    }
+  };
+  const installedOptions = () => [...document.querySelectorAll('.prefs-font-option')]
+    .filter((option) => option.querySelector('.prefs-font-tag')?.textContent === 'Installed');
+  const chooseOption = async (family) => {
+    const option = [...document.querySelectorAll('.prefs-font-option')]
+      .find((entry) => entry.dataset.value === family);
+    if (!option) return false;
+    option.click();
+    await sleep(300);
+    return true;
+  };
+  const resetButton = () => [...document.querySelectorAll('.prefs-row-button button')]
+    .find((button) => /^(Reset |Confirm reset of )/.test(button.textContent ?? '')) ?? null;
+  const resetPreset = async () => {
+    const first = resetButton();
+    if (!first || first.disabled) return false;
+    first.click();
+    await sleep(120);
+    const second = resetButton();
+    if (!second) return false;
+    second.click();
+    await sleep(350);
+    return true;
+  };
+
+  await openPrefs();
+
+  // The scan is started lazily when the section is first shown. Wait for its
+  // note to leave the "Looking..." state before measuring the picker; opening
+  // the list just before a panel redraw would measure a popup about to vanish.
+  for (let i = 0; i < 60; i++) {
+    const note = [...document.querySelectorAll('.prefs-row')].find((element) =>
+      (element.querySelector('.prefs-label')?.textContent ?? '').trim() === 'Installed fonts');
+    if (!note || !note.textContent.includes('Looking for installed fonts')) break;
+    await sleep(100);
+  }
+
+  const installedNote = [...document.querySelectorAll('.prefs-row')]
+    .find((element) => (element.querySelector('.prefs-label')?.textContent ?? '').trim() === 'Installed fonts')
+    ?.textContent ?? '';
+  const installedCount = Number((installedNote.match(/(\\d+) installed font/) ?? [])[1] ?? 0);
+
+  // Pick two installed families that are not the current face, so the two
+  // pixel samples later are genuinely different faces.
+  await openPicker('Preview text');
+  const installed = installedOptions().map((option) => option.dataset.value ?? '');
+  const systemFamily = installed[0] ?? '';
+  const secondSystemFamily = installed.find((family) => family !== systemFamily) ?? '';
+  await closePicker('Preview text');
+
+  if (systemFamily) {
+    await openPicker('Preview text');
+    await chooseOption(systemFamily);
+  }
+  const afterSystemStack = document.documentElement.style.getPropertyValue('--font-body').trim();
+  const computed = document.querySelector('#preview p')
+    ? getComputedStyle(document.querySelector('#preview p')).fontFamily
+    : '';
+
+  // The picker must filter its own list; the old dropdown could only jump to a
+  // prefix, and with hundreds of families that is not enough.
+  await openPicker('Preview text');
+  const searchField = document.querySelector('.prefs-font-search');
+  let searchEmpty = false;
+  let searchRestored = 0;
+  if (searchField) {
+    searchField.value = 'zzzz-no-family';
+    searchField.dispatchEvent(new Event('input', { bubbles: true }));
+    await sleep(80);
+    searchEmpty = Boolean(document.querySelector('.prefs-font-empty'));
+    searchField.value = '';
+    searchField.dispatchEvent(new Event('input', { bubbles: true }));
+    await sleep(80);
+    searchRestored = document.querySelectorAll('.prefs-font-option').length;
+  }
+  await closePicker('Preview text');
+
+  // Custom is a real, selectable preset. It starts from System, so its face
+  // row reports the role default rather than inheriting the System edit above.
+  await choosePill('Custom');
+  const customStartFace = face('Preview text');
+  await openPicker('Preview text');
+  await chooseOption(systemFamily);
+  setNumber('Preview font size', 18);
+  const oldstyle = checkbox('Oldstyle figures in prose');
+  if (oldstyle && !oldstyle.checked) {
+    oldstyle.checked = true;
+    oldstyle.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  await sleep(250);
+  const customEdit = {
+    active: active(),
+    face: face('Preview text'),
+    body: input('Preview font size')?.value ?? '',
+    oldstyle: checkbox('Oldstyle figures in prose')?.checked ?? false,
+  };
+
+  await choosePill('Serif');
+  await choosePill('Custom');
+  const customBack = {
+    active: active(),
+    face: face('Preview text'),
+    body: input('Preview font size')?.value ?? '',
+    oldstyle: checkbox('Oldstyle figures in prose')?.checked ?? false,
+  };
+
+  const customReset = await resetPreset();
+  const afterCustomReset = {
+    active: active(),
+    face: face('Preview text'),
+    body: input('Preview font size')?.value ?? '',
+    oldstyle: checkbox('Oldstyle figures in prose')?.checked ?? false,
+    adjusted: contentText().includes('Adjusted'),
+  };
+
+  // Editing Serif must keep Serif selected; the old model silently switched to
+  // Custom. Switching away and back must restore the edited face, and the
+  // settings file must carry both the id and the diff.
+  await choosePill('Serif');
+  await openPicker('Preview text');
+  await chooseOption(secondSystemFamily || systemFamily);
+  const serifEdit = {
+    active: active(),
+    face: face('Preview text'),
+    adjusted: contentText().includes('Adjusted'),
+  };
+  await sleep(450);
+  const saved = invoke ? await invoke('get_settings') : null;
+
+  await choosePill('System');
+  await choosePill('Serif');
+  const serifBack = {
+    active: active(),
+    face: face('Preview text'),
+  };
+
+  const serifReset = await resetPreset();
+  const afterSerifReset = {
+    active: active(),
+    face: face('Preview text'),
+    adjusted: contentText().includes('Adjusted'),
+  };
+  await sleep(450);
+  const savedAfter = invoke ? await invoke('get_settings') : null;
+
+  // Leave the application on System, with no edits from this block. The System
+  // preset was edited at the top of the block, so reset it too.
+  await choosePill('System');
+  await resetPreset();
+  await sleep(250);
+  const finalSystem = {
+    active: active(),
+    face: face('Preview text'),
+    adjusted: contentText().includes('Adjusted'),
+  };
+  document.querySelector('.prefs-close')?.click();
+
+  return {
+    installedCount,
+    systemFamily,
+    secondSystemFamily,
+    afterSystemStack,
+    computed,
+    searchEmpty,
+    searchRestored,
+    customStartFace,
+    customEdit,
+    customBack,
+    customReset,
+    afterCustomReset,
+    serifEdit,
+    saved,
+    serifBack,
+    serifReset,
+    afterSerifReset,
+    savedAfter,
+    finalSystem,
+  };
+})()`);
+
+console.log(
+  `  installed  ${fonts.installedCount} families; sample ${fonts.systemFamily || "none"}`,
+);
+console.log(`  stack      ${fonts.afterSystemStack}`);
+console.log(
+  `  Custom     start ${fonts.customStartFace}, edit ${fonts.customEdit?.face}, back ${fonts.customBack?.face}`,
+);
+console.log(
+  `  Serif      edit ${fonts.serifEdit?.face}, back ${fonts.serifBack?.face}, reset ${fonts.afterSerifReset?.face}`,
+);
+
+check(
+  fonts.installedCount > 10 && Boolean(fonts.systemFamily),
+  "the operating system reports installed families beyond the old list",
+  `${fonts.installedCount} families`,
+);
+check(
+  Boolean(fonts.systemFamily) &&
+    fonts.afterSystemStack.toLowerCase().includes(fonts.systemFamily.toLowerCase()) &&
+    fonts.computed.toLowerCase().includes(fonts.systemFamily.toLowerCase()),
+  "a system family can be selected and reaches the CSS stack",
+  fonts.afterSystemStack,
+);
+check(
+  fonts.searchEmpty && fonts.searchRestored > 10,
+  "the font picker filters its own list and restores it",
+  `empty ${fonts.searchEmpty}, restored ${fonts.searchRestored}`,
+);
+check(
+  fonts.customEdit?.active === "Custom" && fonts.customStartFace === "System default",
+  "Custom is selectable and starts from System's faces",
+  `start ${fonts.customStartFace}`,
+);
+check(
+  fonts.customBack?.active === "Custom" &&
+    fonts.customBack?.face === fonts.customEdit?.face &&
+    fonts.customBack?.body === fonts.customEdit?.body &&
+    fonts.customBack?.oldstyle === fonts.customEdit?.oldstyle,
+  "Custom keeps its face, size and OpenType choice across a preset round trip",
+  `${fonts.customBack?.face}, ${fonts.customBack?.body}px, oldstyle ${fonts.customBack?.oldstyle}`,
+);
+check(
+  fonts.customReset &&
+    fonts.afterCustomReset?.active === "Custom" &&
+    fonts.afterCustomReset?.face === "System default" &&
+    fonts.afterCustomReset?.body === "16" &&
+    fonts.afterCustomReset?.oldstyle === false &&
+    fonts.afterCustomReset?.adjusted === false,
+  "Reset on Custom returns to the System defaults",
+  `${fonts.afterCustomReset?.face}, ${fonts.afterCustomReset?.body}px, adjusted ${fonts.afterCustomReset?.adjusted}`,
+);
+check(
+  fonts.serifEdit?.active === "Serif" && fonts.serifEdit?.adjusted === true,
+  "editing Serif keeps Serif active and says it is adjusted",
+  `${fonts.serifEdit?.active}, adjusted ${fonts.serifEdit?.adjusted}`,
+);
+check(
+  fonts.serifBack?.active === "Serif" && fonts.serifBack?.face === fonts.serifEdit?.face,
+  "switching away and back restores the edited Serif face",
+  `${fonts.serifBack?.face}`,
+);
+check(
+  fonts.saved?.typographyPreset === "superfamily" &&
+    String(fonts.saved?.presetOverrides?.superfamily?.bodyFont ?? "")
+      .toLowerCase()
+      .includes(String(fonts.serifEdit?.face ?? "").toLowerCase()),
+  "the preset id and the face diff are written to settings",
+  `id ${fonts.saved?.typographyPreset}`,
+);
+check(
+  fonts.serifReset &&
+    fonts.afterSerifReset?.active === "Serif" &&
+    fonts.afterSerifReset?.face === "Source Serif 4" &&
+    fonts.afterSerifReset?.adjusted === false &&
+    fonts.savedAfter?.presetOverrides?.superfamily?.bodyFont === undefined,
+  "Reset on Serif restores its built-in face and clears the diff",
+  `${fonts.afterSerifReset?.face}, adjusted ${fonts.afterSerifReset?.adjusted}`,
+);
+check(
+  fonts.finalSystem?.active === "System" &&
+    fonts.finalSystem?.adjusted === false &&
+    fonts.finalSystem?.face === "System default",
+  "the block leaves System selected and unadjusted",
+  `${fonts.finalSystem?.active}, ${fonts.finalSystem?.face}`,
+);
+
+// The two installed families must draw differently. A stack string can be
+// correct while the name silently falls back; pixels cannot.
+if (fonts.systemFamily && fonts.secondSystemFamily) {
+  const quote = (name) => `"${String(name).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  const firstShot = await shot({ family: quote(fonts.systemFamily) }, "Hamburgefonstiv 123");
+  const secondShot = await shot({ family: quote(fonts.secondSystemFamily) }, "Hamburgefonstiv 123");
+  check(
+    "two installed families render differently",
+    firstShot !== secondShot,
+    firstShot === secondShot ? "identical pixels" : "differs",
+  );
+} else {
+  check("two installed families render differently", false, "fewer than two installed families");
+}
+
 // Leave nothing behind: the harness sits above the document while it runs.
 await evaluate(`document.getElementById("typo-harness")?.remove()`);
 

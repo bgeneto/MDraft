@@ -37,19 +37,41 @@ the document's typeface would be a less predictable application.
 - **Preview headings** — headings in the preview and in exports.
 - **Preview code** — fenced and inline code in the preview.
 
-Each picker offers the thirteen bundled families first, then faces likely to be
-installed on Windows, macOS or a Linux desktop. A value written by an older
-version, or a family not in the list, is shown as a custom entry rather than
-silently replaced.
+Each picker opens a searchable list of the thirteen bundled families and every
+family the operating system's text engine reports, grouped **Bundled** and
+**Installed**. Each entry is drawn in its own face, and the current choice is
+marked. A saved family that the current scan does not contain is shown as
+**Not installed** rather than silently replaced. The list is read only when
+Typography is first shown; a font installed while MDraft is running appears
+after a restart.
 
 The default is **System**: prose, headings and code use the operating system's
 own faces, so a fresh document embeds no font at all. The bundled faces are
 there for the presets that ask for them.
 
+## System fonts
+
+MDraft does not copy, serve or embed a system font. The picker writes a normal
+CSS stack and the webview resolves the family through the platform text engine:
+DirectWrite on Windows, CoreText on macOS and fontconfig on Linux. Weights,
+italics, TTC collections, variable axes and macOS `.dfont` families therefore
+work exactly as they do in any other application.
+
+The formats offered are whatever that engine exposes and the webview can use:
+TrueType (`.ttf`), OpenType (`.otf`), collections (`.ttc`/`.otc`) and variable
+fonts. Type 1 and bitmap formats are not rendered by the webview. WOFF/WOFF2 is
+the delivery format of the thirteen bundled families, not an installed-font
+format.
+
+An exported HTML document names a system family but does not carry its file, so
+a reader without the face sees the stack's fallback. A printed PDF embeds glyphs
+through the normal print path. The bundled OFL families keep their data-URL
+embedding.
+
 ## Presets
 
-A preset sets the four faces and the OpenType switches together, because the
-hard part of choosing type is the pairing rather than one family.
+A preset sets the four faces, the four sizes and the OpenType switches together,
+because the hard part of choosing type is the pairing rather than one family.
 
 | Preset | Character |
 | --- | --- |
@@ -59,28 +81,30 @@ hard part of choosing type is the pairing rather than one family.
 | **Editorial** | Bodoni Moda's hairline Didone under Archivo's grotesque headings, with JetBrains Mono in code. A mid-century magazine: lining figures, ligatures and slashed zero on, 17 px preview size and 90% math scale. |
 | **Bauhaus** | Jost's circles and straight lines in prose and headings, with Azeret Mono's geometric code. A 1920s poster with no serif anywhere: ligatures and slashed zero on, proportional table figures, 17 px and 90% math. |
 | **Notebook** | Alegreya's calligraphic serif under Caveat's handwriting, with Victor Mono's narrow, cursive-italic code. A writer's notebook: oldstyle and tabular figures, ligatures on, 17 px and 86% math. |
+| **Custom** | A free setup that starts from System and is remembered like any other preset. Change any face, size or OpenType option; Reset returns it to the System defaults. |
 
 `Classic`, `Literary` and `Technical` were removed. A reader who had one of them
-selected keeps the saved stacks in `settings.json`, so the picker shows
-**Custom** until a new preset is chosen; the old per-preset size entries remain
-inert. No value is lost.
+selected keeps the saved stacks in `settings.json`; on the first switch the whole
+old setup is stored under **Custom** and stays selectable. The old per-preset
+size entries remain inert. No value is lost.
 
-Every preset is a starting point: changing a face or a switch moves the panel
-to **Custom**, which keeps the values you chose. The four role pickers are not
-locked to a preset.
+Every preset is a starting point, and it stays the active preset when you change
+it. Faces, sizes and OpenType switches are remembered per preset: set Serif's
+body face, visit System and Renaissance, and Serif comes back with it. **Custom**
+is a real, selectable preset; it starts from System and keeps its own edits like
+any other. **Reset** restores the active preset's built-in values and leaves the
+others alone. It is disabled when the preset is unadjusted, and the first click
+arms a four-second confirmation.
 
-Editor font size, preview font size, math scale and code scale are not part of a
-preset's identity. They are reader adjustments remembered per preset: set Serif
-to 19 px, visit System and Renaissance, and Serif still comes back at 19 px. A
-preset that has never been adjusted starts at its own defaults, shown as preview
-size / math scale / code scale (System 16/95/100, Serif 17/88/98, Renaissance
-19/80/90, Editorial 17/90/96, Bauhaus 17/90/93, Notebook 17/86/93). The editor
-font size starts at 15 px for every preset, with a 1.5 line height that scales
-with the size. **Line Height** in
-*Preferences › Editor* chooses **Compact** (1.3×), **Normal** (1.5×) or **Wide**
-(1.8×). It is a global preference, not a per-preset adjustment, and it applies to
-the source pane only: the preview keeps its own reading line height. Under
-Custom, all four sizes are global. Changing any of the four sizes does not leave
+The four sizes are remembered per preset with the faces and switches. A preset
+that has never been adjusted starts at its own defaults, shown as preview size /
+math scale / code scale (System 16/95/100, Serif 17/88/98, Renaissance 19/80/90,
+Editorial 17/90/96, Bauhaus 17/90/93, Notebook 17/86/93). The editor font size
+starts at 15 px for every preset, with a 1.5 line height that scales with the
+size. **Line Height** in *Preferences › Editor* chooses **Compact** (1.3×),
+**Normal** (1.5×) or **Wide** (1.8×). It is a global preference, not a per-preset
+adjustment, and it applies to the source pane only: the preview keeps its own
+reading line height. Changing any face, size or OpenType option does not leave
 the active preset.
 
 ## OpenType
@@ -170,6 +194,12 @@ exactly when a face had been chosen.
 Only faces that actually win in a stack are embedded. A fallback cannot render,
 and carrying it added weight for nothing. The default System preset embeds no
 fonts because there is nothing to embed.
+
+A **system family** is different: the exported document names it in the stack but
+MDraft does not copy or embed its file, so a reader without that face sees the
+stack's fallback. That is the licence-safe and honest outcome; it is stated under
+**Preferences › Typography › Bundled faces**. A printed PDF still embeds glyphs
+through the OS print path, as any document does.
 
 The new families are subset to Latin, Vietnamese, punctuation, arrows, maths,
 box drawing and geometric shapes, with the features the panel uses. Greek and

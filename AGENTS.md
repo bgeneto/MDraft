@@ -205,7 +205,7 @@ rewrite from scratch.
 | `npm run stage` | `scripts/stage-artifacts.mjs` | Re-stage what is already built |
 | `npm run check:version` | `scripts/check-version.mjs` | The two version files agree, and match a tag when one is given |
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
-| `npm run test:rust` | `cargo test` | 223 passed on Windows, 222 on Linux; two ignored downloads, plus the ignored display-owned Linux print probe |
+| `npm run test:rust` | `cargo test` | 228 passed on Windows, 227 on Linux; two ignored downloads, plus the ignored display-owned Linux print probe |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. The two restart layers are the exception: two launches of the same instance's settings directory, closed with WM_CLOSE in between so the close flush runs. Puts back the working tree, the developer's own settings, window state and recovery journal afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
 | `npm run smoke` | `scripts/dom-smoke.mjs` | 114 checks against `samples/feature-tour.md`, including the Math scale and Code scale rows, the per-preset size memory and the Read Aloud preferences |
 | `npm run word-sync` | `scripts/word-sync-test.mjs` | 58 checks of word-level sync, including 20 alternating pairs, element endpoints, multi-paragraph ranges, stale render rejection and reduced motion in Markdown/AsciiDoc/Typst Document, against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, the four-beat pulse and its resting mark, reduced motion, no scroll, Escape, and the fallbacks |
@@ -222,7 +222,8 @@ rewrite from scratch.
 | `npm run export:browser` | `scripts/export-browser-test.mjs` | 24 checks of the native HTML and Print artifacts through the real UI: restored local images/links, absolute print URLs, the readiness/failure script, the exported alert colours, and the same light diagram palette in a dark and a light editor |
 | `npm run pdf:native` | `scripts/pdf-native-test.mjs` | 21 checks of real PDF output, static HTML, active/encoded-child fallbacks, native script blocking, queued-job ownership and existing-target preservation, plus Poppler page checks. `MDRAFT_PDF_KEEP=1` retains evidence; `MDRAFT_PDF_RASTERIZER=wsl` selects WSL |
 | `npm run pdf:visual` | `scripts/pdf-visual-check.mjs` | App-free PDF measurement: A4 geometry, embedded fonts, selectable text, rasterized page PNGs, ink, image colours, table rules and margins |
-| `npm run typography` | `scripts/typography-test.mjs` | 48 checks that each face loads, each OpenType switch changes pixels, the six-preset matrix holds, the four new body faces render differently, and the Semibold weights are real |
+| `npm run typography` | `scripts/typography-test.mjs` | 60 checks that each face loads, each OpenType switch changes pixels, the six-preset matrix holds, the four new body faces render differently, the Semibold weights are real, and the installed-family picker, Custom, per-preset edits and Reset work through the real UI |
+| `npm run typography:unit` | `scripts/typography-unit.mjs` | 27 checks of the CSS stack helpers: quoting, escaping, a comma inside a family name, generic keywords, tail rebuilding and duplicate removal — no application |
 | `npm run typewriter` | `scripts/typewriter-test.mjs` | 21 checks of editor input and caret geometry at start/middle/end, wraps, Focus mode, composition, multi-cursor, undo/redo, reduced motion, tabs, disable and zoom reset. `MDRAFT_TYPEWRITER_VISUAL_DIR=<dir>` retains screenshots and pauses for manual review (`ready.json` / `done.json`), adding one check |
 | `npm run shortcuts` | `scripts/shortcut-test.mjs` | 47 checks that every menu accelerator is registered, that pressing one changes state, that F8/F11 move the menu checks, that the zoom chip follows the level, that Ctrl+Shift+Space reaches the AI Assistant, that a new tab keeps the previous buffer's undo, and that the webview's F5/Ctrl+R reload keys are swallowed |
 | `npm run menu` | `scripts/menu-test.mjs` | 101 checks of the approved eight-menu tree, command placement, conditional labels, availability by language/mode/selection, Preferences deep links, Paste without Formatting, document zoom reset, the three-PDF grouping, block-equation selection handling and both Close All Tabs routes |
@@ -278,7 +279,7 @@ All of these need the app already running with CDP enabled (see
 | `export-browser-test.mjs` | `[port]` | `samples/export-tour.md`; opens `samples/export-tour.adoc` | That an exported HTML page and the captured print document have real local image/link destinations, no `asset:` URLs, absolute `file://` print images, the font/image readiness script, the exported alert tint, and the same light Mermaid palette whatever the editor theme |
 | `pdf-native-test.mjs` | `[port]` | `samples/pdf-quality.md` | The real direct-PDF path: save picker stubbed, `PrintToPdf` writes the file, Poppler checks its pages, static HTML prints natively, and scripted HTML stays on the browser route |
 | `pdf-visual-check.mjs` | `--pdf <file> [--out <dir>] [--fixture quality] [--rasterizer auto\|native\|wsl] [--expect <text>]` | any PDF | A4 geometry, embedded fonts, selectable text, one PNG/PPM per page, non-blank pages, quiet margins, image colours, table rules and math ink. Needs Poppler on `PATH` or in WSL; no application |
-| `typography-test.mjs` | `[port]` | any | Screenshots text with each OpenType feature off and on and compares pixels, then asserts the six-preset matrix, that the four new body faces produce different images, and the Semibold weights. Width cannot measure a monospaced face, so nothing narrower would work |
+| `typography-test.mjs` | `[port]` | any | Screenshots text with each OpenType feature off and on and compares pixels, then asserts the six-preset matrix, that the four new body faces produce different images, and the Semibold weights; also opens the installed-font picker, selects a family the host actually reports, and exercises Custom, a per-preset face edit, its round trip, Reset and the saved `typographyPreset`/`presetOverrides` diff. Width cannot measure a monospaced face, so nothing narrower would work |
 | `shortcut-test.mjs` | `[port] [document]` | `samples/feature-tour.md` | Presses each accelerator through a synthetic keydown and checks what changed. Also reads the `accelerators` registry, which is the only way to see an accelerator the platform rejected |
 | `menu-test.mjs` | `[port]` | `samples/feature-tour.md`; opens the Typst, AsciiDoc and HTML fixtures | The native menu inventory through `menu_items`: the eight categories and command placement, labels, conditional availability by language/mode/selection, Preferences deep links, Paste without Formatting, document zoom reset, block-equation selection, Close All Tabs from both the tab context and File, and cancellation of a dirty batch |
 | `licence-test.mjs` | `[port]` | any | Opens *Font licences* and looks for the thirteen OFL texts in the rendered document. Searching the executable cannot answer this: the frontend bundle is compressed inside it |
@@ -521,12 +522,12 @@ hash the pixels.
 
 ## Testing
 
-Forty-six default layers, cheapest first, plus the opt-in live AI layer. Run them in this order when changing anything.
+Forty-seven default layers, cheapest first, plus the opt-in live AI layer. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 223 Windows / 222 Linux | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction, image content sniffing (WebP/AVIF brands), `${filename}`, the untitled image guard, the Typst image root, the OS opener's executable refusal, the recovery journal's round-trip/id/cap rules, checked-write hashes and same-metadata conflicts, launch argument parsing and path identity, the AI prompts/tags/caps/URL joins, the namespaced wrappers and the answer sanitizer, SSE parsing and model-list diagnostics |
+| Rust unit | `npm run test:rust` | 228 Windows / 227 Linux | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction, image content sniffing (WebP/AVIF brands), `${filename}`, the untitled image guard, the Typst image root, the OS opener's executable refusal, the recovery journal's round-trip/id/cap rules, checked-write hashes and same-metadata conflicts, launch argument parsing and path identity, the AI prompts/tags/caps/URL joins, the namespaced wrappers and the answer sanitizer, SSE parsing and model-list diagnostics, installed-family normalisation and the widened preset overrides |
 | Session store | `npm run test:sessions` | 60 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
 | P0 data safety (unit) | `npm run p0:unit` | 112 | Recovery scheduling/classification/Typst strings, deferred save/reload/Save As, checked-write conflicts and baseline hashes, save queues, bulk-close cancellation/failures, lossy copies and export snapshots across picker/tool/render delays — no application |
 | Paste conversion | `npm run paste:convert` | 378 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, `<br><br>` paragraph splitting, image syntax, AsciiDoc, and an image that fails to save |
@@ -546,6 +547,7 @@ Forty-six default layers, cheapest first, plus the opt-in live AI layer. Run the
 | Typst page map (unit) | `npm run typst:map:unit` | 21 | One-word lines with identical neighbours paint nothing, a unique neighbour window picks the occurrence, ligatures and soft hyphens fold, generated text stays unmapped — no application |
 | HTML source map (unit) | `npm run html:map:unit` | 38 | Entities and CRLF offsets, decoded-to-raw translation, the sample mismatch, and two text nodes under one stamp — no application |
 | Block source map (unit) | `npm run block:map:unit` | 12 | Folded index mapping, per-node alignment across substitutions and smart punctuation, gap block fallback, Typst comments/rules/math/code/tables, and `#lorem` exclusion — no application |
+| Typography stacks (unit) | `npm run typography:unit` | 27 | CSS family quoting and parsing: spaces, commas inside quotes, escaped quotes and backslashes, generic keywords, tail rebuilding and duplicate removal — no application |
 | AI Assistant (unit) | `npm run ai:unit` | 122 | The catalog/search cross-language contract, paragraph expansion, Continue spacing, block insertion, parameters, stale targets, session-history insertion/replacement/titles/previews/ages, button anchor/clamp/drag threshold, the model picker's filter, the unsaved-buffer language detection and the capped word diff - no application |
 | AI Assistant (mock) | `npm run ai` | 195 | The icon-only button and its launch anchor, drag then Preferences Reset position, the five-group palette, search and its discreet scrollbar, streaming, Stop, a 401, Anthropic, the typed Base URL, a gzip model list, the searchable model picker with a stale model, keyboard and pointer choice, the field/picker geometry, the reconcile rule and its field note, the single status count, the first Fetch click after typing, the empty-list error, key-save auto-fetch, the noisy-translate wrapper, parameters, stale targets, the ten-entry success-only History and regenerate overwrite, Copy/Insert below/Clear, rendered Markdown results with lists, tables and a Source view, the top-left resize grip with corner anchoring, arrow-key resizing and a session-remembered layout, a tab switch, dark theme/reduced motion and key hygiene |
 | AI Assistant (live) | `npm run ai:live` | 70 (opt-in) | All fourteen actions against `http://192.168.61.9:4000/v1` / `Qwen3.8-27B`: non-empty tag-free output, the model/host chip, apply and undo, and key hygiene. Without `MDRAFT_AI_E2E_*` the harness entry prints SKIP and `0/0` |
@@ -560,6 +562,7 @@ Forty-six default layers, cheapest first, plus the opt-in live AI layer. Run the
 | Typst pages | `npm run typst:preview` | 51 (+1 optional) | PDF.js page shells/canvases/text layers, both columns, A4 geometry, paragraph click, repeated-word/right-column mapping, a one-word heading, drag ranges, Pages and Document word sync, inline-math paragraphs, tables and code blocks, generated-text fallback, transparent view bar and PDF disposal; plus Help › Typst Reference |
 | Math | `npm run math` | 12 | Font loading, fraction and radical geometry |
 | Syntax | `npm run syntax` | 10 | Token colours, palette switching, and the sync mark's amber contrast on three dark palettes |
+| Typography | `npm run typography` | 60 | Bundled face loading, every OpenType switch changing pixels, the six-preset matrix and Semibold; the installed-family picker's search/selection, Custom's full state, per-preset face edits, round trips, Reset and the saved preset id/diff |
 | AsciiDoc | `npm run asciidoc` | 54 | Preview, title/TOC, math, includes, source highlighting, outline, preview copy, spellcheck, paste, the built-in reference, defaults, word-level sync |
 | Editor menu / Format | `npm run format:document` | 141 | The full editing menu, clipboard fake, the main-menu route, Markdown/HTML/Typst, inactive tabs, undo, caret, AsciiDoc disabled, spelling and formatter failures; 47 math checks also run with `node scripts/format-document-test.mjs --unit`. The physics copy retains all 292 formulas and its KaTeX error count after formatting, with visible fractions/radicals and exact bytes after undo |
 | Menu structure | `npm run menu` | 101 | The eight categories and command placement, conditional labels, availability by language/mode/selection, Preferences deep links, Paste without Formatting, document zoom reset, the three-PDF grouping, block-equation selection and both Close All Tabs routes |
@@ -2261,6 +2264,9 @@ A tagged answer's first line is content. A translation can legitimately begin wi
 **`no delta arrives after Stop` fails with `13: "<mdraft-expa\n"`**
 The mock holds the first 12 characters of the streamed answer, which for the longer namespaced wrapper is a half-written opening tag. `TagFilter::finish` in `Seek` pushed any non-empty buffer, so a stopped request showed the wrapper fragment as the answer; the check's old 12-character threshold was calibrated to `<expanded>Ex`, whose unknown element DOMPurify shortened. Discard a buffer that is only a prefix of the expected opening tag, and measure the visible text after trimming the newline the Markdown renderer adds. Do not widen the threshold: the fix belongs in the filter.
 
+**`Copy-Item ...\MDraftFontTest.exe` fails with `being used by another process` after `taskkill /PID` reported `SUCCESS`, and the next launch still shows the old UI**
+The isolated test instance had not actually exited (its close handler was still waiting), and the single-instance plugin forwarded the new launch to it, so CDP answered and the process list looked healthy while the binary on disk was still the old one. Check `Get-Process` and `StartTime`, force-close the disposable instance, wait for the lock to clear, then copy and relaunch. Never overwrite the installed copy the reader is using.
+
 ## Adding a preference, end to end
 
 Five files, in this order — more than three, so a plan comes first; see
@@ -2334,6 +2340,12 @@ src/
                      renderers (AsciiDoc included), HTML sanitizer and image resolution
   model-combo.ts     the AI Model field's searchable picker: full fetched list on
                      open, filter while typing, fixed popup outside the panel scroller
+  fonts.ts           bundled typefaces, the four roles, the six detection presets
+                     and the selectable Custom preset
+  font-stacks.ts     CSS family quoting/parsing: exotic names, generic keywords,
+                     the preset fallback tail
+  font-picker.ts     searchable installed-family picker: grouped specimens, ARIA,
+                     missing-family warning, fixed popup
   preferences.ts     the Preferences panel and its declarative rows
   sidebar.ts         outline (active-marker updates) / favorites / recent files
   api.ts             typed wrappers over every Rust command
@@ -2343,7 +2355,9 @@ src/
 src-tauri/src/
   lib.rs             builder, plugin registration, command table
   html_preview.rs    preview scheme, CSP, path confinement, preview commands (+ tests)
-  settings.rs        persisted settings and AppState
+  settings.rs        persisted settings, typography preset state and AppState
+  fonts.rs           installed-family enumeration through fontique, session cache
+                     and name normalisation (+ tests)
   ai/                OpenAI-compatible and Anthropic streaming, prompts, output-tag
                      filter, keychain/session credentials and the AI commands
   documents.rs       file IO, path existence, startup file
@@ -2491,15 +2505,16 @@ platform and fails on the other.
    reads the latter for the bundle, and the two must agree. `npm run
    check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
-3. `npm run test:rust` — 223 runnable Windows tests / 222 Linux tests (two ignored downloads: pandoc and Typst, plus the ignored display-owned Linux print probe). Run them on Linux too
+3. `npm run test:rust` — 228 runnable Windows tests / 227 Linux tests (two ignored downloads: pandoc and Typst, plus the ignored display-owned Linux print probe). Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run menu`,
    `npm run preview:zoom`, `npm run math`, `npm run syntax`, `npm run html`,
    `npm run asciidoc`, `npm run favorites`, `npm run ai:unit`, `npm run ai`,
-   `npm run read-aloud:unit`, `npm run read-aloud` and
-   `npm run pdf:native` — 114 + 101 + 24 + 12 + 10 + 60 + 54 + 56 + 122 + 195 +
-   99 + 49 + 21 checks; also run `npm run typewriter` (21 checks, plus the manual visual
+   `npm run read-aloud:unit`, `npm run read-aloud`, `npm run typography:unit`,
+   `npm run typography` and `npm run pdf:native` — 114 + 101 + 24 + 12 + 10 + 60
+   + 54 + 56 + 122 + 195 + 99 + 49 + 27 + 60 + 21 checks; also run
+   `npm run typewriter` (21 checks, plus the manual visual
    hold when changing its behavior), and `npm run ai:live` when the Qwen
    credentials are present.
 5. `npm run audit` against both `docs/sample-files` documents and compare the

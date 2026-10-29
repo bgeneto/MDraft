@@ -486,12 +486,24 @@ check("diagrams removed from preview", toggled.afterOff.svg === 0);
 check("mermaid fences fall back to code", toggled.afterOff.codeBlocks > toggled.afterOn.codeBlocks);
 check("toggle restores diagrams", toggled.afterOn.checked === true && toggled.afterOn.svg >= 2);
 
-// Each face is one dropdown. The old row had a text field for the CSS stack, a
-// second dropdown and a rendered specimen; three controls saying the same
-// thing, with the stack field editable on top of it.
-const faces = await evaluate(`(() => {
+// Each face is one searchable picker now: the old row had a native dropdown
+// over a hard-coded list, which is unusable once the list is every installed
+// family. The control still reports one selected family per role.
+const faces = await evaluate(`(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   [...document.querySelectorAll('.prefs-section')]
     .find((s) => s.textContent === 'Typography').click();
+  await sleep(150);
+
+  // Let the lazily-started font scan settle; opening the list while the panel
+  // is about to redraw would measure a popup that is immediately replaced.
+  for (let i = 0; i < 40; i++) {
+    const note = [...document.querySelectorAll('.prefs-row')].find((row) =>
+      (row.querySelector('.prefs-label')?.textContent ?? '').trim() === 'Installed fonts');
+    if (!note || !note.textContent.includes('Looking for installed fonts')) break;
+    await sleep(100);
+  }
+
   const allLabels = [...document.querySelectorAll('.prefs-row')]
     .map((row) => (row.querySelector('.prefs-label')?.textContent ?? '').replace('?', '').trim());
   const editorSizeIdx = allLabels.indexOf('Editor font size');
@@ -501,14 +513,31 @@ const faces = await evaluate(`(() => {
     const label = (row.querySelector('.prefs-label')?.textContent ?? '').replace('?', '').trim();
     return wanted.includes(label);
   });
+  const read = rows.map((row) => {
+    const trigger = row.querySelector('.prefs-font-trigger');
+    return {
+      label: (row.querySelector('.prefs-label')?.textContent ?? '').replace('?', '').trim(),
+      tag: trigger?.tagName ?? '',
+      selected: trigger?.querySelector('.prefs-font-current')?.textContent ?? '',
+    };
+  });
+
+  const first = rows[0]?.querySelector('.prefs-font-trigger');
+  first?.click();
+  await sleep(150);
+  const options = document.querySelectorAll('.prefs-font-option').length;
+  const search = Boolean(document.querySelector('.prefs-font-search'));
+  first?.click();
+  await sleep(50);
+
   return JSON.stringify({
     editorAboveSource: editorSizeIdx !== -1 && sourceEditorIdx === editorSizeIdx + 1,
-    labels: rows.map((row) => row.querySelector('.prefs-label')?.textContent?.replace('?', '').trim()),
-    controls: rows.map((row) =>
-      row.querySelectorAll('input, select, textarea, .prefs-font-specimen').length),
-    tags: rows.map((row) => row.querySelector('.prefs-control')?.firstElementChild?.tagName ?? ''),
-    options: rows.map((row) => row.querySelectorAll('select option').length),
-    selected: rows.map((row) => row.querySelector('select')?.selectedOptions[0]?.textContent ?? '')
+    labels: read.map((entry) => entry.label),
+    controls: read.map((entry) => (entry.tag ? 1 : 0)),
+    tags: read.map((entry) => entry.tag),
+    selected: read.map((entry) => entry.selected),
+    options,
+    search,
   });
 })()`);
 
@@ -517,17 +546,18 @@ console.log(`  labels   ${faces.labels.join(", ")}`);
 console.log(`  controls ${faces.controls.join(", ")}`);
 console.log(`  tags     ${faces.tags.join(", ")}`);
 console.log(`  selected ${faces.selected.join(", ")}`);
+console.log(`  options  ${faces.options} visible family choice(s)`);
 
 check(
-  "one dropdown for each face",
+  "one picker for each face",
   faces.editorAboveSource &&
     faces.labels.length === 4 &&
-    faces.tags.every((tag) => tag === "SELECT") &&
-    faces.controls.every((count) => count === 1),
+    faces.controls.every((count) => count === 1) &&
+    faces.tags.every((tag) => tag === "BUTTON"),
 );
 check(
-  "face pickers list the faces and keep a selection",
-  faces.options.every((count) => count >= 10) && faces.selected.every(Boolean),
+  "face pickers open a searchable list and keep a selection",
+  faces.options >= 10 && faces.search && faces.selected.every(Boolean),
 );
 
 // Math is drawn at KaTeX's own 1.21em, which is what makes it larger than the

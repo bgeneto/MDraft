@@ -201,13 +201,14 @@ export const TYPOGRAPHY_ROLES: TypographyRole[] = [
 ];
 
 /**
- * Faces offered in each picker.
+ * Suggested faces while the installed-font scan is running or unavailable.
  *
- * The bundled families come first because they are the only ones guaranteed
- * to exist on every machine. The rest are the faces most likely to be present on
- * Windows, macOS and a typical Linux desktop, so the list is useful without
- * pretending to be a system font enumeration — which Tauri does not offer, and
- * which the webview's own font API does not expose reliably.
+ * The native enumeration in `src-tauri/src/fonts.rs` is the real source: when
+ * it answers, the pickers offer every family the OS reports. This list remains
+ * as a fallback so the four pickers are useful before the answer arrives and on
+ * a machine whose platform API cannot be read. The bundled families come first
+ * because they are guaranteed to exist; the rest are faces commonly present on
+ * Windows, macOS and a Linux desktop.
  */
 export const FONT_SUGGESTIONS: string[] = [
   ...BUNDLED_FAMILIES.map((family) => family.name),
@@ -247,13 +248,12 @@ const ROLE_DEFAULTS: Record<string, string> = Object.fromEntries(
 );
 
 /**
- * The application defaults for the four per-preset reader adjustments.
+ * The application defaults for the four typography sizes.
  *
- * These mirror the defaults in `src-tauri/src/settings.rs`. They are
- * deliberately *not* part of a preset's identity (`values`): Editor font size,
- * Preview font size, Math scale and Code scale are remembered per preset in
- * `Settings::preset_overrides`, so an unadjusted preset starts at its own
- * `defaults` (or here when omitted).
+ * These mirror the defaults in `src-tauri/src/settings.rs`. A built-in preset
+ * may override them in its `defaults`; a reader's changes are stored as
+ * per-preset diffs in `Settings::preset_overrides`, so an unadjusted preset
+ * starts at its own defaults (or here when omitted).
  */
 export const DEFAULT_EDITOR_FONT_SIZE = 15;
 export const DEFAULT_BODY_FONT_SIZE = 16;
@@ -298,10 +298,11 @@ export interface TypographyPreset {
     codeFontScale?: number;
   };
   /**
-   * What identifies the preset: the four font stacks and the OpenType
-   * booleans. Editor font size, Preview font size, Math scale and Code scale are
-   * reader adjustments and are stored separately, so editing one does not
-   * change the active preset.
+   * The preset's built-in faces and OpenType switches.
+   *
+   * The active preset id is stored separately (`typographyPreset`), and any
+   * reader change is kept as a per-field diff in `presetOverrides`; these values
+   * are what an unadjusted preset and Reset return to.
    */
   values: Record<string, string | boolean>;
 }
@@ -311,12 +312,19 @@ export interface TypographyPreset {
  *
  * Chosen as complete typographic systems rather than single font swaps, because
  * the hard part of choosing type is the pairing, not the individual face. Each
- * one is a defensible answer on its own; the fields below let it be dismantled.
+ * one is a defensible answer on its own; the fields below let it be dismantled
+ * and remembered per preset.
  *
- * The System preset matches `Settings::default()` exactly, so a fresh
+ * The System preset resolves from `Settings::default()` exactly, so a fresh
  * installation reports it rather than falling through to "custom". It comes
  * first because that is the default: the application should not depend on a face
  * the reader's machine may not own until the reader asks for one.
+ *
+ * These six are the **detection** presets. Custom is declared separately below,
+ * so an untouched System setup can never be mistaken for Custom, and an older
+ * settings file with no stored preset id still finds the preset it was using.
+ * Editing a preset no longer changes its identity: the reader's changes are
+ * stored as per-preset diffs, and the active id is persisted.
  *
  * Fira Code is the editor and preview-code face of the Serif preset only.
  * JetBrains Mono, which Classic, Literary and Technical used to share, now
@@ -450,6 +458,31 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
     },
   },
 ];
+
+export const CUSTOM_PRESET_ID = "custom";
+
+/**
+ * Custom is a real preset and an explicit choice, not the label the picker
+ * falls back to when nothing matches.
+ *
+ * Its built-in values are the System preset's, so the first time it is chosen
+ * it starts from the operating system's own faces, as the reader described.
+ * Every field can then be changed and is remembered in `presetOverrides.custom`
+ * like any other preset; Reset removes that entry and returns here.
+ *
+ * Deliberately absent from `TYPOGRAPHY_PRESETS`: detecting a preset by
+ * comparing values must never report Custom for an untouched System setup.
+ */
+export const CUSTOM_PRESET: TypographyPreset = {
+  id: CUSTOM_PRESET_ID,
+  label: "Custom",
+  note: "A free setup that starts from System and is remembered like any other preset. Change any face, size or OpenType option; Reset returns it to the System defaults.",
+  defaults: TYPOGRAPHY_PRESETS[0].defaults,
+  values: { ...TYPOGRAPHY_PRESETS[0].values },
+};
+
+/** The pills the Typography panel offers, in display order. */
+export const PRESET_CHOICES: TypographyPreset[] = [...TYPOGRAPHY_PRESETS, CUSTOM_PRESET];
 
 // ---------------------------------------------------------------------------
 // Export embedding
