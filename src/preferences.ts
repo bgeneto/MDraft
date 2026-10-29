@@ -11,6 +11,9 @@
 
 import * as api from "./api";
 import {
+  BUNDLED_FAMILIES,
+  CUSTOM_PRESET,
+  CUSTOM_PRESET_ID,
   DEFAULT_BODY_FONT_SIZE,
   DEFAULT_CODE_SCALE,
   DEFAULT_EDITOR_FONT_SIZE,
@@ -18,11 +21,14 @@ import {
   DEFAULT_MATH_SCALE,
   EDITOR_LINE_HEIGHTS,
   FONT_SUGGESTIONS,
+  PRESET_CHOICES,
   TYPOGRAPHY_PRESETS,
   TYPOGRAPHY_ROLES,
   type TypographyPreset,
   type TypographyRole,
 } from "./fonts";
+import { firstFamily, isGenericFamily, stackWith } from "./font-stacks";
+import { attachFontPicker, closeFontPicker, type FontChoice } from "./font-picker";
 import { PALETTE_OPTIONS } from "./syntax-themes";
 import { dictionaryOptions, spellcheckAvailabilityNote } from "./spellcheck";
 import { MAX_RATE, MIN_RATE, voiceAvailabilityNote, type VoiceOption } from "./read-aloud";
@@ -80,6 +86,18 @@ type Row =
       options: [string, string][];
       get: () => string;
       set: (value: string) => void;
+    }
+  | {
+      kind: "font";
+      label: string;
+      help?: string;
+      /** Read on every open: the installed-font scan may arrive after the row. */
+      choices: () => FontChoice[];
+      /** The choice value currently in force, or "" for the role fallback. */
+      selected: () => string;
+      /** The role fallback, used for the default specimen. */
+      fallback: string;
+      choose: (choice: FontChoice) => void;
     }
   /**
    * A fixed set of alternatives, shown as buttons rather than a dropdown.
@@ -139,6 +157,8 @@ type Row =
       label: string;
       help?: string;
       text: string;
+      /** Disable when the action would change nothing (an unadjusted preset). */
+      disabled?: () => boolean;
       action: () => void | Promise<void>;
     };
 
@@ -178,6 +198,10 @@ function rowSearchText(row: Row): string {
     for (const [, label] of row.options) parts.push(label);
   }
   if (row.kind === "text" && row.suggestions) parts.push(...row.suggestions());
+  // A font row's catalog is hundreds of names; indexing it would make almost
+  // every query match. The current face is the searchable part; the picker has
+  // its own search for the rest.
+  if (row.kind === "font") parts.push(row.selected());
   return parts.join(" ").toLowerCase();
 }
 
@@ -249,282 +273,166 @@ function filterSection(section: Section, terms: string[]): Section | null {
 // Typography
 // ---------------------------------------------------------------------------
 
-/**
- * The first family named in a `font-family` stack, without its quotes.
- *
- * Used to decide which face a dropdown should report for a setting written by a
- * preset, an older version, or by hand.
- */
-function firstFamily(stack: string): string {
-  const first = stack.split(",")[0] ?? "";
-  return first.trim().replace(/^["']|["']$/g, "");
-}
+/** Installed families from the OS, or null until the first scan resolves. */
+let systemFamilies: string[] | null = null;
+let systemFontsError: string | null = null;
+let systemFontsPromise: Promise<void> | null = null;
+/** One automatic attempt per Preferences open; a failure must not loop redraws. */
+let systemFontsAttempted = false;
 
-/**
- * A stack that begins with `family` and keeps the role's own fallbacks behind it.
- *
- * The tail is what makes the choice safe: a family with nothing behind it renders
- * as whatever the machine happens to have, and a missing face would fall through
- * to the browser's default serif in the middle of a code block.
- */
-function stackWith(family: string, fallback: string): string {
-  const quoted = /\s/.test(family) ? `"${family}"` : family;
-  const tail = fallback
-    .split(",")
-    .map((part) => part.trim())
-    .slice(1)
-    // The chosen face is often already in the fallback tail — choosing
-    // "Segoe UI" used to produce `"Segoe UI", "Segoe UI", …`.
-    .filter((part) => part.replace(/^["']|["']$/g, "") !== family);
-  return [quoted, ...tail].join(", ");
-}
+/** The preset id a Reset is waiting to confirm, and its expiry. */
+let pendingReset: string | null = null;
+let pendingResetTimer: number | null = null;
+/** The font row to refocus after the panel rebuilds following a choice. */
+let focusFontLabel: string | null = null;
 
-/**
- * The value a face picker reports for a role's stored stack.
- *
- * The built-in stack is represented by the empty string, which is also how the
- * settings spell "use the default". Everything else is reported by the face it
- * begins with, because that is the only decision a single dropdown can express.
- */
-function fontSelection(role: TypographyRole, raw: string): string {
-  const current = raw || role.fallback;
-  if (current === role.fallback) return "";
-  const family = firstFamily(current);
-  return FONT_SUGGESTIONS.includes(family) ? family : current;
-}
-
-/**
- * Options for one face picker.
- *
- * A stack whose first family is not one of the suggestions is added as a custom
- * entry, so a setting from an older version or from a hand-edited settings.json
- * stays visible instead of leaving the control blank — or, worse, being silently
- * replaced the first time the panel is opened.
- */
-function fontOptions(role: TypographyRole, raw: string): [string, string][] {
-  const options: [string, string][] = [["", "Default (built-in stack)"]];
-  for (const family of FONT_SUGGESTIONS) options.push([family, family]);
-  const current = raw || role.fallback;
-  const family = firstFamily(current);
-  if (current !== role.fallback && !FONT_SUGGESTIONS.includes(family)) {
-    options.push([current, `Custom — ${family || current}`]);
+function clearPendingReset(): void {
+  pendingReset = null;
+  if (pendingResetTimer !== null) {
+    window.clearTimeout(pendingResetTimer);
+    pendingResetTimer = null;
   }
-  return options;
 }
 
 /**
- * The typography section: presets, then one row per role, then the OpenType
- * decisions that a family name alone does not express.
+ * Ask the backend for the installed families once per Preferences open.
  *
- * The preset picker exists because choosing type is a pairing problem, not a
- * font problem. Each preset is a complete system, and the fields below it are
- * there to be dismantled by someone who already knows what they want.
- *
- * Each face is one dropdown. A text field for the CSS stack and a specimen
- * beneath it were two more ways to say the same thing — and the stack field
- * could be typed into, which made the picker beside it ambiguous. The stack is
- * still what gets stored; it is just no longer a second control.
+ * The rows are rebuilt when the answer arrives; while it is in flight the
+ * bundled faces and the curated suggestions keep every picker usable. A failure
+ * is sticky until the panel is reopened, so a redraw cannot start a retry loop.
  */
-function typographyRows(host: PreferencesHost): Row[] {
-  const s = () => host.settings();
-  const overrides = () => s().presetOverrides ?? {};
+function ensureSystemFamilies(rerender: () => void): void {
+  if (systemFamilies !== null || systemFontsPromise !== null || systemFontsAttempted) return;
+  systemFontsAttempted = true;
+  systemFontsPromise = api
+    .systemFonts()
+    .then((families) => {
+      if (families.length === 0) throw new Error("the operating system reported no fonts");
+      systemFamilies = families;
+      systemFontsError = null;
+    })
+    .catch((error) => {
+      systemFontsError = String(error);
+    })
+    .finally(() => {
+      systemFontsPromise = null;
+      rerender();
+    });
+}
 
-  /**
-   * Remember a size for the active preset, or keep it global under Custom.
-   *
-   * The top-level value is always written: it is what the editor, preview and
-   * exports read. The map entry is what makes the next visit to the same preset
-   * restore the reader's choice.
-   */
-  const updateSize = (
-    key: "editorFontSize" | "bodyFontSize" | "mathFontScale" | "codeFontScale",
-    value: number,
-  ) => {
-    const preset = activePreset(host);
-    if (!preset) {
-      host.update({ [key]: value } as Partial<api.Settings>);
-      return;
-    }
-    const next = { ...overrides() };
-    next[preset.id] = { ...next[preset.id], [key]: value };
-    host.update({ [key]: value, presetOverrides: next } as Partial<api.Settings>);
+function systemFontsNote(): string {
+  if (systemFamilies !== null) {
+    return `${systemFamilies.length} installed font families are available in every face list. Fonts installed while MDraft is running appear after a restart.`;
+  }
+  if (systemFontsError !== null) {
+    return "The installed font list could not be read. The bundled faces and a short list of common families are still available; restart MDraft to try again.";
+  }
+  return "Looking for installed fonts…";
+}
+
+const BUNDLED_NAMES = new Set(BUNDLED_FAMILIES.map((family) => family.name.toLowerCase()));
+
+/**
+ * Every choice a face picker offers.
+ *
+ * The stored value is a complete stack; `value` is the family name (or "" for
+ * the System default). A family that is not in the current list becomes a custom
+ * entry whose stored stack keeps the saved tail, so a hand-edited fallback is
+ * not silently discarded. `stackWith` uses the preset's built-in stack as the
+ * tail, never the previous choice's, so editing one face does not accumulate old
+ * fallbacks.
+ */
+function fontChoices(
+  role: TypographyRole,
+  settings: api.Settings,
+  preset: TypographyPreset,
+): FontChoice[] {
+  const raw = (settings[role.id] as string | undefined) ?? "";
+  const builtIn = presetFace(preset, role);
+  const base = builtIn || role.fallback;
+  // System and Custom store the role's fallback stack as their built-in face.
+  // Treat that stack, and the empty "use the role fallback" value, as the same
+  // "System default" entry; a named preset's own stack is not a default even
+  // when a hand-edited file happens to hold an empty value.
+  const builtInIsRoleDefault = (builtIn || role.fallback) === role.fallback;
+  const liveIsRoleDefault = (raw || role.fallback) === role.fallback;
+  const current =
+    builtInIsRoleDefault && liveIsRoleDefault ? "" : firstFamily(raw || role.fallback);
+  const choices: FontChoice[] = [];
+
+  if (builtInIsRoleDefault) {
+    choices.push({ value: "", label: "System default", group: "default", stack: role.fallback });
+  }
+
+  const seen = new Set<string>();
+  const add = (family: string, group: FontChoice["group"], stack: string): void => {
+    const key = family.toLowerCase();
+    if (!family || seen.has(key)) return;
+    seen.add(key);
+    choices.push({ value: family, label: family, group, stack });
   };
 
-  const rows: Row[] = [
-    {
-      kind: "choices",
-      label: "Preset",
-      help: "Sets the faces and OpenType options below at once. Editor font size, Preview font size, Math scale and Code scale are remembered separately for each preset; switching back restores them. Changing a face leaves the preset — nothing is locked.",
-      options: [
-        ...TYPOGRAPHY_PRESETS.map((preset) => [preset.id, preset.label] as [string, string]),
-        // Always present, so the control is never blank: it is what the picker
-        // shows once a field below has been edited away from every preset.
-        ["custom", "Custom"],
-      ],
-      // The preset's identity is detected from its fixed values; the four sizes
-      // are remembered separately in `presetOverrides`. Picking a preset writes
-      // both, and the picker then reports whichever identity is in force.
-      get: () => activePreset(host)?.id ?? "custom",
-      set: (value) => {
-        const preset = TYPOGRAPHY_PRESETS.find((entry) => entry.id === value);
-        if (!preset) return;
+  for (const family of BUNDLED_FAMILIES) {
+    add(family.name, "bundled", stackWith(family.name, base));
+  }
 
-        // The preset being left keeps the sizes the reader gave it. This is
-        // also the lazy migration for a settings file written before
-        // `presetOverrides` existed: the current globals become its entry.
-        const next = { ...overrides() };
-        const current = activePreset(host);
-        if (current) {
-          const entry = { ...next[current.id] };
-          if (entry.editorFontSize === undefined) entry.editorFontSize = s().editorFontSize;
-          if (entry.bodyFontSize === undefined) entry.bodyFontSize = s().bodyFontSize;
-          if (entry.mathFontScale === undefined) entry.mathFontScale = s().mathFontScale;
-          if (entry.codeFontScale === undefined) entry.codeFontScale = s().codeFontScale;
-          next[current.id] = entry;
-        }
+  const installed = systemFamilies ?? FONT_SUGGESTIONS;
+  const group: FontChoice["group"] = systemFamilies ? "system" : "suggested";
+  for (const family of installed) {
+    // A bundled family wins its CSS name because its @font-face rules are
+    // installed; offering the system copy as a second entry would be a lie.
+    if (BUNDLED_NAMES.has(family.toLowerCase())) continue;
+    add(family, group, stackWith(family, base));
+  }
 
-        const remembered = next[preset.id] ?? {};
-        host.update({
-          ...preset.values,
-          editorFontSize:
-            remembered.editorFontSize ??
-            preset.defaults?.editorFontSize ??
-            DEFAULT_EDITOR_FONT_SIZE,
-          bodyFontSize:
-            remembered.bodyFontSize ?? preset.defaults?.bodyFontSize ?? DEFAULT_BODY_FONT_SIZE,
-          mathFontScale:
-            remembered.mathFontScale ?? preset.defaults?.mathFontScale ?? DEFAULT_MATH_SCALE,
-          codeFontScale:
-            remembered.codeFontScale ?? preset.defaults?.codeFontScale ?? DEFAULT_CODE_SCALE,
-          presetOverrides: next,
-        } as Partial<api.Settings>);
-      },
-    },
-    {
-      kind: "note",
-      label: "",
-      text:
-        activePreset(host)?.note ??
-        "Set by hand, so no preset matches exactly. The four faces below are the ones in use.",
-    },
-    { kind: "heading", label: "Faces" },
-    {
-      kind: "number",
-      label: "Editor font size",
-      help: "Source text in the editor. Remembered for the active preset; under Custom it applies to the current setup.",
-      min: 10,
-      max: 40,
-      suffix: "px",
-      get: () => s().editorFontSize,
-      set: (value) => updateSize("editorFontSize", value),
-    },
-  ];
-
-  for (const role of TYPOGRAPHY_ROLES) {
-    const raw = () => s()[role.id];
-    rows.push({
-      kind: "select",
-      label: role.label,
-      help: role.help,
-      options: fontOptions(role, raw()),
-      // Report the face actually in use, not the whole stack: the fallback tail
-      // is an implementation detail, and showing it here is what made the old
-      // text field look like a second, competing picker.
-      get: () => fontSelection(role, raw()),
-      set: (value) => {
-        if (value === fontSelection(role, raw())) return;
-        // "" is how the settings spell "the built-in stack"; every other value
-        // is a family, and the role's own fallbacks are rebuilt behind it.
-        host.update({
-          [role.id]: value === "" ? "" : stackWith(value, role.fallback),
-        } as Partial<api.Settings>);
-      },
+  if (current && !seen.has(current.toLowerCase())) {
+    choices.push({
+      value: current,
+      label: current,
+      group: "custom",
+      stack: raw || role.fallback,
+      // A family installed after the scan, or a hand-edited stack, is not
+      // "missing"; only a loaded list that does not contain it is.
+      missing: systemFamilies !== null && !isGenericFamily(current),
     });
   }
 
-  rows.push(
-    {
-      kind: "number",
-      label: "Preview font size",
-      help: "Prose in the preview and in exports. Remembered for the active preset; under Custom it applies to the current setup.",
-      min: 11,
-      max: 32,
-      suffix: "px",
-      get: () => s().bodyFontSize,
-      set: (value) => updateSize("bodyFontSize", value),
-    },
-    {
-      kind: "number",
-      label: "Math scale",
-      help: "Scales the mathematics in the preview and in exports. KaTeX draws formulas at 121% of the surrounding text, so about 83% makes them match the prose; 100% leaves KaTeX's own ratio alone. Remembered for the active preset; under Custom it applies to the current setup.",
-      min: 70,
-      max: 130,
-      suffix: "%",
-      get: () => s().mathFontScale,
-      set: (value) => updateSize("mathFontScale", value),
-    },
-    {
-      kind: "number",
-      label: "Code scale",
-      help: "Scales fenced and inline code in the preview and in exports. 100% keeps the built-in ratio — a block at 86% of the prose and an inline span at 88% — and about 116% makes a block the same nominal size as the prose. A monospaced face still reads larger at that size, so match it by eye. Remembered for the active preset; under Custom it applies to the current setup.",
-      min: 70,
-      max: 130,
-      suffix: "%",
-      get: () => s().codeFontScale,
-      set: (value) => updateSize("codeFontScale", value),
-    },
-    {
-      kind: "note",
-      label: "Bundled faces",
-      text: "The bundled families are under the SIL Open Font License, so they look the same on every machine and travel inside exported HTML and PDF.",
-    },
-    { kind: "heading", label: "OpenType" },
-    {
-      kind: "checkbox",
-      label: "Ligatures in code",
-      help: "Turns the programming ligatures of faces that have them — JetBrains Mono draws `->`, `=>` and `!=` as single glyphs. Off by default, because whether a source file should look like that is a real disagreement.",
-      get: () => s().ligaturesInCode,
-      set: (value) => host.update({ ligaturesInCode: value }),
-    },
-    {
-      kind: "checkbox",
-      label: "Tabular figures in tables",
-      help: "Gives every digit the same width so columns of numbers line up. Worth leaving on: proportional figures in a table are one of the few typographic choices that is simply wrong.",
-      get: () => s().tabularFigures,
-      set: (value) => host.update({ tabularFigures: value }),
-    },
-    {
-      kind: "checkbox",
-      label: "Oldstyle figures in prose",
-      help: "Figures with ascenders and descenders, so 1,234 sits in running text instead of shouting. Needs a face that has them; Source Serif 4 and Georgia do.",
-      get: () => s().oldstyleFigures,
-      set: (value) => host.update({ oldstyleFigures: value }),
-    },
-    {
-      kind: "checkbox",
-      label: "Slashed zero in code",
-      help: "Distinguishes 0 from capital O. Turns on tabular figures with it, since code is read in columns.",
-      get: () => s().slashedZero,
-      set: (value) => host.update({ slashedZero: value }),
-    },
-  );
-
-  return rows;
+  return choices;
 }
 
 /**
- * The preset whose values match the settings exactly, if any.
+ * The choice value a picker reports for a role's stored stack.
  *
- * Compares the *resolved* value for the font fields, because an empty setting
- * means "the built-in default for that role" — comparing the raw string would
- * make every fresh installation report "custom", which is precisely backwards.
- *
- * Editor font size, Preview font size, Math scale and Code scale are
- * deliberately absent from `values`: they are reader adjustments in
- * `presetOverrides`, so editing one does not make the active preset look
- * custom.
+ * The empty string is the System/Custom "System default" entry. Everything
+ * else is the family the stack begins with; a stack from an older version or a
+ * hand-edited file therefore stays visible instead of blanking the control.
  */
-function activePreset(host: PreferencesHost): TypographyPreset | null {
+function fontSelection(
+  role: TypographyRole,
+  settings: api.Settings,
+  preset: TypographyPreset,
+): string {
+  const raw = (settings[role.id] as string | undefined) ?? "";
+  const builtIn = presetFace(preset, role);
+  if ((raw || role.fallback) === role.fallback && (builtIn || role.fallback) === role.fallback) {
+    return "";
+  }
+  return firstFamily(raw || role.fallback);
+}
+
+function presetById(id: string): TypographyPreset | null {
+  return PRESET_CHOICES.find((preset) => preset.id === id) ?? null;
+}
+
+/**
+ * The preset whose live values match a built-in exactly.
+ *
+ * Only used when `typographyPreset` is empty (a file written before the field
+ * existed) or unknown. Custom is deliberately absent from
+ * `TYPOGRAPHY_PRESETS`, so an untouched System setup can never be detected as
+ * Custom.
+ */
+function detectedPreset(host: PreferencesHost): TypographyPreset | null {
   const settings = host.settings() as unknown as Record<string, unknown>;
   const resolve = (key: string): unknown => {
     const raw = settings[key];
@@ -537,6 +445,330 @@ function activePreset(host: PreferencesHost): TypographyPreset | null {
       Object.entries(preset.values).every(([key, value]) => resolve(key) === value),
     ) ?? null
   );
+}
+
+/**
+ * The active preset: the stored id when it names one, otherwise the detected
+ * built-in, otherwise Custom.
+ *
+ * A stored id wins over detection. That is the whole difference from the old
+ * model: editing a face no longer changes which preset is active.
+ */
+function activePreset(host: PreferencesHost): TypographyPreset {
+  const stored = host.settings().typographyPreset;
+  return (stored ? presetById(stored) : null) ?? detectedPreset(host) ?? CUSTOM_PRESET;
+}
+
+function presetFace(preset: TypographyPreset, role: TypographyRole): string {
+  const value = preset.values[role.id];
+  return typeof value === "string" ? value : "";
+}
+
+function presetFlag(preset: TypographyPreset, key: string): boolean {
+  return preset.values[key] === true;
+}
+
+const SIZE_FALLBACKS = {
+  editorFontSize: DEFAULT_EDITOR_FONT_SIZE,
+  bodyFontSize: DEFAULT_BODY_FONT_SIZE,
+  mathFontScale: DEFAULT_MATH_SCALE,
+  codeFontScale: DEFAULT_CODE_SCALE,
+} as const;
+type SizeKey = keyof typeof SIZE_FALLBACKS;
+
+const FLAG_KEYS = ["ligaturesInCode", "tabularFigures", "oldstyleFigures", "slashedZero"] as const;
+
+/**
+ * The differences between the live settings and one preset's built-ins.
+ *
+ * Only differences are stored. Setting a field back to the built-in removes it,
+ * so a later release can still improve a part of the preset the reader never
+ * touched. Comparing resolved stacks means an empty setting really is "the
+ * built-in stack", not a value that only looks different.
+ */
+function captureOverride(settings: api.Settings, preset: TypographyPreset): api.PresetOverride {
+  const entry: api.PresetOverride = {};
+
+  for (const role of TYPOGRAPHY_ROLES) {
+    const live = (settings[role.id] as string | undefined) ?? "";
+    const builtIn = presetFace(preset, role);
+    if ((live || role.fallback) !== (builtIn || role.fallback)) {
+      entry[role.id] = live;
+    }
+  }
+
+  for (const key of Object.keys(SIZE_FALLBACKS) as SizeKey[]) {
+    const live = settings[key];
+    const builtIn = preset.defaults?.[key] ?? SIZE_FALLBACKS[key];
+    if (live !== builtIn) entry[key] = live;
+  }
+
+  for (const key of FLAG_KEYS) {
+    const live = settings[key];
+    if (live !== presetFlag(preset, key)) entry[key] = live;
+  }
+
+  return entry;
+}
+
+function overridesFor(host: PreferencesHost): Record<string, api.PresetOverride> {
+  return { ...(host.settings().presetOverrides ?? {}) };
+}
+
+function captureInto(
+  overrides: Record<string, api.PresetOverride>,
+  settings: api.Settings,
+  preset: TypographyPreset,
+): void {
+  const entry = captureOverride(settings, preset);
+  if (Object.keys(entry).length === 0) delete overrides[preset.id];
+  else overrides[preset.id] = entry;
+}
+
+/** Write one preset's built-ins plus its remembered diffs. */
+function applyPreset(
+  host: PreferencesHost,
+  preset: TypographyPreset,
+  overrides: Record<string, api.PresetOverride>,
+): void {
+  const entry = overrides[preset.id] ?? {};
+  const patch: Partial<api.Settings> = {
+    editorFontSize:
+      entry.editorFontSize ?? preset.defaults?.editorFontSize ?? DEFAULT_EDITOR_FONT_SIZE,
+    bodyFontSize: entry.bodyFontSize ?? preset.defaults?.bodyFontSize ?? DEFAULT_BODY_FONT_SIZE,
+    mathFontScale: entry.mathFontScale ?? preset.defaults?.mathFontScale ?? DEFAULT_MATH_SCALE,
+    codeFontScale: entry.codeFontScale ?? preset.defaults?.codeFontScale ?? DEFAULT_CODE_SCALE,
+    ligaturesInCode: entry.ligaturesInCode ?? presetFlag(preset, "ligaturesInCode"),
+    tabularFigures: entry.tabularFigures ?? presetFlag(preset, "tabularFigures"),
+    oldstyleFigures: entry.oldstyleFigures ?? presetFlag(preset, "oldstyleFigures"),
+    slashedZero: entry.slashedZero ?? presetFlag(preset, "slashedZero"),
+    typographyPreset: preset.id,
+    presetOverrides: overrides,
+  };
+  for (const role of TYPOGRAPHY_ROLES) {
+    (patch as Record<string, unknown>)[role.id] = entry[role.id] ?? presetFace(preset, role);
+  }
+  host.update(patch);
+}
+
+/**
+ * Switch presets without losing the outgoing one's edits.
+ *
+ * Capturing the *live* state, not just the stored diff, also preserves a setup
+ * written before this model existed: the first time it is left, the whole old
+ * state becomes the outgoing preset's entry.
+ */
+function switchPreset(host: PreferencesHost, id: string): void {
+  const target = presetById(id);
+  if (!target) return;
+  const current = activePreset(host);
+  const next = overridesFor(host);
+  captureInto(next, host.settings(), current);
+  clearPendingReset();
+  applyPreset(host, target, next);
+}
+
+/** Restore the active preset's built-in values; other presets are untouched. */
+function resetPreset(host: PreferencesHost): void {
+  const preset = activePreset(host);
+  const next = overridesFor(host);
+  delete next[preset.id];
+  clearPendingReset();
+  applyPreset(host, preset, next);
+}
+
+/**
+ * Write one typography field and remember the difference for the active preset.
+ *
+ * The top-level value is always written: it is what the editor, preview and
+ * exports read. `captureOverride` canonicalises the whole entry, so an edit that
+ * returns a field to its built-in value removes it again.
+ */
+function updateTypographyField<K extends keyof api.Settings>(
+  host: PreferencesHost,
+  key: K,
+  value: api.Settings[K],
+): void {
+  const preset = activePreset(host);
+  const settings = { ...host.settings(), [key]: value } as api.Settings;
+  const next = overridesFor(host);
+  const entry = captureOverride(settings, preset);
+  if (Object.keys(entry).length === 0) delete next[preset.id];
+  else next[preset.id] = entry;
+  host.update({
+    [key]: value,
+    typographyPreset: preset.id,
+    presetOverrides: next,
+  } as Partial<api.Settings>);
+}
+
+function presetAdjusted(host: PreferencesHost): boolean {
+  return Object.keys(captureOverride(host.settings(), activePreset(host))).length > 0;
+}
+
+/**
+ * The typography section: presets, Reset, the installed-font status, one picker
+ * per role, the sizes, and the OpenType decisions.
+ *
+ * The preset picker exists because choosing type is a pairing problem, not a
+ * font problem. Each preset is a complete system, and the fields below it are
+ * there to be dismantled by someone who already knows what they want; the
+ * dismantling is remembered with the preset.
+ *
+ * Each face is one searchable picker over the bundled and installed families.
+ * The stack is what gets stored; the picker never becomes a second free-text
+ * control.
+ */
+function typographyRows(host: PreferencesHost, refresh: () => void): Row[] {
+  const s = () => host.settings();
+  const preset = () => activePreset(host);
+  const resetLabel = () =>
+    pendingReset === preset().id
+      ? `Confirm reset of “${preset().label}”`
+      : preset().id === CUSTOM_PRESET_ID
+        ? "Reset “Custom” to the System defaults"
+        : `Reset “${preset().label}” to defaults`;
+
+  const rows: Row[] = [
+    {
+      kind: "choices",
+      label: "Preset",
+      help: "Sets the faces, sizes and OpenType options below at once. Every change is remembered with the active preset; switching away and back restores it. Custom starts from System. Reset restores the built-in values.",
+      options: PRESET_CHOICES.map((entry) => [entry.id, entry.label] as [string, string]),
+      get: () => preset().id,
+      set: (value) => switchPreset(host, value),
+    },
+    {
+      kind: "note",
+      label: "",
+      text: presetAdjusted(host)
+        ? "Adjusted — this preset keeps your changes. Reset restores its built-in faces, sizes and OpenType options."
+        : preset().note,
+    },
+    {
+      kind: "button",
+      label: "Defaults",
+      help: "Restores this preset's built-in faces, sizes and OpenType options. Other presets keep their changes. Click once to arm the reset, then again to confirm.",
+      text: resetLabel(),
+      disabled: () => !presetAdjusted(host),
+      action: () => {
+        const id = preset().id;
+        if (pendingReset === id) {
+          resetPreset(host);
+          return;
+        }
+        clearPendingReset();
+        pendingReset = id;
+        pendingResetTimer = window.setTimeout(() => {
+          pendingReset = null;
+          pendingResetTimer = null;
+          refresh();
+        }, 4000);
+      },
+    },
+    {
+      kind: "note",
+      label: "Installed fonts",
+      text: systemFontsNote(),
+    },
+    { kind: "heading", label: "Faces" },
+    {
+      kind: "number",
+      label: "Editor font size",
+      help: "Source text in the editor. Remembered with this preset.",
+      min: 10,
+      max: 40,
+      suffix: "px",
+      get: () => s().editorFontSize,
+      set: (value) => updateTypographyField(host, "editorFontSize", value),
+    },
+  ];
+
+  for (const role of TYPOGRAPHY_ROLES) {
+    rows.push({
+      kind: "font",
+      label: role.label,
+      help: role.help,
+      choices: () => fontChoices(role, s(), preset()),
+      selected: () => fontSelection(role, s(), preset()),
+      fallback: role.fallback,
+      choose: (choice) => {
+        updateTypographyField(host, role.id, choice.value === "" ? "" : choice.stack);
+        // The panel rebuilds below; remember which picker should get focus back
+        // so a keyboard choice does not drop the reader at the top of the card.
+        focusFontLabel = role.label;
+      },
+    });
+  }
+
+  rows.push(
+    {
+      kind: "number",
+      label: "Preview font size",
+      help: "Prose in the preview and in exports. Remembered with this preset.",
+      min: 11,
+      max: 32,
+      suffix: "px",
+      get: () => s().bodyFontSize,
+      set: (value) => updateTypographyField(host, "bodyFontSize", value),
+    },
+    {
+      kind: "number",
+      label: "Math scale",
+      help: "Scales the mathematics in the preview and in exports. KaTeX draws formulas at 121% of the surrounding text, so about 83% makes them match the prose; 100% leaves KaTeX's own ratio alone. Remembered with this preset.",
+      min: 70,
+      max: 130,
+      suffix: "%",
+      get: () => s().mathFontScale,
+      set: (value) => updateTypographyField(host, "mathFontScale", value),
+    },
+    {
+      kind: "number",
+      label: "Code scale",
+      help: "Scales fenced and inline code in the preview and in exports. 100% keeps the built-in ratio — a block at 86% of the prose and an inline span at 88% — and about 116% makes a block the same nominal size as the prose. A monospaced face still reads larger at that size, so match it by eye. Remembered with this preset.",
+      min: 70,
+      max: 130,
+      suffix: "%",
+      get: () => s().codeFontScale,
+      set: (value) => updateTypographyField(host, "codeFontScale", value),
+    },
+    {
+      kind: "note",
+      label: "Bundled faces",
+      text: "The bundled families are under the SIL Open Font License, so they look the same on every machine and travel inside exported HTML and PDF. System families are named in an export but their files are not embedded, so a reader without the face sees the stack's fallback.",
+    },
+    { kind: "heading", label: "OpenType" },
+    {
+      kind: "checkbox",
+      label: "Ligatures in code",
+      help: "Turns the programming ligatures of faces that have them — JetBrains Mono draws `->`, `=>` and `!=` as single glyphs. Off by default, because whether a source file should look like that is a real disagreement.",
+      get: () => s().ligaturesInCode,
+      set: (value) => updateTypographyField(host, "ligaturesInCode", value),
+    },
+    {
+      kind: "checkbox",
+      label: "Tabular figures in tables",
+      help: "Gives every digit the same width so columns of numbers line up. Worth leaving on: proportional figures in a table are one of the few typographic choices that is simply wrong.",
+      get: () => s().tabularFigures,
+      set: (value) => updateTypographyField(host, "tabularFigures", value),
+    },
+    {
+      kind: "checkbox",
+      label: "Oldstyle figures in prose",
+      help: "Figures with ascenders and descenders, so 1,234 sits in running text instead of shouting. Needs a face that has them; Source Serif 4 and Georgia do.",
+      get: () => s().oldstyleFigures,
+      set: (value) => updateTypographyField(host, "oldstyleFigures", value),
+    },
+    {
+      kind: "checkbox",
+      label: "Slashed zero in code",
+      help: "Distinguishes 0 from capital O. Turns on tabular figures with it, since code is read in columns.",
+      get: () => s().slashedZero,
+      set: (value) => updateTypographyField(host, "slashedZero", value),
+    },
+  );
+
+  return rows;
 }
 
 // ---------------------------------------------------------------------------
@@ -1502,7 +1734,7 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
     {
       id: "typography",
       title: "Typography",
-      rows: typographyRows(host),
+      rows: typographyRows(host, refresh),
     },
     {
       id: "ai",
@@ -1810,6 +2042,19 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       return select;
     }
 
+    if (row.kind === "font") {
+      return attachFontPicker({
+        label: row.label,
+        choices: row.choices,
+        selected: row.selected,
+        fallback: row.fallback,
+        choose: (choice) => {
+          row.choose(choice);
+          render();
+        },
+      });
+    }
+
     if (row.kind === "number") {
       const wrap = document.createElement("div");
       wrap.className = "prefs-number";
@@ -1934,6 +2179,10 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       button.type = "button";
       button.className = "prefs-button";
       button.textContent = row.text;
+      if (row.disabled?.()) {
+        button.disabled = true;
+        button.title = "This preset is already at its defaults.";
+      }
       // Redraw once the action settles: adding, removing or reconfiguring an
       // export format all change which rows this panel should be showing.
       button.addEventListener("click", () => {
@@ -1957,6 +2206,12 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       const settings = host.settings();
       const endpoint = `${settings.aiProvider}|${settings.aiBaseUrl}`;
       if (ai.endpoint !== endpoint && !ai.loading) void refreshAiStatus();
+    }
+
+    if (section.id === "typography" && systemFamilies === null) {
+      // Lazy on purpose: start-up never scans the font collection. While the
+      // answer is in flight the bundled faces and suggested list are usable.
+      ensureSystemFamilies(render);
     }
 
     const fragment = document.createDocumentFragment();
@@ -2016,18 +2271,34 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
     // The rows are about to be replaced; a fixed popup would otherwise keep
     // pointing at an input that no longer exists.
     closeModelCombo();
+    closeFontPicker();
     const sections = visibleSections();
     if (!sections.some((s) => s.id === activeId) && sections.length > 0) {
       activeId = sections[0].id;
     }
     renderNav(sections);
     renderContent(sections);
+    if (focusFontLabel !== null) {
+      // A chosen family rebuilds the row; return focus to the new trigger so a
+      // keyboard reader can continue from the control they just used.
+      const label = focusFontLabel;
+      focusFontLabel = null;
+      for (const trigger of contentEl.querySelectorAll<HTMLElement>(".prefs-font-trigger")) {
+        if (trigger.getAttribute("aria-label") === label) {
+          trigger.focus();
+          break;
+        }
+      }
+    }
   }
 
   function open(): void {
     overlay.hidden = false;
     query = "";
     searchEl.value = "";
+    // A failed scan is retried only when the panel is reopened, never from the
+    // redraw that reports the failure.
+    if (systemFamilies === null) systemFontsAttempted = false;
     render();
     layoutPanel();
     searchEl.focus();
@@ -2043,6 +2314,9 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
 
   function close(): void {
     closeModelCombo();
+    closeFontPicker();
+    clearPendingReset();
+    focusFontLabel = null;
     overlay.hidden = true;
   }
 

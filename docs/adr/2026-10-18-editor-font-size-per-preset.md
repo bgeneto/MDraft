@@ -1,6 +1,6 @@
 # Editor font size, Preview font size and Math scale are remembered per preset
 
-**Status:** accepted
+**Status:** superseded by `2026-10-29-preset-state.md`
 **Date:** 2026-10-18
 **Supersedes:** `2026-10-17-preset-size-memory.md`
 

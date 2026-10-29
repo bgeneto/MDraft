@@ -152,6 +152,14 @@ const SUITES = [
     script: "block-map-unit.mjs",
   },
   {
+    // Quoting and parsing an arbitrary installed family name into a CSS stack:
+    // commas, quotes, backslashes and generic keywords. Pure, no application.
+    id: "typography-unit",
+    title: "Typography stacks (unit)",
+    kind: "node",
+    script: "typography-unit.mjs",
+  },
+  {
     // Which link or image a Ctrl+click lands on, in Markdown, HTML, AsciiDoc
     // and Typst. Pure resolution; the UI suite proves the wiring.
     id: "link-unit",

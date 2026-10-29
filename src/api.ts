@@ -161,12 +161,28 @@ export interface AfterExportOutcome {
   afterErrors: string[];
 }
 
-/** Sizes remembered for one typography preset. Any field may be absent. */
+/**
+ * The per-preset differences from that preset's built-in typography.
+ *
+ * Every field is optional: `undefined` means "use the built-in value", not
+ * "use the application default". The four sizes keep the older meaning; the
+ * four faces and four OpenType switches became editable presets' state in the
+ * same map. The top-level settings remain the active values every consumer
+ * reads.
+ */
 export interface PresetOverride {
+  sourceFont?: string;
+  bodyFont?: string;
+  headingFont?: string;
+  codeFont?: string;
   editorFontSize?: number;
   bodyFontSize?: number;
   mathFontScale?: number;
   codeFontScale?: number;
+  ligaturesInCode?: boolean;
+  tabularFigures?: boolean;
+  oldstyleFigures?: boolean;
+  slashedZero?: boolean;
 }
 
 export interface Settings {
@@ -214,13 +230,22 @@ export interface Settings {
    */
   codeFontScale: number;
   /**
-   * Sizes remembered per preset id.
+   * Sizes, faces and OpenType choices remembered per preset id.
    *
-   * Editor font size, Preview font size, Math scale and Code scale are reader
-   * adjustments, not part of what identifies a preset. The top-level fields
-   * remain the active values; this map is consulted when a preset is chosen.
+   * The top-level fields remain the active values; this map is consulted when
+   * a preset is selected. A missing entry means the preset has never been
+   * adjusted and starts at its built-in values.
    */
   presetOverrides: Record<string, PresetOverride>;
+  /**
+   * The preset the reader is working in, or empty for a file written before
+   * the field existed.
+   *
+   * Empty is not "System": the frontend detects a matching built-in from the
+   * live values. A stored id wins over detection, which is what keeps editing a
+   * face from turning the picker into Custom.
+   */
+  typographyPreset: string;
   /** Programming ligatures in code, both panes. Off by default: `->` is a choice. */
   ligaturesInCode: boolean;
   /** Tabular figures in preview tables, so columns of numbers line up. */
@@ -452,6 +477,15 @@ export const takeForwardedPaths = () => invoke<string[]>("take_forwarded_paths")
 export const getSettings = () => invoke<Settings>("get_settings");
 
 export const saveSettings = (settings: Settings) => invoke<Settings>("save_settings", { settings });
+
+/**
+ * Families the operating system's text engine exposes, alphabetically.
+ *
+ * Names only: the webview already renders an installed family by name, so no
+ * font file is read or served. The Rust side caches a successful scan for the
+ * session; the frontend calls this only when Typography is first shown.
+ */
+export const systemFonts = () => invoke<string[]>("system_fonts");
 
 /**
  * Record a path as most recent.

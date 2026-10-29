@@ -81,13 +81,16 @@ Markdown document active.*
   original, the caret keeps its line, and the formatters are bundled rather than
   downloaded — nothing is loaded until the first format. AsciiDoc keeps the
   editing menu but has no formatter, and the item says so.
-- **Typography that holds up.** Thirteen bundled typefaces, six presets,
-  independent faces for editor, prose, headings and code, plus OpenType
-  controls. The source pane's line height is **Compact**, **Normal** or
-  **Wide** under Preferences › Editor. Preview headings and emphasis use
-  Semibold; mathematics and code have their own scales, so a listing or a
-  formula can be matched to the prose beside it. Native HTML, PDF and Print
-  exports of Markdown and AsciiDoc embed the chosen faces.
+- **Typography that holds up.** Thirteen bundled typefaces, six presets and a
+  selectable **Custom** setup, plus a searchable picker for every font installed
+  on the operating system. Faces are independent for editor, prose, headings and
+  code, and each preset remembers its faces, sizes and OpenType choices; Reset
+  restores one preset without touching the others. The source pane's line height
+  is **Compact**, **Normal** or **Wide** under Preferences › Editor. Preview
+  headings and emphasis use Semibold; mathematics and code have their own scales,
+  so a listing or a formula can be matched to the prose beside it. Native HTML,
+  PDF and Print exports embed the bundled faces; system families are named but
+  their files are never embedded.
 - **Zoom the whole document.** `Ctrl+Shift+=` enlarges the source in Source-only,
   both panes in Split, and the rendered page in Preview-only — text, images,
   diagrams and Typst pages together. `Ctrl+Alt+0` resets the zoom without

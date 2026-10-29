@@ -224,15 +224,24 @@ pub fn default_export_formats() -> Vec<ExportFormat> {    let args = |rest: &str
     ]
 }
 
-/// Sizes remembered for one typography preset.
+/// Sizes and choices remembered for one typography preset.
 ///
-/// Editor font size, Preview font size, Math scale and Code scale are reader
-/// adjustments, not part of what identifies a preset. Any field may be absent;
-/// a missing field means the preset has never been adjusted and its default
-/// applies.
+/// Every field is a diff from the preset's built-in value, not a complete
+/// snapshot. `None` means "use the preset's own value", so a later release can
+/// still improve a part of a preset the reader never touched. The four sizes
+/// and the four faces are the active top-level settings when the preset is in
+/// use; the map is consulted when a preset is selected.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct PresetOverride {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_font: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_font: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heading_font: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_font: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub editor_font_size: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -241,6 +250,14 @@ pub struct PresetOverride {
     pub math_font_scale: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code_font_scale: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ligatures_in_code: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tabular_figures: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oldstyle_figures: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slashed_zero: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -308,14 +325,23 @@ pub struct Settings {
     /// sizes above.
     #[serde(default = "default_code_font_scale")]
     pub code_font_scale: u32,
-    /// Sizes remembered per typography preset, keyed by preset id.
+    /// Sizes and choices remembered per typography preset, keyed by preset id.
     ///
-    /// The top-level `editor_font_size`, `body_font_size`, `math_font_scale` and
-    /// `code_font_scale` above are the active values. This map is only consulted
-    /// when a preset is selected; a missing entry means the preset has never
-    /// been adjusted and starts at its default.
+    /// The top-level fields above are the active values. This map is only
+    /// consulted when a preset is selected; a missing entry means the preset has
+    /// never been adjusted and starts at its built-in values.
     #[serde(default)]
     pub preset_overrides: BTreeMap<String, PresetOverride>,
+    /// The preset the reader is working in, or empty for a file written before
+    /// this field existed.
+    ///
+    /// Empty is not "System": the frontend detects a matching built-in from the
+    /// live values, which keeps an older file showing the preset it was using.
+    /// A stored id wins over detection, so editing a face no longer changes the
+    /// picker to Custom. The id is stable (`system`, `superfamily`, `custom`,
+    /// …), never a label.
+    #[serde(default)]
+    pub typography_preset: String,
     #[serde(default)]
     pub ligatures_in_code: bool,
     #[serde(default = "default_true")]
@@ -507,6 +533,7 @@ impl Default for Settings {
             math_font_scale: default_math_font_scale(),
             code_font_scale: default_code_font_scale(),
             preset_overrides: BTreeMap::new(),
+            typography_preset: String::new(),
             ligatures_in_code: false,
             tabular_figures: true,
             oldstyle_figures: false,
@@ -982,8 +1009,11 @@ mod tests {
         assert_eq!(s.code_font_scale, 100);
         // The HTML guest runs the document's scripts unless the reader opts out.
         assert!(s.html_preview_scripts);
-        // Sizes are per-preset adjustments, so a fresh profile has none yet.
+        // Sizes and choices are per-preset adjustments, so a fresh profile has
+        // none yet. An empty id means the frontend detects the matching preset
+        // from the live values, which keeps an older settings file working.
         assert!(s.preset_overrides.is_empty());
+        assert_eq!(s.typography_preset, "");
         // Off by default, because whether `->` should render as an arrow is a
         // genuine disagreement and the conservative answer is the plain one.
         assert!(!s.ligatures_in_code);
@@ -1059,6 +1089,7 @@ mod tests {
         assert!(parsed.auto_close_tags);
         assert_eq!(parsed.code_font_scale, 100);
         assert!(parsed.preset_overrides.is_empty());
+        assert_eq!(parsed.typography_preset, "");
     }
 
     #[test]
@@ -1076,6 +1107,7 @@ mod tests {
         assert_eq!(parsed.math_font_scale, 95);
         assert_eq!(parsed.code_font_scale, 100);
         assert!(parsed.preset_overrides.is_empty());
+        assert_eq!(parsed.typography_preset, "");
         assert!(parsed.html_preview_scripts);
         // `tabular_figures` is `#[serde(default = "default_true")]`, so the
         // serde default and the struct default have to agree or an upgrade would
@@ -1131,6 +1163,52 @@ mod tests {
         assert!(
             json["presetOverrides"]["system"].get("codeFontScale").is_none(),
             "a missing size must stay absent rather than serialising as null"
+        );
+    }
+
+    #[test]
+    fn typography_preset_and_full_overrides_round_trip() {
+        // The preset id is stored, not inferred. Faces and OpenType switches are
+        // diffs from the preset's built-ins; fields that were not changed must
+        // stay absent so a later build can still improve the rest of the preset.
+        let parsed: Settings = serde_json::from_str(
+            r#"{
+                "typographyPreset":"custom",
+                "presetOverrides":{"custom":{
+                    "sourceFont":"\"Arial\", monospace",
+                    "bodyFont":"\"Georgia\", serif",
+                    "headingFont":"\"Georgia\", serif",
+                    "codeFont":"\"Consolas\", monospace",
+                    "ligaturesInCode":true,
+                    "tabularFigures":false,
+                    "oldstyleFigures":true,
+                    "slashedZero":true
+                }}
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.typography_preset, "custom");
+        let entry = &parsed.preset_overrides["custom"];
+        assert_eq!(entry.source_font.as_deref(), Some("\"Arial\", monospace"));
+        assert_eq!(entry.body_font.as_deref(), Some("\"Georgia\", serif"));
+        assert_eq!(entry.heading_font.as_deref(), Some("\"Georgia\", serif"));
+        assert_eq!(entry.code_font.as_deref(), Some("\"Consolas\", monospace"));
+        assert_eq!(entry.ligatures_in_code, Some(true));
+        assert_eq!(entry.tabular_figures, Some(false));
+        assert_eq!(entry.oldstyle_figures, Some(true));
+        assert_eq!(entry.slashed_zero, Some(true));
+        assert_eq!(entry.editor_font_size, None);
+
+        let json = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(json["typographyPreset"], "custom");
+        assert_eq!(
+            json["presetOverrides"]["custom"]["sourceFont"],
+            "\"Arial\", monospace"
+        );
+        assert_eq!(json["presetOverrides"]["custom"]["tabularFigures"], false);
+        assert!(
+            json["presetOverrides"]["custom"].get("editorFontSize").is_none(),
+            "an unadjusted size must stay absent, not serialise as null"
         );
     }
 

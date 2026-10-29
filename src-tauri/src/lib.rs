@@ -2,6 +2,7 @@
 
 mod documents;
 mod export;
+mod fonts;
 mod html_preview;
 mod ai;
 mod images;
@@ -38,6 +39,7 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         .manage(html_preview::PreviewStore::default())
+        .manage(fonts::FontCatalog::default())
         .manage(launch::LaunchState::default())
         .register_asynchronous_uri_scheme_protocol(
             html_preview::SCHEME,
@@ -106,6 +108,7 @@ pub fn run() {
             recovery::write_recovery,
             recovery::remove_recovery,
             tokens::count_tokens,
+            fonts::system_fonts,
             spellcheck::spellcheck_languages,
             spellcheck::spellcheck_check,
             spellcheck::spellcheck_suggest,

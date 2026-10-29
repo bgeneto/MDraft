@@ -2,6 +2,7 @@
 
 **Status:** accepted
 **Date:** 2026-10-18
+**Amended by:** `2026-10-29-preset-state.md` — the bundled faces and the six preset systems remain; the "Custom until choosing a new one" consequence is replaced by a stored preset id and per-field diffs.
 
 ## Context
 

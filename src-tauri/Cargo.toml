@@ -1,6 +1,6 @@
 [package]
 name = "mdraft"
-version = "0.6.1"
+version = "0.7.0"
 description = "A Tauri 2 Markdown, Typst, HTML and AsciiDoc editor"
 authors = ["bernh"]
 edition = "2024"
@@ -87,6 +87,13 @@ flate2 = { version = "1.1", default-features = false, features = ["rust_backend"
 # that release asset. Fetching a 40 MB binary and then executing it without this
 # would be trusting the network with arbitrary code execution.
 sha2 = "0.11"
+# Installed font names for the Typography picker. fontique wraps the native text
+# stacks — DirectWrite on Windows, CoreText on macOS, fontconfig on Linux — and
+# exposes family names without loading or copying font bytes. The
+# `fontconfig-dlopen` feature keeps the Linux build free of a new pkg-config
+# dependency: libfontconfig is already present wherever GTK runs, and fontique
+# falls back to an empty collection if it cannot be loaded.
+fontique = { version = "0.12", features = ["fontconfig-dlopen"] }
 
 # The two archive shapes pandoc ships: Windows and macOS get a .zip, Linux a
 # .tar.gz. Each platform therefore compiles only the reader it needs.
