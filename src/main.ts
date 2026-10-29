@@ -88,10 +88,11 @@ import {
 } from "./source-map";
 import { createPreferences, type PreferencesHandle } from "./preferences";
 import { createAssistant, type AssistantHandle } from "./ai/assistant";
-import { captureContext } from "./ai/context";
+import { captureContext, resolveAiLanguage } from "./ai/context";
 import { createRecoveryScheduler } from "./recovery";
 import { createSessionStore, pathKey, type Session } from "./sessions";
 import { planRestore, rememberTabs, type RememberedTabs } from "./tab-restore";
+import { resolveDocumentLanguage as resolveLanguage } from "./language";
 import { installedLanguages, setInstalledLanguages, setSpellRemember } from "./spellcheck";
 import * as sidebarPanel from "./sidebar";
 import { resolvePalette } from "./syntax-themes";
@@ -5266,18 +5267,75 @@ function previewReadAloudText(fromStart: boolean): string {
     .join("\n\n");
 }
 
-function startReadAloud(fromStart: boolean): void {
+/** The document's language, resolved from the live buffer and the current settings. */
+async function resolveDocumentLanguage(spokenText: string): Promise<string> {
+  return resolveLanguage({
+    source: textOf(doc).slice(0, 8_000),
+    markup: doc.language,
+    spokenText,
+    pinned: settings.spellcheckLanguage,
+    candidates: installedLanguages(),
+    check: (language, words) => api.spellcheckCheck(language, words),
+  });
+}
+
+let languageProbe: { key: string; tag: string } | null = null;
+
+/** Cache the probe until the buffer, the Dictionary or the dictionary list changes. */
+async function documentLanguage(spokenText: string): Promise<string> {
+  const key = [
+    doc.id,
+    String(doc.revision),
+    settings.spellcheckLanguage,
+    installedLanguages().join(","),
+  ].join(":");
+  if (languageProbe?.key === key) return languageProbe.tag;
+  const tag = await resolveDocumentLanguage(spokenText);
+  const after = [
+    doc.id,
+    String(doc.revision),
+    settings.spellcheckLanguage,
+    installedLanguages().join(","),
+  ].join(":");
+  // A tab switch or an edit landed while the dictionaries were voting: the
+  // answer belongs to the old buffer and must not seed the next one.
+  if (after === key) languageProbe = { key, tag };
+  return tag;
+}
+
+/** Bumped by every start and stop, so a slow language probe cannot speak late. */
+let readAloudRequest = 0;
+
+async function startReadAloud(fromStart: boolean): Promise<void> {
   const reason = readAloudBlockedReason();
   if (reason) {
     toast(reason, 4200);
     return;
   }
-  if (!readAloud?.start(previewReadAloudText(fromStart))) {
+  const request = ++readAloudRequest;
+  // A new reading supersedes the old one immediately. The language probe can
+  // take a dictionary round-trip, and the previous voice must not keep talking
+  // while the new one is being chosen.
+  readAloud?.stop();
+  // The whole preview is the sample: a voice belongs to the document, not to
+  // the paragraph the reader happened to right-click. The cap keeps a very
+  // large document from being scanned twice.
+  const sample = previewReadAloudText(true).slice(0, 20_000);
+  let language = "";
+  try {
+    language = await documentLanguage(sample);
+  } catch {
+    // A detection failure is not a reading failure: the platform default is
+    // still a correct, if less specific, answer.
+  }
+  if (request !== readAloudRequest || !readAloud) return;
+  if (!readAloud.start(previewReadAloudText(fromStart), language)) {
     toast("There is nothing to read.", 4200);
   }
 }
 
 function stopReadAloud(): void {
+  readAloudRequest += 1;
   readAloud?.stop();
 }
 
@@ -5816,8 +5874,9 @@ async function boot(): Promise<void> {
   readAloud = createReadAloud({
     rate: () => settings.readAloudRate ?? 1,
     voiceName: () => settings.readAloudVoice ?? "",
-    // The spelling language is the application's only statement about the
-    // document's natural language; "auto" leaves the voice to the platform.
+    // The shell resolves the document's language before every start, so this
+    // is only the fallback for a caller that passes no tag: the pinned
+    // Dictionary, or nothing when it is Automatic.
     languageTag: () => (settings.spellcheckLanguage === "auto" ? "" : settings.spellcheckLanguage),
     onChange: renderReadingChip,
     onError: (message) => toast(message, 5200),
@@ -5905,6 +5964,13 @@ async function boot(): Promise<void> {
     },
   });
 
+  // A saved document's extension is authoritative. An unsaved buffer follows
+  // the same classifier the paste path uses, because its default extension is
+  // only a suggestion until Save As chooses one. The editor's parser is never
+  // changed here: `doc.language` still drives highlighting and preview.
+  const assistantLanguage = (text: string): api.DocumentLanguage =>
+    resolveAiLanguage(doc.path !== null, doc.language, text);
+
   assistant = createAssistant(editorPane, {
     config: () => ({
       enabled: settings.aiEnabled,
@@ -5912,15 +5978,16 @@ async function boot(): Promise<void> {
       baseUrl: settings.aiBaseUrl,
       model: settings.aiModel,
     }),
-    language: () => doc.language,
+    language: () => assistantLanguage(editor.getDoc()),
     capture: () => {
       const info = editor.cursorInfo();
+      const text = editor.getDoc();
       return captureContext({
-        text: editor.getDoc(),
+        text,
         from: info.from,
         to: info.to,
         caret: info.to,
-        language: doc.language,
+        language: assistantLanguage(text),
       });
     },
     sessionId: () => doc.id,

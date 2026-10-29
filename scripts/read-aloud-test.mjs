@@ -159,14 +159,14 @@ async function pressLine(index) {
 }
 
 /** A synthetic right-click that reaches every DOM listener. */
-function rightClickLine(index) {
+function rightClickLine(index, offset = 30) {
   return evaluate(`(() => {
     const scroller = document.querySelector('.cm-scroller');
     if (scroller) scroller.scrollTop = 0;
     const line = document.querySelectorAll('.cm-line')[${index}];
     if (!line) return 'missing';
     const rect = line.getBoundingClientRect();
-    const x = rect.left + 30;
+    const x = rect.left + ${offset};
     const y = rect.top + rect.height / 2;
     const target = document.elementFromPoint(x, y) ?? line;
     target.dispatchEvent(new MouseEvent('contextmenu', {
@@ -269,6 +269,10 @@ check(voicesReady, "the installed voices arrive after voiceschanged", String(sup
 // ---------------------------------------------------------------------------
 console.log("=== the editor menu offers Read Aloud ===");
 {
+  // Availability is derived from the rendered preview. A cold start can reach
+  // the first right-click before the first render, which reads as "nothing to
+  // read" and disables the command; wait for the pane the menu measures.
+  await pollFor(`(document.getElementById('preview')?.textContent ?? '').trim().length > 0`, 15000);
   check((await rightClickLine(0)) === "sent", "the first line accepts a right-click");
   const menu = await menuState();
   check(menu.count === 1, "one menu opens");
@@ -278,12 +282,12 @@ console.log("=== the editor menu offers Read Aloud ===");
   const stop = menu.items.find((entry) => entry.action === "stopReading");
 
   check(fromHere?.label === "Read Aloud from Here", "the menu names the from-here command");
-  check(fromHere?.disabled === false, "it is enabled on a Markdown document");
+  check(fromHere?.disabled === false, "it is enabled on a Markdown document", fromHere?.title);
   check(
     fromStart?.label === "Read Aloud from the Beginning",
     "the menu names the from-start command",
   );
-  check(fromStart?.disabled === false, "it is enabled too");
+  check(fromStart?.disabled === false, "it is enabled too", fromStart?.title);
   check(stop === undefined, "Stop Reading is absent until something is being read");
 }
 
@@ -382,6 +386,45 @@ console.log("=== the HTML tab says why it cannot be read ===");
   await evaluate(`document.body.click()`);
 
   check(await openFile("samples/feature-tour.md"), "the Markdown fixture comes back");
+}
+
+// ---------------------------------------------------------------------------
+console.log("=== a Portuguese document finds a Portuguese voice ===");
+{
+  const voices = await evaluate(`speechSynthesis.getVoices().map((voice) => ({
+    name: voice.name,
+    lang: voice.lang,
+  }))`);
+  const portuguese = voices.filter((voice) => /^pt(-|$)/i.test(voice.lang));
+
+  check(await openFile("samples/word-sync.md"), "the Portuguese fixture opens");
+  // x=2 lands in the line's left padding, so the position is the line start and
+  // the spelling plugin has no miss to claim; the editor menu opens.
+  await rightClickLine(2, 2);
+  check(await chooseEditor("readAloudFromStart"), "Read Aloud from the Beginning runs on it");
+  const started = await pollFor(
+    `(() => {
+      const chip = document.getElementById('status-reading');
+      return !!chip && !chip.hidden;
+    })()`,
+    6000,
+  );
+  const chip = await chipState();
+  check(started, "the Portuguese document starts reading");
+
+  if (portuguese.length === 0) {
+    check(true, "the Portuguese voice check is skipped: none is installed", chip.title);
+  } else {
+    check(
+      portuguese.some((voice) => (chip.title ?? "").includes(voice.name)),
+      "the chip names an installed Portuguese voice",
+      chip.title,
+    );
+  }
+
+  await evaluate(`document.getElementById('status-reading')?.click()`);
+  await pollFor(`document.getElementById('status-reading')?.hidden === true`, 4000);
+  check(await openFile("samples/feature-tour.md"), "the Markdown fixture comes back again");
 }
 
 // ---------------------------------------------------------------------------

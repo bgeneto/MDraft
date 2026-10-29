@@ -19,6 +19,8 @@
 //! (`splitSentences`, `chooseVoice`, `createReadingQueue`) runs under Node for
 //! `scripts/read-aloud-unit.mjs`.
 
+import { normalizeLanguageTag } from "./language.ts";
+
 export interface VoiceOption {
   name: string;
   lang: string;
@@ -38,6 +40,8 @@ export interface ReadingState {
 
 export interface SpeakOptions {
   voiceName: string;
+  /** BCP 47 language put on the utterance when no named voice is found. */
+  lang: string;
   rate: number;
 }
 
@@ -170,7 +174,27 @@ function capChunk(text: string, maxLength: number): string[] {
  * deliberate act, and a Portuguese document read by an English voice is still
  * what the reader asked for. Only when that voice has been uninstalled does the
  * language take over, so removing a language pack does not silence the feature.
+ *
+ * Tags are compared after normalising `_` and case, and a base match (`pt`)
+ * still finds a regional voice (`pt-BR`). Automatic selection prefers a local
+ * voice, because the feature promises offline reading; a remote voice is only
+ * considered when the machine has no local voice at all. A saved remote voice
+ * is still honoured — that is an explicit choice.
  */
+function normalizedTag(tag: string): string {
+  return tag.trim().replace(/_/g, "-").toLowerCase();
+}
+
+function bestVoice(candidates: readonly VoiceOption[]): VoiceOption | null {
+  return (
+    candidates.find((voice) => voice.isDefault && voice.local) ??
+    candidates.find((voice) => voice.local) ??
+    candidates.find((voice) => voice.isDefault) ??
+    candidates[0] ??
+    null
+  );
+}
+
 export function chooseVoice(
   voices: VoiceOption[],
   savedName: string,
@@ -183,16 +207,18 @@ export function chooseVoice(
     if (saved) return saved;
   }
 
-  const tag = languageTag.trim().toLowerCase();
+  const tag = normalizedTag(languageTag);
   if (tag && tag !== "auto") {
-    const exact = voices.find((voice) => voice.lang.toLowerCase() === tag);
-    if (exact) return exact;
+    const local = voices.filter((voice) => voice.local);
+    const pool = local.length > 0 ? local : voices;
+    const exact = pool.filter((voice) => normalizedTag(voice.lang) === tag);
+    if (exact.length > 0) return bestVoice(exact);
     const base = tag.split("-")[0];
-    const sameLanguage = voices.find((voice) => voice.lang.toLowerCase().split("-")[0] === base);
-    if (sameLanguage) return sameLanguage;
+    const sameLanguage = pool.filter((voice) => normalizedTag(voice.lang).split("-")[0] === base);
+    if (sameLanguage.length > 0) return bestVoice(sameLanguage);
   }
 
-  return voices.find((voice) => voice.isDefault) ?? voices[0];
+  return bestVoice(voices);
 }
 
 function idleState(voice = ""): ReadingState {
@@ -214,7 +240,7 @@ export function createReadingQueue(
   let chunks: string[] = [];
   let index = 0;
   let active = false;
-  let options: SpeakOptions = { voiceName: "", rate: 1 };
+  let options: SpeakOptions = { voiceName: "", lang: "", rate: 1 };
 
   const emit = (): void => {
     onChange({ active, index, total: chunks.length, voice: options.voiceName });
@@ -292,6 +318,11 @@ export function browserBackend(): SpeechBackend | null {
       const voice = options.voiceName
         ? synthesis.getVoices().find((entry) => entry.name === options.voiceName)
         : undefined;
+      // The language goes on the utterance even when no named voice is found:
+      // the platform may have a voice the webview lists late, and a reader on a
+      // machine with several same-named voices still gets the right phonemes.
+      const lang = voice?.lang || options.lang;
+      if (lang) utterance.lang = lang;
       // A saved voice that has since been uninstalled falls back to the
       // platform's default rather than muting the reader.
       if (voice) utterance.voice = voice;
@@ -342,8 +373,13 @@ export interface ReadAloudOptions {
 }
 
 export interface ReadAloudHandle {
-  /** Start reading `text`; false when there is nothing to say. */
-  start(text: string): boolean;
+  /**
+   * Start reading `text`; false when there is nothing to say.
+   *
+   * `languageTag` is the language the shell resolved for the document. It
+   * overrides the saved callback so the voice and the utterance agree.
+   */
+  start(text: string, languageTag?: string): boolean;
   stop(): void;
   isActive(): boolean;
   state(): ReadingState;
@@ -375,16 +411,35 @@ export function createReadAloud(options: ReadAloudOptions): ReadAloudHandle {
   let list: VoiceOption[] = [];
   let loaded = false;
 
+  // `refreshVoices` waits for `voiceschanged`, but a menu can be opened in the
+  // gap between `getVoices()` filling and that event reaching the app. A
+  // synchronous read here keeps the command enabled as soon as the platform has
+  // an answer, and gives a direct `start` caller the same list.
+  const syncVoices = (): void => {
+    if (loaded && list.length > 0) return;
+    const current = readVoices();
+    if (current.length > 0) {
+      list = current;
+      loaded = true;
+    }
+  };
+
   return {
-    start(text) {
+    start(text, explicitLanguage) {
       if (!queue) {
         options.onError("This webview has no speech synthesis.");
         return false;
       }
       const chunks = splitSentences(text);
       if (chunks.length === 0) return false;
-      const voice = chooseVoice(list, options.voiceName(), options.languageTag());
-      queue.start(chunks, { voiceName: voice?.name ?? "", rate: clampRate(options.rate()) });
+      syncVoices();
+      const language = explicitLanguage ?? options.languageTag();
+      const voice = chooseVoice(list, options.voiceName(), language);
+      queue.start(chunks, {
+        voiceName: voice?.name ?? "",
+        lang: voice?.lang || normalizeLanguageTag(language) || "",
+        rate: clampRate(options.rate()),
+      });
       return true;
     },
     stop() {
@@ -398,6 +453,7 @@ export function createReadAloud(options: ReadAloudOptions): ReadAloudHandle {
     },
     availableReason() {
       if (!queue) return "This webview has no speech synthesis.";
+      syncVoices();
       if (!loaded) return "Looking for installed voices…";
       if (list.length === 0) {
         return "No voices are installed. Add one in the operating system's speech settings.";
@@ -405,6 +461,7 @@ export function createReadAloud(options: ReadAloudOptions): ReadAloudHandle {
       return null;
     },
     voices() {
+      syncVoices();
       return list;
     },
     async refreshVoices() {

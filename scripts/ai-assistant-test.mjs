@@ -22,20 +22,26 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // ---------------------------------------------------------------------------
 
 const TAGS = {
-  revised: "improve",
-  continuation: "continue",
-  expanded: "expand",
-  shortened: "shorten",
-  simplified: "simplify",
-  rewritten: "tone",
-  translation: "translate",
-  summary: "summarize",
-  explanation: "explain",
-  points: "keyPoints",
-  critique: "critique",
-  table: "table",
-  converted: "convert",
+  "mdraft-revised": "improve",
+  "mdraft-continuation": "continue",
+  "mdraft-expanded": "expand",
+  "mdraft-shortened": "shorten",
+  "mdraft-simplified": "simplify",
+  "mdraft-rewritten": "tone",
+  "mdraft-translation": "translate",
+  "mdraft-summary": "summarize",
+  "mdraft-explanation": "explain",
+  "mdraft-points": "keyPoints",
+  "mdraft-critique": "critique",
+  "mdraft-table": "table",
+  "mdraft-converted": "convert",
 };
+
+// A model that ignores the wrapper protocol: the preamble and the change
+// summary reach `done` together, and the Rust guard must leave only the
+// translation.
+const NOISY_TRANSLATION =
+  "Here is the translation:\n\nTexto traduzido pelo mock.\n\n**Summary of changes:**\n- Kept the greeting\n- Fixed the comma";
 
 const ANSWERS = {
   improve: "Improved passage from the mock.",
@@ -129,10 +135,13 @@ const server = http.createServer(async (request, response) => {
     tag: tag ?? null,
   });
 
+  const noisy = control.mode === "noisy" && action === "translate";
   const answer =
     action === "ask"
       ? "The mock says **this file is a feature tour** with a [link](https://example.com)."
-      : ANSWERS[action];
+      : noisy
+        ? NOISY_TRANSLATION
+        : ANSWERS[action];
 
   response.writeHead(200, {
     "content-type": "text/event-stream",
@@ -153,13 +162,15 @@ const server = http.createServer(async (request, response) => {
     }
   };
 
-  const content = tag ? `<${tag}>${answer}</${tag}>` : answer;
-  const notes = action === "improve" ? "\n<notes>Mock notes: fixed agreement.</notes>" : "";
+  const content = tag && !noisy ? `<${tag}>${answer}</${tag}>` : answer;
+  const notes =
+    action === "improve" ? "\n<mdraft-notes>Mock notes: fixed agreement.</mdraft-notes>" : "";
   const full = `${content}${notes}`;
   const third = Math.ceil(full.length / 3);
 
   if (control.mode === "hold") {
-    writeDelta(full.slice(0, Math.min(12, full.length)));
+    const head = full.slice(0, Math.min(12, full.length));
+    writeDelta(head);
     let released = false;
     await new Promise((resolve) => {
       const timer = setTimeout(resolve, 15_000);
@@ -177,6 +188,15 @@ const server = http.createServer(async (request, response) => {
     control.release = null;
     if (!response.writableEnded) {
       try {
+        // A stale-target test releases the hold and expects a completed answer;
+        // a Stop test closes the connection first, and the partial wrapper is
+        // discarded by the backend.
+        if (released) {
+          for (let index = head.length; index < full.length; index += third) {
+            writeDelta(full.slice(index, index + third));
+            await sleep(20);
+          }
+        }
         response.end();
       } catch {
         /* the client cancelled */
@@ -380,6 +400,68 @@ async function pressFetchModels() {
     [...(row?.querySelectorAll('button') ?? [])].find(b => b.textContent === 'Fetch model list')?.click();
   })()`);
   await sleep(700);
+}
+
+async function openModelPicker() {
+  const opened = await evaluate(`(() => {
+    const row = ${rowSelector("Model")};
+    const toggle = row?.querySelector('.prefs-combo-toggle');
+    if (!toggle) return false;
+    toggle.click();
+    return true;
+  })()`);
+  await sleep(120);
+  return opened;
+}
+
+async function modelOptionIds() {
+  return evaluate(
+    `[...document.querySelectorAll('.prefs-combo-popup .prefs-combo-option')].map(o => o.textContent)`,
+  );
+}
+
+async function modelInputValue() {
+  return evaluate(`(${rowSelector("Model")})?.querySelector('input[type=text]')?.value ?? null`);
+}
+
+async function modelFieldNote() {
+  return evaluate(
+    `(${rowSelector("Model")})?.querySelector('.prefs-field-note')?.textContent ?? ''`,
+  );
+}
+
+async function filterModelPicker(query) {
+  const ok = await evaluate(`(() => {
+    const input = (${rowSelector("Model")})?.querySelector('input[type=text]');
+    if (!input) return false;
+    input.focus();
+    input.value = ${JSON.stringify(query)};
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  })()`);
+  await sleep(120);
+  return ok;
+}
+
+async function chooseModelFromPicker(model) {
+  const chosen = await evaluate(`(() => {
+    const option = [...document.querySelectorAll('.prefs-combo-popup .prefs-combo-option')].find(o => o.textContent === ${JSON.stringify(model)});
+    if (!option) return false;
+    option.click();
+    return true;
+  })()`);
+  await sleep(150);
+  return chosen;
+}
+
+async function closeModelPicker() {
+  await evaluate(`(() => {
+    const input = (${rowSelector("Model")})?.querySelector('input[type=text]');
+    if (!input) return false;
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    return true;
+  })()`);
+  await sleep(80);
 }
 
 async function aiStatusNote() {
@@ -997,7 +1079,7 @@ try {
   check(
     "the panel filtered the output tags",
     !(await evaluate(`document.querySelector('.ai-answer')?.textContent ?? ''`)).includes(
-      "<revised>",
+      "<mdraft-revised>",
     ),
   );
   check(
@@ -1319,6 +1401,32 @@ try {
   check("Translate replaces the passage", await clickFooter("Replace selection"));
   await undo();
 
+  console.log("\nTranslate without the wrapper");
+  control.mode = "noisy";
+  await clickEditorWord("Regular");
+  await chooseAction("Translate…");
+  await evaluate(
+    `(() => { const input = document.querySelector('.ai-params input[type=text]'); input.value = 'Portuguese'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`,
+  );
+  await sleep(100);
+  await evaluate(`document.querySelector('.ai-params .ai-generate').click()`);
+  await waitPanelDone();
+  const noisyAnswer = await evaluate(`document.querySelector('.ai-answer')?.textContent ?? ''`);
+  check(
+    "a noisy answer keeps only the translation",
+    noisyAnswer.trim() === "Texto traduzido pelo mock.",
+    noisyAnswer.trim(),
+  );
+  check("a noisy answer drops the change summary", !/summary of changes/i.test(noisyAnswer));
+  check("the clean translation replaces the passage", await clickFooter("Replace selection"));
+  const cleanText = await editorText();
+  check(
+    "the document received only the translation",
+    cleanText.includes("Texto traduzido pelo mock.") && !/summary of changes/i.test(cleanText),
+  );
+  await undo();
+  control.mode = "normal";
+
   console.log("\nChange tone");
   await clickEditorWord("Regular");
   await chooseAction("Change tone…");
@@ -1465,9 +1573,11 @@ try {
   check("Stop reports Stopped", stopped !== null, await panelStatus());
   check("the mock saw the connection close", control.cancelled > 0, String(control.cancelled));
   await sleep(500);
+  const stoppedAnswer = await evaluate(`document.querySelector('.ai-answer')?.textContent ?? ''`);
   check(
     "no delta arrives after Stop",
-    (await evaluate(`document.querySelector('.ai-answer')?.textContent ?? ''`)).length <= 12,
+    stoppedAnswer.trim().length <= 12,
+    `${stoppedAnswer.trim().length}: ${JSON.stringify(stoppedAnswer)}`,
   );
   control.mode = "normal";
   await closePanel();
@@ -1544,9 +1654,10 @@ try {
   check("the newest answer is first", history[0]?.title === "Improve writing", history[0]?.title);
   check(
     "the oldest answers were evicted by the cap",
-    history.at(-1)?.title === "Key points" &&
+    history.at(-1)?.title === "Convert to table" &&
       !history.some((row) => row.title === "Continue writing") &&
-      !history.some((row) => row.title === "Summarize"),
+      !history.some((row) => row.title === "Summarize") &&
+      !history.some((row) => row.title === "Key points"),
     JSON.stringify(history.map((row) => row.title)),
   );
   check(
@@ -1571,8 +1682,14 @@ try {
   check("a row shows the document", history[0]?.request.includes("feature-tour.md"));
   check(
     "a row shows an answer preview",
-    history.find((row) => row.title === "Key points")?.preview.includes("First mock point"),
-    history.find((row) => row.title === "Key points")?.preview,
+    history.find((row) => row.title === "Convert to table")?.preview.includes("one"),
+    history.find((row) => row.title === "Convert to table")?.preview,
+  );
+  check(
+    "the noisy translation is recorded without its change summary",
+    history.filter((row) => row.title === "Translate · Portuguese").length === 2 &&
+      !history.some((row) => /summary of changes/i.test(row.preview)),
+    JSON.stringify(history.map((row) => row.preview)),
   );
   check("a row shows a relative time", history[0]?.time === "Just now", history[0]?.time);
   const historyGeometry = await evaluate(`(() => {
@@ -1863,14 +1980,142 @@ try {
   check("a gzip model list is decoded", gzipStatus.includes("2 models found"), gzipStatus);
   check("the gzip response was actually compressed", control.requests.at(-1)?.gzip === true);
   check(
-    "the fetched models reach the datalist",
-    await evaluate(
-      `[...document.querySelectorAll('datalist option')].some(o => o.value === 'second-model')`,
-    ),
+    "the fetch status counts the models once",
+    (gzipStatus.match(/2 models found/g) ?? []).length === 1 &&
+      !gzipStatus.includes("2 models available"),
+    gzipStatus,
   );
   control.mode = "normal";
 
-  // An empty 200 from a wrong Base URL must name the cause.
+  // A model id from the previous endpoint used to filter a datalist down to
+  // nothing; the picker opens the whole list whatever the field contains.
+  await setText("Model", "not-offered-here");
+  const openedPicker = await openModelPicker();
+  const staleOptions = await modelOptionIds();
+  check(
+    "a model from another endpoint does not hide the fetched list",
+    openedPicker && staleOptions.includes("test-model") && staleOptions.includes("second-model"),
+    staleOptions.join(", "),
+  );
+  const pickerGeometry = await evaluate(`(() => {
+    const modelRow = ${rowSelector("Model")};
+    const baseRow = ${rowSelector("Base URL")};
+    const combo = modelRow?.querySelector('.prefs-combo');
+    const base = baseRow?.querySelector('input[type=text]');
+    const popup = document.querySelector('.prefs-combo-popup');
+    if (!combo || !base || !popup) return null;
+    const c = combo.getBoundingClientRect();
+    const b = base.getBoundingClientRect();
+    const p = popup.getBoundingClientRect();
+    return {
+      width: Math.round(c.width),
+      baseWidth: Math.round(b.width),
+      right: Math.round(c.right),
+      baseRight: Math.round(b.right),
+      popupWidth: Math.round(p.width),
+      popupLeft: Math.round(p.left),
+      popupRight: Math.round(p.right),
+      comboLeft: Math.round(c.left),
+    };
+  })()`);
+  check(
+    "the Model field matches the other inputs' width",
+    pickerGeometry &&
+      pickerGeometry.width === pickerGeometry.baseWidth &&
+      Math.abs(pickerGeometry.right - pickerGeometry.baseRight) <= 1,
+    pickerGeometry ? `${pickerGeometry.width} vs ${pickerGeometry.baseWidth}` : "no geometry",
+  );
+  check(
+    "the picker spans the whole field",
+    pickerGeometry &&
+      Math.abs(pickerGeometry.popupWidth - pickerGeometry.width) <= 1 &&
+      Math.abs(pickerGeometry.popupLeft - pickerGeometry.comboLeft) <= 1 &&
+      Math.abs(pickerGeometry.popupRight - pickerGeometry.right) <= 1,
+    pickerGeometry ? `${pickerGeometry.popupWidth}/${pickerGeometry.width}` : "no geometry",
+  );
+
+  // Typing filters; an id that matches no fetched model stays free text.
+  await filterModelPicker("sec");
+  const filteredOptions = await modelOptionIds();
+  check(
+    "typing filters the fetched models",
+    filteredOptions.length === 1 && filteredOptions[0] === "second-model",
+    filteredOptions.join(", "),
+  );
+  const noMatch = await filterModelPicker("not-a-listed-model");
+  const noMatchText = await evaluate(
+    `document.querySelector('.prefs-combo-popup .prefs-combo-empty')?.textContent ?? ''`,
+  );
+  check(
+    "a search that matches nothing says so",
+    noMatch && noMatchText.includes("No fetched model matches"),
+    noMatchText,
+  );
+
+  // The keyboard path: ArrowDown highlights the first offered id, Enter picks it.
+  await filterModelPicker("");
+  const keyboardPicked = await evaluate(`(() => {
+    const input = (${rowSelector("Model")})?.querySelector('input[type=text]');
+    if (!input) return false;
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    return true;
+  })()`);
+  await sleep(150);
+  check(
+    "the keyboard chooses a fetched model",
+    keyboardPicked && (await modelInputValue()) === "second-model",
+  );
+  check(
+    "the keyboard choice closes the list",
+    await evaluate(`!document.querySelector('.prefs-combo-popup')`),
+  );
+
+  await filterModelPicker("test");
+  const chosen = await chooseModelFromPicker("test-model");
+  check(
+    "choosing a fetched model writes the field",
+    chosen && (await modelInputValue()) === "test-model",
+  );
+  const persistedModel = await evaluate(
+    `window.__TAURI_INTERNALS__.invoke('get_settings').then(s => s.aiModel)`,
+  );
+  check("choosing a fetched model persists it", persistedModel === "test-model", persistedModel);
+  check(
+    "choosing a fetched model closes the list",
+    await evaluate(`!document.querySelector('.prefs-combo-popup')`),
+  );
+
+  // The reported case: a successful list no longer offers the saved id.
+  await setText("Model", "retired-model");
+  const beforeReconcile = control.requests.length;
+  await pressFetchModels();
+  await waitFor(
+    `window.__TAURI_INTERNALS__.invoke('get_settings').then(s => s.aiModel === '')`,
+    8000,
+  );
+  const reconcileStatus = await aiStatusNote();
+  const reconciledModel = await evaluate(
+    `window.__TAURI_INTERNALS__.invoke('get_settings').then(s => s.aiModel)`,
+  );
+  check(
+    "a stale model is cleared after a successful fetch",
+    control.requests.length === beforeReconcile + 1 && reconciledModel === "",
+    reconcileStatus,
+  );
+  check("the cleared model leaves the field empty", (await modelInputValue()) === "");
+  const clearedNote = await modelFieldNote();
+  check(
+    "the field explains the clear",
+    clearedNote.includes("retired-model") &&
+      clearedNote.includes("not offered") &&
+      clearedNote.includes("2 fetched models"),
+    clearedNote,
+  );
+
+  // An endpoint without a list is supported by typing the id, so only proof
+  // may clear it.
+  await setText("Model", "hand-typed-model");
   control.mode = "emptyModels";
   const beforeEmpty = control.requests.length;
   await pressFetchModels();
@@ -1879,6 +2124,10 @@ try {
     8000,
   );
   const emptyStatus = await aiStatusNote();
+  const keptModel = await evaluate(
+    `window.__TAURI_INTERNALS__.invoke('get_settings').then(s => s.aiModel)`,
+  );
+  check("an empty list keeps a hand-typed model", keptModel === "hand-typed-model", keptModel);
   check(
     "an empty model list explains the Base URL",
     emptyStatus.includes("empty response") && emptyStatus.includes("Base URL"),
@@ -1890,12 +2139,63 @@ try {
   );
   control.mode = "normal";
 
+  // A real pointer, not element.click(): typing leaves the Model field focused,
+  // and a blur that re-rendered the panel used to replace Fetch before mouseup.
+  await evaluate(`(() => {
+    const input = (${rowSelector("Model")})?.querySelector('input[type=text]');
+    if (!input) return false;
+    input.focus();
+    input.value = 'second-model';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  })()`);
+  await closeModelPicker();
+  const fetchRect = await evaluate(`(() => {
+    const row = [...document.querySelectorAll('.prefs-row')].find(r => [...r.querySelectorAll('button')].some(b => b.textContent === 'Fetch model list'));
+    const button = [...(row?.querySelectorAll('button') ?? [])].find(b => b.textContent === 'Fetch model list');
+    if (!button) return null;
+    button.scrollIntoView({ block: 'center' });
+    const box = button.getBoundingClientRect();
+    return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+  })()`);
+  if (!fetchRect) throw new Error("no Fetch model list button");
+  const beforeFirstClick = control.requests.length;
+  await send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: fetchRect.x,
+    y: fetchRect.y,
+    button: "left",
+    clickCount: 1,
+  });
+  await send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: fetchRect.x,
+    y: fetchRect.y,
+    button: "left",
+    clickCount: 1,
+  });
+  await sleep(800);
+  check(
+    "Fetch works on the first click after typing",
+    control.requests.length === beforeFirstClick + 1,
+    String(control.requests.length - beforeFirstClick),
+  );
+  const firstClickModel = await evaluate(
+    `window.__TAURI_INTERNALS__.invoke('get_settings').then(s => s.aiModel)`,
+  );
+  check(
+    "the first click keeps a model the endpoint offers",
+    firstClickModel === "second-model",
+    firstClickModel,
+  );
+
   // Saving the key fetches once; the button remains for a manual refresh.
   const openAiStatus = await evaluate(
     `window.__TAURI_INTERNALS__.invoke('ai_status', { provider: 'openai', baseUrl: ${JSON.stringify(baseUrl)} })`,
   );
   if (!openAiStatus.hasKey) {
     await setText("Base URL", baseUrl);
+    await setText("Model", "hand-typed-model");
     const beforeSave = control.requests.length;
     await setKey(`sk-mock-auto-${Date.now()}`);
     await waitFor(
@@ -1909,12 +2209,20 @@ try {
       String(control.requests.length - beforeSave),
     );
     check("saving the key reports the models", saveStatus.includes("models found"), saveStatus);
-    check(
-      "saving the key fills the datalist",
-      await evaluate(
-        `[...document.querySelectorAll('datalist option')].some(o => o.value === 'second-model')`,
-      ),
+    await waitFor(
+      `window.__TAURI_INTERNALS__.invoke('get_settings').then(s => s.aiModel === '')`,
+      8000,
     );
+    const savedReconcile = await evaluate(
+      `window.__TAURI_INTERNALS__.invoke('get_settings').then(s => s.aiModel)`,
+    );
+    check("saving the key reconciles a stale model too", savedReconcile === "", savedReconcile);
+    const savedPicker = await openModelPicker();
+    check(
+      "saving the key fills the picker",
+      savedPicker && (await modelOptionIds()).includes("second-model"),
+    );
+    await closeModelPicker();
     createdOpenAiKey = true;
   } else {
     check("saving the key leaves an existing key alone", true, "an existing key was used");

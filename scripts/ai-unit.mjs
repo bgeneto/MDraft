@@ -25,6 +25,7 @@ import {
   joinContinuation,
   movedEnough,
   paragraphRange,
+  resolveAiLanguage,
   targetIsCurrent,
   trimHistory,
   trimPreceding,
@@ -37,6 +38,7 @@ import {
   previewText,
   rememberRequest,
 } from "../src/ai/history.ts";
+import { filterModelIds } from "../src/model-combo.ts";
 
 let passed = 0;
 let failed = 0;
@@ -517,6 +519,58 @@ equal("above the cap the whole text is shown", huge.length, 2);
 check(
   "the fallback marks removed then added",
   huge[0].kind === "removed" && huge[1].kind === "added",
+);
+
+// ---------------------------------------------------------------------------
+// Model picker
+// ---------------------------------------------------------------------------
+
+console.log("\nModel picker");
+equal(
+  "an empty search keeps the endpoint's order",
+  filterModelIds(["zeta-model", "Alpha-model"], "  "),
+  ["zeta-model", "Alpha-model"],
+);
+equal(
+  "a search ignores case and surrounding space",
+  filterModelIds(["zeta-model", "Alpha-model"], " ALPHA "),
+  ["Alpha-model"],
+);
+equal(
+  "a search matches anywhere in the id",
+  filterModelIds(["gpt-4o-mini", "qwen2.5-coder"], "CODER"),
+  ["qwen2.5-coder"],
+);
+equal("a search that matches nothing is empty", filterModelIds(["one", "two"], "three"), []);
+
+// ---------------------------------------------------------------------------
+// Assistant markup
+// ---------------------------------------------------------------------------
+
+console.log("\nAssistant markup");
+equal(
+  "a saved file ignores content that looks like another markup",
+  resolveAiLanguage(true, "markdown", "= Introduction\n\n#let value = 5"),
+  "markdown",
+);
+equal(
+  "an unsaved Typst buffer is detected from its text",
+  resolveAiLanguage(
+    false,
+    "markdown",
+    "= Introduction\n\n#let value = 5\n\n#table(columns: 2, [a], [b])",
+  ),
+  "typst",
+);
+equal(
+  "an unsaved Markdown buffer is detected from its text",
+  resolveAiLanguage(false, "typst", "# Title\n\n**bold** and [link](https://example.com)"),
+  "markdown",
+);
+equal(
+  "an ambiguous unsaved buffer keeps the editor's language",
+  resolveAiLanguage(false, "typst", "Just a plain sentence."),
+  "typst",
 );
 
 // ---------------------------------------------------------------------------
