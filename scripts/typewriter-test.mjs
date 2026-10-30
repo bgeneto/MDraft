@@ -110,8 +110,12 @@ async function geometry() {
   );
 }
 async function centered(label) {
-  await sleep(400);
-  const g = await geometry();
+  let g = null;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    await sleep(150);
+    g = await geometry();
+    if (g && Math.abs(g.fraction - 0.5) < 0.12) break;
+  }
   check(g && Math.abs(g.fraction - 0.5) < 0.12, label, JSON.stringify(g));
 }
 async function shot(name) {

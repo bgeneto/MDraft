@@ -155,53 +155,67 @@ const closeActiveTab = () =>
 
 /** Right-click the first visible source line and choose Add to Favorites. */
 async function favoriteFromEditor() {
-  const opened = await evaluate(`(() => {
-    const line = document.querySelector(".cm-line");
-    if (!line) return "missing line";
-    const rect = line.getBoundingClientRect();
-    const x = rect.left + 30;
-    const y = rect.top + Math.min(8, rect.height / 2);
-    (document.elementFromPoint(x, y) ?? line).dispatchEvent(new MouseEvent("contextmenu", {
-      bubbles: true, cancelable: true, clientX: x, clientY: y, button: 2, buttons: 2,
-    }));
-    return "ok";
-  })()`);
-  await sleep(200);
-  const chosen = await evaluate(`(() => {
-    const button = document.querySelector('.editor-menu-item[data-action="favorite"]');
-    if (!button) return "missing";
-    if (button.disabled) return "disabled";
-    button.click();
-    return "clicked";
-  })()`);
-  return opened === "ok" ? chosen : opened;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const opened = await evaluate(`(() => {
+      const line = document.querySelector(".cm-line");
+      if (!line) return "missing line";
+      const rect = line.getBoundingClientRect();
+      const x = rect.left + 30;
+      const y = rect.top + Math.min(8, rect.height / 2);
+      (document.elementFromPoint(x, y) ?? line).dispatchEvent(new MouseEvent("contextmenu", {
+        bubbles: true, cancelable: true, clientX: x, clientY: y, button: 2, buttons: 2,
+      }));
+      return "ok";
+    })()`);
+    if (opened !== "ok") return opened;
+    await sleep(200);
+    const chosen = await evaluate(`(() => {
+      const button = document.querySelector('.editor-menu-item[data-action="favorite"]');
+      if (!button) return "missing";
+      if (button.disabled) return "disabled";
+      button.click();
+      return "clicked";
+    })()`);
+    if (chosen !== "missing") return chosen;
+    // The context-menu listener is installed during boot; a slow first paint can
+    // see the native menu before the application's. Retry the same gesture.
+    await evaluate(`document.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }))`);
+    await sleep(120);
+  }
+  return "missing";
 }
 
 /** Right-click a tab and choose Add to Favorites for that tab's own file. */
 async function favoriteFromTab(name, alsoPersist = false) {
-  const opened = await evaluate(`(() => {
-    const tab = [...document.querySelectorAll(".doc-tab")]
-      .find((t) => t.querySelector(".doc-tab-name")?.textContent === ${JSON.stringify(name)});
-    if (!tab) return "missing";
-    const rect = tab.getBoundingClientRect();
-    tab.dispatchEvent(new MouseEvent("contextmenu", {
-      bubbles: true, cancelable: true, button: 2,
-      clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2,
-    }));
-    return "ok";
-  })()`);
-  await sleep(200);
-  const chosen = await evaluate(`(() => {
-    const button = document.querySelector('.tab-menu-item[data-action="favorite"]');
-    if (!button) return "missing";
-    if (button.disabled) return "disabled";
-    button.click();
-    // The regression this catches: a whole-object save scheduled here, while
-    // the favorite command is still in flight, must not carry the old list.
-    if (${JSON.stringify(alsoPersist)}) document.getElementById("flag-sync").click();
-    return "clicked";
-  })()`);
-  return opened === "ok" ? chosen : opened;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const opened = await evaluate(`(() => {
+      const tab = [...document.querySelectorAll(".doc-tab")]
+        .find((t) => t.querySelector(".doc-tab-name")?.textContent === ${JSON.stringify(name)});
+      if (!tab) return "missing";
+      const rect = tab.getBoundingClientRect();
+      tab.dispatchEvent(new MouseEvent("contextmenu", {
+        bubbles: true, cancelable: true, button: 2,
+        clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2,
+      }));
+      return "ok";
+    })()`);
+    if (opened !== "ok") return opened;
+    await sleep(200);
+    const chosen = await evaluate(`(() => {
+      const button = document.querySelector('.tab-menu-item[data-action="favorite"]');
+      if (!button) return "missing";
+      if (button.disabled) return "disabled";
+      button.click();
+      // The regression this catches: a whole-object save scheduled here, while
+      // the favorite command is still in flight, must not carry the old list.
+      if (${JSON.stringify(alsoPersist)}) document.getElementById("flag-sync").click();
+      return "clicked";
+    })()`);
+    if (chosen !== "missing") return chosen;
+    await evaluate(`document.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }))`);
+    await sleep(120);
+  }
+  return "missing";
 }
 
 try {
