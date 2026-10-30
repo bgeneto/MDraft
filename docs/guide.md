@@ -78,11 +78,13 @@ The preview has two views:
   correspondence, so arbitrary macro expansion and formulas have no exact
   source mapping.
   In the dark theme the pages follow the application: the PDF's white paper and
-  black text become the app's dark surface and off-white. In both themes a page
+  black text become the app's dark surface and white. In both themes a page
   fills the pane's width — its side edges are clipped, and only the rule between
   pages shows where one ends — so the preview reads as a continuous document
-  rather than a sheet floating in the middle. Because PDF.js hands the page over
-  as one raster, figures inside it are inverted with the text in the dark theme.
+  rather than a sheet floating in the middle. The page is rendered at the
+  display's pixel density, so text stays crisp on 4K and 5K screens. Because
+  PDF.js hands the page over as one raster, figures inside it are inverted with
+  the text in the dark theme.
 
 An `#include` or `#image` resolves against the document's folder, as it does
 on export. **Help › Typst Reference** opens a live cheat sheet of the syntax
@@ -164,6 +166,32 @@ In Split view:
 - keyboard movement may reveal the caret's block when it has left the pane;
 - **F5 and Ctrl+R do not reload the window.** A reload would discard every open
   tab and every unsaved buffer with no prompt, so those keys are swallowed.
+
+### Scroll sync
+
+With **Sync Scroll** on in Split, both panes follow the same verified text. The
+correction is local: it aligns the nearest literal words or blocks in the same
+reading region, keeps the motion continuous between nearby pairs, and holds the
+last alignment when a formula, a generated line, an image, a page margin or an
+ambiguous repeat has no safe counterpart. It never falls back to a global page
+fraction, so nothing is sent to a plausible but unrelated place.
+
+Typst Pages follows pages and both columns. Moving from one column to the next
+repositions once; scrolling back retains the established column, and a wheel
+gesture over a body column chooses the other column explicitly. The correction
+works on pages whose canvas has not been painted yet and survives tab switches,
+resizes and zoom. HTML follows the guest at document zoom: its own CSS pixels
+are converted to host pixels, so a 150% or 300% document does not drift by the
+zoom factor. The source and preview still follow only vertical movement; there
+is no horizontal sync.
+
+Scrolling changes offsets only. It never moves the caret, the selection or
+focus, and it does not paint correspondence; selecting text does that, and a
+pending follow is suspended during a pointer gesture. A re-render, zoom or fit
+change keeps the reader's place when the source has not changed, and a normal
+tab switch restores it. Exact compiler spans are not available from the CLI
+PDF, so arbitrary macro expansion, formulas and generated content may have no
+counterpart; the panes then hold rather than guess.
   **File › Reload From Disk** is the explicit way to reread the current file.
 
 The sidebar holds the document outline, Favorites and Recent. The outline

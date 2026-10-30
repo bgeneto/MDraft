@@ -11,7 +11,7 @@
 // destination resolution and the escaping before the UI layer sees it.
 
 import { chooseSource, isHtmlSource, detectTextSyntax, scoreTypst } from "../src/paste/detect.ts";
-import { resolvePasteDestination } from "../src/paste/detect-document.ts";
+import { resolvePasteDestination, suggestSave } from "../src/paste/detect-document.ts";
 import { planPaste } from "../src/paste/index.ts";
 import { imageSyntaxFor } from "../src/image-syntax.ts";
 import {
@@ -113,6 +113,116 @@ console.log("=== destination resolution ===");
     fenced.language === "markdown" && fenced.fallback,
     "a code sample cannot classify the document",
     fenced.language,
+  );
+}
+
+console.log("\n=== save suggestion ===");
+{
+  // `main.ts` maps Default File Extension to the language a new document starts
+  // in and passes both here; these calls use the same pairs.
+  const suggest = (buffer, options = {}) =>
+    suggestSave({
+      path: null,
+      language: "markdown",
+      defaultExtension: "md",
+      defaultLanguage: "markdown",
+      ...options,
+      buffer,
+    });
+
+  const saved = suggest("# A Markdown title\n\nA **bold** sentence.", {
+    path: "C:/docs/paper.typ",
+    language: "typst",
+  });
+  check(
+    saved.language === "typst" && saved.extension === null,
+    "a saved file keeps its own path and language",
+    `${saved.language}/${saved.extension}`,
+  );
+
+  const typst = suggest("= A Typst title\n\n#set text(size: 10pt)\n\n- one\n- two");
+  check(
+    typst.language === "typst" && typst.extension === "typ",
+    "untitled Typst content suggests .typ",
+    `${typst.language}/${typst.extension}`,
+  );
+
+  const markdown = suggest(
+    "# A Markdown title\n\nA **bold** sentence and [a link](https://example.com).",
+    { language: "typst", defaultExtension: "typ", defaultLanguage: "typst" },
+  );
+  check(
+    markdown.language === "markdown" && markdown.extension === "md",
+    "untitled Markdown content beats a Typst default",
+    `${markdown.language}/${markdown.extension}`,
+  );
+
+  const html = suggest("<h1>Title</h1>\n<p>Hello</p>", {
+    language: "typst",
+    defaultExtension: "typ",
+    defaultLanguage: "typst",
+  });
+  check(
+    html.language === "html" && html.extension === "html",
+    "untitled HTML content suggests .html",
+    `${html.language}/${html.extension}`,
+  );
+
+  const asciidoc = suggest(
+    "= A book\n:doctype: book\n:toc:\n\nNOTE: Keep this.\n\nimage::cover.png[Cover]",
+  );
+  check(
+    asciidoc.language === "asciidoc" && asciidoc.extension === "adoc",
+    "untitled AsciiDoc content suggests .adoc",
+    `${asciidoc.language}/${asciidoc.extension}`,
+  );
+
+  const blank = suggest("   \n\n", {
+    language: "typst",
+    defaultExtension: "typ",
+    defaultLanguage: "typst",
+  });
+  check(
+    blank.language === "typst" && blank.extension === "typ",
+    "a blank buffer keeps the configured default",
+    `${blank.language}/${blank.extension}`,
+  );
+
+  const preference = suggest("# Title\n\nA **bold** sentence.", {
+    defaultExtension: "markdown",
+  });
+  check(
+    preference.language === "markdown" && preference.extension === "markdown",
+    "the reader's own Markdown spelling survives",
+    `${preference.language}/${preference.extension}`,
+  );
+
+  const text = suggest("# Title\n\nA **bold** sentence.", { defaultExtension: "txt" });
+  check(
+    text.language === "markdown" && text.extension === "txt",
+    "a plain-text default survives detected Markdown",
+    `${text.language}/${text.extension}`,
+  );
+
+  const tie = suggest("= Title\n\nA sentence.");
+  check(
+    tie.language === "markdown" && tie.extension === "md",
+    "a bare title is not a recommendation",
+    `${tie.language}/${tie.extension}`,
+  );
+
+  const fenced = suggest("Prose.\n\n```typst\n= not a heading\n#set text(size: 9pt)\n```\n");
+  check(
+    fenced.language === "markdown" && fenced.extension === "md",
+    "a fenced Typst sample cannot classify the buffer",
+    `${fenced.language}/${fenced.extension}`,
+  );
+
+  const restored = suggest("A sentence with no markup yet.", { language: "typst" });
+  check(
+    restored.language === "typst" && restored.extension === "typ",
+    "an untitled Typst buffer keeps Typst over a Markdown preference",
+    `${restored.language}/${restored.extension}`,
   );
 }
 

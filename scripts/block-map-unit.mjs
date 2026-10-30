@@ -12,6 +12,8 @@ import {
   foldWhitespace,
   rawNodeOffsetToSource,
   sourceOffsetToRawNode,
+  scrollSourceRange,
+  scrollTextAnchors,
 } from "../src/source-map.ts";
 
 const checks = [];
@@ -173,6 +175,36 @@ console.log("\n=== smart punctuation, numbered prefixes and inline calls ===");
     afterUnmatchedNode?.slice === "admonition",
     "an unmatched leading text node does not abort the rest of the block",
     JSON.stringify(afterUnmatchedNode),
+  );
+}
+
+{
+  const node = { data: "Alpha visible words", parentElement: null };
+  const map = {
+    source: node.data,
+    fragments: [{ src0: 0, src1: node.data.length, raw: node.data, kind: "text" }],
+    blocks: [],
+    text: new WeakMap([[node, { fragment: 0, fragStart: 0, block: -1, blockStart: 0 }]]),
+    fragNodes: [[node]],
+    blockNodes: [],
+    blockAllNodes: [],
+    blockLayouts: [],
+  };
+  const anchors = scrollTextAnchors(map);
+  check(
+    anchors.length === 3 && anchors[1].from === 6 && anchors[1].to === 13,
+    "strict scroll anchors preserve literal character boundaries",
+  );
+  map.fragments[0].kind = "math";
+  check(
+    scrollTextAnchors(map).length === 0 && scrollSourceRange(map, node, 0, 5) === null,
+    "atomic selection fallback cannot masquerade as fine scroll geometry",
+  );
+  map.fragments[0].kind = "text";
+  map.fragments[0].raw = "Other unrelated text";
+  check(
+    scrollSourceRange(map, node, 0, 5) === null,
+    "a transformed unmatched run keeps the coarse scroll fallback",
   );
 }
 

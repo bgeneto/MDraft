@@ -1368,7 +1368,7 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
         {
           kind: "select",
           label: "Default File Extension",
-          help: "Used for Save As and for a new document. Typst starts the editor in Typst mode, HTML in HTML mode, AsciiDoc in AsciiDoc mode; the other choices start in Markdown.",
+          help: "Used for a new document, and for Save As when the buffer is not clearly another markup. Typst starts the editor in Typst mode, HTML in HTML mode, AsciiDoc in AsciiDoc mode; the other choices start in Markdown.",
           options: [
             ["md", "Markdown (.md)"],
             ["markdown", "Markdown (.markdown)"],

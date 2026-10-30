@@ -981,6 +981,65 @@ export function blockRangeForNode(map: WordMap, node: Node): BlockRange | null {
 // Public lookups
 // ---------------------------------------------------------------------------
 
+export interface ScrollTextAnchor {
+  from: number;
+  to: number;
+  node: Text;
+  start: number;
+  end: number;
+  region: string;
+}
+
+/** Strict text only: selection's atomic/block fallbacks are never fine geometry. */
+export function scrollSourceRange(
+  map: WordMap,
+  node: Text,
+  start: number,
+  end: number,
+): { from: number; to: number } | null {
+  const record = map.text.get(node);
+  if (!record || (record.fragment >= 0 && map.fragments[record.fragment].kind !== "text"))
+    return null;
+  const text = node.data.slice(start, end);
+  if (!text.trim()) return null;
+  const fragment = record.fragment >= 0 ? map.fragments[record.fragment] : null;
+  const range =
+    fragment && map.fragNodes[record.fragment].length === 1 && fragment.raw === node.data
+      ? { from: fragment.src0 + start, to: fragment.src0 + end }
+      : sourceRangeFor(map, node, start, end);
+  const normal = (s: string) => s.replace(/[\u2018\u2019\u02bc]/g, "'").normalize("NFC");
+  return range && normal(map.source.slice(range.from, range.to)) === normal(text) ? range : null;
+}
+
+/** Built once per DOM snapshot, independent of font/width/zoom measurements. */
+export function scrollTextAnchors(map: WordMap): ScrollTextAnchor[] {
+  const anchors: ScrollTextAnchor[] = [];
+  const nodes = new Set([...map.fragNodes.flat(), ...map.blockNodes.flat()]);
+  for (const node of nodes) {
+    const record = map.text.get(node);
+    if (!record || (record.fragment >= 0 && map.fragments[record.fragment].kind !== "text"))
+      continue;
+    // Large escaped exact fragments retain the coarse path. Re-scanning their
+    // raw prefix for every word would make a pathological paragraph quadratic.
+    if (
+      record.fragment >= 0 &&
+      node.data.length > 2000 &&
+      map.fragments[record.fragment].raw !== node.data
+    )
+      continue;
+    const region =
+      node.parentElement?.closest<HTMLElement>("[data-line]")?.dataset.line ??
+      `b${record.block}:f${record.fragment}`;
+    for (const match of node.data.matchAll(/[\p{L}\p{M}\p{N}_]+/gu)) {
+      const start = match.index,
+        end = start + match[0].length;
+      const range = scrollSourceRange(map, node, start, end);
+      if (range) anchors.push({ ...range, node, start, end, region });
+    }
+  }
+  return anchors;
+}
+
 /** The kind of the exact fragment a text node belongs to, if any. */
 export function fragmentKindFor(map: WordMap, node: Text): FragmentKind | null {
   const record = map.text.get(node);
