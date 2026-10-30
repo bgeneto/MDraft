@@ -133,6 +133,16 @@ interface PageWordPart {
   from: number;
   to: number;
 }
+
+/** Accepted identities only. Scroll policy must not invent additional links. */
+export interface PageScrollAnchor {
+  readonly from: number;
+  readonly to: number;
+  readonly line: number;
+  readonly start: number;
+  readonly end: number;
+  readonly region: string;
+}
 interface PageWord {
   norm: string;
   parts: PageWordPart[];
@@ -180,6 +190,7 @@ export class TypstPageMap {
   private readonly pdf: PageWord[] = [];
   private readonly links: (number | null)[];
   private readonly byLine = new Map<number, number[]>();
+  private readonly accepted: PageScrollAnchor[] = [];
 
   constructor(source: string, lines: readonly PageMapLine[], words: readonly SourceWord[]) {
     this.source = source;
@@ -302,6 +313,26 @@ export class TypstPageMap {
     }
     for (const bucket of inverse.values())
       if (bucket.length > 1) for (const at of bucket) this.links[at] = null;
+    for (let at = 0; at < this.links.length; at++) {
+      const link = this.links[at];
+      if (link === null || link < 0) continue;
+      const word = this.words[link];
+      for (const part of this.pdf[at].parts)
+        this.accepted.push(
+          Object.freeze({
+            from: word.from,
+            to: word.to,
+            line: part.line,
+            start: part.from,
+            end: part.to,
+            region: this.pdf[at].region,
+          }),
+        );
+    }
+  }
+
+  scrollAnchors(): readonly PageScrollAnchor[] {
+    return this.accepted;
   }
 
   private tokenAt(line: number, offset: number, bias: "start" | "end"): number | null {

@@ -208,6 +208,8 @@ rewrite from scratch.
 | `npm run test:rust` | `cargo test` | 229 passed on Windows, 228 on Linux; two ignored downloads, plus the ignored display-owned Linux print probe |
 | `npm test` | `scripts/test-all.mjs` | Every layer in the order below, doing the setup each one quietly depends on: build, Rust, then one freshly launched instance per UI suite on its own free port, each with its fixture and first-run state. The two restart layers are the exception: two launches of the same instance's settings directory, closed with WM_CLOSE in between so the close flush runs. Puts back the working tree, the developer's own settings, window state and recovery journal afterwards. `--only`, `--skip`, `--all`, `--no-build`, `--kill`, `--list` |
 | `npm run smoke` | `scripts/dom-smoke.mjs` | 114 checks against `samples/feature-tour.md`, including the Math scale and Code scale rows, the per-preset size memory and the Read Aloud preferences |
+| `npm run sync` | `scripts/scroll-sync-test.mjs` | 62 checks of content-pair scroll correspondence in all five preview adapters, both directions at 100%, the source direction at 50/150/300%, narrow/wide resize, a Pages tab switch, idle stability, disabled/outside-Split, edit invalidation and the source/caret/focus invariant |
+| `npm run sync:unit` | `scripts/scroll-sync-unit.mjs` | 29 checks of the local scroll solver and ownership: interpolation, clamps, ties, column regions, reflected events and source-offset restoration - no application |
 | `npm run word-sync` | `scripts/word-sync-test.mjs` | 58 checks of word-level sync, including 20 alternating pairs, element endpoints, multi-paragraph ranges, stale render rejection and reduced motion in Markdown/AsciiDoc/Typst Document, against `samples/word-sync.md`: the fragment map, both directions, atomic code/formula/image spans, the four-beat pulse and its resting mark, reduced motion, no scroll, Escape, and the fallbacks |
 | `npm run autoclose:unit` | `scripts/autoclose-unit.mjs` | 17 checks of the tag matcher: attributes, custom elements, void and self-closing tags, autolinks, escapes, declarations, prose — no application |
 | `npm run autoclose` | `scripts/autoclose-test.mjs` | 33 checks of pairs, quotes, backticks, HTML tags and both preferences, typed through the real editor in Markdown, HTML, Typst and AsciiDoc |
@@ -246,7 +248,7 @@ rewrite from scratch.
 | `npm run p0:lifecycle` | `scripts/p0-lifecycle-test.mjs` | 35 checks through the real editor of delayed save/reload/Save As/export, recovery, three-way tab/bulk/window close, failed saves, binary/mixed-drop refusal, a same-size/same-mtime disk rewrite, UTF-16 explanation, focus and clean bundled documents |
 | `npm run single:instance` | `scripts/single-instance-test.mjs` | 12 checks of the second-launch handoff: two initial paths as tabs, a relative second-launch path, the second process exiting, one page target, duplicate-path focus, a missing path toast and a dirty buffer surviving |
 | `npm run preview:zoom` | `scripts/preview-zoom-test.mjs` | 24 checks of document zoom through the editor and every preview renderer: Split, Preview-only, Source-only, Markdown, AsciiDoc, Typst Document, Typst Pages, the HTML guest, word sync, keyboard reveal, the status chip, reset and Content Width |
-| `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 378 unit checks of the paste readers, renderers, destination detection and image syntax; no application |
+| `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 389 unit checks of the paste readers, renderers, destination detection, the Save As extension suggestion and image syntax; no application |
 | `npm run paste` | `scripts/rich-paste-test.mjs` | 87 checks of rich paste through the real UI: destination detection, conversion in every direction, whitespace across inline elements, preferences, Ctrl+Shift+V, undo, and Find/Replace paste ownership, including real Ctrl+V and Ctrl+Shift+V with plain and rich clipboard text. The 8 native-key checks are skipped (79/79) when the session cannot own the clipboard, which the suite proves by writing and reading it back |
 | `npm run image:syntax` | `scripts/image-syntax-test.mjs` | 22 checks of bitmap, remote-image and modern-format handling in Typst, Markdown, HTML and AsciiDoc; Typst refuses AVIF with a message, WebP is inserted, and Format > Image writes Typst syntax |
 | `npm run image:rules` | `scripts/image-rules-test.mjs` | 28 checks of every Image rule, the untitled fallback, a 401 and a non-image response, quoted and `file://` paths and `data:` URLs; `--live` adds the three public sample images |
@@ -522,7 +524,7 @@ hash the pixels.
 
 ## Testing
 
-Forty-seven default layers, cheapest first, plus the opt-in live AI layer. Run them in this order when changing anything.
+Forty-nine default layers, cheapest first, plus the opt-in live AI layer. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
@@ -530,13 +532,15 @@ Forty-seven default layers, cheapest first, plus the opt-in live AI layer. Run t
 | Rust unit | `npm run test:rust` | 229 Windows / 228 Linux | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction, image content sniffing (WebP/AVIF brands), `${filename}`, the untitled image guard, the Typst image root, the OS opener's executable refusal, the recovery journal's round-trip/id/cap rules, checked-write hashes and same-metadata conflicts, launch argument parsing and path identity, the AI prompts/tags/caps/URL joins, the namespaced wrappers and the answer sanitizer, SSE parsing and model-list diagnostics, installed-family normalisation and the widened preset overrides |
 | Session store | `npm run test:sessions` | 60 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
 | P0 data safety (unit) | `npm run p0:unit` | 112 | Recovery scheduling/classification/Typst strings, deferred save/reload/Save As, checked-write conflicts and baseline hashes, save queues, bulk-close cancellation/failures, lossy copies and export snapshots across picker/tool/render delays — no application |
-| Paste conversion | `npm run paste:convert` | 378 | Clipboard/document detection, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, `<br><br>` paragraph splitting, image syntax, AsciiDoc, and an image that fails to save |
+| Paste conversion | `npm run paste:convert` | 389 | Clipboard/document detection, the Save As extension suggestion, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, `<br><br>` paragraph splitting, image syntax, AsciiDoc, and an image that fails to save |
 | AsciiDoc export source | `npm run asciidoc:export:unit` | 17 | Unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations - no application |
 | Export paths (unit) | `npm run export:paths:unit` | 44 | Drive, UNC and POSIX paths, spaces, Unicode, `..`, different roots, encoded spaces, fragments, `data:`, `file:` and protocol-relative references — no application |
 | Browser exports | `npm run export:browser` | 24 | Native HTML and Print artifacts: local image/link resolution, no app protocol, absolute print URLs, the resource-wait/failure script, the exported alert tint, and a light print diagram in a dark editor |
 | Native PDF | `npm run pdf:native` | 21 | A real direct PDF from Markdown, static HTML through the same writer, scripted HTML kept on the browser route, and the Poppler visual metrics |
 | PDF visual (app-free) | `npm run pdf:visual -- --pdf <file> --fixture quality` | 36 | A4 geometry, embedded fonts, selectable text, one PNG/PPM per page, non-blank pages, quiet margins, known image colours, table rules and mathematics ink |
 | DOM smoke | `npm run smoke` | 114 | Rendering, pane sync, preferences (including the four On Launch choices, Line Height, Math scale, Code scale and the Read Aloud section), math, fonts, status icons |
+| Content scroll (unit) | `npm run sync:unit` | 29 | Local interpolation, clamps, ties, column regions, branch ownership, reflected events and source-offset restoration - no application |
+| Content scroll | `npm run sync` | 62 | 40 content pairs in each of Markdown, AsciiDoc, Typst Document, Typst Pages and HTML, both directions at 100%, the source direction at 50/150/300%, narrow/wide resize, a Pages tab switch, idle stability, disabled/outside-Split and edit invalidation; no stall or leftover app |
 | P0 lifecycle (UI) | `npm run p0:lifecycle` | 35 | Delayed save/reload/Save As/export, real text/dirty/recovery preservation, a same-size/same-mtime external rewrite, three-way close/cancellation/failures, binary/mixed-drop/UTF-16 refusal, focus restoration, clean bundled documents and native close |
 | Second launch | `npm run single:instance` | 12 | Two initial paths as tabs, relative second-launch handoff, second-process exit, one page target, duplicate-path focus, missing-path toast, dirty buffer preserved |
 | Document zoom | `npm run preview:zoom` | 24 | Source-only, Split and Preview-only geometry; Markdown/AsciiDoc/Typst Document; HTML guest frame; Typst Pages canvases, horizontal scroll and scroll position; zoomed word sync and keyboard reveal; reset leaves Content Width alone |
@@ -734,7 +738,19 @@ WebView2 folder does not create this isolation. See
 **`Invoke-WebRequest http://127.0.0.1:1420/...` times out although Vite prints `ready`**
 Vite's default dev server binds `localhost`, which on this host resolves to IPv6 `::1`; the IPv4 loopback is a different address. A readiness loop against `127.0.0.1:1420` therefore never connects and looks like a failed dev server. Probe `http://localhost:1420` instead, or start Vite with `--host 127.0.0.1` when a tool insists on the address.
 
-**Add yours before you finish the task** — see
+**`node scripts/scroll-sync-test.mjs` prints its checks and then sits on `Runtime.evaluate` forever**
+Returning from Source-only to Split re-renders the HTML guest, so the active iframe is replaced and the old CDP target closes. The test kept a WebSocket to the old target; its `Runtime.evaluate` Promise never settled, Node printed `unsettled top-level await`, and the manually launched MDraft window stayed on screen because the script owns only CDP, not the app process. Reject pending requests on socket close, give every CDP call a timeout, reconnect to `.html-preview-frame.active` after the split render, and close the launched app in the runner's `finally`. The repo harness already owns the app; a manual runner must do the same.
+
+**A Typst Pages wheel over a column does not move the source when the pane is already at the page top**
+`scrollInput` only remembered the pointer for the next scroll event. At the top both columns share the same `scrollTop`, so the test's column handoff produced no scroll event; the retained old column won and the source stayed one section behind (a 764px probe error). Trigger the preview sync from the wheel itself, and use a non-consuming `scrollAnchorsAt(reference, false)` for bookmark/refinement reads so a pending correction cannot steal a newer gesture's pointer. Do not diagnose the 764px as a matcher gap: the word was mapped and the region was simply not reselected.
+
+**`favorites-restore` fails only inside the full suite with `the editor menu adds the active document`**
+The suite's boot signal is a rendered `.cm-line`, which can be true before `installEditorContextMenu` has attached its contextmenu listener. A single synthetic right-click at that moment sees no application menu, so the favorite action is "missing"; the isolated layer usually boots fast enough to pass. Retry the gesture for a few hundred milliseconds (or wait for the menu listener's own signal) instead of treating one right-click as the final answer. The same applies to the tab menu.
+
+**`typewriter` reports `undo keeps the primary caret centered — {"fraction":-0.054…}` once in a while**
+The centering check sampled once after 400ms, while the typewriter extension settles on the frame after an IME/undo transaction. Poll the caret fraction for up to a second before failing; a single sample is not evidence that centering is broken. This was a test-timing failure, not a Typewriter or scroll-sync regression.
+
+**Add yours before you finish the task** - see
 [Recording traps is required](#recording-traps-is-required) for what qualifies and
 how to write it. The list is append-only in spirit: do not delete an entry because
 the fix landed, because the fix is what makes it recur.
@@ -765,6 +781,16 @@ A newly created canvas has browser-default backing dimensions `300 × 150`,
 which satisfy a naive `width > 0` readiness check before lazy PDF painting.
 Scroll the relevant page into view and wait for actual PDF dimensions before
 checking its aspect ratio; the default canvas does not prove a distorted PDF.
+
+**`typst --version` succeeds but a package-free compile returns `error: Access is denied. (os error 5)`**
+The shell's execution sandbox can reject compilation even when the managed
+compiler starts and its output is stdout or a writable workspace file. This
+looked like a broken Typst/PDF pipeline; disabling system fonts and redirecting
+temporary/package paths into the workspace did not fix it. The same original
+stdin-to-PDF-stdout probe succeeded through approved execution escalation and
+PDF.js extracted both fixture pages. Compare the exact invocation outside the
+sandbox before changing the compiler installation, font setup or preview code;
+do not treat this environment failure as evidence about source-map support.
 
 **Escape clears preview paint but leaves `.cm-sync-word` and collapses the source selection**
 CodeMirror's default Escape keymap consumes the event before a bubbling document

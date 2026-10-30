@@ -67,6 +67,12 @@ let activeApp = null;
 // ---------------------------------------------------------------------------
 const SUITES = [
   {
+    id: "sync-unit",
+    title: "Scroll geometry (unit)",
+    kind: "node",
+    script: "scroll-sync-unit.mjs",
+  },
+  {
     id: "rust",
     title: "Rust unit tests",
     kind: "rust",
@@ -182,6 +188,13 @@ const SUITES = [
     kind: "cdp",
     script: "dom-smoke.mjs",
     doc: "samples/feature-tour.md",
+  },
+  {
+    id: "sync",
+    title: "Content scroll correspondence",
+    kind: "cdp",
+    script: "scroll-sync-test.mjs",
+    doc: "samples/scroll-sync/prose.md",
   },
   {
     id: "p0-lifecycle",

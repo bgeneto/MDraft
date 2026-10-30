@@ -2203,6 +2203,9 @@ body {
   transform: scale(var(--typst-fit));
   transform-origin: top left;
   background: var(--bg);
+  /* The canvas screen-blends with this surface; keep that blend inside the
+     page instead of letting it reach the shell or the pane. */
+  isolation: isolate;
 }
 
 .typst-page canvas {
@@ -2212,13 +2215,17 @@ body {
 }
 
 /* The PDF page reaches us as one raster, so the only way to follow the theme is
-   a filter: 0.882 maps white paper to --bg (#1e1e1e) and black text to #e1e1e1,
-   leaving only the rule and shadow above to mark the page break. The hue
-   rotation puts back the hues a plain invert would flip. Filter the canvas, not
-   the page, so the text layer's selection keeps its normal colour. */
+   a filter. Invert fully — paper black, ink white — and composite with `screen`
+   over the page's own --bg: the screen restores the paper exactly to the theme
+   surface while the ink stays #ffffff. A partial invert cannot do both; at the
+   0.882 that mapped paper to #1e1e1e, black ink could only reach #e1e1e1. The
+   hue rotation puts back the hues a plain invert flips for figures, and
+   `isolation` on the page keeps the blend from reaching the shell. Filter the
+   canvas, not the page, so the text layer's selection keeps its normal colour. */
 @media not (forced-colors: active) {
   [data-theme="dark"] .typst-page canvas {
-    filter: invert(0.882) hue-rotate(180deg);
+    filter: invert(1) hue-rotate(180deg);
+    mix-blend-mode: screen;
   }
 }
 

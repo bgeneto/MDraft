@@ -15,12 +15,17 @@ import {
   htmlDecodedOffsets,
   htmlRangesForSource,
   htmlSourceRange,
+  htmlScrollAnchors,
+  readHtmlScrollGeometry,
+  type HtmlScrollAnchor,
+  type HtmlScrollGeometry,
   type HtmlSelection,
   type HtmlTextFragment,
   type HtmlTextSelection,
 } from "./html-source-map";
 import bridgeTemplate from "./html-bridge.js?raw";
 import { PRINT_READY_SCRIPT } from "./print-ready";
+import { ScrollIndex } from "./scroll-sync";
 
 export type { HtmlSelection, HtmlTextFragment } from "./html-source-map";
 
@@ -35,6 +40,10 @@ export interface HtmlLayout {
   height: number;
   client: number;
   line: number;
+  epoch: number;
+  probe: { from: number; to: number } | null;
+  /** Host pixels per guest CSS pixel: the iframe's own document zoom. */
+  scale: number;
 }
 
 export interface HtmlAccelerator {
@@ -55,6 +64,7 @@ export interface HtmlPreviewCallbacks {
   onScroll(layout: HtmlLayout): void;
   onReady(layout: HtmlLayout): void;
   onError(message: string): void;
+  onScrollInput?(dragging: boolean): void;
 }
 
 export interface HtmlPreviewHandle {
@@ -69,7 +79,7 @@ export interface HtmlPreviewHandle {
   ): Promise<void>;
   dispose(): void;
   setAccelerators(list: HtmlAccelerator[]): void;
-  scrollTo(top: number): void;
+  scrollTo(top: number, input?: number): void;
   scrollToLine(line: number): void;
   /** Scroll the guest to an element id (a same-document link in the source). */
   scrollToId(id: string): void;
@@ -82,6 +92,11 @@ export interface HtmlPreviewHandle {
   layout(): HtmlLayout | null;
   anchors(): Anchor[];
   baseUrl(): string | null;
+  scrollAnchorsNear(offset: number): readonly HtmlScrollAnchor[];
+  measureScroll(
+    source: string,
+    anchors: readonly HtmlScrollAnchor[],
+  ): Promise<HtmlScrollGeometry | null>;
 }
 
 interface FrameState {
@@ -504,6 +519,18 @@ export function createHtmlPreview(
   let accelerators: HtmlAccelerator[] = [];
   let guestBase: string | null = null;
   let htmlFragments: HtmlTextFragment[] = [];
+  let scrollIndex = new ScrollIndex<HtmlScrollAnchor>([]);
+  let scrollRequest = 0;
+  let pendingScroll: {
+    id: number;
+    frame: FrameState;
+    anchors: readonly HtmlScrollAnchor[];
+    finish: (geometry: HtmlScrollGeometry | null) => void;
+  } | null = null;
+  function cancelScroll(): void {
+    pendingScroll?.finish(null);
+    pendingScroll = null;
+  }
 
   const onMessage = (event: MessageEvent) => {
     const data = event.data as { __mdraft?: string; type?: string; [key: string]: unknown } | null;
@@ -518,7 +545,7 @@ export function createHtmlPreview(
     if (!frame || data.__mdraft !== frame.token) return;
 
     if (data.type === "ready") {
-      const layout = readLayout(data);
+      const layout = readLayout(data, frame.fragments, frame.frame);
       if (!layout) return;
       currentLayout = layout;
       window.clearTimeout(frame.timer);
@@ -531,6 +558,7 @@ export function createHtmlPreview(
         // The table belongs to the frame that is now on screen, not to the one
         // that is still being built.
         htmlFragments = frame.fragments;
+        scrollIndex = new ScrollIndex(htmlScrollAnchors(htmlFragments));
         frame.frame.classList.remove("pending");
         frame.frame.classList.add("active");
         if (old) {
@@ -545,18 +573,36 @@ export function createHtmlPreview(
 
     if (!frame.ready || frame !== active) return;
 
+    if (data.type === "scrollGeometry") {
+      const request = pendingScroll;
+      if (!request || request.id !== data.request || request.frame !== frame) return;
+      const geometry = readHtmlScrollGeometry(data, request.anchors);
+      if (geometry && geometry.epoch === currentLayout?.epoch) {
+        geometry.frameTop = frame.frame.getBoundingClientRect().top;
+        geometry.scale = frameScale(frame.frame);
+        request.finish(geometry);
+      } else request.finish(null);
+      pendingScroll = null;
+      return;
+    }
+    if (data.type === "scrollInput") {
+      cancelScroll();
+      callbacks.onScrollInput?.(data.dragging === true);
+      return;
+    }
+
     if (data.type === "clearSync") {
       if (document.activeElement === frame.frame) callbacks.onClear();
       return;
     }
 
     if (data.type === "layout") {
-      const layout = readLayout(data);
+      const layout = readLayout(data, htmlFragments, frame.frame);
       if (layout) currentLayout = layout;
       return;
     }
     if (data.type === "scroll") {
-      const layout = readLayout(data);
+      const layout = readLayout(data, htmlFragments, frame.frame);
       if (layout) {
         currentLayout = layout;
         callbacks.onScroll(layout);
@@ -613,7 +659,19 @@ export function createHtmlPreview(
     }
   }
 
-  function readLayout(data: Record<string, unknown>): HtmlLayout | null {
+  /** CSS zoom on the iframe scales the guest's own CSS pixels on screen. */
+  function frameScale(frame: HTMLIFrameElement): number {
+    const zoom = Number.parseFloat(
+      (getComputedStyle(frame) as CSSStyleDeclaration & { zoom?: string }).zoom ?? "1",
+    );
+    return Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
+  }
+
+  function readLayout(
+    data: Record<string, unknown>,
+    fragments = htmlFragments,
+    frameElement?: HTMLIFrameElement,
+  ): HtmlLayout | null {
     const anchors = Array.isArray(data.anchors)
       ? data.anchors
           .filter(
@@ -635,6 +693,15 @@ export function createHtmlPreview(
       height: Number.isFinite(height) ? height : 0,
       client: Number.isFinite(client) ? client : 0,
       line: Number.isFinite(line) ? line : 1,
+      epoch:
+        typeof data.epoch === "number" && Number.isSafeInteger(data.epoch) && data.epoch >= 0
+          ? data.epoch
+          : 0,
+      probe:
+        data.probe && typeof data.probe === "object"
+          ? htmlSourceRange(fragments, data.probe as HtmlSelection)
+          : null,
+      scale: frameElement ? frameScale(frameElement) : 1,
     };
   }
 
@@ -650,6 +717,8 @@ export function createHtmlPreview(
   }
 
   function dropFrames(): void {
+    cancelScroll();
+    scrollIndex = new ScrollIndex([]);
     window.clearTimeout(pending?.timer ?? 0);
     window.clearTimeout(active?.timer ?? 0);
     pending?.frame.remove();
@@ -674,6 +743,7 @@ export function createHtmlPreview(
     },
 
     async render(source, root, filename, scripts, imageRoots = []) {
+      cancelScroll();
       const mine = ++generation;
       // Captured now: reset() replaces `nonce` while this build is awaiting,
       // and a stale render must not publish the old document under the new one.
@@ -741,8 +811,49 @@ export function createHtmlPreview(
       if (pending) postTo(pending, { type: "keys", list });
     },
 
-    scrollTo(top) {
-      if (active) postTo(active, { type: "scrollTo", top });
+    scrollTo(top, input) {
+      if (active) postTo(active, { type: "scrollTo", top, input });
+    },
+
+    scrollAnchorsNear(offset) {
+      return scrollIndex.near(offset);
+    },
+
+    measureScroll(source, anchors) {
+      cancelScroll();
+      const frame = active;
+      if (
+        !frame?.ready ||
+        frame.source !== source ||
+        !currentLayout ||
+        !anchors.length ||
+        anchors.length > 64
+      )
+        return Promise.resolve(null);
+      return new Promise((resolve) => {
+        const id = ++scrollRequest;
+        const timeout = window.setTimeout(() => {
+          if (pendingScroll?.id === id) {
+            pendingScroll = null;
+            resolve(null);
+          }
+        }, 150);
+        pendingScroll = {
+          id,
+          frame,
+          anchors,
+          finish: (data) => {
+            window.clearTimeout(timeout);
+            resolve(data);
+          },
+        };
+        postTo(frame, {
+          type: "measureScroll",
+          request: id,
+          epoch: currentLayout!.epoch,
+          ranges: anchors.map((a) => a.range),
+        });
+      });
     },
 
     scrollToLine(line) {

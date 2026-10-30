@@ -57,6 +57,9 @@
   var readySent = false;
   var blinkTimer = 0;
   var blinking = null;
+  var layoutEpoch = 0;
+  var scrollInput = 0;
+  var scrollDragging = false;
 
   function post(message) {
     message.__mdraft = TOKEN;
@@ -116,11 +119,13 @@
   }
 
   function layout() {
+    layoutEpoch += 1;
     scanAnchors();
     var state = metrics();
     post({
       type: "layout",
       anchors: publicAnchors(),
+      epoch: layoutEpoch,
       top: state.top,
       height: state.height,
       client: state.client,
@@ -149,6 +154,8 @@
         height: state.height,
         client: state.client,
         line: state.line,
+        epoch: layoutEpoch,
+        probe: scrollDragging ? null : scrollProbe(),
       });
     });
   }
@@ -222,6 +229,7 @@
       var state = metrics();
       post({
         type: "ready",
+        epoch: layoutEpoch,
         anchors: publicAnchors(),
         top: state.top,
         height: state.height,
@@ -296,6 +304,125 @@
     if (!isFinite(n)) return null;
     var index = ownedText(stamp).indexOf(node);
     return index >= 0 ? { n: n, index: index } : null;
+  }
+
+  function scrollProbe() {
+    for (var y of [SYNC_MARGIN + 2, SYNC_MARGIN + 14, SYNC_MARGIN + 28]) {
+      for (var x of [32, window.innerWidth * 0.4, window.innerWidth * 0.7]) {
+        var point = document.caretRangeFromPoint && document.caretRangeFromPoint(x, y);
+        if (!point || point.startContainer.nodeType !== 3) continue;
+        var node = point.startContainer;
+        var entry = textEntry(node);
+        if (!entry) continue;
+        var offset = point.startOffset;
+        var words = node.data.matchAll(/[\p{L}\p{M}\p{N}_]+/gu);
+        for (var word of words) {
+          var start = word.index,
+            end = start + word[0].length;
+          if (offset >= start && offset <= end)
+            return {
+              n: entry.n,
+              index: entry.index,
+              start: start,
+              end: end,
+              sample: word[0],
+            };
+        }
+      }
+    }
+    return null;
+  }
+
+  function reportScrollInput() {
+    scrollInput += 1;
+    post({ type: "scrollInput", dragging: scrollDragging });
+  }
+  window.addEventListener("wheel", reportScrollInput, { capture: true, passive: true });
+  window.addEventListener("touchstart", reportScrollInput, { capture: true, passive: true });
+  window.addEventListener(
+    "keydown",
+    function (event) {
+      if (/^(Arrow|Page|Home|End| )/.test(event.key)) reportScrollInput();
+    },
+    true,
+  );
+  window.addEventListener(
+    "pointerdown",
+    function (event) {
+      scrollDragging = event.button === 0 && !!event.target.closest("[data-mdraft-n]");
+      reportScrollInput();
+    },
+    true,
+  );
+  window.addEventListener(
+    "pointerup",
+    function () {
+      if (scrollDragging) {
+        scrollDragging = false;
+        reportScrollInput();
+      }
+    },
+    true,
+  );
+  window.addEventListener("blur", function () {
+    scrollDragging = false;
+  });
+
+  function measureScroll(data) {
+    if (
+      !Number.isSafeInteger(data.request) ||
+      data.epoch !== layoutEpoch ||
+      !Array.isArray(data.ranges) ||
+      data.ranges.length > 64
+    )
+      return;
+    var points = [];
+    var nodesByStamp = new Map();
+    for (var i = 0; i < data.ranges.length; i += 1) {
+      var spec = data.ranges[i];
+      if (
+        !spec ||
+        !Number.isSafeInteger(spec.n) ||
+        spec.n < 0 ||
+        !Number.isSafeInteger(spec.index) ||
+        spec.index < 0 ||
+        !Number.isSafeInteger(spec.start) ||
+        !Number.isSafeInteger(spec.end) ||
+        spec.start < 0 ||
+        spec.end <= spec.start ||
+        typeof spec.sample !== "string" ||
+        spec.sample.length > 120
+      )
+        return;
+      var nodes = nodesByStamp.get(spec.n);
+      if (!nodes) {
+        var stamp = document.querySelector('[data-mdraft-n="' + spec.n + '"]');
+        nodes = stamp ? ownedText(stamp) : [];
+        nodesByStamp.set(spec.n, nodes);
+      }
+      var node = nodes[spec.index];
+      if (!node || spec.end > node.length || node.data.slice(spec.start, spec.end) !== spec.sample)
+        continue;
+      var range = document.createRange();
+      range.setStart(node, spec.start);
+      range.setEnd(node, spec.end);
+      var box = range.getBoundingClientRect();
+      if (box.width && box.height)
+        points.push({
+          at: i,
+          top: box.top + window.scrollY,
+          height: box.height,
+          sample: spec.sample,
+        });
+    }
+    post({
+      type: "scrollGeometry",
+      request: data.request,
+      epoch: layoutEpoch,
+      input: scrollInput,
+      top: window.scrollY,
+      points: points,
+    });
   }
 
   function reportSelection(reveal) {
@@ -544,8 +671,11 @@
     var data = event.data;
     if (!data || data.__mdraft !== TOKEN) return;
     if (data.type === "scrollTo") {
+      if (data.input !== undefined && data.input !== scrollInput) return;
       var top = Number(data.top);
       if (isFinite(top)) window.scrollTo(0, Math.max(0, top));
+    } else if (data.type === "measureScroll") {
+      measureScroll(data);
     } else if (data.type === "scrollToLine") {
       var anchor = anchorForLine(Number(data.line));
       if (anchor) window.scrollTo(0, Math.max(0, anchor.top - SYNC_MARGIN));

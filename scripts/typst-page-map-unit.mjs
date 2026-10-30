@@ -181,6 +181,31 @@ console.log("\n=== bidirectional prose index ===");
   );
 }
 
+{
+  const source = "Alpha pendulum rotates slowly. Beta pendulum rotates quickly.";
+  const rows = [
+    { text: "Alpha pendulum rotates slowly.", region: "left" },
+    { text: "Beta pendulum rotates quickly.", region: "right" },
+  ];
+  const map = await createTypstPageMap(source, rows);
+  const anchors = map.scrollAnchors();
+  check(anchors.length === 8, "scroll exposes the accepted literal occurrences only");
+  check(
+    anchors.every(
+      (a) =>
+        map.wordAt(a.line, a.start)?.from === a.from &&
+        map
+          .partsForSource(a.from, a.to)
+          .some((p) => p.line === a.line && p.from === a.start && p.to === a.end),
+    ),
+    "scroll and selection use identical links in both directions",
+  );
+  const generated = await createTypstPageMap("#lorem(20)", [
+    { text: "Generated absent words", region: "left" },
+  ]);
+  check(generated.scrollAnchors().length === 0, "generated text cannot become a scroll anchor");
+}
+
 const failed = checks.filter((entry) => !entry.ok).length;
 console.log(`\n${checks.length - failed}/${checks.length} checks passed`);
 process.exit(failed === 0 ? 0 : 1);

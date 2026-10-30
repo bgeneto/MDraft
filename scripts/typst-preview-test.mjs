@@ -676,6 +676,9 @@ async function previewPaint() {
 async function roundTrip(word, root = ".typst-preview") {
   await clearSelection();
   const hit = await selectWord(word, root);
+  // The source decoration is painted after the reveal's measure; wait for it
+  // before reading .cm-sync-word, or a word that had to scroll reads as empty.
+  await sleep(200);
   const forward = await mark();
   const sourcePoint = await evaluate(`(() => {
     const el = document.querySelector('.cm-sync-word');
@@ -684,13 +687,19 @@ async function roundTrip(word, root = ".typst-preview") {
     return {x:b.left+b.width/2,y:b.top+b.height/2};
   })()`);
   if (sourcePoint) await doubleClickAt(sourcePoint);
-  await sleep(120);
+  await sleep(250);
   const reverse = await previewPaint();
+  const diagnostics = await evaluate(`(() => ({
+    scroll: document.querySelector('.cm-scroller')?.scrollTop,
+    active: document.activeElement?.className ?? "",
+    markNodes: [...document.querySelectorAll('.cm-sync-word')].length,
+  }))()`);
   return {
     word,
     selected: hit.selected.trim(),
     forward,
     reverse,
+    diagnostics,
     ok: hit.selected.trim() === word && forward === word && reverse === word,
   };
 }
@@ -713,6 +722,7 @@ check(
 // Browser endpoint at the next node's leading space must not turn a phrase
 // into a paragraph selection. The DOM Range is deliberate boundary coverage.
 await clearSelection();
+await evaluate(`document.activeElement?.blur()`);
 await evaluate(`(() => {
   const nodes = [...document.querySelectorAll('.textLayer span[role="presentation"]')];
   const span = nodes.find(el => el.textContent.includes('com velocidade'));
@@ -722,10 +732,23 @@ await evaluate(`(() => {
   const s=getSelection();s.removeAllRanges();s.addRange(r);
 })()`);
 await sleep(180);
+await evaluate(`(() => {
+  const scroller = document.querySelector('.cm-scroller');
+  for (let i = 0; i < 40; i += 1) {
+    if ((document.querySelector('.cm-content')?.innerText ?? '').includes('com velocidade')) return;
+    scroller.scrollTop += 120;
+  }
+})()`);
+await sleep(100);
+const phraseMark = await mark();
+const phraseDebug = await evaluate(`(() => ({
+  scroll: document.querySelector('.cm-scroller')?.scrollTop,
+  content: (document.querySelector('.cm-content')?.innerText ?? '').includes('com velocidade'),
+}))()`);
 check(
   "a Pages phrase after math paints only its two source words",
-  (await mark()).replaceAll("|", "") === "com velocidade",
-  await mark(),
+  phraseMark.replaceAll("|", "") === "com velocidade",
+  JSON.stringify({ mark: phraseMark, ...phraseDebug }),
 );
 
 await send("Emulation.setEmulatedMedia", {
@@ -784,6 +807,7 @@ check("Pages correspondence survives canvas disposal and repaint", lazy.ok, JSON
 await evaluate(
   `window.__oldPageRange=(()=>{const e=[...document.querySelectorAll('.textLayer span[role="presentation"]')].find(e=>!e.classList.contains('markedContent') && e.textContent.includes('com velocidade'));const r=document.createRange(),at=e.textContent.indexOf('velocidade');r.setStart(e.firstChild,at);r.setEnd(e.firstChild,at+10);return r})()`,
 );
+await evaluate(`document.querySelector(".cm-content").focus()`);
 await send("Input.dispatchKeyEvent", {
   type: "keyDown",
   key: "Home",
@@ -799,6 +823,7 @@ await send("Input.dispatchKeyEvent", {
   windowsVirtualKeyCode: 36,
 });
 await send("Input.insertText", { text: "// audit prefix\n" });
+await sleep(120);
 await evaluate(
   `(()=>{const s=getSelection();s.removeAllRanges();s.addRange(window.__oldPageRange);document.querySelector('.typst-preview').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))})()`,
 );

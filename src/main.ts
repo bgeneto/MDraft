@@ -61,7 +61,12 @@ import {
 import { imageSyntaxFor, needsRelativePath } from "./image-syntax";
 import { linkAt, type LinkTarget } from "./links";
 import { chooseSource, type ClipboardPayload } from "./paste/detect";
-import { resolvePasteDestination, type PasteDestination } from "./paste/detect-document";
+import {
+  CANONICAL_EXTENSION,
+  resolvePasteDestination,
+  suggestSave,
+  type PasteDestination,
+} from "./paste/detect-document";
 import { planPaste, type ImageRequest, type ResolvedImage } from "./paste/index";
 import { escapeMarkdownCurrency, markdownProseSelection } from "./math-delimiters";
 import {
@@ -82,6 +87,9 @@ import {
   selectionEndpoints,
   snapToWords,
   sourceRangeFor,
+  scrollSourceRange,
+  scrollTextAnchors,
+  type ScrollTextAnchor,
   type BlockRange,
   type Fragment,
   type WordMap,
@@ -109,6 +117,16 @@ import {
 import { annotateTypstLines } from "./typst-map";
 import { paragraphRangeAt } from "./typst-page-map";
 import { TypstPdfPreview, type TypstPageContext } from "./typst-pdf";
+import {
+  clampScroll,
+  interpolate,
+  mapScrollOffset,
+  scrollCorrection,
+  ScrollIndex,
+  ScrollOwnership,
+  type ScrollPair,
+  type SyncPane,
+} from "./scroll-sync";
 
 // ---------------------------------------------------------------------------
 // DOM
@@ -187,15 +205,25 @@ const lifecycle = createDocumentLifecycle({
       ))
     )
       return null;
+    // The buffer, not the setting, decides the extension of an untitled file:
+    // someone who typed Typst in a fresh tab should not have to switch the
+    // dialog away from Markdown. A saved file keeps its own path and language,
+    // and a suggested path (a conflict copy) already carries its extension.
+    const suggestion = suggestSave({
+      path: session.path,
+      language: session.language,
+      buffer: textOf(session),
+      defaultExtension: settings.defaultExtension,
+      defaultLanguage: defaultDocumentLanguage(),
+    });
+    const untitled = `untitled.${suggestion.extension ?? settings.defaultExtension}`;
     const chosen = await saveDialog({
       title: session.lossy ? "Save a UTF-8 copy" : "Save As",
       defaultPath:
         suggested ??
         (session.lossy ? conflictCopyPath(session) : session.path) ??
-        (settings.lastDirectory
-          ? joinDir(settings.lastDirectory, `untitled.${settings.defaultExtension}`)
-          : `untitled.${settings.defaultExtension}`),
-      filters: documentFilters(),
+        (settings.lastDirectory ? joinDir(settings.lastDirectory, untitled) : untitled),
+      filters: documentFilters(suggestion.language),
     });
     return Array.isArray(chosen) ? (chosen[0] ?? null) : chosen;
   },
@@ -1238,6 +1266,13 @@ function showTypstFailure(error: unknown, wanted: string): void {
  */
 async function renderTypstPreview(source: string, token: number): Promise<void> {
   const wanted = settings.typstView === "pages" ? "pages" : "document";
+  const oldBookmark = wanted === "pages" ? typstPdf?.scrollBookmark() : null;
+  const oldSource = typstPdf?.source;
+  const bookmarkFrom =
+    oldBookmark && oldSource !== undefined
+      ? mapScrollOffset(oldSource, source, oldBookmark.from)
+      : null;
+  const bookmarkEpoch = scrollOwnership.epoch;
 
   let rendered: api.RenderedTypst;
   try {
@@ -1320,10 +1355,13 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
     if (typstPdf === view) typstPdf = null;
     return;
   }
-  // Pages are a rendered layout, not a source-anchored document; the text layer
-  // supplies click sync separately.
+  // PDF correspondence has its own region adapter, not DOM block anchors.
   previewLinesMapped = false;
-  applyPendingPreviewScroll();
+  if (pendingPreviewScroll !== null) applyPendingPreviewScroll();
+  else if (oldBookmark && bookmarkFrom !== null && bookmarkEpoch === scrollOwnership.epoch) {
+    suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+    view.restoreScroll({ from: bookmarkFrom, screenY: oldBookmark.screenY });
+  }
   syncPreviewFromSource();
 }
 
@@ -1666,9 +1704,11 @@ function updateActiveOutline(): void {
 /**
  * Which markup a path holds.
  *
- * By extension, because that is the only signal there is: a Typst document and a
- * Markdown document are both text, and guessing from the contents would flip the
- * parser under a user who had just typed the first `=`.
+ * By extension, because a saved file's suffix is authoritative: a Typst document
+ * and a Markdown document are both text, and re-reading the contents on every
+ * open would flip the parser under edits that have not been saved yet. The one
+ * place contents decide is Save As on an untitled buffer (`suggestSave`), where
+ * the reader is choosing the extension anyway.
  */
 function languageFor(path: string | null): api.DocumentLanguage {
   if (path === null) return "markdown";
@@ -1681,9 +1721,11 @@ function languageFor(path: string | null): api.DocumentLanguage {
 /**
  * The markup a new document starts in.
  *
- * The default extension is what Save As will suggest, and opening a `.typ` file
- * switches the parser to Typst. Starting the document the other way would make
- * the first save change how the text that was already typed is read.
+ * The default extension is what a new document starts as, and opening a `.typ`
+ * file switches the parser to Typst. Starting the document the other way would
+ * make the first save change how the text that was already typed is read; Save
+ * As is the deliberate exception, where `suggestSave` reads the buffer and may
+ * recommend another extension.
  */
 function defaultDocumentLanguage(): api.DocumentLanguage {
   if (settings.defaultExtension === "typ") return "typst";
@@ -1695,24 +1737,31 @@ function defaultDocumentLanguage(): api.DocumentLanguage {
 }
 
 /**
- * The file dialog filters: the default markup's filter first, the rest
+ * The file dialog filters: the markup being saved or opened first, the rest
  * alphabetical.
  *
  * The native dialog selects the first entry and offers no way to select another
- * (rfd declares `SetFileTypeIndex` but never calls it), so a reader who chose
- * Typst as the default should not have to switch away from "Markdown" every
- * time. The remaining entries are ordered by name — All files, AsciiDoc, HTML,
- * Markdown, Typst — so the list reads the same in every dialog rather than in
- * the order the markup types happened to be introduced.
+ * (rfd declares `SetFileTypeIndex` but never calls it), so that first filter is
+ * also what supplies the extension when the reader types a bare name. Save As
+ * passes the language the buffer was detected as, because the extension in
+ * `defaultPath` stops counting the moment the name is edited; Open passes the
+ * default language. The remaining entries are ordered by name — All files,
+ * AsciiDoc, HTML, Markdown, Typst — so the list reads the same in every dialog
+ * rather than in the order the markup types happened to be introduced.
  */
-function documentFilters(): { name: string; extensions: string[] }[] {
+function documentFilters(
+  language: api.DocumentLanguage = defaultDocumentLanguage(),
+): { name: string; extensions: string[] }[] {
   const markdown = {
     name: "Markdown",
-    extensions: ["md", "markdown", "mdown", "mkd", "txt"],
+    extensions: [CANONICAL_EXTENSION.markdown, "markdown", "mdown", "mkd", "txt"],
   };
-  const typst = { name: "Typst", extensions: ["typ"] };
-  const html = { name: "HTML", extensions: ["html", "htm"] };
-  const asciidoc = { name: "AsciiDoc", extensions: ["adoc", "asciidoc"] };
+  const typst = { name: "Typst", extensions: [CANONICAL_EXTENSION.typst] };
+  const html = { name: "HTML", extensions: [CANONICAL_EXTENSION.html, "htm"] };
+  const asciidoc = {
+    name: "AsciiDoc",
+    extensions: [CANONICAL_EXTENSION.asciidoc, "asciidoc"],
+  };
   const all = { name: "All files", extensions: ["*"] };
   const alphabetical = [all, asciidoc, html, markdown, typst];
   const preferred = {
@@ -1721,7 +1770,7 @@ function documentFilters(): { name: string; extensions: string[] }[] {
     html,
     asciidoc,
   } satisfies Record<api.DocumentLanguage, { name: string; extensions: string[] }>;
-  const first = preferred[defaultDocumentLanguage()];
+  const first = preferred[language];
   return [first, ...alphabetical.filter((filter) => filter !== first)];
 }
 
@@ -3714,18 +3763,6 @@ interface SyncSegment {
 }
 
 /** Map `value` from one interval to the other, clamped to its ends. */
-function interpolate(
-  value: number,
-  from0: number,
-  from1: number,
-  to0: number,
-  to1: number,
-): number {
-  if (from1 <= from0) return to0;
-  const t = Math.min(1, Math.max(0, (value - from0) / (from1 - from0)));
-  return to0 + t * (to1 - to0);
-}
-
 /** Where the preview should stop once the last block has been read through. */
 function previewEndFor(el: HTMLElement): number {
   const pane = previewPane.getBoundingClientRect();
@@ -3746,7 +3783,7 @@ function previewEndFor(el: HTMLElement): number {
 function syncSegmentFor(index: number): SyncSegment | null {
   if (index < 0 || index >= previewAnchors.length) return null;
   const anchor = previewAnchors[index];
-  const editor0 = editor.lineTop(anchor.line);
+  const editor0 = Math.max(0, editor.lineScrollTop(anchor.line) - SYNC_MARGIN);
   const preview0 = previewScrollFor(anchor.el);
 
   if (index + 1 < previewAnchors.length) {
@@ -3754,7 +3791,7 @@ function syncSegmentFor(index: number): SyncSegment | null {
     return {
       editor0,
       preview0,
-      editor1: Math.max(editor0, editor.lineTop(next.line)),
+      editor1: Math.max(editor0, editor.lineScrollTop(next.line) - SYNC_MARGIN),
       preview1: Math.max(preview0, previewScrollFor(next.el)),
     };
   }
@@ -3800,6 +3837,7 @@ function alignPreviewToLine(line: number): void {
  * involved, so it stays correct at 11px and at 32px alike.
  */
 function alignPreviewToScroll(): void {
+  if (alignDomTextScroll("source")) return;
   const line = editor.topVisibleLine();
   const index = Math.max(0, anchorIndexForLine(line));
   const segment = syncSegmentFor(index);
@@ -3826,6 +3864,7 @@ function alignPreviewToScroll(): void {
  * a round trip cannot accumulate drift.
  */
 function alignEditorToScroll(): void {
+  if (alignDomTextScroll("preview")) return;
   const line = lineAtPreviewTop();
   if (line === null) return;
   const index = Math.max(0, anchorIndexForLine(line));
@@ -4010,6 +4049,8 @@ function bindPreviewWords(source: string, fragments?: Fragment[], blocks?: Block
   const hasFragments = fragments && fragments.length > 0;
   const hasBlocks = blocks && blocks.length > 0;
   wordMap = hasFragments || hasBlocks ? bindWordMap(preview, { source, fragments, blocks }) : null;
+  domScrollIndex = new ScrollIndex(wordMap ? scrollTextAnchors(wordMap) : []);
+  domScrollSource = source;
   syncedSource = null;
 }
 
@@ -4119,6 +4160,7 @@ function syncSourceFromPageSelection(context: TypstPageContext | null, reveal: b
   )
     return;
   clearPreviewWords();
+  if (reveal) suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
   const source = editor.getDoc();
   const range =
     context?.sourceRange && context.paragraph
@@ -4241,7 +4283,7 @@ function htmlIndexForLine(anchors: HtmlLayout["anchors"], line: number): number 
 function htmlSegmentFor(layout: HtmlLayout, index: number): HtmlSyncSegment | null {
   if (index < 0 || index >= layout.anchors.length) return null;
   const anchor = layout.anchors[index];
-  const editor0 = editor.lineTop(anchor.line);
+  const editor0 = Math.max(0, editor.lineScrollTop(anchor.line) - SYNC_MARGIN);
   const preview0 = Math.max(0, anchor.top - SYNC_MARGIN);
 
   if (index + 1 < layout.anchors.length) {
@@ -4249,7 +4291,7 @@ function htmlSegmentFor(layout: HtmlLayout, index: number): HtmlSyncSegment | nu
     return {
       editor0,
       preview0,
-      editor1: Math.max(editor0, editor.lineTop(next.line)),
+      editor1: Math.max(editor0, editor.lineScrollTop(next.line) - SYNC_MARGIN),
       preview1: Math.max(preview0, next.top - SYNC_MARGIN),
     };
   }
@@ -4273,6 +4315,12 @@ function htmlLineAtTop(layout: HtmlLayout): number {
 }
 
 function syncEditorToHtml(): void {
+  void alignHtmlTextScroll("source").then((handled) => {
+    if (!handled) syncEditorToHtmlCoarse();
+  });
+}
+
+function syncEditorToHtmlCoarse(): void {
   if (!settings.syncScroll || settings.viewMode !== "split") return;
   const layout = htmlPreview.layout();
   if (!layout || layout.anchors.length < 2) return;
@@ -4284,15 +4332,22 @@ function syncEditorToHtml(): void {
     editor.view.scrollDOM.scrollTop,
     segment.editor0,
     segment.editor1,
-    segment.preview0,
-    segment.preview1,
+    segment.preview0 * (layout.scale > 0 ? layout.scale : 1),
+    segment.preview1 * (layout.scale > 0 ? layout.scale : 1),
   );
   const max = Math.max(0, layout.height - layout.client);
+  const scale = layout.scale > 0 ? layout.scale : 1;
   suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
-  htmlPreview.scrollTo(Math.min(max, Math.max(0, target)));
+  htmlPreview.scrollTo(Math.min(max, Math.max(0, target / scale)));
 }
 
 function syncHtmlToEditor(layout: HtmlLayout): void {
+  void alignHtmlTextScroll("preview", layout).then((handled) => {
+    if (!handled) syncHtmlToEditorCoarse(layout);
+  });
+}
+
+function syncHtmlToEditorCoarse(layout: HtmlLayout): void {
   if (!settings.syncScroll || settings.viewMode !== "split") return;
   if (layout.anchors.length < 2) return;
   if (performance.now() < suppressPreviewScrollUntil) return;
@@ -4359,7 +4414,339 @@ function installReloadGuard(): void {
   );
 }
 
+const scrollOwnership = new ScrollOwnership();
+let domScrollIndex = new ScrollIndex<ScrollTextAnchor>([]);
+let domScrollSource = "";
+let paneSyncFrame = 0;
+let syncDragging = false;
+let htmlScrollDragging = false;
+
+async function alignHtmlTextScroll(
+  direction: SyncPane,
+  layout = htmlPreview.layout(),
+  refined = false,
+): Promise<boolean> {
+  if (
+    !settings.syncScroll ||
+    settings.viewMode !== "split" ||
+    syncDragging ||
+    htmlScrollDragging ||
+    doc.language !== "html" ||
+    htmlPreview.source() !== editor.getDoc()
+  )
+    return true;
+  if (!layout) return false;
+  const reference = scrollReference();
+  const offset = direction === "source" ? editor.offsetAtScreenY(reference) : layout.probe?.from;
+  if (offset === undefined) return false;
+  const near = htmlPreview.scrollAnchorsNear(offset);
+  if (!near.length) return false;
+  const region = near.reduce((a, b) =>
+    Math.abs(a.from - offset) <= Math.abs(b.from - offset) ? a : b,
+  ).region;
+  const anchors = near.filter((a) => a.region === region);
+  const token = renderToken,
+    epoch = scrollOwnership.epoch;
+  const origin = direction === "source" ? editor.view.scrollDOM.scrollTop : layout.top;
+  const geometry = await htmlPreview.measureScroll(editor.getDoc(), anchors);
+  if (
+    token !== renderToken ||
+    epoch !== scrollOwnership.epoch ||
+    syncDragging ||
+    htmlScrollDragging ||
+    !settings.syncScroll ||
+    settings.viewMode !== "split" ||
+    doc.language !== "html"
+  )
+    return true;
+  const now = direction === "source" ? editor.view.scrollDOM.scrollTop : htmlPreview.layout()?.top;
+  if (now === undefined || Math.abs(now - origin) > 1) return true;
+  if (!geometry) return false;
+  const scale = geometry.scale > 0 ? geometry.scale : 1;
+  const pairs: ScrollPair[] = [];
+  let estimated = false;
+  for (const point of geometry.points) {
+    const anchor = anchors[point.at],
+      source = editor.scrollPoint(anchor.from);
+    if (direction === "source" && !source.exact) continue;
+    estimated ||= !source.exact;
+    // Guest CSS pixels are scaled by the iframe's own document zoom.
+    const previewY = geometry.frameTop + (point.top - geometry.top) * scale;
+    pairs.push({
+      from: anchor.from,
+      region,
+      origin: direction === "source" ? source.top : previewY,
+      target: direction === "source" ? previewY : source.top,
+    });
+  }
+  const delta = scrollCorrection(pairs, reference);
+  if (delta === null) return false;
+  if (Math.abs(delta) < 0.5) return true;
+  if (direction === "source") {
+    const target = clampScroll(geometry.top + delta / scale, layout.height - layout.client);
+    suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+    scrollOwnership.wrote("preview", target, performance.now());
+    htmlPreview.scrollTo(target, geometry.input);
+  } else {
+    suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+    editor.scrollToOffset(clampScroll(editor.view.scrollDOM.scrollTop + delta, editor.scrollMax()));
+    scrollOwnership.wrote("source", editor.view.scrollDOM.scrollTop, performance.now());
+    if (estimated && !refined)
+      editor.view.requestMeasure({
+        read: () => null,
+        write: () =>
+          requestAnimationFrame(() => {
+            if (token === renderToken && epoch === scrollOwnership.epoch)
+              void alignHtmlTextScroll(direction, htmlPreview.layout(), true);
+          }),
+      });
+  }
+  return true;
+}
+
+function previewScrollOffset(reference: number): number | null {
+  if (!wordMap || wordMap.source !== editor.getDoc()) return null;
+  const pane = previewPane.getBoundingClientRect();
+  const dom = document as Document & {
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  };
+  for (const y of [reference + 2, reference + 14, reference + 28]) {
+    for (const x of [pane.left + 32, pane.left + pane.width * 0.4, pane.left + pane.width * 0.7]) {
+      const point = dom.caretRangeFromPoint?.(x, y);
+      if (
+        !point ||
+        point.startContainer.nodeType !== Node.TEXT_NODE ||
+        !preview.contains(point.startContainer)
+      )
+        continue;
+      const node = point.startContainer as Text;
+      const offset = Math.min(point.startOffset, node.length - 1);
+      const range = scrollSourceRange(wordMap, node, offset, offset + 1);
+      if (range) return range.from;
+    }
+  }
+  return null;
+}
+
+function alignDomTextScroll(direction: SyncPane, refined = false): boolean {
+  if (syncDragging || !wordMap || wordMap.source !== editor.getDoc()) return false;
+  const reference = scrollReference();
+  const offset =
+    direction === "source" ? editor.offsetAtScreenY(reference) : previewScrollOffset(reference);
+  if (offset === null) return false;
+  const near = domScrollIndex.near(offset);
+  if (!near.length) return false;
+  const region = near.reduce((a, b) =>
+    Math.abs(a.from - offset) <= Math.abs(b.from - offset) ? a : b,
+  ).region;
+  const pairs: ScrollPair[] = [];
+  let estimated = false;
+  for (const anchor of near) {
+    if (anchor.region !== region || !anchor.node.isConnected) continue;
+    const source = editor.scrollPoint(anchor.from);
+    if (direction === "source" && !source.exact) continue;
+    const range = document.createRange();
+    range.setStart(anchor.node, anchor.start);
+    range.setEnd(anchor.node, anchor.end);
+    const rect = range.getBoundingClientRect();
+    if (!rect.width || !rect.height) continue;
+    estimated ||= !source.exact;
+    pairs.push({
+      from: anchor.from,
+      region,
+      origin: direction === "source" ? source.top : rect.top,
+      target: direction === "source" ? rect.top : source.top,
+    });
+  }
+  const delta = scrollCorrection(pairs, reference);
+  if (delta === null) return false;
+  if (Math.abs(delta) < 0.5) return true;
+  if (direction === "source") {
+    suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+    previewPane.scrollTop = clampScroll(
+      previewPane.scrollTop + delta,
+      previewPane.scrollHeight - previewPane.clientHeight,
+    );
+    scrollOwnership.wrote("preview", previewPane.scrollTop, performance.now());
+  } else {
+    suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+    editor.scrollToOffset(clampScroll(editor.view.scrollDOM.scrollTop + delta, editor.scrollMax()));
+    scrollOwnership.wrote("source", editor.view.scrollDOM.scrollTop, performance.now());
+    if (estimated && !refined) {
+      const token = renderToken,
+        epoch = scrollOwnership.epoch,
+        top = previewPane.scrollTop;
+      editor.view.requestMeasure({
+        read: () => null,
+        write: () =>
+          requestAnimationFrame(() => {
+            if (
+              token === renderToken &&
+              epoch === scrollOwnership.epoch &&
+              Math.abs(top - previewPane.scrollTop) < 1
+            )
+              alignDomTextScroll(direction, true);
+          }),
+      });
+    }
+  }
+  return true;
+}
+
+function pagesScrollAvailable(): boolean {
+  return (
+    settings.syncScroll &&
+    settings.viewMode === "split" &&
+    doc.language === "typst" &&
+    settings.typstView === "pages" &&
+    typstPdf !== null &&
+    typstPdfToken === renderToken &&
+    typstPdf.source === editor.getDoc()
+  );
+}
+
+function scrollReference(): number {
+  return (
+    Math.max(
+      editor.view.scrollDOM.getBoundingClientRect().top,
+      previewPane.getBoundingClientRect().top,
+    ) + SYNC_MARGIN
+  );
+}
+
+function alignPagesScroll(direction: SyncPane, refined = false): void {
+  if (!pagesScrollAvailable() || syncDragging) return;
+  const pdf = typstPdf!;
+  const reference = scrollReference();
+  const anchors =
+    direction === "source"
+      ? pdf.scrollAnchorsNear(editor.offsetAtScreenY(reference))
+      : pdf.scrollAnchorsAt(reference, !refined);
+  let estimated = false;
+  const pairs: ScrollPair[] = [];
+  for (const anchor of anchors) {
+    const previewY = pdf.scrollTopFor(anchor);
+    const source = editor.scrollPoint(anchor.from);
+    if (previewY === null || (direction === "source" && !source.exact)) continue;
+    estimated ||= !source.exact;
+    pairs.push({
+      from: anchor.from,
+      region: anchor.region,
+      origin: direction === "source" ? source.top : previewY,
+      target: direction === "source" ? previewY : source.top,
+    });
+  }
+  const delta = scrollCorrection(pairs, reference);
+  if (delta === null || Math.abs(delta) < 0.5) return;
+  if (direction === "source") {
+    suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+    previewPane.scrollTop = clampScroll(
+      previewPane.scrollTop + delta,
+      previewPane.scrollHeight - previewPane.clientHeight,
+    );
+    scrollOwnership.wrote("preview", previewPane.scrollTop, performance.now());
+  } else {
+    suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+    editor.scrollToOffset(clampScroll(editor.view.scrollDOM.scrollTop + delta, editor.scrollMax()));
+    scrollOwnership.wrote("source", editor.view.scrollDOM.scrollTop, performance.now());
+    if (estimated && !refined) {
+      const token = renderToken,
+        epoch = scrollOwnership.epoch,
+        top = previewPane.scrollTop;
+      editor.view.requestMeasure({
+        read: () => null,
+        write: () =>
+          requestAnimationFrame(() => {
+            if (
+              token === renderToken &&
+              epoch === scrollOwnership.epoch &&
+              Math.abs(top - previewPane.scrollTop) < 1
+            )
+              alignPagesScroll(direction, true);
+          }),
+      });
+    }
+  }
+}
+
+function queuePaneScroll(direction: SyncPane): void {
+  if (!settings.syncScroll || settings.viewMode !== "split" || syncDragging || htmlScrollDragging)
+    return;
+  const top =
+    direction === "source"
+      ? editor.view.scrollDOM.scrollTop
+      : doc.language === "html"
+        ? (htmlPreview.layout()?.top ?? 0)
+        : previewPane.scrollTop;
+  if (scrollOwnership.reflected(direction, top, performance.now())) return;
+  scrollOwnership.input();
+  cancelAnimationFrame(paneSyncFrame);
+  const token = renderToken;
+  const epoch = scrollOwnership.epoch;
+  paneSyncFrame = requestAnimationFrame(() => {
+    paneSyncFrame = 0;
+    // A new gesture owns the panes immediately; a correction queued before it
+    // must not scroll the source out from under the pointer or a fresh reveal.
+    if (token !== renderToken || epoch !== scrollOwnership.epoch) return;
+    if (syncDragging || htmlScrollDragging) return;
+    // A selection reveal owns the source for its short hand-off window; a
+    // preview-scroll correction queued before the gesture must not move it away.
+    if (direction === "preview" && performance.now() < suppressEditorScrollUntil) return;
+    if (doc.language === "typst" && settings.typstView === "pages") alignPagesScroll(direction);
+    else if (doc.language === "html") {
+      if (direction === "source") syncEditorToHtml();
+      else {
+        const layout = htmlPreview.layout();
+        if (layout) syncHtmlToEditor(layout);
+      }
+    } else if (previewLinesMapped && domScrollSource === editor.getDoc()) {
+      if (direction === "source") alignPreviewToScroll();
+      else alignEditorToScroll();
+    }
+  });
+}
+
 function installPaneSync(): void {
+  for (const [pane, direction] of [
+    [editorPane, "source"],
+    [previewPane, "preview"],
+  ] as const) {
+    const input = (event: Event): void => {
+      scrollOwnership.input();
+      typstPdf?.cancelScrollRestore();
+      if (direction === "source") suppressEditorScrollUntil = 0;
+      else {
+        suppressPreviewScrollUntil = 0;
+        suppressEditorScrollUntil = 0;
+        if (event instanceof WheelEvent) {
+          typstPdf?.scrollInput(event.clientX, event.clientY);
+          // A wheel over a body column selects that column even when the pane
+          // is already at the top of the page and no scroll event follows.
+          queuePaneScroll("preview");
+        }
+      }
+    };
+    for (const type of ["wheel", "touchstart", "keydown", "pointerdown"])
+      pane.addEventListener(type, input, { passive: true, capture: true });
+  }
+  document.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (
+        event.button === 0 &&
+        event.target instanceof Element &&
+        event.target.closest(".cm-content,.textLayer,#preview p")
+      )
+        syncDragging = true;
+    },
+    true,
+  );
+  const release = (): void => {
+    syncDragging = false;
+  };
+  document.addEventListener("pointerup", release, true);
+  document.addEventListener("pointercancel", release, true);
+  window.addEventListener("blur", release);
   // Caret in the source -> the preview follows the keyboard, never the pointer.
   //
   // A click is aimed at something the reader can already see in the source, and
@@ -4409,13 +4796,17 @@ function installPaneSync(): void {
   // under the top of the pane. This one follows unconditionally, because that
   // is what keeps the two panes together while the reader scrolls.
   editor.onScroll(() => {
+    if (doc.language === "typst" && settings.typstView === "pages") {
+      if (performance.now() >= suppressEditorScrollUntil) queuePaneScroll("source");
+      return;
+    }
     if (doc.language === "html") {
-      if (performance.now() >= suppressEditorScrollUntil) syncEditorToHtml();
+      if (performance.now() >= suppressEditorScrollUntil) queuePaneScroll("source");
       return;
     }
     if (!settings.syncScroll || settings.viewMode !== "split" || !previewLinesMapped) return;
     if (performance.now() < suppressEditorScrollUntil) return;
-    alignPreviewToScroll();
+    queuePaneScroll("source");
   });
 
   // Click in the preview -> the source reveals that line, and the preview stays
@@ -4487,7 +4878,12 @@ function installPaneSync(): void {
     if (doc.language === "html") return;
     if (!settings.syncScroll || settings.viewMode !== "split") return;
     if (performance.now() < suppressPreviewScrollUntil) return;
-    alignEditorToScroll();
+    if (doc.language === "typst" && settings.typstView === "pages") {
+      if (typstPdf?.isLayoutScroll()) return;
+      queuePaneScroll("preview");
+      return;
+    }
+    queuePaneScroll("preview");
   });
 }
 
@@ -4980,6 +5376,7 @@ function handleHtmlLine(line: number): void {
  * nothing when it has drifted; the line reveal already happened on mousedown.
  */
 function handleHtmlSelection(selection: HtmlSelection): void {
+  if (selection.reveal) suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
   if (doc.language !== "html" || !htmlPreview) return;
   if (settings.viewMode !== "split" || htmlPreview.source() !== editor.getDoc()) return;
   clearPreviewWords();
@@ -5092,7 +5489,7 @@ function handleHtmlScroll(layout: HtmlLayout): void {
   htmlScrollTop = layout.top;
   if (doc.language !== "html") return;
   if (performance.now() < suppressPreviewScrollUntil) return;
-  syncHtmlToEditor(layout);
+  queuePaneScroll("preview");
 }
 
 async function installDragDrop(): Promise<void> {
@@ -5918,6 +6315,11 @@ async function boot(): Promise<void> {
     onLink: (href, raw) => handleHtmlLink(href, raw),
     onAction: handleHtmlAction,
     onScroll: handleHtmlScroll,
+    onScrollInput: (dragging) => {
+      htmlScrollDragging = dragging;
+      scrollOwnership.input();
+      suppressPreviewScrollUntil = 0;
+    },
     onReady: handleHtmlReady,
     onError: (message) => toast(message, 6200),
   });

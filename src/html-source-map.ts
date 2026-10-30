@@ -21,6 +21,96 @@ export interface HtmlTextSelection {
   sample: string;
 }
 
+export interface HtmlScrollAnchor {
+  from: number;
+  to: number;
+  region: string;
+  range: HtmlTextSelection;
+}
+
+export interface HtmlScrollGeometry {
+  top: number;
+  epoch: number;
+  input: number;
+  /** Host-screen top of the iframe. */
+  frameTop: number;
+  /** Host pixels per guest CSS pixel: the iframe's own document zoom. */
+  scale: number;
+  points: Array<{ at: number; top: number; height: number }>;
+}
+
+/** Decode once per render. Source offsets never travel to the guest. */
+export function htmlScrollAnchors(fragments: readonly HtmlTextFragment[]): HtmlScrollAnchor[] {
+  const result: HtmlScrollAnchor[] = [];
+  for (const fragment of fragments) {
+    const offsets = boundaries(fragment);
+    if (!offsets) continue;
+    for (const match of fragment.text.matchAll(/[\p{L}\p{M}\p{N}_]+/gu)) {
+      const start = match.index,
+        end = start + match[0].length;
+      const lo = offsets[start],
+        hi = offsets[end];
+      if (lo === null || hi === null || lo === undefined || hi === undefined) continue;
+      result.push({
+        from: fragment.src0 + lo,
+        to: fragment.src0 + hi,
+        region: String(fragment.n),
+        range: { n: fragment.n, index: fragment.index, start, end, sample: match[0] },
+      });
+    }
+  }
+  return result;
+}
+
+/** Bounded geometry reply; identities/samples are the host's requested ones. */
+export function readHtmlScrollGeometry(
+  value: unknown,
+  anchors: readonly HtmlScrollAnchor[],
+): HtmlScrollGeometry | null {
+  if (!value || typeof value !== "object" || anchors.length > 64) return null;
+  const data = value as Record<string, unknown>;
+  if (
+    typeof data.top !== "number" ||
+    !Number.isFinite(data.top) ||
+    data.top < 0 ||
+    data.top > 1e8 ||
+    typeof data.epoch !== "number" ||
+    !Number.isSafeInteger(data.epoch) ||
+    data.epoch < 0 ||
+    typeof data.input !== "number" ||
+    !Number.isSafeInteger(data.input) ||
+    data.input < 0 ||
+    !Array.isArray(data.points) ||
+    data.points.length > anchors.length
+  )
+    return null;
+  const points: HtmlScrollGeometry["points"] = [];
+  const seen = new Set<number>();
+  for (const raw of data.points) {
+    if (!raw || typeof raw !== "object") return null;
+    const p = raw as Record<string, unknown>;
+    if (
+      typeof p.at !== "number" ||
+      !Number.isInteger(p.at) ||
+      p.at < 0 ||
+      p.at >= anchors.length ||
+      seen.has(p.at) ||
+      p.sample !== anchors[p.at].range.sample ||
+      typeof p.top !== "number" ||
+      !Number.isFinite(p.top) ||
+      Math.abs(p.top) > 1e8 ||
+      typeof p.height !== "number" ||
+      !Number.isFinite(p.height) ||
+      p.height <= 0 ||
+      p.height > 2000
+    )
+      return null;
+    seen.add(p.at);
+    points.push({ at: p.at, top: p.top, height: p.height });
+  }
+  return { top: data.top, epoch: data.epoch, input: data.input, frameTop: 0, scale: 1, points };
+}
+
 export interface HtmlSelection extends HtmlTextSelection {
   reveal: boolean;
   segments?: HtmlTextSelection[];

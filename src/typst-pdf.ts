@@ -24,13 +24,34 @@ import type { TextItem } from "pdfjs-dist/types/src/display/api";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { selectionEndpoints } from "./source-map";
 import { createTypstPageMap, lineTokenAt, type TypstPageMap } from "./typst-page-map";
+import { ScrollIndex, chooseScrollRegion, type ScrollRegion } from "./scroll-sync";
+
+interface PdfScrollAnchor {
+  from: number;
+  to: number;
+  region: string;
+  line: TextLine;
+  range: Range;
+}
+
+export interface PdfScrollBookmark {
+  from: number;
+  screenY: number;
+}
 
 /** A4 at 96 dpi, the width the old SVG page view capped at. */
 const MAX_PAGE_WIDTH = 794;
 /** The fitted page runs this far past the pane, half clipped on each side. */
 const PAGE_BLEED = 4;
-/** A page canvas above this many device pixels is downscaled to bound memory. */
-const MAX_CANVAS_PIXELS = 12_000_000;
+/**
+ * A page canvas above this many device pixels is downscaled to bound memory.
+ * The old 12 MP ceiling undersampled a 4K pane in Preview-only (about 17 MP at
+ * 150 % scaling) and a 5K one badly (about 30 MP with the sidebar). 32 MP covers
+ * a full 4K pane and a 5K pane as it is usually laid out. The lazy painter keeps
+ * only the pages near the viewport, so the worst case is a bounded pair of large
+ * canvases.
+ */
+const MAX_CANVAS_PIXELS = 32_000_000;
 /** Render pages this far outside the viewport, then free their canvas again. */
 const PRELOAD_MARGIN = "600px 0px";
 /** A selected phrase longer than this is not a word sync request. */
@@ -115,6 +136,7 @@ export class TypstPdfPreview {
   private readonly linesByPage = new Map<number, TextLine[]>();
   private observer: IntersectionObserver | null = null;
   private resizeObserver: ResizeObserver | null = null;
+  private dprQuery: MediaQueryList | null = null;
   private fit = 1;
   /** View zoom factor; 1 is 100%. */
   private zoom = 1;
@@ -126,6 +148,18 @@ export class TypstPdfPreview {
   private readonly spanLines = new WeakMap<HTMLSpanElement, { line: TextLine; start: number }>();
   private sourceMap: TypstPageMap | null = null;
   private allLines: TextLine[] = [];
+  private scrollIndex = new ScrollIndex<PdfScrollAnchor>([]);
+  private scrollRegions: Array<ScrollRegion & { anchors: PdfScrollAnchor[] }> = [];
+  private scrollRegion: string | null = null;
+  private scrollPointer: { x: number; y: number; at: number } | null = null;
+  private geometryFrame = 0;
+  private inputEpoch = 0;
+  private layoutScrollUntil = 0;
+
+  private readonly dprChange = (): void => {
+    this.watchDevicePixelRatio();
+    this.repaintRendered();
+  };
 
   private readonly dismiss = (event: KeyboardEvent): void => {
     if (event.key === "Escape") {
@@ -195,6 +229,7 @@ export class TypstPdfPreview {
     document.addEventListener("keydown", this.dismiss);
     this.resizeObserver = new ResizeObserver(() => this.applyFit());
     this.resizeObserver.observe(this.pane);
+    this.watchDevicePixelRatio();
   }
 
   async render(pdf: Uint8Array): Promise<void> {
@@ -241,11 +276,28 @@ export class TypstPdfPreview {
     const sourceMap = await createTypstPageMap(this.source, this.allLines);
     if (this.disposed) return;
     this.sourceMap = sourceMap;
+    const anchors: PdfScrollAnchor[] = [];
+    for (const part of sourceMap.scrollAnchors()) {
+      const line = this.allLines[part.line];
+      const first = line.spans.find(
+        (s) => part.start >= s.start && part.start < s.start + (s.span.textContent?.length ?? 0),
+      );
+      const last = line.spans.find(
+        (s) => part.end > s.start && part.end <= s.start + (s.span.textContent?.length ?? 0),
+      );
+      if (!first?.span.firstChild || !last?.span.firstChild) continue;
+      const range = document.createRange();
+      range.setStart(first.span.firstChild, part.start - first.start);
+      range.setEnd(last.span.firstChild, part.end - last.start);
+      anchors.push({ from: part.from, to: part.to, region: part.region, line, range });
+    }
+    this.scrollIndex = new ScrollIndex(anchors);
     this.maxPageWidth = Math.max(
       1,
       this.pages.reduce((max, page) => Math.max(max, page.viewport.width), 0),
     );
     this.applyFit();
+    this.measureScrollRegions();
     this.observePages();
   }
 
@@ -259,22 +311,17 @@ export class TypstPdfPreview {
   setZoom(zoom: number): void {
     const next = Math.max(0.5, Math.min(3, zoom));
     if (Math.abs(next - this.zoom) < 0.001) return;
-    const before = this.fit;
-    const scroll = this.pane.scrollTop;
     this.zoom = next;
     this.pane.classList.toggle("preview-zoomed", next > 1);
     this.applyFit();
-    if (before > 0 && Math.abs(this.fit - before) > 0.0001) {
-      const ratio = this.fit / before;
-      requestAnimationFrame(() => {
-        if (!this.disposed) this.pane.scrollTop = scroll * ratio;
-      });
-    }
   }
 
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    cancelAnimationFrame(this.geometryFrame);
+    this.scrollIndex = new ScrollIndex([]);
+    this.scrollRegions = [];
     this.pane.classList.remove("preview-zoomed");
     window.clearTimeout(this.selectionTimer);
     this.selectionTimer = 0;
@@ -291,6 +338,8 @@ export class TypstPdfPreview {
     this.observer = null;
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
+    this.dprQuery?.removeEventListener("change", this.dprChange);
+    this.dprQuery = null;
     for (const page of this.pages) {
       page.task?.cancel();
       page.task = null;
@@ -305,6 +354,18 @@ export class TypstPdfPreview {
       void loadingTask.destroy();
     }
     this.host.replaceChildren();
+  }
+
+  /**
+   * Re-rasterize when the window moves to a display with another pixel density.
+   * The pane's CSS size can stay the same across that move, so the resize
+   * observer alone would keep the old bitmap and the page would stay soft.
+   */
+  private watchDevicePixelRatio(): void {
+    this.dprQuery?.removeEventListener("change", this.dprChange);
+    const dpr = window.devicePixelRatio || 1;
+    this.dprQuery = window.matchMedia(`(resolution: ${dpr}dppx)`);
+    this.dprQuery.addEventListener("change", this.dprChange);
   }
 
   private async buildPage(
@@ -388,8 +449,24 @@ export class TypstPdfPreview {
     const available = Math.max(160, this.pane.clientWidth + PAGE_BLEED);
     const fit = (available / this.maxPageWidth) * this.zoom;
     if (Math.abs(fit - this.fit) < 0.001) return;
+    const bookmark = this.scrollBookmark();
+    const epoch = this.inputEpoch;
+    const ratio = fit / this.fit;
+    const scroll = this.pane.scrollTop;
     this.fit = fit;
     this.host.style.setProperty("--typst-fit", this.fit.toFixed(4));
+    cancelAnimationFrame(this.geometryFrame);
+    this.geometryFrame = requestAnimationFrame(() => {
+      this.geometryFrame = 0;
+      if (!this.disposed) {
+        this.measureScrollRegions();
+        if (epoch === this.inputEpoch) {
+          this.layoutScrollUntil = performance.now() + 150;
+          if (bookmark) this.restoreScroll(bookmark);
+          else this.pane.scrollTop = scroll * ratio;
+        }
+      }
+    });
 
     // CSS scales the live canvas while the window is being dragged; the raster
     // itself has to be redrawn at the final size or its glyphs stay soft. A page
@@ -401,6 +478,135 @@ export class TypstPdfPreview {
         this.repaintRendered();
       }, 140);
     }
+  }
+
+  /** Geometry is rebuilt at layout changes, never by scanning pages on scroll. */
+  private measureScrollRegions(): void {
+    const pane = this.pane.getBoundingClientRect();
+    const origins = this.pages.map((p) => {
+      const r = p.shell.getBoundingClientRect();
+      return { top: this.pane.scrollTop + r.top - pane.top, left: r.left - pane.left };
+    });
+    const regions = new Map<string, ScrollRegion & { anchors: PdfScrollAnchor[] }>();
+    for (const anchor of this.scrollIndex.anchors) {
+      const line = anchor.line;
+      const origin = origins[line.page - 1];
+      if (!origin) continue;
+      const top = origin.top + line.top * this.fit;
+      const left = origin.left + line.left * this.fit;
+      const right = origin.left + line.right * this.fit;
+      let region = regions.get(anchor.region);
+      if (!region) {
+        region = {
+          key: anchor.region,
+          top,
+          bottom: top,
+          left,
+          right,
+          column: line.column,
+          anchors: [],
+        };
+        regions.set(anchor.region, region);
+      }
+      region.top = Math.min(region.top, top);
+      region.bottom = Math.max(region.bottom, top);
+      region.left = Math.min(region.left, left);
+      region.right = Math.max(region.right, right);
+      region.anchors.push(anchor);
+    }
+    this.scrollRegions = [...regions.values()];
+    for (const region of this.scrollRegions)
+      region.anchors.sort((a, b) => a.line.top - b.line.top || a.from - b.from);
+  }
+
+  /** Only an actual gesture changes column preference; hovering does not. */
+  scrollInput(x: number, y: number): void {
+    this.scrollPointer = { x, y, at: performance.now() };
+  }
+
+  cancelScrollRestore(): void {
+    this.inputEpoch++;
+    this.layoutScrollUntil = 0;
+  }
+
+  isLayoutScroll(): boolean {
+    return performance.now() < this.layoutScrollUntil;
+  }
+
+  scrollBookmark(): PdfScrollBookmark | null {
+    if (!this.scrollIndex.anchors.length || !this.scrollRegions.length) return null;
+    const reference = this.pane.getBoundingClientRect().top + 12;
+    // A bookmark is not a gesture: it must never consume the column whose
+    // wheel event is still waiting for its own scroll event.
+    const near = this.scrollAnchorsAt(reference, false);
+    let best: PdfScrollBookmark | null = null;
+    for (const anchor of near) {
+      const top = this.scrollTopFor(anchor);
+      if (top !== null && (!best || Math.abs(top - reference) < Math.abs(best.screenY - reference)))
+        best = { from: anchor.from, screenY: top };
+    }
+    return best;
+  }
+
+  restoreScroll(bookmark: PdfScrollBookmark): void {
+    this.inputEpoch++;
+    const near = this.scrollAnchorsNear(bookmark.from);
+    if (!near.length) return;
+    const anchor = near.reduce((a, b) =>
+      Math.abs(a.from - bookmark.from) <= Math.abs(b.from - bookmark.from) ? a : b,
+    );
+    const top = this.scrollTopFor(anchor);
+    if (top !== null) {
+      this.layoutScrollUntil = performance.now() + 150;
+      this.pane.scrollTop += top - bookmark.screenY;
+    }
+  }
+
+  scrollAnchorsNear(offset: number): readonly PdfScrollAnchor[] {
+    const near = this.scrollIndex.near(offset);
+    if (!near.length) return [];
+    const closest = near.reduce((a, b) =>
+      Math.abs(a.from - offset) <= Math.abs(b.from - offset) ? a : b,
+    );
+    this.scrollRegion = closest.region;
+    return near.filter((a) => a.region === closest.region);
+  }
+
+  scrollAnchorsAt(screenY: number, usePointer = true): readonly PdfScrollAnchor[] {
+    const pane = this.pane.getBoundingClientRect();
+    const top = this.pane.scrollTop + screenY - pane.top;
+    const now = performance.now();
+    const pointer =
+      usePointer && this.scrollPointer && now - this.scrollPointer.at <= 600
+        ? this.scrollPointer
+        : null;
+    if (usePointer) this.scrollPointer = null;
+    this.scrollRegion = chooseScrollRegion(
+      this.scrollRegions,
+      top,
+      this.pane.scrollTop + this.pane.clientHeight,
+      this.scrollRegion,
+      pointer ? { x: pointer.x - pane.left, y: pointer.y - pane.top + this.pane.scrollTop } : null,
+    );
+    const region = this.scrollRegions.find((r) => r.key === this.scrollRegion);
+    if (!region) return [];
+    // Baselines locate the neighbourhood; actual text rectangles do the alignment.
+    let lo = 0,
+      hi = region.anchors.length;
+    const page = this.pages[region.anchors[0].line.page - 1];
+    const localY = (screenY - page.shell.getBoundingClientRect().top) / this.fit;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (region.anchors[mid].line.top < localY) lo = mid + 1;
+      else hi = mid;
+    }
+    return region.anchors.slice(Math.max(0, lo - 32), lo + 32);
+  }
+
+  scrollTopFor(anchor: PdfScrollAnchor): number | null {
+    if (this.disposed || !anchor.range.startContainer.isConnected) return null;
+    const rect = anchor.range.getBoundingClientRect();
+    return rect.width && rect.height ? rect.top : null;
   }
 
   /** Redraw the pages that are already on screen at the fit's pixel scale. */
@@ -442,10 +648,13 @@ export class TypstPdfPreview {
     const target =
       keepVisible && page.canvas.width > 0 ? document.createElement("canvas") : page.canvas;
     try {
-      const ratio = Math.min(window.devicePixelRatio || 1, 2);
-      // Below a fit of 1 the bitmap is downscaled, which is sharp. Above it, the
-      // canvas is stretched by the page transform, so render at the displayed
-      // size instead of letting the browser enlarge a 96 dpi image.
+      // The page is displayed at `fit × devicePixelRatio` device pixels per CSS
+      // pixel. Rendering at that size keeps glyphs at native resolution on a
+      // 4K/5K display; below a fit of 1 the extra pixels supersample the page
+      // instead, and the high-quality copy below turns that into clean edges.
+      // The DPR cap only guards exotic page zooms; the pixel budget is the real
+      // memory bound.
+      const ratio = Math.min(window.devicePixelRatio || 1, 4);
       const wanted = ratio * Math.max(1, this.fit);
       const area = page.viewport.width * page.viewport.height;
       const scale = Math.min(wanted, Math.sqrt(MAX_CANVAS_PIXELS / area));
@@ -462,7 +671,15 @@ export class TypstPdfPreview {
         if (target !== page.canvas) {
           page.canvas.width = target.width;
           page.canvas.height = target.height;
-          page.canvas.getContext("2d")?.drawImage(target, 0, 0);
+          const context = page.canvas.getContext("2d");
+          if (context) {
+            // The supersampled bitmap is usually larger than the displayed
+            // canvas; high-quality downscaling keeps thin stems crisp instead
+            // of fading them into the dark page.
+            context.imageSmoothingEnabled = true;
+            context.imageSmoothingQuality = "high";
+            context.drawImage(target, 0, 0);
+          }
           target.width = 0;
           target.height = 0;
         }

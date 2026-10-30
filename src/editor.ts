@@ -169,6 +169,12 @@ export interface EditorHandle {
   topVisibleLine(): number;
   /** Content offset of the top of `line`, in pixels. */
   lineTop(line: number): number;
+  /** A source character's screen Y; estimates are refined after virtualisation. */
+  scrollPoint(pos: number): { top: number; exact: boolean };
+  /** Source offset at a visible screen row without changing selection. */
+  offsetAtScreenY(y: number): number;
+  /** Source line in scroll-container CSS pixels, including padding and scale. */
+  lineScrollTop(line: number): number;
   /** Scroll the source pane vertically without moving the caret or focusing it. */
   scrollToOffset(top: number): void;
   /** Largest vertical scroll offset the source pane can reach. */
@@ -1210,6 +1216,40 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     lineTop(line) {
       const target = Math.min(Math.max(Math.round(line), 1), view.state.doc.lines);
       return view.lineBlockAt(view.state.doc.line(target).from).top;
+    },
+
+    scrollPoint(pos) {
+      const target = Math.max(0, Math.min(pos, view.state.doc.length));
+      const rect = view.coordsAtPos(target);
+      return rect
+        ? { top: rect.top, exact: true }
+        : {
+            top:
+              view.documentTop +
+              (() => {
+                const block = view.lineBlockAt(target);
+                const fraction =
+                  block.to > block.from ? (target - block.from) / (block.to - block.from) : 0;
+                return block.top + Math.max(0, block.height - view.defaultLineHeight) * fraction;
+              })() *
+                view.scaleY,
+            exact: false,
+          };
+    },
+
+    offsetAtScreenY(y) {
+      const x = view.contentDOM.getBoundingClientRect().left + 29 * view.scaleX;
+      return view.posAtCoords({ x, y }, false);
+    },
+
+    lineScrollTop(line) {
+      const target = Math.min(Math.max(Math.round(line), 1), view.state.doc.lines);
+      return (
+        view.scrollDOM.scrollTop +
+        view.documentTop -
+        view.scrollDOM.getBoundingClientRect().top +
+        view.lineBlockAt(view.state.doc.line(target).from).top * view.scaleY
+      );
     },
 
     scrollToOffset(top) {

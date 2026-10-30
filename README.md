@@ -41,7 +41,11 @@ Markdown document active.*
   selecting a word or a range in either pane paints it in the other, for
   Markdown, AsciiDoc, HTML and both Typst views. Pages uses verified prose
   context to identify repeated words across columns; unresolved or generated
-  text stays unpainted. Selection stays in the pane you are using. The
+  text stays unpainted. Selection stays in the pane you are using. Scroll sync
+  follows verified text rather than a page fraction, in both directions,
+  through Typst pages and columns and through the HTML guest at document zoom;
+  when a word has no verified source occurrence the panes hold instead of
+  jumping to a plausible wrong place. The
   outline, favorites and recent list are one shortcut away, and
   **File › Open Recent** reaches the newest twenty entries of the persisted
   history without opening the sidebar.

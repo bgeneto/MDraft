@@ -19,6 +19,8 @@
     "check:version": "node scripts/check-version.mjs",
     "icons": "node scripts/build-icons.mjs",
     "smoke": "node scripts/dom-smoke.mjs",
+    "sync": "node scripts/scroll-sync-test.mjs",
+    "sync:unit": "node scripts/scroll-sync-unit.mjs",
     "word-sync": "node scripts/word-sync-test.mjs",
     "autoclose": "node scripts/autoclose-test.mjs",
     "autoclose:unit": "node scripts/autoclose-unit.mjs",

@@ -13,6 +13,8 @@ import {
   htmlRangesForSource,
   htmlSourceRange,
   rawOffsetForDecoded,
+  htmlScrollAnchors,
+  readHtmlScrollGeometry,
 } from "../src/html-source-map.ts";
 import { parseFragment } from "parse5";
 
@@ -217,6 +219,50 @@ check(
   check(
     htmlSourceRange(fragments, { ...segments[0], segments: {}, reveal: false }) === null,
     "malformed segment payloads fail closed without throwing",
+  );
+}
+
+{
+  const raw = "Caf&eacute; afterword",
+    text = "Café afterword";
+  const anchors = htmlScrollAnchors([
+    { n: 1, index: 0, src0: 10, src1: 10 + raw.length, raw, text },
+  ]);
+  check(
+    anchors.length === 2 && anchors[1].from === 10 + raw.indexOf("afterword"),
+    "scroll identities retain HTML entity boundaries",
+  );
+  check(
+    anchors[0].range.sample === "Café" && !("from" in anchors[0].range),
+    "guest scroll specs contain decoded identity, never source offsets",
+  );
+  const valid = {
+    top: 100,
+    epoch: 2,
+    input: 3,
+    points: [{ at: 0, top: 200, height: 20, sample: "Café" }],
+  };
+  check(
+    readHtmlScrollGeometry(valid, anchors)?.points[0].top === 200,
+    "requested geometry is accepted with matching samples",
+  );
+  const bad = [
+    { ...valid, epoch: -1 },
+    { ...valid, input: NaN },
+    { ...valid, top: Infinity },
+    { ...valid, points: [{ ...valid.points[0], at: anchors.length }] },
+    { ...valid, points: [{ ...valid.points[0], sample: "different" }] },
+    { ...valid, points: [{ ...valid.points[0], height: -1 }] },
+    { ...valid, points: [valid.points[0], valid.points[0]] },
+  ];
+  check(
+    bad.every((data) => readHtmlScrollGeometry(data, anchors) === null),
+    "invalid epochs, geometry, identities, samples and duplicates fail closed",
+  );
+  check(
+    readHtmlScrollGeometry(null, anchors) === null &&
+      readHtmlScrollGeometry({ ...valid, points: {} }, anchors) === null,
+    "malformed scroll replies do not throw",
   );
 }
 
