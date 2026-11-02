@@ -1512,19 +1512,55 @@ Return only the translated passage, wrapped exactly once in \
 wrapper, do not wrap it in a code fence, and do not explain the translation.";
 
 const SUMMARIZE: &str = "You are summarizing a passage from the author's document. \
-Write a faithful summary of the passage inside <passage>.
+Write a faithful and comprehensive summary of the passage inside <passage>: cover \
+every major idea, argument and conclusion, not only the headline points, while \
+preserving its meaning, intent and stance.
 
-- Preserve the main claims, facts, names, numbers and technical terms.
-- Do not add information, opinions or examples that are not in the passage.
-- Keep the author's language; do not translate.
-- Do not add a heading, a label or a preamble such as \"Summary\", \"This \
-passage\" or \"The author\".
-- Do not use bullet points unless the passage itself is a list; otherwise write \
-plain prose.
-- Aim for roughly one quarter of the passage's length, or three to five \
-sentences for a short passage.
-- Use the list or emphasis syntax of {markup} only if the summary itself needs \
-it; never use another markup.
+Rules:
+- Use only the passage. Do not add facts, context, interpretation or examples \
+that are not in it, and do not speculate beyond it.
+- Preserve the level of certainty, the hedging and the tone. Attribute claims to \
+the passage (\"the passage argues\", \"the text suggests\") instead of stating them \
+as unattributed fact.
+- Paraphrase by default; quote only where the exact wording matters, and keep the \
+quotation short.
+- Keep the central thesis, every major argument or section, the supporting \
+evidence, the key data (numbers, dates, names, percentages), the counterarguments \
+the passage answers, the conclusions and the stated limitations.
+- Remove repetition, filler, rhetorical flourishes and anecdotes that carry no \
+argument or evidence. When an example is the only support for a claim, keep it in \
+one short clause.
+- Do not let brevity override completeness. When in doubt, include the point.
+- The section labels below are part of the summary, not a label for your answer.
+
+Length: aim for roughly 15 to 20 percent of the passage, and never so short that \
+a major section goes unrepresented. A long, dense passage may reach about 1,200 \
+words; a passage of a few sentences becomes two to four sentences of plain prose, \
+without the section labels.
+
+Use exactly these four sections, in this order, one after the other. Start each \
+section with its label in bold - never a heading, because the summary is inserted \
+under the passage and must not change the document's outline. Follow the label \
+with the section's content on the same line when that content is prose, or on the \
+lines below when it is a list. Translate the labels into the passage's language, \
+and keep TL;DR as it is:
+- TL;DR: two or three sentences with the central thesis and the conclusion.
+- Main ideas: follow the passage's own structure; for each major section or \
+argument, one bullet that opens with a short bold label and then carries two to \
+five sentences with the key claims and their support.
+- Key data and facts: bullets with the important numbers, dates, names and \
+definitions; leave this section out when the passage has none.
+- Conclusion and stance: the final position, the recommendations and the stated \
+caveats.
+
+Write in the passage's language; do not translate. Use only the syntax of \
+{markup}: bold labels with `**` in Markdown, `*` in Typst and AsciiDoc and \
+`<strong>` in HTML, and the document's own list syntax for the bullets. Do not \
+use a heading at any level.
+
+Before answering, check silently that every major section of the passage is \
+represented and that no claim was added or distorted. If the passage contains no \
+substantive text, reply with one short sentence saying so.
 
 Return only the summary, wrapped exactly once in <mdraft-summary> and \
 </mdraft-summary>. Write nothing outside the wrapper and do not wrap it in a code \
@@ -1693,6 +1729,23 @@ mod tests {
                     action.id()
                 );
             }
+            // Prompts are assembled by textual substitution, so a placeholder
+            // with no parameter behind it would reach the model as literal
+            // braces and be read as writing advice.
+            for placeholder in [
+                "{markup}",
+                "{syntax_rule}",
+                "{tone}",
+                "{target_language}",
+                "{target_markup}",
+                "{target_syntax_rule}",
+            ] {
+                assert!(
+                    !prepared.system.contains(placeholder),
+                    "{} prompt leaves {placeholder} unrendered",
+                    action.id()
+                );
+            }
             assert!(!prepared.messages.is_empty());
         }
     }
@@ -1711,6 +1764,32 @@ mod tests {
         let prepared = prepare_default(&req).expect("prepare");
         assert!(prepared.system.contains("Typst markup"));
         assert!(prepared.system.contains("The document's markup is Typst."));
+        // A summary answers in sections, but it is inserted under the passage,
+        // so the sections are bold labels rather than headings: a heading would
+        // claim a place in the document's outline.
+        for section in [
+            "TL;DR",
+            "Main ideas",
+            "Key data and facts",
+            "Conclusion and stance",
+        ] {
+            assert!(prepared.system.contains(section), "missing {section}");
+        }
+        assert!(prepared.system.contains("never a heading"));
+        assert!(prepared.system.contains("`**` in Markdown"));
+        assert!(prepared.system.contains("`*` in Typst and AsciiDoc"));
+        assert!(prepared.system.contains("<strong>"));
+        assert!(!prepared.system.contains("<h2>"));
+        // The summary's bold form must agree with the markup's own syntax rule,
+        // which teaches `*bold*` for Typst and AsciiDoc and forbids `**bold**`
+        // there as Markdown.
+        assert!(!prepared.system.contains("`**` in Markdown and AsciiDoc"));
+
+        let mut adoc = request(AiAction::Summarize);
+        adoc.language = "asciidoc".into();
+        let asciidoc = prepare_default(&adoc).expect("prepare");
+        assert!(asciidoc.system.contains("Use AsciiDoc markup only"));
+        assert!(asciidoc.system.contains("`*` in Typst and AsciiDoc"));
     }
 
     #[test]
