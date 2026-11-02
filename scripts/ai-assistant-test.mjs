@@ -490,9 +490,11 @@ async function closeModelPicker() {
   await sleep(80);
 }
 
+// The answer to Fetch is a "Models" note under the button that asked for it;
+// the key's own state is on the API Key row.
 async function aiStatusNote() {
   return evaluate(
-    `[...document.querySelectorAll('.prefs-row')].find(r => r.querySelector('.prefs-label')?.textContent.replace(/\\?$/, '') === 'Status')?.querySelector('.prefs-note')?.textContent ?? ''`,
+    `[...document.querySelectorAll('.prefs-row')].find(r => r.querySelector('.prefs-label')?.textContent.replace(/\\?$/, '') === 'Models')?.querySelector('.prefs-note')?.textContent ?? ''`,
   );
 }
 
@@ -1012,10 +1014,17 @@ try {
     "API Key",
     "Model",
     "Context limit",
-    "Status",
+    "Prompts file",
   ]) {
     check(`the AI section has ${label}`, prefsSection.labels.includes(label));
   }
+  // The section used to end in one catch-all "Status" row that spoke about the
+  // API key far from the key field; each control answers for itself now.
+  check(
+    "the AI section has no catch-all Status row",
+    !prefsSection.labels.includes("Status"),
+    prefsSection.labels.join(", "),
+  );
   const contextLimit = await evaluate(`(() => {
     const input = (${rowSelector("Context limit")})?.querySelector('input[type=number]');
     if (!input) return null;

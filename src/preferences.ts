@@ -157,6 +157,8 @@ type Row =
       help?: string;
       placeholder: string;
       status: () => { hasKey: boolean; source: api.AiKeySource; warning: string | null };
+      /** An answer from the last key action, printed under the field. */
+      feedback?: () => string | null;
       set: (value: string) => Promise<void>;
       clear: () => Promise<void>;
     }
@@ -192,8 +194,15 @@ interface AiUiState {
   modelsEndpoint: string;
   /** The saved id a successful fetch proved absent, for the field note. */
   clearedModel: string | null;
-  error: string | null;
-  message: string | null;
+  /**
+   * The last answer from an action, printed under the control that caused it.
+   *
+   * One row used to carry all of it at the foot of the section, which made a
+   * sentence about the API key appear far from the API Key field. Each place
+   * answers for its own control instead: the secret row for the key, a Models
+   * note after Fetch, and the Prompts file note for the prompt file.
+   */
+  note: { where: "key" | "model" | "prompts"; text: string } | null;
   loading: boolean;
   /** The prompt file's state; null until the AI section has asked. */
   prompts: api.AiPromptsStatus | null;
@@ -1021,42 +1030,13 @@ function exportRows(host: PreferencesHost): Row[] {
   return rows;
 }
 
-function aiStatusText(ai: AiUiState): string {
-  const lines: string[] = [];
-  if (ai.error) lines.push(ai.error);
-  if (ai.status) {
-    if (ai.status.hasKey) {
-      lines.push(
-        ai.status.source === "keychain"
-          ? "Key: saved in the system credential store."
-          : "Key: kept for this session only.",
-      );
-    } else {
-      lines.push("Key: none saved for this endpoint; requests are sent without one.");
-    }
-    if (ai.status.warning) lines.push(ai.status.warning);
-    if (!ai.status.keychainAvailable) {
-      lines.push("The system credential store is unavailable on this machine.");
-    }
-  } else if (!ai.error) {
-    lines.push("Key status: not checked yet.");
-  }
-  if (ai.message) lines.push(ai.message);
-  // The success message already names the count. Repeating it as "N models
-  // available from the last check" made the same answer read as two facts.
-  const counted = ai.message?.includes(`${ai.models.length} models found`) ?? false;
-  if (ai.models.length > 0 && !counted) {
-    lines.push(`${ai.models.length} models available from the last check.`);
-  }
-  return lines.join(" ");
-}
-
 /**
  * The AI Assistant section.
  *
  * Every row is a real control: Enable, Provider, Base URL, the secret key, the
- * model, Fetch models and a status note. The key never enters settings.json;
- * the status note is the only place that says where it lives.
+ * model and Fetch models. The key never enters settings.json: the secret field
+ * itself says where it lives, and anything an action has to report is printed
+ * beside the control that caused it.
  */
 function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[] {
   const s = () => host.settings();
@@ -1102,8 +1082,7 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
   ): Promise<void> => {
     const requested = `${provider}|${baseUrl.trim()}`;
     ai.loading = true;
-    ai.error = null;
-    ai.message = afterSave ? "Key saved. Fetching the model list…" : "Fetching the model list…";
+    ai.note = { where: "model", text: "Fetching the model list…" };
     // A list belongs to the endpoint that returned it. A Base URL typed and
     // fetched without blurring never ran the row's setter, so drop the old
     // suggestions here as well as on the row.
@@ -1124,11 +1103,15 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
       if (ai.clearedModel && reply.models.includes(ai.clearedModel)) {
         ai.clearedModel = null;
       }
-      const prefix = afterSave ? "Key saved. " : "";
+      // The key's own state line already reports "Saved in the system keychain",
+      // so a save-triggered fetch says only what it found.
       if (reply.models.length === 0) {
-        ai.message = `${prefix}The endpoint returned no models; type the model id by hand.`;
+        ai.note = {
+          where: "model",
+          text: "The endpoint returned no models; type the model id by hand.",
+        };
       } else {
-        ai.message = `${prefix}${reply.models.length} models found.`;
+        ai.note = { where: "model", text: `${reply.models.length} models found.` };
         // The field is a combobox, so the list is reachable even with a stale
         // value; clearing is reconciliation, not a workaround for the popup.
         // Only a successful, non-empty answer proves the saved id absent.
@@ -1142,10 +1125,12 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
       // A failed list request must not read as a failed save: the key is
       // already stored and remains usable. It must not erase a hand-typed id
       // either; an endpoint without a list is a supported configuration.
-      ai.error = afterSave
-        ? `Key saved, but the model list could not be read: ${String(error)}`
-        : String(error);
-      ai.message = afterSave ? "Key saved." : null;
+      ai.note = {
+        where: "model",
+        text: afterSave
+          ? `The key is saved, but the model list could not be read: ${String(error)}`
+          : String(error),
+      };
     } finally {
       ai.loading = false;
       refresh();
@@ -1154,30 +1139,30 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
 
   const saveKey = async (key: string): Promise<void> => {
     const { provider, baseUrl, model } = currentConnection();
-    ai.error = null;
-    ai.message = "Saving the key…";
+    ai.note = { where: "key", text: "Saving the key…" };
     try {
       ai.status = await api.aiSetKey(provider, baseUrl, key);
       ai.endpoint = `${provider}|${baseUrl}`;
+      // The field's own state line says where the key went, and any warning
+      // from the store is read from the status by the row itself, so nothing
+      // here competes with the model list the save goes on to fetch.
+      ai.note = null;
       await loadModels(provider, baseUrl, model, true);
     } catch (error) {
-      ai.error = String(error);
-      ai.message = null;
+      ai.note = { where: "key", text: String(error) };
       refresh();
     }
   };
 
   const clearKey = async (): Promise<void> => {
     const { provider, baseUrl } = currentConnection();
-    ai.error = null;
-    ai.message = "Removing the key…";
+    ai.note = { where: "key", text: "Removing the key…" };
     try {
       ai.status = await api.aiClearKey(provider, baseUrl);
       ai.endpoint = `${provider}|${baseUrl}`;
-      ai.message = "Key removed.";
+      ai.note = null;
     } catch (error) {
-      ai.error = String(error);
-      ai.message = null;
+      ai.note = { where: "key", text: String(error) };
     }
     refresh();
   };
@@ -1194,11 +1179,11 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
    * highlighted, spell-checked, searchable and saved with Ctrl+S like any other.
    */
   const openPrompts = async (): Promise<void> => {
-    ai.error = null;
+    ai.note = null;
     try {
       await host.openAiPrompts();
     } catch (error) {
-      ai.error = String(error);
+      ai.note = { where: "prompts", text: String(error) };
     }
     // The section re-reads the file on the next render, which the caller runs
     // after the action settles.
@@ -1215,12 +1200,12 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
    * work the reader has not saved.
    */
   const resetPrompts = async (): Promise<void> => {
-    ai.error = null;
+    ai.note = null;
     try {
       await host.resetAiPrompts();
-      ai.message = "Prompts reset to the built-in text.";
+      ai.note = { where: "prompts", text: "Prompts reset to the built-in text." };
     } catch (error) {
-      ai.error = String(error);
+      ai.note = { where: "prompts", text: String(error) };
     }
     ai.prompts = null;
     refresh();
@@ -1235,17 +1220,18 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
    */
   const promptsNote = (): string => {
     const prompts = ai.prompts;
-    if (!prompts) return "Reading ai-prompts.md…";
-    if (prompts.error) {
-      return `${prompts.error} Reset prompts to defaults restores the file.`;
-    }
-    if (!prompts.exists) {
-      return "Using the built-in prompts. Edit prompts creates ai-prompts.md from them.";
-    }
-    if (prompts.custom === 0) {
-      return "Using the built-in prompts; every section matches the generated file.";
-    }
-    return `${prompts.custom} of ${prompts.total} prompts customised. Saved changes take effect on the next Generate. File: ${prompts.path}`;
+    // An action's answer joins the state sentence rather than replacing it: the
+    // reader needs both "what the file holds now" and "what my press did".
+    const answer = ai.note?.where === "prompts" ? ai.note.text : "";
+    if (!prompts) return answer || "Reading ai-prompts.md…";
+    const state = prompts.error
+      ? `${prompts.error} Reset prompts to defaults restores the file.`
+      : !prompts.exists
+        ? "Using the built-in prompts. Edit prompts creates ai-prompts.md from them."
+        : prompts.custom === 0
+          ? "Using the built-in prompts; every section matches the generated file."
+          : `${prompts.custom} of ${prompts.total} prompts customised. Saved changes take effect on the next Generate. File: ${prompts.path}`;
+    return answer ? `${state} ${answer}` : state;
   };
 
   const offered =
@@ -1254,8 +1240,9 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
     ai.clearedModel && s().aiModel.trim() === ""
       ? `“${ai.clearedModel}” is not offered by this endpoint, so the field was cleared. Choose ${offered}, or type an id.`
       : undefined;
+  const modelNote = ai.note?.where === "model" ? ai.note.text : null;
 
-  return [
+  const rows: Row[] = [
     {
       kind: "note",
       label: "Privacy",
@@ -1323,8 +1310,7 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
         ai.models = [];
         ai.modelsEndpoint = "";
         ai.clearedModel = null;
-        ai.error = null;
-        ai.message = null;
+        ai.note = null;
         host.update({ aiBaseUrl: value.trim() });
       },
     },
@@ -1340,6 +1326,9 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
         source: ai.status?.source ?? "none",
         warning: ai.status?.warning ?? null,
       }),
+      // The field states where the key lives; this carries an action's answer
+      // and, when the store has something to say about it, the store's warning.
+      feedback: () => (ai.note?.where === "key" ? ai.note.text : (ai.status?.warning ?? null)),
       set: saveKey,
       clear: clearKey,
     },
@@ -1365,6 +1354,14 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
       help: "Refreshes the model list. Saving a key already does this once; use this button after changing the endpoint or to retry.",
       action: fetchModels,
     },
+  ];
+
+  // The answer to Fetch sits under the button that asked, not at the foot of
+  // the section: it is about this list, and a reader who presses Fetch again
+  // should not have to look for it somewhere else.
+  if (modelNote) rows.push({ kind: "note", label: "Models", text: modelNote });
+
+  rows.push(
     {
       kind: "number",
       label: "Context limit",
@@ -1397,12 +1394,9 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
       label: "Prompts file",
       text: promptsNote(),
     },
-    {
-      kind: "note",
-      label: "Status",
-      text: aiStatusText(ai),
-    },
-  ];
+  );
+
+  return rows;
 }
 
 /**
@@ -1899,8 +1893,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
     models: [],
     modelsEndpoint: "",
     clearedModel: null,
-    error: null,
-    message: null,
+    note: null,
     loading: false,
     prompts: null,
     promptsLoading: false,
@@ -1923,9 +1916,12 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       const status = await api.aiStatus(settings.aiProvider, settings.aiBaseUrl);
       ai.status = status;
       ai.endpoint = endpoint;
-      ai.error = status.warning;
+      // The warning is read from the status by the field itself, so only a
+      // failure to ask belongs in the note; a stale one from a previous
+      // endpoint must not outlive the answer that replaced it.
+      if (ai.note?.where === "key") ai.note = null;
     } catch (error) {
-      ai.error = String(error);
+      ai.note = { where: "key", text: String(error) };
       ai.endpoint = endpoint;
     } finally {
       ai.loading = false;
@@ -1948,7 +1944,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       ai.prompts = await api.aiPromptsStatus();
     } catch (error) {
       ai.prompts = null;
-      ai.error = String(error);
+      ai.note = { where: "prompts", text: String(error) };
     } finally {
       ai.promptsLoading = false;
     }
@@ -2243,6 +2239,16 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
           ? "Saved in the system keychain"
           : "Session only"
         : "No key — optional";
+      // Where the key lives is a standing fact, so it stays on screen; what a
+      // save or a removal answered is a second line that goes away with the
+      // next action.
+      const answer = row.feedback?.() ?? null;
+      const feedback = answer ? document.createElement("span") : null;
+      if (feedback && answer) {
+        feedback.className = "prefs-key-state";
+        feedback.setAttribute("role", "status");
+        feedback.textContent = answer;
+      }
       const commit = () => {
         const key = input.value.trim();
         if (!key) return;
@@ -2261,6 +2267,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       });
       clear.addEventListener("click", () => void row.clear());
       wrap.append(input, save, clear, note);
+      if (feedback) wrap.append(feedback);
       return wrap;
     }
 
