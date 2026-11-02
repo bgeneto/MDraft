@@ -3098,6 +3098,216 @@ try {
     fs.rmSync(nameDir, { recursive: true, force: true });
   }
 
+  console.log("\nEditable prompts");
+  const promptsPath = path.join(process.env.APPDATA ?? "", appIdentifier, "ai-prompts.md");
+  // This block owns the prompt file for its duration. A developer running the
+  // suite outside the harness must get their own prompts back, and a file left
+  // by an earlier run must not decide what this one measures.
+  const promptsBackup = fs.existsSync(promptsPath) ? fs.readFileSync(promptsPath) : null;
+  try {
+    const resetDisabled = () =>
+      evaluate(`(() => {
+        const button = [...document.querySelectorAll('.prefs-row .prefs-button')].find(b => b.textContent === 'Reset prompts to defaults');
+        return button ? button.disabled : null;
+      })()`);
+    const activateTab = (name) =>
+      evaluate(`(() => {
+        const tab = [...document.querySelectorAll('.doc-tab')].find(t => t.querySelector('.doc-tab-name')?.textContent === ${JSON.stringify(name)});
+        if (!tab) return false;
+        tab.click();
+        return true;
+      })()`);
+    const MARKER = "Count the words in the passage and stop.";
+
+    await closePanel();
+    await openAiSection();
+    const initialNote = await waitFor(
+      `(() => {
+        const note = [...document.querySelectorAll('.prefs-row')].find(r => r.querySelector('.prefs-label')?.textContent.replace(/\\?$/, '') === 'Prompts file')?.querySelector('.prefs-note')?.textContent ?? '';
+        return note && !note.startsWith('Reading') ? note : null;
+      })()`,
+      8000,
+    );
+    check(
+      "the AI section says which prompts are in use",
+      /built-in|matches the generated file|customised/.test(String(initialNote)),
+      String(initialNote),
+    );
+    check("Edit prompts is offered", await clickPrefsButton("Edit prompts…"));
+    check(
+      "ai-prompts.md opens as a tab",
+      Boolean(
+        await waitFor(
+          `[...document.querySelectorAll('.doc-tab-name')].some(t => t.textContent === 'ai-prompts.md')`,
+          12_000,
+        ),
+      ),
+    );
+    await closePrefs();
+    check(
+      "the generated file carries the header and the prompts",
+      fs.existsSync(promptsPath) &&
+        (() => {
+          const generated = fs.readFileSync(promptsPath, "utf8");
+          return (
+            generated.startsWith("# MDraft AI prompts") &&
+            generated.includes("## preamble") &&
+            generated.includes("## summarize") &&
+            generated.includes("## improve")
+          );
+        })(),
+    );
+
+    // A partial file is a valid override: only the section it names changes.
+    await activateTab("ai-prompts.md");
+    await sleep(150);
+    await evaluate(`document.querySelector('.cm-content').focus()`);
+    await pressCtrl("a", "KeyA", 65);
+    await send("Input.insertText", {
+      text: ["## summarize", "", "```", MARKER, "```", ""].join("\n"),
+    });
+    await sleep(250);
+    await pressCtrl("s", "KeyS", 83);
+    let savedPrompt = false;
+    for (let attempt = 0; attempt < 60 && !savedPrompt; attempt += 1) {
+      savedPrompt =
+        fs.existsSync(promptsPath) &&
+        fs.readFileSync(promptsPath, "utf8").includes(MARKER);
+      if (!savedPrompt) await sleep(100);
+    }
+    check("the edited prompt is saved to disk", savedPrompt);
+
+    check("the fixture tab is back", await activateTab("feature-tour.md"));
+    await sleep(200);
+    await clickEditorWord("Regular");
+    await chooseAction("Summarize");
+    await waitPanelDone();
+    const editedRequest = control.requests.at(-1);
+    check(
+      "the edited prompt reaches the model",
+      (editedRequest?.system ?? "").includes(MARKER),
+      (editedRequest?.system ?? "").slice(0, 70),
+    );
+    check(
+      "the wrapper tag is still imposed by the application",
+      (editedRequest?.system ?? "").includes("<mdraft-summary>"),
+    );
+    await closePanel();
+
+    await openAiSection();
+    const counted = await waitFor(
+      `(() => {
+        const note = [...document.querySelectorAll('.prefs-row')].find(r => r.querySelector('.prefs-label')?.textContent.replace(/\\?$/, '') === 'Prompts file')?.querySelector('.prefs-note')?.textContent ?? '';
+        return note.includes('customised') ? note : null;
+      })()`,
+      8000,
+    );
+    check(
+      "the note counts the customised prompt",
+      String(counted ?? "").includes("1 of 16"),
+      String(counted),
+    );
+    check("Reset is enabled for a clean file", (await resetDisabled()) === false);
+    check("Reset prompts to defaults", await clickPrefsButton("Reset prompts to defaults"));
+    const resetNote = await waitFor(
+      `(() => {
+        const note = [...document.querySelectorAll('.prefs-row')].find(r => r.querySelector('.prefs-label')?.textContent.replace(/\\?$/, '') === 'Prompts file')?.querySelector('.prefs-note')?.textContent ?? '';
+        return note.includes('built-in') ? note : null;
+      })()`,
+      8000,
+    );
+    const restored = fs.existsSync(promptsPath) ? fs.readFileSync(promptsPath, "utf8") : "";
+    check(
+      "Reset rewrites the built-in prompts",
+      Boolean(resetNote) && restored.includes("## preamble") && !restored.includes(MARKER),
+      String(resetNote),
+    );
+    await closePrefs();
+    await activateTab("ai-prompts.md");
+    await sleep(150);
+    await scrollEditorTop();
+    check(
+      "the open prompts tab is reloaded",
+      (await waitFor(
+        `(document.querySelector('.cm-line')?.textContent ?? '') === '# MDraft AI prompts'`,
+        8000,
+      )) === true,
+    );
+
+    // The safety net: a file that no longer parses must be reported, and Reset
+    // must work anyway, because that is the only way back.
+    fs.writeFileSync(
+      promptsPath,
+      ["## summarise", "", "```", "A typo in the section name.", "```", ""].join("\n"),
+      "utf8",
+    );
+    await activateTab("feature-tour.md");
+    await sleep(200);
+    await clickEditorWord("Regular");
+    await chooseAction("Summarize");
+    const failure = await waitFor(
+      `(() => {
+        const status = document.querySelector('.ai-status')?.textContent ?? '';
+        return status.includes('ai-prompts.md') ? status : null;
+      })()`,
+      8000,
+    );
+    check(
+      "a file that does not parse is reported in the panel",
+      String(failure ?? "").includes("unknown action"),
+      String(failure),
+    );
+    await closePanel();
+    await openAiSection();
+    check("Reset recovers a file that cannot be used", await clickPrefsButton("Reset prompts to defaults"));
+    const recovered = await waitFor(
+      `(() => {
+        const note = [...document.querySelectorAll('.prefs-row')].find(r => r.querySelector('.prefs-label')?.textContent.replace(/\\?$/, '') === 'Prompts file')?.querySelector('.prefs-note')?.textContent ?? '';
+        return note.includes('built-in') ? note : null;
+      })()`,
+      8000,
+    );
+    check(
+      "the file parses again after Reset",
+      Boolean(recovered) &&
+        fs.existsSync(promptsPath) &&
+        fs.readFileSync(promptsPath, "utf8").includes("## preamble"),
+      String(recovered),
+    );
+    await closePrefs();
+
+    // A dirty buffer is the one thing Reset must refuse: a rewrite would throw
+    // away an edit the reader has not saved.
+    await activateTab("ai-prompts.md");
+    await sleep(150);
+    await evaluate(`document.querySelector('.cm-content').focus()`);
+    await send("Input.insertText", { text: "x" });
+    await sleep(250);
+    await openAiSection();
+    const dirtyRefusal = await waitFor(
+      `(() => {
+        const button = [...document.querySelectorAll('.prefs-row .prefs-button')].find(b => b.textContent === 'Reset prompts to defaults');
+        return button ? button.disabled : false;
+      })()`,
+      5000,
+    ).catch(() => false);
+    check("Reset is refused while the prompts tab has unsaved changes", dirtyRefusal === true);
+    await closePrefs();
+    await evaluate(`document.querySelector('.cm-content').focus()`);
+    await undo();
+    await waitFor(
+      `![...document.querySelectorAll('.doc-tab')].some(t => t.querySelector('.doc-tab-name')?.textContent === 'ai-prompts.md' && t.classList.contains('is-dirty'))`,
+      4000,
+    );
+  } finally {
+    try {
+      if (promptsBackup) fs.writeFileSync(promptsPath, promptsBackup);
+      else fs.rmSync(promptsPath, { force: true });
+    } catch {
+      /* the app may be gone */
+    }
+  }
+
   const settings = await evaluate(`window.__TAURI_INTERNALS__.invoke('get_settings')`);
   check("get_settings has no API key", !JSON.stringify(settings).includes("sk-mock-"));
   const configPath = path.join(process.env.APPDATA ?? "", appIdentifier, "settings.json");

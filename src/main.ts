@@ -6529,6 +6529,29 @@ async function boot(): Promise<void> {
     exportHtml: () => void exportHtml(),
     exportPdf: () => void exportPdf(),
     setupTypst: () => typstSetup(),
+    // The prompt file is not a document the reader opened, so it stays out of
+    // Recents; one press focuses the tab if it is already there.
+    openAiPrompts: async () => {
+      const status = await api.aiPromptsStatus();
+      const path = status.exists ? status.path : await api.aiExportPrompts();
+      await openPath(path, { rememberRecent: false });
+    },
+    resetAiPrompts: async () => {
+      const status = await api.aiPromptsStatus();
+      const open = sessions.findByPath(status.path);
+      // Rewriting a dirty buffer would discard an edit the reader has not saved.
+      // That is the one way this button could lose work, so it refuses instead.
+      if (open?.dirty) {
+        throw new Error(
+          "Save or discard the changes in ai-prompts.md before resetting the prompts.",
+        );
+      }
+      await api.aiExportPrompts();
+      // Rewriting the file behind an open tab would leave the editor showing the
+      // text that was just replaced, so reload it when it is clean.
+      if (open) await lifecycle.reload(open);
+    },
+    aiPromptsDirty: (path) => Boolean(sessions.findByPath(path)?.dirty),
     openDocumentation: (which) =>
       void showBuiltin(
         which === "reference" ? REFERENCE : which === "shortcuts" ? SHORTCUTS : FONT_LICENCES,
