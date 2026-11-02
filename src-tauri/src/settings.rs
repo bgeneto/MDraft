@@ -511,6 +511,13 @@ pub struct Settings {
     /// clamped on load and save.
     #[serde(default = "default_ai_context_tokens")]
     pub ai_context_tokens: usize,
+    /// Whether the assistant may name an untitled document when it is saved.
+    ///
+    /// Off by default. The deterministic first-line name needs no request, so
+    /// an existing profile keeps its behaviour until the reader turns this on in
+    /// Preferences › AI Assistant.
+    #[serde(default)]
+    pub ai_suggest_filename: bool,
 
     // ---- Preferences: Read Aloud -----------------------------------------
     /// Voice the right-click **Read Aloud** commands use.
@@ -601,6 +608,7 @@ impl Default for Settings {
             ai_base_url: default_ai_base_url(),
             ai_model: String::new(),
             ai_context_tokens: default_ai_context_tokens(),
+            ai_suggest_filename: false,
 
             read_aloud_voice: String::new(),
             read_aloud_rate: default_read_aloud_rate(),
@@ -994,6 +1002,7 @@ mod tests {
         assert_eq!(s.spellcheck_language, "auto");
         assert!(s.spellcheck_words.is_empty());
         assert_eq!(s.ai_context_tokens, 8_192);
+        assert!(!s.ai_suggest_filename);
     }
 
     #[test]

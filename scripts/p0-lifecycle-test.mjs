@@ -115,7 +115,7 @@ try {
   );
   // All interception lives in this test. Production has no test globals or commands.
   await evaluate(`(() => {
-    const state=window.__p0TestOnly={original:window.fetch,messages:[],calls:[],block:null,nextSave:null,failPath:null};
+    const state=window.__p0TestOnly={original:window.fetch,messages:[],calls:[],saveDefaults:[],block:null,nextSave:null,failPath:null};
     window.fetch=async function(input,options){
       const url=new URL(typeof input==='string'?input:input.url,location.href);
       if(url.hostname!=='ipc.localhost') return state.original.call(window,input,options);
@@ -127,6 +127,7 @@ try {
         if(state.block?.command===command&&!state.block.entered) {
           state.block.entered=true; await new Promise(resolve=>{state.block.release=resolve});
         }
+        state.saveDefaults.push(args.options?.defaultPath ?? args.defaultPath);
         const chosen=state.nextSave; state.nextSave=null; return response(chosen);
       }
       if(command==='plugin:dialog|message') { state.messages.push(args.message); return response(args.buttons==='YesNo'?'Yes':'Ok'); }
@@ -432,6 +433,61 @@ try {
     !(await evaluate(`!!document.querySelector('.doc-tab.is-dirty')`)) &&
       (await journal()).length === 0,
     "bundled CRLF documents open clean without creating recovery work",
+  );
+
+  // The Save dialog's default name comes from the document, not "untitled".
+  const derived = path.join(work, "derived.md");
+  await action("file.new");
+  await type(
+    "# A Grande Mudança que se Aproxima nas Relações entre os Estados Unidos e a China na Era da Inteligência Artificial",
+  );
+  await evaluate(`window.__p0TestOnly.nextSave=${JSON.stringify(derived)}`);
+  await action("file.save");
+  await wait(`${tab("derived.md")}?.getAttribute('aria-selected')==='true'`);
+  const headingName = await evaluate(`window.__p0TestOnly.saveDefaults.at(-1)`);
+  check(
+    path.basename(headingName) ===
+      "A Grande Mudança que se Aproxima nas Relações entre os Estados Unidos e a China na Era da Inteligência Artificial.md",
+    "an untitled save derives its name from the heading",
+    headingName,
+  );
+
+  const product = path.join(work, "product.md");
+  await action("file.new");
+  await type("Par de caixas torre Monitor Audio Silver 300 7G, no acabamento Natural Walnut.");
+  await evaluate(`window.__p0TestOnly.nextSave=${JSON.stringify(product)}`);
+  await action("file.save");
+  await wait(`${tab("product.md")}?.getAttribute('aria-selected')==='true'`);
+  const lineName = await evaluate(`window.__p0TestOnly.saveDefaults.at(-1)`);
+  check(
+    path.basename(lineName) ===
+      "Par de caixas torre Monitor Audio Silver 300 7G, no acabamento Natural Walnut.md",
+    "a first paragraph becomes the name without its period",
+    lineName,
+  );
+
+  const invalid = path.join(work, "invalid.md");
+  await action("file.new");
+  await type("# Q&A: What's Next?");
+  await evaluate(`window.__p0TestOnly.nextSave=${JSON.stringify(invalid)}`);
+  await action("file.save");
+  await wait(`${tab("invalid.md")}?.getAttribute('aria-selected')==='true'`);
+  const repaired = await evaluate(`window.__p0TestOnly.saveDefaults.at(-1)`);
+  check(
+    path.basename(repaired) === "Q&A What's Next.md",
+    "characters the platform refuses are replaced before the dialog",
+    repaired,
+  );
+
+  const renamed = path.join(work, "renamed.md");
+  await evaluate(`window.__p0TestOnly.nextSave=${JSON.stringify(renamed)}`);
+  await action("file.saveAs");
+  await wait(`${tab("renamed.md")}?.getAttribute('aria-selected')==='true'`);
+  const savedName = await evaluate(`window.__p0TestOnly.saveDefaults.at(-1)`);
+  check(
+    path.basename(savedName) === "invalid.md",
+    "Save As on a saved document keeps its own name",
+    savedName,
   );
 } catch (error) {
   try {

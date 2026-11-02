@@ -361,6 +361,13 @@ export interface Settings {
    * this to 1,024–32,768 when loading and saving settings.
    */
   aiContextTokens: number;
+  /**
+   * Let the assistant propose the file name when an untitled document is saved.
+   *
+   * Off by default. Only consulted while the assistant itself is enabled, and
+   * only when the text has no title or heading of its own.
+   */
+  aiSuggestFilename: boolean;
 
   /**
    * Read Aloud.
@@ -877,6 +884,17 @@ export const aiFetchModels = (provider: AiProvider, baseUrl: string, model: stri
 export const aiCancel = (id: string) => invoke<void>("ai_cancel", { id });
 
 export const aiCancelAll = () => invoke<void>("ai_cancel_all");
+
+/**
+ * Ask the configured endpoint for a file-name stem.
+ *
+ * The opening text is the only document text this request carries. The answer
+ * is raw; the caller runs it through the same sanitiser a heading goes through,
+ * because a model cannot be trusted to obey a filename contract. `id` is the
+ * cancellation key, registered by the backend like any other AI request.
+ */
+export const aiSuggestFilename = (id: string, text: string) =>
+  invoke<string>("ai_suggest_filename", { id, text });
 
 /**
  * Start one action.

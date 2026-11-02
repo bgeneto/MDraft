@@ -103,6 +103,15 @@ const SUITES = [
     script: "p0-unit.mjs",
   },
   {
+    // The name the Save dialog pre-fills: title sources in four markups, the
+    // cross-platform sanitiser and the cleaning of an assistant's answer. Pure
+    // logic, no application; the UI layers prove the dialog wiring.
+    id: "filename-unit",
+    title: "File name suggestions (unit)",
+    kind: "node",
+    script: "filename-unit.mjs",
+  },
+  {
     // The conversion matrix: pure logic, the same TypeScript modules the editor
     // imports, and no application. Node runs them directly.
     id: "paste-convert",

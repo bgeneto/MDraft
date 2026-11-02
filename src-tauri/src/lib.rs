@@ -92,6 +92,7 @@ pub fn run() {
             ai::ai_clear_key,
             ai::ai_fetch_models,
             ai::ai_complete,
+            ai::naming::ai_suggest_filename,
             ai::ai_cancel,
             ai::ai_cancel_all,
             documents::read_document,
