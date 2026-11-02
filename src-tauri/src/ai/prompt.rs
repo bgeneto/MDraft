@@ -1501,6 +1501,9 @@ glossary, an explanation or a summary of changes.
 - Do not add or remove content, examples or qualifications.
 - Preserve the meaning, tone, register and level of detail.
 - Use natural {target_language}, not a literal word-for-word rendering.
+- Write the reply in {target_language}, never in the source language — even when \
+the two are closely related, and even when the passage is a title or a single \
+phrase.
 - If a term has no settled translation, keep the source term in place; do not \
 add a note about it.
 
@@ -1729,6 +1732,9 @@ mod tests {
         req.parameter = Some("Portuguese".into());
         let prepared = prepare_default(&req).expect("prepare");
         assert!(prepared.system.contains("into Portuguese"));
+        // A weak model must not read the preamble's "keep the passage's
+        // language" rule as permission to return the source unchanged.
+        assert!(prepared.system.contains("never in the source language"));
     }
 
     #[test]

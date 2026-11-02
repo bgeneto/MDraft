@@ -2956,12 +2956,25 @@ body {
 }
 
 .ai-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 3px 2px;
   border: none;
   background: transparent;
   color: var(--muted);
   font: 11.5px var(--font-ui);
   cursor: pointer;
+}
+
+/* The footer commands carry an icon so they read as navigation rather than as
+   part of the search hint. The palette's action rows already tint their icons
+   with the accent, and these two are the same kind of destination. */
+.ai-link svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--accent);
 }
 
 .ai-link:hover {
@@ -3182,7 +3195,10 @@ body {
   align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
-  padding: 10px 12px;
+  /* The left padding is the resize grip's old slot: the grip is absolutely
+     positioned in the corner, so the padding keeps the heading and the back
+     button at the x they had when it was a flex child. */
+  padding: 10px 12px 10px 34px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -3241,13 +3257,16 @@ body {
    the left while its bottom-right corner stays anchored. It is the Preferences
    grip (an L bracket in the panel corner) turned to face the corner that
    actually moves. The diagonal hatch it replaced read as decoration at 14 px,
-   and its strokes ran across the drag direction rather than pointing at it. */
+   and its strokes ran across the drag direction rather than pointing at it.
+   The handle is taken out of the header's flow so the bracket can hug the
+   panel edge; the header's left padding keeps the title and the back button
+   where they were. */
 .ai-resize {
-  position: relative;
-  flex: none;
-  width: 14px;
-  height: 14px;
-  margin-top: 2px;
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 20px;
+  height: 20px;
   padding: 0;
   border: none;
   border-radius: 3px;
@@ -3261,8 +3280,8 @@ body {
 .ai-resize::before {
   content: "";
   position: absolute;
-  left: 2px;
-  top: 2px;
+  left: 4px;
+  top: 4px;
   width: 8px;
   height: 8px;
   border-left: 1px solid currentColor;
@@ -3383,9 +3402,46 @@ body {
   white-space: nowrap;
 }
 
+/* Redo and the Result/Changes switch are one right-hand group: the head's free
+   space belongs before the group, never between its two controls. */
+.ai-result-tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.ai-regenerate {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.ai-regenerate svg {
+  width: 15px;
+  height: 15px;
+}
+
+.ai-regenerate:hover:not(:disabled) {
+  background: var(--code-bg);
+  color: var(--fg);
+}
+
+.ai-regenerate:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .ai-toggle {
   display: inline-flex;
-  margin-left: auto;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 6px;

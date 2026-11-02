@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import {
   ACTIONS,
   GROUP_ORDER,
+  answerLanguage,
   convertTargets,
   defaultParameter,
   groupedActions,
@@ -197,6 +198,36 @@ equal(
 );
 equal("the default tone is Professional", defaultParameter("tone", "markdown"), "Professional");
 equal("translate starts empty", defaultParameter("translate", "markdown"), "");
+
+// ---------------------------------------------------------------------------
+// The markup a new-tab answer opens in
+// ---------------------------------------------------------------------------
+
+console.log("\nAnswer language");
+equal("Convert opens its target markup", answerLanguage("convert", "typst", "markdown"), "typst");
+equal("Convert from AsciiDoc opens HTML", answerLanguage("convert", "html", "asciidoc"), "html");
+equal(
+  "a missing parameter falls back to the source",
+  answerLanguage("convert", null, "markdown"),
+  "markdown",
+);
+equal(
+  "an unknown markup falls back to the source",
+  answerLanguage("convert", "latex", "typst"),
+  "typst",
+);
+equal(
+  "a target equal to the source is not a conversion",
+  answerLanguage("convert", "markdown", "markdown"),
+  "markdown",
+);
+equal("a rewrite keeps the document's language", answerLanguage("improve", null, "typst"), "typst");
+equal(
+  "a language parameter is not a markup",
+  answerLanguage("translate", "Portuguese", "asciidoc"),
+  "asciidoc",
+);
+equal("Convert to table keeps the language", answerLanguage("table", null, "html"), "html");
 
 // ---------------------------------------------------------------------------
 // Paragraph expansion

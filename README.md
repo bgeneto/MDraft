@@ -136,7 +136,11 @@ Markdown document active.*
   Shorten, Simplify, Change tone, Translate, Summarize, Explain, Key points,
   Critique, Convert to table and Convert markup — and the answer streams into a
   non-modal panel before you apply it with **Replace selection**, **Insert
-  below** or **Insert**. Answers are requested in the document's own markup —
+  below**, **Insert** or **New tab**, which opens the answer as its own untitled
+  document in the markup it was written in (the target markup for Convert
+  markup). **Regenerate** sits beside the answer, and the actions that can place
+  an answer say where it goes in their tooltip. Answers are requested in the
+  document's own markup —
   the saved extension, or the detected syntax of an unsaved buffer — and a final
   guard removes greetings, labels and change summaries before the answer reaches
   the panel. The finished answer renders as sanitized Markdown, with headings,
