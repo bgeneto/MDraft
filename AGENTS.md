@@ -338,7 +338,7 @@ node scripts\image-paste-test.mjs 9222 "http://127.0.0.1:8791/served.png" "C:\pa
 | `cargo-vcvars.cmd` | `<cargo args…>` | The same wrapper specialised for cargo: `cargo-vcvars.cmd test --manifest-path src-tauri\Cargo.toml` |
 | `check-version.mjs` | `[tag]` | Asserts `package.json` and `src-tauri/tauri.conf.json` carry the same version, and that a supplied tag (`v0.1.0`, or `GITHUB_REF_NAME`) matches. CI runs it before building anything |
 | `build-icons.mjs` | `[--source path] [--out dir]` | Regenerates every file in `src-tauri/icons/` from one square master PNG (default `docs/icon/mdraft-icon.png`): the bundle PNGs including `256x256.png`/`512x512.png`, the Windows Store logos, `icon.ico` and `icon.icns`. Resamples with Lanczos, quantises each size to a small palette and wraps the frames itself, so the set stays around 300 KB instead of the 2.4 MB `tauri icon` produced. `npm run icons` is the same command |
-| `subset-fonts.py` | `--source … --output … [--instance JSON] [--features csv] [--require csv]` | Instances and subsets one source into woff2, verifies the Latin probe and the required OpenType features. Called by `fetch-fonts.ps1` for each Google output; needs Python, fonttools and brotli |
+| `subset-fonts.py` | `--source … --output … [--instance JSON] [--instance-after-subset] [--features csv] [--require csv]` | Instances and subsets one source into woff2, verifies the Latin probe and the required OpenType features. Called by `fetch-fonts.ps1` for each Google output; needs Python, fonttools and brotli. Keeps the source's `head.modified`, so the same input produces the same SHA-256 |
 
 ### Conventions for new test scripts
 
@@ -939,8 +939,8 @@ handle is released. Do not switch to an in-place shell write to work around it:
 it bypasses the tool's read-before-write check and the other program's buffer
 then overflows the change on its next save.
 
-**`git diff --check` reports every added line of `src-tauri/src/settings.rs` or `src-tauri/src/typst.rs` as "trailing whitespace"**
-Those files are stored with CRLF in the index (`git ls-files --eol` says `i/crlf w/crlf`) while most of the tree is LF in the index, and the repository's `core.whitespace` does not include `cr-at-eol`. The carriage return at the end of each added line is therefore read as trailing whitespace even though the text is clean. Do not normalise the file or strip the CR — that rewrites every line. Confirm with `[IO.File]::ReadAllText` if in doubt; zero LF-only line endings means the whitespace warning is the line-ending policy, not the patch.
+**`git diff --check` reports every added line of `src-tauri/src/settings.rs`, `src-tauri/src/typst.rs`, `scripts/font-sources.json` or `src/assets/fonts/fonts.json` as "trailing whitespace"**
+Those files are stored with CRLF in the index (`git ls-files --eol` says `i/crlf w/crlf`) while most of the tree is LF in the index, and the repository's `core.whitespace` does not include `cr-at-eol`. The carriage return at the end of each added line is therefore read as trailing whitespace even though the text is clean. This applies to any file whose index form is CRLF, including the two font manifests. Do not normalise the file or strip the CR — that rewrites every line. Confirm with `[IO.File]::ReadAllText` if in doubt; zero LF-only line endings means the whitespace warning is the line-ending policy, not the patch.
 
 **`document.fonts.check()` is false for a font that exists**
 Web fonts load lazily. `check()` reports whether a face is *active*, not whether
@@ -2316,6 +2316,12 @@ The isolated test instance had not actually exited (its close handler was still 
 
 **A modal closes with Escape but focus lands on `document.body` (`{"focus":false,"dialog":false,"active":""}`)**
 `document.activeElement` can be `<body>` after another panel closes without restoring focus. A "previous element is connected and has client rects" check treats body as restorable, and `body.focus()` leaves the keyboard nowhere; the statistics dialog passed when the editor was focused and failed only after Preferences had been opened and closed. Exclude `document.body` and `document.documentElement`, and use the shell's editor fallback when the previous target is gone or invisible. The same applies to a just-hidden Preferences button, whose rects are empty.
+
+**`KeyError: 'uni02C8'` (or `uni0329`, `CR`) from `fontTools/subset/__init__.py` when pinning Playfair's axes**
+`subset-fonts.py --instance '{"opsz":17,"wdth":100}'` on `Playfair[opsz,wdth,wght].ttf` failed in `_dict_subset`: the `gvar` table of the instanced font has no variation entry for some glyphs the subset still requests. This is a fontTools instancing/subsetting order problem, not a bad source pin or a bad axis value. Subset first and instantiate afterwards (`--instance-after-subset`, which `fetch-fonts.ps1` passes when `font-sources.json` says `instanceAfterSubset: true`). The retained glyphs and the required features are the same.
+
+**Two identical `subset-fonts.py` runs print different SHA-256 values, and the recorded pin looks wrong**
+`fontTools` stamps `head.modified` with the current time on every save, so the same source, axes and features produce a few bytes' difference and a different digest; `fonts.json` then records a timestamp rather than the content. Set `font.recalcTimestamp = False` before saving, which keeps the source's timestamp. The script now does this, so a pin can be reproduced; existing files generated before the change still carry their original stamp and need no rewrite.
 
 ## Adding a preference, end to end
 

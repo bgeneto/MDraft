@@ -714,7 +714,7 @@ check(
 // adjustments, not part of a preset's identity. Editing one must leave the
 // picker on the preset, and each preset must remember its own sizes across a
 // round trip. An unvisited preset starts at its own defaults: Serif
-// 15/17/88/98, Renaissance 15/19/80/90, Editorial 15/17/90/96, Bauhaus
+// 15/17/88/98, Renaissance 15/19/80/90, Editorial 15/19/80/96, Bauhaus
 // 15/17/90/93, Notebook 15/17/86/93 and System 15/16/95/100 (editor/preview/
 // math/code).
 const presetSizes = await evaluate(`(async () => {
@@ -854,6 +854,8 @@ check(
     presetSizes.renaissance?.math === "80" &&
     presetSizes.renaissance?.code === "90" &&
     presetSizes.renaissance?.oldstyle === true &&
+    presetSizes.editorial?.body === "19" &&
+    presetSizes.editorial?.math === "80" &&
     presetSizes.editorial?.code === "96" &&
     presetSizes.bauhaus?.code === "93" &&
     presetSizes.notebook?.code === "93",

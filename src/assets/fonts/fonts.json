@@ -197,26 +197,26 @@
       ]
     },
     {
-      "id": "bodoni-moda",
-      "name": "Bodoni Moda",
+      "id": "playfair",
+      "name": "Playfair",
       "tag": "google-fonts@47d54ca",
       "source": "https://github.com/google/fonts",
       "licence": "OFL-1.1",
-      "licenceFile": "licenses/bodoni-moda-OFL.txt",
+      "licenceFile": "licenses/playfair-OFL.txt",
       "files": [
         {
-          "file": "BodoniModa-Variable.woff2",
+          "file": "Playfair-Variable.woff2",
           "style": "normal",
-          "weight": "400 900",
-          "bytes": 60064,
-          "sha256": "c53e933337c148399c9bfc50cd2340b2ddd01b72f664b016336bb0f1367adfcb"
+          "weight": "300 900",
+          "bytes": 103372,
+          "sha256": "c04a52207da05034e4d488e25019b69f88aa8577340523413fd416dd773ab29b"
         },
         {
-          "file": "BodoniModa-Variable-Italic.woff2",
+          "file": "Playfair-Variable-Italic.woff2",
           "style": "italic",
-          "weight": "400 900",
-          "bytes": 68980,
-          "sha256": "d67b601dd4ec47bfae7680ce2152eb48e651e24a9c85239b2c0c2dffda00e437"
+          "weight": "300 900",
+          "bytes": 116760,
+          "sha256": "b1615ee12681b9f3e51476d886b0e0708e0824645bc7a83d96db6fa20de9c028"
         }
       ]
     },

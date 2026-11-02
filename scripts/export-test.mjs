@@ -535,7 +535,7 @@ if (pdfButton === "available") {
       "Fira Code",
       "EB Garamond",
       "IBM Plex Mono",
-      "Bodoni Moda",
+      "Playfair",
       "Archivo",
       "Jost",
       "Azeret Mono",
