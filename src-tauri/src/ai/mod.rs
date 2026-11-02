@@ -9,6 +9,7 @@
 pub mod limits;
 pub mod naming;
 pub mod prompt;
+pub mod prompts_file;
 pub mod provider;
 pub mod secret;
 pub mod stream;
@@ -74,6 +75,64 @@ pub struct AiKeyStatus {
 #[serde(rename_all = "camelCase")]
 pub struct AiModelsReply {
     pub models: Vec<String>,
+}
+
+/// Where the reader's prompt overrides live: beside `settings.json`, so the
+/// portable build's directory override covers it with no extra work.
+pub(crate) fn prompts_path(state: &AppState) -> std::path::PathBuf {
+    state.config_file.with_file_name(prompts_file::FILE_NAME)
+}
+
+/// What the Preferences panel says about the prompt file.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiPromptsStatus {
+    pub path: String,
+    pub exists: bool,
+    /// Sections that differ from the built-in prompt.
+    pub custom: usize,
+    /// Sections the file can carry: the preamble, every action and the filename
+    /// prompt.
+    pub total: usize,
+    /// Why the file could not be used, when it could not.
+    pub error: Option<String>,
+}
+
+/// Whether the reader has edited any prompt, and where the file is.
+///
+/// Read-only on purpose: opening Preferences must not create a file.
+#[tauri::command]
+pub fn ai_prompts_status(state: State<'_, AppState>) -> AiPromptsStatus {
+    let path = prompts_path(&state);
+    let exists = path.is_file();
+    let (custom, error) = if exists {
+        match prompts_file::load(&path) {
+            Ok(overrides) => (overrides.customised(), None),
+            Err(message) => (0, Some(message)),
+        }
+    } else {
+        (0, None)
+    };
+    AiPromptsStatus {
+        path: path.to_string_lossy().to_string(),
+        exists,
+        custom,
+        total: prompts_file::sections().len(),
+        error,
+    }
+}
+
+/// Write every built-in prompt to the file, replacing what is there.
+///
+/// Two callers: opening the file for the first time, and **Reset prompts to
+/// defaults**. Reset is the recovery path for an edit that broke an action, so
+/// it must work without reading the old content — this writes from the
+/// constants and never parses what it replaces.
+#[tauri::command]
+pub fn ai_export_prompts(state: State<'_, AppState>) -> Result<String, String> {
+    let path = prompts_path(&state);
+    prompts_file::write_defaults(&path)?;
+    Ok(path.to_string_lossy().to_string())
 }
 
 fn status_for(endpoint: &str, source: secret::KeySource, warning: Option<String>) -> AiKeyStatus {
@@ -234,6 +293,7 @@ pub async fn ai_complete(
     let prepared = prompt::prepare(
         &request,
         AiLimits::from_context_tokens(settings.ai_context_tokens),
+        &prompts_file::load(&prompts_path(&state))?,
     )?;
     // No key is not a configuration error. Sending no auth header is the only
     // accurate request for an endpoint whose operator never configured one;

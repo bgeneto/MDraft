@@ -158,6 +158,17 @@ Markdown document active.*
   Preferences also sets a **Context limit**, measured in the same approximate
   tokens as the status bar: 8,192 by default, raised to at most 32,768. A
   rewrite beyond it is refused; Ask and Continue trim to fit.
+  Every prompt is yours to change: **Preferences › AI Assistant › Edit prompts**
+  opens `ai-prompts.md` beside `settings.json` as an ordinary Markdown document,
+  with one section per action and the shared preamble. Edit the wording, press
+  Ctrl+S, and the next Generate uses it; delete a section to fall back to the
+  built-in text. `{markup}`, `{syntax_rule}` and each action's own placeholders
+  (tone, target language) are filled in, a placeholder the action cannot fill is
+  reported with its line, and the wrapper tag that makes an answer insertable is
+  added by the application, so an edit cannot break streaming. **Reset prompts to
+  defaults** restores every section from the built-in text — including a file
+  that no longer parses — and is refused while the prompts tab has unsaved
+  changes.
   **Suggest file names when saving** is a second opt-in: an untitled document is
   normally named from its own text — an explicit title, the first heading, then
   the first line — and with this option on, the assistant may propose the name

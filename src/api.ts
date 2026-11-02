@@ -885,6 +885,34 @@ export const aiCancel = (id: string) => invoke<void>("ai_cancel", { id });
 
 export const aiCancelAll = () => invoke<void>("ai_cancel_all");
 
+/** What the AI Assistant's prompt file currently holds. */
+export interface AiPromptsStatus {
+  path: string;
+  exists: boolean;
+  /** Sections that differ from the built-in prompt. */
+  custom: number;
+  /** Sections the file can carry: the preamble, every action and the name prompt. */
+  total: number;
+  /** Why the file could not be used, when it could not. */
+  error: string | null;
+}
+
+/**
+ * Whether the reader has edited any prompt, and where the file is.
+ *
+ * Read-only: opening Preferences must not create `ai-prompts.md`.
+ */
+export const aiPromptsStatus = () => invoke<AiPromptsStatus>("ai_prompts_status");
+
+/**
+ * Write every built-in prompt to `ai-prompts.md`, replacing what is there.
+ *
+ * This is both "open the file for the first time" and **Reset prompts to
+ * defaults**. It writes from the Rust constants and never parses the old file,
+ * so it is the way back from an edit that no longer parses.
+ */
+export const aiExportPrompts = () => invoke<string>("ai_export_prompts");
+
 /**
  * Ask the configured endpoint for a file-name stem.
  *

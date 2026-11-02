@@ -1009,7 +1009,7 @@ function stageBinary(binary, stage) {
 // from an earlier run changes what they measure. The originals are moved aside
 // and put back in the finally, so running the suite does not cost the developer
 // their preferences.
-const USER_STATE = ["settings.json", ".window-state.json", "recovery"];
+const USER_STATE = ["settings.json", ".window-state.json", "recovery", "ai-prompts.md"];
 
 function takeUserState(destination) {
   const saved = [];

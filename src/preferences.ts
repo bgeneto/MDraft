@@ -56,6 +56,12 @@ export interface PreferencesHost {
   chooseStyleReference(current: string): Promise<string>;
   /** Installed speech-synthesis voices; empty until the list has loaded. */
   readAloudVoices(): VoiceOption[];
+  /** Open `ai-prompts.md`, creating it from the built-in prompts first. */
+  openAiPrompts(): Promise<void>;
+  /** Rewrite `ai-prompts.md` from the built-in prompts. Throws when a dirty tab would lose work. */
+  resetAiPrompts(): Promise<void>;
+  /** Whether the open prompts file has unsaved changes. */
+  aiPromptsDirty(path: string): boolean;
 }
 
 export interface PreferencesHandle {
@@ -189,6 +195,9 @@ interface AiUiState {
   error: string | null;
   message: string | null;
   loading: boolean;
+  /** The prompt file's state; null until the AI section has asked. */
+  prompts: api.AiPromptsStatus | null;
+  promptsLoading: boolean;
 }
 
 /** Everything a row can be found by, lower-cased once. */
@@ -1178,6 +1187,67 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
     await loadModels(provider, baseUrl, model);
   };
 
+  /**
+   * Open the reader's prompt file, creating it from the built-ins on first use.
+   *
+   * The file is an ordinary Markdown document: it opens in a tab, so it is
+   * highlighted, spell-checked, searchable and saved with Ctrl+S like any other.
+   */
+  const openPrompts = async (): Promise<void> => {
+    ai.error = null;
+    try {
+      await host.openAiPrompts();
+    } catch (error) {
+      ai.error = String(error);
+    }
+    // The section re-reads the file on the next render, which the caller runs
+    // after the action settles.
+    ai.prompts = null;
+    refresh();
+  };
+
+  /**
+   * Put every prompt back to the built-in text.
+   *
+   * This is the way back from an edit that broke an action or the file's syntax:
+   * the backend writes from its own constants, so it works even when the file no
+   * longer parses. The only refusal is a dirty prompts tab, which would lose
+   * work the reader has not saved.
+   */
+  const resetPrompts = async (): Promise<void> => {
+    ai.error = null;
+    try {
+      await host.resetAiPrompts();
+      ai.message = "Prompts reset to the built-in text.";
+    } catch (error) {
+      ai.error = String(error);
+    }
+    ai.prompts = null;
+    refresh();
+  };
+
+  /**
+   * What the prompt file is doing right now.
+   *
+   * Three states matter: no file (built-ins), a file with some sections changed,
+   * and a file that cannot be used. The last one names the line, because that is
+   * the only way the reader can repair it.
+   */
+  const promptsNote = (): string => {
+    const prompts = ai.prompts;
+    if (!prompts) return "Reading ai-prompts.md…";
+    if (prompts.error) {
+      return `${prompts.error} Reset prompts to defaults restores the file.`;
+    }
+    if (!prompts.exists) {
+      return "Using the built-in prompts. Edit prompts creates ai-prompts.md from them.";
+    }
+    if (prompts.custom === 0) {
+      return "Using the built-in prompts; every section matches the generated file.";
+    }
+    return `${prompts.custom} of ${prompts.total} prompts customised. Saved changes take effect on the next Generate. File: ${prompts.path}`;
+  };
+
   const offered =
     ai.models.length > 1 ? `one of the ${ai.models.length} fetched models` : "a fetched model";
   const clearedNote =
@@ -1305,6 +1375,27 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
       suffix: "tokens",
       get: () => s().aiContextTokens ?? 8_192,
       set: (value) => host.update({ aiContextTokens: value }),
+    },
+    { kind: "heading", label: "Prompts" },
+    {
+      kind: "button",
+      label: "Prompts",
+      text: "Edit prompts…",
+      help: "Opens ai-prompts.md in a tab: one section per action, each in a fenced block. Delete a section to use the built-in prompt for it. {markup}, {syntax_rule} and the action's own placeholders are filled in; the wrapper tag that makes an answer insertable is added by the application and is not part of the file.",
+      action: openPrompts,
+    },
+    {
+      kind: "button",
+      label: "",
+      text: "Reset prompts to defaults",
+      help: "Rewrites ai-prompts.md with the built-in prompts, and is the way back from an edit that no longer parses. Refused while the prompts tab has unsaved changes, so nothing is lost without a save first.",
+      disabled: () => ai.prompts !== null && host.aiPromptsDirty(ai.prompts.path),
+      action: resetPrompts,
+    },
+    {
+      kind: "note",
+      label: "Prompts file",
+      text: promptsNote(),
     },
     {
       kind: "note",
@@ -1811,6 +1902,8 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
     error: null,
     message: null,
     loading: false,
+    prompts: null,
+    promptsLoading: false,
   };
   let activeId = buildSections(host, ai, () => render())[0].id;
   let query = "";
@@ -1836,6 +1929,28 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       ai.endpoint = endpoint;
     } finally {
       ai.loading = false;
+    }
+    if (activeId === "ai" && !overlay.hidden) render();
+  }
+
+  /**
+   * Ask whether the reader has edited a prompt, and whether the file still
+   * parses.
+   *
+   * Same rule as the key status: only while the AI section is on screen. A file
+   * that does not parse is reported here rather than silently ignored, because
+   * the next Generate would otherwise fail with a message they had no way to see
+   * coming.
+   */
+  async function refreshPromptsStatus(): Promise<void> {
+    ai.promptsLoading = true;
+    try {
+      ai.prompts = await api.aiPromptsStatus();
+    } catch (error) {
+      ai.prompts = null;
+      ai.error = String(error);
+    } finally {
+      ai.promptsLoading = false;
     }
     if (activeId === "ai" && !overlay.hidden) render();
   }
@@ -2228,6 +2343,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       const settings = host.settings();
       const endpoint = `${settings.aiProvider}|${settings.aiBaseUrl}`;
       if (ai.endpoint !== endpoint && !ai.loading) void refreshAiStatus();
+      if (ai.prompts === null && !ai.promptsLoading) void refreshPromptsStatus();
     }
 
     if (section.id === "typography" && systemFamilies === null) {
@@ -2321,6 +2437,10 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
     // A failed scan is retried only when the panel is reopened, never from the
     // redraw that reports the failure.
     if (systemFamilies === null) systemFontsAttempted = false;
+    // The prompt file is an answer from outside the panel — the reader may have
+    // saved it in its tab since the last time this opened — so it is re-read on
+    // every open rather than trusted from the previous one.
+    ai.prompts = null;
     render();
     layoutPanel();
     searchEl.focus();
