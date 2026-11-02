@@ -2350,7 +2350,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       const field = document.createElement("div");
       field.className = "prefs-field";
       const combo = document.createElement("div");
-      combo.className = "prefs-combo";
+      combo.className = "combo prefs-combo";
       combo.append(input);
 
       const note = row.fieldNote ? document.createElement("p") : null;

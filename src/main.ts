@@ -106,6 +106,7 @@ import {
 import { createPreferences, type PreferencesHandle } from "./preferences";
 import { createAssistant, type AssistantHandle } from "./ai/assistant";
 import { captureContext, resolveAiLanguage } from "./ai/context";
+import { recordUsage as recordActionUsage } from "./ai/usage";
 import { createRecoveryScheduler } from "./recovery";
 import { createSessionStore, pathKey, type Session } from "./sessions";
 import { planRestore, rememberTabs, type RememberedTabs } from "./tab-restore";
@@ -1037,8 +1038,20 @@ function setTheme(mode: api.ThemeMode): void {
   scheduleRender(true);
 }
 
-/** Apply a patch from the Preferences panel and refresh anything it affects. */
-function applySettingsPatch(patch: Partial<api.Settings>): void {
+/**
+ * Apply a patch from the Preferences panel and refresh anything it affects.
+ *
+ * `effects: false` is for a counter no other surface displays — the AI action
+ * usage — so recording a use does not re-apply the theme, re-measure the
+ * layout or re-read the assistant's configuration. The write itself still goes
+ * through this one function, so `settings` and the queued `persist()` never
+ * disagree about what the current values are.
+ */
+function applySettingsPatch(
+  patch: Partial<api.Settings>,
+  options: { effects?: boolean } = {},
+): void {
+  const effects = options.effects !== false;
   const affectsRendering =
     patch.enableMath !== undefined ||
     patch.enableMermaid !== undefined ||
@@ -1047,9 +1060,12 @@ function applySettingsPatch(patch: Partial<api.Settings>): void {
     patch.syntaxTheme !== undefined;
 
   settings = { ...settings, ...patch };
-  applyTheme();
-  applyLayout();
+  if (effects) {
+    applyTheme();
+    applyLayout();
+  }
   persist();
+  if (!effects) return;
   assistant?.sync();
 
   if (patch.autoClosePairs !== undefined || patch.autoCloseTags !== undefined) {
@@ -6619,6 +6635,17 @@ async function boot(): Promise<void> {
     openSettings: () => preferences.openAt("ai"),
     setEnabled: (enabled) => applySettingsPatch({ aiEnabled: enabled }),
     documentName: () => doc.name,
+    usage: () => settings.aiActionUsage ?? [],
+    // A completed request is the only thing that moves *Most used*. The quiet
+    // patch skips the layout/theme work that a preference change needs, because
+    // no surface but the palette reads this counter.
+    recordUsage: (action) =>
+      applySettingsPatch(
+        {
+          aiActionUsage: recordActionUsage(settings.aiActionUsage ?? [], action),
+        },
+        { effects: false },
+      ),
     estimateTokens: (text) => api.countTokens(text),
   });
 

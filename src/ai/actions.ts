@@ -7,7 +7,16 @@
 
 import type { AiActionId, DocumentLanguage } from "../api";
 
-export type AiGroup = "mostUsed" | "write" | "refine" | "understand" | "transform";
+export type AiGroup = "write" | "refine" | "understand" | "transform";
+
+/**
+ * A group as the palette shows it.
+ *
+ * `mostUsed` is not a catalog membership: it is the derived shortcut section at
+ * the top, computed from recorded use (`src/ai/usage.ts`). Every action belongs
+ * to exactly one real group.
+ */
+export type AiGroupKey = "mostUsed" | AiGroup;
 
 export type AiParameter = "none" | "tone" | "language" | "markup";
 
@@ -39,9 +48,9 @@ export interface AiActionSpec {
   apply: AiApply;
 }
 
-export const GROUP_ORDER: AiGroup[] = ["mostUsed", "write", "refine", "understand", "transform"];
+export const GROUP_ORDER: AiGroupKey[] = ["mostUsed", "write", "refine", "understand", "transform"];
 
-export const GROUP_LABELS: Record<AiGroup, string> = {
+export const GROUP_LABELS: Record<AiGroupKey, string> = {
   mostUsed: "Most used",
   write: "Write",
   refine: "Refine",
@@ -49,20 +58,19 @@ export const GROUP_LABELS: Record<AiGroup, string> = {
   transform: "Transform",
 };
 
-export const TONES = ["Professional", "Formal", "Casual", "Confident", "Friendly", "Persuasive"];
+/** How many rows the derived *Most used* section shows. */
+export const MOST_USED_LIMIT = 3;
 
-export const LANGUAGES = [
-  "English",
-  "Portuguese",
-  "Spanish",
-  "French",
-  "German",
-  "Italian",
-  "Japanese",
-  "Chinese",
-  "Arabic",
-  "Russian",
-];
+/**
+ * What the shortcut section shows before anything has been recorded.
+ *
+ * These are the three actions the palette used to pin there, so a fresh profile
+ * looks the same as before. Once three other actions have a recorded use they
+ * fill the section instead.
+ */
+export const DEFAULT_MOST_USED: AiActionId[] = ["continue", "improve", "ask"];
+
+export const TONES = ["Professional", "Formal", "Casual", "Confident", "Friendly", "Persuasive"];
 
 export const MARKUPS: { id: DocumentLanguage; label: string }[] = [
   { id: "markdown", label: "Markdown" },
@@ -75,7 +83,7 @@ export const ACTIONS: AiActionSpec[] = [
   {
     id: "continue",
     label: "Continue writing",
-    group: "mostUsed",
+    group: "write",
     description: "Write the next passage in your voice",
     keywords: ["continue", "next", "complete", "carry on", "escrever"],
     icon: '<path d="M4 20l6.5-6.5"/><path d="M13.5 4.5l6 6L9 21H3v-6z"/><path d="M14.5 3.5l6 6"/>',
@@ -85,7 +93,7 @@ export const ACTIONS: AiActionSpec[] = [
   {
     id: "improve",
     label: "Improve writing",
-    group: "mostUsed",
+    group: "refine",
     description: "Proofread and polish the selected passage",
     keywords: ["improve", "proofread", "grammar", "spelling", "revise", "revisar"],
     icon: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/>',
@@ -95,7 +103,7 @@ export const ACTIONS: AiActionSpec[] = [
   {
     id: "ask",
     label: "Ask AI…",
-    group: "mostUsed",
+    group: "understand",
     description: "Ask about the selection, or ask anything",
     keywords: ["ask", "question", "chat", "custom", "perguntar"],
     icon: '<path d="M21 12a8.5 8.5 0 0 1-8.5 8.5H4l3-3A8.5 8.5 0 1 1 21 12z"/><path d="M8.5 11h7M8.5 14.5h4.5"/>',
@@ -249,14 +257,29 @@ export function searchActions(
   });
 }
 
-/** Group a filtered list while keeping the catalog's group order. */
+/**
+ * Group a filtered list while keeping the palette's group order.
+ *
+ * `mostUsed` is supplied by the caller (`rankMostUsed`) and intersected with
+ * `actions` by id, so a filtered list never shows a shortcut it also shows in
+ * its own category. The shortcuts are deduplicated and capped by the caller.
+ */
 export function groupedActions(
   actions: readonly AiActionSpec[],
-): { group: AiGroup; label: string; actions: AiActionSpec[] }[] {
+  mostUsed: readonly AiActionSpec[] = [],
+): { group: AiGroupKey; label: string; actions: AiActionSpec[] }[] {
+  const present = new Set(actions.map((action) => action.id));
+  const seen = new Set<AiActionId>();
+  const shortcuts: AiActionSpec[] = [];
+  for (const action of mostUsed) {
+    if (!present.has(action.id) || seen.has(action.id)) continue;
+    seen.add(action.id);
+    shortcuts.push(action);
+  }
   return GROUP_ORDER.map((group) => ({
     group,
     label: GROUP_LABELS[group],
-    actions: actions.filter((action) => action.group === group),
+    actions: group === "mostUsed" ? shortcuts : actions.filter((action) => action.group === group),
   })).filter((entry) => entry.actions.length > 0);
 }
 
