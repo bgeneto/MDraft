@@ -3799,31 +3799,45 @@ body {
   line-height: 1.55;
 }
 
-.prefs-combo {
+/* The structural box every searchable combo shares. Each surface supplies its
+   own width: Preferences a 420 px row, the AI panel its share of the one line it
+   has beside Generate. */
+.combo {
   position: relative;
   display: flex;
-  width: 100%;
-  max-width: 420px;
   min-width: 0;
 }
 
-/* The caret sits inside the field, the way a native select's arrow does, so
-   the control keeps the same 420 px edge as every other Preferences input. */
-.prefs-combo input {
+.prefs-combo {
+  width: 100%;
+  max-width: 420px;
+}
+
+.ai-param-combo {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The caret sits inside the field, the way a native select's arrow does, so the
+   control keeps the same edge as every other input in its row. */
+.combo input {
   flex: 1;
   min-width: 0;
   width: 100%;
   max-width: none;
   padding-right: 34px;
+}
+
+.prefs-combo input {
   border-radius: 4px;
 }
 
-.prefs-combo input:focus,
-.prefs-combo:focus-within input {
+.combo input:focus,
+.combo:focus-within input {
   border-color: var(--accent);
 }
 
-.prefs-combo-toggle {
+.combo-toggle {
   position: absolute;
   top: 2px;
   right: 2px;
@@ -3840,24 +3854,24 @@ body {
   cursor: pointer;
 }
 
-.prefs-combo-toggle:hover {
+.combo-toggle:hover {
   background: var(--active-line);
   color: var(--fg);
 }
 
-.prefs-combo-toggle:focus-visible {
+.combo-toggle:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
 
-.prefs-combo-toggle[aria-expanded="true"] {
+.combo-toggle[aria-expanded="true"] {
   background: var(--active-line);
   color: var(--fg);
 }
 
-/* The list is appended to the body and fixed to the field: the Preferences
-   content scrolls, and an absolute child would be clipped at its bottom edge. */
-.prefs-combo-popup {
+/* The list is appended to the body and fixed to the field: both surfaces scroll
+   their content, and an absolute child would be clipped at its bottom edge. */
+.combo-popup {
   position: fixed;
   z-index: 120;
   padding: 4px;
@@ -3872,36 +3886,36 @@ body {
   font-size: 13px;
 }
 
-[data-theme="dark"] .prefs-combo-popup {
+[data-theme="dark"] .combo-popup {
   box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55);
 }
 
-.prefs-combo-popup::-webkit-scrollbar {
+.combo-popup::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
-.prefs-combo-popup::-webkit-scrollbar-track {
+.combo-popup::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.prefs-combo-popup::-webkit-scrollbar-thumb {
+.combo-popup::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
   border-radius: 8px;
   background: var(--scrollbar-thumb);
   background-clip: padding-box;
 }
 
-.prefs-combo-popup::-webkit-scrollbar-thumb:hover {
+.combo-popup::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
   background-clip: padding-box;
 }
 
-.prefs-combo-popup::-webkit-scrollbar-corner {
+.combo-popup::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-.prefs-combo-option {
+.combo-option {
   position: relative;
   overflow: hidden;
   padding: 6px 10px;
@@ -3911,17 +3925,17 @@ body {
   white-space: nowrap;
 }
 
-.prefs-combo-option:hover,
-.prefs-combo-option.is-active {
+.combo-option:hover,
+.combo-option.is-active {
   background: var(--accent-soft);
 }
 
-.prefs-combo-option[aria-selected="true"] {
+.combo-option[aria-selected="true"] {
   padding-right: 32px;
   font-weight: 600;
 }
 
-.prefs-combo-option[aria-selected="true"]::after {
+.combo-option[aria-selected="true"]::after {
   position: absolute;
   top: 50%;
   right: 10px;
@@ -3931,7 +3945,7 @@ body {
   transform: translateY(-50%);
 }
 
-.prefs-combo-empty {
+.combo-empty {
   padding: 6px 10px;
   color: var(--muted);
 }

@@ -11,8 +11,8 @@ import { marked } from "marked";
 
 import * as api from "../api";
 import { writeClipboardText } from "../clipboard";
+import { attachCombo, closeCombo } from "../combo";
 import {
-  LANGUAGES,
   TONES,
   actionById,
   answerLanguage,
@@ -41,6 +41,7 @@ import {
   type Point,
 } from "./context";
 import { diffSummary, wordDiff } from "./diff";
+import { rankMostUsed } from "./usage";
 import {
   MAX_AI_HISTORY,
   formatHistoryAge,
@@ -49,6 +50,7 @@ import {
   rememberRequest,
   type AiHistoryEntry,
 } from "./history";
+import { LANGUAGES } from "./languages";
 
 const BUTTON_SIZE = 40;
 const PALETTE_WIDTH = 340;
@@ -104,6 +106,16 @@ export interface AssistantHost {
   setEnabled(enabled: boolean): void;
   /** The name shown in a history row: the tab's document name. */
   documentName(): string;
+  /**
+   * Per-action usage behind the palette's *Most used* group. Empty when nothing
+   * has been recorded yet; the module ranks it and applies the decay.
+   */
+  usage(): readonly api.AiUsageEntry[];
+  /**
+   * Record one completed use of `id`. Called at most once per opened panel; the
+   * host persists it. The assistant never writes settings itself.
+   */
+  recordUsage(action: api.AiActionId): void;
   /**
    * Approximate tokens in a passage, from the same estimator as the status
    * bar. The assistant never implements a second counter.
@@ -377,6 +389,13 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
   let historySeq = 0;
   let paletteOpen = false;
   let panelOpen = false;
+  /**
+   * Whether the open panel has already counted as a use of its action.
+   *
+   * Retry and Regenerate repair the same request, so they must not inflate the
+   * *Most used* score; a fresh panel starts this false again.
+   */
+  let usageCounted = false;
   let activeIndex = 0;
   let rows: { action: AiActionSpec; element: HTMLButtonElement; reason: string | null }[] = [];
   let suppressClick = false;
@@ -831,7 +850,11 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
 
   function renderPalette(): void {
     const results = searchActions(search.value);
-    const groups = groupedActions(results);
+    // The shortcut section is for the unfiltered list only: a search result
+    // must never show the same action twice, once as a shortcut and once in
+    // the category the reader was searching for.
+    const mostUsed = search.value.trim() ? [] : rankMostUsed(host.usage());
+    const groups = groupedActions(results, mostUsed);
     const current = host.capture();
     rows = [];
     activeIndex = 0;
@@ -855,7 +878,9 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
         const row = document.createElement("button");
         row.type = "button";
         row.className = "ai-row";
-        row.id = `ai-row-${spec.id}`;
+        // An action now renders twice: once under *Most used* and once in its
+        // own group. The id must stay unique for `aria-activedescendant`.
+        row.id = `ai-row-${group.group}-${spec.id}`;
         row.setAttribute("role", "option");
         row.setAttribute("aria-selected", "false");
         row.innerHTML = `<span class="ai-row-icon">${iconSvg(spec.icon)}</span><span class="ai-row-text"><span class="ai-row-label"></span><span class="ai-row-description"></span></span>`;
@@ -904,6 +929,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       return;
     }
     closeHistory();
+    closeCombo();
     panelOpen = false;
     panel.hidden = true;
     paletteOpen = true;
@@ -953,6 +979,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     }
     paletteOpen = false;
     palette.hidden = true;
+    closeCombo();
     panelOpen = false;
     panel.hidden = true;
     historyOpen = true;
@@ -1232,6 +1259,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     showChanges = false;
     askHistory = [];
     pendingQuestion = "";
+    usageCounted = false;
     parameterValue = defaultParameter(spec.id, capture.language);
     sentParameter = null;
     state = spec.parameter === "none" ? "idle" : "parameter";
@@ -1253,6 +1281,9 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
   }
 
   function buildParams(): void {
+    // The list is appended to the body, not to this row, so replacing the row
+    // would leave it floating beside a detached field.
+    closeCombo();
     paramsEl.replaceChildren();
     if (!action || action.parameter === "none") {
       paramsEl.hidden = true;
@@ -1260,11 +1291,18 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     }
     paramsEl.hidden = false;
 
+    if (action.id === "translate") {
+      paramsEl.append(translateRow(), generateButton());
+      return;
+    }
+
+    // Tone and Convert are short closed lists: a native select is what every
+    // Preferences enumeration uses, and it brings the platform's own keyboard
+    // behaviour with it.
     const label = document.createElement("label");
     label.className = "ai-param";
-    let control: HTMLSelectElement | HTMLInputElement;
+    const select = document.createElement("select");
     if (action.id === "tone") {
-      const select = document.createElement("select");
       for (const tone of TONES) {
         const option = document.createElement("option");
         option.value = tone;
@@ -1272,28 +1310,8 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
         select.appendChild(option);
       }
       select.value = parameterValue;
-      select.addEventListener("change", () => setParameter(select.value));
-      control = select;
       label.append("Tone");
-    } else if (action.id === "translate") {
-      const input = document.createElement("input");
-      input.type = "text";
-      input.placeholder = "Target language";
-      input.value = parameterValue;
-      input.spellcheck = false;
-      input.setAttribute("list", "ai-language-list");
-      input.addEventListener("input", () => setParameter(input.value));
-      // A single-line field beside one button: Enter submits, as it would in
-      // any small dialog. Ctrl/Cmd+Enter is Ask's convention for its textarea.
-      input.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" || event.isComposing) return;
-        event.preventDefault();
-        if (state !== "running") startRequest();
-      });
-      control = input;
-      label.append("Translate to");
     } else {
-      const select = document.createElement("select");
       const language = capture?.language ?? "markdown";
       for (const markup of convertTargets(language)) {
         const option = document.createElement("option");
@@ -1305,13 +1323,65 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
         parameterValue = convertTargets(language)[0]?.id ?? "html";
       }
       select.value = parameterValue;
-      select.addEventListener("change", () => setParameter(select.value));
-      control = select;
       label.append("Convert to");
     }
-    control.className = "ai-param-control";
-    label.appendChild(control);
+    select.className = "ai-param-control";
+    select.addEventListener("change", () => setParameter(select.value));
+    label.append(select);
+    paramsEl.append(label, generateButton());
+  }
 
+  /**
+   * The Translate target: free text with the language list behind it.
+   *
+   * A `<label>` cannot wrap the field and its caret together — a `<button>` is
+   * labelable too, so a click on the caption could activate either — so the
+   * caption is explicit here. Tone and Convert keep their label-wrapped select.
+   */
+  function translateRow(): HTMLElement {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.id = "ai-target-language";
+    input.placeholder = "Target language";
+    input.value = parameterValue;
+    input.className = "ai-param-control";
+    input.addEventListener("input", () => setParameter(input.value));
+
+    const caption = document.createElement("label");
+    caption.className = "ai-param-caption";
+    caption.htmlFor = input.id;
+    caption.textContent = "Translate to";
+
+    const combo = document.createElement("div");
+    combo.className = "combo ai-param-combo";
+    combo.append(
+      input,
+      attachCombo({
+        input,
+        label: "Target language",
+        listLabel: "Suggested languages",
+        toggleLabel: "Show suggested languages",
+        entries: () => LANGUAGES,
+        emptyLabel: "No languages to suggest.",
+        noMatchLabel: (query) => `No match — press Enter to translate into “${query.trim()}”.`,
+        choose: (value) => setParameter(value),
+        // Enter on a highlighted language chooses it. Enter on free text is the
+        // only submit gesture a single-line field needs, the way it would be in
+        // any small dialog; Ctrl/Cmd+Enter is Ask's convention for its textarea.
+        accept: () => {
+          if (state !== "running") startRequest();
+        },
+        growToFit: true,
+      }),
+    );
+
+    const row = document.createElement("div");
+    row.className = "ai-param";
+    row.append(caption, combo);
+    return row;
+  }
+
+  function generateButton(): HTMLButtonElement {
     const generate = document.createElement("button");
     generate.type = "button";
     generate.className = "ai-generate";
@@ -1320,16 +1390,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       if (state === "running") cancel();
       else startRequest();
     });
-    paramsEl.append(label, generate);
-
-    const list = document.createElement("datalist");
-    list.id = "ai-language-list";
-    for (const language of LANGUAGES) {
-      const option = document.createElement("option");
-      option.value = language;
-      list.appendChild(option);
-    }
-    paramsEl.appendChild(list);
+    return generate;
   }
 
   function updateGenerate(): void {
@@ -1906,6 +1967,15 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
         answerTruncated = event.truncated;
         answerStopped = event.stopped;
         state = "done";
+        // One opened panel counts as one use of its action. `done` is the
+        // honest moment: Rust sends `started` before the HTTP call, so a 401 or
+        // an unreachable host would score a request that never answered, while
+        // a stopped answer was still a request the reader made. Retry and
+        // Regenerate stay inside this panel and therefore count once.
+        if (!usageCounted && action) {
+          usageCounted = true;
+          host.recordUsage(action.id);
+        }
         // The answer is remembered even if the palette or the history list is
         // covering the panel: opening another surface must not lose it.
         recordHistory();
@@ -1980,6 +2050,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
 
   function close(): void {
     closeButtonMenu();
+    closeCombo();
     cancel();
     requestId = null;
     closeHistory();

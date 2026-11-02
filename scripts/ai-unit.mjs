@@ -8,8 +8,10 @@ import assert from "node:assert/strict";
 
 import {
   ACTIONS,
+  DEFAULT_MOST_USED,
   GROUP_ORDER,
   answerLanguage,
+  actionById,
   convertTargets,
   defaultParameter,
   groupedActions,
@@ -42,6 +44,16 @@ import {
   rememberRequest,
 } from "../src/ai/history.ts";
 import { filterModelIds } from "../src/model-combo.ts";
+import { filterEntries } from "../src/combo.ts";
+import { LANGUAGES, filterLanguages } from "../src/ai/languages.ts";
+import {
+  MAX_USAGE_ENTRIES,
+  USAGE_HALF_LIFE_MS,
+  decay,
+  rankMostUsed,
+  recordUsage,
+  sanitizeUsage,
+} from "../src/ai/usage.ts";
 
 let passed = 0;
 let failed = 0;
@@ -95,15 +107,25 @@ console.log("\nCatalog");
 equal("fourteen actions", ACTIONS.length, 14);
 equal("every action id is unique", new Set(ACTIONS.map((action) => action.id)).size, 14);
 equal(
-  "the catalog covers the five groups",
+  "the catalog covers the four real groups",
   [...new Set(ACTIONS.map((action) => action.group))].sort(),
-  [...GROUP_ORDER].sort(),
+  ["refine", "transform", "understand", "write"],
 );
-equal(
-  "Most used keeps the original three first",
-  ACTIONS.filter((action) => action.group === "mostUsed").map((action) => action.id),
-  ["continue", "improve", "ask"],
-);
+equal("the palette order puts the derived group first", GROUP_ORDER, [
+  "mostUsed",
+  "write",
+  "refine",
+  "understand",
+  "transform",
+]);
+equal("the cold-start shortcuts are the three the palette used to pin", DEFAULT_MOST_USED, [
+  "continue",
+  "improve",
+  "ask",
+]);
+equal("Continue writing belongs to Write", actionById("continue")?.group, "write");
+equal("Improve writing belongs to Refine", actionById("improve")?.group, "refine");
+equal("Ask AI belongs to Understand", actionById("ask")?.group, "understand");
 equal(
   "rewrite actions can replace",
   ACTIONS.filter((action) => action.apply === "replace").map((action) => action.id),
@@ -147,9 +169,9 @@ equal(
   ["table"],
 );
 equal(
-  "the Understand group finds its four actions",
+  "the Understand group finds all five actions",
   searchActions("understand").map((a) => a.id),
-  ["summarize", "explain", "keyPoints", "critique"],
+  ["ask", "summarize", "explain", "keyPoints", "critique"],
 );
 equal(
   "a synonym reaches the action",
@@ -169,8 +191,143 @@ equal(
 equal(
   "grouped output keeps group order",
   groupedActions(searchActions("")).map((group) => group.group),
-  GROUP_ORDER,
+  ["write", "refine", "understand", "transform"],
 );
+
+// ---------------------------------------------------------------------------
+// Most used
+// ---------------------------------------------------------------------------
+
+console.log("\nMost used");
+// One fixed instant: nothing below may depend on the wall clock.
+const NOW = 1_760_000_000_000;
+const nowUsed = (id) => recordUsage([], id, NOW);
+const ids = (entries) => rankMostUsed(entries, NOW).map((action) => action.id);
+
+equal("a fresh profile shows the three defaults", ids([]), ["continue", "improve", "ask"]);
+equal("the section is capped at the limit", ids([]).length, 3);
+equal(
+  "a smaller limit trims the section",
+  rankMostUsed([], NOW, 2).map((a) => a.id),
+  ["continue", "improve"],
+);
+equal("a zero limit shows nothing", rankMostUsed([], NOW, 0), []);
+equal("one use of Summarize puts it first", ids(nowUsed("summarize"))[0], "summarize");
+equal("the defaults fill the rest", ids(nowUsed("summarize")), [
+  "summarize",
+  "continue",
+  "improve",
+]);
+equal("a use starts at one", nowUsed("summarize")[0].score, 1);
+check("a score halves after one half-life", Math.abs(decay(4, USAGE_HALF_LIFE_MS) - 2) < 1e-9);
+check("a clock that went backwards does not age the score", decay(2, -5_000) === 2);
+equal(
+  "a recent habit outranks an older, heavier one",
+  ids([
+    { id: "translate", score: 5, at: NOW - 6 * USAGE_HALF_LIFE_MS },
+    { id: "summarize", score: 1, at: NOW },
+  ]).slice(0, 2),
+  ["summarize", "translate"],
+);
+equal(
+  "an entry that decayed to nothing stops taking a slot",
+  ids([{ id: "translate", score: 1, at: NOW - 20 * USAGE_HALF_LIFE_MS }]),
+  ["continue", "improve", "ask"],
+);
+equal(
+  "equal scores fall back to catalog order",
+  ids([
+    { id: "translate", score: 1, at: NOW },
+    { id: "continue", score: 1, at: NOW },
+  ]),
+  ["continue", "translate", "improve"],
+);
+equal(
+  "a newer equal score goes first",
+  ids([
+    { id: "translate", score: 1, at: NOW - 1_000 },
+    { id: "continue", score: 1, at: NOW },
+  ]).slice(0, 2),
+  ["continue", "translate"],
+);
+
+const shortcuts = rankMostUsed([], NOW);
+equal(
+  "the shortcut group comes first",
+  groupedActions(searchActions(""), shortcuts).map((group) => group.group),
+  ["mostUsed", "write", "refine", "understand", "transform"],
+);
+equal(
+  "the shortcut rows are catalog actions",
+  groupedActions(searchActions(""), shortcuts)[0].actions.map((action) => action.id),
+  ["continue", "improve", "ask"],
+);
+equal(
+  "a shortcut still appears in its own category",
+  groupedActions(searchActions(""), shortcuts)[1].actions.map((action) => action.id),
+  ["continue", "expand", "shorten"],
+);
+equal(
+  "a filtered list drops the shortcut group",
+  groupedActions(searchActions("summ"), shortcuts).map((group) => group.group),
+  ["understand"],
+);
+
+equal("undefined usage is empty", sanitizeUsage(undefined, NOW), []);
+equal(
+  "an id this build does not know is dropped",
+  sanitizeUsage([{ id: "vanish", score: 1, at: NOW }], NOW),
+  [],
+);
+equal(
+  "a duplicate id keeps its strongest score",
+  sanitizeUsage(
+    [
+      { id: "summarize", score: 1, at: NOW },
+      { id: "summarize", score: 3, at: NOW },
+    ],
+    NOW,
+  ),
+  [{ id: "summarize", score: 3, at: NOW }],
+);
+equal(
+  "negative and non-finite scores are dropped",
+  sanitizeUsage(
+    [
+      { id: "continue", score: -1, at: NOW },
+      { id: "improve", score: Number.NaN, at: NOW },
+    ],
+    NOW,
+  ),
+  [],
+);
+equal(
+  "a timestamp far in the future is dropped",
+  sanitizeUsage([{ id: "continue", score: 1, at: NOW + 2 * 24 * 60 * 60 * 1000 }], NOW),
+  [],
+);
+check(
+  "a timestamp slightly ahead is tolerated",
+  sanitizeUsage([{ id: "continue", score: 1, at: NOW + 1_000 }], NOW).length === 1,
+);
+equal("the storage guard matches the backend", MAX_USAGE_ENTRIES, 32);
+check(
+  "a repeat use ages the old score before adding one",
+  Math.abs(
+    recordUsage([{ id: "improve", score: 2, at: NOW - USAGE_HALF_LIFE_MS }], "improve", NOW)[0]
+      .score - 2,
+  ) < 1e-9,
+);
+equal(
+  "recording prunes what has decayed away",
+  recordUsage(
+    [{ id: "translate", score: 0.02, at: NOW - 20 * USAGE_HALF_LIFE_MS }],
+    "summarize",
+    NOW,
+  ).map((entry) => entry.id),
+  ["summarize"],
+);
+equal("an unknown id is not recorded", recordUsage([], "vanish", NOW), []);
 
 // ---------------------------------------------------------------------------
 // Parameters
@@ -606,6 +763,95 @@ equal(
   ["qwen2.5-coder"],
 );
 equal("a search that matches nothing is empty", filterModelIds(["one", "two"], "three"), []);
+
+// ---------------------------------------------------------------------------
+// Shared combo filter
+// ---------------------------------------------------------------------------
+
+console.log("\nShared combo filter");
+
+equal(
+  "an empty query keeps every entry in the caller's order",
+  filterEntries([{ value: "zeta" }, { value: "Alpha" }], "  ").map((entry) => entry.value),
+  ["zeta", "Alpha"],
+);
+equal(
+  "a query matches the value and ignores case",
+  filterEntries([{ value: "zeta" }, { value: "Alpha" }], " ALPH ").map((entry) => entry.value),
+  ["Alpha"],
+);
+equal(
+  "an accented value is found without the accent",
+  filterEntries([{ value: "Español" }], "espanol").map((entry) => entry.value),
+  ["Español"],
+);
+equal(
+  "an accented query finds an unaccented value",
+  filterEntries([{ value: "Espanol" }], "español").map((entry) => entry.value),
+  ["Espanol"],
+);
+equal(
+  "a keyword matches even though it is never displayed",
+  filterEntries([{ value: "Portuguese (Brazil)", keywords: ["pt-BR"] }], "pt-br").map(
+    (entry) => entry.value,
+  ),
+  ["Portuguese (Brazil)"],
+);
+equal(
+  "a label matches even when the value does not",
+  filterEntries([{ value: "a1", label: "Shown name" }], "shown").map((entry) => entry.value),
+  ["a1"],
+);
+equal("a query that matches nothing is empty", filterEntries([{ value: "one" }], "three"), []);
+
+// ---------------------------------------------------------------------------
+// Language suggestions
+// ---------------------------------------------------------------------------
+
+console.log("\nLanguage suggestions");
+
+check("the suggestion table has 34 entries", LANGUAGES.length === 34);
+equal(
+  "the curated head keeps the likely targets first",
+  LANGUAGES.slice(0, 4).map((entry) => entry.value),
+  ["English (US)", "English (UK)", "Portuguese (Brazil)", "Portuguese (Portugal)"],
+);
+equal(
+  "an alias finds one variant",
+  filterLanguages("brasil").map((entry) => entry.value),
+  ["Portuguese (Brazil)"],
+);
+equal(
+  "a short tag finds both variants, in table order",
+  filterLanguages("pt").map((entry) => entry.value),
+  ["Portuguese (Brazil)", "Portuguese (Portugal)"],
+);
+equal(
+  "zh finds both Chinese variants",
+  filterLanguages("zh").map((entry) => entry.value),
+  ["Chinese (Simplified)", "Chinese (Traditional)"],
+);
+equal(
+  "an English word finds the plain label",
+  filterLanguages("mandarin").map((entry) => entry.value),
+  ["Chinese (Simplified)"],
+);
+equal(
+  "an unaccented query finds an accented name",
+  filterLanguages("espanol").map((entry) => entry.value),
+  ["Spanish (Spain)"],
+);
+equal(
+  "an unaccented query finds an accented alias",
+  filterLanguages("turkce").map((entry) => entry.value),
+  ["Turkish"],
+);
+equal("an unknown language matches nothing", filterLanguages("klingon"), []);
+equal(
+  "an empty query lists every suggestion in table order",
+  filterLanguages("").map((entry) => entry.value),
+  LANGUAGES.map((entry) => entry.value),
+);
 
 // ---------------------------------------------------------------------------
 // Assistant markup

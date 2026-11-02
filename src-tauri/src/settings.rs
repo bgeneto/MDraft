@@ -33,6 +33,30 @@ pub(crate) const MAX_FAVORITES: usize = 50;
 /// for a realistic working set, small enough that restoring stays a few reads.
 pub(crate) const MAX_LAST_TABS: usize = 20;
 
+/// Maximum number of palette actions whose usage is remembered.
+///
+/// The catalog has fourteen actions today and the palette shows three; this is
+/// a storage guard for a hand-edited or older file, not a reader-facing limit.
+/// The frontend drops ids this build does not know and prunes what has decayed
+/// to nothing; this side only refuses to grow the list without bound.
+pub(crate) const MAX_AI_USAGE_ENTRIES: usize = 32;
+
+/// One palette action's usage weight behind the *Most used* group.
+///
+/// The frontend owns the decay rule and the ranking (`src/ai/usage.ts`); this
+/// shape only has to round-trip what it wrote. `score` is the decayed count and
+/// `at` the Unix millisecond timestamp that score belongs to, so a stale entry
+/// can be aged without another write.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AiActionUsage {
+    /// An id from the frontend catalog. An unknown one is ignored there, not
+    /// rejected here: Rust has no second copy of the action list to drift.
+    pub id: String,
+    pub score: f64,
+    pub at: u64,
+}
+
 /// One pandoc export target: how to invoke pandoc, and what to do afterwards.
 ///
 /// `arguments` is a token list, not a shell string, and four placeholders are
@@ -528,6 +552,15 @@ pub struct Settings {
     /// Preferences › AI Assistant.
     #[serde(default)]
     pub ai_suggest_filename: bool,
+    /// How often each palette action has been used, for *Most used*.
+    ///
+    /// The palette used to show three fixed actions under that heading. The
+    /// frontend now ranks these entries with a decaying score; this side only
+    /// bounds the list, so a hand-edited file cannot grow it without limit.
+    /// Missing from a file written before the group was derived, which loads as
+    /// an empty list and makes the palette fall back to its defaults.
+    #[serde(default)]
+    pub ai_action_usage: Vec<AiActionUsage>,
 
     // ---- Preferences: Read Aloud -----------------------------------------
     /// Voice the right-click **Read Aloud** commands use.
@@ -620,6 +653,7 @@ impl Default for Settings {
             ai_context_tokens: default_ai_context_tokens(),
             ai_disable_reasoning: false,
             ai_suggest_filename: false,
+            ai_action_usage: Vec::new(),
 
             read_aloud_voice: String::new(),
             read_aloud_rate: default_read_aloud_rate(),
@@ -646,6 +680,98 @@ pub struct AppState {
     /// Keys kept for this session and cancellation handles for in-flight AI
     /// requests. Never written to disk.
     pub ai: crate::ai::AiState,
+}
+
+/// Strongest first, then newest.
+///
+/// The palette ranks with decay at read time; this is only the stored order, so
+/// a capped file keeps the entries that still matter and a diff between two
+/// saves stays small.
+fn sort_ai_usage(entries: &mut [AiActionUsage]) {
+    entries.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.at.cmp(&a.at))
+    });
+}
+
+/// Bound and validate the palette-usage list read from a settings file.
+///
+/// This runs on the raw JSON **before** `Settings` is deserialised. A single
+/// malformed entry must not make `parse_settings` return `None`, because
+/// `AppState::load` then falls back to `Settings::default()` and every other
+/// preference in the file is lost. Anything this build cannot use is dropped
+/// here instead: a non-array value, a missing or over-long id, a negative or
+/// non-finite score, and a timestamp more than a day in the future.
+///
+/// Action ids are the frontend's; this side deliberately does not know them, so
+/// an id that no longer exists survives the load and is ignored by the palette.
+fn normalize_ai_usage(object: &mut serde_json::Map<String, serde_json::Value>) {
+    let Some(value) = object.get("aiActionUsage") else {
+        return;
+    };
+    let Some(list) = value.as_array() else {
+        object.remove("aiActionUsage");
+        return;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(0);
+
+    let mut entries: Vec<AiActionUsage> = Vec::new();
+    for entry in list {
+        let Some(entry) = entry.as_object() else {
+            continue;
+        };
+        let Some(id) = entry.get("id").and_then(|id| id.as_str()) else {
+            continue;
+        };
+        let id = id.trim();
+        if id.is_empty() || id.chars().count() > 64 {
+            continue;
+        }
+        let Some(score) = entry.get("score").and_then(|score| score.as_f64()) else {
+            continue;
+        };
+        // JSON cannot carry NaN or infinity, but it can carry a negative or an
+        // absurd value, and a score only ever grows by one per completed use.
+        if !score.is_finite() || !(0.0..=1.0e9).contains(&score) {
+            continue;
+        }
+        let Some(at) = entry.get("at").and_then(|at| at.as_u64()) else {
+            continue;
+        };
+        if at > now.saturating_add(86_400_000) {
+            continue;
+        }
+        // A hand-edited file can repeat an id. Keep the strongest copy rather
+        // than letting the last one win by accident.
+        match entries.iter_mut().find(|existing| existing.id == id) {
+            Some(existing) if score > existing.score => {
+                existing.score = score;
+                existing.at = at;
+            }
+            Some(_) => {}
+            None => entries.push(AiActionUsage {
+                id: id.to_string(),
+                score,
+                at,
+            }),
+        }
+    }
+
+    sort_ai_usage(&mut entries);
+    entries.truncate(MAX_AI_USAGE_ENTRIES);
+    match serde_json::to_value(entries) {
+        Ok(value) => {
+            object.insert("aiActionUsage".into(), value);
+        }
+        Err(_) => {
+            object.remove("aiActionUsage");
+        }
+    }
 }
 
 /// Deserialize a settings file, carrying the old per-format after-export flags
@@ -721,6 +847,8 @@ fn parse_settings(raw: &str) -> Option<Settings> {
         object.insert("afterCommand".into(), command.into());
     }
 
+    normalize_ai_usage(object);
+
     let mut settings: Settings = serde_json::from_value(value).ok()?;
     // A hand-edited or older file can carry more than the stored limit. Cap it
     // here so a load cannot grow the settings file without bound; the menu then
@@ -771,6 +899,8 @@ impl AppState {
         normalize_favorites(&mut next.favorites);
         next.last_tabs.truncate(MAX_LAST_TABS);
         next.ai_context_tokens = clamp_context_tokens(next.ai_context_tokens);
+        sort_ai_usage(&mut next.ai_action_usage);
+        next.ai_action_usage.truncate(MAX_AI_USAGE_ENTRIES);
         write_json(&self.config_file, &next)?;
         let mut guard = self.settings.lock().map_err(|e| e.to_string())?;
         *guard = next.clone();
@@ -1057,6 +1187,109 @@ mod tests {
         };
         let saved = state.save(next).expect("save settings");
         assert_eq!(saved.ai_context_tokens, 32_768);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ai_action_usage_defaults_empty_and_loads_a_legacy_file() {
+        assert!(Settings::default().ai_action_usage.is_empty());
+        let older =
+            parse_settings(r#"{"theme": "dark"}"#).expect("a file without usage is still settings");
+        assert!(older.ai_action_usage.is_empty());
+        assert_eq!(older.theme, "dark");
+    }
+
+    #[test]
+    fn ai_action_usage_round_trips_through_a_saved_file() {
+        let raw = r#"{"aiActionUsage":[
+            {"id":"continue","score":1,"at":1700000001000},
+            {"id":"summarize","score":2.5,"at":1700000000000}
+        ]}"#;
+        let parsed = parse_settings(raw).expect("usage is additive");
+        assert_eq!(parsed.ai_action_usage.len(), 2);
+        // Stored strongest first, whatever order the file had.
+        assert_eq!(parsed.ai_action_usage[0].id, "summarize");
+        assert_eq!(parsed.ai_action_usage[0].score, 2.5);
+        assert_eq!(parsed.ai_action_usage[1].id, "continue");
+
+        let dir = std::env::temp_dir().join(format!("tt-ai-usage-rt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = AppState {
+            settings: Mutex::new(Settings::default()),
+            config_file: dir.join("settings.json"),
+            export_availability: Mutex::new(ExportAvailability::default()),
+            ai: crate::ai::AiState::default(),
+        };
+        let saved = state.save(parsed).expect("save settings");
+        assert_eq!(saved.ai_action_usage.len(), 2);
+        let text = std::fs::read_to_string(dir.join("settings.json")).unwrap();
+        let reread = parse_settings(&text).expect("the saved file loads");
+        assert_eq!(reread.ai_action_usage, saved.ai_action_usage);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_broken_usage_list_does_not_discard_the_rest_of_the_file() {
+        // `parse_settings` falling back to defaults would lose every other
+        // preference, so a malformed list is dropped on its own.
+        let parsed = parse_settings(
+            r#"{"aiActionUsage": "nope", "theme": "dark", "recentFiles": ["C:\\notes.md"]}"#,
+        )
+        .expect("a malformed usage list must not reset the settings");
+        assert_eq!(parsed.theme, "dark");
+        assert_eq!(parsed.recent_files.len(), 1);
+        assert!(parsed.ai_action_usage.is_empty());
+    }
+
+    #[test]
+    fn unusable_usage_entries_are_dropped() {
+        let raw = r#"{"aiActionUsage":[
+            {"id":"summarize","score":2,"at":1700000000000},
+            {"id":"","score":1,"at":1700000000000},
+            {"id":"continue","score":-1,"at":1700000000000},
+            {"id":"ask","score":1e300,"at":1700000000000},
+            {"id":"improve","score":"2","at":1700000000000},
+            {"id":"tone","score":1,"at":18446744073709551615},
+            {"id":"translate","score":1},
+            {"id":"summarize","score":1,"at":1700000000000},
+            {"id":"summarize","score":3,"at":1700000000000},
+            "junk"
+        ]}"#;
+        let parsed = parse_settings(raw).expect("the usable entries survive");
+        // The repeated id keeps its strongest score, not the last one.
+        assert_eq!(parsed.ai_action_usage.len(), 1);
+        assert_eq!(parsed.ai_action_usage[0].id, "summarize");
+        assert_eq!(parsed.ai_action_usage[0].score, 3.0);
+    }
+
+    #[test]
+    fn saving_caps_the_usage_list_by_score() {
+        let entries: Vec<AiActionUsage> = (0..MAX_AI_USAGE_ENTRIES + 8)
+            .map(|index| AiActionUsage {
+                id: format!("action-{index}"),
+                score: index as f64,
+                at: 1_700_000_000_000,
+            })
+            .collect();
+        let dir = std::env::temp_dir().join(format!("tt-ai-usage-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = AppState {
+            settings: Mutex::new(Settings::default()),
+            config_file: dir.join("settings.json"),
+            export_availability: Mutex::new(ExportAvailability::default()),
+            ai: crate::ai::AiState::default(),
+        };
+        let saved = state
+            .save(Settings {
+                ai_action_usage: entries,
+                ..Settings::default()
+            })
+            .expect("save settings");
+        assert_eq!(saved.ai_action_usage.len(), MAX_AI_USAGE_ENTRIES);
+        assert_eq!(
+            saved.ai_action_usage[0].score,
+            (MAX_AI_USAGE_ENTRIES + 7) as f64
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

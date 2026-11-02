@@ -377,6 +377,15 @@ export interface Settings {
    * only when the text has no title or heading of its own.
    */
   aiSuggestFilename: boolean;
+  /**
+   * Per-action usage behind the palette's *Most used* group.
+   *
+   * Empty on a fresh profile and on a file written before the group was
+   * derived from use. `score` is a decaying count and `at` the Unix
+   * millisecond timestamp it belongs to; `src/ai/usage.ts` owns both the decay
+   * rule and the ranking, and the backend only bounds the list.
+   */
+  aiActionUsage: AiUsageEntry[];
 
   /**
    * Read Aloud.
@@ -812,6 +821,20 @@ export type AiActionId =
   | "critique"
   | "table"
   | "convert";
+
+/**
+ * One palette action's usage weight, as persisted in `aiActionUsage`.
+ *
+ * `score` is a decaying use count and `at` the Unix millisecond timestamp it
+ * belongs to, so an entry can be aged without another write. `src/ai/usage.ts`
+ * owns the half-life and the ranking; Rust only bounds the list.
+ */
+export interface AiUsageEntry {
+  /** A catalog id. One this build does not know is ignored, not an error. */
+  id: AiActionId;
+  score: number;
+  at: number;
+}
 
 export interface AiTurn {
   role: "user" | "assistant";

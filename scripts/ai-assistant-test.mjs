@@ -14,6 +14,12 @@ import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 
+// The palette's *Most used* section is computed by the application from the
+// recorded usage. The check below compares the rendered rows with the same
+// module, so it holds on a profile that already has a history instead of
+// assuming a fresh one.
+import { rankMostUsed } from "../src/ai/usage.ts";
+
 const port = process.argv[2] ?? "9222";
 const appIdentifier = process.env.MDRAFT_TEST_IDENTIFIER ?? "io.github.bernh.mdraft";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -473,7 +479,7 @@ async function pressFetchModels() {
 async function openModelPicker() {
   const opened = await evaluate(`(() => {
     const row = ${rowSelector("Model")};
-    const toggle = row?.querySelector('.prefs-combo-toggle');
+    const toggle = row?.querySelector('.combo-toggle');
     if (!toggle) return false;
     toggle.click();
     return true;
@@ -484,7 +490,7 @@ async function openModelPicker() {
 
 async function modelOptionIds() {
   return evaluate(
-    `[...document.querySelectorAll('.prefs-combo-popup .prefs-combo-option')].map(o => o.textContent)`,
+    `[...document.querySelectorAll('.combo-popup .combo-option')].map(o => o.textContent)`,
   );
 }
 
@@ -513,7 +519,7 @@ async function filterModelPicker(query) {
 
 async function chooseModelFromPicker(model) {
   const chosen = await evaluate(`(() => {
-    const option = [...document.querySelectorAll('.prefs-combo-popup .prefs-combo-option')].find(o => o.textContent === ${JSON.stringify(model)});
+    const option = [...document.querySelectorAll('.combo-popup .combo-option')].find(o => o.textContent === ${JSON.stringify(model)});
     if (!option) return false;
     option.click();
     return true;
@@ -744,6 +750,27 @@ async function waitPanelDone(timeout = 15_000) {
     })()`,
     timeout,
   );
+}
+
+/** The persisted palette usage, as the palette itself reads it. */
+async function storedUsage() {
+  return evaluate(
+    `window.__TAURI_INTERNALS__.invoke('get_settings').then((s) => s.aiActionUsage ?? [])`,
+  );
+}
+
+/**
+ * Wait until `id` has a stored entry, then return the whole list.
+ *
+ * The settings write is queued, so reading immediately after an answer can see
+ * the copy from before it; polling is the honest wait rather than a sleep.
+ */
+async function waitForStoredUsage(id, timeout = 6_000) {
+  await waitFor(
+    `window.__TAURI_INTERNALS__.invoke('get_settings').then((s) => (s.aiActionUsage ?? []).some((e) => e.id === ${JSON.stringify(id)}))`,
+    timeout,
+  );
+  return storedUsage();
 }
 
 async function clickFooter(label) {
@@ -1164,24 +1191,83 @@ try {
 
   console.log("\nPalette");
   await openPalette();
-  const palette = await evaluate(`(() => ({
-    groups: [...document.querySelectorAll('.ai-group')].map(g => g.textContent),
-    rows: [...document.querySelectorAll('.ai-row-label')].map(r => r.textContent),
-    footer: [...document.querySelectorAll('.ai-palette-footer button')].map((b) => b.textContent.trim()),
-    height: Math.round(document.querySelector('.ai-palette').getBoundingClientRect().height),
-    inside: (() => {
-      const pane = document.getElementById('editor-pane').getBoundingClientRect();
-      const box = document.querySelector('.ai-palette').getBoundingClientRect();
-      return box.left >= pane.left && box.right <= pane.right && box.top >= pane.top && box.bottom <= pane.bottom;
-    })(),
-  }))()`);
+  const palette = await evaluate(`(() => {
+    const sections = [];
+    let current = null;
+    for (const child of document.querySelector('.ai-actions').children) {
+      if (child.classList.contains('ai-group')) {
+        current = { label: child.textContent, labels: [] };
+        sections.push(current);
+      } else if (child.classList.contains('ai-row') && current) {
+        current.labels.push(child.querySelector('.ai-row-label')?.textContent ?? '');
+      }
+    }
+    return {
+      groups: [...document.querySelectorAll('.ai-group')].map(g => g.textContent),
+      sections,
+      rows: [...document.querySelectorAll('.ai-row-label')].map(r => r.textContent),
+      ids: [...document.querySelectorAll('.ai-row')].map(r => r.id),
+      footer: [...document.querySelectorAll('.ai-palette-footer button')].map((b) => b.textContent.trim()),
+      height: Math.round(document.querySelector('.ai-palette').getBoundingClientRect().height),
+      inside: (() => {
+        const pane = document.getElementById('editor-pane').getBoundingClientRect();
+        const box = document.querySelector('.ai-palette').getBoundingClientRect();
+        return box.left >= pane.left && box.right <= pane.right && box.top >= pane.top && box.bottom <= pane.bottom;
+      })(),
+    };
+  })()`);
   check(
     "five groups are shown",
     JSON.stringify(palette.groups) ===
       JSON.stringify(["Most used", "Write", "Refine", "Understand", "Transform"]),
     JSON.stringify(palette.groups),
   );
-  check("fourteen actions are shown", palette.rows.length === 14, String(palette.rows.length));
+  check(
+    "the shortcut section shows three rows",
+    palette.sections[0]?.labels.length === 3,
+    JSON.stringify(palette.sections[0]?.labels),
+  );
+  check(
+    "the catalog renders fourteen actions plus three shortcuts",
+    palette.rows.length === 17,
+    String(palette.rows.length),
+  );
+  check(
+    "every palette row has a unique id",
+    new Set(palette.ids).size === palette.ids.length,
+    `${new Set(palette.ids).size}/${palette.ids.length}`,
+  );
+  const usageNow = await storedUsage();
+  const expectedShortcuts = rankMostUsed(usageNow).map((action) => action.label);
+  check(
+    "the section is the ranking of the recorded use",
+    JSON.stringify(palette.sections[0]?.labels) === JSON.stringify(expectedShortcuts),
+    `${JSON.stringify(palette.sections[0]?.labels)} vs ${JSON.stringify(expectedShortcuts)}`,
+  );
+  const categoryOf = (label) =>
+    palette.sections.slice(1).find((section) => section.labels.includes(label))?.label ?? "";
+  check(
+    "Continue writing is listed under Write",
+    categoryOf("Continue writing") === "Write",
+    categoryOf("Continue writing"),
+  );
+  check(
+    "Improve writing is listed under Refine",
+    categoryOf("Improve writing") === "Refine",
+    categoryOf("Improve writing"),
+  );
+  check(
+    "Ask AI is listed under Understand",
+    categoryOf("Ask AI…") === "Understand",
+    categoryOf("Ask AI…"),
+  );
+  check(
+    "a shortcut also appears in its own category",
+    palette.sections[0].labels.every(
+      (label) => palette.rows.filter((row) => row === label).length === 2,
+    ),
+    JSON.stringify(palette.rows),
+  );
   check(
     "the palette footer has History and the settings command",
     palette.footer.includes("History") &&
@@ -1219,7 +1305,7 @@ try {
   await openPalette();
   const overLimit = await waitFor(
     `(() => {
-      const row = document.querySelector('#ai-row-improve');
+      const row = document.querySelector('#ai-row-refine-improve');
       return row?.classList.contains('is-disabled')
         ? row.querySelector('.ai-row-description')?.textContent ?? ''
         : null;
@@ -1231,7 +1317,7 @@ try {
     overLimit?.includes("up to 1,024 tokens") === true,
     String(overLimit),
   );
-  await evaluate(`document.querySelector('#ai-row-improve').click()`);
+  await evaluate(`document.querySelector('#ai-row-refine-improve').click()`);
   await sleep(200);
   const limitToast = await evaluate(
     `document.getElementById('toast').hidden ? '' : document.getElementById('toast').textContent`,
@@ -1247,7 +1333,7 @@ try {
   await openPalette();
   const raisedRow = await waitFor(
     `(() => {
-      const row = document.querySelector('#ai-row-improve');
+      const row = document.querySelector('#ai-row-refine-improve');
       return row && !row.classList.contains('is-disabled') ? true : null;
     })()`,
     8000,
@@ -1267,10 +1353,28 @@ try {
       await evaluate(`[...document.querySelectorAll('.ai-row-label')].map(l => l.textContent)`),
     ) === JSON.stringify(["Translate…"]),
   );
+  check(
+    "a search hides the shortcut section",
+    (await evaluate(
+      `[...document.querySelectorAll('.ai-group')].every((g) => g.textContent !== 'Most used')`,
+    )) === true,
+  );
+  check(
+    "a searched action appears once",
+    (await evaluate(
+      `[...document.querySelectorAll('.ai-row-label')].filter((l) => l.textContent === 'Translate…').length`,
+    )) === 1,
+  );
   await evaluate(
     `(() => { const s = document.querySelector('.ai-search'); s.value = ''; s.dispatchEvent(new Event('input', { bubbles: true })); })()`,
   );
   await sleep(100);
+  check(
+    "clearing the search restores the shortcut section",
+    (await evaluate(
+      `[...document.querySelectorAll('.ai-group')].some((g) => g.textContent === 'Most used')`,
+    )) === true,
+  );
   await send("Input.dispatchKeyEvent", {
     type: "rawKeyDown",
     key: "Escape",
@@ -1646,9 +1750,20 @@ try {
   await undo();
 
   console.log("\nSummarize");
+  const usageBeforeSummarize = await storedUsage();
   await clickEditorWord("Regular");
   await chooseAction("Summarize");
   await waitPanelDone();
+  const usageAfterSummarize = await waitForStoredUsage("summarize");
+  const summarizeBefore = usageBeforeSummarize.find((entry) => entry.id === "summarize");
+  const summarizeAfter = usageAfterSummarize.find((entry) => entry.id === "summarize");
+  check(
+    "a completed request records its use",
+    Boolean(summarizeAfter) &&
+      summarizeAfter.at > (summarizeBefore?.at ?? 0) &&
+      summarizeAfter.score > 0,
+    `${JSON.stringify(summarizeBefore ?? null)} -> ${JSON.stringify(summarizeAfter ?? null)}`,
+  );
   check(
     "Summarize shows a summary",
     (await evaluate(`document.querySelector('.ai-answer')?.textContent ?? ''`)).includes(
@@ -1672,6 +1787,50 @@ try {
     summarized.match(/open inside the app\.[\s\S]{0,50}/)?.[0] ?? "",
   );
   await undo();
+
+  // The section is computed from the live settings, not a snapshot taken when
+  // the palette was built, so reopening it after a use must show the ranking
+  // the same module produces from the stored list.
+  await closePanel();
+  await openPalette();
+  const summarizedSections = await evaluate(`(() => {
+    const sections = [];
+    let current = null;
+    for (const child of document.querySelector('.ai-actions').children) {
+      if (child.classList.contains('ai-group')) {
+        current = { label: child.textContent, labels: [] };
+        sections.push(current);
+      } else if (child.classList.contains('ai-row') && current) {
+        current.labels.push(child.querySelector('.ai-row-label')?.textContent ?? '');
+      }
+    }
+    return sections;
+  })()`);
+  const summarizeExpected = rankMostUsed(await storedUsage()).map((action) => action.label);
+  check(
+    "the shortcut section reflects the new use",
+    JSON.stringify(summarizedSections[0]?.labels) === JSON.stringify(summarizeExpected),
+    `${JSON.stringify(summarizedSections[0]?.labels)} vs ${JSON.stringify(summarizeExpected)}`,
+  );
+  const configPath = path.join(process.env.APPDATA ?? "", appIdentifier, "settings.json");
+  let usageOnDisk = [];
+  const diskDeadline = Date.now() + 5000;
+  while (Date.now() < diskDeadline) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      usageOnDisk = Array.isArray(parsed.aiActionUsage) ? parsed.aiActionUsage : [];
+      if (usageOnDisk.some((entry) => entry.id === "summarize")) break;
+    } catch {
+      /* the queued write may still be in flight */
+    }
+    await sleep(100);
+  }
+  check(
+    "the recorded use reaches settings.json",
+    usageOnDisk.some((entry) => entry.id === "summarize"),
+    JSON.stringify(usageOnDisk.map((entry) => entry.id)),
+  );
+  await closePalette();
 
   console.log("\nMarkdown result");
   await clickEditorWord("Regular");
@@ -1860,13 +2019,172 @@ try {
     "Translate opens with a language field",
     await evaluate(`Boolean(document.querySelector('.ai-params input[type=text]'))`),
   );
+
+  // The target field is a combo, not a datalist: the list is the application's
+  // own element, it opens whole, it is drawn above the panel, and the value it
+  // commits is the readable name that reaches the prompt.
+  check(
+    "the target field is a combo, not a datalist",
+    await evaluate(
+      `Boolean(document.querySelector('.ai-params .combo-toggle')) && !document.querySelector('.ai-params datalist')`,
+    ),
+  );
+  await evaluate(`document.querySelector('.ai-params .combo-toggle').click()`);
+  await waitFor(`Boolean(document.querySelector('.combo-popup'))`, 3000);
+  const languageRows = await evaluate(
+    `[...document.querySelectorAll('.combo-popup .combo-option')].map(o => o.textContent)`,
+  );
+  check(
+    "the caret lists every suggested language",
+    languageRows.length === 34,
+    `${languageRows.length} rows`,
+  );
+  check(
+    "the list opens on the likely targets",
+    JSON.stringify(languageRows.slice(0, 4)) ===
+      JSON.stringify([
+        "English (US)",
+        "English (UK)",
+        "Portuguese (Brazil)",
+        "Portuguese (Portugal)",
+      ]),
+    languageRows.slice(0, 4).join(", "),
+  );
+  const popupGeometry = await evaluate(`(() => {
+    const popup = document.querySelector('.combo-popup');
+    const field = document.querySelector('.ai-params input[type=text]');
+    if (!popup || !field) return null;
+    const p = popup.getBoundingClientRect();
+    const f = field.getBoundingClientRect();
+    const hit = document.elementFromPoint(p.left + p.width / 2, p.top + Math.min(p.height / 2, 40));
+    return {
+      wider: p.width >= f.width - 1,
+      inside: p.left >= 0 && p.right <= window.innerWidth,
+      onTop: Boolean(hit && popup.contains(hit)),
+    };
+  })()`);
+  check(
+    "the list spans the field, stays on screen and paints above the panel",
+    popupGeometry?.wider === true &&
+      popupGeometry?.inside === true &&
+      popupGeometry?.onTop === true,
+    JSON.stringify(popupGeometry),
+  );
+
+  await evaluate(`document.querySelector('.ai-params input[type=text]').focus()`);
+  await send("Input.insertText", { text: "port" });
+  await sleep(150);
+  const filteredLanguages = await evaluate(
+    `[...document.querySelectorAll('.combo-popup .combo-option')].map(o => o.textContent)`,
+  );
+  check(
+    "typing filters the language list",
+    JSON.stringify(filteredLanguages) ===
+      JSON.stringify(["Portuguese (Brazil)", "Portuguese (Portugal)"]),
+    filteredLanguages.join(", "),
+  );
+
+  const choseLanguage = await evaluate(`(() => {
+    const option = [...document.querySelectorAll('.combo-popup .combo-option')].find(
+      (o) => o.textContent === 'Portuguese (Brazil)',
+    );
+    if (!option) return false;
+    option.click();
+    return true;
+  })()`);
+  await sleep(150);
+  check(
+    "clicking a language writes its readable name",
+    choseLanguage &&
+      (await evaluate(`document.querySelector('.ai-params input[type=text]').value`)) ===
+        "Portuguese (Brazil)",
+  );
+  check(
+    "choosing a language closes the list",
+    await evaluate(`!document.querySelector('.combo-popup')`),
+  );
+
+  await evaluate(`document.querySelector('.ai-params .combo-toggle').click()`);
+  await waitFor(`Boolean(document.querySelector('.combo-popup'))`, 3000);
+  check(
+    "the current language is marked in the list",
+    (await evaluate(
+      `document.querySelector('.combo-popup .combo-option[aria-selected="true"]')?.textContent ?? ''`,
+    )) === "Portuguese (Brazil)",
+  );
+
+  await pressKey("Escape", "Escape", 27);
+  check(
+    "the first Escape closes only the list",
+    await evaluate(`!document.querySelector('.combo-popup')`),
+  );
+  check(
+    "the panel is still open after that Escape",
+    await evaluate(`!document.querySelector('.ai-panel')?.hidden`),
+  );
+
+  await evaluate(`document.querySelector('.ai-params .combo-toggle').click()`);
+  await waitFor(`Boolean(document.querySelector('.combo-popup'))`, 3000);
+  const requestsBeforeEnter = control.requests.length;
+  // The list opens on the field's current value, so ArrowDown moves from
+  // "Portuguese (Brazil)" to the next row rather than starting at the top.
+  await pressKey("ArrowDown", "ArrowDown", 40);
+  await pressKey("Enter", "Enter", 13);
+  check(
+    "Enter chooses the row the arrows reached",
+    (await evaluate(`document.querySelector('.ai-params input[type=text]').value`)) ===
+      "Portuguese (Portugal)",
+  );
+  check(
+    "choosing with Enter does not send a request",
+    control.requests.length === requestsBeforeEnter,
+    `${control.requests.length - requestsBeforeEnter} sent`,
+  );
+
+  // A <label> cannot wrap the field and the caret together, so the caption is
+  // explicit. A real click on it must still focus the field.
+  const captionPoint = await evaluate(`(() => {
+    const caption = document.querySelector('.ai-param-caption');
+    const field = document.querySelector('.ai-params input[type=text]');
+    if (!caption || !field) return null;
+    field.blur();
+    const rect = caption.getBoundingClientRect();
+    return {
+      x: Math.round(rect.left + rect.width / 2),
+      y: Math.round(rect.top + rect.height / 2),
+    };
+  })()`);
+  if (captionPoint) {
+    await send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: captionPoint.x,
+      y: captionPoint.y,
+      button: "left",
+      clickCount: 1,
+    });
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: captionPoint.x,
+      y: captionPoint.y,
+      button: "left",
+      clickCount: 1,
+    });
+    await sleep(150);
+  }
+  check(
+    "clicking the caption focuses the field",
+    await evaluate(
+      `document.activeElement === document.querySelector('.ai-params input[type=text]')`,
+    ),
+  );
+
   const requestsBeforeTranslate = control.requests.length;
   check(
     "Translate does not send before Generate",
     (await panelStatus()).includes("Choose a value"),
   );
   await evaluate(
-    `(() => { const input = document.querySelector('.ai-params input[type=text]'); input.value = 'Portuguese'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`,
+    `(() => { const input = document.querySelector('.ai-params input[type=text]'); input.value = 'Portuguese'; input.dispatchEvent(new Event('input', { bubbles: true })); input.blur(); })()`,
   );
   await sleep(100);
   await evaluate(`document.querySelector('.ai-params .ai-generate').click()`);
@@ -1894,7 +2212,7 @@ try {
   await clickEditorWord("Regular");
   await chooseAction("Translate…");
   await evaluate(
-    `(() => { const input = document.querySelector('.ai-params input[type=text]'); input.value = 'Portuguese'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`,
+    `(() => { const input = document.querySelector('.ai-params input[type=text]'); input.value = 'Portuguese'; input.dispatchEvent(new Event('input', { bubbles: true })); input.blur(); })()`,
   );
   await sleep(100);
   await evaluate(`document.querySelector('.ai-params .ai-generate').click()`);
@@ -2082,6 +2400,7 @@ try {
 
   console.log("\nRejected key");
   control.mode = "unauthorized";
+  const usageBefore401 = await storedUsage();
   await clickEditorWord("Regular");
   await chooseAction("Shorten");
   await waitPanelDone(8000);
@@ -2106,9 +2425,23 @@ try {
     "an error does not offer Replace",
     !(await footerButtons()).some((b) => b.text === "Replace selection"),
   );
+  const usageAfter401 = await storedUsage();
+  const shortenBefore401 = usageBefore401.find((entry) => entry.id === "shorten")?.score ?? 0;
+  const shortenAfter401 = usageAfter401.find((entry) => entry.id === "shorten")?.score ?? 0;
+  check(
+    "a rejected request records no use",
+    Math.abs(shortenAfter401 - shortenBefore401) < 1e-9,
+    `${shortenBefore401} -> ${shortenAfter401}`,
+  );
   control.mode = "normal";
   check("Retry re-issues the request", await clickFooter("Retry"));
   await waitPanelDone();
+  const usageAfterRetry = await waitForStoredUsage("shorten");
+  check(
+    "the successful retry records one use",
+    (usageAfterRetry.find((entry) => entry.id === "shorten")?.score ?? 0) > shortenBefore401,
+    `${shortenBefore401} -> ${usageAfterRetry.find((entry) => entry.id === "shorten")?.score ?? 0}`,
+  );
   check(
     "Retry produces an answer",
     (await panelStatus()).startsWith("Answer ready"),
@@ -2325,6 +2658,7 @@ try {
   await clickEditorWord("Regular");
   await chooseAction("Improve writing");
   await waitPanelDone();
+  const usageBeforeRegenerate = await waitForStoredUsage("improve");
   const beforeRegenerate = control.requests.length;
   check("Regenerate sends the request again", await clickRegenerate());
   const regenerateDeadline = Date.now() + 8000;
@@ -2332,6 +2666,15 @@ try {
     await sleep(80);
   }
   await waitPanelDone();
+  await sleep(300);
+  const usageAfterRegenerate = await storedUsage();
+  const improveBefore = usageBeforeRegenerate.find((entry) => entry.id === "improve")?.score ?? 0;
+  const improveAfter = usageAfterRegenerate.find((entry) => entry.id === "improve")?.score ?? 0;
+  check(
+    "Regenerate does not add another use",
+    improveAfter < improveBefore + 0.5,
+    `${improveBefore} -> ${improveAfter}`,
+  );
   check(
     "Regenerate made exactly one request",
     control.requests.length === beforeRegenerate + 1,
@@ -2781,7 +3124,7 @@ try {
     const baseRow = ${rowSelector("Base URL")};
     const combo = modelRow?.querySelector('.prefs-combo');
     const base = baseRow?.querySelector('input[type=text]');
-    const popup = document.querySelector('.prefs-combo-popup');
+    const popup = document.querySelector('.combo-popup');
     if (!combo || !base || !popup) return null;
     const c = combo.getBoundingClientRect();
     const b = base.getBoundingClientRect();
@@ -2823,7 +3166,7 @@ try {
   );
   const noMatch = await filterModelPicker("not-a-listed-model");
   const noMatchText = await evaluate(
-    `document.querySelector('.prefs-combo-popup .prefs-combo-empty')?.textContent ?? ''`,
+    `document.querySelector('.combo-popup .combo-empty')?.textContent ?? ''`,
   );
   check(
     "a search that matches nothing says so",
@@ -2847,7 +3190,7 @@ try {
   );
   check(
     "the keyboard choice closes the list",
-    await evaluate(`!document.querySelector('.prefs-combo-popup')`),
+    await evaluate(`!document.querySelector('.combo-popup')`),
   );
 
   await filterModelPicker("test");
@@ -2862,7 +3205,7 @@ try {
   check("choosing a fetched model persists it", persistedModel === "test-model", persistedModel);
   check(
     "choosing a fetched model closes the list",
-    await evaluate(`!document.querySelector('.prefs-combo-popup')`),
+    await evaluate(`!document.querySelector('.combo-popup')`),
   );
 
   // The reported case: a successful list no longer offers the saved id.
@@ -3542,6 +3885,9 @@ try {
       aiContextTokens: original.aiContextTokens,
       aiDisableReasoning: original.aiDisableReasoning,
       aiSuggestFilename: original.aiSuggestFilename,
+      // The suite's own requests are uses of the action; a standalone run
+      // against the developer's profile must put the counter back.
+      aiActionUsage: original.aiActionUsage,
     };
     await evaluate(
       `window.__TAURI_INTERNALS__.invoke('save_settings', { settings: ${JSON.stringify(patched)} })`,

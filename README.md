@@ -134,7 +134,11 @@ Markdown document active.*
   Its searchable palette offers fourteen
   task-specific actions — Continue writing, Improve writing, Ask AI, Expand,
   Shorten, Simplify, Change tone, Translate, Summarize, Explain, Key points,
-  Critique, Convert to table and Convert markup — and the answer streams into a
+  Critique, Convert to table and Convert markup — under a learned **Most used**
+  section that ranks the actions you actually complete requests with, decaying a
+  use over 30 days, and falls back to its three original shortcuts until others
+  are used. That list stays on this device and is an ordinary field in
+  `settings.json`. The answer streams into a
   non-modal panel before you apply it with **Replace selection**, **Insert
   below**, **Insert** or **New tab**, which opens the answer as its own untitled
   document in the markup it was written in (the target markup for Convert
