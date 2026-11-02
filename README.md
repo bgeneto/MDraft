@@ -88,7 +88,8 @@ Markdown document active.*
 - **Document statistics at a glance.** **Tools › Document Statistics…** reports
   the active buffer's characters without line endings, words, estimated tokens,
   lines and the UTF-8 byte length a save would write. While text is selected it
-  adds the selection's characters, bytes and range count. The dialog is a
+  adds the selection's characters, bytes and range count. The same dialog opens
+  when you click the word or token count in the status bar. The dialog is a
   snapshot taken from the same incremental counts as the status bar; it does not
   rescan while you type.
 - **Typography that holds up.** Thirteen bundled typefaces, six presets and a

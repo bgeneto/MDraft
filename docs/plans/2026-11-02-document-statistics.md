@@ -220,6 +220,9 @@ by Lines, Document length and the selection line.
   into the dirty buffer.
 - Dark and light screenshots of the dialog were inspected; both use the theme
   tokens, tabular figures and the intended row order.
+- Follow-up: the status-bar word and token counts are now real buttons that open
+  the same dialog, with hover and focus styling and `aria-haspopup="dialog"`.
+  The menu suite covers both routes, raising its count from 121 to 123.
 
 ## Acceptance criteria
 

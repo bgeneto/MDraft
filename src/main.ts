@@ -146,8 +146,8 @@ const editorPane = el<HTMLElement>("editor-pane");
 const previewPane = el<HTMLElement>("preview-pane");
 const preview = el<HTMLElement>("preview");
 const statusFile = el<HTMLSpanElement>("status-file");
-const statusTokens = el<HTMLSpanElement>("status-tokens");
-const statusWords = el<HTMLSpanElement>("status-words");
+const statusTokens = el<HTMLButtonElement>("status-tokens");
+const statusWords = el<HTMLButtonElement>("status-words");
 const statusCursor = el<HTMLSpanElement>("status-cursor");
 const statusEncoding = el<HTMLSpanElement>("status-encoding");
 const statusZoom = el<HTMLButtonElement>("status-zoom");
@@ -1066,7 +1066,7 @@ function showTokenCount(tokens: number): void {
   statusTokens.textContent = `${formatCount(tokens)} ${tokens === 1 ? "token" : "tokens"}`;
   statusTokens.title =
     `Estimated ${formatCount(tokens)} tokens — within about 10% of cl100k and o200k. ` +
-    "No model vocabulary is loaded.";
+    "No model vocabulary is loaded. Click for document statistics.";
   statusTokens.hidden = false;
 }
 
@@ -1139,7 +1139,9 @@ function refreshStatus(): void {
   const wordsText = formatCount(words);
   statusFile.textContent = `${doc.dirty ? "• " : ""}${doc.name ?? "Untitled"}`;
   statusWords.textContent = `${wordsText} ${words === 1 ? "word" : "words"}`;
-  statusWords.title = `${wordsText} words · ${formatCount(chars)} characters · ${formatCount(lines)} lines`;
+  statusWords.title =
+    `${wordsText} words · ${formatCount(chars)} characters · ${formatCount(lines)} lines` +
+    " · Click for document statistics";
   statusCursor.textContent = `Ln ${cursor.line}, Col ${cursor.column}${
     cursor.selectionLength > 0
       ? ` (${cursor.selectionLength} selected${
@@ -6088,6 +6090,10 @@ function installChrome(): void {
   );
   statusZoom.addEventListener("click", () => setZoom(DEFAULT_ZOOM));
   statusReading.addEventListener("click", stopReadAloud);
+  // The counts are the visible summary of the document; either one opens the
+  // same dialog as Tools › Document Statistics, through the same guard.
+  statusWords.addEventListener("click", () => runMenuAction("tools.statistics"));
+  statusTokens.addEventListener("click", () => runMenuAction("tools.statistics"));
 
   // The flags take the same route as the native menu items, so the two can never
   // disagree and the 250 ms double-run guard lives in one place.

@@ -514,6 +514,25 @@ try {
   await sleep(300);
   await key("Home", "Home", 2);
 
+  await evaluate(`document.getElementById("status-words")?.click()`);
+  await sleep(450);
+  check(
+    await evaluate(`Boolean(document.querySelector(".stats-dialog[open]"))`),
+    "clicking the word count opens the statistics dialog",
+  );
+  await key("Escape", "Escape");
+  await sleep(300);
+  const tokenCountVisible = await evaluate(`!document.getElementById("status-tokens")?.hidden`);
+  await evaluate(`document.getElementById("status-tokens")?.click()`);
+  await sleep(450);
+  check(
+    tokenCountVisible && (await evaluate(`Boolean(document.querySelector(".stats-dialog[open]"))`)),
+    "clicking the token count opens the statistics dialog",
+  );
+  await key("Escape", "Escape");
+  await sleep(300);
+  await evaluate(`document.querySelector(".cm-content")?.focus()`);
+
   const aiBefore = (await settings()).aiEnabled === true;
   check(
     (await itemById("tools.ai"))?.checked === aiBefore,

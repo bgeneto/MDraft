@@ -1067,6 +1067,29 @@ body {
   text-overflow: ellipsis;
 }
 
+/* The word and token counts are quiet buttons: no surface until hover, but a
+   real focus ring and cursor, because clicking either one opens the document
+   statistics dialog. The negative margin keeps the text spacing unchanged. */
+.status-stats {
+  margin: 0 -4px;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.status-stats:hover {
+  background: var(--active-line);
+  color: var(--fg);
+}
+.status-stats:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .status-modes {
   display: flex;
   gap: 1px;
