@@ -3171,8 +3171,7 @@ try {
     let savedPrompt = false;
     for (let attempt = 0; attempt < 60 && !savedPrompt; attempt += 1) {
       savedPrompt =
-        fs.existsSync(promptsPath) &&
-        fs.readFileSync(promptsPath, "utf8").includes(MARKER);
+        fs.existsSync(promptsPath) && fs.readFileSync(promptsPath, "utf8").includes(MARKER);
       if (!savedPrompt) await sleep(100);
     }
     check("the edited prompt is saved to disk", savedPrompt);
@@ -3259,7 +3258,10 @@ try {
     );
     await closePanel();
     await openAiSection();
-    check("Reset recovers a file that cannot be used", await clickPrefsButton("Reset prompts to defaults"));
+    check(
+      "Reset recovers a file that cannot be used",
+      await clickPrefsButton("Reset prompts to defaults"),
+    );
     const recovered = await waitFor(
       `(() => {
         const note = [...document.querySelectorAll('.prefs-row')].find(r => r.querySelector('.prefs-label')?.textContent.replace(/\\?$/, '') === 'Prompts file')?.querySelector('.prefs-note')?.textContent ?? '';

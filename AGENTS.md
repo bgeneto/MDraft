@@ -686,6 +686,9 @@ than asserting the feature's own internal counters.
 
 ## Traps
 
+**CI's Quality job fails on `cargo clippy --all-targets -- -D warnings` and `npm run format:check` although `npm run check:rust`, `npm test` and `npm run build` are all green**
+Nothing local applies those two gates: `check:rust` is plain `cargo check`, `test-all.mjs` runs `cargo test` without `-D warnings`, and `format:check` is not part of `npm test`. The failures were "method `len` is never used" at `src\ai\prompts_file.rs:73:12` (a `pub fn` in a private module whose only callers are `#[cfg(test)]`), two "this `if` statement can be collapsed", and `[warn] scripts/ai-assistant-test.mjs`. All four reproduced on the local Rust 1.91.1 with the same commands, so this was not the version skew described in the next entry — the gates had simply never been run. Run `.\scripts\cargo-vcvars.cmd clippy --manifest-path src-tauri\Cargo.toml --all-targets -- -D warnings` and `npm run format:check` before pushing; a green `npm test` is not evidence for either, and a release tag pushed on top of a red Quality run publishes artefacts from a tree nobody linted.
+
 **Local Clippy passes, but CI fails with `chunks_exact_to_as_chunks` / `unnecessary_sort_by`**
 The local toolchain is Rust 1.91.1 while the CI `stable` toolchain can be newer
 (the first 0.5.0 run used Clippy 1.99). New warnings become errors under

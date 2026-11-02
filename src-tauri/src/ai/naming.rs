@@ -81,20 +81,20 @@ fn clean_answer(raw: &str) -> String {
 
     // A model that ignores the one-line rule sometimes wraps the name in the
     // XML-ish tag it uses for answers elsewhere.
-    if text.starts_with('<') {
-        if let Some(end) = text.find('>') {
-            let head = &text[1..end];
-            if !head.is_empty() && !head.contains(' ') && head.len() < 40 {
-                text = text[end + 1..].trim();
-            }
+    if text.starts_with('<')
+        && let Some(end) = text.find('>')
+    {
+        let head = &text[1..end];
+        if !head.is_empty() && !head.contains(' ') && head.len() < 40 {
+            text = text[end + 1..].trim();
         }
     }
-    if text.ends_with('>') {
-        if let Some(start) = text.rfind("</") {
-            let tag = &text[start + 2..text.len() - 1];
-            if !tag.is_empty() && !tag.contains(' ') && tag.len() < 40 {
-                text = text[..start].trim();
-            }
+    if text.ends_with('>')
+        && let Some(start) = text.rfind("</")
+    {
+        let tag = &text[start + 2..text.len() - 1];
+        if !tag.is_empty() && !tag.contains(' ') && tag.len() < 40 {
+            text = text[..start].trim();
         }
     }
 
