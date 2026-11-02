@@ -275,7 +275,8 @@ Other editor features:
 - **Document statistics** are under **Tools › Document Statistics…**: characters
   without line endings, words, estimated tokens, lines and the UTF-8 byte length
   a save would write. With text selected, the same dialog reports the
-  selection's characters, bytes and range count. The numbers come from the
+  selection's characters, bytes and range count. The same dialog opens when you
+  click the word or token count in the status bar. The numbers come from the
   status bar's incremental counts; the dialog is a snapshot and does not update
   while it is open.
 - **Preferences** (**File › Preferences…**, `Ctrl+,`) does not show dead
