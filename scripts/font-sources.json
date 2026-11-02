@@ -261,35 +261,41 @@
       ]
     },
     {
-      "id": "bodoni-moda",
-      "name": "Bodoni Moda",
+      "id": "playfair",
+      "name": "Playfair",
       "kind": "google",
       "source": "https://github.com/google/fonts",
       "tag": "google-fonts@47d54ca",
       "licence": "OFL-1.1",
-      "licenceFile": "licenses/bodoni-moda-OFL.txt",
-      "licenceUrl": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/bodonimoda/OFL.txt",
+      "licenceFile": "licenses/playfair-OFL.txt",
+      "licenceUrl": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/playfair/OFL.txt",
       "sources": [
         {
-          "file": "BodoniModa[opsz,wght].ttf",
-          "url": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/bodonimoda/BodoniModa%5Bopsz,wght%5D.ttf",
-          "sha256": "550f5e34ee0a828d7941b1fe9bc58b34e5260d3f33a61532e6d0a0114e79a5cf"
+          "file": "Playfair[opsz,wdth,wght].ttf",
+          "url": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/playfair/Playfair%5Bopsz,wdth,wght%5D.ttf",
+          "sha256": "33cfecbc9948cf9eafe54dc9f36d19a03b393cf12221b20be235926d1ca1db61"
         },
         {
-          "file": "BodoniModa-Italic[opsz,wght].ttf",
-          "url": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/bodonimoda/BodoniModa-Italic%5Bopsz,wght%5D.ttf",
-          "sha256": "dfff1619f8f6871c6372f8855b67211f9a73b4e93d45aca868cd8f46a48622de"
+          "file": "Playfair-Italic[opsz,wdth,wght].ttf",
+          "url": "https://raw.githubusercontent.com/google/fonts/47d54ca1ebb14fd864695f1d39dc734f39017c33/ofl/playfair/Playfair-Italic%5Bopsz,wdth,wght%5D.ttf",
+          "sha256": "ae0d7a72a93804925040c277b4cd7e0607f48bb68dbbce70e3da6b5949f911ca"
         }
       ],
       "outputs": [
         {
-          "file": "BodoniModa-Variable.woff2",
-          "source": "BodoniModa[opsz,wght].ttf",
+          "file": "Playfair-Variable.woff2",
+          "source": "Playfair[opsz,wdth,wght].ttf",
           "style": "normal",
-          "weight": "400 900",
+          "weight": "300 900",
           "subset": true,
+          "instance": {
+            "opsz": 17,
+            "wdth": 100
+          },
+          "instanceAfterSubset": true,
           "requiredFeatures": [
             "onum",
+            "lnum",
             "tnum",
             "liga"
           ],
@@ -301,20 +307,28 @@
             "liga",
             "calt",
             "onum",
+            "lnum",
+            "tnum",
+            "zero",
             "kern",
             "mark",
-            "mkmk",
-            "tnum"
+            "mkmk"
           ]
         },
         {
-          "file": "BodoniModa-Variable-Italic.woff2",
-          "source": "BodoniModa-Italic[opsz,wght].ttf",
+          "file": "Playfair-Variable-Italic.woff2",
+          "source": "Playfair-Italic[opsz,wdth,wght].ttf",
           "style": "italic",
-          "weight": "400 900",
+          "weight": "300 900",
           "subset": true,
+          "instance": {
+            "opsz": 17,
+            "wdth": 100
+          },
+          "instanceAfterSubset": true,
           "requiredFeatures": [
             "onum",
+            "lnum",
             "tnum",
             "liga"
           ],
@@ -326,10 +340,12 @@
             "liga",
             "calt",
             "onum",
+            "lnum",
+            "tnum",
+            "zero",
             "kern",
             "mark",
-            "mkmk",
-            "tnum"
+            "mkmk"
           ]
         }
       ]

@@ -90,7 +90,7 @@ if (state.clicked) {
       fira: text.includes('Fira Code Project Authors'),
       eb: text.includes('EB Garamond Project Authors'),
       ibm: text.includes('IBM Corp.'),
-      bodoni: text.includes('Bodoni Moda Project Authors'),
+      playfair: text.includes('The Playfair Project Authors'),
       archivo: text.includes('Archivo Project Authors'),
       jost: text.includes('Jost Project Authors'),
       azeret: text.includes('Azeret Project Authors'),
@@ -110,7 +110,7 @@ if (state.clicked) {
       seen.fira &&
       seen.eb &&
       seen.ibm &&
-      seen.bodoni &&
+      seen.playfair &&
       seen.archivo &&
       seen.jost &&
       seen.azeret &&

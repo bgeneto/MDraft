@@ -330,13 +330,13 @@ export const SHORTCUTS = SHORTCUTS_LINES.join("\n");
 import alegreyaLicence from "./assets/fonts/licenses/alegreya-OFL.txt?raw";
 import archivoLicence from "./assets/fonts/licenses/archivo-OFL.txt?raw";
 import azeretMonoLicence from "./assets/fonts/licenses/azeret-mono-OFL.txt?raw";
-import bodoniModaLicence from "./assets/fonts/licenses/bodoni-moda-OFL.txt?raw";
 import caveatLicence from "./assets/fonts/licenses/caveat-OFL.txt?raw";
 import ebGaramondLicence from "./assets/fonts/licenses/eb-garamond-OFL.txt?raw";
 import firaCodeLicence from "./assets/fonts/licenses/fira-code-OFL.txt?raw";
 import ibmPlexMonoLicence from "./assets/fonts/licenses/ibm-plex-mono-OFL.txt?raw";
 import jetbrainsLicence from "./assets/fonts/licenses/jetbrains-mono-OFL.txt?raw";
 import jostLicence from "./assets/fonts/licenses/jost-OFL.txt?raw";
+import playfairLicence from "./assets/fonts/licenses/playfair-OFL.txt?raw";
 import sourceSansLicence from "./assets/fonts/licenses/source-sans-OFL.txt?raw";
 import sourceSerifLicence from "./assets/fonts/licenses/source-serif-OFL.txt?raw";
 import victorMonoLicence from "./assets/fonts/licenses/victor-mono-OFL.txt?raw";
@@ -358,7 +358,7 @@ const FONT_LICENCE_LINES: string[] = [
   "| Fira Code | https://github.com/tonsky/FiraCode |",
   "| EB Garamond | https://github.com/octaviopardo/EBGaramond12 |",
   "| IBM Plex Mono | https://github.com/IBM/plex |",
-  "| Bodoni Moda | https://github.com/indestructible-type/Bodoni |",
+  "| Playfair | https://github.com/googlefonts/Playfair |",
   "| Archivo | https://github.com/Omnibus-Type/Archivo |",
   "| Jost | https://github.com/indestructible-type/Jost |",
   "| Azeret Mono | https://github.com/displaay/azeret |",
@@ -393,9 +393,9 @@ const FONT_LICENCE_LINES: string[] = [
   "",
   ibmPlexMonoLicence,
   "",
-  "## Bodoni Moda",
+  "## Playfair",
   "",
-  bodoniModaLicence,
+  playfairLicence,
   "",
   "## Archivo",
   "",

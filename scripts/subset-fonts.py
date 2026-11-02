@@ -12,6 +12,10 @@ zero — and drops the decorative sets, so the switches stay real without paying
 for glyphs the UI never requests. It refuses to write a file whose Latin probe
 or required features are missing.
 
+The output is reproducible: ``head.modified`` is kept from the source instead of
+being stamped with the current time. ``--instance-after-subset`` pins the axes
+after the glyph subset instead of before, which some variable fonts need.
+
     python scripts/subset-fonts.py \
         --source EBGaramond[wght].ttf \
         --output src/assets/fonts/EBGaramond-Variable.woff2 \
@@ -74,8 +78,8 @@ DEFAULT_LAYOUT_FEATURES = [
 ]
 
 # Every text face in the catalogue must at least cover Portuguese. The probe is
-# deliberately not the full symbol list: Jost and Bodoni do not carry arrows,
-# and those fall back through the stack as intended.
+# deliberately not the full symbol list: Jost does not carry arrows, and those
+# fall back through the stack as intended.
 LATIN_PROBE = "ãõçáéíóúâêôàüñÃÕÇÁÉÍÓÚÂÊÔÀÜÑ"
 
 
@@ -89,6 +93,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--instance", default="", help="JSON object of axis values")
+    parser.add_argument(
+        "--instance-after-subset",
+        action="store_true",
+        help=(
+            "Pin the axes after glyph subsetting instead of before. Some "
+            "variable fonts (Playfair) make the subsetter fail on gvar when "
+            "the default instance is applied first."
+        ),
+    )
     parser.add_argument(
         "--features",
         default="",
@@ -104,10 +117,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.instance_after_subset and not args.instance.strip():
+        fail("--instance-after-subset needs --instance")
     if not args.source.is_file():
         fail(f"source not found: {args.source}")
 
     font = TTFont(args.source)
+    axes = None
     if args.instance.strip():
         try:
             axes = json.loads(args.instance)
@@ -115,7 +131,8 @@ def main() -> None:
             fail(f"--instance is not JSON: {error}")
         if not isinstance(axes, dict) or not axes:
             fail("--instance must be a non-empty JSON object")
-        font = instantiateVariableFont(font, axes, updateFontNames=False)
+        if not args.instance_after_subset:
+            font = instantiateVariableFont(font, axes, updateFontNames=False)
 
     required = [tag.strip() for tag in args.require.split(",") if tag.strip()]
     wanted = [tag.strip() for tag in args.features.split(",") if tag.strip()]
@@ -139,6 +156,13 @@ def main() -> None:
     subsetter.populate(unicodes=unicodes)
     subsetter.subset(font)
 
+    # Some variable fonts (Playfair) have gvar entries the subsetter cannot
+    # line up once the default instance has been applied, and fail with a
+    # KeyError in _dict_subset. Subsetting first and pinning the axes
+    # afterwards keeps exactly the same retained glyphs.
+    if axes is not None and args.instance_after_subset:
+        font = instantiateVariableFont(font, axes, updateFontNames=False)
+
     cmap = font.getBestCmap() or {}
     missing = [character for character in LATIN_PROBE if ord(character) not in cmap]
     if missing:
@@ -158,6 +182,11 @@ def main() -> None:
             + f" (present: {', '.join(sorted(features)) or 'none'})"
         )
 
+    # fontTools stamps head.modified with the current time on every save. That
+    # makes two identical subset runs produce different bytes and a different
+    # SHA-256, which turns the recorded pin into a timestamp rather than a
+    # content check. Keep the source's timestamp instead.
+    font.recalcTimestamp = False
     font.flavor = "woff2"
     args.output.parent.mkdir(parents=True, exist_ok=True)
     buffer = io.BytesIO()

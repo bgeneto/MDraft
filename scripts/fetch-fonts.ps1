@@ -171,6 +171,9 @@ foreach ($family in $manifest.families) {
         if ($output.instance) {
           $arguments += @("--instance", ($output.instance | ConvertTo-Json -Compress))
         }
+        if ($output.instanceAfterSubset) {
+          $arguments += @("--instance-after-subset")
+        }
         if ($output.layoutFeatures) {
           $arguments += @("--features", ($output.layoutFeatures -join ","))
         }

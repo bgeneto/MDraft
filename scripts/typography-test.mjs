@@ -112,7 +112,7 @@ const loaded = await evaluate(`
     await document.fonts.ready;
     const names = [
       "Source Serif 4", "Source Sans 3", "JetBrains Mono", "Fira Code",
-      "EB Garamond", "IBM Plex Mono", "Bodoni Moda", "Archivo", "Jost",
+      "EB Garamond", "IBM Plex Mono", "Playfair", "Archivo", "Jost",
       "Azeret Mono", "Alegreya", "Caveat", "Victor Mono",
     ];
     const found = [];
@@ -194,15 +194,15 @@ check(
   ebgNormal === ebgOld ? "identical pixels — the subset lost onum" : "differs",
 );
 
-const bodoniNormal = await shot({ family: '"Bodoni Moda", serif' }, "1111111111");
-const bodoniTab = await shot(
-  { family: '"Bodoni Moda", serif', numeric: "tabular-nums" },
+const playfairNormal = await shot({ family: '"Playfair", serif' }, "1111111111");
+const playfairTab = await shot(
+  { family: '"Playfair", serif', numeric: "tabular-nums" },
   "1111111111",
 );
 check(
-  bodoniNormal !== bodoniTab,
-  "Bodoni Moda tabular figures change the drawing",
-  bodoniNormal === bodoniTab ? "identical pixels — the subset lost tnum" : "differs",
+  playfairNormal !== playfairTab,
+  "Playfair tabular figures change the drawing",
+  playfairNormal === playfairTab ? "identical pixels — the subset lost tnum" : "differs",
 );
 
 const alegreyaNormal = await shot({ family: '"Alegreya", serif' }, "1111111111");
@@ -267,17 +267,17 @@ console.log("\n=== the faces differ from each other, and from the fallback ===")
 const serifShot = await shot({ family: serif }, "Hamburgefonstiv 123");
 const sansShot = await shot({ family: '"Source Sans 3", sans-serif' }, "Hamburgefonstiv 123");
 const ebShot = await shot({ family: '"EB Garamond", serif' }, "Hamburgefonstiv 123");
-const bodoniShot = await shot({ family: '"Bodoni Moda", serif' }, "Hamburgefonstiv 123");
+const playfairShot = await shot({ family: '"Playfair", serif' }, "Hamburgefonstiv 123");
 const jostShot = await shot({ family: '"Jost", sans-serif' }, "Hamburgefonstiv 123");
 const alegreyaShot = await shot({ family: '"Alegreya", serif' }, "Hamburgefonstiv 123");
 const fallbackShot = await shot({ family: "monospace" }, "Hamburgefonstiv 123");
 check(serifShot !== sansShot, "the serif and the sans render differently");
 check(
-  new Set([serifShot, ebShot, bodoniShot, jostShot, alegreyaShot]).size === 5,
+  new Set([serifShot, ebShot, playfairShot, jostShot, alegreyaShot]).size === 5,
   "the five body families render differently",
 );
 check(
-  [ebShot, bodoniShot, jostShot, alegreyaShot].every((digest) => digest !== fallbackShot),
+  [ebShot, playfairShot, jostShot, alegreyaShot].every((digest) => digest !== fallbackShot),
   "the new body families do not collapse to the monospace fallback",
 );
 
@@ -454,7 +454,7 @@ check(
 
 const expected = {
   Renaissance: ["IBM Plex Mono", "EB Garamond", "EB Garamond", "IBM Plex Mono"],
-  Editorial: ["JetBrains Mono", "Bodoni Moda", "Archivo", "JetBrains Mono"],
+  Editorial: ["JetBrains Mono", "Playfair", "Archivo", "JetBrains Mono"],
   Bauhaus: ["Azeret Mono", "Jost", "Jost", "Azeret Mono"],
   Notebook: ["Victor Mono", "Alegreya", "Caveat", "Victor Mono"],
 };

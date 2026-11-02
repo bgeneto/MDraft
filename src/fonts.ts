@@ -15,19 +15,22 @@
 //!  * **EB Garamond / IBM Plex Mono** for Renaissance. Both are humanist and
 //!    low-contrast; Garamond's serif headings keep the page in one voice, and
 //!    Plex's larger x-height is the concession code needs.
-//!  * **Bodoni Moda / Archivo / JetBrains Mono** for Editorial. Didone hairlines
-//!    under a grotesque heading; JetBrains is the already-bundled grotesque code
-//!    face, with ligatures and a slashed zero.
+//!  * **Playfair / Archivo / JetBrains Mono** for Editorial. A high-contrast
+//!    Didone under a grotesque heading; JetBrains is the already-bundled
+//!    grotesque code face, with ligatures and a slashed zero. The subset pins
+//!    the optical cut at 17 and keeps the weight axis.
 //!  * **Jost / Azeret Mono** for Bauhaus. Geometric prose and headings over a
 //!    geometric code face; there is no serif anywhere in the preset.
 //!  * **Alegreya / Caveat / Victor Mono** for Notebook. A calligraphic serif, a
 //!    handwriting heading and a narrow mono whose italic is cursive.
 //!
 //! Why EB Garamond rather than Cormorant: the latter is a display cut and too
-//! light at 16–18 px. Why Bodoni Moda rather than Libre Bodoni: the optical-size
-//! axis picks the text cut at the size in use. Why Jost rather than Poppins:
-//! Poppins has no italic and one width. Why Alegreya rather than Lora: Lora's
-//! OFL reserves the name, so a subset would have to be renamed.
+//! light at 16–18 px. Why Playfair rather than Playfair Display: the latter
+//! reserves its name in the OFL, so a subset could not keep it; the 2023
+//! Playfair has no RFN and carries the same weight range and the figure
+//! features. Why Jost rather than Poppins: Poppins has no italic and one width.
+//! Why Alegreya rather than Lora: Lora's OFL reserves the name, so a subset
+//! would have to be renamed.
 
 import catalogue from "./assets/fonts/fonts.json";
 import type { EditorLineHeight } from "./api";
@@ -392,21 +395,23 @@ export const TYPOGRAPHY_PRESETS: TypographyPreset[] = [
   {
     id: "editorial",
     label: "Editorial",
-    note: "Bodoni Moda's hairline Didone against Archivo's grotesque headings, with JetBrains Mono in code. Lining figures and ligatures; the page behaves like a magazine.",
+    note: "Playfair's high-contrast Didone against Archivo's grotesque headings, with JetBrains Mono in code. Oldstyle figures and ligatures; the page behaves like a magazine.",
     defaults: {
-      bodyFontSize: 17,
-      mathFontScale: 90,
+      bodyFontSize: 19,
+      mathFontScale: 80,
       codeFontScale: 96,
     },
     values: {
       ...ROLE_DEFAULTS,
       sourceFont: '"JetBrains Mono", ui-monospace, monospace',
-      bodyFont: '"Bodoni Moda", "Source Serif 4", "Times New Roman", serif',
+      bodyFont: '"Playfair", "Source Serif 4", "Times New Roman", serif',
       headingFont: '"Archivo", "Source Sans 3", system-ui, sans-serif',
       codeFont: '"JetBrains Mono", ui-monospace, monospace',
       ligaturesInCode: true,
       tabularFigures: true,
-      oldstyleFigures: false,
+      // Playfair's default figures are oldstyle; its `tnum` still gives tables
+      // tabular oldstyle figures, so both switches describe the result.
+      oldstyleFigures: true,
       slashedZero: true,
     },
   },

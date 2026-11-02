@@ -17,7 +17,7 @@ License. None is fetched at runtime.
 | Fira Code | Code and source in Serif | [tonsky/FiraCode](https://github.com/tonsky/FiraCode) |
 | EB Garamond | Prose and headings in Renaissance | [octaviopardo/EBGaramond12](https://github.com/octaviopardo/EBGaramond12) |
 | IBM Plex Mono | Code and source in Renaissance | [IBM/plex](https://github.com/IBM/plex) |
-| Bodoni Moda | Prose in Editorial | [indestructible-type/Bodoni](https://github.com/indestructible-type/Bodoni) |
+| Playfair | Prose in Editorial | [googlefonts/Playfair](https://github.com/googlefonts/Playfair) |
 | Archivo | Headings in Editorial | [Omnibus-Type/Archivo](https://github.com/Omnibus-Type/Archivo) |
 | Jost | Prose and headings in Bauhaus | [indestructible-type/Jost](https://github.com/indestructible-type/Jost) |
 | Azeret Mono | Code and source in Bauhaus | [displaay/azeret](https://github.com/displaay/azeret) |
@@ -78,7 +78,7 @@ because the hard part of choosing type is the pairing rather than one family.
 | **System** | The default. No bundled faces; nothing is embedded in an export. |
 | **Serif** | Source Serif 4 under Source Sans 3, with Fira Code in both code roles. A neutral modern book: oldstyle figures, ligatures and slashed zero on; starts at 17 px preview size and 88% math scale. |
 | **Renaissance** | EB Garamond in prose and headings, IBM Plex Mono in the editor. A 16th-century book page: low contrast, small x-height, serif headings, oldstyle figures, no code ligatures, 80% math scale. |
-| **Editorial** | Bodoni Moda's hairline Didone under Archivo's grotesque headings, with JetBrains Mono in code. A mid-century magazine: lining figures, ligatures and slashed zero on, 17 px preview size and 90% math scale. |
+| **Editorial** | Playfair's high-contrast Didone under Archivo's grotesque headings, with JetBrains Mono in code. A mid-century magazine: oldstyle figures, ligatures and slashed zero on, 19 px preview size and 80% math scale. |
 | **Bauhaus** | Jost's circles and straight lines in prose and headings, with Azeret Mono's geometric code. A 1920s poster with no serif anywhere: ligatures and slashed zero on, proportional table figures, 17 px and 90% math. |
 | **Notebook** | Alegreya's calligraphic serif under Caveat's handwriting, with Victor Mono's narrow, cursive-italic code. A writer's notebook: oldstyle and tabular figures, ligatures on, 17 px and 86% math. |
 | **Custom** | A free setup that starts from System and is remembered like any other preset. Change any face, size or OpenType option; Reset returns it to the System defaults. |
@@ -99,7 +99,7 @@ arms a four-second confirmation.
 The four sizes are remembered per preset with the faces and switches. A preset
 that has never been adjusted starts at its own defaults, shown as preview size /
 math scale / code scale (System 16/95/100, Serif 17/88/98, Renaissance 19/80/90,
-Editorial 17/90/96, Bauhaus 17/90/93, Notebook 17/86/93). The editor font size
+Editorial 19/80/96, Bauhaus 17/90/93, Notebook 17/86/93). The editor font size
 starts at 15 px for every preset, with a 1.5 line height that scales with the
 size. **Line Height** in *Preferences › Editor* chooses **Compact** (1.3×),
 **Normal** (1.5×) or **Wide** (1.8×). It is a global preference, not a per-preset
@@ -113,10 +113,10 @@ the active preset.
 | --- | --- | --- |
 | Ligatures in code | Off in System and Renaissance; on in Serif, Editorial, Bauhaus and Notebook | Draws `->` and `=>` as single glyphs in faces that have them |
 | Tabular figures in tables | On, except Bauhaus | Equal-width digits, so columns line up |
-| Oldstyle figures in prose | On in Serif, Renaissance and Notebook | Figures with ascenders and descenders in running text |
+| Oldstyle figures in prose | On in Serif, Renaissance, Editorial and Notebook | Figures with ascenders and descenders in running text |
 | Slashed zero in code | On in Serif, Renaissance, Editorial and Bauhaus; off in System and Notebook | Distinguishes `0` from `O` |
 
-Two faces need a note rather than a checkbox:
+A few faces need a note rather than a checkbox:
 
 - **Jost's `tnum` is a fullwidth set**, not a tabular one. Bauhaus therefore
   leaves tabular figures off; turning the switch on would replace the table
@@ -126,6 +126,9 @@ Two faces need a note rather than a checkbox:
 - **Alegreya's default figures are oldstyle**, and **EB Garamond's default
   figures are tabular lining**. The switches describe the result; on those two
   faces the default already has the requested shape.
+- **Playfair's default figures are oldstyle**; its `tnum` produces tabular
+  oldstyle figures, so Editorial has both figure switches on and gets the
+  requested shapes.
 
 Kerning and standard ligatures are stated explicitly rather than left to the
 browser's defaults, and variable fonts are asked to interpolate their optical
@@ -157,7 +160,7 @@ Emphasis, headings and table headers are set at weight 600 (Semibold), not 700
 Semibold holds its counters at heading sizes and sits closer to the body text;
 Bold at 700 reads as a different face.
 
-Source Serif 4, EB Garamond, Bodoni Moda, Jost and Alegreya carry the weight on
+Source Serif 4, EB Garamond, Playfair, Jost and Alegreya carry the weight on
 a variable axis. Source Sans 3 ships a separate Semibold cut; Archivo and Caveat
 are bundled as a single Semibold instance for the heading role. IBM Plex Mono
 and Victor Mono ship 400, 400 italic and 700; the code view uses 700 where a
@@ -175,7 +178,7 @@ KaTeX draws at `1.21em`, which is why a formula reads slightly larger than the
 text beside it. **Preferences › Typography › Math scale** multiplies that ratio
 from 70% to 130%. 100% keeps KaTeX's own size; about 83% makes a formula match
 the prose. Serif uses 88%; System 95%; Renaissance 80% so the mathematics does
-not shout beside Garamond; Editorial and Bauhaus 90%, and Notebook 86%. The
+not shout beside Garamond; Editorial 80%, Bauhaus 90%, and Notebook 86%. The
 preview, exported HTML and printed PDF all read the same value.
 
 A perfect text-and-math match would need a different math font and a renderer
@@ -206,8 +209,8 @@ box drawing and geometric shapes, with the features the panel uses. Greek and
 Cyrillic are not in those subsets; the Serif preset, whose Source faces are
 bundled whole, remains the full-coverage choice. A document that mixes Greek or
 Cyrillic into a new preset falls back in the preview; an export falls back to
-the reader's system for those runs. Approximate base64 sizes of a print
-document: Renaissance 513 KiB, Editorial 694 KiB, Bauhaus 150 KiB, Notebook
+the reader's system for those runs. Approximate embedded-font base64 payloads:
+Renaissance 513 KiB, Editorial 813 KiB, Bauhaus 150 KiB, Notebook
 448 KiB, Serif 1,919 KiB.
 
 Pandoc exports (DOCX, ODT, LaTeX and the rest) use pandoc's own layout. They do
@@ -227,7 +230,9 @@ Font Name and keep their canonical names in the subset. **IBM Plex Mono**
 declares "Plex", so it is bundled whole, unchanged. The two Source families are
 also bundled unchanged from Adobe's release. Lora ("Lora") and Source Code Pro
 ("Source") were considered and rejected for the same reason; the Notebook body
-uses Alegreya instead.
+uses Alegreya instead. **Playfair Display** declares "Playfair Display", so the
+Editorial prose uses the 2023 **Playfair** instead: it has no RFN and carries
+the same weight range plus the figure features.
 
 `scripts/font-sources.json` records every source pin. `scripts/fetch-fonts.ps1`
 downloads and verifies each source, calls `scripts/subset-fonts.py` for the
