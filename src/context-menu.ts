@@ -546,7 +546,19 @@ export function installEditorContextMenu(options: EditorMenuOptions): () => void
       }
       items[index]?.focus({ preventScroll: true });
     };
-    const onScroll = (): void => closeMenu();
+    // Chromium dispatches `scroll` on the scroller when a layout change re-clamps
+    // it even though the offset did not move; a document still finishing its
+    // first render does that within a frame of the menu opening (measured on an
+    // AsciiDoc tab, whose preview renders after the source is shown). Closing on
+    // it would dismiss the menu the reader just asked for, so follow only a real
+    // movement of the text under the menu.
+    const scrollLeft = view.scrollDOM.scrollLeft;
+    const scrollTop = view.scrollDOM.scrollTop;
+    const onScroll = (): void => {
+      if (view.scrollDOM.scrollLeft === scrollLeft && view.scrollDOM.scrollTop === scrollTop)
+        return;
+      closeMenu();
+    };
     const onBlur = (): void => closeMenu();
     const onResize = (): void => closeMenu();
 
