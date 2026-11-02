@@ -617,15 +617,45 @@ async function openHistoryDetail(index = 0) {
 
 async function chooseAction(label) {
   await openPalette();
-  const clicked = await evaluate(`(() => {
-    const row = [...document.querySelectorAll('.ai-row')].find(r => r.querySelector('.ai-row-label')?.textContent === ${JSON.stringify(label)});
-    if (!row) return false;
-    row.click();
-    return true;
-  })()`);
-  if (!clicked) throw new Error(`no action row ${label}`);
-  await waitFor(`!document.querySelector('.ai-panel').hidden`);
-  await sleep(120);
+  const rowExpression = `[...document.querySelectorAll('.ai-row')].find(r => r.querySelector('.ai-row-label')?.textContent === ${JSON.stringify(label)})`;
+  // A palette row is briefly disabled while its passage is measured
+  // ("Measuring the passage…"), and the palette re-renders once the count
+  // arrives. A single click in that window only raises a toast, so retry the
+  // gesture the way a person would instead of waiting for a panel that never
+  // opens.
+  const deadline = Date.now() + 5000;
+  let lastReason = "";
+  while (Date.now() < deadline) {
+    const state = await evaluate(`(() => {
+      const row = ${rowExpression};
+      if (!row) return { state: 'missing' };
+      return {
+        state: row.classList.contains('is-disabled') ? 'disabled' : 'ready',
+        reason: row.querySelector('.ai-row-description')?.textContent ?? '',
+      };
+    })()`);
+    if (state.state === "missing") throw new Error(`no action row ${label}`);
+    lastReason = state.reason;
+    if (state.state === "ready") {
+      await evaluate(`(() => {
+        const row = ${rowExpression};
+        if (!row) return false;
+        row.click();
+        return true;
+      })()`);
+      if (await waitFor(`!document.querySelector('.ai-panel').hidden`, 2000)) {
+        await sleep(120);
+        return;
+      }
+      const toast = await evaluate(
+        `document.getElementById('toast')?.hidden ? '' : (document.getElementById('toast')?.textContent ?? '')`,
+      );
+      if (toast) throw new Error(`${label} did not open: ${toast}`);
+    }
+    await sleep(120);
+    if (!(await evaluate(`!document.querySelector('.ai-palette').hidden`))) await openPalette();
+  }
+  throw new Error(`${label} never opened its panel (last row state: ${lastReason || "unknown"})`);
 }
 
 async function panelStatus() {
@@ -2767,18 +2797,40 @@ try {
   // History checks because every Generate adds a distinct history entry.
   console.log("\nTranslate with a typed target");
 
+  // The Model list section ends on purpose with an empty model (the stale-id
+  // reconcile), and an assistant without a model is hidden by `sync()`. Restore
+  // one before asking it to translate, or the palette opens Preferences and the
+  // panel below is invisible.
+  await openAiSection();
+  check("the model is restored for the typed target", await setText("Model", "test-model"));
+  await closePrefs();
+  await waitFor(`!document.querySelector('.ai-assistant')?.hidden`, 5000);
+
   // CDP inserts into whatever holds focus at dispatch time. A stray focus
   // change would put the language into the editor instead, so prove the field
   // is focused and received the text before anything is generated.
   const typeTargetLanguage = async (value) => {
-    const focused = await evaluate(`(() => {
+    const focus = await evaluate(`(() => {
+      const panel = document.querySelector('.ai-panel');
       const input = document.querySelector('.ai-params input[type=text]');
-      if (!input) return false;
+      const details = {
+        input: Boolean(input),
+        panelOpen: !panel?.hidden,
+        rootHidden: document.querySelector('.ai-assistant')?.hidden ?? null,
+        paletteHidden: document.querySelector('.ai-palette')?.hidden ?? null,
+        prefsOpen: Boolean(document.querySelector('.prefs-overlay')?.offsetParent),
+        title: document.querySelector('.ai-panel-title')?.textContent ?? '',
+        params: (document.querySelector('.ai-params')?.innerHTML ?? '').slice(0, 120),
+        active: document.activeElement?.className || document.activeElement?.tagName || '',
+      };
+      if (!input) return { ok: false, ...details };
       input.focus();
       input.select();
-      return document.activeElement === input;
+      return { ok: document.activeElement === input, ...details };
     })()`);
-    if (!focused) throw new Error("the language field could not take focus");
+    if (!focus.ok) {
+      throw new Error(`the language field could not take focus: ${JSON.stringify(focus)}`);
+    }
     await send("Input.insertText", { text: value });
     await sleep(120);
     const actual = await evaluate(

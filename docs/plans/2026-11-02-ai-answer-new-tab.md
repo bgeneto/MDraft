@@ -173,8 +173,6 @@ deleted icon.
   dot, the answer as the buffer, the original tab clean and without the answer,
   close asks and Discard removes it), the same route from a History detail,
   Convert making New tab primary and opening a Typst buffer, and the History row.
-  Every check this plan adds passed in the runs below; see the note on the
-  concurrent session.
 - `npm run build`, `npm run lint`, `npm run format:check`, `npm run knip` — all
   clean.
 - The measurement that proves it: `{"rows":1,"overflow":0,"inside":true}` for the
@@ -185,25 +183,27 @@ deleted icon.
 Run on 2026-11-02 against a disposable build with its own identifier
 (`io.github.bernh.mdraft.aitest`), because the installed application was open:
 `npm run ai:unit` 136/136, `npm run build`, `npm run lint`, `npm run format:check`
-and `npm run knip` clean, and nine full `npm run ai` runs. The suite was 249/249
-before the last check was added, and every check added here passed from run 5
-onward.
+and `npm run knip` clean, and fourteen full `npm run ai` runs. The final run is
+**255/255**, including the typed-target block another session added in the same
+checkout; getting that block green needed three test-only fixes, recorded here
+because they are part of this commit:
 
-Two deviations to record:
+- the Model list section ends on purpose with an empty model, and an assistant
+  without a model hides itself (`sync()`), so the typed-target block restores a
+  model before asking for a translation;
+- `chooseAction` retries while a palette row is still disabled for a pending
+  token measurement, instead of clicking once, getting a toast and waiting for a
+  panel that never opens — and it now throws with the row's reason or the toast
+  instead of timing out silently;
+- `typeTargetLanguage` reports the panel state when focus is refused, which is
+  what identified the hidden assistant.
 
-- Another session is editing this checkout at the same time (it committed this
-  plan, rewrote a translation prompt in `src-tauri/src/ai/prompt.rs` and added an
-  uncommitted "Typed parameters" block at the end of `scripts/ai-assistant-test.mjs`).
-  That block is red in the final runs — it types into the translate field with
-  CDP and the field does not always hold focus — and it is not part of this
-  change. This plan alone takes the suite from 221 to 250; the four checks in
-  that block are why `AGENTS.md` documents 254.
-- Two fixes in the suite belong to this change even though the plan did not name
-  them: `clickFooter`/`footerButtons` are now scoped to `.ai-panel`, because a
-  History detail owns the same `.ai-footer-actions` class and sits earlier in the
-  DOM, so "New tab" could click a remembered answer; and the palette-footer check
-  trims its labels, which it must because those buttons carry an SVG icon and
-  template whitespace (that check was already red before this work).
+Two fixes in the suite belong to this change even though the plan did not name
+them: `clickFooter`/`footerButtons` are now scoped to `.ai-panel`, because a
+History detail owns the same `.ai-footer-actions` class and sits earlier in the
+DOM, so "New tab" could click a remembered answer; and the palette-footer check
+trims its labels, which it must because those buttons carry an SVG icon and
+template whitespace (that check was already red before this work).
 
 ## Acceptance criteria
 
@@ -220,9 +220,8 @@ Two deviations to record:
 - `Regenerate` is reachable from the answer head in every done state except Ask,
   its `title` and `aria-label` both read "Regenerate", and the error state keeps
   `Retry`.
-- The checks added by this plan pass; the documented counts are 254 for
-  `npm run ai` (29 of them from this plan, four from the concurrent block
-  described below) and 136 for `npm run ai:unit`.
+- The checks added by this plan pass; `npm run ai` reports 255 checks and
+  `npm run ai:unit` 136.
 
 ## Open questions
 
