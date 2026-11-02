@@ -354,6 +354,13 @@ export interface Settings {
   aiProvider: AiProvider;
   aiBaseUrl: string;
   aiModel: string;
+  /**
+   * How much context one request may send, in approximate tokens.
+   *
+   * The status bar's token count uses the same estimator. The backend clamps
+   * this to 1,024–32,768 when loading and saving settings.
+   */
+  aiContextTokens: number;
 
   /**
    * Read Aloud.
@@ -828,7 +835,7 @@ export type AiEvent =
       kind: "started";
       model: string;
       host: string;
-      contextChars: number;
+      contextTokens: number;
       contextTruncated: boolean;
     }
   | { kind: "delta"; text: string }

@@ -349,15 +349,16 @@ export function targetIsCurrent(
 }
 
 /**
- * Keep the last complete history pairs that fit the caps.
+ * Keep the last complete history pairs that fit the turn cap.
  *
  * Dropping a lone user or assistant turn would break Anthropic's alternation,
- * so pairs leave from the front.
+ * so pairs leave from the front. The token budget belongs to Rust: it is the
+ * only layer with the estimator, and a character cap here would make a
+ * configured token budget unreachable.
  */
 export function trimHistory(
   history: AiTurn[],
   maxTurns = 12,
-  maxChars = 24_000,
 ): { history: AiTurn[]; dropped: boolean } {
   const kept = history.filter(
     (turn) => (turn.role === "user" || turn.role === "assistant") && turn.content.trim().length > 0,
@@ -365,12 +366,6 @@ export function trimHistory(
   let dropped = kept.length !== history.length;
   while (kept.length > maxTurns) {
     kept.splice(0, 2);
-    dropped = true;
-  }
-  let total = kept.reduce((sum, turn) => sum + turn.content.length, 0);
-  while (total > maxChars && kept.length >= 2) {
-    const removed = kept.splice(0, 2);
-    total -= removed.reduce((sum, turn) => sum + turn.content.length, 0);
     dropped = true;
   }
   return { history: kept, dropped };

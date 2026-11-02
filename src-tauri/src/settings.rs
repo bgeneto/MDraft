@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, Runtime};
 
+use crate::ai::limits::clamp_context_tokens;
+
 /// Maximum number of entries kept in the persisted "recent files" list.
 ///
 /// The sidebar renders all of these and scrolls. The File › Open Recent submenu
@@ -141,6 +143,15 @@ fn default_read_aloud_rate() -> f64 {
 
 fn default_ai_base_url() -> String {
     "https://api.openai.com/v1".to_string()
+}
+
+/// The assistant's document-context budget, in approximate tokens.
+///
+/// The value is clamped when it is loaded and when it is saved; the Preferences
+/// row offers the same range. The estimator is the status bar's, not a second
+/// per-model tokenizer.
+fn default_ai_context_tokens() -> usize {
+    crate::ai::limits::DEFAULT_AI_CONTEXT_TOKENS
 }
 
 fn default_true() -> bool {
@@ -492,6 +503,14 @@ pub struct Settings {
     /// Model id sent verbatim to the endpoint.
     #[serde(default)]
     pub ai_model: String,
+    /// How much context one request may send, in approximate tokens.
+    ///
+    /// The passage, Continue's preceding text, Ask's question and history all
+    /// draw from this one budget. `src-tauri/src/ai/limits.rs` derives the
+    /// shares. Older files load with the default, and a hand-edited value is
+    /// clamped on load and save.
+    #[serde(default = "default_ai_context_tokens")]
+    pub ai_context_tokens: usize,
 
     // ---- Preferences: Read Aloud -----------------------------------------
     /// Voice the right-click **Read Aloud** commands use.
@@ -581,6 +600,7 @@ impl Default for Settings {
             ai_provider: default_ai_provider(),
             ai_base_url: default_ai_base_url(),
             ai_model: String::new(),
+            ai_context_tokens: default_ai_context_tokens(),
 
             read_aloud_voice: String::new(),
             read_aloud_rate: default_read_aloud_rate(),
@@ -689,6 +709,7 @@ fn parse_settings(raw: &str) -> Option<Settings> {
     settings.recent_files.truncate(MAX_RECENT);
     normalize_favorites(&mut settings.favorites);
     settings.last_tabs.truncate(MAX_LAST_TABS);
+    settings.ai_context_tokens = clamp_context_tokens(settings.ai_context_tokens);
     // The Files panel was replaced by Favorites. An older file that was last
     // showing it must open on the panel that took its place, not fall through
     // the renderer's `else` branch into Recent.
@@ -730,6 +751,7 @@ impl AppState {
         next.recent_files.truncate(MAX_RECENT);
         normalize_favorites(&mut next.favorites);
         next.last_tabs.truncate(MAX_LAST_TABS);
+        next.ai_context_tokens = clamp_context_tokens(next.ai_context_tokens);
         write_json(&self.config_file, &next)?;
         let mut guard = self.settings.lock().map_err(|e| e.to_string())?;
         *guard = next.clone();
@@ -971,6 +993,40 @@ mod tests {
         assert!(s.spellcheck);
         assert_eq!(s.spellcheck_language, "auto");
         assert!(s.spellcheck_words.is_empty());
+        assert_eq!(s.ai_context_tokens, 8_192);
+    }
+
+    #[test]
+    fn ai_context_tokens_default_and_clamp() {
+        let defaults = parse_settings("{}").expect("an empty object is still settings");
+        assert_eq!(defaults.ai_context_tokens, 8_192);
+
+        let too_high = parse_settings(r#"{"aiContextTokens": 999999}"#)
+            .expect("an overgrown budget is still settings");
+        assert_eq!(too_high.ai_context_tokens, 32_768);
+
+        let too_low = parse_settings(r#"{"aiContextTokens": 1}"#)
+            .expect("a tiny budget is still settings");
+        assert_eq!(too_low.ai_context_tokens, 1_024);
+    }
+
+    #[test]
+    fn saving_clamps_the_ai_context_budget() {
+        let dir = std::env::temp_dir().join(format!("tt-ai-context-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = AppState {
+            settings: Mutex::new(Settings::default()),
+            config_file: dir.join("settings.json"),
+            export_availability: Mutex::new(ExportAvailability::default()),
+            ai: crate::ai::AiState::default(),
+        };
+        let next = Settings {
+            ai_context_tokens: usize::MAX,
+            ..Settings::default()
+        };
+        let saved = state.save(next).expect("save settings");
+        assert_eq!(saved.ai_context_tokens, 32_768);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 # Menus are organized by user intent, with one primary address per command
 
 **Status:** accepted
+**Superseded in part by:** `2026-11-02-preferences-in-file-menu.md` (Preferences placement only)
 **Date:** 2026-10-25
 
 ## Context
