@@ -70,6 +70,10 @@ impl Overrides {
 
     /// How many sections are present, including ones identical to the built-in
     /// text (a reader may have looked and saved without changing anything).
+    ///
+    /// Test-only: what the panel reports is `customised()`, and a section count
+    /// is `sections().len()`.
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.prompts.len()
     }
