@@ -2188,6 +2188,28 @@ async function loadUntitled(
   await showInEditor(true);
 }
 
+/**
+ * Open an AI answer as its own untitled tab.
+ *
+ * `loadUntitled` records the content as the saved baseline, because a bundled
+ * document is reproduced from the bundle and closing it loses nothing. An answer
+ * is not reproducible, so the baseline is cleared and the tab starts dirty: the
+ * tab strip shows its dot, Ctrl+W asks before discarding it, and the recovery
+ * journal holds the text until it is saved or discarded.
+ */
+async function openAiDocument(text: string, language: api.DocumentLanguage): Promise<void> {
+  try {
+    await loadUntitled(text, language);
+  } catch (error) {
+    toast(`Could not open a new tab: ${String(error)}`);
+    return;
+  }
+  doc.savedContent = "";
+  setDirty(true);
+  recovery.schedule(doc, text);
+  toast("Opened the answer in a new tab — use Save As to keep a copy.");
+}
+
 /** Save only this session; the controller protects newer edits and recovery. */
 async function writeSession(session: Session, automatic = false): Promise<boolean> {
   try {
@@ -6463,6 +6485,7 @@ async function boot(): Promise<void> {
       plan.kind === "replace"
         ? editor.replaceRange(plan.from, plan.to, plan.text)
         : editor.insertText(plan.from, plan.text),
+    openInNewTab: (text, language) => openAiDocument(text, language),
     focusEditor: () => editor.focus(),
     toast,
     openSettings: () => preferences.openAt("ai"),

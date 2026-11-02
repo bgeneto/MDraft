@@ -20,6 +20,10 @@ export type AiParameter = "none" | "tone" | "language" | "markup";
  *   explanation, key points, critique).
  * - `continue`: the answer is inserted at the selection end or the caret.
  * - `answer`: Copy is primary; Insert below is available (Ask).
+ *
+ * Every kind can also open the answer in its own tab. That destination never
+ * edits the captured document, so it is the one offer that survives a stale
+ * target or a read-only buffer.
  */
 export type AiApply = "replace" | "block" | "continue" | "answer";
 
@@ -283,6 +287,25 @@ export function convertTargets(
   language: DocumentLanguage,
 ): { id: DocumentLanguage; label: string }[] {
   return MARKUPS.filter((markup) => markup.id !== language);
+}
+
+/**
+ * The markup an answer should open in when it becomes its own document.
+ *
+ * Convert answers in the *target* markup, so the new tab must be that language:
+ * a Typst answer opened in a Markdown tab would be highlighted and previewed as
+ * Markdown. Every other action answers in the document's own language. An
+ * unknown target, or one equal to the source, falls back to the source so a
+ * stale parameter cannot produce a wrongly typed tab.
+ */
+export function answerLanguage(
+  action: AiActionId,
+  parameter: string | null,
+  source: DocumentLanguage,
+): DocumentLanguage {
+  if (action !== "convert" || !parameter) return source;
+  const target = MARKUPS.find((markup) => markup.id === parameter);
+  return target && target.id !== source ? target.id : source;
 }
 
 /** The default parameter for a parameterised action. */

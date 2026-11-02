@@ -643,8 +643,11 @@ async function waitPanelDone(timeout = 15_000) {
 }
 
 async function clickFooter(label) {
+  // Scope to the panel: a history detail owns the same `.ai-footer-actions`
+  // class, and it sits earlier in the DOM, so an unscoped query would click a
+  // remembered answer instead of the one on screen.
   const clicked = await evaluate(`(() => {
-    const button = [...document.querySelectorAll('.ai-footer-actions button')].find(b => b.textContent === ${JSON.stringify(label)});
+    const button = [...document.querySelectorAll('.ai-panel .ai-footer-actions button')].find(b => b.textContent === ${JSON.stringify(label)});
     if (!button || button.disabled) return false;
     button.click();
     return true;
@@ -655,7 +658,7 @@ async function clickFooter(label) {
 
 async function footerButtons() {
   return evaluate(
-    `[...document.querySelectorAll('.ai-footer-actions button')].map(b => ({ text: b.textContent, disabled: b.disabled }))`,
+    `[...document.querySelectorAll('.ai-panel .ai-footer-actions button')].map(b => ({ text: b.textContent, disabled: b.disabled }))`,
   );
 }
 
@@ -870,6 +873,57 @@ async function closeTab() {
   await sleep(600);
 }
 
+/** The visible tab strip: how many, which one is active, which are unsaved. */
+async function tabState() {
+  return evaluate(`(() => {
+    const tabs = [...document.querySelectorAll('.doc-tab')];
+    return {
+      count: tabs.length,
+      active: tabs.findIndex((tab) => tab.getAttribute('aria-selected') === 'true'),
+      dirty: tabs.map((tab) => tab.classList.contains('is-dirty')),
+      names: tabs.map((tab) => tab.querySelector('.doc-tab-name')?.textContent ?? ''),
+    };
+  })()`);
+}
+
+/**
+ * Close the rightmost tab and discard it when the app asks to save it.
+ *
+ * A generated tab is dirty by design, so Ctrl+W (and the harness afterwards)
+ * meets the unsaved dialog instead of a silent close. Returns whether the
+ * dialog appeared, which is itself the assertion that the tab was marked dirty.
+ */
+async function discardGeneratedTab() {
+  const clicked = await evaluate(`(() => {
+    const tabs = [...document.querySelectorAll('.doc-tab')];
+    const last = tabs.at(-1);
+    if (!last) return false;
+    last.querySelector('.doc-tab-close')?.click();
+    return true;
+  })()`);
+  if (!clicked) return false;
+  const asked = await waitFor(`Boolean(document.querySelector('.unsaved-dialog'))`, 4000);
+  if (asked) {
+    await evaluate(
+      `document.querySelector('.unsaved-dialog button[data-decision="discard"]')?.click()`,
+    );
+    await sleep(400);
+  }
+  return Boolean(asked);
+}
+
+/** Press the answer head's Regenerate icon, which replaced the footer button. */
+async function clickRegenerate() {
+  const clicked = await evaluate(`(() => {
+    const button = document.querySelector('.ai-regenerate');
+    if (!button || button.hidden) return false;
+    button.click();
+    return true;
+  })()`);
+  await sleep(250);
+  return clicked;
+}
+
 // ---------------------------------------------------------------------------
 // Setup
 // ---------------------------------------------------------------------------
@@ -981,7 +1035,7 @@ try {
   const palette = await evaluate(`(() => ({
     groups: [...document.querySelectorAll('.ai-group')].map(g => g.textContent),
     rows: [...document.querySelectorAll('.ai-row-label')].map(r => r.textContent),
-    footer: [...document.querySelectorAll('.ai-palette-footer button')].map(b => b.textContent),
+    footer: [...document.querySelectorAll('.ai-palette-footer button')].map((b) => b.textContent.trim()),
     height: Math.round(document.querySelector('.ai-palette').getBoundingClientRect().height),
     inside: (() => {
       const pane = document.getElementById('editor-pane').getBoundingClientRect();
@@ -999,7 +1053,7 @@ try {
   check(
     "the palette footer has History and the settings command",
     palette.footer.includes("History") &&
-      palette.footer.includes("AI Assistant Settings…") &&
+      palette.footer.includes("AI Settings…") &&
       !palette.footer.some((label) => label.includes("Reset button position")),
     JSON.stringify(palette.footer),
   );
@@ -1371,6 +1425,37 @@ try {
     improveFooter.some((b) => b.text === "Copy"),
   );
   check(
+    "New tab is offered",
+    improveFooter.some((b) => b.text === "New tab" && !b.disabled),
+  );
+  check(
+    "Regenerate moved to the answer head",
+    (await evaluate(`!document.querySelector('.ai-regenerate')?.hidden`)) &&
+      !improveFooter.some((b) => b.text === "Regenerate"),
+  );
+  check(
+    "the Regenerate icon carries its own name",
+    await evaluate(
+      `(() => { const b = document.querySelector('.ai-regenerate'); return b?.title === 'Regenerate' && b?.getAttribute('aria-label') === 'Regenerate'; })()`,
+    ),
+  );
+  const footerRow = await evaluate(`(() => {
+    const row = document.querySelector('.ai-panel .ai-footer-actions');
+    const buttons = [...(row?.querySelectorAll('button') ?? [])];
+    if (!buttons.length) return null;
+    const pane = document.querySelector('.ai-panel').getBoundingClientRect();
+    return {
+      rows: new Set(buttons.map((b) => Math.round(b.getBoundingClientRect().top))).size,
+      overflow: Math.round(row.scrollWidth - row.clientWidth),
+      inside: buttons.every((b) => b.getBoundingClientRect().right <= pane.right - 4),
+    };
+  })()`);
+  check(
+    "the four destinations share one row",
+    footerRow?.rows === 1 && footerRow.overflow <= 0 && footerRow.inside === true,
+    JSON.stringify(footerRow),
+  );
+  check(
     "the header names the model and host",
     (await evaluate(`document.querySelector('.ai-chip')?.textContent ?? ''`)).includes(
       "test-model",
@@ -1414,6 +1499,10 @@ try {
     "Insert is the primary action",
     (await footerButtons()).some((b) => b.text === "Insert" && !b.disabled),
   );
+  check(
+    "Continue offers New tab",
+    (await footerButtons()).some((b) => b.text === "New tab" && !b.disabled),
+  );
   check("Insert places the continuation", await clickFooter("Insert"));
   const continued = await editorText();
   check("the continuation is in the buffer", continued.includes("and the mock continues."));
@@ -1437,6 +1526,10 @@ try {
   check(
     "Insert below is the primary action",
     (await footerButtons()).some((b) => b.text === "Insert below" && !b.disabled),
+  );
+  check(
+    "Summarize offers New tab",
+    (await footerButtons()).some((b) => b.text === "New tab" && !b.disabled),
   );
   check("Insert below places the block", await clickFooter("Insert below"));
   const summarized = await editorText();
@@ -1520,7 +1613,7 @@ try {
   })()`);
   check(
     "the panel has a top-left resize grip",
-    handleBox?.width === 14 && handleBox?.height === 14 && handleBox?.cursor === "nwse-resize",
+    handleBox?.width === 20 && handleBox?.height === 20 && handleBox?.cursor === "nwse-resize",
     JSON.stringify(handleBox),
   );
 
@@ -1736,6 +1829,12 @@ try {
       "Converted by the mock",
     ),
   );
+  check(
+    "Convert marks New tab as the primary",
+    await evaluate(
+      `document.querySelector('.ai-panel .ai-footer-actions .ai-action.is-primary')?.textContent === 'New tab'`,
+    ),
+  );
   await closePanel();
 
   // -------------------------------------------------------------------------
@@ -1778,6 +1877,10 @@ try {
     "Ask offers Copy and Insert below",
     (await footerButtons()).some((b) => b.text === "Copy") &&
       (await footerButtons()).some((b) => b.text === "Insert below"),
+  );
+  check(
+    "Ask offers New tab",
+    (await footerButtons()).some((b) => b.text === "New tab" && !b.disabled),
   );
   check("Ask Insert below places the answer", await clickFooter("Insert below"));
   check(
@@ -1902,6 +2005,10 @@ try {
   check(
     "a changed document still offers Insert below",
     staleFooter.find((b) => b.text === "Insert below")?.disabled === false,
+  );
+  check(
+    "a changed document still offers New tab",
+    staleFooter.find((b) => b.text === "New tab")?.disabled === false,
   );
   await closePanel();
   await undo();
@@ -2028,8 +2135,10 @@ try {
     askDetail.context,
   );
   check(
-    "the detail offers Copy and Insert below",
-    askDetail.actions.includes("Copy") && askDetail.actions.includes("Insert below"),
+    "the detail offers Copy, Insert below and New tab",
+    askDetail.actions.includes("Copy") &&
+      askDetail.actions.includes("Insert below") &&
+      askDetail.actions.includes("New tab"),
     JSON.stringify(askDetail.actions),
   );
   check("the detail has a back button", askDetail.back === true);
@@ -2085,7 +2194,7 @@ try {
   await chooseAction("Improve writing");
   await waitPanelDone();
   const beforeRegenerate = control.requests.length;
-  check("Regenerate sends the request again", await clickFooter("Regenerate"));
+  check("Regenerate sends the request again", await clickRegenerate());
   const regenerateDeadline = Date.now() + 8000;
   while (control.requests.length === beforeRegenerate && Date.now() < regenerateDeadline) {
     await sleep(80);
@@ -2109,6 +2218,163 @@ try {
     afterRegenerate[0]?.title,
   );
   await closeHistory();
+
+  // -------------------------------------------------------------------------
+  // New tab
+  // -------------------------------------------------------------------------
+
+  console.log("\nNew tab");
+  const improveAnswer = (
+    await evaluate(`document.querySelector('.ai-answer')?.textContent?.trim() ?? ''`)
+  ).trim();
+  check(
+    "the panel holds the improved answer",
+    improveAnswer === "Improved passage from the mock.",
+    improveAnswer,
+  );
+  const tabsBeforeNewTab = await tabState();
+  check(
+    "the answer on screen can open in a new tab",
+    (await footerButtons()).some((b) => b.text === "New tab" && !b.disabled),
+  );
+  await clickFooter("New tab");
+  await waitFor(
+    `document.querySelectorAll('.doc-tab').length === ${tabsBeforeNewTab.count + 1}`,
+    6000,
+  );
+  await waitFor(
+    `[...document.querySelectorAll('.cm-line')].map((line) => line.textContent).join('\\n').includes('Improved passage from the mock.')`,
+    6000,
+  );
+  const tabsAfterNewTab = await tabState();
+  check(
+    "New tab opened exactly one tab",
+    tabsAfterNewTab.count === tabsBeforeNewTab.count + 1,
+    `${tabsBeforeNewTab.count} -> ${tabsAfterNewTab.count}`,
+  );
+  check(
+    "the generated tab is active",
+    tabsAfterNewTab.active === tabsAfterNewTab.count - 1,
+    JSON.stringify(tabsAfterNewTab),
+  );
+  check(
+    "the generated tab is dirty",
+    tabsAfterNewTab.dirty[tabsAfterNewTab.active] === true,
+    JSON.stringify(tabsAfterNewTab.dirty),
+  );
+  check(
+    "the answer is the whole buffer",
+    (await editorText()).includes("Improved passage from the mock."),
+    JSON.stringify((await editorText()).slice(0, 90)),
+  );
+  check(
+    "opening a tab closes the panel",
+    await evaluate(`document.querySelector('.ai-panel').hidden`),
+  );
+  await evaluate(`document.querySelectorAll('.doc-tab')[0].click()`);
+  await waitFor(
+    `document.querySelectorAll('.doc-tab')[0]?.getAttribute('aria-selected') === 'true'`,
+    4000,
+  );
+  await waitFor(
+    `![...document.querySelectorAll('.cm-line')].map((line) => line.textContent).join('\\n').includes('Improved passage from the mock.')`,
+    4000,
+  );
+  // The buffer is compared by what it must not contain rather than by bytes: a
+  // long fixture renders only the lines in the viewport, so two whole-text reads
+  // at different scroll offsets are not equal even when nothing was written.
+  check(
+    "the original buffer does not gain the answer",
+    !(await editorText()).includes("Improved passage from the mock."),
+  );
+  check(
+    "the original tab stays clean",
+    (await tabState()).dirty[0] === false,
+    JSON.stringify((await tabState()).dirty),
+  );
+  check("closing the generated tab asks first", await discardGeneratedTab());
+  check(
+    "Discard removed the generated tab",
+    (await tabState()).count === tabsBeforeNewTab.count,
+    String((await tabState()).count),
+  );
+
+  // The same destination exists for a remembered answer.
+  console.log("\nNew tab from History");
+  await openHistory();
+  check("the history detail opens", await openHistoryDetail(0));
+  const historyNewTab = await evaluate(`(() => {
+    const button = [...document.querySelectorAll('.ai-history-detail-actions button')].find(b => b.textContent === 'New tab');
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`);
+  check("the history detail opens a new tab", historyNewTab);
+  await waitFor(
+    `document.querySelectorAll('.doc-tab').length === ${tabsBeforeNewTab.count + 1}`,
+    6000,
+  );
+  await waitFor(
+    `[...document.querySelectorAll('.cm-line')].map((line) => line.textContent).join('\\n').includes('Improved passage from the mock.')`,
+    6000,
+  );
+  const historyTabs = await tabState();
+  check(
+    "the remembered answer is in a dirty tab",
+    historyTabs.count === tabsBeforeNewTab.count + 1 &&
+      historyTabs.dirty[historyTabs.active] === true,
+    JSON.stringify(historyTabs),
+  );
+  check(
+    "the remembered answer is the buffer",
+    (await editorText()).includes("Improved passage from the mock."),
+  );
+  check("closing the history tab asks first", await discardGeneratedTab());
+
+  // Convert answers in a different markup, so its tab must be typed as that
+  // markup; a Markdown tab holding Typst would highlight and preview it wrongly.
+  console.log("\nNew tab in the converted markup");
+  await clickEditorWord("Regular");
+  await chooseAction("Convert markup…");
+  await evaluate(
+    `(() => { const select = document.querySelector('.ai-params select'); select.value = 'typst'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`,
+  );
+  await sleep(100);
+  await evaluate(`document.querySelector('.ai-params .ai-generate').click()`);
+  await waitPanelDone();
+  check(
+    "Convert makes New tab primary",
+    await evaluate(
+      `document.querySelector('.ai-panel .ai-footer-actions .ai-action.is-primary')?.textContent === 'New tab'`,
+    ),
+  );
+  await clickFooter("New tab");
+  await waitFor(
+    `[...document.querySelectorAll('.cm-line')].map((line) => line.textContent).join('\\n').includes('Converted by the mock')`,
+    6000,
+  );
+  // `menu_state` is the native-menu probe, and the two Typst view items are
+  // checked only for a Typst buffer. That is the proof the target markup reached
+  // the host; the check is pushed asynchronously, so poll.
+  const convertedLanguage = await waitFor(
+    `window.__TAURI_INTERNALS__.invoke('menu_state').then((items) => items.some((item) => (item.id === 'view.typstDocument' || item.id === 'view.typstPages') && item.checked) ? 'typst' : '')`,
+    5000,
+  );
+  check(
+    "the converted tab is typed as Typst",
+    convertedLanguage === "typst",
+    String(convertedLanguage ?? ""),
+  );
+  check(
+    "the converted tab holds the answer",
+    (await editorText()).includes("Converted by the mock"),
+  );
+  await discardGeneratedTab();
+  check(
+    "the converted tab is gone",
+    (await tabState()).count === tabsBeforeNewTab.count,
+    String((await tabState()).count),
+  );
 
   // -------------------------------------------------------------------------
   // Tab switch and view mode
@@ -2491,6 +2757,69 @@ try {
     check("saving the key leaves an existing key alone", true, "an existing key was used");
   }
   await closePrefs();
+
+  // -------------------------------------------------------------------------
+  // Typed parameters
+  // -------------------------------------------------------------------------
+
+  // The language field is free text: "Catalan" and "pt-BR" are not in the
+  // datalist, so typing is the only way to ask for them. This runs after the
+  // History checks because every Generate adds a distinct history entry.
+  console.log("\nTranslate with a typed target");
+
+  // CDP inserts into whatever holds focus at dispatch time. A stray focus
+  // change would put the language into the editor instead, so prove the field
+  // is focused and received the text before anything is generated.
+  const typeTargetLanguage = async (value) => {
+    const focused = await evaluate(`(() => {
+      const input = document.querySelector('.ai-params input[type=text]');
+      if (!input) return false;
+      input.focus();
+      input.select();
+      return document.activeElement === input;
+    })()`);
+    if (!focused) throw new Error("the language field could not take focus");
+    await send("Input.insertText", { text: value });
+    await sleep(120);
+    const actual = await evaluate(
+      `document.querySelector('.ai-params input[type=text]')?.value ?? ''`,
+    );
+    if (actual !== value) {
+      throw new Error(`the language field holds ${JSON.stringify(actual)}, not ${value}`);
+    }
+  };
+
+  await clickEditorWord("Regular");
+  await chooseAction("Translate…");
+  await typeTargetLanguage("Portuguese");
+  await evaluate(`document.querySelector('.ai-params .ai-generate').click()`);
+  await waitPanelDone();
+  check(
+    "an answer is visible for the target it was sent with",
+    await evaluate(`!document.querySelector('.ai-result').hidden`),
+  );
+  const beforeTypedTarget = control.requests.length;
+  await typeTargetLanguage("Catalan");
+  check(
+    "typing another target clears the answer the old one produced",
+    await evaluate(`document.querySelector('.ai-result').hidden`),
+  );
+  // Enter is the only submit gesture a single-line field needs. Without it the
+  // old answer stayed on screen and the typed target looked ignored.
+  await pressKey("Enter", "Enter", 13);
+  const typedDone = await waitPanelDone();
+  check(
+    "Enter sends the typed target",
+    typedDone && control.requests.length === beforeTypedTarget + 1,
+    `${typedDone ? "done" : "no request"} · ${control.requests.length - beforeTypedTarget} sent`,
+  );
+  const typedSystem = control.requests.at(-1)?.system ?? "";
+  check(
+    "the model receives the typed language",
+    typedSystem.includes("into Catalan"),
+    typedSystem.match(/document into ([^.\n]+)\./)?.[1] ?? "missing",
+  );
+  await closePanel();
 
   // -------------------------------------------------------------------------
   // Appearance and cleanup

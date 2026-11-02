@@ -15,6 +15,7 @@ import {
   LANGUAGES,
   TONES,
   actionById,
+  answerLanguage,
   convertTargets,
   defaultParameter,
   groupedActions,
@@ -57,6 +58,14 @@ const MIN_PANEL_HEIGHT = 240;
 const PANE_MARGIN = 8;
 const ANCHOR_SIDE_MARGIN = 20;
 
+/**
+ * Tooltips for the two labels that do not say where they act. `Copy` and
+ * `Replace selection` are explicit; `Insert below` and `New tab` are not — below
+ * *what*, and into *which* tab.
+ */
+const INSERT_BELOW_TITLE = "Insert the answer below the current paragraph.";
+const REPLACE_TITLE = "Replace the captured passage with the answer.";
+
 /** A resized assistant popover, in pane coordinates, for this session only. */
 interface PopoverRect {
   left: number;
@@ -82,6 +91,12 @@ export interface AssistantHost {
   revision(): number;
   canWrite(): boolean;
   apply(plan: ApplyPlan): boolean;
+  /**
+   * Open an answer as its own untitled tab, typed as `language`, without
+   * touching this document. The host decides whether the new buffer starts
+   * dirty; this module only supplies the text and the markup.
+   */
+  openInNewTab(text: string, language: api.DocumentLanguage): void | Promise<void>;
   focusEditor(): void;
   toast(text: string): void;
   openSettings(): void;
@@ -185,8 +200,14 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       </div>
       <div class="ai-actions" role="listbox" aria-label="AI actions"></div>
       <div class="ai-palette-footer">
-        <button class="ai-link" type="button" data-command="history">History</button>
-        <button class="ai-link" type="button" data-command="settings">AI Assistant Settings…</button>
+        <button class="ai-link" type="button" data-command="history">
+          ${iconSvg('<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>')}
+          <span>History</span>
+        </button>
+        <button class="ai-link" type="button" data-command="settings">
+          ${iconSvg('<path d="M10.3 3.6a1.75 1.75 0 0 1 3.4 0l.3 1.2a1 1 0 0 0 1.4.7l1.1-.5a1.75 1.75 0 0 1 2.4 2.4l-.5 1.1a1 1 0 0 0 .7 1.4l1.2.3a1.75 1.75 0 0 1 0 3.4l-1.2.3a1 1 0 0 0-.7 1.4l.5 1.1a1.75 1.75 0 0 1-2.4 2.4l-1.1-.5a1 1 0 0 0-1.4.7l-.3 1.2a1.75 1.75 0 0 1-3.4 0l-.3-1.2a1 1 0 0 0-1.4-.7l-1.1.5a1.75 1.75 0 0 1-2.4-2.4l.5-1.1a1 1 0 0 0-.7-1.4l-1.2-.3a1.75 1.75 0 0 1 0-3.4l1.2-.3a1 1 0 0 0 .7-1.4l-.5-1.1a1.75 1.75 0 0 1 2.4-2.4l1.1.5a1 1 0 0 0 1.4-.7z"/><circle cx="12" cy="12" r="3"/>')}
+          <span>AI Settings…</span>
+        </button>
       </div>
     </div>
     <div class="ai-popover ai-history" role="dialog" aria-labelledby="ai-history-title" hidden>
@@ -227,9 +248,20 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
           <div class="ai-result-head">
             <span class="ai-result-label">Answer</span>
             <span class="ai-changes-summary"></span>
-            <div class="ai-toggle" role="group" aria-label="Answer view">
-              <button class="ai-toggle-btn active" type="button" data-view="result">Result</button>
-              <button class="ai-toggle-btn" type="button" data-view="changes">Changes</button>
+            <div class="ai-result-tools">
+              <button
+                class="ai-regenerate"
+                type="button"
+                title="Regenerate"
+                aria-label="Regenerate"
+                hidden
+              >
+                ${iconSvg('<path d="M21 12a9 9 0 1 1-2.64-6.36" /><path d="M21 3v6h-6" />')}
+              </button>
+              <div class="ai-toggle" role="group" aria-label="Answer view">
+                <button class="ai-toggle-btn active" type="button" data-view="result">Result</button>
+                <button class="ai-toggle-btn" type="button" data-view="changes">Changes</button>
+              </div>
             </div>
           </div>
           <div class="ai-answer ai-markdown"></div>
@@ -280,6 +312,8 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
   const resultLabel = root.querySelector<HTMLElement>(".ai-result-label")!;
   const changesSummary = root.querySelector<HTMLElement>(".ai-changes-summary")!;
   const toggleButtons = Array.from(root.querySelectorAll<HTMLButtonElement>(".ai-toggle-btn"));
+  const toggleGroup = root.querySelector<HTMLElement>(".ai-toggle")!;
+  const regenerateButton = root.querySelector<HTMLButtonElement>(".ai-regenerate")!;
   const answerEl = root.querySelector<HTMLElement>(".ai-answer")!;
   const answerSource = root.querySelector<HTMLDetailsElement>(".ai-answer-source")!;
   const answerSourceText = root.querySelector<HTMLElement>(".ai-answer-source-text")!;
@@ -332,6 +366,8 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
   let askHistory: api.AiTurn[] = [];
   let pendingQuestion = "";
   let parameterValue = "";
+  /** The parameter the current request was sent with, not the one on screen now. */
+  let sentParameter: string | null = null;
   let historyOpen = false;
   let historyDetailId: string | null = null;
   let historyEntries: AiHistoryEntry[] = [];
@@ -1084,6 +1120,13 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
           ? "Insert the answer below the current paragraph."
           : "The document is read-only.",
       ),
+      actionButton(
+        "New tab",
+        false,
+        () => openHistoryInNewTab(entry),
+        false,
+        "Open the answer in a new untitled tab; this document is not changed.",
+      ),
     );
     historyDetail.appendChild(actions);
   }
@@ -1122,6 +1165,15 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     host.toast("Inserted the answer — undo with Ctrl/Cmd+Z.");
   }
 
+  /** Re-open a remembered answer as its own tab, in the markup the action used. */
+  function openHistoryInNewTab(entry: AiHistoryEntry): void {
+    const text = entry.answer.trim();
+    if (!text) return;
+    const language = answerLanguage(entry.action, entry.parameter, entry.language);
+    close();
+    void host.openInNewTab(text, language);
+  }
+
   /**
    * Record a completed answer once. Regenerate keeps the entry id, so replacing
    * the same request cannot grow the list.
@@ -1134,7 +1186,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     const entry: AiHistoryEntry = {
       id: entryId,
       action: spec.id,
-      parameter: spec.parameter === "none" ? null : parameterValue || null,
+      parameter: sentParameter,
       question: spec.id === "ask" ? pendingQuestion.trim() : "",
       contextSummary: context.summary,
       context: context.text,
@@ -1181,6 +1233,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     askHistory = [];
     pendingQuestion = "";
     parameterValue = defaultParameter(spec.id, capture.language);
+    sentParameter = null;
     state = spec.parameter === "none" ? "idle" : "parameter";
     panelOpen = true;
     panel.hidden = false;
@@ -1219,11 +1272,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
         select.appendChild(option);
       }
       select.value = parameterValue;
-      select.addEventListener("change", () => {
-        parameterValue = select.value;
-        entryId = null;
-        updateGenerate();
-      });
+      select.addEventListener("change", () => setParameter(select.value));
       control = select;
       label.append("Tone");
     } else if (action.id === "translate") {
@@ -1231,11 +1280,15 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       input.type = "text";
       input.placeholder = "Target language";
       input.value = parameterValue;
+      input.spellcheck = false;
       input.setAttribute("list", "ai-language-list");
-      input.addEventListener("input", () => {
-        parameterValue = input.value;
-        entryId = null;
-        updateGenerate();
+      input.addEventListener("input", () => setParameter(input.value));
+      // A single-line field beside one button: Enter submits, as it would in
+      // any small dialog. Ctrl/Cmd+Enter is Ask's convention for its textarea.
+      input.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" || event.isComposing) return;
+        event.preventDefault();
+        if (state !== "running") startRequest();
       });
       control = input;
       label.append("Translate to");
@@ -1252,11 +1305,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
         parameterValue = convertTargets(language)[0]?.id ?? "html";
       }
       select.value = parameterValue;
-      select.addEventListener("change", () => {
-        parameterValue = select.value;
-        entryId = null;
-        updateGenerate();
-      });
+      select.addEventListener("change", () => setParameter(select.value));
       control = select;
       label.append("Convert to");
     }
@@ -1298,6 +1347,40 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     generate.textContent = running ? "Stop" : "Generate";
     generate.disabled =
       !running && !parameterIsValid(action.id, parameterValue, capture?.language ?? "markdown");
+  }
+
+  /**
+   * Adopt a parameter the reader typed or chose.
+   *
+   * An answer belongs to the parameter it was requested with, so once that
+   * changes the answer below it is no longer the result of what the field
+   * shows. Leaving it there made a translation into Portuguese sit under a
+   * field that says Catalan — it reads as a translation that ignored the
+   * request. History keeps the answer; the panel goes back to waiting.
+   */
+  function setParameter(value: string): void {
+    const changed = value !== parameterValue;
+    parameterValue = value;
+    entryId = null;
+    if (changed && state === "done") {
+      resetAnswer();
+      renderPanel();
+      return;
+    }
+    updateGenerate();
+  }
+
+  /** Drop the result a parameter no longer owns, without touching the field. */
+  function resetAnswer(): void {
+    answerText = "";
+    notes = "";
+    answerTruncated = false;
+    answerStopped = false;
+    startedInfo = null;
+    showChanges = false;
+    state = "parameter";
+    requestContext = null;
+    renderContext();
   }
 
   function describeContext(
@@ -1377,6 +1460,9 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     askRow.hidden = spec.id !== "ask";
     chatEl.hidden = spec.id !== "ask";
     resultEl.hidden = spec.id === "ask" || (!answerText && state !== "running");
+    // Redo lives with the answer, not with its destinations. Ask has no result
+    // head, and the error state already offers Retry in the footer.
+    regenerateButton.hidden = !(state === "done" && spec.id !== "ask");
     notesEl.hidden = spec.id !== "improve" || !notes;
     notesText.textContent = notes;
 
@@ -1417,6 +1503,8 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       toggle.hidden = !canDiff;
       toggle.classList.toggle("active", (toggle.dataset.view === "changes") === showChanges);
     }
+    // An empty group is a 2 px bordered sliver; hide it with the buttons it holds.
+    toggleGroup.hidden = !canDiff;
     if (canDiff && showChanges && capture) {
       answerEl.hidden = true;
       answerSource.hidden = true;
@@ -1556,14 +1644,21 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     const blockedReason = readOnly
       ? "The document is read-only."
       : isStale
-        ? "The document changed while the answer was arriving — insert it below instead."
+        ? "The document changed while the answer was arriving — insert it below or into a new tab."
         : "";
 
     if (spec.apply === "answer") {
       footerActions.appendChild(actionButton("Copy", true, () => void copyAnswer()));
       footerActions.appendChild(
-        actionButton("Insert below", false, () => applyAnswer("below"), !canApply(), blockedReason),
+        actionButton(
+          "Insert below",
+          false,
+          () => applyAnswer("below"),
+          !canApply(),
+          blockedReason || INSERT_BELOW_TITLE,
+        ),
       );
+      footerActions.appendChild(newTabButton());
       footerActions.appendChild(actionButton("New conversation", false, newConversation));
       return;
     }
@@ -1572,40 +1667,93 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       footerActions.appendChild(
         actionButton("Insert", true, () => applyAnswer("insert"), !canApply(), blockedReason),
       );
+      footerActions.appendChild(newTabButton());
       footerActions.appendChild(actionButton("Copy", false, () => void copyAnswer()));
-      footerActions.appendChild(
-        actionButton("Regenerate", false, () => startRequest("regenerate")),
-      );
       return;
     }
 
     if (spec.apply === "block") {
       footerActions.appendChild(
-        actionButton("Insert below", true, () => applyAnswer("below"), !canApply(), blockedReason),
+        actionButton(
+          "Insert below",
+          true,
+          () => applyAnswer("below"),
+          !canApply(),
+          blockedReason || INSERT_BELOW_TITLE,
+        ),
       );
+      footerActions.appendChild(newTabButton());
       footerActions.appendChild(actionButton("Copy", false, () => void copyAnswer()));
-      footerActions.appendChild(
-        actionButton("Regenerate", false, () => startRequest("regenerate")),
-      );
       return;
     }
 
     // Rewrite: Replace is primary, Insert below is the safe alternative.
     const replaceDisabled = !canApply() || isStale;
-    footerActions.appendChild(
-      actionButton(
-        "Replace selection",
-        true,
-        () => applyAnswer("replace"),
-        replaceDisabled,
-        blockedReason,
-      ),
+    const replace = actionButton(
+      "Replace selection",
+      spec.id !== "convert",
+      () => applyAnswer("replace"),
+      replaceDisabled,
+      blockedReason || REPLACE_TITLE,
     );
-    footerActions.appendChild(
-      actionButton("Insert below", false, () => applyAnswer("below"), !canApply(), blockedReason),
+    const insertBelow = actionButton(
+      "Insert below",
+      false,
+      () => applyAnswer("below"),
+      !canApply(),
+      blockedReason || INSERT_BELOW_TITLE,
     );
+    if (spec.id === "convert") {
+      // Convert answers in a different markup: replacing a passage of the source
+      // language with it, or leaving both markups in one buffer, is wrong in
+      // both directions, so the new tab is the natural result.
+      footerActions.appendChild(newTabButton(true));
+      footerActions.appendChild(replace);
+      footerActions.appendChild(insertBelow);
+      footerActions.appendChild(actionButton("Copy", false, () => void copyAnswer()));
+      return;
+    }
+    footerActions.appendChild(replace);
+    footerActions.appendChild(insertBelow);
+    footerActions.appendChild(newTabButton());
     footerActions.appendChild(actionButton("Copy", false, () => void copyAnswer()));
-    footerActions.appendChild(actionButton("Regenerate", false, () => startRequest("regenerate")));
+  }
+
+  /** A complete answer exists — not stopped, not empty, not still arriving. */
+  function completeAnswer(): boolean {
+    return state === "done" && !answerStopped && answerText.trim().length > 0;
+  }
+
+  /**
+   * The "New tab" destination.
+   *
+   * It never edits the captured document, so neither a stale target nor a
+   * read-only buffer disables it: only an incomplete answer does.
+   */
+  function newTabButton(primary = false): HTMLButtonElement {
+    return actionButton(
+      "New tab",
+      primary,
+      () => void openAnswerInNewTab(),
+      !completeAnswer(),
+      "Open the answer in a new untitled tab; this document is not changed.",
+    );
+  }
+
+  /**
+   * Send the answer to its own tab.
+   *
+   * Deliberately not gated by `canApply()`: a stale target or a read-only buffer
+   * still has a complete answer, and this is the destination that keeps it
+   * without touching the document it came from.
+   */
+  async function openAnswerInNewTab(): Promise<void> {
+    if (!action || !capture || !completeAnswer()) return;
+    const parameter = action.parameter === "none" ? null : parameterValue;
+    const language = answerLanguage(action.id, parameter, capture.language);
+    const text = answerText.trim();
+    close();
+    await host.openInNewTab(text, language);
   }
 
   async function copyAnswer(): Promise<void> {
@@ -1626,7 +1774,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     if (kind === "replace") {
       if (stale()) {
         setStatus(
-          "The document changed while the answer was arriving — insert it below instead.",
+          "The document changed while the answer was arriving — insert it below or into a new tab.",
           true,
         );
         return;
@@ -1719,6 +1867,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     errorMessage = "";
     startedInfo = null;
     showChanges = false;
+    sentParameter = parameter;
     if (spec.id === "ask") pendingQuestion = question;
 
     const history = spec.id === "ask" ? trimHistory(askHistory).history : [];
@@ -1770,6 +1919,12 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
           }
           pendingQuestion = "";
           askInput.value = "";
+        }
+        // The target moved while the answer was arriving: the answer belongs
+        // to the parameter it was sent with, so History keeps it and the panel
+        // returns to waiting instead of showing it under the new value.
+        if (action && action.parameter !== "none" && sentParameter !== parameterValue) {
+          resetAnswer();
         }
         renderPanel();
         break;
@@ -2012,6 +2167,12 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       nudgeResize(event, element);
     });
   }
+
+  regenerateButton.addEventListener("click", () => {
+    // The button is hidden outside the done state; the guard keeps a queued
+    // click during the last render from starting a second request.
+    if (state === "done") startRequest("regenerate");
+  });
 
   for (const toggle of toggleButtons) {
     toggle.addEventListener("click", () => {
