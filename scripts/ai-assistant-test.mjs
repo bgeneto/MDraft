@@ -137,6 +137,48 @@ const server = http.createServer(async (request, response) => {
     tag: tag ?? null,
   });
 
+  // A model that refuses the reasoning-off field. `rejectReasoning` refuses the
+  // first Anthropic spelling only, which is what exercises the client's
+  // `between_tools` translation; `rejectAllReasoning` stands for a model whose
+  // thinking cannot be turned off at all.
+  const reasoningOff = isAnthropic
+    ? body.thinking?.type === "disabled" || body.thinking?.type === "between_tools"
+    : body.reasoning_effort === "none";
+  const refusesReasoning =
+    control.mode === "rejectAllReasoning" ||
+    (control.mode === "rejectReasoning" &&
+      (isAnthropic ? body.thinking?.type === "disabled" : body.reasoning_effort === "none"));
+  if (reasoningOff && refusesReasoning) {
+    response.writeHead(400, { "content-type": "application/json" });
+    response.end(
+      JSON.stringify(
+        isAnthropic
+          ? {
+              type: "error",
+              error: {
+                message:
+                  '"thinking.type.disabled" is not supported for this model. Use "thinking.type.between_tools" instead.',
+              },
+            }
+          : { error: { message: "Unrecognized request argument supplied: reasoning_effort" } },
+      ),
+    );
+    return;
+  }
+
+  // The Preferences test is a plain completion, not a stream.
+  if (body.stream === false) {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(
+      JSON.stringify(
+        isAnthropic
+          ? { type: "message", content: [{ type: "text", text: "OK" }] }
+          : { choices: [{ message: { role: "assistant", content: "OK" } }] },
+      ),
+    );
+    return;
+  }
+
   const noisy = control.mode === "noisy" && action === "translate";
   const answer =
     action === "ask"
@@ -496,6 +538,23 @@ async function aiStatusNote() {
   return evaluate(
     `[...document.querySelectorAll('.prefs-row')].find(r => r.querySelector('.prefs-label')?.textContent.replace(/\\?$/, '') === 'Models')?.querySelector('.prefs-note')?.textContent ?? ''`,
   );
+}
+
+// The reasoning test's answer, under the button that asked for it.
+async function reasoningNote() {
+  return evaluate(
+    `[...document.querySelectorAll('.prefs-row')].find(r => r.querySelector('.prefs-label')?.textContent.replace(/\\?$/, '') === 'Reasoning')?.querySelector('.prefs-note')?.textContent ?? ''`,
+  );
+}
+
+async function waitReasoningNote(fragment, timeout = 10_000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const note = await reasoningNote();
+    if (note.includes(fragment)) return note;
+    await sleep(120);
+  }
+  return "";
 }
 
 async function clickFab() {
@@ -2532,6 +2591,124 @@ try {
   await closePanel();
 
   // -------------------------------------------------------------------------
+  // Reasoning off
+  // -------------------------------------------------------------------------
+
+  console.log("\nReasoning");
+
+  await openAiSection();
+  const reasoningBox = await evaluate(`(() => {
+    const row = ${rowSelector("Disable reasoning (thinking)")};
+    const input = row?.querySelector('input[type=checkbox]');
+    return { present: Boolean(input), checked: input?.checked ?? null };
+  })()`);
+  check(
+    "the reasoning box exists and is off by default",
+    reasoningBox.present && reasoningBox.checked === false,
+    JSON.stringify(reasoningBox),
+  );
+
+  // The test asks the model, not the checkbox: it must work before opting in.
+  await clickPrefsButton("Test with the configured model");
+  const acceptedNote = await waitReasoningNote("accepted the reasoning-off request");
+  check(
+    "the test accepts a model that allows reasoning off",
+    acceptedNote.length > 0,
+    acceptedNote,
+  );
+
+  check("the reasoning box can be ticked", await setCheckbox("Disable reasoning (thinking)", true));
+  await closePrefs();
+  await clickEditorWord("Regular");
+  await chooseAction("Summarize");
+  await waitPanelDone();
+  const anthropicOff = control.requests.at(-1);
+  check(
+    "Anthropic asks for thinking off",
+    anthropicOff?.body?.thinking?.type === "disabled",
+    JSON.stringify(anthropicOff?.body?.thinking),
+  );
+  await closePanel();
+
+  // Sonnet 5.5 refuses "disabled" and names "between_tools"; the client must
+  // translate the reader's intent instead of surfacing that 400.
+  control.mode = "rejectReasoning";
+  const beforeRetry = control.requests.length;
+  await clickEditorWord("Regular");
+  await chooseAction("Summarize");
+  await waitPanelDone();
+  const retried = control.requests.slice(beforeRetry);
+  check(
+    "a model that wants between_tools is asked again",
+    retried.length === 2 &&
+      retried[0].body?.thinking?.type === "disabled" &&
+      retried[1].body?.thinking?.type === "between_tools",
+    JSON.stringify(retried.map((request) => request.body?.thinking?.type)),
+  );
+  check(
+    "the retried request answers",
+    (await panelStatus()).startsWith("Answer ready"),
+    await panelStatus(),
+  );
+  await closePanel();
+
+  // A model whose thinking cannot be turned off at all: the test reports the
+  // refusal, and Generate names the setting that caused it.
+  control.mode = "rejectAllReasoning";
+  await openAiSection();
+  await clickPrefsButton("Test with the configured model");
+  const refusedNote = await waitReasoningNote("refused the reasoning-off request");
+  check(
+    "the test reports a model that refuses it",
+    refusedNote.includes("thinking.type.disabled"),
+    refusedNote,
+  );
+
+  await closePrefs();
+  await clickEditorWord("Regular");
+  await chooseAction("Summarize");
+  await waitPanelDone(8000);
+  const refusalStatus = await panelStatus();
+  check(
+    "a refused request names the reasoning setting",
+    refusalStatus.includes("Disable reasoning (thinking)"),
+    refusalStatus,
+  );
+  await closePanel();
+
+  // The OpenAI-compatible shape.
+  control.mode = "normal";
+  await openAiSection();
+  await setSelect("Provider", "openai");
+  await setText("Base URL", baseUrl);
+  await setText("Model", "test-model");
+  await closePrefs();
+  await clickEditorWord("Regular");
+  await chooseAction("Summarize");
+  await waitPanelDone();
+  const openaiOff = control.requests.at(-1);
+  check(
+    "OpenAI-compatible asks for reasoning_effort none",
+    openaiOff?.body?.reasoning_effort === "none",
+    JSON.stringify(openaiOff?.body?.reasoning_effort),
+  );
+  await closePanel();
+
+  await openAiSection();
+  await setCheckbox("Disable reasoning (thinking)", false);
+  await closePrefs();
+  await clickEditorWord("Regular");
+  await chooseAction("Summarize");
+  await waitPanelDone();
+  const openaiDefault = control.requests.at(-1);
+  check(
+    "unticking removes the field",
+    Boolean(openaiDefault?.body) && !("reasoning_effort" in openaiDefault.body),
+    JSON.stringify(openaiDefault?.body),
+  );
+  await closePanel();
+
+  // -------------------------------------------------------------------------
   // Model fetch
   // -------------------------------------------------------------------------
 
@@ -3363,6 +3540,7 @@ try {
       aiBaseUrl: original.aiBaseUrl,
       aiModel: original.aiModel,
       aiContextTokens: original.aiContextTokens,
+      aiDisableReasoning: original.aiDisableReasoning,
       aiSuggestFilename: original.aiSuggestFilename,
     };
     await evaluate(

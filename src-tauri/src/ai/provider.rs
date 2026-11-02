@@ -17,6 +17,9 @@ use crate::ai::prompt::PromptMessage;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 const MODELS_TIMEOUT: Duration = Duration::from_secs(20);
+/// The Preferences test is one small answer; a model that has not begun by then
+/// is treated as unreachable rather than leaving the button disabled forever.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provider {
@@ -47,11 +50,25 @@ pub struct ChatConfig {
     pub model: String,
     pub key: Option<String>,
     pub host: String,
+    /// Ask the endpoint to answer without reasoning; see [`apply_reasoning_off`].
+    pub disable_reasoning: bool,
 }
 
 pub struct Outcome {
     pub stopped: bool,
 }
+
+/// What one reasoning test request found.
+pub struct ReasoningProbe {
+    /// Whether the endpoint accepted the request that asked for no reasoning.
+    pub accepted: bool,
+    /// A sentence for the Preferences note, carrying the provider's own words
+    /// when it refused.
+    pub message: String,
+}
+
+/// A short prompt: the test is about the request field, not the answer.
+const PROBE_PROMPT: &str = "Reply with the single word OK.";
 
 /// Trim, validate and canonicalise a Base URL.
 ///
@@ -129,8 +146,18 @@ pub fn models_url(base_url: &str, provider: Provider) -> String {
 /// required; OpenAI-compatible servers disagree about output-limit fields, so
 /// the client omits them and caps the displayed answer itself.
 pub fn request_body(config: &ChatConfig, system: &str, messages: &[PromptMessage]) -> Value {
+    request_body_with(config, system, messages, true)
+}
+
+/// Build one body, streaming or as the short test request.
+fn request_body_with(
+    config: &ChatConfig,
+    system: &str,
+    messages: &[PromptMessage],
+    stream: bool,
+) -> Value {
     let merged = merge_roles(messages);
-    match config.provider {
+    let mut body = match config.provider {
         Provider::OpenAi => {
             let mut all = Vec::with_capacity(merged.len() + 1);
             all.push(json!({ "role": "system", "content": system }));
@@ -140,7 +167,7 @@ pub fn request_body(config: &ChatConfig, system: &str, messages: &[PromptMessage
             json!({
                 "model": config.model,
                 "messages": all,
-                "stream": true,
+                "stream": stream,
             })
         }
         Provider::Anthropic => {
@@ -155,10 +182,56 @@ pub fn request_body(config: &ChatConfig, system: &str, messages: &[PromptMessage
                 "system": system,
                 "messages": all,
                 "max_tokens": 4096,
-                "stream": true,
+                "stream": stream,
             })
         }
+    };
+    if config.disable_reasoning {
+        apply_reasoning_off(&mut body, config.provider);
     }
+    body
+}
+
+/// Add the provider's own "do not think first" field.
+///
+/// One field per protocol, because strict servers reject an unknown body field.
+/// OpenAI's spelling covers GPT-5.1 and later, plus servers that translate it
+/// (llama.cpp maps `none` to thinking off); Anthropic's `thinking` is validated
+/// against the model's regime, and a model whose thinking is always on refuses
+/// `disabled` outright. Both are therefore opt-in, and the Preferences test
+/// request exists so a refusal is found before Generate meets it.
+fn apply_reasoning_off(body: &mut Value, provider: Provider) {
+    match provider {
+        Provider::OpenAi => body["reasoning_effort"] = json!("none"),
+        Provider::Anthropic => body["thinking"] = json!({ "type": "disabled" }),
+    }
+}
+
+/// The body for the short test request.
+///
+/// A real completion, because only the endpoint can say whether it validates
+/// the field: a `/models` lookup and a header cannot. The OpenAI shape keeps
+/// omitting an output limit, as every other request does; the Messages API
+/// requires one, so the test bounds its own cost.
+fn probe_body(config: &ChatConfig) -> Value {
+    let messages = json!([{ "role": "user", "content": PROBE_PROMPT }]);
+    let mut body = match config.provider {
+        Provider::OpenAi => json!({
+            "model": config.model,
+            "messages": messages,
+            "stream": false,
+        }),
+        Provider::Anthropic => json!({
+            "model": config.model,
+            "messages": messages,
+            "max_tokens": 16,
+            "stream": false,
+        }),
+    };
+    if config.disable_reasoning {
+        apply_reasoning_off(&mut body, config.provider);
+    }
+    body
 }
 
 /// Anthropic rejects two consecutive messages with the same role. Coalescing is
@@ -254,6 +327,162 @@ pub fn is_private_host(host: &str) -> bool {
     }
 }
 
+/// A chat request that did not produce a response.
+enum ChatFailure {
+    /// The endpoint could not be reached, or the connection failed.
+    Transport(String),
+    /// The endpoint answered with a status outside 2xx.
+    Http { status: u16, body: String },
+}
+
+impl ChatFailure {
+    /// The text the panel shows for a failed request.
+    fn message(self, config: &ChatConfig) -> String {
+        match self {
+            Self::Transport(message) => message,
+            Self::Http { status, body } => {
+                let mut message = http_error(
+                    status,
+                    &body,
+                    &config.host,
+                    &config.base_url,
+                    config.key.is_some(),
+                );
+                // The field is opt-in and a model that never reasons rejects it
+                // instead of ignoring it. Naming the setting turns a bare
+                // "HTTP 400" into something the reader can act on.
+                if config.disable_reasoning && matches!(status, 400 | 422) && names_reasoning(&body)
+                {
+                    message.push_str(
+                        " If this endpoint does not accept turning reasoning off, untick Disable reasoning (thinking) in Preferences › AI Assistant.",
+                    );
+                }
+                message
+            }
+        }
+    }
+}
+
+/// POST one chat body, translating Anthropic's other name for "no thinking".
+///
+/// Sonnet 5.5 refuses `{"type": "disabled"}` and its own 400 says to send
+/// `{"type": "between_tools"}` instead. Retrying once with that value asks for
+/// exactly what the reader chose; the refusal is only reported when the retry
+/// fails too. No provider gets a silent retry without the field: a model that
+/// rejects it must say so, or the checkbox would appear to work while the
+/// request was quietly changed.
+async fn post_chat(
+    client: &reqwest::Client,
+    config: &ChatConfig,
+    mut body: Value,
+    stream: bool,
+) -> Result<reqwest::Response, ChatFailure> {
+    let url = chat_url(&config.base_url, config.provider);
+    let response = send_chat(client, config, &url, &body, stream).await?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+    let mut body_text = response.text().await.unwrap_or_default();
+    if config.disable_reasoning
+        && config.provider == Provider::Anthropic
+        && status == reqwest::StatusCode::BAD_REQUEST
+        && body_text.contains("between_tools")
+    {
+        body["thinking"] = json!({ "type": "between_tools" });
+        let retried = send_chat(client, config, &url, &body, stream).await?;
+        let retried_status = retried.status();
+        if retried_status.is_success() {
+            return Ok(retried);
+        }
+        body_text = retried.text().await.unwrap_or_default();
+        return Err(ChatFailure::Http {
+            status: retried_status.as_u16(),
+            body: body_text,
+        });
+    }
+    Err(ChatFailure::Http {
+        status: status.as_u16(),
+        body: body_text,
+    })
+}
+
+async fn send_chat(
+    client: &reqwest::Client,
+    config: &ChatConfig,
+    url: &str,
+    body: &Value,
+    stream: bool,
+) -> Result<reqwest::Response, ChatFailure> {
+    let request = client
+        .post(url)
+        .header(
+            "accept",
+            if stream {
+                "text/event-stream"
+            } else {
+                "application/json"
+            },
+        )
+        .header("cache-control", "no-cache")
+        .json(body);
+    auth(request, config)
+        .send()
+        .await
+        .map_err(|error| ChatFailure::Transport(transport_error(&error, &config.host)))
+}
+
+/// Ask the endpoint to accept one short request with reasoning off.
+///
+/// The box is off by default and a model may refuse the field, so Preferences
+/// needs an answer before Generate meets one. Deliberately a real completion: a
+/// `/models` lookup or a header cannot tell whether the endpoint validates the
+/// body. An accepted request proves the field was not refused — not that the
+/// model stopped thinking, which no response reports.
+pub async fn probe_reasoning(config: &ChatConfig) -> Result<ReasoningProbe, String> {
+    let client = build_client(&config.base_url)?;
+    let probe = tokio::time::timeout(
+        PROBE_TIMEOUT,
+        post_chat(&client, config, probe_body(config), false),
+    )
+    .await;
+    let outcome = match probe {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            return Err(format!(
+                "The endpoint did not answer the test request within {} seconds.",
+                PROBE_TIMEOUT.as_secs()
+            ));
+        }
+    };
+    match outcome {
+        Ok(_) => Ok(ReasoningProbe {
+            accepted: true,
+            message: "The endpoint accepted the reasoning-off request. That does not prove the model stopped reasoning.".to_string(),
+        }),
+        Err(ChatFailure::Http {
+            status: 400 | 422,
+            body,
+        }) => {
+            Ok(ReasoningProbe {
+                accepted: false,
+                message: format!(
+                    "The model refused the reasoning-off request: {}",
+                    error_detail(&body).unwrap_or_else(|| {
+                        let text = sanitize(&body);
+                        if text.is_empty() {
+                            "no detail was returned".to_string()
+                        } else {
+                            text
+                        }
+                    })
+                ),
+            })
+        }
+        Err(failure) => Err(failure.message(config)),
+    }
+}
+
 /// Stream one completion, calling `on_text` for each text delta.
 pub async fn stream(
     config: &ChatConfig,
@@ -263,31 +492,10 @@ pub async fn stream(
     mut on_text: impl FnMut(&str),
 ) -> Result<Outcome, String> {
     let client = build_client(&config.base_url)?;
-    let url = chat_url(&config.base_url, config.provider);
-    let request = client
-        .post(&url)
-        .header("accept", "text/event-stream")
-        .header("cache-control", "no-cache")
-        .json(&request_body(config, system, messages));
-    let request = auth(request, config);
-
-    let response = request
-        .send()
+    let body = request_body(config, system, messages);
+    let mut response = post_chat(&client, config, body, true)
         .await
-        .map_err(|error| transport_error(&error, &config.host))?;
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(http_error(
-            status.as_u16(),
-            &body,
-            &config.host,
-            &config.base_url,
-            config.key.is_some(),
-        ));
-    }
-
-    let mut response = response;
+        .map_err(|failure| failure.message(config))?;
     let mut buffer = String::new();
     let mut finished = false;
     let mut stopped = false;
@@ -488,25 +696,38 @@ fn http_error(status: u16, body: &str, host: &str, base_url: &str, key_sent: boo
             "The endpoint answered 404 Not Found. Check the Base URL ({base_url}); it usually ends with /v1."
         ),
         429 => "The provider is rate limiting requests. Wait a moment and try again.".to_string(),
-        _ => {
-            let detail = serde_json::from_str::<Value>(body)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .pointer("/error/message")
-                        .or_else(|| value.get("message"))
-                        .and_then(Value::as_str)
-                        .map(sanitize)
-                })
-                .filter(|detail| !detail.is_empty());
-            match detail {
-                Some(detail) => {
-                    format!("The provider answered HTTP {status}: {detail}")
-                }
-                None => format!("The provider answered HTTP {status}."),
+        _ => match error_detail(body) {
+            Some(detail) => {
+                format!("The provider answered HTTP {status}: {detail}")
             }
-        }
+            None => format!("The provider answered HTTP {status}."),
+        },
     }
+}
+
+/// The provider's own sentence from an error body, when it sent one.
+fn error_detail(body: &str) -> Option<String> {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .pointer("/error/message")
+                .or_else(|| value.get("message"))
+                .and_then(Value::as_str)
+                .map(sanitize)
+        })
+        .filter(|detail| !detail.is_empty())
+}
+
+/// Whether a refusal names the field this client added.
+///
+/// OpenAI says `Unrecognized request argument supplied: reasoning_effort`;
+/// Anthropic says `"thinking.type.disabled" is not supported for this model`.
+/// Only that pair earns the hint naming the setting, so an unrelated 400 keeps
+/// its own message.
+fn names_reasoning(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    lower.contains("reasoning") || lower.contains("thinking")
 }
 
 fn transport_error(error: &reqwest::Error, host: &str) -> String {
@@ -689,6 +910,7 @@ mod tests {
             model: "gpt-test".into(),
             key: None,
             host: "api.openai.com".into(),
+            disable_reasoning: false,
         };
         let body = request_body(
             &config,
@@ -710,12 +932,94 @@ mod tests {
             model: "claude-test".into(),
             key: None,
             host: "api.anthropic.com".into(),
+            disable_reasoning: false,
         };
         let body = request_body(&config, "system text", &[message("user", "hello")]);
         assert_eq!(body["system"], "system text");
         assert_eq!(body["max_tokens"], 4096);
         assert_eq!(body["stream"], true);
         assert!(body.get("messages").is_some());
+    }
+
+    fn config(provider: Provider, disable_reasoning: bool) -> ChatConfig {
+        ChatConfig {
+            provider,
+            base_url: if provider == Provider::OpenAi {
+                "https://api.openai.com/v1".into()
+            } else {
+                "https://api.anthropic.com".into()
+            },
+            model: "test-model".into(),
+            key: None,
+            host: "api.example.com".into(),
+            disable_reasoning,
+        }
+    }
+
+    #[test]
+    fn reasoning_off_uses_each_protocol_s_own_field() {
+        let openai = request_body(&config(Provider::OpenAi, true), "system", &[message("user", "hi")]);
+        assert_eq!(openai["reasoning_effort"], "none");
+        assert!(openai.get("thinking").is_none());
+
+        let anthropic =
+            request_body(&config(Provider::Anthropic, true), "system", &[message("user", "hi")]);
+        assert_eq!(anthropic["thinking"]["type"], "disabled");
+        assert!(anthropic.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn reasoning_fields_are_absent_when_the_setting_is_off() {
+        let openai = request_body(&config(Provider::OpenAi, false), "system", &[message("user", "hi")]);
+        assert!(openai.get("reasoning_effort").is_none());
+
+        let anthropic =
+            request_body(&config(Provider::Anthropic, false), "system", &[message("user", "hi")]);
+        assert!(anthropic.get("thinking").is_none());
+    }
+
+    #[test]
+    fn the_probe_asks_the_same_question_without_streaming() {
+        let openai = probe_body(&config(Provider::OpenAi, true));
+        assert_eq!(openai["stream"], false);
+        assert_eq!(openai["messages"][0]["content"], PROBE_PROMPT);
+        assert_eq!(openai["reasoning_effort"], "none");
+        assert!(openai.get("max_tokens").is_none());
+
+        let anthropic = probe_body(&config(Provider::Anthropic, true));
+        assert_eq!(anthropic["stream"], false);
+        assert_eq!(anthropic["max_tokens"], 16);
+        assert_eq!(anthropic["thinking"]["type"], "disabled");
+    }
+
+    #[test]
+    fn only_a_refusal_about_reasoning_earns_the_setting_hint() {
+        assert!(names_reasoning(
+            r#"{"error":{"message":"Unrecognized request argument supplied: reasoning_effort"}}"#
+        ));
+        assert!(names_reasoning(
+            r#"{"type":"error","error":{"message":"\"thinking.type.disabled\" is not supported for this model."}}"#
+        ));
+        assert!(!names_reasoning(
+            r#"{"error":{"message":"model not found"}}"#
+        ));
+
+        let failure = ChatFailure::Http {
+            status: 400,
+            body: r#"{"error":{"message":"Unrecognized request argument supplied: reasoning_effort"}}"#
+                .into(),
+        };
+        let hinted = failure.message(&config(Provider::OpenAi, true));
+        assert!(hinted.contains("Disable reasoning (thinking)"), "{hinted}");
+
+        // The hint belongs to a request that actually carried the field.
+        let plain = ChatFailure::Http {
+            status: 400,
+            body: r#"{"error":{"message":"Unrecognized request argument supplied: reasoning_effort"}}"#
+                .into(),
+        };
+        let unhinted = plain.message(&config(Provider::OpenAi, false));
+        assert!(!unhinted.contains("Disable reasoning"), "{unhinted}");
     }
 
     #[test]

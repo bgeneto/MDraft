@@ -91,6 +91,7 @@ pub fn run() {
             ai::ai_set_key,
             ai::ai_clear_key,
             ai::ai_fetch_models,
+            ai::ai_test_reasoning,
             ai::ai_complete,
             ai::naming::ai_suggest_filename,
             ai::ai_prompts_status,
