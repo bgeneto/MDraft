@@ -77,6 +77,16 @@ pub struct AiModelsReply {
     pub models: Vec<String>,
 }
 
+/// What the reasoning test found.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiReasoningProbe {
+    /// Whether the endpoint accepted a request that asked for no reasoning.
+    pub accepted: bool,
+    /// The sentence shown under the checkbox.
+    pub message: String,
+}
+
 /// Where the reader's prompt overrides live: beside `settings.json`, so the
 /// portable build's directory override covers it with no extra work.
 pub(crate) fn prompts_path(state: &AppState) -> std::path::PathBuf {
@@ -237,11 +247,58 @@ pub async fn ai_fetch_models(
         model,
         key,
         host: provider::host_of(&base),
+        // `/models` has no request body, so the reasoning preference cannot
+        // apply to it; the field is here only because the config is shared.
+        disable_reasoning: false,
     };
     let models = provider::list_models(&config)
         .await
         .map_err(|message| provider::redact(&message, config.key.as_deref()))?;
     Ok(AiModelsReply { models })
+}
+
+/// Try one short request with reasoning off.
+///
+/// The preference is off by default and a model can refuse the field, so the
+/// reader needs the answer before Generate meets one. Deliberately independent
+/// of `ai_enabled` and of the saved checkbox: Preferences may be open while the
+/// assistant is still being configured, and the question is what the *model*
+/// accepts. A refusal is an answer, not an error; transport and auth failures
+/// still are.
+#[tauri::command]
+pub async fn ai_test_reasoning(
+    state: State<'_, AppState>,
+    provider: String,
+    base_url: String,
+    model: String,
+) -> Result<AiReasoningProbe, String> {
+    let provider_kind = Provider::from_id(&provider)
+        .ok_or_else(|| "Choose a provider in AI Settings.".to_string())?;
+    let base = provider::normalize_base_url(&base_url)?;
+    let model = model.trim().to_string();
+    if model.is_empty() {
+        return Err("Set a model in AI Settings first.".to_string());
+    }
+    let (key, _) = secret::resolve(&state.ai.keys, provider_kind.id(), &base);
+    let config = ChatConfig {
+        provider: provider_kind,
+        base_url: base.clone(),
+        model,
+        key,
+        host: provider::host_of(&base),
+        // Whatever the checkbox currently says, the test asks the endpoint
+        // whether it accepts the field at all.
+        disable_reasoning: true,
+    };
+    let probe = provider::probe_reasoning(&config)
+        .await
+        .map_err(|message| provider::redact(&message, config.key.as_deref()))?;
+    Ok(AiReasoningProbe {
+        accepted: probe.accepted,
+        // The refusal quotes provider text, which may echo a request; the same
+        // redaction as an error path.
+        message: provider::redact(&probe.message, config.key.as_deref()),
+    })
 }
 
 /// Stop one request. The streaming loop notices immediately even when the
@@ -307,6 +364,7 @@ pub async fn ai_complete(
         model,
         key,
         host: host.clone(),
+        disable_reasoning: settings.ai_disable_reasoning,
     };
 
     let _ = on_event.send(AiEvent::Started {

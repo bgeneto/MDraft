@@ -511,6 +511,16 @@ pub struct Settings {
     /// clamped on load and save.
     #[serde(default = "default_ai_context_tokens")]
     pub ai_context_tokens: usize,
+    /// Ask the endpoint to answer without reasoning.
+    ///
+    /// The wire spelling differs by provider — `reasoning_effort: "none"` for
+    /// an OpenAI-compatible server, `thinking: {type: "disabled"}` for
+    /// Anthropic — and not every model accepts it: one that never reasons may
+    /// refuse the request outright. Off by default, and a model that rejects it
+    /// makes Generate fail with a message naming this setting, which is why
+    /// Preferences offers a test request beside the box.
+    #[serde(default)]
+    pub ai_disable_reasoning: bool,
     /// Whether the assistant may name an untitled document when it is saved.
     ///
     /// Off by default. The deterministic first-line name needs no request, so
@@ -608,6 +618,7 @@ impl Default for Settings {
             ai_base_url: default_ai_base_url(),
             ai_model: String::new(),
             ai_context_tokens: default_ai_context_tokens(),
+            ai_disable_reasoning: false,
             ai_suggest_filename: false,
 
             read_aloud_voice: String::new(),
@@ -1002,7 +1013,18 @@ mod tests {
         assert_eq!(s.spellcheck_language, "auto");
         assert!(s.spellcheck_words.is_empty());
         assert_eq!(s.ai_context_tokens, 8_192);
+        assert!(!s.ai_disable_reasoning);
         assert!(!s.ai_suggest_filename);
+    }
+
+    #[test]
+    fn ai_disable_reasoning_defaults_off_and_loads_from_a_file() {
+        let defaults = parse_settings("{}").expect("an empty object is still settings");
+        assert!(!defaults.ai_disable_reasoning);
+
+        let on = parse_settings(r#"{"aiDisableReasoning": true}"#)
+            .expect("the reasoning switch is still settings");
+        assert!(on.ai_disable_reasoning);
     }
 
     #[test]

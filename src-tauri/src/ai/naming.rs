@@ -181,6 +181,7 @@ pub async fn ai_suggest_filename(
         model,
         key,
         host,
+        disable_reasoning: settings.ai_disable_reasoning,
     };
     let messages = vec![PromptMessage {
         role: "user".to_string(),

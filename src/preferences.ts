@@ -169,6 +169,8 @@ type Row =
       text: string;
       /** Disable when the action would change nothing (an unadjusted preset). */
       disabled?: () => boolean;
+      /** Why it is disabled; the preset rows' sentence when omitted. */
+      disabledTitle?: string;
       action: () => void | Promise<void>;
     };
 
@@ -202,8 +204,10 @@ interface AiUiState {
    * answers for its own control instead: the secret row for the key, a Models
    * note after Fetch, and the Prompts file note for the prompt file.
    */
-  note: { where: "key" | "model" | "prompts"; text: string } | null;
+  note: { where: "key" | "model" | "prompts" | "reasoning"; text: string } | null;
   loading: boolean;
+  /** A reasoning test is in flight; its button stays disabled until it answers. */
+  testing: boolean;
   /** The prompt file's state; null until the AI section has asked. */
   prompts: api.AiPromptsStatus | null;
   promptsLoading: boolean;
@@ -1173,6 +1177,35 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
   };
 
   /**
+   * Ask the endpoint whether it accepts the reasoning-off field.
+   *
+   * The answer is about the model, so it is asked whichever way the checkbox is
+   * set: a reader deciding whether to opt in needs it first. A refusal is shown
+   * as the provider's own sentence; a transport or authentication failure keeps
+   * its own message.
+   */
+  const testReasoning = async (): Promise<void> => {
+    const { provider, baseUrl, model } = currentConnection();
+    if (!model) {
+      ai.note = { where: "reasoning", text: "Set a model first." };
+      refresh();
+      return;
+    }
+    ai.testing = true;
+    ai.note = { where: "reasoning", text: "Sending one short request…" };
+    refresh();
+    try {
+      const probe = await api.aiTestReasoning(provider, baseUrl, model);
+      ai.note = { where: "reasoning", text: probe.message };
+    } catch (error) {
+      ai.note = { where: "reasoning", text: String(error) };
+    } finally {
+      ai.testing = false;
+      refresh();
+    }
+  };
+
+  /**
    * Open the reader's prompt file, creating it from the built-ins on first use.
    *
    * The file is an ordinary Markdown document: it opens in a tab, so it is
@@ -1241,6 +1274,7 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
       ? `“${ai.clearedModel}” is not offered by this endpoint, so the field was cleared. Choose ${offered}, or type an id.`
       : undefined;
   const modelNote = ai.note?.where === "model" ? ai.note.text : null;
+  const reasoningNote = ai.note?.where === "reasoning" ? ai.note.text : null;
 
   const rows: Row[] = [
     {
@@ -1294,6 +1328,8 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
         ai.models = [];
         ai.modelsEndpoint = "";
         ai.clearedModel = null;
+        // The test answered for the previous endpoint.
+        if (ai.note?.where === "reasoning") ai.note = null;
         host.update({ aiProvider: provider, aiBaseUrl: baseUrl });
       },
     },
@@ -1344,6 +1380,8 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
       set: (value) => {
         const model = value.trim();
         if (model) ai.clearedModel = null;
+        // A test of one model says nothing about the next one.
+        if (ai.note?.where === "reasoning") ai.note = null;
         host.update({ aiModel: model });
       },
     },
@@ -1360,6 +1398,29 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
   // the section: it is about this list, and a reader who presses Fetch again
   // should not have to look for it somewhere else.
   if (modelNote) rows.push({ kind: "note", label: "Models", text: modelNote });
+
+  rows.push(
+    {
+      kind: "checkbox",
+      label: "Disable reasoning (thinking)",
+      help: 'Ask the endpoint to answer without thinking first, so the first word can arrive much sooner. Sends reasoning_effort: "none" to an OpenAI-compatible server and thinking: {type: "disabled"} to Anthropic. Support is model-specific: many GPT-5 models accept it, GPT-4o and GPT-4.1 refuse the field, and Anthropic\'s always-reasoning models refuse it too. A refusal makes Generate fail, so test with the configured model before relying on it.',
+      get: () => s().aiDisableReasoning ?? false,
+      set: (value) => {
+        if (ai.note?.where === "reasoning") ai.note = null;
+        host.update({ aiDisableReasoning: value });
+      },
+    },
+    {
+      kind: "button",
+      label: "",
+      text: "Test with the configured model",
+      help: "Sends one short request with reasoning off and reports whether the endpoint accepted it. It costs one small answer. Acceptance means the request was not refused; it does not prove the model stopped thinking, which no response reports.",
+      disabled: () => ai.testing,
+      disabledTitle: "The test request is already running.",
+      action: testReasoning,
+    },
+  );
+  if (reasoningNote) rows.push({ kind: "note", label: "Reasoning", text: reasoningNote });
 
   rows.push(
     {
@@ -1895,6 +1956,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
     clearedModel: null,
     note: null,
     loading: false,
+    testing: false,
     prompts: null,
     promptsLoading: false,
   };
@@ -2325,7 +2387,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       button.textContent = row.text;
       if (row.disabled?.()) {
         button.disabled = true;
-        button.title = "This preset is already at its defaults.";
+        button.title = row.disabledTitle ?? "This preset is already at its defaults.";
       }
       // Redraw once the action settles: adding, removing or reconfiguring an
       // export format all change which rows this panel should be showing.

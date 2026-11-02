@@ -362,6 +362,15 @@ export interface Settings {
    */
   aiContextTokens: number;
   /**
+   * Ask the endpoint to answer without reasoning.
+   *
+   * Sends `reasoning_effort: "none"` to an OpenAI-compatible server and
+   * `thinking: { type: "disabled" }` to Anthropic. Off by default: not every
+   * model accepts the field, and one that never reasons may refuse the request
+   * rather than ignore it. `aiTestReasoning` asks before the box is relied on.
+   */
+  aiDisableReasoning: boolean;
+  /**
    * Let the assistant propose the file name when an untitled document is saved.
    *
    * Off by default. Only consulted while the assistant itself is enabled, and
@@ -880,6 +889,23 @@ export const aiClearKey = (provider: AiProvider, baseUrl: string) =>
 /** Ask the endpoint for its model list. Nothing is requested until this runs. */
 export const aiFetchModels = (provider: AiProvider, baseUrl: string, model: string) =>
   invoke<AiModelsReply>("ai_fetch_models", { provider, baseUrl, model });
+
+/** What one short request found about the endpoint's reasoning-off field. */
+export interface AiReasoningProbe {
+  accepted: boolean;
+  message: string;
+}
+
+/**
+ * Send one short request that asks for no reasoning.
+ *
+ * Independent of the checkbox and of `aiEnabled`: the question is what the
+ * model accepts, and a reader may be configuring the assistant for the first
+ * time. A model that refuses the field is an answer, not an error; a transport
+ * or authentication failure is still an error.
+ */
+export const aiTestReasoning = (provider: AiProvider, baseUrl: string, model: string) =>
+  invoke<AiReasoningProbe>("ai_test_reasoning", { provider, baseUrl, model });
 
 export const aiCancel = (id: string) => invoke<void>("ai_cancel", { id });
 

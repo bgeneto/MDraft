@@ -158,6 +158,13 @@ Markdown document active.*
   Preferences also sets a **Context limit**, measured in the same approximate
   tokens as the status bar: 8,192 by default, raised to at most 32,768. A
   rewrite beyond it is refused; Ask and Continue trim to fit.
+  **Disable reasoning (thinking)** asks the model to answer without thinking
+  first — `reasoning_effort: "none"` on an OpenAI-compatible server,
+  `thinking: {type: "disabled"}` on Anthropic — which can make the first word
+  arrive much sooner. Support is model-specific, so **Test with the configured
+  model** sends one short request and reports whether the endpoint accepted it;
+  a model that refuses the field makes Generate fail with a message naming the
+  setting.
   Every prompt is yours to change: **Preferences › AI Assistant › Edit prompts**
   opens `ai-prompts.md` beside `settings.json` as an ordinary Markdown document,
   with one section per action and the shared preamble. Edit the wording, press
