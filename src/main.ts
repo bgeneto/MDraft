@@ -69,6 +69,14 @@ import {
   type PasteDestination,
 } from "./paste/detect-document";
 import { planPaste, type ImageRequest, type ResolvedImage } from "./paste/index";
+import {
+  AI_EXCERPT_CHARS,
+  cleanAiSuggestion,
+  plainExcerpt,
+  suggestFileStem,
+  withExtension,
+  type FileStem,
+} from "./filename";
 import { escapeMarkdownCurrency, markdownProseSelection } from "./math-delimiters";
 import {
   ASCIIDOC_CSS,
@@ -189,6 +197,14 @@ const recovery = createRecoveryScheduler({
   notify: (message) => toast(message, 6200),
 });
 let closeCommitFocus: HTMLElement | null = null;
+/**
+ * Assistant file names, remembered per session revision.
+ *
+ * A cancelled Save dialog is not a reason to ask the endpoint again: the same
+ * text has the same name. Editing increments the revision and discards it.
+ */
+const suggestedNames = new Map<string, { revision: number; stem: string }>();
+let filenameRequestSeq = 0;
 const lifecycle = createDocumentLifecycle({
   sessions,
   text: textOf,
@@ -217,18 +233,28 @@ const lifecycle = createDocumentLifecycle({
       defaultExtension: settings.defaultExtension,
       defaultLanguage: defaultDocumentLanguage(),
     });
-    const untitled = `untitled.${suggestion.extension ?? settings.defaultExtension}`;
+    // A suggested path (a conflict copy) and a saved file's own path are already
+    // names. Only an untitled buffer is named from its contents.
+    let defaultPath = suggested ?? (session.lossy ? conflictCopyPath(session) : session.path);
+    if (!defaultPath) {
+      const extension = suggestion.extension ?? settings.defaultExtension;
+      const name = await suggestedFileName(
+        session,
+        textOf(session),
+        suggestion.language,
+        extension,
+      );
+      defaultPath = settings.lastDirectory ? joinDir(settings.lastDirectory, name) : name;
+    }
     const chosen = await saveDialog({
       title: session.lossy ? "Save a UTF-8 copy" : "Save As",
-      defaultPath:
-        suggested ??
-        (session.lossy ? conflictCopyPath(session) : session.path) ??
-        (settings.lastDirectory ? joinDir(settings.lastDirectory, untitled) : untitled),
+      defaultPath,
       filters: documentFilters(suggestion.language),
     });
     return Array.isArray(chosen) ? (chosen[0] ?? null) : chosen;
   },
   adoptPath: (session, path) => {
+    suggestedNames.delete(session.id);
     session.path = path;
     session.name = basename(path);
     session.directory = directoryOf(path);
@@ -398,6 +424,10 @@ function zoomFactor(): number {
   return zoomLevel() / 100;
 }
 const AUTO_SAVE_INTERVAL_MS = 20_000;
+/** How long Save waits for an assistant name before using the first line. */
+const AI_FILENAME_TIMEOUT_MS = 4_000;
+/** A fast answer should not flash a toast before the dialog opens. */
+const AI_FILENAME_NOTICE_DELAY_MS = 300;
 /** Scroll alignment window, in ms, after a programmatic pane scroll. */
 const SYNC_SUPPRESS_MS = 150;
 /**
@@ -1817,6 +1847,81 @@ function documentFilters(
   } satisfies Record<api.DocumentLanguage, { name: string; extensions: string[] }>;
   const first = preferred[language];
   return [first, ...alphabetical.filter((filter) => filter !== first)];
+}
+
+/**
+ * The file name Save As pre-fills for an untitled buffer.
+ *
+ * The deterministic name is always ready; the assistant can only improve the
+ * one case the text itself cannot name — the first line is prose rather than a
+ * title — and a slow or failed request falls back to it. The extension still
+ * comes from `suggestSave`, because the buffer's markup decides the filter.
+ */
+async function suggestedFileName(
+  session: Session,
+  text: string,
+  language: api.DocumentLanguage,
+  extension: string,
+): Promise<string> {
+  const deterministic = suggestFileStem({ text, language });
+  const assisted = await assistantFileName(session, text, deterministic, extension);
+  return withExtension(assisted ?? deterministic.stem, extension);
+}
+
+/**
+ * Ask the configured endpoint for a better name, or `null` to keep the
+ * document's own.
+ *
+ * Every gate here is deliberate. An explicit title or heading is the author's
+ * own name and is authoritative; asking a model to rename it spends a request
+ * to make it worse. The same name for the same revision is reused, so
+ * cancelling the dialog does not ask twice. The race is the promise the dialog
+ * waits on: `ai_cancel` asks the backend to stop, but a connection that has not
+ * answered yet cannot see the cancellation channel, so the frontend must stop
+ * waiting on its own.
+ */
+async function assistantFileName(
+  session: Session,
+  text: string,
+  deterministic: FileStem,
+  extension: string,
+): Promise<string | null> {
+  if (!settings.aiEnabled || !settings.aiSuggestFilename || !settings.aiModel.trim()) return null;
+  if (deterministic.source !== "line") return null;
+
+  const cached = suggestedNames.get(session.id);
+  if (cached && cached.revision === session.revision) return cached.stem;
+
+  const excerpt = plainExcerpt(text, AI_EXCERPT_CHARS);
+  if (excerpt.split(/\s+/).filter(Boolean).length < 3) return null;
+
+  const id = `filename-${Date.now()}-${++filenameRequestSeq}`;
+  const notice: { current: { dismiss: () => void } | null } = { current: null };
+  const noticeTimer = window.setTimeout(() => {
+    notice.current = toast("Asking the assistant for a file name…", 0);
+  }, AI_FILENAME_NOTICE_DELAY_MS);
+  let stopTimer = 0;
+  try {
+    const answer = await Promise.race([
+      api.aiSuggestFilename(id, excerpt),
+      new Promise<null>((resolve) => {
+        stopTimer = window.setTimeout(() => {
+          void api.aiCancel(id).catch(() => undefined);
+          resolve(null);
+        }, AI_FILENAME_TIMEOUT_MS);
+      }),
+    ]);
+    if (answer === null) return null;
+    const stem = cleanAiSuggestion(answer, extension);
+    if (stem) suggestedNames.set(session.id, { revision: session.revision, stem });
+    return stem;
+  } catch {
+    return null;
+  } finally {
+    window.clearTimeout(noticeTimer);
+    window.clearTimeout(stopTimer);
+    notice.current?.dismiss();
+  }
 }
 
 /** Drop the guest when the editor leaves HTML; start a fresh nonce when it enters. */

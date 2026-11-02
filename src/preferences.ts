@@ -76,6 +76,8 @@ type Row =
       kind: "checkbox";
       label: string;
       help?: string;
+      /** Disable when the option depends on another switch being on. */
+      disabled?: () => boolean;
       get: () => boolean;
       set: (value: boolean) => void;
     }
@@ -1187,7 +1189,7 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
     {
       kind: "note",
       label: "Privacy",
-      text: "The assistant contacts only the endpoint you configure, and only when you press Generate or fetch the model list. The selection and your instruction are the only document text that leaves this machine. The API key is stored safely in the operating system's credential store.",
+      text: "The assistant contacts only the endpoint you configure, and only when you press Generate or fetch the model list. The selection and your instruction are the only document text that leaves this machine — unless Suggest file names when saving is on, which sends the opening of an untitled document when you save it. The API key is stored safely in the operating system's credential store.",
     },
     {
       kind: "checkbox",
@@ -1195,6 +1197,14 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
       help: "Shows the floating button in the source pane; the Tools › AI Assistant check and this box turn it on or off. Off by default: no request and no keychain read until you enable it and choose an endpoint and model.",
       get: () => s().aiEnabled,
       set: (value) => host.update({ aiEnabled: value }),
+    },
+    {
+      kind: "checkbox",
+      label: "Suggest file names when saving",
+      help: "When an untitled document with no title or heading is saved, ask the model for a short name before the Save dialog opens. The opening text is sent to the endpoint and the answer is cleaned like any other file name. A slow or failed request falls back to the document's first line after about four seconds. Off by default; requires the assistant.",
+      disabled: () => !s().aiEnabled,
+      get: () => s().aiSuggestFilename ?? false,
+      set: (value) => host.update({ aiSuggestFilename: value }),
     },
     {
       kind: "button",
@@ -2008,6 +2018,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       const input = document.createElement("input");
       input.type = "checkbox";
       input.checked = row.get();
+      input.disabled = row.disabled?.() ?? false;
       input.addEventListener("change", () => {
         row.set(input.checked);
         render();

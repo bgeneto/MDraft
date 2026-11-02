@@ -7,6 +7,7 @@
 //! it streams, and the whole map is cleared when the window closes.
 
 pub mod limits;
+pub mod naming;
 pub mod prompt;
 pub mod provider;
 pub mod secret;

@@ -158,13 +158,19 @@ Markdown document active.*
   Preferences also sets a **Context limit**, measured in the same approximate
   tokens as the status bar: 8,192 by default, raised to at most 32,768. A
   rewrite beyond it is refused; Ask and Continue trim to fit.
+  **Suggest file names when saving** is a second opt-in: an untitled document is
+  normally named from its own text — an explicit title, the first heading, then
+  the first line — and with this option on, the assistant may propose the name
+  instead. A slow or failed request falls back to the first line after about four
+  seconds, and a document with a real title never spends a request.
   The ten most recent successful answers stay
   in an in-session **History**, reachable from the palette, where you can read,
   copy or insert them again; nothing in that history is written to disk.
 - **Quiet by design.** No accounts, activation, telemetry or update checks.
   MDraft makes no network request at start-up; it goes online only for an action
   you take, such as installing pandoc or Typst, fetching a pasted image URL,
-  asking the AI Assistant (only after you enable it and press Generate), or
+  asking the AI Assistant (only after you enable it and press Generate or Fetch,
+  or save an untitled document with *Suggest file names when saving* on), or
   opening an HTML document whose own markup references remote resources.
 
 ## Getting started

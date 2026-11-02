@@ -10,6 +10,7 @@
 
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 
@@ -124,8 +125,9 @@ const server = http.createServer(async (request, response) => {
   const system = isAnthropic
     ? String(body.system ?? "")
     : String(body.messages?.find?.((message) => message.role === "system")?.content ?? "");
+  const isName = system.includes("You name text documents");
   const tag = Object.keys(TAGS).find((candidate) => system.includes(`<${candidate}>`));
-  const action = tag ? TAGS[tag] : "ask";
+  const action = isName ? "filename" : tag ? TAGS[tag] : "ask";
   control.requests.push({
     url,
     headers: request.headers,
@@ -161,6 +163,17 @@ const server = http.createServer(async (request, response) => {
       response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
     }
   };
+
+  if (isName) {
+    // Deliberately labelled and containing a slash: the backend removes the
+    // label and the frontend's sanitiser replaces the slash, which is what the
+    // end-to-end check measures.
+    writeDelta("Nome: Relações EUA/China na Era da IA");
+    response.end(
+      isAnthropic ? 'event: message_stop\ndata: {"type":"message_stop"}\n\n' : "data: [DONE]\n\n",
+    );
+    return;
+  }
 
   const content = tag && !noisy ? `<${tag}>${answer}</${tag}>` : answer;
   const notes =
@@ -970,6 +983,16 @@ try {
   await closePalette();
   await openAiSection();
   check("Enable can be turned off", await setCheckbox("Enable AI Assistant", false));
+  const filenameOptionOff = await evaluate(`(() => {
+    const row = ${rowSelector("Suggest file names when saving")};
+    const input = row?.querySelector('input[type=checkbox]');
+    return input ? { found: true, disabled: input.disabled } : { found: false, disabled: false };
+  })()`);
+  check(
+    "the filename option is disabled while the assistant is off",
+    filenameOptionOff.found && filenameOptionOff.disabled,
+    JSON.stringify(filenameOptionOff),
+  );
   await closePrefs();
   const hiddenAtStart = await evaluate(`document.querySelector('.ai-assistant').hidden`);
   check("disabling the assistant hides the button", hiddenAtStart === true);
@@ -982,6 +1005,7 @@ try {
   check("Preferences has an AI Assistant section", prefsSection.title === "AI Assistant");
   for (const label of [
     "Enable AI Assistant",
+    "Suggest file names when saving",
     "Floating button",
     "Provider",
     "Base URL",
@@ -1023,6 +1047,16 @@ try {
   check("the Base URL is set to the mock", await setText("Base URL", baseUrl));
   check("the model is set to the mock", await setText("Model", "test-model"));
   check("Enable is turned on", await setCheckbox("Enable AI Assistant", true));
+  const filenameOptionOn = await evaluate(`(() => {
+    const row = ${rowSelector("Suggest file names when saving")};
+    const input = row?.querySelector('input[type=checkbox]');
+    return input ? { found: true, disabled: input.disabled } : { found: false, disabled: false };
+  })()`);
+  check(
+    "the filename option enables with the assistant",
+    filenameOptionOn.found && !filenameOptionOn.disabled,
+    JSON.stringify(filenameOptionOn),
+  );
   await closePrefs();
 
   const fab = await waitFor(
@@ -2907,6 +2941,163 @@ try {
   check("reduced motion removes the button transition", reduced === "0s", reduced);
   await send("Emulation.setEmulatedMedia", { features: [] });
 
+  // -------------------------------------------------------------------------
+  // File-name suggestions
+  // -------------------------------------------------------------------------
+  console.log("\nFile-name suggestions");
+  await closePanel();
+  await closePrefs();
+  await closePalette();
+  // The native Save picker cannot be photographed or read from the DOM. Stub
+  // its IPC reply and record the defaultPath it was given; everything else goes
+  // through the untouched fetch transport.
+  await evaluate(`(() => {
+    const state = window.__filenameTest = { original: window.fetch, defaults: [], next: null };
+    window.fetch = async function (input, options) {
+      const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+      if (url.hostname !== 'ipc.localhost') return state.original.call(window, input, options);
+      const command = decodeURIComponent(url.pathname.slice(1));
+      if (command !== 'plugin:dialog|save') return state.original.call(window, input, options);
+      const args = typeof options?.body === 'string' ? JSON.parse(options.body) : {};
+      state.defaults.push(args.options?.defaultPath ?? args.defaultPath);
+      const chosen = state.next;
+      state.next = null;
+      return new Response(JSON.stringify(chosen), {
+        headers: { 'Content-Type': 'application/json', 'Tauri-Response': 'ok' },
+      });
+    };
+  })()`);
+  const nameDir = fs.mkdtempSync(path.join(os.tmpdir(), "mdraft-name-"));
+  try {
+    // Heading-less text: the assistant is asked and its answer becomes the name.
+    await openAiSection();
+    check(
+      "Suggest file names when saving can be enabled",
+      await setCheckbox("Suggest file names when saving", true),
+    );
+    await closePrefs();
+    await newTab();
+    await evaluate(`document.querySelector('.cm-content').focus()`);
+    await send("Input.insertText", {
+      text: "Par de caixas torre Monitor Audio Silver 300 7G, no acabamento Natural Walnut.",
+    });
+    await sleep(200);
+    const beforeName = control.requests.filter((request) => request.action === "filename").length;
+    await evaluate(
+      `window.__filenameTest.next = ${JSON.stringify(path.join(nameDir, "first.md"))}`,
+    );
+    await pressCtrl("s", "KeyS", 83);
+    await waitFor(
+      `[...document.querySelectorAll('.doc-tab-name')].some((tab) => tab.textContent === 'first.md')`,
+      12000,
+    );
+    const firstDefault = await evaluate(`window.__filenameTest.defaults.at(-1)`);
+    check(
+      "the save dialog uses the assistant's name",
+      path.basename(firstDefault ?? "") === "Relações EUA China na Era da IA.md",
+      firstDefault,
+    );
+    const nameRequests = control.requests.filter((request) => request.action === "filename");
+    check(
+      "one naming request carried the opening",
+      nameRequests.length === beforeName + 1,
+      String(nameRequests.length - beforeName),
+    );
+    check(
+      "the naming request asked for one line",
+      (nameRequests.at(-1)?.system ?? "").includes("file name only"),
+    );
+
+    // A heading is authoritative: no request, and the heading is the name.
+    await newTab();
+    await evaluate(`document.querySelector('.cm-content').focus()`);
+    await send("Input.insertText", { text: "# A heading of its own" });
+    await sleep(200);
+    const beforeHeading = control.requests.filter(
+      (request) => request.action === "filename",
+    ).length;
+    await evaluate(
+      `window.__filenameTest.next = ${JSON.stringify(path.join(nameDir, "heading.md"))}`,
+    );
+    await pressCtrl("s", "KeyS", 83);
+    await waitFor(
+      `[...document.querySelectorAll('.doc-tab-name')].some((tab) => tab.textContent === 'heading.md')`,
+      12000,
+    );
+    const headingDefault = await evaluate(`window.__filenameTest.defaults.at(-1)`);
+    check(
+      "a heading is used without asking the model",
+      path.basename(headingDefault ?? "") === "A heading of its own.md" &&
+        control.requests.filter((request) => request.action === "filename").length ===
+          beforeHeading,
+      headingDefault,
+    );
+
+    // Turning the option off restores the deterministic name and stops requests.
+    await openAiSection();
+    check(
+      "Suggest file names can be turned off",
+      await setCheckbox("Suggest file names when saving", false),
+    );
+    await closePrefs();
+    await newTab();
+    await evaluate(`document.querySelector('.cm-content').focus()`);
+    await send("Input.insertText", { text: "A quiet deterministic line." });
+    await sleep(200);
+    const beforeQuiet = control.requests.filter((request) => request.action === "filename").length;
+    await evaluate(
+      `window.__filenameTest.next = ${JSON.stringify(path.join(nameDir, "quiet.md"))}`,
+    );
+    await pressCtrl("s", "KeyS", 83);
+    await waitFor(
+      `[...document.querySelectorAll('.doc-tab-name')].some((tab) => tab.textContent === 'quiet.md')`,
+      12000,
+    );
+    const quietDefault = await evaluate(`window.__filenameTest.defaults.at(-1)`);
+    check(
+      "turning the option off stops the request and keeps the first line",
+      path.basename(quietDefault ?? "") === "A quiet deterministic line.md" &&
+        control.requests.filter((request) => request.action === "filename").length === beforeQuiet,
+      quietDefault,
+    );
+
+    // A failing endpoint falls back and the dialog still opens.
+    await openAiSection();
+    await setCheckbox("Suggest file names when saving", true);
+    await closePrefs();
+    await newTab();
+    await evaluate(`document.querySelector('.cm-content').focus()`);
+    await send("Input.insertText", { text: "A line that must survive a failed request." });
+    await sleep(200);
+    control.mode = "unauthorized";
+    await evaluate(
+      `window.__filenameTest.next = ${JSON.stringify(path.join(nameDir, "fallback.md"))}`,
+    );
+    await pressCtrl("s", "KeyS", 83);
+    const fallbackOpened = await waitFor(
+      `[...document.querySelectorAll('.doc-tab-name')].some((tab) => tab.textContent === 'fallback.md')`,
+      12000,
+    );
+    control.mode = "normal";
+    const fallbackDefault = await evaluate(`window.__filenameTest.defaults.at(-1)`);
+    check(
+      "a failed name request still opens Save with the first line",
+      Boolean(fallbackOpened) &&
+        path.basename(fallbackDefault ?? "") === "A line that must survive a failed request.md",
+      fallbackDefault,
+    );
+  } finally {
+    control.mode = "normal";
+    try {
+      await evaluate(
+        `window.fetch = window.__filenameTest?.original ?? window.fetch; delete window.__filenameTest`,
+      );
+    } catch {
+      /* the app may be gone */
+    }
+    fs.rmSync(nameDir, { recursive: true, force: true });
+  }
+
   const settings = await evaluate(`window.__TAURI_INTERNALS__.invoke('get_settings')`);
   check("get_settings has no API key", !JSON.stringify(settings).includes("sk-mock-"));
   const configPath = path.join(process.env.APPDATA ?? "", appIdentifier, "settings.json");
@@ -2951,6 +3142,7 @@ try {
       aiBaseUrl: original.aiBaseUrl,
       aiModel: original.aiModel,
       aiContextTokens: original.aiContextTokens,
+      aiSuggestFilename: original.aiSuggestFilename,
     };
     await evaluate(
       `window.__TAURI_INTERNALS__.invoke('save_settings', { settings: ${JSON.stringify(patched)} })`,
