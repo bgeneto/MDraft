@@ -1129,6 +1129,28 @@ try {
     adocMenu.items.find((entry) => entry.action === "comment")?.disabled === false,
     "AsciiDoc keeps the comment action",
   );
+  // The menu is anchored to the text, so it follows a real scroll and must
+  // ignore a `scroll` event that moved nothing. Chromium emits one when a
+  // document still settling re-clamps its scroller — the AsciiDoc tab does that
+  // within a frame of opening — and closing on it dismissed a menu that had
+  // just been asked for.
+  const unmoved = await evaluate(`(() => {
+    const scroller = document.querySelector('.cm-scroller');
+    scroller.dispatchEvent(new Event('scroll'));
+    return document.querySelectorAll('.editor-menu').length;
+  })()`);
+  check(unmoved === 1, "a scroll event that moved nothing leaves the menu open", String(unmoved));
+  const scrolledAway = await evaluate(`(() => {
+    const scroller = document.querySelector('.cm-scroller');
+    scroller.scrollTop += 40;
+    return scroller.scrollTop;
+  })()`);
+  check(
+    scrolledAway > 0 &&
+      (await pollFor(`document.querySelectorAll('.editor-menu').length === 0`, 4000)),
+    "a real scroll closes the menu",
+    `scrollTop ${scrolledAway}`,
+  );
   await evaluate(
     `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`,
   );
