@@ -85,6 +85,12 @@ Markdown document active.*
   original, the caret keeps its line, and the formatters are bundled rather than
   downloaded — nothing is loaded until the first format. AsciiDoc keeps the
   editing menu but has no formatter, and the item says so.
+- **Document statistics at a glance.** **Tools › Document Statistics…** reports
+  the active buffer's characters without line endings, words, estimated tokens,
+  lines and the UTF-8 byte length a save would write. While text is selected it
+  adds the selection's characters, bytes and range count. The dialog is a
+  snapshot taken from the same incremental counts as the status bar; it does not
+  rescan while you type.
 - **Typography that holds up.** Thirteen bundled typefaces, six presets and a
   selectable **Custom** setup, plus a searchable picker for every font installed
   on the operating system. Faces are independent for editor, prose, headings and
@@ -144,6 +150,9 @@ Markdown document active.*
   endpoint's model list; the Model field's arrow opens a searchable list of it,
   and Fetch refreshes that list later. A model the endpoint no longer offers is
   cleared with a note, while an empty or failed list leaves a typed id alone.
+  Preferences also sets a **Context limit**, measured in the same approximate
+  tokens as the status bar: 8,192 by default, raised to at most 32,768. A
+  rewrite beyond it is refused; Ask and Continue trim to fit.
   The ten most recent successful answers stay
   in an in-session **History**, reachable from the palette, where you can read,
   copy or insert them again; nothing in that history is written to disk.

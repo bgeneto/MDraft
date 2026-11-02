@@ -22,6 +22,7 @@ import { installEditorContextMenu, titleCase, type ReadingMenuState } from "./co
 import { createReadAloud, type ReadAloudHandle, type ReadingState } from "./read-aloud";
 import { readClipboardData } from "./clipboard";
 import { createDocumentLifecycle } from "./document-lifecycle";
+import { showDocumentStatistics, type DocumentStatistics } from "./statistics-dialog";
 import { askUnsaved } from "./unsaved-dialog";
 import { rewriteExportReferences } from "./export-article";
 import { createEditor, type EditorHandle } from "./editor";
@@ -1155,6 +1156,48 @@ function refreshStatus(): void {
       doc.readOnly ? " · read-only" : ""
     }`;
   }
+}
+
+/**
+ * The statistics snapshot for Tools › Document Statistics.
+ *
+ * Words, lines and characters come from the editor's incremental cache. The
+ * byte length is the saved file's exact size while the buffer is clean; a dirty
+ * or untitled buffer is measured as UTF-8 with the document's line-ending and
+ * BOM overhead added, so the number is what the next save will write. Only the
+ * explicit menu action pays for that pass.
+ */
+const utf8Encoder = new TextEncoder();
+
+function utf8Length(text: string): number {
+  return utf8Encoder.encode(text).length;
+}
+
+function documentStatistics(text: string): DocumentStatistics {
+  const metrics = editor.metrics();
+  const bytes =
+    doc.path && !doc.dirty
+      ? doc.size
+      : utf8Length(text) +
+        (doc.lineEnding === "\r\n" ? Math.max(0, metrics.lines - 1) : 0) +
+        (doc.hadBom ? 3 : 0);
+  const ranges = editor.view.state.selection.ranges.filter((range) => !range.empty);
+  let selectedCharacters = 0;
+  let selectedBytes = 0;
+  for (const range of ranges) {
+    selectedCharacters += range.to - range.from;
+    selectedBytes += utf8Length(text.slice(range.from, range.to));
+  }
+  return {
+    characters: metrics.chars,
+    words: metrics.words,
+    lines: metrics.lines,
+    bytes,
+    selection:
+      ranges.length > 0
+        ? { characters: selectedCharacters, bytes: selectedBytes, ranges: ranges.length }
+        : null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -3606,6 +3649,14 @@ const handlers: Record<string, () => void | Promise<void>> = {
 
   "tools.spellcheck": () => applySettingsPatch({ spellcheck: settings.spellcheck === false }),
   "tools.spellLanguage": () => preferences.openAt("editor"),
+  "tools.statistics": () => {
+    const text = editor.getDoc();
+    showDocumentStatistics(
+      documentStatistics(text),
+      api.countTokens(text).catch(() => null),
+      () => editor.focus(),
+    );
+  },
   "tools.exportConfig": () => preferences.openAt("export"),
   "tools.pandoc": () => void pandocSetup(),
   "tools.typst": () => void typstSetup(),
@@ -5135,7 +5186,12 @@ function installResizers(): void {
 const lastActionAt = new Map<string, number>();
 
 function runMenuAction(id: string): void {
-  if (lifecycle.committing || document.querySelector(".unsaved-dialog[open]")) return;
+  if (
+    lifecycle.committing ||
+    document.querySelector(".unsaved-dialog[open]") ||
+    document.querySelector(".stats-dialog[open]")
+  )
+    return;
   const now = performance.now();
   const previous = lastActionAt.get(id) ?? 0;
   if (now - previous < 250) return;
@@ -6380,6 +6436,7 @@ async function boot(): Promise<void> {
       provider: settings.aiProvider,
       baseUrl: settings.aiBaseUrl,
       model: settings.aiModel,
+      contextTokens: settings.aiContextTokens ?? 8_192,
     }),
     language: () => assistantLanguage(editor.getDoc()),
     capture: () => {
@@ -6405,6 +6462,7 @@ async function boot(): Promise<void> {
     openSettings: () => preferences.openAt("ai"),
     setEnabled: (enabled) => applySettingsPatch({ aiEnabled: enabled }),
     documentName: () => doc.name,
+    estimateTokens: (text) => api.countTokens(text),
   });
 
   installChrome();

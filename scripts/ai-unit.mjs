@@ -369,11 +369,7 @@ const longTurns = Array.from({ length: 6 }, (_, index) => ({
   role: index % 2 === 0 ? "user" : "assistant",
   content: "x".repeat(6000),
 }));
-equal(
-  "history is capped by characters in pairs",
-  trimHistory(longTurns, 12, 20_000).history.length,
-  2,
-);
+equal("the frontend leaves token capping to Rust", trimHistory(longTurns, 12).history.length, 6);
 
 // ---------------------------------------------------------------------------
 // Session history

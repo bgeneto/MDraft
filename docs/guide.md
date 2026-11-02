@@ -272,8 +272,14 @@ Other editor features:
   Cancelling a bulk close keeps every tab; earlier successful saves are retained,
   but earlier Discard choices are not applied. New typing invalidates an older
   close/reload decision. The final native window close still saves window state.
-- **Preferences** does not show dead controls: every row writes a setting or
-  performs the action it names.
+- **Document statistics** are under **Tools › Document Statistics…**: characters
+  without line endings, words, estimated tokens, lines and the UTF-8 byte length
+  a save would write. With text selected, the same dialog reports the
+  selection's characters, bytes and range count. The numbers come from the
+  status bar's incremental counts; the dialog is a snapshot and does not update
+  while it is open.
+- **Preferences** (**File › Preferences…**, `Ctrl+,`) does not show dead
+  controls: every row writes a setting or performs the action it names.
 
 ## Paste, copy and images
 
@@ -389,7 +395,7 @@ built from source, use `Cmd` where the application registers `CmdOrCtrl`.
 | Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
 | Move focused tab left / right | `Alt+Shift+Left` / `Alt+Shift+Right` |
 | Tab context menu | `Shift+F10` (or the Menu key) |
-| Preferences | `Ctrl+,` |
+| Preferences (File › Preferences…) | `Ctrl+,` |
 | Find / Find and Replace | `Ctrl+F` / `Ctrl+H` |
 | Find next / previous | `F3` / `Shift+F3` |
 | Select next occurrence | `Ctrl+D` |

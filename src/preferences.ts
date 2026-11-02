@@ -1286,6 +1286,17 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
       action: fetchModels,
     },
     {
+      kind: "number",
+      label: "Context limit",
+      help: "The most context one request may send, measured in approximate tokens. The status bar's token count uses the same estimator. A rewrite over the limit is refused; Ask's selection, question and history, and Continue's text, trim to fit. The model also needs room for its own instructions and answer, so keep this below its context window. Default 8,192; maximum 32,768.",
+      min: 1_024,
+      max: 32_768,
+      step: 256,
+      suffix: "tokens",
+      get: () => s().aiContextTokens ?? 8_192,
+      set: (value) => host.update({ aiContextTokens: value }),
+    },
+    {
       kind: "note",
       label: "Status",
       text: aiStatusText(ai),

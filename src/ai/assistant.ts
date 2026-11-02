@@ -70,6 +70,8 @@ export interface AssistantConfig {
   provider: api.AiProvider;
   baseUrl: string;
   model: string;
+  /** Document-context budget for one request, in approximate tokens. */
+  contextTokens: number;
 }
 
 export interface AssistantHost {
@@ -87,6 +89,11 @@ export interface AssistantHost {
   setEnabled(enabled: boolean): void;
   /** The name shown in a history row: the tab's document name. */
   documentName(): string;
+  /**
+   * Approximate tokens in a passage, from the same estimator as the status
+   * bar. The assistant never implements a second counter.
+   */
+  estimateTokens(text: string): Promise<number>;
 }
 
 export interface AssistantHandle {
@@ -291,6 +298,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     provider: "openai",
     baseUrl: "",
     model: "",
+    contextTokens: 8_192,
   };
   let position: Point | null = null;
   /**
@@ -707,6 +715,56 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     statusEl.classList.toggle("is-error", isError);
   }
 
+  // Token counts always come from Rust, so the palette and the status bar agree.
+  // The cache keeps a search keystroke from sending the same passage again; the
+  // failure set stops a rejected promise from retrying on every render.
+  const tokenCache = new Map<string, number>();
+  const tokenPending = new Set<string>();
+  const tokenFailures = new Set<string>();
+  const TOKEN_CACHE_LIMIT = 8;
+
+  function rememberToken(text: string, tokens: number): void {
+    tokenCache.set(text, tokens);
+    if (tokenCache.size > TOKEN_CACHE_LIMIT) {
+      const oldest = tokenCache.keys().next().value;
+      if (oldest !== undefined) tokenCache.delete(oldest);
+    }
+  }
+
+  /**
+   * The cached token count for `text`, or null while it is being measured.
+   *
+   * A null result is not an error: the caller decides whether the text is short
+   * enough to pass without a count. Once the promise settles the palette and
+   * the open panel are re-rendered with the real number.
+   */
+  function tokensFor(text: string): number | null {
+    if (!text) return 0;
+    const cached = tokenCache.get(text);
+    if (cached !== undefined) return cached;
+    if (tokenPending.has(text) || tokenFailures.has(text)) return null;
+    tokenPending.add(text);
+    void host
+      .estimateTokens(text)
+      .then((tokens) => {
+        if (!Number.isFinite(tokens) || tokens < 0) throw new Error("invalid token count");
+        rememberToken(text, Math.trunc(tokens));
+      })
+      .catch(() => {
+        tokenFailures.add(text);
+        if (tokenFailures.size > TOKEN_CACHE_LIMIT) {
+          const oldest = tokenFailures.values().next().value;
+          if (oldest !== undefined) tokenFailures.delete(oldest);
+        }
+      })
+      .finally(() => {
+        tokenPending.delete(text);
+        if (paletteOpen) renderPalette();
+        if (panelOpen && action) renderContext();
+      });
+    return null;
+  }
+
   function reasonFor(spec: AiActionSpec, current = host.capture()): string | null {
     if (!host.canWrite() && spec.apply !== "answer") {
       return "The document is read-only — copy the answer instead.";
@@ -718,8 +776,15 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     }
     const passage = current.hasSelection ? current.selection : current.paragraph;
     if (!passage.trim()) return "Write or select some text first.";
-    if (passage.length > 24_000) {
-      return "Select a shorter passage — up to 24,000 characters.";
+    const tokens = tokensFor(passage);
+    if (tokens !== null && tokens > config.contextTokens) {
+      return `Select a shorter passage — up to ${formatCount(config.contextTokens)} tokens.`;
+    }
+    // Tokens can never outnumber characters, so a short-enough text is safe
+    // without waiting. A longer one shows the measurement rather than letting a
+    // possible over-budget click through.
+    if (tokens === null && !tokenFailures.has(passage) && passage.length > config.contextTokens) {
+      return "Measuring the passage…";
     }
     return null;
   }
@@ -1258,20 +1323,28 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       return `<passage>\n${passage}\n</passage>`;
     })();
 
+    const passage = current.hasSelection ? current.selection : current.paragraph;
+    const passageTokens = tokensFor(passage);
+    const passageLabel =
+      passageTokens !== null
+        ? `${formatCount(passageTokens)} tokens`
+        : `${formatCount(passage.length)} characters`;
+
     let summary: string;
     if (spec.id === "ask") {
-      summary = current.hasSelection
-        ? `Selection · ${formatCount(current.selection.length)} characters`
-        : "No document context";
+      summary = current.hasSelection ? `Selection · ${passageLabel}` : "No document context";
     } else if (spec.id === "continue") {
+      const precedingTokens = tokensFor(preceded.text);
+      const precedingLabel =
+        precedingTokens !== null
+          ? `${formatCount(precedingTokens)} tokens`
+          : `${formatCount(preceded.text.length)} characters`;
       summary = current.hasSelection
-        ? `Selection · ${formatCount(current.selection.length)} characters, plus the text before it`
-        : `${formatCount(preceded.text.length)} characters before the caret`;
-      if (preceded.truncated) summary += " · trimmed to 12,000";
+        ? `Selection · ${passageLabel}, plus ${precedingLabel} before it`
+        : `${precedingLabel} before the caret`;
+      if (preceded.truncated) summary += " · preview trimmed";
     } else {
-      summary = `${current.hasSelection ? "Selection" : "Current paragraph"} · ${formatCount(
-        (current.hasSelection ? current.selection : current.paragraph).length,
-      )} characters`;
+      summary = `${current.hasSelection ? "Selection" : "Current paragraph"} · ${passageLabel}`;
     }
     return { summary, text: preview };
   }
@@ -1280,7 +1353,12 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     if (!action || !capture) return;
     const context = describeContext(action, capture);
     requestContext = context;
-    contextSummary.textContent = `${context.summary} · exact context`;
+    let summary = `${context.summary} · context preview`;
+    if (startedInfo) {
+      summary = `${context.summary} · ${formatCount(startedInfo.contextTokens)} tokens sent`;
+      if (startedInfo.contextTruncated) summary += " · trimmed to fit";
+    }
+    contextSummary.textContent = summary;
     contextText.textContent = context.text;
   }
 
@@ -1666,6 +1744,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     switch (event.kind) {
       case "started":
         startedInfo = event;
+        renderContext();
         renderPanel();
         break;
       case "delta":

@@ -584,8 +584,8 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
         | "view.preview" | "view.statusBar" | "view.focus" | "view.typewriter"
         | "view.fullscreen" | "view.interfaceTheme" | "view.codeColors"
         | "view.typography" | "navigate.gotoLine" | "navigate.openTabs"
-        | "tools.spellLanguage" | "tools.exportConfig" | "tools.pandoc" | "tools.typst"
-        | "tools.ai" => true,
+        | "tools.spellLanguage" | "tools.statistics" | "tools.exportConfig"
+        | "tools.pandoc" | "tools.typst" | "tools.ai" => true,
         _ if id.starts_with("view.syntax.")
             || id.starts_with("themes.")
             || id.starts_with("help.") =>
@@ -811,8 +811,18 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .separator()
         .item(&PredefinedMenuItem::close_window(app, None)?);
 
+    // Preferences is a File-menu command on Windows and Linux; macOS keeps its
+    // own application-menu item. The id and the CmdOrCtrl+, accelerator do not
+    // move with the label, so the frontend route and the registry stay stable.
     #[cfg(not(target_os = "macos"))]
-    let file = file.item(&PredefinedMenuItem::quit(app, None)?);
+    let file = file
+        .separator()
+        .item(&item(
+            "file.preferences",
+            "Preferences…",
+            Some("CmdOrCtrl+,"),
+        )?)
+        .item(&PredefinedMenuItem::quit(app, None)?);
     let file = file.build()?;
 
     // ---- Edit -------------------------------------------------------------
@@ -1147,6 +1157,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             "Spelling Language…",
             None,
         )?)
+        .item(&item(
+            "tools.statistics",
+            "Document Statistics…",
+            None,
+        )?)
         .separator()
         .item(&item(
             "tools.exportConfig",
@@ -1165,15 +1180,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         )?)
         .separator()
         .item(&check("tools.ai", "AI Assistant", None)?);
-
-    #[cfg(not(target_os = "macos"))]
-    let tools = tools
-        .separator()
-        .item(&item(
-            "file.preferences",
-            "Preferences…",
-            Some("CmdOrCtrl+,"),
-        )?);
     let tools = tools.build()?;
 
     // ---- Help -------------------------------------------------------------
@@ -1721,6 +1727,7 @@ mod tests {
         assert_eq!(enabled_for(&state, "navigate.openTarget"), Some(false));
         assert_eq!(enabled_for(&state, "view.typstPreview"), Some(true));
         assert_eq!(enabled_for(&state, "view.zoomIn"), Some(true));
+        assert_eq!(enabled_for(&state, "tools.statistics"), Some(true));
 
         state.document_language = "html".into();
         state.link_kind = "file".into();

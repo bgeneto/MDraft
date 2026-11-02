@@ -3,8 +3,9 @@
 //!
 //! This suite owns what the other UI layers do not: the shape of the native
 //! menu (`menu_items`), its context-sensitive labels and enabled states, the
-//! Preferences deep links, Paste without Formatting, the zoom-only reset,
-//! the block-equation normalisation and both Close All Tabs routes.
+//! Preferences deep links, the document statistics dialog, Paste without
+//! Formatting, the zoom-only reset, the block-equation normalisation and both
+//! Close All Tabs routes.
 //!
 //!   node scripts/menu-test.mjs [port]
 //!
@@ -212,12 +213,21 @@ try {
     ["themes.system", "Interface Theme"],
     ["view.syntax.nord", "Code Colors"],
     ["navigate.openTarget", "Navigate"],
+    ["file.preferences", "File"],
     ["tools.spellcheck", "Tools"],
+    ["tools.statistics", "Tools"],
     ["tools.ai", "Tools"],
     ["help.welcome", "Help"],
   ]) {
     check(parentOf(id) === parent, `${id} lives under ${parent}`, parentOf(id));
   }
+
+  const preferencesRows = all.filter((item) => item.text === "Preferences…");
+  check(
+    preferencesRows.length === 1 && preferencesRows[0].parent === "File",
+    "Preferences lives only in File",
+    preferencesRows.map((item) => item.parent).join(", ") || "MISSING",
+  );
 
   const textOf = (id) => all.find((item) => item.id === id)?.text ?? "MISSING";
   for (const [id, expected] of [
@@ -232,8 +242,10 @@ try {
     ["export.html", "HTML…"],
     ["export.pdf", "PDF…"],
     ["export.pdf.browser", "PDF (opens browser)…"],
+    ["file.preferences", "Preferences…"],
     ["tools.spellcheck", "Check Spelling While Typing"],
     ["tools.spellLanguage", "Spelling Language…"],
+    ["tools.statistics", "Document Statistics…"],
     ["tools.ai", "AI Assistant"],
     ["edit.pastePlain", "Paste without Formatting"],
     ["edit.find", "Find"],
@@ -378,6 +390,130 @@ try {
     "Fonts and Reading opens Typography",
   );
   await closePreferences();
+  check(
+    (await openPreferencesAt("file.preferences")) !== null,
+    "File › Preferences opens the settings panel",
+  );
+  await closePreferences();
+
+  // -------------------------------------------------------------------------
+  // Document statistics
+  // -------------------------------------------------------------------------
+  console.log("\n=== Tools › Document Statistics ===");
+  const statusTitle = await evaluate(`document.getElementById("status-words")?.title ?? ""`);
+  const statusNumbers =
+    statusTitle.match(/[\d.,]+/g)?.map((value) => Number(value.replace(/[^\d]/g, ""))) ?? [];
+  await emitMenu("tools.statistics");
+  await sleep(500);
+  check(
+    await evaluate(`Boolean(document.querySelector(".stats-dialog[open]"))`),
+    "Tools › Document Statistics opens the modal",
+  );
+  check(
+    await waitFor(
+      `(() => {
+        const dialog = document.querySelector(".stats-dialog");
+        if (!dialog) return false;
+        const row = [...dialog.querySelectorAll(".stats-row")].find(
+          (entry) => entry.querySelector("dt")?.textContent?.startsWith("Tokens"),
+        );
+        const value = row?.querySelector("dd")?.textContent ?? "";
+        return value !== "" && value !== "Estimating…";
+      })()`,
+      10000,
+    ),
+    "the token estimate arrives while the dialog is open",
+  );
+  const stats = await evaluate(`(() => {
+    const dialog = document.querySelector(".stats-dialog");
+    if (!dialog) return null;
+    const rows = [...dialog.querySelectorAll(".stats-row")].map((row) => ({
+      label: row.querySelector("dt")?.textContent?.trim() ?? "",
+      value: row.querySelector("dd")?.textContent?.trim() ?? "",
+    }));
+    const selection = dialog.querySelector(".stats-selection");
+    return {
+      title: dialog.querySelector("h2")?.textContent ?? "",
+      rows,
+      selection: selection && !selection.hidden ? selection.textContent : "",
+    };
+  })()`);
+  const labels = stats?.rows.map((row) => row.label) ?? [];
+  const values = stats?.rows.map((row) => Number(row.value.replace(/[^\d]/g, ""))) ?? [];
+  check(
+    stats?.title === "Document Statistics",
+    "the modal names the command",
+    stats?.title ?? "MISSING",
+  );
+  check(
+    labels[0]?.startsWith("Characters") &&
+      labels[0].includes("without line endings") &&
+      labels[2] === "Tokens" &&
+      labels[3] === "Lines" &&
+      labels[4]?.startsWith("Document length") &&
+      labels[4].includes("UTF-8 bytes"),
+    "the rows are ordered with Tokens directly below Words",
+    labels.join(" / "),
+  );
+  check(
+    values[1] === statusNumbers[0] &&
+      values[0] === statusNumbers[1] &&
+      values[3] === statusNumbers[2],
+    "Words, Characters and Lines match the status bar",
+    `${values.join("/")} vs ${statusNumbers.join("/")}`,
+  );
+  check(
+    Number.isFinite(values[2]) && values[2] > 0,
+    "the Tokens row shows a number",
+    String(values[2]),
+  );
+  check(
+    Number.isFinite(values[4]) && values[4] >= values[0],
+    "Document length is at least the character count in UTF-8 bytes",
+    String(values[4]),
+  );
+  const modeBeforeStats = await evaluate(
+    `[...document.getElementById("app").classList].find((name) => name.startsWith("mode-")) ?? ""`,
+  );
+  await emitMenu(modeBeforeStats.includes("mode-source") ? "view.split" : "view.source");
+  await sleep(400);
+  check(
+    (await evaluate(
+      `[...document.getElementById("app").classList].find((name) => name.startsWith("mode-")) ?? ""`,
+    )) === modeBeforeStats,
+    "menu commands do not run behind the statistics dialog",
+  );
+  await key("Escape", "Escape");
+  await sleep(300);
+  const afterStats = await evaluate(`(() => ({
+    focus: Boolean(document.activeElement?.closest?.(".cm-editor")),
+    dialog: Boolean(document.querySelector(".stats-dialog")),
+    active: document.activeElement?.className ?? "",
+  }))()`);
+  check(
+    afterStats.focus && !afterStats.dialog,
+    "Escape closes the dialog and restores the editor",
+    JSON.stringify(afterStats),
+  );
+
+  await evaluate(`document.querySelector(".cm-content")?.focus()`);
+  await key("a", "KeyA", 2);
+  await sleep(350);
+  await emitMenu("tools.statistics");
+  await sleep(500);
+  const selectionText = await evaluate(`(() => {
+    const line = document.querySelector(".stats-dialog .stats-selection");
+    return line && !line.hidden ? line.textContent ?? "" : "";
+  })()`);
+  check(
+    /^\d[\d.,]* selected characters? \(\d[\d.,]* bytes?\) in 1 range$/.test(selectionText),
+    "a selection adds one line with its character, byte and range counts",
+    selectionText,
+  );
+  await key("Escape", "Escape");
+  await sleep(300);
+  await key("Home", "Home", 2);
+
   const aiBefore = (await settings()).aiEnabled === true;
   check(
     (await itemById("tools.ai"))?.checked === aiBefore,

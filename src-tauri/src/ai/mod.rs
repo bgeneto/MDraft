@@ -6,6 +6,7 @@
 //! only text crosses the IPC boundary. A request can be cancelled by id while
 //! it streams, and the whole map is cleared when the window closes.
 
+pub mod limits;
 pub mod prompt;
 pub mod provider;
 pub mod secret;
@@ -20,6 +21,7 @@ use tauri::State;
 use tokio::sync::watch;
 
 use crate::settings::AppState;
+use limits::AiLimits;
 use prompt::{AiAction, AiRequest};
 use provider::{ChatConfig, Provider};
 
@@ -39,7 +41,7 @@ pub enum AiEvent {
     Started {
         model: String,
         host: String,
-        context_chars: usize,
+        context_tokens: usize,
         context_truncated: bool,
     },
     Delta {
@@ -228,7 +230,10 @@ pub async fn ai_complete(
     if model.is_empty() {
         return Err("Set a model in AI Settings first.".to_string());
     }
-    let prepared = prompt::prepare(&request)?;
+    let prepared = prompt::prepare(
+        &request,
+        AiLimits::from_context_tokens(settings.ai_context_tokens),
+    )?;
     // No key is not a configuration error. Sending no auth header is the only
     // accurate request for an endpoint whose operator never configured one;
     // the 401 handler names the endpoint when it does require a key.
@@ -246,7 +251,7 @@ pub async fn ai_complete(
     let _ = on_event.send(AiEvent::Started {
         model: config.model.clone(),
         host,
-        context_chars: prepared.context_chars,
+        context_tokens: prepared.context_tokens,
         context_truncated: prepared.context_truncated,
     });
 

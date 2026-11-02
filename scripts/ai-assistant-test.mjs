@@ -367,6 +367,19 @@ async function setText(label, value) {
   return ok;
 }
 
+async function setNumber(label, value) {
+  const ok = await evaluate(`(() => {
+    const row = ${rowSelector(label)};
+    const input = row?.querySelector('input[type=number]');
+    if (!input) return false;
+    input.value = ${JSON.stringify(String(value))};
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  })()`);
+  await sleep(200);
+  return ok;
+}
+
 async function setSelect(label, value) {
   const ok = await evaluate(`(() => {
     const row = ${rowSelector(label)};
@@ -890,10 +903,31 @@ try {
     "Base URL",
     "API Key",
     "Model",
+    "Context limit",
     "Status",
   ]) {
     check(`the AI section has ${label}`, prefsSection.labels.includes(label));
   }
+  const contextLimit = await evaluate(`(() => {
+    const input = (${rowSelector("Context limit")})?.querySelector('input[type=number]');
+    if (!input) return null;
+    return { value: input.value, min: input.min, max: input.max, step: input.step };
+  })()`);
+  check(
+    "the context limit starts at 8192 tokens",
+    contextLimit?.value === "8192",
+    JSON.stringify(contextLimit),
+  );
+  check(
+    "the context limit carries the hard bounds",
+    contextLimit?.min === "1024" && contextLimit?.max === "32768",
+    JSON.stringify(contextLimit),
+  );
+  check("the context limit can be lowered", await setNumber("Context limit", 1024));
+  const loweredLimit = await evaluate(
+    `window.__TAURI_INTERNALS__.invoke('get_settings').then(s => s.aiContextTokens)`,
+  );
+  check("the lowered context limit is persisted", loweredLimit === 1024, String(loweredLimit));
   check(
     "the AI section can reset the floating button",
     await evaluate(
@@ -988,6 +1022,54 @@ try {
       scrollbar.scrolls,
     JSON.stringify(scrollbar),
   );
+
+  console.log("\nContext limit");
+  await closePalette();
+  await evaluate(`document.querySelector('.cm-content').focus()`);
+  await pressCtrl("End", "End", 35);
+  await send("Input.insertText", { text: "\n\n" + "word ".repeat(1500) });
+  await sleep(300);
+  await pressCtrl("a", "KeyA", 65);
+  await openPalette();
+  const overLimit = await waitFor(
+    `(() => {
+      const row = document.querySelector('#ai-row-improve');
+      return row?.classList.contains('is-disabled')
+        ? row.querySelector('.ai-row-description')?.textContent ?? ''
+        : null;
+    })()`,
+    8000,
+  );
+  check(
+    "the palette names the configured token limit",
+    overLimit?.includes("up to 1,024 tokens") === true,
+    String(overLimit),
+  );
+  await evaluate(`document.querySelector('#ai-row-improve').click()`);
+  await sleep(200);
+  const limitToast = await evaluate(
+    `document.getElementById('toast').hidden ? '' : document.getElementById('toast').textContent`,
+  );
+  check("a refused action explains the budget", limitToast.includes("shorter passage"), limitToast);
+  await closePalette();
+  await evaluate(`document.querySelector('.cm-content').focus()`);
+  await undo();
+  await sleep(300);
+  await openAiSection();
+  check("the context limit can be raised", await setNumber("Context limit", 8192));
+  await closePrefs();
+  await openPalette();
+  const raisedRow = await waitFor(
+    `(() => {
+      const row = document.querySelector('#ai-row-improve');
+      return row && !row.classList.contains('is-disabled') ? true : null;
+    })()`,
+    8000,
+  );
+  check("raising the limit re-enables the row", raisedRow === true);
+  await closePalette();
+  await clickEditorWord("Regular");
+  await openPalette();
 
   await evaluate(
     `(() => { const s = document.querySelector('.ai-search'); s.value = 'translate'; s.dispatchEvent(new Event('input', { bubbles: true })); })()`,
@@ -1242,6 +1324,14 @@ try {
     "Improve reports an answer",
     (await panelStatus()).startsWith("Answer ready"),
     await panelStatus(),
+  );
+  const improveContext = await evaluate(
+    `document.querySelector('.ai-context-summary')?.textContent ?? ''`,
+  );
+  check(
+    "the panel reports the tokens it sent",
+    improveContext.includes("tokens sent"),
+    improveContext,
   );
   const improve = control.requests.at(-1);
   check("Improve reached /chat/completions", improve?.url === "/v1/chat/completions", improve?.url);
@@ -2479,6 +2569,7 @@ try {
       aiProvider: original.aiProvider,
       aiBaseUrl: original.aiBaseUrl,
       aiModel: original.aiModel,
+      aiContextTokens: original.aiContextTokens,
     };
     await evaluate(
       `window.__TAURI_INTERNALS__.invoke('save_settings', { settings: ${JSON.stringify(patched)} })`,
