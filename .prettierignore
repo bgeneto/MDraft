@@ -11,3 +11,6 @@ package-lock.json
 *.md
 LICENSE
 *.log
+
+# Google Search Console verification files are plain text, not HTML.
+site/google*.html
