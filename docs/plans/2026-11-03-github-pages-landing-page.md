@@ -622,9 +622,9 @@ gate. The cheapest layers that can catch this change:
 The site is live at `https://bgeneto.github.io/MDraft/` and
 `https://bgeneto.github.io/MDraft/pt-br/`. GitHub Pages is enabled with
 `build_type: workflow` and HTTPS enforced; the deploy workflow succeeded on
-commits `b79abf7`, `8760816`, `9f8e856` and `36d8e41` (runs 41691156680,
-41692417883, 41692929603 and 41693933400), and the repository homepage and
-topics were updated.
+commits `b79abf7`, `8760816`, `9f8e856`, `36d8e41` and `f325ad6` (runs
+41691156680, 41692417883, 41692929603, 41693933400 and 41694684642), and the
+repository homepage and topics were updated.
 
 Verified against the public address, not the local build:
 
@@ -645,10 +645,11 @@ Verified against the public address, not the local build:
   `https://github.com/bgeneto/MDraft/releases/latest`; the hero CTA was clicked
   and reached the `v0.7.8` release page. The release page returns 200.
 - **Performance and privacy:** Lighthouse mobile **100 / 100 / 100 / 100**
-  (Performance / Accessibility / Best Practices / SEO), LCP 1.4 s, CLS 0;
-  desktop **100 / 100 / 100 / 100**, LCP 0.6 s, CLS 0.001. Every live resource
-  request goes to one origin (`bgeneto.github.io`) and none to a third party;
-  the build reports a 469 KB initial payload and 1,557 KB total.
+  (Performance / Accessibility / Best Practices / SEO) on both the English and
+  Portuguese pages, LCP 1.2 s / 1.4 s, CLS 0; desktop **100 / 100 / 100 / 100**,
+  LCP 0.6 s, CLS 0.001. Every live resource request goes to one origin
+  (`bgeneto.github.io`) and none to a third party; the build reports a 469 KB
+  initial payload and 1,560 KB total.
 - **Repository:** the site is committed with its sources, optimized WebP files,
   social card and build script; the existing Quality workflow passed after the
   push (run 41691157109).
