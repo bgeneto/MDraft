@@ -26,6 +26,20 @@ highlighting, blockquotes, rules and local images. On top of that it renders:
 Math inside code spans and fences is left alone. Local image links resolve
 against the folder of the document being edited.
 
+### Currency and inline math
+
+The Markdown preview keeps prices such as `R$50`, `R$ 15.200,75`, `US$5.00`
+and `C$8,123.50` literal while supporting both `$x + y$` and `$ x + y $`
+equations. Use `\$` for an ambiguous literal dollar and `\(…\)` for explicit
+math. A tight `$5$` is numeric math; `$ 5 $` is literal, and `R$5$` is prefixed
+money followed by a literal dollar. A dollar immediately followed by a digit
+cannot close math: write `\(x\)2` instead of `$x$2`.
+
+Formatted paste into Markdown escapes currency dollars once, preserving code,
+URLs and existing escapes. `Ctrl+Shift+V` or turning off rich paste keeps the
+raw clipboard text. Native HTML, PDF and Print follow these rules; Pandoc uses
+its own Markdown reader.
+
 ## AsciiDoc
 
 `.adoc` and `.asciidoc` files open as AsciiDoc. The preview is produced in the
@@ -282,6 +296,38 @@ Other editor features:
 - **Preferences** (**File › Preferences…**, `Ctrl+,`) does not show dead
   controls: every row writes a setting or performs the action it names.
 
+## AI Assistant
+
+The assistant is off by default. To set it up:
+
+1. Open **File › Preferences… › AI Assistant** and enable the assistant.
+2. Select **OpenAI-compatible** or **Anthropic**, then enter the provider's
+   base URL. For example, a local Ollama server commonly uses
+   `http://127.0.0.1:11434/v1` with the OpenAI-compatible option.
+3. Enter a model ID or use **Fetch model list** and choose a model. Add an API
+   key if your provider requires one; many local servers do not. Saving a key
+   also fetches the model list.
+
+The blue button in the source pane opens a searchable palette. Select text,
+choose an action and press **Generate**. Once an answer arrives, you can copy
+it, replace the selection, insert it or open it in a new tab. Available actions
+include improving, continuing, translating, summarizing and converting text.
+The palette's **History** keeps the ten most recent successful answers for the
+current session; it is not saved to disk.
+
+Under **Preferences › AI Assistant**, **Edit prompts…** opens the prompts as a
+Markdown document. Save your changes to use them on the next request; **Reset
+prompts to defaults** restores the built-in versions. The configurable context
+limit controls how much text a request can contain.
+
+Requests send the relevant text and instructions to the endpoint you select.
+Hosted providers may charge for requests. **Suggest file names when saving** is
+a separate, off-by-default option that can send the opening of an untitled
+document to that endpoint. A saved API key uses the operating system's
+credential store when available; otherwise, MDraft stores it in an unencrypted
+private file beside its settings. The Preferences panel reports which store is
+in use.
+
 ## Paste, copy and images
 
 Rich text pasted from a browser, word processor or another editor is converted
@@ -343,11 +389,12 @@ exists without the document. A URL or local path keeps its original address
 they can show a local image, because both resolve images against a root that
 only a saved file has.
 
-The application's only network requests of its own are user-initiated image
-downloads and the optional downloads of pandoc and Typst. It makes no request
-at start-up, sends no telemetry and checks for no updates. An HTML document's
-own linked resources are requested by the guest because its author asked for
-them.
+The application's own network requests are for image downloads, optional
+downloads of Pandoc and Typst, and the AI Assistant after it is enabled and used.
+An optional filename suggestion can also send text when saving an untitled
+document. MDraft makes no request at start-up, sends no telemetry and checks for
+no updates. An HTML document's own linked resources are requested by the guest
+because its author asked for them.
 
 ## Following links
 
@@ -462,3 +509,39 @@ the status bar while it differs from 100%.
 - **macOS is not published.** The source has a macOS bundle configuration and
   uses the native spell checker, but the release page currently has Windows and
   Linux builds only.
+
+### Linux startup on Wayland
+
+Some Wayland systems can abort before the window appears with
+`Error 71 (Protocol error) dispatching to Wayland display`. MDraft enables the
+WebKitGTK DMA-BUF workaround on Wayland before GTK starts. Set
+`MDRAFT_WEBKIT_DMABUF=0` to opt out, or `MDRAFT_WEBKIT_DMABUF=1` to explicitly
+enable it. If the window still does not appear, try:
+
+```bash
+WEBKIT_DISABLE_DMABUF_RENDERER=1 mdraft notes.md
+```
+
+For a desktop entry, copy the installed file into your own applications folder
+and add the environment assignment to its command:
+
+```bash
+mkdir -p ~/.local/share/applications
+cp /usr/share/applications/mdraft.desktop ~/.local/share/applications/
+# Edit the copy so its Exec line reads:
+# Exec=env WEBKIT_DISABLE_DMABUF_RENDERER=1 mdraft %F
+update-desktop-database ~/.local/share/applications
+```
+
+### Read Aloud on Linux
+
+Read Aloud uses speech-dispatcher and an installed synthesizer. On Debian or
+Ubuntu, install and test them with:
+
+```bash
+sudo apt install speech-dispatcher espeak-ng
+spd-say "Hello"
+```
+
+On other distributions, use the equivalent packages. MDraft does not download
+or bundle voices.

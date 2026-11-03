@@ -1014,6 +1014,13 @@ this is not evidence of a broken dependency or parser change. Request the
 normal execution escalation and rerun the same build/test command without
 rewriting dependencies or replacing the source file.
 
+**`Preview: http://127.0.0.1:4173/MDraft/` prints, but the browser cannot load it and `Invoke-WebRequest` reports `An attempt was made to access a socket in a way forbidden by its access permissions`**
+On this Windows host, a site preview started inside the sandbox can announce its
+listener yet remain inaccessible to the host browser. Escalating only the client
+timed out, so the page itself was not the problem. Stop the owned server, run
+`npm run site:serve` with normal execution escalation, and check the URL outside
+the sandbox with `Invoke-WebRequest -NoProxy -ErrorAction Stop` before opening it.
+
 **`OUT_DIR env var is not set, do you have a build script?` despite `src-tauri/build.rs` being present**
 On this host the restricted shell also logged `could not canonicalize path` for
 the workspace ancestors. The same MSVC-wrapped cargo command outside the sandbox

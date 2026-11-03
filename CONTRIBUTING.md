@@ -97,8 +97,8 @@ frontend when Node is available, and stages the `.deb` and AppImage.
 When changing the UI, capture a new screenshot rather than describing it in the
 abstract. On Windows, `scripts/screenshot.mjs` drives a running window over the
 WebView2 DevTools protocol; the Linux WebKitGTK build has no CDP endpoint. The
-README images are in `docs/screenshots/`; the documents they show are
-`samples/tidewater-field-notes.md` and `samples/tidewater-guide.adoc`.
+README images are in `docs/screenshots/`; the landing page uses optimized copies
+under `site/assets/img/`.
 
 ## Pull requests
 
