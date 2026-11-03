@@ -925,10 +925,6 @@ figcaption {
   margin-bottom: 34px;
 }
 
-.typography-gallery .shot-frame {
-  height: 100%;
-}
-
 .typography-gallery .shot img {
   width: 100%;
   height: auto;
@@ -945,9 +941,9 @@ figcaption {
   gap: 24px;
 }
 
-.gallery-pair .shot-frame {
-  height: 100%;
-}
+/* The frames size to their image. A `height: 100%` here made the frame fill
+   the grid item and pushed the figcaption outside the figure, where it
+   overlapped the feature list below. */
 
 /* --------------------------------------------------------------------------
    Languages
