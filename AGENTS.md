@@ -816,6 +816,9 @@ GitHub Pages answers an unknown project URL with the `404.html` content but keep
 **A full-page screenshot shows every below-the-fold screenshot as an empty box**
 The landing page marks its section images `loading="lazy"`. Playwright's `fullPage: true` captures without scrolling, so the images are never requested and the capture looks like the assets are missing; the build and a real scroll load all of them. Scroll each section (or wait for `img.complete`) before judging the layout, and do not "fix" an image that the browser simply has not fetched yet.
 
+**`height: 100%` on a screenshot frame pushes its `<figcaption>` into the next list**
+In a CSS grid, a `figure` stretches to the row height; an inner `.shot-frame` with `height:100%` then fills that height, and the caption is laid out below the frame but outside the figure's own box. The next `.feature-list` starts at the figure's nominal bottom, so the caption and its "Click to enlarge" hint painted over the first bullets. Measured in the math pair: figure 430px, frame 430px, caption 45px, and the list only 26px after the figure bottom; after removing the rule, frame 374px, caption 45px, figure 430px, and the list starts 26px below the caption. Let the frame size to its image; if two cards must match heights, stretch a wrapper that contains the caption, not the frame alone.
+
 **Add yours before you finish the task** - see
 [Recording traps is required](#recording-traps-is-required) for what qualifies and
 how to write it. The list is append-only in spirit: do not delete an entry because
