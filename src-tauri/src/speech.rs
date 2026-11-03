@@ -51,9 +51,17 @@ pub struct SpeechState {
 /// malformed IPC call cannot hand an unbounded string to a child process.
 const MAX_SPEECH_CHARS: usize = 10_000;
 
+// The four `spd-say` helpers below exist for the Linux backend and for the
+// tests, which run on every platform. On Windows and macOS the non-Linux
+// `status_blocking`/`speak_blocking` never call them, so an ungated definition
+// is dead code there and `cargo clippy --all-targets -- -D warnings` fails on
+// `function ... is never used`. Keeping `test` in the gate is what lets the
+// parser and argument tests run on every host.
+
 /// `spd-say` wants -100..100, where 0 is the synthesiser's normal pace. The
 /// frontend uses the Web Speech 0.5..2.0 scale, so 1.0 maps to 0 and each 0.5
 /// step is fifty points.
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn rate_to_spd(rate: f64) -> i32 {
     if !rate.is_finite() {
         return 0;
@@ -64,6 +72,7 @@ pub(crate) fn rate_to_spd(rate: f64) -> i32 {
 
 /// The base ISO code `spd-say -l` expects. A regional tag (`pt-BR`) is reduced
 /// to `pt`; the named voice carries the region when there is one.
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn spd_language(tag: &str) -> String {
     let normalized = tag.trim().replace('_', "-");
     if normalized.is_empty() || normalized.eq_ignore_ascii_case("auto") {
@@ -84,6 +93,7 @@ pub(crate) fn spd_language(tag: &str) -> String {
 /// list is 14,806 rows on espeak-ng, while one default per language is 141 and
 /// is what a voice picker can present. The first `none` row of each language is
 /// marked as its default.
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn parse_voices(output: &str) -> Vec<SpeechVoice> {
     let mut voices = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -115,6 +125,7 @@ pub(crate) fn parse_voices(output: &str) -> Vec<SpeechVoice> {
 
 /// Build the `spd-say -w` command line. Kept pure so the test can inspect it
 /// without starting a process.
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn speak_arguments(text: &str, lang: &str, voice: &str, rate: f64) -> Vec<String> {
     let mut arguments = vec![
         "-w".to_string(),
