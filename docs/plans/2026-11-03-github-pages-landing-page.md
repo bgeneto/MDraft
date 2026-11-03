@@ -1,6 +1,6 @@
 # Landing page for MDraft on GitHub Pages
 
-**Status:** in progress (approved 2026-11-03)
+**Status:** done
 **Date:** 2026-11-03
 **ADR:** `../adr/2026-11-03-static-landing-page.md`
 
@@ -429,38 +429,39 @@ artifact is a few hundred kilobytes plus the screenshots.
 
 ## Steps
 
-- [ ] Write the ADR: static site, no framework, self-hosted assets, no
+- [x] Write the ADR: static site, no framework, self-hosted assets, no
       third-party requests, bilingual pages, `site/` + build script, Pages
       artifact flow, icon palette.
-- [ ] Run `scripts/optimize-site-images.py`; commit the WebP outputs and verify
+- [x] Run `scripts/optimize-site-images.py`; commit the WebP outputs and verify
       dimensions, format and bytes.
-- [ ] Create `site/index.html` (English) with the sections above, semantic
+- [x] Create `site/index.html` (English) with the sections above, semantic
       landmarks, the SEO head, JSON-LD and token placeholders.
-- [ ] Create `site/pt-br/index.html` with translated copy, metadata, canonical,
+- [x] Create `site/pt-br/index.html` with translated copy, metadata, canonical,
       JSON-LD and reciprocal `hreflang`.
-- [ ] Create `site/styles.css`: icon palette, fluid type, two themes, responsive
+- [x] Create `site/styles.css`: icon palette, fluid type, two themes, responsive
       grid, gallery thumbnails, dialog/lightbox, focus states, reduced motion.
-- [ ] Create `site/site.js`: theme toggle with `localStorage`, lightbox
+- [x] Create `site/site.js`: theme toggle with `localStorage`, lightbox
       (`<dialog>`, gallery arrows, focus restoration), no other behavior.
-- [ ] Create `site/404.html` and `site/pt-br/404.html` (`noindex`), and
+- [x] Create `site/404.html` and `site/pt-br/404.html` (`noindex`), and
       `site/robots.txt`.
-- [ ] Produce `site/assets/og.png` at 1200×630, language-neutral (wordmark,
+- [x] Produce `site/assets/og.png` at 1200×630, language-neutral (wordmark,
       four language names, screenshot), with its source composition under
       `docs/`.
-- [ ] Write `scripts/build-site.mjs`: assembly, token substitution, sitemap,
+- [x] Write `scripts/build-site.mjs`: assembly, token substitution, sitemap,
       bilingual parity checks, link/image/JSON-LD validation, budget report and
       `--serve`.
-- [ ] Add `npm run site` and `npm run site:serve`; extend the Prettier globs to
+- [x] Add `npm run site` and `npm run site:serve`; extend the Prettier globs to
       `site/**/*.{html,css,js}`; ignore `_site/`.
-- [ ] Add `.github/workflows/pages.yml`.
-- [ ] Update `README.md` with the site link; update `AGENTS.md` with both script
+- [x] Add `.github/workflows/pages.yml`.
+- [x] Update `README.md` with the site link; update `AGENTS.md` with both script
       rows, the publishing section, the release-checklist line and the traps.
-- [ ] Enable Pages (Settings → GitHub Actions, or `gh api` once), set the
+- [x] Enable Pages (Settings → GitHub Actions, or `gh api` once), set the
       repository homepage to the site URL, add `tauri` and `pdf` topics.
-- [ ] Deploy, verify both live URLs, the headers, the HTML, the social card, the
+- [x] Deploy, verify both live URLs, the headers, the HTML, the social card, the
       sitemap and the absence of third-party requests; run Lighthouse on both.
 - [ ] Hand the owner the Search Console verification token step and submit the
-      sitemap.
+      sitemap. The sitemap is live; verification needs the owner's Google
+      account.
 
 ## Files and modules
 
@@ -615,6 +616,47 @@ gate. The cheapest layers that can catch this change:
     recorded.
 14. The application is unaffected: `npm run build`, `npm run format:check`,
     `npm run lint` and `npm run knip` pass.
+
+## Outcome (2026-11-03)
+
+The site is live at `https://bgeneto.github.io/MDraft/` and
+`https://bgeneto.github.io/MDraft/pt-br/`. GitHub Pages is enabled with
+`build_type: workflow` and HTTPS enforced; the deploy workflow succeeded on
+commits `b79abf7`, `8760816` and `9f8e856` (runs 41691156680, 41692417883 and
+41692929603), and the repository homepage and topics were updated.
+
+Verified against the public address, not the local build:
+
+- **Visual and responsive:** desktop 1440×960 and mobile 390×844 render the
+  hero, AI palette, scroll pair, Typst paper, typography specimen, math pair,
+  download cards, FAQ, final CTA and footer; no horizontal overflow at either
+  width. All 12 image elements load with non-zero natural dimensions, the two
+  fonts load, the theme toggle and lightbox work, and the language switch goes
+  to the correct `lang`/`canonical` page.
+- **SEO:** title, description, canonical, Open Graph, Twitter card and
+  reciprocal `hreflang` (`en`, `pt-BR`, `x-default`) are correct on both pages;
+  the live `sitemap.xml` and `robots.txt` are valid; the custom 404 is styled,
+  `noindex` and resolves its assets through `<base>`. The schema.org validator
+  reports **3 items, 0 errors, 0 warnings** (`SoftwareApplication`, `WebSite`,
+  `FAQPage`, with an `Organization` publisher).
+- **CTAs:** five download links point at
+  `https://github.com/bgeneto/MDraft/releases/latest`; the hero CTA was clicked
+  and reached the `v0.7.8` release page. The release page returns 200.
+- **Performance and privacy:** Lighthouse mobile **100 / 100 / 100 / 100**
+  (Performance / Accessibility / Best Practices / SEO), LCP 1.4 s, CLS 0;
+  desktop **100 / 100 / 100 / 100**, LCP 0.6 s, CLS 0.001. Every live resource
+  request goes to one origin (`bgeneto.github.io`) and none to a third party;
+  the build reports a 469 KB initial payload and 1,557 KB total.
+- **Repository:** the site is committed with its sources, optimized WebP files,
+  social card and build script; the existing Quality workflow passed after the
+  push (run 41691157109).
+
+The only remaining owner action is Search Console: verify the URL-prefix
+property with a token or verification file, submit
+`https://bgeneto.github.io/MDraft/sitemap.xml` and request indexing for both
+languages. A direct `site:` query could not be completed because Google served
+its bot check to this environment; indexing is Google's decision and was not
+promised by the code.
 
 ## Open questions
 
