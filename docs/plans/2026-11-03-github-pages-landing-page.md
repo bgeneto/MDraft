@@ -654,12 +654,15 @@ Verified against the public address, not the local build:
   social card and build script; the existing Quality workflow passed after the
   push (run 41691157109).
 
-The only remaining owner action is Search Console: verify the URL-prefix
-property with a token or verification file, submit
+The Google verification file
+`site/google38db1b93bb68508e.html` is published at
+`https://bgeneto.github.io/MDraft/google38db1b93bb68508e.html` (200, exact
+content), so the URL-prefix property can be verified. The remaining owner
+actions are to press **Verify** in Search Console, submit
 `https://bgeneto.github.io/MDraft/sitemap.xml` and request indexing for both
-languages. A direct `site:` query could not be completed because Google served
-its bot check to this environment; indexing is Google's decision and was not
-promised by the code.
+languages; they need the owner's Google account. A direct `site:` query could
+not be completed because Google served its bot check to this environment;
+indexing is Google's decision and was not promised by the code.
 
 ## Open questions
 
