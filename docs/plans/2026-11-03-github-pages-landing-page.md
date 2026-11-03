@@ -622,8 +622,9 @@ gate. The cheapest layers that can catch this change:
 The site is live at `https://bgeneto.github.io/MDraft/` and
 `https://bgeneto.github.io/MDraft/pt-br/`. GitHub Pages is enabled with
 `build_type: workflow` and HTTPS enforced; the deploy workflow succeeded on
-commits `b79abf7`, `8760816` and `9f8e856` (runs 41691156680, 41692417883 and
-41692929603), and the repository homepage and topics were updated.
+commits `b79abf7`, `8760816`, `9f8e856` and `36d8e41` (runs 41691156680,
+41692417883, 41692929603 and 41693933400), and the repository homepage and
+topics were updated.
 
 Verified against the public address, not the local build:
 
@@ -636,9 +637,10 @@ Verified against the public address, not the local build:
 - **SEO:** title, description, canonical, Open Graph, Twitter card and
   reciprocal `hreflang` (`en`, `pt-BR`, `x-default`) are correct on both pages;
   the live `sitemap.xml` and `robots.txt` are valid; the custom 404 is styled,
-  `noindex` and resolves its assets through `<base>`. The schema.org validator
-  reports **3 items, 0 errors, 0 warnings** (`SoftwareApplication`, `WebSite`,
-  `FAQPage`, with an `Organization` publisher).
+  `noindex`, resolves its assets through `<base>` and localises itself for
+  `/pt-br/` paths. The schema.org validator reports **3 items, 0 errors, 0
+  warnings** (`SoftwareApplication`, `WebSite`, `FAQPage`, with an `Organization`
+  publisher).
 - **CTAs:** five download links point at
   `https://github.com/bgeneto/MDraft/releases/latest`; the hero CTA was clicked
   and reached the `v0.7.8` release page. The release page returns 200.
