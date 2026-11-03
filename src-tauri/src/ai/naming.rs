@@ -173,7 +173,7 @@ pub async fn ai_suggest_filename(
         return Err("The document is empty.".to_string());
     }
 
-    let (key, _) = super::secret::resolve(&state.ai.keys, provider_kind.id(), &base);
+    let (key, _) = super::resolve_key(&state, provider_kind.id(), &base);
     let host = provider::host_of(&base);
     let config = ChatConfig {
         provider: provider_kind,

@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.7.7",
   "type": "module",
-  "description": "A Tauri 2 Markdown, Typst, HTML and AsciiDoc editor in the spirit of Typora",
+  "description": "A native Markdown, AsciiDoc, Typst and HTML editor with live preview and an optional AI assistant",
   "license": "MIT",
   "scripts": {
     "dev": "vite",

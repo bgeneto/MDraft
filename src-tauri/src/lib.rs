@@ -7,10 +7,13 @@ mod html_preview;
 mod ai;
 mod images;
 mod launch;
+#[cfg(target_os = "linux")]
+mod linux_webkit_env;
 mod menu;
 mod print;
 mod recovery;
 mod settings;
+mod speech;
 mod spellcheck;
 mod tokens;
 mod typst;
@@ -20,6 +23,12 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before anything creates a GTK application: WebKitGTK reads its rendering
+    // switches while it initialises. See `linux_webkit_env` for the NVIDIA
+    // Wayland failure this prevents.
+    #[cfg(target_os = "linux")]
+    linux_webkit_env::apply_before_gtk_init();
+
     let context = tauri::generate_context!();
 
     // Wayland has no window-icon property for GTK3 applications: the
@@ -41,6 +50,7 @@ pub fn run() {
         .manage(html_preview::PreviewStore::default())
         .manage(fonts::FontCatalog::default())
         .manage(launch::LaunchState::default())
+        .manage(speech::SpeechState::default())
         .register_asynchronous_uri_scheme_protocol(
             html_preview::SCHEME,
             |context, request, responder| {
@@ -113,6 +123,9 @@ pub fn run() {
             recovery::remove_recovery,
             tokens::count_tokens,
             fonts::system_fonts,
+            speech::speech_status,
+            speech::speech_speak,
+            speech::speech_stop,
             spellcheck::spellcheck_languages,
             spellcheck::spellcheck_check,
             spellcheck::spellcheck_suggest,

@@ -63,7 +63,7 @@ pub enum AiEvent {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiKeyStatus {
-    /// `"keychain"`, `"session"` or `"none"`.
+    /// `"keychain"`, `"file"`, `"session"` or `"none"`.
     pub source: String,
     pub has_key: bool,
     pub endpoint: String,
@@ -155,6 +155,22 @@ fn status_for(endpoint: &str, source: secret::KeySource, warning: Option<String>
     }
 }
 
+/// The fallback file beside `settings.json`.
+fn keys_path(state: &AppState) -> std::path::PathBuf {
+    secret::keys_file(&state.config_file)
+}
+
+/// The key for an endpoint, from the session, the keychain or the private
+/// fallback file, in that order. Every request path uses this one function so
+/// the precedence cannot drift between status, model listing and generation.
+pub(crate) fn resolve_key(
+    state: &AppState,
+    provider: &str,
+    base_url: &str,
+) -> (Option<String>, secret::KeySource) {
+    secret::resolve(&state.ai.keys, provider, base_url, &keys_path(state))
+}
+
 /// Where the key for this endpoint currently comes from.
 ///
 /// Deliberately forgiving while the reader types: an invalid URL reports `none`
@@ -168,7 +184,7 @@ pub async fn ai_status(
     let normalized = provider::normalize_base_url(&base_url);
     let (source, endpoint) = match normalized {
         Ok(base) => {
-            let (_, source) = secret::resolve(&state.ai.keys, &provider, &base);
+            let (_, source) = resolve_key(&state, &provider, &base);
             (source, base)
         }
         Err(_) => (secret::KeySource::None, base_url.trim().to_string()),
@@ -176,11 +192,55 @@ pub async fn ai_status(
     Ok(status_for(&endpoint, source, None))
 }
 
-/// Store a key in the OS credential store, falling back to this session.
+/// Store a key in the OS credential store, falling back to a private file and
+/// then to this session.
 ///
-/// The fallback is reported, not hidden: a Linux session without a Secret
-/// Service must still be usable, and the reader must know the key will vanish
-/// on restart.
+/// The fallback is reported, not hidden: a Linux session without a usable
+/// Secret Service must survive a restart, and the reader must know where the key
+/// went. The file is `0600`, separate from `settings.json`, and explicitly not
+/// encrypted; the UI says so. A later successful keychain write removes it.
+///
+/// Split from the command so the refused-keychain branch is testable without a
+/// real Secret Service.
+fn store_key(
+    keys: &Mutex<HashMap<String, String>>,
+    keys_path: &std::path::Path,
+    provider: &str,
+    base: &str,
+    key: &str,
+    keychain: Result<(), String>,
+) -> (secret::KeySource, Option<String>) {
+    match keychain {
+        Ok(()) => {
+            secret::session_remove(keys, provider, base);
+            let _ = secret::file_delete(keys_path, provider, base);
+            (secret::KeySource::Keychain, None)
+        }
+        Err(message) => match secret::file_set(keys_path, provider, base, key) {
+            Ok(()) => {
+                secret::session_remove(keys, provider, base);
+                (
+                    secret::KeySource::File,
+                    Some(format!(
+                        "{message} The key is saved in a private file and will survive a restart; \
+                         the system keychain is still preferred. The file is readable only by \
+                         your user account, but it is not encrypted."
+                    )),
+                )
+            }
+            Err(file_error) => {
+                secret::session_set(keys, provider, base, key);
+                (
+                    secret::KeySource::Session,
+                    Some(format!(
+                        "{message} {file_error} The key is kept for this session only."
+                    )),
+                )
+            }
+        },
+    }
+}
+
 #[tauri::command]
 pub async fn ai_set_key(
     state: State<'_, AppState>,
@@ -193,20 +253,10 @@ pub async fn ai_set_key(
     if key.is_empty() {
         return Err("Type the API key first.".to_string());
     }
-    match secret::keychain_set(&provider, &base, key) {
-        Ok(()) => {
-            secret::session_remove(&state.ai.keys, &provider, &base);
-            Ok(status_for(&base, secret::KeySource::Keychain, None))
-        }
-        Err(message) => {
-            secret::session_set(&state.ai.keys, &provider, &base, key);
-            Ok(status_for(
-                &base,
-                secret::KeySource::Session,
-                Some(format!("{message} The key is kept for this session only.")),
-            ))
-        }
-    }
+    let path = keys_path(&state);
+    let keychain = secret::keychain_set(&provider, &base, key);
+    let (source, warning) = store_key(&state.ai.keys, &path, &provider, &base, key, keychain);
+    Ok(status_for(&base, source, warning))
 }
 
 #[tauri::command]
@@ -216,12 +266,27 @@ pub async fn ai_clear_key(
     base_url: String,
 ) -> Result<AiKeyStatus, String> {
     let base = provider::normalize_base_url(&base_url)?;
-    let warning = secret::keychain_delete(&provider, &base).err();
+    let path = keys_path(&state);
+    let mut warnings = Vec::new();
+    if let Err(message) = secret::keychain_delete(&provider, &base) {
+        warnings.push(message);
+    }
+    if let Err(message) = secret::file_delete(&path, &provider, &base) {
+        warnings.push(message);
+    }
     secret::session_remove(&state.ai.keys, &provider, &base);
     // Report what actually remains: a failed delete must not claim the key is
     // gone while it can still be read.
-    let (_, source) = secret::resolve(&state.ai.keys, &provider, &base);
-    Ok(status_for(&base, source, warning))
+    let (_, source) = resolve_key(&state, &provider, &base);
+    Ok(status_for(
+        &base,
+        source,
+        if warnings.is_empty() {
+            None
+        } else {
+            Some(warnings.join(" "))
+        },
+    ))
 }
 
 /// Fetch the endpoint's model list. Nothing is requested until the reader
@@ -240,7 +305,7 @@ pub async fn ai_fetch_models(
     // needs none, and a hosted endpoint answers 401 when it wants one. Let the
     // request be the authority instead of refusing before the reader's server
     // has had a chance to answer.
-    let (key, _) = secret::resolve(&state.ai.keys, provider_id.id(), &base);
+    let (key, _) = resolve_key(&state, provider_id.id(), &base);
     let config = ChatConfig {
         provider: provider_id,
         base_url: base.clone(),
@@ -279,7 +344,7 @@ pub async fn ai_test_reasoning(
     if model.is_empty() {
         return Err("Set a model in AI Settings first.".to_string());
     }
-    let (key, _) = secret::resolve(&state.ai.keys, provider_kind.id(), &base);
+    let (key, _) = resolve_key(&state, provider_kind.id(), &base);
     let config = ChatConfig {
         provider: provider_kind,
         base_url: base.clone(),
@@ -355,7 +420,7 @@ pub async fn ai_complete(
     // No key is not a configuration error. Sending no auth header is the only
     // accurate request for an endpoint whose operator never configured one;
     // the 401 handler names the endpoint when it does require a key.
-    let (key, _) = secret::resolve(&state.ai.keys, provider_kind.id(), &base);
+    let (key, _) = resolve_key(&state, provider_kind.id(), &base);
 
     let host = provider::host_of(&base);
     let config = ChatConfig {
@@ -444,4 +509,103 @@ pub async fn ai_complete(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+    struct TempDir(std::path::PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "mdraft-key-store-{}-{}-{name}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn keys(&self) -> std::path::PathBuf {
+            self.0.join(secret::KEYS_FILE)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_refused_keychain_falls_back_to_the_private_file() {
+        let dir = TempDir::new("refused");
+        let path = dir.keys();
+        let keys = Mutex::new(HashMap::new());
+        let (source, warning) = store_key(
+            &keys,
+            &path,
+            "openai",
+            "http://a/v1",
+            "key-a",
+            Err("The system credential store refused the key.".to_string()),
+        );
+        assert_eq!(source, secret::KeySource::File);
+        assert!(
+            warning
+                .as_deref()
+                .is_some_and(|text| text.contains("private file"))
+        );
+        assert_eq!(
+            secret::file_get(&path, "openai", "http://a/v1"),
+            Some("key-a".to_string())
+        );
+        assert_eq!(secret::session_get(&keys, "openai", "http://a/v1"), None);
+    }
+
+    #[test]
+    fn a_successful_keychain_write_removes_the_older_file_entry() {
+        let dir = TempDir::new("migrate");
+        let path = dir.keys();
+        secret::file_set(&path, "openai", "http://a/v1", "old-key").unwrap();
+        let keys = Mutex::new(HashMap::new());
+        let (source, warning) = store_key(&keys, &path, "openai", "http://a/v1", "new-key", Ok(()));
+        assert_eq!(source, secret::KeySource::Keychain);
+        assert!(warning.is_none());
+        assert_eq!(secret::file_get(&path, "openai", "http://a/v1"), None);
+    }
+
+    #[test]
+    fn an_unwritable_file_keeps_the_key_for_the_session() {
+        let dir = TempDir::new("unwritable");
+        let blocker = dir.0.join("not-a-directory");
+        fs::write(&blocker, b"x").unwrap();
+        let path = blocker.join(secret::KEYS_FILE);
+        let keys = Mutex::new(HashMap::new());
+        let (source, warning) = store_key(
+            &keys,
+            &path,
+            "openai",
+            "http://a/v1",
+            "key-a",
+            Err("The system credential store refused the key.".to_string()),
+        );
+        assert_eq!(source, secret::KeySource::Session);
+        assert!(
+            warning
+                .as_deref()
+                .is_some_and(|text| text.contains("session only"))
+        );
+        assert_eq!(
+            secret::session_get(&keys, "openai", "http://a/v1"),
+            Some("key-a".to_string())
+        );
+    }
 }

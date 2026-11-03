@@ -19,6 +19,7 @@ import {
   browserBackend,
   chooseVoice,
   clampRate,
+  createReadAloud,
   createReadingQueue,
   splitSentences,
   voiceAvailabilityNote,
@@ -583,6 +584,63 @@ console.log("=== the Preferences note names the only way to add a voice ===");
 
   const linux = voiceAvailabilityNote(voices, "", "Mozilla/5.0 (X11; Linux x86_64)");
   check(linux.includes("speech-dispatcher"), "the Linux path names speech-dispatcher");
+
+  const linuxNone = voiceAvailabilityNote([], "", "Mozilla/5.0 (X11; Linux x86_64)");
+  check(
+    linuxNone.includes("sudo apt install speech-dispatcher espeak-ng"),
+    "the Linux no-voice path names the exact package command",
+    linuxNone,
+  );
+  check(linuxNone.includes('spd-say "Hello"'), "the Linux no-voice path names the test command");
+}
+
+// ---------------------------------------------------------------------------
+console.log("=== an injected platform catalogue and backend replace Web Speech ===");
+{
+  let spoken = null;
+  const backend = {
+    speak(text, options) {
+      spoken = { text, options };
+    },
+    cancel() {},
+  };
+  const voiceSource = {
+    read: () => [
+      {
+        name: "Portuguese (Portugal)",
+        lang: "pt",
+        local: true,
+        isDefault: true,
+      },
+    ],
+    refresh: async () => [
+      {
+        name: "Portuguese (Portugal)",
+        lang: "pt",
+        local: true,
+        isDefault: true,
+      },
+    ],
+  };
+  const handle = createReadAloud({
+    rate: () => 1,
+    voiceName: () => "",
+    languageTag: () => "pt-BR",
+    onChange: () => {},
+    onError: () => {},
+    backend,
+    voiceSource,
+  });
+  check(handle.availableReason() === null, "the injected catalogue is available");
+  handle.start("Olá. Tudo bem?");
+  check(spoken !== null, "the injected backend was used");
+  check(spoken?.text === "Olá.", "the first sentence is spoken", spoken?.text);
+  check(
+    spoken?.options.voiceName === "Portuguese (Portugal)",
+    "the language chose the injected voice",
+    spoken?.options.voiceName,
+  );
+  check(spoken?.options.lang === "pt", "the voice's language reaches the backend");
 }
 
 // ---------------------------------------------------------------------------

@@ -150,7 +150,11 @@ are for knowledge that has no natural home in the code.
 ## Prerequisites
 
 - **Rust** 1.91+ (`x86_64-pc-windows-msvc` target on Windows)
-- **Node.js** 20+ and npm. This repo uses **npm**; pnpm is not installed here.
+- **Node.js** 20+ and npm; **Node 24** for the app-free suites. This repo uses
+  **npm**; pnpm is not installed here. The application build works on Node 20/22
+  (the release workflow uses 22), but suites such as `read-aloud:unit`,
+  `p0:unit` and `test:sessions` import `.ts` sources directly. Node 22 is built
+  without TypeScript support; Node 24 strips the types.
 - **Python 3** with `fonttools` and `brotli`, only to refresh the bundled fonts
   through `scripts/fetch-fonts.ps1`. Ordinary builds and the test suite do not
   need Python.
@@ -241,7 +245,7 @@ rewrite from scratch.
 | `npm run ai` | `scripts/ai-assistant-test.mjs` | 323 checks against a local mock endpoint: the icon-only draggable button and its launch anchor, its own right-click menu (Reset position, Settings, disable and Escape), its place surviving a taller window, the five-group palette, the derived *Most used* section (three shortcuts, each repeated in its own category, unique row ids, a search hiding it, the ranking following the stored usage), a completed use recorded and reaching `settings.json`, Regenerate not adding a second use, a 401 recording none, search and its discreet scrollbar, the configurable Context limit and its 1,024-token refusal, the Disable reasoning option with its test request, the two provider bodies, the `between_tools` retry and the refusal hint, the panel's token count, Improve/Continue/Summarize/Translate/Tone/Convert/Ask, the answer footer as destinations (Replace selection, Insert below, New tab, Copy) with Regenerate in the answer head, one row at the default width, the one-tab open of an answer (count, active, dirty dot, stale target), the same route from History, Convert opening its target markup, the searchable language picker (all 34 suggestions in head order, filtering, the marked current value, the popup's geometry and layer, Escape closing only the list, and Enter choosing or submitting) and a target language typed into the field (Enter submits it, and retyping another clears the previous answer), the noisy-translate wrapper, streaming, Stop, a 401 with Retry, the Anthropic request shape, a typed Base URL, a gzip model list, the searchable model picker with a stale model, keyboard and pointer choice, the field/picker geometry, the reconcile rule, the one model count under Fetch, the first Fetch click after typing, the empty-list error, key-save auto-fetch, the stale-target guard, the ten-entry success-only History with regenerate overwrite, Copy/Insert below/Clear, rendered Markdown results with lists, tables and a Source view, the top-left resize grip with its corner anchoring, keyboard nudges and session layout, the Preferences Reset position row, the filename-suggestion option (its disabled state, the request, a heading skipping it, turning it off and a 401 fallback), the prompt file (Edit prompts opening ai-prompts.md, a saved section reaching the mock's system message, the wrapper tag surviving, the customised count, Reset restoring the built-ins and recovering a file that cannot be used, and the dirty refusal), a tab switch, dark theme/reduced motion and key hygiene |
 | `npm run ai:live` | `scripts/ai-live-test.mjs` | Opt-in 70 checks against the real `http://192.168.61.9:4000/v1` / `Qwen3.8-27B`: all fourteen actions, non-empty tag-free output, the model/host chip, apply and undo, and key hygiene. Reads `MDRAFT_AI_E2E_*`; `MDRAFT_AI_LIVE_OPTIONAL=1` turns a missing key into `SKIP` plus `0/0 checks passed` |
 | `npm run read-aloud` | `scripts/read-aloud-test.mjs` | 49 checks of Read Aloud through the real editor: the menu entries and their availability per language, the status chip and its position, the queue advancing, Stop from the menu and from the chip, the HTML tab's refusal with its reason, a Portuguese document selecting an installed Portuguese voice, and the voice and rate surviving a Preferences change. Audio is not asserted; the engine's state and the chip are |
-| `npm run read-aloud:unit` | `scripts/read-aloud-unit.mjs` | 99 checks of the sentence splitter (decimals, abbreviations, quotes, the length cap), the voice choice by name and language, the queue's own state machine (stop mid-queue, a late `onend`, `canceled` versus a real failure, a synchronous backend), English/Portuguese detection, declared `lang` in all four markups, the dictionary vote, the utterance's language and the Preferences note — no application |
+| `npm run read-aloud:unit` | `scripts/read-aloud-unit.mjs` | 106 checks of the sentence splitter (decimals, abbreviations, quotes, the length cap), the voice choice by name and language, the queue's own state machine (stop mid-queue, a late `onend`, `canceled` versus a real failure, a synchronous backend), English/Portuguese detection, declared `lang` in all four markups, the dictionary vote, the utterance's language, the Preferences note, the exact Linux speech-dispatcher install/test commands and an injected native voice source/backend — no application |
 | `npm run recent` | `scripts/recent-menu-test.mjs` | 26 checks that File › Open Recent mirrors the persisted list: the launch file, a new file becoming first, the menu id opening/focusing a tab, Clear Items emptying menu and sidebar, the list refilling, and a 27-row history rendered in full by the sidebar while the menu shows 20 plus Clear Items |
 | `npm run asciidoc` | `scripts/asciidoc-test.mjs` | 54 checks of the AsciiDoc preview, source highlighting, outline, preview copy, spellcheck, includes, paste, the AsciiDoc reference, the default extension and word-level sync |
 | `npm run asciidoc:export:unit` | `scripts/asciidoc-export-unit.mjs` | 17 unit checks of the AsciiDoc -> HTML step every pandoc export uses: unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail, inline and block LaTeX and AsciiMath, and the absence of preview decorations; no application |
@@ -536,7 +540,7 @@ Fifty default layers, cheapest first, plus the opt-in live AI layer. Run them in
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
 | Typecheck | `npm run build` | — | Type errors, unused imports |
-| Rust unit | `npm run test:rust` | 271 Windows / 270 Linux | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, the AI context budget and its token-bounded prefix/suffix helpers, the filename prompt's first-line/label/wrapper cleaning, the reader's prompt file (round trip, sparse override, unknown action and placeholder, fence and preamble rules, caps), spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction, image content sniffing (WebP/AVIF brands), `${filename}`, the untitled image guard, the Typst image root, the OS opener's executable refusal, the recovery journal's round-trip/id/cap rules, checked-write hashes and same-metadata conflicts, launch argument parsing and path identity, the AI prompts/tags/caps/URL joins, the fixed wrapper appendix, the namespaced wrappers and the answer sanitizer, SSE parsing and model-list diagnostics, installed-family normalisation and the widened preset overrides |
+| Rust unit | `npm run test:rust` | 302 on Linux (2026-11-03), 4 ignored; Windows omits the 7 Linux-only Wayland tests | Path handling, sanitisers, file IO, settings, recent-list order/cap (100 stored, 20 in the menu), the favorites order/cap (50, refused not evicted), the remembered-tab cap (20), menu labels, token estimate, the AI context budget and its token-bounded prefix/suffix helpers, the filename prompt's first-line/label/wrapper cleaning, the reader's prompt file (round trip, sparse override, unknown action and placeholder, fence and preamble rules, caps), spellcheck, HTML preview scheme, export reader selection, the PDF scratch directory, xz/tar release extraction, image content sniffing (WebP/AVIF brands), `${filename}`, the untitled image guard, the Typst image root, the OS opener's executable refusal, the recovery journal's round-trip/id/cap rules, checked-write hashes and same-metadata conflicts, launch argument parsing and path identity, the keychain/file/session fallback branch, the AI prompts/tags/caps/URL joins, the fixed wrapper appendix, the namespaced wrappers and the answer sanitizer, SSE parsing and model-list diagnostics, installed-family normalisation and the widened preset overrides |
 | Session store | `npm run test:sessions` | 60 | Tab order, untitled names, path identity, the neighbour on close, `move` and `removeMany` — no application needed |
 | P0 data safety (unit) | `npm run p0:unit` | 112 | Recovery scheduling/classification/Typst strings, deferred save/reload/Save As, checked-write conflicts and baseline hashes, save queues, bulk-close cancellation/failures, lossy copies and export snapshots across picker/tool/render delays — no application |
 | File name suggestions (unit) | `npm run filename:unit` | 76 | Title metadata, headings and first prose lines in Markdown, Typst, AsciiDoc and HTML; structural-line skips; the cross-platform sanitiser (invalid characters, reserved device names, 120 code points/180 UTF-8 bytes); the assistant-answer cleaner and excerpt — no application |
@@ -563,7 +567,7 @@ Fifty default layers, cheapest first, plus the opt-in live AI layer. Run them in
 | AI Assistant (unit) | `npm run ai:unit` | 184 | The catalog/search cross-language contract, paragraph expansion, Continue spacing, block insertion, parameters, the markup a new tab opens in, stale targets, session-history insertion/replacement/titles/previews/ages, button anchor/clamp/drag threshold and free-space resize anchoring, the model picker's filter, the language search across aliases and accents, the decaying per-action score behind the derived *Most used* group, the unsaved-buffer language detection, the capped word diff, and the frontend history turn cap that leaves token trimming to Rust - no application |
 | AI Assistant (mock) | `npm run ai` | 323 | The icon-only button and its launch anchor, its own right-click menu, drag then Preferences Reset position, its place surviving a taller window, the five-group palette, the derived *Most used* section and its recorded use (rows repeated in their categories, unique ids, a search hiding it, Regenerate and a 401 not double-counting), search and its discreet scrollbar, the Context limit row and its 1,024-token refusal, the Disable reasoning box and its test request, both provider bodies, the `between_tools` retry and the refusal hint, the panel's token count, streaming, Stop, a 401, Anthropic, the typed Base URL, a gzip model list, the searchable model picker with a stale model, keyboard and pointer choice, the field/picker geometry, the reconcile rule and its field note, the one model count under Fetch, the first Fetch click after typing, the empty-list error, key-save auto-fetch, the noisy-translate wrapper, parameters, stale targets, the answer footer's four destinations on one row with Regenerate in the answer head, New tab from the panel and from History (active, dirty, original untouched), Convert opening its target markup, the searchable language picker (all 34 suggestions, filtering, the marked current value, the popup layer, Escape closing only the list and Enter choosing or submitting) and a typed target language that Enter submits and that clears the previous answer when retyped, the ten-entry success-only History and regenerate overwrite, Copy/Insert below/Clear, rendered Markdown results with lists, tables and a Source view, the top-left resize grip with corner anchoring, arrow-key resizing and a session-remembered layout, the filename option's disabled/enabled state, its request, a heading skipping it, the option-off path and a 401 fallback, the prompt file's Preferences route (opening the generated file, an edited prompt reaching the model, the wrapper flag, the count, Reset on a broken file, the dirty refusal), a tab switch, dark theme/reduced motion and key hygiene |
 | AI Assistant (live) | `npm run ai:live` | 70 (opt-in) | All fourteen actions against `http://192.168.61.9:4000/v1` / `Qwen3.8-27B`: non-empty tag-free output, the model/host chip, apply and undo, and key hygiene. Without `MDRAFT_AI_E2E_*` the harness entry prints SKIP and `0/0` |
-| Read Aloud (unit) | `npm run read-aloud:unit` | 99 | Sentence splitting across decimals, abbreviations and quotes, the length cap, the voice choice by saved name and language, English/Portuguese detection, declared `lang` in Markdown/AsciiDoc/Typst/HTML, the dictionary vote with its timeout and confidence margin, the resolver's precedence, the utterance's language through a fake backend, the queue's own index (stop mid-queue, a late `onend`, `canceled` versus a real failure, a synchronous backend) and the Preferences note — no application |
+| Read Aloud (unit) | `npm run read-aloud:unit` | 106 | Sentence splitting across decimals, abbreviations and quotes, the length cap, the voice choice by saved name and language, English/Portuguese detection, declared `lang` in Markdown/AsciiDoc/Typst/HTML, the dictionary vote with its timeout and confidence margin, the resolver's precedence, the utterance's language through a fake backend, the queue's own index (stop mid-queue, a late `onend`, `canceled` versus a real failure, a synchronous backend), the Preferences note and an injected native voice source/backend — no application |
 | Read Aloud | `npm run read-aloud` | 49 | The editor menu's two Read Aloud commands and Stop, the status chip and its sentence position, the queue advancing, Stop from the menu and from the chip, the HTML tab's disabled entries and their reason, a Portuguese document using an installed Portuguese voice, and the voice and speed saved through Preferences. Audio is not asserted; engine state and the chip are |
 | Auto-close typing | `npm run autoclose` | 33 | Pairs, step-over, Backspace, selection wrap, Markdown inline tags, HTML tags, both preferences, in all four document types |
 | Rich paste | `npm run paste` | 87 (79 without a usable clipboard) | The paste event, destination notice, preferences, Ctrl+Shift+V, undo, the same clipboard converted into Markdown and kept as source in HTML, spaces around inline elements, native Find/Replace field paste and unchanged source bytes. The native block is skipped when writing the clipboard then reading it back returns empty |
@@ -800,6 +804,64 @@ through `applySettingsPatch`.
 [Recording traps is required](#recording-traps-is-required) for what qualifies and
 how to write it. The list is append-only in spirit: do not delete an entry because
 the fix landed, because the fix is what makes it recur.
+
+**`npm test` reports `rust ... FAIL cargo test exited -1 without a result line` in 0.0s on Linux, while `cargo test` passes**
+`runRustSuite` in `scripts/test-all.mjs` invoked `cargo-vcvars` unconditionally.
+That is a Windows-only wrapper; on Linux `spawn` emits `ENOENT`, `run()`
+returns code `-1`, and `parseRustResult` finds no summary line, so the harness
+reports a Rust failure that never ran. Use plain `cargo` when `process.platform`
+is not `win32`; `runWrapped` already falls through to the plain command. The
+literal tell is the `0.0s` duration: a real 302-test cargo run cannot finish
+that fast.
+
+**`git status` shows `ai/limits.rs`, `ai/prompt.rs`, `ai/prompts_file.rs`, `ai/provider.rs` and `ai/stream.rs` modified although only `ai/mod.rs` was edited**
+`rustfmt src-tauri/src/ai/mod.rs` formats the module **and every submodule it
+declares**, so it rewrote test formatting in files nobody touched and made the
+patch look five times larger. Run `rustfmt --skip-children` on a module file, or
+run rustfmt only on the leaf file being edited, and revert the unrelated files
+with `git checkout --`. This is the same rule as the existing
+`cargo fmt --check` trap: the tree is not rustfmt-clean, so a repository-wide or
+module-wide format is not a neutral operation.
+
+**`Gdk-Message: … Error 71 (Protocol error) dispatching to Wayland display.` and “commit 7108d56 fixes it”**
+`7108d56` is not a Tauri commit: it is `happier-dev/happier@7108d561`, an
+application-level default for `__NV_DISABLE_EXPLICIT_SYNC`. The resolved stack
+here is `tauri 2.12.5`, `wry 0.57.1`, `tao 0.37.2`, and grepping all three
+sources for `WEBKIT_DISABLE_DMABUF_RENDERER`, `__NV_DISABLE_EXPLICIT_SYNC` or
+NVIDIA detection returns nothing, so there was no upstream fix to inherit. On
+the reporter's NVIDIA Wayland machine `__NV_DISABLE_EXPLICIT_SYNC=1` did not
+help; `WEBKIT_DISABLE_DMABUF_RENDERER=1` did, and it must be set before
+GTK/WebKitGTK initialise (`lib.rs::run`, before `generate_context!`). Do not
+scope this to NVIDIA: this host reproduced the same abort on `nouveau` and
+started with the variable, and upstream reports include AMD. `linux_webkit_env.rs`
+now applies it on any Wayland session, with `MDRAFT_WEBKIT_DMABUF=0` as the
+opt-out. Resolve a commit's repository before concluding that a dependency
+contains it.
+
+**Read Aloud says “No voice is installed” while `spd-say "Hello"` speaks**
+Ubuntu's WebKitGTK 2.52.6 is built without the Web Speech synthesis backend, so
+`'speechSynthesis' in window` is `false` even with speech-dispatcher and
+espeak-ng installed; a minimal GTK/WebKit probe returned
+`{"has":false,"n":-1}`. The app now uses speech-dispatcher through `spd-say` on
+Linux (`src-tauri/src/speech.rs`). Do not tell the reader to install more
+packages when `spd-say` already works, and do not try to make `getVoices()`
+non-empty through Preferences: the API is absent, not empty.
+
+**`The system credential store refused the key.` on a fresh Ubuntu session although gnome-keyring is running**
+`keyring` 4.2's Secret Service store writes to the default collection. With no
+default collection, `create_item("default")` catches the no-entry error, then
+`create_collection("default")` calls `get_default_collection()` again and fails
+the same way; it never creates one. `secret::keychain_available()` only proves
+the D-Bus service initialized, not that a write can succeed. The fallback is
+`ai-keys.json` beside `settings.json`, mode `0600`, separate from settings and
+backups; the UI says it is not encrypted. Do not delete the file fallback to
+keep a “keychain only” rule; that rule is the reported data loss.
+
+**`TypeError [ERR_UNKNOWN_FILE_EXTENSION]: Unknown file extension ".ts"` from `npm run read-aloud:unit`**
+Ubuntu's Node 22 is built without TypeScript support, so it cannot import
+`src/read-aloud.ts`; Node 24 strips the types. The suite is not broken. Run the
+script with Node 24 when the system Node is older. Do not rewrite the `.ts`
+imports to `.js` to satisfy Node 22.
 
 **`gh auth status` reports `The token in default is invalid.` inside the sandbox**
 The sandboxed command could not use this host's Windows keyring credentials;
@@ -2439,6 +2501,10 @@ src/
                      the preset fallback tail
   font-picker.ts     searchable installed-family picker: grouped specimens, ARIA,
                      missing-family warning, fixed popup
+  read-aloud.ts      sentence queue and voice choice; Web Speech or an injected
+                     platform backend (Linux uses speech-dispatcher)
+  system-speech.ts   the Linux `spd-say` backend and voice catalogue behind
+                     read-aloud.ts
   preferences.ts     the Preferences panel and its declarative rows
   sidebar.ts         outline (active-marker updates) / favorites / recent files
   api.ts             typed wrappers over every Rust command
@@ -2454,8 +2520,11 @@ src-tauri/src/
   ai/                OpenAI-compatible and Anthropic streaming, prompts, the
                      reader's ai-prompts.md (parser and generator), output-tag
                      filter, the token context budget, the reasoning-off field
-                     and its test request, keychain/session credentials and the
-                     AI commands
+                     and its test request, keychain/file/session credentials and
+                     the AI commands
+  speech.rs          Linux Read Aloud through speech-dispatcher: `spd-say -L`
+                     parsing, speech/stop commands and their tests
+  linux_webkit_env.rs pre-GTK Wayland/NVIDIA DMA-BUF workaround (+ tests)
   documents.rs       file IO, path existence, startup file
   recovery.rs        the crash-recovery journal, atomic per-entry files (+ tests)
   images.rs          image import: sniffing, sanitiser, dedup, download
@@ -2601,7 +2670,7 @@ platform and fails on the other.
    reads the latter for the bundle, and the two must agree. `npm run
    check:version` proves it, and CI runs the same check against the tag.
 2. `npm run build` — typecheck plus frontend bundle.
-3. `npm run test:rust` — 271 runnable Windows tests / 270 Linux tests (two ignored downloads: pandoc and Typst, plus the ignored display-owned Linux print probe). Run them on Linux too
+3. `npm run test:rust` — 302 runnable tests on Linux (2026-11-03; Windows runs the same suite minus the 7 Linux-only Wayland tests), with two ignored downloads (pandoc and Typst), the ignored display-owned Linux print probe and the ignored host speech probe. Run them on Linux too
    (`cd ~/.cache/mdraft-build/src-tauri && cargo test`): the path tests are
    `#[cfg]`-split, so half of them never execute on either platform alone.
 4. Launch with each fixture and run `npm run smoke`, `npm run menu`,
