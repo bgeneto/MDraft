@@ -91,6 +91,46 @@
       </div>
     </footer>
 
+    <script>
+      // GitHub Pages serves one custom 404 for the whole project. When the
+      // missing path is under /pt-br/, present the same page in Portuguese
+      // instead of sending the reader to a bilingual switch first.
+      (() => {
+        const base = new URL(document.baseURI).pathname;
+        if (!location.pathname.startsWith(`${base}pt-br/`)) return;
+        document.documentElement.lang = "pt-BR";
+        document.title = "Página não encontrada — MDraft";
+        const description = document.querySelector('meta[name="description"]');
+        if (description) {
+          description.content =
+            "A página solicitada não faz parte do site do MDraft. Volte à página inicial para baixar o editor ou ler a documentação.";
+        }
+        const heading = document.querySelector(".notfound h1");
+        const body = document.querySelector(".notfound p:not(.code)");
+        const home = document.querySelector(".notfound a.btn-primary");
+        const github = document.querySelector(".notfound a.btn-ghost");
+        if (heading) heading.textContent = "Esta página não está aqui.";
+        if (body) {
+          body.textContent =
+            "O link pode ser antigo, ou o documento mudou de lugar. O editor continua onde você deixou.";
+        }
+        if (home) home.textContent = "Ir para a página inicial";
+        if (github) github.textContent = "Ver no GitHub";
+        for (const link of document.querySelectorAll(".lang-switch a")) {
+          if (link.getAttribute("hreflang") === "pt-BR") link.setAttribute("aria-current", "page");
+          else link.removeAttribute("aria-current");
+        }
+        for (const group of document.querySelectorAll('.lang-switch[role="group"]')) {
+          group.setAttribute("aria-label", "Idioma");
+        }
+        const toggle = document.querySelector("[data-theme-toggle]");
+        if (toggle) {
+          toggle.dataset.labelLight = "Mudar para o tema claro";
+          toggle.dataset.labelDark = "Mudar para o tema escuro";
+          toggle.setAttribute("aria-label", "Mudar para o tema escuro");
+        }
+      })();
+    </script>
     <script src="./site.js" defer></script>
   </body>
 </html>
