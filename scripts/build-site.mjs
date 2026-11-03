@@ -32,6 +32,8 @@ const ICONS = join(ROOT, "src-tauri", "icons");
 const ORIGIN = (process.env.SITE_ORIGIN || "https://bgeneto.github.io").replace(/\/+$/, "");
 const BASE_PATH = normalizeBase(process.env.SITE_BASE_PATH ?? "/MDraft");
 const SITE_URL = `${ORIGIN}${BASE_PATH}/`;
+// Bump the version when the image changes so sharing services fetch the new card.
+const OG_IMAGE_URL = `${SITE_URL}assets/og.png?v=2`;
 const RELEASE_URL = "https://github.com/bgeneto/MDraft/releases/latest";
 const YEAR = String(new Date().getFullYear());
 
@@ -144,7 +146,7 @@ function render(html, page, version) {
   let output = html
     .replaceAll("{{SITE_URL}}", SITE_URL)
     .replaceAll("{{CANONICAL}}", page.canonical)
-    .replaceAll("{{OG_IMAGE}}", `${SITE_URL}assets/og.png`)
+    .replaceAll("{{OG_IMAGE}}", OG_IMAGE_URL)
     .replaceAll("{{RELEASE_URL}}", RELEASE_URL)
     .replaceAll("{{VERSION_CHIP}}", chip)
     .replaceAll("{{VERSION}}", version)
@@ -305,7 +307,7 @@ async function validatePage(file, page, options) {
     const ogImage = html.match(/<meta\s+property="og:image"\s+content="([^"]*)"/i)?.[1];
     check(ogUrl === page.canonical, `${label}: og:url matches canonical`);
     check(ogLocale === page.locale, `${label}: og:locale is ${page.locale}`);
-    check(ogImage === `${SITE_URL}assets/og.png`, `${label}: og:image is absolute`);
+    check(ogImage === OG_IMAGE_URL, `${label}: og:image is absolute`);
 
     const jsonLd = html.match(/<script\s+type="application\/ld\+json">([\s\S]*?)<\/script>/i)?.[1];
     let graph = null;
