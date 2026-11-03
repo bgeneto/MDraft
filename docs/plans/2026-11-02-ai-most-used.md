@@ -1,6 +1,6 @@
 # AI Assistant: a real "Most used" group
 
-**Status:** approved
+**Status:** done
 **Date:** 2026-11-02
 **ADR:** `../adr/2026-11-02-ai-action-usage.md`
 
@@ -120,7 +120,7 @@ Rejected alternatives:
 
 ## Steps
 
-- [ ] **Rust: the store.** Add `AiActionUsage { id: String, score: f64, at: u64 }`
+- [x] **Rust: the store.** Add `AiActionUsage { id: String, score: f64, at: u64 }`
   and `#[serde(default)] pub ai_action_usage: Vec<AiActionUsage>` to `Settings`,
   plus a `MAX_AI_USAGE_ENTRIES: usize = 32`. In `parse_settings`, sanitise the
   raw JSON **before** deserialising (`normalize_ai_usage`, the same pattern as
@@ -131,49 +131,64 @@ Rejected alternatives:
   Apply the same cap in `AppState::save`. A malformed `aiActionUsage` must never
   make `parse_settings` return `None`, because that resets every other setting
   in the file (`settings.rs:753`).
-- [ ] **Rust tests**: default and legacy file load with an empty list; round
+- [x] **Rust tests**: default and legacy file load with an empty list; round
   trip through `save`; `{"aiActionUsage": "nope", "theme": "dark"}` still loads
   `theme` dark; a 40-entry payload is capped by score; negative/huge scores and
   future timestamps are dropped.
-- [ ] **`src/api.ts`**: export `AiUsageEntry { id: AiActionId; score: number;
+- [x] **`src/api.ts`**: export `AiUsageEntry { id: AiActionId; score: number;
   at: number }` and add `aiActionUsage: AiUsageEntry[]` to `Settings`, with a
   comment naming the decay rule and that the backend only bounds it.
-- [ ] **`src/ai/actions.ts`**: `AiGroup` becomes `"write" | "refine" |
+- [x] **`src/ai/actions.ts`**: `AiGroup` becomes `"write" | "refine" |
   "understand" | "transform"`; add `AiGroupKey = "mostUsed" | AiGroup`;
   `GROUP_ORDER`/`GROUP_LABELS` are keyed by `AiGroupKey`; the three actions get
   their real group; add `DEFAULT_MOST_USED: AiActionId[] = ["continue",
   "improve", "ask"]` and `MOST_USED_LIMIT = 3`; `groupedActions(actions,
   mostUsed)` intersects the ranked list with `actions` by id and puts the
   virtual group first.
-- [ ] **`src/ai/usage.ts`** (new, pure): `sanitizeUsage(value, now)` (unknown
+- [x] **`src/ai/usage.ts`** (new, pure): `sanitizeUsage(value, now)` (unknown
   ids, duplicates, non-finite/negative scores, future timestamps, cap),
   `decay(score, elapsedMs)`, `recordUsage(entries, id, now)` (decay, +1, prune
   below 0.02, cap at 32, store sorted), `rankMostUsed(entries, now, limit)`
   (decay, sort by score desc → `at` desc → catalog order, fill from
   `DEFAULT_MOST_USED` then the catalog, return specs). Import with explicit
   `.ts` extensions, or `npm run ai:unit` fails to resolve.
-- [ ] **`src/ai/assistant.ts`**: extend `AssistantHost` with
+- [x] **`src/ai/assistant.ts`**: extend `AssistantHost` with
   `usage(): readonly AiUsageEntry[]` and `recordUsage(id: AiActionId): void`;
   in `renderPalette` compute
   `const mostUsed = search.value.trim() ? [] : rankMostUsed(host.usage())` and
   pass it to `groupedActions`; give each row a group-qualified id; reset
   `usageCounted` in `openPanel` and record once in the `done` branch, before
   `renderPanel()`.
-- [ ] **`src/main.ts`**: implement the two host methods. `usage` returns
+- [x] **`src/main.ts`**: implement the two host methods. `usage` returns
   `settings.aiActionUsage ?? []`; `recordUsage` mutates through
   `applySettingsPatch({ aiActionUsage: recordActionUsage(settings.aiActionUsage,
-  id) }, { refreshUi: false })`, where the second argument is a new option that
+  id) }, { effects: false })`, where the second argument is the new option that
   skips `applyTheme`/`applyLayout`/`assistant.sync()` — none of them can change
   because of a counter — while still assigning `settings` and calling
   `persist()`, so the queued whole-settings write stays the single write path.
-- [ ] **Tests**: extend `scripts/ai-unit.mjs` and `scripts/ai-assistant-test.mjs`
+- [x] **Tests**: extend `scripts/ai-unit.mjs` and `scripts/ai-assistant-test.mjs`
   (below), update the two group assertions that currently expect the static
   three, and add `aiActionUsage: original.aiActionUsage` to the mock suite's
   restore list at `ai-assistant-test.mjs:3688`, or a standalone `npm run ai`
   leaves test usage in the developer's profile.
-- [ ] **Docs**: `AGENTS.md` test counts and repository-script rows for
+- [x] **Docs**: `AGENTS.md` test counts and repository-script rows for
   `ai:unit`/`ai`, the `README.md` AI paragraph if it names the groups, and the
   ADR.
+
+## Deviations during execution
+
+- The UI suite does not assert the three cold-start defaults, because a
+  standalone `npm run ai` may run against a profile that already holds usage.
+  The section is compared with `rankMostUsed` from `src/ai/usage.ts` — the same
+  module the palette uses — so the check proves the wiring on any profile, and
+  the cold-start order is covered by the injected-state unit checks instead.
+- The UI suite polls `get_settings` with `waitForStoredUsage(id)` before reading
+  the counter, because `persist()` queues the settings write; a single read
+  right after `done` can see the copy from before the request. Recorded in
+  `AGENTS.md` under Traps.
+- A use is counted for the whole panel session, including a successful Retry of
+  an earlier failure (the retry is that session's first completed answer) and a
+  stopped answer; Regenerate inside the same panel is not a second use.
 
 ## Files and modules
 
@@ -185,8 +200,8 @@ Rejected alternatives:
 | `src/ai/usage.ts` | New: sanitise, decay, record, rank. |
 | `src/ai/assistant.ts` | Host contract, the palette's virtual group, the `done` hook, unique row ids. |
 | `src/main.ts` | Wiring usage to `settings`/`persist`, and the quiet patch option. |
-| `scripts/ai-unit.mjs` | Catalog assertions plus about 18 checks for `usage.ts`. |
-| `scripts/ai-assistant-test.mjs` | About 10 UI checks and the settings restore list. |
+| `scripts/ai-unit.mjs` | Catalog assertions plus 32 checks for `usage.ts`. |
+| `scripts/ai-assistant-test.mjs` | 17 UI checks and the settings restore list. |
 | `docs/adr/2026-11-02-ai-action-usage.md` | The decision: where usage lives and where ranking lives. |
 | `AGENTS.md`, `README.md` | Test counts and the description of the group. |
 
@@ -218,30 +233,36 @@ Rejected alternatives:
 
 ## Tests and validation
 
-- `npm run ai:unit` — about 18 new checks: fresh-profile order equals the
-  defaults; one use of *Summarize* ranks it first; the action is still listed
-  under *Understand*; the limit is three; a score halves after one half-life; a
-  recent habit beats an older, equal count; equal scores fall back to catalog
-  order; unknown ids, duplicates, negative/non-finite scores and future
-  timestamps are dropped without throwing; `recordUsage` adds one, prunes, and
-  caps; `undefined` (a file from before this change) is accepted; a search query
-  hides the virtual group; every action has exactly one real group.
-- `npm run test:rust` — the five settings checks above (271 → 276 on Windows).
-- `npm run ai` — the suite's mock endpoint accepts requests, so one *Summarize*
-  run is a real `done`. Checks: the fresh palette shows the three defaults; after
-  Summarize, its row is the first `.ai-row` under the first `.ai-group`; the same
-  action still appears under *Understand*; every `.ai-row` id is unique; typing
-  `summ` hides the *Most used* heading and clearing the field restores it;
-  Regenerate does not raise the stored score; a 401 leaves the score unchanged;
-  `get_settings().aiActionUsage` and the on-disk `settings.json` both carry the
-  entry (poll the file, do not sample once); the palette is still ≤ 520 px and
-  the footer is unchanged.
-- `npm run build`, `npm run lint`, `npm run format:check`, `npm run knip` — the
-  new module is imported, exported and formatted.
-- The measurement that proves it: use an action that is not one of the three
-  defaults, reopen the palette, and see it first under *Most used* **while it is
-  also still under its own category** — then read the same entry back from
-  `settings.json`.
+- `npm run ai:unit` — **184/184 passing, 32 of them new**: fresh-profile order
+  equals the defaults; one use of *Summarize* ranks it first; the defaults still
+  fill the rest; the limit is three; a score halves after one half-life; a
+  recent habit beats an older, heavier one; equal scores fall back to catalog
+  order and a newer tie goes first; an entry that decayed below the floor stops
+  taking a slot; unknown ids, duplicates, negative/non-finite scores and
+  far-future timestamps are dropped without throwing; `undefined` (a file from
+  before this change) is accepted; a repeat use ages the old score before adding
+  one, prunes and stays bounded; a search hides the shortcut group while a
+  shortcut keeps appearing in its category.
+- `npm run test:rust` — **281 passed, 2 ignored** (the five new settings checks:
+  default/legacy load, save round trip, a malformed list not discarding the
+  rest, unusable entries dropped, and the save cap keeping the strongest
+  entries).
+- `npm run ai` — **323/323 passing, 17 of them new** against the local mock: the
+  section shows three rows and the catalog renders fourteen plus three; every
+  row has a unique id; the rendered rows equal `rankMostUsed` of the stored
+  usage; *Continue writing*, *Improve writing* and *Ask AI…* are also listed
+  under *Write*, *Refine* and *Understand*; typing a search hides the section
+  and clearing it restores it; a completed request adds an entry that reaches
+  `settings.json`; the section follows the new ranking; Regenerate does not add
+  a second use; a 401 records none and its successful Retry records one; the
+  palette is still ≤ 520 px with the same footer.
+- `npm run build`, `npm run lint`, `npm run format:check`, `npm run knip` and
+  `cargo clippy --all-targets -- -D warnings` — all green; the new module is
+  imported, exported, formatted and warning-free.
+- The measurement that proves it: the suite uses *Summarize* — an action that is
+  not one of the three defaults — reopens the palette, and the rendered section
+  matches `rankMostUsed` of the stored list, while *Summarize* is still under
+  *Understand*; the entry is read back from `settings.json`.
 
 ## Acceptance criteria
 
