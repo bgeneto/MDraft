@@ -11,7 +11,7 @@ bundled browser, no account, and no telemetry.
 
 [![Latest release](https://img.shields.io/github/v/release/bgeneto/MDraft?label=latest&sort=semver)](https://github.com/bgeneto/MDraft/releases/latest)
 
-**[Download the latest release →](https://github.com/bgeneto/MDraft/releases/latest)**
+**[Website](https://bgeneto.github.io/MDraft/) · [Download the latest release →](https://github.com/bgeneto/MDraft/releases/latest)**
 
 Windows installers and a portable `.exe`; Linux `.deb`, AppImage and a bare
 binary. The release page always names the current version and carries its notes
