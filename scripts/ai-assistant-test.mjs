@@ -1812,12 +1812,12 @@ try {
     JSON.stringify(summarizedSections[0]?.labels) === JSON.stringify(summarizeExpected),
     `${JSON.stringify(summarizedSections[0]?.labels)} vs ${JSON.stringify(summarizeExpected)}`,
   );
-  const configPath = path.join(process.env.APPDATA ?? "", appIdentifier, "settings.json");
+  const usageConfigPath = path.join(process.env.APPDATA ?? "", appIdentifier, "settings.json");
   let usageOnDisk = [];
   const diskDeadline = Date.now() + 5000;
   while (Date.now() < diskDeadline) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      const parsed = JSON.parse(fs.readFileSync(usageConfigPath, "utf8"));
       usageOnDisk = Array.isArray(parsed.aiActionUsage) ? parsed.aiActionUsage : [];
       if (usageOnDisk.some((entry) => entry.id === "summarize")) break;
     } catch {
