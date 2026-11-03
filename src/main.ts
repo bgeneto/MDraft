@@ -20,6 +20,7 @@ import {
 } from "./content";
 import { installEditorContextMenu, titleCase, type ReadingMenuState } from "./context-menu";
 import { createReadAloud, type ReadAloudHandle, type ReadingState } from "./read-aloud";
+import { createSystemSpeech, needsSystemSpeech } from "./system-speech";
 import { readClipboardData } from "./clipboard";
 import { createDocumentLifecycle } from "./document-lifecycle";
 import { showDocumentStatistics, type DocumentStatistics } from "./statistics-dialog";
@@ -6474,6 +6475,10 @@ async function boot(): Promise<void> {
     refreshStatus();
     updateActiveOutline();
   });
+  // Ubuntu's WebKitGTK has no `speechSynthesis` at all. When the webview
+  // cannot speak, use speech-dispatcher through Rust; Windows and macOS keep
+  // the platform catalogue the webview exposes.
+  const systemSpeech = needsSystemSpeech(navigator.userAgent) ? createSystemSpeech() : null;
   readAloud = createReadAloud({
     rate: () => settings.readAloudRate ?? 1,
     voiceName: () => settings.readAloudVoice ?? "",
@@ -6483,6 +6488,8 @@ async function boot(): Promise<void> {
     languageTag: () => (settings.spellcheckLanguage === "auto" ? "" : settings.spellcheckLanguage),
     onChange: renderReadingChip,
     onError: (message) => toast(message, 5200),
+    backend: systemSpeech?.backend,
+    voiceSource: systemSpeech?.voiceSource,
   });
   // Measured: `getVoices()` is empty on the first read, so the list is fetched in
   // the background and only that first moment reports "looking for voices".
@@ -6538,6 +6545,9 @@ async function boot(): Promise<void> {
     update: applySettingsPatch,
     clearRecent: clearRecentFiles,
     readAloudVoices: () => readAloud?.voices() ?? [],
+    refreshReadAloudVoices: async () => {
+      await readAloud?.refreshVoices();
+    },
     resetAssistantPosition: () => {
       assistant?.resetPosition();
       toast("Assistant layout reset.");

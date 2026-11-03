@@ -438,6 +438,35 @@ export const spellcheckCheck = (language: string, words: readonly string[]) =>
 export const spellcheckSuggest = (language: string, word: string) =>
   invoke<string[]>("spellcheck_suggest", { language, word });
 
+// ---------------------------------------------------------------------------
+// Read Aloud's Linux speech service
+// ---------------------------------------------------------------------------
+
+/** One voice the system speech service can use. */
+export interface SpeechVoice {
+  name: string;
+  lang: string;
+  local: boolean;
+  isDefault: boolean;
+}
+
+/** The speech service's answer, including why it cannot speak when it cannot. */
+export interface SpeechStatus {
+  available: boolean;
+  reason: string | null;
+  voices: SpeechVoice[];
+}
+
+/** Ask speech-dispatcher for its default voice per language. Cached in Rust. */
+export const speechStatus = () => invoke<SpeechStatus>("speech_status");
+
+/** Speak one sentence and resolve when it has been spoken. */
+export const speechSpeak = (text: string, lang: string, voice: string, rate: number) =>
+  invoke<void>("speech_speak", { text, lang, voice, rate });
+
+/** Stop the current sentence and clear anything already queued. */
+export const speechStop = () => invoke<void>("speech_stop");
+
 export const writeDocument = (path: string, content: string, lineEnding: string, hadBom: boolean) =>
   invoke<SavedInfo>("write_document", { path, content, lineEnding, hadBom });
 
@@ -803,7 +832,7 @@ export const clearHtmlPreview = () => invoke<void>("clear_html_preview");
 export type AiProvider = "openai" | "anthropic";
 
 /** Where the key for an endpoint comes from. */
-export type AiKeySource = "keychain" | "session" | "none";
+export type AiKeySource = "keychain" | "file" | "session" | "none";
 
 /** The ids the Rust prompt builder knows; `src/ai/actions.ts` owns the labels. */
 export type AiActionId =

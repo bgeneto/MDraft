@@ -250,6 +250,45 @@ and Print use these rules; Pandoc retains its own Markdown reader.
   install Typst with your package manager or from its download page, and put
   `typst` on `PATH`. Administrator rights are not needed for the in-app installs.
 
+### Linux notes
+
+On Wayland, WebKitGTK can abort at startup with
+`Error 71 (Protocol error) dispatching to Wayland display` before a window
+exists. The failure has been seen with the proprietary NVIDIA driver, `nouveau`
+and AMD, so MDraft sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` on any Wayland
+session before GTK initializes; a desktop entry, the AppImage and a terminal
+launch all get the workaround. To keep DMA-BUF acceleration and accept the risk,
+launch with `MDRAFT_WEBKIT_DMABUF=0`; `MDRAFT_WEBKIT_DMABUF=1` is the explicit
+force-on, useful when diagnosing a launch. If a session still fails before the
+window appears, the manual fallback is:
+
+```bash
+WEBKIT_DISABLE_DMABUF_RENDERER=1 mdraft notes.md
+```
+
+For a desktop entry, copy the installed file to your own applications folder
+and add the environment assignment in front of the command:
+
+```bash
+mkdir -p ~/.local/share/applications
+cp /usr/share/applications/mdraft.desktop ~/.local/share/applications/
+# then edit the copy so its Exec line reads:
+# Exec=env WEBKIT_DISABLE_DMABUF_RENDERER=1 mdraft %F
+update-desktop-database ~/.local/share/applications
+```
+
+Read Aloud uses the system's speech service because Ubuntu's WebKitGTK is built
+without the Web Speech API. Install speech-dispatcher and a synthesiser, then
+test them:
+
+```bash
+sudo apt install speech-dispatcher espeak-ng
+spd-say "Hello"
+```
+
+On other distributions use the equivalent package names. MDraft never
+downloads or bundles a voice.
+
 ## Documentation
 
 - [User guide](docs/guide.md) — the four document types, previews, paste and

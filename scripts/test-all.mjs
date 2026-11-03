@@ -1009,7 +1009,13 @@ function stageBinary(binary, stage) {
 // from an earlier run changes what they measure. The originals are moved aside
 // and put back in the finally, so running the suite does not cost the developer
 // their preferences.
-const USER_STATE = ["settings.json", ".window-state.json", "recovery", "ai-prompts.md"];
+const USER_STATE = [
+  "settings.json",
+  ".window-state.json",
+  "recovery",
+  "ai-prompts.md",
+  "ai-keys.json",
+];
 
 function takeUserState(destination) {
   const saved = [];
@@ -1090,8 +1096,11 @@ async function runRustSuite(options) {
   const temp = path.join(repoRoot, "src-tauri", "target", "test-tmp", "cargo");
   fs.mkdirSync(temp, { recursive: true });
   const env = { ...process.env, TEMP: temp, TMP: temp, MDRAFT_QUIET: "1" };
+  // The MSVC wrapper exists for the Windows SDK environment; on Linux (and
+  // macOS) there is no `cargo-vcvars` file, and asking for it made the whole
+  // Rust layer fail instantly with "exited -1 without a result line".
   const result = await runWrapped(
-    "cargo-vcvars",
+    isWindows ? "cargo-vcvars" : "cargo",
     ["test", "--manifest-path", "src-tauri/Cargo.toml"],
     {
       env,

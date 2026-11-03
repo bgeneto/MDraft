@@ -56,6 +56,11 @@ export interface PreferencesHost {
   chooseStyleReference(current: string): Promise<string>;
   /** Installed speech-synthesis voices; empty until the list has loaded. */
   readAloudVoices(): VoiceOption[];
+  /**
+   * Re-read the Read Aloud catalogue when the panel opens. A voice installed
+   * while MDraft was running should appear without a restart.
+   */
+  refreshReadAloudVoices?(): Promise<void>;
   /** Open `ai-prompts.md`, creating it from the built-in prompts first. */
   openAiPrompts(): Promise<void>;
   /** Rewrite `ai-prompts.md` from the built-in prompts. Throws when a dirty tab would lose work. */
@@ -1280,12 +1285,12 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
     {
       kind: "note",
       label: "Privacy",
-      text: "The assistant contacts only the endpoint you configure, and only when you press Generate or fetch the model list. The selection and your instruction are the only document text that leaves this machine — unless Suggest file names when saving is on, which sends the opening of an untitled document when you save it. The API key is stored safely in the operating system's credential store.",
+      text: "The assistant contacts only the endpoint you configure, and only when you press Generate or fetch the model list. The selection and your instruction are the only document text that leaves this machine — unless Suggest file names when saving is on, which sends the opening of an untitled document when you save it. The API key is stored in the operating system's credential store; where that store is unavailable, it is saved in a private file beside the settings instead, and the line under the field says which.",
     },
     {
       kind: "checkbox",
       label: "Enable AI Assistant",
-      help: "Shows the floating button in the source pane; the Tools › AI Assistant check and this box turn it on or off. Off by default: no request and no keychain read until you enable it and choose an endpoint and model.",
+      help: "Shows the floating button in the source pane; the Tools › AI Assistant check and this box turn it on or off. Off by default: no request and no credential read until you enable it and choose an endpoint and model.",
       get: () => s().aiEnabled,
       set: (value) => host.update({ aiEnabled: value }),
     },
@@ -1353,7 +1358,7 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
     {
       kind: "secret",
       label: "API Key",
-      help: "Optional. Local inference servers usually need no key; when none is saved the request goes out without an auth header. A hosted endpoint that needs one answers 401, and the error names it. Saving a key also requests the model list and fills the model suggestions. Stored in the OS credential store, keyed by provider and endpoint; after changing the scheme or host, save it again. When the store is unavailable the key is kept for this session only.",
+      help: "Optional. Local inference servers usually need no key; when none is saved the request goes out without an auth header. A hosted endpoint that needs one answers 401, and the error names it. Saving a key also requests the model list and fills the model suggestions. Stored in the OS credential store, keyed by provider and endpoint; after changing the scheme or host, save it again. Where the store is unavailable the key is saved in a private file beside the settings (not encrypted); the line under the field says which.",
       placeholder: ai.status?.hasKey
         ? "A key is saved — type to replace it"
         : "No key — optional for local servers",
@@ -2299,7 +2304,9 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       note.textContent = current.hasKey
         ? current.source === "keychain"
           ? "Saved in the system keychain"
-          : "Session only"
+          : current.source === "file"
+            ? "Saved in a private file (not encrypted)"
+            : "Session only"
         : "No key — optional";
       // Where the key lives is a standing fact, so it stays on screen; what a
       // save or a removal answered is a second line that goes away with the
@@ -2513,6 +2520,18 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
     render();
     layoutPanel();
     searchEl.focus();
+    // A voice can be installed while MDraft is running. Refresh in the
+    // background and redraw only when the answer changed; an unconditional
+    // redraw would steal focus from the search field on every open.
+    const voicesBefore = host.readAloudVoices().length;
+    void host
+      .refreshReadAloudVoices?.()
+      .then(() => {
+        if (!overlay.hidden && host.readAloudVoices().length !== voicesBefore) render();
+      })
+      .catch(() => {
+        // A failed platform refresh is already explained by the panel's note.
+      });
   }
 
   function openAt(sectionId: string): void {

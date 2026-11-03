@@ -1,6 +1,7 @@
 # The AI Assistant keeps its transport and its key in Rust
 
 **Status:** accepted
+**Superseded in part by:** [`2026-11-03-ai-key-file-fallback.md`](2026-11-03-ai-key-file-fallback.md) for the key-storage fallback
 **Date:** 2026-10-28
 
 ## Context

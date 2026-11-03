@@ -57,6 +57,21 @@ export interface SpeechBackend {
   cancel(): void;
 }
 
+/**
+ * Where the voice list comes from.
+ *
+ * The webview's `speechSynthesis` is the default. Linux injects the system
+ * speech service instead, because Ubuntu's WebKitGTK has no Web Speech API at
+ * all; `refresh` is asynchronous so the native command can be awaited without
+ * making `availableReason` or `start` async.
+ */
+export interface VoiceSource {
+  read(): VoiceOption[];
+  refresh(): Promise<VoiceOption[]>;
+  /** Why the platform has no voices, when it knows more than "the list is empty". */
+  reason?(): string | null;
+}
+
 export interface ReadingQueue {
   start(chunks: string[], options: SpeakOptions): void;
   stop(): void;
@@ -362,6 +377,38 @@ export function readVoices(): VoiceOption[] {
   }));
 }
 
+/** How long to wait for `voiceschanged` before believing the list is empty. */
+const VOICE_WAIT_MS = 2500;
+
+/** The webview's own catalogue, including its delayed first answer. */
+function browserVoiceSource(): VoiceSource {
+  return {
+    read: readVoices,
+    async refresh() {
+      let voices = readVoices();
+      if (voices.length === 0 && typeof window !== "undefined" && "speechSynthesis" in window) {
+        // Measured: `getVoices()` is empty on the first call, even on a machine
+        // with voices installed. Waiting for the event is the only reliable
+        // answer; the timeout keeps a webview that never fires it from hanging.
+        await new Promise<void>((resolve) => {
+          let settled = false;
+          const finish = (): void => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(timer);
+            window.speechSynthesis.removeEventListener("voiceschanged", finish);
+            resolve();
+          };
+          const timer = window.setTimeout(finish, VOICE_WAIT_MS);
+          window.speechSynthesis.addEventListener("voiceschanged", finish, { once: true });
+        });
+        voices = readVoices();
+      }
+      return voices;
+    },
+  };
+}
+
 export interface ReadAloudOptions {
   rate: () => number;
   /** The saved voice name, or "" for automatic. */
@@ -370,6 +417,15 @@ export interface ReadAloudOptions {
   languageTag: () => string;
   onChange: (state: ReadingState) => void;
   onError: (message: string) => void;
+  /**
+   * A platform backend, or `null` for none. Omitted means the webview's own
+   * `speechSynthesis`; Linux passes the system speech service here.
+   */
+  backend?: SpeechBackend | null;
+  /** A platform voice catalogue. Omitted means the webview's own list. */
+  voiceSource?: VoiceSource;
+  /** The message when no backend exists at all. */
+  unavailableReason?: string;
 }
 
 export interface ReadAloudHandle {
@@ -389,9 +445,6 @@ export interface ReadAloudHandle {
   refreshVoices(): Promise<VoiceOption[]>;
 }
 
-/** How long to wait for `voiceschanged` before believing the list is empty. */
-const VOICE_WAIT_MS = 2500;
-
 function explain(error: string): string {
   if (error === "not-allowed") {
     return "The webview blocked audio until the window has been clicked.";
@@ -403,7 +456,8 @@ function explain(error: string): string {
 }
 
 export function createReadAloud(options: ReadAloudOptions): ReadAloudHandle {
-  const backend = browserBackend();
+  const backend = options.backend !== undefined ? options.backend : browserBackend();
+  const source = options.voiceSource ?? browserVoiceSource();
   const queue = backend
     ? createReadingQueue(backend, options.onChange, (error) => options.onError(explain(error)))
     : null;
@@ -417,7 +471,7 @@ export function createReadAloud(options: ReadAloudOptions): ReadAloudHandle {
   // an answer, and gives a direct `start` caller the same list.
   const syncVoices = (): void => {
     if (loaded && list.length > 0) return;
-    const current = readVoices();
+    const current = source.read();
     if (current.length > 0) {
       list = current;
       loaded = true;
@@ -427,7 +481,7 @@ export function createReadAloud(options: ReadAloudOptions): ReadAloudHandle {
   return {
     start(text, explicitLanguage) {
       if (!queue) {
-        options.onError("This webview has no speech synthesis.");
+        options.onError(options.unavailableReason ?? "This webview has no speech synthesis.");
         return false;
       }
       const chunks = splitSentences(text);
@@ -452,11 +506,15 @@ export function createReadAloud(options: ReadAloudOptions): ReadAloudHandle {
       return queue?.state() ?? idleState();
     },
     availableReason() {
-      if (!queue) return "This webview has no speech synthesis.";
+      if (!queue) return options.unavailableReason ?? "This webview has no speech synthesis.";
       syncVoices();
       if (!loaded) return "Looking for installed voices…";
       if (list.length === 0) {
-        return "No voices are installed. Add one in the operating system's speech settings.";
+        return (
+          source.reason?.() ??
+          options.unavailableReason ??
+          "No voices are installed. Add one in the operating system's speech settings."
+        );
       }
       return null;
     },
@@ -465,24 +523,12 @@ export function createReadAloud(options: ReadAloudOptions): ReadAloudHandle {
       return list;
     },
     async refreshVoices() {
-      list = readVoices();
-      if (list.length === 0 && backend && typeof window !== "undefined") {
-        // Measured: `getVoices()` is empty on the first call, even on a machine
-        // with voices installed. Waiting for the event is the only reliable
-        // answer; the timeout keeps a webview that never fires it from hanging.
-        await new Promise<void>((resolve) => {
-          let settled = false;
-          const finish = (): void => {
-            if (settled) return;
-            settled = true;
-            window.clearTimeout(timer);
-            window.speechSynthesis.removeEventListener("voiceschanged", finish);
-            resolve();
-          };
-          const timer = window.setTimeout(finish, VOICE_WAIT_MS);
-          window.speechSynthesis.addEventListener("voiceschanged", finish, { once: true });
-        });
-        list = readVoices();
+      try {
+        list = await source.refresh();
+      } catch {
+        // A failed platform check must not leave the previous list in place as
+        // if it were current; `read` is synchronous and is the last known state.
+        list = source.read();
       }
       loaded = true;
       return list;
@@ -503,21 +549,27 @@ export function voiceAvailabilityNote(
   userAgent: string,
 ): string {
   const agent = userAgent;
+  const linux = /Linux/i.test(agent);
   let how: string;
   if (/Windows/i.test(agent)) {
     how =
       "Add one in Settings → Time & language → Language & region: add the language, " +
       "then turn on its Speech optional feature.";
-  } else if (/Linux/i.test(agent)) {
+  } else if (linux) {
     how =
-      "Install speech-dispatcher and a synthesiser for that language; the Linux build " +
-      "speaks through the system's speech service.";
+      "Install speech-dispatcher and a synthesiser with: " +
+      "sudo apt install speech-dispatcher espeak-ng (use your distribution's package " +
+      'manager elsewhere), then test it with: spd-say "Hello". The Linux build speaks ' +
+      "through the system's speech service.";
   } else if (/Mac/i.test(agent)) {
     how =
       "Add one in System Settings → Accessibility → Spoken Content → System Voice → Manage Voices.";
   } else {
     how = "Install that language's voice in the operating system.";
   }
+  const addAnother = linux
+    ? 'Add another language by installing its voice for speech-dispatcher; espeak-ng covers many, and spd-say "Hello" tests the service.'
+    : how;
 
   if (voices.length === 0) {
     return `No voice is installed, so Read Aloud stays unavailable. ${how} Nothing is downloaded by MDraft.`;
@@ -528,5 +580,6 @@ export function voiceAvailabilityNote(
   const prefix = missing
     ? `The saved voice “${savedName}” is no longer installed, so the default is used instead. `
     : "";
-  return `${prefix}MDraft reads with the voices the system already has (${languages}), offline — they sound like the operating system, not like a neural web service. ${how}`;
+  const service = linux ? "speech-dispatcher" : "the system";
+  return `${prefix}MDraft reads with the voices ${service} already has (${languages}), offline — they sound like the operating system, not like a neural web service. ${addAnother}`;
 }

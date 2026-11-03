@@ -36,8 +36,8 @@
     "active": true,
     "targets": "all",
     "category": "Productivity",
-    "shortDescription": "A Markdown, Typst, HTML and AsciiDoc editor",
-    "longDescription": "A Markdown, Typst, HTML and AsciiDoc editor in the spirit of Typora: live preview, math, diagrams and syntax highlighting, with PDF typeset by Typst, AsciiDoc includes and a sandboxed HTML guest document.",
+    "shortDescription": "A native Markdown, AsciiDoc, Typst and HTML editor",
+    "longDescription": "A native Markdown, AsciiDoc, Typst and HTML editor with live preview, math, diagrams and syntax highlighting. It adds an optional AI writing assistant, tabbed documents that remember their undo and scroll state, favorites, typography presets, and HTML, PDF and pandoc export — with no account and no telemetry.",
       "copyright": "Copyright © 2026 Bernhard Enders",
       "publisher": "Bernhard Enders",
     "icon": [
