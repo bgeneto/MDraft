@@ -800,6 +800,9 @@ is the app's own ranking, and `scripts/ai-assistant-test.mjs` polls with
 single read. The same rule applies to any test that checks a counter written
 through `applySettingsPatch`.
 
+**`error: function ... is never used` on the Windows Quality runner for helpers the Linux backend calls**
+`src-tauri/src/speech.rs` defines `rate_to_spd`, `spd_language`, `parse_voices` and `speak_arguments`, and their only callers are `status_blocking`/`speak_blocking`, which are `#[cfg(target_os = "linux")]`. Quality's Rust job is `windows-latest`, so on that target the four have no caller and `cargo clippy --all-targets -- -D warnings` ends with `error: could not compile mdraft (lib) due to 4 previous errors`. `npm test`, `cargo test` and `npm run check:rust` are all green — the test profile compiles the lib only as the `cfg(test)` harness, where the unit tests use them, and `cargo check` prints a warning rather than an error. Gate a platform-only helper with `#[cfg(any(target_os = "linux", test))]`: the Linux build keeps it, every test build keeps it, and Windows stops compiling it. Reproduce the gate locally with `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` before pushing. Deleting the helper "fixes" the warning by breaking Read Aloud on Linux.
+
 **Add yours before you finish the task** - see
 [Recording traps is required](#recording-traps-is-required) for what qualifies and
 how to write it. The list is append-only in spirit: do not delete an entry because
