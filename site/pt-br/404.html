@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <base href="{{SITE_URL}}pt-br/" />
+    <title>Página não encontrada — MDraft</title>
+    <meta
+      name="description"
+      content="A página solicitada não faz parte do site do MDraft. Volte à página inicial para baixar o editor ou ler a documentação."
+    />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="theme-color" content="#fbfaf6" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#06111f" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" href="../assets/favicon-32.png" sizes="32x32" type="image/png" />
+    <link rel="stylesheet" href="../styles.css" />
+    <script>
+      try {
+        const theme = localStorage.getItem("mdraft-theme");
+        if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+      } catch {
+        // Siga o tema do sistema.
+      }
+    </script>
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="container header-inner">
+        <a class="brand" href="./" aria-label="Início do MDraft">
+          <img src="../assets/apple-touch-icon.png" width="34" height="34" alt="" />
+          <span>MDraft</span>
+        </a>
+        <div class="header-actions">
+          <div class="lang-switch" role="group" aria-label="Idioma">
+            <a href="../" lang="en" hreflang="en">EN</a>
+            <a href="./" aria-current="page" lang="pt-BR" hreflang="pt-BR">PT</a>
+          </div>
+          <button
+            class="icon-button"
+            type="button"
+            data-theme-toggle
+            data-label-light="Mudar para o tema claro"
+            data-label-dark="Mudar para o tema escuro"
+            aria-label="Mudar para o tema escuro"
+            aria-pressed="false"
+          >
+            <svg
+              class="icon-sun"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <circle cx="12" cy="12" r="4" />
+              <path
+                d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"
+              />
+            </svg>
+            <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path
+                fill="currentColor"
+                d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5 8.5 8.5 0 1 0 20.5 14.5Z"
+              />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main class="container notfound">
+      <div>
+        <p class="code">404</p>
+        <h1>Esta página não está aqui.</h1>
+        <p>
+          O link pode ser antigo, ou o documento mudou de lugar. O editor continua onde você deixou.
+        </p>
+        <div class="actions actions-center">
+          <a class="btn btn-primary" href="./">Ir para a página inicial</a>
+          <a class="btn btn-ghost" href="https://github.com/bgeneto/MDraft">Ver no GitHub</a>
+        </div>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-bottom">
+        <p>© {{YEAR}} contribuidores do MDraft. Licença MIT.</p>
+        <p>Esta página não define cookies e não carrega nada de terceiros.</p>
+      </div>
+    </footer>
+
+    <script src="../site.js" defer></script>
+  </body>
+</html>

@@ -10,21 +10,31 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+_site
 *.local
 
 # Staged release output, bin/<os>/<arch>/. Reproducible with `npm run dist`.
 bin
 
-# Only the screenshots the README embeds are part of the repository. The rest of
-# this folder holds captures taken while comparing layouts and themes, which are
-# working files.
+# Only the screenshots the README embeds and the captures the landing page
+# optimizer reads are part of the repository. The rest of this folder holds
+# captures taken while comparing layouts and themes, which are working files.
 #
-# `docs/screenshots/*` rather than `docs/screenshots/` on purpose — excluding the
+# `docs/screenshots/*` rather than `docs/screenshots/` on purpose - excluding the
 # directory itself makes git stop descending into it, and a `!` rule inside it
 # would then have nothing to re-include.
 docs/screenshots/*
 !docs/screenshots/readme-markdown-light-renaissance.png
 !docs/screenshots/readme-markdown-dark-system.png
+# Sources for scripts/optimize-site-images.py -> site/assets/img/*.webp.
+!docs/screenshots/auto-highlighting.webp
+!docs/screenshots/builtin-ai-assistant.webp
+!docs/screenshots/typst-ieee-conference-paper.webp
+!docs/screenshots/typography-presets-implemented.png
+!docs/screenshots/typography-presets-proposal.png
+!docs/screenshots/math-light.png
+!docs/screenshots/math-dark.png
+!docs/screenshots/statusbar-p2.png
 
 # Remove samples 
 docs/samples/*

@@ -265,6 +265,10 @@ rewrite from scratch.
 | `npm run licence` | `scripts/licence-test.mjs` | 4 checks that the bundled typefaces' licences ship inside the application. Run against its own instance: it opens a document |
 | `npm run images` | `scripts/image-paste-test.mjs` | Image paste through the real UI |
 | `npm run screenshot` | `scripts/screenshot.mjs` | PNG of the running window |
+| `npm run site` | `scripts/build-site.mjs` | Build and validate the landing page into `_site/`: copies the fonts, icons and WebP screenshots, injects the origin/version, generates the sitemap and fails on a broken link, a bad canonical, invalid JSON-LD or a bilingual mismatch |
+| `npm run site:serve` | `scripts/build-site.mjs --serve` | The same build, then serves `_site/` at `http://127.0.0.1:4173/MDraft/` with Node's `http` module |
+| `npm run site:images` | `scripts/optimize-site-images.py --write` | Resize and encode the landing-page captures from `docs/screenshots/` into `site/assets/img/*.webp`; needs Pillow, and is run by hand, never by CI |
+| `npm run site:images:check` | `scripts/optimize-site-images.py --check` | Verify the committed WebP files: format, expected dimensions, no upscaling |
 
 ### Test harnesses
 
@@ -802,6 +806,15 @@ through `applySettingsPatch`.
 
 **`error: function ... is never used` on the Windows Quality runner for helpers the Linux backend calls**
 `src-tauri/src/speech.rs` defines `rate_to_spd`, `spd_language`, `parse_voices` and `speak_arguments`, and their only callers are `status_blocking`/`speak_blocking`, which are `#[cfg(target_os = "linux")]`. Quality's Rust job is `windows-latest`, so on that target the four have no caller and `cargo clippy --all-targets -- -D warnings` ends with `error: could not compile mdraft (lib) due to 4 previous errors`. `npm test`, `cargo test` and `npm run check:rust` are all green — the test profile compiles the lib only as the `cfg(test)` harness, where the unit tests use them, and `cargo check` prints a warning rather than an error. Gate a platform-only helper with `#[cfg(any(target_os = "linux", test))]`: the Linux build keeps it, every test build keeps it, and Windows stops compiling it. Reproduce the gate locally with `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` before pushing. Deleting the helper "fixes" the warning by breaking Read Aloud on Linux.
+
+**A custom 404 at `/MDraft/404.html` loses its stylesheet, icon and script when it is served for `/MDraft/some/deep/path`**
+GitHub Pages answers an unknown project URL with the `404.html` content but keeps the requested URL, so a relative `./styles.css` resolves under the missing directory and 404s too; the page renders unstyled with no theme. Put `<base href="https://bgeneto.github.io/MDraft/">` in the 404 and the language-specific base in `pt-br/404.html`, then use paths relative to that base. A normal page cannot use this trick: `<base>` changes every anchor, so keep it only on the error pages.
+
+**An anchor jump leaves a 100 px band of the previous section under the sticky header**
+`scroll-padding-top` on `html` and `scroll-margin-top` on the target both apply. With 88 px on each, clicking `#typography` put the section top at 176 px while the 75 px header ended at 75, leaving a 101 px strip of the previous dark band; the heading looked detached. Keep one mechanism: the site uses `scroll-padding-top: 80px` and no `scroll-margin-top` on sections. Measure `section.getBoundingClientRect().top` against the header's bottom after a real nav click, not by eye.
+
+**A full-page screenshot shows every below-the-fold screenshot as an empty box**
+The landing page marks its section images `loading="lazy"`. Playwright's `fullPage: true` captures without scrolling, so the images are never requested and the capture looks like the assets are missing; the build and a real scroll load all of them. Scroll each section (or wait for `img.complete`) before judging the layout, and do not "fix" an image that the browser simply has not fetched yet.
 
 **Add yours before you finish the task** - see
 [Recording traps is required](#recording-traps-is-required) for what qualifies and
@@ -2620,6 +2633,50 @@ Three things are easy to get wrong here and are worth knowing:
   before uploading; anything else added later with a platform-independent name
   needs the same treatment.
 
+## Landing page (GitHub Pages)
+
+`site/` is the source of the landing page; `_site/` is generated and ignored.
+`npm run site` assembles and validates it, and `npm run site:serve` serves it at
+`http://127.0.0.1:4173/MDraft/`. The deploy is
+`.github/workflows/pages.yml`, which uploads only `_site/` on a site change, on
+a published release (to refresh the version) and on manual dispatch.
+
+The page is bilingual: English at `/` and Brazilian Portuguese at `/pt-br/`.
+Both are static HTML with one stylesheet and one small script (theme toggle and
+lightbox). There is no framework and no third-party request: the fonts, icons,
+screenshots and social image are self-hosted.
+
+What the build enforces, and what a change must keep true:
+
+- The origin and base path come from `configure-pages`; every internal link is
+  relative, so the same artifact works at `/MDraft/` and at a custom-domain
+  root. Canonical, Open Graph, JSON-LD and the sitemap use absolute URLs from
+  the same pair.
+- `scripts/optimize-site-images.py` resizes the captures in
+  `docs/screenshots/` to WebP under `site/assets/img/`. Run
+  `npm run site:images` when a screenshot changes, then commit the results;
+  `npm run site:images:check` verifies format and dimensions. Pillow is needed
+  only for that script, never for the site build or CI.
+- The version chip and `softwareVersion` come from the latest release tag in
+  CI, with `package.json` as the local fallback.
+- A broken link, a missing image, a wrong dimension, a bad canonical, invalid
+  JSON-LD, a FAQ answer that is not visible, a missing Portuguese section or a
+  payload over the budget fails the build. The site is not part of `npm test`;
+  validate it with `npm run site`, then `npm run format:check`,
+  `npm run lint`, `npm run knip` and `npm run build`.
+- **Pages must be enabled once with Source: GitHub Actions.** The workflow's
+  `GITHUB_TOKEN` cannot do it: `configure-pages`'s `enablement` input needs a
+  PAT with `repo` or `administration:write` + `pages:write`. Until that one-time
+  setting exists the deploy job fails; the release workflow is unaffected.
+- `docs/` is deliberately not published: it contains plans, ADRs and internal
+  reviews.
+
+Search Console is an owner action: verify the URL-prefix property
+`https://bgeneto.github.io/MDraft/`, submit `sitemap.xml` and request indexing
+for both languages. The project-level `robots.txt` is advisory; only the host
+root is authoritative. A custom domain later needs only the `CNAME`/Pages
+setting; the build reads the new origin from `configure-pages`.
+
 ## Portable builds
 
 `mdraft_<version>_x64-portable.exe` is the ordinary Windows build compiled with
@@ -2688,21 +2745,25 @@ platform and fails on the other.
    credentials are present.
 5. `npm run audit` against both `docs/sample-files` documents and compare the
    counts with the table in the README.
-6. `npm run dist` — installers and checksums land in `bin/<os>/<arch>/`.
-7. `.\scripts\test-close.ps1` — the release binary must exit on WM_CLOSE and
+6. When a release changes the feature list, re-read `site/index.html` and
+   `site/pt-br/index.html` against the README, refresh the screenshots with
+   `npm run site:images` if the UI changed, and run `npm run site`. The landing
+   page is the shopfront; a stale claim there is worse than a long README.
+7. `npm run dist` — installers and checksums land in `bin/<os>/<arch>/`.
+8. `.\scripts\test-close.ps1` — the release binary must exit on WM_CLOSE and
    write `.window-state.json`. Do not skip it: it passed in every other test and
    still failed in a shipped build once.
-8. Install the MSI **and** the NSIS setup on a clean profile; confirm the icon and
+9. Install the MSI **and** the NSIS setup on a clean profile; confirm the icon and
    that the app starts with no console window. Note there are **no**
    `fileAssociations` in the bundle config, so the installer does not register
    `.md` — adding that would be a deliberate feature, not a fixed default.
-9. Confirm the release binary still refuses to do anything on its own: no
-   network at start-up, no telemetry, no licence check.
-10. For Linux: `bash scripts/build-linux.sh`, then
+10. Confirm the release binary still refuses to do anything on its own: no
+    network at start-up, no telemetry, no licence check.
+11. For Linux: `bash scripts/build-linux.sh`, then
     `sudo apt install -y ./bin/linux/amd64/mdraft_*.deb` and launch `mdraft`
     from a WSLg or desktop session. Check the GTK menu bar, the outline, math and
     the status-bar icons. `dpkg -s mdraft` must report `Package: mdraft` with
     `Replaces: m-draft`, the launcher must still read **MDraft**, and
     `/usr/share/applications/` must hold only `mdraft.desktop`.
-11. Tag and push — CI builds both platforms and publishes the release. See
+12. Tag and push — CI builds both platforms and publishes the release. See
     [Releasing](#releasing).

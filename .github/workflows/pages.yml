@@ -1,0 +1,87 @@
+# Build the landing page in site/ and publish it to GitHub Pages.
+#
+# The site is static HTML assembled by scripts/build-site.mjs. Nothing from
+# docs/, src/ or src-tauri/ is published; only _site/ is uploaded.
+#
+# GitHub Pages must be enabled with "Source: GitHub Actions" once in the
+# repository settings. The workflow's GITHUB_TOKEN cannot enable it (see the
+# enablement input of actions/configure-pages).
+
+name: Pages
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "site/**"
+      - "scripts/build-site.mjs"
+      - "src/assets/fonts/**"
+      - "src-tauri/icons/**"
+      - "package.json"
+      - ".github/workflows/pages.yml"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      # The build uses the tag so the version chip and JSON-LD match the
+      # release that is actually published, not a package.json that may be
+      # ahead of it. On a push, ask the API for the latest release; if that
+      # fails, the build falls back to package.json.
+      - name: Resolve the latest release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.event.release.tag_name }}"
+          if [ -z "$tag" ]; then
+            tag=$(gh release view --json tagName -q .tagName 2>/dev/null || true)
+          fi
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "Publishing version: ${tag:-unknown}"
+
+      - name: Build the site
+        run: node scripts/build-site.mjs
+        env:
+          SITE_ORIGIN: ${{ steps.pages.outputs.origin }}
+          SITE_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+          SITE_VERSION: ${{ steps.release.outputs.version }}
+
+      - name: Upload the artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v5

@@ -8,8 +8,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "format": "prettier --write \"src/**/*.{ts,js,css}\" \"scripts/**/*.mjs\" \"*.{json,ts,html}\"",
-    "format:check": "prettier --check \"src/**/*.{ts,js,css}\" \"scripts/**/*.mjs\" \"*.{json,ts,html}\"",
+    "format": "prettier --write \"src/**/*.{ts,js,css}\" \"site/**/*.{html,css,js}\" \"scripts/**/*.mjs\" \"*.{json,ts,html}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,js,css}\" \"site/**/*.{html,css,js}\" \"scripts/**/*.mjs\" \"*.{json,ts,html}\"",
     "lint": "eslint src",
     "knip": "knip --include dependencies,unlisted",
     "preview": "vite preview",
@@ -70,6 +70,10 @@
     "format:document": "node scripts/format-document-test.mjs",
     "images": "node scripts/image-paste-test.mjs",
     "screenshot": "node scripts/screenshot.mjs",
+    "site": "node scripts/build-site.mjs",
+    "site:serve": "node scripts/build-site.mjs --serve",
+    "site:images": "python scripts/optimize-site-images.py --write",
+    "site:images:check": "python scripts/optimize-site-images.py --check",
     "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml",
     "test": "node scripts/test-all.mjs",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml"
