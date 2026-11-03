@@ -1,305 +1,145 @@
 # MDraft
 
-A cross-platform markup editor for **Markdown, AsciiDoc, Typst and HTML**, with
-live preview and an eye for the finished document.
+[![Latest release](https://img.shields.io/github/v/release/bgeneto/MDraft?label=release&sort=semver)](https://github.com/bgeneto/MDraft/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/bgeneto/MDraft/total?label=downloads)](https://github.com/bgeneto/MDraft/releases)
+[![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011%20%28x64%29-0078D4)](https://github.com/bgeneto/MDraft/releases/latest)
+[![Linux](https://img.shields.io/badge/Linux-x64-FCC624)](https://github.com/bgeneto/MDraft/releases/latest)
+[![License](https://img.shields.io/github/license/bgeneto/MDraft)](LICENSE)
 
-MDraft is for people who care about both the source they type and the page it
-becomes. It keeps the rendered document beside the text, handles four markup
-languages in one window, and exports to the formats other people ask for. It is
-a native Tauri application: the system webview draws the preview. There is no
-bundled browser, no account, and no telemetry.
+**Write in markup. See the page take shape.**
 
-[![Latest release](https://img.shields.io/github/v/release/bgeneto/MDraft?label=latest&sort=semver)](https://github.com/bgeneto/MDraft/releases/latest)
+MDraft is a free, open-source desktop editor for **Markdown, AsciiDoc, Typst
+and HTML**. Write notes, documentation or papers with your source and a live
+preview side by side, then export a document ready to share.
 
 **[Website](https://bgeneto.github.io/MDraft/) · [Download the latest release →](https://github.com/bgeneto/MDraft/releases/latest)**
 
-Windows installers and a portable `.exe`; Linux `.deb`, AppImage and a bare
-binary. The release page always names the current version and carries its notes
-and checksums.
+![MDraft in split view, with Markdown source on the left and a typeset preview on the right. The same phrase is highlighted in both panes.](docs/screenshots/auto-highlighting.webp)
 
-![MDraft in the light theme with the Renaissance typography preset, showing Markdown source and its typeset preview](docs/screenshots/readme-markdown-light-renaissance.png)
+*Select text in either pane to find its match in the other.*
 
-*Light theme with the Renaissance preset: EB Garamond prose and headings, IBM
-Plex Mono in the source.*
+## Stay oriented as you write
 
-![MDraft in the dark theme with the System typography preset, showing the same Markdown source and preview](docs/screenshots/readme-markdown-dark-system.png)
+Scroll through the source or the preview and the other pane follows the same
+part of the document. Select a word or passage in either pane to highlight the
+matching text across the split. When a match cannot be identified confidently,
+MDraft leaves it unmarked.
 
-*Dark theme with the System preset: the platform's own faces, 
-Markdown document active.*
+Use **Split** to see both views, or switch to **Source** or **Preview** when
+you want more room. The outline, favorites and recent files keep longer
+projects easy to navigate.
 
-## What it does well
+## Four formats, one editor
 
-- **Four languages, each with the right preview.** Markdown supports GFM tables,
-  KaTeX, Mermaid, GitHub alerts and `[TOC]`. AsciiDoc supports Asciidoctor's
-  admonitions, tables, listings, local includes and `latexmath`/`asciimath`. Typst, once
-  its compiler is installed, gets a flowing document view and a PDF page view
-  whose text can be selected and clicked; the Insert and Format menus write
-  Typst syntax rather than Markdown. HTML keeps its own CSS, images and
-  scripts, isolated in a sandbox.
-- **A preview that follows the work.** Split, source-only and preview-only
-  modes; scroll sync; clicking a source line blinks the matching block;
-  selecting a word or a range in either pane paints it in the other, for
-  Markdown, AsciiDoc, HTML and both Typst views. Pages uses verified prose
-  context to identify repeated words across columns; unresolved or generated
-  text stays unpainted. Selection stays in the pane you are using. Scroll sync
-  follows verified text rather than a page fraction, in both directions,
-  through Typst pages and columns and through the HTML guest at document zoom;
-  when a word has no verified source occurrence the panes hold instead of
-  jumping to a plausible wrong place. The
-  outline, favorites and recent list are one shortcut away, and
-  **File › Open Recent** reaches the newest twenty entries of the persisted
-  history without opening the sidebar.
-- **Many documents, each with its own state.** Tabs keep every document's
-  caret, undo and scroll position. A crowded strip scrolls with arrows, the
-  wheel or drag reordering, and right-click offers the tab actions, including
-  **Format Document** and **Add to Favorites**. **Reopen the last tabs** on launch
-  restores the set that was open, in the same order and with the same one active.
-- **Work that survives a crash.** Every dirty buffer, untitled included, is
-  journaled beside the settings while you type; the next launch restores it as a
-  dirty tab and says how many documents came back. A file that changed or was
-  deleted on disk while its tab was dirty raises a notice with **Reload from
-  disk**, **Keep my version** and **Save a copy…**, instead of being overwritten.
-  The check compares the file's bytes, not only its timestamp and size, so a
-  same-size rewrite is still caught.
-- **Document changes stay with their tab.** Typing during Save or Save As stays
-  dirty and recoverable; a delayed disk reload cannot replace newer edits.
-  Closing offers **Save / Discard / Cancel**; Escape and dismissal cancel.
-  Binary files and unsupported encodings are refused before editing, rather
-  than decoded with replacement characters and later overwritten.
-- **Typing that closes itself.** `(`, `[`, `{`, quotes and backticks insert
-  their pair, step over the closer and delete both on Backspace; HTML tags close
-  in HTML, Markdown and AsciiDoc. Both behaviors have a switch under
-  Preferences › Editor.
-- **Spelling in the language being written.** The operating system's own
-  dictionary underlines prose as you type; code, URLs and mathematics are left
-  alone. English and Portuguese are detected automatically, a language can be
-  pinned under Preferences › Editor, and the status bar turns checking on and
-  off. Right-click a marked word for suggestions or **Add to dictionary**.
-  Nothing is downloaded, and HTML guests are not checked.
-- **A right-click menu that acts on the source.** Cut, copy, paste and delete;
-  select all; UPPERCASE, lowercase and Title Case; toggle a single-line comment;
-  duplicate a line or move it up and down; undo and redo. **Format Document** is
-  the last entry: Prettier aligns Markdown tables and tidies HTML, Typstyle
-  reindents Typst. The same command is on a tab's context menu and formats that
-  document even while another tab is on screen. One undo restores the exact
-  original, the caret keeps its line, and the formatters are bundled rather than
-  downloaded — nothing is loaded until the first format. AsciiDoc keeps the
-  editing menu but has no formatter, and the item says so.
-- **Document statistics at a glance.** **Tools › Document Statistics…** reports
-  the active buffer's characters without line endings, words, estimated tokens,
-  lines and the UTF-8 byte length a save would write. While text is selected it
-  adds the selection's characters, bytes and range count. The same dialog opens
-  when you click the word or token count in the status bar. The dialog is a
-  snapshot taken from the same incremental counts as the status bar; it does not
-  rescan while you type.
-- **Typography that holds up.** Thirteen bundled typefaces, six presets and a
-  selectable **Custom** setup, plus a searchable picker for every font installed
-  on the operating system. Faces are independent for editor, prose, headings and
-  code, and each preset remembers its faces, sizes and OpenType choices; Reset
-  restores one preset without touching the others. The source pane's line height
-  is **Compact**, **Normal** or **Wide** under Preferences › Editor. Preview
-  headings and emphasis use Semibold; mathematics and code have their own scales,
-  so a listing or a formula can be matched to the prose beside it. Native HTML,
-  PDF and Print exports embed the bundled faces; system families are named but
-  their files are never embedded.
-- **Zoom the whole document.** `Ctrl+Shift+=` enlarges the source in Source-only,
-  both panes in Split, and the rendered page in Preview-only — text, images,
-  diagrams and Typst pages together. `Ctrl+Alt+0` resets the zoom without
-  changing Content Width or the font-size preferences.
-- **Content moves both ways.** Paste formatted text from a browser or word
-  processor and MDraft converts it into the destination's markup; paste markup
-  source and it is converted the same way, or kept in its original syntax when
-  it already matches the destination. Formatted Markdown paste escapes currency
-  dollars once. Copy from a text preview and the formatting
-  goes with it. Images can be pasted, dropped, linked or downloaded into the
-  document's assets folder.
-- **Useful exports, stated plainly.** HTML, PDF and Print need no extra tools.
-  Local images and links are resolved for the browser or the native writer, and
-  the print document waits for its fonts and figures and owns its light theme.
-  A static HTML document prints natively; scripted HTML keeps the browser route.
-  DOCX, ODT, EPUB, LaTeX and the rest go through pandoc,
-  which MDraft can install for you. A format whose converter is missing is
-  disabled and says which tool it needs. Typst documents compile straight to
-  PDF; PDF via Typst handles the other languages.
-- **An opt-in writing assistant, without leaving the document.** Enable it under
-  Preferences › AI Assistant and point it at any OpenAI-compatible
-  `chat/completions` server (OpenAI, DeepSeek, Ollama, LM Studio, llama.cpp,
-  vLLM, OpenRouter, your own gateway) or at Anthropic's Messages API. A single
-  icon-only button sits in the source pane; drag it anywhere, and it starts at
-  the same corner on every launch. Right-click the button for its own menu:
-  **Reset position**, **AI Assistant Settings…** and **Disable AI Assistant**.
-  **Tools › AI Assistant** is the same on/off switch with a check mark and no
-  shortcut. The panel and History can be widened or heightened from the grip in
-  their top-left corner; the button's corner and that size last for the session.
-  Its searchable palette offers fourteen
-  task-specific actions — Continue writing, Improve writing, Ask AI, Expand,
-  Shorten, Simplify, Change tone, Translate, Summarize, Explain, Key points,
-  Critique, Convert to table and Convert markup — under a learned **Most used**
-  section that ranks the actions you actually complete requests with, decaying a
-  use over 30 days, and falls back to its three original shortcuts until others
-  are used. That list stays on this device and is an ordinary field in
-  `settings.json`. The answer streams into a
-  non-modal panel before you apply it with **Replace selection**, **Insert
-  below**, **Insert** or **New tab**, which opens the answer as its own untitled
-  document in the markup it was written in (the target markup for Convert
-  markup). **Regenerate** sits beside the answer, and the actions that can place
-  an answer say where it goes in their tooltip. Answers are requested in the
-  document's own markup —
-  the saved extension, or the detected syntax of an unsaved buffer — and a final
-  guard removes greetings, labels and change summaries before the answer reaches
-  the panel. The finished answer renders as sanitized Markdown, with headings,
-  lists, tables, code and emphasis, and the raw source stays one click
-  away under **Source**; History uses the same rendering. One undo restores the
-  exact original. The key is optional: a local inference server usually needs
-  none, and when none is saved requests go out without an auth header. A saved
-  key lives in the operating system's credential store, never in
-  `settings.json`. The assistant is off by default: no request and no keychain
-  read happens at start-up, and the store is read only when you open its
-  Preferences section or use an action. Saving the key also fetches the
-  endpoint's model list; the Model field's arrow opens a searchable list of it,
-  and Fetch refreshes that list later. A model the endpoint no longer offers is
-  cleared with a note, while an empty or failed list leaves a typed id alone.
-  Preferences also sets a **Context limit**, measured in the same approximate
-  tokens as the status bar: 8,192 by default, raised to at most 32,768. A
-  rewrite beyond it is refused; Ask and Continue trim to fit.
-  **Disable reasoning (thinking)** asks the model to answer without thinking
-  first — `reasoning_effort: "none"` on an OpenAI-compatible server,
-  `thinking: {type: "disabled"}` on Anthropic — which can make the first word
-  arrive much sooner. Support is model-specific, so **Test with the configured
-  model** sends one short request and reports whether the endpoint accepted it;
-  a model that refuses the field makes Generate fail with a message naming the
-  setting.
-  Every prompt is yours to change: **Preferences › AI Assistant › Edit prompts**
-  opens `ai-prompts.md` beside `settings.json` as an ordinary Markdown document,
-  with one section per action and the shared preamble. Edit the wording, press
-  Ctrl+S, and the next Generate uses it; delete a section to fall back to the
-  built-in text. `{markup}`, `{syntax_rule}` and each action's own placeholders
-  (tone, target language) are filled in, a placeholder the action cannot fill is
-  reported with its line, and the wrapper tag that makes an answer insertable is
-  added by the application, so an edit cannot break streaming. **Reset prompts to
-  defaults** restores every section from the built-in text — including a file
-  that no longer parses — and is refused while the prompts tab has unsaved
-  changes.
-  **Suggest file names when saving** is a second opt-in: an untitled document is
-  normally named from its own text — an explicit title, the first heading, then
-  the first line — and with this option on, the assistant may propose the name
-  instead. A slow or failed request falls back to the first line after about four
-  seconds, and a document with a real title never spends a request.
-  The ten most recent successful answers stay
-  in an in-session **History**, reachable from the palette, where you can read,
-  copy or insert them again; nothing in that history is written to disk.
-- **Quiet by design.** No accounts, activation, telemetry or update checks.
-  MDraft makes no network request at start-up; it goes online only for an action
-  you take, such as installing pandoc or Typst, fetching a pasted image URL,
-  asking the AI Assistant (only after you enable it and press Generate or Fetch,
-  or save an untitled document with *Suggest file names when saving* on), or
-  opening an HTML document whose own markup references remote resources.
+- **Markdown** — GitHub-flavored tables, task lists and alerts, plus math,
+  Mermaid diagrams, syntax-highlighted code and a table of contents.
+- **AsciiDoc** — admonitions, tables, listings, local includes and mathematics
+  for manuals and technical documentation.
+- **Typst** — a flowing Document view or a Pages view of the compiled PDF,
+  with selectable text and source matching. Export directly to PDF with Typst.
+- **HTML** — preview a page with its own CSS, images and scripts in a sandboxed
+  view alongside its source.
 
-## Getting started
+![A Typst conference paper in MDraft, showing source on the left and its compiled two-column PDF in Pages view on the right.](docs/screenshots/typst-ieee-conference-paper.webp)
 
-Markdown keeps prices such as `R$50`, `R$ 15.200,75`, `US$5.00` and
-`C$8,123.50` literal while supporting both `$x + y$` and `$ x + y $` equations.
-Use `\$` for ambiguous literal dollars and `\(…\)` for explicit math. Tight
-`$5$` is numeric math; `$ 5 $` is literal, `R$5$` is prefixed money, and a
-dollar followed immediately by a digit cannot close math (`\(x\)2` replaces
-`$x$2`). Code, URLs and existing escapes are preserved during paste;
-`Ctrl+Shift+V` or rich paste off keeps the raw clipboard text. Native HTML, PDF
-and Print use these rules; Pandoc retains its own Markdown reader.
+*Typst Pages view shows the compiled page while you edit its source.*
 
-1. Download the installer for your platform from
-   [Releases](https://github.com/bgeneto/MDraft/releases/latest). On Windows,
-   the portable `.exe` keeps its settings beside itself; the installers put
-   them in the usual application data folder.
-2. Open a document with **File › Open**, drop it on the window, or pass it on
-   the command line:
+Typst preview and PDF compilation require the Typst compiler. MDraft can
+install it for you on Windows and Linux.
 
-   ```bash
-   mdraft notes.md          # Linux, after installing the .deb
-   MDraft.exe notes.md      # Windows
-   ```
+## An AI assistant you can configure
 
-   Starting MDraft with a file while it is already open hands that path to the
-   running window and opens it as a tab; it does not start a second window.
-   Several paths on one command line all open, and an already open document is
-   focused rather than duplicated.
+MDraft's AI Assistant is **off by default**. If you enable it, you can use a
+local server such as Ollama or LM Studio, an OpenAI-compatible endpoint, or
+Anthropic. You choose the provider and model; provider charges may apply.
 
-3. Split view is the default. Use the status-bar buttons for Source or
-   Preview; `Ctrl+/` jumps to the source.
-4. For `.typ` files, install the Typst compiler: **Tools › Check or Install
-   Typst…** on Windows and Linux; on macOS use your package manager or the
-   [Typst download page](https://typst.app/open-source/#download), with `typst`
-   on your `PATH`. For DOCX, ODT and the other pandoc formats, use **Tools ›
-   Check or Install Pandoc…**. Neither is required to edit or preview Markdown,
-   AsciiDoc or HTML.
+Choose from 14 actions to improve, continue, summarize, translate or convert
+your writing, among other tasks. Review the streamed answer, then copy it,
+replace a selection, insert it, or open it in a new tab. You can also edit the
+prompts behind the actions.
 
-## Requirements
+<p align="center">
+  <img src="docs/screenshots/builtin-ai-assistant.webp" width="340" alt="The AI Assistant palette, with a search field and actions for translating, converting, expanding and refining text.">
+</p>
 
-- **Windows 10/11 (x64)** with the WebView2 runtime, which is preinstalled on
-  Windows 11.
-- **Linux (x64)** with WebKitGTK 4.1 and GTK 3. The `.deb` declares its
-  dependencies.
-- **macOS is not currently published.** The code includes macOS support, but
-  the release page has Windows and Linux builds only.
-- PDF and Print use the system webview: Windows writes through WebView2 and
-  Linux through WebKitGTK, with selectable text, embedded fonts and a light
-  diagram palette. The browser handoff remains for scripted HTML and for hosts
-  without a print API.
-- Pandoc and Typst are optional. **Tools › Check or Install Pandoc…** installs
-  pandoc into MDraft's own data folder on every published platform; **Tools ›
-  Check or Install Typst…** does the same on Windows and Linux. On macOS,
-  install Typst with your package manager or from its download page, and put
-  `typst` on `PATH`. Administrator rights are not needed for the in-app installs.
+Enable and configure it under **Preferences › AI Assistant**. Requests send
+the relevant text to the endpoint you choose. Use a model running on your own
+computer if you want local inference. The [AI Assistant guide](docs/guide.md#ai-assistant)
+covers setup, prompts and privacy.
 
-### Linux notes
+## Typography and themes
 
-On Wayland, WebKitGTK can abort at startup with
-`Error 71 (Protocol error) dispatching to Wayland display` before a window
-exists. The failure has been seen with the proprietary NVIDIA driver, `nouveau`
-and AMD, so MDraft sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` on any Wayland
-session before GTK initializes; a desktop entry, the AppImage and a terminal
-launch all get the workaround. To keep DMA-BUF acceleration and accept the risk,
-launch with `MDRAFT_WEBKIT_DMABUF=0`; `MDRAFT_WEBKIT_DMABUF=1` is the explicit
-force-on, useful when diagnosing a launch. If a session still fails before the
-window appears, the manual fallback is:
+Choose a light or dark theme, then shape the document with six typography
+presets or your own combination of fonts. MDraft includes 13 typefaces and lets
+you choose installed fonts for the editor, body, headings and code. Math and
+code can be scaled independently of the surrounding text.
 
-```bash
-WEBKIT_DISABLE_DMABUF_RENDERER=1 mdraft notes.md
-```
+![MDraft in dark mode, with the source and rendered equations of a physics paper shown side by side.](docs/screenshots/math-dark.png)
 
-For a desktop entry, copy the installed file to your own applications folder
-and add the environment assignment in front of the command:
+*Dark theme, with mathematics rendered alongside the source.*
 
-```bash
-mkdir -p ~/.local/share/applications
-cp /usr/share/applications/mdraft.desktop ~/.local/share/applications/
-# then edit the copy so its Exec line reads:
-# Exec=env WEBKIT_DISABLE_DMABUF_RENDERER=1 mdraft %F
-update-desktop-database ~/.local/share/applications
-```
+## Editing and organization
 
-Read Aloud uses the system's speech service because Ubuntu's WebKitGTK is built
-without the Web Speech API. Install speech-dispatcher and a synthesiser, then
-test them:
+- **Keep your place.** Work across tabs that remember each document's caret,
+  scroll position and undo history. Choose to reopen your last tabs on startup.
+- **Protect unsaved work.** Unsaved changes, including untitled documents, are
+  recorded for recovery after an unexpected close. If a file changes on disk
+  while you have unsaved edits, MDraft asks how you want to proceed.
+- **Bring content in.** Paste formatted text from a browser or word processor
+  and convert it to your document's markup. Paste or drop images into your
+  document.
+- **Keep writing.** Use spellcheck, document statistics, focus and typewriter
+  modes, and Read Aloud with your system's voices.
 
-```bash
-sudo apt install speech-dispatcher espeak-ng
-spd-say "Hello"
-```
+## Export and share
 
-On other distributions use the equivalent package names. MDraft never
-downloads or bundles a voice.
+Export Markdown and AsciiDoc to HTML or PDF, or print them without installing
+an extra converter. Static HTML can also be printed or saved as PDF; pages that
+depend on scripts and systems without a print API use the browser route.
 
-## Documentation
+For **DOCX, ODT, EPUB, LaTeX** and other formats, MDraft uses Pandoc. Typst
+documents use the Typst compiler for preview and direct PDF export. Both tools
+are optional and can be installed from MDraft's **Tools** menu on Windows and
+Linux. See the [export guide](docs/export.md) for formats and details.
 
-- [User guide](docs/guide.md) — the four document types, previews, paste and
-  images, shortcuts, limitations.
-- [Export and conversion](docs/export.md) — formats, dependencies, PDF paths,
-  pandoc configuration.
-- [Typography](docs/typography.md) — bundled faces, presets, OpenType, export
-  embedding and licences.
-- [Contributing](CONTRIBUTING.md) — build, test and packaging instructions.
-  [AGENTS.md](AGENTS.md) is the deeper working guide.
-- [Issues](https://github.com/bgeneto/MDraft/issues) — bug reports and feature
-  requests.
+## Get started
+
+1. **[Download MDraft](https://github.com/bgeneto/MDraft/releases/latest)** for
+   your computer:
+   - **Windows 10/11, x64:** choose the setup `.exe` or `.msi`. The portable
+     `.exe` keeps its settings beside the executable.
+   - **Linux, x64:** choose the `.deb`, AppImage or standalone binary. Make an
+     AppImage executable before opening it.
+2. Install or open MDraft, then create a document or open one with **File ›
+   Open**. You can also drop a file into the window.
+3. Write in the source pane and watch the preview update. Try selecting a word
+   in either pane, or use the status bar to switch views.
+
+Windows needs the WebView2 runtime, included with Windows 11. Linux needs
+WebKitGTK 4.1 and GTK 3; the `.deb` declares its dependencies. macOS builds
+are not currently published.
+
+To work with Typst files, choose **Tools › Check or Install Typst…**. For
+Pandoc exports, choose **Tools › Check or Install Pandoc…**. Neither is needed
+to edit or preview Markdown, AsciiDoc or HTML.
+
+## Privacy
+
+MDraft requires no account or activation. It has no telemetry, update checks
+or network request at startup. You choose where to save your files.
+
+Network access is used for actions you initiate, such as installing an
+optional tool, downloading a pasted image, fetching AI models or generating
+an AI response. If you enable AI filename suggestions, saving an untitled
+document can also send text to your chosen endpoint. HTML documents may load
+remote resources referenced by their own markup.
+
+## Learn more
+
+- [User guide](docs/guide.md) — editing, previews, shortcuts and troubleshooting.
+- [Export and conversion](docs/export.md) — supported formats and dependencies.
+- [Typography](docs/typography.md) — fonts, presets and OpenType options.
+- [Contributing](CONTRIBUTING.md) — report a problem, build MDraft or contribute.
+- [Issues](https://github.com/bgeneto/MDraft/issues) — bug reports and feature requests.
 
 MDraft is open source under the [MIT License](LICENSE).
