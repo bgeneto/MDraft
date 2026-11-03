@@ -90,11 +90,7 @@
             "screenshot": "{{SITE_URL}}assets/img/scroll-sync.webp",
             "image": "{{OG_IMAGE}}",
             "sameAs": ["https://github.com/bgeneto/MDraft"],
-            "author": {
-              "@type": "Organization",
-              "name": "MDraft contributors",
-              "url": "https://github.com/bgeneto/MDraft"
-            },
+            "author": { "@id": "{{SITE_URL}}pt-br/#publisher" },
             "offers": {
               "@type": "Offer",
               "price": "0",
@@ -110,12 +106,18 @@
             ]
           },
           {
+            "@type": "Organization",
+            "@id": "{{SITE_URL}}pt-br/#publisher",
+            "name": "MDraft contributors",
+            "url": "https://github.com/bgeneto/MDraft"
+          },
+          {
             "@type": "WebSite",
             "@id": "{{SITE_URL}}pt-br/#site",
             "url": "{{SITE_URL}}pt-br/",
             "name": "MDraft",
             "inLanguage": "pt-BR",
-            "publisher": { "@id": "{{SITE_URL}}pt-br/#app" }
+            "publisher": { "@id": "{{SITE_URL}}pt-br/#publisher" }
           },
           {
             "@type": "FAQPage",
