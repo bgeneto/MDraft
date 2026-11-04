@@ -6415,8 +6415,17 @@ async function restoreLastTabs(): Promise<void> {
 
   const plan = planRestore(saved, settings.lastActiveTab, (path) => exists.get(path) === true);
   if (plan.tabs.length === 0) {
-    // First run with the preference set, or every remembered file is gone.
-    await loadUntitled(WELCOME);
+    // "Reopen the last tabs" reproduces the previous session, not the welcome
+    // document. A session with no saved documents — first run with the
+    // preference, or Close All Tabs, which leaves one blank tab on screen —
+    // therefore comes back as that blank tab. Welcome keeps its own On Launch
+    // mode and its Help entry; falling back to it here made the mode look
+    // ignored exactly when the reader had closed every document deliberately.
+    if (plan.missing > 0) {
+      const subject = plan.missing === 1 ? "1 document" : `${plan.missing} documents`;
+      toast(`${subject} from the last session could not be found.`, 4000);
+    }
+    await loadUntitled("", defaultDocumentLanguage());
     return;
   }
 
