@@ -2,6 +2,7 @@
 //
 //   node scripts/tabs-restore-test.mjs <port> phase1 <launchDoc> <extra…>
 //   node scripts/tabs-restore-test.mjs <port> phase2
+//   node scripts/tabs-restore-test.mjs <port> phase3
 //
 // The harness between the phases: it closes the window with WM_CLOSE — the
 // message the title-bar X sends, so the close handler's flush runs — and starts
@@ -12,7 +13,9 @@
 // Phase 1 opens two more documents, reorders the strip, activates one of them,
 // sets On Launch to "Reopen the last tabs" through the Preferences panel, and
 // closes a tab as its last act so the close flush has something to record.
-// Phase 2 asserts the tab names, their order, the active tab and the preference.
+// Phase 2 asserts the tab names, their order, the active tab and the preference,
+// then closes every tab. Phase 3 proves that a remembered set with no saved
+// documents boots as one blank Untitled tab, not the welcome document.
 
 import path from "node:path";
 
@@ -21,7 +24,7 @@ const phase = process.argv[3] ?? "";
 const extras = process.argv.slice(5);
 const basename = (value) => value.split(/[\\/]/).pop();
 
-if (phase !== "phase1" && phase !== "phase2") {
+if (phase !== "phase1" && phase !== "phase2" && phase !== "phase3") {
   console.error(`unknown phase: ${phase || "(missing)"}`);
   process.exit(2);
 }
@@ -90,6 +93,8 @@ const activeTab = () =>
     `document.querySelector('.doc-tab[aria-selected="true"] .doc-tab-name')?.textContent ?? ""`,
   );
 const title = () => evaluate(`document.title`);
+const firstSourceLine = () =>
+  evaluate(`document.querySelector(".cm-line")?.textContent ?? "__missing__"`);
 const toastText = () =>
   evaluate(
     `document.getElementById("toast").hidden ? "" : document.getElementById("toast").textContent`,
@@ -130,6 +135,14 @@ const emitOpenFiles = (paths) =>
   evaluate(
     `window.__TAURI_INTERNALS__
       .invoke("plugin:event|emit", { event: "open-files", payload: ${JSON.stringify(paths)} })
+      .then(() => "ok", (error) => { throw new Error(String(error)); })`,
+  );
+
+/** Run a native menu command the frontend listens for, as a real click would. */
+const emitMenu = (id) =>
+  evaluate(
+    `window.__TAURI_INTERNALS__
+      .invoke("plugin:event|emit", { event: "menu", payload: ${JSON.stringify(id)} })
       .then(() => "ok", (error) => { throw new Error(String(error)); })`,
   );
 
@@ -292,7 +305,7 @@ try {
       `document.querySelectorAll(".doc-tab").length === ${extras.length}`,
     );
     check(settled, "the strip is down to the remembered set", (await tabs()).join(", "));
-  } else {
+  } else if (phase === "phase2") {
     // -----------------------------------------------------------------------
     console.log("=== phase 2: the same binary, no document argument ===");
     const restored = await pollFor(`document.querySelectorAll(".doc-tab").length === 2`, 60000);
@@ -332,6 +345,51 @@ try {
       settings.lastActiveTab ?? "null",
     );
     check((await toastText()) === "", "no file was reported missing", await toastText());
+
+    // -----------------------------------------------------------------------
+    // Leave the next launch with no saved document. Close All Tabs keeps one
+    // blank tab on screen, and the remembered list must follow it to empty
+    // before the window closes, or phase 3 would still see the old set.
+    console.log("\n=== closing every tab leaves an empty remembered set ===");
+    check((await emitMenu("file.closeAll")) === "ok", "Close All Tabs runs");
+    const emptied = await pollFor(`document.querySelectorAll(".doc-tab").length === 1`, 8000);
+    check(emptied, "the strip falls back to one tab", String((await tabs()).length));
+    check((await tabs())[0] === "Untitled", "the survivor is Untitled", (await tabs()).join(", "));
+    check(
+      (await firstSourceLine()) === "",
+      "and it is blank, not the welcome document",
+      await firstSourceLine(),
+    );
+    const forgotten = await pollFor(
+      `(async () => (await window.__TAURI_INTERNALS__.invoke("get_settings")).lastTabs.length === 0)()`,
+      8000,
+    );
+    check(forgotten, "the remembered tab list is empty before the window closes");
+  } else {
+    // -----------------------------------------------------------------------
+    console.log("=== phase 3: a remembered session with no saved documents ===");
+    const booted = await pollFor(
+      `document.querySelectorAll(".doc-tab").length === 1 &&
+       document.querySelector(".cm-line") !== null`,
+      60000,
+    );
+    check(booted, "the window finished booting");
+    const bootedTabs = await tabs();
+    check(bootedTabs.join(",") === "Untitled", "one Untitled tab came back", bootedTabs.join(", "));
+    check((await activeTab()) === "Untitled", "and it is active", await activeTab());
+    check(
+      (await firstSourceLine()) === "",
+      "the document is blank, not the welcome document",
+      await firstSourceLine(),
+    );
+
+    const settings = await invoke("get_settings");
+    check(settings.onLaunch === "tabs", "the launch preference still holds", settings.onLaunch);
+    check(
+      settings.lastTabs.length === 0,
+      "nothing was remembered as open",
+      JSON.stringify(settings.lastTabs),
+    );
   }
 } catch (error) {
   console.log(`  FAIL  the suite threw — ${error.message}`);

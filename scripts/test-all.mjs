@@ -449,17 +449,20 @@ const SUITES = [
     doc: "samples/feature-tour.md",
   },
   {
-    // Two launches on one settings directory. Phase 1 opens documents, reorders
-    // and activates, sets the launch preference, then closes a tab and returns;
-    // the harness closes the window with WM_CLOSE (so the close flush runs) and
-    // starts the same binary again **without a document argument** — argv would
-    // win over the remembered set and hide what this layer exists to see.
+    // Three launches on one settings directory. Phase 1 opens documents,
+    // reorders and activates, sets the launch preference, then closes a tab and
+    // returns; the harness closes the window with WM_CLOSE (so the close flush
+    // runs) and starts the same binary again **without a document argument** —
+    // argv would win over the remembered set and hide what this layer exists to
+    // see. Phase 2 checks the restored set and closes every tab; phase 3 proves
+    // that an empty remembered set comes back as a blank tab, not Welcome.
     id: "tabs-restore",
     title: "Tab restore across launches",
     kind: "restart",
     script: "tabs-restore-test.mjs",
     doc: "samples/feature-tour.md",
     extras: ["README.md", "docs/guide.md"],
+    phases: ["phase1", "phase2", "phase3"],
   },
   {
     // The list has to survive the close flush, which saves the whole settings
@@ -906,9 +909,9 @@ function parseChecks(output) {
 /**
  * Sum every per-phase `N/M checks passed` line a restart suite printed.
  *
- * The restart layer is two processes, so it prints two summaries; `parseChecks`
- * reads only the last, which would report phase 2's total as the suite's. The
- * harness's contract is one count per suite, so add them.
+ * A restart layer is several processes, so it prints one summary per phase;
+ * `parseChecks` reads only the last, which would report the final phase's total
+ * as the suite's. The harness's contract is one count per suite, so add them.
  */
 function parsePhaseChecks(output) {
   const matches = [...output.matchAll(/(\d+)\/(\d+) checks passed/g)];
@@ -1241,13 +1244,14 @@ async function runCdpSuite(suite, port, options, context) {
 }
 
 /**
- * A layer that spans two launches on one settings directory.
+ * A layer that spans several launches on one settings directory.
  *
- * The phases are two invocations of the same script. Between them the harness
- * closes the window with WM_CLOSE — the message the title-bar X sends, so the
- * close handler's remembered-tab flush runs — waits for the process to be gone
- * and only then starts the binary again, **without a document argument**; argv
- * would win over the remembered set and hide what the layer exists to see.
+ * Each phase is one invocation of the same script against a fresh process. The
+ * harness closes the window between phases with WM_CLOSE — the message the
+ * title-bar X sends, so the close handler's remembered-tab flush runs — waits
+ * for the process to be gone and only then starts the binary again, **without a
+ * document argument** after the first launch; argv would win over the remembered
+ * set and hide what the layer exists to see. A phase that fails stops the chain.
  */
 async function runRestartSuite(suite, port, options, context) {
   resetAppState();
@@ -1263,29 +1267,30 @@ async function runRestartSuite(suite, port, options, context) {
     path.join(repoRoot, suite.doc),
     ...(suite.extras ?? []).map((entry) => path.join(repoRoot, entry)),
   ];
+  const phases = suite.phases ?? ["phase1", "phase2"];
 
   const runs = [];
   let launched = null;
   try {
-    launched = await launchApp(suite, port, context, { temp, userData });
-    runs.push(await run(process.execPath, args("phase1"), { env, stream: options.verbose }));
-    // WM_CLOSE, not /F: the close handler has to run so the remembered tab list
-    // is flushed before the process ends.
-    await stopApp(launched.child);
-    activeApp = null;
-    fs.closeSync(launched.outFd);
-    fs.closeSync(launched.errFd);
-    launched = null;
-
-    if (runs[0].code === 0) {
-      await waitForPortFree(port);
+    for (const [index, phase] of phases.entries()) {
+      if (index > 0) {
+        // WM_CLOSE, not /F: the close handler has to run so the remembered tab
+        // list is flushed before the process ends.
+        await stopApp(launched.child);
+        activeApp = null;
+        fs.closeSync(launched.outFd);
+        fs.closeSync(launched.errFd);
+        launched = null;
+        await waitForPortFree(port);
+      }
       launched = await launchApp(suite, port, context, {
         temp,
         userData,
-        noDocument: true,
-        label: `${suite.id}-phase2`,
+        noDocument: index > 0,
+        label: index === 0 ? suite.id : `${suite.id}-${phase}`,
       });
-      runs.push(await run(process.execPath, args("phase2"), { env, stream: options.verbose }));
+      runs.push(await run(process.execPath, args(phase), { env, stream: options.verbose }));
+      if (runs[runs.length - 1].code !== 0) break;
     }
   } finally {
     if (launched) {
