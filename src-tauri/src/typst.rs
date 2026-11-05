@@ -11,10 +11,12 @@
 //! licence question simple — Typst is Apache-2.0 and would have to be shipped
 //! with its notice otherwise.
 
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -36,6 +38,39 @@ const RENDER_TIMEOUT: Duration = Duration::from_secs(60);
 /// Concurrent previews share the temporary directory; each PDF gets its own name
 /// so a slow render cannot be overwritten by the next keystroke.
 static NEXT_PDF: AtomicU64 = AtomicU64::new(0);
+
+/// The newest preview compile per window, and the flag that stops the previous
+/// one. A Typst compile is a whole process; ignoring a stale result is not
+/// enough when the next keystroke has already asked for another one.
+type PreviewFlag = Arc<AtomicBool>;
+static PREVIEW_FLAGS: OnceLock<Mutex<HashMap<String, (u64, PreviewFlag)>>> = OnceLock::new();
+
+fn preview_flags() -> &'static Mutex<HashMap<String, (u64, PreviewFlag)>> {
+    PREVIEW_FLAGS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Register a preview token and cancel every older compile for this window.
+fn begin_preview(key: &str, token: u64) -> PreviewFlag {
+    let flag = Arc::new(AtomicBool::new(false));
+    if let Ok(mut flags) = preview_flags().lock() {
+        if let Some((older, previous)) = flags.get(key)
+            && *older < token
+        {
+            previous.store(true, Ordering::Relaxed);
+        }
+        flags.insert(key.to_string(), (token, flag.clone()));
+    }
+    flag
+}
+
+/// Drop a finished token without removing a newer one registered meanwhile.
+fn end_preview(key: &str, token: u64) {
+    if let Ok(mut flags) = preview_flags().lock()
+        && flags.get(key).is_some_and(|(current, _)| *current == token)
+    {
+        flags.remove(key);
+    }
+}
 
 pub fn typst_exe() -> &'static str {
     if cfg!(windows) { "typst.exe" } else { "typst" }
@@ -461,19 +496,29 @@ pub async fn render_typst<R: Runtime>(
     source: String,
     mode: Option<String>,
     image_root: Option<String>,
+    token: Option<u64>,
 ) -> Result<RenderedTypst, String> {
     let mode = mode.unwrap_or_else(|| "document".into());
-    tauri::async_runtime::spawn_blocking(move || {
+    // The application is single-window; one key is enough to let a newer
+    // preview stop the compile the previous one started.
+    let key = "typst-preview";
+    let cancel = token.map(|value| begin_preview(key, value));
+    let result = tauri::async_runtime::spawn_blocking(move || {
         render(
             &app,
             path.as_deref(),
             &source,
             &mode,
             image_root.as_deref(),
+            cancel.as_deref(),
         )
     })
     .await
-    .map_err(|e| format!("The Typst render task could not be started: {e}"))?
+    .map_err(|e| format!("The Typst render task could not be started: {e}"))?;
+    if let Some(value) = token {
+        end_preview(key, value);
+    }
+    result
 }
 
 /// Run Typst once, feeding the document on stdin.
@@ -488,6 +533,7 @@ fn run_typst(
     source: &str,
     extra: &[&str],
     output: &Path,
+    cancel: Option<&AtomicBool>,
 ) -> Result<(bool, String), String> {
     let mut child = {
         let mut command = std::process::Command::new(binary);
@@ -532,12 +578,19 @@ fn run_typst(
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
+                if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = std::fs::remove_file(output);
+                    return Err("Typst render was superseded by a newer edit.".into());
+                }
                 if std::time::Instant::now() >= deadline {
                     // A document that never finishes would otherwise wedge a
                     // worker thread for the life of the process, and the next
                     // keystroke would start another one.
                     let _ = child.kill();
                     let _ = child.wait();
+                    let _ = std::fs::remove_file(output);
                     return Err(format!(
                         "Typst did not finish within {} seconds and was stopped.",
                         RENDER_TIMEOUT.as_secs()
@@ -596,6 +649,7 @@ fn render_document(
     root: &Path,
     dir: &Path,
     source: &str,
+    cancel: Option<&AtomicBool>,
 ) -> Result<RenderedTypst, String> {
     let target = dir.join("document.html");
     let _ = std::fs::remove_file(&target);
@@ -606,6 +660,7 @@ fn render_document(
         source,
         &["--features", "html", "--format", "html"],
         &target,
+        cancel,
     )?;
     if !ok {
         let message: Vec<String> = stderr
@@ -662,6 +717,7 @@ fn render_pages(
     root: &Path,
     dir: &Path,
     source: &str,
+    cancel: Option<&AtomicBool>,
 ) -> Result<RenderedTypst, String> {
     let target = dir.join(format!(
         "pages-{}-{}.pdf",
@@ -674,7 +730,7 @@ fn render_pages(
     // PDF.js can put a selectable text layer over the compiler's layout. The SVG
     // writer turns every glyph into an outline, which is why the old page view
     // could not be selected or clicked.
-    let (ok, stderr) = run_typst(binary, root, source, &["--format", "pdf"], &target)?;
+    let (ok, stderr) = run_typst(binary, root, source, &["--format", "pdf"], &target, cancel)?;
 
     if !ok {
         let _ = std::fs::remove_file(&target);
@@ -739,7 +795,7 @@ pub fn compile_to<R: Runtime>(
     }
     extra.extend(["--format", format]);
 
-    let (ok, stderr) = run_typst(&typst.path, &root, source, &extra, target)?;
+    let (ok, stderr) = run_typst(&typst.path, &root, source, &extra, target, None)?;
     if !ok {
         let message: Vec<&str> = stderr
             .lines()
@@ -761,6 +817,7 @@ fn render<R: Runtime>(
     source: &str,
     mode: &str,
     image_root: Option<&str>,
+    cancel: Option<&AtomicBool>,
 ) -> Result<RenderedTypst, String> {
     let typst = find_typst(app).ok_or_else(|| {
         format!(
@@ -785,15 +842,20 @@ fn render<R: Runtime>(
     );
 
     if mode == "pages" {
-        return render_pages(&typst.path, &root, &dir, source);
+        return render_pages(&typst.path, &root, &dir, source, cancel);
     }
 
-    match render_document(&typst.path, &root, &dir, source) {
+    match render_document(&typst.path, &root, &dir, source, cancel) {
         Ok(rendered) => Ok(rendered),
         Err(failure) => {
+            // A cancelled compile must not start a second process just to be
+            // cancelled again; the frontend has already moved to a newer edit.
+            if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                return Err(failure);
+            }
             // The document view is experimental and refuses some documents
             // outright. Falling back keeps the pane useful, and says why.
-            let mut fallback = render_pages(&typst.path, &root, &dir, source)?;
+            let mut fallback = render_pages(&typst.path, &root, &dir, source, cancel)?;
             fallback
                 .warnings
                 .insert(0, format!("The document view was unavailable ({failure})."));
@@ -869,6 +931,22 @@ mod tests {
         let mut parts = line.split_whitespace();
         assert_eq!(parts.next(), Some("typst"));
         assert_eq!(parts.next(), Some("0.15.1"));
+    }
+
+    #[test]
+    fn a_new_preview_cancels_only_the_older_compile() {
+        let key = "unit-preview-cancel";
+        let first = begin_preview(key, 1);
+        assert!(!first.load(Ordering::Relaxed));
+        let second = begin_preview(key, 2);
+        assert!(first.load(Ordering::Relaxed));
+        assert!(!second.load(Ordering::Relaxed));
+        // A late finish of the first token must not remove the newer entry.
+        end_preview(key, 1);
+        let third = begin_preview(key, 3);
+        assert!(second.load(Ordering::Relaxed));
+        assert!(!third.load(Ordering::Relaxed));
+        end_preview(key, 3);
     }
 
     #[test]

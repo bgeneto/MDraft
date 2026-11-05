@@ -194,6 +194,8 @@ export interface Settings {
   showStatusBar: boolean;
   focusMode: boolean;
   typewriterMode: boolean;
+  /** Blink the caret; off leaves a solid caret and saves a continuous repaint. */
+  cursorBlink: boolean;
   /** Editor source pane size, in pixels. */
   editorFontSize: number;
   /** View zoom percentage; 100 is the base size. */
@@ -647,7 +649,8 @@ export const renderTypst = (
   source: string,
   mode: TypstView = "document",
   imageRoot: string | null = null,
-) => invoke<RenderedTypst>("render_typst", { path, source, mode, imageRoot });
+  token?: number,
+) => invoke<RenderedTypst>("render_typst", { path, source, mode, imageRoot, token: token ?? null });
 
 /** One menu accelerator, as the native menu registered it. */
 export interface Shortcut {
