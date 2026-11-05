@@ -542,7 +542,7 @@ hash the pixels.
 
 ## Testing
 
-Fifty default layers, cheapest first, plus the opt-in live AI layer. Run them in this order when changing anything.
+Fifty-one default layers, cheapest first, plus the opt-in live AI layer. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
@@ -553,6 +553,7 @@ Fifty default layers, cheapest first, plus the opt-in live AI layer. Run them in
 | File name suggestions (unit) | `npm run filename:unit` | 76 | Title metadata, headings and first prose lines in Markdown, Typst, AsciiDoc and HTML; structural-line skips; the cross-platform sanitiser (invalid characters, reserved device names, 120 code points/180 UTF-8 bytes); the assistant-answer cleaner and excerpt — no application |
 | Paste conversion | `npm run paste:convert` | 389 | Clipboard/document detection, the Save As extension suggestion, every reader and renderer, escaping, sanitisation, the source/destination matrix, whitespace across inline elements, `<br><br>` paragraph splitting, image syntax, AsciiDoc, and an image that fails to save |
 | AsciiDoc export source | `npm run asciidoc:export:unit` | 28 | Unset attributes, attribute substitution, backend-pdf/backend-html5 conditionals, the include jail/pre-reader, inline and block LaTeX and AsciiMath, the preview's top-level chunks and markers, and the absence of export decorations - no application |
+| Preview pipeline (unit) | `npm run preview:unit` | 36 | Chunk counts, fragment order and ranges, line anchors, KaTeX/code tables, CRLF, empty input — no application |
 | Export paths (unit) | `npm run export:paths:unit` | 44 | Drive, UNC and POSIX paths, spaces, Unicode, `..`, different roots, encoded spaces, fragments, `data:`, `file:` and protocol-relative references — no application |
 | Browser exports | `npm run export:browser` | 24 | Native HTML and Print artifacts: local image/link resolution, no app protocol, absolute print URLs, the resource-wait/failure script, the exported alert tint, and a light print diagram in a dark editor |
 | Native PDF | `npm run pdf:native` | 21 | A real direct PDF from Markdown, static HTML through the same writer, scripted HTML kept on the browser route, and the Poppler visual metrics |
@@ -563,7 +564,6 @@ Fifty default layers, cheapest first, plus the opt-in live AI layer. Run them in
 | P0 lifecycle (UI) | `npm run p0:lifecycle` | 39 | Delayed save/reload/Save As/export, real text/dirty/recovery preservation, a same-size/same-mtime external rewrite, three-way close/cancellation/failures, binary/mixed-drop/UTF-16 refusal, focus restoration, clean bundled documents, native close, and the content-derived default name the Save dialog receives |
 | Second launch | `npm run single:instance` | 12 | Two initial paths as tabs, relative second-launch handoff, second-process exit, one page target, duplicate-path focus, missing-path toast, dirty buffer preserved |
 | Document zoom | `npm run preview:zoom` | 24 | Source-only, Split and Preview-only geometry; Markdown/AsciiDoc/Typst Document; HTML guest frame; Typst Pages canvases, horizontal scroll and scroll position; zoomed word sync and keyboard reveal; reset leaves Content Width alone |
-| Preview pipeline (unit) | `npm run preview:unit` | 36 | Chunk counts, fragment order and ranges, line anchors, KaTeX/code tables, CRLF, empty input — no application |
 | Preview performance | `npm run preview:perf` | 14 | Key event age and Long Tasks while a 1.2 MB Markdown document and a 600 KB AsciiDoc document render, idle typing, Source mode without a render, and the return to Split |
 | Typewriter | `npm run typewriter` | 21 (+1 manual hold) | Typing/caret centering at three positions, wraps, Focus, IME, multi-cursor, undo/redo, reduced motion, tabs, disable and reset |
 | Word sync | `npm run word-sync` | 58 | The fragment map, preview → source and source → preview, atomic code, formula and image spans, the pulse and its resting mark, reduced motion, word snapping, no scroll, Escape |
@@ -618,8 +618,8 @@ leftovers. A private webview folder or CDP port does not isolate the app identif
 The frontend quality gates are separate from the functional table: `npm run
 format:check`, `npm run lint` and `npm run knip`. The `Quality` workflow
 (`.github/workflows/quality.yml`) runs those with `npm run build`, `npm run
-p0:unit`, `npm run test:sessions` and `cargo clippy --all-targets -- -D
-warnings`.
+p0:unit`, `npm run test:sessions`, `npm run preview:unit`, `npm run
+asciidoc:export:unit` and `cargo clippy --all-targets -- -D warnings`.
 
 The close test is PowerShell rather than CDP because it has to kill the
 application, which no DOM test can survive. It launches the release binary, sends

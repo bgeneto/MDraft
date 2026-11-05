@@ -47,9 +47,10 @@ jobs:
 
   safety:
     name: App-free safety
-    # The P0 and session suites import the TypeScript modules directly and rely
-    # on Node's type stripping; they need no build and no application. Node 24
-    # matches the version the suites are developed and documented against.
+    # The P0, session, preview and AsciiDoc suites import the TypeScript modules
+    # directly and rely on Node's type stripping; they need no build and no
+    # application. Node 24 matches the version the suites are developed and
+    # documented against.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -70,6 +71,12 @@ jobs:
 
       - name: Session store
         run: npm run test:sessions
+
+      - name: Preview pipeline
+        run: npm run preview:unit
+
+      - name: AsciiDoc export source
+        run: npm run asciidoc:export:unit
 
   rust:
     name: Rust
