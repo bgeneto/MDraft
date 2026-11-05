@@ -35,7 +35,7 @@ In scope:
 - Run the Asciidoctor conversion and its pure post-processing in the existing
   module worker (or a sibling worker with the same client pattern).
 - Emit top-level HTML chunks with source lines from a custom converter, so the
-  main thread can reuse the 64 KB batched sanitise/insert path from
+  main thread can reuse the batched sanitise/insert path from
   `markdown.ts`.
 - Pre-resolve includes on the main thread into a map passed to the worker, so
   the include jail and the Tauri file reads stay where they already are.
@@ -154,7 +154,8 @@ faithful route.
 - `src/asciidoc-worker.ts` (new) — the AsciiDoc worker entry.
 - `src/preview-worker.ts`, `src/preview-worker-client.ts` — Markdown worker,
   two-engine channel client.
-- `src/preview-batches.ts` (new) — shared 64 KB batching and yield.
+- `src/preview-batches.ts` (new) — shared batching (one batch below 300 KB,
+  64 KB above) and yield; batches are built in a detached staging container.
 - `src/markdown.ts` — uses the shared batching helper.
 - `src/main.ts` — `renderAsciidocPreviewInto` in `doRender`.
 - `scripts/preview-performance-test.mjs`, `scripts/asciidoc-export-unit.mjs` —

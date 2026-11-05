@@ -25,8 +25,8 @@ AsciiDoc (Asciidoctor), while the HTML guest reloads a whole iframe and Typst
 spawns a fresh compiler process per render.
 
 The cheap wins have landed: Source mode no longer renders a hidden preview; the
-quiet period scales with the buffer; the word map and the fragment map are built
-only in Split. That removes the worst case (a hidden pane) but does not bound
+quiet period is the pre-worker base (a size-scaled delay was tried and measured
+worse); the word map and the fragment map are built only in Split. That removes the worst case (a hidden pane) but does not bound
 the latency of a render that is legitimately needed: a pause longer than the
 debounce still starts a ~1 s task on the UI thread, and typing during it waits.
 
@@ -123,13 +123,14 @@ coalesces edits into one pending request.
 - [x] Keep `renderPreview` synchronous for export and as the fallback; the live
       path is `renderPreviewInto`. A worker failure falls back to the
       synchronous pipeline, not to an empty preview.
-- [x] In `doRender`, await the worker result, check the generation, sanitise and
-      insert in 64 KB batches with an ~8 ms yield budget, restore pre-rendered
-      KaTeX, decorate, assign `data-line`, and paint. `finishPreview` runs the
-      whole-host passes after the batches.
+- [x] In `doRender`, await the worker result, check the generation, sanitise
+      into a detached staging container (one batch below 300 KB, 64 KB batches
+      above) with an ~8 ms yield budget, restore pre-rendered KaTeX, decorate,
+      assign `data-line`, and swap the staging children into the pane once.
+      `finishPreview` runs the whole-host passes before the swap.
 - [x] Move `bindPreviewWords`/`scrollTextAnchors` to a `requestIdleCallback`
-      (800 ms timeout) with a 400 ms quiet gate, only in Split, cancelled by a
-      generation. Word sync is unavailable until it finishes; an edit drops the
+      (800 ms timeout) 600 ms after the render, with a 400 ms quiet gate, only
+      in Split, cancelled by a generation. Word sync is unavailable until it finishes; an edit drops the
       generation.
 - [x] Move mermaid rendering to a follow-up task after the first paint; it is
       cancelled by the render generation and re-anchors when the diagrams settle.
@@ -150,10 +151,19 @@ coalesces edits into one pending request.
 ## Implementation notes and deviations
 
 - **Chunking, not a second sanitizer.** The worker returns one HTML fragment per
-  top-level `marked` token. The main thread joins them in 64 KB batches, runs
-  the existing DOMPurify options once per batch, and yields between batches.
-  Math/KaTeX HTML is inserted after sanitising, which is the existing trust
-  boundary.
+  top-level `marked` token. The main thread joins them into a detached staging
+  container — one batch below 300 KB, 64 KB batches above — runs the existing
+  DOMPurify options once per batch, yields between batches, and swaps the
+  finished children into the pane once. Math/KaTeX HTML is inserted after
+  sanitising, which is the existing trust boundary.
+- **The first release was slower; the probe found it.** Appending each sanitized
+  batch to the live pane forced a layout per batch: insertion was 190 ms for
+  223 KB (the old one-shot `innerHTML` was 26 ms), and the size-scaled quiet
+  period added 289 ms. The worker itself was fine (`fallback=0`) and key events
+  were not delayed. After detached staging, a single small-document batch and
+  the pre-worker quiet period, the release build measured 19 ms insertion and
+  196 ms render for 223 KB, with a 308 ms preview lag (old ≈360 ms); 1.2 MB
+  measured 887 ms lag with key p95 36 ms / max 95 ms (old input block 932 ms).
 - **KaTeX moved, highlight.js did not.** KaTeX rendering (per formula) is now in
   the worker. highlight.js stays on the main thread per batch because a
   document has few fences and moving it would duplicate the library in the
@@ -161,8 +171,8 @@ coalesces edits into one pending request.
 - **`renderPreview` stays.** It is the export/print path and the worker
   fallback. It uses the same `renderChunks` and the same batched insertion, so
   the two paths cannot drift; the goldens below compare them.
-- **Word map timing.** It is built in an idle callback after paint, gated on
-  400 ms of quiet, rather than in the render task.
+- **Word map timing.** It is built in an idle callback 600 ms after the render,
+  gated on 400 ms of quiet, rather than in the render task.
 - **Mermaid.** It starts after the first paint and re-anchors when the SVGs
   settle; a newer render cancels it.
 - **Typst identity.** The plan said "source hash"; the implementation uses the
@@ -176,18 +186,19 @@ coalesces edits into one pending request.
   main-thread gap in Chromium. The Source skip and quiet-period scaling apply to
   it unchanged.
 - **Validation on this host.** `tsc`, Prettier, ESLint, `npm run build`,
-  `npm run preview:unit` (36/36), the two new Rust tests and the whole
-  `cargo check` pass. The Markdown worker and the synchronous path produced
-  byte-identical HTML, fragments and anchors for `feature-tour.md`,
-  `word-sync.md` and a 1.2 MB fixture in Chromium (goldens captured from the
-  pre-refactor renderer): 22,483 / 3,354 / 1,650,510 bytes respectively. The
-  worker rendered the 1.2 MB fixture in 479 ms off the main thread. On the real
-  Tauri/WebKitGTK app (dev build, isolated profile) the worker reported a
-  successful render and the Split preview painted the feature tour, which
-  proves module workers work on the Linux target. The Windows CDP suites
-  (`preview:perf`, `smoke`, `sync`, `word-sync`, `preview:zoom`, `asciidoc`,
-  `typst:preview`) were not run on this Linux host; they remain the release
-  gate in `AGENTS.md`.
+  `npm run preview:unit` (36/36), the two Rust tests and `cargo clippy
+  --all-targets -- -D warnings` pass. The Markdown worker and the synchronous
+  path are byte-identical for `feature-tour.md`, `word-sync.md` and a 1.2 MB
+  fixture in Chromium (22,483 / 3,354 / 1,650,510 bytes). The worker rendered
+  the 1.2 MB fixture in 479 ms off the main thread. The **Linux release binary**
+  was then built and probed with real typing: 223 KB insertion 19 ms, render
+  196 ms, preview lag 308 ms, key max 18 ms; 1.2 MB preview lag 887 ms, key p95
+  36 ms / max 95 ms, fallback 0. The first release probe had showed the batch
+  regression (190 ms insertion) and the size-scaled delay; both are fixed. On
+  real Tauri/WebKitGTK the worker reported a successful render and the Split
+  preview painted. The Windows CDP suites (`preview:perf`, `smoke`, `sync`,
+  `word-sync`, `preview:zoom`, `asciidoc`, `typst:preview`) were not run on this
+  Linux host; they remain the release gate in `AGENTS.md`.
 
 ## Files and modules
 
@@ -236,8 +247,8 @@ coalesces edits into one pending request.
 - **Typst kill.** Killing a child while it writes its temporary output must
   still reap it and leave no `typst` process. The temporary directory is per
   render; no user file is touched.
-- **Rollback of the whole plan.** The cheap wins (source skip, adaptive delay,
-  map gating) are independent commits; the worker, the preference and Typst
+- **Rollback of the whole plan.** The cheap wins (source skip, quiet-period
+  base, map gating) are independent commits; the worker, the preference and Typst
   cancellation each revert separately. No data migration.
 
 ## Tests and validation
@@ -251,10 +262,11 @@ coalesces edits into one pending request.
   1.2 MB document, then compared with both the new synchronous path and the
   worker path. All three are byte-identical (see Implementation notes).
 - **UI performance test.** `npm run preview:perf` opens a generated 1.2 MB
-  document in Split, types while the initial render runs, and measures the key
-  event's age and Long Tasks; it also checks idle typing, Source mode and the
-  return to Split. To run on a Windows CDP host; the Linux session here could
-  not drive the app after the X restart.
+  Markdown and a 600 KB AsciiDoc document, types while each initial render
+  runs, and measures key-event age and Long Tasks; it also checks idle typing,
+  Source mode and the return to Split (14 checks). The Linux release probe
+  above is the same contract measured through the window title; the CDP suite
+  remains the Windows gate.
 - **Caret test.** The Rust settings test covers the default and round trip; the
   preferences row applies through `applyLayout`. The idle-CPU measurement that
   motivated it (focused editor ~9%, blink off ~1%) was taken before the
