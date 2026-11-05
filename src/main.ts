@@ -1286,11 +1286,9 @@ let pendingPreviewScroll: number | null = null;
 /**
  * Rebuild the preview after a quiet period.
  *
- * The render runs on the webview's main thread: the Markdown pipeline alone
- * costs roughly half a millisecond per kilobyte, and the word map walks every
- * word again. A fixed 200 ms was shorter than the render it started, so the
- * next keystrokes queued behind it and appeared late. Scale the quiet period
- * with the buffer, and skip the work entirely while the preview is hidden.
+ * The conversion runs in a worker; only the batched insertion touches the main
+ * thread, so the pre-worker quiet period is enough to coalesce a burst. Typst
+ * keeps a longer one because it starts a compiler process.
  */
 function scheduleRender(immediate = false): void {
   window.clearTimeout(renderTimer);
@@ -1308,17 +1306,10 @@ function scheduleRender(immediate = false): void {
 
 /** How long the preview may lag behind the buffer before it is rebuilt. */
 function renderDelay(): number {
-  const base =
-    doc.language === "html"
-      ? 300
-      : doc.language === "asciidoc"
-        ? 250
-        : doc.language === "typst"
-          ? 450
-          : 200;
-  const chars = editor?.metrics().chars ?? 0;
-  // Capped, so even a multi-megabyte document refreshes while the reader pauses.
-  return base + Math.min(800, Math.round(chars / 2500));
+  if (doc.language === "html") return 300;
+  if (doc.language === "asciidoc") return 250;
+  if (doc.language === "typst") return 450;
+  return 200;
 }
 
 // The PDF.js page view currently on screen, if any. It owns the PDF document,
@@ -4308,6 +4299,7 @@ let wordMapGeneration = 0;
 let lastEditAt = 0;
 const WORD_MAP_QUIET_MS = 400;
 const WORD_MAP_RETRY_MS = 200;
+const WORD_MAP_DELAY_MS = 600;
 /** The source range currently painted in the preview, and its pulse state. */
 let previewSyncKey = "";
 let previewPulseRanges: Range[] = [];
@@ -4443,7 +4435,9 @@ function bindPreviewWords(
     wordMap = bindWordMap(preview, { source, fragments, blocks });
     domScrollIndex = new ScrollIndex(wordMap ? scrollTextAnchors(wordMap) : []);
   };
-  scheduleIdle(build);
+  // Do not build immediately after a render: the reader often resumes typing,
+  // and the walk can take ~100 ms on a megabyte. A newer edit cancels it.
+  window.setTimeout(() => scheduleIdle(build), WORD_MAP_DELAY_MS);
 }
 
 /** Word sync needs a map, a split view and a format that can produce one. */

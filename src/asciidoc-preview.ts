@@ -29,7 +29,7 @@ import {
   renderMathIn,
   renderMermaidIn,
 } from "./markdown";
-import { batchesOf, settleMainThread } from "./preview-batches";
+import { batchesForChunks, settleMainThread } from "./preview-batches";
 import { renderAsciidocChunksAsync } from "./preview-worker-client";
 
 import type { BlockRange } from "./source-map";
@@ -263,7 +263,7 @@ export async function renderAsciidocPreview(
       readFile: async (path) => (await api.readDocument(path)).content,
     });
     const host = document.createElement("div");
-    for (const batch of batchesOf(chunks.chunks)) insertAsciidocBatch(host, batch);
+    for (const batch of batchesForChunks(chunks.chunks)) insertAsciidocBatch(host, batch);
     const done = await finishAsciidoc(host, chunks, options, source);
     return { html: host.innerHTML, ...done };
   } catch (error) {
@@ -330,15 +330,21 @@ export async function renderAsciidocPreviewInto(
     }
     if (cancelled()) return null;
 
-    host.replaceChildren();
+    // Build in a detached container and swap once; appending batches to the
+    // live pane forced a layout of the growing document per batch.
+    const staging = document.createElement("div");
     let lastYield = performance.now();
-    for (const batch of batchesOf(chunks.chunks)) {
+    for (const batch of batchesForChunks(chunks.chunks)) {
       if (cancelled()) return null;
-      insertAsciidocBatch(host, batch);
+      insertAsciidocBatch(staging, batch);
       lastYield = await settleMainThread(lastYield);
+      if (cancelled()) return null;
     }
-    const done = await finishAsciidoc(host, chunks, options, source);
+    const done = await finishAsciidoc(staging, chunks, options, source);
     if (cancelled()) return null;
+    const fragment = document.createDocumentFragment();
+    while (staging.firstChild) fragment.appendChild(staging.firstChild);
+    host.replaceChildren(fragment);
     return done;
   } catch (error) {
     if (cancelled()) return null;

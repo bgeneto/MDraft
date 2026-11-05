@@ -11,7 +11,7 @@ import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/common";
 import katex from "katex";
 import { escapeHtml, renderChunks, type PreviewChunks, type RenderedMath } from "./preview-render";
-import { batchesOf, settleMainThread } from "./preview-batches";
+import { batchesForChunks, settleMainThread } from "./preview-batches";
 import { renderChunksAsync } from "./preview-worker-client";
 import type { Fragment } from "./source-map";
 // The stylesheet carries the Computer Modern faces AND the layout rules. Without
@@ -141,7 +141,7 @@ export function renderPreview(source: string, options: RenderOptions): RenderRes
 /** Insert every batch synchronously; used by exports and by the fallback. */
 function insertChunks(host: HTMLElement, data: PreviewChunks, options: RenderOptions): void {
   host.replaceChildren();
-  for (const batch of batchesOf(data.chunks)) {
+  for (const batch of batchesForChunks(data.chunks)) {
     insertBatch(host, batch, data, options);
   }
   finishPreview(host, data, options);
@@ -167,16 +167,23 @@ export async function renderPreviewInto(
   const data = outcome.kind === "ok" ? outcome.data : renderChunks(source, options);
   if (cancelled()) return null;
 
-  host.replaceChildren();
+  // Build the new preview in a detached container. Appending each batch to the
+  // live pane forced a layout of a growing document per batch; one swap at the
+  // end is a single layout and leaves the old preview visible while the worker
+  // and the batches run.
+  const staging = document.createElement("div");
   let lastYield = performance.now();
-  for (const batch of batchesOf(data.chunks)) {
+  for (const batch of batchesForChunks(data.chunks)) {
     if (cancelled()) return null;
-    insertBatch(host, batch, data, options);
+    insertBatch(staging, batch, data, options);
     lastYield = await settleMainThread(lastYield);
     if (cancelled()) return null;
   }
-  finishPreview(host, data, options);
+  finishPreview(staging, data, options);
   if (cancelled()) return null;
+  const fragment = document.createDocumentFragment();
+  while (staging.firstChild) fragment.appendChild(staging.firstChild);
+  host.replaceChildren(fragment);
   return describePreview(host, data);
 }
 

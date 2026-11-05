@@ -7,14 +7,16 @@
 
 export const PREVIEW_BATCH_BYTES = 64 * 1024;
 const PREVIEW_YIELD_MS = 8;
+/** Below this total, one batch is cheaper than several small ones. */
+const SMALL_DOCUMENT_BYTES = 300 * 1024;
 
 /** Group top-level chunks to a byte budget, preserving their order. */
-export function batchesOf(chunks: readonly string[]): string[][] {
+export function batchesOf(chunks: readonly string[], maxBytes = PREVIEW_BATCH_BYTES): string[][] {
   const batches: string[][] = [];
   let batch: string[] = [];
   let size = 0;
   for (const chunk of chunks) {
-    if (batch.length > 0 && size + chunk.length > PREVIEW_BATCH_BYTES) {
+    if (batch.length > 0 && size + chunk.length > maxBytes) {
       batches.push(batch);
       batch = [];
       size = 0;
@@ -24,6 +26,16 @@ export function batchesOf(chunks: readonly string[]): string[][] {
   }
   if (batch.length > 0) batches.push(batch);
   return batches;
+}
+
+/**
+ * Batch a document for insertion. A small document is one sanitize call; a
+ * larger one is split so each task stays short. The old fixed 64 KB budget made
+ * a 223 KB file four DOMPurify/DOM passes for no benefit.
+ */
+export function batchesForChunks(chunks: readonly string[]): string[][] {
+  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  return batchesOf(chunks, total <= SMALL_DOCUMENT_BYTES ? total + 1 : PREVIEW_BATCH_BYTES);
 }
 
 /**
