@@ -114,6 +114,8 @@ export interface EditorHandle {
   /** Install a syntax palette: token colours plus the writing surface. */
   setSyntax(palette: SyntaxPalette): void;
   setFontSize(px: number): void;
+  /** Enable or disable the caret blink without rebuilding the editor state. */
+  setCursorBlink(on: boolean): void;
   setLanguage(kind: DocumentLanguage): void;
   /**
    * The view's current state, including undo history and the caret.
@@ -353,6 +355,8 @@ const baseTheme = EditorView.theme({
 export interface EditorOptions {
   autoClosePairs?: boolean;
   autoCloseTags?: boolean;
+  /** Blink the caret. Off leaves a solid caret and stops a continuous repaint. */
+  cursorBlink?: boolean;
   /** Resolve the link or image at a document offset. */
   linkAt?: (pos: number) => LinkTarget | null;
   /** Follow the target a Ctrl/Cmd+click found. */
@@ -434,6 +438,7 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
   let nativeTransform: ((text: string) => string) | null = null;
   let nativeInput: { before: string; after: string } | null = null;
   const fontSizeCompartment = new Compartment();
+  const selectionCompartment = new Compartment();
   const focusCompartment = new Compartment();
   const historyCompartment = new Compartment();
   const syntaxCompartment = new Compartment();
@@ -443,6 +448,7 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
   let spellKey = "";
   let autoPairs = options.autoClosePairs ?? true;
   let autoTags = options.autoCloseTags ?? true;
+  let cursorBlink = options.cursorBlink !== false;
   let currentLanguage: DocumentLanguage = "markdown";
   /// Which language the buffer is parsed as. A markdown editor that also edits
   /// Typst needs this to be switchable at runtime; a static extension could not be.
@@ -737,7 +743,7 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     highlightSpecialChars(),
     historyCompartment.of(buildHistory()),
     foldGutter(),
-    drawSelection(),
+    selectionCompartment.of(drawSelection({ cursorBlinkRate: cursorBlink ? 1200 : 0 })),
     dropCursor(),
     EditorState.allowMultipleSelections.of(true),
     indentOnInput(),
@@ -947,6 +953,16 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
       view.dispatch({
         effects: fontSizeCompartment.reconfigure(
           EditorView.theme({ "&": { fontSize: `${px}px` } }),
+        ),
+      });
+    },
+
+    setCursorBlink(on) {
+      if (on === cursorBlink) return;
+      cursorBlink = on;
+      view.dispatch({
+        effects: selectionCompartment.reconfigure(
+          drawSelection({ cursorBlinkRate: on ? 1200 : 0 }),
         ),
       });
     },

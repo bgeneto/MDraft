@@ -255,6 +255,8 @@ rewrite from scratch.
 | `npm run p0:lifecycle` | `scripts/p0-lifecycle-test.mjs` | 39 checks through the real editor of delayed save/reload/Save As/export, recovery, three-way tab/bulk/window close, failed saves, binary/mixed-drop refusal, a same-size/same-mtime disk rewrite, UTF-16 explanation, focus and clean bundled documents, and the content-derived default name the Save dialog receives |
 | `npm run single:instance` | `scripts/single-instance-test.mjs` | 12 checks of the second-launch handoff: two initial paths as tabs, a relative second-launch path, the second process exiting, one page target, duplicate-path focus, a missing path toast and a dirty buffer surviving |
 | `npm run preview:zoom` | `scripts/preview-zoom-test.mjs` | 24 checks of document zoom through the editor and every preview renderer: Split, Preview-only, Source-only, Markdown, AsciiDoc, Typst Document, Typst Pages, the HTML guest, word sync, keyboard reveal, the status chip, reset and Content Width |
+| `npm run preview:unit` | `scripts/preview-render-unit.mjs` | 36 checks of the pure Markdown preview: chunk counts, fragments, line anchors, KaTeX/code tables, CRLF, empty input — no application |
+| `npm run preview:perf` | `scripts/preview-performance-test.mjs` | 10 checks of typing latency during a 1.2 MB preview render: key event age, Long Tasks, Source mode without a render, and the return to Split |
 | `npm run paste:convert` | `scripts/paste-convert-test.mjs` | 389 unit checks of the paste readers, renderers, destination detection, the Save As extension suggestion and image syntax; no application |
 | `npm run paste` | `scripts/rich-paste-test.mjs` | 87 checks of rich paste through the real UI: destination detection, conversion in every direction, whitespace across inline elements, preferences, Ctrl+Shift+V, undo, and Find/Replace paste ownership, including real Ctrl+V and Ctrl+Shift+V with plain and rich clipboard text. The 8 native-key checks are skipped (79/79) when the session cannot own the clipboard, which the suite proves by writing and reading it back |
 | `npm run image:syntax` | `scripts/image-syntax-test.mjs` | 22 checks of bitmap, remote-image and modern-format handling in Typst, Markdown, HTML and AsciiDoc; Typst refuses AVIF with a message, WebP is inserted, and Format > Image writes Typst syntax |
@@ -310,6 +312,7 @@ All of these need the app already running with CDP enabled (see
 | `typewriter-test.mjs` | `[port]` | `samples/feature-tour.md`; creates an owned temporary document | Caret/viewport geometry during editor input, manual scroll, wrapping, Focus, IME, undo, tab state and disabling; screenshots and optional manual visual hold |
 | `single-instance-test.mjs` | `[port]` | Two initial documents, `samples/feature-tour.md` and `samples/word-sync.md`; needs `MDRAFT_EXE` and `MDRAFT_REPO` from the harness | The running window receives a relative second-launch path as a tab, the second process exits, one page target remains, an already-open path is focused, a missing path toasts without opening a tab, and the dirty startup buffer survives |
 | `preview-zoom-test.mjs` | `[port]` | `samples/export-tour.md`; opens the AsciiDoc, Typst and HTML fixtures | Document zoom geometry in Split/Preview-only/Source-only, AsciiDoc, Typst Document, Typst Pages and the HTML guest; a zoomed word sync; reset and Content Width; a 150% screenshot |
+| `preview-performance-test.mjs` | `[port]` | any; opens a generated 1.2 MB Markdown document | Key event age while the initial render runs, idle typing, Source mode without a render, and the return to Split; fails above 150 ms for a key or a main-thread task |
 | `sessions-test.mjs` | — | none — runs without the application | The session store's rules: insertion after the active tab, untitled names, one tab per path under both case rules, the neighbour that takes over on close, `move` and `removeMany` order, wrap-around, and the empty-list invariant |
 | `paste-convert-test.mjs` | `[--without-optional-corpus]` | none — runs without the application | The paste matrix: clipboard and document detection, all reader/renderer pairs, escaping, sanitisation, caps and image syntax |
 | `tabs-restore-unit.mjs` | — | none — runs without the application | What is remembered and what is restored: tab order, untitled exclusion, deduplication under the platform's path identity, the 20-document cap, missing files and the active-tab fallback |
@@ -560,6 +563,8 @@ Fifty default layers, cheapest first, plus the opt-in live AI layer. Run them in
 | P0 lifecycle (UI) | `npm run p0:lifecycle` | 39 | Delayed save/reload/Save As/export, real text/dirty/recovery preservation, a same-size/same-mtime external rewrite, three-way close/cancellation/failures, binary/mixed-drop/UTF-16 refusal, focus restoration, clean bundled documents, native close, and the content-derived default name the Save dialog receives |
 | Second launch | `npm run single:instance` | 12 | Two initial paths as tabs, relative second-launch handoff, second-process exit, one page target, duplicate-path focus, missing-path toast, dirty buffer preserved |
 | Document zoom | `npm run preview:zoom` | 24 | Source-only, Split and Preview-only geometry; Markdown/AsciiDoc/Typst Document; HTML guest frame; Typst Pages canvases, horizontal scroll and scroll position; zoomed word sync and keyboard reveal; reset leaves Content Width alone |
+| Preview pipeline (unit) | `npm run preview:unit` | 36 | Chunk counts, fragment order and ranges, line anchors, KaTeX/code tables, CRLF, empty input — no application |
+| Preview performance | `npm run preview:perf` | 10 | Key event age and Long Tasks while a 1.2 MB document renders, idle typing, Source mode without a render, and the return to Split |
 | Typewriter | `npm run typewriter` | 21 (+1 manual hold) | Typing/caret centering at three positions, wraps, Focus, IME, multi-cursor, undo/redo, reduced motion, tabs, disable and reset |
 | Word sync | `npm run word-sync` | 58 | The fragment map, preview → source and source → preview, atomic code, formula and image spans, the pulse and its resting mark, reduced motion, word snapping, no scroll, Escape |
 | Auto-close matching | `npm run autoclose:unit` | 17 | Which tag a typed `>`, the void/self-closing/autolink/escape rules — no application |
@@ -2442,6 +2447,16 @@ The isolated test instance had not actually exited (its close handler was still 
 
 **Two identical `subset-fonts.py` runs print different SHA-256 values, and the recorded pin looks wrong**
 `fontTools` stamps `head.modified` with the current time on every save, so the same source, axes and features produce a few bytes' difference and a different digest; `fonts.json` then records a timestamp rather than the content. Set `font.recalcTimestamp = False` before saving, which keeps the source's timestamp. The script now does this, so a pin can be reproduced; existing files generated before the change still carry their original stamp and need no rewrite.
+
+**Typing stutters in a large document although the editor buffer updates in 5 ms**
+`scheduleRender` rebuilt the whole preview 200 ms after every edit, on the webview's main thread. Measured with a 1.2 MB Markdown file: `renderPreview` 656 ms, `preview.innerHTML` 26 ms, `bindPreviewWords`/`scrollTextAnchors` 118 ms, `doRender` ~1.03 s; keys pressed during that render waited **932 ms** (`event.timeStamp` to the update listener) and then appeared in a burst. A 223 KB file still took ~160 ms per render. It also rendered in **Source mode**, where the pane is hidden, and built the word map in every mode. Do not diagnose this from CPU or from CodeMirror: measure the key event's age and the `doRender` duration with `performance.now()`. The cheap fixes are to skip rendering in Source, scale the quiet period with the buffer (`base + min(800, chars / 2500)` ms), pass `map: true` only in Split, and build the word map only in Split. The remaining structural fix now runs that pure half in `src/preview-worker.ts`
+(see `docs/adr/2026-11-04-preview-render-worker.md`); the synchronous
+`renderPreview` stays as the export path and as the fallback. The same trap
+applies to AsciiDoc, which still runs Asciidoctor on the main thread and is a
+separate plan (`docs/plans/2026-11-04-asciidoc-preview-worker.md`). The other
+measured cost is the caret blink: a focused editor with a large document burns
+~9% of a core in WebKitGTK compositing here, and `cursorBlinkRate: 0` drops it
+to ~1%.
 
 ## Adding a preference, end to end
 
