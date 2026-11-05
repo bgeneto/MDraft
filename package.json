@@ -1,7 +1,7 @@
 {
   "name": "mdraft",
   "private": true,
-  "version": "0.7.8",
+  "version": "0.8.0",
   "type": "module",
   "description": "A native Markdown, AsciiDoc, Typst and HTML editor with live preview and an optional AI assistant",
   "license": "MIT",
