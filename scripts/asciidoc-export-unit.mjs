@@ -15,7 +15,11 @@
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { renderAsciidocForPandoc } from "../src/asciidoc-render.ts";
+import {
+  preloadAsciidocIncludes,
+  renderAsciidocChunks,
+  renderAsciidocForPandoc,
+} from "../src/asciidoc-render.ts";
 
 let passed = 0;
 let total = 0;
@@ -166,6 +170,79 @@ try {
     (await renderAsciidocForPandoc("   \n\n", { baseDir: null, readFile: async () => "" })) === "",
     "an empty document renders nothing",
   );
+
+  console.log("\n=== preview chunks ===");
+  const preloadReads = [];
+  const includes = await preloadAsciidocIncludes(document, {
+    baseDir: workDir,
+    readFile: async (path) => {
+      preloadReads.push(path);
+      return readFileSync(path, "utf8");
+    },
+  });
+  check(includes !== null, "the preview document preloads");
+  check(
+    includes !== null && Object.keys(includes).some((key) => key.endsWith("/part.adoc")),
+    "the included file is in the map",
+    preloadReads.length === 1 ? preloadReads[0] : `${preloadReads.length} read(s)`,
+  );
+  const jailReads = [];
+  const jail = await preloadAsciidocIncludes("include::../outside-asciidoc-export.adoc[]\n", {
+    baseDir: workDir,
+    readFile: async (path) => {
+      jailReads.push(path);
+      return "OUTSIDE-MARKER";
+    },
+  });
+  check(
+    jail !== null && Object.keys(jail).length === 0 && jailReads.length === 0,
+    "the pre-reader keeps the include jail",
+  );
+  const dynamic = await preloadAsciidocIncludes("include::{dir}/x.adoc[]\n", {
+    baseDir: workDir,
+    readFile: async () => "X",
+  });
+  check(dynamic === null, "an attribute-built include asks for the main-thread path");
+
+  const chunks = await renderAsciidocChunks(document, {
+    baseDir: workDir,
+    math: true,
+    includes: includes ?? {},
+  });
+  check(chunks.chunks.length > 1, "the document has top-level chunks", `${chunks.chunks.length}`);
+  check(
+    chunks.chunks.some(
+      (chunk) => chunk.includes("Included") && chunk.includes("<strong>text</strong>"),
+    ),
+    "the included content reaches a chunk",
+  );
+  check(
+    chunks.marks.length > 0,
+    "the marker processor recorded every block",
+    `${chunks.marks.length}`,
+  );
+  check(chunks.hasHeader && !chunks.notitle, "the header is detected for the title anchor");
+  check(
+    !chunks.chunks.join("").includes("<!--mdraft-chunk") &&
+      !chunks.chunks.join("").includes("<!--/mdraft-chunk"),
+    "the split comments are gone",
+  );
+  check(
+    (await renderAsciidocChunks("   \n\n", { baseDir: null, math: true, includes: {} })).chunks
+      .length === 0,
+    "an empty document has no chunks",
+  );
+  let missingRejected = false;
+  try {
+    await renderAsciidocChunks("include::part.adoc[]\n", {
+      baseDir: workDir,
+      math: true,
+      includes: {},
+    });
+  } catch {
+    missingRejected = true;
+  }
+  check(missingRejected, "a missed preload asks the caller to fall back");
 } finally {
   rmSync(workDir, { recursive: true, force: true });
   rmSync(join(process.cwd(), "outside-asciidoc-export.adoc"), { force: true });

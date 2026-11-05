@@ -14,10 +14,12 @@
 import DOMPurify from "dompurify";
 import * as api from "./api";
 import {
-  createIncludeProcessor,
   loadAsciiMath,
-  loadAsciidoctor,
+  preloadAsciidocIncludes,
+  renderAsciidocChunks,
   renderAsciidocForPandoc,
+  type AsciidocChunks,
+  type AsciidocIncludeMap,
 } from "./asciidoc-render";
 import {
   decorateCodeBlocks,
@@ -27,6 +29,8 @@ import {
   renderMathIn,
   renderMermaidIn,
 } from "./markdown";
+import { batchesOf, settleMainThread } from "./preview-batches";
+import { renderAsciidocChunksAsync } from "./preview-worker-client";
 
 import type { BlockRange } from "./source-map";
 
@@ -47,43 +51,6 @@ export interface AsciidocRenderResult {
    * search rather than from exact fragments.
    */
   blocks: BlockRange[];
-}
-
-interface Mark {
-  marker: string;
-  line: number;
-}
-
-type AsciidoctorModule = typeof import("@asciidoctor/core");
-
-/**
- * A per-load HTML5 converter that marks AsciiMath stems.
- *
- * Asciidoctor wraps AsciiMath in `\$...\$`, which is also how a literal escaped
- * dollar appears, so a post-conversion regex cannot tell them apart. The
- * converter knows the stem type, and a `data-stem` marker survives DOMPurify.
- * Every other conversion method is inherited unchanged.
- */
-function createConverterFactory(Asciidoctor: AsciidoctorModule): unknown {
-  class MdraftHtml5Converter extends Asciidoctor.Html5Converter {
-    async convert_inline_quoted(node: any): Promise<string> {
-      if (node.type === "asciimath") {
-        return `<span data-stem="asciimath">${node.text ?? ""}</span>`;
-      }
-      return super.convert_inline_quoted(node);
-    }
-
-    async convert_stem(node: any): Promise<string> {
-      const html = await super.convert_stem(node);
-      return node.style === "asciimath"
-        ? html.replace(/^<div/, '<div data-stem="asciimath"')
-        : html;
-    }
-  }
-
-  const factory = new Asciidoctor.ConverterCustomFactory();
-  factory.register(MdraftHtml5Converter, "html5");
-  return factory;
 }
 
 /** Asciidoctor separates AsciiMath lines with `<br>` inside the block. */
@@ -197,164 +164,186 @@ function sanitizeAsciidoc(raw: string): string {
   });
 }
 
+/** Insert one sanitised batch into the live host. */
+function insertAsciidocBatch(host: HTMLElement, batch: readonly string[]): void {
+  const holder = document.createElement("div");
+  holder.innerHTML = sanitizeAsciidoc(batch.join(""));
+  while (holder.firstChild) host.appendChild(holder.firstChild);
+}
+
+/**
+ * Everything after the HTML is inserted: line markers, source offsets, the two
+ * mathematics passes, code highlighting, links and diagrams.
+ *
+ * The marker rewrite is deliberately on the whole host, not per chunk: the
+ * line ranges of a block depend on the next marked block, which may live in the
+ * following chunk.
+ */
+async function finishAsciidoc(
+  host: HTMLElement,
+  chunks: AsciidocChunks,
+  options: AsciidocRenderOptions,
+  source: string,
+): Promise<{ linesMapped: boolean; blocks: BlockRange[] }> {
+  const lines = source.split("\n").length;
+  const sorted = chunks.marks.slice().sort((a, b) => a.line - b.line);
+  const ranges = new Map<string, { line: number; end: number }>();
+  sorted.forEach((mark, index) => {
+    const next = sorted[index + 1];
+    ranges.set(mark.marker, {
+      line: mark.line,
+      end: next ? Math.max(mark.line, next.line - 1) : Math.max(mark.line, lines),
+    });
+  });
+
+  for (const element of Array.from(host.querySelectorAll("[class]"))) {
+    const marker = Array.from(element.classList).find((name) => name.startsWith("mdraft-line-"));
+    if (!marker) continue;
+    const range = ranges.get(marker);
+    element.classList.remove(marker);
+    if (element.classList.length === 0) element.removeAttribute("class");
+    if (range) {
+      const target = element.matches(".sect1, .sect2, .sect3, .sect4, .sect5")
+        ? (element.querySelector<HTMLElement>(
+            ":scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6",
+          ) ?? element)
+        : element;
+      target.setAttribute("data-line", String(range.line));
+      target.setAttribute("data-line-end", String(range.end));
+    }
+  }
+
+  if (chunks.hasHeader && !chunks.notitle) {
+    const title = host.querySelector("h1");
+    if (title) {
+      title.setAttribute("data-line", "1");
+      title.setAttribute("data-line-end", "1");
+    }
+  }
+
+  // Turn the line ranges into source offsets once. The elements keep a `data-b`
+  // index so the bound map can find them after the HTML is inserted; nested
+  // blocks come later in document order, which is what lets the deepest one win.
+  const lineOffsets: number[] = [0];
+  for (let i = 0; i < source.length; i += 1) {
+    if (source.charCodeAt(i) === 10) lineOffsets.push(i + 1);
+  }
+  const blocks: BlockRange[] = [];
+  for (const element of Array.from(host.querySelectorAll<HTMLElement>("[data-line]"))) {
+    const start = Number(element.dataset.line);
+    const end = Number(element.dataset.lineEnd ?? element.dataset.line);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+    const src0 = lineOffsets[Math.max(0, start - 1)] ?? 0;
+    const src1 = end < lineOffsets.length ? lineOffsets[end] : source.length;
+    element.dataset.b = String(blocks.length);
+    blocks.push({ src0, src1 });
+  }
+
+  if (options.math) {
+    renderMathIn(host);
+    await renderAsciiMathIn(host);
+  }
+  decorateCodeBlocks(host, options.mermaid);
+  decorateLinks(host, options.baseDir);
+  await renderMermaidIn(host, options.isDark);
+
+  return { linesMapped: host.querySelectorAll("[data-line]").length >= 2, blocks };
+}
+
+/** Render AsciiDoc synchronously. Used by the export article and as the fallback. */
 export async function renderAsciidocPreview(
   source: string,
   options: AsciidocRenderOptions,
 ): Promise<AsciidocRenderResult> {
   try {
-    const Asciidoctor = await loadAsciidoctor();
     if (!source.trim()) return { html: "", linesMapped: false, blocks: [] };
-
-    const marks: Mark[] = [];
-    let markerCount = 0;
-    const baseDir = options.baseDir;
-
-    class MarkerProcessor extends Asciidoctor.TreeProcessor {
-      private readonly seen = new Set<unknown>();
-
-      process(doc: unknown): void {
-        const visit = (node: unknown): void => {
-          if (!node || typeof node !== "object" || this.seen.has(node)) return;
-          this.seen.add(node);
-          if (Array.isArray(node)) {
-            for (const child of node) visit(child);
-            return;
-          }
-          const record = node as {
-            sourceLocation?: { file?: string | null; lineno?: number } | null;
-            addRole?: (role: string) => unknown;
-            blocks?: unknown;
-            items?: unknown;
-            rows?: unknown;
-            cells?: unknown;
-          };
-          const location = record.sourceLocation;
-          if (
-            location &&
-            typeof location.lineno === "number" &&
-            !location.file &&
-            typeof record.addRole === "function"
-          ) {
-            const marker = `mdraft-line-${++markerCount}`;
-            marks.push({ marker, line: location.lineno });
-            record.addRole(marker);
-          }
-          visit(record.blocks);
-          visit(record.items);
-          visit(record.rows);
-          visit(record.cells);
-        };
-        visit(doc);
-      }
-    }
-
-    const registry = Asciidoctor.Extensions.create("mdraft");
-    registry.includeProcessor(
-      createIncludeProcessor(Asciidoctor, {
-        baseDir,
-        readFile: async (path) => (await api.readDocument(path)).content,
-      }),
-    );
-    registry.treeProcessor(new MarkerProcessor());
-
-    const loadOptions = {
-      standalone: false,
-      safe: "secure",
-      sourcemap: true,
-      base_dir: baseDir ?? undefined,
-      extension_registry: registry,
-      // Embedded output sets `notitle`; ask for the title explicitly, or the
-      // document title silently disappears from the preview.
-      attributes: { showtitle: "" },
-    };
-    if (options.math) {
-      // Only mark stems when the preview will draw them. With mathematics off,
-      // leave Asciidoctor's `\$...\$` delimiters exactly as they were.
-      (loadOptions as Record<string, unknown>).converter_factory =
-        createConverterFactory(Asciidoctor);
-    }
-    const doc = await Asciidoctor.load(source, loadOptions);
-
-    const raw = await doc.convert();
-
-    const clean = sanitizeAsciidoc(raw);
-
-    const holder = document.createElement("div");
-    holder.innerHTML = clean;
-
-    const lines = source.split("\n").length;
-    const sorted = marks.slice().sort((a, b) => a.line - b.line);
-    const ranges = new Map<string, { line: number; end: number }>();
-    sorted.forEach((mark, index) => {
-      const next = sorted[index + 1];
-      ranges.set(mark.marker, {
-        line: mark.line,
-        end: next ? Math.max(mark.line, next.line - 1) : Math.max(mark.line, lines),
-      });
+    const chunks = await renderAsciidocChunks(source, {
+      baseDir: options.baseDir,
+      math: options.math,
+      readFile: async (path) => (await api.readDocument(path)).content,
     });
-
-    for (const element of Array.from(holder.querySelectorAll("[class]"))) {
-      const marker = Array.from(element.classList).find((name) => name.startsWith("mdraft-line-"));
-      if (!marker) continue;
-      const range = ranges.get(marker);
-      element.classList.remove(marker);
-      if (element.classList.length === 0) element.removeAttribute("class");
-      if (range) {
-        const target = element.matches(".sect1, .sect2, .sect3, .sect4, .sect5")
-          ? (element.querySelector<HTMLElement>(
-              ":scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6",
-            ) ?? element)
-          : element;
-        target.setAttribute("data-line", String(range.line));
-        target.setAttribute("data-line-end", String(range.end));
-      }
-    }
-
-    if (doc.hasHeader() && !doc.isNotitle()) {
-      const title = holder.querySelector("h1");
-      if (title) {
-        title.setAttribute("data-line", "1");
-        title.setAttribute("data-line-end", "1");
-      }
-    }
-
-    // Turn the line ranges into source offsets once. The elements keep a `data-b`
-    // index so the bound map can find them after the HTML is inserted; nested
-    // blocks come later in document order, which is what lets the deepest one win.
-    const lineOffsets: number[] = [0];
-    for (let i = 0; i < source.length; i += 1) {
-      if (source.charCodeAt(i) === 10) lineOffsets.push(i + 1);
-    }
-    const blocks: BlockRange[] = [];
-    for (const element of Array.from(holder.querySelectorAll<HTMLElement>("[data-line]"))) {
-      const start = Number(element.dataset.line);
-      const end = Number(element.dataset.lineEnd ?? element.dataset.line);
-      if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
-      const src0 = lineOffsets[Math.max(0, start - 1)] ?? 0;
-      const src1 = end < lineOffsets.length ? lineOffsets[end] : source.length;
-      element.dataset.b = String(blocks.length);
-      blocks.push({ src0, src1 });
-    }
-
-    if (options.math) {
-      renderMathIn(holder);
-      await renderAsciiMathIn(holder);
-    }
-    decorateCodeBlocks(holder, options.mermaid);
-    decorateLinks(holder, baseDir);
-    await renderMermaidIn(holder, options.isDark);
-
-    return {
-      html: holder.innerHTML,
-      linesMapped: holder.querySelectorAll("[data-line]").length >= 2,
-      blocks,
-    };
+    const host = document.createElement("div");
+    for (const batch of batchesOf(chunks.chunks)) insertAsciidocBatch(host, batch);
+    const done = await finishAsciidoc(host, chunks, options, source);
+    return { html: host.innerHTML, ...done };
   } catch (error) {
     return {
       html: `<pre class="asciidoc-error">${escapeHtml(String(error))}</pre>`,
       linesMapped: false,
       blocks: [],
     };
+  }
+}
+
+/**
+ * Paint the AsciiDoc preview from the worker, yielding between batches.
+ *
+ * Includes are read on the main thread first because the worker cannot call the
+ * Tauri command. A document whose include path is built from an attribute
+ * cannot be pre-read; it stays on the main-thread conversion rather than risking
+ * the wrong file. A worker failure falls back the same way.
+ */
+export async function renderAsciidocPreviewInto(
+  host: HTMLElement,
+  source: string,
+  options: AsciidocRenderOptions,
+  cancelled: () => boolean,
+): Promise<{ linesMapped: boolean; blocks: BlockRange[] } | null> {
+  try {
+    if (!source.trim()) {
+      host.replaceChildren();
+      return { linesMapped: false, blocks: [] };
+    }
+    const readFile = async (path: string) => (await api.readDocument(path)).content;
+    let includes: AsciidocIncludeMap | null = null;
+    try {
+      includes = await preloadAsciidocIncludes(source, { baseDir: options.baseDir, readFile });
+    } catch {
+      includes = null;
+    }
+    if (cancelled()) return null;
+
+    let chunks: AsciidocChunks;
+    if (includes) {
+      const outcome = await renderAsciidocChunksAsync(source, {
+        baseDir: options.baseDir,
+        math: options.math,
+        includes,
+      });
+      if (outcome.kind === "superseded") return null;
+      if (outcome.kind === "fallback") {
+        if (cancelled()) return null;
+        chunks = await renderAsciidocChunks(source, {
+          baseDir: options.baseDir,
+          math: options.math,
+          readFile,
+        });
+      } else {
+        chunks = outcome.data;
+      }
+    } else {
+      chunks = await renderAsciidocChunks(source, {
+        baseDir: options.baseDir,
+        math: options.math,
+        readFile,
+      });
+    }
+    if (cancelled()) return null;
+
+    host.replaceChildren();
+    let lastYield = performance.now();
+    for (const batch of batchesOf(chunks.chunks)) {
+      if (cancelled()) return null;
+      insertAsciidocBatch(host, batch);
+      lastYield = await settleMainThread(lastYield);
+    }
+    const done = await finishAsciidoc(host, chunks, options, source);
+    if (cancelled()) return null;
+    return done;
+  } catch (error) {
+    if (cancelled()) return null;
+    host.innerHTML = `<pre class="asciidoc-error">${escapeHtml(String(error))}</pre>`;
+    return { linesMapped: false, blocks: [] };
   }
 }
 

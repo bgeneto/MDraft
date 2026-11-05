@@ -9,7 +9,11 @@ import { ask, message, open as openDialog, save as saveDialog } from "@tauri-app
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import * as api from "./api";
-import { renderAsciidocForExport, renderAsciidocPreview } from "./asciidoc-preview";
+import {
+  renderAsciidocForExport,
+  renderAsciidocPreview,
+  renderAsciidocPreviewInto,
+} from "./asciidoc-preview";
 import {
   ASCIIDOC_REFERENCE,
   FONT_LICENCES,
@@ -1690,14 +1694,18 @@ async function doRender(force = false): Promise<void> {
   }
 
   if (doc.language === "asciidoc") {
-    const result = await renderAsciidocPreview(source, {
-      baseDir: doc.directory ?? null,
-      math: settings.enableMath,
-      mermaid: settings.enableMermaid,
-      isDark,
-    });
-    if (token !== renderToken) return;
-    preview.innerHTML = result.html;
+    const result = await renderAsciidocPreviewInto(
+      preview,
+      source,
+      {
+        baseDir: doc.directory ?? null,
+        math: settings.enableMath,
+        mermaid: settings.enableMermaid,
+        isDark,
+      },
+      () => token !== renderToken,
+    );
+    if (!result) return;
     previewLinesMapped = result.linesMapped;
     bindPreviewWords(source, undefined, result.blocks, wantsMap);
     rebuildAnchors();

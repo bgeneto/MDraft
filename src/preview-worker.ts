@@ -1,4 +1,4 @@
-//! The preview render worker. Pure string work only; see `preview-render.ts`.
+//! The Markdown preview worker. Pure string work only; see `preview-render.ts`.
 
 import { renderChunks, type ChunkOptions, type PreviewChunks } from "./preview-render";
 

@@ -190,6 +190,270 @@ export function createIncludeProcessor(
 }
 
 // ---------------------------------------------------------------------------
+// Preview chunks
+// ---------------------------------------------------------------------------
+
+/** A file pre-read for the worker, or the failure the include processor saw. */
+export type AsciidocIncludeMap = Record<string, { content: string } | { error: string }>;
+
+/** What the worker receives for an AsciiDoc job. */
+export interface AsciidocWorkerOptions {
+  baseDir: string | null;
+  math: boolean;
+  includes: AsciidocIncludeMap;
+}
+
+export interface AsciidocChunkOptions {
+  baseDir: string | null;
+  math: boolean;
+  /** Main-thread include reads; the preview and the fallback use this. */
+  readFile?: (path: string) => Promise<string>;
+  /** Files pre-read by `preloadAsciidocIncludes` for the worker. */
+  includes?: AsciidocIncludeMap;
+}
+
+export interface AsciidocMark {
+  marker: string;
+  line: number;
+}
+
+export interface AsciidocChunks {
+  /** Top-level HTML segments in document order, without the chunk comments. */
+  chunks: string[];
+  /** The role marker each block carries and its source line. */
+  marks: AsciidocMark[];
+  hasHeader: boolean;
+  notitle: boolean;
+}
+
+const CHUNK_OPEN = "<!--mdraft-chunk-->";
+const CHUNK_CLOSE = "<!--/mdraft-chunk-->";
+const INCLUDE_DIRECTIVE = /^\s*include::([^[]+)\[[^\]]*\]\s*$/gm;
+
+/** A converter that wraps each top-level block in a split marker and keeps the
+ * AsciiMath markers the preview's DOM pass consumes. */
+function createPreviewConverterFactory(
+  Asciidoctor: AsciidoctorModule,
+  markStems: boolean,
+): unknown {
+  class PreviewHtml5Converter extends Asciidoctor.Html5Converter {
+    async convert(node: any, transform?: string): Promise<string> {
+      const html = String(await super.convert(node, transform));
+      if (
+        node &&
+        node.context &&
+        node.context !== "document" &&
+        node.parent &&
+        node.parent.context === "document"
+      ) {
+        return `${CHUNK_OPEN}${html}${CHUNK_CLOSE}`;
+      }
+      return html;
+    }
+
+    async convert_inline_quoted(node: any): Promise<string> {
+      if (markStems && node.type === "asciimath") {
+        return `<span data-stem="asciimath">${node.text ?? ""}</span>`;
+      }
+      return super.convert_inline_quoted(node);
+    }
+
+    async convert_stem(node: any): Promise<string> {
+      const html = await super.convert_stem(node);
+      return markStems && node.style === "asciimath"
+        ? html.replace(/^<div/, '<div data-stem="asciimath"')
+        : html;
+    }
+  }
+
+  const factory = new Asciidoctor.ConverterCustomFactory();
+  factory.register(PreviewHtml5Converter, "html5");
+  return factory;
+}
+
+/** Mark every block with its source line, as the preview always has. */
+function createPreviewMarkerProcessor(Asciidoctor: AsciidoctorModule, marks: AsciidocMark[]) {
+  return class PreviewMarkerProcessor extends Asciidoctor.TreeProcessor {
+    private readonly seen = new Set<unknown>();
+
+    process(doc: unknown): void {
+      const visit = (node: unknown): void => {
+        if (!node || typeof node !== "object" || this.seen.has(node)) return;
+        this.seen.add(node);
+        if (Array.isArray(node)) {
+          for (const child of node) visit(child);
+          return;
+        }
+        const record = node as {
+          sourceLocation?: { file?: string | null; lineno?: number } | null;
+          addRole?: (role: string) => unknown;
+          blocks?: unknown;
+          items?: unknown;
+          rows?: unknown;
+          cells?: unknown;
+        };
+        const location = record.sourceLocation;
+        if (
+          location &&
+          typeof location.lineno === "number" &&
+          !location.file &&
+          typeof record.addRole === "function"
+        ) {
+          const marker = `mdraft-line-${marks.length + 1}`;
+          marks.push({ marker, line: location.lineno });
+          record.addRole(marker);
+        }
+        visit(record.blocks);
+        visit(record.items);
+        visit(record.rows);
+        visit(record.cells);
+      };
+      visit(doc);
+    }
+  };
+}
+
+/** Split the converter output at its top-level markers, preserving every other
+ * byte; the marker comments are removed by this pass. */
+function splitPreviewChunks(raw: string): string[] {
+  const chunks: string[] = [];
+  let cursor = 0;
+  for (;;) {
+    const open = raw.indexOf(CHUNK_OPEN, cursor);
+    if (open < 0) {
+      if (cursor < raw.length) chunks.push(raw.slice(cursor));
+      break;
+    }
+    if (open > cursor) chunks.push(raw.slice(cursor, open));
+    const start = open + CHUNK_OPEN.length;
+    const close = raw.indexOf(CHUNK_CLOSE, start);
+    if (close < 0) {
+      chunks.push(raw.slice(start));
+      break;
+    }
+    chunks.push(raw.slice(start, close));
+    cursor = close + CHUNK_CLOSE.length;
+  }
+  return chunks.filter((chunk) => chunk.length > 0);
+}
+
+/** The directory Asciidoctor would use for an included file's own includes. */
+function includeDirectory(path: string): string {
+  const at = path.lastIndexOf("/");
+  return at > 0 ? path.slice(0, at) : path;
+}
+
+/**
+ * Read every include a document can reach, before the worker starts.
+ *
+ * The worker cannot call `api.readDocument`. A literal `include::path[...]` is
+ * resolved with the same jail as the include processor and its file is read on
+ * the main thread; nested includes are scanned in the included content. A
+ * target built from an attribute (`include::{dir}/x[]`) cannot be resolved
+ * here, so the whole document falls back to the main-thread conversion rather
+ * than risking a wrong path.
+ */
+export async function preloadAsciidocIncludes(
+  source: string,
+  options: { baseDir: string | null; readFile: (path: string) => Promise<string> },
+): Promise<AsciidocIncludeMap | null> {
+  if (!options.baseDir || !source.includes("include::")) return {};
+  const map: AsciidocIncludeMap = {};
+  const seen = new Set<string>();
+
+  const scan = async (text: string, currentDir: string | null): Promise<boolean> => {
+    for (const match of text.matchAll(INCLUDE_DIRECTIVE)) {
+      const target = match[1].trim();
+      if (target.includes("{")) return false;
+      const resolved = resolveInclude(target, currentDir, options.baseDir);
+      if (!resolved) continue;
+      const key = foldForCompare(resolved);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      try {
+        const content = await options.readFile(resolved);
+        map[resolved] = { content };
+        if (!(await scan(content, includeDirectory(resolved)))) return false;
+      } catch (error) {
+        map[resolved] = { error: String(error) };
+      }
+    }
+    return true;
+  };
+
+  return (await scan(source, options.baseDir)) ? map : null;
+}
+
+/**
+ * Convert AsciiDoc to top-level HTML segments for the preview.
+ *
+ * The conversion is the expensive part and is DOM-free; the marker roles and
+ * chunk comments are plain HTML, so this runs in the worker and the main thread
+ * only sanitises and inserts. `marks` is what the main thread turns into
+ * `data-line`/`data-line-end`; the title and TOC live in the leading segment,
+ * footnotes in the trailing one.
+ */
+export async function renderAsciidocChunks(
+  source: string,
+  options: AsciidocChunkOptions,
+): Promise<AsciidocChunks> {
+  if (!source.trim()) return { chunks: [], marks: [], hasHeader: false, notitle: false };
+
+  const Asciidoctor = await loadAsciidoctor();
+  const marks: AsciidocMark[] = [];
+  // A path the pre-reader missed is not an unresolved directive: the caller
+  // must fall back to the main-thread conversion, which can read it. The
+  // include processor catches read errors, so the miss is recorded here and
+  // checked after conversion.
+  let missingInclude: string | null = null;
+  const readFile =
+    options.readFile ??
+    (async (path: string) => {
+      const entry = options.includes?.[path];
+      if (!entry) {
+        missingInclude = path;
+        throw `Include was not preloaded: ${path}`;
+      }
+      if ("error" in entry) throw entry.error;
+      return entry.content;
+    });
+
+  const registry = Asciidoctor.Extensions.create("mdraft-chunks");
+  registry.includeProcessor(
+    createIncludeProcessor(Asciidoctor, { baseDir: options.baseDir, readFile }),
+  );
+  registry.treeProcessor(createPreviewMarkerProcessor(Asciidoctor, marks));
+
+  const loadOptions = {
+    standalone: false,
+    safe: "secure",
+    sourcemap: true,
+    base_dir: options.baseDir ?? undefined,
+    extension_registry: registry,
+    // Embedded output sets `notitle`; ask for the title explicitly, or the
+    // document title silently disappears from the preview.
+    attributes: { showtitle: "" },
+  } as Record<string, unknown>;
+  if (options.math) {
+    loadOptions.converter_factory = createPreviewConverterFactory(Asciidoctor, true);
+  } else {
+    // The chunk wrapper is still needed, but stems must keep Asciidoctor's
+    // delimiters when mathematics is off.
+    loadOptions.converter_factory = createPreviewConverterFactory(Asciidoctor, false);
+  }
+
+  const doc = await Asciidoctor.load(source, loadOptions);
+  const raw = String(await doc.convert());
+  if (missingInclude) throw new Error(`Include was not preloaded: ${missingInclude}`);
+  return {
+    chunks: splitPreviewChunks(raw),
+    marks,
+    hasHeader: Boolean(doc.hasHeader()),
+    notitle: Boolean(doc.isNotitle()),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // The export renderer
 // ---------------------------------------------------------------------------
 
