@@ -119,9 +119,29 @@ function bigDocument() {
   return parts.join("");
 }
 
+function bigAsciidoc() {
+  const words =
+    "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu document editor preview source paragraph section heading formula table code".split(
+      " ",
+    );
+  const parts = ["= Large AsciiDoc fixture\n:nofooter:\n\n"];
+  for (let i = 0; i < 3000; i += 1) {
+    let sentence = "";
+    for (let w = 0; w < 30; w += 1) sentence += `${words[(i * 7 + w * 13) % words.length]} `;
+    parts.push(`${sentence.trim().replace(/^./, (c) => c.toUpperCase())}.\n\n`);
+    if (i % 25 === 0) parts.push(`== Section ${Math.floor(i / 25)}\n\n`);
+    if (i % 120 === 0) parts.push("Inline math stem:[a^2 + b^2 = c^2] with *bold* and `code`.\n\n");
+    if (i % 200 === 0)
+      parts.push("[source,js]\n----\nconst value = items.map((item) => item * 2);\n----\n\n");
+  }
+  return parts.join("");
+}
+
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mdraft-preview-perf-"));
 const file = path.join(directory, "preview-performance.md");
 fs.writeFileSync(file, bigDocument(), "utf8");
+const adocFile = path.join(directory, "preview-performance.adoc");
+fs.writeFileSync(adocFile, bigAsciidoc(), "utf8");
 
 // ---------------------------------------------------------------------------
 // Probes
@@ -280,6 +300,43 @@ check(
 check(
   "Split has a rendered preview again",
   await evaluate(`document.querySelectorAll("#preview > *").length > 500`),
+);
+
+// ---------------------------------------------------------------------------
+// AsciiDoc: the conversion is a second engine, also behind the worker
+// ---------------------------------------------------------------------------
+
+// The Markdown buffer is dirty from the typing above. Save it before opening
+// another file, or the application asks what to do and the test blocks on a
+// native dialog.
+await invoke("plugin:event|emit", { event: "menu", payload: "file.save" });
+await waitFor("the Markdown document saves", `!document.title.includes("•")`, 5000);
+await invoke("plugin:event|emit", { event: "open-files", payload: [adocFile] });
+await waitFor(
+  "the large AsciiDoc document opens",
+  `document.title.includes("preview-performance.adoc")`,
+  30000,
+);
+await focusEditor();
+await resetProbe();
+await typeText("overlap typing during the asciidoc render", 15);
+await sleep(250);
+const adoc = await readProbe();
+check("AsciiDoc keys arrive while the preview renders", adoc.count >= 30, `${adoc.count} keys`);
+check(
+  "no AsciiDoc key waits more than 150 ms",
+  adoc.max < 150,
+  `p95 ${adoc.p95.toFixed(1)} ms, max ${adoc.max.toFixed(1)} ms`,
+);
+check("the median AsciiDoc key stays under one frame", adoc.p50 < 50, `${adoc.p50.toFixed(1)} ms`);
+check(
+  "no AsciiDoc main-thread task lasts longer than 150 ms",
+  adoc.longest < 150,
+  `${adoc.long} over 50 ms, longest ${adoc.longest.toFixed(1)} ms`,
+);
+await waitFor(
+  "the AsciiDoc preview paints its blocks",
+  `document.querySelectorAll("#preview > *").length > 50`,
 );
 
 try {

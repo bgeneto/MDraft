@@ -168,11 +168,13 @@ coalesces edits into one pending request.
 - **Typst identity.** The plan said "source hash"; the implementation uses the
   session id, revision, source string, mode and image root. A revision bump is
   cheaper than a hash and catches every edit.
-- **AsciiDoc is out of this plan by measurement and decision.** A generated
-  610 KB `.adoc` took 596 ms in one task. It needs its own chunk converter and
-  an include pre-reader; the follow-up is
-  `docs/plans/2026-11-04-asciidoc-preview-worker.md`. The generic Source skip
-  and quiet-period scaling still apply to it.
+- **AsciiDoc followed in its own plan.** A generated 610 KB `.adoc` took 596 ms
+  in one task when this plan was written. The follow-up
+  (`docs/plans/2026-11-04-asciidoc-preview-worker.md`) has landed: the Asciidoctor
+  conversion runs in `src/asciidoc-worker.ts` with its includes pre-read on the
+  main thread, and the 610 KB worker path measured 156 ms with a 22 ms maximum
+  main-thread gap in Chromium. The Source skip and quiet-period scaling apply to
+  it unchanged.
 - **Validation on this host.** `tsc`, Prettier, ESLint, `npm run build`,
   `npm run preview:unit` (36/36), the two new Rust tests and the whole
   `cargo check` pass. The Markdown worker and the synchronous path produced

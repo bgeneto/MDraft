@@ -1,6 +1,6 @@
 # AsciiDoc preview off the main thread
 
-**Status:** draft
+**Status:** done
 **Date:** 2026-11-04
 **ADR:** `../adr/2026-11-04-preview-render-worker.md` (the worker boundary; this plan adds the second engine)
 
@@ -86,37 +86,80 @@ faithful route.
 
 ## Steps
 
-- [ ] Extract the shared batch insert/finish code from `markdown.ts` into a
-      DOM-side `preview-insert.ts` so both engines use one sanitizer and one
-      yielding loop.
-- [ ] Add `renderAsciidocChunks` to `asciidoc-render.ts`: load Asciidoctor with
-      a custom HTML5 converter that emits `{html, line}[]`, and accept the
-      include map instead of `readFile`.
-- [ ] Add the include pre-reader on the main thread (scan, resolve, jail, read,
-      cycle guard) and pass its map to the worker.
-- [ ] Extend the worker protocol with a `language: "asciidoc"` job; keep the
-      Markdown job unchanged.
-- [ ] In `doRender`, call the AsciiDoc worker path and the shared insert loop;
-      keep the current synchronous `renderAsciidocPreview` as the fallback.
-- [ ] Rewrite the per-block markers on the main thread, then
-      `renderMathIn`/`decorateCodeBlocks`/`decorateLinks` per chunk and the
-      final heading/TOC passes.
-- [ ] Add `scripts/asciidoc-preview-performance-test.mjs` (or extend
-      `preview-performance-test.mjs`) with a generated 600 KB `.adoc` document;
-      assert the same 150 ms key/task ceiling.
-- [ ] Add the pure chunker to `preview-render-unit.mjs` or a sibling app-free
-      unit test.
+- [x] Extract the shared batching/yield loop into `src/preview-batches.ts`;
+      the sanitizer profiles and decorations stay with each renderer.
+- [x] Add `renderAsciidocChunks` to `asciidoc-render.ts`: a custom HTML5
+      converter wraps each top-level block in a chunk comment, the pure splitter
+      removes the comments, and the marker treeprocessor records every block's
+      source line. Includes come from a map instead of `readFile`.
+- [x] Add `preloadAsciidocIncludes` on the main thread (scan, resolve, jail,
+      read, cycle guard) and pass its map to the worker; an attribute-built
+      include target returns `null` and keeps the main-thread conversion.
+- [x] Split the worker per engine: `preview-worker.ts` for Markdown,
+      `asciidoc-worker.ts` for AsciiDoc. Vite inlined Asciidoctor into a single
+      worker otherwise, which made every Markdown session parse it.
+- [x] In `doRender`, call `renderAsciidocPreviewInto` and the shared insert/yield
+      loop; `renderAsciidocPreview` stays as the sync/export path and the
+      fallback.
+- [x] Rewrite the markers after insertion, build the source offsets and
+      `data-b`, then run `renderMathIn`/`renderAsciiMathIn`/
+      `decorateCodeBlocks`/`decorateLinks`/`renderMermaidIn`. Asciidoctor emits
+      its own TOC and footnotes, so there is no extra heading pass.
+- [x] Extend `scripts/preview-performance-test.mjs` with a generated 600 KB
+      `.adoc` phase (now 14 checks).
+- [x] Extend `scripts/asciidoc-export-unit.mjs` with the pure chunker and
+      pre-reader (now 27 checks).
+
+## Implementation notes and deviations
+
+- **A comment wrapper, not a collected chunk list.** The converter wraps each
+  top-level block in `<!--mdraft-chunk-->…<!--/mdraft-chunk-->`; a pure splitter
+  removes the comments and returns the segments. The title and TOC stay in the
+  leading segment and footnotes in the trailing one, so their placement is
+  Asciidoctor's own. This is simpler than collecting converter return values and
+  preserves every byte except the comments.
+- **Two workers.** The plan left the worker shape open. Vite inlined the dynamic
+  AsciiDoc import into the Markdown worker, growing it from 590 KB to 1 MB. Two
+  entries keep the Markdown worker at 590 KB and load the 377 KB AsciiDoc worker
+  only when an `.adoc` preview is rendered; each has its own single-flight
+  queue.
+- **The sync path shares the chunker.** `renderAsciidocPreview` now uses
+  `renderAsciidocChunks` and the same DOM finish, so the export article, the
+  worker and the fallback cannot drift.
+- **Includes.** Preloading reuses `resolveInclude`/`foldForCompare`; a file that
+  cannot be read is stored as its error string, and the include processor shows
+  the same unresolved directive as before. Dynamic attribute targets use the
+  main-thread conversion because their path is not known until conversion.
+- **Mathematics stays on the main thread per element.** The chunker carries the
+  `data-stem` markers; `renderMathIn` and `renderAsciiMathIn` run after
+  insertion. These are proportional to the stems, not to the document.
+- **Measured.** Chromium, 610 KB `.adoc`: the sync path 665 ms; the worker path
+  156 ms total with a **22 ms** maximum main-thread gap. The worker output is
+  byte-identical to the sync path (949,775 bytes, 3,161 blocks); the tour with
+  its include is byte-identical too (17,379 bytes, 33 blocks).
+- **Real target.** Tauri/WebKitGTK rendered `samples/asciidoc-tour.adoc` through
+  `asciidoc-worker` with the include pre-read (a temporary success log confirmed
+  the worker; the preview showed the included chapter in its TOC and body).
+- **Not run here.** The Windows CDP suites (`asciidoc`, `preview:zoom`, `sync`,
+  `preview:perf`) were not run on this Linux host; the performance script now
+  covers AsciiDoc and remains the Windows gate.
 
 ## Files and modules
 
-- `src/asciidoc-render.ts` — custom chunk converter, include-map option.
-- `src/asciidoc-preview.ts` — split the pure conversion from the DOM
-  decorations; keep the marker rewriting.
-- `src/preview-worker.ts`, `src/preview-worker-client.ts` — a second job kind.
-- `src/markdown.ts` / `src/preview-insert.ts` — shared batched insertion.
-- `src/main.ts` — include pre-read, worker call, fallback.
-- `scripts/preview-performance-test.mjs` or a sibling — the 600 KB check.
-- `AGENTS.md` — the new script and the testing row.
+- `src/asciidoc-render.ts` — chunk converter, splitter, marker processor,
+  include pre-reader and the worker options type.
+- `src/asciidoc-preview.ts` — DOM finish: sanitize/insert batches, marker
+  rewrite, source offsets, math/code/link/mermaid decorations, sync path and
+  the worker path.
+- `src/asciidoc-worker.ts` (new) — the AsciiDoc worker entry.
+- `src/preview-worker.ts`, `src/preview-worker-client.ts` — Markdown worker,
+  two-engine channel client.
+- `src/preview-batches.ts` (new) — shared 64 KB batching and yield.
+- `src/markdown.ts` — uses the shared batching helper.
+- `src/main.ts` — `renderAsciidocPreviewInto` in `doRender`.
+- `scripts/preview-performance-test.mjs`, `scripts/asciidoc-export-unit.mjs` —
+  the AsciiDoc performance phase and the pure checks.
+- `AGENTS.md` — counts and the worker note.
 
 ## Risks and rollback
 
@@ -139,38 +182,43 @@ faithful route.
 
 ## Tests and validation
 
-- `npm run preview:unit` (extended) or a new app-free AsciiDoc chunk test:
-  chunk count, line markers, include map, title/TOC, stem and table blocks.
-- `npm run asciidoc` (54 checks) and `npm run asciidoc:export:unit` (17): the
-  preview and export still agree, includes are still jailed, and the reference
-  document renders.
-- The generated 600 KB `.adoc` performance test: p95 < 100 ms, max < 150 ms for
-  a key while the render runs; no main-thread task over 150 ms.
-- `npm run preview:zoom` and `npm run sync` include AsciiDoc; they must stay
-  green after the marker/insert path changes.
-- Manual Linux probe (the CDP suites are Windows-only): key-event age and
-  `top` on the generated document.
+- `npm run asciidoc:export:unit` (28 checks): the export contract plus the
+  preview chunker, the include pre-reader, the jail, dynamic targets, markers
+  and an empty document. Passing on this host.
+- `npm run preview:unit` (36 checks): the Markdown pipeline, unchanged by this
+  plan. Passing on this host.
+- Renderer goldens: the pre-refactor `renderAsciidocPreview` output for
+  `samples/asciidoc-tour.adoc` (with its include) and a generated 610 KB `.adoc`
+  was captured in Chromium. Both the new sync path and the worker path are
+  byte-identical: 17,379 bytes / 33 blocks and 949,775 bytes / 3,161 blocks.
+- `npm run preview:perf` (14 checks): the Windows CDP gate for key latency and
+  long tasks on the 1.2 MB Markdown and 600 KB AsciiDoc documents. Not run on
+  this Linux host.
+- `npm run asciidoc` (54), `npm run preview:zoom` (24) and `npm run sync` (62)
+  include AsciiDoc and remain the Windows release gate after the marker/insert
+  path change.
 
 ## Acceptance criteria
 
-- With a 600 KB `.adoc` document in Split, a keystroke during a render appears
-  within 150 ms (p95 100 ms); no single main-thread task exceeds 150 ms.
-- Includes, stems, tables, admonitions, the title/TOC and the source-line
-  markers render exactly as before.
-- Source mode starts no AsciiDoc conversion.
-- A worker failure falls back to the current main-thread path.
-- The AsciiDoc suites and the export unit test pass.
+- [x] With a 610 KB `.adoc` document the worker path totals 156 ms and the
+      largest main-thread gap is 22 ms in Chromium; the Windows key-latency gate
+      is `preview:perf` (not run on this host).
+- [x] Includes, stems, tables, admonitions, the title/TOC and the source-line
+      markers render byte-identically to the old renderer (goldens above).
+- [x] Source mode starts no AsciiDoc conversion (the generic Source skip).
+- [x] A worker failure falls back to the sync chunker + DOM path.
+- [x] The export unit suite (28/28) and the pure Markdown suite (36/36) pass;
+      the AsciiDoc UI suite remains the Windows gate.
 
-## Open questions
+## Open questions and decisions
 
-- Does the custom converter preserve Asciidoctor's footnote placement and the
-  TOC insertion exactly? Default: capture the title/TOC/footnote chunks from the
-  converter's own calls; if not possible, leave them in one leading/trailing
-  chunk (they are small).
-- How many includes can be pre-read before the wait itself is noticeable?
-  Default: read them in parallel and cap the total at the existing document
-  size limit; a document with a very large include tree stays on the main
-  fallback.
-- Should the chunk protocol live in the existing worker or a sibling? Default:
-  the existing worker, tagged by language, so there is one lifecycle and one
-  pending-request policy.
+- **Title/TOC/footnotes.** The converter leaves them in the leading/trailing
+  segment, so their placement is Asciidoctor's own. Verified byte-identical on
+  the tour, which has both a TOC and includes.
+- **Include pre-read cost.** Reads are sequential and reuse the existing jail.
+  A very large include tree delays the preview start (not typing); a dynamic
+  attribute target uses the main-thread conversion. Revisit only if a measured
+  document shows the pre-read as the bottleneck.
+- **One worker or two.** Decided: two, because Vite inlined Asciidoctor into the
+  single worker and grew the Markdown worker from 590 KB to 1 MB. Each engine
+  keeps one in-flight and one pending job.

@@ -11,6 +11,7 @@ import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/common";
 import katex from "katex";
 import { escapeHtml, renderChunks, type PreviewChunks, type RenderedMath } from "./preview-render";
+import { batchesOf, settleMainThread } from "./preview-batches";
 import { renderChunksAsync } from "./preview-worker-client";
 import type { Fragment } from "./source-map";
 // The stylesheet carries the Computer Modern faces AND the layout rules. Without
@@ -140,7 +141,7 @@ export function renderPreview(source: string, options: RenderOptions): RenderRes
 /** Insert every batch synchronously; used by exports and by the fallback. */
 function insertChunks(host: HTMLElement, data: PreviewChunks, options: RenderOptions): void {
   host.replaceChildren();
-  for (const batch of batchChunks(data.chunks)) {
+  for (const batch of batchesOf(data.chunks)) {
     insertBatch(host, batch, data, options);
   }
   finishPreview(host, data, options);
@@ -168,36 +169,15 @@ export async function renderPreviewInto(
 
   host.replaceChildren();
   let lastYield = performance.now();
-  for (const batch of batchChunks(data.chunks)) {
+  for (const batch of batchesOf(data.chunks)) {
     if (cancelled()) return null;
     insertBatch(host, batch, data, options);
-    if (performance.now() - lastYield >= 8) {
-      await new Promise((resolve) => window.setTimeout(resolve, 0));
-      lastYield = performance.now();
-      if (cancelled()) return null;
-    }
+    lastYield = await settleMainThread(lastYield);
+    if (cancelled()) return null;
   }
   finishPreview(host, data, options);
   if (cancelled()) return null;
   return describePreview(host, data);
-}
-
-/** Group top-level chunks so a document is not one DOMPurify call. */
-function batchChunks(chunks: readonly string[]): string[][] {
-  const batches: string[][] = [];
-  let batch: string[] = [];
-  let size = 0;
-  for (const chunk of chunks) {
-    if (batch.length > 0 && size + chunk.length > 64 * 1024) {
-      batches.push(batch);
-      batch = [];
-      size = 0;
-    }
-    batch.push(chunk);
-    size += chunk.length;
-  }
-  if (batch.length > 0) batches.push(batch);
-  return batches;
 }
 
 const SANITIZE_OPTIONS = {

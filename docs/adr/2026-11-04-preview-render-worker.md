@@ -20,11 +20,13 @@ expensive steps do not: marked, the math/code masking, KaTeX's
 
 ## Decision
 
-The pure part of the preview pipeline runs in a module Web Worker
-(`src/preview-worker.ts`, backed by `src/preview-render.ts`). It returns the
-marked HTML chunks, the fragment table, the pre-rendered KaTeX HTML and the
-block line list. The main thread applies DOMPurify to the marked HTML and
-inserts the math afterwards, which is the same trust boundary
+The pure part of the preview pipeline runs in module Web Workers. Markdown
+(`src/preview-worker.ts`) and AsciiDoc (`src/asciidoc-worker.ts`) have separate
+entries so a Markdown session never downloads or parses Asciidoctor; each has
+its own single-flight queue. A worker returns the marked or Asciidoctor HTML
+chunks, the fragment table, the pre-rendered KaTeX HTML (Markdown), the include
+map results and the block line list. The main thread applies DOMPurify to the
+HTML and inserts the math afterwards, which is the same trust boundary
 `restorePlaceholders` already uses: only generated markup is inserted after
 sanitising. highlight.js stays on the main thread inside the 64 KB insert batch;
 a document has few fences and moving it would duplicate the library in the
@@ -38,7 +40,9 @@ failure must fall back to that path, never to an empty preview.
 The word map is built after the DOM is painted, in a `requestIdleCallback`,
 only in Split view. It cannot move into the worker because it binds to live DOM
 text nodes; building it late keeps it from sitting between a keystroke and a
-frame.
+frame. AsciiDoc includes are pre-read on the main thread because the worker
+cannot call the Tauri command; a document whose include path is built from an
+attribute falls back to the main-thread conversion.
 
 ## Consequences
 

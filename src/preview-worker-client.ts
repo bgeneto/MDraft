@@ -1,109 +1,128 @@
-//! The live-preview client for the render worker.
+//! The live-preview client for the render workers.
 //!
-//! One worker per application, one render in flight and one pending. A newer
-//! edit replaces the pending job, so a burst of keystrokes cannot queue a dozen
-//! full renders; the worker finishes the job it has and starts the newest one.
-//! A superseded caller stops without doing work; only a worker that cannot run
-//! falls back to the synchronous pipeline.
+//! One worker per engine — Markdown and AsciiDoc — so a Markdown session never
+//! downloads or parses Asciidoctor. Each worker keeps one render in flight and
+//! one pending; a newer edit replaces the pending job, so a burst of keystrokes
+//! cannot queue a dozen full renders. A superseded caller stops without doing
+//! work; only a worker that cannot run falls back to the synchronous pipeline.
 
+import type { AsciidocChunks, AsciidocWorkerOptions } from "./asciidoc-render";
 import type { ChunkOptions, PreviewChunks } from "./preview-render";
 
-export type AsyncRender =
-  { kind: "ok"; data: PreviewChunks } | { kind: "fallback" } | { kind: "superseded" };
+export type AsyncRender<T> =
+  { kind: "ok"; data: T } | { kind: "fallback" } | { kind: "superseded" };
 
-interface Job {
-  source: string;
-  options: ChunkOptions;
-  resolve: (result: AsyncRender) => void;
-}
-
-interface WorkerReply {
+interface Reply {
   id: number;
   ok: boolean;
-  data?: PreviewChunks;
+  data?: unknown;
 }
 
-let worker: Worker | null = null;
-let broken = false;
-let running = false;
-let current: Job | null = null;
-let pending: Job | null = null;
-let nextId = 1;
-let currentId = 0;
-
-function settle(job: Job | null, result: AsyncRender): void {
-  if (job) job.resolve(result);
+interface Pending {
+  source: string;
+  options: unknown;
+  resolve: (result: AsyncRender<unknown>) => void;
 }
 
-function failAll(): void {
-  broken = true;
-  settle(current, { kind: "fallback" });
-  settle(pending, { kind: "fallback" });
-  current = null;
-  pending = null;
-  running = false;
-  worker?.terminate();
-  worker = null;
-}
+class Channel {
+  private worker: Worker | null = null;
+  private broken = false;
+  private running = false;
+  private current: Pending | null = null;
+  private currentId = 0;
+  private nextId = 1;
+  private pending: Pending | null = null;
 
-function ensureWorker(): Worker | null {
-  if (worker || broken) return worker;
-  try {
-    worker = new Worker(new URL("./preview-worker.ts", import.meta.url), { type: "module" });
-    worker.onmessage = (event: MessageEvent<WorkerReply>) => {
-      const reply = event.data;
-      if (!reply || reply.id !== currentId) return;
-      const job = current;
-      current = null;
-      running = false;
-      if (reply.ok && reply.data) {
-        settle(job, { kind: "ok", data: reply.data });
-      } else {
-        // A render error is not a broken worker: fall back for this request and
-        // keep the worker for the next one. The synchronous path will report the
-        // same failure with a stack in the console.
-        settle(job, { kind: "fallback" });
-      }
-      pump();
-    };
-    worker.onerror = () => failAll();
-  } catch {
-    broken = true;
-    worker = null;
+  constructor(private readonly create: () => Worker) {}
+
+  request(source: string, options: unknown): Promise<AsyncRender<unknown>> {
+    if (this.broken) return Promise.resolve({ kind: "fallback" });
+    return new Promise((resolve) => {
+      // Only the newest pending job matters. The replaced caller stops without
+      // running a stale render on the main thread; only a worker failure falls
+      // back.
+      if (this.pending) this.pending.resolve({ kind: "superseded" });
+      this.pending = { source, options, resolve };
+      this.pump();
+    });
   }
-  return worker;
-}
 
-function pump(): void {
-  if (running) return;
-  const job = pending;
-  if (!job) return;
-  pending = null;
-  const instance = ensureWorker();
-  if (!instance) {
-    settle(job, { kind: "fallback" });
-    failAll();
-    return;
+  private failAll(): void {
+    this.broken = true;
+    this.current?.resolve({ kind: "fallback" });
+    this.pending?.resolve({ kind: "fallback" });
+    this.current = null;
+    this.pending = null;
+    this.running = false;
+    this.worker?.terminate();
+    this.worker = null;
   }
-  running = true;
-  current = job;
-  currentId = nextId++;
-  instance.postMessage({
-    id: currentId,
-    source: job.source,
-    options: { math: job.options.math ?? true, map: job.options.map ?? false },
-  });
+
+  private ensureWorker(): Worker | null {
+    if (this.worker || this.broken) return this.worker;
+    try {
+      this.worker = this.create();
+      this.worker.onmessage = (event: MessageEvent<Reply>) => {
+        const reply = event.data;
+        if (!reply || reply.id !== this.currentId) return;
+        const job = this.current;
+        this.current = null;
+        this.running = false;
+        if (reply.ok && reply.data !== undefined) {
+          job?.resolve({ kind: "ok", data: reply.data });
+        } else {
+          // A render error is not a broken worker: fall back for this request
+          // and keep the worker for the next one. The synchronous path reports
+          // the same failure with a stack in the console.
+          job?.resolve({ kind: "fallback" });
+        }
+        this.pump();
+      };
+      this.worker.onerror = () => this.failAll();
+    } catch {
+      this.broken = true;
+      this.worker = null;
+    }
+    return this.worker;
+  }
+
+  private pump(): void {
+    if (this.running) return;
+    const job = this.pending;
+    if (!job) return;
+    this.pending = null;
+    const instance = this.ensureWorker();
+    if (!instance) {
+      job.resolve({ kind: "fallback" });
+      this.failAll();
+      return;
+    }
+    this.running = true;
+    this.current = job;
+    this.currentId = this.nextId++;
+    instance.postMessage({ id: this.currentId, source: job.source, options: job.options });
+  }
 }
 
-/** Render off the main thread, or report that the caller must fall back. */
-export function renderChunksAsync(source: string, options: ChunkOptions): Promise<AsyncRender> {
-  if (broken) return Promise.resolve({ kind: "fallback" });
-  return new Promise((resolve) => {
-    // Only the newest pending job matters. The replaced caller stops without
-    // running a stale render on the main thread; only a worker failure falls
-    // back.
-    settle(pending, { kind: "superseded" });
-    pending = { source, options, resolve };
-    pump();
-  });
+const markdown = new Channel(
+  () => new Worker(new URL("./preview-worker.ts", import.meta.url), { type: "module" }),
+);
+const asciidoc = new Channel(
+  () => new Worker(new URL("./asciidoc-worker.ts", import.meta.url), { type: "module" }),
+);
+
+/** Render Markdown off the main thread, or report that the caller must fall back. */
+export function renderChunksAsync(
+  source: string,
+  options: ChunkOptions,
+): Promise<AsyncRender<PreviewChunks>> {
+  return markdown.request(source, options) as Promise<AsyncRender<PreviewChunks>>;
+}
+
+/** Render AsciiDoc off the main thread, or report that the caller must fall back. */
+export function renderAsciidocChunksAsync(
+  source: string,
+  options: AsciidocWorkerOptions,
+): Promise<AsyncRender<AsciidocChunks>> {
+  return asciidoc.request(source, options) as Promise<AsyncRender<AsciidocChunks>>;
 }
