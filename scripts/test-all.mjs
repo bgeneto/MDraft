@@ -129,6 +129,15 @@ const SUITES = [
     script: "asciidoc-export-unit.mjs",
   },
   {
+    // The pure Markdown preview pipeline: chunk counts, fragments, line
+    // anchors, KaTeX/code tables, CRLF and empty input. No DOM and no
+    // application; the worker and the synchronous fallback share it.
+    id: "preview-unit",
+    title: "Preview pipeline (unit)",
+    kind: "node",
+    script: "preview-render-unit.mjs",
+  },
+  {
     id: "autoclose-unit",
     title: "Auto-close matching (unit)",
     kind: "node",
