@@ -13,9 +13,20 @@
 // of writing a bogus `.png`.
 
 import { createServer } from "node:http";
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { marked } from "marked";
 
 const port = Number(process.argv[2] ?? 9222);
 const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
@@ -122,12 +133,12 @@ const invoke = (command, args = {}) =>
 const emit = (event, payload) => invoke("plugin:event|emit", { event, payload });
 
 const work = mkdtempSync(path.join(tmpdir(), "mdraft-image-rules-"));
-const pictures = path.join(work, "pictures");
+const pictures = path.join(work, ".hidden", "pictures");
 const media = path.join(work, "media");
 const document = path.join(work, "notes.md");
 const spaced = path.join(work, "a b.png");
 const fileUrlImage = path.join(work, "c d.png");
-mkdirSync(pictures);
+mkdirSync(pictures, { recursive: true });
 mkdirSync(path.join(work, "notes.assets"));
 writeFileSync(path.join(work, "notes.assets", "seed.png"), PNG);
 writeFileSync(document, "# Notes\n\n![seed](notes.assets/seed.png)\n\nStart.\n");
@@ -396,9 +407,18 @@ try {
   await pasteBitmap();
   const absolute = await lines();
   check(
-    absolute.includes(pictures),
+    absolute.includes(pictures.replace(/\\/g, "\\\\")),
     "an absolute custom folder works without a saved document",
     absolute,
+  );
+  const imageToken = marked
+    .lexer(absolute)
+    .flatMap((token) => token.tokens ?? [])
+    .find((token) => token.type === "image" && token.href.includes("pictures"));
+  check(
+    imageToken?.href.startsWith(pictures + path.sep),
+    "Markdown preserves the absolute path through a dot-prefixed folder",
+    imageToken?.href ?? "no image token",
   );
   check(
     listDir(pictures).some((name) => name.startsWith("image-")),
@@ -418,6 +438,225 @@ try {
     ),
     "the absolute-path image renders in the preview",
   );
+
+  if (process.platform === "win32") {
+    console.log("\n=== legacy Windows image destinations ===");
+    const legacyDir = path.join(work, "legacy", ".codex");
+    const ordinaryDir = path.join(work, "legacy.codex");
+    const legacyImage = path.join(legacyDir, "image.png");
+    const dotImage = path.join(legacyDir, ".image.png");
+    const spacedLegacyDir = path.join(work, "legacy space", ".images");
+    const spacedLegacyImage = path.join(spacedLegacyDir, "image.png");
+    const ordinaryImage = path.join(ordinaryDir, "image.png");
+    const ordinaryDotImage = path.join(work, "legacy.codex.image.png");
+    const ordinarySpacedDir = path.join(work, "legacy space.images");
+    const ordinarySpacedImage = path.join(ordinarySpacedDir, "image.png");
+    const legacyDoc = path.join(work, "legacy-document.md");
+    const collisionDoc = path.join(work, "legacy-collision.md");
+    mkdirSync(legacyDir, { recursive: true });
+    mkdirSync(spacedLegacyDir, { recursive: true });
+    writeFileSync(legacyImage, PNG);
+    writeFileSync(dotImage, PNG);
+    writeFileSync(spacedLegacyImage, PNG);
+    const legacySource = `![inline](${legacyImage})\n\n![reference][old]\n\n![relative](.\\legacy\\.codex\\image.png)\n\n![bare](legacy\\.codex\\image.png)\n\n![dot](${dotImage})\n\n![encoded](${spacedLegacyImage.replace(/ /g, "%20")})\n\n[old]: ${legacyImage}\n`;
+    writeFileSync(legacyDoc, legacySource);
+    await emit("open-files", [legacyDoc]);
+    check(
+      await pollFor(`${activeName} === 'legacy-document.md'`),
+      "the legacy image document opens",
+    );
+    const legacyLoaded = await pollFor(
+      `(() => {
+        const images=[...document.querySelectorAll('#preview img')];
+        return images.length===6 && images.every((img,index)=>img.complete && img.naturalWidth>0 && img.dataset.src===(index===5?${JSON.stringify(spacedLegacyImage)}:index===4?${JSON.stringify(dotImage)}:${JSON.stringify(legacyImage)}));
+      })()`,
+      20000,
+    );
+    check(
+      legacyLoaded,
+      "inline, reference and relative images recover the local legacy destination",
+      legacyLoaded
+        ? ""
+        : JSON.stringify(
+            await evaluate(
+              `([...document.querySelectorAll('#preview img')]).map(img=>({src:img.dataset.src,loaded:img.complete,width:img.naturalWidth}))`,
+            ),
+          ),
+    );
+    check(
+      (await evaluate(
+        `document.querySelector('.cm-content').cmTile.root.view.state.doc.toString()`,
+      )) === legacySource,
+      "legacy image recovery leaves the document unchanged",
+    );
+    const exportFile = path.join(work, "legacy-export.html");
+    await evaluate(`(() => {
+      window.__legacyExportFetch=window.fetch;
+      window.fetch=async function(input,options){
+        const url=new URL(typeof input==='string'?input:input.url,location.href);
+        if(url.hostname==='ipc.localhost' && decodeURIComponent(url.pathname.slice(1))==='plugin:dialog|save')
+          return new Response(JSON.stringify(${JSON.stringify(exportFile)}),{headers:{'Content-Type':'application/json','Tauri-Response':'ok'}});
+        return window.__legacyExportFetch.call(window,input,options);
+      };
+    })()`);
+    await emit("menu", "export.html");
+    const exportDeadline = Date.now() + 30000;
+    while (!existsSync(exportFile) && Date.now() < exportDeadline) await sleep(100);
+    const exported = existsSync(exportFile) ? readFileSync(exportFile, "utf8") : "";
+    await evaluate(`window.fetch=window.__legacyExportFetch`);
+    check(
+      exported.includes("legacy/.codex/image.png") &&
+        exported.includes("legacy/.codex/.image.png") &&
+        exported.includes("legacy%20space/.images/image.png") &&
+        !exported.includes("data-mdraft-legacy"),
+      "HTML export preserves the recovered destination without internal stamps",
+    );
+    const autoWasOn = await evaluate(`(() => {
+      const flag=document.getElementById('flag-auto-save'),wasOn=flag.dataset.on==='true';
+      if(!wasOn) flag.click();
+      const view=document.querySelector('.cm-content').cmTile.root.view;
+      view.dispatch({selection:{anchor:0}});view.focus();return wasOn;
+    })()`);
+    const editMarker = "legacy-autosave-check\n";
+    const waitForDisk = async (expected) => {
+      const deadline = Date.now() + 30000;
+      while (Date.now() < deadline) {
+        if (readFileSync(legacyDoc, "utf8") === expected) return true;
+        await sleep(200);
+      }
+      return false;
+    };
+    const historyKey = async (key, code) => {
+      await evaluate(`(() => {
+        const target=document.querySelector('.cm-content');target.focus();
+        target.dispatchEvent(new KeyboardEvent('keydown', {key:${JSON.stringify(key)},code:${JSON.stringify(code)},ctrlKey:true,bubbles:true}));
+      })()`);
+    };
+    await send("Input.insertText", { text: editMarker });
+    check(
+      await waitForDisk(editMarker + legacySource),
+      "Auto Save preserves a deliberate edit beside recovered legacy images",
+    );
+    await historyKey("z", "KeyZ");
+    check(
+      await pollFor(
+        `document.querySelector('.cm-content').cmTile.root.view.state.doc.toString() === ${JSON.stringify(legacySource)}`,
+      ),
+      "undo restores the original legacy source",
+    );
+    await historyKey("y", "KeyY");
+    check(
+      await pollFor(
+        `document.querySelector('.cm-content').cmTile.root.view.state.doc.toString() === ${JSON.stringify(editMarker + legacySource)}`,
+      ),
+      "redo restores the deliberate edit and legacy source",
+    );
+    await historyKey("z", "KeyZ");
+    check(await waitForDisk(legacySource), "Auto Save persists the source restored by undo");
+    if (!autoWasOn) await evaluate(`document.getElementById('flag-auto-save').click()`);
+    const repeatedDoc = path.join(work, "legacy-repeated.md");
+    writeFileSync(
+      repeatedDoc,
+      Array.from({ length: 100 }, () => `![repeated](${legacyImage})`).join("\n\n"),
+    );
+    await evaluate(`(() => {
+      window.__legacyOriginalFetch=window.fetch;
+      window.__legacyCalls=0;
+      window.fetch=function(input,...args){
+        const url=new URL(typeof input==='string'?input:input.url,location.href);
+        if(url.hostname==='ipc.localhost' && decodeURIComponent(url.pathname.slice(1))==='resolve_legacy_local_image') window.__legacyCalls++;
+        return window.__legacyOriginalFetch.call(this,input,...args);
+      };
+    })()`);
+    const repeatedStarted = Date.now();
+    await emit("open-files", [repeatedDoc]);
+    await pollFor(`${activeName} === 'legacy-repeated.md'`);
+    await pollFor(`document.querySelectorAll('#preview img').length === 100`);
+    // Off-screen preview images are deliberately lazy; force this synthetic
+    // stress case to request all of them before checking resolution sharing.
+    await evaluate(
+      `document.querySelectorAll('#preview img').forEach(img=>{img.loading='eager';})`,
+    );
+    const repeatedLoaded = await pollFor(
+      `(() => {
+      const images=[...document.querySelectorAll('#preview img')];
+      return images.length===100 && images.every(img=>img.complete && img.naturalWidth>0);
+    })()`,
+      30000,
+    );
+    const repeatedCalls = await evaluate(`(() => {
+      window.fetch=window.__legacyOriginalFetch;
+      return window.__legacyCalls;
+    })()`);
+    const repeatedDiagnostics = repeatedLoaded
+      ? null
+      : await evaluate(`(() => {
+      const images=[...document.querySelectorAll('#preview img')];
+      return {count:images.length, loaded:images.filter(img=>img.complete&&img.naturalWidth>0).length,
+        failed:images.filter(img=>img.complete&&img.naturalWidth===0).length,
+        pending:images.filter(img=>!img.complete).length,
+        examples:images.filter(img=>!img.complete||img.naturalWidth===0).slice(0,3).map(img=>({src:img.src,source:img.dataset.src}))};
+    })()`);
+    check(
+      repeatedLoaded && repeatedCalls === 1,
+      "100 repeated legacy images share one local resolution",
+      `calls=${repeatedCalls}, elapsed=${Date.now() - repeatedStarted} ms, diagnostics=${JSON.stringify(repeatedDiagnostics)}`,
+    );
+    mkdirSync(ordinaryDir, { recursive: true });
+    mkdirSync(ordinarySpacedDir, { recursive: true });
+    writeFileSync(ordinaryImage, "not an image");
+    writeFileSync(ordinaryDotImage, "not an image");
+    writeFileSync(ordinarySpacedImage, "not an image");
+    writeFileSync(collisionDoc, legacySource);
+    await emit("open-files", [collisionDoc]);
+    await pollFor(`${activeName} === 'legacy-collision.md'`);
+    await pollFor(`document.querySelectorAll('#preview img').length===6`);
+    await sleep(2000);
+    check(
+      await evaluate(
+        `([...document.querySelectorAll('#preview img')]).every(img=>img.complete && img.naturalWidth===0 && img.dataset.src!==${JSON.stringify(legacyImage)} && img.dataset.src!==${JSON.stringify(dotImage)})`,
+      ),
+      "an existing ordinary destination wins even when it is not an image",
+    );
+    const validCollisionDoc = path.join(work, "legacy-valid-collision.md");
+    writeFileSync(ordinaryImage, PNG);
+    writeFileSync(ordinaryDotImage, PNG);
+    writeFileSync(ordinarySpacedImage, PNG);
+    writeFileSync(validCollisionDoc, legacySource);
+    await emit("open-files", [validCollisionDoc]);
+    await pollFor(`${activeName} === 'legacy-valid-collision.md'`);
+    check(
+      await pollFor(`(() => {
+        const images=[...document.querySelectorAll('#preview img')];
+        return images.length===6 && images.every(img=>img.complete && img.naturalWidth>0 && img.dataset.src!==${JSON.stringify(legacyImage)} && img.dataset.src!==${JSON.stringify(dotImage)} && img.dataset.src!==${JSON.stringify(spacedLegacyImage)});
+      })()`),
+      "an existing valid Markdown destination wins over the legacy candidate",
+    );
+    const junction = path.join(work, "legacy-junction");
+    try {
+      symlinkSync(legacyDir, junction, "junction");
+      const viaJunction = await invoke("resolve_legacy_local_image", {
+        primary: path.join(work, "missing-image.png"),
+        candidate: path.join(junction, "image.png"),
+        documentPath: null,
+      });
+      check(viaJunction === null, "legacy fallback refuses a junction");
+    } finally {
+      if (existsSync(junction)) unlinkSync(junction);
+    }
+    const unc = await invoke("resolve_legacy_local_image", {
+      primary: path.join(work, "missing-image.png"),
+      candidate: String.raw`\\server\share\image.png`,
+      documentPath: null,
+    });
+    check(unc === null, "legacy fallback refuses UNC before querying it");
+    const missing = await invoke("resolve_legacy_local_image", {
+      primary: path.join(work, "not-found.png"),
+      candidate: path.join(legacyDir, "not-found.png"),
+      documentPath: null,
+    });
+    check(missing === null, "legacy fallback does not invent a missing image");
+  }
 } finally {
   try {
     rmSync(work, { recursive: true, force: true });

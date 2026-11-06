@@ -311,6 +311,59 @@ await switchView("Document");
 const documentReady = await waitFor(`Boolean(document.querySelector(".typst-document"))`);
 check("Document view is available", documentReady);
 
+// A theme change requests a fresh paint of the same revision. The cached Typst
+// result must keep its view controls and word mapping instead of clearing them.
+await evaluate(`document.getElementById("btn-theme")?.click()`);
+await sleep(1000);
+check(
+  "a theme change keeps the Typst view controls",
+  (await evaluate(`document.querySelectorAll(".typst-viewbutton").length`)) === 2,
+);
+
+// Hold the map's idle callback across a Source -> Split round trip. The cached
+// Document DOM must schedule a new map without compiling or reviving the old one.
+await evaluate(`(() => {
+  window.__typstIdleOriginal=window.requestIdleCallback;
+  window.__typstIdleHeld=[];
+  window.requestIdleCallback=(callback)=>{window.__typstIdleHeld.push(callback);return 0;};
+  window.__typstBarBefore=document.querySelector('.typst-viewbar');
+  const view=document.querySelector('.cm-content').cmTile.root.view;
+  view.dispatch({changes:{from:view.state.doc.length,insert:'\\n// deferred map test\\n'}});
+})()`);
+const newDocumentRender = await waitFor(
+  `document.querySelector('.typst-viewbar') !== window.__typstBarBefore`,
+  20000,
+);
+const oldMapHeld = await waitFor(`window.__typstIdleHeld.length > 0`, 6000);
+await evaluate(
+  `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'menu',payload:'view.source'})`,
+);
+await evaluate(
+  `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'menu',payload:'view.split'})`,
+);
+await evaluate(`(() => {
+  const original=window.__typstIdleOriginal,held=window.__typstIdleHeld;
+  window.requestIdleCallback=original;
+  for(const callback of held)original.call(window,callback,{timeout:800});
+})()`);
+await sleep(1400);
+await clearSelection();
+const restoredDocumentWord = await selectWord("gyroscope", ".typst-document");
+const restoredDocumentMark = await mark();
+check(
+  "Document word sync returns after a pending map is invalidated by a mode switch",
+  newDocumentRender &&
+    oldMapHeld &&
+    restoredDocumentWord.selected.includes("gyroscope") &&
+    restoredDocumentMark === "gyroscope",
+  JSON.stringify({
+    newDocumentRender,
+    oldMapHeld,
+    selected: restoredDocumentWord.selected,
+    mark: restoredDocumentMark,
+  }),
+);
+
 const documentShape = await evaluate(`(() => {
   const host = document.querySelector(".typst-document");
   if (!host) return null;
@@ -524,6 +577,17 @@ check(
 const pagesMark = await mark();
 check("the Pages word paints the source", pagesMark === "gyroscope", pagesMark);
 
+await evaluate(`document.getElementById('btn-theme').click()`);
+await sleep(1000);
+await clearSelection();
+const pagesThemeWord = await selectWord("gyroscope", ".typst-preview");
+const pagesThemeMark = await mark();
+check(
+  "a theme cache hit keeps Pages word sync owned by the current render",
+  pagesThemeWord.selected.includes("gyroscope") && pagesThemeMark === "gyroscope",
+  JSON.stringify({ selected: pagesThemeWord.selected, mark: pagesThemeMark }),
+);
+
 await clearSelection();
 const latePendulum = await selectWordInLine(
   "pendulum",
@@ -633,8 +697,14 @@ const srcWordPoint = await evaluate(`(() => {
 })()`);
 if (srcWordPoint) {
   await doubleClickAt(srcWordPoint);
-  await sleep(280);
 }
+await waitFor(
+  `(() => {
+  const h = CSS.highlights?.get("mdraft-sync") ?? CSS.highlights?.get("mdraft-sync-peak");
+  return h && [...h].some((range) => range.toString().includes("illustrative"));
+})()`,
+  4000,
+);
 const highlightBeforeSwitch = await evaluate(`(() => {
   const highlight =
     CSS.highlights?.get("mdraft-sync") ??
@@ -645,7 +715,13 @@ await switchView("Pages");
 await waitFor(`document.querySelectorAll(".typst-page-shell").length >= 2`);
 await switchView("Document");
 await waitFor(`Boolean(document.querySelector(".typst-document"))`);
-await sleep(260);
+await waitFor(
+  `(() => {
+  const h = CSS.highlights?.get("mdraft-sync") ?? CSS.highlights?.get("mdraft-sync-peak");
+  return h && [...h].some((range) => range.toString().includes("illustrative"));
+})()`,
+  4000,
+);
 const previewHighlightAfterRender = await evaluate(`(() => {
   const highlight =
     CSS.highlights?.get("mdraft-sync") ??

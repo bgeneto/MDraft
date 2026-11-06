@@ -166,7 +166,7 @@ function walkTextNodes(root: Element, visit: (node: Text, start: number) => void
  * apply to the same text node, so the second pass updates the record instead of
  * replacing it.
  */
-export function bindWordMap(container: HTMLElement, spec: MapSpec): WordMap {
+function* bindWordMapSteps(container: HTMLElement, spec: MapSpec): Generator<void, WordMap> {
   const fragments = spec.fragments ?? [];
   const blocks = spec.blocks ?? [];
   const map: WordMap = {
@@ -180,7 +180,7 @@ export function bindWordMap(container: HTMLElement, spec: MapSpec): WordMap {
     blockLayouts: new Array(blocks.length),
   };
 
-  for (const element of Array.from(container.querySelectorAll<HTMLElement>("[data-f]"))) {
+  for (const element of container.querySelectorAll<HTMLElement>("[data-f]")) {
     const index = Number(element.dataset.f);
     if (!Number.isInteger(index) || index < 0 || index >= fragments.length) continue;
     walkTextNodes(element, (node, start) => {
@@ -190,9 +190,10 @@ export function bindWordMap(container: HTMLElement, spec: MapSpec): WordMap {
       record.fragStart = start;
       map.text.set(node, record);
     });
+    yield;
   }
 
-  for (const element of Array.from(container.querySelectorAll<HTMLElement>("[data-b]"))) {
+  for (const element of container.querySelectorAll<HTMLElement>("[data-b]")) {
     const index = Number(element.dataset.b);
     if (!Number.isInteger(index) || index < 0 || index >= blocks.length) continue;
     walkTextNodes(element, (node, start) => {
@@ -208,9 +209,37 @@ export function bindWordMap(container: HTMLElement, spec: MapSpec): WordMap {
       if (nonProse && element.contains(nonProse)) return;
       map.blockNodes[index].push(node);
     });
+    yield;
   }
 
   return map;
+}
+
+/** Run a traversal in bounded tasks and abandon it when its preview is stale. */
+async function runMapSteps<T>(
+  steps: Generator<void, T>,
+  cancelled: () => boolean,
+): Promise<T | null> {
+  let lastYield = performance.now();
+  let count = 0;
+  while (!cancelled()) {
+    const step = steps.next();
+    if (step.done) return cancelled() ? null : step.value;
+    if (++count % 128 === 0 && performance.now() - lastYield >= 8) {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      lastYield = performance.now();
+    }
+  }
+  return null;
+}
+
+/** Bind in the background without publishing a partial map. */
+export function bindWordMapAsync(
+  container: HTMLElement,
+  spec: MapSpec,
+  cancelled: () => boolean,
+): Promise<WordMap | null> {
+  return runMapSteps(bindWordMapSteps(container, spec), cancelled);
 }
 
 // ---------------------------------------------------------------------------
@@ -231,6 +260,36 @@ export function translateOffset(substitutions: readonly Substitution[], prepared
     delta += sub.o1 - sub.o0 - (sub.p1 - sub.p0);
   }
   return prepared + delta;
+}
+
+/**
+ * Index a sorted substitution list once for repeated offset lookups.
+ *
+ * A CRLF document has one substitution per line ending. Scanning that list for
+ * every fragment makes a long document quadratic; cumulative deltas and an
+ * upper-bound search preserve `translateOffset`'s boundary rule in O(log n).
+ */
+export function indexOffsets(substitutions: readonly Substitution[]): (prepared: number) => number {
+  if (substitutions.length === 0) return (prepared) => prepared;
+  const ends = new Float64Array(substitutions.length);
+  const deltas = new Float64Array(substitutions.length);
+  let delta = 0;
+  for (let i = 0; i < substitutions.length; i += 1) {
+    const sub = substitutions[i];
+    ends[i] = sub.p1;
+    delta += sub.o1 - sub.o0 - (sub.p1 - sub.p0);
+    deltas[i] = delta;
+  }
+  return (prepared) => {
+    let low = 0;
+    let high = ends.length;
+    while (low < high) {
+      const middle = low + Math.floor((high - low) / 2);
+      if (ends[middle] <= prepared) low = middle + 1;
+      else high = middle;
+    }
+    return prepared + (low === 0 ? 0 : deltas[low - 1]);
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1012,32 +1071,67 @@ export function scrollSourceRange(
 }
 
 /** Built once per DOM snapshot, independent of font/width/zoom measurements. */
-export function scrollTextAnchors(map: WordMap): ScrollTextAnchor[] {
+function* scrollTextAnchorSteps(
+  map: WordMap,
+): Generator<void, { anchors: ScrollTextAnchor[]; sorted: boolean }> {
   const anchors: ScrollTextAnchor[] = [];
-  const nodes = new Set([...map.fragNodes.flat(), ...map.blockNodes.flat()]);
-  for (const node of nodes) {
-    const record = map.text.get(node);
-    if (!record || (record.fragment >= 0 && map.fragments[record.fragment].kind !== "text"))
-      continue;
-    // Large escaped exact fragments retain the coarse path. Re-scanning their
-    // raw prefix for every word would make a pathological paragraph quadratic.
-    if (
-      record.fragment >= 0 &&
-      node.data.length > 2000 &&
-      map.fragments[record.fragment].raw !== node.data
-    )
-      continue;
-    const region =
-      node.parentElement?.closest<HTMLElement>("[data-line]")?.dataset.line ??
-      `b${record.block}:f${record.fragment}`;
-    for (const match of node.data.matchAll(/[\p{L}\p{M}\p{N}_]+/gu)) {
-      const start = match.index,
-        end = start + match[0].length;
-      const range = scrollSourceRange(map, node, start, end);
-      if (range) anchors.push({ ...range, node, start, end, region });
-    }
+  const seen = new Set<Text>();
+  let steps = 0;
+  let sorted = true;
+  for (const lists of [map.fragNodes, map.blockNodes])
+    for (const list of lists)
+      for (const node of list) {
+        if (seen.has(node)) continue;
+        seen.add(node);
+        const record = map.text.get(node);
+        if (!record || (record.fragment >= 0 && map.fragments[record.fragment].kind !== "text"))
+          continue;
+        // Large escaped exact fragments retain the coarse path. Re-scanning their
+        // raw prefix for every word would make a pathological paragraph quadratic.
+        if (
+          record.fragment >= 0 &&
+          node.data.length > 2000 &&
+          map.fragments[record.fragment].raw !== node.data
+        )
+          continue;
+        const region =
+          node.parentElement?.closest<HTMLElement>("[data-line]")?.dataset.line ??
+          `b${record.block}:f${record.fragment}`;
+        for (const match of node.data.matchAll(/[\p{L}\p{M}\p{N}_]+/gu)) {
+          const start = match.index,
+            end = start + match[0].length;
+          const range = scrollSourceRange(map, node, start, end);
+          if (range) {
+            const previous = anchors[anchors.length - 1];
+            if (
+              previous &&
+              (previous.from > range.from ||
+                (previous.from === range.from && previous.to > range.to))
+            )
+              sorted = false;
+            anchors.push({ ...range, node, start, end, region });
+          }
+          if (++steps % 128 === 0) yield;
+        }
+        yield;
+      }
+  return { anchors, sorted };
+}
+
+export function scrollTextAnchors(map: WordMap): ScrollTextAnchor[] {
+  const steps = scrollTextAnchorSteps(map);
+  for (;;) {
+    const result = steps.next();
+    if (result.done) return result.value.anchors;
   }
-  return anchors;
+}
+
+/** Build the potentially large scroll index input without blocking edits. */
+export function scrollTextAnchorsAsync(
+  map: WordMap,
+  cancelled: () => boolean,
+): Promise<{ anchors: ScrollTextAnchor[]; sorted: boolean } | null> {
+  return runMapSteps(scrollTextAnchorSteps(map), cancelled);
 }
 
 /** The kind of the exact fragment a text node belongs to, if any. */

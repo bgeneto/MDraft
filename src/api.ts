@@ -509,6 +509,12 @@ export const removeRecovery = (id: string) => invoke<void>("remove_recovery", { 
 export const pathExists = (path: string, documentPath: string | null = null) =>
   invoke<boolean>("path_exists", { path, documentPath });
 
+export const resolveLegacyLocalImage = (
+  primary: string,
+  candidate: string,
+  documentPath: string | null = null,
+) => invoke<string | null>("resolve_legacy_local_image", { primary, candidate, documentPath });
+
 export const saveClipboardImage = (
   data: string,
   nameHint: string | null,
@@ -651,6 +657,10 @@ export const renderTypst = (
   imageRoot: string | null = null,
   token?: number,
 ) => invoke<RenderedTypst>("render_typst", { path, source, mode, imageRoot, token: token ?? null });
+
+/** Stop Typst preview jobs through this generation; exports remain independent. */
+export const cancelTypstPreview = (token: number) =>
+  invoke<void>("cancel_typst_preview", { token });
 
 /** One menu accelerator, as the native menu registered it. */
 export interface Shortcut {

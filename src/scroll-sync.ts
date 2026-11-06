@@ -8,8 +8,12 @@ export interface SourceAnchor {
 /** One immutable, source-sorted index per render, never a text search on scroll. */
 export class ScrollIndex<T extends SourceAnchor> {
   readonly anchors: readonly T[];
-  constructor(anchors: readonly T[]) {
-    this.anchors = [...anchors].sort((a, b) => a.from - b.from || a.to - b.to);
+  constructor(anchors: readonly T[], alreadySorted = false) {
+    // The map builder hands over an owned array whose order it verified while
+    // traversing; other callers retain the defensive copy and sort.
+    this.anchors = alreadySorted
+      ? anchors
+      : [...anchors].sort((a, b) => a.from - b.from || a.to - b.to);
   }
 
   near(offset: number, radius = 32, distance = 1800): readonly T[] {

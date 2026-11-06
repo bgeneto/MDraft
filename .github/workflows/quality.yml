@@ -75,6 +75,12 @@ jobs:
       - name: Preview pipeline
         run: npm run preview:unit
 
+      - name: Preview worker ownership
+        run: npm run preview:worker:unit
+
+      - name: Preview DOM and sanitizer
+        run: npm run preview:dom
+
       - name: AsciiDoc export source
         run: npm run asciidoc:export:unit
 

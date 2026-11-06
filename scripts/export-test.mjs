@@ -708,14 +708,21 @@ const article = /<article\b[\s\S]*?<\/article>/.exec(nativePrint)?.[0] ?? "";
 // module also imports CSS and DOM libraries and is not a Node test module.
 const wrapperSource = readFileSync(new URL("../src/markdown.ts", import.meta.url), "utf8");
 const wrapperTree = ts.createSourceFile("markdown.ts", wrapperSource, ts.ScriptTarget.Latest, true);
-const declarations = wrapperTree.statements
-  .filter(
-    (node) =>
-      ts.isFunctionDeclaration(node) &&
-      ["escapeHtml", "wrapStandaloneHtml"].includes(node.name?.text),
-  )
-  .map((node) => node.getText(wrapperTree))
-  .join("\n");
+const rendererSource = readFileSync(new URL("../src/preview-render.ts", import.meta.url), "utf8");
+const rendererTree = ts.createSourceFile(
+  "preview-render.ts",
+  rendererSource,
+  ts.ScriptTarget.Latest,
+  true,
+);
+const declarations = [
+  ...rendererTree.statements
+    .filter((node) => ts.isFunctionDeclaration(node) && node.name?.text === "escapeHtml")
+    .map((node) => node.getText(rendererTree)),
+  ...wrapperTree.statements
+    .filter((node) => ts.isFunctionDeclaration(node) && node.name?.text === "wrapStandaloneHtml")
+    .map((node) => node.getText(wrapperTree)),
+].join("\n");
 const wrapper = { exports: {} };
 runInNewContext(
   ts.transpileModule(declarations, {
@@ -752,6 +759,59 @@ console.log(
   "  Pandoc validation uses its existing source-reader dialect; padded-dollar parity is outside this change.",
 );
 await evaluate("window.fetch=window.__browserExport.original;delete window.__browserExport");
+
+// Submit two real Typst -> HTML -> Pandoc exports alongside a cancellable
+// preview. Their distinctive text must never cross into the other output.
+const typstStatus = await call("typst_status");
+if (typstStatus.ok && typstStatus.value?.found) {
+  const alphaPath = join(workDir, "concurrent-alpha.rst");
+  const betaPath = join(workDir, "concurrent-beta.rst");
+  const alpha = {
+    formatId: "rst",
+    markdown: "= Alpha\n\n" + "Alpha ownership sentinel.\n\n".repeat(120),
+    outputPath: alphaPath,
+    inputPath: join(process.env.MDRAFT_REPO ?? process.cwd(), "samples", "typst-pages.typ"),
+    language: "typst",
+  };
+  const beta = {
+    ...alpha,
+    markdown: "= Beta\n\n" + "Beta ownership sentinel.\n\n".repeat(120),
+    outputPath: betaPath,
+  };
+  const concurrent = await evaluate(`(async()=>{
+    const invoke=window.__TAURI_INTERNALS__.invoke;
+    const settle=(promise)=>promise.then(value=>({ok:true,value})).catch(error=>({ok:false,error:String(error)}));
+    const preview=settle(invoke('render_typst',{path:null,source:'= Pending preview\\n\\n#lorem(50000)',
+      mode:'document',imageRoot:null,token:1000000000}));
+    const first=settle(invoke('run_export',{request:${JSON.stringify(alpha)}}));
+    const second=settle(invoke('run_export',{request:${JSON.stringify(beta)}}));
+    await invoke('cancel_typst_preview',{token:1000000000});
+    return Promise.all([preview,first,second]);
+  })()`);
+  const alphaText = existsSync(alphaPath) ? readFileSync(alphaPath, "utf8") : "";
+  const betaText = existsSync(betaPath) ? readFileSync(betaPath, "utf8") : "";
+  check(
+    !concurrent[0].ok && /superseded/i.test(concurrent[0].error),
+    "the concurrent preview can be cancelled",
+    JSON.stringify(concurrent[0]),
+  );
+  check(
+    concurrent[1].ok &&
+      alphaText.includes("Alpha ownership sentinel") &&
+      !alphaText.includes("Beta ownership sentinel"),
+    "the first concurrent Typst/Pandoc export keeps its own contents",
+    concurrent[1].error,
+  );
+  check(
+    concurrent[2].ok &&
+      betaText.includes("Beta ownership sentinel") &&
+      !betaText.includes("Alpha ownership sentinel"),
+    "the second concurrent Typst/Pandoc export keeps its own contents",
+    concurrent[2].error,
+  );
+} else {
+  console.log("  SKIP  concurrent Typst export: Typst is unavailable");
+}
 ws.close();
 rmSync(workDir, { recursive: true, force: true });
 

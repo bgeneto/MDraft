@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -268,6 +269,8 @@ pub(crate) fn quiet(command: &mut Command) -> &mut Command {
     command
 }
 
+static NEXT_SCRATCH: AtomicU64 = AtomicU64::new(0);
+
 /// A writable directory of our own, handed to pandoc as its working directory.
 ///
 /// Pandoc's PDF writer does not use the system temporary directory. It creates the
@@ -309,15 +312,19 @@ impl Scratch {
             // One directory per run: two exports at once must not share scratch
             // space, and leftovers from a crashed run must never be reused.
             let unique = format!(
-                "{}-{:x}",
+                "{}-{:x}-{:x}",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|elapsed| elapsed.as_nanos())
-                    .unwrap_or(0)
+                    .unwrap_or(0),
+                NEXT_SCRATCH.fetch_add(1, Ordering::Relaxed),
             );
             let path = root.join(unique);
-            match std::fs::create_dir_all(&path) {
+            // `create_dir`, unlike `create_dir_all`, refuses an existing job's
+            // directory instead of silently sharing it.
+            let created = std::fs::create_dir_all(root).and_then(|_| std::fs::create_dir(&path));
+            match created {
                 Ok(()) => return Ok(Self { path }),
                 Err(e) => failures.push(format!("{}: {e}", root.display())),
             }
@@ -548,9 +555,13 @@ pub fn export<R: Runtime>(app: &AppHandle<R>, request: &ExportRequest) -> Result
     // which is not: it turns `= Text` into the literal text "= Text", prints
     // `#set page(...)` verbatim and leaks `//` comments into the output. Verified
     // by exporting this project's own sample — see the note in typst.rs.
+    // Typst's intermediate HTML belongs to this export, just like the PDF
+    // engine's scratch files. A shared name lets concurrent exports overwrite
+    // one another and leaves temporary input behind on errors.
+    let scratch = Scratch::new(app)?;
     let mut input_file: Option<PathBuf> = None;
     if typst_source {
-        let rendered = std::env::temp_dir().join("mdraft-typst").join("export.html");
+        let rendered = scratch.path().join("typst-input.html");
         crate::typst::compile_to(
             app,
             request.input_path.as_deref(),
@@ -585,7 +596,6 @@ pub fn export<R: Runtime>(app: &AppHandle<R>, request: &ExportRequest) -> Result
     // Pandoc creates the PDF engine's files in its working directory, so it must
     // not inherit one the launcher happened to provide. Kept alive for the whole
     // run; the guard removes the directory when the export returns.
-    let scratch = Scratch::new(app)?;
     let directory = pandoc_directory(request, &scratch);
     let mut command = pandoc_command(&pandoc, &args, &scratch, directory);
     let mut child = quiet(&mut command)
@@ -1323,6 +1333,36 @@ mod tests {
         drop(scratch);
         assert!(!path.exists(), "{} outlived its export", path.display());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn concurrent_exports_own_separate_scratch_files() {
+        // Each Scratch owns a unique child; using the existing temp root leaves
+        // no test-specific parent behind when the jobs are dropped.
+        let root = std::env::temp_dir();
+        let jobs: Vec<_> = (0..16)
+            .map(|_| {
+                let root = root.clone();
+                std::thread::spawn(move || Scratch::create(&[root]).unwrap())
+            })
+            .collect();
+        let mut scratch: Vec<_> = jobs.into_iter().map(|job| job.join().unwrap()).collect();
+        let distinct: std::collections::HashSet<_> =
+            scratch.iter().map(|job| job.path().to_path_buf()).collect();
+        assert_eq!(distinct.len(), scratch.len());
+        for (index, job) in scratch.iter().enumerate() {
+            std::fs::write(job.path().join("typst-input.html"), index.to_string()).unwrap();
+        }
+        let removed = scratch.pop().unwrap();
+        let removed_path = removed.path().to_path_buf();
+        drop(removed);
+        assert!(!removed_path.exists());
+        for (index, job) in scratch.iter().enumerate() {
+            assert_eq!(
+                std::fs::read_to_string(job.path().join("typst-input.html")).unwrap(),
+                index.to_string()
+            );
+        }
     }
 
     #[test]
