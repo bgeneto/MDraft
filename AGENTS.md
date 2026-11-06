@@ -712,15 +712,6 @@ than asserting the feature's own internal counters.
 
 ## Traps
 
-**`cargo test` reports `250 passed; 60 failed` and every failure is `Os { code: 5, kind: PermissionDenied, message: "Access is denied." }`**
-The failing tests all create a directory under `std::env::temp_dir()` and then
-write into it (`documents::tests::checked_write_*`, `ai::secret::tests::*`,
-`recovery::tests::*`, `settings::tests::*`). On this host `TEMP` is `T:\Temp`,
-which PowerShell can create and delete in, but the test process is refused. The
-suite fails identically on an untouched checkout — verify with
-`git stash push -u` before blaming a change. Do not "fix" the tests; the
-temporary-directory permission is the problem.
-
 **A test launched with `visible: false` still displayed `main.tex — MDraft`**
 The window-state plugin calls `show()` during restoration, including when
 the Tauri window configuration starts hidden. The `MDRAFT_TEST_HIDDEN` mode
