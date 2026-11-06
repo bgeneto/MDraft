@@ -351,6 +351,14 @@ pub struct MenuState {
     pub syntax_theme: String,
     pub typst_view: String,
     pub typst_available: bool,
+    /// Whether the preview holds a PDF the document's own compiler produced.
+    ///
+    /// `Export › PDF` writes exactly those bytes, so the row is enabled only
+    /// while they exist and are current; it never starts a compile, because a
+    /// multi-second engine run behind a menu item is indistinguishable from a
+    /// hang. Always true for a compiled LaTeX document; for Typst it is true only
+    /// in the Pages view, which is where that language compiles a PDF.
+    pub pdf_preview_available: bool,
 }
 
 impl Default for MenuState {
@@ -397,6 +405,7 @@ impl MenuState {
             syntax_theme: settings.syntax_theme.clone(),
             typst_view: settings.typst_view.clone(),
             typst_available: true,
+            pdf_preview_available: false,
         }
     }
 
@@ -529,13 +538,24 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
     let task_language = !html && !typst;
     Some(match id {
         "file.reload" | "file.reveal" | "file.favorite" => state.has_path,
-        // Native printing and the direct PDF writer have no article for Typst:
-        // that language already compiles a PDF through Export › PDF (via
-        // Typst). The browser route stays available for every language.
-        "file.print" | "export.pdf" => !typst && !latex,
+        // `Export › PDF` writes the PDF the document's own compiler produced, so
+        // it is available exactly while such a PDF exists: always for a compiled
+        // LaTeX project, and for Typst only in the Pages view, which is where
+        // that language compiles one. It never starts a compile. Native printing
+        // stays disabled for both (decision D11): the PDF already exists, so
+        // printing it is the reader's own action on a file they own.
+        "export.pdf" => {
+            if typst {
+                state.pdf_preview_available
+            } else if latex {
+                state.pdf_preview_available
+            } else {
+                true
+            }
+        }
+        "file.print" => !typst && !latex,
         // HTML export and the browser print route are pandoc/print paths that a
-        // `.tex` document has no reader for in this change; they come back with
-        // the native PDF row. Every other language keeps them.
+        // `.tex` document has no reader for in this change.
         "export.html" | "export.pdf.browser" => !latex,
         "file.close" | "file.closeAll" => true,
         "file.closeOthers" => state.tab_count > 1,
@@ -629,11 +649,31 @@ fn label_for(state: &MenuState, id: &str) -> Option<String> {
             "anchor" => "Go to Heading Under Cursor",
             _ => "Open Link Under Cursor",
         },
-        "file.print" if state.document_language == "typst" => {
-            "Print… (use PDF via Typst)"
+        // The PDF row names the engine that produced the bytes it writes, because
+        // a reader comparing two documents deserves to know which compiler laid
+        // them out. Nothing is stored, so there is no migration and no
+        // reader-facing rename of a format they own.
+        //
+        // A disabled row says why instead of leaving a live one that refuses, so
+        // the "not available" arms come first: the match is ordered, and a
+        // "compiled by" arm would otherwise win for a row that cannot run. The
+        // Typst Document view compiles HTML and holds no PDF bytes, and the row
+        // never starts a compile on its own.
+        "export.pdf"
+            if state.document_language == "typst" && !state.pdf_preview_available =>
+        {
+            "PDF… (available in Pages view)"
         }
-        "export.pdf" if state.document_language == "typst" => {
-            "PDF… (use PDF via Typst)"
+        "export.pdf" if state.document_language == "latex" && !state.pdf_preview_available => {
+            "PDF… (available after the preview compiles)"
+        }
+        "export.pdf" if state.document_language == "typst" => "PDF… (compiled by Typst)",
+        "export.pdf" if state.document_language == "latex" => "PDF… (compiled by LuaLaTeX)",
+        // Printing stays disabled for both PDF-rendered languages, and the label
+        // points at the route that does work rather than at a row that no longer
+        // exists under that name.
+        "file.print" if state.document_language == "typst" || state.document_language == "latex" => {
+            "Print… (use Export › PDF)"
         }
         "view.typstPreview"
             if state.document_language == "typst" && !state.typst_available =>
@@ -1792,6 +1832,59 @@ mod tests {
         assert_eq!(enabled_for(&state, "format.document"), Some(true));
         assert_eq!(enabled_for(&state, "export.pdf"), Some(true));
         assert_eq!(enabled_for(&state, "para.task"), Some(true));
+    }
+
+    #[test]
+    fn the_pdf_row_follows_the_compiled_bytes_and_names_the_engine() {
+        // Typst: the Document view compiles HTML and holds no PDF, so the row is
+        // disabled with a reason; the Pages view has the bytes and enables it.
+        let mut state = MenuState {
+            document_language: "typst".into(),
+            ..MenuState::default()
+        };
+        assert_eq!(enabled_for(&state, "export.pdf"), Some(false));
+        assert_eq!(
+            label_for(&state, "export.pdf").as_deref(),
+            Some("PDF… (available in Pages view)")
+        );
+        state.pdf_preview_available = true;
+        assert_eq!(enabled_for(&state, "export.pdf"), Some(true));
+        assert_eq!(
+            label_for(&state, "export.pdf").as_deref(),
+            Some("PDF… (compiled by Typst)")
+        );
+        // Printing stays disabled for both PDF-rendered languages, and its label
+        // points at the row that does work.
+        assert_eq!(enabled_for(&state, "file.print"), Some(false));
+        assert_eq!(
+            label_for(&state, "file.print").as_deref(),
+            Some("Print… (use Export › PDF)")
+        );
+
+        // LaTeX: its preview *is* a compiled PDF, so a successful compile is
+        // enough; before one exists the row says what it is waiting for.
+        state.document_language = "latex".into();
+        state.pdf_preview_available = false;
+        assert_eq!(enabled_for(&state, "export.pdf"), Some(false));
+        assert_eq!(
+            label_for(&state, "export.pdf").as_deref(),
+            Some("PDF… (available after the preview compiles)")
+        );
+        state.pdf_preview_available = true;
+        assert_eq!(enabled_for(&state, "export.pdf"), Some(true));
+        assert_eq!(
+            label_for(&state, "export.pdf").as_deref(),
+            Some("PDF… (compiled by LuaLaTeX)")
+        );
+        assert_eq!(enabled_for(&state, "file.print"), Some(false));
+
+        // Every other language keeps the native print surface, and its PDF row
+        // is the article the preview builds rather than a compiled file.
+        state.document_language = "markdown".into();
+        assert_eq!(enabled_for(&state, "export.pdf"), Some(true));
+        assert_eq!(label_for(&state, "export.pdf"), None);
+        assert_eq!(enabled_for(&state, "file.print"), Some(true));
+        assert_eq!(label_for(&state, "file.print"), None);
     }
 
     #[test]

@@ -769,6 +769,20 @@ function menuStateSnapshot(): api.MenuState {
       : false;
   const canFold =
     doc?.language === "markdown" || doc?.language === "html" || doc?.language === "typst";
+  // `Export › PDF` writes the bytes the preview already holds, so it is available
+  // exactly while those bytes are current. A LaTeX preview *is* a compiled PDF,
+  // so a successful compile is enough; a Typst document only has PDF bytes in the
+  // Pages view, because the Document view compiles HTML. The freshness check is
+  // the same token comparison the preview itself uses, so a stale render cannot
+  // enable a row that would then write the previous document's pages.
+  const pdfPreviewAvailable =
+    doc?.language === "latex"
+      ? latexCurrent(latexPreview) && latexPreview.token === renderToken
+      : doc?.language === "typst"
+        ? settings.typstView === "pages" &&
+          Boolean(typstPdfBase64) &&
+          typstPdfToken === renderToken
+        : false;
   const syntaxTheme =
     settings.syntaxTheme === "github-light" ? "catppuccin-latte" : settings.syntaxTheme;
 
@@ -801,6 +815,7 @@ function menuStateSnapshot(): api.MenuState {
     syntaxTheme,
     typstView: settings.typstView,
     typstAvailable: typstCache?.found !== false,
+    pdfPreviewAvailable,
   };
 }
 
@@ -1377,6 +1392,8 @@ interface LatexPreview {
   revisions: Array<{ id: string; revision: number; path: string | null }>;
 }
 let latexPreview: LatexPreview | null = null;
+/** The last measured LaTeX package cache, or null before the first read. */
+let latexCacheInfo: api.LatexCacheInfo | null = null;
 let latexNavigationRoot: string | null = null;
 
 function latexCurrent(value: LatexPreview | null): value is LatexPreview {
@@ -1422,7 +1439,7 @@ function latexEnableNote(): void {
   const text = document.createElement("span");
   text.className = "typst-note-text";
   text.textContent =
-    "Experimental LuaLaTeX: enabling downloads about 10 MiB of verified engine files. Additional TeX packages and fonts are downloaded on demand and cached locally. Your document stays on this device.";
+    "LuaLaTeX compiles .tex documents locally. Enabling downloads about 10 MiB of verified engine files; additional TeX packages and fonts are downloaded on demand and cached locally. Your document stays on this device.";
   const button = document.createElement("button");
   button.type = "button";
   button.className = "typst-notebutton";
@@ -1432,7 +1449,13 @@ function latexEnableNote(): void {
     button.textContent = "Downloading…";
     void api
       .installLatex()
-      .then(() => scheduleRender(true))
+      .then(() => {
+        // The switch is settings-backed, so the in-memory copy has to follow it
+        // before the next render; otherwise the note would come back.
+        settings.latexEnabled = true;
+        persist();
+        scheduleRender(true);
+      })
       .catch((error: unknown) => {
         button.disabled = false;
         button.textContent = "Retry setup";
@@ -1508,25 +1531,14 @@ async function latexSavePdf(): Promise<void> {
     return;
   }
   const root = sessions.byId(value.rootId);
-  const chosen = await saveDialog({
-    title: "Save experimental LuaLaTeX PDF",
+  await saveCompiledPdf({
+    data: bytesToBase64(value.result.pdf),
+    token: value.token,
+    sessionId: doc.id,
+    revision: doc.revision,
+    engine: "LuaLaTeX",
     defaultPath: (root?.path ?? "document.tex").replace(/\.tex$/i, ".pdf"),
-    filters: [{ name: "PDF", extensions: ["pdf"] }],
   });
-  if (!chosen) return;
-  if (!latexCurrent(value)) {
-    toast("The project changed; compile again before saving.", 5200);
-    return;
-  }
-  let data = "";
-  for (let i = 0; i < value.result.pdf.length; i += 0x8000)
-    data += String.fromCharCode(...value.result.pdf.subarray(i, i + 0x8000));
-  try {
-    await api.saveLatexPdf(chosen, btoa(data));
-    toast(`Saved ${basename(chosen)}`);
-  } catch (error) {
-    await message(String(error), { title: "Could not save PDF", kind: "error" });
-  }
 }
 
 function latexBar(): HTMLElement {
@@ -1894,29 +1906,18 @@ function typstViewBar(active: string): HTMLElement {
 
 async function saveTypstPagesPdf(): Promise<void> {
   const data = typstPdfBase64;
-  const token = renderToken;
-  const id = doc.id;
-  const revision = doc.revision;
-  if (!data || typstPdfToken !== token) {
+  if (!data || typstPdfToken !== renderToken) {
     toast("Wait for the current Typst page preview before saving.");
     return;
   }
-  const chosen = await saveDialog({
-    title: "Save Typst PDF",
-    defaultPath: (doc.path ?? doc.name).replace(/(?:\.typ)?$/i, ".pdf"),
-    filters: [{ name: "PDF", extensions: ["pdf"] }],
+  await saveCompiledPdf({
+    data,
+    token: typstPdfToken,
+    sessionId: doc.id,
+    revision: doc.revision,
+    engine: "Typst",
+    defaultPath: (doc.path ?? doc.name).replace(/\.typ$/i, ".pdf"),
   });
-  if (!chosen) return;
-  if (token !== renderToken || doc.id !== id || doc.revision !== revision) {
-    toast("The document changed; compile again before saving.", 5200);
-    return;
-  }
-  try {
-    await api.saveLatexPdf(chosen, data);
-    toast(`Saved ${basename(chosen)}`);
-  } catch (error) {
-    await message(String(error), { title: "Could not save PDF", kind: "error" });
-  }
 }
 
 /** Switch the preview view and redraw it. */
@@ -3245,12 +3246,101 @@ async function reportPrintWarnings(failed: string[]): Promise<void> {
  * through WebKitGTK print settings. A host without either API gets the browser
  * handoff instead of a silent no-op.
  */
+/** Base64 for a byte array, chunked so a large PDF cannot blow the argument stack. */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  }
+  return btoa(binary);
+}
+
+/**
+ * Save the PDF the preview currently holds, for a PDF-rendered language.
+ *
+ * One implementation for Typst Pages and LaTeX: both hand over the bytes their
+ * own compiler emitted, so the only differences are the dialog title, the
+ * suggested name and the engine's name. The freshness check is repeated after
+ * the dialog closes, because a compile can finish — or a tab can switch — while
+ * the reader is choosing a path, and writing the previous document's pages would
+ * be worse than refusing.
+ */
+async function saveCompiledPdf(options: {
+  /** The PDF bytes, base64 as the command expects them. */
+  data: string;
+  /** The render token the bytes belong to. */
+  token: number;
+  /** The session whose document was compiled; may differ from the active tab. */
+  sessionId: string;
+  revision: number;
+  engine: string;
+  defaultPath: string;
+}): Promise<boolean> {
+  const chosen = await saveDialog({
+    title: `Save PDF compiled by ${options.engine}`,
+    defaultPath: options.defaultPath,
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
+  });
+  if (!chosen) return false;
+  const session = sessions.byId(options.sessionId);
+  if (
+    options.token !== renderToken ||
+    !session ||
+    session.revision !== options.revision
+  ) {
+    toast("The document changed; compile again before saving.", 5200);
+    return false;
+  }
+  try {
+    await api.saveCompiledPdf(chosen, options.data);
+    toast(`Saved ${basename(chosen)}`);
+    return true;
+  } catch (error) {
+    await message(String(error), { title: "Could not save PDF", kind: "error" });
+    return false;
+  }
+}
+
+/**
+ * Export PDF.
+ *
+ * For Typst and LaTeX this writes the PDF their own compiler produced — the same
+ * bytes the preview is drawing — because a second, differently-laid-out PDF
+ * behind the same document would contradict what the reader sees. Every other
+ * language keeps the native print surface, which is the article the preview
+ * builds. A missing or stale PDF is refused with a reason: a multi-second engine
+ * run behind a menu item is indistinguishable from a hang.
+ */
 async function exportPdf(): Promise<void> {
   const source = exportSource();
+  if (source.language === "latex") {
+    const value = latexPreview;
+    if (!latexCurrent(value) || value.token !== renderToken) {
+      toast("Wait for the current LaTeX compilation before exporting the PDF.");
+      return;
+    }
+    await saveCompiledPdf({
+      data: bytesToBase64(value.result.pdf),
+      token: value.token,
+      sessionId: doc.id,
+      revision: doc.revision,
+      engine: "LuaLaTeX",
+      defaultPath: (doc.path ?? doc.name).replace(/\.tex$/i, ".pdf"),
+    });
+    return;
+  }
   if (source.language === "typst") {
-    await message("Typst documents write their PDF through Export › PDF (via Typst)…", {
-      title: "Use the Typst PDF route",
-      kind: "info",
+    if (settings.typstView !== "pages" || !typstPdfBase64 || typstPdfToken !== renderToken) {
+      toast("Switch to the Pages view and wait for the compile before exporting the PDF.");
+      return;
+    }
+    await saveCompiledPdf({
+      data: typstPdfBase64,
+      token: typstPdfToken,
+      sessionId: doc.id,
+      revision: doc.revision,
+      engine: "Typst",
+      defaultPath: (doc.path ?? doc.name).replace(/\.typ$/i, ".pdf"),
     });
     return;
   }
@@ -7375,6 +7465,57 @@ async function boot(): Promise<void> {
     exportHtml: () => void exportHtml(),
     exportPdf: () => void exportPdf(),
     setupTypst: () => typstSetup(),
+    latexCache: () => latexCacheInfo,
+    refreshLatexCache: async () => {
+      try {
+        latexCacheInfo = await api.latexCacheInfo();
+      } catch {
+        // A cache that cannot be measured is reported as absent rather than as
+        // an error dialog: the section still explains the feature.
+        latexCacheInfo = null;
+      }
+    },
+    installLatex: async () => {
+      const notice = toast("Downloading the LuaLaTeX engine…", 0);
+      try {
+        await api.installLatex();
+        settings.latexEnabled = true;
+        persist();
+        notice.dismiss();
+        toast("LuaLaTeX is enabled.");
+      } catch (error) {
+        notice.dismiss();
+        await message(String(error), { title: "Could not enable LuaLaTeX", kind: "error" });
+      }
+      preferences.refresh();
+    },
+    disableLatex: async () => {
+      try {
+        await api.latexDisable();
+        settings.latexEnabled = false;
+        persist();
+        toast("LuaLaTeX is off. The downloaded files stay on disk.");
+      } catch (error) {
+        await message(String(error), { title: "Could not turn LuaLaTeX off", kind: "error" });
+      }
+      preferences.refresh();
+    },
+    clearLatexCache: async () => {
+      const confirmed = await ask(
+        "Delete the downloaded TeX packages and fonts?\n\n" +
+          "The engine itself is kept, so the next compile re-downloads only what it needs. " +
+          "Your documents are not touched.",
+        { title: "Clear the LaTeX package cache?", kind: "warning" },
+      );
+      if (!confirmed) return;
+      try {
+        const freed = await api.latexClearCache();
+        toast(`Cleared ${(freed / (1024 * 1024)).toFixed(1)} MiB of cached TeX packages.`);
+      } catch (error) {
+        await message(String(error), { title: "Could not clear the cache", kind: "error" });
+      }
+      preferences.refresh();
+    },
     // The prompt file is not a document the reader opened, so it stays out of
     // Recents; one press focuses the tab if it is already there.
     openAiPrompts: async () => {

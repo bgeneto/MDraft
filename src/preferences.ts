@@ -52,6 +52,21 @@ export interface PreferencesHost {
   setupPandoc(): Promise<void>;
   /** Check for Typst and offer to install it if it is missing. */
   setupTypst(): Promise<void>;
+  /**
+   * The downloaded LuaLaTeX package cache, or null before the first read.
+   *
+   * Read on demand rather than held in settings: the size is a measurement, not
+   * a preference, and it changes whenever a compile downloads a package.
+   */
+  latexCache(): api.LatexCacheInfo | null;
+  /** Re-read the cache size; called when the LaTeX section is drawn. */
+  refreshLatexCache(): Promise<void>;
+  /** Download and verify the LuaLaTeX engine, then turn the switch on. */
+  installLatex(): Promise<void>;
+  /** Turn the engine off. Deletes nothing. */
+  disableLatex(): Promise<void>;
+  /** Delete the downloaded package cache; the only destructive LaTeX action. */
+  clearLatexCache(): Promise<void>;
   /** Ask the user for a reference/style file. Empty string when cancelled. */
   chooseStyleReference(current: string): Promise<string>;
   /** Installed speech-synthesis voices; empty until the list has loaded. */
@@ -845,9 +860,15 @@ function removeFormat(host: PreferencesHost, id: string): void {
   host.update({ exportFormats: next });
 }
 
-function exportRows(host: PreferencesHost): Row[] {
+function exportRows(host: PreferencesHost, refresh: () => void): Row[] {
+  const s = () => host.settings();
   const formats = host.settings().exportFormats;
   const status = host.pandocStatus();
+  // The cache size is a measurement, not a preference, so it is read when the
+  // section is drawn rather than carried in settings. `refresh` is called once
+  // the read lands, which is what makes the row show a number instead of
+  // "Checking…" on the second paint.
+  if (host.latexCache() === null) void host.refreshLatexCache().then(refresh);
 
   const rows: Row[] = [
     {
@@ -889,6 +910,68 @@ function exportRows(host: PreferencesHost): Row[] {
       text: "Both use the preview pipeline and need no pandoc. PDF saves directly through the system webview. File › Export › PDF (opens browser) keeps browser printing available; PDF (via Typst) uses the compiler, with pandoc for conversion from other languages.",
     },
   ];
+
+  // ---- LaTeX -------------------------------------------------------------
+  // The switch and the cache are one section because they answer one question:
+  // "is the engine on, and how much disk is it using?" Turning it off is not a
+  // destructive action — the cache stays where it is, inert — so Clear cache is
+  // the only button here that deletes anything.
+  const latex = host.latexCache();
+  const mb = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  rows.push(
+    { kind: "heading", label: "LaTeX" },
+    {
+      kind: "note",
+      label: "",
+      text: "A .tex document is compiled locally by LuaLaTeX running in WebAssembly. The engine and the TeX packages it needs are downloaded once, verified against pinned SHA-256 digests, and cached; your document and bibliography never leave this device.",
+    },
+    {
+      kind: "checkbox",
+      label: "Enable LuaLaTeX",
+      help: "Compiles .tex documents in the preview and lets Export › PDF write the PDF it produces. Turning this off stops the engine from serving anything; the downloaded files stay on disk until you clear the cache.",
+      get: () => s().latexEnabled,
+      set: (value) => {
+        if (value) void host.installLatex();
+        else void host.disableLatex();
+      },
+    },    {
+      kind: "note",
+      label: "Engine",
+      text: latex
+        ? latex.installed
+          ? latex.enabled
+            ? "Installed and enabled."
+            : "Installed, but the switch is off."
+          : latex.enabled
+            ? "Enabled, but the engine files are missing. Toggle the switch off and on to download them again."
+            : "Not installed. Turn the switch on to download about 10 MiB of verified engine files."
+        : "Checking…",
+    },
+    {
+      kind: "note",
+      label: "Package cache",
+      text: latex
+        ? `${mb(latex.bytes)} of ${latex.limitMb} MiB used. TeX packages and fonts are downloaded on demand and evicted least-recently-used when the cache reaches its ceiling.`
+        : "Checking…",
+    },
+    {
+      kind: "number",
+      label: "Cache limit (MiB)",
+      help: "The most disk the downloaded TeX packages may use. When a compile needs a new package and the cache is full, the least recently used files are deleted first. 32 to 4096 MiB.",
+      min: 32,
+      max: 4096,
+      suffix: "MiB",
+      get: () => s().latexCacheLimitMb,
+      set: (value) => host.update({ latexCacheLimitMb: value }),
+    },
+    {
+      kind: "button",
+      label: "",
+      text: "Clear package cache",
+      help: "Deletes the downloaded TeX packages and fonts. The engine itself is kept, so the next compile re-downloads only what it needs. Your documents are not touched.",
+      action: () => void host.clearLatexCache(),
+    },
+  );
 
   // After-export options are global, not per format.
   //
@@ -1830,7 +1913,7 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
           help: "Writes a PDF directly through the system webview. File › Export › PDF (opens browser) provides browser printing and the fallback for scripted HTML. Typst documents use PDF (via Typst).",
           action: () => host.exportPdf(),
         },
-        ...exportRows(host),
+        ...exportRows(host, refresh),
       ],
     },
     {

@@ -145,6 +145,28 @@ fn default_typst_view() -> String {
     "document".to_string()
 }
 
+/// The LaTeX package cache ceiling, in MiB.
+///
+/// 256 MiB is what the experiment used as a hard limit and is enough for a paper
+/// with a handful of packages and fonts; the reader can lower or raise it in
+/// Preferences.
+fn default_latex_cache_limit() -> u32 {
+    256
+}
+
+/// The range the cache ceiling is clamped to.
+pub const LATEX_CACHE_MIN_MB: u32 = 32;
+pub const LATEX_CACHE_MAX_MB: u32 = 4096;
+
+/// Keep a hand-edited or stale cache ceiling inside the supported range.
+///
+/// A zero would make every compile re-download and fail as soon as one package
+/// exceeded the limit; an enormous value would turn the cache into a second
+/// document folder. Clamping is friendlier than refusing to load the file.
+fn clamp_latex_cache_limit(mb: u32) -> u32 {
+    mb.clamp(LATEX_CACHE_MIN_MB, LATEX_CACHE_MAX_MB)
+}
+
 /// The source pane's line spacing.
 ///
 /// `normal` is the 1.5 established when the default was tightened; Compact and
@@ -432,6 +454,24 @@ pub struct Settings {
     #[serde(default)]
     pub last_active_tab: Option<String>,
 
+    // ---- Preferences: LaTeX ----------------------------------------------
+    /// Whether the reader has enabled the experimental LuaLaTeX engine.
+    ///
+    /// This lives in `settings.json` rather than in a marker file beside the
+    /// cache, so a portable build and a settings backup carry it. The cache
+    /// directory holds only downloaded bytes; turning the switch off leaves it
+    /// inert and stops the `mdraft-tex` scheme from serving anything.
+    #[serde(default)]
+    pub latex_enabled: bool,
+    /// The ceiling for the downloaded TeX package cache, in MiB.
+    ///
+    /// Least-recently-used entries are evicted to stay under it. Clamped to a
+    /// range a reader cannot set to something that would make a compile fail
+    /// opaquely: too small and every compile re-downloads, too large and the
+    /// cache stops being a cache.
+    #[serde(default = "default_latex_cache_limit")]
+    pub latex_cache_limit_mb: u32,
+
     // ---- Preferences: Files ----------------------------------------------
     /// "welcome" | "new" | "last" | "tabs"
     pub on_launch: String,
@@ -629,6 +669,9 @@ impl Default for Settings {
             last_directory: None,
             last_tabs: Vec::new(),
             last_active_tab: None,
+
+            latex_enabled: false,
+            latex_cache_limit_mb: default_latex_cache_limit(),
 
             on_launch: "welcome".into(),
             default_extension: "md".into(),
@@ -872,6 +915,7 @@ fn parse_settings(raw: &str) -> Option<Settings> {
     normalize_favorites(&mut settings.favorites);
     settings.last_tabs.truncate(MAX_LAST_TABS);
     settings.ai_context_tokens = clamp_context_tokens(settings.ai_context_tokens);
+    settings.latex_cache_limit_mb = clamp_latex_cache_limit(settings.latex_cache_limit_mb);
     // The Files panel was replaced by Favorites. An older file that was last
     // showing it must open on the panel that took its place, not fall through
     // the renderer's `else` branch into Recent.
@@ -898,12 +942,24 @@ impl AppState {
             .and_then(|raw| parse_settings(&raw))
             .unwrap_or_default();
 
+        // The `mdraft-tex` scheme handler is synchronous and cannot parse this
+        // file per request, so the two fields it needs are mirrored in memory.
+        crate::latex::apply_settings(&settings);
+
         Self {
             settings: Mutex::new(settings),
             config_file,
             export_availability: Mutex::new(ExportAvailability::default()),
             ai: crate::ai::AiState::default(),
         }
+    }
+
+    /// A copy of the current settings, for a command that changes one field.
+    pub fn snapshot(&self) -> Result<Settings, String> {
+        self.settings
+            .lock()
+            .map(|guard| guard.clone())
+            .map_err(|e| e.to_string())
     }
 
     pub fn save(&self, mut next: Settings) -> Result<Settings, String> {
@@ -914,9 +970,13 @@ impl AppState {
         normalize_favorites(&mut next.favorites);
         next.last_tabs.truncate(MAX_LAST_TABS);
         next.ai_context_tokens = clamp_context_tokens(next.ai_context_tokens);
+        next.latex_cache_limit_mb = clamp_latex_cache_limit(next.latex_cache_limit_mb);
         sort_ai_usage(&mut next.ai_action_usage);
         next.ai_action_usage.truncate(MAX_AI_USAGE_ENTRIES);
         write_json(&self.config_file, &next)?;
+        // The scheme handler reads the mirror, not the file, so it must follow
+        // every save — including the one that turns the engine off.
+        crate::latex::apply_settings(&next);
         let mut guard = self.settings.lock().map_err(|e| e.to_string())?;
         *guard = next.clone();
         Ok(next)
@@ -1215,6 +1275,32 @@ mod tests {
         let saved = state.save(next).expect("save settings");
         assert_eq!(saved.ai_context_tokens, 32_768);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_latex_cache_ceiling_is_clamped_and_defaults_to_256() {
+        // A zero ceiling would make every compile re-download, and an enormous
+        // one would turn the cache into a second document folder.
+        assert_eq!(Settings::default().latex_cache_limit_mb, 256);
+        assert_eq!(clamp_latex_cache_limit(0), LATEX_CACHE_MIN_MB);
+        assert_eq!(clamp_latex_cache_limit(1), LATEX_CACHE_MIN_MB);
+        assert_eq!(clamp_latex_cache_limit(256), 256);
+        assert_eq!(clamp_latex_cache_limit(u32::MAX), LATEX_CACHE_MAX_MB);
+    }
+
+    #[test]
+    fn the_latex_switch_defaults_off_and_loads_from_a_legacy_file() {
+        // An older settings file has neither key; it must keep loading, with the
+        // engine off and the documented ceiling.
+        let legacy = r#"{"viewMode":"split","theme":"light"}"#;
+        let loaded = parse_settings(legacy).expect("a legacy file loads");
+        assert!(!loaded.latex_enabled);
+        assert_eq!(loaded.latex_cache_limit_mb, 256);
+
+        let enabled = r#"{"latexEnabled":true,"latexCacheLimitMb":512}"#;
+        let loaded = parse_settings(enabled).expect("the new keys load");
+        assert!(loaded.latex_enabled);
+        assert_eq!(loaded.latex_cache_limit_mb, 512);
     }
 
     #[test]

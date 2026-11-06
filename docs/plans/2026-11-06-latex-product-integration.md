@@ -310,7 +310,7 @@ user-visible gain; 5–7 need their own measurement before they are committed.
   then the local catalog, the worker index, the stale-tag rule and the
   "no network" assertion. Ship behind the same availability rules as the other
   languages; nothing appears in the menu that cannot work.
-- [ ] **7. The native PDF row.** `save_compiled_pdf` (renamed from
+- [x] **7. The native PDF row.** `save_compiled_pdf` (renamed from
   `latex_save_pdf`) behind `Export › PDF` and the preview button; `export.pdf`
   enabled for Typst and LaTeX with `pdfPreviewAvailable` from D10 and the D1b
   availability rule; labels naming the engine; the two `(use PDF via Typst)`
@@ -318,7 +318,7 @@ user-visible gain; 5–7 need their own measurement before they are committed.
   `exportPdf()` writes the compiled bytes for both languages instead of the
   print path or the "use the other route" modal; the stale/kbd guard in
   `exportWithPandoc`. No change in `export.rs`.
-- [ ] **8. State, portable build and cache.** `latexEnabled` and the ceiling in
+- [x] **8. State, portable build and cache.** `latexEnabled` and the ceiling in
   settings, in-memory mirror for the scheme, `latex_disable` /
   `latex_cache_info` / `latex_clear_cache`, LRU eviction, lock released around
   the download, digest check where published, Preferences rows, portable `data`
@@ -374,6 +374,28 @@ user-visible gain; 5–7 need their own measurement before they are committed.
   `LAST_MENU_STATE` so a pandoc row cannot be re-enabled for a `.tex` document by
   a later availability report, which would have left a live row that reaches
   pandoc's Markdown reader.
+- **Step 7, one saver.** `save_compiled_pdf` (the command) is reached through one
+  frontend helper, `saveCompiledPdf`, which both the preview button and
+  `Export › PDF` call for Typst and LaTeX. The freshness check runs after the save
+  dialog closes, because a compile can finish while the reader is choosing a path.
+- **Step 7, the Typst label.** `PDF… (use PDF via Typst)` became
+  `PDF… (compiled by Typst)` and the print row became `Print… (use Export › PDF)`.
+  Both are Rust-built, so no `parse_settings` migration was needed — that
+  migration was only required for the rejected pandoc-label change.
+- **Step 7, menu-test coverage.** The Typst Pages-view availability is proven by
+  the Rust unit test rather than the UI suite: it needs a real Typst compile,
+  which `menu-test.mjs` does not run. The Document-view disabled state and its
+  label are asserted through the real menu.
+- **Step 8, cache tests.** The three new cache tests use a scratch directory under
+  `src-tauri/target/` instead of `std::env::temp_dir()`, because that directory is
+  refused on this host (see the trap in `AGENTS.md`). The pre-existing tests that
+  use the temp directory still fail here for the same environmental reason.
+- **Step 8, `latex_status`.** It is now true only when the switch is on *and* the
+  verified assets are present, so a switch that promises an engine it cannot run
+  is not reported as ready.
+- **Step 8, cache size.** `cache_size` skips a symlink and reports the size
+  instead of failing the whole measurement; a single odd entry must not make
+  Preferences unable to show a number.
 
 ## Files and modules
 
