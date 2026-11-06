@@ -64,12 +64,24 @@ of it.
 alone, minified with CodeMirror peers external: **9,839 B gzip**. That is the
 floor for having completion at all, and it is paid whichever catalog we write.
 
+**HTML costs nothing, and that is the sharpest contrast in this plan.**
+`@codemirror/lang-html` is already a dependency and is already loaded for every
+`.html` document (`src/html-language.ts:18`), and `html()` registers its own
+completion source as language data
+(`@codemirror/lang-html/dist/index.js:605`). Measured: importing
+`htmlCompletionSource` alone is **58,411 B gzip**, but importing `html()` — which
+we already do — is **65,718 B gzip** and *includes* it. So HTML completion
+arrives with the layer, at **zero additional bytes and zero catalog code**. The
+same package also exposes `extraTags` and `extraGlobalAttributes` for the day a
+project-specific tag list is wanted.
+
 **What this means.** A hand-written catalog is ~5 KB gzip of data (the same order
 as `latex-data.js`) plus the 10 KB layer — roughly **15 KB gzip**, against
 **60 KB** for importing their completion source alone. The package would cost
 four times as much to deliver a catalog we can write in a day, and it would bring
 a second LaTeX parser that can disagree with the sTeX grammar the editor already
-runs.
+runs. HTML shows the other side of the same rule: a package that already ships a
+completion source we can reach for free is simply used.
 
 **What CodeMirror 6 gives us for free.** `@codemirror/autocomplete` is already
 installed and exports everything needed: `autocompletion`, `completionKeymap`,
@@ -93,6 +105,16 @@ fields come from the same package. **No new dependency is required.**
 - A **Markdown catalog** as the second consumer, to prove the layer is
   language-neutral rather than a LaTeX special case: ATX headings, emphasis,
   links, tables, and the built-in Reference's own constructs.
+- **HTML completion at zero cost.** `@codemirror/lang-html` — already a
+  dependency, already loaded for every `.html` document — registers its own
+  autocomplete source inside `html()` (`node_modules/@codemirror/lang-html/dist/index.js:605`:
+  `htmlLanguage.data.of({ autocomplete: htmlCompletionSourceWith(config) })`).
+  So the moment `autocompletion()` is installed, HTML gets tag, attribute and
+  attribute-value completion with **no catalog to write and no bytes to add**.
+  This is a verification step, not a build step: confirm it works, confirm it
+  respects the preference, and confirm the `extraTags`/`extraGlobalAttributes`
+  hooks are left alone. Measured: importing `htmlCompletionSource` alone is
+  58 KB gzip, but we pay **0** because `html()` already ships it.
 - A preference to turn completion off, and a documented key that opens it
   explicitly.
 
@@ -109,9 +131,9 @@ fields come from the same package. **No new dependency is required.**
 - Diagnostics, linting, hover tooltips and auto-closing environments. Those are
   separate features with their own cost; the linter in particular needs
   `@codemirror/lint` and a decision about what a "wrong" LaTeX document is.
-- Typst, HTML and AsciiDoc catalogs. The layer supports them; adding their
-  catalogs is follow-up work, and shipping the layer with two languages proves
-  the abstraction better than four half-tested ones.
+- Typst and AsciiDoc catalogs. The layer supports them; adding their catalogs is
+  follow-up work. HTML is **not** in this list: it needs no catalog, because
+  `@codemirror/lang-html` already carries one (see scope above).
 - AI-assisted completion. The assistant is a separate, opt-in, network feature
   and must not be entangled with a local catalog.
 
@@ -185,6 +207,15 @@ the same rule the existing chrome follows and the reason `.combo-popup` has a
   reconfigured on language change and on the preference. Verify Tab in all four
   states, plus Escape, plus IME composition. **Measure the bundle delta here**,
   before any catalog exists, and record it against the 9,839 B floor.
+- [ ] **1b. HTML, which comes for free.** With the layer installed, a `.html`
+  document already offers tags, attributes and attribute values, because
+  `html()` registers `htmlCompletionSourceWith(config)` as its `autocomplete`
+  language data (`@codemirror/lang-html/dist/index.js:605`). Confirm it works
+  through the real editor, that the preference turns it off, that it does not
+  fight `autoCloseTags` (which is a separate extension and stays governed by its
+  own preference), and that the bundle does not grow — the completion source is
+  already inside the `html()` chunk we ship. If any of that is false, the
+  assumption is wrong and HTML moves to its own step.
 - [ ] **2. Theme and accessibility.** Tooltip selectors in `buildChromeTheme` for
   all nine palettes; `aria-activedescendant` and the live-region announcement the
   library emits; reduced-motion respect; a visible focus ring that survives the
@@ -201,8 +232,7 @@ the same rule the existing chrome follows and the reason `.combo-popup` has a
   cached project snapshot, generation-tagged and cancellable, with a test that a
   stale reply is dropped.
 - [ ] **6. The Markdown catalog.** The second consumer, proving the layer is
-  language-neutral.
-- [ ] **7. Preference and documentation.** A `completion` setting in
+  language-neutral.- [ ] **7. Preference and documentation.** A `completion` setting in
   `settings.json` (default on), a Preferences row, the LaTeX Reference and
   `docs/latex.md` updated, `AGENTS.md` script and test rows.
 - [ ] **8. Measurement and close.** Typing latency with the popup open and closed
@@ -270,6 +300,9 @@ additive with a default, so an older build loads the same `settings.json`.
   construct the Format menu inserts.
 - Extend `menu-test.mjs` (150) — the Preferences row exists and persists.
 - Extend `syntax-theme-test.mjs` (10) — the popup is legible on a dark palette.
+- Extend `autoclose-test.mjs` (33) — HTML completion offers tags and attributes
+  through the real editor, and the preference turns it off without affecting
+  auto-closing, which is a separate setting.
 - A hidden Tauri run on the LaTeX project: typing `\beg` offers `\begin`, `\ref{`
   offers the project's labels, a stale reply after an edit paints nothing.
 - Update every count in `AGENTS.md` in the same change.
@@ -283,6 +316,9 @@ unchanged from today, typing latency with it open stays within the existing
 - Typing `\` in a `.tex` document offers commands; `\begin{` offers environments;
   `\usepackage{` offers packages; `\ref{`, `\cite{` and `\includegraphics{` offer
   the project's own labels, keys and images.
+- Typing `<` in a `.html` document offers tags, and inside a tag offers
+  attributes and their values — with no catalog written for it and no bundle
+  growth, because `html()` already carries that source.
 - Tab accepts a completion when the popup is open and indents when it is not, in
   every language, with no change to existing indentation behaviour.
 - The popup is legible in every syntax palette, announces itself to a screen
