@@ -8,9 +8,9 @@
 
 **Write in markup. See the page take shape.**
 
-MDraft is a free, open-source desktop editor for **Markdown, AsciiDoc, Typst
-and HTML**. Write notes, documentation or papers with your source and a live
-preview side by side, then export a document ready to share.
+MDraft is a free, open-source desktop editor for **Markdown, AsciiDoc, Typst,
+LaTeX and HTML**. Write notes, documentation or papers with your source and a
+live preview side by side, then export a document ready to share.
 
 **[Website](https://bgeneto.github.io/MDraft/) · [Download the latest release →](https://github.com/bgeneto/MDraft/releases/latest)**
 
@@ -29,7 +29,7 @@ Use **Split** to see both views, or switch to **Source** or **Preview** when
 you want more room. The outline, favorites and recent files keep longer
 projects easy to navigate.
 
-## Four formats, one editor
+## Five formats, one editor
 
 - **Markdown** — GitHub-flavored tables, task lists and alerts, plus math,
   Mermaid diagrams, syntax-highlighted code and a table of contents.
@@ -37,6 +37,10 @@ projects easy to navigate.
   for manuals and technical documentation.
 - **Typst** — a flowing Document view or a Pages view of the compiled PDF,
   with selectable text and source matching. Export directly to PDF with Typst.
+- **LaTeX** — syntax colouring, `%` comments, an outline read from `\section`
+  commands, and the compiled PDF in the preview. LuaLaTeX runs locally, so a
+  `.tex` project with `\input`, images and BibTeX compiles without a TeX
+  installation.
 - **HTML** — preview a page with its own CSS, images and scripts in a sandboxed
   view alongside its source.
 
@@ -46,6 +50,11 @@ projects easy to navigate.
 
 Typst preview and PDF compilation require the Typst compiler. MDraft can
 install it for you on Windows and Linux.
+
+LaTeX is opt-in: enabling it downloads about 10 MiB of verified LuaLaTeX engine
+files, and the TeX packages a document needs are fetched on demand and cached
+locally. Nothing about your document leaves this device, and *Preferences ›
+Export* reports the cache size and clears it.
 
 ## An AI assistant you can configure
 
@@ -134,13 +143,14 @@ an AI response. If you enable AI filename suggestions, saving an untitled
 document can also send text to your chosen endpoint. HTML documents may load
 remote resources referenced by their own markup.
 
-The experimental [LuaLaTeX proof of concept](docs/latex-poc.md) downloads its
-engine only after explicit enablement and then retrieves missing TeX packages
-and fonts on demand. The document and bibliography contents stay local.
+The [LaTeX engine](docs/latex.md) downloads its files only after explicit
+enablement and then retrieves missing TeX packages and fonts on demand. The
+document and bibliography contents stay local.
 
 ## Learn more
 
 - [User guide](docs/guide.md) — editing, previews, shortcuts and troubleshooting.
+- [LaTeX](docs/latex.md) — the local LuaLaTeX engine, the project snapshot and PDF export.
 - [Export and conversion](docs/export.md) — supported formats and dependencies.
 - [Typography](docs/typography.md) — fonts, presets and OpenType options.
 - [Contributing](CONTRIBUTING.md) — report a problem, build MDraft or contribute.

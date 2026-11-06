@@ -7,6 +7,7 @@
 
 import ASCIIDOC_REFERENCE_SOURCE from "../samples/asciidoc-reference.adoc?raw";
 import TYPST_REFERENCE_SOURCE from "../samples/typst-reference.typ?raw";
+import LATEX_REFERENCE_SOURCE from "../samples/latex-reference.tex?raw";
 
 const WELCOME_LINES: string[] = [
   "# Welcome to MDraft",
@@ -315,6 +316,7 @@ export const WELCOME = WELCOME_LINES.join("\n");
 export const REFERENCE = REFERENCE_LINES.join("\n");
 export const ASCIIDOC_REFERENCE = ASCIIDOC_REFERENCE_SOURCE;
 export const TYPST_REFERENCE = TYPST_REFERENCE_SOURCE;
+export const LATEX_REFERENCE = LATEX_REFERENCE_SOURCE;
 export const SHORTCUTS = SHORTCUTS_LINES.join("\n");
 
 // ---------------------------------------------------------------------------
