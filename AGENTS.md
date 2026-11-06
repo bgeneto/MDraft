@@ -712,6 +712,28 @@ than asserting the feature's own internal counters.
 
 ## Traps
 
+**`npm test` reports `the application exited with code 0 before opening port 92xx` for every UI layer, and killing the leaked `mdraft.exe` makes a new PID appear**
+An orphaned `node scripts/test-all.mjs` from an earlier, interrupted run was still
+alive; each fresh launch handed off to its instance through the single-instance
+plugin and exited 0. `Stop-Process` on the app alone is not enough because the
+harness relaunches it. Find the parent first —
+`Get-CimInstance Win32_Process -Filter "Name='mdraft.exe'"` and read
+`ParentProcessId` — stop the `test-all.mjs` node process, then the app. Check for
+both before blaming a change: `Get-CimInstance Win32_Process -Filter
+"Name='node.exe'" | Where-Object { $_.CommandLine -like '*test-all.mjs*' }`. The
+earlier entry about a running installation is the same failure with a different
+parent.
+
+**`preview-zoom`, `typst-preview`, `word-sync` and `sync` fail on a host where `typst --version` works**
+The harness gives each UI suite a private `%APPDATA%`, and `managed_root` in
+`src-tauri/src/typst.rs` resolves the managed compiler through
+`app_data_dir()/typst`. A Typst installed by MDraft into the *real* profile is
+therefore invisible to the test instance, which reports
+`Document zoom's Typst checks require Typst` — or, for `typst-preview`, exits 2
+with an empty log before printing any check. These four fail identically on an
+untouched checkout, so verify with `git stash push -u` before investigating. Put
+`typst` on `PATH` to exercise them.
+
 **A test launched with `visible: false` still displayed `main.tex — MDraft`**
 The window-state plugin calls `show()` during restoration, including when
 the Tauri window configuration starts hidden. The `MDRAFT_TEST_HIDDEN` mode
