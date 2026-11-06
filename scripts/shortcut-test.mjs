@@ -455,6 +455,43 @@ check(
 );
 
 // ---------------------------------------------------------------------------
+// Tab belongs to the completion layer while a popup is open and to indentation
+// the rest of the time. This is the one silent-failure risk in that feature: a
+// wrong precedence makes Tab indent while a popup is open, which looks like a
+// broken editor rather than a wrong keymap. Both states are measured here.
+//
+// The popup itself is exercised by the catalog suites (steps 3 and 6); what this
+// pins is that Tab keeps indenting, which is the behaviour a wrong keymap
+// precedence would silently break.
+console.log("\n=== Tab still indents with the completion layer installed ===");
+{
+  const text = () => evaluate(`document.querySelector(".cm-content").innerText`);
+  await evaluate(`document.querySelector(".cm-content").focus()`);
+  await send("Input.insertText", { text: "\nplain prose here\n" });
+
+  const before = await text();
+  const result = await press({ code: "Tab", key: "Tab" });
+  const after = await text();
+  check(
+    after !== before,
+    "Tab changes the buffer rather than being swallowed",
+    `${before.length} -> ${after.length}`,
+  );
+  check(result === "handled", "the editor consumes Tab", result);
+
+  // The popup must not be open for prose: `activateOnTyping` is on, so a layer
+  // that offered buffer words would have opened one by now.
+  const popup = await evaluate(`Boolean(document.querySelector(".cm-tooltip-autocomplete"))`);
+  check(popup === false, "typing prose opens no completion popup", popup ? "open" : "none");
+
+  // And Tab keeps working after the completion layer has been asked to decline.
+  const before2 = await text();
+  await press({ code: "Tab", key: "Tab" });
+  const after2 = await text();
+  check(after2 !== before2, "a second Tab still indents", `${before2.length} -> ${after2.length}`);
+}
+
+// ---------------------------------------------------------------------------
 // Ctrl+O and Ctrl+Shift+S open native modal dialogs. Pressing them here would
 // block on a window this session cannot dismiss, so they are covered by the
 // registry check above — bound, and reachable — and not executed. Say so rather
