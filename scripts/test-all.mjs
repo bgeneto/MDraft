@@ -129,6 +129,27 @@ const SUITES = [
     script: "asciidoc-export-unit.mjs",
   },
   {
+    // The pure Markdown preview pipeline: chunk counts, fragments, line
+    // anchors, KaTeX/code tables, CRLF and empty input. No DOM and no
+    // application; the worker and the synchronous fallback share it.
+    id: "preview-unit",
+    title: "Preview pipeline (unit)",
+    kind: "node",
+    script: "preview-render-unit.mjs",
+  },
+  {
+    id: "preview-worker-unit",
+    title: "Preview worker ownership (unit)",
+    kind: "node",
+    script: "preview-worker-unit.mjs",
+  },
+  {
+    id: "preview-dom",
+    title: "Preview DOM and sanitizer",
+    kind: "node",
+    script: "preview-dom-test.mjs",
+  },
+  {
     id: "autoclose-unit",
     title: "Auto-close matching (unit)",
     kind: "node",
@@ -238,6 +259,30 @@ const SUITES = [
     kind: "cdp",
     script: "preview-zoom-test.mjs",
     doc: "samples/export-tour.md",
+  },
+  {
+    id: "preview-perf",
+    title: "Preview typing performance",
+    kind: "cdp",
+    script: "preview-performance-test.mjs",
+    doc: "samples/feature-tour.md",
+  },
+  {
+    id: "preview-extreme",
+    title: "Preview of 10.8 MB CRLF and 72,000 paragraphs",
+    kind: "cdp",
+    script: "preview-performance-test.mjs",
+    doc: "samples/feature-tour.md",
+    env: { MDRAFT_PREVIEW_EXTREME: "1" },
+    optIn: true,
+  },
+  {
+    id: "preview-compare",
+    title: "Preview latency before/after comparison",
+    kind: "cdp",
+    script: "../docs/audits/preview-native-compare.mjs",
+    doc: "samples/feature-tour.md",
+    optIn: true,
   },
   {
     id: "word-sync",

@@ -206,6 +206,57 @@ console.log("\n=== bidirectional prose index ===");
   check(generated.scrollAnchors().length === 0, "generated text cannot become a scroll anchor");
 }
 
+{
+  const source = [
+    "= List sync",
+    "",
+    "- alpha first item",
+    "  beta continuation line",
+    "- gamma second item",
+    "  delta continuation line",
+    "",
+    "+ ordered one",
+    "+ ordered two",
+  ].join("\n");
+  const rows = [
+    "alpha first item",
+    "beta continuation line",
+    "gamma second item",
+    "delta continuation line",
+    "ordered one",
+    "ordered two",
+  ].map((text) => ({ text, region: "left" }));
+  const map = await createTypstPageMap(source, rows);
+  for (const [word, occurrence, line] of [
+    ["alpha", 0, 0],
+    ["beta", 0, 1],
+    ["gamma", 0, 2],
+    ["delta", 0, 3],
+    ["ordered", 1, 5],
+  ]) {
+    const at = occurrence === 0 ? source.indexOf(word) : source.lastIndexOf(word);
+    const found = map.wordAt(line, rows[line].text.indexOf(word));
+    check(
+      found?.text === word && found?.from === at,
+      `a multiline list word maps its own source occurrence (${word})`,
+      JSON.stringify({ found, at }),
+    );
+    const parts = found ? map.partsForSource(found.from, found.to) : [];
+    check(
+      parts.some((part) => part.line === line),
+      `the reverse lookup reaches the same list line (${word})`,
+      JSON.stringify(parts),
+    );
+  }
+  const repeated = map.wordAt(1, 0);
+  check(
+    repeated?.text === "beta" &&
+      map.wordAt(3, 0)?.text === "delta" &&
+      map.wordAt(1, 0)?.from !== map.wordAt(3, 0)?.from,
+    "a repeated continuation word keeps its own line",
+  );
+}
+
 const failed = checks.filter((entry) => !entry.ok).length;
 console.log(`\n${checks.length - failed}/${checks.length} checks passed`);
 process.exit(failed === 0 ? 0 : 1);

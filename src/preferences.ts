@@ -1656,6 +1656,13 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
         },
         {
           kind: "checkbox",
+          label: "Blink the caret",
+          help: "Off keeps a solid caret. On Linux this also stops WebKitGTK repainting continuously while the editor is focused.",
+          get: () => s().cursorBlink,
+          set: (value) => host.update({ cursorBlink: value }),
+        },
+        {
+          kind: "checkbox",
           label: "Synchronise Scroll",
           help: "Keeps the two panes aligned while you scroll. Clicking in either pane always jumps the other one to the same content, and the block matching the caret is highlighted.",
           get: () => s().syncScroll,

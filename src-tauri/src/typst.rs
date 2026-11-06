@@ -11,10 +11,12 @@
 //! licence question simple — Typst is Apache-2.0 and would have to be shipped
 //! with its notice otherwise.
 
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -32,10 +34,92 @@ const RELEASE_API: &str = "https://api.github.com/repos/typst/typst/releases/lat
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 /// A preview that takes longer than this is a runaway document, not a big one.
 const RENDER_TIMEOUT: Duration = Duration::from_secs(60);
+const PREVIEW_SUPERSEDED: &str = "Typst render was superseded by a newer edit.";
 
-/// Concurrent previews share the temporary directory; each PDF gets its own name
-/// so a slow render cannot be overwritten by the next keystroke.
-static NEXT_PDF: AtomicU64 = AtomicU64::new(0);
+/// Each render gets its own output name, including concurrent exports.
+static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(0);
+
+fn render_output(dir: &Path, extension: &str) -> PathBuf {
+    dir.join(format!(
+        "render-{}-{}.{}",
+        std::process::id(),
+        NEXT_OUTPUT.fetch_add(1, Ordering::Relaxed),
+        extension
+    ))
+}
+
+/// The newest preview compile per window, and the flag that stops the previous
+/// one. A Typst compile is a whole process; ignoring a stale result is not
+/// enough when the next keystroke has already asked for another one.
+type PreviewFlag = Arc<AtomicBool>;
+#[derive(Default)]
+struct PreviewState {
+    /// Retained after completion so a late IPC request cannot revive old work.
+    latest: Option<u64>,
+    active: Option<(u64, PreviewFlag)>,
+}
+static PREVIEW_FLAGS: OnceLock<Mutex<HashMap<String, PreviewState>>> = OnceLock::new();
+static PREVIEW_SLOT: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+
+fn preview_flags() -> &'static Mutex<HashMap<String, PreviewState>> {
+    PREVIEW_FLAGS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Register a preview token and cancel every older compile for this window.
+fn begin_preview(key: &str, token: u64) -> PreviewFlag {
+    let flag = Arc::new(AtomicBool::new(false));
+    if let Ok(mut flags) = preview_flags().lock() {
+        let state = flags.entry(key.to_string()).or_default();
+        if state.latest.is_some_and(|latest| token <= latest) {
+            flag.store(true, Ordering::Relaxed);
+            return flag;
+        }
+        if let Some((_, previous)) = &state.active {
+            previous.store(true, Ordering::Relaxed);
+        }
+        state.latest = Some(token);
+        state.active = Some((token, flag.clone()));
+    } else {
+        // A poisoned registry cannot establish ownership safely.
+        flag.store(true, Ordering::Relaxed);
+    }
+    flag
+}
+
+/// Drop a finished token without removing a newer one registered meanwhile.
+fn end_preview(key: &str, token: u64) {
+    if let Ok(mut flags) = preview_flags().lock()
+        && let Some(state) = flags.get_mut(key)
+        && state
+            .active
+            .as_ref()
+            .is_some_and(|(current, _)| *current == token)
+    {
+        state.active = None;
+    }
+}
+
+/// Advance the watermark and stop only previews at or before this generation.
+fn cancel_preview(key: &str, token: u64) -> Result<(), String> {
+    let mut flags = preview_flags()
+        .lock()
+        .map_err(|_| "The Typst preview registry is unavailable.".to_string())?;
+    let state = flags.entry(key.to_string()).or_default();
+    if state.latest.is_none_or(|latest| token > latest) {
+        state.latest = Some(token);
+    }
+    if let Some((current, flag)) = &state.active
+        && *current <= token
+    {
+        flag.store(true, Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn cancel_typst_preview(token: u64) -> Result<(), String> {
+    cancel_preview("typst-preview", token)
+}
 
 pub fn typst_exe() -> &'static str {
     if cfg!(windows) { "typst.exe" } else { "typst" }
@@ -461,19 +545,54 @@ pub async fn render_typst<R: Runtime>(
     source: String,
     mode: Option<String>,
     image_root: Option<String>,
+    token: Option<u64>,
 ) -> Result<RenderedTypst, String> {
     let mode = mode.unwrap_or_else(|| "document".into());
-    tauri::async_runtime::spawn_blocking(move || {
+    // The application is single-window; one key is enough to let a newer
+    // preview stop the compile the previous one started.
+    let key = "typst-preview";
+    let cancel = token.map(|value| begin_preview(key, value));
+    // A newer request signals the running child before waiting for this slot.
+    // Export calls have no token and retain their independent process/output.
+    let _permit = if let Some(flag) = cancel.as_ref() {
+        if flag.load(Ordering::Relaxed) {
+            if let Some(value) = token {
+                end_preview(key, value);
+            }
+            return Err(PREVIEW_SUPERSEDED.into());
+        }
+        let slot = PREVIEW_SLOT.get_or_init(|| tokio::sync::Semaphore::new(1));
+        let permit = slot
+            .acquire()
+            .await
+            .map_err(|_| "The Typst preview queue is unavailable.".to_string())?;
+        if flag.load(Ordering::Relaxed) {
+            if let Some(value) = token {
+                end_preview(key, value);
+            }
+            return Err(PREVIEW_SUPERSEDED.into());
+        }
+        Some(permit)
+    } else {
+        None
+    };
+    let result = tauri::async_runtime::spawn_blocking(move || {
         render(
             &app,
             path.as_deref(),
             &source,
             &mode,
             image_root.as_deref(),
+            cancel.as_deref(),
         )
     })
     .await
-    .map_err(|e| format!("The Typst render task could not be started: {e}"))?
+    .map_err(|e| format!("The Typst render task could not be started: {e}"))
+    .and_then(|result| result);
+    if let Some(value) = token {
+        end_preview(key, value);
+    }
+    result
 }
 
 /// Run Typst once, feeding the document on stdin.
@@ -488,72 +607,104 @@ fn run_typst(
     source: &str,
     extra: &[&str],
     output: &Path,
+    cancel: Option<&AtomicBool>,
 ) -> Result<(bool, String), String> {
-    let mut child = {
-        let mut command = std::process::Command::new(binary);
-        quiet(&mut command)
-            .arg("compile")
-            .args(extra)
-            .arg("--root")
-            .arg(root)
-            .arg("-")
-            .arg(output)
-            .current_dir(root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        command.spawn().map_err(|e| format!("Could not start Typst: {e}"))?
-    };
+    let mut command = std::process::Command::new(binary);
+    quiet(&mut command)
+        .arg("compile")
+        .args(extra)
+        .arg("--root")
+        .arg(root)
+        .arg("-")
+        .arg(output)
+        .current_dir(root);
+    run_typst_command(command, source, cancel, RENDER_TIMEOUT)
+}
 
-    if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write;
-        stdin
-            .write_all(source.as_bytes())
-            .map_err(|e| format!("Could not pass the document to Typst: {e}"))?;
+/// Drain the child while stdin is written on a separate scoped thread. This
+/// lets a cancellation or timeout kill a child that stopped reading a large
+/// buffer, and avoids copying the whole source merely to move it to a thread.
+fn run_typst_command(
+    mut command: std::process::Command,
+    source: &str,
+    cancel: Option<&AtomicBool>,
+    timeout: Duration,
+) -> Result<(bool, String), String> {
+    if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        return Err(PREVIEW_SUPERSEDED.into());
     }
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Could not start Typst: {e}"))?;
 
-    let stdout_thread = child.stdout.take().map(|mut pipe| {
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let _ = pipe.read_to_end(&mut buf);
-            buf
-        })
-    });
-    let stderr_thread = child.stderr.take().map(|mut pipe| {
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let _ = pipe.read_to_end(&mut buf);
-            buf
-        })
-    });
+    std::thread::scope(|scope| {
+        let writer = child.stdin.take().map(|mut pipe| {
+            scope.spawn(move || {
+                use std::io::Write;
+                pipe.write_all(source.as_bytes())
+            })
+        });
+        let stdout = child.stdout.take().map(|mut pipe| {
+            scope.spawn(move || {
+                let _ = std::io::copy(&mut pipe, &mut std::io::sink());
+            })
+        });
+        let stderr = child.stderr.take().map(|mut pipe| {
+            scope.spawn(move || {
+                let mut bytes = Vec::new();
+                let _ = pipe.read_to_end(&mut bytes);
+                bytes
+            })
+        });
 
-    let deadline = std::time::Instant::now() + RENDER_TIMEOUT;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {
-                if std::time::Instant::now() >= deadline {
-                    // A document that never finishes would otherwise wedge a
-                    // worker thread for the life of the process, and the next
-                    // keystroke would start another one.
+        let deadline = std::time::Instant::now() + timeout;
+        let outcome = loop {
+            if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                let _ = child.kill();
+                let _ = child.wait();
+                break Err(PREVIEW_SUPERSEDED.to_string());
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                break Err(format!(
+                    "Typst did not finish within {} seconds and was stopped.",
+                    timeout.as_secs()
+                ));
+            }
+            match child.try_wait() {
+                Ok(Some(status)) => break Ok(status),
+                Ok(None) => std::thread::sleep(Duration::from_millis(40)),
+                Err(error) => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(format!(
-                        "Typst did not finish within {} seconds and was stopped.",
-                        RENDER_TIMEOUT.as_secs()
-                    ));
+                    break Err(format!("Could not wait for Typst: {error}"));
                 }
-                std::thread::sleep(Duration::from_millis(40));
             }
-            Err(e) => return Err(format!("Could not wait for Typst: {e}")),
-        }
-    };
+        };
 
-    let _ = stdout_thread.map(|t| t.join());
-    let stderr = stderr_thread
-        .map(|t| t.join().unwrap_or_default())
-        .unwrap_or_default();
-    Ok((status.success(), String::from_utf8_lossy(&stderr).into_owned()))
+        let written = writer.map(|thread| thread.join());
+        let _ = stdout.map(|thread| thread.join());
+        let stderr = stderr
+            .and_then(|thread| thread.join().ok())
+            .unwrap_or_default();
+        let status = outcome?;
+        match written {
+            Some(Ok(Ok(()))) => {}
+            Some(Ok(Err(error))) => {
+                return Err(format!("Could not pass the document to Typst: {error}"));
+            }
+            Some(Err(_)) => return Err("The Typst input task failed.".into()),
+            None => return Err("Could not open Typst's input pipe.".into()),
+        }
+        Ok((
+            status.success(),
+            String::from_utf8_lossy(&stderr).into_owned(),
+        ))
+    })
 }
 
 /// Turn Typst's stderr into the lines worth showing.
@@ -596,18 +747,28 @@ fn render_document(
     root: &Path,
     dir: &Path,
     source: &str,
+    cancel: Option<&AtomicBool>,
 ) -> Result<RenderedTypst, String> {
-    let target = dir.join("document.html");
+    let target = render_output(dir, "html");
     let _ = std::fs::remove_file(&target);
 
-    let (ok, stderr) = run_typst(
+    let compiled = run_typst(
         binary,
         root,
         source,
         &["--features", "html", "--format", "html"],
         &target,
-    )?;
+        cancel,
+    );
+    let (ok, stderr) = match compiled {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = std::fs::remove_file(&target);
+            return Err(error);
+        }
+    };
     if !ok {
+        let _ = std::fs::remove_file(&target);
         let message: Vec<String> = stderr
             .lines()
             .filter(|line| !line.trim().is_empty())
@@ -621,8 +782,9 @@ fn render_document(
         });
     }
 
-    let page = std::fs::read_to_string(&target)
-        .map_err(|e| format!("Could not read the rendered document: {e}"))?;
+    let page = std::fs::read_to_string(&target);
+    let _ = std::fs::remove_file(&target);
+    let page = page.map_err(|e| format!("Could not read the rendered document: {e}"))?;
 
     // The export writes a complete HTML document. The body is taken because it is
     // inserted into the application's own document, so that the preview's
@@ -662,19 +824,23 @@ fn render_pages(
     root: &Path,
     dir: &Path,
     source: &str,
+    cancel: Option<&AtomicBool>,
 ) -> Result<RenderedTypst, String> {
-    let target = dir.join(format!(
-        "pages-{}-{}.pdf",
-        std::process::id(),
-        NEXT_PDF.fetch_add(1, Ordering::Relaxed)
-    ));
+    let target = render_output(dir, "pdf");
     let _ = std::fs::remove_file(&target);
 
     // PDF, not one SVG per page: the PDF carries the text and its positions, so
     // PDF.js can put a selectable text layer over the compiler's layout. The SVG
     // writer turns every glyph into an outline, which is why the old page view
     // could not be selected or clicked.
-    let (ok, stderr) = run_typst(binary, root, source, &["--format", "pdf"], &target)?;
+    let compiled = run_typst(binary, root, source, &["--format", "pdf"], &target, cancel);
+    let (ok, stderr) = match compiled {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = std::fs::remove_file(&target);
+            return Err(error);
+        }
+    };
 
     if !ok {
         let _ = std::fs::remove_file(&target);
@@ -739,7 +905,7 @@ pub fn compile_to<R: Runtime>(
     }
     extra.extend(["--format", format]);
 
-    let (ok, stderr) = run_typst(&typst.path, &root, source, &extra, target)?;
+    let (ok, stderr) = run_typst(&typst.path, &root, source, &extra, target, None)?;
     if !ok {
         let message: Vec<&str> = stderr
             .lines()
@@ -761,6 +927,7 @@ fn render<R: Runtime>(
     source: &str,
     mode: &str,
     image_root: Option<&str>,
+    cancel: Option<&AtomicBool>,
 ) -> Result<RenderedTypst, String> {
     let typst = find_typst(app).ok_or_else(|| {
         format!(
@@ -785,15 +952,20 @@ fn render<R: Runtime>(
     );
 
     if mode == "pages" {
-        return render_pages(&typst.path, &root, &dir, source);
+        return render_pages(&typst.path, &root, &dir, source, cancel);
     }
 
-    match render_document(&typst.path, &root, &dir, source) {
+    match render_document(&typst.path, &root, &dir, source, cancel) {
         Ok(rendered) => Ok(rendered),
         Err(failure) => {
+            // A cancelled compile must not start a second process just to be
+            // cancelled again; the frontend has already moved to a newer edit.
+            if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                return Err(failure);
+            }
             // The document view is experimental and refuses some documents
             // outright. Falling back keeps the pane useful, and says why.
-            let mut fallback = render_pages(&typst.path, &root, &dir, source)?;
+            let mut fallback = render_pages(&typst.path, &root, &dir, source, cancel)?;
             fallback
                 .warnings
                 .insert(0, format!("The document view was unavailable ({failure})."));
@@ -869,6 +1041,134 @@ mod tests {
         let mut parts = line.split_whitespace();
         assert_eq!(parts.next(), Some("typst"));
         assert_eq!(parts.next(), Some("0.15.1"));
+    }
+
+    #[test]
+    fn a_new_preview_cancels_only_the_older_compile() {
+        let key = "unit-preview-cancel";
+        let first = begin_preview(key, 1);
+        assert!(!first.load(Ordering::Relaxed));
+        let second = begin_preview(key, 2);
+        assert!(first.load(Ordering::Relaxed));
+        assert!(!second.load(Ordering::Relaxed));
+        // A late finish of the first token must not remove the newer entry.
+        end_preview(key, 1);
+        let third = begin_preview(key, 3);
+        assert!(second.load(Ordering::Relaxed));
+        assert!(!third.load(Ordering::Relaxed));
+        end_preview(key, 3);
+    }
+
+    #[test]
+    fn an_older_preview_cannot_replace_a_newer_generation() {
+        let key = "unit-preview-out-of-order";
+        let newest = begin_preview(key, 5);
+        let older = begin_preview(key, 4);
+        assert!(older.load(Ordering::Relaxed));
+        assert!(!newest.load(Ordering::Relaxed));
+        let next = begin_preview(key, 6);
+        assert!(newest.load(Ordering::Relaxed));
+        assert!(!next.load(Ordering::Relaxed));
+        end_preview(key, 6);
+    }
+
+    #[test]
+    fn cancellation_respects_the_generation_watermark() {
+        let key = "unit-preview-watermark";
+        let current = begin_preview(key, 10);
+        cancel_preview(key, 9).unwrap();
+        assert!(!current.load(Ordering::Relaxed));
+        cancel_preview(key, 10).unwrap();
+        assert!(current.load(Ordering::Relaxed));
+        let late = begin_preview(key, 10);
+        assert!(late.load(Ordering::Relaxed));
+        let next = begin_preview(key, 11);
+        assert!(!next.load(Ordering::Relaxed));
+        cancel_preview(key, 10).unwrap();
+        assert!(!next.load(Ordering::Relaxed));
+        end_preview(key, 11);
+        let late_after_finish = begin_preview(key, 10);
+        assert!(late_after_finish.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn simultaneous_renders_get_distinct_output_paths() {
+        let dir = Path::new("audit-typst-scratch");
+        let first = render_output(dir, "html");
+        let second = render_output(dir, "html");
+        let pages = render_output(dir, "pdf");
+        assert_ne!(first, second);
+        assert_ne!(first, pages);
+        assert_eq!(first.parent(), Some(dir));
+        assert_eq!(
+            pages.extension().and_then(|value| value.to_str()),
+            Some("pdf")
+        );
+    }
+
+    /// The parent test launches this one in a child test process. With no
+    /// marker it is a no-op in an ordinary suite run.
+    #[test]
+    fn fake_typst_stalls_without_reading() {
+        if std::env::var_os("MDRAFT_TEST_TYPST_STALL").is_some() {
+            std::thread::sleep(Duration::from_secs(5));
+        }
+    }
+
+    #[test]
+    fn cancellation_interrupts_a_child_blocked_on_stdin() {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .arg("--exact")
+            .arg("typst::tests::fake_typst_stalls_without_reading")
+            .arg("--nocapture")
+            .env("MDRAFT_TEST_TYPST_STALL", "1");
+        let flag = Arc::new(AtomicBool::new(false));
+        let signal = flag.clone();
+        let canceller = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            signal.store(true, Ordering::Relaxed);
+        });
+        let source = "x".repeat(2 * 1024 * 1024);
+        let started = std::time::Instant::now();
+        let result = run_typst_command(command, &source, Some(&flag), Duration::from_secs(5));
+        canceller.join().unwrap();
+        assert_eq!(result.unwrap_err(), PREVIEW_SUPERSEDED);
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn timeout_interrupts_a_child_blocked_on_stdin() {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .arg("--exact")
+            .arg("typst::tests::fake_typst_stalls_without_reading")
+            .arg("--nocapture")
+            .env("MDRAFT_TEST_TYPST_STALL", "1");
+        let source = "x".repeat(2 * 1024 * 1024);
+        let started = std::time::Instant::now();
+        let result = run_typst_command(command, &source, None, Duration::from_millis(150));
+        assert!(result.unwrap_err().contains("was stopped"));
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn fake_typst_closes_stdin_without_reading() {}
+
+    #[test]
+    fn a_child_that_closes_stdin_reports_the_failed_write() {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .arg("--exact")
+            .arg("typst::tests::fake_typst_closes_stdin_without_reading")
+            .arg("--nocapture");
+        let source = "x".repeat(2 * 1024 * 1024);
+        let result = run_typst_command(command, &source, None, Duration::from_secs(5));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Could not pass the document to Typst")
+        );
     }
 
     #[test]

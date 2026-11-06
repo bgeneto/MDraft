@@ -184,6 +184,15 @@ const paintedWord = () =>
     return marks.length === 0 ? null : marks.map((mark) => mark.textContent).join("\\n");
   })()`);
 
+async function waitForPaint(word, timeoutMs = 6000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if ((await paintedWord()) === word) return true;
+    await sleep(100);
+  }
+  return false;
+}
+
 const highlightText = () =>
   evaluate(`(() => {
     // The pulse swaps the registered name, so either one is the painted word.
@@ -518,7 +527,7 @@ console.log("\n=== escape ===");
   const word = await rectOf("sanciona", "#preview");
   if (word) {
     await doubleClickAt(word.x, word.y);
-    await sleep(150);
+    await waitForPaint("sanciona");
     const beforeEscape = await paintedWord();
     await send("Input.dispatchKeyEvent", {
       type: "keyDown",
@@ -591,6 +600,10 @@ check(
 );
 console.log("\n=== shared selection regression matrix ===");
 const matrixDir = fs.mkdtempSync(path.join(os.tmpdir(), "mdraft-sync-matrix-"));
+const selectStrongBoundary = () =>
+  evaluate(
+    `(()=>{const p=[...document.querySelectorAll('#preview p')].find(e=>e.textContent.includes('alpha'));if(!p)return null;const strong=p.querySelector('strong'),at=[...p.childNodes].indexOf(strong);const r=document.createRange();r.setStart(p,at);r.setEnd(p,at+1);const s=window.getSelection();s.removeAllRanges();s.addRange(r);document.querySelector('#preview').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));return s.toString();})()`,
+  );
 for (const [extension, source] of [
   ["md", "# Audit\n\nalpha **bravo** charlie.\n\ndelta echo foxtrot.\n"],
   ["adoc", "= Audit\n\nalpha *bravo* charlie.\n\ndelta echo foxtrot.\n"],
@@ -598,6 +611,13 @@ for (const [extension, source] of [
 ]) {
   const file = path.join(matrixDir, `audit.${extension}`);
   fs.writeFileSync(file, source);
+  if (extension === "md") {
+    await evaluate(`(() => {
+      window.__wordSyncIdleOriginal=window.requestIdleCallback;
+      window.__wordSyncIdleHeld=[];
+      window.requestIdleCallback=(callback)=>{window.__wordSyncIdleHeld.push(callback);return 0;};
+    })()`);
+  }
   await evaluate(
     `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'open-files',payload:[${JSON.stringify(file)}]})`,
   );
@@ -611,10 +631,47 @@ for (const [extension, source] of [
     await sleep(100);
   }
   await resetView();
-  const boundary = await evaluate(
-    `(()=>{const p=[...document.querySelectorAll('#preview p')].find(e=>e.textContent.includes('alpha'));if(!p)return null;const strong=p.querySelector('strong'),at=[...p.childNodes].indexOf(strong);const r=document.createRange();r.setStart(p,at);r.setEnd(p,at+1);const s=window.getSelection();s.removeAllRanges();s.addRange(r);document.querySelector('#preview').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));return s.toString();})()`,
-  );
-  await sleep(150);
+  if (extension === "md") {
+    const deadline = Date.now() + 6000;
+    while (Date.now() < deadline && !(await evaluate("window.__wordSyncIdleHeld.length > 0"))) {
+      await sleep(100);
+    }
+    const held = await evaluate("window.__wordSyncIdleHeld.length > 0");
+    const selection = await selectStrongBoundary();
+    await send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key: "Escape",
+      code: "Escape",
+      windowsVirtualKeyCode: 27,
+    });
+    await send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: "Escape",
+      code: "Escape",
+      windowsVirtualKeyCode: 27,
+    });
+    await evaluate(`(() => {
+      const original=window.__wordSyncIdleOriginal,held=window.__wordSyncIdleHeld;
+      window.requestIdleCallback=original;
+      for(const callback of held)original.call(window,callback,{timeout:800});
+    })()`);
+    await sleep(500);
+    check(
+      "Escape prevents a deferred map from restoring a dismissed preview selection",
+      held &&
+        selection === "bravo" &&
+        (await paintedWord()) === null &&
+        (await evaluate("getSelection().toString()")) === "bravo",
+      JSON.stringify({
+        held,
+        paint: await paintedWord(),
+        selection: await evaluate("getSelection().toString()"),
+      }),
+    );
+    await clearSelection();
+  }
+  const boundary = await selectStrongBoundary();
+  await waitForPaint("bravo");
   check(
     `${extension}: element endpoints select only the bold word`,
     boundary === "bravo" && (await paintedWord()) === "bravo",
@@ -724,11 +781,442 @@ for (const [extension, source] of [
   await evaluate(
     `document.querySelector('#preview').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`,
   );
-  await sleep(150);
+  await waitForPaint("alpha");
   check(
     `${extension}: the new map paints the current word after editing`,
     (await paintedWord()) === "alpha",
     JSON.stringify(await paintedWord()),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Multiline lists: the reported defect
+// ---------------------------------------------------------------------------
+
+console.log("\n=== multiline lists ===");
+
+/** The source offset of the first `.cm-sync-word` mark. */
+const syncMarkOffset = () =>
+  evaluate(`(() => {
+    const mark = document.querySelector(".cm-sync-word");
+    if (!mark) return null;
+    const line = mark.closest(".cm-line");
+    if (!line) return null;
+    const lines = [...document.querySelectorAll(".cm-line")];
+    const before = document.createRange();
+    before.setStart(line, 0);
+    before.setEndBefore(mark);
+    return lines.slice(0, lines.indexOf(line)).reduce((n, node) => n + node.textContent.length + 1, 0) + before.toString().length;
+  })()`);
+
+/** The line text the source mark sits on, for repeated or long documents. */
+const syncMarkLine = () =>
+  evaluate(`document.querySelector(".cm-sync-word")?.closest(".cm-line")?.textContent ?? null`);
+
+/** A word's viewport centre after scrolling it into the middle of its pane. */
+async function wordPoint(word, root, occurrence = 0) {
+  return evaluate(`(async () => {
+    const root = document.querySelector(${JSON.stringify(root)});
+    if (!root) return null;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let seen = 0;
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      let at = node.data.indexOf(${JSON.stringify(word)});
+      while (at >= 0) {
+        if (seen++ === ${occurrence}) {
+          const range = document.createRange();
+          range.setStart(node, at);
+          range.setEnd(node, at + ${JSON.stringify(word)}.length);
+          (node.parentElement?.closest("li, p, h1, h2, h3, pre, td") ?? node.parentElement)
+            ?.scrollIntoView({ block: "center" });
+          await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+          const box = range.getBoundingClientRect();
+          if (box.width === 0 || box.height === 0) return null;
+          return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+        }
+        at = node.data.indexOf(${JSON.stringify(word)}, at + 1);
+      }
+    }
+    return null;
+  })()`);
+}
+
+/** The preview range currently painted for a source selection. */
+const paintedPreviewRanges = () =>
+  evaluate(`(() => {
+    const highlight = CSS.highlights?.get("mdraft-sync") ?? CSS.highlights?.get("mdraft-sync-peak");
+    if (!highlight) return null;
+    return [...highlight].map((range) => ({
+      text: range.toString(),
+      item: range.startContainer.parentElement?.closest("li")?.textContent ?? null,
+      block: range.startContainer.parentElement?.closest("[data-line]")?.tagName ?? null,
+    }));
+  })()`);
+
+const listDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "mdraft-sync-lists-"));
+const listSource = [
+  "# List word sync",
+  "",
+  "- alpha first item",
+  "  beta continuation line",
+  "- gamma second item",
+  "  delta continuation line",
+  "- repeated word item",
+  "  delta repeated late",
+  "- epsilon third item",
+  "",
+  "1. one ordered",
+  "2. two ordered",
+  "   three continuation",
+  "",
+  "- [ ] pending task",
+  "  still pending",
+  "- [x] finished task",
+  "",
+  "- outer item",
+  "  - inner item",
+  "    inner continuation",
+  "",
+  "> - quoted item",
+  ">   quoted continuation",
+  "",
+  "- ending with `inline code` and text",
+  "",
+].join("\n");
+const listFile = path.join(listDirectory, "list-sync.md");
+fs.writeFileSync(listFile, listSource);
+await evaluate(
+  `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'open-files',payload:[${JSON.stringify(listFile)}]})`,
+);
+for (let attempt = 0; attempt < 120; attempt++) {
+  if (
+    await evaluate(
+      `document.title.includes('list-sync.md') && document.querySelectorAll('#preview li [data-f]').length > 20`,
+    )
+  )
+    break;
+  await sleep(100);
+}
+await resetView();
+{
+  const fragments = await evaluate(`document.querySelectorAll("#preview li [data-f]").length`);
+  check("every list line emits fragments", fragments >= 20, `${fragments} fragments`);
+  const items = await evaluate(
+    `[...document.querySelectorAll("#preview li")].map((li) => li.querySelectorAll("[data-f]").length)`,
+  );
+  check(
+    "each list item carries its own fragments",
+    Array.isArray(items) && items.length >= 8 && items.every((count) => count > 0),
+    JSON.stringify(items),
+  );
+}
+
+// Preview -> source, with the exact offset rather than merely a non-empty mark.
+for (const [word, occurrence, note] of [
+  ["alpha", 0, "first line of an item"],
+  ["beta", 0, "continuation line"],
+  ["three", 0, "numbered list continuation"],
+  ["still", 0, "task continuation"],
+  ["inner", 1, "nested continuation"],
+  ["quoted", 1, "block-quoted continuation"],
+  ["delta", 1, "second occurrence of a repeated word"],
+]) {
+  await resetView();
+  const point = await wordPoint(word, "#preview", occurrence);
+  if (!point) {
+    check(`the preview word "${word}" is reachable`, false, note);
+    continue;
+  }
+  await doubleClickAt(point.x, point.y);
+  await sleep(200);
+  const offset = await syncMarkOffset();
+  const expected = occurrence === 0 ? listSource.indexOf(word) : listSource.lastIndexOf(word);
+  check(
+    `"${word}" paints its own source occurrence (${note})`,
+    offset === expected,
+    `${offset} vs ${expected}`,
+  );
+}
+
+// Source -> preview, including a word only present on a continuation line.
+for (const [word, occurrence, note] of [
+  ["beta", 0, "continuation line"],
+  ["delta", 1, "repeated word, second occurrence"],
+  ["quoted", 1, "block-quoted continuation"],
+]) {
+  await resetView();
+  const point = await wordPoint(word, ".cm-content", occurrence);
+  if (!point) {
+    check(`the source word "${word}" is reachable`, false, note);
+    continue;
+  }
+  await doubleClickAt(point.x, point.y);
+  await sleep(220);
+  const ranges = await paintedPreviewRanges();
+  const painted = ranges?.map((range) => range.text).join(" ") ?? "";
+  const item = ranges?.[0]?.item ?? "";
+  check(
+    `the source word "${word}" paints the preview word (${note})`,
+    painted.trim() === word,
+    painted || "nothing",
+  );
+  check(
+    `the source word "${word}" paints the right list item (${note})`,
+    item.toLowerCase().includes(word),
+    JSON.stringify(item.slice(0, 60)),
+  );
+}
+
+// A selection across two items keeps both words.
+{
+  await resetView();
+  const selected = await evaluate(`(() => {
+    const walker = document.createTreeWalker(document.getElementById("preview"), NodeFilter.SHOW_TEXT);
+    let first = null;
+    let last = null;
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (first === null && node.data.includes("alpha first")) first = node;
+      if (node.data.includes("three continuation")) last = node;
+    }
+    if (!first || !last) return null;
+    const range = document.createRange();
+    range.setStart(first, first.data.indexOf("alpha"));
+    range.setEnd(last, last.data.indexOf("three") + 5);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return selection.toString();
+  })()`);
+  await sleep(250);
+  const painted = await paintedWord();
+  check(
+    "a selection across list items maps both ends",
+    selected !== null &&
+      painted !== null &&
+      painted.startsWith("alpha") &&
+      painted.trimEnd().endsWith("three"),
+    JSON.stringify(painted),
+  );
+}
+
+// The block blink stays, and the word highlight paints over it.
+{
+  await clearSelection();
+  await resetView();
+  const point = await wordPoint("gamma", "#preview", 0);
+  if (point) {
+    const click = async (clickCount) => {
+      await send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: point.x,
+        y: point.y,
+        button: "left",
+        clickCount,
+      });
+      await send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: point.x,
+        y: point.y,
+        button: "left",
+        clickCount,
+      });
+    };
+    await click(1);
+    await sleep(80);
+    const blink = await evaluate(`document.querySelector("#preview .sync-blink")?.tagName ?? null`);
+    check("a single click still blinks the list block", blink === "UL", String(blink));
+    // Let the block blink finish so the next gesture is not a triple click.
+    await sleep(800);
+    await clearSelection();
+    await doubleClickAt(point.x, point.y);
+    await sleep(200);
+    const both = await evaluate(`({
+      blink: document.querySelector("#preview .sync-blink") !== null,
+      word: [...document.querySelectorAll(".cm-sync-word")].map((node) => node.textContent).join("|"),
+    })`);
+    check(
+      "the word correspondence paints over the block blink",
+      both.word === "gamma",
+      JSON.stringify(both),
+    );
+    check(
+      "the block blink is still visible during the word correspondence",
+      both.blink === true,
+      JSON.stringify(both),
+    );
+    await sleep(700);
+    await clearSelection();
+  } else {
+    check("the blink target is on screen", false);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Multiline lists in AsciiDoc and Typst Document
+// ---------------------------------------------------------------------------
+
+console.log("\n=== multiline lists in AsciiDoc and Typst ===");
+for (const [extension, source] of [
+  [
+    "adoc",
+    [
+      "= List sync",
+      "",
+      "* alpha first item",
+      "  beta continuation line",
+      "* gamma second item",
+      "  delta continuation line",
+      "",
+      ". ordered one",
+      ". ordered two",
+      "  ordered continuation",
+      "",
+    ].join("\n"),
+  ],
+  [
+    "typ",
+    [
+      "= List sync",
+      "",
+      "- alpha first item",
+      "  beta continuation line",
+      "- gamma second item",
+      "  delta continuation line",
+      "",
+      "+ ordered one",
+      "+ ordered two",
+      "  ordered continuation",
+      "",
+    ].join("\n"),
+  ],
+]) {
+  const file = path.join(listDirectory, `list-sync.${extension}`);
+  fs.writeFileSync(file, source);
+  await evaluate(
+    `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'open-files',payload:[${JSON.stringify(file)}]})`,
+  );
+  for (let attempt = 0; attempt < 150; attempt++) {
+    if (
+      await evaluate(
+        `document.title.includes('list-sync.${extension}') && (document.getElementById('preview')?.textContent ?? '').includes('beta continuation line')`,
+      )
+    )
+      break;
+    await sleep(100);
+  }
+  await sleep(500);
+  await resetView();
+  const items = await evaluate(
+    `[...document.querySelectorAll("#preview li")].map((li) => li.textContent.trim())`,
+  );
+  check(
+    `${extension}: the multiline list renders`,
+    Array.isArray(items) && items.some((text) => text.includes("beta continuation line")),
+    JSON.stringify(items?.slice(0, 4)),
+  );
+  for (const [word, occurrence, note] of [
+    ["alpha", 0, "first line"],
+    ["beta", 0, "continuation line"],
+    ["delta", 0, "another continuation line"],
+    ["ordered", 0, "ordered item"],
+  ]) {
+    await resetView();
+    const point = await wordPoint(word, "#preview", occurrence);
+    if (!point) {
+      check(`${extension}: the preview word "${word}" is reachable`, false, note);
+      continue;
+    }
+    await doubleClickAt(point.x, point.y);
+    await sleep(250);
+    const offset = await syncMarkOffset();
+    const expected = occurrence === 0 ? source.indexOf(word) : source.lastIndexOf(word);
+    check(
+      `${extension}: "${word}" paints its own source occurrence (${note})`,
+      offset === expected,
+      `${offset} vs ${expected}`,
+    );
+  }
+  for (const [word, note] of [
+    ["beta", "continuation line"],
+    ["delta", "second item's continuation"],
+  ]) {
+    await resetView();
+    const point = await wordPoint(word, ".cm-content", 0);
+    if (!point) {
+      check(`${extension}: the source word "${word}" is reachable`, false, note);
+      continue;
+    }
+    await doubleClickAt(point.x, point.y);
+    await sleep(300);
+    const ranges = await paintedPreviewRanges();
+    const painted = ranges?.map((range) => range.text).join(" ") ?? "";
+    check(
+      `${extension}: the source word "${word}" paints the preview (${note})`,
+      painted.trim() === word,
+      painted || "nothing",
+    );
+  }
+  await clearSelection();
+}
+
+// ---------------------------------------------------------------------------
+// The built-in Markdown Reference: the document the reader reported
+// ---------------------------------------------------------------------------
+
+console.log("\n=== the built-in Markdown Reference ===");
+await evaluate(
+  `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'menu',payload:'help.reference'})`,
+);
+for (let attempt = 0; attempt < 150; attempt++) {
+  if (
+    await evaluate(`(() => {
+      const list = [...document.querySelectorAll("#preview ul")].find((ul) => ul.textContent.includes("Tight"));
+      return Boolean(list) && list.querySelectorAll("[data-f]").length >= 6;
+    })()`)
+  )
+    break;
+  await sleep(100);
+}
+await resetView();
+{
+  const lines = await evaluate(`(() => {
+    const list = [...document.querySelectorAll("#preview ul")].find((ul) => ul.textContent.includes("Tight"));
+    if (!list) return null;
+    return [...list.querySelectorAll("li")].map((li) => li.querySelectorAll("[data-f]").length);
+  })()`);
+  check(
+    "every reference list item carries fragments",
+    Array.isArray(lines) && lines.length === 7 && lines.every((count) => count >= 2),
+    JSON.stringify(lines),
+  );
+}
+for (const [word, note] of [
+  ["Tight", "first item, first line"],
+  ["numeric", "first item, continuation line"],
+  ["Complete", "second item, second continuation line"],
+  ["closer", "fourth item, first line"],
+  ["preserving", "sixth item, first line"],
+  ["survives", "seventh item, continuation line"],
+]) {
+  await resetView();
+  const point = await wordPoint(word, "#preview", 0);
+  if (!point) {
+    check(`the reference word "${word}" is reachable`, false, note);
+    continue;
+  }
+  await doubleClickAt(point.x, point.y);
+  await sleep(200);
+  const painted = await paintedWord();
+  const line = await syncMarkLine();
+  check(
+    `the reference "${word}" paints the same word (${note})`,
+    painted === word,
+    painted ?? "nothing",
+  );
+  check(
+    `the reference "${word}" paints its own line (${note})`,
+    typeof line === "string" && line.includes(word),
+    JSON.stringify(line?.slice(0, 70)),
   );
 }
 

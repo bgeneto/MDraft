@@ -1,16 +1,19 @@
 //! Markdown → HTML.
 //!
-//! Pipeline: protect inline code → extract math → marked → DOMPurify → restore
-//! placeholders → highlight code → tag mermaid blocks → resolve local images and
-//! links. Mermaid runs afterwards, against the live preview element.
+//! The pure pipeline — code/math masking, marked, KaTeX, the fragment table and
+//! the block line list — lives in `preview-render.ts`, which also runs in the
+//! module worker. This module owns the DOM half: DOMPurify, the decoration
+//! passes, batched insertion and the live worker path. The synchronous
+//! `renderPreview` is the export/print path and the fallback when a worker
+//! cannot start.
 
-import { Marked, Renderer, type RendererObject, type Token } from "marked";
 import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/common";
 import katex from "katex";
-import { analyzeMath } from "./math-delimiters";
-import { markdownCodeSpans } from "./markdown-context";
-import { translateOffset, type Fragment, type Substitution } from "./source-map";
+import { escapeHtml, renderChunks, type PreviewChunks, type RenderedMath } from "./preview-render";
+import { batchesForChunks, settleMainThread } from "./preview-batches";
+import { renderChunksAsync } from "./preview-worker-client";
+import type { Fragment } from "./source-map";
 // The stylesheet carries the Computer Modern faces AND the layout rules. Without
 // it KaTeX still emits its DOM, but fractions collapse and radicals, integrals
 // and large delimiters vanish, because those are drawn with the KaTeX_Size
@@ -18,6 +21,7 @@ import { translateOffset, type Fragment, type Substitution } from "./source-map"
 import "katex/dist/katex.min.css";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { PRINT_READY_SCRIPT } from "./print-ready";
+import { resolveLegacyLocalImage } from "./api";
 
 /**
  * The KaTeX stylesheet, for exported documents that no longer live inside the
@@ -34,10 +38,13 @@ import { PRINT_READY_SCRIPT } from "./print-ready";
  * browser follows, which the README documents.
  */
 export const KATEX_STYLESHEET_URL = "https://cdn.jsdelivr.net/npm/katex@0.19.0/dist/katex.min.css";
+export { escapeHtml };
 
 export interface RenderOptions {
   /** Directory of the document being edited, used to resolve relative images. */
   baseDir: string | null;
+  /** Saved document used to resolve a legacy relative image candidate. */
+  documentPath?: string | null;
   /** Render `$…$` with KaTeX. When false the delimiters stay literal. */
   math?: boolean;
   /** Render `mermaid` fences as diagrams. When false they stay code blocks. */
@@ -49,42 +56,7 @@ export interface RenderOptions {
   map?: boolean;
 }
 
-const marked = new Marked({
-  gfm: true,
-  breaks: false,
-  pedantic: false,
-});
-
 const PLACEHOLDER = /@@(CODE|MATH)(\d+)@@/g;
-const PLACEHOLDER_PIECE = /@@(CODE|MATH)(\d+)@@/g;
-
-/** A code span protected from the parser, with the source range it came from. */
-interface CodeEntry {
-  text: string;
-  src0: number;
-  src1: number;
-}
-
-/** A formula extracted before `marked`, with the source range it came from. */
-interface MathEntry {
-  body: string;
-  display: boolean;
-  src0: number;
-  src1: number;
-}
-
-export function escapeHtml(input: string): string {
-  return input
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-// ---------------------------------------------------------------------------
-// Fenced code awareness
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -137,269 +109,10 @@ function assetUrl(raw: string, baseDir: string | null): string {
 }
 
 // ---------------------------------------------------------------------------
-// Word-level source fragments
-// ---------------------------------------------------------------------------
-
-/** A token carrying the offset `marked` does not provide. */
-interface Positioned {
-  srcStart?: number;
-  raw?: string;
-  text?: string;
-  tokens?: unknown;
-  items?: unknown;
-  header?: unknown;
-  rows?: unknown;
-}
-
-interface Piece {
-  start: number;
-  text: string;
-  kind: "raw" | "code" | "math";
-}
-
-/** Split a text run at the placeholders code and math left behind. */
-function splitPieces(raw: string): Piece[] {
-  const pieces: Piece[] = [];
-  let last = 0;
-  for (const match of raw.matchAll(PLACEHOLDER_PIECE)) {
-    if (match.index > last) {
-      pieces.push({ start: last, text: raw.slice(last, match.index), kind: "raw" });
-    }
-    pieces.push({
-      start: match.index,
-      text: match[0],
-      kind: match[1] === "CODE" ? "code" : "math",
-    });
-    last = match.index + match[0].length;
-  }
-  if (last < raw.length) pieces.push({ start: last, text: raw.slice(last), kind: "raw" });
-  return pieces;
-}
-
-/** Insert an attribute into the first opening tag of a name. */
-function injectAttribute(html: string, tag: string, attribute: string): string {
-  const at = html.indexOf(`<${tag}`);
-  if (at < 0) return html;
-  const after = at + tag.length + 1;
-  return `${html.slice(0, after)} ${attribute}${html.slice(after)}`;
-}
-
-/**
- * Record the prepared offset of every token in the tree.
- *
- * `raw` is a literal slice of the text `marked` lexed, so `indexOf` from a
- * forward cursor is exact and cannot run backwards. A token whose raw cannot be
- * found — a table cell that was trimmed, a construct the walk does not know —
- * gets no offset and renders without a fragment, which falls back to the block.
- */
-function assignOffsets(tokens: Token[], source: string): void {
-  let cursor = 0;
-  for (const token of tokens) {
-    const record = token as unknown as Positioned;
-    const raw = record.raw ?? "";
-    const at = raw ? source.indexOf(raw, cursor) : -1;
-    if (at >= 0) cursor = at + raw.length;
-    record.srcStart = at >= 0 ? at : cursor;
-    assignChildren(record);
-  }
-}
-
-function assignChildren(token: Positioned): void {
-  const base = token.srcStart;
-  if (base === undefined) return;
-  const raw = token.raw ?? "";
-
-  if (Array.isArray(token.items)) {
-    let cursor = 0;
-    for (const item of token.items as Positioned[]) {
-      const itemRaw = item.raw ?? "";
-      const at = itemRaw ? raw.indexOf(itemRaw, cursor) : -1;
-      if (at < 0) {
-        item.srcStart = undefined;
-        continue;
-      }
-      item.srcStart = base + at;
-      cursor = at + itemRaw.length;
-      assignChildren(item);
-    }
-  }
-
-  if (Array.isArray(token.header) || Array.isArray(token.rows)) {
-    const cells: Positioned[] = [
-      ...(Array.isArray(token.header) ? (token.header as Positioned[]) : []),
-      ...(Array.isArray(token.rows) ? (token.rows as Positioned[][]).flat() : []),
-    ];
-    let cursor = 0;
-    for (const cell of cells) {
-      const text = cell.text ?? "";
-      if (!text) continue;
-      const at = raw.indexOf(text, cursor);
-      if (at < 0) continue;
-      cursor = at + text.length;
-      cell.srcStart = base + at;
-      assignChildList(cell.tokens, base + at, text);
-    }
-  }
-
-  assignChildList(token.tokens, base, raw);
-}
-
-function assignChildList(children: unknown, base: number, parentRaw: string): void {
-  if (!Array.isArray(children)) return;
-  let cursor = 0;
-  for (const child of children as Positioned[]) {
-    const raw = child.raw ?? "";
-    const at = raw ? parentRaw.indexOf(raw, cursor) : -1;
-    if (at < 0) {
-      child.srcStart = undefined;
-      continue;
-    }
-    child.srcStart = base + at;
-    cursor = at + raw.length;
-    assignChildren(child);
-  }
-}
-
-/** Pair every placeholder in the prepared text with the range it replaced. */
-function collectSubstitutions(
-  preparedSegments: readonly string[],
-  isCode: readonly boolean[],
-  codes: readonly CodeEntry[],
-  maths: readonly MathEntry[],
-): Substitution[] {
-  const substitutions: Substitution[] = [];
-  const placeholder = /@@(CODE|MATH)(\d+)@@/g;
-  let base = 0;
-
-  for (let i = 0; i < preparedSegments.length; i += 1) {
-    const segment = preparedSegments[i];
-    if (!isCode[i]) {
-      for (const match of segment.matchAll(placeholder)) {
-        const entry = match[1] === "CODE" ? codes[Number(match[2])] : maths[Number(match[2])];
-        if (!entry) continue;
-        substitutions.push({
-          p0: base + match.index,
-          p1: base + match.index + match[0].length,
-          o0: entry.src0,
-          o1: entry.src1,
-        });
-      }
-    }
-    base += segment.length + 1;
-  }
-
-  return substitutions;
-}
-
-/**
- * Render the prepared markdown with the fragment table.
- *
- * One wrapper per text run, never per word: a word is a range inside a run, and
- * the run is what the DOM needs to map back. Code, formulas, images and fences
- * are atomic spans, because their rendered text is not their source text.
- */
-function renderMarked(
-  prepared: string,
-  substitutions: readonly Substitution[],
-  lineSubstitutions: readonly Substitution[] = [],
-): { html: string; fragments: Fragment[] } {
-  const fragments: Fragment[] = [];
-  const sourceOf = (preparedOffset: number) =>
-    translateOffset(substitutions, translateOffset(lineSubstitutions, preparedOffset));
-  const push = (fragment: Fragment): number => {
-    fragments.push(fragment);
-    return fragments.length - 1;
-  };
-  const escape = escapeHtml;
-
-  const renderer: RendererObject = {
-    text(token) {
-      const positioned = token as unknown as Positioned;
-      const raw = token.raw ?? "";
-      const escaped = "escaped" in token && token.escaped === true;
-      const children = "tokens" in token ? token.tokens : undefined;
-      const body =
-        children && children.length > 0
-          ? this.parser.parseInline(children)
-          : escaped
-            ? token.text
-            : escape(token.text);
-
-      if (positioned.srcStart === undefined || raw.length === 0) return body;
-      // Children carry their own offsets; wrapping the parent would overlap them.
-      if (children && children.length > 0) return body;
-
-      const pieces = splitPieces(raw);
-      if (pieces.length === 1) {
-        const index = push({
-          src0: sourceOf(positioned.srcStart),
-          src1: sourceOf(positioned.srcStart + raw.length),
-          raw,
-          kind: "text",
-        });
-        return `<span data-f="${index}">${body}</span>`;
-      }
-
-      let out = "";
-      for (const piece of pieces) {
-        const src0 = sourceOf(positioned.srcStart + piece.start);
-        const src1 = sourceOf(positioned.srcStart + piece.start + piece.text.length);
-        const index = push({
-          src0,
-          src1,
-          raw: piece.text,
-          kind: piece.kind === "raw" ? "text" : piece.kind,
-        });
-        const html =
-          piece.kind === "raw" ? (escaped ? piece.text : escape(piece.text)) : piece.text;
-        out += `<span data-f="${index}">${html}</span>`;
-      }
-      return out;
-    },
-
-    code(token) {
-      // Through the prototype, not a detached `new Renderer()`: the built-in
-      // `image` below needs `this.parser` to render alt text, and a detached
-      // renderer never receives one.
-      const html = Renderer.prototype.code.call(this, token);
-      const positioned = token as unknown as Positioned;
-      if (positioned.srcStart === undefined) return html;
-      const index = push({
-        src0: sourceOf(positioned.srcStart),
-        src1: sourceOf(positioned.srcStart + (token.raw?.length ?? 0)),
-        raw: "",
-        kind: "pre",
-      });
-      return injectAttribute(html, "pre", `data-f="${index}"`);
-    },
-
-    image(token) {
-      const html = Renderer.prototype.image.call(this, token);
-      const positioned = token as unknown as Positioned;
-      if (positioned.srcStart === undefined) return html;
-      const index = push({
-        src0: sourceOf(positioned.srcStart),
-        src1: sourceOf(positioned.srcStart + (token.raw?.length ?? 0)),
-        raw: "",
-        kind: "image",
-      });
-      return injectAttribute(html, "img", `data-f="${index}"`);
-    },
-  };
-
-  const instance = new Marked({ gfm: true, breaks: false, pedantic: false });
-  instance.use({ renderer });
-  const tokens = instance.lexer(prepared);
-  assignOffsets(tokens, prepared);
-  return { html: instance.parser(tokens) as string, fragments };
-}
-
-// ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
 
-export interface RenderResult {
-  html: string;
+export interface PreviewDescription {
   /**
    * True when every top-level block carries an exact `data-line` anchor. When
    * false the panes cannot be aligned positionally and callers should fall back
@@ -410,185 +123,270 @@ export interface RenderResult {
   anchors: number;
   /** Word-level source fragments, present only when `map` was requested. */
   fragments?: Fragment[];
+  legacyImages?: PreviewChunks["legacyImages"];
 }
 
+export interface RenderResult extends PreviewDescription {
+  html: string;
+}
+
+/**
+ * Render a document for the preview or an export.
+ *
+ * The pure work is in `preview-render.ts`; this function only builds the DOM.
+ * Chunks are sanitised in batches so one huge document does not become one
+ * long main-thread task; the worker path (`renderPreviewInto`) uses the same
+ * batching with yields between batches.
+ */
 export function renderPreview(source: string, options: RenderOptions): RenderResult {
-  const mathEnabled = options.math ?? true;
-  const mermaidEnabled = options.mermaid ?? true;
-
-  const codes: CodeEntry[] = [];
-  const maths: MathEntry[] = [];
-  const ranges = [
-    ...markdownCodeSpans(source).map((range) => ({
-      ...range,
-      code: true,
-      body: "",
-      display: false,
-    })),
-    ...(mathEnabled ? analyzeMath(source).math.map((range) => ({ ...range, code: false })) : []),
-  ].sort((a, b) => a.from - b.from);
-  let prepared = "";
-  let last = 0;
-  for (const range of ranges) {
-    prepared += source.slice(last, range.from);
-    if (range.code) {
-      const raw = source.slice(range.from, range.to);
-      const ticks = /^`+/.exec(raw)?.[0].length ?? 0;
-      let text = raw.slice(ticks, -ticks).replace(/\r?\n/g, " ");
-      if (text.startsWith(" ") && text.endsWith(" ") && /[^ ]/.test(text)) text = text.slice(1, -1);
-      prepared += "@@CODE" + codes.length + "@@";
-      codes.push({ text, src0: range.from, src1: range.to });
-    } else {
-      prepared += "@@MATH" + maths.length + "@@";
-      maths.push({ body: range.body, display: range.display, src0: range.from, src1: range.to });
-    }
-    last = range.to;
-  }
-  prepared += source.slice(last);
-  const preparedSegments = [prepared];
-  const isCode = [false];
-  const lineSubstitutions: Substitution[] = [];
-  let lineDelta = 0;
-  const normalized = prepared.replace(/\r\n?/g, (match, offset: number) => {
-    lineSubstitutions.push({
-      p0: offset - lineDelta,
-      p1: offset - lineDelta + 1,
-      o0: offset,
-      o1: offset + match.length,
-    });
-    lineDelta += match.length - 1;
-    return "\n";
-  });
-  const mapped = options.map
-    ? renderMarked(
-        normalized,
-        collectSubstitutions(preparedSegments, isCode, codes, maths),
-        lineSubstitutions,
-      )
-    : null;
-  const rawHtml = mapped ? mapped.html : (marked.parse(prepared, { async: false }) as string);
-
-  const clean = DOMPurify.sanitize(rawHtml, {
-    // DOMPurify's default URI rule treats `C:` as an unknown scheme and strips
-    // the attribute. A drive path is a file the reader chose, so it is allow-
-    // listed explicitly; `javascript:` and friends still fall through to the
-    // rejection branch.
-    ALLOWED_URI_REGEXP:
-      /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|asset):|[A-Za-z]:[\\/%]|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i,
-    ADD_ATTR: [
-      "align",
-      "data-f",
-      "data-mermaid",
-      "data-href",
-      "id",
-      "colspan",
-      "rowspan",
-      "type",
-      "checked",
-      "disabled",
-    ],
-    // `input` has to survive sanitising so GFM task lists keep their checkbox;
-    // normalizeInputs() then strips every input that is not a disabled checkbox.
-    FORBID_TAGS: [
-      "script",
-      "iframe",
-      "object",
-      "embed",
-      "form",
-      "textarea",
-      "select",
-      "button",
-      "base",
-    ],
-    USE_PROFILES: { html: true },
-  });
-
+  const data = renderChunks(source, options);
   const host = document.createElement("div");
-  host.innerHTML = clean;
+  insertChunks(host, data, options);
+  return { ...describePreview(host, data), html: host.innerHTML };
+}
 
-  normalizeInputs(host);
-  restorePlaceholders(host, codes, maths);
-  decorateCodeBlocks(host, mermaidEnabled);
-  decorateLinks(host, options.baseDir);
+/** Raw HTML may open and close across tokens, so it needs one HTML parse. */
+function previewBatches(data: PreviewChunks): readonly (readonly string[])[] {
+  if (data.hasRawHtml) return data.chunks.length > 0 ? [data.chunks] : [];
+  return batchesForChunks(data.chunks);
+}
+
+/** Insert every batch synchronously; used by exports and by the fallback. */
+function insertChunks(host: HTMLElement, data: PreviewChunks, options: RenderOptions): void {
+  host.replaceChildren();
+  for (const batch of previewBatches(data)) {
+    insertBatch(host, batch, data, options);
+  }
+  finishPreview(host, data, options, true);
+}
+
+/**
+ * Paint the preview from a worker result, yielding between batches.
+ *
+ * `cancelled` is checked before every batch; a newer render token means the
+ * caller must stop and let that render own the pane.
+ */
+export async function renderPreviewInto(
+  host: HTMLElement,
+  source: string,
+  options: RenderOptions,
+  cancelled: () => boolean,
+): Promise<PreviewDescription | null> {
+  const outcome = await renderChunksAsync(source, options);
+  // A superseded request must not run a second, synchronous render: the newer
+  // render owns the pane. Only a worker that cannot run falls back.
+  if (outcome.kind === "superseded") return null;
+  if (outcome.kind === "fallback" && cancelled()) return null;
+  const data = outcome.kind === "ok" ? outcome.data : renderChunks(source, options);
+  if (cancelled()) return null;
+
+  // Build the new preview in a detached container. Appending each batch to the
+  // live pane forced a layout of a growing document per batch; one swap at the
+  // end is a single layout and leaves the old preview visible while the worker
+  // and the batches run.
+  const staging = document.createElement("div");
+  const grouping = canGroupParagraphs(data) ? new ParagraphGroups(staging, data.lines!) : null;
+  let lastYield = performance.now();
+  for (const batch of previewBatches(data)) {
+    if (cancelled()) return null;
+    insertBatch(staging, batch, data, options, grouping);
+    lastYield = await settleMainThread(lastYield);
+    if (cancelled()) return null;
+  }
+  const grouped = grouping?.finish() ?? false;
+  finishPreview(staging, data, options, false, grouped);
+  if (cancelled()) return null;
+  const fragment = document.createDocumentFragment();
+  while (staging.firstChild) fragment.appendChild(staging.firstChild);
+  host.replaceChildren(fragment);
+  return describePreview(host, data, grouped);
+}
+
+// Restrict grouping to independently parsed paragraphs with an exact line map.
+// Raw HTML and complex blocks retain their existing whole-context treatment.
+function canGroupParagraphs(data: PreviewChunks): boolean {
+  if (
+    data.hasRawHtml ||
+    !data.lines ||
+    data.lines.length < 10000 ||
+    typeof CSS === "undefined" ||
+    typeof CSS.supports !== "function" ||
+    !CSS.supports("content-visibility", "auto")
+  )
+    return false;
+  const chunks = data.chunks.filter((chunk) => chunk.length > 0);
+  return chunks.length === data.lines.length && chunks.every((chunk) => chunk.startsWith("<p>"));
+}
+
+/** Group only sanitized nodes, while each detached batch is already yielding. */
+class ParagraphGroups {
+  private group: HTMLElement | null = null;
+  private count = 0;
+  private index = 0;
+  private valid = true;
+
+  constructor(
+    private readonly host: HTMLElement,
+    private readonly lines: number[],
+  ) {}
+
+  append(holder: HTMLElement): void {
+    if (
+      this.valid &&
+      Array.from(holder.childNodes).some((node) =>
+        node.nodeType === Node.ELEMENT_NODE
+          ? (node as Element).tagName !== "P"
+          : node.nodeType !== Node.TEXT_NODE || !!node.textContent?.trim(),
+      )
+    ) {
+      this.flatten();
+    }
+    while (holder.firstChild) {
+      const node = holder.firstChild;
+      if (!this.valid) {
+        this.host.appendChild(node);
+      } else if (node.nodeType !== Node.ELEMENT_NODE) {
+        (this.group ?? this.host).appendChild(node);
+      } else {
+        if (!this.group || this.count === 64) {
+          this.group = document.createElement("div");
+          this.group.className = "md-preview-group";
+          this.group.style.contentVisibility = "auto";
+          this.group.style.containIntrinsicSize = "auto 3072px";
+          this.host.appendChild(this.group);
+          this.count = 0;
+        }
+        if (this.index === 0) (node as HTMLElement).style.marginTop = "0";
+        (node as HTMLElement).dataset.line = String(this.lines[this.index++]);
+        this.group.appendChild(node);
+        this.count++;
+      }
+    }
+  }
+
+  finish(): boolean {
+    if (this.valid && this.index !== this.lines.length) this.flatten();
+    return this.valid;
+  }
+
+  private flatten(): void {
+    this.valid = false;
+    const flat = document.createDocumentFragment();
+    while (this.host.firstChild) {
+      const node = this.host.firstChild;
+      if (node instanceof HTMLElement && node.classList.contains("md-preview-group")) {
+        while (node.firstChild) {
+          const child = node.firstChild;
+          if (child instanceof HTMLElement) {
+            child.removeAttribute("data-line");
+            if (child.style.marginTop === "0px") child.style.removeProperty("margin-top");
+            if (!child.getAttribute("style")) child.removeAttribute("style");
+          }
+          flat.appendChild(child);
+        }
+        node.remove();
+      } else flat.appendChild(node);
+    }
+    this.host.appendChild(flat);
+    this.group = null;
+  }
+}
+
+const SANITIZE_OPTIONS = {
+  // DOMPurify's default URI rule treats `C:` as an unknown scheme and strips
+  // the attribute. A drive path is a file the reader chose, so it is allow-
+  // listed explicitly; `javascript:` and friends still fall through to the
+  // rejection branch.
+  ALLOWED_URI_REGEXP:
+    /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|asset):|[A-Za-z]:[\\/%]|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i,
+  ADD_ATTR: [
+    "align",
+    "data-f",
+    "data-mermaid",
+    "data-href",
+    "id",
+    "colspan",
+    "rowspan",
+    "type",
+    "checked",
+    "disabled",
+  ],
+  // `input` has to survive sanitising so GFM task lists keep their checkbox;
+  // normalizeInputs() then strips every input that is not a disabled checkbox.
+  FORBID_TAGS: [
+    "script",
+    "iframe",
+    "object",
+    "embed",
+    "form",
+    "textarea",
+    "select",
+    "button",
+    "base",
+  ],
+  USE_PROFILES: { html: true },
+};
+
+function insertBatch(
+  host: HTMLElement,
+  batch: readonly string[],
+  data: PreviewChunks,
+  options: RenderOptions,
+  grouping: ParagraphGroups | null = null,
+): void {
+  const holder = document.createElement("div");
+  holder.innerHTML = DOMPurify.sanitize(batch.join(""), SANITIZE_OPTIONS);
+  normalizeInputs(holder);
+  restorePlaceholders(holder, data.codes, data.maths);
+  decorateCodeBlocks(holder, options.mermaid ?? true);
+  if (grouping) grouping.append(holder);
+  else while (holder.firstChild) host.appendChild(holder.firstChild);
+}
+
+/** Whole-host passes that need the final element set. */
+function finishPreview(
+  host: HTMLElement,
+  data: PreviewChunks,
+  options: RenderOptions,
+  preserveLegacy = false,
+  grouped = false,
+): void {
+  decorateLinks(
+    host,
+    options.baseDir,
+    data.legacyImages,
+    options.documentPath ?? null,
+    preserveLegacy,
+  );
   decorateAlerts(host);
   addHeadingIds(host);
   buildTableOfContents(host);
-
-  // Last, once the element set is final: tie every block back to its source line.
-  const mapping = annotatePreviewLines(host, source);
-
-  return {
-    html: host.innerHTML,
-    linesMapped: mapping.complete,
-    anchors: mapping.count,
-    fragments: mapped?.fragments,
-  };
-}
-
-/** Tokens that render no element, so they cannot be zipped with the DOM. */
-const SILENT_TOKENS = new Set(["space", "def"]);
-
-/**
- * DOMPurify removes HTML comments, so a `<!-- Page 1 -->` marker produces no
- * element even though marked emits a token for it. Such tokens must not take
- * part in the index zip or every block after them would be off by one.
- */
-function rendersNothing(token: { type: string; raw?: string }): boolean {
-  if (SILENT_TOKENS.has(token.type)) return true;
-  return token.type === "html" && /^\s*<!--/.test(token.raw ?? "");
-}
-
-function lineStarts(text: string): number[] {
-  const starts = [0];
-  for (let i = 0; i < text.length; i++) {
-    if (text.charCodeAt(i) === 10) starts.push(i + 1);
-  }
-  return starts;
-}
-
-function lineOf(starts: number[], offset: number): number {
-  let low = 0;
-  let high = starts.length - 1;
-  while (low < high) {
-    const mid = (low + high + 1) >> 1;
-    if (starts[mid] <= offset) low = mid;
-    else high = mid - 1;
-  }
-  return low + 1;
-}
-
-/**
- * Write `data-line` on every top-level preview block.
- *
- * The markdown is lexed a second time from the *original* source, so each
- * token's `raw` is a literal slice of what the user typed and its offset is
- * exact. That token list and the rendered element list are both in document
- * order and, because the render transformations neither add nor remove blocks,
- * they can be zipped index by index. If the counts ever disagree the whole
- * annotation is dropped rather than producing a wrong map.
- */
-function annotatePreviewLines(
-  host: HTMLElement,
-  source: string,
-): { complete: boolean; count: number } {
-  const tokens = marked.lexer(source).filter((token) => !rendersNothing(token));
+  // The line list belongs to the original source and is already in document
+  // order; if a sanitised chunk produced a different number of top-level
+  // elements, the annotation is dropped rather than pointing at a wrong line.
+  const lines = data.lines;
   const blocks = Array.from(host.children) as HTMLElement[];
-  if (tokens.length === 0 || tokens.length !== blocks.length) {
-    return { complete: false, count: 0 };
+  if (!grouped && lines && lines.length === blocks.length) {
+    for (let i = 0; i < blocks.length; i += 1) {
+      blocks[i].setAttribute("data-line", String(lines[i]));
+    }
   }
+}
 
-  const starts = lineStarts(source);
-  let cursor = 0;
-
-  for (let i = 0; i < tokens.length; i++) {
-    const raw = tokens[i].raw ?? "";
-    const at = source.indexOf(raw, cursor);
-    if (raw.length === 0 || at < 0) return { complete: false, count: 0 };
-    cursor = at + raw.length;
-    blocks[i].setAttribute("data-line", String(lineOf(starts, at)));
-  }
-
-  return { complete: true, count: tokens.length };
+function describePreview(
+  host: HTMLElement,
+  data: PreviewChunks,
+  grouped = false,
+): PreviewDescription {
+  const lines = data.lines;
+  const mapped =
+    lines !== null && lines.length > 0 && (grouped || lines.length === host.children.length);
+  return {
+    linesMapped: mapped,
+    anchors: mapped && lines ? lines.length : 0,
+    fragments: data.fragments,
+    legacyImages: data.legacyImages,
+  };
 }
 
 /** GitHub-style `> [!NOTE]` blockquotes get a class and a visible title. */
@@ -637,8 +435,8 @@ function normalizeInputs(host: HTMLElement): void {
 
 function restorePlaceholders(
   host: HTMLElement,
-  codes: readonly CodeEntry[],
-  maths: readonly MathEntry[],
+  codes: readonly { text: string }[],
+  maths: readonly RenderedMath[],
 ): void {
   const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
   const targets: Text[] = [];
@@ -679,7 +477,11 @@ function restorePlaceholders(
   }
 }
 
-export function mathNode(entry: { body: string; display: boolean } | undefined): Node {
+export function mathNode(
+  entry:
+    | (Pick<RenderedMath, "body" | "display"> & Partial<Pick<RenderedMath, "html" | "error">>)
+    | undefined,
+): Node {
   const span = document.createElement("span");
   span.className = entry?.display ? "math-display" : "math-inline";
   if (!entry) {
@@ -687,6 +489,18 @@ export function mathNode(entry: { body: string; display: boolean } | undefined):
     return span;
   }
   span.dataset.tex = entry.body;
+  // The worker pre-renders the KaTeX markup; the export/AsciiDoc paths render
+  // it here. Either way the generated HTML is inserted after sanitising.
+  if (entry.html !== undefined && entry.html !== null) {
+    span.innerHTML = entry.html;
+    return span;
+  }
+  if (entry.error) {
+    span.className = "math-error";
+    span.textContent = `$${entry.body}$`;
+    span.title = entry.error;
+    return span;
+  }
   try {
     span.innerHTML = katex.renderToString(entry.body, {
       displayMode: entry.display,
@@ -843,9 +657,22 @@ export function decorateCodeBlocks(host: HTMLElement, mermaidEnabled = true): vo
   }
 }
 
-export function decorateLinks(host: HTMLElement, baseDir: string | null): void {
+export function decorateLinks(
+  host: HTMLElement,
+  baseDir: string | null,
+  legacyImages?: PreviewChunks["legacyImages"],
+  documentPath: string | null = null,
+  preserveLegacy = false,
+): void {
+  const resolutions = new Map<string, Promise<string | null>>();
   for (const img of Array.from(host.querySelectorAll("img"))) {
     const src = img.getAttribute("src");
+    const stamp = img.getAttribute("data-mdraft-legacy");
+    const legacy =
+      stamp && legacyImages && Object.prototype.hasOwnProperty.call(legacyImages, stamp)
+        ? legacyImages[stamp]
+        : undefined;
+    if (!preserveLegacy) img.removeAttribute("data-mdraft-legacy");
     if (src) {
       // Keep the document's own address: `src` below is rewritten to an
       // `asset:` URL, and Ctrl+click (and the failed-image tooltip) need the
@@ -855,7 +682,42 @@ export function decorateLinks(host: HTMLElement, baseDir: string | null): void {
       img.addEventListener(
         "error",
         () => {
-          if (!img.title) img.title = src;
+          const addedTitle = !img.title;
+          if (addedTitle) img.title = src;
+          if (!legacy || !/Windows/i.test(navigator.userAgent)) return;
+          let parsed: string;
+          let expected: string;
+          let candidate: string;
+          try {
+            parsed = decodeURI(src);
+            expected = decodeURI(legacy.parsed);
+            candidate = decodeURI(legacy.candidate);
+          } catch {
+            return;
+          }
+          if (parsed !== expected) return;
+          const key = JSON.stringify([parsed, candidate]);
+          let resolution = resolutions.get(key);
+          if (!resolution) {
+            resolution = resolveLegacyLocalImage(parsed, candidate, documentPath);
+            resolutions.set(key, resolution);
+          }
+          void resolution
+            .then((path) => {
+              if (!path || !img.isConnected) return;
+              img.addEventListener(
+                "load",
+                () => {
+                  img.dataset.src = path;
+                  if (addedTitle && img.title === src) img.removeAttribute("title");
+                },
+                { once: true },
+              );
+              img.setAttribute("src", assetUrl(path, null));
+            })
+            .catch(() => {
+              /* preserve the original failed image */
+            });
         },
         { once: true },
       );
@@ -873,6 +735,54 @@ export function decorateLinks(host: HTMLElement, baseDir: string | null): void {
     }
     anchor.removeAttribute("href");
   }
+}
+
+/** Resolve candidates for static exports before their destinations are rewritten. */
+export async function resolveLegacyImagesForExport(
+  host: HTMLElement,
+  legacyImages: PreviewChunks["legacyImages"],
+  documentPath: string | null,
+): Promise<void> {
+  const pending: Array<{ img: HTMLImageElement; parsed: string; candidate: string }> = [];
+  for (const img of Array.from(
+    host.querySelectorAll<HTMLImageElement>("img[data-mdraft-legacy]"),
+  )) {
+    const stamp = img.getAttribute("data-mdraft-legacy");
+    img.removeAttribute("data-mdraft-legacy");
+    const legacy =
+      stamp && legacyImages && Object.prototype.hasOwnProperty.call(legacyImages, stamp)
+        ? legacyImages[stamp]
+        : undefined;
+    if (!legacy || !/Windows/i.test(navigator.userAgent)) continue;
+    let parsed = img.dataset.src ?? "";
+    let expected: string;
+    let candidate: string;
+    try {
+      parsed = decodeURI(parsed);
+      expected = decodeURI(legacy.parsed);
+      candidate = decodeURI(legacy.candidate);
+    } catch {
+      continue;
+    }
+    if (parsed !== expected) continue;
+    pending.push({ img, parsed, candidate });
+  }
+  const cache = new Map<string, Promise<string | null>>();
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < pending.length) {
+      const { img, parsed, candidate } = pending[next++];
+      const key = JSON.stringify([parsed, candidate]);
+      let resolution = cache.get(key);
+      if (!resolution) {
+        resolution = resolveLegacyLocalImage(parsed, candidate, documentPath).catch(() => null);
+        cache.set(key, resolution);
+      }
+      const path = await resolution;
+      if (path) img.dataset.src = path;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(4, pending.length) }, () => worker()));
 }
 
 function slugify(text: string): string {

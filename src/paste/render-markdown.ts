@@ -2,6 +2,7 @@
 
 import type { Align, Block, Inline } from "./ir.ts";
 import { inlineText } from "./ir.ts";
+import { escapeMarkdownImagePath } from "../image-syntax.ts";
 
 function escapeText(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/([`*_[\]<>$])/g, "\\$1");
@@ -71,7 +72,7 @@ function renderInline(nodes: readonly Inline[]): string {
       }
       case "image": {
         const title = node.title ? ` "${node.title.replace(/"/g, '\\"')}"` : "";
-        out += `![${node.alt.replace(/\]/g, "\\]")}](${linkDestination(node.src)}${title})`;
+        out += `![${node.alt.replace(/\]/g, "\\]")}](${linkDestination(escapeMarkdownImagePath(node.src))}${title})`;
         break;
       }
       case "math":

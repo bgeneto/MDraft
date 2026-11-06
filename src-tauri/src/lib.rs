@@ -114,6 +114,7 @@ pub fn run() {
             documents::fingerprint_document,
             documents::stat_document,
             documents::path_exists,
+            documents::resolve_legacy_local_image,
             documents::open_external,
             documents::startup_file,
             launch::startup_files,
@@ -150,6 +151,7 @@ pub fn run() {
             typst::install_typst,
             typst::typst_download_page,
             typst::render_typst,
+            typst::cancel_typst_preview,
             html_preview::set_html_preview,
             html_preview::clear_html_preview,
         ])
