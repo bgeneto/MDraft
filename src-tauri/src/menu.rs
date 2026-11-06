@@ -1236,6 +1236,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&item("help.reference", "Markdown Reference", None)?)
         .item(&item("help.asciidocReference", "AsciiDoc Reference", None)?)
         .item(&item("help.typstReference", "Typst Reference", None)?)
+        .item(&item("help.latexReference", "LaTeX Reference", None)?)
         .item(&item("help.shortcuts", "Keyboard Shortcuts", None)?)
         .separator()
         .item(&item("help.licences", "Font Licences", None)?)

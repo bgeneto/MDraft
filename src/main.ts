@@ -17,6 +17,7 @@ import {
 import {
   ASCIIDOC_REFERENCE,
   FONT_LICENCES,
+  LATEX_REFERENCE,
   REFERENCE,
   SHORTCUTS,
   TYPST_REFERENCE,
@@ -4473,6 +4474,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "help.reference": () => void showBuiltin(REFERENCE),
   "help.asciidocReference": () => void showBuiltin(ASCIIDOC_REFERENCE, "asciidoc"),
   "help.typstReference": () => void showBuiltin(TYPST_REFERENCE, "typst"),
+  "help.latexReference": () => void showBuiltin(LATEX_REFERENCE, "latex"),
   "help.shortcuts": () => void showBuiltin(SHORTCUTS),
   "help.licences": () => void showBuiltin(FONT_LICENCES),
   "help.latexLicenses": showLatexLicenses,

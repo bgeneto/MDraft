@@ -1,0 +1,170 @@
+%! MDraft's built-in LaTeX reference.
+%!
+%! Opened by Help › LaTeX Reference. Every example outside a verbatim block is
+%! compiled by the same LuaLaTeX the preview uses, so what this file says about
+%! the syntax is what the application actually renders. A built-in document has
+%! no folder of its own, so `\includegraphics` and `\input` are shown as source
+%! rather than called with a path that could not resolve.
+
+\documentclass[11pt]{article}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{hyperref}
+\usepackage{xcolor}
+
+\title{LaTeX Reference}
+\author{MDraft}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Introduction}
+
+This document is a live sample. LaTeX is a typesetting system: the text below is
+markup, the lines beginning with a backslash are commands, and LuaLaTeX evaluates
+both before it lays out a page. Edit any line and the preview recompiles.
+
+The preview draws the PDF the compiler produced, with the real page size, margins
+and layout. Select text in it to copy it, and click it to jump to the source line
+that produced it.
+
+\tableofcontents
+
+\section{Headings and text}
+
+A heading is a command: \verb|\section{...}| is level one,
+\verb|\subsection{...}| is level two, and \verb|\subsubsection{...}| is level
+three. The starred form (\verb|\section*{...}|) is unnumbered. The Outline panel
+reads these commands, so the sidebar and the document cannot disagree.
+
+Paragraphs are separated by a blank line. A single newline
+continues the same paragraph. Two backslashes force a line break,\\
+like this. A blank line starts a new paragraph.
+
+\textbf{Strong}, \emph{emphasis}, \texttt{inline code}, \underline{underline},
+\sout{strikethrough}, H\textsubscript{2}O and E = mc\textsuperscript{2} are all
+part of the markup. A backslash escapes a literal character: \# \$ \% \& \_ are
+text, not syntax.
+
+\section{Mathematics}
+
+Inline mathematics sits between dollar signs: $e^{i\pi} + 1 = 0$. Display
+mathematics uses \verb|\[ ... \]|:
+
+\[
+  \int_{-\infty}^{\infty} e^{-x^2}\,dx = \sqrt{\pi}
+\]
+
+A numbered equation uses the \verb|equation| environment, and a multi-line
+alignment uses \verb|align|:
+
+\begin{align}
+  (a + b)^2 &= a^2 + 2ab + b^2 \\
+  (a - b)^2 &= a^2 - 2ab + b^2
+\end{align}
+
+Fractions, radicals, sums and integrals are all ordinary commands:
+$\frac{a}{b}$, $\sqrt{x}$, $\sum_{n=1}^{\infty} \frac{1}{n^2}$,
+$\lim_{x \to 0} \frac{\sin x}{x}$. The application's own math settings do not
+apply here: LaTeX typesets its own mathematics.
+
+\section{Lists and tables}
+
+An unordered list is the \verb|itemize| environment; an ordered list is
+\verb|enumerate|. Each entry begins with \verb|\item|.
+
+\begin{itemize}
+  \item A first point.
+  \item A second point, with \emph{emphasis}.
+  \begin{itemize}
+    \item A nested point.
+  \end{itemize}
+\end{itemize}
+
+\begin{enumerate}
+  \item A numbered step.
+  \item Another step.
+\end{enumerate}
+
+A table is a \verb|tabular| with a column specification: \verb|l| and \verb|c|
+are left- and centre-aligned columns, and \verb|\hline| draws a rule.
+
+\begin{table}[htbp]
+  \centering
+  \begin{tabular}{ll}
+    \hline
+    Command & Purpose \\
+    \hline
+    \verb|\textbf| & Strong text \\
+    \verb|\emph| & Emphasis \\
+    \verb|\texttt| & Inline code \\
+    \hline
+  \end{tabular}
+  \caption{A small table.}
+\end{table}
+
+\section{Quotes and verbatim}
+
+The \verb|quote| environment indents a passage:
+
+\begin{quote}
+  A quotation is set apart from the surrounding text, without quotation marks of
+  its own.
+\end{quote}
+
+Verbatim text keeps every character exactly as written, which is how code is
+shown. The \verb|verbatim| environment is a block; \verb|\verb| is inline.
+
+\begin{verbatim}
+for i in range(3):
+    print(i)   # % is not a comment here
+\end{verbatim}
+
+\section{Links, references and citations}
+
+An external link is \verb|\href{url}{text}|: \href{https://www.latex-project.org/}{the LaTeX project}.
+A bare URL is \verb|\url{...}|: \url{https://www.latex-project.org/}.
+
+A label marks a place and a reference points at it. This section is labelled
+\verb|sec:links|, and \verb|\ref{sec:links}| prints its number: see
+Section~\ref{sec:links}. The \verb|\pageref| command prints the page instead.
+
+A citation reads a bibliography. The engine runs real BibTeX, so a
+\verb|\cite{...}| key must exist in the \verb|.bib| file named by
+\verb|\bibliography{...}|. Biber and the full \verb|biblatex| feature set are
+not available; \verb|biblatex-lite| covers the common cases.
+
+\section{Including other files}
+
+A large document is split with \verb|\input{chapters/intro}| or
+\verb|\include{chapters/intro}\footnote{The \texttt{.tex} extension is
+optional.}|. Paths are relative to the main file's folder, which is also the
+project root: a reference that escapes it is an error rather than a silent
+omission.
+
+An image is \verb|\includegraphics{figures/plot}|, optionally with a size:
+\verb|\includegraphics[width=0.5\linewidth]{figures/plot}|. The application
+inserts this command when you paste or drop an image into a \verb|.tex|
+document.
+
+\section{Exporting}
+
+\verb|File > Export > PDF| writes the PDF this preview is showing, byte for byte.
+It never starts a compile of its own: if the preview is stale, the row is
+disabled and says so. The preview's own \verb|Save PDF| button writes the same
+bytes. Native printing is disabled for LaTeX because the PDF already exists.
+
+\section{When something fails}
+
+A compile error appears above the preview with the compiler's own message and
+the line it refers to. The previous successful PDF stays on screen, so a
+half-finished edit does not blank the page. Fixing the error and waiting a moment
+recompiles automatically.
+
+The engine is opt-in. If the preview offers \verb|Enable LuaLaTeX|, the engine
+files have not been downloaded yet; about 10 MiB of verified files are fetched
+once, and the TeX packages a document needs are fetched on demand and cached
+locally. Nothing about your document leaves this device.
+
+\end{document}
