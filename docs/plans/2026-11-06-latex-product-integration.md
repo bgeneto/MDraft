@@ -306,6 +306,20 @@ user-visible gain; 5–7 need their own measurement before they are committed.
 - [ ] **5. Format Document.** Measure the tex-fmt WASM build against the corpus
   and the installer; integrate behind `hasFormatter`/`formatDocument`; extend the
   47 unit and 143 UI checks with LaTeX rows.
+
+  **Measured before starting (2026-11-06).** A tex-fmt WASM build exists, in
+  `wasm-latex-tools` 0.2.0 (AGPL-3.0, which this project may adopt):
+  `tex_fmt_bg.wasm` is **1,661,158 B raw / 568,115 B gzip**. The 4 MB of WebPerl
+  in the same package is for `texcount`/`latexdiff`/`latexpand` and is **not**
+  needed — `TexFmt` takes no runner. For comparison, Typstyle, which the editor
+  already ships for Typst, is 658,635 B raw / 250,722 B gzip. So this step means
+  **roughly doubling the bundled formatter WASM**, and it is the first step in
+  this plan whose cost is large enough to be a product decision rather than an
+  implementation detail. Options, in the order I would try them: (a) build
+  tex-fmt from source with `wasm-opt -Oz` and a trimmed feature set and measure
+  again; (b) ship it as a lazily fetched chunk like the LaTeX engine itself, so a
+  reader who never formats a `.tex` file pays nothing; (c) accept the cost.
+  Whichever is chosen, record the number here before writing the integration.
 - [ ] **6. Completion.** The CodeMirror layer first (keymap, theme, a11y, IME),
   then the local catalog, the worker index, the stale-tag rule and the
   "no network" assertion. Ship behind the same availability rules as the other
