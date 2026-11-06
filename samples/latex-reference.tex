@@ -11,6 +11,7 @@
 \usepackage{amssymb}
 \usepackage{hyperref}
 \usepackage{xcolor}
+\usepackage[normalem]{ulem}
 
 \title{LaTeX Reference}
 \author{MDraft}
@@ -138,8 +139,8 @@ not available; \verb|biblatex-lite| covers the common cases.
 \section{Including other files}
 
 A large document is split with \verb|\input{chapters/intro}| or
-\verb|\include{chapters/intro}\footnote{The \texttt{.tex} extension is
-optional.}|. Paths are relative to the main file's folder, which is also the
+\verb|\include{chapters/intro}|.\footnote{The \texttt{.tex} extension is
+optional.} Paths are relative to the main file's folder, which is also the
 project root: a reference that escapes it is an error rather than a silent
 omission.
 
