@@ -113,6 +113,18 @@ pub fn latex_status(app: AppHandle) -> bool {
     directory(&app).is_ok_and(|dir| dir.join("assets").is_dir())
 }
 
+/// Whether the pre-settings marker file exists, for the one-time migration.
+///
+/// The experiment wrote `<app_data_dir>/wasmtex-poc-2025/enabled`; the product
+/// keeps the same fact in `settings.json`. `AppState::load` adopts this marker
+/// once so a reader who already enabled the engine keeps it, then the switch is
+/// the only source of truth and turning it off is not undone by a stale file.
+pub fn legacy_marker_present<R: tauri::Runtime>(app: &AppHandle<R>) -> bool {
+    app.path()
+        .app_data_dir()
+        .is_ok_and(|dir| dir.join("wasmtex-poc-2025").join("enabled").is_file())
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LatexStats {
@@ -172,6 +184,15 @@ pub fn latex_disable(app: AppHandle) -> Result<(), String> {
     let mut settings = state.snapshot()?;
     settings.latex_enabled = false;
     state.save(settings)?;
+    // The pre-settings marker file is what `AppState::load` adopts for a reader
+    // who enabled the experiment. Leaving it behind would switch the engine back
+    // on at the next launch, so turning the switch off retires it. Only the
+    // marker is removed; the downloaded assets and cache are untouched, which is
+    // decision D14.
+    if let Ok(dir) = app.path().app_data_dir() {
+        let marker = dir.join("wasmtex-poc-2025").join("enabled");
+        let _ = fs::remove_file(marker);
+    }
     Ok(())
 }
 
