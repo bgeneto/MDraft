@@ -199,10 +199,74 @@ export function declaredLanguage(source: string, markup: MarkupLanguage): string
       const match = /<html\b[^>]*\blang\s*=\s*["']([^"']+)["']/i.exec(head);
       return match ? normalizeLanguageTag(match[1]) : null;
     }
-    case "latex":
+    case "latex": {
+      // `\usepackage[english,brazilian]{babel}` and
+      // `\setmainlanguage{portuguese}` (polyglossia). Babel's last option wins,
+      // which is how a document picks its main language when it loads several.
+      // The values are language *names*, not tags, so the common ones are mapped
+      // and anything else is left to the detector rather than guessed at.
+      const babel = /\\usepackage\s*\[([^\]]*)\]\s*\{babel\}/.exec(head);
+      if (babel) {
+        const options = babel[1]
+          .split(",")
+          .map((option) => option.trim())
+          .filter(Boolean);
+        const main = options[options.length - 1];
+        const tag = main ? LATEX_LANGUAGE_NAMES[main.toLowerCase()] : undefined;
+        if (tag) return tag;
+      }
+      const polyglossia = /\\set(?:main|other)language\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}/.exec(head);
+      if (polyglossia) {
+        const tag = LATEX_LANGUAGE_NAMES[polyglossia[1].trim().toLowerCase()];
+        if (tag) return tag;
+      }
       return null;
+    }
   }
 }
+
+/**
+ * The language names Babel and Polyglossia use, mapped to BCP 47 tags.
+ *
+ * Only the names whose tag is unambiguous: `english` is `en` everywhere, but a
+ * regional variant such as `australian` is mapped to its own tag rather than
+ * folded into `en`, because the voice choice depends on it.
+ */
+const LATEX_LANGUAGE_NAMES: Record<string, string> = {
+  english: "en",
+  american: "en-US",
+  british: "en-GB",
+  ukenglish: "en-GB",
+  usenglish: "en-US",
+  australian: "en-AU",
+  canadian: "en-CA",
+  newzealand: "en-NZ",
+  portuguese: "pt",
+  brazilian: "pt-BR",
+  brazil: "pt-BR",
+  spanish: "es",
+  french: "fr",
+  francais: "fr",
+  german: "de",
+  ngerman: "de",
+  austrian: "de-AT",
+  swissgerman: "de-CH",
+  italian: "it",
+  dutch: "nl",
+  polish: "pl",
+  russian: "ru",
+  japanese: "ja",
+  chinese: "zh",
+  korean: "ko",
+  greek: "el",
+  turkish: "tr",
+  swedish: "sv",
+  norwegian: "no",
+  danish: "da",
+  finnish: "fi",
+  czech: "cs",
+  catalan: "ca",
+};
 
 /** A checker with the shape of `api.spellcheckCheck`. */
 export type DictionaryCheck = (

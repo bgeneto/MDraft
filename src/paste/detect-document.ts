@@ -11,6 +11,7 @@ import {
   detectTextSyntax,
   stripNoise,
   scoreAsciidoc,
+  scoreLatex,
   scoreMarkdown,
   scoreTypst,
 } from "./detect.ts";
@@ -72,6 +73,7 @@ export function resolvePasteDestination(input: DestinationInput): PasteDestinati
       scoreMarkdown(stripNoise(sample)),
       scoreTypst(stripNoise(sample)),
       scoreAsciidoc(stripNoise(sample)),
+      scoreLatex(sample),
     ),
     runnerUp: 0,
   };
@@ -89,6 +91,47 @@ export const CANONICAL_EXTENSION: Record<DocumentLanguage, string> = {
   asciidoc: "adoc",
   latex: "tex",
 };
+
+/**
+ * Every extension this application opens as each markup.
+ *
+ * One table, because two answers to "what is a `.tex` file" is how the editor
+ * ends up parsing a document as Markdown while the menus offer LaTeX commands.
+ * The canonical extension comes first; the aliases follow it. `main.ts` builds
+ * the file dialog filters from the same entries, so a name the dialog offers and
+ * a name the classifier recognises cannot drift apart.
+ */
+export const LANGUAGE_EXTENSIONS: Record<DocumentLanguage, readonly string[]> = {
+  markdown: [CANONICAL_EXTENSION.markdown, "markdown", "mdown", "mkd", "txt"],
+  typst: [CANONICAL_EXTENSION.typst],
+  html: [CANONICAL_EXTENSION.html, "htm"],
+  asciidoc: [CANONICAL_EXTENSION.asciidoc, "asciidoc"],
+  latex: [CANONICAL_EXTENSION.latex],
+};
+
+/** A file extension without its dot, lowercased; null when there is none. */
+function extensionOf(name: string): string | null {
+  const match = /\.([A-Za-z0-9]+)$/.exec(name.trim());
+  return match ? match[1].toLowerCase() : null;
+}
+
+/**
+ * The markup a file name or a bare extension names.
+ *
+ * A saved file's suffix is authoritative — re-reading the contents on every open
+ * would flip the parser under edits that have not been saved yet — so this is the
+ * one classifier `main.ts` uses for both an opened path and the Default File
+ * Extension preference. An unknown or absent extension is Markdown, which is what
+ * the editor has always fallen back to.
+ */
+export function languageForExtension(nameOrExtension: string | null): DocumentLanguage {
+  if (nameOrExtension === null) return "markdown";
+  const extension = extensionOf(nameOrExtension) ?? nameOrExtension.trim().toLowerCase();
+  for (const [language, extensions] of Object.entries(LANGUAGE_EXTENSIONS)) {
+    if (extensions.includes(extension)) return language as DocumentLanguage;
+  }
+  return "markdown";
+}
 
 export interface SaveSuggestionInput {
   /** The path the document already has, or null while it is untitled. */

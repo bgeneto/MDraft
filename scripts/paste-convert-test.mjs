@@ -10,8 +10,20 @@
 // cheaply cover every reader/writer pair. This suite pins the matrix, the
 // destination resolution and the escaping before the UI layer sees it.
 
-import { chooseSource, isHtmlSource, detectTextSyntax, scoreTypst } from "../src/paste/detect.ts";
-import { resolvePasteDestination, suggestSave } from "../src/paste/detect-document.ts";
+import {
+  chooseSource,
+  isHtmlSource,
+  detectTextSyntax,
+  scoreLatex,
+  scoreTypst,
+} from "../src/paste/detect.ts";
+import {
+  CANONICAL_EXTENSION,
+  LANGUAGE_EXTENSIONS,
+  languageForExtension,
+  resolvePasteDestination,
+  suggestSave,
+} from "../src/paste/detect-document.ts";
 import { planPaste } from "../src/paste/index.ts";
 import { imageSyntaxFor } from "../src/image-syntax.ts";
 import {
@@ -224,6 +236,134 @@ console.log("\n=== save suggestion ===");
     restored.language === "typst" && restored.extension === "typ",
     "an untitled Typst buffer keeps Typst over a Markdown preference",
     `${restored.language}/${restored.extension}`,
+  );
+}
+
+console.log("\n=== LaTeX detection ===");
+{
+  const DOCUMENT = [
+    "\\documentclass[11pt]{article}",
+    "\\usepackage{amsmath}",
+    "\\usepackage[english]{babel}",
+    "",
+    "\\title{A Study of Things}",
+    "\\author{A. Reader}",
+    "",
+    "\\begin{document}",
+    "\\maketitle",
+    "",
+    "\\section{Introduction}",
+    "The first paragraph of the paper.",
+    "",
+    "\\end{document}",
+  ].join("\n");
+
+  // A real document leads by a wide margin, so it is recognised.
+  check(
+    detectTextSyntax(DOCUMENT, "document")?.language === "latex",
+    "a LaTeX document is recognised",
+    String(detectTextSyntax(DOCUMENT, "document")?.score),
+  );
+
+  // The gate the plan promised: prose that mentions a command once is not
+  // reclassified. This is the case that would re-parse a reader's Markdown.
+  const PROSE = [
+    "# Typesetting with LaTeX",
+    "",
+    "We used \\LaTeX{} to set the paper, and the result was good.",
+    "",
+    "- one point",
+    "- another point",
+  ].join("\n");
+  check(
+    detectTextSyntax(PROSE, "document")?.language !== "latex",
+    "a Markdown document mentioning a LaTeX command is not reclassified",
+    String(detectTextSyntax(PROSE, "document")?.language),
+  );
+  check(scoreLatex(PROSE) < 4, "a prose mention does not reach the threshold", String(scoreLatex(PROSE)));
+
+  // The boundary the plan names: score >= 4 and a lead >= 2.
+  check(scoreLatex(DOCUMENT) >= 4, "a document clears the score gate", String(scoreLatex(DOCUMENT)));
+  check(
+    scoreLatex("\\documentclass{article}") === 5 &&
+      scoreLatex("\\begin{document}\nx\n\\end{document}") === 8,
+    "the preamble and the document body score separately",
+    `${scoreLatex("\\documentclass{article}")}/${scoreLatex("\\begin{document}\nx\n\\end{document}")}`,
+  );
+  check(
+    scoreLatex("A sentence about \\section{prose} in the middle of a line.") === 0,
+    "an inline command in prose scores nothing",
+    String(scoreLatex("A sentence about \\section{prose} in the middle of a line.")),
+  );
+
+  // Save As recommends `.tex` for an untitled LaTeX buffer.
+  const suggestion = suggestSave({
+    path: null,
+    language: "markdown",
+    buffer: DOCUMENT,
+    defaultExtension: "md",
+    defaultLanguage: "markdown",
+  });
+  check(
+    suggestion.language === "latex" && suggestion.extension === "tex",
+    "an untitled LaTeX buffer suggests .tex",
+    `${suggestion.language}/${suggestion.extension}`,
+  );
+
+  // The reader's own default spelling survives when the content agrees.
+  const preferred = suggestSave({
+    path: null,
+    language: "latex",
+    buffer: DOCUMENT,
+    defaultExtension: "tex",
+    defaultLanguage: "latex",
+  });
+  check(
+    preferred.language === "latex" && preferred.extension === "tex",
+    "a LaTeX default keeps its own extension",
+    `${preferred.language}/${preferred.extension}`,
+  );
+
+  // A LaTeX clipboard is pasted as plain text: no reader/writer pair exists.
+  const clipboard = chooseSource(payload(null, DOCUMENT), "markdown");
+  check(
+    clipboard.source === "plain" && clipboard.native,
+    "a LaTeX clipboard is pasted as plain text",
+    `${clipboard.source}/${clipboard.native}`,
+  );
+  const intoLatex = chooseSource(payload("<p>Hello</p>", "Hello"), "latex");
+  check(
+    intoLatex.source === "plain" && intoLatex.native,
+    "pasting into LaTeX stays native",
+    `${intoLatex.source}/${intoLatex.native}`,
+  );
+
+  // The extension table is the one classifier, so a filter cannot offer a name
+  // the opener would read as Markdown.
+  check(
+    languageForExtension("C:/docs/paper.tex") === "latex" &&
+      languageForExtension("paper.TEX") === "latex" &&
+      languageForExtension("tex") === "latex",
+    "a .tex path and a bare tex extension are both LaTeX",
+  );
+  check(
+    languageForExtension("notes.md") === "markdown" &&
+      languageForExtension("notes.markdown") === "markdown" &&
+      languageForExtension("notes.txt") === "markdown" &&
+      languageForExtension("paper.typ") === "typst" &&
+      languageForExtension("page.htm") === "html" &&
+      languageForExtension("doc.asciidoc") === "asciidoc",
+    "every alias resolves to its language",
+  );
+  check(
+    languageForExtension(null) === "markdown" && languageForExtension("noextension") === "markdown",
+    "an absent or unknown extension is Markdown",
+  );
+  check(
+    CANONICAL_EXTENSION.latex === "tex" &&
+      LANGUAGE_EXTENSIONS.latex.includes("tex") &&
+      LANGUAGE_EXTENSIONS.markdown.includes("md"),
+    "the canonical extension is the first entry of its language",
   );
 }
 

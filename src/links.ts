@@ -337,6 +337,40 @@ function typstAt(text: string, offset: number): LinkTarget | null {
 }
 
 /**
+ * LaTeX: `\href`, `\url`, `\includegraphics`, `\input`/`\include` and bare URLs.
+ *
+ * `\ref`, `\cite` and `\label` are deliberately absent: they name something
+ * inside the project, and there is no file to open for them. A `%` comment is
+ * not a link either — its argument is prose about a link, not a link.
+ */
+function latexAt(text: string, offset: number): LinkTarget | null {
+  const { start, line } = lineWindow(text, offset);
+  const column = offset - start;
+
+  const comment = /(?<!\\)%/.exec(line);
+  if (comment && column >= (comment.index ?? 0)) return null;
+
+  const commands: Array<{ pattern: RegExp; image: boolean }> = [
+    { pattern: /\\includegraphics\*?\s*(?:\[[^\]]*\])?\s*\{([^}]*)\}/g, image: true },
+    { pattern: /\\(?:input|include|includeonly|subfile)\s*\{([^}]*)\}/g, image: false },
+    { pattern: /\\href\s*\{([^}]*)\}/g, image: false },
+    { pattern: /\\url\s*\{([^}]*)\}/g, image: false },
+  ];
+  for (const command of commands) {
+    for (const match of line.matchAll(command.pattern)) {
+      const from = match.index ?? 0;
+      const to = from + match[0].length;
+      if (column < from || column >= to) continue;
+      // A `#` fragment is an anchor, an `http…` destination is external, and
+      // anything else is a file; `\href{}{}` keeps its own classification.
+      return target(match[1], command.image);
+    }
+  }
+
+  return bareUrlAt(line, column);
+}
+
+/**
  * The link or image target under `offset`, or null.
  *
  * A target inside a code span, a fenced block or a script/style tag is not a
@@ -356,5 +390,6 @@ export function linkAt(
   }
   if (language === "asciidoc") return asciidocAt(text, offset);
   if (language === "typst") return typstAt(text, offset);
+  if (language === "latex") return latexAt(text, offset);
   return markdownAt(text, offset);
 }

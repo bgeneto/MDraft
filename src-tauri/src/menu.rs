@@ -520,26 +520,23 @@ fn is_checked(state: &MenuState, id: &str) -> bool {
 /// accident. The handler still validates the context, because a stale menu or a
 /// keyboard route can outlive the state that disabled it.
 fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
-    if state.document_language == "latex"
-        && (id.starts_with("format.") || id.starts_with("insert.")
-            || (id.starts_with("para.") && !matches!(id, "para.indent" | "para.outdent" | "para.insertBefore" | "para.insertAfter"))
-            || id.starts_with("export.") || id == "file.print")
-    {
-        return Some(false);
-    }
     let writable = !state.read_only;
     let html = state.document_language == "html";
     let typst = state.document_language == "typst";
     let markdown = state.document_language == "markdown";
     let asciidoc = state.document_language == "asciidoc";
+    let latex = state.document_language == "latex";
     let task_language = !html && !typst;
     Some(match id {
         "file.reload" | "file.reveal" | "file.favorite" => state.has_path,
         // Native printing and the direct PDF writer have no article for Typst:
         // that language already compiles a PDF through Export › PDF (via
         // Typst). The browser route stays available for every language.
-        "file.print" | "export.pdf" => !typst,
-        "export.pdf.browser" => true,
+        "file.print" | "export.pdf" => !typst && !latex,
+        // HTML export and the browser print route are pandoc/print paths that a
+        // `.tex` document has no reader for in this change; they come back with
+        // the native PDF row. Every other language keeps them.
+        "export.html" | "export.pdf.browser" => !latex,
         "file.close" | "file.closeAll" => true,
         "file.closeOthers" => state.tab_count > 1,
         "file.closeLeft" => state.tab_index > 0,
@@ -552,18 +549,21 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
         "edit.comment" => writable && state.has_comment_syntax,
         "edit.pastePlain" => true,
         "edit.selectOccurrences" | "edit.convertSelection" | "edit.lines" => writable,
-        "format.document" => state.can_format,
+        "format.document" => state.can_format && !latex,
         "format.bold" | "format.italic" | "format.strike" | "format.code" | "format.link"
         | "format.image" => writable,
         "format.math" | "para.mathBlock" => writable && !html,
         "format.paragraphStyle" => writable && !html,
         "format.lists" => writable,
-        "format.tasks" | "insert.alerts" => writable && task_language,
+        // LaTeX has no task-list and no alert syntax; the command explains that
+        // rather than inserting markup that does not compile, so the row is
+        // disabled instead of offering a control that only shows a toast.
+        "format.tasks" | "insert.alerts" => writable && task_language && !latex,
         "para.task" | "para.taskDone" | "para.taskTodo" | "para.taskPlain" => {
-            writable && task_language
+            writable && task_language && !latex
         }
         "para.alertNote" | "para.alertTip" | "para.alertImportant" | "para.alertWarning"
-        | "para.alertCaution" => writable && task_language,
+        | "para.alertCaution" => writable && task_language && !latex,
         "para.yaml" => writable && (markdown || asciidoc),
         "para.toc" => writable && !html,
         "para.h1" | "para.h2" | "para.h3" | "para.h4" | "para.h5" | "para.h6"
@@ -1463,6 +1463,16 @@ fn apply_export_availability<R: Runtime>(app: &AppHandle<R>, availability: Expor
     let Some(menu) = app.menu() else {
         return;
     };
+    // A `.tex` document has no pandoc reader in this change, so every pandoc row
+    // stays disabled for it. The language comes from the cached menu state, which
+    // `set_menu_state` keeps current; without it the rows would be re-enabled on
+    // the next availability change and a stale click would reach pandoc's
+    // Markdown reader.
+    let latex = LAST_MENU_STATE
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|state| state.document_language == "latex"))
+        .unwrap_or(false);
     for format in export_formats(app) {
         let id = format!("{EXPORT_PREFIX}{}", format.id);
         let Some(item) = find_item(&menu, &id) else {
@@ -1474,7 +1484,8 @@ fn apply_export_availability<R: Runtime>(app: &AppHandle<R>, availability: Expor
         if let Err(error) = menu_item.set_text(export_label(&format, availability)) {
             eprintln!("[menu] could not set the label of {id}: {error}");
         }
-        if let Err(error) = menu_item.set_enabled(export_enabled(&format, availability)) {
+        let enabled = export_enabled(&format, availability) && !latex;
+        if let Err(error) = menu_item.set_enabled(enabled) {
             eprintln!("[menu] could not set the enabled state of {id}: {error}");
         }
     }
@@ -1711,20 +1722,76 @@ mod tests {
     }
 
     #[test]
-    fn latex_defers_markup_commands_but_keeps_plain_editing() {
+    fn latex_enables_the_markup_commands_it_implements() {
         let mut state = MenuState {
             document_language: "latex".into(),
             has_selection: true,
             ..MenuState::default()
         };
-        for id in ["format.bold", "format.document", "para.h1", "para.table", "format.image", "export.pdf", "file.print"] {
+        // The commands LaTeX now implements: inline formatting, headings,
+        // lists, quotes, code, tables and math.
+        for id in [
+            "format.bold",
+            "format.italic",
+            "format.link",
+            "format.image",
+            "format.math",
+            "para.h1",
+            "para.paragraph",
+            "para.increaseHeading",
+            "para.quote",
+            "para.ul",
+            "para.ol",
+            "para.table",
+            "para.codeBlock",
+            "para.hr",
+            "para.toc",
+            "para.mathBlock",
+            "para.indent",
+            "para.outdent",
+            "para.insertBefore",
+            "para.insertAfter",
+        ] {
+            assert_eq!(enabled_for(&state, id), Some(true), "{id}");
+        }
+        // What LaTeX genuinely cannot do yet, each with a reason instead of a
+        // control that does nothing: the formatter (step 5), the native PDF row
+        // and every pandoc route (step 7), printing (D11), and the two markups
+        // LaTeX has no syntax for.
+        for id in [
+            "format.document",
+            "format.tasks",
+            "insert.alerts",
+            "para.task",
+            "para.alertNote",
+            "para.yaml",
+            "export.html",
+            "export.pdf",
+            "export.pdf.browser",
+            "file.print",
+        ] {
             assert_eq!(enabled_for(&state, id), Some(false), "{id}");
         }
+        // Plain editing keeps working, and comment toggling now does too: the
+        // stream grammar carries `commentTokens` for `%`.
         for id in ["edit.delete", "edit.find", "file.save", "para.indent"] {
             assert_eq!(enabled_for(&state, id), Some(true), "{id}");
         }
+        state.has_comment_syntax = true;
+        assert_eq!(enabled_for(&state, "edit.comment"), Some(true));
+
+        // Folding has no mechanism in a stream grammar, so the menu says so
+        // rather than offering a control that cannot work.
+        state.can_fold = false;
+        assert_eq!(enabled_for(&state, "view.foldCurrent"), Some(false));
+
+        // The same commands come back for another language.
         state.document_language = "markdown".into();
+        state.can_fold = true;
         assert_eq!(enabled_for(&state, "format.bold"), Some(true));
+        assert_eq!(enabled_for(&state, "format.document"), Some(true));
+        assert_eq!(enabled_for(&state, "export.pdf"), Some(true));
+        assert_eq!(enabled_for(&state, "para.task"), Some(true));
     }
 
     #[test]

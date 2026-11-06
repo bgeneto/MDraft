@@ -120,6 +120,46 @@ export function scoreAsciidoc(raw: string): number {
   return score;
 }
 
+/**
+ * The LaTeX score.
+ *
+ * Every signal is anchored to the start of a line, because that is what
+ * separates a LaTeX *document* from prose that mentions LaTeX. A Markdown
+ * article saying "we used \LaTeX{} for this" has no line beginning with
+ * `\documentclass` or `\begin{document}`, so it scores 0 here and its Markdown
+ * score keeps it.
+ *
+ * `\begin{document}` is worth the most: it is the one command a LaTeX document
+ * cannot be written without, and it does not appear in a bare fragment. The
+ * preamble commands are next — a clipboard holding only a preamble is still
+ * LaTeX source. A `%` comment line is worth 1, the same as Typst's and
+ * AsciiDoc's comment signal, so it can never decide alone.
+ */
+export function scoreLatex(raw: string): number {
+  const text = raw;
+  let score = 0;
+  if (/^ {0,3}\\begin\s*\{document\}/m.test(text)) score += 6;
+  if (/^ {0,3}\\documentclass\b/m.test(text)) score += 5;
+  if (/^ {0,3}\\end\s*\{document\}/m.test(text)) score += 2;
+  if (count(text, /^ {0,3}\\(?:usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{/gm) > 0) score += 4;
+  if (
+    count(
+      text,
+      /^ {0,3}\\(?:part|chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?\s*(?:\[[^\]]*\])?\s*\{/gm,
+    ) > 0
+  ) {
+    score += 4;
+  }
+  if (count(text, /^ {0,3}\\(?:newcommand|renewcommand|providecommand|def|DeclareMathOperator)\b/gm) > 0) {
+    score += 4;
+  }
+  if (count(text, /^ {0,3}\\begin\s*\{(?!document\})[A-Za-z*]+\}/gm) > 0) score += 3;
+  if (/^ {0,3}\\(?:title|author|date)\s*\{/m.test(text)) score += 2;
+  if (/\\includegraphics\b/.test(text)) score += 2;
+  if (count(text, /^ {0,3}%.*$/gm) > 0) score += 1;
+  return score;
+}
+
 const BLOCK_TAG =
   /^<(?:!doctype\s+html|html|body|main|article|section|header|footer|div|p|h[1-6]|ul|ol|li|table|blockquote|pre|figure|details)\b/i;
 
@@ -209,11 +249,13 @@ export function detectTextSyntax(
   const markdown = scoreMarkdown(raw);
   const typst = scoreTypst(raw);
   const asciidoc = scoreAsciidoc(raw);
+  const latex = scoreLatex(raw);
   const scores: Array<[DocumentLanguage, number]> = [
     ["html", html],
     ["markdown", markdown],
     ["typst", typst],
     ["asciidoc", asciidoc],
+    ["latex", latex],
   ];
   scores.sort((a, b) => b[1] - a[1]);
   const [language, score] = scores[0];

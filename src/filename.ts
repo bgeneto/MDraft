@@ -165,6 +165,18 @@ function stripInline(input: string, language: DocumentLanguage): string {
       .replace(/(^|\s)_([^_]+)_(?=\s|$)/g, "$1$2")
       .replace(/\$[^$]*\$/g, " ")
       .replace(/(^|\s)\/\/.*$/g, "");
+  } else if (language === "latex") {
+    text = text
+      // A command's argument is the text a reader sees: `\textbf{Bold}` keeps
+      // "Bold". The command name itself is markup and goes.
+      .replace(/\\[a-zA-Z@]+\*?(?:\[[^\]]*\])?\{([^{}]*)\}/g, "$1")
+      .replace(/\\[a-zA-Z@]+\*?/g, " ")
+      .replace(/\\\\/g, " ")
+      // Escaped specials are literal characters in the text.
+      .replace(/\\([$&%#_{}])/g, "$1")
+      .replace(/\$[^$]*\$/g, " ")
+      .replace(/[{}~]/g, " ")
+      .replace(/(?<!\\)%.*$/g, "");
   }
 
   return decodeEntities(text).replace(/\s+/g, " ").trim();
@@ -183,6 +195,8 @@ function stripBlockPrefix(line: string, language: DocumentLanguage): string {
     text = text.replace(/^\s*(?:\.{1,2}|-|\*+|\d+\.)\s+/, "").replace(/^=+\s+/, "");
   } else if (language === "typst") {
     text = text.replace(/^\s*(?:[-+]|\d+\.)\s+/, "").replace(/^=+\s+/, "");
+  } else if (language === "latex") {
+    text = text.replace(/^\s*\\item\s*(\[[^\]]*\])?\s*/, "").replace(/^\s*\\[a-zA-Z@]+\*?\s*/, "");
   }
   return text;
 }
@@ -211,6 +225,16 @@ function isStructuralLine(line: string, language: DocumentLanguage): boolean {
     // arguments are not bracketed text, so the inline cleaner would otherwise
     // leave `#set page(paper: "a4")` looking like a sentence.
     if (/^#(?:set|show|import|include|let)\b/.test(trimmed)) return true;
+  } else if (language === "latex") {
+    // A comment, a preamble command, or a sectioning command that is not a
+    // title: none of these is the document's prose.
+    if (/^%/.test(trimmed)) return true;
+    if (/^\\(?:documentclass|usepackage|input|include|includeonly|bibliography|bibliographystyle|addbibresource|newcommand|renewcommand|providecommand|def|let|graphicspath|hypersetup|pagestyle|thispagestyle|setlength|setcounter|label|ref|eqref|cite|nocite|begin|end|maketitle|tableofcontents|appendix|clearpage|newpage|vspace|hspace|noindent|centering|includegraphics|footnote|index)\b/.test(trimmed)) {
+      return true;
+    }
+    if (/^\\(?:part|chapter|section|subsection|subsubsection|paragraph|subparagraph|title)\b/.test(trimmed)) {
+      return true;
+    }
   }
   return false;
 }
@@ -271,8 +295,35 @@ function metadataTitle(text: string, language: DocumentLanguage): string | null 
     const match = /#set\s+document\s*\([^)]*\btitle\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(normalized);
     return match ? match[1].replace(/\\(["\\])/g, "$1") : null;
   }
+  if (language === "latex") {
+    // `\title{…}` may carry an optional short form (`\title[Short]{Long}`) and
+    // may span lines, so the balanced argument is read rather than regexed.
+    const at = /\\title\s*(?:\[[^\]]*\])?\s*\{/.exec(normalized);
+    if (!at) return null;
+    const raw = balancedArgument(normalized, at.index + at[0].length);
+    const cleaned = raw === null ? null : stripInline(raw, "latex");
+    return cleaned && cleaned.trim() ? cleaned : null;
+  }
   const match = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(normalized);
   return match ? stripInline(match[1], "html") : null;
+}
+
+/** The text of a brace-balanced argument that starts just after its `{`. */
+function balancedArgument(text: string, from: number): string | null {
+  let depth = 1;
+  for (let index = from; index < text.length; index += 1) {
+    const ch = text[index];
+    if (ch === "\\") {
+      index += 1;
+      continue;
+    }
+    if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return text.slice(from, index);
+    }
+  }
+  return null;
 }
 
 /** Headings inside the scanned window, in document order. */
@@ -285,6 +336,8 @@ function headings(text: string, language: DocumentLanguage): Heading[] {
     if (h2) found.push({ raw: h2[1], level: 2 });
     return found;
   }
+
+  if (language === "latex") return latexHeadings(text);
 
   const lines = normalize(text).split("\n");
   const front = language === "markdown" ? frontMatter(lines) : { title: null, end: -1 };
@@ -349,6 +402,37 @@ function firstHeading(text: string, language: DocumentLanguage): string | null {
   return found.find((heading) => heading.level === best)?.raw ?? null;
 }
 
+/**
+ * Sectioning commands inside the scanned window, in document order.
+ *
+ * The same nesting the outline uses, so the name a Save dialog offers and the
+ * title the sidebar shows cannot disagree.
+ */
+function latexHeadings(text: string): Heading[] {
+  const levels: Record<string, number> = {
+    part: 0,
+    chapter: 1,
+    section: 1,
+    subsection: 2,
+    subsubsection: 3,
+    paragraph: 4,
+    subparagraph: 5,
+  };
+  const normalized = normalize(text);
+  const pattern =
+    /\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?\s*(?:\[([^\]]*)\])?\s*\{/g;
+  const found: Heading[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(normalized)) !== null) {
+    const short = match[2]?.trim();
+    const raw = short || balancedArgument(normalized, match.index + match[0].length);
+    if (raw === null || !raw.trim()) continue;
+    found.push({ raw, level: levels[match[1]] });
+    if (found.length >= 6) break;
+  }
+  return found;
+}
+
 /** The first readable sentence, skipping markup that is not prose. */
 function firstProseLine(text: string, language: DocumentLanguage): string | null {
   if (language === "html") return firstHtmlLine(text);
@@ -383,6 +467,15 @@ function firstProseLine(text: string, language: DocumentLanguage): string | null
       continue;
     }
     if ((language === "asciidoc" || language === "typst") && /^=+\s+/.test(line)) {
+      index += 1;
+      continue;
+    }
+    if (
+      language === "latex" &&
+      /^\s*\\(?:part|chapter|section|subsection|subsubsection|paragraph|subparagraph|title)\b/.test(
+        line,
+      )
+    ) {
       index += 1;
       continue;
     }
