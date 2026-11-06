@@ -208,6 +208,77 @@ console.log("\n=== smart punctuation, numbered prefixes and inline calls ===");
   );
 }
 
+console.log("\n=== multiline lists ===");
+{
+  // AsciiDoc and Typst Document hand the shared mapper a block range plus the
+  // text nodes inside it, so a list item's continuation line is a separate node
+  // whose text is not a literal slice of the source (the marker and indentation
+  // are gone). The aligner must move the cursor past the first node without
+  // losing the second.
+  const source =
+    "* alpha first item\n  beta continuation line\n* gamma second item\n  delta continuation line\n";
+  const aligned = alignBlockNodes(source, 0, [
+    "alpha first item",
+    "beta continuation line",
+    "gamma second item",
+    "delta continuation line",
+  ]);
+  for (const [nodeIndex, word, at] of [
+    [0, "alpha", source.indexOf("alpha")],
+    [1, "beta", source.indexOf("beta")],
+    [2, "gamma", source.indexOf("gamma")],
+    [3, "delta", source.indexOf("delta")],
+  ]) {
+    const node = [
+      "alpha first item",
+      "beta continuation line",
+      "gamma second item",
+      "delta continuation line",
+    ][nodeIndex];
+    const start = node.indexOf(word);
+    const range = alignedNodeSourceRange(aligned, nodeIndex, start, start + word.length);
+    check(
+      range?.from === at && source.slice(range.from, range.to) === word,
+      `a list node maps its exact word (${word})`,
+      JSON.stringify({ range, expected: at }),
+    );
+  }
+
+  // A repeated word on two different items keeps its own occurrence.
+  const repeated = "* repeated alpha\n  repeated beta\n* repeated gamma\n  repeated delta\n";
+  const repeatedNodes = ["repeated alpha", "repeated beta", "repeated gamma", "repeated delta"];
+  const repeatedAligned = alignBlockNodes(repeated, 0, repeatedNodes);
+  const offsets = repeatedNodes.map((node, index) => {
+    const range = alignedNodeSourceRange(repeatedAligned, index, 0, 8);
+    return range ? range.from : null;
+  });
+  check(
+    offsets.every((offset) => offset !== null) && new Set(offsets).size === 4,
+    "four repeated list prefixes map to four distinct occurrences",
+    JSON.stringify(offsets),
+  );
+  check(
+    offsets[2] !== null && repeated.slice(offsets[2], offsets[2] + 8) === "repeated",
+    "a later item's repeated prefix still slices its own source",
+    JSON.stringify(offsets),
+  );
+
+  // A numbered continuation uses a wider marker; the indent removed differs.
+  const ordered = "1. one ordered\n   two continuation\n2. three ordered\n";
+  const orderedAligned = alignBlockNodes(ordered, 0, [
+    "one ordered",
+    "two continuation",
+    "three ordered",
+  ]);
+  const continuation = alignedNodeSourceRange(orderedAligned, 1, 0, 3);
+  check(
+    continuation?.from === ordered.indexOf("two") &&
+      ordered.slice(continuation.from, continuation.to) === "two",
+    "an ordered continuation line maps its exact word",
+    JSON.stringify(continuation),
+  );
+}
+
 const failed = checks.filter((entry) => !entry.ok).length;
 console.log(`\n${checks.length - failed}/${checks.length} checks passed`);
 process.exit(failed === 0 ? 0 : 1);

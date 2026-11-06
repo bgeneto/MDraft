@@ -334,6 +334,41 @@ try {
     JSON.stringify(mapBuild),
   );
   check("canceling a map never publishes a partial result", mapBuild.cancelled);
+  const listMap = await evaluate(`(async()=>{
+    const maps=await import('/src/source-map.ts');
+    const source='- alpha first item\\n  beta continuation line\\n- gamma second item\\n  delta continuation line\\n';
+    const opts={baseDir:null,math:false,mermaid:false,map:true};
+    const host=document.createElement('div');document.body.replaceChildren(host);
+    const live=await window.previewTest.renderPreviewInto(host,source,opts,()=>false);
+    const sync=window.previewTest.renderPreview(source,opts);
+    const fragments=items=>(items??[]).map(({src0,src1,raw,kind})=>[src0,src1,raw,kind]);
+    const map=await maps.bindWordMapAsync(host,{source,fragments:live.fragments},()=>false);
+    let found=null;
+    if(map){
+      for(const nodes of map.fragNodes) for(const node of nodes){
+        const at=node.data.indexOf('beta');
+        if(at<0) continue;
+        found=maps.sourceRangeFor(map,node,at,at+4);
+      }
+    }
+    return {
+      parity:JSON.stringify(fragments(live.fragments))===JSON.stringify(fragments(sync.fragments)),
+      fragments:(live.fragments??[]).length,
+      slice:found?source.slice(found.from,found.to):null,
+      at:found?found.from:-1,
+      expected:source.indexOf('beta'),
+    };
+  })()`);
+  check(
+    "a multiline list maps the same ranges through the worker and the synchronous path",
+    listMap.parity && listMap.fragments >= 4,
+    JSON.stringify(listMap),
+  );
+  check(
+    "a continuation-line word resolves to its own source range in the DOM",
+    listMap.slice === "beta" && listMap.at === listMap.expected,
+    JSON.stringify(listMap),
+  );
   const mapYield = await evaluate(`(async()=>{
     const maps=await import('/src/source-map.ts');
     const source=Array.from({length:10000},(_,i)=>'paragraph '+i).join('\\n\\n');
