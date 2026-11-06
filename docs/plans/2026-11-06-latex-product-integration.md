@@ -267,7 +267,7 @@ main file and the referenced set replaces the current revision list.
 
 | Candidate | Why not |
 | --- | --- |
-| `codemirror-lang-latex` 0.6.1 | AGPL-3.0-or-later against MDraft's MIT, plus peer and bundle costs that are not the installer delta. Needs a licensing decision the project has not taken. |
+| `codemirror-lang-latex` 0.6.1 | Measured at **60 KB gzip** even when importing only its completion source, because that module imports the parser utilities; no `exports` map, so the linter, tooltips and symbol tables cannot be split out. Its AGPL licence is *not* the objection — the project may move to the AGPL if a package earns it — but four times the cost of a hand-written catalog is not earned. See [the completion plan](2026-11-06-command-completion.md) for the numbers. |
 | `lang-tex` / `lezer-tex` | Deprecated, GPL-3.0-or-later, built on pre-1.0 CodeMirror. A fork, not a dependency. |
 | `tree-sitter-latex` | A second parser ecosystem and a bridge, for folding and structure this plan can live without. Kept as a fallback if the stream grammar demonstrably fails. |
 | `wasmtex/lsp` as the completion backend | The pinned SDK already ships the editor-neutral service, but adopting it here drags the compiler SDK into the editor's dependency graph for a catalog that must be local anyway; measure only if the bundled catalog proves insufficient. |

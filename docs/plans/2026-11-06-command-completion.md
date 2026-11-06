@@ -30,34 +30,53 @@ language the editor supports, offers LaTeX commands/environments/packages and
 project references first because that is where the need is, and never touches the
 network.
 
-## What was investigated
+## What was investigated, and measured
 
-**`codemirror-lang-latex` (TeXlyre) is not usable.** The reference implementation
-is real and good — a Lezer grammar ported from Overleaf, with
-`latexCompletionSource`, snippets, hover tooltips and a linter. But its licence
-changed: versions 0.1.0-alpha.0 through **0.4.2 were MIT**, and **0.5.0 onward is
-`AGPL-3.0-or-later`** (confirmed in the npm registry metadata and the repository
-`LICENSE`). The relicensing follows the grammar's provenance: Overleaf, from
-which the Lezer grammar is ported, is itself AGPL-3.0.
+Licensing is **not** the constraint. Per
+[AGENTS.md](../../AGENTS.md#licensing-mit-today-agpl-is-an-allowed-destination),
+MDraft may move to the AGPL if a package worth having requires it. Size and
+performance are the gate, so the numbers below decide the approach.
 
-MDraft is MIT. Linking an AGPL parser into the shipped application would impose
-AGPL's network-and-redistribution obligations on the whole product. That is a
-licensing decision this project has not taken, and the existing plan already
-rejected this package for exactly this reason. **Reading its approach for
-reference is fine; depending on it is not.**
+**`codemirror-lang-latex` 0.6.1, measured on this host.** The package is a real
+implementation — a Lezer grammar ported from Overleaf, with
+`latexCompletionSource`, snippets, hover tooltips and a linter. Its licence went
+from MIT (0.1.0–0.4.2) to `AGPL-3.0-or-later` at 0.5.0, following the
+Overleaf-derived grammar. That is now acceptable; the cost is not:
 
-Two further points against it even if the licence were acceptable: it brings
-`@codemirror/lint` (not currently a dependency) for diagnostics this change does
-not want, and it ships a *second* LaTeX parser alongside the sTeX stream grammar
-the editor already uses — two grammars that can disagree about the same buffer.
+| Measurement | Result |
+| --- | --- |
+| Tarball | 287 KB |
+| `dist/index.js` raw | 188,801 B |
+| `dist/index.js` gzip / brotli | **57,433 B / 40,759 B** |
+| Import **only** `latexCompletionSource`, minified, CodeMirror peers external | **60,586 B gzip** |
+| Import the full `latex()` support, same conditions | 67,399 B gzip |
+| `dist/latex-data.js` alone (the catalog) | 5,246 B gzip |
+| Our existing sTeX grammar chunk | 1,169 B gzip |
 
-**What CodeMirror 6 gives us for free.** `@codemirror/autocomplete` exports
-everything this plan needs and is already installed:
-`autocompletion`, `completionKeymap`, `snippetCompletion`, `snippetKeymap`,
-`completeFromList`, `ifIn`, `ifNotIn`, `CompletionContext`, `CompletionResult`,
-`Completion`, `CompletionSection`, `startCompletion`, `acceptCompletion`,
-`completionStatus`. Snippets with tab-stop fields come from the same package, so
-no new dependency is required at all.
+The decisive number is the second row of the tree-shaking pair: importing **one
+function** costs 60 KB gzip, because `src/completion.ts` imports `scanLatexModes`
+from `parser-utils`, which pulls the parser and its tables. There is no `exports`
+map and no `sideEffects: false` in its `package.json`, so the bundle is
+monolithic and a bundler cannot split the linter, tooltips and symbol tables out
+of it.
+
+**The layer itself, measured the same way.** `autocompletion` + `completionKeymap`
+alone, minified with CodeMirror peers external: **9,839 B gzip**. That is the
+floor for having completion at all, and it is paid whichever catalog we write.
+
+**What this means.** A hand-written catalog is ~5 KB gzip of data (the same order
+as `latex-data.js`) plus the 10 KB layer — roughly **15 KB gzip**, against
+**60 KB** for importing their completion source alone. The package would cost
+four times as much to deliver a catalog we can write in a day, and it would bring
+a second LaTeX parser that can disagree with the sTeX grammar the editor already
+runs.
+
+**What CodeMirror 6 gives us for free.** `@codemirror/autocomplete` is already
+installed and exports everything needed: `autocompletion`, `completionKeymap`,
+`snippetCompletion`, `snippetKeymap`, `completeFromList`, `ifIn`, `ifNotIn`,
+`CompletionContext`, `CompletionResult`, `Completion`, `CompletionSection`,
+`startCompletion`, `acceptCompletion`, `completionStatus`. Snippets with tab-stop
+fields come from the same package. **No new dependency is required.**
 
 ## Scope and non-scope
 
@@ -79,13 +98,16 @@ no new dependency is required at all.
 
 **Out of scope**
 
-- `codemirror-lang-latex` or any AGPL dependency, and any new npm dependency.
+- `codemirror-lang-latex` as a dependency. Not for licensing — that is settled —
+  but because it costs 60 KB gzip to deliver what this plan writes in ~15 KB, and
+  because it duplicates the parser. Recorded as a rejected alternative with the
+  measurement, not as a licence objection.
 - Replacing the sTeX stream grammar with a Lezer grammar. Completion does not
   need a syntax tree; the catalog is a list and the context is a regex over the
   current line. A tree would give better context detection and is the right
   follow-up if this proves too coarse — recorded as an open question.
 - Diagnostics, linting, hover tooltips and auto-closing environments. Those are
-  separate features with their own risk; the linter in particular needs
+  separate features with their own cost; the linter in particular needs
   `@codemirror/lint` and a decision about what a "wrong" LaTeX document is.
 - Typst, HTML and AsciiDoc catalogs. The layer supports them; adding their
   catalogs is follow-up work, and shipping the layer with two languages proves
@@ -145,14 +167,15 @@ the same rule the existing chrome follows and the reason `.combo-popup` has a
 
 **Rejected alternatives**
 
-| Candidate | Why not |
-| --- | --- |
-| `codemirror-lang-latex` 0.6.1 | AGPL-3.0-or-later against MDraft's MIT. The grammar is ported from Overleaf, which is AGPL, which is why the package relicensed at 0.5.0. Also pulls `@codemirror/lint` and a second LaTeX parser. |
-| Pinning the MIT 0.4.2 release | The last MIT release is two minor versions behind, unmaintained, and its grammar is the same Overleaf-derived code — the licence change at 0.5.0 is evidence the author believes the port carries AGPL obligations. Relying on an older tag to escape that is not a decision to take silently. |
-| A Lezer grammar of our own | Correct long-term, and the right follow-up for context detection and folding, but it is a parser project, not a completion project. Completion does not need a tree. |
-| `wasmtex/lsp` | The pinned SDK ships an editor-neutral service, but adopting it drags the compiler SDK into the editor's dependency graph for a catalog that must be local. |
-| Completing from the document's own words only | Useful, and `completeAnyWord` already exists, but it cannot offer `\includegraphics` to a reader who has never typed it. |
-| A second, LaTeX-only completion implementation | The duplication this plan exists to avoid: two keymaps, two tooltip themes, two cancellation rules. |
+| Candidate | Measured cost | Why not |
+| --- | --- | --- |
+| `codemirror-lang-latex` 0.6.1, full `latex()` | 67 KB gzip | Four times this plan's cost, and it ships a second LaTeX parser that can disagree with the sTeX grammar already in the editor. |
+| `codemirror-lang-latex`, `latexCompletionSource` only | 60 KB gzip | The tempting subset, and it barely helps: the module imports `parser-utils`, so the parser comes along. No `exports` map, no `sideEffects: false`. |
+| Pinning the MIT 0.4.2 release | not measured | Two minor versions behind and unmaintained. Its licence is no longer the reason to avoid it — the cost is. |
+| A Lezer grammar of our own | — | Correct long-term, and the right follow-up for context detection and folding, but it is a parser project, not a completion project. Completion does not need a tree. |
+| `wasmtex/lsp` | not measured | The pinned SDK ships an editor-neutral service, but adopting it drags the compiler SDK into the editor's dependency graph for a catalog that must be local. |
+| Completing from the document's own words only | ~0 | Useful, and `completeAnyWord` already exists, but it cannot offer `\includegraphics` to a reader who has never typed it. |
+| A second, LaTeX-only completion implementation | — | The duplication this plan exists to avoid: two keymaps, two tooltip themes, two cancellation rules. |
 
 ## Steps
 
@@ -160,14 +183,16 @@ the same rule the existing chrome follows and the reason `.combo-popup` has a
   `completionKeymap` installed with the precedence that keeps `indentWithTab`
   working; `setCompletion(enabled)` on the editor interface; the compartment
   reconfigured on language change and on the preference. Verify Tab in all four
-  states, plus Escape, plus IME composition.
+  states, plus Escape, plus IME composition. **Measure the bundle delta here**,
+  before any catalog exists, and record it against the 9,839 B floor.
 - [ ] **2. Theme and accessibility.** Tooltip selectors in `buildChromeTheme` for
   all nine palettes; `aria-activedescendant` and the live-region announcement the
   library emits; reduced-motion respect; a visible focus ring that survives the
   dark palettes.
 - [ ] **3. The LaTeX catalog.** Commands, environments, packages and snippets as
   data. Snippets reuse the strings `src/latex-commands.ts` already inserts, so
-  Format › Table and typing `\begin{table}` cannot disagree.
+  Format › Table and typing `\begin{table}` cannot disagree. **Measure the
+  catalog chunk**; the target is ~5 KB gzip, in line with `latex-data.js`.
 - [ ] **4. LaTeX context.** The pure decision table: command, environment,
   package, label, citation, image path. Unit-tested without an editor, including
   the cases that must offer nothing — inside a `%` comment, inside `verbatim`,
@@ -182,7 +207,7 @@ the same rule the existing chrome follows and the reason `.combo-popup` has a
   `docs/latex.md` updated, `AGENTS.md` script and test rows.
 - [ ] **8. Measurement and close.** Typing latency with the popup open and closed
   on the 1.2 MB fixture, popup open latency on the LaTeX project, and the
-  installer delta (expected zero). Record the numbers in this plan.
+  installer delta. Record the numbers in this plan.
 
 ## Files and modules
 
@@ -219,14 +244,15 @@ No new dependency. `@codemirror/autocomplete` is already declared and installed.
   cost. Mitigated by `maxRenderedOptions`, by filtering on a prefix rather than a
   fuzzy match, and by measuring in step 8. The layer must not run when the
   preference is off.
+- **Bundle growth.** The whole point of the measurement above. Budget: **≤ 20 KB
+  gzip** for layer plus both catalogs, against 60 KB for the rejected package. A
+  step that exceeds its share is a reason to stop and reconsider, not to ship.
 - **A noisy popup.** Completion that opens on every word is worse than none. The
   context table decides when to open, and it must offer nothing in prose — the
   same conservatism `scoreLatex` uses.
 - **Project references.** Reading the snapshot on demand could trigger a compile
   or a slow disk read. Mitigated by using the already-cached snapshot and by
   never compiling from completion.
-- **Licence.** No AGPL code enters the tree. This is the constraint that shaped
-  the whole approach and must survive review.
 
 **Rollback** is a branch revert plus turning the preference off. The setting is
 additive with a default, so an older build loads the same `settings.json`.
@@ -250,7 +276,7 @@ additive with a default, so an older build loads the same `settings.json`.
 
 The measurement that proves it works: typing latency with the popup closed is
 unchanged from today, typing latency with it open stays within the existing
-`preview:perf` budget, and the installer delta is zero.
+`preview:perf` budget, and the bundle grows by ≤ 20 KB gzip.
 
 ## Acceptance criteria
 
@@ -264,8 +290,8 @@ unchanged from today, typing latency with it open stays within the existing
 - Nothing is offered inside a comment, inside `verbatim`, or in prose where no
   construct could follow.
 - Completion never makes a network request; the preference turns it off entirely.
-- Typing latency and installer size are unchanged by measurement, not by
-  assumption.
+- The bundle grows by ≤ 20 KB gzip and typing latency is unchanged by
+  measurement, not by assumption.
 
 ## Open questions
 
@@ -276,7 +302,9 @@ unchanged from today, typing latency with it open stays within the existing
   set of a few hundred entries covers what people write; a complete list is
   thousands and makes the popup worse. If no answer, curated, with the list
   living in one file so extending it is a data change.
-- **Is a Lezer grammar now worth it?** Completion works without one. A tree would
-  improve context detection (knowing it is inside a `tabular`, say) and would
-  finally enable folding for LaTeX. That is a separate plan with its own
-  licensing question, since the good grammar is the AGPL one.
+- **Is a Lezer grammar now worth it?** Completion works without one, and the
+  licensing objection is gone. A tree would improve context detection (knowing it
+  is inside a `tabular`, say) and would finally enable folding for LaTeX. It is
+  still a separate plan, and its cost must be measured the same way — the
+  Overleaf-derived grammar's 60 KB is the number to beat.
+

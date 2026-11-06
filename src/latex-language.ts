@@ -1,12 +1,18 @@
 //! The LaTeX grammar, loaded on demand.
 //!
-//! There is no Lezer grammar for LaTeX in this project's dependency set and the
-//! candidates were rejected on licence (see the plan's rejected alternatives), so
-//! colouring comes from `@codemirror/legacy-modes`' `stex` stream parser: the
+//! Colouring comes from `@codemirror/legacy-modes`' `stex` stream parser: the
 //! CodeMirror 5 mode that understands `\command`, `{…}`/`[…]` arguments, `%`
 //! comments and the four math delimiters. A stream parser produces tokens and no
 //! syntax tree, which is why folding is not offered for LaTeX — see
 //! `canFold` in `src/main.ts`.
+//!
+//! The alternative, `codemirror-lang-latex`, is a real Lezer grammar and its
+//! AGPL licence is acceptable to this project; it was not taken because it costs
+//! about 60 KB gzip for the parser and its tables, against 3 KB here for the
+//! colouring this editor needs. See `docs/plans/2026-11-06-command-completion.md`
+//! for the measurement. A Lezer grammar remains the right answer if folding or
+//! structural context detection is ever wanted, and the cost is the number to
+//! beat.
 //!
 //! The module is imported dynamically for the same reason Typst's is: the chunk
 //! is small (3 KB, already emitted because `@codemirror/language-data` maps both

@@ -44,7 +44,7 @@ The frontend **cannot** touch the filesystem. Every file operation is a
 
 Two rules that are not negotiable, both documented in the README:
 
-1. **No licensing, telemetry, or start-up network activity.** The only outbound
+1. **No telemetry, and no start-up network activity.** The only outbound
    requests the application makes itself are `images::download_image`, reached by
    a user pasting or dropping an image URL, or by pasting rich content that
    contains remote images, and the AI Assistant's
@@ -74,6 +74,59 @@ markdown dialect existing documents rely on, a menu event name, or the
 cargo or a bundled font; something hard to undo, such as renaming
 `productName`/`identifier` (which moves every install's settings) or rewriting
 the release workflow; or the user asks for a plan.
+
+### Licensing: MIT today, AGPL is an allowed destination
+
+MDraft ships under the MIT License (`package.json`, `LICENSE`). **A dependency
+with a copyleft licence — GPL, LGPL or AGPL — is not on its own a reason to
+reject it.** The project's position is that the licence may move to the current
+AGPL if a package worth having requires it: the maintainer has stated this
+explicitly, and the trade is accepted rather than avoided.
+
+What follows from that, in order of how often it matters:
+
+1. **Size and performance decide, not the licence.** A dependency is judged on
+   what it adds to the installer and to typing latency. Those numbers are
+   measured and recorded in the plan that introduces it; "it is only 50 KB" is
+   not a measurement, and neither is "it is AGPL so we cannot". See
+   [Measuring a dependency](#measuring-a-dependency) for the method.
+2. **Relicensing is a deliberate act, not a side effect.** Do not add a
+   copyleft dependency and leave the licence files untouched: that makes the
+   shipped artefact's terms ambiguous. A change that introduces one either
+   (a) keeps the dependency out of the distributed bundle, (b) is accompanied by
+   the licence change in the same branch — `LICENSE`, `package.json`,
+   `README.md`, `CONTRIBUTING.md` and the About box — or (c) is not merged.
+3. **The licence text is not a build input.** Nothing in the code reads the
+   licence, so a licence change touches documents only and cannot break a build.
+   The one exception is a dependency whose licence forbids the *use* we make of
+   it, which is a legal question, not a build one.
+4. **Record the reason.** When a copyleft dependency is taken, the ADR or plan
+   says which one, its licence, its measured cost, and whether the application's
+   own licence changed. A later reader must be able to tell why.
+
+At the time of writing, `codemirror-lang-latex` (AGPL-3.0-or-later from 0.5.0) is
+the concrete case: it is a candidate for the completion work, and the open
+question is its **60 KB gzip** cost, not its licence.
+
+### Measuring a dependency
+
+Every "is this worth it" question in this repository is answered with numbers
+from the real build, not from a package's README:
+
+- **Bundle cost.** Build it alone with esbuild, minified, with the CodeMirror
+  peers external, and report raw + gzip. Then build the *entry point we would
+  actually import* — a package that tree-shakes well and one that does not look
+  identical in its own README and differ by 40 KB here. `codemirror-lang-latex`
+  is the cautionary example: importing only its completion source still pulls
+  ~60 KB gzip because that module imports the parser utilities.
+- **Runtime cost.** Typing latency on the 1.2 MB fixture from
+  `preview:perf`, with the feature on and off.
+- **Installer cost.** The staged binary in `bin/<os>/<arch>/` before and after.
+- **What it replaces.** A dependency that removes more code than it adds is
+  usually worth taking; one that duplicates an existing module is not.
+
+Record all four in the plan. A dependency whose cost is not measured is not
+approved, whatever its licence.
 
 **No plan — implement directly**, for example: UI copy; CSS; an obvious local JS
 fix; renaming a variable; a typo; a message or validation tweak; a bug confined
