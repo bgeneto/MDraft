@@ -40,6 +40,7 @@ import {
   toggleComment,
 } from "@codemirror/commands";
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
+import { completionSupport } from "./completion/layer";
 import { html } from "@codemirror/lang-html";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
@@ -238,6 +239,8 @@ export interface EditorHandle {
    * both are reconfigured through compartments, never by rebuilding the state.
    */
   setAutoClose(options: { pairs: boolean; tags: boolean }): void;
+  /** Turn completion on or off. Off removes the keymap with the extension. */
+  setCompletion(enabled: boolean): void;
   insertAtTop(text: string): void;
   wrapSelection(before: string, after: string, placeholder: string): void;
   onDocChanged(cb: (text: string) => void): void;
@@ -360,6 +363,8 @@ const baseTheme = EditorView.theme({
 export interface EditorOptions {
   autoClosePairs?: boolean;
   autoCloseTags?: boolean;
+  /** Offer completions. Off installs nothing, so the keymap goes with it. */
+  completion?: boolean;
   /** Blink the caret. Off leaves a solid caret and stops a continuous repaint. */
   cursorBlink?: boolean;
   /** Resolve the link or image at a document offset. */
@@ -450,9 +455,13 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
   const spellCompartment = new Compartment();
   const pairCompartment = new Compartment();
   const tagCompartment = new Compartment();
+  /// Completion is switched at runtime, so it cannot be a static extension: the
+  /// preference turns it off and a language with no catalog must offer nothing.
+  const completionCompartment = new Compartment();
   let spellKey = "";
   let autoPairs = options.autoClosePairs ?? true;
   let autoTags = options.autoCloseTags ?? true;
+  let completionEnabled = options.completion !== false;
   let cursorBlink = options.cursorBlink !== false;
   let currentLanguage: DocumentLanguage = "markdown";
   /// Which language the buffer is parsed as. A markdown editor that also edits
@@ -764,6 +773,7 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     languageCompartment.of(markdownSupport),
     pairCompartment.of(autoPairs ? pairSupport() : []),
     tagCompartment.of(tagSupport("markdown")),
+    completionCompartment.of(options.completion === false ? [] : completionSupport()),
     linkSupport(options),
     keymap.of([...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, indentWithTab]),
     fontSizeCompartment.of(
@@ -1013,6 +1023,14 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
         .catch((error) => {
           console.warn(`[editor] the Typst grammar could not be loaded: ${error}`);
         });
+    },
+
+    setCompletion(enabled) {
+      if (enabled === completionEnabled) return;
+      completionEnabled = enabled;
+      view.dispatch({
+        effects: completionCompartment.reconfigure(enabled ? completionSupport() : []),
+      });
     },
 
     setAutoClose(next) {

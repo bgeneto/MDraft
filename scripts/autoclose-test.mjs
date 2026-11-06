@@ -328,6 +328,43 @@ check(
 );
 
 // ---------------------------------------------------------------------------
+// HTML completion, which this project gets for free.
+//
+// `@codemirror/lang-html` registers `htmlCompletionSourceWith` inside `html()`,
+// so installing the completion layer is all it takes — no catalog, no bytes.
+// That claim is worth proving rather than assuming: the popup is the only
+// evidence that the source is reached through the real editor.
+// ---------------------------------------------------------------------------
+console.log("\n=== HTML completion comes from the language, not from a catalog ===");
+await scenario(async () => {
+  await type("<di");
+  await sleep(400);
+  const popup = await evaluate(`
+    (() => {
+      const list = document.querySelector(".cm-tooltip-autocomplete");
+      if (!list) return null;
+      return [...list.querySelectorAll("li")].map((li) => li.textContent.trim()).slice(0, 10);
+    })()
+  `);
+  check(
+    Array.isArray(popup) && popup.length > 0,
+    "typing a partial tag opens a completion popup",
+    popup ? popup.join(", ") : "no popup",
+  );
+  check(
+    Array.isArray(popup) && popup.some((row) => /div/i.test(row)),
+    "the popup offers the div tag",
+    popup ? popup.join(", ") : "no popup",
+  );
+  // The popup must be dismissable without editing the buffer, or it would trap
+  // the reader in a list they cannot leave.
+  await press("Escape", "Escape");
+  await sleep(200);
+  const closed = await evaluate(`!document.querySelector(".cm-tooltip-autocomplete")`);
+  check(closed === true, "Escape dismisses the popup");
+});
+
+// ---------------------------------------------------------------------------
 // Typst gets pairs but no tags; AsciiDoc gets both.
 // ---------------------------------------------------------------------------
 console.log("\n=== other document types ===");

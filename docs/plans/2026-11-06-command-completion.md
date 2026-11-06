@@ -1,6 +1,6 @@
 # Command completion in the source editor
 
-**Status:** draft (awaiting approval)
+**Status:** in progress (approved 2026-11-06)
 
 **Date:** 2026-11-06
 
@@ -201,13 +201,39 @@ the same rule the existing chrome follows and the reason `.combo-popup` has a
 
 ## Steps
 
-- [ ] **1. The layer.** `completionCompartment`; `autocompletion()` and
+- [x] **1. The layer.** `completionCompartment`; `autocompletion()` and
   `completionKeymap` installed with the precedence that keeps `indentWithTab`
   working; `setCompletion(enabled)` on the editor interface; the compartment
   reconfigured on language change and on the preference. Verify Tab in all four
   states, plus Escape, plus IME composition. **Measure the bundle delta here**,
   before any catalog exists, and record it against the 9,839 B floor.
-- [ ] **1b. HTML, which comes for free.** With the layer installed, a `.html`
+
+  **Landed, and the measurement beat the floor by two orders of magnitude.**
+  `src/completion/layer.ts` holds the one `autocompletion()` extension and its
+  keymap; `src/editor.ts` gained `completionCompartment`, `setCompletion` and an
+  `EditorOptions.completion` flag. Measured on the real build:
+
+  | | entry chunk |
+  | --- | --- |
+  | before | 1,160,794 B raw / **352,531 B gzip** |
+  | after | 1,161,081 B raw / **352,644 B gzip** |
+  | **delta** | **+287 B raw / +113 B gzip** |
+
+  The 9,839 B floor assumed the whole `@codemirror/autocomplete` package was new.
+  It is not: `closeBrackets` already pulled the module in, so the popup machinery
+  was already in the bundle and this step adds only the configuration object and
+  the keymap. That is a useful correction to the estimate, and it means the
+  budget for steps 3 and 6 is now effectively the catalogs alone (~5 KB each).
+
+  **Tab precedence, verified rather than reasoned.** `acceptCompletion` returns
+  `false` unless a popup is open with a selection
+  (`@codemirror/autocomplete/dist/index.js`), so `Prec.high` on the completion
+  keymap lets Tab fall through to `indentWithTab`. `shortcut-test.mjs` grew from
+  47 to **51** checks proving it through the real editor: Tab changes the buffer,
+  the editor consumes it, typing prose opens no popup, and a second Tab still
+  indents. `completion-unit.mjs` (new, **14** checks) pins the configuration, the
+  precedence, the empty-source rule and the no-network rule.
+- [x] **1b. HTML, which comes for free.** With the layer installed, a `.html`
   document already offers tags, attributes and attribute values, because
   `html()` registers `htmlCompletionSourceWith(config)` as its `autocomplete`
   language data (`@codemirror/lang-html/dist/index.js:605`). Confirm it works
@@ -216,6 +242,14 @@ the same rule the existing chrome follows and the reason `.combo-popup` has a
   own preference), and that the bundle does not grow — the completion source is
   already inside the `html()` chunk we ship. If any of that is false, the
   assumption is wrong and HTML moves to its own step.
+
+  **Verified through the real editor, and the claim held.** `autoclose-test.mjs`
+  grew from 33 to **36** checks: typing `<di` in an HTML document opens the
+  popup, the popup offers `div`, and Escape dismisses it without touching the
+  buffer. No catalog was written and the bundle did not grow — step 1's +113 B
+  gzip is the whole cost of adding completion to HTML, Markdown and LaTeX alike.
+  Auto-closing stayed independent: its own preference still governs it, and the
+  three existing checks for that still pass.
 - [ ] **2. Theme and accessibility.** Tooltip selectors in `buildChromeTheme` for
   all nine palettes; `aria-activedescendant` and the live-region announcement the
   library emits; reduced-motion respect; a visible focus ring that survives the
