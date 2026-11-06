@@ -15,6 +15,11 @@ function htmlEscape(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
+/** Preserve literal backslashes through Markdown's punctuation escapes. */
+export function escapeMarkdownImagePath(value: string): string {
+  return value.replace(/\\/g, "\\\\");
+}
+
 /** The image markup for a language. Paths are already document-relative. */
 export function imageSyntaxFor(language: DocumentLanguage, alt: string, src: string): string {
   if (language === "typst") {
@@ -29,9 +34,9 @@ export function imageSyntaxFor(language: DocumentLanguage, alt: string, src: str
     // paste renderer where the surrounding sentence is known.
     return `image::${src}[${alt.replace(/\\/g, "\\\\").replace(/\]/g, "\\]").replace(/,/g, "\\,")}]`;
   }
-  // Exactly the string the image pipeline produced before this feature: the
-  // Markdown path must not change, including its historical lack of alt escaping.
-  return `![${alt}](${src})`;
+  // A single backslash before punctuation is a Markdown escape, not a path
+  // separator. Escape it so Windows and UNC paths reach the parser intact.
+  return `![${alt}](${escapeMarkdownImagePath(src)})`;
 }
 
 /** True when the path needs to stay relative for the preview/compiler to reach it. */

@@ -1,0 +1,580 @@
+{
+  "date": "2026-11-05",
+  "command": "npm test -- --verbose --keep",
+  "note": "Full run before the independent image-path generation fix and test-only scratch cleanup; affected layers were retested separately.",
+  "staged_binary_sha256": "ca919c51bdbb7311e92f6d8df79ab8826ecdddeaad68c450701c9c3329617e28",
+  "layers": [
+    {
+      "id": "ai-unit",
+      "check_summaries": [
+        {
+          "passed": 184,
+          "total": 184
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "ai",
+      "check_summaries": [
+        {
+          "passed": 323,
+          "total": 323
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "asciidoc-export-unit",
+      "check_summaries": [
+        {
+          "passed": 28,
+          "total": 28
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "asciidoc",
+      "check_summaries": [
+        {
+          "passed": 54,
+          "total": 54
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "autoclose-unit",
+      "check_summaries": [
+        {
+          "passed": 17,
+          "total": 17
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "autoclose",
+      "check_summaries": [
+        {
+          "passed": 33,
+          "total": 33
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "block-map-unit",
+      "check_summaries": [
+        {
+          "passed": 15,
+          "total": 15
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "close",
+      "check_summaries": [],
+      "status": "passed"
+    },
+    {
+      "id": "export-browser",
+      "check_summaries": [
+        {
+          "passed": 24,
+          "total": 24
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "export-paths-unit",
+      "check_summaries": [
+        {
+          "passed": 44,
+          "total": 44
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "favorites-restore",
+      "check_summaries": [
+        {
+          "passed": 18,
+          "total": 18
+        },
+        {
+          "passed": 12,
+          "total": 12
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "favorites",
+      "check_summaries": [
+        {
+          "passed": 56,
+          "total": 56
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "filename-unit",
+      "check_summaries": [
+        {
+          "passed": 76,
+          "total": 76
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "format-document",
+      "check_summaries": [
+        {
+          "passed": 143,
+          "total": 143
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "html-source-map-unit",
+      "check_summaries": [
+        {
+          "passed": 43,
+          "total": 43
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "html",
+      "check_summaries": [
+        {
+          "passed": 60,
+          "total": 60
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "image-rules",
+      "check_summaries": [
+        {
+          "passed": 28,
+          "total": 28
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "image-syntax",
+      "check_summaries": [
+        {
+          "passed": 22,
+          "total": 22
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "licence",
+      "check_summaries": [
+        {
+          "passed": 4,
+          "total": 4
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "link-unit",
+      "check_summaries": [
+        {
+          "passed": 39,
+          "total": 39
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "links",
+      "check_summaries": [
+        {
+          "passed": 18,
+          "total": 18
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "math",
+      "check_summaries": [
+        {
+          "passed": 12,
+          "total": 12
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "menu",
+      "check_summaries": [
+        {
+          "passed": 123,
+          "total": 123
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "p0-lifecycle",
+      "check_summaries": [
+        {
+          "passed": 39,
+          "total": 39
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "p0-unit",
+      "check_summaries": [
+        {
+          "passed": 112,
+          "total": 112
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "paste-convert",
+      "check_summaries": [
+        {
+          "passed": 389,
+          "total": 389
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "paste",
+      "check_summaries": [
+        {
+          "passed": 87,
+          "total": 87
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "pdf-native",
+      "check_summaries": [
+        {
+          "passed": 36,
+          "total": 36
+        },
+        {
+          "passed": 14,
+          "total": 14
+        },
+        {
+          "passed": 15,
+          "total": 15
+        },
+        {
+          "passed": 14,
+          "total": 14
+        },
+        {
+          "passed": 14,
+          "total": 14
+        },
+        {
+          "passed": 21,
+          "total": 21
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "preview-dom",
+      "check_summaries": [
+        {
+          "passed": 12,
+          "total": 12
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "preview-perf",
+      "check_summaries": [
+        {
+          "passed": 12,
+          "total": 12
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "preview-unit",
+      "check_summaries": [
+        {
+          "passed": 51,
+          "total": 51
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "preview-worker-unit",
+      "check_summaries": [
+        {
+          "passed": 18,
+          "total": 18
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "preview-zoom",
+      "check_summaries": [
+        {
+          "passed": 24,
+          "total": 24
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "read-aloud-unit",
+      "check_summaries": [
+        {
+          "passed": 106,
+          "total": 106
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "read-aloud",
+      "check_summaries": [
+        {
+          "passed": 58,
+          "total": 58
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "recent-menu",
+      "check_summaries": [
+        {
+          "passed": 26,
+          "total": 26
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "rust",
+      "check_summaries": [],
+      "status": "passed"
+    },
+    {
+      "id": "sessions",
+      "check_summaries": [
+        {
+          "passed": 60,
+          "total": 60
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "shortcuts",
+      "check_summaries": [
+        {
+          "passed": 47,
+          "total": 47
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "single-instance",
+      "check_summaries": [
+        {
+          "passed": 12,
+          "total": 12
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "smoke",
+      "check_summaries": [
+        {
+          "passed": 114,
+          "total": 114
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "spellcheck",
+      "check_summaries": [
+        {
+          "passed": 3,
+          "total": 3
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "sync-unit",
+      "check_summaries": [
+        {
+          "passed": 29,
+          "total": 29
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "sync",
+      "check_summaries": [
+        {
+          "passed": 62,
+          "total": 62
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "syntax",
+      "check_summaries": [
+        {
+          "passed": 10,
+          "total": 10
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "tabs-restore-unit",
+      "check_summaries": [
+        {
+          "passed": 33,
+          "total": 33
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "tabs-restore",
+      "check_summaries": [
+        {
+          "passed": 17,
+          "total": 17
+        },
+        {
+          "passed": 13,
+          "total": 13
+        },
+        {
+          "passed": 6,
+          "total": 6
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "tabs",
+      "check_summaries": [
+        {
+          "passed": 107,
+          "total": 107
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "typewriter",
+      "check_summaries": [
+        {
+          "passed": 21,
+          "total": 21
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "typography-unit",
+      "check_summaries": [
+        {
+          "passed": 27,
+          "total": 27
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "typography",
+      "check_summaries": [
+        {
+          "passed": 60,
+          "total": 60
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "typst-page-map-unit",
+      "check_summaries": [
+        {
+          "passed": 24,
+          "total": 24
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "typst-preview",
+      "check_summaries": [
+        {
+          "passed": 55,
+          "total": 55
+        }
+      ],
+      "status": "passed"
+    },
+    {
+      "id": "word-sync",
+      "check_summaries": [
+        {
+          "passed": 59,
+          "total": 59
+        }
+      ],
+      "status": "passed"
+    }
+  ],
+  "after_image_fix": {
+    "paste-convert": "389/389",
+    "preview-dom": "12/12",
+    "paste": "87/87",
+    "export-browser": "24/24",
+    "image-syntax": "22/22",
+    "image-rules": "29/29",
+    "preview-extreme": "5/5",
+    "rust-scratch-cleanup": "1/1"
+  }
+}

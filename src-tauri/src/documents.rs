@@ -453,6 +453,94 @@ pub fn path_exists(path: String, document_path: Option<String>) -> bool {
     resolve_path(&path, document_path.as_deref()).exists()
 }
 
+/// Resolve a legacy image only when both checks stay on a fixed local drive.
+/// A valid ordinary Markdown target always wins, even if it is not an image.
+#[tauri::command]
+pub async fn resolve_legacy_local_image(
+    primary: String,
+    candidate: String,
+    document_path: Option<String>,
+) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        resolve_legacy_local_image_inner(primary, candidate, document_path)
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+fn resolve_legacy_local_image_inner(
+    primary: String,
+    candidate: String,
+    document_path: Option<String>,
+) -> Option<String> {
+    let primary = resolve_path(&primary, document_path.as_deref());
+    let candidate = resolve_path(&candidate, document_path.as_deref());
+    let (primary_exists, _, _) = local_fixed_presence(&primary)?;
+    if primary_exists {
+        return None;
+    }
+    let (candidate_exists, candidate_is_file, candidate_path) = local_fixed_presence(&candidate)?;
+    if !candidate_exists || !candidate_is_file {
+        return None;
+    }
+    Some(candidate_path.to_string_lossy().into_owned())
+}
+
+#[cfg(not(windows))]
+fn local_fixed_presence(_path: &Path) -> Option<(bool, bool, PathBuf)> {
+    None
+}
+
+#[cfg(windows)]
+fn local_fixed_presence(path: &Path) -> Option<(bool, bool, PathBuf)> {
+    use std::os::windows::fs::MetadataExt;
+    use std::path::{Component, Prefix};
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::GetDriveTypeW;
+
+    let mut components = path.components();
+    let drive = match components.next()? {
+        Component::Prefix(prefix) => match prefix.kind() {
+            Prefix::Disk(letter) => letter,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    if !matches!(components.next(), Some(Component::RootDir)) {
+        return None;
+    }
+    let root = format!("{}:\\", char::from(drive));
+    let wide: Vec<u16> = root.encode_utf16().chain(std::iter::once(0)).collect();
+    // The null-terminated root is valid for this call. DRIVE_FIXED is 3;
+    // mapped, removable, UNC and unknown drives are deliberately excluded.
+    if unsafe { GetDriveTypeW(PCWSTR(wide.as_ptr())) } != 3 {
+        return None;
+    }
+    let mut current = PathBuf::from(root);
+    let drive_root = current.clone();
+    let mut is_file = false;
+    for component in components {
+        match component {
+            Component::Normal(part) => current.push(part),
+            Component::CurDir => continue,
+            Component::ParentDir if current != drive_root && !is_file => {
+                current.pop();
+                is_file = false;
+                continue;
+            }
+            _ => return None,
+        }
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_attributes() & 0x400 == 0 => is_file = metadata.is_file(),
+            Ok(_) => return None, // FILE_ATTRIBUTE_REPARSE_POINT
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Some((false, false, current)),
+            Err(_) => return None,
+        }
+    }
+    Some((true, is_file, current))
+}
+
 /// Extensions a document link must never launch. The OS opener would run them.
 const EXECUTABLE_EXTENSIONS: [&str; 12] = [
     "exe", "bat", "cmd", "com", "scr", "msi", "ps1", "vbs", "js", "jar", "lnk", "pif",
@@ -779,6 +867,51 @@ mod tests {
         assert!(error.contains("executable"), "{error}");
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn legacy_local_image_preserves_primary_and_never_probes_unc() {
+        let root = std::env::temp_dir().join(format!("tt-legacy-image-{}", std::process::id()));
+        fs::create_dir_all(root.join(".hidden")).unwrap();
+        let primary = root.join("missing.png");
+        let candidate = root.join(".hidden").join("image.png");
+        fs::write(&candidate, b"image").unwrap();
+        let p = primary.to_string_lossy().into_owned();
+        let c = candidate.to_string_lossy().into_owned();
+        assert_eq!(resolve_legacy_local_image_inner(p.clone(), c.clone(), None), Some(c.clone()));
+        let document = root.join("docs").join("doc.md");
+        fs::create_dir_all(document.parent().unwrap()).unwrap();
+        assert_eq!(
+            resolve_legacy_local_image_inner(
+                r"..\missing.png".into(),
+                r"..\.hidden\image.png".into(),
+                Some(document.to_string_lossy().into_owned()),
+            ),
+            Some(c.clone())
+        );
+        fs::write(&primary, b"ordinary target").unwrap();
+        assert_eq!(resolve_legacy_local_image_inner(p.clone(), c.clone(), None), None);
+        assert_eq!(resolve_legacy_local_image_inner(p, r"\\server\share\image.png".into(), None), None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn legacy_windows_image_fallback_does_not_reinterpret_posix_names() {
+        let root = std::env::temp_dir().join(format!("tt-legacy-posix-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let literal = root.join(r"images\.hidden\image.png");
+        fs::write(&literal, b"image").unwrap();
+        assert_eq!(
+            resolve_legacy_local_image_inner(
+                root.join("images.hiddenimage.png").to_string_lossy().into_owned(),
+                literal.to_string_lossy().into_owned(),
+                None,
+            ),
+            None
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

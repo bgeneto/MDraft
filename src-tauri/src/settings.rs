@@ -155,6 +155,16 @@ fn default_editor_line_height() -> String {
     "normal".to_string()
 }
 
+/// Whether the caret blinks.
+///
+/// Windows and macOS draw a blink cheaply; WebKitGTK's compositor keeps
+/// repainting while it runs, which measured ~9% of one core with a large
+/// document. A fresh Linux profile therefore starts with a solid caret, and
+/// Preferences › Editor can turn the blink back on.
+fn default_cursor_blink() -> bool {
+    !cfg!(target_os = "linux")
+}
+
 fn default_ai_provider() -> String {
     "openai".to_string()
 }
@@ -309,6 +319,10 @@ pub struct Settings {
     pub show_status_bar: bool,
     pub focus_mode: bool,
     pub typewriter_mode: bool,
+    /// Blink the caret. Off leaves a solid caret; on WebKitGTK the animation
+    /// keeps the compositor busy, so a fresh Linux profile starts with it off.
+    #[serde(default = "default_cursor_blink")]
+    pub cursor_blink: bool,
     pub editor_font_size: u32,
     /// View zoom percentage. 100 is the base size; the base font sizes above
     /// stay the reader's preference. Additive, so older files load at 100.
@@ -589,6 +603,7 @@ impl Default for Settings {
             show_status_bar: true,
             focus_mode: false,
             typewriter_mode: false,
+            cursor_blink: default_cursor_blink(),
             editor_font_size: 15,
             zoom_level: default_zoom_level(),
             editor_max_width: 980,
@@ -1129,6 +1144,18 @@ pub fn same_path(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_blink_defaults_by_platform_and_round_trips() {
+        let s = Settings::default();
+        assert_eq!(s.cursor_blink, !cfg!(target_os = "linux"));
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains(r#""cursorBlink""#));
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.cursor_blink, s.cursor_blink);
+        let partial: Settings = serde_json::from_str(r#"{"theme":"dark"}"#).unwrap();
+        assert_eq!(partial.cursor_blink, !cfg!(target_os = "linux"));
+    }
 
     #[test]
     fn defaults_are_sane() {

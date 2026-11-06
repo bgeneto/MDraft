@@ -1,0 +1,121 @@
+{
+  "date": "2026-11-05",
+  "fixture_bytes": 10800000,
+  "notes": "Windows WebView2; test-only DOM grouping, not a production build. Input samples are ArrowRight keys sent every 30 ms after typing; search uses wrap. Do not compare without recognizing the altered DOM and children-count shim.",
+  "runs": {
+    "baseline": [
+      [
+        "PASS  Markdown 10.8 MB CRLF on disk: layout input sampling received events  ({\"count\":162,\"p50\":3,\"p95\":704.1999999992549,\"p99\":921.6999999992549,\"max\":952.8000000007451,\"taskOverlap\":37})",
+        "INFO  Markdown 10.8 MB CRLF on disk last input to matching preview frame: 4501.4 ms",
+        "INFO  Markdown 10.8 MB CRLF on disk Long Tasks: 2 observed, longest 953.0 ms",
+        "6/6 checks passed"
+      ],
+      [
+        "PASS  Markdown 10.8 MB CRLF on disk: layout input sampling received events  ({\"count\":158,\"p50\":2.599999999627471,\"p95\":726.3000000007451,\"p99\":913.1999999992549,\"max\":943.3000000007451,\"taskOverlap\":37})",
+        "INFO  Markdown 10.8 MB CRLF on disk last input to matching preview frame: 4520.3 ms",
+        "INFO  Markdown 10.8 MB CRLF on disk Long Tasks: 2 observed, longest 951.0 ms",
+        "6/6 checks passed"
+      ],
+      [
+        "PASS  Markdown 10.8 MB CRLF on disk: layout input sampling received events  ({\"count\":152,\"p50\":2.5,\"p95\":727,\"p99\":911.1999999992549,\"max\":942.3000000007451,\"taskOverlap\":37})",
+        "INFO  Markdown 10.8 MB CRLF on disk last input to matching preview frame: 4426.7 ms",
+        "INFO  Markdown 10.8 MB CRLF on disk Long Tasks: 2 observed, longest 945.0 ms",
+        "6/6 checks passed"
+      ]
+    ],
+    "group64_before_dom": [
+      [
+        "PASS  Markdown 10.8 MB CRLF on disk: layout input sampling received events  ({\"count\":122,\"p50\":1.5,\"p95\":30.299999998882413,\"p99\":61.5,\"max\":73.40000000037253,\"taskOverlap\":3})",
+        "INFO  Markdown 10.8 MB CRLF on disk last input to matching preview frame: 3837.9 ms",
+        "INFO  Markdown 10.8 MB CRLF on disk Long Tasks: 1 observed, longest 83.0 ms",
+        "INFO  group prototype: {\"groups\":1125,\"blocks\":72000}",
+        "6/6 checks passed"
+      ],
+      [
+        "PASS  Markdown 10.8 MB CRLF on disk: layout input sampling received events  ({\"count\":122,\"p50\":1.800000000745058,\"p95\":27.300000000745058,\"p99\":68.59999999962747,\"max\":77,\"taskOverlap\":3})",
+        "INFO  Markdown 10.8 MB CRLF on disk last input to matching preview frame: 3829.5 ms",
+        "INFO  Markdown 10.8 MB CRLF on disk Long Tasks: 1 observed, longest 80.0 ms",
+        "INFO  group prototype: {\"groups\":1125,\"blocks\":72000}",
+        "6/6 checks passed"
+      ],
+      [
+        "PASS  Markdown 10.8 MB CRLF on disk: layout input sampling received events  ({\"count\":121,\"p50\":2.099999999627471,\"p95\":30.800000000745058,\"p99\":69.69999999925494,\"max\":74.90000000037253,\"taskOverlap\":3})",
+        "INFO  Markdown 10.8 MB CRLF on disk last input to matching preview frame: 3807.8 ms",
+        "INFO  Markdown 10.8 MB CRLF on disk Long Tasks: 1 observed, longest 85.0 ms",
+        "INFO  group prototype: {\"groups\":1125,\"blocks\":72000}",
+        "6/6 checks passed"
+      ]
+    ],
+    "group64_with_scroll_search": [
+      [
+        "INFO  Markdown 10.8 MB CRLF on disk last input to matching preview frame: 3462.1 ms",
+        "INFO  Markdown 10.8 MB CRLF on disk Long Tasks: 1 observed, longest 85.0 ms",
+        "INFO  group prototype: {\"groups\":1125,\"blocks\":72000}",
+        "PASS  group prototype: a middle paragraph can be revealed  ({\"top\":1735295.625,\"visible\":true,\"text\":\"alpha bravo charlie \"})",
+        "PASS  group prototype: selection crosses a group boundary",
+        "PASS  group prototype: browser find sees the edited marker",
+        "8/8 checks passed"
+      ]
+    ],
+    "group64_swap": [
+      [
+        "PASS  Markdown 10.8 MB CRLF on disk: layout input sampling received events  ({\"count\":121,\"p50\":1.799999998882413,\"p95\":81.19999999925494,\"p99\":236.30000000074506,\"max\":267.69999999925494,\"taskOverlap\":9})",
+        "INFO  Markdown 10.8 MB CRLF on disk last input to matching preview frame: 3815.0 ms",
+        "INFO  Markdown 10.8 MB CRLF on disk Long Tasks: 1 observed, longest 280.0 ms",
+        "INFO  group prototype: {\"groups\":1125,\"blocks\":72000}",
+        "6/6 checks passed"
+      ]
+    ],
+    "group32_swap": [
+      [
+        "PASS  Markdown 10.8 MB CRLF on disk: layout input sampling received events  ({\"count\":120,\"p50\":1.400000000372529,\"p95\":81.09999999962747,\"p99\":235.90000000037253,\"max\":266.09999999962747,\"taskOverlap\":9})",
+        "INFO  Markdown 10.8 MB CRLF on disk last input to matching preview frame: 3787.0 ms",
+        "INFO  Markdown 10.8 MB CRLF on disk Long Tasks: 1 observed, longest 282.0 ms",
+        "INFO  group prototype: {\"groups\":2250,\"blocks\":72000}",
+        "6/6 checks passed"
+      ]
+    ],
+    "group512_swap": [
+      [
+        "PASS  Markdown 10.8 MB CRLF on disk: layout input sampling received events  ({\"count\":203,\"p50\":2,\"p95\":249.59999999962747,\"p99\":494.30000000074506,\"max\":555.5,\"taskOverlap\":20})",
+        "INFO  Markdown 10.8 MB CRLF on disk last input to matching preview frame: 6385.9 ms",
+        "INFO  Markdown 10.8 MB CRLF on disk Long Tasks: 2 observed, longest 578.0 ms",
+        "INFO  group prototype: {\"groups\":141,\"blocks\":72000}",
+        "6/6 checks passed"
+      ]
+    ],
+    "group64_geometry": [
+      [
+        "INFO  group prototype: {\"groups\":1125,\"blocks\":72000}",
+        "PASS  group prototype: a middle paragraph can be revealed  ({\"top\":1735295.625,\"visible\":true,\"text\":\"alpha bravo charlie \"})",
+        "PASS  group prototype: selection crosses a group boundary",
+        "PASS  group prototype: paragraph spacing survives a group boundary  ({\"inside\":16.00000762939453,\"boundary\":16.00000762939453})",
+        "PASS  group prototype: browser find sees the edited marker",
+        "9/9 checks passed"
+      ]
+    ]
+  },
+  "webkitgtk_standalone": [
+    {
+      "layoutMs": 135,
+      "supports": true,
+      "visible": true,
+      "found": true,
+      "blocks": 72000
+    },
+    {
+      "layoutMs": 119,
+      "supports": true,
+      "visible": true,
+      "found": true,
+      "blocks": 72000
+    },
+    {
+      "layoutMs": 122,
+      "supports": true,
+      "visible": true,
+      "found": true,
+      "blocks": 72000
+    }
+  ]
+}

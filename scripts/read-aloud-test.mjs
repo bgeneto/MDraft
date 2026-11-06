@@ -487,6 +487,100 @@ console.log("=== Preferences lists the system's voices ===");
 }
 
 // ---------------------------------------------------------------------------
+console.log("=== pending preview ownership ===");
+{
+  await emit("menu", "view.source");
+  await pressLine(0);
+  await send("Input.dispatchKeyEvent", { type: "char", text: " ", unmodifiedText: " " });
+  await evaluate(`(() => {
+    const original = Worker.prototype.postMessage;
+    window.__readingPreview = { original, held: [] };
+    Worker.prototype.postMessage = function(message, ...rest) {
+      if (typeof message?.source === 'string' && typeof message?.id === 'number') {
+        window.__readingPreview.held.push({ worker: this, message, rest });
+        return;
+      }
+      return original.call(this, message, ...rest);
+    };
+  })()`);
+
+  async function beginHeldPreview() {
+    const before = await evaluate("window.__readingPreview.held.length");
+    // Edits can make the first word misspelled; use the padding so the spell
+    // checker's own context menu does not take the editor menu's gesture.
+    // Let a programmatic scroll settle before opening the menu; a real scroll
+    // closes it by design.
+    await evaluate("document.querySelector('.cm-scroller').scrollTop = 0");
+    await sleep(200);
+    let started = false;
+    for (let attempt = 0; attempt < 3 && !started; attempt += 1) {
+      await rightClickLine(0, 2);
+      started = await chooseEditor("readAloudFromStart");
+      if (!started) await sleep(200);
+    }
+    const held =
+      started && (await pollFor(`window.__readingPreview.held.length > ${before}`, 6000));
+    if (!started || !held) {
+      const surface = await evaluate(`(() => {
+        const line=document.querySelector('.cm-line'); const box=line?.getBoundingClientRect();
+        const target=box && document.elementFromPoint(box.left+2,box.top+box.height/2);
+        return {line:line?.textContent, box:box?.toJSON(), target:target?.outerHTML.slice(0,300),
+          active:document.activeElement?.outerHTML.slice(0,200),
+          menus:[...document.querySelectorAll('[role=menu]')].map(e=>e.className)};
+      })()`);
+      console.log(
+        `  INFO  pending start: ${JSON.stringify({ started, held, menu: await menuState(), surface })}`,
+      );
+    }
+    return started && held;
+  }
+
+  check(await beginHeldPreview(), "a Source-mode reading waits for its forced preview");
+  await rightClickLine(0, 2);
+  check(
+    await chooseEditor("stopReading"),
+    "Stop Reading is available while preview preparation is pending",
+  );
+  await sleep(500);
+  check(
+    !(await speakingState()).speaking &&
+      !(await speakingState()).pending &&
+      (await chipState()).hidden,
+    "stopping a pending reading prevents late speech",
+  );
+
+  check(await beginHeldPreview(), "a new pending reading can start after Stop");
+  const beforeEdit = await evaluate("document.querySelector('.cm-content')?.textContent");
+  await pressLine(0);
+  await send("Input.dispatchKeyEvent", { type: "char", text: " ", unmodifiedText: " " });
+  await sleep(500);
+  check(
+    (await evaluate("document.querySelector('.cm-content')?.textContent")) !== beforeEdit,
+    "the edit actually changes the pending reading's source",
+  );
+  check(
+    !(await speakingState()).speaking &&
+      !(await speakingState()).pending &&
+      (await chipState()).hidden,
+    "an edit cancels a reading whose preview is pending",
+  );
+
+  check(await beginHeldPreview(), "a reading can wait for the edited buffer");
+  check(
+    await openFile("samples/word-sync.md"),
+    "another tab can replace the pending reading's document",
+  );
+  await sleep(500);
+  check(
+    !(await speakingState()).speaking &&
+      !(await speakingState()).pending &&
+      (await chipState()).hidden,
+    "a tab switch prevents speech from the old document",
+  );
+  await evaluate(`Worker.prototype.postMessage = window.__readingPreview.original`);
+}
+
+// ---------------------------------------------------------------------------
 const failed = checks.filter((entry) => !entry.ok).length;
 const passed = checks.length - failed;
 console.log(`\n${passed}/${checks.length} checks passed`);
