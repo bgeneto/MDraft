@@ -68,7 +68,8 @@ import { imageSyntaxFor, needsRelativePath } from "./image-syntax";
 import { linkAt, type LinkTarget } from "./links";
 import { chooseSource, type ClipboardPayload } from "./paste/detect";
 import {
-  CANONICAL_EXTENSION,
+  LANGUAGE_EXTENSIONS,
+  languageForExtension,
   resolvePasteDestination,
   suggestSave,
   type PasteDestination,
@@ -132,6 +133,16 @@ import {
   typstInline,
   typstUnsupported,
 } from "./typst-commands";
+import {
+  LATEX_CODE,
+  LATEX_DISPLAY_MATH,
+  LATEX_QUOTE,
+  LATEX_RULE,
+  LATEX_TABLE,
+  LATEX_TOC,
+  latexInline,
+  latexUnsupported,
+} from "./latex-commands";
 import { annotateTypstLines } from "./typst-map";
 import { paragraphRangeAt } from "./typst-page-map";
 import { TypstPdfPreview, type TypstPageContext } from "./typst-pdf";
@@ -895,6 +906,7 @@ function applySpellcheck(): void {
     // would underline tags and attribute names.
     enabled: settings.spellcheck !== false && doc.language !== "html",
     language: settings.spellcheckLanguage || "auto",
+    documentLanguage: doc.language,
     words: settings.spellcheckWords ?? [],
   });
 }
@@ -2220,7 +2232,9 @@ function refreshOutline(text = editor.getDoc()): void {
         ? sidebarPanel.extractHtmlHeadings(text)
         : language === "asciidoc"
           ? sidebarPanel.extractAsciidocHeadings(text)
-          : sidebarPanel.extractHeadings(text);
+          : language === "latex"
+            ? sidebarPanel.extractLatexHeadings(text)
+            : sidebarPanel.extractHeadings(text);
   outlineLanguage = language;
   outlineReady = true;
 
@@ -2271,12 +2285,7 @@ function updateActiveOutline(): void {
  * the reader is choosing the extension anyway.
  */
 function languageFor(path: string | null): api.DocumentLanguage {
-  if (path === null) return "markdown";
-  if (/\.tex$/i.test(path)) return "latex";
-  if (/\.typ$/i.test(path)) return "typst";
-  if (/\.html?$/i.test(path)) return "html";
-  if (/\.(?:adoc|asciidoc)$/i.test(path)) return "asciidoc";
-  return "markdown";
+  return languageForExtension(path);
 }
 
 /**
@@ -2289,12 +2298,7 @@ function languageFor(path: string | null): api.DocumentLanguage {
  * recommend another extension.
  */
 function defaultDocumentLanguage(): api.DocumentLanguage {
-  if (settings.defaultExtension === "typ") return "typst";
-  if (settings.defaultExtension === "html" || settings.defaultExtension === "htm") return "html";
-  if (settings.defaultExtension === "adoc" || settings.defaultExtension === "asciidoc") {
-    return "asciidoc";
-  }
-  return "markdown";
+  return languageForExtension(settings.defaultExtension);
 }
 
 /**
@@ -2313,17 +2317,18 @@ function defaultDocumentLanguage(): api.DocumentLanguage {
 function documentFilters(
   language: api.DocumentLanguage = defaultDocumentLanguage(),
 ): { name: string; extensions: string[] }[] {
-  const markdown = {
-    name: "Markdown",
-    extensions: [CANONICAL_EXTENSION.markdown, "markdown", "mdown", "mkd", "txt"],
-  };
-  const typst = { name: "Typst", extensions: [CANONICAL_EXTENSION.typst] };
-  const html = { name: "HTML", extensions: [CANONICAL_EXTENSION.html, "htm"] };
-  const latex = { name: "LaTeX", extensions: [CANONICAL_EXTENSION.latex] };
-  const asciidoc = {
-    name: "AsciiDoc",
-    extensions: [CANONICAL_EXTENSION.asciidoc, "asciidoc"],
-  };
+  // The extension lists come from `LANGUAGE_EXTENSIONS`, the same table
+  // `languageForExtension` classifies with, so a filter can never offer a name
+  // the opener would then read as Markdown.
+  const filter = (name: string, kind: api.DocumentLanguage) => ({
+    name,
+    extensions: [...LANGUAGE_EXTENSIONS[kind]],
+  });
+  const markdown = filter("Markdown", "markdown");
+  const typst = filter("Typst", "typst");
+  const html = filter("HTML", "html");
+  const latex = filter("LaTeX", "latex");
+  const asciidoc = filter("AsciiDoc", "asciidoc");
   const all = { name: "All files", extensions: ["*"] };
   const alphabetical = [all, asciidoc, html, latex, markdown, typst];
   const preferred = {
@@ -2334,7 +2339,7 @@ function documentFilters(
     latex,
   } satisfies Record<api.DocumentLanguage, { name: string; extensions: string[] }>;
   const first = preferred[language];
-  return [first, ...alphabetical.filter((filter) => filter !== first)];
+  return [first, ...alphabetical.filter((entry) => entry !== first)];
 }
 
 /**
@@ -2552,6 +2557,7 @@ async function displayDoc(): Promise<void> {
     {
       enabled: settings.spellcheck !== false && doc.language !== "html",
       language: settings.spellcheckLanguage || "auto",
+      documentLanguage: doc.language,
       words: settings.spellcheckWords ?? [],
     },
     true,
@@ -3475,6 +3481,14 @@ function exportSuggestion(format: api.ExportFormat, name: string): string {
  */
 async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
   const snapshot = exportSource();
+  // A `.tex` file has no pandoc reader in this change: pandoc would parse it
+  // with its Markdown reader and produce a silently wrong document. The menu
+  // keeps every pandoc row disabled for LaTeX; this guard covers a stale menu,
+  // a keyboard route and a settings file edited elsewhere.
+  if (snapshot.language === "latex") {
+    toast("LaTeX exports its own PDF. Open the preview to save it.");
+    return;
+  }
   // The menu disables formats whose tool is missing, but a stale menu, a
   // keyboard route or a settings file edited elsewhere must not open a save
   // dialog for an export that cannot run. Ask before choosing a path.
@@ -3718,6 +3732,10 @@ function setHeadingCommand(level: number): void {
     editor.setTypstHeading(level);
     return;
   }
+  if (doc.language === "latex") {
+    editor.setLatexHeading(level);
+    return;
+  }
   editor.setHeading(level);
 }
 
@@ -3732,6 +3750,10 @@ function setParagraphCommand(): void {
   }
   if (doc.language === "typst") {
     editor.setTypstHeading(0);
+    return;
+  }
+  if (doc.language === "latex") {
+    editor.setLatexHeading(0);
     return;
   }
   editor.setHeading(0);
@@ -3750,6 +3772,10 @@ function shiftHeadingCommand(delta: number): void {
     editor.shiftTypstHeading(delta);
     return;
   }
+  if (doc.language === "latex") {
+    editor.shiftLatexHeading(delta);
+    return;
+  }
   editor.shiftHeading(delta);
 }
 
@@ -3766,6 +3792,10 @@ function quoteCommand(): void {
     editor.insertBlockWithCaret(TYPST_QUOTE.text, TYPST_QUOTE.caret);
     return;
   }
+  if (doc.language === "latex") {
+    editor.insertBlockWithCaret(LATEX_QUOTE.text, LATEX_QUOTE.caret);
+    return;
+  }
   editor.toggleLinePrefix("> ");
 }
 
@@ -3776,6 +3806,10 @@ function codeBlockCommand(): void {
   }
   if (doc.language === "asciidoc") {
     editor.insertBlockWithCaret("----\n\n----", 5);
+    return;
+  }
+  if (doc.language === "latex") {
+    editor.insertBlockWithCaret(LATEX_CODE.text, LATEX_CODE.caret);
     return;
   }
   editor.insertBlockWithCaret("```\n\n```", 4);
@@ -3795,6 +3829,14 @@ function listCommand(kind: "ul" | "ol"): void {
     editor.toggleLinePrefix(kind === "ul" ? "- " : "+ ");
     return;
   }
+  if (doc.language === "latex") {
+    // A LaTeX list is an environment, not a line prefix: `\item` alone outside
+    // one is a compile error, so the block is inserted whole.
+    const environment = kind === "ul" ? "itemize" : "enumerate";
+    const text = `\\begin{${environment}}\n  \\item \n\\end{${environment}}`;
+    editor.insertBlockWithCaret(text, text.indexOf("\\item ") + "\\item ".length);
+    return;
+  }
   editor.toggleLinePrefix(kind === "ul" ? "- " : "1. ");
 }
 
@@ -3810,6 +3852,10 @@ function taskCommand(state: "insert" | "done" | "todo" | "plain"): void {
   }
   if (doc.language === "typst") {
     toast(typstUnsupported("task"), 5200);
+    return;
+  }
+  if (doc.language === "latex") {
+    toast(latexUnsupported("task"), 5200);
     return;
   }
   if (state === "insert") editor.toggleLinePrefix("- [ ] ");
@@ -3831,6 +3877,10 @@ function tableCommand(): void {
     editor.insertBlockWithCaret(TYPST_TABLE.text, TYPST_TABLE.caret);
     return;
   }
+  if (doc.language === "latex") {
+    editor.insertBlockWithCaret(LATEX_TABLE.text, LATEX_TABLE.caret);
+    return;
+  }
   editor.insertBlock("| Column | Column |\n| --- | --- |\n| Cell | Cell |");
 }
 
@@ -3838,6 +3888,7 @@ function ruleCommand(): void {
   if (doc.language === "html") editor.insertBlock("<hr>");
   else if (doc.language === "asciidoc") editor.insertBlock("'''");
   else if (doc.language === "typst") editor.insertBlock(TYPST_RULE);
+  else if (doc.language === "latex") editor.insertBlock(LATEX_RULE);
   else editor.insertBlock("---");
 }
 
@@ -3852,6 +3903,10 @@ function tocCommand(): void {
   }
   if (doc.language === "typst") {
     editor.insertBlock(TYPST_OUTLINE);
+    return;
+  }
+  if (doc.language === "latex") {
+    editor.insertBlock(LATEX_TOC);
     return;
   }
   editor.insertToc();
@@ -3869,6 +3924,10 @@ function frontMatterCommand(): void {
   }
   if (doc.language === "typst") {
     toast(typstUnsupported("frontMatter"), 5200);
+    return;
+  }
+  if (doc.language === "latex") {
+    toast(latexUnsupported("frontMatter"), 5600);
     return;
   }
   editor.insertYamlFrontMatter();
@@ -3892,6 +3951,10 @@ function alertCommand(label: string): void {
     toast(typstUnsupported("alert"), 5200);
     return;
   }
+  if (doc.language === "latex") {
+    toast(latexUnsupported("alert"), 5600);
+    return;
+  }
   editor.insertBlock(`> [!${label}]\n> `);
 }
 
@@ -3899,6 +3962,11 @@ function inlineCommand(kind: "bold" | "italic" | "strike" | "code" | "link" | "m
   if (doc.language === "typst") {
     const typstKind = kind === "bold" ? "strong" : kind === "italic" ? "emphasis" : kind;
     const inline = typstInline(typstKind);
+    editor.wrapSelection(inline.before, inline.after, inline.placeholder);
+    return;
+  }
+  if (doc.language === "latex") {
+    const inline = latexInline(kind);
     editor.wrapSelection(inline.before, inline.after, inline.placeholder);
     return;
   }
@@ -3980,6 +4048,12 @@ function imageCommand(): void {
     editor.wrapSelection('#image("./image.png", alt: "', '")', "alt text");
     return;
   }
+  if (doc.language === "latex") {
+    // `\includegraphics` takes a path and no alt text; the placeholder path is
+    // selected so the reader can type over it.
+    editor.wrapSelection("\\includegraphics{", "}", "./image.png");
+    return;
+  }
   editor.wrapSelection("![", "](./image.png)", "alt text");
 }
 
@@ -4002,6 +4076,16 @@ function displayMathCommand(): void {
       editor.wrapSelection("$ ", " $", "");
     } else {
       editor.insertBlockWithCaret(TYPST_DISPLAY_MATH.text, TYPST_DISPLAY_MATH.caret);
+    }
+    return;
+  }
+  if (doc.language === "latex") {
+    // `\[ … \]` is the display form that needs no environment and no package,
+    // which is why it is the menu's default rather than `equation`.
+    if (editor.cursorInfo().selectionLength > 0) {
+      editor.wrapSelection("\\[\n", "\n\\]", "");
+    } else {
+      editor.insertBlockWithCaret(LATEX_DISPLAY_MATH, 3);
     }
     return;
   }
@@ -5956,6 +6040,27 @@ function installResizers(): void {
  */
 const lastActionAt = new Map<string, number>();
 
+/**
+ * Whether a menu command has no LaTeX implementation yet.
+ *
+ * The blanket gate that used to refuse every `format.`, `insert.`, `para.`,
+ * `export.` and print command is gone; each command now answers for itself in
+ * its own branch. What remains here is the short list of things LaTeX genuinely
+ * cannot do yet, and each one says why instead of failing silently:
+ *
+ * - `format.document` waits for the tex-fmt formatter (plan step 5).
+ * - Every export row waits for the native PDF route (step 7). A `.tex` file has
+ *   no pandoc reader in this change, so feeding it to pandoc's Markdown reader
+ *   would produce a silently wrong document.
+ * - `file.print` has no article for a PDF-rendered language (decision D11).
+ */
+function latexCommandRefused(id: string): boolean {
+  if (doc.language !== "latex") return false;
+  if (id === "format.document") return true;
+  if (id === "file.print") return true;
+  return id.startsWith("export.");
+}
+
 function runMenuAction(id: string): void {
   if (
     lifecycle.committing ||
@@ -5963,16 +6068,13 @@ function runMenuAction(id: string): void {
     document.querySelector(".stats-dialog[open]")
   )
     return;
-  if (
-    doc.language === "latex" &&
-    (id.startsWith("format.") ||
-      id.startsWith("insert.") ||
-      (id.startsWith("para.") &&
-        !["para.indent", "para.outdent", "para.insertBefore", "para.insertAfter"].includes(id)) ||
-      id.startsWith("export.") ||
-      id === "file.print")
-  ) {
-    toast("LaTeX editing commands are deferred. Use the experimental PDF controls.", 4200);
+  if (latexCommandRefused(id)) {
+    toast(
+      id === "format.document"
+        ? "LaTeX formatting is not available yet."
+        : "LaTeX exports its own PDF through the preview; export formats arrive with it.",
+      4200,
+    );
     return;
   }
   const now = performance.now();
@@ -6335,17 +6437,6 @@ async function installDragDrop(): Promise<void> {
   const win = getCurrentWindow();
   await win.onDragDropEvent(async (event) => {
     if (event.payload.type !== "drop" || event.payload.paths.length === 0) return;
-    if (doc.language === "latex") {
-      for (const path of event.payload.paths) {
-        if (/\.(?:png|jpe?g|gif|webp|svg|bmp|tiff?)$/i.test(path))
-          toast(
-            "Image insertion for LaTeX is deferred; reference the project file in source.",
-            4200,
-          );
-        else await openPath(path);
-      }
-      return;
-    }
     // Images are imported; anything else is opened as a document.
     const remaining = await handleImageDrop(event.payload.paths, imageContext());
     for (const path of remaining) await openPath(path);
@@ -6485,6 +6576,10 @@ function readAloudBlockedReason(): string | null {
   // The HTML tab renders into an opaque-origin iframe: its text is not the
   // parent document's to read, so there is nothing to speak.
   if (doc.language === "html") return "The HTML preview cannot be read aloud.";
+  // A LaTeX preview is a PDF canvas: the words exist in the text layer, but not
+  // as the paragraph elements this reader walks, so there is nothing to speak
+  // until a source-derived prose extractor exists.
+  if (doc.language === "latex") return "The LaTeX preview cannot be read aloud.";
   const reason = readAloud.availableReason();
   if (reason) return reason;
   // Source mode defers the render; starting a reading forces it, so an empty
@@ -6867,14 +6962,6 @@ function installPasteHandlers(): void {
     // has already moved the caret to the block under the pointer.
     const inEditor = target !== null && editor.view.contentDOM.contains(target);
     const hasSelection = inEditor && editor.cursorInfo().selectionLength > 0;
-
-    if (doc.language === "latex") {
-      if (!event.clipboardData?.getData("text/plain") && event.clipboardData?.files.length) {
-        event.preventDefault();
-        toast("Image insertion for LaTeX is deferred; reference the project file in source.", 4200);
-      }
-      return;
-    }
 
     // The decision and preventDefault must happen in this same turn; deferring
     // them to a promise lets the browser insert the pasted text as well.

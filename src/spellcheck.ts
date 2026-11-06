@@ -28,6 +28,8 @@ export interface SpellOptions {
   enabled: boolean;
   /** `"auto"`, or a tag returned by `spellcheck_languages`. */
   language: string;
+  /** The buffer's markup. LaTeX needs more skips than the shared list. */
+  documentLanguage?: string;
   /** Words the reader ignored or added. Compared case-insensitively. */
   words: readonly string[];
 }
@@ -84,12 +86,13 @@ const setMarks = StateEffect.define<Marks>();
 
 interface SpellConfig {
   language: string;
+  documentLanguage: string;
   words: readonly string[];
 }
 
 const spellConfig = Facet.define<SpellConfig, SpellConfig>({
   combine(values) {
-    return values[0] ?? { language: "auto", words: [] };
+    return values[0] ?? { language: "auto", documentLanguage: "markdown", words: [] };
   },
 });
 
@@ -176,7 +179,14 @@ export function spellcheckAvailabilityNote(): string | null {
 }
 
 export function spellExtension(options: SpellOptions): Extension {
-  return [spellConfig.of({ language: options.language, words: options.words }), spellPlugin];
+  return [
+    spellConfig.of({
+      language: options.language,
+      documentLanguage: options.documentLanguage ?? "markdown",
+      words: options.words,
+    }),
+    spellPlugin,
+  ];
 }
 
 function normalize(word: string): string {
@@ -264,7 +274,49 @@ function frontMatterEnd(state: EditorState): number {
   return 0;
 }
 
-function extraSkips(text: string, base: number): Array<[number, number]> {
+/**
+ * The ranges a LaTeX document must not be spell-checked in.
+ *
+ * The shared list already covers `$…$`, `\[…\]`, URLs and angle brackets, which
+ * LaTeX uses too. What it cannot know is that LaTeX spells its structure as
+ * commands: `\documentclass{article}` would underline `documentclass` and
+ * `article`, and `\begin{figure}` would underline both. This pass covers the
+ * command names, their brace arguments, the verbatim-like environments, the
+ * preamble, and `%` comments — leaving the prose inside `\section{…}`,
+ * `\textbf{…}` and the body for the checker, which is the point.
+ */
+function latexSkips(text: string, base: number): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  const add = (from: number, to: number) => {
+    if (to > from) ranges.push([base + from, base + to]);
+  };
+
+  // Verbatim-like bodies first: everything inside them is literal, including
+  // `%`, so they must be claimed before the comment rule sees a `%` in code.
+  const verbatim = /\\begin\{(verbatim\*?|Verbatim\*?|lstlisting|minted|alltt)\}[\s\S]*?\\end\{\1\}/g;
+  let match: RegExpExecArray | null;
+  while ((match = verbatim.exec(text)) !== null) add(match.index, match.index + match[0].length);
+
+  // `%` comments run to the end of the line and are not prose. An escaped `\%`
+  // is a percent sign in the text, so it does not open one.
+  const comment = /(?<!\\)%.*$/gm;
+  while ((match = comment.exec(text)) !== null) add(match.index, match.index + match[0].length);
+
+  // A command name and its optional/required arguments, up to three deep:
+  // `\includegraphics[width=2cm]{figs/plot}` and `\cite[p.~3]{knuth84}`.
+  const command = /\\[a-zA-Z@]+\*?(?:\s*\[[^\]]*\])?(?:\s*\{[^{}]*\}){0,3}/g;
+  while ((match = command.exec(text)) !== null) add(match.index, match.index + match[0].length);
+
+  // Remaining bare braces and brackets hold keys, labels and dimensions, not
+  // prose: `{2cm}`, `{htbp}`, `{figure}`. Prose inside a command's argument was
+  // already claimed above, so this only reaches what a command did not.
+  const braces = /\{[^{}\n]*\}/g;
+  while ((match = braces.exec(text)) !== null) add(match.index, match.index + match[0].length);
+
+  return ranges;
+}
+
+function extraSkips(text: string, base: number, documentLanguage: string): Array<[number, number]> {
   const ranges: Array<[number, number]> = [];
   const patterns = [
     /\$\$[\s\S]*?\$\$/g,
@@ -291,6 +343,7 @@ function extraSkips(text: string, base: number): Array<[number, number]> {
       match = pattern.exec(text);
     }
   }
+  if (documentLanguage === "latex") ranges.push(...latexSkips(text, base));
   return ranges;
 }
 
@@ -309,6 +362,7 @@ function collectWords(
   from: number,
   to: number,
   ignored: Set<string>,
+  documentLanguage: string,
 ): WordHit[] {
   const tree = syntaxTree(state);
   const skipped: Array<[number, number]> = [];
@@ -325,7 +379,7 @@ function collectWords(
     },
   });
   const slice = state.doc.sliceString(from, to);
-  skipped.push(...extraSkips(slice, from));
+  skipped.push(...extraSkips(slice, from, documentLanguage));
 
   const hits: WordHit[] = [];
   let token = "";
@@ -367,10 +421,14 @@ function collectWords(
   return hits;
 }
 
-function sampleWords(state: EditorState, ignored: Set<string>): string[] {
+function sampleWords(
+  state: EditorState,
+  ignored: Set<string>,
+  documentLanguage: string,
+): string[] {
   const limit = Math.min(state.doc.length, 20_000);
   ensureSyntaxTree(state, limit, 100);
-  return collectWords(state, 0, limit, ignored).map((hit) => hit.form);
+  return collectWords(state, 0, limit, ignored, documentLanguage).map((hit) => hit.form);
 }
 
 function chosenLanguage(
@@ -380,7 +438,9 @@ function chosenLanguage(
 ): string | null {
   if (!installedKnown) return null;
   const requested =
-    config.language === "auto" ? detectLanguage(sampleWords(state, ignored)) : config.language;
+    config.language === "auto"
+      ? detectLanguage(sampleWords(state, ignored, config.documentLanguage))
+      : config.language;
   if (!requested) return null;
   if (requested === "en") {
     return installed.some((tag) => tag === "en" || tag === "en-GB") ? "en" : null;
@@ -475,7 +535,7 @@ class SpellPlugin implements PluginValue {
     this.followUp = false;
     const hits: WordHit[] = [];
     for (const range of view.visibleRanges) {
-      hits.push(...collectWords(view.state, range.from, range.to, ignored));
+      hits.push(...collectWords(view.state, range.from, range.to, ignored, config.documentLanguage));
       if (hits.length >= 1_500) break;
     }
     const request = ++this.request;

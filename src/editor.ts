@@ -51,6 +51,8 @@ import { markdownProseSelection } from "./math-delimiters";
 import type { LinkTarget } from "./links";
 import { DEFAULT_EDITOR_FONT_SIZE } from "./fonts";
 import { htmlLanguage } from "./html-language";
+import { latexHeadingLine, latexShiftHeadingLine } from "./latex-commands";
+import { latexLanguage } from "./latex-language";
 import { autoCloseTag } from "./tag-close";
 import { typstHeadingLine, typstShiftHeadingLine } from "./typst-commands";
 import { typstLanguage } from "./typst-language";
@@ -196,6 +198,9 @@ export interface EditorHandle {
   /** The AsciiDoc heading commands; `=` is the title, `==` the first section. */
   setAsciiDocHeading(level: number): void;
   shiftAsciiDocHeading(delta: number): void;
+  /** The LaTeX heading commands; level 1 is `\section`, level 0 removes it. */
+  setLatexHeading(level: number): void;
+  shiftLatexHeading(delta: number): void;
   toggleLinePrefix(prefix: string): void;
   setTaskState(state: "done" | "todo" | "plain"): void;
   setAsciiDocTaskState(state: "done" | "todo" | "plain"): void;
@@ -978,7 +983,13 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
       // switching to Typst must drop a handler that would insert `</a>`.
       view.dispatch({ effects: tagCompartment.reconfigure(tagSupport(kind)) });
       if (kind === "latex") {
-        install([]);
+        // The stream grammar arrives asynchronously like Typst's; until it does
+        // the buffer keeps the parser it had rather than losing colouring.
+        void latexLanguage()
+          .then(install)
+          .catch((error) => {
+            console.warn(`[editor] the LaTeX grammar could not be loaded: ${error}`);
+          });
         return;
       }
       if (kind === "markdown") {
@@ -1086,7 +1097,10 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
      * call this on every sidebar toggle.
      */
     setSpellcheck(options: SpellOptions, force = false) {
-      const key = `${options.enabled}\0${options.language}\0${options.words.join("\n")}`;
+      // The language is part of the key: switching a tab from Markdown to LaTeX
+      // changes which ranges are prose, so the plugin must be rebuilt even when
+      // the dictionary and the word list are unchanged.
+      const key = `${options.enabled}\0${options.language}\0${options.documentLanguage ?? ""}\0${options.words.join("\n")}`;
       if (!force && key === spellKey) return;
       spellKey = key;
       view.dispatch({
@@ -1357,6 +1371,14 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
         const next = Math.min(6, Math.max(2, match[1].length + delta));
         return `${indent}${"=".repeat(next)} ${match[2]}`;
       });
+    },
+
+    setLatexHeading(level) {
+      transformSelectedLines((line) => latexHeadingLine(line, level));
+    },
+
+    shiftLatexHeading(delta) {
+      transformSelectedLines((line) => latexShiftHeadingLine(line, delta));
     },
 
     toggleLinePrefix(prefix) {
