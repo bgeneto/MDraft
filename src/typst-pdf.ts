@@ -25,6 +25,7 @@ import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { selectionEndpoints } from "./source-map";
 import { createTypstPageMap, lineTokenAt, type TypstPageMap } from "./typst-page-map";
 import { ScrollIndex, chooseScrollRegion, type ScrollRegion } from "./scroll-sync";
+import type { PdfLocation } from "wasmtex/synctex";
 
 interface PdfScrollAnchor {
   from: number;
@@ -216,6 +217,7 @@ export class TypstPdfPreview {
     pane: HTMLElement,
     onContext: (context: TypstPageContext | null, reveal: boolean) => void,
     readonly source: string,
+    private readonly onPdfClick?: (page: number, x: number, y: number) => void,
   ) {
     this.host = host;
     this.pane = pane;
@@ -273,11 +275,11 @@ export class TypstPdfPreview {
     this.allLines.forEach((line, id) => {
       line.id = id;
     });
-    const sourceMap = await createTypstPageMap(this.source, this.allLines);
+    const sourceMap = this.onPdfClick ? null : await createTypstPageMap(this.source, this.allLines);
     if (this.disposed) return;
     this.sourceMap = sourceMap;
     const anchors: PdfScrollAnchor[] = [];
-    for (const part of sourceMap.scrollAnchors()) {
+    for (const part of sourceMap?.scrollAnchors() ?? []) {
       const line = this.allLines[part.line];
       const first = line.spans.find(
         (s) => part.start >= s.start && part.start < s.start + (s.span.textContent?.length ?? 0),
@@ -953,6 +955,29 @@ export class TypstPdfPreview {
     const selection = window.getSelection();
     if (!selection || !selection.isCollapsed) return;
 
+    if (this.onPdfClick) {
+      const index = this.pages.findIndex((page) => {
+        const rect = page.pageEl.getBoundingClientRect();
+        return (
+          clientX >= rect.left &&
+          clientX <= rect.right &&
+          clientY >= rect.top &&
+          clientY <= rect.bottom
+        );
+      });
+      if (index < 0) return;
+      const page = this.pages[index];
+      const rect = page.pageEl.getBoundingClientRect();
+      const width = page.page.view[2] - page.page.view[0];
+      const height = page.page.view[3] - page.page.view[1];
+      this.onPdfClick(
+        index + 1,
+        ((clientX - rect.left) * width) / rect.width,
+        ((clientY - rect.top) * height) / rect.height,
+      );
+      return;
+    }
+
     const doc = document as Document & {
       caretPositionFromPoint?: (
         x: number,
@@ -992,6 +1017,26 @@ export class TypstPdfPreview {
       },
       true,
     );
+  }
+
+  /** Display compiler-provided page regions in PDF points, independently of Typst's map. */
+  showRegions(regions: readonly PdfLocation[], blink = false): void {
+    this.host.querySelectorAll(".latex-sync-region").forEach((element) => element.remove());
+    for (const region of regions) {
+      const page = this.pages[region.page - 1];
+      if (!page) continue;
+      const mark = document.createElement("div");
+      mark.className = "latex-sync-region";
+      if (blink) {
+        mark.classList.add("latex-sync-blink");
+        window.setTimeout(() => mark.remove(), 1300);
+      }
+      mark.style.left = `${region.x * page.viewport.scale}px`;
+      mark.style.top = `${region.y * page.viewport.scale}px`;
+      mark.style.width = `${Math.max(2, region.width * page.viewport.scale)}px`;
+      mark.style.height = `${Math.max(2, region.height * page.viewport.scale)}px`;
+      page.pageEl.append(mark);
+    }
   }
 
   /** Source and preview gestures share precisely the same accepted links. */

@@ -87,6 +87,7 @@ export const CANONICAL_EXTENSION: Record<DocumentLanguage, string> = {
   typst: "typ",
   html: "html",
   asciidoc: "adoc",
+  latex: "tex",
 };
 
 export interface SaveSuggestionInput {

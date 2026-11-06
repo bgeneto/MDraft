@@ -12,7 +12,7 @@
 //! same code in `scripts/read-aloud-unit.mjs`.
 
 export type ProseLanguage = "en" | "pt-BR";
-export type MarkupLanguage = "markdown" | "typst" | "html" | "asciidoc";
+export type MarkupLanguage = "markdown" | "typst" | "html" | "asciidoc" | "latex";
 
 /** Minimum number of prose words before a vote is trusted. */
 export const MIN_PROSE_WORDS = 40;
@@ -199,6 +199,8 @@ export function declaredLanguage(source: string, markup: MarkupLanguage): string
       const match = /<html\b[^>]*\blang\s*=\s*["']([^"']+)["']/i.exec(head);
       return match ? normalizeLanguageTag(match[1]) : null;
     }
+    case "latex":
+      return null;
   }
 }
 

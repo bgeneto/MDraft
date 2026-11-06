@@ -977,6 +977,10 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
       // The tag closer follows the document type, not the grammar's promise:
       // switching to Typst must drop a handler that would insert `</a>`.
       view.dispatch({ effects: tagCompartment.reconfigure(tagSupport(kind)) });
+      if (kind === "latex") {
+        install([]);
+        return;
+      }
       if (kind === "markdown") {
         install(markdownSupport);
         return;

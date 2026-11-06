@@ -48,17 +48,23 @@ import { fileURLToPath } from "node:url";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
 const isWindows = process.platform === "win32";
+// Tests never activate the developer's desktop. Some native-focus layers may
+// need an explicitly separate interactive environment.
+process.env.MDRAFT_TEST_HIDDEN = "1";
 
 const tauriConfig = JSON.parse(
   fs.readFileSync(path.join(repoRoot, "src-tauri", "tauri.conf.json"), "utf8"),
 );
-const identifier = tauriConfig.identifier;
+const identifier = `${tauriConfig.identifier}.test-automation`;
+process.env.MDRAFT_TEST_IDENTIFIER = identifier;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // The instance this run started, so an interrupt can still close it. Leaving one
 // behind is what makes the next build fail on a locked executable.
 let activeApp = null;
+let interrupted = false;
+const runningCommands = new Set();
 
 // ---------------------------------------------------------------------------
 // The layers, in the order they should run: cheap and independent first, UI
@@ -712,6 +718,7 @@ function run(
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    runningCommands.add(child);
     let out = "";
     let err = "";
     child.stdout.on("data", (chunk) => {
@@ -722,8 +729,14 @@ function run(
       err += chunk;
       if (stream) process.stderr.write(chunk);
     });
-    child.on("error", (error) => resolve({ code: -1, out, err: `${err}\n${error.message}` }));
-    child.on("close", (code) => resolve({ code: code ?? -1, out, err }));
+    child.on("error", (error) => {
+      runningCommands.delete(child);
+      resolve({ code: -1, out, err: `${err}\n${error.message}` });
+    });
+    child.on("close", (code) => {
+      runningCommands.delete(child);
+      resolve({ code: code ?? -1, out, err });
+    });
   });
 }
 
@@ -797,7 +810,7 @@ async function listRunningInstances() {
 
 async function closeInstances(instances) {
   for (const { pid } of instances) {
-    if (isWindows) await run("taskkill", ["/PID", String(pid)]);
+    if (isWindows) await closeTestWindow(pid);
     else await run("kill", [String(pid)]);
   }
   const deadline = Date.now() + 10000;
@@ -812,6 +825,16 @@ async function closeInstances(instances) {
     else await run("kill", ["-9", String(pid)]);
   }
   await sleep(500);
+}
+
+async function closeTestWindow(pid) {
+  await run("pwsh", [
+    "-NoProfile",
+    "-File",
+    path.join(repoRoot, "scripts", "close-test-window.ps1"),
+    "-ProcessId",
+    String(pid),
+  ]);
 }
 
 async function prepareForRun(_options) {
@@ -847,9 +870,9 @@ async function waitForExit(child, timeoutMs) {
 async function stopApp(child) {
   if (!child || child.exitCode !== null) return;
   if (isWindows) {
-    // Without /F, taskkill posts WM_CLOSE, which is what a user clicking the X
-    // sends — the graceful path the close test exists to protect.
-    await run("taskkill", ["/PID", String(child.pid)]);
+    // Hidden windows have no MainWindowHandle; enumerate this staged process's
+    // Tauri window and post WM_CLOSE without bringing it to the foreground.
+    await closeTestWindow(child.pid);
   } else {
     child.kill("SIGTERM");
   }
@@ -1202,7 +1225,7 @@ async function launchApp(
     // The window owns no console, but a pipe on stdout would still be held open
     // by the child and stall anything reading our output.
     stdio: ["ignore", outFd, errFd],
-    windowsHide: false,
+    windowsHide: true,
   });
   // Whether the step prints its own line is a human concern, not a reason to
   // give up the captured copy that the summary is built from.
@@ -1463,6 +1486,12 @@ async function main() {
         "no release binary in src-tauri/target/release — run without --no-build, or: npm run dist",
       );
     }
+    if (
+      touchesApp &&
+      !fs.readFileSync(binary).includes(Buffer.from("MDRAFT_TEST_HIDDEN_ISOLATED_WINDOW_V2"))
+    ) {
+      fail("This binary does not support hidden test windows. Rebuild before running UI tests.");
+    }
 
     context = { stage: fs.mkdtempSync(path.join(os.tmpdir(), "mdraft-test-")), logDir: "" };
     context.logDir = path.join(context.stage, "logs");
@@ -1484,6 +1513,7 @@ async function main() {
 
     let portCursor = options.port;
     for (const suite of suites) {
+      if (interrupted) break;
       const started = Date.now();
       process.stdout.write(`${suite.id.padEnd(10)} ... `);
       let result;
@@ -1492,7 +1522,13 @@ async function main() {
       const missingFixture = suite.doc && !fs.existsSync(path.join(repoRoot, suite.doc));
       const missingTool =
         suite.requires === "pandoc" && (await run("pandoc", ["--version"])).code !== 0;
-      if (missingFixture || missingTool) {
+      if (suite.kind === "close") {
+        result = {
+          ok: true,
+          skipped: true,
+          detail: "skipped — window-state close verification requires a visible window",
+        };
+      } else if (missingFixture || missingTool) {
         result = {
           ok: true,
           skipped: true,
@@ -1565,7 +1601,7 @@ async function main() {
   }
 
   printSummary(results);
-  return results.every((result) => result.ok) ? 0 : 1;
+  return interrupted ? 130 : results.every((result) => result.ok) ? 0 : 1;
 }
 
 function printSummary(results) {
@@ -1583,11 +1619,11 @@ function printSummary(results) {
 }
 
 process.on("SIGINT", async () => {
-  console.log("\ninterrupted — closing the instance this run started");
-  // The finally in main() does not run once the process exits from here, and a
-  // window left open locks the executable the next build has to replace.
+  if (interrupted) return;
+  interrupted = true;
+  console.log("\ninterrupted — restoring the developer's state");
+  for (const child of runningCommands) child.kill();
   if (activeApp) await stopApp(activeApp);
-  process.exit(130);
 });
 
 const code = await main();

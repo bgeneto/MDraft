@@ -141,9 +141,11 @@ pub fn on_second_instance<R: tauri::Runtime>(
     }
 
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
+        if std::env::var_os("MDRAFT_TEST_HIDDEN").is_none() {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
     }
 }
 

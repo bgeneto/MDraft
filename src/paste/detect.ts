@@ -270,10 +270,12 @@ export function chooseSource(
   destination: DocumentLanguage,
 ): ClipboardChoice {
   const text = payload.text ?? "";
+  if (destination === "latex") return { source: "plain", native: true, fromText: true };
   const typed = detectTextSyntax(text, "clipboard");
-  const detected: DocumentLanguage | null = isHtmlSource(text)
+  const detected: Exclude<DocumentLanguage, "latex"> | null = isHtmlSource(text)
     ? "html"
-    : (typed?.language ?? (carriesMarkdown(text) ? "markdown" : null));
+    : ((typed?.language === "latex" ? null : typed?.language) ??
+      (carriesMarkdown(text) ? "markdown" : null));
 
   if (detected) {
     return { source: detected, native: detected === destination, fromText: true };

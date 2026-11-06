@@ -41,6 +41,8 @@
     "favorites": "node scripts/favorites-test.mjs",
     "tabs:restore:unit": "node scripts/tabs-restore-unit.mjs",
     "typst:map:unit": "node scripts/typst-page-map-unit.mjs",
+    "latex:sync:unit": "node scripts/latex-sync-unit.mjs",
+    "latex:poc": "node scripts/latex-poc-test.mjs",
     "html:map:unit": "node scripts/html-source-map-unit.mjs",
     "block:map:unit": "node scripts/block-map-unit.mjs",
     "ai": "node scripts/ai-assistant-test.mjs",
@@ -108,7 +110,13 @@
     "mermaid": "^12.2.0",
     "parse5": "^8.0.1",
     "pdfjs-dist": "6.4.299",
-    "prettier": "^3.9.10"
+    "prettier": "^3.9.10",
+    "wasmtex": "https://github.com/corca-ai/wasmtex/releases/download/snapshot-f85a1d3cec1c0598/wasmtex-optional-monaco-d6a39bc.tgz"
+  },
+  "overrides": {
+    "wasmtex": {
+      "pdfjs-dist": "$pdfjs-dist"
+    }
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

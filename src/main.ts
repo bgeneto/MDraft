@@ -135,6 +135,7 @@ import {
 import { annotateTypstLines } from "./typst-map";
 import { paragraphRangeAt } from "./typst-page-map";
 import { TypstPdfPreview, type TypstPageContext } from "./typst-pdf";
+import { cancelLatex, compileLatex, latexSourceAt, type LatexResult } from "./latex";
 import {
   clampScroll,
   interpolate,
@@ -1311,6 +1312,7 @@ function scheduleRender(immediate = false): void {
     renderToken += 1;
     previewStale = true;
     previewSyncReady = false;
+    cancelLatex();
     return;
   }
   renderTimer = window.setTimeout(() => void doRender(), immediate ? 0 : renderDelay());
@@ -1318,6 +1320,7 @@ function scheduleRender(immediate = false): void {
 
 /** How long the preview may lag behind the buffer before it is rebuilt. */
 function renderDelay(): number {
+  if (doc.language === "latex") return 800;
   if (doc.language === "html") return 300;
   if (doc.language === "asciidoc") return 250;
   if (doc.language === "typst") return 450;
@@ -1329,6 +1332,7 @@ function renderDelay(): number {
 // destroy it or a long session keeps every page it ever drew alive.
 let typstPdf: TypstPdfPreview | null = null;
 let typstPdfToken = -1;
+let typstPdfBase64: string | null = null;
 /**
  * What the last successful Typst compile was for. A theme change, a mode switch
  * or a view switch must reuse it instead of starting another compiler process;
@@ -1349,6 +1353,258 @@ let lastTypstRender: TypstRenderKey | null = null;
 function disposeTypstPdf(): void {
   typstPdf?.dispose();
   typstPdf = null;
+  typstPdfBase64 = null;
+}
+
+interface LatexPreview {
+  result: LatexResult;
+  rootId: string;
+  rootDirectory: string;
+  activeId: string;
+  token: number;
+  revisions: Array<{ id: string; revision: number; path: string | null }>;
+}
+let latexPreview: LatexPreview | null = null;
+let latexNavigationRoot: string | null = null;
+
+function latexCurrent(value: LatexPreview | null): value is LatexPreview {
+  return Boolean(
+    value &&
+    value.token === renderToken &&
+    value.activeId === doc.id &&
+    value.revisions.every((item) => {
+      const session = sessions.byId(item.id);
+      return session?.revision === item.revision && session.path === item.path;
+    }),
+  );
+}
+
+function latexRelative(value: LatexPreview, path: string | null): string | null {
+  if (!path) return null;
+  for (const file of value.result.files) {
+    if (pathKey(joinDir(value.rootDirectory, file)) === pathKey(path)) return file;
+  }
+  return null;
+}
+
+function latexFailure(error: unknown): void {
+  previewPane.querySelector(":scope > .typst-viewbar")?.remove();
+  disposeTypstPdf();
+  preview.replaceChildren();
+  const box = document.createElement("pre");
+  box.className = "typst-error";
+  box.textContent = String(error);
+  preview.appendChild(box);
+  previewStale = false;
+  previewSyncReady = false;
+}
+
+function showLatexLicenses(): void {
+  void import("./latex-licenses").then(({ LATEX_LICENSES }) => showBuiltin(LATEX_LICENSES));
+}
+
+function latexEnableNote(): void {
+  preview.replaceChildren();
+  const note = document.createElement("div");
+  note.className = "typst-note";
+  const text = document.createElement("span");
+  text.className = "typst-note-text";
+  text.textContent =
+    "Experimental LuaLaTeX: enabling downloads about 10 MiB of verified engine files. Additional TeX packages and fonts are downloaded on demand and cached locally. Your document stays on this device.";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "typst-notebutton";
+  button.textContent = "Enable LuaLaTeX…";
+  button.addEventListener("click", () => {
+    button.disabled = true;
+    button.textContent = "Downloading…";
+    void api
+      .installLatex()
+      .then(() => scheduleRender(true))
+      .catch((error: unknown) => {
+        button.disabled = false;
+        button.textContent = "Retry setup";
+        toast(`Could not enable LuaLaTeX: ${String(error)}`, 6200);
+      });
+  });
+  const licenses = document.createElement("button");
+  licenses.type = "button";
+  licenses.className = "typst-notebutton";
+  licenses.textContent = "Licences and source";
+  licenses.addEventListener("click", showLatexLicenses);
+  note.append(text, button, licenses);
+  preview.appendChild(note);
+}
+
+function latexSyncCursor(silent = false, blink = false): void {
+  const value = latexPreview;
+  if (!latexCurrent(value) || !typstPdf) return;
+  const path = latexRelative(value, doc.path);
+  if (!path) return;
+  const line = editor.cursorInfo().line;
+  const match = value.result.parser.forwardLookupDetailed(value.result.mapping, path, line);
+  if (!match || match.match !== "exact") {
+    if (!silent) toast("No exact SyncTeX region for this source line.");
+    return;
+  }
+  const regions = match.regions.filter((region) => {
+    const source = latexSourceAt(
+      value.result,
+      region.page,
+      region.x + region.width / 2,
+      region.y + region.height / 2,
+    );
+    return source?.file === path && source.line === line;
+  });
+  if (!regions.length) {
+    if (!silent) toast("This SyncTeX region is ambiguous.");
+    return;
+  }
+  typstPdf.showRegions(regions, blink);
+}
+
+async function latexSyncSource(page: number, x: number, y: number): Promise<void> {
+  const value = latexPreview;
+  if (!latexCurrent(value)) return;
+  const match = latexSourceAt(value.result, page, x, y);
+  if (!match) return;
+  const path = joinDir(value.rootDirectory, match.file);
+  latexNavigationRoot = value.rootId;
+  const sameFile = doc.path !== null && pathKey(doc.path) === pathKey(path);
+  if (!sameFile) await openPath(path, { silent: true });
+  if (!doc.path || pathKey(doc.path) !== pathKey(path)) return;
+  const number = match.line;
+  if (number < 1 || number > editor.view.state.doc.lines) return;
+  const document = editor.view.state.doc;
+  const isProse = (text: string) => !!text.trim() && !/^\s*\\/.test(text);
+  let first = number;
+  let last = number;
+  if (isProse(document.line(number).text)) {
+    while (first > 1 && isProse(document.line(first - 1).text)) first -= 1;
+    while (last < document.lines && isProse(document.line(last + 1).text)) last += 1;
+  }
+  const range = { from: document.line(first).from, to: document.line(last).to };
+  if (!sameFile) editor.revealLine(number, false, false);
+  syncedSource = range;
+  editor.setSyncRange(range.from, range.to);
+}
+
+async function latexSavePdf(): Promise<void> {
+  const value = latexPreview;
+  if (!latexCurrent(value)) {
+    toast("Wait for the current LaTeX compilation before saving.");
+    return;
+  }
+  const root = sessions.byId(value.rootId);
+  const chosen = await saveDialog({
+    title: "Save experimental LuaLaTeX PDF",
+    defaultPath: (root?.path ?? "document.tex").replace(/\.tex$/i, ".pdf"),
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
+  });
+  if (!chosen) return;
+  if (!latexCurrent(value)) {
+    toast("The project changed; compile again before saving.", 5200);
+    return;
+  }
+  let data = "";
+  for (let i = 0; i < value.result.pdf.length; i += 0x8000)
+    data += String.fromCharCode(...value.result.pdf.subarray(i, i + 0x8000));
+  try {
+    await api.saveLatexPdf(chosen, btoa(data));
+    toast(`Saved ${basename(chosen)}`);
+  } catch (error) {
+    await message(String(error), { title: "Could not save PDF", kind: "error" });
+  }
+}
+
+function latexBar(): HTMLElement {
+  const bar = document.createElement("div");
+  bar.className = "typst-viewbar";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "typst-viewbutton";
+  button.textContent = "Save PDF…";
+  button.addEventListener("click", () => void latexSavePdf());
+  bar.appendChild(button);
+  return bar;
+}
+
+async function renderLatexPreview(source: string, token: number): Promise<void> {
+  const started = performance.now();
+  const activeId = doc.id;
+  previewPane.querySelector(":scope > .typst-viewbar")?.remove();
+  if (!doc.path) {
+    latexFailure("Save this .tex file before compiling.");
+    return;
+  }
+  const enabled = await api.latexStatus();
+  if (token !== renderToken || doc.id !== activeId) return;
+  if (!enabled) {
+    disposeTypstPdf();
+    latexEnableNote();
+    previewStale = false;
+    return;
+  }
+
+  let root = latexNavigationRoot ? sessions.byId(latexNavigationRoot) : undefined;
+  if (!root?.path || !root.directory || !latexPreview || !latexRelative(latexPreview, doc.path)) {
+    root = doc;
+    latexNavigationRoot = doc.id;
+  }
+  if (!root.path || !root.directory) {
+    latexFailure("Save the main .tex file first.");
+    return;
+  }
+  const revisions = sessions.list().map(({ id, revision, path }) => ({ id, revision, path }));
+  const rootPrefix = pathKey(root.directory) + "/";
+  const overlays = sessions
+    .list()
+    .filter(
+      (session): session is Session & { path: string } =>
+        session.path !== null &&
+        pathKey(session.path).startsWith(rootPrefix) &&
+        /\.(?:tex|bib|sty|cls|bst)$/i.test(session.path),
+    )
+    .map((session) => ({ path: session.path, text: textOf(session) }));
+  const owner = { rootId: root.id, rootDirectory: root.directory, activeId, token, revisions };
+  try {
+    const snapshot = await api.latexProjectSnapshot(root.path, overlays);
+    if (token !== renderToken || doc.id !== activeId) return;
+    const result = await compileLatex(snapshot);
+    const value = { ...owner, result };
+    if (!latexCurrent(value)) return;
+    latexPreview = value;
+    wordMap = null;
+    clearPreviewWords();
+    disposeTypstPdf();
+    preview.replaceChildren();
+    preview.before(latexBar());
+    const host = document.createElement("div");
+    host.className = "typst-preview";
+    preview.appendChild(host);
+    const view = new TypstPdfPreview(
+      host,
+      previewPane,
+      () => {},
+      source,
+      (page, x, y) => void latexSyncSource(page, x, y),
+    );
+    typstPdf = view;
+    typstPdfToken = token;
+    view.setZoom(zoomFactor());
+    await view.render(result.pdf.slice());
+    if (!latexCurrent(value)) {
+      view.dispose();
+      return;
+    }
+    preview.dataset.latexCurrent = String(token);
+    preview.dataset.latexMs = String(Math.round(performance.now() - started));
+    previewLinesMapped = false;
+    previewStale = false;
+    previewSyncReady = true;
+  } catch (error) {
+    if (token === renderToken && doc.id === activeId) latexFailure(error);
+  }
 }
 
 /** Decode the base64 PDF the Rust command returns. */
@@ -1556,6 +1812,7 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
   const view = new TypstPdfPreview(host, previewPane, syncSourceFromPageSelection, source);
   typstPdf = view;
   typstPdfToken = token;
+  typstPdfBase64 = rendered.pdf;
   view.setZoom(zoomFactor());
   try {
     await view.render(decodePdf(rendered.pdf));
@@ -1612,7 +1869,42 @@ function typstViewBar(active: string): HTMLElement {
     button.addEventListener("click", () => chooseTypstView(id as api.TypstView));
     bar.appendChild(button);
   }
+  if (active === "pages") {
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "typst-viewbutton";
+    save.textContent = "Save PDF…";
+    save.addEventListener("click", () => void saveTypstPagesPdf());
+    bar.appendChild(save);
+  }
   return bar;
+}
+
+async function saveTypstPagesPdf(): Promise<void> {
+  const data = typstPdfBase64;
+  const token = renderToken;
+  const id = doc.id;
+  const revision = doc.revision;
+  if (!data || typstPdfToken !== token) {
+    toast("Wait for the current Typst page preview before saving.");
+    return;
+  }
+  const chosen = await saveDialog({
+    title: "Save Typst PDF",
+    defaultPath: (doc.path ?? doc.name).replace(/(?:\.typ)?$/i, ".pdf"),
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
+  });
+  if (!chosen) return;
+  if (token !== renderToken || doc.id !== id || doc.revision !== revision) {
+    toast("The document changed; compile again before saving.", 5200);
+    return;
+  }
+  try {
+    await api.saveLatexPdf(chosen, data);
+    toast(`Saved ${basename(chosen)}`);
+  } catch (error) {
+    await message(String(error), { title: "Could not save PDF", kind: "error" });
+  }
 }
 
 /** Switch the preview view and redraw it. */
@@ -1698,6 +1990,11 @@ async function doRender(force = false): Promise<void> {
   // Capture the mode once: a mermaid/Asciidoctor await may span a mode switch,
   // and the map the render produced must match the map the split pane expects.
   const wantsMap = settings.viewMode === "split";
+
+  if (doc.language === "latex") {
+    await renderLatexPreview(source, token);
+    return;
+  }
 
   if (doc.language === "typst") {
     await renderTypstPreview(source, token);
@@ -1975,6 +2272,7 @@ function updateActiveOutline(): void {
  */
 function languageFor(path: string | null): api.DocumentLanguage {
   if (path === null) return "markdown";
+  if (/\.tex$/i.test(path)) return "latex";
   if (/\.typ$/i.test(path)) return "typst";
   if (/\.html?$/i.test(path)) return "html";
   if (/\.(?:adoc|asciidoc)$/i.test(path)) return "asciidoc";
@@ -2021,17 +2319,19 @@ function documentFilters(
   };
   const typst = { name: "Typst", extensions: [CANONICAL_EXTENSION.typst] };
   const html = { name: "HTML", extensions: [CANONICAL_EXTENSION.html, "htm"] };
+  const latex = { name: "LaTeX", extensions: [CANONICAL_EXTENSION.latex] };
   const asciidoc = {
     name: "AsciiDoc",
     extensions: [CANONICAL_EXTENSION.asciidoc, "asciidoc"],
   };
   const all = { name: "All files", extensions: ["*"] };
-  const alphabetical = [all, asciidoc, html, markdown, typst];
+  const alphabetical = [all, asciidoc, html, latex, markdown, typst];
   const preferred = {
     markdown,
     typst,
     html,
     asciidoc,
+    latex,
   } satisfies Record<api.DocumentLanguage, { name: string; extensions: string[] }>;
   const first = preferred[language];
   return [first, ...alphabetical.filter((filter) => filter !== first)];
@@ -2162,10 +2462,12 @@ function snapshotDoc(): void {
 
 /** A render that started for the previous tab must not paint this one. */
 function invalidatePreview(): void {
+  delete preview.dataset.latexCurrent;
   renderToken += 1;
   wordMapGeneration += 1;
   cancelPreviewWorkers();
   cancelTypstRender();
+  cancelLatex();
   window.clearTimeout(renderTimer);
   window.clearTimeout(selectionTimer);
   wordMap = null;
@@ -2290,6 +2592,7 @@ function setDirty(next: boolean): void {
 /** Why Format Document cannot run for `session`, or null when it can. */
 function formatUnavailableReason(session: Session): string | null {
   if (session.readOnly) return "This document is read-only.";
+  if (session.language === "latex") return "LaTeX formatting is deferred in this experiment.";
   if (!hasFormatter(session.language)) return "AsciiDoc documents have no formatter.";
   if (formatBusy) return "Formatting is already running.";
   if (session.id !== doc.id && !session.editorState) {
@@ -3998,6 +4301,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "help.typstReference": () => void showBuiltin(TYPST_REFERENCE, "typst"),
   "help.shortcuts": () => void showBuiltin(SHORTCUTS),
   "help.licences": () => void showBuiltin(FONT_LICENCES),
+  "help.latexLicenses": showLatexLicenses,
   "help.welcome": () => void showBuiltin(WELCOME),
   "help.installTypst": () => void typstSetup(),
   "help.pandoc": () => void pandocSetup(),
@@ -4040,6 +4344,7 @@ function setViewMode(mode: api.ViewMode): void {
     wordMapGeneration += 1;
     cancelPreviewWorkers();
     cancelTypstRender();
+    cancelLatex();
     if (!wordMap) previewSyncReady = false;
   }
   settings.viewMode = mode;
@@ -5266,6 +5571,11 @@ function installPaneSync(): void {
   // itself, and moves nothing. No strobe risk: the caret moves on every
   // keystroke, but a click is one discrete action.
   editorPane.addEventListener("click", () => {
+    if (doc.language === "latex") {
+      if (settings.viewMode === "split" && editor.cursorInfo().selectionLength === 0)
+        latexSyncCursor(true, true);
+      return;
+    }
     if (doc.language === "html") {
       if (settings.viewMode === "split") htmlPreview.blink(editor.cursorInfo().line);
       return;
@@ -5345,6 +5655,7 @@ function installPaneSync(): void {
         syncedSource !== null ||
         previewPulseRanges.length > 0 ||
         htmlWordsActive ||
+        !!preview.querySelector(".latex-sync-region") ||
         pendingPreviewSelection;
       if (
         (target instanceof Node && (editorPane.contains(target) || previewPane.contains(target))) ||
@@ -5374,6 +5685,7 @@ function installPaneSync(): void {
       syncedSource = null;
       editor.clearSyncRange();
       clearPreviewWords();
+      if (doc.language === "latex") typstPdf?.showRegions([]);
     },
     true,
   );
@@ -5651,6 +5963,18 @@ function runMenuAction(id: string): void {
     document.querySelector(".stats-dialog[open]")
   )
     return;
+  if (
+    doc.language === "latex" &&
+    (id.startsWith("format.") ||
+      id.startsWith("insert.") ||
+      (id.startsWith("para.") &&
+        !["para.indent", "para.outdent", "para.insertBefore", "para.insertAfter"].includes(id)) ||
+      id.startsWith("export.") ||
+      id === "file.print")
+  ) {
+    toast("LaTeX editing commands are deferred. Use the experimental PDF controls.", 4200);
+    return;
+  }
   const now = performance.now();
   const previous = lastActionAt.get(id) ?? 0;
   if (now - previous < 250) return;
@@ -6011,6 +6335,17 @@ async function installDragDrop(): Promise<void> {
   const win = getCurrentWindow();
   await win.onDragDropEvent(async (event) => {
     if (event.payload.type !== "drop" || event.payload.paths.length === 0) return;
+    if (doc.language === "latex") {
+      for (const path of event.payload.paths) {
+        if (/\.(?:png|jpe?g|gif|webp|svg|bmp|tiff?)$/i.test(path))
+          toast(
+            "Image insertion for LaTeX is deferred; reference the project file in source.",
+            4200,
+          );
+        else await openPath(path);
+      }
+      return;
+    }
     // Images are imported; anything else is opened as a document.
     const remaining = await handleImageDrop(event.payload.paths, imageContext());
     for (const path of remaining) await openPath(path);
@@ -6443,13 +6778,15 @@ async function resolveRichImage(
 }
 
 function languageLabel(language: api.DocumentLanguage): string {
-  return language === "typst"
-    ? "Typst"
-    : language === "html"
-      ? "HTML"
-      : language === "asciidoc"
-        ? "AsciiDoc"
-        : "Markdown";
+  return language === "latex"
+    ? "LaTeX"
+    : language === "typst"
+      ? "Typst"
+      : language === "html"
+        ? "HTML"
+        : language === "asciidoc"
+          ? "AsciiDoc"
+          : "Markdown";
 }
 
 async function applyRichPaste(
@@ -6530,6 +6867,14 @@ function installPasteHandlers(): void {
     // has already moved the caret to the block under the pointer.
     const inEditor = target !== null && editor.view.contentDOM.contains(target);
     const hasSelection = inEditor && editor.cursorInfo().selectionLength > 0;
+
+    if (doc.language === "latex") {
+      if (!event.clipboardData?.getData("text/plain") && event.clipboardData?.files.length) {
+        event.preventDefault();
+        toast("Image insertion for LaTeX is deferred; reference the project file in source.", 4200);
+      }
+      return;
+    }
 
     // The decision and preventDefault must happen in this same turn; deferring
     // them to a promise lets the browser insert the pasted text as well.
@@ -6657,6 +7002,7 @@ function recoveryLanguage(value: string): api.DocumentLanguage {
     case "typst":
     case "html":
     case "asciidoc":
+    case "latex":
       return value;
     default:
       return "markdown";
@@ -6834,12 +7180,14 @@ async function boot(): Promise<void> {
     linkClick: openLinkTarget,
   });
   editor.onDocChanged((text) => {
+    delete preview.dataset.latexCurrent;
     doc.revision += 1;
     // Invalidate before the debounce: the visible DOM still describes old text.
     renderToken += 1;
     wordMapGeneration += 1;
     cancelPreviewWorkers();
     cancelTypstRender();
+    cancelLatex();
     lastEditAt = performance.now();
     wordMap = null;
     previewStale = true;
