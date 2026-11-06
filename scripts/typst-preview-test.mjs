@@ -1030,6 +1030,196 @@ check(
   JSON.stringify(reference),
 );
 
+// ---------------------------------------------------------------------------
+// A wrapped list item maps from its own line, in both directions
+// ---------------------------------------------------------------------------
+console.log("\n=== Typst list word sync ===");
+
+/** A point on the first occurrence of a word inside a descendant that matches. */
+const wordPoint = (word, selector, contains) =>
+  evaluate(`(async () => {
+    const host = document.querySelector("${selector}");
+    if (!host) return null;
+    const target = [...host.querySelectorAll("li, p, h2, h3")]
+      .find((element) => element.textContent.includes(${JSON.stringify(contains)}));
+    if (!target) return null;
+    target.scrollIntoView({ block: "center" });
+    await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+    const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const at = node.data.indexOf(${JSON.stringify(word)});
+      if (at < 0) continue;
+      const range = document.createRange();
+      range.setStart(node, at);
+      range.setEnd(node, at + ${JSON.stringify(word)}.length);
+      const box = range.getBoundingClientRect();
+      if (box.width === 0 || box.height === 0) continue;
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    }
+    return null;
+  })()`);
+
+for (const [word, item, line] of [
+  ["selectable", "selectable prose styled like the", "flowing, selectable prose"],
+  ["application", "rest of the application", "rest of the application"],
+]) {
+  // The word map is built after paint, so the first click of the suite can land
+  // before it exists; a person would simply click again.
+  let painted = "";
+  for (let attempt = 0; attempt < 3 && painted !== word; attempt += 1) {
+    const point = await wordPoint(word, ".typst-document", item);
+    if (!point) break;
+    await doubleClickAt(point);
+    await sleep(320);
+    painted = await mark();
+  }
+  check(
+    `a Typst list word maps back to the source (${word})`,
+    painted === word,
+    JSON.stringify(painted),
+  );
+  check(
+    `a Typst list word paints its own line (${word})`,
+    (await markedLine()).includes(line),
+    JSON.stringify(await markedLine()),
+  );
+}
+
+{
+  // Source -> Document, from a word that only exists on the wrapped line.
+  await clearSelection();
+  const point = await evaluate(`(async () => {
+    const walker = document.createTreeWalker(document.querySelector(".cm-content"), NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const at = node.data.indexOf("application");
+      if (at < 0) continue;
+      const line = node.parentElement?.closest(".cm-line");
+      if (!line || !line.textContent.includes("rest of the application")) continue;
+      line.scrollIntoView({ block: "center" });
+      await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+      const range = document.createRange();
+      range.setStart(node, at);
+      range.setEnd(node, at + 11);
+      const box = range.getBoundingClientRect();
+      if (box.width === 0) continue;
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    }
+    return null;
+  })()`);
+  if (point) await doubleClickAt(point);
+  await sleep(350);
+  const painted = await evaluate(`(() => {
+    const highlight = CSS.highlights?.get("mdraft-sync") ?? CSS.highlights?.get("mdraft-sync-peak");
+    return highlight ? [...highlight].map((range) => range.toString()).join(" ") : null;
+  })()`);
+  check(
+    "a source word on a Typst list continuation paints the preview",
+    painted === "application",
+    JSON.stringify(painted),
+  );
+  await clearSelection();
+}
+
+// ---------------------------------------------------------------------------
+// Typst Pages: a list item still maps through the PDF text layer
+// ---------------------------------------------------------------------------
+console.log("\n=== Typst Pages list word sync ===");
+{
+  const source = [
+    "= List pages",
+    "",
+    "- alpha first item",
+    "  beta continuation line",
+    "- gamma second item",
+    "  delta continuation line",
+    "",
+  ].join("\n");
+  const directory = fs.mkdtempSync(path.join(process.cwd(), ".tmp-typst-list-"));
+  const file = path.join(directory, "pages-list.typ");
+  fs.writeFileSync(file, source);
+  await evaluate(
+    `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'open-files',payload:[${JSON.stringify(file)}]})`,
+  );
+  await waitFor(`document.title.includes("pages-list.typ")`, 15000);
+  await evaluate(
+    `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'menu',payload:'view.typstPages'})`,
+  );
+  const ready = await waitFor(
+    `(() => {
+      const canvases = [...document.querySelectorAll(".typst-page canvas")];
+      if (canvases.length === 0) return false;
+      if (canvases.some((canvas) => canvas.width === 0 || canvas.height === 0)) return false;
+      const text = [...document.querySelectorAll(".typst-page .textLayer")].map((layer) => layer.textContent).join(" ");
+      return text.includes("alpha first item") && text.includes("delta continuation line");
+    })()`,
+    40000,
+  );
+  check("a small Typst document renders its list in Pages", ready);
+  const point = await evaluate(`(async () => {
+    const layer = document.querySelector(".typst-page .textLayer");
+    if (!layer) return null;
+    const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const at = node.data.indexOf("delta");
+      if (at < 0) continue;
+      const range = document.createRange();
+      range.setStart(node, at);
+      range.setEnd(node, at + 5);
+      const box = range.getBoundingClientRect();
+      if (box.width === 0 || box.height === 0) continue;
+      await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+      return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+    }
+    return null;
+  })()`);
+  if (point) {
+    // The page map is built after the PDF paints, so the first gesture can
+    // arrive before it exists. A reader would simply click again.
+    let painted = "";
+    for (let attempt = 0; attempt < 3 && painted !== "delta"; attempt += 1) {
+      await doubleClickAt(point);
+      await sleep(400);
+      painted = await mark();
+    }
+    check(
+      "a Pages list word maps back to its source line",
+      painted === "delta" && (await markedLine()).includes("delta continuation line"),
+      JSON.stringify({ painted, line: await markedLine() }),
+    );
+    await clearSelection();
+    // Source -> Pages, from the word that only exists on the wrapped line.
+    const sourcePoint = await evaluate(`(async () => {
+      const walker = document.createTreeWalker(document.querySelector(".cm-content"), NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const at = node.data.indexOf("delta");
+        if (at < 0) continue;
+        const range = document.createRange();
+        range.setStart(node, at);
+        range.setEnd(node, at + 5);
+        const box = range.getBoundingClientRect();
+        if (box.width === 0) continue;
+        return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+      }
+      return null;
+    })()`);
+    if (sourcePoint) await doubleClickAt(sourcePoint);
+    await sleep(350);
+    const reverse = await evaluate(`(() => {
+      const highlight = CSS.highlights?.get("mdraft-sync") ?? CSS.highlights?.get("mdraft-sync-peak");
+      return highlight ? [...highlight].map((range) => range.toString()).join(" ") : null;
+    })()`);
+    check(
+      "a source word in a list paints its Pages text",
+      reverse === "delta",
+      JSON.stringify(reverse),
+    );
+    await clearSelection();
+  } else {
+    check("the Pages list word is reachable", false);
+  }
+  fs.rmSync(directory, { recursive: true, force: true });
+}
+
 console.log(`\n${passed}/${passed + failed} checks passed`);
 ws.close();
 if (failed > 0) process.exit(1);
