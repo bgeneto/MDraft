@@ -2,9 +2,9 @@
 //!
 //! One worker per engine — Markdown and AsciiDoc — so a Markdown session never
 //! downloads or parses Asciidoctor. Each worker keeps one render in flight and
-//! one pending; a newer edit replaces the pending job, so a burst of keystrokes
-//! cannot queue a dozen full renders. A superseded caller stops without doing
-//! work; only a worker that cannot run falls back to the synchronous pipeline.
+//! one pending; a newer render supersedes the active one, so stale work cannot
+//! hold up the latest buffer. A superseded caller stops without falling back;
+//! only a worker that cannot run uses the synchronous pipeline.
 
 import type { AsciidocChunks, AsciidocWorkerOptions } from "./asciidoc-render";
 import type { ChunkOptions, PreviewChunks } from "./preview-render";
@@ -24,7 +24,7 @@ interface Pending {
   resolve: (result: AsyncRender<unknown>) => void;
 }
 
-class Channel {
+export class PreviewWorkerChannel {
   private worker: Worker | null = null;
   private broken = false;
   private running = false;
@@ -33,7 +33,16 @@ class Channel {
   private nextId = 1;
   private pending: Pending | null = null;
 
-  constructor(private readonly create: () => Worker) {}
+  private readonly create: () => Worker;
+  private readonly validData: (data: unknown) => boolean;
+
+  constructor(
+    create: () => Worker,
+    validData: (data: unknown) => boolean = (data) => data != null,
+  ) {
+    this.create = create;
+    this.validData = validData;
+  }
 
   request(source: string, options: unknown): Promise<AsyncRender<unknown>> {
     if (this.broken) return Promise.resolve({ kind: "fallback" });
@@ -43,8 +52,25 @@ class Channel {
       // back.
       if (this.pending) this.pending.resolve({ kind: "superseded" });
       this.pending = { source, options, resolve };
+      this.cancelCurrent();
       this.pump();
     });
+  }
+
+  /** Drop work owned by an older edit, document, or view mode. */
+  cancel(): void {
+    this.cancelCurrent();
+    this.pending?.resolve({ kind: "superseded" });
+    this.pending = null;
+  }
+
+  private cancelCurrent(): void {
+    if (!this.current) return;
+    this.current.resolve({ kind: "superseded" });
+    this.current = null;
+    this.running = false;
+    this.worker?.terminate();
+    this.worker = null;
   }
 
   private failAll(): void {
@@ -61,10 +87,24 @@ class Channel {
   private ensureWorker(): Worker | null {
     if (this.worker || this.broken) return this.worker;
     try {
-      this.worker = this.create();
-      this.worker.onmessage = (event: MessageEvent<Reply>) => {
+      const instance = this.create();
+      this.worker = instance;
+      instance.onmessage = (event: MessageEvent<Reply>) => {
+        if (this.worker !== instance) return;
         const reply = event.data;
-        if (!reply || reply.id !== this.currentId) return;
+        if (!reply || typeof reply.id !== "number" || typeof reply.ok !== "boolean") {
+          this.failAll();
+          return;
+        }
+        if (reply.id < this.currentId) return;
+        if (reply.id !== this.currentId) {
+          this.failAll();
+          return;
+        }
+        if (reply.ok && !this.validData(reply.data)) {
+          this.failAll();
+          return;
+        }
         const job = this.current;
         this.current = null;
         this.running = false;
@@ -78,7 +118,12 @@ class Channel {
         }
         this.pump();
       };
-      this.worker.onerror = () => this.failAll();
+      instance.onerror = () => {
+        if (this.worker === instance) this.failAll();
+      };
+      instance.onmessageerror = () => {
+        if (this.worker === instance) this.failAll();
+      };
     } catch {
       this.broken = true;
       this.worker = null;
@@ -100,15 +145,51 @@ class Channel {
     this.running = true;
     this.current = job;
     this.currentId = this.nextId++;
-    instance.postMessage({ id: this.currentId, source: job.source, options: job.options });
+    try {
+      instance.postMessage({ id: this.currentId, source: job.source, options: job.options });
+    } catch {
+      this.failAll();
+    }
   }
 }
 
-const markdown = new Channel(
+// Validate the envelope without walking every fragment of a large document on
+// the UI thread. Invalid replies must not reach the DOM code or wedge the queue.
+function validMarkdownData(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const data = value as Partial<PreviewChunks>;
+  return (
+    Array.isArray(data.chunks) &&
+    typeof data.hasRawHtml === "boolean" &&
+    Array.isArray(data.codes) &&
+    Array.isArray(data.maths) &&
+    (data.legacyImages === undefined ||
+      (data.legacyImages !== null &&
+        typeof data.legacyImages === "object" &&
+        !Array.isArray(data.legacyImages))) &&
+    (data.fragments === undefined || Array.isArray(data.fragments)) &&
+    (data.lines === null || Array.isArray(data.lines))
+  );
+}
+
+function validAsciidocData(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const data = value as Partial<AsciidocChunks>;
+  return (
+    Array.isArray(data.chunks) &&
+    Array.isArray(data.marks) &&
+    typeof data.hasHeader === "boolean" &&
+    typeof data.notitle === "boolean"
+  );
+}
+
+const markdown = new PreviewWorkerChannel(
   () => new Worker(new URL("./preview-worker.ts", import.meta.url), { type: "module" }),
+  validMarkdownData,
 );
-const asciidoc = new Channel(
+const asciidoc = new PreviewWorkerChannel(
   () => new Worker(new URL("./asciidoc-worker.ts", import.meta.url), { type: "module" }),
+  validAsciidocData,
 );
 
 /** Render Markdown off the main thread, or report that the caller must fall back. */
@@ -125,4 +206,10 @@ export function renderAsciidocChunksAsync(
   options: AsciidocWorkerOptions,
 ): Promise<AsyncRender<AsciidocChunks>> {
   return asciidoc.request(source, options) as Promise<AsyncRender<AsciidocChunks>>;
+}
+
+/** Stop hidden or superseded previews without invoking the synchronous fallback. */
+export function cancelPreviewWorkers(): void {
+  markdown.cancel();
+  asciidoc.cancel();
 }

@@ -184,6 +184,15 @@ const paintedWord = () =>
     return marks.length === 0 ? null : marks.map((mark) => mark.textContent).join("\\n");
   })()`);
 
+async function waitForPaint(word, timeoutMs = 6000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if ((await paintedWord()) === word) return true;
+    await sleep(100);
+  }
+  return false;
+}
+
 const highlightText = () =>
   evaluate(`(() => {
     // The pulse swaps the registered name, so either one is the painted word.
@@ -518,7 +527,7 @@ console.log("\n=== escape ===");
   const word = await rectOf("sanciona", "#preview");
   if (word) {
     await doubleClickAt(word.x, word.y);
-    await sleep(150);
+    await waitForPaint("sanciona");
     const beforeEscape = await paintedWord();
     await send("Input.dispatchKeyEvent", {
       type: "keyDown",
@@ -591,6 +600,10 @@ check(
 );
 console.log("\n=== shared selection regression matrix ===");
 const matrixDir = fs.mkdtempSync(path.join(os.tmpdir(), "mdraft-sync-matrix-"));
+const selectStrongBoundary = () =>
+  evaluate(
+    `(()=>{const p=[...document.querySelectorAll('#preview p')].find(e=>e.textContent.includes('alpha'));if(!p)return null;const strong=p.querySelector('strong'),at=[...p.childNodes].indexOf(strong);const r=document.createRange();r.setStart(p,at);r.setEnd(p,at+1);const s=window.getSelection();s.removeAllRanges();s.addRange(r);document.querySelector('#preview').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));return s.toString();})()`,
+  );
 for (const [extension, source] of [
   ["md", "# Audit\n\nalpha **bravo** charlie.\n\ndelta echo foxtrot.\n"],
   ["adoc", "= Audit\n\nalpha *bravo* charlie.\n\ndelta echo foxtrot.\n"],
@@ -598,6 +611,13 @@ for (const [extension, source] of [
 ]) {
   const file = path.join(matrixDir, `audit.${extension}`);
   fs.writeFileSync(file, source);
+  if (extension === "md") {
+    await evaluate(`(() => {
+      window.__wordSyncIdleOriginal=window.requestIdleCallback;
+      window.__wordSyncIdleHeld=[];
+      window.requestIdleCallback=(callback)=>{window.__wordSyncIdleHeld.push(callback);return 0;};
+    })()`);
+  }
   await evaluate(
     `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'open-files',payload:[${JSON.stringify(file)}]})`,
   );
@@ -611,10 +631,47 @@ for (const [extension, source] of [
     await sleep(100);
   }
   await resetView();
-  const boundary = await evaluate(
-    `(()=>{const p=[...document.querySelectorAll('#preview p')].find(e=>e.textContent.includes('alpha'));if(!p)return null;const strong=p.querySelector('strong'),at=[...p.childNodes].indexOf(strong);const r=document.createRange();r.setStart(p,at);r.setEnd(p,at+1);const s=window.getSelection();s.removeAllRanges();s.addRange(r);document.querySelector('#preview').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));return s.toString();})()`,
-  );
-  await sleep(150);
+  if (extension === "md") {
+    const deadline = Date.now() + 6000;
+    while (Date.now() < deadline && !(await evaluate("window.__wordSyncIdleHeld.length > 0"))) {
+      await sleep(100);
+    }
+    const held = await evaluate("window.__wordSyncIdleHeld.length > 0");
+    const selection = await selectStrongBoundary();
+    await send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key: "Escape",
+      code: "Escape",
+      windowsVirtualKeyCode: 27,
+    });
+    await send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: "Escape",
+      code: "Escape",
+      windowsVirtualKeyCode: 27,
+    });
+    await evaluate(`(() => {
+      const original=window.__wordSyncIdleOriginal,held=window.__wordSyncIdleHeld;
+      window.requestIdleCallback=original;
+      for(const callback of held)original.call(window,callback,{timeout:800});
+    })()`);
+    await sleep(500);
+    check(
+      "Escape prevents a deferred map from restoring a dismissed preview selection",
+      held &&
+        selection === "bravo" &&
+        (await paintedWord()) === null &&
+        (await evaluate("getSelection().toString()")) === "bravo",
+      JSON.stringify({
+        held,
+        paint: await paintedWord(),
+        selection: await evaluate("getSelection().toString()"),
+      }),
+    );
+    await clearSelection();
+  }
+  const boundary = await selectStrongBoundary();
+  await waitForPaint("bravo");
   check(
     `${extension}: element endpoints select only the bold word`,
     boundary === "bravo" && (await paintedWord()) === "bravo",
@@ -724,7 +781,7 @@ for (const [extension, source] of [
   await evaluate(
     `document.querySelector('#preview').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`,
   );
-  await sleep(150);
+  await waitForPaint("alpha");
   check(
     `${extension}: the new map paints the current word after editing`,
     (await paintedWord()) === "alpha",

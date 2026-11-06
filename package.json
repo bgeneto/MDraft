@@ -56,6 +56,8 @@
     "single:instance": "node scripts/single-instance-test.mjs",
     "preview:zoom": "node scripts/preview-zoom-test.mjs",
     "preview:unit": "node scripts/preview-render-unit.mjs",
+    "preview:worker:unit": "node scripts/preview-worker-unit.mjs",
+    "preview:dom": "node scripts/preview-dom-test.mjs",
     "preview:perf": "node scripts/preview-performance-test.mjs",
     "typewriter": "node scripts/typewriter-test.mjs",
     "paste:convert": "node scripts/paste-convert-test.mjs",

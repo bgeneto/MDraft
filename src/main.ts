@@ -90,12 +90,14 @@ import {
   renderMermaidIn,
   renderPreview,
   renderPreviewInto,
+  resolveLegacyImagesForExport,
   wrapNativePrintHtml,
   wrapPrintHtml,
   wrapStandaloneHtml,
 } from "./markdown";
+import { cancelPreviewWorkers } from "./preview-worker-client";
 import {
-  bindWordMap,
+  bindWordMapAsync,
   blockRangeForNode,
   fragmentKindFor,
   rangesForSource,
@@ -103,7 +105,7 @@ import {
   snapToWords,
   sourceRangeFor,
   scrollSourceRange,
-  scrollTextAnchors,
+  scrollTextAnchorsAsync,
   type ScrollTextAnchor,
   type BlockRange,
   type Fragment,
@@ -1261,6 +1263,16 @@ function documentStatistics(text: string): DocumentStatistics {
 
 let renderTimer = 0;
 let renderToken = 0;
+/** The preview compile currently owned by the frontend, if any. */
+let typstInFlight: number | null = null;
+
+function cancelTypstRender(): void {
+  if (typstInFlight === null) return;
+  typstInFlight = null;
+  void api.cancelTypstPreview(renderToken).catch((error) => {
+    console.warn("[preview] could not cancel Typst:", error);
+  });
+}
 /**
  * True when the preview does not describe the current buffer. Source mode sets
  * it without rendering; switching to a visible mode renders before it is used.
@@ -1329,6 +1341,8 @@ interface TypstRenderKey {
   mode: string;
   imageRoot: string | null;
   syncReady: boolean;
+  /** Source ranges already annotated on the cached Document DOM. */
+  blocks?: BlockRange[];
 }
 let lastTypstRender: TypstRenderKey | null = null;
 
@@ -1378,6 +1392,9 @@ function showTypstFailure(error: unknown, wanted: string): void {
   // retry a compile that just failed.
   previewStale = false;
   previewSyncReady = true;
+  previewPane.querySelector(":scope > .typst-viewbar")?.remove();
+  wordMap = null;
+  clearPreviewWords();
   disposeTypstPdf();
   preview.innerHTML = "";
   previewLinesMapped = false;
@@ -1436,16 +1453,24 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
     lastTypstRender.source === source &&
     lastTypstRender.mode === wanted &&
     lastTypstRender.imageRoot === imageRoot &&
-    // A Document render made in Preview Only has no DOM word map; entering
-    // Split needs the compile's DOM pass again.
-    (lastTypstRender.syncReady || !wantsMap)
+    // Document ranges survive a mode change and can be rebound without another
+    // compiler process, even when a pending map build was invalidated.
+    (lastTypstRender.syncReady || !wantsMap || (wanted === "document" && lastTypstRender.blocks))
   ) {
     previewStale = false;
+    if (wanted === "document" && wantsMap && !wordMap && lastTypstRender.blocks) {
+      bindPreviewWords(source, undefined, lastTypstRender.blocks, true);
+      lastTypstRender.syncReady = true;
+    }
     previewSyncReady = lastTypstRender.syncReady;
+    // The existing PDF still belongs to this document, but doRender assigned a
+    // new generation to the cache hit. Keep Pages sync owned by that generation.
+    if (wanted === "pages" && typstPdf) typstPdfToken = token;
     return;
   }
 
   let rendered: api.RenderedTypst;
+  typstInFlight = token;
   try {
     rendered = await api.renderTypst(doc.path, source, wanted, imageRoot, token);
   } catch (error) {
@@ -1454,9 +1479,16 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
     // line of this document, and the pane is where the document is looked at.
     showTypstFailure(error, wanted);
     return;
+  } finally {
+    if (typstInFlight === token) typstInFlight = null;
   }
   if (token !== renderToken) return;
 
+  // A cache hit above keeps the current controls and word map intact. Only a
+  // result that will replace the DOM may discard them.
+  previewPane.querySelector(":scope > .typst-viewbar")?.remove();
+  wordMap = null;
+  clearPreviewWords();
   disposeTypstPdf();
   // A word decoration belongs to the view that produced it. Switching to Pages,
   // or re-rendering the document, must not leave a mark that cannot be cleared.
@@ -1508,6 +1540,7 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
       mode: wanted,
       imageRoot,
       syncReady: wantsMap,
+      blocks: mapped.blocks,
     };
     return;
   }
@@ -1538,8 +1571,13 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
   }
   // PDF correspondence has its own region adapter, not DOM block anchors.
   previewLinesMapped = false;
-  if (pendingPreviewScroll !== null) applyPendingPreviewScroll();
-  else if (oldBookmark && bookmarkFrom !== null && bookmarkEpoch === scrollOwnership.epoch) {
+  if (pendingPreviewScroll !== null) {
+    // A fit-to-width animation frame can still hold the old zero scroll. The
+    // tab's saved position owns this restoration, so invalidate that callback's
+    // scroll adjustment while letting it finish measuring page geometry.
+    view.cancelScrollRestore();
+    applyPendingPreviewScroll();
+  } else if (oldBookmark && bookmarkFrom !== null && bookmarkEpoch === scrollOwnership.epoch) {
     suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
     view.restoreScroll({ from: bookmarkFrom, screenY: oldBookmark.screenY });
   }
@@ -1661,11 +1699,13 @@ async function doRender(force = false): Promise<void> {
   // and the map the render produced must match the map the split pane expects.
   const wantsMap = settings.viewMode === "split";
 
-  // The Typst view bar lives outside `#preview` so document zoom does not scale
-  // its buttons. Every render begins by removing the previous one.
-  previewPane.querySelector(":scope > .typst-viewbar")?.remove();
+  if (doc.language === "typst") {
+    await renderTypstPreview(source, token);
+    return;
+  }
 
-  // The DOM the old map described is about to be replaced.
+  // Typst controls live outside #preview and belong only to a Typst result.
+  previewPane.querySelector(":scope > .typst-viewbar")?.remove();
   wordMap = null;
   clearPreviewWords();
 
@@ -1676,11 +1716,6 @@ async function doRender(force = false): Promise<void> {
     // the same iframe without a second render.
     previewStale = false;
     previewSyncReady = true;
-    return;
-  }
-
-  if (doc.language === "typst") {
-    await renderTypstPreview(source, token);
     return;
   }
 
@@ -1716,6 +1751,7 @@ async function doRender(force = false): Promise<void> {
     source,
     {
       baseDir: doc.directory ?? null,
+      documentPath: doc.path,
       math: settings.enableMath,
       mermaid: settings.enableMermaid,
       map: wantsMap,
@@ -2128,10 +2164,14 @@ function snapshotDoc(): void {
 function invalidatePreview(): void {
   renderToken += 1;
   wordMapGeneration += 1;
+  cancelPreviewWorkers();
+  cancelTypstRender();
   window.clearTimeout(renderTimer);
   window.clearTimeout(selectionTimer);
   wordMap = null;
   syncedSource = null;
+  wordSyncDismissed = false;
+  dismissedWordSelection = null;
   clearPreviewWords();
   editor?.clearSyncRange();
   // The DOM still describes the tab that was on screen a moment ago.
@@ -2680,11 +2720,14 @@ async function buildExportArticle(
     holder.innerHTML = rendered.html ?? "";
     css = rendered.css ?? "";
   } else {
-    holder.innerHTML = renderPreview(source.text, {
+    const rendered = renderPreview(source.text, {
       baseDir: source.directory ?? null,
+      documentPath: source.path,
       math: settings.enableMath,
       mermaid: settings.enableMermaid,
-    }).html;
+    });
+    holder.innerHTML = rendered.html;
+    await resolveLegacyImagesForExport(holder, rendered.legacyImages, source.path);
   }
   await renderMermaidIn(holder, themeIsDark);
   // Restore the destinations the preview deliberately decorated for its own
@@ -3990,6 +4033,15 @@ async function showBuiltin(
 }
 
 function setViewMode(mode: api.ViewMode): void {
+  const previousMode = settings.viewMode;
+  if (mode !== previousMode) {
+    // A worker or delayed word map belongs to the mode in which it started.
+    renderToken += 1;
+    wordMapGeneration += 1;
+    cancelPreviewWorkers();
+    cancelTypstRender();
+    if (!wordMap) previewSyncReady = false;
+  }
   settings.viewMode = mode;
   applyLayout();
   persist();
@@ -4292,6 +4344,27 @@ interface HighlightRegistryLike {
 
 let wordMap: WordMap | null = null;
 let syncedSource: { from: number; to: number } | null = null;
+/** Escape dismisses the current selection even if its map is still pending. */
+let wordSyncDismissed = false;
+let dismissedWordSelection: {
+  anchorNode: Node | null;
+  anchorOffset: number;
+  focusNode: Node | null;
+  focusOffset: number;
+} | null = null;
+
+function currentSelectionWasDismissed(): boolean {
+  const selection = window.getSelection();
+  return (
+    wordSyncDismissed &&
+    dismissedWordSelection !== null &&
+    selection !== null &&
+    selection.anchorNode === dismissedWordSelection.anchorNode &&
+    selection.anchorOffset === dismissedWordSelection.anchorOffset &&
+    selection.focusNode === dismissedWordSelection.focusNode &&
+    selection.focusOffset === dismissedWordSelection.focusOffset
+  );
+}
 let selectionTimer = 0;
 /** Cancels a word-map build that belongs to an older render. */
 let wordMapGeneration = 0;
@@ -4426,18 +4499,39 @@ function bindPreviewWords(
   // The walk is O(every word). Running it in the same task as the paint put it
   // between a keystroke and the next frame; build it after paint instead, and
   // only once the typing has gone quiet. A newer render bumps the generation.
-  const build = (): void => {
+  const build = async (): Promise<void> => {
     if (generation !== wordMapGeneration) return;
     if (performance.now() - lastEditAt < WORD_MAP_QUIET_MS) {
       window.setTimeout(build, WORD_MAP_RETRY_MS);
       return;
     }
-    wordMap = bindWordMap(preview, { source, fragments, blocks });
-    domScrollIndex = new ScrollIndex(wordMap ? scrollTextAnchors(wordMap) : []);
+    const cancelled = () => generation !== wordMapGeneration;
+    const map = await bindWordMapAsync(preview, { source, fragments, blocks }, cancelled);
+    if (!map || cancelled()) return;
+    const index = await scrollTextAnchorsAsync(map, cancelled);
+    if (!index || cancelled()) return;
+    wordMap = map;
+    domScrollIndex = new ScrollIndex(index.anchors, index.sorted);
+    if (currentSelectionWasDismissed()) return;
+    wordSyncDismissed = false;
+    dismissedWordSelection = null;
+    // A selection can be made while the deferred map is still being built.
+    // Reconcile it once the current generation is ready, without moving focus.
+    const selection = window.getSelection();
+    if (
+      selection &&
+      !selection.isCollapsed &&
+      selection.rangeCount > 0 &&
+      preview.contains(selection.getRangeAt(0).commonAncestorContainer)
+    ) {
+      syncSourceFromPreview(false);
+    } else {
+      syncPreviewFromSource();
+    }
   };
   // Do not build immediately after a render: the reader often resumes typing,
   // and the walk can take ~100 ms on a megabyte. A newer edit cancels it.
-  window.setTimeout(() => scheduleIdle(build), WORD_MAP_DELAY_MS);
+  window.setTimeout(() => scheduleIdle(() => void build()), WORD_MAP_DELAY_MS);
 }
 
 /** Word sync needs a map, a split view and a format that can produce one. */
@@ -5150,6 +5244,8 @@ function installPaneSync(): void {
   });
 
   editor.onCursor((info) => {
+    wordSyncDismissed = false;
+    dismissedWordSelection = null;
     refreshStatus();
     updateActiveOutline();
     syncPreviewFromSource();
@@ -5217,6 +5313,8 @@ function installPaneSync(): void {
   // it may reveal the source. A drag only paints: moving the pane under the
   // pointer is the bug this rule exists to prevent.
   preview.addEventListener("dblclick", () => {
+    wordSyncDismissed = false;
+    dismissedWordSelection = null;
     window.clearTimeout(selectionTimer);
     syncSourceFromPreview(true);
   });
@@ -5226,6 +5324,9 @@ function installPaneSync(): void {
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) return;
     if (!preview.contains(selection.anchorNode)) return;
+    if (currentSelectionWasDismissed()) return;
+    wordSyncDismissed = false;
+    dismissedWordSelection = null;
     window.clearTimeout(selectionTimer);
     selectionTimer = window.setTimeout(() => syncSourceFromPreview(false), WORD_SYNC_DEBOUNCE_MS);
   });
@@ -5236,8 +5337,29 @@ function installPaneSync(): void {
     "keydown",
     (event) => {
       if (event.key !== "Escape") return;
-      const dismissing = syncedSource !== null || previewPulseRanges.length > 0 || htmlWordsActive;
       const target = event.target;
+      const selection = window.getSelection();
+      const pendingPreviewSelection =
+        !!selection && !selection.isCollapsed && preview.contains(selection.anchorNode);
+      const dismissing =
+        syncedSource !== null ||
+        previewPulseRanges.length > 0 ||
+        htmlWordsActive ||
+        pendingPreviewSelection;
+      if (
+        (target instanceof Node && (editorPane.contains(target) || previewPane.contains(target))) ||
+        pendingPreviewSelection
+      ) {
+        wordSyncDismissed = true;
+        dismissedWordSelection = selection
+          ? {
+              anchorNode: selection.anchorNode,
+              anchorOffset: selection.anchorOffset,
+              focusNode: selection.focusNode,
+              focusOffset: selection.focusOffset,
+            }
+          : null;
+      }
       // CodeMirror's Escape keymap simplifies a selection and consumes the key.
       // Dismiss correspondence first while preserving the user's selection;
       // dialogs and unrelated Escape gestures keep their normal handlers.
@@ -6005,6 +6127,7 @@ function installSystemThemeWatcher(): void {
 // ---------------------------------------------------------------------------
 
 let readAloud: ReadAloudHandle | null = null;
+let readAloudPending = false;
 
 /**
  * Blocks that are not prose.
@@ -6061,7 +6184,7 @@ function readingMenuState(): ReadingMenuState {
   return {
     blocked,
     fromHereBlocked: blocked ? null : readAloudFromHereBlockedReason(),
-    active: readAloud?.isActive() ?? false,
+    active: readAloudPending || (readAloud?.isActive() ?? false),
   };
 }
 
@@ -6116,48 +6239,73 @@ async function documentLanguage(spokenText: string): Promise<string> {
 let readAloudRequest = 0;
 
 async function startReadAloud(fromStart: boolean): Promise<void> {
-  // Source mode may have skipped the render; speaking needs the rendered prose,
-  // and this is the one command that may rebuild it while the pane is hidden.
-  await ensurePreviewRendered();
-  const reason = readAloudBlockedReason();
-  if (reason) {
-    toast(reason, 4200);
-    return;
-  }
-  if (!fromStart) {
-    // The menu was built while the render was deferred; the anchors only exist
-    // once it has run, so re-check before reading from the caret.
-    const fromHere = readAloudFromHereBlockedReason();
-    if (fromHere) {
-      toast(fromHere, 4200);
+  const request = ++readAloudRequest;
+  const documentId = doc.id;
+  const revision = doc.revision;
+  // Stop immediately: a pending preview or language probe must not outlive Stop
+  // or start speaking for a different document.
+  readAloud?.stop();
+  readAloudPending = true;
+  try {
+    // Source mode may have skipped the render; speaking needs the rendered prose,
+    // and this is the one command that may rebuild it while the pane is hidden.
+    await ensurePreviewRendered();
+    if (
+      request !== readAloudRequest ||
+      doc.id !== documentId ||
+      doc.revision !== revision ||
+      previewStale
+    )
+      return;
+    const reason = readAloudBlockedReason();
+    if (reason) {
+      toast(reason, 4200);
       return;
     }
-  }
-  const request = ++readAloudRequest;
-  // A new reading supersedes the old one immediately. The language probe can
-  // take a dictionary round-trip, and the previous voice must not keep talking
-  // while the new one is being chosen.
-  readAloud?.stop();
-  // The whole preview is the sample: a voice belongs to the document, not to
-  // the paragraph the reader happened to right-click. The cap keeps a very
-  // large document from being scanned twice.
-  const sample = previewReadAloudText(true).slice(0, 20_000);
-  let language = "";
-  try {
-    language = await documentLanguage(sample);
-  } catch {
-    // A detection failure is not a reading failure: the platform default is
-    // still a correct, if less specific, answer.
-  }
-  if (request !== readAloudRequest || !readAloud) return;
-  if (!readAloud.start(previewReadAloudText(fromStart), language)) {
-    toast("There is nothing to read.", 4200);
+    if (!fromStart) {
+      // The menu was built while the render was deferred; the anchors only exist
+      // once it has run, so re-check before reading from the caret.
+      const fromHere = readAloudFromHereBlockedReason();
+      if (fromHere) {
+        toast(fromHere, 4200);
+        return;
+      }
+    }
+    // The whole preview is the sample: a voice belongs to the document, not to
+    // the paragraph the reader happened to right-click. The cap keeps a very
+    // large document from being scanned twice.
+    const sample = previewReadAloudText(true).slice(0, 20_000);
+    let language = "";
+    try {
+      language = await documentLanguage(sample);
+    } catch {
+      // A detection failure is not a reading failure: the platform default is
+      // still a correct, if less specific, answer.
+    }
+    if (
+      request !== readAloudRequest ||
+      doc.id !== documentId ||
+      doc.revision !== revision ||
+      !readAloud
+    )
+      return;
+    if (!readAloud.start(previewReadAloudText(fromStart), language)) {
+      toast("There is nothing to read.", 4200);
+    }
+  } finally {
+    if (request === readAloudRequest) readAloudPending = false;
   }
 }
 
 function stopReadAloud(): void {
   readAloudRequest += 1;
+  readAloudPending = false;
   readAloud?.stop();
+  if (settings.viewMode === "source" && previewStale) {
+    renderToken += 1;
+    cancelPreviewWorkers();
+    cancelTypstRender();
+  }
 }
 
 function renderReadingChip(state: ReadingState): void {
@@ -6690,6 +6838,8 @@ async function boot(): Promise<void> {
     // Invalidate before the debounce: the visible DOM still describes old text.
     renderToken += 1;
     wordMapGeneration += 1;
+    cancelPreviewWorkers();
+    cancelTypstRender();
     lastEditAt = performance.now();
     wordMap = null;
     previewStale = true;

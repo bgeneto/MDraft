@@ -1,0 +1,396 @@
+{
+  "command": "npm test -- --no-build --skip typewriter --keep",
+  "binary_sha256_prefix": "53a7a69d27fc",
+  "session_exit": "unavailable after session interruption; 53 preserved layer logs verified",
+  "typewriter": "21/21 separately on the same binary",
+  "layers": [
+    {
+      "layer": "ai-unit",
+      "summaries": [
+        "184/184 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "ai",
+      "summaries": [
+        "323/323 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "asciidoc-export-unit",
+      "summaries": [
+        "28/28 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "asciidoc",
+      "summaries": [
+        "54/54 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "autoclose-unit",
+      "summaries": [
+        "17/17 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "autoclose",
+      "summaries": [
+        "33/33 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "block-map-unit",
+      "summaries": [
+        "15/15 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "close",
+      "summaries": [
+        "close test passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "export-browser",
+      "summaries": [
+        "24/24 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "export-paths-unit",
+      "summaries": [
+        "44/44 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "favorites-restore",
+      "summaries": [
+        "18/18 checks passed",
+        "12/12 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "favorites",
+      "summaries": [
+        "56/56 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "filename-unit",
+      "summaries": [
+        "76/76 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "format-document",
+      "summaries": [
+        "143/143 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "html-source-map-unit",
+      "summaries": [
+        "43/43 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "html",
+      "summaries": [
+        "60/60 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "image-rules",
+      "summaries": [
+        "39/39 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "image-syntax",
+      "summaries": [
+        "22/22 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "licence",
+      "summaries": [
+        "4/4 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "link-unit",
+      "summaries": [
+        "39/39 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "links",
+      "summaries": [
+        "18/18 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "math",
+      "summaries": [
+        "12/12 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "menu",
+      "summaries": [
+        "123/123 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "p0-lifecycle",
+      "summaries": [
+        "39/39 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "p0-unit",
+      "summaries": [
+        "113/113 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "paste-convert",
+      "summaries": [
+        "397/397 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "paste",
+      "summaries": [
+        "87/87 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "pdf-native",
+      "summaries": [
+        "36/36 checks passed",
+        "14/14 checks passed",
+        "15/15 checks passed",
+        "14/14 checks passed",
+        "14/14 checks passed",
+        "21/21 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "preview-dom",
+      "summaries": [
+        "23/23 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "preview-perf",
+      "summaries": [
+        "12/12 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "preview-unit",
+      "summaries": [
+        "66/66 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "preview-worker-unit",
+      "summaries": [
+        "18/18 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "preview-zoom",
+      "summaries": [
+        "24/24 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "read-aloud-unit",
+      "summaries": [
+        "106/106 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "read-aloud",
+      "summaries": [
+        "58/58 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "recent-menu",
+      "summaries": [
+        "26/26 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "rust",
+      "summaries": [
+        "test result: ok. 307 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.39s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "sessions",
+      "summaries": [
+        "60/60 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "shortcuts",
+      "summaries": [
+        "47/47 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "single-instance",
+      "summaries": [
+        "12/12 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "smoke",
+      "summaries": [
+        "114/114 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "spellcheck",
+      "summaries": [
+        "3/3 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "sync-unit",
+      "summaries": [
+        "29/29 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "sync",
+      "summaries": [
+        "62/62 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "syntax",
+      "summaries": [
+        "10/10 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "tabs-restore-unit",
+      "summaries": [
+        "33/33 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "tabs-restore",
+      "summaries": [
+        "17/17 checks passed",
+        "13/13 checks passed",
+        "6/6 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "tabs",
+      "summaries": [
+        "107/107 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "typography-unit",
+      "summaries": [
+        "27/27 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "typography",
+      "summaries": [
+        "60/60 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "typst-page-map-unit",
+      "summaries": [
+        "24/24 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "typst-preview",
+      "summaries": [
+        "55/55 checks passed"
+      ],
+      "failure": false
+    },
+    {
+      "layer": "word-sync",
+      "summaries": [
+        "59/59 checks passed"
+      ],
+      "failure": false
+    }
+  ],
+  "final_image_rules": "43/43, including undo/redo and Auto Save",
+  "packaged_smoke": {
+    "msi": "114/114",
+    "nsis": "114/114",
+    "portable": "114/114",
+    "distribution_executable": "smoke 114/114; extreme 18/18; word sync 59/59; images 43/43"
+  }
+}

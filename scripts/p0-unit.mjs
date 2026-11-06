@@ -807,6 +807,7 @@ function exportHarness(language, delay) {
       await release.promise;
     }
   };
+  const legacyPaths = [];
   const context = {
     doc: first,
     settings: { lastDirectory: null, enableMath: true, enableMermaid: true },
@@ -829,6 +830,7 @@ function exportHarness(language, delay) {
     keepHeadingsWithNext: () => {},
     document: { createElement: () => ({ innerHTML: "" }), getElementById: () => null },
     renderPreview: (text) => ({ html: `<p>${text}</p>` }),
+    resolveLegacyImagesForExport: async (_holder, _images, path) => legacyPaths.push(path),
     renderAsciidocPreview: async (text) => ({ html: `<p>${text}</p>` }),
     renderMermaidIn: async () => pause("article"),
     rewriteExportReferences: () => {},
@@ -874,7 +876,17 @@ function exportHarness(language, delay) {
     `${exportCode}\nglobalThis.routes={exportHtml,exportPdf,exportPdfBrowser,exportWithPandoc,buildExportArticle,exportSource};`,
     context,
   );
-  return { context, first, second, entered, release, calls, errors, routes: context.routes };
+  return {
+    context,
+    first,
+    second,
+    entered,
+    release,
+    calls,
+    errors,
+    legacyPaths,
+    routes: context.routes,
+  };
 }
 {
   const h = exportHarness("markdown", "picker");
@@ -890,6 +902,10 @@ function exportHarness(language, delay) {
   check(
     h.calls[0]?.content.startsWith("origin.md\n") && !h.calls[0].content.includes("OTHER BUFFER"),
     "HTML export title and body belong to the same snapshot",
+  );
+  check(
+    h.legacyPaths[0] === h.first.path,
+    "legacy image resolution keeps the initiating document path",
   );
 }
 {

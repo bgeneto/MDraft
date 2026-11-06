@@ -561,7 +561,12 @@ try {
       );
       await wait(`document.title.includes('two-columns.typ')`);
       await wait(`document.querySelectorAll('.typst-page .textLayer').length > 2`);
-      await sleep(800);
+      // Text layers appear before the entire PDF map and scroll restoration
+      // finish. Wait for the observable result instead of a fixed 800 ms.
+      const restoreDeadline = Date.now() + 8000;
+      while (Date.now() < restoreDeadline && Math.abs((await previewTop()) - before) >= 40) {
+        await sleep(100);
+      }
       const after = await previewTop();
       check(
         Math.abs(after - before) < 40,

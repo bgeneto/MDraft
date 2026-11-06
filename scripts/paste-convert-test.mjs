@@ -27,6 +27,7 @@ import { renderAsciidoc } from "../src/paste/render-asciidoc.ts";
 import { renderHtmlFragment } from "../src/paste/render-html.ts";
 import { readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { marked } from "marked";
 
 let passed = 0;
 let total = 0;
@@ -724,6 +725,26 @@ console.log("\n=== sanitation and safety ===");
 
 console.log("\n=== images and math ===");
 {
+  for (const source of [
+    String.raw`C:\Users\reader\.codex\.image.png`,
+    String.raw`C:\My Pictures\.images\(cover).png`,
+    String.raw`\\server\share\.images\cover.png`,
+    String.raw`C:\images\\.hidden\cover.png`,
+    "./images/space (cover).png",
+    "https://example.test/a%20b.png?size=1",
+    "/home/reader/.images/cover.png",
+    "https://example.test/.images/cover.png",
+  ]) {
+    const markup = renderMarkdown([
+      { kind: "paragraph", children: [{ kind: "image", src: source, alt: "Alt", title: "Title" }] },
+    ]);
+    const image = marked.lexer(markup)[0]?.tokens?.[0];
+    check(
+      image?.type === "image" && image.href === source && image.title === "Title",
+      "rich-paste Markdown preserves an image destination and title",
+      markup,
+    );
+  }
   check(
     imageSyntaxFor("markdown", "Alt", "./a.png") === "![Alt](./a.png)",
     "Markdown image syntax",

@@ -13,7 +13,8 @@ import { Marked, Renderer, type RendererObject, type Token } from "marked";
 import katex from "katex";
 import { analyzeMath } from "./math-delimiters.ts";
 import { markdownCodeSpans } from "./markdown-context.ts";
-import { translateOffset, type Fragment, type Substitution } from "./source-map.ts";
+import { indexOffsets, type Fragment, type Substitution } from "./source-map.ts";
+import { legacyImageCandidate } from "./legacy-image-paths.ts";
 
 export interface ChunkOptions {
   /** Render `$…$` with KaTeX. */
@@ -48,6 +49,8 @@ export interface RenderedMath {
 export interface PreviewChunks {
   /** One HTML fragment per top-level `marked` token, in order. */
   chunks: string[];
+  /** Raw HTML can cross token boundaries and must be parsed as one document. */
+  hasRawHtml: boolean;
   /** Code-span text, indexed by the `@@CODEn@@` placeholder. */
   codes: CodeEntry[];
   /** Formulas with pre-rendered KaTeX HTML, indexed by `@@MATHn@@`. */
@@ -56,6 +59,7 @@ export interface PreviewChunks {
   fragments?: Fragment[];
   /** One line per element that renders, or null when the counts disagree. */
   lines: number[] | null;
+  legacyImages?: Record<string, { candidate: string; parsed: string }>;
 }
 
 const PLACEHOLDER_PIECE = /@@(CODE|MATH)(\d+)@@/g;
@@ -115,6 +119,41 @@ function injectAttribute(html: string, tag: string, attribute: string): string {
   if (at < 0) return html;
   const after = at + tag.length + 1;
   return `${html.slice(0, after)} ${attribute}${html.slice(after)}`;
+}
+
+/** Stamps bind sanitized image elements to candidates without trusting raw HTML. */
+function legacyImagesForRender() {
+  const definitions = new Map<string, string | null>();
+  const images: NonNullable<PreviewChunks["legacyImages"]> = {};
+  let nonce: string | null = null;
+  let next = 0;
+  return {
+    images,
+    definitions(tokens: readonly Token[]) {
+      for (const token of tokens) {
+        if (token.type !== "def") continue;
+        const candidate = legacyImageCandidate(token.raw, token.href);
+        if (definitions.has(token.href)) {
+          if (definitions.get(token.href) !== candidate) definitions.set(token.href, null);
+        } else definitions.set(token.href, candidate);
+      }
+    },
+    stamp(html: string, token: { raw: string; href: string }) {
+      let candidate = legacyImageCandidate(token.raw, token.href);
+      if (!candidate && /^!\[(?:[^\]\\\r\n]|\\.)*\](?:\[[^\]\r\n]*\])?$/.test(token.raw)) {
+        candidate = definitions.get(token.href) ?? null;
+      }
+      if (!candidate || !globalThis.crypto?.getRandomValues) return html;
+      if (!nonce) {
+        nonce = Array.from(globalThis.crypto.getRandomValues(new Uint32Array(4)), (n) =>
+          n.toString(16).padStart(8, "0"),
+        ).join("");
+      }
+      const id = `${nonce}-${next++}`;
+      images[id] = { candidate, parsed: token.href };
+      return injectAttribute(html, "img", `data-mdraft-legacy="${id}"`);
+    },
+  };
 }
 
 /**
@@ -239,10 +278,17 @@ function renderMappedChunks(
   prepared: string,
   substitutions: readonly Substitution[],
   lineSubstitutions: readonly Substitution[] = [],
-): { chunks: string[]; fragments: Fragment[] } {
+): {
+  chunks: string[];
+  fragments: Fragment[];
+  hasRawHtml: boolean;
+  legacyImages: NonNullable<PreviewChunks["legacyImages"]>;
+} {
   const fragments: Fragment[] = [];
-  const sourceOf = (preparedOffset: number) =>
-    translateOffset(substitutions, translateOffset(lineSubstitutions, preparedOffset));
+  const legacy = legacyImagesForRender();
+  const sourceOffset = indexOffsets(substitutions);
+  const lineOffset = indexOffsets(lineSubstitutions);
+  const sourceOf = (preparedOffset: number) => sourceOffset(lineOffset(preparedOffset));
   const push = (fragment: Fragment): number => {
     fragments.push(fragment);
     return fragments.length - 1;
@@ -311,7 +357,7 @@ function renderMappedChunks(
     },
 
     image(token) {
-      const html = Renderer.prototype.image.call(this, token);
+      const html = legacy.stamp(Renderer.prototype.image.call(this, token), token);
       const positioned = token as unknown as Positioned;
       if (positioned.srcStart === undefined) return html;
       const index = push({
@@ -327,16 +373,48 @@ function renderMappedChunks(
   const instance = new Marked({ gfm: true, breaks: false, pedantic: false });
   instance.use({ renderer });
   const tokens = instance.lexer(prepared);
+  if (prepared.includes("\\")) legacy.definitions(tokens);
   assignOffsets(tokens, prepared);
+  const hasRawHtml = prepared.includes("<") && containsRawHtml(instance, tokens);
   const chunks = tokens.map((token) => instance.parser([token]) as string);
-  return { chunks, fragments };
+  return { chunks, fragments, hasRawHtml, legacyImages: legacy.images };
 }
 
 /** Render the prepared markdown without a fragment table. */
-function renderPlainChunks(prepared: string): string[] {
+function renderPlainChunks(prepared: string): {
+  chunks: string[];
+  hasRawHtml: boolean;
+  legacyImages: NonNullable<PreviewChunks["legacyImages"]>;
+} {
+  const legacy = legacyImagesForRender();
   const instance = new Marked({ gfm: true, breaks: false, pedantic: false });
+  instance.use({
+    renderer: {
+      image(token) {
+        return legacy.stamp(Renderer.prototype.image.call(this, token), token);
+      },
+    },
+  });
   const tokens = instance.lexer(prepared);
-  return tokens.map((token) => instance.parser([token]) as string);
+  if (prepared.includes("\\")) legacy.definitions(tokens);
+  const hasRawHtml = prepared.includes("<") && containsRawHtml(instance, tokens);
+  return {
+    chunks: tokens.map((token) => instance.parser([token]) as string),
+    hasRawHtml,
+    legacyImages: legacy.images,
+  };
+}
+
+/**
+ * HTML tokens can open in one Markdown block and close in another. The DOM
+ * sanitizer must parse those blocks together; fenced/inline code is not HTML.
+ */
+function containsRawHtml(instance: Marked, tokens: Token[]): boolean {
+  let found = false;
+  instance.walkTokens(tokens, (token) => {
+    if (token.type === "html") found = true;
+  });
+  return found;
 }
 
 // ---------------------------------------------------------------------------
@@ -481,6 +559,8 @@ export function renderChunks(source: string, options: ChunkOptions = {}): Previe
 
   let chunks: string[];
   let fragments: Fragment[] | undefined;
+  let hasRawHtml: boolean;
+  let legacyImages: PreviewChunks["legacyImages"];
   if (options.map) {
     const mapped = renderMappedChunks(
       normalized,
@@ -489,15 +569,22 @@ export function renderChunks(source: string, options: ChunkOptions = {}): Previe
     );
     chunks = mapped.chunks;
     fragments = mapped.fragments;
+    hasRawHtml = mapped.hasRawHtml;
+    legacyImages = mapped.legacyImages;
   } else {
-    chunks = renderPlainChunks(normalized);
+    const plain = renderPlainChunks(normalized);
+    chunks = plain.chunks;
+    hasRawHtml = plain.hasRawHtml;
+    legacyImages = plain.legacyImages;
   }
 
   return {
     chunks,
+    hasRawHtml,
     codes,
     maths: renderMath(maths),
     fragments,
     lines: blockLines(source),
+    legacyImages,
   };
 }

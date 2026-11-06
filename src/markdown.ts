@@ -21,6 +21,7 @@ import type { Fragment } from "./source-map";
 import "katex/dist/katex.min.css";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { PRINT_READY_SCRIPT } from "./print-ready";
+import { resolveLegacyLocalImage } from "./api";
 
 /**
  * The KaTeX stylesheet, for exported documents that no longer live inside the
@@ -42,6 +43,8 @@ export { escapeHtml };
 export interface RenderOptions {
   /** Directory of the document being edited, used to resolve relative images. */
   baseDir: string | null;
+  /** Saved document used to resolve a legacy relative image candidate. */
+  documentPath?: string | null;
   /** Render `$…$` with KaTeX. When false the delimiters stay literal. */
   math?: boolean;
   /** Render `mermaid` fences as diagrams. When false they stay code blocks. */
@@ -109,8 +112,7 @@ function assetUrl(raw: string, baseDir: string | null): string {
 // Render
 // ---------------------------------------------------------------------------
 
-export interface RenderResult {
-  html: string;
+export interface PreviewDescription {
   /**
    * True when every top-level block carries an exact `data-line` anchor. When
    * false the panes cannot be aligned positionally and callers should fall back
@@ -121,6 +123,11 @@ export interface RenderResult {
   anchors: number;
   /** Word-level source fragments, present only when `map` was requested. */
   fragments?: Fragment[];
+  legacyImages?: PreviewChunks["legacyImages"];
+}
+
+export interface RenderResult extends PreviewDescription {
+  html: string;
 }
 
 /**
@@ -135,16 +142,22 @@ export function renderPreview(source: string, options: RenderOptions): RenderRes
   const data = renderChunks(source, options);
   const host = document.createElement("div");
   insertChunks(host, data, options);
-  return describePreview(host, data);
+  return { ...describePreview(host, data), html: host.innerHTML };
+}
+
+/** Raw HTML may open and close across tokens, so it needs one HTML parse. */
+function previewBatches(data: PreviewChunks): readonly (readonly string[])[] {
+  if (data.hasRawHtml) return data.chunks.length > 0 ? [data.chunks] : [];
+  return batchesForChunks(data.chunks);
 }
 
 /** Insert every batch synchronously; used by exports and by the fallback. */
 function insertChunks(host: HTMLElement, data: PreviewChunks, options: RenderOptions): void {
   host.replaceChildren();
-  for (const batch of batchesForChunks(data.chunks)) {
+  for (const batch of previewBatches(data)) {
     insertBatch(host, batch, data, options);
   }
-  finishPreview(host, data, options);
+  finishPreview(host, data, options, true);
 }
 
 /**
@@ -158,7 +171,7 @@ export async function renderPreviewInto(
   source: string,
   options: RenderOptions,
   cancelled: () => boolean,
-): Promise<RenderResult | null> {
+): Promise<PreviewDescription | null> {
   const outcome = await renderChunksAsync(source, options);
   // A superseded request must not run a second, synchronous render: the newer
   // render owns the pane. Only a worker that cannot run falls back.
@@ -172,19 +185,111 @@ export async function renderPreviewInto(
   // end is a single layout and leaves the old preview visible while the worker
   // and the batches run.
   const staging = document.createElement("div");
+  const grouping = canGroupParagraphs(data) ? new ParagraphGroups(staging, data.lines!) : null;
   let lastYield = performance.now();
-  for (const batch of batchesForChunks(data.chunks)) {
+  for (const batch of previewBatches(data)) {
     if (cancelled()) return null;
-    insertBatch(staging, batch, data, options);
+    insertBatch(staging, batch, data, options, grouping);
     lastYield = await settleMainThread(lastYield);
     if (cancelled()) return null;
   }
-  finishPreview(staging, data, options);
+  const grouped = grouping?.finish() ?? false;
+  finishPreview(staging, data, options, false, grouped);
   if (cancelled()) return null;
   const fragment = document.createDocumentFragment();
   while (staging.firstChild) fragment.appendChild(staging.firstChild);
   host.replaceChildren(fragment);
-  return describePreview(host, data);
+  return describePreview(host, data, grouped);
+}
+
+// Restrict grouping to independently parsed paragraphs with an exact line map.
+// Raw HTML and complex blocks retain their existing whole-context treatment.
+function canGroupParagraphs(data: PreviewChunks): boolean {
+  if (
+    data.hasRawHtml ||
+    !data.lines ||
+    data.lines.length < 10000 ||
+    typeof CSS === "undefined" ||
+    typeof CSS.supports !== "function" ||
+    !CSS.supports("content-visibility", "auto")
+  )
+    return false;
+  const chunks = data.chunks.filter((chunk) => chunk.length > 0);
+  return chunks.length === data.lines.length && chunks.every((chunk) => chunk.startsWith("<p>"));
+}
+
+/** Group only sanitized nodes, while each detached batch is already yielding. */
+class ParagraphGroups {
+  private group: HTMLElement | null = null;
+  private count = 0;
+  private index = 0;
+  private valid = true;
+
+  constructor(
+    private readonly host: HTMLElement,
+    private readonly lines: number[],
+  ) {}
+
+  append(holder: HTMLElement): void {
+    if (
+      this.valid &&
+      Array.from(holder.childNodes).some((node) =>
+        node.nodeType === Node.ELEMENT_NODE
+          ? (node as Element).tagName !== "P"
+          : node.nodeType !== Node.TEXT_NODE || !!node.textContent?.trim(),
+      )
+    ) {
+      this.flatten();
+    }
+    while (holder.firstChild) {
+      const node = holder.firstChild;
+      if (!this.valid) {
+        this.host.appendChild(node);
+      } else if (node.nodeType !== Node.ELEMENT_NODE) {
+        (this.group ?? this.host).appendChild(node);
+      } else {
+        if (!this.group || this.count === 64) {
+          this.group = document.createElement("div");
+          this.group.className = "md-preview-group";
+          this.group.style.contentVisibility = "auto";
+          this.group.style.containIntrinsicSize = "auto 3072px";
+          this.host.appendChild(this.group);
+          this.count = 0;
+        }
+        if (this.index === 0) (node as HTMLElement).style.marginTop = "0";
+        (node as HTMLElement).dataset.line = String(this.lines[this.index++]);
+        this.group.appendChild(node);
+        this.count++;
+      }
+    }
+  }
+
+  finish(): boolean {
+    if (this.valid && this.index !== this.lines.length) this.flatten();
+    return this.valid;
+  }
+
+  private flatten(): void {
+    this.valid = false;
+    const flat = document.createDocumentFragment();
+    while (this.host.firstChild) {
+      const node = this.host.firstChild;
+      if (node instanceof HTMLElement && node.classList.contains("md-preview-group")) {
+        while (node.firstChild) {
+          const child = node.firstChild;
+          if (child instanceof HTMLElement) {
+            child.removeAttribute("data-line");
+            if (child.style.marginTop === "0px") child.style.removeProperty("margin-top");
+            if (!child.getAttribute("style")) child.removeAttribute("style");
+          }
+          flat.appendChild(child);
+        }
+        node.remove();
+      } else flat.appendChild(node);
+    }
+    this.host.appendChild(flat);
+    this.group = null;
+  }
 }
 
 const SANITIZE_OPTIONS = {
@@ -227,18 +332,32 @@ function insertBatch(
   batch: readonly string[],
   data: PreviewChunks,
   options: RenderOptions,
+  grouping: ParagraphGroups | null = null,
 ): void {
   const holder = document.createElement("div");
   holder.innerHTML = DOMPurify.sanitize(batch.join(""), SANITIZE_OPTIONS);
   normalizeInputs(holder);
   restorePlaceholders(holder, data.codes, data.maths);
   decorateCodeBlocks(holder, options.mermaid ?? true);
-  while (holder.firstChild) host.appendChild(holder.firstChild);
+  if (grouping) grouping.append(holder);
+  else while (holder.firstChild) host.appendChild(holder.firstChild);
 }
 
 /** Whole-host passes that need the final element set. */
-function finishPreview(host: HTMLElement, data: PreviewChunks, options: RenderOptions): void {
-  decorateLinks(host, options.baseDir);
+function finishPreview(
+  host: HTMLElement,
+  data: PreviewChunks,
+  options: RenderOptions,
+  preserveLegacy = false,
+  grouped = false,
+): void {
+  decorateLinks(
+    host,
+    options.baseDir,
+    data.legacyImages,
+    options.documentPath ?? null,
+    preserveLegacy,
+  );
   decorateAlerts(host);
   addHeadingIds(host);
   buildTableOfContents(host);
@@ -247,21 +366,26 @@ function finishPreview(host: HTMLElement, data: PreviewChunks, options: RenderOp
   // elements, the annotation is dropped rather than pointing at a wrong line.
   const lines = data.lines;
   const blocks = Array.from(host.children) as HTMLElement[];
-  if (lines && lines.length === blocks.length) {
+  if (!grouped && lines && lines.length === blocks.length) {
     for (let i = 0; i < blocks.length; i += 1) {
       blocks[i].setAttribute("data-line", String(lines[i]));
     }
   }
 }
 
-function describePreview(host: HTMLElement, data: PreviewChunks): RenderResult {
+function describePreview(
+  host: HTMLElement,
+  data: PreviewChunks,
+  grouped = false,
+): PreviewDescription {
   const lines = data.lines;
-  const mapped = lines !== null && lines.length === host.children.length;
+  const mapped =
+    lines !== null && lines.length > 0 && (grouped || lines.length === host.children.length);
   return {
-    html: host.innerHTML,
     linesMapped: mapped,
     anchors: mapped && lines ? lines.length : 0,
     fragments: data.fragments,
+    legacyImages: data.legacyImages,
   };
 }
 
@@ -533,9 +657,22 @@ export function decorateCodeBlocks(host: HTMLElement, mermaidEnabled = true): vo
   }
 }
 
-export function decorateLinks(host: HTMLElement, baseDir: string | null): void {
+export function decorateLinks(
+  host: HTMLElement,
+  baseDir: string | null,
+  legacyImages?: PreviewChunks["legacyImages"],
+  documentPath: string | null = null,
+  preserveLegacy = false,
+): void {
+  const resolutions = new Map<string, Promise<string | null>>();
   for (const img of Array.from(host.querySelectorAll("img"))) {
     const src = img.getAttribute("src");
+    const stamp = img.getAttribute("data-mdraft-legacy");
+    const legacy =
+      stamp && legacyImages && Object.prototype.hasOwnProperty.call(legacyImages, stamp)
+        ? legacyImages[stamp]
+        : undefined;
+    if (!preserveLegacy) img.removeAttribute("data-mdraft-legacy");
     if (src) {
       // Keep the document's own address: `src` below is rewritten to an
       // `asset:` URL, and Ctrl+click (and the failed-image tooltip) need the
@@ -545,7 +682,42 @@ export function decorateLinks(host: HTMLElement, baseDir: string | null): void {
       img.addEventListener(
         "error",
         () => {
-          if (!img.title) img.title = src;
+          const addedTitle = !img.title;
+          if (addedTitle) img.title = src;
+          if (!legacy || !/Windows/i.test(navigator.userAgent)) return;
+          let parsed: string;
+          let expected: string;
+          let candidate: string;
+          try {
+            parsed = decodeURI(src);
+            expected = decodeURI(legacy.parsed);
+            candidate = decodeURI(legacy.candidate);
+          } catch {
+            return;
+          }
+          if (parsed !== expected) return;
+          const key = JSON.stringify([parsed, candidate]);
+          let resolution = resolutions.get(key);
+          if (!resolution) {
+            resolution = resolveLegacyLocalImage(parsed, candidate, documentPath);
+            resolutions.set(key, resolution);
+          }
+          void resolution
+            .then((path) => {
+              if (!path || !img.isConnected) return;
+              img.addEventListener(
+                "load",
+                () => {
+                  img.dataset.src = path;
+                  if (addedTitle && img.title === src) img.removeAttribute("title");
+                },
+                { once: true },
+              );
+              img.setAttribute("src", assetUrl(path, null));
+            })
+            .catch(() => {
+              /* preserve the original failed image */
+            });
         },
         { once: true },
       );
@@ -563,6 +735,54 @@ export function decorateLinks(host: HTMLElement, baseDir: string | null): void {
     }
     anchor.removeAttribute("href");
   }
+}
+
+/** Resolve candidates for static exports before their destinations are rewritten. */
+export async function resolveLegacyImagesForExport(
+  host: HTMLElement,
+  legacyImages: PreviewChunks["legacyImages"],
+  documentPath: string | null,
+): Promise<void> {
+  const pending: Array<{ img: HTMLImageElement; parsed: string; candidate: string }> = [];
+  for (const img of Array.from(
+    host.querySelectorAll<HTMLImageElement>("img[data-mdraft-legacy]"),
+  )) {
+    const stamp = img.getAttribute("data-mdraft-legacy");
+    img.removeAttribute("data-mdraft-legacy");
+    const legacy =
+      stamp && legacyImages && Object.prototype.hasOwnProperty.call(legacyImages, stamp)
+        ? legacyImages[stamp]
+        : undefined;
+    if (!legacy || !/Windows/i.test(navigator.userAgent)) continue;
+    let parsed = img.dataset.src ?? "";
+    let expected: string;
+    let candidate: string;
+    try {
+      parsed = decodeURI(parsed);
+      expected = decodeURI(legacy.parsed);
+      candidate = decodeURI(legacy.candidate);
+    } catch {
+      continue;
+    }
+    if (parsed !== expected) continue;
+    pending.push({ img, parsed, candidate });
+  }
+  const cache = new Map<string, Promise<string | null>>();
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < pending.length) {
+      const { img, parsed, candidate } = pending[next++];
+      const key = JSON.stringify([parsed, candidate]);
+      let resolution = cache.get(key);
+      if (!resolution) {
+        resolution = resolveLegacyLocalImage(parsed, candidate, documentPath).catch(() => null);
+        cache.set(key, resolution);
+      }
+      const path = await resolution;
+      if (path) img.dataset.src = path;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(4, pending.length) }, () => worker()));
 }
 
 function slugify(text: string): string {

@@ -1,0 +1,42 @@
+[
+  {
+    "version": "master",
+    "run": 1,
+    "first_saved_prefix": "alpha bravo ch",
+    "first_size": 10800000,
+    "first_title": "\u2022 save-order-master-1.md \u2014 MDraft",
+    "final_has_marker": true,
+    "final_size": 10800014,
+    "final_crlf": 144000
+  },
+  {
+    "version": "branch",
+    "run": 1,
+    "first_saved_prefix": "Lalpha bravo c",
+    "first_size": 10800001,
+    "first_title": "\u2022 save-order-branch-1.md \u2014 MDraft",
+    "final_has_marker": true,
+    "final_size": 10800014,
+    "final_crlf": 144000
+  },
+  {
+    "version": "master",
+    "run": 2,
+    "first_saved_prefix": "alpha bravo ch",
+    "first_size": 10800000,
+    "first_title": "\u2022 save-order-master-2.md \u2014 MDraft",
+    "final_has_marker": true,
+    "final_size": 10800014,
+    "final_crlf": 144000
+  },
+  {
+    "version": "branch",
+    "run": 2,
+    "first_saved_prefix": "Lalpha bravo c",
+    "first_size": 10800001,
+    "first_title": "\u2022 save-order-branch-2.md \u2014 MDraft",
+    "final_has_marker": true,
+    "final_size": 10800014,
+    "final_crlf": 144000
+  }
+]

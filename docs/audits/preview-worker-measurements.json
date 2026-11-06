@@ -1,0 +1,454 @@
+{
+  "date": "2026-11-05",
+  "master": "b7da9c585531bf633ddfc7f94e6a5d1f7c094f4c",
+  "branch": "f1c8cf14e5ca4bb2040bea190e2d167bee08304d",
+  "browser": {
+    "browser": "Chrome/156.0.8078.80",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+    "snapshots": {
+      "master": {
+        "compare": {
+          "html": "<h1 id=\"title\"><span data-f=\"0\">Title</span></h1>\n<p><span data-f=\"1\">A </span><strong><span data-f=\"2\">bold</span></strong><span data-f=\"3\"> line and </span><a data-href=\"https://example.com\" class=\"external-link\"><span data-f=\"4\">link</span></a><span data-f=\"5\">.</span></p>\n<ul>\n<li><input checked=\"\" disabled=\"\" type=\"checkbox\"> <span data-f=\"6\">item</span></li>\n</ul>\n",
+          "fragments": 7,
+          "anchors": 0
+        },
+        "boundaries": [
+          {
+            "map": false,
+            "sourceBytes": 375542,
+            "boxContainsInside": true,
+            "synchronousBoxContainsInside": true,
+            "insideExists": true,
+            "htmlLength": 375558
+          },
+          {
+            "map": true,
+            "sourceBytes": 375517,
+            "boxContainsInside": true,
+            "synchronousBoxContainsInside": true,
+            "insideExists": true,
+            "htmlLength": 375605
+          }
+        ],
+        "empty": {
+          "html": "",
+          "linesMapped": false,
+          "anchors": 0
+        },
+        "rows": [
+          {
+            "paragraphs": 800,
+            "sourceBytes": 118400,
+            "children": 800,
+            "samples": [
+              {
+                "elapsedMs": 15.900000000372529,
+                "maxTimerGapMs": 23.40000000037253,
+                "longestTaskMs": 0
+              },
+              {
+                "elapsedMs": 18,
+                "maxTimerGapMs": 25.5,
+                "longestTaskMs": 0
+              },
+              {
+                "elapsedMs": 18.800000000279397,
+                "maxTimerGapMs": 28.100000000093132,
+                "longestTaskMs": 0
+              }
+            ]
+          },
+          {
+            "paragraphs": 6400,
+            "sourceBytes": 947200,
+            "children": 6400,
+            "samples": [
+              {
+                "elapsedMs": 117.20000000018626,
+                "maxTimerGapMs": 169.5,
+                "longestTaskMs": 117
+              },
+              {
+                "elapsedMs": 118.8000000002794,
+                "maxTimerGapMs": 177.5,
+                "longestTaskMs": 118
+              },
+              {
+                "elapsedMs": 123.3000000002794,
+                "maxTimerGapMs": 194.90000000037253,
+                "longestTaskMs": 123
+              }
+            ]
+          }
+        ],
+        "serialization": {
+          "htmlCharacters": 1266935,
+          "samplesMs": [
+            2.3999999999068677, 2.1999999997206032, 2.3000000002793968, 2.1999999997206032,
+            2.2000000001862645
+          ]
+        },
+        "workers": {
+          "created": 0,
+          "success": 0,
+          "errors": 0
+        }
+      },
+      "branch": {
+        "compare": {
+          "html": "<h1 id=\"title\"><span data-f=\"0\">Title</span></h1>\n<p><span data-f=\"1\">A </span><strong><span data-f=\"2\">bold</span></strong><span data-f=\"3\"> line and </span><a data-href=\"https://example.com\" class=\"external-link\"><span data-f=\"4\">link</span></a><span data-f=\"5\">.</span></p>\n<ul>\n<li><input checked=\"\" disabled=\"\" type=\"checkbox\"> <span data-f=\"6\">item</span></li>\n</ul>\n",
+          "fragments": 7,
+          "anchors": 0
+        },
+        "boundaries": [
+          {
+            "map": false,
+            "sourceBytes": 375542,
+            "boxContainsInside": false,
+            "synchronousBoxContainsInside": false,
+            "insideExists": true,
+            "htmlLength": 375558
+          },
+          {
+            "map": true,
+            "sourceBytes": 375517,
+            "boxContainsInside": false,
+            "synchronousBoxContainsInside": false,
+            "insideExists": true,
+            "htmlLength": 375605
+          }
+        ],
+        "empty": {
+          "html": "",
+          "linesMapped": true,
+          "anchors": 0
+        },
+        "rows": [
+          {
+            "paragraphs": 800,
+            "sourceBytes": 118400,
+            "children": 800,
+            "samples": [
+              {
+                "elapsedMs": 22.300000000279397,
+                "maxTimerGapMs": 20.90000000037253,
+                "longestTaskMs": 0
+              },
+              {
+                "elapsedMs": 18.40000000037253,
+                "maxTimerGapMs": 17.40000000037253,
+                "longestTaskMs": 0
+              },
+              {
+                "elapsedMs": 18.299999999813735,
+                "maxTimerGapMs": 16.299999999813735,
+                "longestTaskMs": 0
+              }
+            ]
+          },
+          {
+            "paragraphs": 6400,
+            "sourceBytes": 947200,
+            "children": 6400,
+            "samples": [
+              {
+                "elapsedMs": 130.60000000009313,
+                "maxTimerGapMs": 73.60000000009313,
+                "longestTaskMs": 0
+              },
+              {
+                "elapsedMs": 135.79999999981374,
+                "maxTimerGapMs": 78.10000000009313,
+                "longestTaskMs": 0
+              },
+              {
+                "elapsedMs": 130.39999999990687,
+                "maxTimerGapMs": 87.60000000009313,
+                "longestTaskMs": 0
+              }
+            ]
+          }
+        ],
+        "serialization": {
+          "htmlCharacters": 1266935,
+          "samplesMs": [
+            2.2000000001862645, 2.2999999998137355, 2.3999999999068677, 2.3999999999068677,
+            2.2000000001862645
+          ]
+        },
+        "workers": {
+          "created": 1,
+          "success": 11,
+          "errors": 0
+        }
+      }
+    },
+    "cdpInput": {
+      "events": {
+        "keydown": 0,
+        "keypress": 1,
+        "input": 1
+      },
+      "value": "a"
+    },
+    "htmlEqual": true
+  },
+  "scale": {
+    "node": "v24.22.0",
+    "rows": [
+      {
+        "paragraphs": 400,
+        "endings": "LF",
+        "map": false,
+        "bytes": 59200,
+        "chunks": 800,
+        "medianMs": 11.7,
+        "samplesMs": [13.4, 11.7, 10.8]
+      },
+      {
+        "paragraphs": 400,
+        "endings": "LF",
+        "map": true,
+        "bytes": 59200,
+        "chunks": 800,
+        "medianMs": 10.8,
+        "samplesMs": [11.4, 10.8, 9.9]
+      },
+      {
+        "paragraphs": 400,
+        "endings": "CRLF",
+        "map": false,
+        "bytes": 60000,
+        "chunks": 800,
+        "medianMs": 10.6,
+        "samplesMs": [10.8, 10.3, 10.6]
+      },
+      {
+        "paragraphs": 400,
+        "endings": "CRLF",
+        "map": true,
+        "bytes": 60000,
+        "chunks": 800,
+        "medianMs": 11.2,
+        "samplesMs": [12.7, 11.2, 11.2]
+      },
+      {
+        "paragraphs": 800,
+        "endings": "LF",
+        "map": false,
+        "bytes": 118400,
+        "chunks": 1600,
+        "medianMs": 17.5,
+        "samplesMs": [17.5, 18.3, 17]
+      },
+      {
+        "paragraphs": 800,
+        "endings": "LF",
+        "map": true,
+        "bytes": 118400,
+        "chunks": 1600,
+        "medianMs": 18.3,
+        "samplesMs": [18.3, 18.3, 18.3]
+      },
+      {
+        "paragraphs": 800,
+        "endings": "CRLF",
+        "map": false,
+        "bytes": 120000,
+        "chunks": 1600,
+        "medianMs": 17.4,
+        "samplesMs": [17.8, 17.4, 17]
+      },
+      {
+        "paragraphs": 800,
+        "endings": "CRLF",
+        "map": true,
+        "bytes": 120000,
+        "chunks": 1600,
+        "medianMs": 19.6,
+        "samplesMs": [19.6, 19.7, 19.5]
+      },
+      {
+        "paragraphs": 1600,
+        "endings": "LF",
+        "map": false,
+        "bytes": 236800,
+        "chunks": 3200,
+        "medianMs": 30.2,
+        "samplesMs": [31.2, 29.6, 30.2]
+      },
+      {
+        "paragraphs": 1600,
+        "endings": "LF",
+        "map": true,
+        "bytes": 236800,
+        "chunks": 3200,
+        "medianMs": 32,
+        "samplesMs": [32.2, 31.7, 32]
+      },
+      {
+        "paragraphs": 1600,
+        "endings": "CRLF",
+        "map": false,
+        "bytes": 240000,
+        "chunks": 3200,
+        "medianMs": 31.5,
+        "samplesMs": [29.3, 31.5, 32.5]
+      },
+      {
+        "paragraphs": 1600,
+        "endings": "CRLF",
+        "map": true,
+        "bytes": 240000,
+        "chunks": 3200,
+        "medianMs": 37.6,
+        "samplesMs": [37.8, 37.6, 35.5]
+      },
+      {
+        "paragraphs": 3200,
+        "endings": "LF",
+        "map": false,
+        "bytes": 473600,
+        "chunks": 6400,
+        "medianMs": 55.4,
+        "samplesMs": [58.7, 55.4, 53.6]
+      },
+      {
+        "paragraphs": 3200,
+        "endings": "LF",
+        "map": true,
+        "bytes": 473600,
+        "chunks": 6400,
+        "medianMs": 56.1,
+        "samplesMs": [60.2, 56.1, 55.5]
+      },
+      {
+        "paragraphs": 3200,
+        "endings": "CRLF",
+        "map": false,
+        "bytes": 480000,
+        "chunks": 6400,
+        "medianMs": 56.6,
+        "samplesMs": [56.6, 56.6, 54.1]
+      },
+      {
+        "paragraphs": 3200,
+        "endings": "CRLF",
+        "map": true,
+        "bytes": 480000,
+        "chunks": 6400,
+        "medianMs": 82.1,
+        "samplesMs": [83.8, 82.1, 80.4]
+      },
+      {
+        "paragraphs": 6400,
+        "endings": "LF",
+        "map": false,
+        "bytes": 947200,
+        "chunks": 12800,
+        "medianMs": 99,
+        "samplesMs": [104, 99, 92.1]
+      },
+      {
+        "paragraphs": 6400,
+        "endings": "LF",
+        "map": true,
+        "bytes": 947200,
+        "chunks": 12800,
+        "medianMs": 100.6,
+        "samplesMs": [103.9, 96, 100.6]
+      },
+      {
+        "paragraphs": 6400,
+        "endings": "CRLF",
+        "map": false,
+        "bytes": 960000,
+        "chunks": 12800,
+        "medianMs": 97.1,
+        "samplesMs": [97.1, 100.9, 96.2]
+      },
+      {
+        "paragraphs": 6400,
+        "endings": "CRLF",
+        "map": true,
+        "bytes": 960000,
+        "chunks": 12800,
+        "medianMs": 199,
+        "samplesMs": [199.5, 198.2, 199]
+      }
+    ],
+    "oversizedChunk": {
+      "configuredTarget": 65536,
+      "actualCharacters": 1048576,
+      "batches": 1
+    }
+  },
+  "extreme": [
+    {
+      "endings": "LF",
+      "sourceBytes": 10656000,
+      "elapsedMs": 1080.2,
+      "maxRssKiB": 301536
+    },
+    {
+      "endings": "CRLF",
+      "sourceBytes": 10800000,
+      "elapsedMs": 16160.1,
+      "maxRssKiB": 330796
+    }
+  ],
+  "bundle": {
+    "masterAllBytes": 15889911,
+    "branchAllBytes": 16865396,
+    "masterJsBytes": 11558537,
+    "branchJsBytes": 12534022,
+    "markdownWorkerBytes": 590612,
+    "markdownWorkerGzipBytes": 182171,
+    "asciidocWorkerBytes": 377138,
+    "asciidocWorkerGzipBytes": 104227
+  },
+  "browserAsciiDocRun": {
+    "browser": "Chrome/156.0.8078.80",
+    "master": {
+      "sourceBytes": 592009,
+      "children": 4001,
+      "samples": [
+        {
+          "elapsedMs": 68.09999999962747,
+          "maxTimerGapMs": 100.1999999997206
+        },
+        {
+          "elapsedMs": 63.39999999990687,
+          "maxTimerGapMs": 97.5
+        },
+        {
+          "elapsedMs": 65.40000000037253,
+          "maxTimerGapMs": 103.40000000037253
+        }
+      ]
+    },
+    "branch": {
+      "sourceBytes": 592009,
+      "children": 4001,
+      "samples": [
+        {
+          "elapsedMs": 94.89999999990687,
+          "maxTimerGapMs": 87.1999999997206
+        },
+        {
+          "elapsedMs": 96.20000000018626,
+          "maxTimerGapMs": 75.39999999990687
+        },
+        {
+          "elapsedMs": 97.29999999981374,
+          "maxTimerGapMs": 70.10000000009313
+        }
+      ]
+    },
+    "workers": {
+      "created": 2,
+      "success": 15,
+      "errors": 0
+    }
+  }
+}
