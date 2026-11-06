@@ -2291,6 +2291,28 @@ body {
   height: 100%;
 }
 
+.latex-sync-region {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+  background: rgb(255 191 0 / 25%);
+  outline: 1px solid rgb(180 110 0 / 65%);
+}
+
+.latex-sync-blink {
+  animation: latex-sync-fade 1.3s ease-out forwards;
+}
+
+@keyframes latex-sync-fade {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
 /* The PDF page reaches us as one raster, so the only way to follow the theme is
    a filter. Invert fully — paper black, ink white — and composite with `screen`
    over the page's own --bg: the screen restores the paper exactly to the theme

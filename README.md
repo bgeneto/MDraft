@@ -134,6 +134,10 @@ an AI response. If you enable AI filename suggestions, saving an untitled
 document can also send text to your chosen endpoint. HTML documents may load
 remote resources referenced by their own markup.
 
+The experimental [LuaLaTeX proof of concept](docs/latex-poc.md) downloads its
+engine only after explicit enablement and then retrieves missing TeX packages
+and fonts on demand. The document and bibliography contents stay local.
+
 ## Learn more
 
 - [User guide](docs/guide.md) — editing, previews, shortcuts and troubleshooting.

@@ -354,7 +354,7 @@ impl Drop for PendingPdf {
     }
 }
 
-fn write_pdf_atomically(
+pub(crate) fn write_pdf_atomically(
     target: &Path,
     write: impl FnOnce(&Path) -> Result<(), String>,
 ) -> Result<u64, String> {

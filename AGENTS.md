@@ -55,7 +55,11 @@ Two rules that are not negotiable, both documented in the README:
    can turn each image request off, and the assistant is off by default. An HTML
    document the reader
    opens may request the resources its own markup links; that is the document's
-   request, not the application's.
+   request, not the application's. The experimental LuaLaTeX PoC is one
+   additional user-initiated exception: after the reader explicitly enables
+   it, MDraft downloads verified engine assets and fetches missing TeX Live
+   packages and fonts from its pinned mirror. It does not send document or
+   bibliography contents.
 2. **No dead UI.** If a Typora option is not implemented, the Preferences panel
    shows a note explaining that, never a control that does nothing.
 
@@ -239,6 +243,9 @@ rewrite from scratch.
 | `npm run favorites` | `scripts/favorites-test.mjs` | 56 checks of the Favorites panel that replaced Files: the editor and tab menu routes, the Add/Remove toggle, insertion order across opens, inactive-tab favoriting, duplicate adds, the per-row × and row menu, one-at-a-time removal, a missing file, the untitled disabled state, no Clear All, the Preferences changes and `view.favorites` in the native menu |
 | `npm run tabs:restore:unit` | `scripts/tabs-restore-unit.mjs` | 33 checks of what is remembered and what is restored: tab order, untitled exclusion, deduplication under the platform's path identity, the 20-document cap, and the restore plan's handling of missing files — no application |
 | `npm run typst:map:unit` | `scripts/typst-page-map-unit.mjs` | 35 checks of the bidirectional Typst Pages prose index: formula-adjacent prose, region isolation, ambiguity, reverse lookup, PDF ActualText breaks and Unicode offsets; a repeated one-word line with identical neighbours paints nothing, a unique neighbour window picks the clicked occurrence, ligatures and soft hyphens match, and generated text stays unmapped. A multiline list keeps every first-line and continuation word on its own source line in both directions — no application |
+| `npm run latex:sync:unit` | `scripts/latex-sync-unit.mjs` | Checks exact SyncTeX regions for the experimental multi-file LuaLaTeX fixture and rejects ambiguous positions; no application. |
+| `npm run latex:poc -- [port] [offline]` | `scripts/latex-poc-test.mjs` | Exercises the experimental LuaLaTeX project in a separately launched, isolated Windows WebView2 instance; the offline mode expects a warmed cache and a process-level network block. |
+| `scripts/close-test-window.ps1 -ProcessId <pid>` | — | Posts WM_CLOSE to a hidden staged test window without changing desktop focus; refuses processes outside the test staging directory. |
 | `npm run html:map:unit` | `scripts/html-source-map-unit.mjs` | 38 checks of HTML5 entity boundaries, inverse ranges, validated multi-node payloads and text-node offsets: entities and CRLF, the decoded-to-raw translation, the sample mismatch that paints nothing, and two nodes under one stamp — no application |
 | `npm run block:map:unit` | `scripts/block-map-unit.mjs` | 22 checks of the block-level source map and Typst line annotation: folded index mapping, per-node alignment across substitutions and smart punctuation, gap block fallback, Typst comments/rules/math/code/tables, and `#lorem` exclusion. Multiline list nodes — the marker and indentation removed, the continuation line a separate node — map their exact words, repeated prefixes keep distinct occurrences, and an ordered continuation is exact — no application |
 | `npm run ai:unit` | `scripts/ai-unit.mjs` | 184 checks of the AI catalog and search, paragraph expansion, continuation spacing, block insertion, parameter validation, the markup an answer opens in as its own tab, stale targets, session-history insertion/replacement/titles/previews/ages, button geometry (including the free-space anchor that survives a resize), the model picker's filter and the language search across aliases and accents, the decaying per-action score behind the derived *Most used* group (order, decay, ties, pruning, bad stored entries), the unsaved-buffer language detection and the word diff, and the frontend history turn cap that leaves token trimming to Rust; no application and no network |
@@ -704,6 +711,39 @@ When adding a test, ask what a broken result looks like and measure that, rather
 than asserting the feature's own internal counters.
 
 ## Traps
+
+**A test launched with `visible: false` still displayed `main.tex — MDraft`**
+The window-state plugin calls `show()` during restoration, including when
+the Tauri window configuration starts hidden. The `MDRAFT_TEST_HIDDEN` mode
+must also exclude the main window from window-state restoration; verify the
+actual Win32 window visibility before running a suite while someone is working.
+
+**Interrupting `npm test` printed `interrupted — closing the instance this run started` but did not restore the user's settings**
+An older SIGINT handler exited directly, bypassing `main()`'s `finally`;
+the original settings and recovery are copied to the printed staging folder's
+`user-state` directory. Restore those exact saved files after stopping an
+older test runner, and verify their hashes before removing any backup. The
+runner now unwinds through its restoration path on interruption.
+
+**WasmTex returns `success: true` for a PDF whose log says `File 'biblatex-lite.bbl' not created by biblatex`**
+The selected SDK returned a PDF with an unresolved `[knuth1984]` citation and
+no bibliography even though its success flag was true; the error and undefined
+citation were present in `result.errors`. Check error diagnostics and
+unresolved bibliography warnings as well as the success flag, and inspect the
+actual PDF when evaluating `biblatex-lite`.
+
+**WasmTex reports `AssetDownloadError: TeX asset download failed: network` in both Tauri hosts while the same mirror works in Node**
+The TeX Live mirror did not send an `Access-Control-Allow-Origin` header for
+the WebView2 or WebKitGTK origins. The SDK's worker also makes synchronous
+lookups, so an asynchronous `invoke` alone cannot replace its fetch. The
+experiment uses an allowlisted in-process Tauri protocol and a Rust-managed
+cache; test both worker imports and synchronous requests on each host.
+
+**`error: rustc 1.85.1 is not supported by the following packages:` from a WSL build even though rustup has Rust 1.91.1**
+Running `wsl.exe -- ... bash scripts/build-linux.sh` without a login shell inherited a PATH that found Debian's `/usr/bin/rustc` and Node 20, not the user's installed rustup and Node 24 binaries. The compiler really was too old for that invocation; it did not mean Linux needed a new Rust installation. Check `rustc --version` and `node --version` in the exact WSL process, then prepend the existing `~/.cargo/bin` and Node 24 bin directory to its PATH before building.
+
+**`git switch` or `git diff` says `fatal: this operation must be run in a work tree` inside a managed `.codex/worktrees` checkout, while `git status` and `git rev-parse --is-inside-work-tree` work**
+On a managed Windows sandbox whose writable roots did not include the attached worktree and its linked Git metadata, the same commands succeeded with the required workspace access outside that sandbox. Do not conclude that the checkout is bare or recreate it; check the worktree path and granted access first, then request the necessary access for the operation.
 
 **`msiexec /i ... ALLUSERS=2 MSIINSTALLPERUSER=1 INSTALLDIR=T:\Temp\...` fails with `Error 1321 ... C:\Program Files\MDraft\mdraft.exe. System Error 5`**
 The MSI's `AppSearch` can replace the requested `INSTALLDIR` with an existing MDraft installation path from the registry before `InstallFinalize`. A registry query inside the ordinary sandbox did not show the machine-wide installation; an escalated query did. In the observed attempt Windows refused the overwrite, the old product remained registered, and the old executable kept its original size and timestamp, but the test was not an isolated installation. Check the registry and the installer's AppSearch behavior outside the sandbox first; use a genuinely clean VM/sandbox instead of relying on `INSTALLDIR` to protect an existing installation.

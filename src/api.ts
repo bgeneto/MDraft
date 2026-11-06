@@ -604,7 +604,21 @@ export const runAfterExport = (path: string) =>
 export const installPandoc = () => invoke<PandocStatus>("install_pandoc");
 
 /** Which markup the buffer holds. */
-export type DocumentLanguage = "markdown" | "typst" | "html" | "asciidoc";
+export type DocumentLanguage = "markdown" | "typst" | "html" | "asciidoc" | "latex";
+
+export interface LatexProjectSnapshot {
+  mainFile: string;
+  files: Array<{ path: string; data: string }>;
+}
+
+export const latexStatus = () => invoke<boolean>("latex_status");
+export const installLatex = () => invoke<void>("install_latex");
+export const latexProjectSnapshot = (
+  path: string,
+  overlays: Array<{ path: string; text: string }>,
+) => invoke<LatexProjectSnapshot>("latex_project_snapshot", { path, overlays });
+export const saveLatexPdf = (outputPath: string, data: string) =>
+  invoke<void>("latex_save_pdf", { outputPath, data });
 
 /** One Typst installation, as the backend sees it. */
 export interface TypstStatus {

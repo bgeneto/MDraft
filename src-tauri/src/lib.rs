@@ -7,6 +7,7 @@ mod html_preview;
 mod ai;
 mod images;
 mod launch;
+mod latex;
 #[cfg(target_os = "linux")]
 mod linux_webkit_env;
 mod menu;
@@ -29,7 +30,23 @@ pub fn run() {
     #[cfg(target_os = "linux")]
     linux_webkit_env::apply_before_gtk_init();
 
-    let context = tauri::generate_context!();
+    let mut context = tauri::generate_context!();
+    let hidden_test = std::env::var_os("MDRAFT_TEST_HIDDEN").is_some();
+    // Automated UI runs must not interrupt the user's active desktop.
+    if hidden_test {
+        // The test runner checks this embedded marker before starting a binary
+        // with --no-build, so an older executable cannot unexpectedly appear.
+        eprintln!("MDRAFT_TEST_HIDDEN_ISOLATED_WINDOW_V2");
+        if let Ok(identifier) = std::env::var("MDRAFT_TEST_IDENTIFIER") {
+            if identifier == "io.github.bernh.mdraft.test-automation" {
+                context.config_mut().identifier = identifier;
+            }
+        }
+        for window in &mut context.config_mut().app.windows {
+            window.visible = false;
+            window.focus = false;
+        }
+    }
 
     // Wayland has no window-icon property for GTK3 applications: the
     // compositor resolves the icon by matching the window's app id to a
@@ -51,6 +68,9 @@ pub fn run() {
         .manage(fonts::FontCatalog::default())
         .manage(launch::LaunchState::default())
         .manage(speech::SpeechState::default())
+        .register_asynchronous_uri_scheme_protocol(latex::SCHEME, |context, request, responder| {
+            latex::serve(context.app_handle().clone(), request, responder);
+        })
         .register_asynchronous_uri_scheme_protocol(
             html_preview::SCHEME,
             |context, request, responder| {
@@ -70,7 +90,11 @@ pub fn run() {
                 // The print surface exists only for one operation and is not a
                 // document window; remembering its geometry would add a stale
                 // entry to the reader's window state.
-                .with_denylist(&[print::PRINT_WINDOW])
+                .with_denylist(if hidden_test {
+                    &[print::PRINT_WINDOW, "main"]
+                } else {
+                    &[print::PRINT_WINDOW]
+                })
                 .build(),
         )
         .on_menu_event(menu::on_event)
@@ -91,6 +115,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            latex::latex_status,
+            latex::latex_stats,
+            latex::install_latex,
+            latex::latex_project_snapshot,
+            latex::latex_save_pdf,
             settings::get_settings,
             settings::save_settings,
             settings::add_recent,

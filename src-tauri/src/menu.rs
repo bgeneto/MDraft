@@ -520,6 +520,13 @@ fn is_checked(state: &MenuState, id: &str) -> bool {
 /// accident. The handler still validates the context, because a stale menu or a
 /// keyboard route can outlive the state that disabled it.
 fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
+    if state.document_language == "latex"
+        && (id.starts_with("format.") || id.starts_with("insert.")
+            || (id.starts_with("para.") && !matches!(id, "para.indent" | "para.outdent" | "para.insertBefore" | "para.insertAfter"))
+            || id.starts_with("export.") || id == "file.print")
+    {
+        return Some(false);
+    }
     let writable = !state.read_only;
     let html = state.document_language == "html";
     let typst = state.document_language == "typst";
@@ -1191,7 +1198,8 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&item("help.typstReference", "Typst Reference", None)?)
         .item(&item("help.shortcuts", "Keyboard Shortcuts", None)?)
         .separator()
-        .item(&item("help.licences", "Font Licences", None)?);
+        .item(&item("help.licences", "Font Licences", None)?)
+        .item(&item("help.latexLicenses", "LaTeX Licences and Source", None)?);
 
     #[cfg(not(target_os = "macos"))]
     let help = help
@@ -1700,6 +1708,23 @@ mod tests {
         state.syntax_theme = "github-light".into();
         assert!(is_checked(&state, "view.syntax.catppuccin-latte"));
         assert!(!is_checked(&state, "view.syntax.paper"));
+    }
+
+    #[test]
+    fn latex_defers_markup_commands_but_keeps_plain_editing() {
+        let mut state = MenuState {
+            document_language: "latex".into(),
+            has_selection: true,
+            ..MenuState::default()
+        };
+        for id in ["format.bold", "format.document", "para.h1", "para.table", "format.image", "export.pdf", "file.print"] {
+            assert_eq!(enabled_for(&state, id), Some(false), "{id}");
+        }
+        for id in ["edit.delete", "edit.find", "file.save", "para.indent"] {
+            assert_eq!(enabled_for(&state, id), Some(true), "{id}");
+        }
+        state.document_language = "markdown".into();
+        assert_eq!(enabled_for(&state, "format.bold"), Some(true));
     }
 
     #[test]
