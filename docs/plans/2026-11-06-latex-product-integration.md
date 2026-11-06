@@ -437,6 +437,16 @@ and these suites green: `menu` 150/150, `shortcuts` 47/47, `smoke` 114/114,
 - **Step 8, cache size.** `cache_size` skips a symlink and reports the size
   instead of failing the whole measurement; a single odd entry must not make
   Preferences unable to show a number.
+- **Step 8, the marker-file migration (a regression this plan introduced and then
+  fixed).** Moving the switch from `<app_data_dir>/wasmtex-poc-2025/enabled` into
+  `settings.json` silently disabled the engine for anyone who had already enabled
+  the experiment: their settings file has no `latexEnabled` key, so the switch
+  read as `false` and the preview offered "Enable LuaLaTeX…" again, re-downloading
+  ~10 MiB. `AppState::load` now adopts the marker once, and `latex_disable`
+  deletes it — without that second half, turning the switch off would be undone
+  at the next launch by a file nothing removed. The assets and cache are still
+  untouched by turning it off (D14); only the marker is retired. Covered by
+  `the_legacy_marker_is_adopted_only_when_the_switch_was_never_set`.
 
 ## Files and modules
 

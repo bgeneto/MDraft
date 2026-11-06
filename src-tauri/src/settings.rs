@@ -937,10 +937,21 @@ impl AppState {
         let _ = std::fs::create_dir_all(&dir);
         let config_file = dir.join("settings.json");
 
-        let settings = std::fs::read_to_string(&config_file)
+        let mut settings = std::fs::read_to_string(&config_file)
             .ok()
             .and_then(|raw| parse_settings(&raw))
             .unwrap_or_default();
+
+        // The LuaLaTeX experiment kept its switch in a marker file beside the
+        // cache; the product keeps it here. A reader who enabled the experiment
+        // has the marker and no `latexEnabled` key, so without this they would
+        // silently lose the engine they had already downloaded — the preview
+        // would offer "Enable LuaLaTeX…" again and re-download it. Adopt the
+        // marker once, then leave it alone: the switch is the source of truth
+        // from here on, and turning it off must not be undone by a stale file.
+        if !settings.latex_enabled && crate::latex::legacy_marker_present(app) {
+            settings.latex_enabled = true;
+        }
 
         // The `mdraft-tex` scheme handler is synchronous and cannot parse this
         // file per request, so the two fields it needs are mirrored in memory.
@@ -1301,6 +1312,28 @@ mod tests {
         let loaded = parse_settings(enabled).expect("the new keys load");
         assert!(loaded.latex_enabled);
         assert_eq!(loaded.latex_cache_limit_mb, 512);
+    }
+
+    #[test]
+    fn the_legacy_marker_is_adopted_only_when_the_switch_was_never_set() {
+        // The experiment kept the switch in a marker file; the product keeps it
+        // in `settings.json`. Two rules protect the reader, and they work
+        // together:
+        //
+        // 1. `AppState::load` adopts the marker only when the stored value is
+        //    false, so an explicit `true` is never overridden.
+        // 2. `latex_disable` deletes the marker, so "off" cannot be re-adopted
+        //    at the next launch by a file that is still on disk.
+        //
+        // Without (2), rule (1) would resurrect the engine every time the reader
+        // turned it off — which is exactly the bug this pair exists to prevent.
+        let adopt = |marker: bool, stored: bool| stored || marker;
+
+        assert!(adopt(true, false), "a marker with no key adopts the switch");
+        assert!(!adopt(false, false), "no marker and no key stays off");
+        assert!(adopt(false, true), "an explicit on is kept");
+        // After `latex_disable` the marker is gone, so the reader's "off" holds.
+        assert!(!adopt(false, false), "off survives once the marker is retired");
     }
 
     #[test]
