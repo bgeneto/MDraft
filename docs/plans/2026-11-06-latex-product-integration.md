@@ -331,14 +331,55 @@ user-visible gain; 5–7 need their own measurement before they are committed.
   the same Escape, blink and no-selection-stealing rules as Typst.
 - [ ] **11. SyncTeX source.** Public engine route first; capability-checked
   fallback; a pinned-SDK test that fails when the shape changes.
-- [ ] **12. Documentation.** `samples/latex-reference.tex` and a Help entry;
+- [x] **12. Documentation.** `samples/latex-reference.tex` and a Help entry;
   `docs/latex.md` replacing `docs/latex-poc.md`; README language list and network
   policy; `AGENTS.md` (scripts, Testing layers, traps); `docs/backlog.md`.
 - [ ] **13. Measurement.** First and warm compile, p95 typing latency, memory,
   installer delta, cache size, cold start — against the PoC baseline, on Windows
   and Linux, plus the macOS note.
-- [ ] **14. ADRs and close.** Write the three ADRs, update this plan's status and
+- [x] **14. ADRs and close.** Write the three ADRs, update this plan's status and
   record every deviation here.
+
+## Progress
+
+Landed on `codex/latex-product-integration`, in five commits:
+
+| Step | State |
+| --- | --- |
+| 1. Baseline | done |
+| 2. Grammar | done |
+| 3. Language sites | done |
+| 4. Commands and menus | done |
+| 5. Format Document | **not started** — needs the tex-fmt WASM build and its measurement |
+| 6. Completion | **not started** — needs the CodeMirror completion layer, which this editor has never had |
+| 7. The native PDF row | done |
+| 8. State, portable build and cache | done |
+| 9. Snapshot hardening | **not started** — the current snapshot still copies the directory tree |
+| 10. Correspondence (Sync Scroll) | **not started** — click navigation works, scroll correspondence does not |
+| 11. SyncTeX source | **not started** — the private worker read is unchanged and still fails closed |
+| 12. Documentation | done |
+| 13. Measurement | **not started** — needs a real compile on Windows and Linux |
+| 14. ADRs and close | ADRs written; the plan stays `in progress` until 5–6 and 9–11 land |
+
+Steps 1–4, 7, 8 and 12 are the bulk of the user-visible gain and are complete:
+a `.tex` file opens coloured, its outline is right, spelling skips its commands,
+Save As offers `.tex` for an untitled LaTeX buffer, Insert and Format insert LaTeX
+syntax, `Export › PDF` writes the compiled bytes, and the switch and cache live
+in `settings.json` with a Preferences section.
+
+Steps 5, 6 and 9–11 are each a substantial piece of work with its own
+measurement, and the plan already conditioned them on that measurement. Nothing
+in the shipped code pretends otherwise: `format.document` is disabled for LaTeX
+with a reason, completion is absent rather than broken, and the snapshot and
+SyncTeX code paths are exactly as the PoC left them.
+
+**Validation run so far:** `npx tsc --noEmit` clean, `npm run knip` clean,
+`cargo check` clean, `cargo clippy` with only the three pre-existing warnings,
+and these suites green: `menu` 150/150, `shortcuts` 47/47, `smoke` 114/114,
+`export` 40/40, `syntax` 10/10, `format-document` 143/143, `paste:convert`
+411/411, `filename:unit` 76/76, `links:unit` 39/39, `read-aloud:unit` 106/106,
+`ai:unit` 184/184, `p0:unit` 113/113, plus the Rust `menu::` (15) and `latex::`
+(5) tests and the two new settings tests.
 
 ## Deviations recorded while implementing
 
