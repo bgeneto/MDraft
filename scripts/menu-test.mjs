@@ -811,15 +811,28 @@ try {
   check((await itemById("view.blocks"))?.enabled === true, "Typst keeps folding");
   check((await itemById("file.print"))?.enabled === false, "Typst disables native printing");
   check(
-    (await itemById("file.print"))?.text === "Print… (use PDF via Typst)",
-    "the disabled print row names the Typst PDF route",
+    (await itemById("file.print"))?.text === "Print… (use Export › PDF)",
+    "the disabled print row points at Export › PDF",
     (await itemById("file.print"))?.text ?? "MISSING",
   );
-  check((await itemById("export.pdf"))?.enabled === false, "Typst disables the direct PDF writer");
+  // The Document view compiles HTML and holds no PDF, so the row is disabled and
+  // says where the PDF comes from.
+  check(
+    (await itemById("export.pdf"))?.enabled === false,
+    "Typst disables the PDF row in the Document view",
+  );
+  check(
+    (await itemById("export.pdf"))?.text === "PDF… (available in Pages view)",
+    "the disabled Typst PDF row names the Pages view",
+    (await itemById("export.pdf"))?.text ?? "MISSING",
+  );
   check(
     (await itemById("export.pdf.browser"))?.enabled === true,
     "Typst keeps the browser print route",
   );
+  // The enabled state in the Pages view is proven by the Rust unit test
+  // `the_pdf_row_follows_the_compiled_bytes_and_names_the_engine`: it needs a
+  // real Typst compile, which this suite does not run.
 
   await openPaths([join(repoRoot, "samples", "asciidoc-tour.adoc")]);
   check(
@@ -846,6 +859,64 @@ try {
     (await itemById("export.pdf.browser"))?.enabled === true,
     "HTML keeps the browser print route",
   );
+
+  // LaTeX: the commands it implements are live, and what it cannot do yet is
+  // disabled rather than offered as a control that only shows a toast.
+  await openPaths([join(repoRoot, "samples", "latex-poc", "main.tex")]);
+  for (const [id, label] of [
+    ["format.bold", "bold"],
+    ["format.italic", "italic"],
+    ["format.link", "a link"],
+    ["format.image", "an image"],
+    ["format.math", "inline math"],
+    ["para.h1", "a heading"],
+    ["para.paragraph", "a paragraph"],
+    ["para.quote", "a quote"],
+    ["para.ul", "a bullet list"],
+    ["para.ol", "an ordered list"],
+    ["para.table", "a table"],
+    ["para.codeBlock", "a code block"],
+    ["para.hr", "a rule"],
+    ["para.toc", "a table of contents"],
+  ]) {
+    check((await itemById(id))?.enabled === true, `LaTeX keeps ${label}`);
+  }
+  check(
+    (await itemById("format.document"))?.enabled === false,
+    "LaTeX disables Format Document until the formatter lands",
+  );
+  check((await itemById("para.task"))?.enabled === false, "LaTeX has no task lists");
+  check((await itemById("para.yaml"))?.enabled === false, "LaTeX has no document metadata block");
+  check((await itemById("file.print"))?.enabled === false, "LaTeX disables native printing");
+  check(
+    (await itemById("file.print"))?.text === "Print… (use Export › PDF)",
+    "the disabled LaTeX print row points at Export › PDF",
+    (await itemById("file.print"))?.text ?? "MISSING",
+  );
+  // The PDF row names the engine and is enabled only while a current PDF exists.
+  // This fixture has not been compiled in this run, so it is disabled with the
+  // reason rather than offering a row that would refuse.
+  check(
+    (await itemById("export.pdf"))?.enabled === false,
+    "LaTeX disables the PDF row before a compile",
+  );
+  check(
+    (await itemById("export.pdf"))?.text === "PDF… (available after the preview compiles)",
+    "the disabled LaTeX PDF row says what it waits for",
+    (await itemById("export.pdf"))?.text ?? "MISSING",
+  );
+  check(
+    (await itemById("export.html"))?.enabled === false,
+    "LaTeX disables the HTML export until the native PDF row lands",
+  );
+  check(
+    (await itemById("export.pdf.browser"))?.enabled === false,
+    "LaTeX disables the browser print route",
+  );
+  // A stream grammar produces tokens and no tree, so folding has no mechanism.
+  check((await itemById("view.blocks"))?.enabled === false, "LaTeX has no folding commands");
+  check((await itemById("edit.comment"))?.enabled === true, "LaTeX toggles % comments");
+  check((await itemById("tools.spellcheck"))?.enabled === true, "LaTeX keeps spelling");
 } finally {
   rmSync(workDir, { recursive: true, force: true });
 }

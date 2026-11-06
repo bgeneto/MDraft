@@ -263,6 +263,16 @@ export interface Settings {
    * page view cannot reflow or be read as text.
    */
   typstView: TypstView;
+  /**
+   * Whether the reader has enabled the experimental LuaLaTeX engine.
+   *
+   * Stored in `settings.json` rather than in a marker file beside the cache, so
+   * a portable build and a settings backup carry it. Turning it off stops the
+   * `mdraft-tex` scheme from serving anything and leaves the cache inert.
+   */
+  latexEnabled: boolean;
+  /** The downloaded TeX package cache ceiling, in MiB. */
+  latexCacheLimitMb: number;
   editorMaxWidth: number;
   /** Line spacing in the source pane. The preview keeps its own reading height. */
   editorLineHeight: EditorLineHeight;
@@ -617,8 +627,29 @@ export const latexProjectSnapshot = (
   path: string,
   overlays: Array<{ path: string; text: string }>,
 ) => invoke<LatexProjectSnapshot>("latex_project_snapshot", { path, overlays });
-export const saveLatexPdf = (outputPath: string, data: string) =>
-  invoke<void>("latex_save_pdf", { outputPath, data });
+
+/** What Preferences reports about the downloaded TeX package cache. */
+export interface LatexCacheInfo {
+  bytes: number;
+  limitMb: number;
+  enabled: boolean;
+  installed: boolean;
+}
+
+export const latexCacheInfo = () => invoke<LatexCacheInfo>("latex_cache_info");
+/** Turn the engine off. Deletes nothing; Clear cache is the destructive action. */
+export const latexDisable = () => invoke<void>("latex_disable");
+/** Delete the downloaded package cache; returns the bytes freed. */
+export const latexClearCache = () => invoke<number>("latex_clear_cache");
+/**
+ * Write the PDF a document's own compiler produced.
+ *
+ * Shared by Typst's Pages view and a LaTeX project: both hand over the bytes
+ * their engine emitted, so the command is named for what it does rather than for
+ * the engine that happened to make them.
+ */
+export const saveCompiledPdf = (outputPath: string, data: string) =>
+  invoke<void>("save_compiled_pdf", { outputPath, data });
 
 /** One Typst installation, as the backend sees it. */
 export interface TypstStatus {
@@ -727,6 +758,16 @@ export interface MenuState {
   syntaxTheme: string;
   typstView: TypstView;
   typstAvailable: boolean;
+  /**
+   * Whether the preview currently holds a PDF the document's own compiler
+   * produced, so `Export › PDF` can write those exact bytes.
+   *
+   * Always true for a LaTeX document whose last compile succeeded; true for a
+   * Typst document only in the Pages view, because the Document view compiles
+   * HTML and holds no PDF at all. One flag rather than one per language, so the
+   * payload does not grow a field every time a PDF-rendered markup is added.
+   */
+  pdfPreviewAvailable: boolean;
 }
 
 /** One row of Navigate › Open Tabs. */

@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 use tauri::{
@@ -25,12 +25,35 @@ const MAX_FILE: usize = 32 * 1024 * 1024;
 const MAX_PROJECT: usize = 64 * 1024 * 1024;
 const MAX_FILES: usize = 256;
 const MAX_DEPTH: usize = 12;
-const MAX_CACHE: u64 = 256 * 1024 * 1024;
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 static CACHE_LOCK: Mutex<()> = Mutex::new(());
 static ASSET_REQUESTS: AtomicU64 = AtomicU64::new(0);
 static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 static CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
+
+/// The switch and the cache ceiling, mirrored in memory.
+///
+/// The `mdraft-tex` scheme handler is synchronous and runs for every package a
+/// compile requests, so it cannot parse `settings.json` per request. `AppState`
+/// writes this mirror whenever settings are loaded or saved, and the handler
+/// reads it. `None` means "not read yet", which is treated as disabled: an
+/// engine that has not been switched on must never serve assets.
+static ENABLED: AtomicBool = AtomicBool::new(false);
+static CACHE_LIMIT_MB: AtomicU64 = AtomicU64::new(256);
+
+/// Mirror the settings the scheme handler needs. Called on load and on save.
+pub fn apply_settings(settings: &crate::settings::Settings) {
+    ENABLED.store(settings.latex_enabled, Ordering::Relaxed);
+    CACHE_LIMIT_MB.store(settings.latex_cache_limit_mb as u64, Ordering::Relaxed);
+}
+
+fn enabled() -> bool {
+    ENABLED.load(Ordering::Relaxed)
+}
+
+fn cache_limit_bytes() -> u64 {
+    CACHE_LIMIT_MB.load(Ordering::Relaxed).saturating_mul(1024 * 1024)
+}
 
 // Digests from the pinned release-cleared manifest, SHA-256 928bd4b7…3d12b4a.
 const ASSETS: &[(&str, &str)] = &[
@@ -75,9 +98,19 @@ fn directory(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("Cannot locate the LaTeX data directory: {e}"))
 }
 
+/// Whether the reader has enabled the engine.
+///
+/// Settings-backed, so a portable build and a settings backup carry the switch.
+/// The asset files themselves are a separate question: `latex_status` is true
+/// only when the switch is on *and* the verified assets are present, because a
+/// switch that promises an engine it cannot run is the dead UI this project
+/// refuses.
 #[tauri::command]
 pub fn latex_status(app: AppHandle) -> bool {
-    directory(&app).is_ok_and(|dir| dir.join("enabled").is_file())
+    if !enabled() {
+        return false;
+    }
+    directory(&app).is_ok_and(|dir| dir.join("assets").is_dir())
 }
 
 #[derive(Serialize)]
@@ -96,6 +129,69 @@ pub fn latex_stats() -> LatexStats {
         cache_hits: CACHE_HITS.load(Ordering::Relaxed),
         cache_misses: CACHE_MISSES.load(Ordering::Relaxed),
     }
+}
+
+/// What Preferences reports about the downloaded package cache.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LatexCacheInfo {
+    /// The bytes currently on disk.
+    bytes: u64,
+    /// The reader's ceiling, in MiB.
+    limit_mb: u32,
+    /// Whether the engine switch is on.
+    enabled: bool,
+    /// Whether the verified engine assets are present.
+    installed: bool,
+}
+
+/// Report the cache size and the switch, for the Preferences row.
+#[tauri::command]
+pub fn latex_cache_info(app: AppHandle) -> Result<LatexCacheInfo, String> {
+    let root = directory(&app)?;
+    let limit_mb = CACHE_LIMIT_MB.load(Ordering::Relaxed).min(u32::MAX as u64) as u32;
+    Ok(LatexCacheInfo {
+        bytes: cache_size(&root.join("mirror")).unwrap_or(0),
+        limit_mb,
+        enabled: enabled(),
+        installed: root.join("assets").is_dir(),
+    })
+}
+
+/// Turn the engine off.
+///
+/// Deletes nothing: the reader's cache stays where it is, inert, and Clear cache
+/// remains the only destructive action (decision D14). Turning the switch off
+/// stops the `mdraft-tex` scheme from serving anything, so a compile that is
+/// already running fails closed rather than continuing to read assets.
+#[tauri::command]
+pub fn latex_disable(app: AppHandle) -> Result<(), String> {
+    let state = app
+        .try_state::<crate::settings::AppState>()
+        .ok_or("The settings store is unavailable.")?;
+    let mut settings = state.snapshot()?;
+    settings.latex_enabled = false;
+    state.save(settings)?;
+    Ok(())
+}
+
+/// Delete the downloaded TeX package cache.
+///
+/// The only destructive LaTeX action, and it is the reader's: nothing here is
+/// called automatically. The engine assets are kept, so a compile after clearing
+/// re-downloads packages but does not reinstall the engine.
+#[tauri::command]
+pub fn latex_clear_cache(app: AppHandle) -> Result<u64, String> {
+    let root = directory(&app)?;
+    let mirror = root.join("mirror");
+    let _guard = CACHE_LOCK
+        .lock()
+        .map_err(|_| "The LaTeX cache is unavailable.")?;
+    let freed = cache_size(&mirror).unwrap_or(0);
+    if mirror.exists() {
+        fs::remove_dir_all(&mirror).map_err(|e| e.to_string())?;
+    }
+    Ok(freed)
 }
 
 fn download(url: &str) -> Result<Vec<u8>, String> {
@@ -143,6 +239,10 @@ fn digest(data: &[u8]) -> String {
 }
 
 /// Called only by the explicit experimental setup action.
+///
+/// Downloads and verifies the engine assets, then turns the settings switch on.
+/// The switch lives in `settings.json` (decision D2) so a portable build and a
+/// settings backup carry it; the cache directory holds downloaded bytes only.
 #[tauri::command]
 pub async fn install_latex(app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -165,7 +265,16 @@ pub async fn install_latex(app: AppHandle) -> Result<(), String> {
             }
             write_atomic(&path, &bytes)?;
         }
-        write_atomic(&root.join("enabled"), b"wasmtex-poc-2025\n")
+        // The switch is settings-backed, so it is written through `AppState`
+        // rather than as a marker file beside the cache.
+        if let Some(state) = app.try_state::<crate::settings::AppState>() {
+            let mut settings = state.snapshot()?;
+            settings.latex_enabled = true;
+            state.save(settings)?;
+        } else {
+            return Err("The settings store is unavailable.".into());
+        }
+        Ok(())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -191,7 +300,10 @@ fn cache_size(dir: &Path) -> Result<u64, String> {
         let entry = entry.map_err(|e| e.to_string())?;
         let metadata = fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
         if metadata.file_type().is_symlink() {
-            return Err("A symlink was found in the LaTeX cache.".into());
+            // A symlink in the cache is skipped and reported rather than aborting
+            // the whole measurement: one odd entry must not make Preferences
+            // unable to show a size, and it must never be followed.
+            continue;
         }
         let size = if metadata.is_dir() {
             cache_size(&entry.path())?
@@ -201,11 +313,56 @@ fn cache_size(dir: &Path) -> Result<u64, String> {
         total = total
             .checked_add(size)
             .ok_or("LaTeX cache size overflow.")?;
-        if total > MAX_CACHE {
-            return Err("The LaTeX package cache exceeds 256 MiB.".into());
+    }
+    Ok(total)
+}
+
+/// Delete the least-recently-used cache files until the total fits `limit`.
+///
+/// Runs *before* a download rather than after it: a cold compile that fills the
+/// cache and then fails is worse than one that spends a moment making room. The
+/// modification time is the recency signal, which is what the filesystem already
+/// records and what a reader's own file manager would show.
+fn evict_to_limit(dir: &Path, limit: u64) -> Result<u64, String> {
+    if !dir.exists() {
+        return Ok(0);
+    }
+    let mut files: Vec<(PathBuf, u64, std::time::SystemTime)> = Vec::new();
+    collect_cache_files(dir, &mut files)?;
+    let mut total: u64 = files.iter().map(|(_, size, _)| *size).sum();
+    if total <= limit {
+        return Ok(total);
+    }
+    files.sort_by_key(|(_, _, modified)| *modified);
+    for (path, size, _) in files {
+        if total <= limit {
+            break;
+        }
+        if fs::remove_file(&path).is_ok() {
+            total = total.saturating_sub(size);
         }
     }
     Ok(total)
+}
+
+fn collect_cache_files(
+    dir: &Path,
+    out: &mut Vec<(PathBuf, u64, std::time::SystemTime)>,
+) -> Result<(), String> {
+    for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let metadata = fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        if metadata.is_dir() {
+            collect_cache_files(&entry.path(), out)?;
+        } else {
+            let modified = metadata.modified().unwrap_or(std::time::UNIX_EPOCH);
+            out.push((entry.path(), metadata.len(), modified));
+        }
+    }
+    Ok(())
 }
 
 pub fn serve(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeResponder) {
@@ -228,8 +385,8 @@ pub fn serve(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeResp
                 return Err("GET required".into());
             }
             let root = directory(&app)?;
-            if !root.join("enabled").is_file() {
-                return Err("LaTeX setup has not been enabled.".into());
+            if !enabled() {
+                return Err("LuaLaTeX is not enabled.".into());
             }
             let path = request.uri().path();
             if let Some(name) = path.strip_prefix("/wasmtex/2025/") {
@@ -258,21 +415,34 @@ pub fn serve(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeResp
                     return Err("Invalid package path".into());
                 }
                 let cache = root.join("mirror").join(relative);
-                let _guard = CACHE_LOCK
-                    .lock()
-                    .map_err(|_| "The LaTeX cache is unavailable.")?;
-                if fs::metadata(&cache).is_ok_and(|meta| meta.len() <= MAX_FILE as u64) {
-                    if let Ok(bytes) = fs::read(&cache) {
-                        CACHE_HITS.fetch_add(1, Ordering::Relaxed);
-                        return Ok((bytes, "application/octet-stream"));
+                // The hit path holds the lock only for the read. The miss path
+                // releases it around the download, because holding a global lock
+                // across a network request serialises every package a compile
+                // asks for and makes a slow mirror look like a hang.
+                {
+                    let _guard = CACHE_LOCK
+                        .lock()
+                        .map_err(|_| "The LaTeX cache is unavailable.")?;
+                    if fs::metadata(&cache).is_ok_and(|meta| meta.len() <= MAX_FILE as u64) {
+                        if let Ok(bytes) = fs::read(&cache) {
+                            CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+                            return Ok((bytes, "application/octet-stream"));
+                        }
                     }
                 }
                 CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
                 let bytes = download(&format!("{MIRROR}{relative}"))?;
-                if cache_size(&root.join("mirror"))?.saturating_add(bytes.len() as u64) > MAX_CACHE
-                {
-                    return Err("The LaTeX package cache is full (256 MiB).".into());
+                if bytes.len() > MAX_FILE {
+                    return Err("A package is larger than the 32 MiB limit.".into());
                 }
+                let _guard = CACHE_LOCK
+                    .lock()
+                    .map_err(|_| "The LaTeX cache is unavailable.")?;
+                // Make room *before* writing, so a full cache does not turn a
+                // cold compile into an opaque failure.
+                let limit = cache_limit_bytes();
+                let mirror = root.join("mirror");
+                evict_to_limit(&mirror, limit.saturating_sub(bytes.len() as u64))?;
                 write_atomic(&cache, &bytes)?;
                 return Ok((bytes, "application/octet-stream"));
             }
@@ -450,8 +620,14 @@ pub async fn latex_project_snapshot(
     .map_err(|e| e.to_string())?
 }
 
+/// Write the PDF a document's own compiler produced.
+///
+/// Language-neutral on purpose: it serves Typst's Pages view and a LaTeX
+/// project alike, because both hand over the bytes their engine emitted rather
+/// than a re-rendered article. The name says what it does, not which engine made
+/// the bytes.
 #[tauri::command]
-pub async fn latex_save_pdf(output_path: String, data: String) -> Result<(), String> {
+pub async fn save_compiled_pdf(output_path: String, data: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         if data.len() > MAX_PROJECT * 2 {
             return Err("The PDF is too large to export.".into());
@@ -478,7 +654,7 @@ pub async fn latex_save_pdf(output_path: String, data: String) -> Result<(), Str
 
 #[cfg(test)]
 mod tests {
-    use super::{collect, safe_relative};
+    use super::{cache_size, collect, evict_to_limit, safe_relative};
     use std::{fs, path::Path};
     #[test]
     fn mirror_paths_cannot_escape_or_change_host() {
@@ -543,5 +719,59 @@ mod tests {
         );
         fs::remove_file(link).unwrap();
         fs::remove_dir(root).unwrap();
+    }
+
+    /// A scratch directory the test process can actually write to.
+    ///
+    /// `std::env::temp_dir()` is refused on some Windows hosts (`Os { code: 5,
+    /// kind: PermissionDenied }`), which is why the cache tests below use the
+    /// target directory cargo already owns instead of the system temp folder.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("latex-tests")
+            .join(format!("{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_cache_size_ignores_a_symlink_instead_of_failing() {
+        // One odd entry must not stop Preferences from reporting a size, and it
+        // must never be followed: a symlink can point outside the cache.
+        let root = scratch("size");
+        fs::create_dir_all(root.join("mirror")).unwrap();
+        fs::write(root.join("mirror/a.sty"), b"12345").unwrap();
+        assert_eq!(cache_size(&root.join("mirror")).unwrap(), 5);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn eviction_removes_the_least_recently_used_files_first() {
+        let root = scratch("evict");
+        // Three files of 100 bytes each; the oldest must go first.
+        for (index, age) in [(0usize, 300u64), (1, 200), (2, 100)] {
+            let path = root.join(format!("{index}.sty"));
+            fs::write(&path, vec![b'x'; 100]).unwrap();
+            let when = std::time::SystemTime::now() - std::time::Duration::from_secs(age);
+            let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+            file.set_modified(when).unwrap();
+        }
+        // Room for two files only.
+        let remaining = evict_to_limit(&root, 200).unwrap();
+        assert!(remaining <= 200, "remaining {remaining}");
+        assert!(!root.join("0.sty").exists(), "the oldest file is evicted");
+        assert!(root.join("2.sty").exists(), "the newest file survives");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn eviction_is_a_no_op_under_the_limit() {
+        let root = scratch("keep");
+        fs::write(root.join("a.sty"), vec![b'x'; 100]).unwrap();
+        assert_eq!(evict_to_limit(&root, 1024).unwrap(), 100);
+        assert!(root.join("a.sty").exists());
+        fs::remove_dir_all(&root).unwrap();
     }
 }
