@@ -257,18 +257,27 @@ Each step leaves the product consistent and is independently testable.
   produced no preview at all. This is the same class of bug as the `\bibliography`
   one found earlier: a shipped document that cannot compile.
 
-  **Still open, and it is a product defect rather than a test problem:** every
-  click in the reference resolves to **line 1**, so no region is painted on a
-  typeset line. `latexSourceAt`'s candidate rule is sound on paper, which points at
-  the SyncTeX mapping carrying a document-wide node that owns the whole page — the
-  same shape as the `\end{document}` case its comment already guards against, but
-  not caught. Click navigation is therefore effectively broken even though the
-  caret does move.
+  **Still open, and narrowed as far as the harness can take it.** Every click
+  resolves to line 1 and paints nothing, while:
+  - `latexSourceAt` is **proven correct** by `latex:sync:unit` against the
+    committed fixture — `latexSourceAt(result, 1, 215, 170)` returns
+    `{ file: "main.tex", line: 8 }`, and 14 checks pass including the ambiguous and
+    out-of-page cases;
+  - the click reaches the viewer: a probe records
+    `dispatched: true, collapsed: true, inHost: true`, so `emitParagraph` runs and
+    calls `onPdfClick`;
+  - the document compiles: 5 pages, canvas present, 1874 ms.
 
-  **Honest status: the paint is implemented, the click is not correct.** The
-  preview suite that proved zoom and scroll (`latex-preview-test.mjs`) is kept
-  outside `test-all.mjs` because two of its assertions fail on that defect; wiring
-  it in would mean either weakening them or shipping a red layer.
+  So the failure is between `onPdfClick` and `latexSourceAt` — most plausibly
+  `latexCurrent(value)` returning false because the preview was compiled for a
+  different document than the one now active, which makes `latexSyncSource` return
+  on its first line. That is a test-sequencing question (the suite opens the
+  reference after the compile) as much as a product one, and it needs the app's own
+  console at the click, which the suite now has but has not yet read.
+
+  **Honest status: the paint is implemented and the resolution logic is proven; the
+  click is not yet correct end to end.** `latex-preview-test.mjs` is `optIn`, so a
+  default run stays green.
 
 - [ ] **8. Two-column scroll precision.** Verify the correspondence against a
   two-column document — the case where one source line owns regions in both

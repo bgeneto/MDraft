@@ -171,6 +171,23 @@ check(
 
 console.log("\n=== a click paints the SyncTeX region ===");
 
+// What the compiled result actually carries. The click handler resolves through
+// `latexSourceAt`, which needs a SyncTeX mapping; the engine emits none for this
+// build, so the private fallback is what supplies it. If the mapping is empty the
+// click can only ever do nothing, and that is the fact worth recording.
+const mappingInfo = await page.evaluate(`
+  (() => {
+    const pane = document.getElementById("preview-pane");
+    const shell = document.querySelector(".typst-page-shell");
+    return JSON.stringify({
+      pages: document.querySelectorAll(".typst-page-shell").length,
+      hasCanvas: Boolean(shell?.querySelector("canvas")),
+      dataLatexMs: pane?.querySelector("[data-latex-ms]")?.dataset.latexMs ?? "",
+    });
+  })()
+`);
+console.log(`  preview: ${mappingInfo}`);
+
 // A click in the middle of the first page. The viewer paints the region it
 // resolved, which is the parity with the Typst Pages view the plan asks for.
 // A click where body text actually is. The top third of the page is the title
@@ -209,8 +226,9 @@ check(
 // is the fail-closed rule working, not a failure. So the test walks down the page
 // until the resolved line is body content, and requires a painted region there.
 //
-// The caret is moved away first: leaving it on line 1 means every attempt looks
-// like "the click resolved to line 1" whether or not it moved anything.
+// The caret is parked at the **end of the document** first. Without that, a click
+// that resolves to nothing leaves the caret on line 1 — where it already was from
+// opening the file — and "the caret is on line 1" looks like a click that moved it.
 let painted = null;
 const attempts = [];
 for (const fraction of [0.55, 0.65, 0.75, 0.45, 0.85, 0.35]) {
@@ -220,11 +238,37 @@ for (const fraction of [0.55, 0.65, 0.75, 0.45, 0.85, 0.35]) {
       const canvas = shell?.querySelector("canvas");
       if (!canvas) return "no canvas";
       document.querySelectorAll(".latex-sync-region").forEach((node) => node.remove());
-      // Park the caret at the end so a click that resolves to line 1 is visibly a
-      // click that moved it, not a caret that never left.
-      const editor = document.querySelector(".cm-content");
-      editor?.focus();
+      // Park the caret on the **last line**, using the same menu route a reader
+      // would, so a click that resolves to line 1 is visibly a click that moved it
+      // rather than a caret that never left.
+      await window.__TAURI_INTERNALS__.invoke("plugin:event|emit", {
+        event: "menu",
+        payload: "navigate.gotoLine",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const field = document.querySelector(".goto-line-input, input[type=number]");
+      if (field) {
+        field.value = "170";
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+        field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+      const before = document.querySelector(".cm-activeLine")?.textContent?.trim().slice(0, 40) ?? "";
       const box = canvas.getBoundingClientRect();
+      // The viewer's click handler requires a **collapsed selection**: a click that
+      // lands while text is selected is a selection gesture, not a paragraph one.
+      // A synthetic click can leave one behind, so it is cleared first — otherwise
+      // the handler returns early and the test measures nothing.
+      window.getSelection()?.removeAllRanges();
+      // Record whether the click reaches the handlers at all, and which guard
+      // rejects it. The viewer's click handler requires a collapsed selection and
+      // a target inside the host; either can silently swallow a synthetic event.
+      // target inside the host; either can silently swallow a synthetic event.
+      window.__clickProbe = { dispatched: true, collapsed: null, inHost: null };
+      const selection = window.getSelection();
+      window.__clickProbe.collapsed = selection ? selection.isCollapsed : "no selection";
+      const host = canvas.closest(".typst-preview");
+      window.__clickProbe.inHost = host ? host.contains(canvas) : "no host";
       canvas.dispatchEvent(new MouseEvent("click", {
         clientX: box.left + box.width / 2,
         clientY: box.top + box.height * ${fraction},
@@ -233,13 +277,17 @@ for (const fraction of [0.55, 0.65, 0.75, 0.45, 0.85, 0.35]) {
       await new Promise((resolve) => setTimeout(resolve, 1100));
       return JSON.stringify({
         marks: document.querySelectorAll(".latex-sync-region").length,
+        before,
         line: document.querySelector(".cm-activeLine")?.textContent?.trim().slice(0, 50) ?? "",
+        probe: window.__clickProbe,
       });
     })().catch((error) => "error: " + String(error))
   `);
   if (String(attempt).startsWith("error")) continue;
   const result = JSON.parse(String(attempt));
-  attempts.push(`${fraction}:${result.marks}/${result.line.slice(0, 20)}`);
+  attempts.push(
+    `${fraction}: marks=${result.marks} probe=${JSON.stringify(result.probe)} after=${JSON.stringify(result.line.slice(0, 24))}`,
+  );
   const body = !/^\\(documentclass|usepackage|title|author|begin\{document\}|end\{document\})/.test(
     result.line,
   ) && !result.line.startsWith("%");

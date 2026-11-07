@@ -220,6 +220,17 @@ const SUITES = [
     script: "latex-format-unit.mjs",
   },
   {
+    // The compiled PDF in the real UI. **Opt-in**, because two of its assertions
+    // fail on the click-resolution defect recorded in the plan; a default run must
+    // stay green. `npm test -- --only latex-preview` runs it.
+    id: "latex-preview",
+    title: "LaTeX preview, zoom, SyncTeX and scroll",
+    kind: "cdp",
+    script: "latex-preview-test.mjs",
+    doc: "samples/feature-tour.md",
+    optIn: true,
+  },
+  {
     // What to remember when the tabs change, and what to open at boot: pure
     // list logic, no application.
     id: "tabs-restore-unit",
