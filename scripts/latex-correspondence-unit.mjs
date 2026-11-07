@@ -102,17 +102,27 @@ console.log("\n=== the preview target follows the direction of travel ===");
   const fresh = previewTargetForLine(result, "main.tex", 20);
   check(fresh?.y === 100, "without a hint the first region is chosen", String(fresh?.y));
 
-  const nearTop = previewTargetForLine(result, "main.tex", 20, { page: 1, y: 110 });
-  check(nearTop?.y === 100, "a hint near the top keeps the top region", String(nearTop?.y));
-
-  const nearMiddle = previewTargetForLine(result, "main.tex", 20, { page: 1, y: 190 });
-  check(nearMiddle?.y === 200, "a hint near the middle moves to the middle", String(nearMiddle?.y));
-
-  const nearBottom = previewTargetForLine(result, "main.tex", 20, { page: 1, y: 290 });
-  check(nearBottom?.y === 300, "a hint near the bottom moves to the bottom", String(nearBottom?.y));
+  // **The target must not depend on the hint.**
+  //
+  // An earlier version consulted the current preview position, and the measurement
+  // that killed it was a repeat scroll: the same editor positions gave
+  // `0,0,264,345,277` and then `277,195,304,256,318`. The same source line mapped to
+  // different places depending on where the preview already was, so the reader could
+  // never predict the result and a second pass drifted.
+  //
+  // A correspondence is a function of the document. The hint is still accepted — a
+  // caller may pass the current position — but it must not change the answer.
+  for (const hint of [{ page: 1, y: 110 }, { page: 1, y: 190 }, { page: 1, y: 290 }]) {
+    const withHint = previewTargetForLine(result, "main.tex", 20, hint);
+    check(
+      withHint?.y === fresh?.y,
+      `a hint at y=${hint.y} does not change the target`,
+      `${withHint?.y} vs ${fresh?.y}`,
+    );
+  }
 
   // Every region is returned for painting, not just the chosen one.
-  check(nearBottom?.regions.length === 3, "all regions are offered for painting");
+  check(fresh?.regions.length === 3, "all regions are offered for painting");
   check(previewTargetForLine(result, "main.tex", 99) === null, "an unmapped line has no target");
 }
 

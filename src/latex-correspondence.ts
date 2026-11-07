@@ -117,26 +117,59 @@ export function previewTargetForLine(
   const onPage = regions.filter((region) => region.page === page);
   if (onPage.length === 0) return null;
 
-  // **Nearest by both axes, not just y.**
+  // **Deterministic: the target depends on the source line, not on history.**
   //
-  // A two-column document is the case that forces this: the same source line owns
-  // a region in the left column and one in the right, at the *same* y. Comparing y
-  // alone makes the choice arbitrary, and the measured result was an oscillation —
-  // the preview advanced to 345 and then jumped back to 277 as the rule kept
-  // choosing the left column while the reader scrolled down the right one.
+  // A correspondence that consults the current preview position is not a function of
+  // the document, and the measurement showed why that matters: scrolling the same
+  // editor positions twice gave `0,0,264,345,277` and then `277,195,304,256,318`.
+  // The same line mapped to different places depending on where the preview already
+  // was, so the reader could never predict the result and a repeat scroll drifted.
   //
-  // x is weighted by 0.5 so the two axes are comparable: a column is about half a
-  // page wide, so a wrong column costs about as much as half a page of vertical
-  // error. Unweighted, x in points would dominate and a region on the same line but
-  // the other column would always lose to one far above it.
-  const distance = (region: CorrespondenceRegion) =>
-    hint ? Math.abs(region.y - hint.y) + Math.abs(region.x - (hint.x ?? 0)) * 0.5 : 0;
+  // The fix is to choose from the *reading order of the line's own regions*: the
+  // first region of the first column it appears in. A line that spans a column break
+  // therefore always lands on the same page position, and the hint is no longer an
+  // input to the choice.
+  const columns = columnSplit(onPage);
+  const ordered = [...onPage].sort((a, b) => {
+    const columnA = a.x + a.width / 2 < columns ? 0 : 1;
+    const columnB = b.x + b.width / 2 < columns ? 0 : 1;
+    return columnA !== columnB ? columnA - columnB : a.y - b.y;
+  });
 
-  const chosen = hint
-    ? onPage.reduce((best, region) => (distance(region) < distance(best) ? region : best))
-    : onPage[0];
+  return { page, y: ordered[0].y, regions };
+}
 
-  return { page, y: chosen.y, regions };
+/**
+ * The x coordinate that separates two columns, or `Infinity` when there is only one.
+ *
+ * Found by looking for a horizontal gap that no region crosses and that is wide
+ * enough to be a column gutter rather than the space between two words. A page whose
+ * regions all overlap horizontally has one column, and the caller then orders by y
+ * alone.
+ */
+function columnSplit(regions: readonly CorrespondenceRegion[]): number {
+  if (regions.length < 2) return Infinity;
+  // Candidate gaps: between the right edge of one region and the left edge of
+  // another, where the two do not overlap.
+  const spans = regions
+    .map((region) => ({ left: region.x, right: region.x + region.width }))
+    .sort((a, b) => a.left - b.left);
+  let widest = 0;
+  let split = Infinity;
+  let reach = spans[0].right;
+  for (const span of spans.slice(1)) {
+    if (span.left > reach) {
+      const gap = span.left - reach;
+      if (gap > widest) {
+        widest = gap;
+        split = reach + gap / 2;
+      }
+    }
+    reach = Math.max(reach, span.right);
+  }
+  // A gutter is tens of points; a word space is a few. Below the threshold this is
+  // one column with ragged edges, not two columns.
+  return widest >= 24 ? split : Infinity;
 }
 
 /**
