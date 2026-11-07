@@ -105,7 +105,7 @@ export function previewTargetForLine(
   result: LatexResult,
   file: string,
   line: number,
-  hint?: { page: number; y: number },
+  hint?: { page: number; y: number; x?: number },
 ): PreviewTarget | null {
   const regions = regionsForLine(result, file, line);
   if (!regions) return null;
@@ -117,10 +117,23 @@ export function previewTargetForLine(
   const onPage = regions.filter((region) => region.page === page);
   if (onPage.length === 0) return null;
 
+  // **Nearest by both axes, not just y.**
+  //
+  // A two-column document is the case that forces this: the same source line owns
+  // a region in the left column and one in the right, at the *same* y. Comparing y
+  // alone makes the choice arbitrary, and the measured result was an oscillation —
+  // the preview advanced to 345 and then jumped back to 277 as the rule kept
+  // choosing the left column while the reader scrolled down the right one.
+  //
+  // x is weighted by 0.5 so the two axes are comparable: a column is about half a
+  // page wide, so a wrong column costs about as much as half a page of vertical
+  // error. Unweighted, x in points would dominate and a region on the same line but
+  // the other column would always lose to one far above it.
+  const distance = (region: CorrespondenceRegion) =>
+    hint ? Math.abs(region.y - hint.y) + Math.abs(region.x - (hint.x ?? 0)) * 0.5 : 0;
+
   const chosen = hint
-    ? onPage.reduce((best, region) =>
-        Math.abs(region.y - hint.y) < Math.abs(best.y - hint.y) ? region : best,
-      )
+    ? onPage.reduce((best, region) => (distance(region) < distance(best) ? region : best))
     : onPage[0];
 
   return { page, y: chosen.y, regions };

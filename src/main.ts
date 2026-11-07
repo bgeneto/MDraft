@@ -1497,8 +1497,15 @@ function syncLatexToPreview(): void {
   const path = latexRelative(value, doc.path);
   if (!path) return;
   const hint = typstPdf.topPosition() ?? undefined;
-  const target = previewTargetForLine(value.result, path, editor.topVisibleLine(), hint);
-  if (!target) return;
+  const line = editor.topVisibleLine();
+  const target = previewTargetForLine(value.result, path, line, hint);
+  if (!target) {
+    // A scroll that does nothing is the hardest kind of bug to report, because the
+    // reader sees only "the preview did not follow". Name the line and whether the
+    // mapping had anything for it.
+    console.info(`[latex-scroll] no target for ${path}:${line} (hint: ${hint ? `${hint.page}@${Math.round(hint.y)}` : "none"})`);
+    return;
+  }
   suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
   typstPdf.scrollToPagePosition(target.page, target.y);
 }

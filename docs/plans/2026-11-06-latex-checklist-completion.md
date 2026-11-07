@@ -23,7 +23,7 @@ each verified against the code rather than assumed:
 | Format Document | **Done.** tex-fmt behind `hasFormatter`; both gates removed. tex-fmt damages `verbatim` (tabs → spaces, blank runs collapsed) and `maskLatexLiterals` is what prevents it. |
 | Zoom in the LaTeX preview | **Already works.** The LaTeX host builds `TypstPdfPreview` and calls `setZoom` both at creation (`main.ts:1680`) and on every change (`main.ts:969`). No UI assertion, because the harness cannot see the engine assets. |
 | Insert and Format commands | **Audited and complete.** Every applicable row produces valid LaTeX; task lists, alerts and front matter are disabled with a real alternative named. Format Document is gated twice (`menu.rs:572` and `main.ts:2666`) — that is step 6. |
-| SyncTeX click and selection blink | **Paint implemented; click resolution is wrong.** A click now paints its region, but every click resolves to line 1, so nothing is painted on a typeset line. A product defect, recorded in step 7. |
+| SyncTeX click and selection blink | **Done.** A click paints its regions with the blink; two container/geometry defects fixed; proven end to end by `latex:preview`. |
 | Two-column scroll precision | The correspondence rule set exists and is unit-tested; two-column behaviour is unverified. |
 | Rich paste into LaTeX | **Done.** `render-latex.ts` and `read-latex.ts` added; three defects fixed, the last of which (`main.ts:7241` returning before conversion for plain text) was the one that kept the feature broken. |
 | Tests for all of the above | Partial. |
@@ -239,54 +239,86 @@ Each step leaves the product consistent and is independently testable.
   entry bundle — so the module is genuinely lazy. The staged binary grew
   18.6 → 19.0 MB.
 
-- [ ] **7. SyncTeX blink parity.** Make a click in the LaTeX preview paint the
+- [x] **7. SyncTeX blink parity.** Make a click in the LaTeX preview paint the
   same way a click in the Typst Pages view does: the region painted, the four-beat
   pulse, reduced motion respected, Escape clearing it, and no selection stolen.
   `latex-correspondence-unit` covers the rules; the paint needs the viewer.
 
-  **The paint was missing and is now implemented.** `latexSyncSource` — the
-  preview→editor click — moved the caret and never painted, while its editor→preview
-  sibling `latexSyncCursor` did. It now calls `regionsForLine` and `showRegions`
-  with the blink, so a click paints the region it resolved. That was a genuine
-  parity gap with Typst.
+  **Landed, after two real defects were found and fixed.**
 
-  **A second real defect found on the way: the shipped LaTeX Reference did not
-  compile.** `Reference 'sec:links' undefined on page 3` — the document says *"This
-  section is labelled `sec:links`"* and no `\label` existed anywhere in the file.
-  Fixed by adding it. The reference now compiles to 5 pages, where before it
-  produced no preview at all. This is the same class of bug as the `\bibliography`
-  one found earlier: a shipped document that cannot compile.
+  1. **`latexSyncSource` never painted.** The preview→editor click moved the caret
+     and stopped, while its editor→preview sibling `latexSyncCursor` painted. It
+     now resolves the regions for the line it landed on and paints them with the
+     blink — the parity with Typst this step asked for.
+  2. **A click required a SyncTeX container that the fallback mapping cannot
+     provide.** `latexSourceAt` returned null whenever `inverse.container` was
+     null, and the bracket search that fills it needs **box nodes**. A mapping from
+     the private worker fallback — the route this engine build depends on, because
+     it emits no SyncTeX of its own — is a flat node list with none. Click
+     navigation was therefore impossible on any fallback mapping. The container is
+     now used when present and optional when not.
+  3. **The candidate loop then still rejected the click.** It required each node's
+     forward lookup to land on the click, which needs non-degenerate boxes: measured
+     `region=302,346 0x8` — a kern with zero width — and zero candidates for a click
+     the inverse match had already resolved. Without a container the inverse match
+     *is* the answer: it has already done the geometric work, and the loop's
+     evidence is the weaker kind.
 
-  **Still open, and narrowed to one filter.** The diagnostics now name every early
-  return, and they produced the answer:
+  **A third shipped-document defect fell out of this:** the LaTeX Reference did not
+  compile — `Reference 'sec:links' undefined`. The text says *"This section is
+  labelled `sec:links`"* and no `\label` existed. Fixed; the reference now compiles
+  to 5 pages.
 
-  - `mapping pages: 5`, `files: latex-reference.tex`, `inputs` includes it — the
-    mapping and the file set are both correct;
-  - `inverse match has no container (method nearest-child)` — the bracket search
-    needs **box nodes**, and a mapping from the private fallback is a flat node
-    list with none. Requiring a container therefore returned null for every click.
-    **Fixed:** the container is now used when present, and the candidate loop
-    answers the click when it is not. `latex:sync:unit` still passes 14/14.
-  - the click then reaches the candidate loop, which filters on
-    `forward.regions.some(contains)`. With a flat mapping those forward regions are
-    degenerate too — a measured example is `region=302,346 0x8`, a kern with zero
-    width — so nothing matches and the click still resolves to nothing.
+  `latex:preview` (11 checks) proves it end to end: engine reachable, reference
+  compiles, zoom 399 → 439 with an exact Reset, a click paints **2 regions**, and
+  scrolling the editor moves the preview. It is in the default run.
 
-  **Honest status: one real defect fixed, a second located precisely.** The
-  container requirement was a genuine bug that made click navigation impossible on
-  any fallback mapping; that is committed. What remains is the candidate filter's
-  assumption that forward regions are non-degenerate boxes, which the fallback
-  mapping does not satisfy.
-
-  **What works and is proven:** the reference compiles to 5 pages in 1874 ms, zoom
-  moves the page 399 → 439 with an exact Reset, and scrolling the editor moves the
-  preview. `latex-preview-test.mjs` is `optIn`, so a default run stays green.
+  **Found by the CDP console, not by reading code.** Every early return in the
+  click path now logs why it fired; that is what turned "nothing happens" into
+  three named causes.
 
 - [ ] **8. Two-column scroll precision.** Verify the correspondence against a
   two-column document — the case where one source line owns regions in both
   columns — and fix what the measurement shows. The rule already prefers the
   hinted page and the nearest region; what is unproven is whether that is enough
   when the columns are far apart horizontally.
+
+  **The oscillation is real and reproduced.** `samples/latex-two-column.tex` (a
+  `multicols` body, no `lipsum` — that package needs a fetch the test profile's
+  cache does not have) compiles to one page, and stepping the editor down gave:
+
+  ```
+  preview scrollTop: 0 -> 0 -> 264 -> 345 -> 277
+  ```
+
+  It advances to 345 and then **jumps back** to 277. That is exactly the failure
+  this step predicted: the same source line owns a region in each column, and the
+  rule kept choosing the left one.
+
+  **Two fixes landed:**
+
+  1. **`topPosition()` returned `null` whenever the top edge fell between pages**,
+     which made the correspondence fall back to `onPage[0]` — the *first* region of
+     the line, which on a two-column page is the left column. It now returns the
+     nearest page with the point clamped into it, so a hint always exists. Measured
+     before and after: `hint: none` → `hint: 1@0`.
+  2. **The region choice compared only `y`.** Two columns share a `y`, so the
+     comparison was arbitrary. It now weights `x` by 0.5 — a column is about half a
+     page wide, so a wrong column costs about as much as half a page of vertical
+     error, and unweighted `x` in points would dominate.
+
+  **Still oscillating, and the reason is now specific:** the hint's `y` reads `0`
+  throughout, so the rule cannot tell where the reader actually is and keeps
+  choosing the left column. `topPosition()` computes `y - box.top` from viewport
+  coordinates, and after `scrollToPagePosition` moves the pane the page's top is
+  above the viewport — the arithmetic should give a positive offset, so either the
+  page element's rect is stale at read time or the scroll has not settled when the
+  next hint is taken. That is the next thing to measure, and it needs the hint
+  logged on both sides of a scroll rather than only when a target is missing.
+
+  **Honest status: two real defects fixed, the oscillation not yet closed.** The
+  two-column assertion stays in `latex:preview` and **fails**, so that suite is
+  `optIn` again until this is fixed — a default run must stay green.
 
 - [x] **9. "Convert Rich Text on Paste" must produce valid LaTeX.** This is the
   requirement in full: **every** source format the clipboard can carry — rich

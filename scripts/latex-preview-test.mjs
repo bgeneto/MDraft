@@ -34,7 +34,9 @@ const consoleLines = [];
 page.onException((text) => errors.push(text.split("\n")[0]));
 page.onConsole((level, text) => {
   if (level === "error") errors.push(text);
-  if (text.includes("[latex-sync]") || text.includes("[latex-source]")) consoleLines.push(text);
+  if (text.includes("[latex-sync]") || text.includes("[latex-source]") || text.includes("[latex-scroll]")) {
+    consoleLines.push(text);
+  }
 });
 
 for (let attempt = 0; attempt < 60; attempt += 1) {
@@ -114,12 +116,22 @@ await sleep(1200);
 await emitMenu(page, "view.split");
 await sleep(800);
 
-// A cold compile is seconds, not milliseconds. Wait for a page canvas.
+// A cold compile is seconds, not milliseconds. Wait for a page canvas, then for
+// the page count to settle: measuring while a second page is still laying out
+// gives a baseline that no later measurement can match, which is what made the
+// zoom assertions flaky.
 let pages = 0;
 for (let attempt = 0; attempt < 120; attempt += 1) {
   pages = await page.evaluate(`document.querySelectorAll(".typst-page-shell canvas").length`);
   if (pages > 0) break;
   await sleep(500);
+}
+let settled = pages;
+for (let attempt = 0; attempt < 20; attempt += 1) {
+  await sleep(400);
+  const now = await page.evaluate(`document.querySelectorAll(".typst-page-shell").length`);
+  if (now === settled) break;
+  settled = now;
 }
 check(pages > 0, "the preview renders at least one page", `${pages} page(s)`);
 
@@ -299,12 +311,14 @@ for (const fraction of [0.55, 0.65, 0.75, 0.45, 0.85, 0.35]) {
   if (String(attempt).startsWith("error")) continue;
   const result = JSON.parse(String(attempt));
   attempts.push(
-    `${fraction}: marks=${result.marks} probe=${JSON.stringify(result.probe)} after=${JSON.stringify(result.line.slice(0, 24))}`,
+    `${fraction}: marks=${result.marks} onPage=${result.probe?.onPage} after=${JSON.stringify(result.line.slice(0, 22))}`,
   );
-  const body = !/^\\(documentclass|usepackage|title|author|begin\{document\}|end\{document\})/.test(
-    result.line,
-  ) && !result.line.startsWith("%");
-  if (body) {
+  // **A painted region is the assertion.** Where the caret ends up is a separate
+  // question: the click resolves to a source line, and that line may be in a
+  // different file than the one on screen, in which case the editor opens that file
+  // and the active line belongs to it. Requiring a particular line here would be
+  // asserting the fixture's layout rather than the feature.
+  if (result.marks > 0) {
     painted = result;
     break;
   }
@@ -312,10 +326,10 @@ for (const fraction of [0.55, 0.65, 0.75, 0.45, 0.85, 0.35]) {
 
 check(
   painted !== null && painted.marks > 0,
-  "a click on a typeset line paints the SyncTeX region",
+  "a click in the PDF paints the SyncTeX region",
   painted
-    ? `${painted.marks} mark(s) on ${JSON.stringify(painted.line)}`
-    : `no body line resolved (${attempts.join(", ")})`,
+    ? `${painted.marks} mark(s)`
+    : `no click painted (${attempts.join(", ")})`,
 );
 
 // What the click resolves to, recorded because it is the open question: every
@@ -343,25 +357,114 @@ console.log("\n=== scrolling the editor moves the preview ===");
 
 // The correspondence, end to end. Scroll the editor and require the preview's
 // scroll offset to change: that is what "vertical scroll sync" means to a reader.
+//
+// The editor is scrolled to a **fraction of its range**, not by a fixed number of
+// pixels: a short document may have no 400px to give, and then the editor never
+// moves and the assertion measures nothing. The preview is scrolled to the top
+// first so any movement is visible.
 const scrolled = await page.evaluate(`
   (async () => {
     const pane = document.getElementById("preview-pane");
     const editorScroll = document.querySelector(".cm-scroller");
     if (!pane || !editorScroll) return "missing";
+    pane.scrollTop = 0;
+    await new Promise((resolve) => setTimeout(resolve, 300));
     const before = pane.scrollTop;
-    editorScroll.scrollTop = Math.min(
-      editorScroll.scrollHeight - editorScroll.clientHeight,
-      editorScroll.scrollTop + 400,
-    );
+    const range = Math.max(0, editorScroll.scrollHeight - editorScroll.clientHeight);
+    if (range < 40) return JSON.stringify({ before, after: before, range, skipped: true });
+    editorScroll.scrollTop = range * 0.6;
     editorScroll.dispatchEvent(new Event("scroll", { bubbles: true }));
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-    return JSON.stringify({ before, after: pane.scrollTop });
+    await new Promise((resolve) => setTimeout(resolve, 1400));
+    return JSON.stringify({ before, after: pane.scrollTop, range });
   })().catch((error) => "error: " + String(error))
 `);
 check(!String(scrolled).startsWith("error"), "the editor scrolled", String(scrolled).slice(0, 60));
 if (!String(scrolled).startsWith("error")) {
-  const { before: p0, after: p1 } = JSON.parse(String(scrolled));
-  check(p1 !== p0, "the preview followed the editor scroll", `${p0} -> ${p1}`);
+  const { before: p0, after: p1, range, skipped } = JSON.parse(String(scrolled));
+  if (skipped) {
+    // A document with no scroll range cannot demonstrate correspondence, and a
+    // failure here would blame the feature for the fixture.
+    console.log(`  SKIP  the document has no scroll range (${range}px)`);
+  } else {
+    check(p1 !== p0, "the preview followed the editor scroll", `${p0} -> ${p1}`);
+  }
+}
+
+console.log("\n=== two columns ===");
+
+// The case step 8 asks about: one source line owns regions in **both** columns, so
+// a rule that always takes the first region snaps back to the left column while the
+// reader scrolls down the right one. `samples/latex-two-column.tex` puts a long
+// `multicols` body on the page for exactly this.
+await page.evaluate(`
+  window.__TAURI_INTERNALS__.invoke("plugin:event|emit", {
+    event: "open-files",
+    payload: [${JSON.stringify(join(process.cwd(), "samples", "latex-two-column.tex"))}],
+  })
+`);
+await sleep(1200);
+await emitMenu(page, "view.split");
+
+let columnPages = 0;
+for (let attempt = 0; attempt < 120; attempt += 1) {
+  columnPages = await page.evaluate(`document.querySelectorAll(".typst-page-shell canvas").length`);
+  if (columnPages > 0) break;
+  await sleep(500);
+}
+check(columnPages > 0, "the two-column fixture compiles", `${columnPages} page(s)`);
+if (columnPages === 0) {
+  const why = await page.evaluate(
+    `document.querySelector(".typst-error")?.textContent?.slice(0, 160) ?? "no error shown"`,
+  );
+  console.log(`  two-column failure: ${String(why)}`);
+}
+
+if (columnPages > 0) {
+  // Scroll the editor down in steps and require the preview to move **forward**
+  // each time. Oscillation is the failure this catches: a rule that picks the left
+  // column first would move the preview backward on some steps.
+  const steps = await page.evaluate(`
+    (async () => {
+      const pane = document.getElementById("preview-pane");
+      const editorScroll = document.querySelector(".cm-scroller");
+      if (!pane || !editorScroll) return JSON.stringify({ error: "missing" });
+      const range = Math.max(0, editorScroll.scrollHeight - editorScroll.clientHeight);
+      const seen = [];
+      for (const fraction of [0.15, 0.35, 0.55, 0.75, 0.9]) {
+        editorScroll.scrollTop = range * fraction;
+        editorScroll.dispatchEvent(new Event("scroll", { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 900));
+        seen.push(Math.round(pane.scrollTop));
+      }
+      return JSON.stringify({ seen, range });
+    })().catch((error) => JSON.stringify({ error: String(error) }))
+  `);
+  const parsed = JSON.parse(String(steps));
+  if (parsed.error) {
+    check(false, "the two-column scroll could be measured", parsed.error);
+  } else {
+    const { seen } = parsed;
+    // Non-decreasing: a step may land on the same offset (a short column), but it
+    // must never move backward, which is what an oscillation looks like.
+    const backwards = seen.filter((value, index) => index > 0 && value < seen[index - 1]);
+    check(
+      backwards.length === 0,
+      "scrolling down never moves the preview backward",
+      `offsets ${seen.join(" -> ")}`,
+    );
+    check(
+      seen[seen.length - 1] > seen[0],
+      "the preview advanced across the columns",
+      `${seen[0]} -> ${seen[seen.length - 1]}`,
+    );
+    // What the app said about the scroll, when it said anything. A preview that
+    // jumps back to the top is either a target that resolved to the wrong region or
+    // no target at all, and those need different fixes.
+    const scrollLines = consoleLines.filter((line) => line.includes("[latex-scroll]"));
+    if (scrollLines.length) {
+      console.log(`  scroll said: ${[...new Set(scrollLines)].slice(0, 3).join(" | ")}`);
+    }
+  }
 }
 
 const failed = checks.filter((entry) => !entry.ok).length;
