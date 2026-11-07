@@ -44,10 +44,17 @@ export interface PreferencesHost {
   exportHtml(): void;
   /** Save the document to PDF through the native writer. */
   exportPdf(): void;
-  openDocumentation(which: "reference" | "shortcuts" | "licences"): void;
-  version(): string;
+  /**
+   * Open one of the application's own tool folders in the OS file manager.
+   *
+   * The panel shows a button instead of printing the install path, so the reader
+   * can look at what was downloaded without reading a `C:\…` line.
+   */
+  openAppFolder(folder: api.AppFolder): Promise<void>;
   /** Last known pandoc status, or null before the first check. */
   pandocStatus(): api.PandocStatus | null;
+  /** Last known Typst status, or null before the first check. */
+  typstStatus(): api.TypstStatus | null;
   /** Check for pandoc and offer to install it if it is missing. */
   setupPandoc(): Promise<void>;
   /** Check for Typst and offer to install it if it is missing. */
@@ -267,10 +274,10 @@ function rowMatches(row: Row, terms: string[]): boolean {
 /**
  * Keep the rows a query names, with a group heading for context.
  *
- * A heading is a searchable category. When "Recent Locations" matches, its
- * whole group comes with it — the settings underneath are not expected to
- * repeat the group's word. A matching setting stays under its heading, and a
- * heading with neither a matching name nor a matching row disappears.
+ * A heading is a searchable category. When "LaTeX" matches, its whole group
+ * comes with it — the settings underneath are not expected to repeat the
+ * group's word. A matching setting stays under its heading, and a heading with
+ * neither a matching name nor a matching row disappears.
  */
 function filterSection(section: Section, terms: string[]): Section | null {
   // A section's own name stands for all of it.
@@ -870,20 +877,20 @@ function exportRows(host: PreferencesHost, refresh: () => void): Row[] {
   // "Checking…" on the second paint.
   if (host.latexCache() === null) void host.refreshLatexCache().then(refresh);
 
+  // One status line and one folder button per tool. The install path is not
+  // printed: it is long, it is not a setting, and the reader who wants to look
+  // at the files has the button. The explanation of what each tool is lives in
+  // the guide and in docs/export.md, not in a preferences panel.
   const rows: Row[] = [
     {
       kind: "note",
       label: "Pandoc",
       text: status
         ? status.found
-          ? `${status.version ?? "Found"} at ${status.path}${
+          ? `${status.version ?? "Found"}${
               status.source === "managed" ? " (installed by MDraft)" : ""
-            }.${
-              status.pdfEngine
-                ? ` PDF (via Typst) will use ${status.pdfEngine}.`
-                : " PDF (via Typst) needs Typst — use Tools › Check or Install Typst…. Native PDF and browser printing remain available."
             }`
-          : "Not found. Word, EPUB, PDF (via Typst) conversion and the other Pandoc formats need it; native HTML/PDF do not."
+          : "Not installed. Word, EPUB and the other Pandoc formats need it."
         : "Checking…",
     },
     {
@@ -893,9 +900,22 @@ function exportRows(host: PreferencesHost, refresh: () => void): Row[] {
       action: () => host.setupPandoc(),
     },
     {
+      kind: "button",
+      label: "",
+      text: "Open the pandoc folder",
+      action: () => host.openAppFolder("pandoc"),
+    },
+    {
       kind: "note",
       label: "Typst",
-      text: "Typst is a typesetting program: text and markup go in, a laid-out document comes out. In MDraft it draws both previews of .typ documents and compiles them to PDF; for the other languages, pandoc uses it as the PDF engine.",
+      text: (() => {
+        const typst = host.typstStatus();
+        if (!typst) return "Checking…";
+        if (!typst.found) return "Not installed. .typ previews and PDF (via Typst) need it.";
+        return `${typst.version ?? "Found"}${
+          typst.source === "managed" ? " (installed by MDraft)" : ""
+        }`;
+      })(),
     },
     {
       kind: "button",
@@ -905,9 +925,10 @@ function exportRows(host: PreferencesHost, refresh: () => void): Row[] {
       action: () => host.setupTypst(),
     },
     {
-      kind: "note",
-      label: "HTML and PDF",
-      text: "Both use the preview pipeline and need no pandoc. PDF saves directly through the system webview. File › Export › PDF (opens browser) keeps browser printing available; PDF (via Typst) uses the compiler, with pandoc for conversion from other languages.",
+      kind: "button",
+      label: "",
+      text: "Open the Typst folder",
+      action: () => host.openAppFolder("typst"),
     },
   ];
 
@@ -921,11 +942,6 @@ function exportRows(host: PreferencesHost, refresh: () => void): Row[] {
   rows.push(
     { kind: "heading", label: "LaTeX" },
     {
-      kind: "note",
-      label: "",
-      text: "A .tex document is compiled locally by LuaLaTeX running in WebAssembly. The engine and the TeX packages it needs are downloaded once, verified against pinned SHA-256 digests, and cached; your document and bibliography never leave this device.",
-    },
-    {
       kind: "checkbox",
       label: "Enable LuaLaTeX",
       help: "Compiles .tex documents in the preview and lets Export › PDF write the PDF it produces. Turning this off stops the engine from serving anything; the downloaded files stay on disk until you clear the cache.",
@@ -934,7 +950,8 @@ function exportRows(host: PreferencesHost, refresh: () => void): Row[] {
         if (value) void host.installLatex();
         else void host.disableLatex();
       },
-    },    {
+    },
+    {
       kind: "note",
       label: "Engine",
       text: latex
@@ -950,9 +967,7 @@ function exportRows(host: PreferencesHost, refresh: () => void): Row[] {
     {
       kind: "note",
       label: "Package cache",
-      text: latex
-        ? `${mb(latex.bytes)} of ${latex.limitMb} MiB used. TeX packages and fonts are downloaded on demand and evicted least-recently-used when the cache reaches its ceiling.`
-        : "Checking…",
+      text: latex ? `${mb(latex.bytes)} of ${latex.limitMb} MiB used.` : "Checking…",
     },
     {
       kind: "number",
@@ -970,6 +985,12 @@ function exportRows(host: PreferencesHost, refresh: () => void): Row[] {
       text: "Clear package cache",
       help: "Deletes the downloaded TeX packages and fonts. The engine itself is kept, so the next compile re-downloads only what it needs. Your documents are not touched.",
       action: () => void host.clearLatexCache(),
+    },
+    {
+      kind: "button",
+      label: "",
+      text: "Open the LaTeX folder",
+      action: () => host.openAppFolder("latex"),
     },
   );
 
@@ -1022,7 +1043,7 @@ function exportRows(host: PreferencesHost, refresh: () => void): Row[] {
       // does know its path and runs these options normally.
       kind: "note",
       label: "PDF (opens browser)",
-      text: "The browser PDF route asks you where to save, so MDraft never learns that path and these options do not run for it. They do run for the direct PDF, HTML, Typst and every pandoc format.",
+      text: "These options do not run for it: the browser owns the save path.",
     },
     { kind: "heading", label: "Formats" },
   );
@@ -1366,11 +1387,6 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
 
   const rows: Row[] = [
     {
-      kind: "note",
-      label: "Privacy",
-      text: "The assistant contacts only the endpoint you configure, and only when you press Generate or fetch the model list. The selection and your instruction are the only document text that leaves this machine — unless Suggest file names when saving is on, which sends the opening of an untitled document when you save it. The API key is stored in the operating system's credential store; where that store is unavailable, it is saved in a private file beside the settings instead, and the line under the field says which.",
-    },
-    {
       kind: "checkbox",
       label: "Enable AI Assistant",
       help: "Shows the floating button in the source pane; the Tools › AI Assistant check and this box turn it on or off. Off by default: no request and no credential read until you enable it and choose an endpoint and model.",
@@ -1424,7 +1440,7 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
     {
       kind: "text",
       label: "Base URL",
-      help: "Include the version segment; the assistant appends /chat/completions or /v1/messages. A public gateway usually requires https:// — an http:// address outside your machine is unencrypted and may answer an empty 200.",
+      help: "Include the version segment; the assistant appends /chat/completions or /v1/messages.",
       placeholder: "https://api.openai.com/v1",
       rerender: false,
       get: () => s().aiBaseUrl,
@@ -1441,7 +1457,7 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
     {
       kind: "secret",
       label: "API Key",
-      help: "Optional. Local inference servers usually need no key; when none is saved the request goes out without an auth header. A hosted endpoint that needs one answers 401, and the error names it. Saving a key also requests the model list and fills the model suggestions. Stored in the OS credential store, keyed by provider and endpoint; after changing the scheme or host, save it again. Where the store is unavailable the key is saved in a private file beside the settings (not encrypted); the line under the field says which.",
+      help: "Optional: local inference servers usually need no key. Stored in the OS credential store, or in a private file beside the settings where that store is unavailable; the line under the field says which.",
       placeholder: ai.status?.hasKey
         ? "A key is saved — type to replace it"
         : "No key — optional for local servers",
@@ -1491,7 +1507,7 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
     {
       kind: "checkbox",
       label: "Disable reasoning (thinking)",
-      help: 'Ask the endpoint to answer without thinking first, so the first word can arrive much sooner. Sends reasoning_effort: "none" to an OpenAI-compatible server and thinking: {type: "disabled"} to Anthropic. Support is model-specific: many GPT-5 models accept it, GPT-4o and GPT-4.1 refuse the field, and Anthropic\'s always-reasoning models refuse it too. A refusal makes Generate fail, so test with the configured model before relying on it.',
+      help: "Asks the endpoint to answer without thinking first. Support is model-specific: a refusal makes Generate fail, so test with the configured model before relying on it.",
       get: () => s().aiDisableReasoning ?? false,
       set: (value) => {
         if (ai.note?.where === "reasoning") ai.note = null;
@@ -1514,7 +1530,7 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
     {
       kind: "number",
       label: "Context limit",
-      help: "The most context one request may send, measured in approximate tokens. The status bar's token count uses the same estimator. A rewrite over the limit is refused; Ask's selection, question and history, and Continue's text, trim to fit. The model also needs room for its own instructions and answer, so keep this below its context window. Default 8,192; maximum 32,768.",
+      help: "The most context one request may send, in approximate tokens. Keep it below the model's context window, which must also hold the instructions and the answer.",
       min: 1_024,
       max: 32_768,
       step: 256,
@@ -1644,7 +1660,6 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
           get: () => s().autoSave,
           set: (value) => host.update({ autoSave: value }),
         },
-        { kind: "heading", label: "Recent Locations" },
         {
           kind: "checkbox",
           label: "Record Recent Files",
@@ -1656,12 +1671,6 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
           label: "",
           text: "Clear Recent Files",
           action: () => host.clearRecent(),
-        },
-        { kind: "heading", label: "Favorites" },
-        {
-          kind: "note",
-          label: "Managing Favorites",
-          text: "Right-click a document or any tab and choose Add to Favorites. The Favorites panel keeps them in the order you added them; each row's × removes one entry, and opening a favorite never reorders the list.",
         },
       ],
     },
@@ -1676,7 +1685,6 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
           get: () => s().richPaste,
           set: (value) => host.update({ richPaste: value }),
         },
-        { kind: "heading", label: "Auto-close" },
         {
           kind: "checkbox",
           label: "Auto-close brackets and quotes",
@@ -1691,7 +1699,6 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
           get: () => s().autoCloseTags,
           set: (value) => host.update({ autoCloseTags: value }),
         },
-        { kind: "heading", label: "Completion" },
         {
           kind: "checkbox",
           label: "Suggest completions while typing",
@@ -1766,7 +1773,6 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
           get: () => s().showStatusBar,
           set: (value) => host.update({ showStatusBar: value }),
         },
-        { kind: "heading", label: "Spelling" },
         {
           kind: "checkbox",
           label: "Check spelling while typing",
@@ -1963,42 +1969,6 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
           ],
           get: () => s().sidebarTab,
           set: (value) => host.update({ sidebarTab: value as api.SidebarTab }),
-        },
-      ],
-    },
-    {
-      id: "general",
-      title: "General",
-      rows: [
-        { kind: "note", label: "Version", text: `MDraft ${host.version()}` },
-        {
-          kind: "note",
-          label: "Formatting",
-          text: "Format Document uses Prettier (MIT) for Markdown and HTML and Typstyle (Apache-2.0) for Typst.",
-        },
-        {
-          kind: "button",
-          label: "",
-          text: "Open the Markdown Reference",
-          action: () => host.openDocumentation("reference"),
-        },
-        {
-          kind: "button",
-          label: "",
-          text: "Open the Keyboard Shortcuts",
-          action: () => host.openDocumentation("shortcuts"),
-        },
-        {
-          kind: "button",
-          label: "",
-          text: "Font licences…",
-          help: "The thirteen bundled typefaces are under the SIL Open Font License 1.1, which requires their copyright notices and licence texts to travel with them wherever they are redistributed. All are compiled into the application and shown here.",
-          action: () => host.openDocumentation("licences"),
-        },
-        {
-          kind: "note",
-          label: "Settings file",
-          text: "Preferences are stored as settings.json in the application config directory and are safe to edit by hand.",
         },
       ],
     },

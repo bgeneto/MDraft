@@ -1,6 +1,8 @@
 # `Export › PDF` writes the PDF the document's own compiler produced
 
-**Status:** accepted
+**Status:** accepted; the LaTeX non-PDF restriction below is superseded by
+`2026-11-07-latex-export-routes.md`. The compiled-PDF decision itself stands for
+both languages.
 **Date:** 2026-11-06
 
 ## Context
@@ -58,10 +60,14 @@ on a file they own.
 
 - What the reader exports is what they were looking at, byte for byte. The
   preview button and the menu row call one helper, so they cannot diverge.
-- A `.tex` document has no pandoc reader in this change. Every pandoc row stays
+- ~~A `.tex` document has no pandoc reader in this change. Every pandoc row stays
   disabled for it, and `exportWithPandoc` refuses one that arrives through a
   stale menu or a keyboard route — pandoc would otherwise parse the source with
-  its Markdown reader and produce a silently wrong document.
+  its Markdown reader and produce a silently wrong document.~~
+  **Superseded 2026-11-07.** `src-tauri/src/export.rs` gained a `latex` reader arm
+  and the frontend sends `language: "latex"`, so pandoc reads `.tex` with its own
+  reader rather than the Markdown one. Every non-PDF writer is now available. See
+  `2026-11-07-latex-export-routes.md`.
 - The Typst Document view has a disabled PDF row. If readers report that as a
   nuisance, the fix is a separate, visible *Compile PDF* action, not a silent
   compile behind Export.

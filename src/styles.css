@@ -29,6 +29,11 @@
   /* The pulse's lighter beat. Kept beside the resting wash so the preview's two
      registered highlight names cannot drift from the source mark. */
   --word-sync-peak: rgba(255, 167, 0, 0.55);
+  /* A failed LaTeX compile. Rose, deliberately not the amber the word sync owns:
+     the two marks mean different things and must not read as the same state. */
+  --diagnostic-error: rgba(229, 72, 111, 0.16);
+  --diagnostic-error-peak: rgba(229, 72, 111, 0.4);
+  --diagnostic-rule: #d93661;
   --quote-bar: rgba(127, 127, 127, 0.4);
   --sidebar-w: 244px;
   --editor-max-width: 860px;
@@ -101,6 +106,11 @@
      not share this value, because it sits on the syntax palette's surface. */
   --word-sync: rgba(255, 196, 0, 0.42);
   --word-sync-peak: rgba(255, 214, 80, 0.62);
+  /* Rose reads on the light and dark palettes alike; the wash is translucent so
+     it blends with Nord/Ink/Solarized surfaces instead of fighting them. */
+  --diagnostic-error: rgba(255, 105, 145, 0.2);
+  --diagnostic-error-peak: rgba(255, 105, 145, 0.46);
+  --diagnostic-rule: #ff8fab;
   --quote-bar: rgba(200, 200, 200, 0.35);
   --spell-error: #f07178;
   --scroll-shadow: rgba(0, 0, 0, 0.55);
@@ -1873,6 +1883,131 @@ body {
   margin-top: 24px;
 }
 
+/* --------------------------------------------------------------------------
+   Export format chooser
+   -------------------------------------------------------------------------- */
+
+.export-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, calc(100vw - 48px));
+  max-height: min(620px, calc(100vh - 64px));
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.3);
+}
+.export-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.35);
+}
+.export-dialog h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+.export-dialog-caption {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 0.92em;
+  line-height: 1.45;
+}
+.export-dialog-search {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--sidebar-bg);
+  color: var(--fg);
+  font: inherit;
+}
+.export-dialog-search:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* The list is the scrolling part: the field and the buttons stay put while a
+   77-row catalogue is searched. */
+.export-dialog-list {
+  flex: 1 1 auto;
+  min-height: 120px;
+  margin: 12px 0 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.export-dialog-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 16px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.export-dialog-row + .export-dialog-row {
+  border-top: 1px solid var(--border);
+}
+.export-dialog-row.is-active,
+.export-dialog-row:hover {
+  background: var(--active-line);
+}
+.export-dialog-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.export-dialog-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.export-dialog-detail {
+  color: var(--muted);
+  font-size: 0.86em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.export-dialog-note {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 0.82em;
+  font-style: italic;
+}
+.export-dialog-empty {
+  padding: 16px 12px;
+  color: var(--muted);
+}
+.export-dialog-status {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.86em;
+  font-variant-numeric: tabular-nums;
+}
+.export-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+.export-dialog-actions button {
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--sidebar-bg);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+.export-dialog-actions button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .prefs-overlay {
   position: fixed;
   inset: 0;
@@ -2215,14 +2350,54 @@ body {
   margin-top: 0;
 }
 
-/* Typst preview: the compiler's own pages, one below the other. */
+/* Typst preview: the compiler's own pages, one below the other, flush.
+   No gap, no rule, no shadow: the reader is reading a document, not a stack of
+   cards. What separates one page from the next is the paper's own margin, which
+   is part of the page and therefore part of what a PDF export contains. */
 .typst-preview {
   --typst-fit: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 18px;
   padding: 22px 0 40px;
+}
+
+/* Compile errors float above the last successful PDF without changing its
+   scroll height; the next successful replacement removes the layer. */
+.pdf-rebuild-error {
+  position: sticky;
+  top: 0;
+  height: 0;
+  z-index: 5;
+}
+.pdf-rebuild-error .typst-error {
+  position: absolute;
+  top: 0;
+  left: 8px;
+  right: 8px;
+  max-height: 35vh;
+  overflow: auto;
+  background: var(--bg);
+}
+
+/* The navigable panel replaces the bare <pre> as the layer's visible content.
+   The raw log keeps its own scrolling inside the panel. */
+.pdf-rebuild-error .latex-problems {
+  position: absolute;
+  top: 0;
+  left: 8px;
+  right: 8px;
+  max-height: 45vh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.pdf-rebuild-error .latex-problems .typst-error {
+  position: static;
+  max-height: none;
+  background: transparent;
 }
 
 /* Pages own the pane from edge to edge: the fitted page is a few pixels wider
@@ -2255,20 +2430,14 @@ body {
   align-items: flex-start;
 }
 
-/* The shell owns the fitted size and the shadow; the page inside keeps the
-   fixed 96 dpi coordinate system PDF.js laid the text layer out in. */
+/* The shell owns the fitted size; the page inside keeps the fixed 96 dpi
+   coordinate system PDF.js laid the text layer out in. */
 .typst-page-shell {
   position: relative;
   flex: none;
   width: calc(var(--typst-page-width) * 1px * var(--typst-fit));
   height: calc(var(--typst-page-height) * 1px * var(--typst-fit));
   background: var(--bg);
-  /* The page is as wide as the pane, so its side shadow is clipped away. What
-     is left is a rule above each page and a soft shadow below it: the page
-     break reads vertically, which is the only place a page edge should show. */
-  box-shadow:
-    0 -1px 0 var(--border),
-    0 1px 4px rgb(0 0 0 / 22%);
 }
 
 .typst-page {
@@ -2289,28 +2458,6 @@ body {
   display: block;
   width: 100%;
   height: 100%;
-}
-
-.latex-sync-region {
-  position: absolute;
-  z-index: 3;
-  pointer-events: none;
-  background: rgb(255 191 0 / 25%);
-  outline: 1px solid rgb(180 110 0 / 65%);
-}
-
-.latex-sync-blink {
-  animation: latex-sync-fade 1.3s ease-out forwards;
-}
-
-@keyframes latex-sync-fade {
-  0%,
-  45% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
-  }
 }
 
 /* The PDF page reaches us as one raster, so the only way to follow the theme is
@@ -2400,14 +2547,105 @@ body {
   overflow-wrap: anywhere;
 }
 
-/* The page stands slightly off the pane, so a rule and the shadow above are
-   what separate one page from the next. The shell is dark too: it is visible
-   for the instant between appending a page and PDF.js filling its canvas. */
+/* The navigable form of a LaTeX failure. The raw log stays available below it,
+   but the list is what the reader acts on: one row per occurrence, with the line
+   the compiler actually read. */
+.latex-problems {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+}
+
+.latex-problems-head {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.latex-problems-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.latex-problem {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--code-bg);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.latex-problem:hover,
+.latex-problem:focus-visible {
+  border-color: var(--diagnostic-rule);
+  background: color-mix(in srgb, var(--diagnostic-error) 45%, var(--code-bg));
+}
+
+.latex-problem-place {
+  font-family: var(--font-code);
+  font-size: 11.5px;
+  color: var(--diagnostic-rule);
+}
+
+.latex-problem-message {
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+/* The compiled line, not the buffer's: when the two differ, the reader sees
+   exactly which text the build used. */
+.latex-problem-source {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: var(--bg);
+  font-family: var(--font-code);
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.latex-problems-more {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.latex-log {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.latex-log summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.latex-log .typst-error {
+  padding: 8px 0 0;
+}
+
+/* The shell is dark too: it is visible for the instant between appending a page
+   and PDF.js filling its canvas. */
 [data-theme="dark"] .typst-page-shell {
   background: var(--bg);
-  box-shadow:
-    0 -1px 0 var(--border),
-    0 1px 6px rgb(0 0 0 / 55%);
 }
 
 /* A set of alternatives as buttons, used where picking one redraws the panel. */
@@ -2692,6 +2930,39 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .cm-sync-word {
+    animation: none;
+  }
+}
+
+/* A LaTeX problem from the last compile. Three beats, then the resting wash:
+   the mark must remain after the blink, because it is the only pointer to the
+   offending command. Shape (the wavy underline) carries the meaning as well as
+   colour, so it survives a reader who cannot separate rose from amber. */
+@keyframes latex-error-pulse {
+  0%,
+  100% {
+    background-color: var(--diagnostic-error);
+  }
+  40% {
+    background-color: var(--diagnostic-error-peak);
+  }
+}
+
+.cm-latex-error {
+  background-color: var(--diagnostic-error);
+  text-decoration: underline wavy var(--diagnostic-rule);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  border-radius: 2px;
+  animation: latex-error-pulse 520ms ease-in-out 3;
+}
+
+.cm-latex-error-line {
+  background-color: color-mix(in srgb, var(--diagnostic-error) 55%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cm-latex-error {
     animation: none;
   }
 }

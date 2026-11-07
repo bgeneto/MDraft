@@ -16,11 +16,64 @@
 //! `%APPDATA%\io.github.bernh.mdraft\settings.json` must have been deleted so
 //! the default format list is in place.
 
-import { mkdirSync, readFileSync, rmSync, existsSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, existsSync, statSync, writeFileSync } from "node:fs";
+import { inflateRawSync } from "node:zlib";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import ts from "typescript";
 import { runInNewContext } from "node:vm";
+
+/**
+ * Read a ZIP's entries as text, for a DOCX/ODT/EPUB the conversion produced.
+ *
+ * A DOCX is a ZIP, and node has no built-in reader, so the central directory is
+ * walked by hand: enough to prove the document part and the embedded media are
+ * there, which is what a reader would see when opening the file.
+ */
+function listZip(path) {
+  const bytes = readFileSync(path);
+  const entries = new Map();
+  // Find the end-of-central-directory record, scanning back over its comment.
+  let eocd = -1;
+  for (let i = bytes.length - 22; i >= 0 && i > bytes.length - 65558; i -= 1) {
+    if (bytes.readUInt32LE(i) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) return entries;
+  const count = bytes.readUInt16LE(eocd + 10);
+  let offset = bytes.readUInt32LE(eocd + 16);
+  for (let index = 0; index < count; index += 1) {
+    if (bytes.readUInt32LE(offset) !== 0x02014b50) break;
+    const method = bytes.readUInt16LE(offset + 10);
+    const compressed = bytes.readUInt32LE(offset + 20);
+    const nameLength = bytes.readUInt16LE(offset + 28);
+    const extraLength = bytes.readUInt16LE(offset + 30);
+    const commentLength = bytes.readUInt16LE(offset + 32);
+    const localOffset = bytes.readUInt32LE(offset + 42);
+    const name = bytes.toString("utf8", offset + 46, offset + 46 + nameLength);
+    const start =
+      localOffset +
+      30 +
+      bytes.readUInt16LE(localOffset + 26) +
+      bytes.readUInt16LE(localOffset + 28);
+    const raw = bytes.subarray(start, start + compressed);
+    if (method === 0) {
+      entries.set(name, raw.toString("utf8"));
+    } else if (method === 8) {
+      try {
+        entries.set(name, inflateRawSync(raw).toString("utf8"));
+      } catch {
+        entries.set(name, "");
+      }
+    } else {
+      entries.set(name, "");
+    }
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+  return entries;
+}
 
 const port = process.argv[2] ?? "9222";
 const withInstall = process.argv.includes("--install");
@@ -283,7 +336,6 @@ for (const format of formats) {
   }
 }
 
-
 // (3d) The AsciiDoc frontend renders the source to HTML and sends
 //      `language: "html"`. Asciidoctor emits `\(…\)` / `\[…\]`; without the
 //      backslash math extensions pandoc's HTML reader prints them literally.
@@ -308,6 +360,307 @@ for (const format of formats) {
       text.split("\n").find((line) => line.includes("x^2")) ?? "no formula",
     );
   }
+}
+
+// (3e) The writer chooser's two commands, and a LaTeX conversion from a
+//      snapshot rather than from the file on disk.
+//
+//      This is the route File › Export › More Pandoc Formats… uses. The point of
+//      the snapshot is that an unsaved chapter reaches the export: the fixture
+//      below has a root and an `\input` chapter that exist only in the payload,
+//      so a conversion that read the disk would produce neither.
+{
+  const writers = await call("pandoc_list_writers");
+  if (!writers.ok) {
+    check(false, "pandoc_list_writers reports the installed writers", writers.error.split("\n")[0]);
+  } else {
+    const ids = writers.value.map((entry) => entry.id);
+    check(ids.length > 40, "the writer list is the installed one", `${ids.length} writers`);
+    for (const expected of ["docx", "odt", "epub", "rtf", "markdown", "html", "pdf"]) {
+      check(ids.includes(expected), `the writer list contains ${expected}`);
+    }
+    // A known writer carries the curated label and extension the save dialog
+    // suggests; an unknown one still gets a usable pair rather than vanishing.
+    const docx = writers.value.find((entry) => entry.id === "docx");
+    check(
+      docx?.label === "Word (.docx)" && docx?.extension === "docx",
+      "a known writer keeps its curated label and extension",
+      docx ? `${docx.label} / .${docx.extension}` : "MISSING",
+    );
+    check(
+      writers.value.find((entry) => entry.id === "chunkedhtml")?.extension === "zip",
+      "chunked HTML is one ZIP, not a directory tree",
+    );
+    // Bibliography-only writers are labelled so the chooser can explain an empty
+    // result instead of presenting it as a successful conversion.
+    const bibtex = writers.value.find((entry) => entry.id === "bibtex");
+    check(
+      bibtex?.bibliographyOnly === true,
+      "a citation-data writer is marked as such",
+      bibtex ? String(bibtex.bibliographyOnly) : "MISSING",
+    );
+  }
+
+  // A writer the installed pandoc does not advertise is refused by name rather
+  // than reaching pandoc as a usage error.
+  const bogus = await call("run_pandoc_writer", {
+    request: {
+      formatId: "no-such-writer",
+      markdown: "",
+      outputPath: join(workDir, "bogus.docx"),
+      inputPath: null,
+      language: "latex",
+    },
+    writer: "no-such-writer",
+  });
+  check(
+    !bogus.ok && /does not offer/i.test(bogus.error),
+    "a writer the installed pandoc does not offer is refused",
+    bogus.ok ? "it was allowed" : bogus.error.split("\n")[0],
+  );
+
+  // A writer id that is not a safe identifier is refused before any process
+  // starts: it would otherwise become a second argument.
+  const unsafe = await call("run_pandoc_writer", {
+    request: {
+      formatId: "docx",
+      markdown: "",
+      outputPath: join(workDir, "unsafe.docx"),
+      inputPath: null,
+      language: "latex",
+    },
+    writer: "docx --pdf-engine=x",
+  });
+  check(
+    !unsafe.ok && /valid pandoc writer/i.test(unsafe.error),
+    "an unsafe writer id is refused",
+    unsafe.ok ? "it was allowed" : unsafe.error.split("\n")[0],
+  );
+
+  // `pdf` is in pandoc's list, but it is the compiled route rather than a
+  // conversion, so a direct call is refused with that explanation.
+  const pdfWriter = await call("run_pandoc_writer", {
+    request: {
+      formatId: "pdf",
+      markdown: "",
+      outputPath: join(workDir, "writer.pdf"),
+      inputPath: null,
+      language: "latex",
+    },
+    writer: "pdf",
+  });
+  check(
+    !pdfWriter.ok && /compiled/i.test(pdfWriter.error),
+    "the pdf writer is refused in favour of the compiled route",
+    pdfWriter.ok ? "it was allowed" : pdfWriter.error.split("\n")[0],
+  );
+
+  // The snapshot fixture: a root, a chapter and a local image, none of which is
+  // on disk anywhere. `root` is the project directory the links are rewritten
+  // to, so it must exist even though the sources do not.
+  const projectRoot = join(workDir, "latex-project");
+  mkdirSync(join(projectRoot, "fig"), { recursive: true });
+  // A 1x1 PNG, so an image-bearing writer has something real to embed.
+  writeFileSync(
+    join(projectRoot, "fig", "pixel.png"),
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==",
+      "base64",
+    ),
+  );
+  const snapshot = {
+    root: projectRoot,
+    mainFile: "main.tex",
+    files: [
+      {
+        path: "main.tex",
+        data: Buffer.from(
+          [
+            "\\documentclass{article}",
+            "\\usepackage{graphicx}",
+            "\\begin{document}",
+            "\\section{Snapshot Section}",
+            "\\input{chapter}",
+            "\\includegraphics{fig/pixel.png}",
+            "\\end{document}",
+            "",
+          ].join("\n"),
+        ).toString("base64"),
+      },
+      {
+        path: "chapter.tex",
+        data: Buffer.from("Chapter text that exists only in the snapshot.\n").toString("base64"),
+      },
+    ],
+  };
+
+  const docxPath = join(workDir, "snapshot.docx");
+  const docx = await call("run_pandoc_writer", {
+    request: {
+      formatId: "docx",
+      markdown: "",
+      outputPath: docxPath,
+      inputPath: null,
+      language: "latex",
+      snapshot,
+    },
+    writer: "docx",
+  });
+  check(
+    docx.ok && existsSync(docxPath) && readFileSync(docxPath).subarray(0, 2).toString() === "PK",
+    "a LaTeX snapshot converts to DOCX",
+    docx.ok ? `${statSync(docxPath).size} bytes` : docx.error.split("\n")[0],
+  );
+  if (docx.ok && existsSync(docxPath)) {
+    // A DOCX is a ZIP: read the document part and require the heading and the
+    // chapter, which is the proof that the snapshot was read rather than a file.
+    const entries = listZip(docxPath);
+    const documentPart = entries.get("word/document.xml") ?? "";
+    check(
+      documentPart.includes("Snapshot Section"),
+      "the DOCX carries the root document's heading",
+      documentPart.includes("Snapshot Section") ? "present" : "MISSING",
+    );
+    check(
+      documentPart.includes("Chapter text that exists only in the snapshot"),
+      "the DOCX carries the chapter that exists only in the snapshot",
+      documentPart.includes("Chapter text") ? "present" : "MISSING — the disk was read",
+    );
+    check(
+      [...entries.keys()].some((name) => name.startsWith("word/media/")),
+      "the DOCX embeds the local image",
+      [...entries.keys()].filter((name) => name.startsWith("word/media/")).join(", ") || "none",
+    );
+  }
+
+  // Standalone HTML embeds the local image, so the file still works after the
+  // scratch copy is gone. A relative `fig/pixel.png` would dangle.
+  const htmlPath = join(workDir, "snapshot.html");
+  const html = await call("run_pandoc_writer", {
+    request: {
+      formatId: "html",
+      markdown: "",
+      outputPath: htmlPath,
+      inputPath: null,
+      language: "latex",
+      snapshot,
+    },
+    writer: "html",
+  });
+  if (!html.ok) {
+    check(false, "a LaTeX snapshot converts to standalone HTML", html.error.split("\n")[0]);
+  } else {
+    const text = readFileSync(htmlPath, "utf8");
+    check(
+      text.includes("Snapshot Section") && text.includes("Chapter text"),
+      "the HTML carries the snapshot's structure and its chapter",
+    );
+    check(
+      /<img[^>]+src="data:image\/png;base64,/.test(text),
+      "the HTML embeds the local image rather than a scratch path",
+      /<img[^>]+src="data:image\/png;base64,/.test(text) ? "embedded" : "a path was left behind",
+    );
+    check(!text.includes("mdraft-export"), "no scratch directory path survives in the HTML");
+  }
+
+  // A Markdown target rewrites its image link to the reader's own file, because
+  // the staged copy is deleted when the export returns.
+  const mdPath = join(workDir, "snapshot.md");
+  const md = await call("run_pandoc_writer", {
+    request: {
+      formatId: "markdown",
+      markdown: "",
+      outputPath: mdPath,
+      inputPath: null,
+      language: "latex",
+      snapshot,
+    },
+    writer: "markdown",
+  });
+  if (!md.ok) {
+    check(false, "a LaTeX snapshot converts to Markdown", md.error.split("\n")[0]);
+  } else {
+    const text = readFileSync(mdPath, "utf8");
+    check(
+      text.includes("# Snapshot Section"),
+      "the Markdown carries the root document's heading",
+      text.split("\n").find((line) => line.startsWith("#")) ?? "no heading",
+    );
+    check(
+      text.includes("Chapter text that exists only in the snapshot"),
+      "the Markdown carries the chapter that exists only in the snapshot",
+    );
+    const link = text.match(/!\[[^\]]*\]\(([^)]+)\)/)?.[1] ?? "";
+    check(
+      existsSync(link) && link.includes("pixel.png"),
+      "the Markdown image link points at the reader's own file",
+      link || "no image link",
+    );
+  }
+
+  // A bibliography-only writer explains the empty result rather than reporting a
+  // silent zero-byte success.
+  const bibPath = join(workDir, "snapshot.bib");
+  const bib = await call("run_pandoc_writer", {
+    request: {
+      formatId: "bibtex",
+      markdown: "",
+      outputPath: bibPath,
+      inputPath: null,
+      language: "latex",
+      snapshot,
+    },
+    writer: "bibtex",
+  });
+  check(
+    bib.ok && /citation data/i.test(bib.value.warnings),
+    "a bibliography-only writer explains its empty result",
+    bib.ok ? bib.value.warnings.split("\n")[0] : bib.error.split("\n")[0],
+  );
+
+  // The output must not be one of the project's own files: pandoc would truncate
+  // it before writing and the reader would lose the source.
+  const collision = await call("run_pandoc_writer", {
+    request: {
+      formatId: "docx",
+      markdown: "",
+      outputPath: join(projectRoot, "main.tex"),
+      inputPath: null,
+      language: "latex",
+      snapshot,
+    },
+    writer: "docx",
+  });
+  check(
+    !collision.ok && /part of the project/i.test(collision.error),
+    "a conversion refuses to overwrite a project source file",
+    collision.ok ? "it was allowed" : collision.error.split("\n")[0],
+  );
+
+  // A snapshot entry that escapes its root is refused, not written outside it.
+  const escape = await call("run_pandoc_writer", {
+    request: {
+      formatId: "docx",
+      markdown: "",
+      outputPath: join(workDir, "escape.docx"),
+      inputPath: null,
+      language: "latex",
+      snapshot: {
+        root: projectRoot,
+        mainFile: "main.tex",
+        files: [
+          { path: "../escaped.tex", data: Buffer.from("x").toString("base64") },
+          { path: "main.tex", data: Buffer.from("\\section{x}").toString("base64") },
+        ],
+      },
+    },
+    writer: "docx",
+  });
+  check(
+    !escape.ok && /safe project path/i.test(escape.error),
+    "a snapshot entry that leaves the project is refused",
+    escape.ok ? "it was allowed" : escape.error.split("\n")[0],
+  );
 }
 
 // (4) An export must not be able to clobber the document it is exporting.
@@ -694,6 +1047,8 @@ const panel = await evaluate(`
       found: true,
       heading: document.querySelector('.prefs-section-title')?.textContent ?? '',
       labels,
+      notes: [...document.querySelectorAll('.prefs-note')].map((n) => n.textContent ?? ''),
+      buttons: [...document.querySelectorAll('.prefs-button')].map((b) => b.textContent ?? ''),
       selects: document.querySelectorAll('.prefs-control select').length,
       checkboxes: document.querySelectorAll('.prefs-row-checkbox input[type=checkbox]').length,
       // The format picker must list every configured target.
@@ -729,6 +1084,21 @@ if (panel.found) {
     panel.checkboxes >= 3 && panel.selects >= 1,
     "the Export section has real controls, not just notes",
     `${panel.selects} select(s), ${panel.checkboxes} checkbox(es)`,
+  );
+  // The install paths used to be printed in full. A reader cannot act on a
+  // `C:\Users\…\pandoc\3.12.1\pandoc.exe` line, and it dominated the section;
+  // each tool has a folder button instead.
+  check(
+    !panel.notes.some((text) => /[A-Za-z]:[\\/]|^\/|\.exe\b/i.test(text)),
+    "the Export section prints no install path",
+    panel.notes.join(" | "),
+  );
+  check(
+    ["Open the pandoc folder", "Open the Typst folder", "Open the LaTeX folder"].every((label) =>
+      panel.buttons.includes(label),
+    ),
+    "each tool has a folder button",
+    panel.buttons.join(", "),
   );
 }
 

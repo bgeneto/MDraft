@@ -3,6 +3,10 @@
 **Status:** accepted
 **Date:** 2026-11-06
 
+The LaTeX-specific SyncTeX lookup below is superseded by
+[`2026-11-07-pdf-correspondence-and-lifetime.md`](2026-11-07-pdf-correspondence-and-lifetime.md).
+The decision to share one PDF viewer remains in force.
+
 ## Context
 
 The Typst Pages view draws the compiler's PDF with PDF.js and maps a click back

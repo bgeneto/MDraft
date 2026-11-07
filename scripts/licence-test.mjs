@@ -61,21 +61,18 @@ function check(ok, label, detail = "") {
 }
 
 console.log("=== the licences are reachable from the interface ===");
+// The route is Help › Font Licences. Preferences used to offer a duplicate
+// button in a General section that had no setting in it; that section is gone,
+// so this suite proves the Help route — the one a reader actually uses — works.
 const clicked = await evaluate(`(() => {
-  const overlay = document.querySelector('.prefs-overlay');
-  if (!overlay || overlay.hidden) document.getElementById('btn-prefs').click();
-  const general = [...document.querySelectorAll('.prefs-section')]
-    .find((s) => /^general$/i.test(s.textContent.trim()));
-  if (!general) return JSON.stringify({ error: 'no General section' });
-  general.click();
-  const button = [...document.querySelectorAll('.prefs-button')]
-    .find((b) => /Font licences/i.test(b.textContent));
-  if (!button) return JSON.stringify({ error: 'no licence button' });
-  button.click();
-  return JSON.stringify({ clicked: true });
+  const invoke = window.__TAURI_INTERNALS__?.invoke;
+  if (typeof invoke !== 'function') return JSON.stringify({ error: 'no IPC bridge' });
+  return invoke('plugin:event|emit', { event: 'menu', payload: 'help.licences' })
+    .then(() => JSON.stringify({ clicked: true }))
+    .catch((error) => JSON.stringify({ error: String(error) }));
 })()`);
 const state = JSON.parse(clicked);
-check("Preferences offers the font licences", state.clicked === true, state.error ?? "");
+check("Help offers the font licences", state.clicked === true, state.error ?? "");
 
 if (state.clicked) {
   // The document opens in the editor; give the render a moment.
@@ -124,14 +121,19 @@ if (state.clicked) {
   );
 }
 
-console.log("\n=== the Help menu reaches the same document ===");
-// The menu id is dispatched through the same "menu" event the shortcut handler
-// uses, so this also proves the licence document is reachable without the panel.
-const helpBound = await evaluate(`(() => {
-  const app = document.getElementById('app');
-  return JSON.stringify({ menuHandler: typeof window.__TAURI_INTERNALS__?.invoke === 'function' && !!app });
+console.log("\n=== Preferences no longer duplicates the route ===");
+// The duplicate button lived in a General section that held no setting. Its
+// removal is what makes the Help route the only one, so assert it is gone
+// rather than leaving a reader to discover a dead reference.
+const generalGone = await evaluate(`(() => {
+  const overlay = document.querySelector('.prefs-overlay');
+  if (!overlay || overlay.hidden) document.getElementById('btn-prefs').click();
+  const names = [...document.querySelectorAll('.prefs-section')].map((s) => s.textContent.trim());
+  document.querySelector('.prefs-close')?.click();
+  return JSON.stringify({ names });
 })()`);
-check(JSON.parse(helpBound).menuHandler, "the application is wired to receive menu events");
+const sections = JSON.parse(generalGone).names;
+check("Preferences has no General section", !sections.includes("General"), sections.join(", "));
 
 const failed = checks.filter((c) => !c.ok);
 console.log(`\n${checks.length - failed.length}/${checks.length} checks passed`);

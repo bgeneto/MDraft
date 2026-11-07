@@ -1422,10 +1422,28 @@ language rather than assuming every language uses `>`.
 ### GAP-029 — Actionable compiler diagnostics
 
 **Priority:** P2 · **Effort:** M/L · **Workstream:** Preview · **Status:** open
+(LaTeX slice delivered 2026-11-07)
 
 **Evidence.** Typst failures are preformatted messages; warning extraction
 retains headline strings. Messages exist, but there is no navigable
 file/line/column diagnostic surface.
+
+**LaTeX (delivered).** `docs/plans/2026-11-07-latex-diagnostic-navigation.md`
+gives LaTeX structured diagnostics with the project-relative file, 1-based line
+and UTF-16 column, the exact command and the line the compiler read. The preview
+pane lists every occurrence as a button, opens the included file on a new
+failure, and the editor paints a pink `cm-latex-error` over the command with a
+three-beat pulse and a resting wavy underline. The validator no longer stops at
+the first problem, and the odd/even `%` comment rule plus the `comment` and
+`filecontents` bodies are masked in both the TypeScript scan and the Rust
+collector. The Typst half of this item is still open.
+
+**Follow-up (2026-11-07).** `\graphicspath` is not resolved by either the
+validator or the Rust collector, so an image that lives in a folder declared by
+`\graphicspath{{figures/}}` is reported missing even though LuaLaTeX finds it.
+The reported case had a genuinely missing file, which is why this was split out
+rather than bundled with the diagnostics work. A fix must teach both sides the
+same prefixes and add a test with `figures/plot.png` referenced as `plot`.
 
 **Target.** Show actionable source locations and reveal the offending range.
 Consider retaining the last successful preview with an explicit stale label;

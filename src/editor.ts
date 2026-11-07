@@ -11,6 +11,7 @@ import {
   StateEffect,
   StateField,
   type Extension,
+  type Range,
   type Text,
 } from "@codemirror/state";
 import {
@@ -109,6 +110,14 @@ export interface ScrollInfo {
   client: number;
 }
 
+/** A LaTeX problem the editor should paint, in CodeMirror offsets. */
+export interface DiagnosticRange {
+  from: number;
+  to: number;
+  /** Start of the line, when the whole line should carry the wash too. */
+  lineFrom?: number;
+}
+
 export interface EditorHandle {
   view: EditorView;
   setDoc(text: string, resetHistory?: boolean): void;
@@ -189,10 +198,22 @@ export interface EditorHandle {
   cursorInfo(): CursorInfo;
   /** Paint the source range that corresponds to a preview selection. */
   setSyncRange(from: number, to: number): void;
+  setSyncRanges(ranges: readonly { from: number; to: number }[]): void;
   /** Remove that decoration, leaving the caret and the selection alone. */
   clearSyncRange(): void;
   /** Replay the pulse on the current decoration without changing its range. */
   pulseSyncRange(): void;
+  /**
+   * Paint the ranges a failed LaTeX compile points at.
+   *
+   * `pulse` replays the pink beat; a tab restore passes false so switching
+   * tabs does not blink an error that was already on screen.
+   */
+  setDiagnostics(ranges: readonly DiagnosticRange[], pulse?: boolean): void;
+  /** Remove every diagnostic mark. */
+  clearDiagnostics(): void;
+  /** Replay the pulse on the current diagnostic marks. */
+  pulseDiagnostics(): void;
   setHeading(level: number): void;
   shiftHeading(delta: number): void;
   /** Typst headings are `=` markers, not `#`; level 0 removes the marker. */
@@ -261,7 +282,7 @@ const dimLine = Decoration.line({ class: "cm-dim-line" });
  * change and whenever a tab is restored — an `EditorState` is captured per tab,
  * so a decoration that survived capture would come back in the wrong document.
  */
-const syncRangeEffect = StateEffect.define<{ from: number; to: number } | null>();
+const syncRangeEffect = StateEffect.define<readonly { from: number; to: number }[] | null>();
 
 const syncMark = Decoration.mark({ class: "cm-sync-word" });
 
@@ -273,11 +294,50 @@ const syncRangeField = StateField.define<DecorationSet>({
     for (const effect of transaction.effects) {
       if (!effect.is(syncRangeEffect)) continue;
       explicit = true;
-      const range = effect.value;
-      next =
-        range && range.to > range.from
-          ? Decoration.set([syncMark.range(range.from, range.to)])
-          : Decoration.none;
+      const ranges = effect.value ?? [];
+      next = ranges.length
+        ? Decoration.set(
+            ranges.map((range) => syncMark.range(range.from, range.to)),
+            true,
+          )
+        : Decoration.none;
+    }
+    if (transaction.docChanged && !explicit) return Decoration.none;
+    return next;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+/**
+ * The LaTeX problems from the last compile, painted in the source pane.
+ *
+ * Cleared on every document change, like the sync mark: a mark on a line the
+ * reader just edited would claim the compile still points there. It comes back
+ * from the next compile result, which is the only authority on the problem.
+ */
+const diagnosticsEffect = StateEffect.define<readonly DiagnosticRange[] | null>();
+const diagnosticMark = Decoration.mark({ class: "cm-latex-error" });
+const diagnosticLine = Decoration.line({ class: "cm-latex-error-line" });
+
+const diagnosticsField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, transaction) {
+    let next = value.map(transaction.changes);
+    let explicit = false;
+    for (const effect of transaction.effects) {
+      if (!effect.is(diagnosticsEffect)) continue;
+      explicit = true;
+      const ranges = effect.value ?? [];
+      const decorations: Range<Decoration>[] = [];
+      const washed = new Set<number>();
+      for (const range of ranges) {
+        if (range.lineFrom !== undefined && !washed.has(range.lineFrom)) {
+          washed.add(range.lineFrom);
+          decorations.push(diagnosticLine.range(range.lineFrom));
+        }
+        if (range.to > range.from) decorations.push(diagnosticMark.range(range.from, range.to));
+      }
+      next = decorations.length ? Decoration.set(decorations, true) : Decoration.none;
     }
     if (transaction.docChanged && !explicit) return Decoration.none;
     return next;
@@ -778,6 +838,7 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     highlightActiveLine(),
     highlightSelectionMatches(),
     syncRangeField,
+    diagnosticsField,
     search({ top: true }),
     EditorView.lineWrapping,
     languageCompartment.of(markdownSupport),
@@ -907,6 +968,24 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
   function pulseSyncRange(): void {
     if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
     for (const mark of view.dom.querySelectorAll<HTMLElement>(".cm-sync-word")) {
+      mark.style.animation = "none";
+      void mark.offsetWidth;
+      mark.style.animation = "";
+    }
+  }
+
+  /**
+   * Replay the pink beat on the diagnostic marks.
+   *
+   * Same reason as {@link pulseSyncRange}: a new failure with the same ranges
+   * reuses the DOM element, and the animation only runs when it is inserted.
+   * The resting wash stays; reduced motion keeps it without the beat.
+   */
+  function pulseDiagnostics(): void {
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    for (const mark of view.dom.querySelectorAll<HTMLElement>(
+      ".cm-latex-error, .cm-latex-error-line",
+    )) {
       mark.style.animation = "none";
       void mark.offsetWidth;
       mark.style.animation = "";
@@ -1327,16 +1406,20 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     },
 
     setSyncRange(from, to) {
-      // The range belongs to the other pane. A focused editor writes its own
-      // selection back into the DOM on its next update, which collapses the
-      // preview selection the reader just made — measured at about 100 ms. A
-      // real mousedown in the preview blurs the editor anyway; do the same for a
-      // selection that arrives by script or by keyboard.
+      this.setSyncRanges([{ from, to }]);
+    },
+
+    setSyncRanges(ranges) {
+      // Preserve the PDF selection when CodeMirror repaints its decorations.
       if (view.hasFocus) view.contentDOM.blur();
       const max = view.state.doc.length;
-      const start = Math.max(0, Math.min(from, max));
-      const end = Math.max(start, Math.min(to, max));
-      view.dispatch({ effects: syncRangeEffect.of(end > start ? { from: start, to: end } : null) });
+      const clean = ranges
+        .map(({ from, to }) => ({
+          from: Math.max(0, Math.min(from, max)),
+          to: Math.max(0, Math.min(to, max)),
+        }))
+        .filter(({ from, to }) => to > from);
+      view.dispatch({ effects: syncRangeEffect.of(clean.length ? clean : null) });
       pulseSyncRange();
     },
 
@@ -1346,6 +1429,26 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     },
 
     pulseSyncRange,
+
+    setDiagnostics(ranges, pulse = false) {
+      const max = view.state.doc.length;
+      const clean = ranges
+        .map(({ from, to, lineFrom }) => ({
+          from: Math.max(0, Math.min(from, max)),
+          to: Math.max(0, Math.min(to, max)),
+          lineFrom: lineFrom === undefined ? undefined : Math.max(0, Math.min(lineFrom, max)),
+        }))
+        .filter(({ from, to, lineFrom }) => to > from || lineFrom !== undefined);
+      view.dispatch({ effects: diagnosticsEffect.of(clean.length ? clean : null) });
+      if (pulse) pulseDiagnostics();
+    },
+
+    clearDiagnostics() {
+      if (view.state.field(diagnosticsField).size === 0) return;
+      view.dispatch({ effects: diagnosticsEffect.of(null) });
+    },
+
+    pulseDiagnostics,
 
     setHeading(level) {
       transformSelectedLines((line) => {

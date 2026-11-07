@@ -145,6 +145,39 @@ export interface ExportRequest {
    * the document's folder and this one. Only a `.typ` export uses it.
    */
   imageRoot?: string | null;
+  /**
+   * The LaTeX project as the preview compiled it, unsaved buffers included.
+   *
+   * A `.tex` conversion reads this instead of the file on disk: the buffer on
+   * screen can be newer, and an `\input` chapter may never have been saved.
+   * Absent for every other language, and absent keeps the old behaviour.
+   */
+  snapshot?: ExportSnapshot | null;
+}
+
+/** The project files a LaTeX conversion reads, captured before any dialog. */
+export interface ExportSnapshot {
+  /** The absolute project directory the snapshot came from. */
+  root: string;
+  /** Project-relative, forward slashes. */
+  mainFile: string;
+  /** Base64, because an `\includegraphics` target is a PNG or a PDF. */
+  files: Array<{ path: string; data: string }>;
+}
+
+/** One writer the installed pandoc advertises. */
+export interface PandocWriter {
+  id: string;
+  label: string;
+  /** Without the dot, as the save dialog wants it. */
+  extension: string;
+  /**
+   * The writer emits citation data rather than a document.
+   *
+   * Pandoc's LaTeX reader does not carry the entries a `.bib` file holds, so
+   * these produce an empty result for a `.tex` source. The chooser says so.
+   */
+  bibliographyOnly: boolean;
 }
 
 export interface ExportOutcome {
@@ -607,8 +640,36 @@ export const pandocStatus = () => invoke<PandocStatus>("pandoc_status");
  */
 export const openExternal = (path: string) => invoke<void>("open_external", { path });
 
+/**
+ * Open one of the application's own tool folders in the OS file manager.
+ *
+ * Preferences offers a button instead of printing the install path. The name is
+ * a whitelist entry (`"pandoc"`, `"typst"`, `"latex"`), never a path: Rust
+ * resolves it under the application data directory and creates it if needed.
+ */
+export type AppFolder = "pandoc" | "typst" | "latex";
+export const openAppFolder = (folder: AppFolder) => invoke<void>("open_app_folder", { folder });
+
 export const runExport = (request: ExportRequest) =>
   invoke<ExportOutcome>("run_export", { request });
+
+/**
+ * Every writer the installed pandoc advertises.
+ *
+ * Read-only, cached in Rust against the resolved binary and version. `pdf` is
+ * included: the chooser turns it into the compiled-PDF route rather than a
+ * conversion.
+ */
+export const pandocListWriters = () => invoke<PandocWriter[]>("pandoc_list_writers");
+
+/**
+ * Convert a LaTeX project with one writer the chooser picked.
+ *
+ * The writer is validated in Rust against the installed binary's own list, so a
+ * stale chooser or a writer a pandoc update removed fails with a named error.
+ */
+export const runPandocWriter = (request: ExportRequest, writer: string) =>
+  invoke<ExportOutcome>("run_pandoc_writer", { request, writer });
 
 /**
  * Run the global after-export options for a file the frontend wrote.

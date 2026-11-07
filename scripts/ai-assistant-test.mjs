@@ -1111,6 +1111,14 @@ try {
     !prefsSection.labels.includes("Status"),
     prefsSection.labels.join(", "),
   );
+  // The Privacy paragraph explained the endpoint, the credential store and what
+  // leaves the machine. That is documentation, and it lives in the guide; the
+  // panel is a list of controls.
+  check(
+    "the AI section has no Privacy paragraph",
+    !prefsSection.labels.includes("Privacy"),
+    prefsSection.labels.join(", "),
+  );
   const contextLimit = await evaluate(`(() => {
     const input = (${rowSelector("Context limit")})?.querySelector('input[type=number]');
     if (!input) return null;

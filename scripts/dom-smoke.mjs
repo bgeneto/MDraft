@@ -314,11 +314,11 @@ for (const section of prefs.perSection) {
 
 check("preferences opens", prefs.open);
 check("preferences title", prefs.title === "Preferences");
-check("eleven sections", prefs.sectionNames.split(",").length === 11);
+check("ten sections", prefs.sectionNames.split(",").length === 10);
 check(
   "sections named and ordered",
   prefs.sectionNames ===
-    "Files,Editor,Image,Markdown,HTML,Export,Appearance,General,Typography,AI Assistant,Read Aloud",
+    "Files,Editor,Image,Markdown,HTML,Export,Appearance,Typography,AI Assistant,Read Aloud",
 );
 check(
   "first section selected",
@@ -335,6 +335,35 @@ check(
   Boolean(editorSection) &&
     editorSection.labels.includes("Check spelling while typing") &&
     editorSection.labels.includes("Dictionary"),
+);
+
+// A heading that only repeats the row beneath it is noise. These three named
+// the setting sitting under them and nothing else, so they are gone; the check
+// is what stops them drifting back in a later edit.
+const headings = await evaluate(`(() => {
+  const groups = [];
+  for (const button of document.querySelectorAll('.prefs-section')) {
+    button.click();
+    groups.push(...[...document.querySelectorAll('.prefs-group')].map((g) => g.textContent));
+  }
+  [...document.querySelectorAll('.prefs-section')].find((s) => s.textContent === 'Files').click();
+  const filesLabels = [...document.querySelectorAll('.prefs-row .prefs-label')]
+    .map((l) => l.textContent.replace('?', '').trim());
+  return JSON.stringify({ groups, filesLabels });
+})()`);
+check(
+  "no heading repeats the setting beneath it",
+  !headings.groups.includes("Auto-close") &&
+    !headings.groups.includes("Completion") &&
+    !headings.groups.includes("Spelling") &&
+    !headings.groups.includes("Recent Locations") &&
+    !headings.groups.includes("Favorites"),
+  headings.groups.join(", "),
+);
+check(
+  "the Favorites how-to note is gone",
+  !headings.filesLabels.includes("Managing Favorites"),
+  headings.filesLabels.join(", "),
 );
 const readAloudSection = prefs.perSection.find((section) => section.name === "Read Aloud");
 check(
@@ -394,8 +423,10 @@ check("the choice reaches the settings file", onLaunch.stored === "tabs");
 check("the preference is left as it was found", onLaunch.restored === onLaunch.initial);
 
 // Search filters the navigation down to matching sections. A group heading is
-// a searchable category too: "Recent Locations" is a heading, not a row, and
-// used to leave the section with nothing the reader could see.
+// a searchable category too: "Preferred Image Syntax" is a heading, not a row,
+// and matching it must bring its whole group with it. The terms are chosen to
+// occur in exactly one section — "latex", for instance, also appears in the
+// completion help under Editor.
 const search = await evaluate(`(() => {
   const input = document.querySelector('.prefs-search');
   const run = (value) => {
@@ -409,35 +440,35 @@ const search = await evaluate(`(() => {
     };
   };
   const mermaid = run('mermaid');
-  const locations = run('locations');
-  const managing = run('managing');
+  const syntax = run('preferred image syntax');
+  const autosave = run('auto save');
   const clear = run('clear recent');
   input.value = '';
   input.dispatchEvent(new Event('input', { bubbles: true }));
-  return JSON.stringify({ mermaid, locations, managing, clear });
+  return JSON.stringify({ mermaid, syntax, autosave, clear });
 })()`);
 
 console.log("\n=== preferences search ===");
 console.log(`  mermaid    ${search.mermaid.sections} / ${search.mermaid.labels}`);
 console.log(
-  `  locations  ${search.locations.sections} / ${search.locations.groups} / ${search.locations.labels}`,
+  `  syntax     ${search.syntax.sections} / ${search.syntax.groups} / ${search.syntax.labels}`,
 );
 console.log(
-  `  managing   ${search.managing.sections} / ${search.managing.groups} / ${search.managing.labels}`,
+  `  auto save  ${search.autosave.sections} / ${search.autosave.groups} / ${search.autosave.labels}`,
 );
 console.log(`  clear      ${search.clear.sections} / ${search.clear.buttons}`);
 check(
   "search narrows sections",
   search.mermaid.sections === "Markdown" &&
-    search.locations.sections === "Files" &&
-    search.managing.sections === "Files" &&
+    search.syntax.sections === "Image" &&
+    search.autosave.sections === "Files" &&
     search.clear.sections === "Files",
 );
 check(
   "search keeps the matching row or heading",
   /Enable Diagrams/.test(search.mermaid.labels) &&
-    /Recent Locations/.test(search.locations.groups) &&
-    /Managing Favorites/.test(search.managing.labels) &&
+    /Preferred Image Syntax/.test(search.syntax.groups) &&
+    /Auto Save/.test(search.autosave.labels) &&
     /Clear Recent Files/.test(search.clear.buttons),
 );
 

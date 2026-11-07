@@ -443,11 +443,11 @@ pub fn serve(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeResp
                     let _guard = CACHE_LOCK
                         .lock()
                         .map_err(|_| "The LaTeX cache is unavailable.")?;
-                    if fs::metadata(&cache).is_ok_and(|meta| meta.len() <= MAX_FILE as u64) {
-                        if let Ok(bytes) = fs::read(&cache) {
-                            CACHE_HITS.fetch_add(1, Ordering::Relaxed);
-                            return Ok((bytes, "application/octet-stream"));
-                        }
+                    if fs::metadata(&cache).is_ok_and(|meta| meta.len() <= MAX_FILE as u64)
+                        && let Ok(bytes) = fs::read(&cache)
+                    {
+                        CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+                        return Ok((bytes, "application/octet-stream"));
                     }
                 }
                 CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
@@ -629,6 +629,13 @@ fn mask_literal_regions(text: &str) -> String {
         "lstlisting",
         "minted",
         "alltt",
+        // The `comment` package's environment is not read by the compiler, and
+        // `filecontents` writes a file rather than typesetting its body. Both
+        // were scanned as live markup, so a reference inside them was collected
+        // (or reported) even though TeX never executes it.
+        "comment",
+        "filecontents",
+        "filecontents*",
     ] {
         let open = format!("\\begin{{{name}}}");
         let close = format!("\\end{{{name}}}");
@@ -728,16 +735,33 @@ fn first_brace_argument(text: &str) -> Option<String> {
     Some(chars[at + 1..end - 1].iter().collect())
 }
 
+/// The byte offset where a TeX comment starts on this line, or None.
+///
+/// A `%` starts a comment unless an **odd** number of backslashes precedes it:
+/// `\%` is a literal percent, `\\%` is an escaped backslash followed by a
+/// comment, `\\\%` is a literal percent again. The old single-character test
+/// kept the whole line for `\\%`, so a commented reference after a line break
+/// was still collected — and the TS validator, which had the same rule, still
+/// reported it.
+fn comment_start(line: &str) -> Option<usize> {
+    for (at, ch) in line.char_indices() {
+        if ch != '%' {
+            continue;
+        }
+        let slashes = line[..at].chars().rev().take_while(|c| *c == '\\').count();
+        if slashes % 2 == 0 {
+            return Some(at);
+        }
+    }
+    None
+}
+
 /// The literal references one source declares, as `(kind, name)`.
 fn declared_references(text: &str) -> Vec<(String, String)> {
     let masked = mask_literal_regions(text);
     let mut out = Vec::new();
     for line in masked.split('\n') {
-        // A `%` starts a comment unless escaped.
-        let code = match line.find('%') {
-            Some(at) if at == 0 || !line[..at].ends_with('\\') => &line[..at],
-            _ => line,
-        };
+        let code = &line[..comment_start(line).unwrap_or(line.len())];
         let chars: Vec<char> = code.chars().collect();
         for kind in [
             "input",
@@ -806,11 +830,17 @@ fn relative_to(root: &Path, path: &Path) -> Result<String, String> {
 ///
 /// A symlink is **skipped and reported**, never followed: following one can leave
 /// the project root, which is the confinement the snapshot exists to enforce.
+/// The files a project reads, the symlinks skipped, and the generation key.
+///
+/// A named alias rather than a bare tuple: the return type is three collections
+/// deep, and a reader (and Clippy) should not have to decode it at every call.
+type CollectedProject = (Vec<(PathBuf, Vec<u8>)>, Vec<String>, String);
+
 fn collect_referenced(
     root: &Path,
     main: &Path,
     overlays: &[Overlay],
-) -> Result<(Vec<(PathBuf, Vec<u8>)>, Vec<String>, String), String> {
+) -> Result<CollectedProject, String> {
     // Every candidate is canonicalized before it is compared with `root`, so the
     // root must be canonical too — otherwise a caller passing a path with a
     // symlinked or non-normalised prefix would silently collect nothing. The
@@ -880,7 +910,12 @@ fn collect_referenced(
                 if !literal_reference(&name) {
                     continue;
                 }
-                let base = path.parent().unwrap_or(root);
+                // TeX resolves `\input` and `\includegraphics` against the main
+                // file's directory, not against the including file's. Resolving
+                // from `path.parent()` made a chapter in `chapters/` look for
+                // `chapters/figures/plot.png` while LuaLaTeX read
+                // `figures/plot.png`; the snapshot then omitted the image and the
+                // validator reported a file that exists.
                 let has_extension = name.rsplit('/').next().is_some_and(|part| part.contains('.'));
                 let suffixes: &[&str] = if has_extension {
                     &[""]
@@ -888,7 +923,7 @@ fn collect_referenced(
                     candidate_suffixes(&kind)
                 };
                 for suffix in suffixes {
-                    let candidate = base.join(format!("{name}{suffix}"));
+                    let candidate = root.join(format!("{name}{suffix}"));
                     let Ok(full) = fs::canonicalize(&candidate) else {
                         continue;
                     };
@@ -1060,8 +1095,8 @@ pub async fn print_compiled_pdf<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::{
-        cache_size, collect_referenced, evict_to_limit, mask_literal_regions, safe_relative,
-        MAX_PROJECT,
+        cache_size, collect_referenced, declared_references, evict_to_limit, mask_literal_regions,
+        safe_relative, MAX_PROJECT,
     };
     use std::{fs, path::Path};    #[test]
     fn mirror_paths_cannot_escape_or_change_host() {
@@ -1165,6 +1200,50 @@ mod tests {
         assert!(!masked.contains("\\input"), "a text argument is blanked");
         // A real reference survives.
         assert!(mask_literal_regions("\\input{real}").contains("\\input"));
+    }
+
+    #[test]
+    fn a_chapter_resolves_references_against_the_project_root() {
+        // TeX does not change the working directory for an included file, so a
+        // chapter under `chapters/` that names `figures/plot.png` still means the
+        // root's `figures/plot.png`. Resolving from the chapter's own directory
+        // skipped the image, and the validator then called a real file missing.
+        let root = scratch("nested-reference");
+        fs::create_dir_all(root.join("chapters")).unwrap();
+        fs::create_dir_all(root.join("figures")).unwrap();
+        fs::write(root.join("main.tex"), "\\input{chapters/intro}").unwrap();
+        fs::write(
+            root.join("chapters/intro.tex"),
+            "\\includegraphics{figures/plot.png}",
+        )
+        .unwrap();
+        fs::write(root.join("figures/plot.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+        let (files, _, _) = collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
+        assert!(
+            files
+                .iter()
+                .any(|(path, _)| path.ends_with("figures/plot.png")),
+            "the chapter's image is collected from the root: {:?}",
+            files
+                .iter()
+                .map(|(path, _)| path.display().to_string())
+                .collect::<Vec<_>>()
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_commented_reference_is_not_collected() {
+        // A line comment keeps the command out of the snapshot.
+        assert!(declared_references("% \\input{gone}").is_empty());
+        assert!(declared_references("text % \\input{gone}").is_empty());
+        // `\\%` is a line break followed by a comment: the percent is not
+        // escaped, and the command after it must not be read.
+        assert!(declared_references("a\\\\% \\input{gone}").is_empty());
+        // `\%` is a literal percent, so the reference beside it is live.
+        assert_eq!(declared_references("50\\% \\input{real}").len(), 1);
+        // The `comment` environment is not read by the compiler either.
+        assert!(declared_references("\\begin{comment}\n\\input{gone}\n\\end{comment}").is_empty());
     }
 
     #[cfg(unix)]

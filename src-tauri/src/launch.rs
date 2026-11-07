@@ -140,12 +140,12 @@ pub fn on_second_instance<R: tauri::Runtime>(
         let _ = app.emit("open-files", paths);
     }
 
-    if let Some(window) = app.get_webview_window("main") {
-        if std::env::var_os("MDRAFT_TEST_HIDDEN").is_none() {
-            let _ = window.unminimize();
-            let _ = window.show();
-            let _ = window.set_focus();
-        }
+    if let Some(window) = app.get_webview_window("main")
+        && std::env::var_os("MDRAFT_TEST_HIDDEN").is_none()
+    {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
     }
 }
 

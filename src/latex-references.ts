@@ -1,5 +1,5 @@
 //! Which `\input`/`\include`/`\includegraphics`/`\bibliography` references a
-//! project actually makes.
+//! project actually makes, and where each one is.
 //!
 //! The snapshot is a closed set of literal files: it cannot expand `\input{\mypath}`,
 //! so a non-literal reference has to fail with a named message instead of
@@ -19,9 +19,50 @@
 //! document is a normal thing to do. This module therefore masks the literal
 //! regions before scanning, the same way `src/spellcheck.ts` and `src/sidebar.ts`
 //! already do for their own scans.
+//!
+//! A reference now carries its line and column, and the collector returns every
+//! problem instead of throwing the first one. That is what lets the editor mark
+//! the offending command and the preview pane list each occurrence: a document
+//! that names the same missing image twice used to produce one message that never
+//! changed when the reader fixed one of them.
 
 /** The environments whose bodies are literal text, not markup. */
-const VERBATIM_ENVIRONMENTS = "verbatim\\*?|Verbatim\\*?|lstlisting|minted|alltt";
+const VERBATIM_ENVIRONMENTS =
+  "verbatim\\*?|Verbatim\\*?|lstlisting|minted|alltt|comment|filecontents\\*?";
+
+/** The source line shown beside a diagnostic, trimmed and bounded. */
+export function lineTextOf(line: string): string {
+  const trimmed = line.trim();
+  return trimmed.length > 300 ? `${trimmed.slice(0, 297)}...` : trimmed;
+}
+
+/**
+ * One problem the LaTeX project has, with everything the UI needs to point at it.
+ *
+ * `line`, `column` and `endColumn` are 1-based, and columns count UTF-16 code
+ * units, because that is what CodeMirror positions count. Byte offsets would not
+ * survive the CRLF normalisation `documents.rs` applies to an open buffer.
+ */
+export interface LatexDiagnostic {
+  /** Project-relative source, `/` separated. */
+  file: string;
+  /** 1-based line, or 0 when the compiler supplied no location. */
+  line: number;
+  /** 1-based first column, or 0 when unknown. */
+  column: number;
+  /** 1-based exclusive end column, or 0 when unknown. */
+  endColumn: number;
+  severity: "error" | "warning";
+  /** Stable kind for the UI: `missing-reference`, `compile`, … */
+  code: string;
+  message: string;
+  /** The exact command as written, when the reference scan produced it. */
+  text: string;
+  /** The line as compiled, for the panel's "what the compiler read" row. */
+  lineText: string;
+  /** Candidate paths the resolver tried, for a missing reference. */
+  searched: string[];
+}
 
 /** One reference a project makes. */
 export interface LatexReference {
@@ -31,6 +72,16 @@ export interface LatexReference {
   name: string;
   /** The source file the reference appears in. */
   source: string;
+  /** 1-based line. */
+  line: number;
+  /** 1-based first column of the argument. */
+  column: number;
+  /** 1-based exclusive end column of the argument. */
+  endColumn: number;
+  /** The whole command, including options and braces. */
+  text: string;
+  /** The source line, trimmed and bounded. */
+  lineText: string;
 }
 
 /**
@@ -173,6 +224,31 @@ export function isLiteralReference(name: string): boolean {
   );
 }
 
+/**
+ * The index of the `%` that starts a comment, or -1.
+ *
+ * TeX's rule is an **odd** number of backslashes: `\%` is a literal percent,
+ * `\\%` is an escaped backslash followed by a comment, and `\\\%` is a literal
+ * percent again. The previous single-character test treated `\\%` as escaped,
+ * so a comment after a line break stayed live and its commands were scanned.
+ */
+export function commentStart(line: string): number {
+  for (let at = 0; at < line.length; at += 1) {
+    if (line[at] !== "%") continue;
+    let slashes = 0;
+    for (let before = at - 1; before >= 0 && line[before] === "\\"; before -= 1) slashes += 1;
+    if (slashes % 2 === 0) return at;
+  }
+  return -1;
+}
+
+/** Blank a line's comment, preserving every offset. */
+function maskComment(line: string): string {
+  const start = commentStart(line);
+  if (start < 0) return line;
+  return line.slice(0, start) + " ".repeat(line.length - start);
+}
+
 /** The reference command pattern, shared by the scan and the leftover check. */
 export const REFERENCE_COMMAND =
   /\\(input|include|includegraphics|bibliography|addbibresource)\s*(?:\[[^\]]*\]\s*)?\{([^{}]*)\}/g;
@@ -185,14 +261,30 @@ export const REFERENCE_COMMAND =
  */
 export function referencesIn(masked: string, source: string): LatexReference[] {
   const out: LatexReference[] = [];
-  for (const line of masked.split(/\r?\n/)) {
-    const withoutComment = line.replace(/(^|[^\\])%.*/, "$1");
-    for (const match of withoutComment.matchAll(REFERENCE_COMMAND)) {
-      const kind = match[1];
-      const names = kind === "bibliography" ? match[2].split(",") : [match[2]];
-      for (const raw of names) {
-        const name = raw.trim().replace(/^\.\//, "");
-        if (name) out.push({ kind, name, source });
+  const lines = masked.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = maskComment(lines[index]);
+    REFERENCE_COMMAND.lastIndex = 0;
+    for (const match of line.matchAll(REFERENCE_COMMAND)) {
+      const at = match.index ?? 0;
+      const raw = match[2];
+      const parts = match[1] === "bibliography" ? raw.split(",") : [raw];
+      for (const part of parts) {
+        const name = part.trim().replace(/^\.\//, "");
+        if (!name) continue;
+        out.push({
+          kind: match[1],
+          name,
+          source,
+          line: index + 1,
+          // The mark covers the whole command, not only the argument: the
+          // command is what the reader has to find, and the argument span would
+          // leave the leading `\includegraphics` look like ordinary text.
+          column: at + 1,
+          endColumn: at + match[0].length + 1,
+          text: match[0],
+          lineText: lineTextOf(lines[index]),
+        });
       }
     }
   }
@@ -200,7 +292,7 @@ export function referencesIn(masked: string, source: string): LatexReference[] {
 }
 
 /**
- * Whether a line still mentions a reference command the scan could not parse.
+ * The first reference command the scan could not parse, with its position.
  *
  * Only a command **with an argument** counts. A bare mention — `The
  * \includegraphics command takes a path` — is prose about the command, not a call,
@@ -208,15 +300,181 @@ export function referencesIn(masked: string, source: string): LatexReference[] {
  * reference. A real non-literal call always has braces, so requiring them keeps
  * the genuine `\input{\mypath}` rejection while letting the prose through.
  */
-export function hasUnparsedReference(masked: string): boolean {
-  for (const line of masked.split(/\r?\n/)) {
-    const withoutComment = line.replace(/(^|[^\\])%.*/, "$1");
-    const unmatched = withoutComment.replace(REFERENCE_COMMAND, "");
-    if (
-      /\\(?:input|include|includegraphics|bibliography|addbibresource)\b[^\n]*\{/.test(unmatched)
-    ) {
-      return true;
+function unparsedReferenceAt(
+  masked: string,
+): { line: number; column: number; lineText: string } | null {
+  const lines = masked.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = maskComment(lines[index]);
+    // Replace a parsed call with spaces, so the column of the leftover command
+    // still counts in the original line.
+    const leftover = line.replace(REFERENCE_COMMAND, (value) => " ".repeat(value.length));
+    const match = /\\(?:input|include|includegraphics|bibliography|addbibresource)\b[^\n]*\{/.exec(
+      leftover,
+    );
+    if (match) {
+      return {
+        line: index + 1,
+        column: (match.index ?? 0) + 1,
+        lineText: lineTextOf(lines[index]),
+      };
     }
   }
-  return false;
+  return null;
+}
+
+/** Whether a line still mentions a reference command the scan could not parse. */
+export function hasUnparsedReference(masked: string): boolean {
+  return unparsedReferenceAt(masked) !== null;
+}
+
+/** Everything a project's reference scan found. */
+export interface LatexReferenceScan {
+  /** The files the main document can reach through `\input`/`\include`. */
+  reachable: ReadonlySet<string>;
+  /** Every problem, in scan order. */
+  diagnostics: LatexDiagnostic[];
+  /** True when the list stopped at its cap. */
+  truncated: boolean;
+}
+
+/** The default number of problems reported for one project. */
+export const MAX_REFERENCE_DIAGNOSTICS = 50;
+
+/**
+ * Walk a project and report every reference problem, instead of the first.
+ *
+ * A project with the same missing image in three figures used to throw the same
+ * message three times — one per compile — and the reader could not tell which
+ * occurrence was still live. Collecting them all is what makes the problem list
+ * and the editor marks possible.
+ */
+export function collectLatexReferences(
+  sources: ReadonlyMap<string, string>,
+  files: ReadonlySet<string>,
+  mainFile = "main.tex",
+  limit = MAX_REFERENCE_DIAGNOSTICS,
+): LatexReferenceScan {
+  const pending = [mainFile];
+  const visited = new Set<string>();
+  const diagnostics: LatexDiagnostic[] = [];
+  let truncated = false;
+
+  const add = (diagnostic: LatexDiagnostic): void => {
+    if (diagnostics.length >= limit) {
+      truncated = true;
+      return;
+    }
+    diagnostics.push(diagnostic);
+  };
+
+  while (pending.length) {
+    const sourceName = pending.pop()!;
+    if (visited.has(sourceName)) continue;
+    visited.add(sourceName);
+    const text = sources.get(sourceName);
+    if (text === undefined) throw new Error(`Missing project source: ${sourceName}`);
+
+    // Mask once per file, so the reference scan and the leftover check agree
+    // about which regions are literal.
+    const masked = maskLiteralRegions(text);
+
+    for (const reference of referencesIn(masked, sourceName)) {
+      const { kind, name } = reference;
+      if (!isLiteralReference(name)) {
+        add({
+          file: sourceName,
+          line: reference.line,
+          column: reference.column,
+          endColumn: reference.endColumn,
+          severity: "error",
+          code: "unsafe-reference",
+          message: `Unsupported non-literal or unsafe \\${kind} reference in ${sourceName}: ${name}`,
+          text: reference.text,
+          lineText: reference.lineText,
+          searched: [],
+        });
+        continue;
+      }
+      const hasExtension = /\.[^/]+$/.test(name);
+      const suffixes = hasExtension
+        ? [""]
+        : kind === "includegraphics"
+          ? [".pdf", ".png", ".jpg", ".jpeg"]
+          : kind === "bibliography" || kind === "addbibresource"
+            ? [".bib"]
+            : [".tex"];
+      const resolved = suffixes.map((suffix) => name + suffix).find((path) => files.has(path));
+      if (!resolved) {
+        add({
+          file: sourceName,
+          line: reference.line,
+          column: reference.column,
+          endColumn: reference.endColumn,
+          severity: "error",
+          code: "missing-reference",
+          message: `Missing project file for \\${kind} in ${sourceName}: ${name}`,
+          text: reference.text,
+          lineText: reference.lineText,
+          searched: suffixes.map((suffix) => name + suffix),
+        });
+        continue;
+      }
+      if ((kind === "input" || kind === "include") && sources.has(resolved)) {
+        pending.push(resolved);
+      }
+    }
+
+    const unparsed = unparsedReferenceAt(masked);
+    if (unparsed) {
+      add({
+        file: sourceName,
+        line: unparsed.line,
+        column: unparsed.column,
+        endColumn: 0,
+        severity: "error",
+        code: "unparsed-reference",
+        message: `Unsupported non-literal project reference in ${sourceName}.`,
+        text: "",
+        lineText: unparsed.lineText,
+        searched: [],
+      });
+    }
+  }
+
+  return { reachable: visited, diagnostics, truncated };
+}
+
+/**
+ * The error the throwing wrapper raises, carrying every diagnostic for the UI.
+ *
+ * `message` stays the first problem's text so the existing suites, which read
+ * `error.message`, keep measuring the same thing.
+ */
+export class LatexReferenceError extends Error {
+  readonly diagnostics: readonly LatexDiagnostic[];
+  readonly reachable: ReadonlySet<string>;
+
+  constructor(scan: LatexReferenceScan) {
+    super(scan.diagnostics[0]?.message ?? "Unsupported LaTeX project reference.");
+    this.name = "LatexReferenceError";
+    this.diagnostics = scan.diagnostics;
+    this.reachable = scan.reachable;
+  }
+}
+
+/**
+ * The old throwing contract, kept for the suites and for `latex-sync-unit`.
+ *
+ * `compileLatex` calls {@link collectLatexReferences} directly, so the UI gets
+ * every problem and their positions.
+ */
+export function validateLatexReferences(
+  sources: ReadonlyMap<string, string>,
+  files: ReadonlySet<string>,
+  mainFile = "main.tex",
+): ReadonlySet<string> {
+  const scan = collectLatexReferences(sources, files, mainFile);
+  if (scan.diagnostics.length) throw new LatexReferenceError(scan);
+  return scan.reachable;
 }

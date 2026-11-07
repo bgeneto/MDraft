@@ -101,7 +101,7 @@ fn export_availability<R: Runtime>(app: &AppHandle<R>) -> ExportAvailability {
 /// The suffix is part of the label rather than a tooltip because a native menu
 /// item does not show a tooltip reliably. It is deliberately short: the submenu
 /// still has to fit the format's own name and its accelerator column.
-fn export_label(format: &ExportFormat, availability: ExportAvailability) -> String {
+fn export_label(format: &ExportFormat, availability: ExportAvailability, language: &str) -> String {
     let base = plain_label(&format.label);
     // A default label gets the ellipsis the save dialog earns; a label the reader
     // wrote is left exactly as written. Appending punctuation to a custom name
@@ -114,6 +114,12 @@ fn export_label(format: &ExportFormat, availability: ExportAvailability) -> Stri
     } else {
         base
     };
+    // The LaTeX reason comes first: it is true whatever the tools say, and a
+    // "needs Typst" suffix on a row that would refuse anyway would be a second
+    // explanation for a decision the reader cannot act on.
+    if is_pandoc_pdf(format) && language == "latex" {
+        return format!("{base} — use Export › PDF (compiled)");
+    }
     match availability.pandoc {
         Some(false) => format!("{base} — needs Pandoc"),
         Some(true) if is_pandoc_pdf(format) && availability.typst == Some(false) => {
@@ -133,11 +139,25 @@ fn is_pandoc_pdf(format: &ExportFormat) -> bool {
     format.id.eq_ignore_ascii_case("pdf")
 }
 
-/// Whether this format can run with the tools that are installed.
+/// Whether this format can run, for this document language and these tools.
 ///
-/// PDF is the one format that also needs Typst; every other pandoc target reads
-/// Markdown and writes a file, so Pandoc alone is enough.
-fn export_enabled(format: &ExportFormat, availability: ExportAvailability) -> bool {
+/// **One rule, used by the initial build, every menu-state sync and every tool
+/// report.** Two independent gates — a Rust one that disabled every pandoc row
+/// for LaTeX and a frontend one that refused every `export.*` — produced the
+/// defect this rule replaces: a working LaTeX reader behind a menu that said it
+/// did not exist.
+///
+/// The only language-specific answer is the built-in pandoc PDF: converting
+/// LaTeX to Typst would change the layout, and the preview already holds the
+/// compiled PDF, so that row points at `Export › PDF` instead.
+fn export_enabled_for(
+    format: &ExportFormat,
+    availability: ExportAvailability,
+    language: &str,
+) -> bool {
+    if is_pandoc_pdf(format) && language == "latex" {
+        return false;
+    }
     availability.pandoc.unwrap_or(true)
         && (!is_pandoc_pdf(format) || availability.typst.unwrap_or(true))
 }
@@ -544,10 +564,12 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
         // that language compiles one. It never starts a compile. Native printing
         // stays disabled for both (decision D11): the PDF already exists, so
         // printing it is the reader's own action on a file they own.
+        // `export.pdf` writes the PDF the document's own compiler produced, so
+        // it is available exactly while such a PDF exists. Both compiled
+        // languages answer the same way; every other language keeps the native
+        // article writer.
         "export.pdf" => {
-            if typst {
-                state.pdf_preview_available
-            } else if latex {
+            if typst || latex {
                 state.pdf_preview_available
             } else {
                 true
@@ -569,6 +591,16 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
         // prints that, which would produce a second layout contradicting the
         // compiled PDF the preview is showing.
         "export.html" => true,
+        // Markdown is the editor's own dialect, so writing it back through pandoc
+        // would be a round trip for a Markdown document. The direct row exists for
+        // LaTeX, which the plan names explicitly: a `.tex` author should not need
+        // a custom format recipe to reach Markdown.
+        "export.markdown" => latex,
+        // The chooser lists what the installed pandoc advertises and converts a
+        // LaTeX project from its snapshot. Every other language already has its
+        // own configured rows, so the row is disabled there with a reason rather
+        // than offering a control that would only explain itself.
+        "export.pandoc.more" => latex,
         "export.pdf.browser" => !latex,
         "file.close" | "file.closeAll" => true,
         "file.closeOthers" => state.tab_count > 1,
@@ -698,6 +730,17 @@ fn label_for(state: &MenuState, id: &str) -> Option<String> {
         {
             "Typst Preview — needs Typst"
         }
+        // The chooser converts a LaTeX project from its snapshot; every other
+        // language already has its own configured rows.
+        "export.pandoc.more" if state.document_language != "latex" => {
+            "More Pandoc Formats… (LaTeX documents)"
+        }
+        // Markdown is the editor's own dialect, so writing it back through pandoc
+        // would be a round trip for a Markdown document. The row is a LaTeX
+        // conversion, and says so where it cannot run.
+        "export.markdown" if state.document_language != "latex" => {
+            "Markdown… (LaTeX documents)"
+        }
         _ => return None,
     };
     Some(text.to_string())
@@ -810,8 +853,12 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     // still has a working print route.
     let export_item = |format: &ExportFormat| -> tauri::Result<MenuItem<R>> {
         let id = format!("{EXPORT_PREFIX}{}", format.id);
-        let built = item(&id, &export_label(format, availability), None)?;
-        if !export_enabled(format, availability) {
+        let built = item(
+            &id,
+            &export_label(format, availability, &state.document_language),
+            None,
+        )?;
+        if !export_enabled_for(format, availability, &state.document_language) {
             built.set_enabled(false)?;
         }
         Ok(built)
@@ -822,8 +869,13 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     // keeps the order arranged in Preferences.
     let (pandoc_pdf, other_formats): (Vec<ExportFormat>, Vec<ExportFormat>) =
         export_formats(app).into_iter().partition(is_pandoc_pdf);
-    let mut export = SubmenuBuilder::with_id(app, "file.export", "Export")
+    let export = SubmenuBuilder::with_id(app, "file.export", "Export")
         .item(&item("export.html", "HTML…", None)?);
+    // Markdown is the one target a `.tex` author is most likely to want, and it
+    // is not in the stored list because the editor's own dialect is Markdown:
+    // writing it back through pandoc would be a round trip for a Markdown
+    // document. For LaTeX it is a real conversion, so it gets a direct row.
+    let mut export = export.item(&item("export.markdown", "Markdown…", None)?);
     for format in &other_formats {
         export = export.item(&export_item(format)?);
     }
@@ -835,6 +887,15 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     }
     let export = export
         .item(&item("export.pdf.browser", "PDF (opens browser)…", None)?)
+        .separator()
+        // Every other writer the installed pandoc advertises, on demand: a row
+        // per writer in Preferences would crowd the menu, change the reader's
+        // settings and miss whatever a pandoc update adds.
+        .item(&item(
+            "export.pandoc.more",
+            "More Pandoc Formats…",
+            None,
+        )?)
         .build()?;
 
     let close_tabs = SubmenuBuilder::with_id(app, "file.closeTabs", "Close Tabs")
@@ -1400,6 +1461,15 @@ pub fn sync<R: Runtime>(app: &AppHandle<R>, state: &MenuState) {
     if let Ok(items) = menu.items() {
         apply_context(items, state);
     }
+    // The configured export rows are owned by the tool report and the document
+    // language together, so `enabled_for` deliberately returns `None` for them.
+    // Applying them here is what makes a tab switch update them: the cached
+    // availability is unchanged, but the language is not.
+    let availability = app
+        .try_state::<AppState>()
+        .and_then(|state| state.export_availability.lock().ok().map(|slot| *slot))
+        .unwrap_or_default();
+    apply_export_rows(app, &state.document_language, availability);
 }
 
 /// Walk every custom item and apply its enabled state and conditional label.
@@ -1524,35 +1594,67 @@ pub fn set_export_availability<R: Runtime>(app: AppHandle<R>, pandoc: bool, typs
 }
 
 fn apply_export_availability<R: Runtime>(app: &AppHandle<R>, availability: ExportAvailability) {
+    let language = LAST_MENU_STATE
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|state| state.document_language.clone()))
+        .unwrap_or_else(|| "markdown".to_string());
+    apply_export_rows(app, &language, availability);
+}
+
+/// Write the configured export rows' labels and enabled states.
+///
+/// Called from both the tool report and every menu-state sync, so a language
+/// change and a tool change cannot disagree about the same row. The language is
+/// a parameter rather than read from the cached state so the sync path uses the
+/// state it is about to apply.
+fn apply_export_rows<R: Runtime>(
+    app: &AppHandle<R>,
+    language: &str,
+    availability: ExportAvailability,
+) {
     let Some(menu) = app.menu() else {
         return;
     };
-    // A `.tex` document has no pandoc reader in this change, so every pandoc row
-    // stays disabled for it. The language comes from the cached menu state, which
-    // `set_menu_state` keeps current; without it the rows would be re-enabled on
-    // the next availability change and a stale click would reach pandoc's
-    // Markdown reader.
-    let latex = LAST_MENU_STATE
-        .lock()
-        .ok()
-        .and_then(|slot| slot.as_ref().map(|state| state.document_language == "latex"))
-        .unwrap_or(false);
-    for format in export_formats(app) {
-        let id = format!("{EXPORT_PREFIX}{}", format.id);
-        let Some(item) = find_item(&menu, &id) else {
-            continue;
-        };
-        let Some(menu_item) = item.as_menuitem() else {
-            continue;
-        };
-        if let Err(error) = menu_item.set_text(export_label(&format, availability)) {
-            eprintln!("[menu] could not set the label of {id}: {error}");
-        }
-        let enabled = export_enabled(&format, availability) && !latex;
-        if let Err(error) = menu_item.set_enabled(enabled) {
-            eprintln!("[menu] could not set the enabled state of {id}: {error}");
+    let formats = export_formats(app);
+    let Ok(items) = menu.items() else {
+        return;
+    };
+    // One walk for every row rather than a `find_item` per format: this runs on
+    // every menu-state sync, which includes cursor movement, and a tree walk per
+    // format would be a dozen of them per keystroke.
+    fn walk<R: Runtime>(
+        items: Vec<MenuItemKind<R>>,
+        formats: &[ExportFormat],
+        language: &str,
+        availability: ExportAvailability,
+    ) {
+        for item in items {
+            if let MenuItemKind::Submenu(submenu) = &item
+                && let Ok(children) = submenu.items()
+            {
+                walk(children, formats, language, availability);
+            }
+            let id = item.id().as_ref().to_string();
+            let Some(format) = id
+                .strip_prefix(EXPORT_PREFIX)
+                .and_then(|rest| formats.iter().find(|format| format.id == rest))
+            else {
+                continue;
+            };
+            let Some(menu_item) = item.as_menuitem() else {
+                continue;
+            };
+            if let Err(error) = menu_item.set_text(export_label(format, availability, language)) {
+                eprintln!("[menu] could not set the label of {id}: {error}");
+            }
+            let enabled = export_enabled_for(format, availability, language);
+            if let Err(error) = menu_item.set_enabled(enabled) {
+                eprintln!("[menu] could not set the enabled state of {id}: {error}");
+            }
         }
     }
+    walk(items, &formats, language, availability);
 }
 
 #[derive(serde::Serialize)]
@@ -1842,7 +1944,7 @@ mod tests {
         // `export.pdf` is *not* asserted here: it writes the compiled PDF, so it
         // is available exactly while such a PDF exists, and this fixture has not
         // compiled one. The assertion for it lives with the compiled-PDF test.
-        for id in ["format.document", "export.html"] {
+        for id in ["format.document", "export.html", "export.markdown"] {
             assert_eq!(enabled_for(&state, id), Some(true), "{id}");
         }
         // Plain editing keeps working, and comment toggling now does too: the
@@ -1865,7 +1967,10 @@ mod tests {
         assert_eq!(enabled_for(&state, "format.document"), Some(true));
         assert_eq!(enabled_for(&state, "export.pdf"), Some(true));
         assert_eq!(enabled_for(&state, "para.task"), Some(true));
-    }
+        // Markdown is the editor's own dialect, so its direct export row is the
+        // one that is disabled for a Markdown document and live for LaTeX.
+        assert_eq!(enabled_for(&state, "export.markdown"), Some(false));
+        assert_eq!(enabled_for(&state, "export.pandoc.more"), Some(false));    }
 
     #[test]
     fn the_pdf_row_follows_the_compiled_bytes_and_names_the_engine() {
@@ -2057,38 +2162,104 @@ mod tests {
         };
 
         let unknown = ExportAvailability::default();
-        assert!(export_enabled(&docx, unknown));
-        assert_eq!(export_label(&docx, unknown), "Word (.docx)…");
+        assert!(export_enabled_for(&docx, unknown, "markdown"));
+        assert_eq!(export_label(&docx, unknown, "markdown"), "Word (.docx)…");
 
         let custom = ExportFormat {
             id: "custom1".into(),
             label: "My Word Target".into(),
             ..ExportFormat::default()
         };
-        assert_eq!(export_label(&custom, unknown), "My Word Target");
+        assert_eq!(export_label(&custom, unknown, "markdown"), "My Word Target");
 
         let pandoc_missing = ExportAvailability {
             pandoc: Some(false),
             typst: Some(false),
         };
-        assert!(!export_enabled(&docx, pandoc_missing));
-        assert!(export_label(&docx, pandoc_missing).ends_with("— needs Pandoc"));
+        assert!(!export_enabled_for(&docx, pandoc_missing, "markdown"));
+        assert!(
+            export_label(&docx, pandoc_missing, "markdown").ends_with("— needs Pandoc")
+        );
 
         // Pandoc alone is enough for every target but PDF.
         let typst_missing = ExportAvailability {
             pandoc: Some(true),
             typst: Some(false),
         };
-        assert!(export_enabled(&docx, typst_missing));
-        assert!(!export_enabled(&pdf, typst_missing));
-        assert!(export_label(&pdf, typst_missing).ends_with("— needs Typst"));
+        assert!(export_enabled_for(&docx, typst_missing, "markdown"));
+        assert!(!export_enabled_for(&pdf, typst_missing, "markdown"));
+        assert!(
+            export_label(&pdf, typst_missing, "markdown").ends_with("— needs Typst")
+        );
 
         let installed = ExportAvailability {
             pandoc: Some(true),
             typst: Some(true),
         };
-        assert!(export_enabled(&pdf, installed));
-        assert_eq!(export_label(&pdf, installed), "PDF (via Typst)…");
+        assert!(export_enabled_for(&pdf, installed, "markdown"));
+        assert_eq!(
+            export_label(&pdf, installed, "markdown"),
+            "PDF (via Typst)…"
+        );
+    }
+
+    #[test]
+    fn every_pandoc_row_is_live_for_a_latex_document_but_the_typst_pdf() {
+        // The defect this pins: a `.tex` document had every pandoc row disabled
+        // by a comment claiming pandoc had no LaTeX reader, while the backend had
+        // one. The rule now lives in one place and answers for the language.
+        let installed = ExportAvailability {
+            pandoc: Some(true),
+            typst: Some(true),
+        };
+        let docx = ExportFormat {
+            id: "docx".into(),
+            label: "Word (.docx)".into(),
+            ..ExportFormat::default()
+        };
+        let epub = ExportFormat {
+            id: "epub".into(),
+            label: "EPUB".into(),
+            ..ExportFormat::default()
+        };
+        for format in [&docx, &epub] {
+            assert!(
+                export_enabled_for(format, installed, "latex"),
+                "{} must run for LaTeX",
+                format.id
+            );
+            assert_eq!(
+                export_label(format, installed, "latex"),
+                export_label(format, installed, "markdown"),
+                "a working row keeps its own label"
+            );
+        }
+
+        // The built-in pandoc PDF is the one exception, and it says why rather
+        // than pretending Typst is missing.
+        let pdf = ExportFormat {
+            id: "pdf".into(),
+            label: "PDF (via Typst)".into(),
+            ..ExportFormat::default()
+        };
+        assert!(!export_enabled_for(&pdf, installed, "latex"));
+        assert!(
+            export_label(&pdf, installed, "latex").ends_with("— use Export › PDF (compiled)"),
+            "{}",
+            export_label(&pdf, installed, "latex")
+        );
+        // Without pandoc the reason is still the LaTeX one: the row cannot run
+        // whatever the tools say, and a second explanation would be noise.
+        let missing = ExportAvailability {
+            pandoc: Some(false),
+            typst: Some(false),
+        };
+        assert!(
+            export_label(&pdf, missing, "latex").ends_with("— use Export › PDF (compiled)")
+        );
+        // Every other language keeps the Typst rule.
+        assert!(!export_enabled_for(&pdf, missing, "markdown"));
+        assert!(export_label(&pdf, missing, "markdown").ends_with("— needs Pandoc"));
     }
 
     #[test]

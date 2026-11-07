@@ -93,9 +93,10 @@ The preview has two views:
   source mapping.
   In the dark theme the pages follow the application: the PDF's white paper and
   black text become the app's dark surface and white. In both themes a page
-  fills the pane's width — its side edges are clipped, and only the rule between
-  pages shows where one ends — so the preview reads as a continuous document
-  rather than a sheet floating in the middle. The page is rendered at the
+  fills the pane's width — its side edges are clipped, and the pages sit flush
+  against each other, so the preview reads as one continuous document rather
+  than a stack of sheets; the only space between two pages is the paper's own
+  margin. The page is rendered at the
   display's pixel density, so text stays crisp on 4K and 5K screens. Because
   PDF.js hands the page over as one raster, figures inside it are inverted with
   the text in the dark theme.
@@ -420,6 +421,14 @@ LaTeX, reStructuredText, AsciiDoc, RTF, Textile, MediaWiki and OPML use pandoc;
 **PDF (via Typst)** uses pandoc with the Typst compiler for Markdown, AsciiDoc
 and HTML, and Typst directly for a `.typ` document.
 
+A `.tex` document is the exception to that summary in one place: **File ›
+Export › PDF** writes the PDF its own LuaLaTeX preview compiled, so it needs
+neither pandoc nor Typst. Every other format for LaTeX goes through pandoc's
+LaTeX reader, and **File › Export › More Pandoc Formats…** offers the rest of the
+installed pandoc's writers — around 77 of them — in a searchable list. A
+conversion reads the project snapshot the preview compiled, so unsaved edits in
+the root and in included chapters reach the export.
+
 Exports use the document text and identity captured when the command begins.
 Switching tabs while a picker or renderer is working does not change which
 document is exported; subsequent typing stays in the editor for the next export.
@@ -428,6 +437,11 @@ writer can follow, and the print document waits for its fonts and figures before
 printing. **File › Export › PDF…** writes the file directly through WebView2 or
 WebKitGTK; **File › Print…** (`Ctrl+P`) opens the platform print dialog. The
 browser handoff remains for scripted HTML and hosts without a print API.
+
+**Preferences › Export** shows whether pandoc and Typst are installed, offers to
+install or update either, and has one button per tool that opens its folder in
+the system file manager — the install path itself is not printed. The LaTeX
+cache size, its ceiling and the Clear cache action are in the same section.
 
 See [Export and conversion](export.md) for the exact directions, dependencies,
 configuration and fidelity notes.

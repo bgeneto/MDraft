@@ -187,6 +187,14 @@ const SUITES = [
     script: "latex-references-unit.mjs",
   },
   {
+    // The mapper from a diagnostic's line and column to a CodeMirror range. Its
+    // staleness rule is what keeps a mark off the wrong word after an edit.
+    id: "latex-diagnostics-unit",
+    title: "LaTeX diagnostics (unit)",
+    kind: "node",
+    script: "latex-diagnostics-unit.mjs",
+  },
+  {
     // The Outline panel's LaTeX scan. A `\section` shown inside `\verb` or a
     // verbatim block is sample text, not structure; the shipped LaTeX Reference
     // demonstrates every command it documents, so the regression is pinned
@@ -197,10 +205,27 @@ const SUITES = [
     script: "latex-outline-unit.mjs",
   },
   {
-    // The SyncTeX route and the pinned SDK shape it depends on. Fails when an
-    // SDK upgrade removes or renames the fields the adapter reads.
+    id: "latex-word-map-unit",
+    title: "LaTeX prose candidates (unit)",
+    kind: "node",
+    script: "latex-word-map-unit.mjs",
+  },
+  {
+    id: "pdf-map-worker-unit",
+    title: "PDF map worker batches (unit)",
+    kind: "node",
+    script: "pdf-page-worker-unit.mjs",
+  },
+  {
+    id: "latex-project-unit",
+    title: "LaTeX project validation (unit)",
+    kind: "node",
+    script: "latex-sync-unit.mjs",
+  },
+  {
+    // The adapter pins LuaLaTeX and does not request or consume SyncTeX.
     id: "latex-sdk-unit",
-    title: "LaTeX SDK shape and SyncTeX route (unit)",
+    title: "LaTeX SDK and no-SyncTeX route (unit)",
     kind: "node",
     script: "latex-sdk-unit.mjs",
   },
@@ -230,16 +255,25 @@ const SUITES = [
     script: "latex-format-unit.mjs",
   },
   {
-    // The compiled PDF in the real UI: the reference compiles, zoom reaches the page,
-    // a click paints its SyncTeX region, scrolling moves the preview, and a
-    // two-column document stays inside the pane and converges. Skips when the engine
-    // is not installed. Scrolls with real wheel events, because CodeMirror does not
-    // observe a programmatic `scrollTop` write.
+    // Real PDF selection, zoom, page growth and two-column scrolling.
     id: "latex-preview",
-    title: "LaTeX preview, zoom, SyncTeX paint and scroll",
+    title: "LaTeX preview, zoom, word correspondence and scroll",
     kind: "cdp",
     script: "latex-preview-test.mjs",
     doc: "samples/feature-tour.md",
+    // Uses an unsaved buffer and a hidden app with the `.test-automation`
+    // identifier; it never writes the repository fixture or developer state.
+    safeWithInstalledApp: true,
+  },
+  {
+    id: "latex-poc",
+    title: "LaTeX included-file PDF correspondence",
+    kind: "cdp",
+    script: "latex-poc-test.mjs",
+    doc: "samples/latex-poc/main.tex",
+    // All document changes are in-memory CodeMirror edits in the isolated
+    // `.test-automation` instance; the project fixture is never saved.
+    safeWithInstalledApp: true,
   },
   {
     // What to remember when the tabs change, and what to open at boot: pure
@@ -311,6 +345,9 @@ const SUITES = [
     kind: "cdp",
     script: "scroll-sync-test.mjs",
     doc: "samples/scroll-sync/prose.md",
+    // Edits are unsaved in a hidden `.test-automation` instance; the only
+    // filesystem output is the ignored scroll evidence under node_modules.
+    safeWithInstalledApp: true,
   },
   {
     id: "p0-lifecycle",
@@ -481,6 +518,9 @@ const SUITES = [
     kind: "cdp",
     script: "typst-preview-test.mjs",
     doc: "samples/typst-pages.typ",
+    // The fixture is edited only in memory; its extra multipage fixture is
+    // created temporarily and removed by the suite.
+    safeWithInstalledApp: true,
   },
   {
     id: "math",
@@ -673,6 +713,7 @@ function parseArgs(argv) {
     verbose: false,
     keep: false,
     kill: false,
+    allowInstalled: false,
     port: 9222,
     list: false,
   };
@@ -703,6 +744,9 @@ function parseArgs(argv) {
         break;
       case "--kill":
         options.kill = true;
+        break;
+      case "--allow-installed":
+        options.allowInstalled = true;
         break;
       case "--port":
         options.port = Number(next());
@@ -739,6 +783,8 @@ Usage: node scripts/test-all.mjs [options]
   --verbose       stream each layer's output instead of capturing it
   --keep          keep the staging directory and the per-suite logs
   --kill          legacy option; never bypasses a running user-instance guard
+  --allow-installed
+                  only allow suites explicitly marked read-only with the isolated test id
   --list          print the suites and exit
 `.trim();
 
@@ -917,18 +963,28 @@ async function closeTestWindow(pid) {
   ]);
 }
 
-async function prepareForRun(_options) {
+async function prepareForRun(options, suites) {
   const instances = await listRunningInstances();
   if (!instances.length) return;
   const ours = instances.filter((instance) => /mdraft-test-/.test(instance.path));
   // A private browser folder does not isolate single-instance handoff or the
   // settings/recovery identifier from an installed or portable user instance.
   const userInstances = instances.filter((instance) => !ours.includes(instance));
-  if (userInstances.length)
+  const isolatedReadOnlyRun =
+    options.allowInstalled &&
+    identifier === `${tauriConfig.identifier}.test-automation` &&
+    suites.length > 0 &&
+    suites.every((suite) => suite.safeWithInstalledApp && !suite.writesDoc);
+  if (userInstances.length && !isolatedReadOnlyRun)
     fail(
       `MDraft is already running (pid ${userInstances.map((i) => i.pid).join(", ")}).\n` +
         `No test state was changed. Close it yourself or use a build/harness with a separate test identifier. ` +
         `--no-build and --kill cannot bypass single-instance/state isolation.`,
+    );
+  if (userInstances.length)
+    console.log(
+      `keeping installed MDraft running (${userInstances.map((i) => i.pid).join(", ")}); ` +
+        `the selected hidden test uses the separate ${identifier} identifier and read-only fixtures.`,
     );
   if (ours.length) {
     console.log(
@@ -1364,18 +1420,35 @@ async function launchApp(
 
   const outFd = fs.openSync(path.join(context.logDir, `${label}.app.out.log`), "w");
   const errFd = fs.openSync(path.join(context.logDir, `${label}.app.err.log`), "w");
+  const env = {
+    ...process.env,
+    TEMP: temp,
+    TMP: temp,
+    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,
+    WEBVIEW2_USER_DATA_FOLDER: userData,
+  };
+  // The isolated profile cannot see MDraft's managed Typst. Reuse the existing
+  // binary through this child process's PATH, without modifying either profile.
+  if (process.platform === "win32" && process.env.APPDATA) {
+    const root = path.join(process.env.APPDATA, tauriConfig.identifier, "typst");
+    let versions = [];
+    try {
+      versions = fs.readdirSync(root).sort().reverse();
+    } catch {
+      /* Typst is optional. */
+    }
+    const managed = versions
+      .map((version) => path.join(root, version))
+      .find((dir) => fs.existsSync(path.join(dir, "typst.exe")));
+    if (managed) {
+      const key = Object.keys(env).find((name) => name.toLowerCase() === "path") ?? "PATH";
+      env[key] = `${managed}${path.delimiter}${env[key] ?? ""}`;
+    }
+  }
   const child = spawn(context.staged, noDocument ? [] : docs, {
     cwd: context.stage,
-    env: {
-      ...process.env,
-      TEMP: temp,
-      TMP: temp,
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,
-      // One browser process per user-data folder, so a private folder per suite
-      // is what lets suites run back to back (and keeps a bad run away from the
-      // developer's real profile).
-      WEBVIEW2_USER_DATA_FOLDER: userData,
-    },
+    // One browser process per user-data folder keeps runs isolated.
+    env,
     // The window owns no console, but a pipe on stdout would still be held open
     // by the child and stall anything reading our output.
     stdio: ["ignore", outFd, errFd],
@@ -1617,7 +1690,7 @@ async function main() {
   try {
     // Before anything else: a leftover window locks the release binary (so the
     // build cannot replace it) and would hold a CDP port the suites need.
-    if (touchesApp) await prepareForRun(options);
+    if (touchesApp) await prepareForRun(options, suites);
 
     if (options.build) {
       process.stdout.write("building  ... ");

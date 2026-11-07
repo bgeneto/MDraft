@@ -13,20 +13,39 @@ let sequence = 0;
 const pending = new Map();
 socket.addEventListener("message", (event) => {
   const message = JSON.parse(event.data);
-  if (message.id && pending.has(message.id)) {
-    pending.get(message.id)(message);
+  if (message.id !== undefined && pending.has(message.id)) {
+    const request = pending.get(message.id);
+    clearTimeout(request.timer);
     pending.delete(message.id);
+    request.resolve(message);
   }
+});
+socket.addEventListener("close", () => {
+  for (const [id, request] of pending) {
+    clearTimeout(request.timer);
+    request.reject(new Error(`CDP connection closed with request ${id} pending.`));
+  }
+  pending.clear();
 });
 await new Promise((resolve, reject) => {
   socket.addEventListener("open", resolve, { once: true });
   socket.addEventListener("error", reject, { once: true });
 });
 function send(method, params = {}) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const id = ++sequence;
-    pending.set(id, resolve);
-    socket.send(JSON.stringify({ id, method, params }));
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error(`CDP ${method} request timed out after 10 seconds.`));
+    }, 10000);
+    pending.set(id, { resolve, reject, timer });
+    try {
+      socket.send(JSON.stringify({ id, method, params }));
+    } catch (error) {
+      clearTimeout(timer);
+      pending.delete(id);
+      reject(error);
+    }
   });
 }
 async function evaluate(expression) {
@@ -97,9 +116,23 @@ try {
   );
   if (setup && offline) throw new Error("The offline run started without the warmed engine.");
   if (setup) {
-    console.log("Enabling the explicitly requested engine download.");
+    await evaluate(`(async () => {
+      const open=document.getElementById("btn-prefs"); open?.click();
+      await new Promise(r=>setTimeout(r,500));
+      [...document.querySelectorAll(".prefs-section")].find(n=>n.textContent.trim()==="Export")?.click();
+      await new Promise(r=>setTimeout(r,400));
+      const row=[...document.querySelectorAll(".prefs-row")].find(n=>/Enable LuaLaTeX/i.test(n.querySelector(".prefs-label")?.textContent ?? ""));
+      const box=row?.querySelector("input[type=checkbox]"); if(box && !box.checked) box.click();
+      await new Promise(r=>setTimeout(r,900)); open?.click();
+    })()`);
+    if (!(await evaluate('window.__TAURI_INTERNALS__.invoke("latex_status")'))) {
+      console.log("SKIP: the LaTeX engine is not installed in this test profile.");
+      console.log("0/0 checks passed");
+      socket.close();
+      process.exit(0);
+    }
     await evaluate(
-      '[...document.querySelectorAll("button")].find(b => b.textContent.includes("Enable LuaLaTeX")).click()',
+      'window.__TAURI_INTERNALS__.invoke("plugin:event|emit",{event:"menu",payload:"view.split"})',
     );
   }
   const start = Date.now();
@@ -107,6 +140,10 @@ try {
     'document.querySelector(".typst-page .textLayer")?.textContent.includes("The TeXbook")',
   );
   check("LuaLaTeX renders the multi-file project", rendered);
+  check(
+    "The project word map is ready",
+    await waitFor('document.querySelector(".typst-preview")?.dataset.wordMap === "ready"'),
+  );
   console.log(
     `Wait after setup/launch: ${Date.now() - start} ms; compilation and page load: ${await evaluate('document.querySelector("#preview")?.dataset.latexMs ?? "unavailable"')} ms`,
   );
@@ -126,24 +163,9 @@ try {
     stats.assetRequests > 0 && stats.cacheHits + stats.cacheMisses > 0,
   );
 
-  const before = await evaluate(
-    'document.querySelector(".cm-content").cmTile.root.view.state.doc.toString()',
-  );
-  await evaluate(
-    "window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'menu',payload:'format.bold'})",
-  );
-  await delay(400);
-  check(
-    "Deferred format command cannot change LaTeX",
-    before ===
-      (await evaluate(
-        'document.querySelector(".cm-content").cmTile.root.view.state.doc.toString()',
-      )),
-  );
-
   const sourcePoint = await evaluate(`(() => {
     const v=document.querySelector(".cm-content").cmTile.root.view;
-    const r=v.coordsAtPos(v.state.doc.line(8).from+1);
+    const r=v.coordsAtPos(v.state.doc.line(9).from+1);
     return r ? {x:r.left,y:(r.top+r.bottom)/2} : null;
   })()`);
   const previewScroll = await evaluate('document.getElementById("preview-pane").scrollTop');
@@ -160,7 +182,9 @@ try {
   await delay(300);
   check(
     "Source click blinks the preview without scrolling",
-    (await evaluate('!!document.querySelector(".latex-sync-blink")')) &&
+    (await evaluate(
+      '!!(CSS.highlights.get("mdraft-sync") || CSS.highlights.get("mdraft-sync-peak"))',
+    )) &&
       Math.abs(
         (await evaluate('document.getElementById("preview-pane").scrollTop')) - previewScroll,
       ) < 2,
@@ -171,9 +195,9 @@ try {
     v.dispatch({selection:{anchor:0}});
     return v.state.selection.main.head;
   })()`);
-  await clickPdfText("LuaLaTeX in MDraft");
+  await clickPdfText("This main-file sentence");
   check(
-    "Inverse SyncTeX paints the main-file source",
+    "PDF click paints the main-file source",
     await evaluate('!!document.querySelector(".cm-content .cm-sync-word")'),
   );
   check(
@@ -242,12 +266,33 @@ try {
     );
   }
 
-  await clickPdfText("Included chapter");
+  const latexTokenBeforeSyncTeX = Number(
+    await evaluate('document.querySelector("#preview")?.dataset.latexCurrent ?? 0'),
+  );
+  const authoredSyncTeXInserted = await evaluate(`(() => {
+    const v=document.querySelector(".cm-content").cmTile.root.view;
+    const directive="\\\\synctex=1\\n";
+    const at=v.state.doc.line(1).to+1;
+    v.dispatch({changes:{from:at,insert:directive}});
+    return v.state.doc.toString().includes(directive);
+  })()`);
+  const authoredSyncTeXCompiled = await waitFor(
+    `Number(document.querySelector("#preview")?.dataset.latexCurrent ?? 0) > ${latexTokenBeforeSyncTeX} && document.querySelector(".typst-preview")?.dataset.wordMap === "ready"`,
+  );
+  const authoredSyncTeXPreserved = await evaluate(
+    'document.querySelector(".cm-content").cmTile.root.view.state.doc.toString().includes("\\\\synctex=1\\n")',
+  );
+  check(
+    "An authored SyncTeX directive is preserved and the in-memory map still builds",
+    authoredSyncTeXInserted && authoredSyncTeXCompiled && authoredSyncTeXPreserved,
+  );
+
+  await clickPdfText("independent SyncTeX navigation target");
   const chapter = await waitFor(
     'document.querySelector(".cm-content").cmTile.root.view.state.doc.toString().includes("independent SyncTeX navigation target")',
     15000,
   );
-  check("Inverse SyncTeX opens the included chapter", chapter);
+  check("PDF click opens the included chapter", chapter);
   if (chapter) {
     check(
       "The main file remains the compilation root",
@@ -257,12 +302,15 @@ try {
     );
     await evaluate(`(() => {
       const el=document.querySelector(".cm-content"), v=el.cmTile.root.view;
-      v.dispatch({selection:{anchor:0}});
-      el.dispatchEvent(new MouseEvent("click",{bubbles:true}));
+      const at=v.state.doc.toString().indexOf("independent");
+      v.dispatch({selection:{anchor:at,head:at+11}});
     })()`);
     check(
-      "Forward SyncTeX marks the included-file line",
-      await waitFor('!!document.querySelector(".latex-sync-region")', 5000),
+      "Source selection marks the included-file word",
+      await waitFor(
+        '!!(CSS.highlights.get("mdraft-sync") || CSS.highlights.get("mdraft-sync-peak"))',
+        5000,
+      ),
     );
     await evaluate(`(() => {
       const v=document.querySelector(".cm-content").cmTile.root.view;

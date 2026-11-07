@@ -23,9 +23,8 @@ import type {
 import type { TextItem } from "pdfjs-dist/types/src/display/api";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { selectionEndpoints } from "./source-map";
-import { createTypstPageMap, lineTokenAt, type TypstPageMap } from "./typst-page-map";
+import { PdfPageMap, type PdfSourceFile, type PdfWordAnchor } from "./pdf-page-map";
 import { ScrollIndex, chooseScrollRegion, type ScrollRegion } from "./scroll-sync";
-import type { PdfLocation } from "wasmtex/synctex";
 
 interface PdfScrollAnchor {
   from: number;
@@ -93,7 +92,13 @@ interface TextLine {
  * and neighbouring lines describe the gesture; they are not source offsets.
  */
 export interface TypstPageContext {
-  sourceRange: { from: number; to: number } | null;
+  sourceRange: {
+    from: number;
+    to: number;
+    file?: string;
+    segments?: Array<{ from: number; to: number }>;
+    atomic?: true;
+  } | null;
   page: number;
   lineText: string;
   /** The neighbouring visual lines in the same column, for a one-word line. */
@@ -147,13 +152,19 @@ export class TypstPdfPreview {
   private selectionTimer = 0;
   private clickTimer = 0;
   private readonly spanLines = new WeakMap<HTMLSpanElement, { line: TextLine; start: number }>();
-  private sourceMap: TypstPageMap | null = null;
+  private sourceMap: PdfPageMap | null = null;
+  private mapWorker: Worker | null = null;
+  private mapTimer = 0;
+  private activeFile = "";
+  private detached = false;
+  private selectionDismissed = false;
   private allLines: TextLine[] = [];
   private scrollIndex = new ScrollIndex<PdfScrollAnchor>([]);
   private scrollRegions: Array<ScrollRegion & { anchors: PdfScrollAnchor[] }> = [];
   private scrollRegion: string | null = null;
   private scrollPointer: { x: number; y: number; at: number } | null = null;
   private geometryFrame = 0;
+  private geometryGeneration = 0;
   private inputEpoch = 0;
   private layoutScrollUntil = 0;
 
@@ -164,6 +175,7 @@ export class TypstPdfPreview {
 
   private readonly dismiss = (event: KeyboardEvent): void => {
     if (event.key === "Escape") {
+      this.selectionDismissed = true;
       window.clearTimeout(this.selectionTimer);
       window.clearTimeout(this.clickTimer);
     }
@@ -203,6 +215,7 @@ export class TypstPdfPreview {
 
   private readonly mouseUp = (event: MouseEvent): void => {
     if (this.disposed || !this.host.contains(event.target as Node)) return;
+    this.selectionDismissed = false;
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed || !this.selectionInside(selection)) return;
     // A drag has settled. Reveal the source once, at the end, instead of
@@ -216,9 +229,18 @@ export class TypstPdfPreview {
     host: HTMLElement,
     pane: HTMLElement,
     onContext: (context: TypstPageContext | null, reveal: boolean) => void,
-    readonly source: string,
-    private readonly onPdfClick?: (page: number, x: number, y: number) => void,
+    public source: string,
+    private readonly mapOptions?: {
+      language: "typst" | "latex";
+      files: PdfSourceFile[];
+      activeFile: string;
+      enabled: boolean;
+      detached?: boolean;
+      onReady?: () => void;
+    },
   ) {
+    this.activeFile = mapOptions?.activeFile ?? "";
+    this.detached = mapOptions?.detached ?? false;
     this.host = host;
     this.pane = pane;
     this.onContext = onContext;
@@ -275,25 +297,6 @@ export class TypstPdfPreview {
     this.allLines.forEach((line, id) => {
       line.id = id;
     });
-    const sourceMap = this.onPdfClick ? null : await createTypstPageMap(this.source, this.allLines);
-    if (this.disposed) return;
-    this.sourceMap = sourceMap;
-    const anchors: PdfScrollAnchor[] = [];
-    for (const part of sourceMap?.scrollAnchors() ?? []) {
-      const line = this.allLines[part.line];
-      const first = line.spans.find(
-        (s) => part.start >= s.start && part.start < s.start + (s.span.textContent?.length ?? 0),
-      );
-      const last = line.spans.find(
-        (s) => part.end > s.start && part.end <= s.start + (s.span.textContent?.length ?? 0),
-      );
-      if (!first?.span.firstChild || !last?.span.firstChild) continue;
-      const range = document.createRange();
-      range.setStart(first.span.firstChild, part.start - first.start);
-      range.setEnd(last.span.firstChild, part.end - last.start);
-      anchors.push({ from: part.from, to: part.to, region: part.region, line, range });
-    }
-    this.scrollIndex = new ScrollIndex(anchors);
     this.maxPageWidth = Math.max(
       1,
       this.pages.reduce((max, page) => Math.max(max, page.viewport.width), 0),
@@ -301,6 +304,162 @@ export class TypstPdfPreview {
     this.applyFit();
     this.measureScrollRegions();
     this.observePages();
+    if (this.mapOptions?.enabled !== false) this.startMap();
+  }
+
+  /** Pure matching runs off-thread; DOM range construction yields between batches. */
+  private startMap(): void {
+    this.host.dataset.wordMap = "pending";
+    const started = performance.now();
+    const files = this.mapOptions?.files ?? [{ path: "", source: this.source }];
+    if (
+      files.reduce((size, file) => size + file.source.length, 0) > 2_000_000 ||
+      this.allLines.length > 50_000
+    ) {
+      this.host.dataset.wordMap = "unavailable";
+      return;
+    }
+    try {
+      const worker = new Worker(new URL("./pdf-page-map-worker.ts", import.meta.url), {
+        type: "module",
+      });
+      this.mapWorker = worker;
+      const map = new PdfPageMap(this.allLines, [], this.mapOptions?.language === "latex");
+      const anchors: PdfScrollAnchor[] = [];
+      let longestBatch = 0;
+      let totalParts = 0;
+      let totalAtomic = 0;
+      worker.onmessage = (
+        event: MessageEvent<{ anchors?: PdfWordAnchor[]; done?: boolean; error?: string }>,
+      ) => {
+        if (this.disposed || this.mapWorker !== worker) return;
+        if (!event.data.anchors) {
+          worker.terminate();
+          this.mapWorker = null;
+          this.host.dataset.wordMap = "unavailable";
+          console.warn("PDF word map unavailable:", event.data.error);
+          return;
+        }
+        const parts = event.data.anchors;
+        totalParts += parts.length;
+        totalAtomic += parts.reduce((count, part) => count + (part.atomic ? 1 : 0), 0);
+        let offset = 0;
+        const step = (): void => {
+          if (this.disposed || this.mapWorker !== worker) return;
+          const batchStarted = performance.now();
+          const until = batchStarted + 8;
+          do {
+            const end = Math.min(parts.length, offset + 64);
+            const batch = parts.slice(offset, end);
+            map.add(batch);
+            for (const part of batch) {
+              if (part.file !== this.activeFile) continue;
+              const line = this.allLines[part.line];
+              if (!line) continue;
+              const first = line.spans.find(
+                (s) =>
+                  part.start >= s.start && part.start < s.start + (s.span.textContent?.length ?? 0),
+              );
+              const last = line.spans.find(
+                (s) =>
+                  part.end > s.start && part.end <= s.start + (s.span.textContent?.length ?? 0),
+              );
+              if (!first?.span.firstChild || !last?.span.firstChild) continue;
+              const range = document.createRange();
+              range.setStart(first.span.firstChild, part.start - first.start);
+              range.setEnd(last.span.firstChild, part.end - last.start);
+              anchors.push({ from: part.from, to: part.to, region: part.region, line, range });
+            }
+            offset = end;
+          } while (offset < parts.length && performance.now() < until);
+          longestBatch = Math.max(longestBatch, performance.now() - batchStarted);
+          if (offset < parts.length) this.mapTimer = window.setTimeout(step, 0);
+          else if (!event.data.done) {
+            this.mapTimer = 0;
+            worker.postMessage({ next: true });
+          } else {
+            worker.terminate();
+            this.mapWorker = null;
+            this.sourceMap = map;
+            this.host.dataset.wordMap = "ready";
+            this.host.dataset.wordMapMs = (performance.now() - started).toFixed(1);
+            this.host.dataset.wordMapBatchMs = longestBatch.toFixed(1);
+            this.host.dataset.wordMapAnchors = String(totalParts);
+            this.host.dataset.wordMapAtomicAnchors = String(totalAtomic);
+            this.scrollIndex = new ScrollIndex(anchors, true);
+            this.measureScrollRegions();
+            this.mapTimer = 0;
+            this.mapOptions?.onReady?.();
+            if (!this.selectionDismissed && !this.detached) this.emitSelection(false);
+          }
+        };
+        this.mapTimer = window.setTimeout(step, 0);
+      };
+      worker.onerror = (event) => {
+        this.host.dataset.wordMap = "unavailable";
+        console.warn("PDF word map worker failed:", event.message);
+        worker.terminate();
+        if (this.mapWorker === worker) this.mapWorker = null;
+      };
+      worker.onmessageerror = () => {
+        this.host.dataset.wordMap = "unavailable";
+        worker.terminate();
+        if (this.mapWorker === worker) this.mapWorker = null;
+      };
+      worker.postMessage({
+        language: this.mapOptions?.language ?? "typst",
+        files,
+        lines: this.allLines.map(({ text, region }) => ({ text, region })),
+      });
+    } catch (error) {
+      this.host.dataset.wordMap = "unavailable";
+      // PDF selection and copying remain usable when a worker cannot be started.
+      console.warn("PDF word map worker unavailable:", error);
+    }
+  }
+
+  cancelMap(): void {
+    this.mapWorker?.terminate();
+    this.mapWorker = null;
+    window.clearTimeout(this.mapTimer);
+    this.mapTimer = 0;
+  }
+
+  ensureMap(): void {
+    if (!this.sourceMap && !this.mapWorker && !this.mapTimer && !this.disposed) this.startMap();
+  }
+
+  setActiveFile(file: string, source: string): void {
+    this.cancelMap();
+    this.geometryGeneration++;
+    this.sourceMap = null;
+    this.scrollIndex = new ScrollIndex([]);
+    this.scrollRegions = [];
+    this.activeFile = file;
+    this.source = source;
+    this.ensureMap();
+  }
+
+  activate(): void {
+    this.detached = false;
+    this.cancelScrollRestore();
+    this.measureScrollRegions();
+  }
+
+  mapReady(): boolean {
+    return this.sourceMap !== null;
+  }
+
+  pageCount(): number {
+    return this.pages.length;
+  }
+
+  atEnd(): boolean {
+    const last = this.pages[this.pages.length - 1];
+    return (
+      !!last &&
+      last.shell.getBoundingClientRect().bottom <= this.pane.getBoundingClientRect().bottom + 50
+    );
   }
 
   /**
@@ -321,6 +480,10 @@ export class TypstPdfPreview {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.geometryGeneration++;
+    this.mapWorker?.terminate();
+    this.mapWorker = null;
+    window.clearTimeout(this.mapTimer);
     cancelAnimationFrame(this.geometryFrame);
     this.scrollIndex = new ScrollIndex([]);
     this.scrollRegions = [];
@@ -462,7 +625,7 @@ export class TypstPdfPreview {
       this.geometryFrame = 0;
       if (!this.disposed) {
         this.measureScrollRegions();
-        if (epoch === this.inputEpoch) {
+        if (!this.detached && epoch === this.inputEpoch) {
           this.layoutScrollUntil = performance.now() + 150;
           if (bookmark) this.restoreScroll(bookmark);
           else this.pane.scrollTop = scroll * ratio;
@@ -484,41 +647,78 @@ export class TypstPdfPreview {
 
   /** Geometry is rebuilt at layout changes, never by scanning pages on scroll. */
   private measureScrollRegions(): void {
+    const generation = ++this.geometryGeneration;
     const pane = this.pane.getBoundingClientRect();
     const origins = this.pages.map((p) => {
       const r = p.shell.getBoundingClientRect();
       return { top: this.pane.scrollTop + r.top - pane.top, left: r.left - pane.left };
     });
     const regions = new Map<string, ScrollRegion & { anchors: PdfScrollAnchor[] }>();
-    for (const anchor of this.scrollIndex.anchors) {
-      const line = anchor.line;
-      const origin = origins[line.page - 1];
-      if (!origin) continue;
-      const top = origin.top + line.top * this.fit;
-      const left = origin.left + line.left * this.fit;
-      const right = origin.left + line.right * this.fit;
-      let region = regions.get(anchor.region);
-      if (!region) {
-        region = {
-          key: anchor.region,
-          top,
-          bottom: top,
-          left,
-          right,
-          column: line.column,
-          anchors: [],
-        };
-        regions.set(anchor.region, region);
+    const byLine = new Map<number, PdfScrollAnchor[]>();
+    const anchors = this.scrollIndex.anchors;
+    let at = 0;
+    let lineAt = 0,
+      withinLine = 0;
+    const step = (): void => {
+      if (this.disposed || generation !== this.geometryGeneration) return;
+      const deadline = performance.now() + 8;
+      do {
+        const end = Math.min(at + 128, anchors.length);
+        for (; at < end; at++) {
+          const anchor = anchors[at],
+            line = anchor.line,
+            origin = origins[line.page - 1];
+          if (!origin) continue;
+          const top = origin.top + line.top * this.fit;
+          const left = origin.left + line.left * this.fit;
+          const right = origin.left + line.right * this.fit;
+          let region = regions.get(anchor.region);
+          if (!region) {
+            region = {
+              key: anchor.region,
+              top,
+              bottom: top,
+              left,
+              right,
+              column: line.column,
+              anchors: [],
+            };
+            regions.set(anchor.region, region);
+          }
+          region.top = Math.min(region.top, top);
+          region.bottom = Math.max(region.bottom, top);
+          region.left = Math.min(region.left, left);
+          region.right = Math.max(region.right, right);
+          const bucket = byLine.get(line.id) ?? [];
+          bucket.push(anchor);
+          byLine.set(line.id, bucket);
+        }
+      } while (at < anchors.length && performance.now() < deadline);
+      if (at < anchors.length) {
+        window.setTimeout(step, 0);
+        return;
       }
-      region.top = Math.min(region.top, top);
-      region.bottom = Math.max(region.bottom, top);
-      region.left = Math.min(region.left, left);
-      region.right = Math.max(region.right, right);
-      region.anchors.push(anchor);
-    }
-    this.scrollRegions = [...regions.values()];
-    for (const region of this.scrollRegions)
-      region.anchors.sort((a, b) => a.line.top - b.line.top || a.from - b.from);
+      // Lines were indexed in reading order, with each region's baselines in
+      // ascending order. This avoids a large main-thread sort after the batches.
+      let work = 0;
+      while (lineAt < this.allLines.length && (work < 128 || performance.now() < deadline)) {
+        const line = this.allLines[lineAt];
+        const bucket = byLine.get(line.id);
+        if (bucket && withinLine < bucket.length) {
+          regions.get(line.region)?.anchors.push(bucket[withinLine++]);
+        } else {
+          lineAt++;
+          withinLine = 0;
+        }
+        work++;
+      }
+      if (lineAt < this.allLines.length) {
+        window.setTimeout(step, 0);
+        return;
+      }
+      this.scrollRegions = [...regions.values()];
+    };
+    step();
   }
 
   /** Only an actual gesture changes column preference; hovering does not. */
@@ -539,8 +739,8 @@ export class TypstPdfPreview {
    * The PDF position at the top of the visible area, for scroll correspondence.
    *
    * Returns the page under the top edge and the point within it, in the page's
-   * own coordinates — the same space SyncTeX reports regions in. `null` when no
-   * page is laid out yet, which is the honest answer before a render.
+   * own coordinates. `null` when no page is laid out yet, which is the honest
+   * answer before a render.
    *
    * The horizontal component is the pane's centre: a source line maps to a
    * region, and a line that spans a column break has regions on both sides, so
@@ -566,8 +766,8 @@ export class TypstPdfPreview {
 
     // **Otherwise the nearest page, not `null`.**
     //
-    // The top edge can fall in the gap between two pages, or above the first one
-    // while the view is still settling. Returning `null` there made the
+    // The top edge can fall above the first page or below the last while the view
+    // is still settling. Returning `null` there made the
     // correspondence fall back to `onPage[0]` — the *first* region of the line —
     // which on a two-column document is the left column. That is the oscillation
     // measured on `samples/latex-two-column.tex`: the preview advanced to 345 and
@@ -607,10 +807,8 @@ export class TypstPdfPreview {
   /**
    * Scroll so a point on a page sits near the top of the visible area.
    *
-   * The counterpart to {@link topPosition}, and the only place that converts a
-   * SyncTeX point into a scroll offset. It does nothing when the page is not laid
-   * out, so a caller racing a render cannot scroll to a position that does not
-   * exist yet.
+   * The counterpart to {@link topPosition}, converting a page-local point into
+   * a scroll offset. It does nothing when the page is not laid out yet.
    */
   scrollToPagePosition(page: number, y: number): void {
     if (this.disposed) return;
@@ -864,11 +1062,17 @@ export class TypstPdfPreview {
           ? -1
           : columnOf(record.rect.left);
       let line: TextLine | null = null;
-      for (const candidate of lines) {
-        if (
-          candidate.column === column &&
-          Math.abs(candidate.top - record.rect.top) <= Math.max(0.8, record.rect.height * 0.12)
-        ) {
+      const tolerance = Math.max(0.8, record.rect.height * 0.12);
+      let lo = 0,
+        hi = lines.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (lines[mid].top < record.rect.top - tolerance) lo = mid + 1;
+        else hi = mid;
+      }
+      for (let at = lo; at < lines.length && lines[at].top <= record.rect.top + tolerance; at++) {
+        const candidate = lines[at];
+        if (candidate.column === column && Math.abs(candidate.top - record.rect.top) <= tolerance) {
           line = candidate;
           break;
         }
@@ -916,7 +1120,16 @@ export class TypstPdfPreview {
       columns.length > 1
         ? lines.filter((line) => line.column < 0).sort((a, b) => a.top - b.top)
         : [];
-    const band = (line: TextLine) => wide.filter((other) => other.top < line.top - 1).length;
+    const band = (line: TextLine) => {
+      let lo = 0,
+        hi = wide.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (wide[mid].top < line.top - 1) lo = mid + 1;
+        else hi = mid;
+      }
+      return lo;
+    };
     for (const line of lines) line.region = `${page}:${band(line)}:${line.column}`;
     lines.sort((a, b) => band(a) - band(b) || a.column - b.column || a.top - b.top);
     this.linesByPage.set(page, lines);
@@ -1001,11 +1214,23 @@ export class TypstPdfPreview {
     const text = range.toString();
     if (!text.trim()) return null;
     const neighbours = this.neighbours(start.line);
+    const sourceRange = end
+      ? (this.sourceMap?.sourceRange(start.line.id, start.offset, end.line.id, end.offset) ?? null)
+      : null;
+    const sourceFile =
+      sourceRange && this.mapOptions?.files.find((file) => file.path === sourceRange.file);
+    if (sourceRange && sourceFile && this.mapOptions?.language === "latex") {
+      const segments =
+        this.sourceMap?.sourceSegments(
+          sourceRange.file,
+          sourceRange.from,
+          sourceRange.to,
+          sourceFile.source,
+        ) ?? [];
+      Object.assign(sourceRange, { segments });
+    }
     return {
-      sourceRange: end
-        ? (this.sourceMap?.sourceRange(start.line.id, start.offset, end.line.id, end.offset) ??
-          null)
-        : null,
+      sourceRange,
       page: start.line.page,
       lineText: start.line.text,
       before: neighbours.before,
@@ -1045,29 +1270,6 @@ export class TypstPdfPreview {
     const selection = window.getSelection();
     if (!selection || !selection.isCollapsed) return;
 
-    if (this.onPdfClick) {
-      const index = this.pages.findIndex((page) => {
-        const rect = page.pageEl.getBoundingClientRect();
-        return (
-          clientX >= rect.left &&
-          clientX <= rect.right &&
-          clientY >= rect.top &&
-          clientY <= rect.bottom
-        );
-      });
-      if (index < 0) return;
-      const page = this.pages[index];
-      const rect = page.pageEl.getBoundingClientRect();
-      const width = page.page.view[2] - page.page.view[0];
-      const height = page.page.view[3] - page.page.view[1];
-      this.onPdfClick(
-        index + 1,
-        ((clientX - rect.left) * width) / rect.width,
-        ((clientY - rect.top) * height) / rect.height,
-      );
-      return;
-    }
-
     const doc = document as Document & {
       caretPositionFromPoint?: (
         x: number,
@@ -1088,13 +1290,17 @@ export class TypstPdfPreview {
     const start = this.locate(node, offset);
     if (!start) return;
     const neighbours = this.neighbours(start.line);
+    const word = this.sourceMap?.wordAt(start.line.id, start.offset) ?? null;
     this.onContext(
       {
-        sourceRange: (() => {
-          const token = lineTokenAt(start.line.text, start.offset);
-          const word = token ? this.sourceMap?.wordAt(start.line.id, token.token.from) : null;
-          return word ? { from: word.from, to: word.to } : null;
-        })(),
+        sourceRange: word
+          ? {
+              from: word.from,
+              to: word.to,
+              file: word.file,
+              ...(word.atomic ? { atomic: true as const } : {}),
+            }
+          : null,
         page: start.line.page,
         lineText: start.line.text,
         before: neighbours.before,
@@ -1102,42 +1308,22 @@ export class TypstPdfPreview {
         start: start.offset,
         end: start.offset,
         text: "",
-        paragraph: true,
+        paragraph: !word?.atomic,
         multiLine: false,
       },
       true,
     );
   }
 
-  /** Display compiler-provided page regions in PDF points, independently of Typst's map. */
-  showRegions(regions: readonly PdfLocation[], blink = false): void {
-    this.host.querySelectorAll(".latex-sync-region").forEach((element) => element.remove());
-    for (const region of regions) {
-      const page = this.pages[region.page - 1];
-      if (!page) continue;
-      const mark = document.createElement("div");
-      mark.className = "latex-sync-region";
-      if (blink) {
-        mark.classList.add("latex-sync-blink");
-        window.setTimeout(() => mark.remove(), 1300);
-      }
-      mark.style.left = `${region.x * page.viewport.scale}px`;
-      mark.style.top = `${region.y * page.viewport.scale}px`;
-      mark.style.width = `${Math.max(2, region.width * page.viewport.scale)}px`;
-      mark.style.height = `${Math.max(2, region.height * page.viewport.scale)}px`;
-      page.pageEl.append(mark);
-    }
-  }
-
   /** Source and preview gestures share precisely the same accepted links. */
   rangesForSource(source: string, from: number, to: number): Range[] {
     if (this.disposed || source !== this.source || !this.sourceMap) return [];
     const ranges: Range[] = [];
-    for (const part of this.sourceMap.partsForSource(from, to)) {
+    for (const part of this.sourceMap.partsForSource(this.activeFile, from, to)) {
       const line = this.allLines[part.line];
       for (const entry of line.spans) {
-        const lo = Math.max(part.from, entry.start),
-          hi = Math.min(part.to, entry.start + (entry.span.textContent?.length ?? 0));
+        const lo = Math.max(part.start, entry.start),
+          hi = Math.min(part.end, entry.start + (entry.span.textContent?.length ?? 0));
         if (hi <= lo || !entry.span.firstChild) continue;
         const range = document.createRange();
         range.setStart(entry.span.firstChild, lo - entry.start);
@@ -1146,5 +1332,12 @@ export class TypstPdfPreview {
       }
     }
     return ranges;
+  }
+
+  /** Whole source constructs such as verified equations override line clicks. */
+  atomicRangeAtSource(source: string, offset: number): { from: number; to: number } | null {
+    if (this.disposed || source !== this.source || !this.sourceMap) return null;
+    const range = this.sourceMap.atomicAtSource(this.activeFile, offset);
+    return range ? { from: range.from, to: range.to } : null;
   }
 }

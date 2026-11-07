@@ -15,10 +15,12 @@
 //!   `Program Files`, or to the registry, and no elevation is ever requested.
 
 use crate::settings::{AppState, ExportFormat};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Runtime};
@@ -115,6 +117,38 @@ pub struct ExportRequest {
     /// `.typ` export uses it; absent for every other format.
     #[serde(default)]
     pub image_root: Option<String>,
+    /// A bounded, project-confined LaTeX snapshot to convert instead of the
+    /// file on disk.
+    ///
+    /// A `.tex` project is compiled from the buffers on screen, so the file on
+    /// disk can be older than what the reader is looking at, and an `\input`
+    /// chapter may be unsaved. Passing `input_path` alone would export a
+    /// different document. Absent for every other language, and absent means
+    /// "read `markdown` and `input_path` exactly as before".
+    #[serde(default)]
+    pub snapshot: Option<ExportSnapshot>,
+}
+
+/// The files a LaTeX conversion reads, as the preview's snapshot captured them.
+///
+/// `data` is base64 because an `\includegraphics` target is a PNG or a PDF, not
+/// text. `root` is the absolute project directory the snapshot came from: it is
+/// what a text writer's image links are rewritten to point at, since the staged
+/// copy is deleted when the export returns.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportSnapshot {
+    pub root: String,
+    pub main_file: String,
+    pub files: Vec<ExportSnapshotFile>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportSnapshotFile {
+    /// Project-relative, forward slashes, no `..` and no drive letter.
+    pub path: String,
+    pub data: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -512,6 +546,464 @@ pub fn status<R: Runtime>(app: &AppHandle<R>) -> PandocStatus {
 }
 
 // ---------------------------------------------------------------------------
+// Writer discovery
+// ---------------------------------------------------------------------------
+
+/// One writer the installed pandoc advertises.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PandocWriter {
+    /// The writer name pandoc accepts after `-t`.
+    pub id: String,
+    /// A readable name for the chooser.
+    pub label: String,
+    /// The extension the save dialog suggests, without the dot.
+    pub extension: String,
+    /// Writers that emit citation data rather than a document.
+    ///
+    /// Pandoc's LaTeX reader does not carry the entries a `.bib` file holds, so
+    /// these produce an empty result for a `.tex` source. The chooser says so
+    /// instead of offering a row that writes a zero-byte file.
+    pub bibliography_only: bool,
+}
+
+/// The writer list, cached against the binary that produced it.
+///
+/// A pandoc update can add, remove or deprecate a writer, so the cache key is
+/// the resolved path *and* the version. Anything else would keep serving a list
+/// the installed binary no longer implements.
+static WRITERS: Mutex<Option<(String, Vec<PandocWriter>)>> = Mutex::new(None);
+
+/// A stable key for one pandoc installation.
+fn writer_cache_key(found: &FoundPandoc) -> String {
+    format!("{}|{}", found.path.display(), found.version)
+}
+
+/// The curated label and extension for a writer, or a derived fallback.
+///
+/// Derived rather than exhaustive on purpose: a writer this build has never
+/// heard of stays selectable with a safe name and extension, because pandoc
+/// adding one is exactly the case the on-demand list exists for.
+fn writer_metadata(id: &str) -> (String, String) {
+    let known: Option<(&str, &str)> = match id {
+        "html" | "html5" => Some(("HTML", "html")),
+        "html4" => Some(("HTML 4", "html")),
+        "chunkedhtml" => Some(("HTML (chunked, one ZIP)", "zip")),
+        "docx" => Some(("Word (.docx)", "docx")),
+        "odt" => Some(("OpenDocument (.odt)", "odt")),
+        "opendocument" => Some(("OpenDocument XML", "fodt")),
+        "fodt" => Some(("OpenDocument (flat XML)", "fodt")),
+        "epub" => Some(("EPUB", "epub")),
+        "epub2" => Some(("EPUB 2", "epub")),
+        "epub3" => Some(("EPUB 3", "epub")),
+        "rtf" => Some(("RTF", "rtf")),
+        "latex" => Some(("LaTeX", "tex")),
+        "beamer" => Some(("LaTeX Beamer slides", "tex")),
+        "context" => Some(("ConTeXt", "tex")),
+        "typst" => Some(("Typst", "typ")),
+        "markdown" => Some(("Markdown (Pandoc)", "md")),
+        "markdown_strict" => Some(("Markdown (strict)", "md")),
+        "markdown_mmd" => Some(("Markdown (MultiMarkdown)", "md")),
+        "markdown_phpextra" => Some(("Markdown (PHP Extra)", "md")),
+        "markdown_github" => Some(("Markdown (GitHub, deprecated)", "md")),
+        "commonmark" => Some(("CommonMark", "md")),
+        "commonmark_x" => Some(("CommonMark (extended)", "md")),
+        "gfm" => Some(("GitHub-flavoured Markdown", "md")),
+        "markua" => Some(("Markua", "md")),
+        "djot" => Some(("Djot", "dj")),
+        "rst" => Some(("reStructuredText", "rst")),
+        "asciidoc" => Some(("AsciiDoc", "adoc")),
+        "asciidoc_legacy" => Some(("AsciiDoc (legacy)", "adoc")),
+        "asciidoctor" => Some(("Asciidoctor", "adoc")),
+        "textile" => Some(("Textile", "textile")),
+        "mediawiki" => Some(("MediaWiki", "wiki")),
+        "dokuwiki" => Some(("DokuWiki", "txt")),
+        "xwiki" => Some(("XWiki", "txt")),
+        "zimwiki" => Some(("ZimWiki", "txt")),
+        "jira" => Some(("Jira wiki", "txt")),
+        "org" => Some(("Org mode", "org")),
+        "muse" => Some(("Emacs Muse", "muse")),
+        "t2t" => Some(("txt2tags", "t2t")),
+        "vimdoc" => Some(("Vim help", "txt")),
+        "haddock" => Some(("Haddock", "txt")),
+        "man" => Some(("man page", "1")),
+        "ms" => Some(("roff ms", "ms")),
+        "plain" => Some(("Plain text", "txt")),
+        "ansi" => Some(("Plain text with ANSI escapes", "txt")),
+        "json" => Some(("JSON AST", "json")),
+        "native" => Some(("Pandoc native AST", "native")),
+        "csljson" => Some(("CSL JSON citation data", "json")),
+        "bibtex" => Some(("BibTeX citation data", "bib")),
+        "biblatex" => Some(("BibLaTeX citation data", "bib")),
+        "ipynb" => Some(("Jupyter notebook", "ipynb")),
+        "opml" => Some(("OPML", "opml")),
+        "icml" => Some(("InDesign ICML", "icml")),
+        "fb2" => Some(("FictionBook 2", "fb2")),
+        "tei" => Some(("TEI Simple", "tei")),
+        "texinfo" => Some(("Texinfo", "texi")),
+        "docbook" | "docbook5" => Some(("DocBook 5", "xml")),
+        "docbook4" => Some(("DocBook 4", "xml")),
+        "jats" | "jats_archiving" | "jats_publishing" | "jats_articleauthoring" => {
+            Some(("JATS XML", "xml"))
+        }
+        "xml" => Some(("XML (Pandoc AST)", "xml")),
+        "pptx" => Some(("PowerPoint (.pptx)", "pptx")),
+        "revealjs" => Some(("reveal.js slides", "html")),
+        "s5" => Some(("S5 slides", "html")),
+        "slidy" => Some(("Slidy slides", "html")),
+        "slideous" => Some(("Slideous slides", "html")),
+        "dzslides" => Some(("DZSlides", "html")),
+        "bbcode" => Some(("BBCode", "txt")),
+        "bbcode_fluxbb" => Some(("BBCode (FluxBB)", "txt")),
+        "bbcode_hubzilla" => Some(("BBCode (Hubzilla)", "txt")),
+        "bbcode_phpbb" => Some(("BBCode (phpBB)", "txt")),
+        "bbcode_steam" => Some(("BBCode (Steam)", "txt")),
+        "bbcode_xenforo" => Some(("BBCode (XenForo)", "txt")),
+        "pdf" => Some(("PDF", "pdf")),
+        _ => None,
+    };
+    if let Some((label, extension)) = known {
+        return (label.to_string(), extension.to_string());
+    }
+    // An unknown writer: "some_new_writer" becomes "Some New Writer", and the
+    // extension is the id with anything a filename cannot hold replaced.
+    let label = id
+        .split('_')
+        .filter(|word| !word.is_empty())
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let extension: String = id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    (
+        if label.is_empty() { id.to_string() } else { label },
+        if extension.is_empty() {
+            "txt".to_string()
+        } else {
+            extension
+        },
+    )
+}
+
+/// Writers that emit citation data instead of a document.
+fn bibliography_only(id: &str) -> bool {
+    matches!(id, "bibtex" | "biblatex" | "csljson")
+}
+
+/// A writer id that can be handed to pandoc as one `-t` argument.
+///
+/// The id arrives from the webview, so it is validated rather than trusted: a
+/// name with a space, a slash or a leading `-` could otherwise become a second
+/// argument or a path.
+pub(crate) fn safe_writer_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '+')
+        && !id.starts_with('-')
+}
+
+/// Ask pandoc which writers it implements.
+fn probe_writers(pandoc: &Path) -> Result<Vec<PandocWriter>, String> {
+    let output = quiet(&mut Command::new(pandoc))
+        .arg("--list-output-formats")
+        .output()
+        .map_err(|e| format!("Could not ask pandoc for its writers: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Pandoc could not list its writers (exit {}).",
+            output
+                .status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".into())
+        ));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut writers: Vec<PandocWriter> = Vec::new();
+    for line in text.lines() {
+        let id = line.trim();
+        if id.is_empty() || !safe_writer_id(id) {
+            continue;
+        }
+        let (label, extension) = writer_metadata(id);
+        writers.push(PandocWriter {
+            id: id.to_string(),
+            label,
+            extension,
+            bibliography_only: bibliography_only(id),
+        });
+    }
+    if writers.is_empty() {
+        return Err("Pandoc listed no output formats.".into());
+    }
+    Ok(writers)
+}
+
+/// The writer list for the pandoc this application would export with.
+pub fn list_writers<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<PandocWriter>, String> {
+    let found = find_pandoc(app).ok_or_else(|| {
+        "Pandoc was not found. Use Help › Install Pandoc to add it, or install it yourself."
+            .to_string()
+    })?;
+    let key = writer_cache_key(&found);
+    if let Ok(cache) = WRITERS.lock()
+        && let Some((cached_key, writers)) = cache.as_ref()
+        && *cached_key == key
+    {
+        return Ok(writers.clone());
+    }
+    let writers = probe_writers(&found.path)?;
+    if let Ok(mut cache) = WRITERS.lock() {
+        *cache = Some((key, writers.clone()));
+    }
+    Ok(writers)
+}
+
+// ---------------------------------------------------------------------------
+// Staging a project snapshot
+// ---------------------------------------------------------------------------
+
+/// A project-relative path that cannot leave the directory it is joined onto.
+///
+/// The snapshot comes from the webview, so every entry is re-validated here: a
+/// `..`, an absolute path or a drive letter would otherwise let a conversion
+/// write outside the scratch directory it owns.
+pub(crate) fn safe_snapshot_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && !path.contains(':')
+        && !path.contains('\0')
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
+/// The project written into a scratch directory for pandoc to read.
+#[derive(Debug)]
+struct Staged {
+    /// The staged main file, absolute.
+    main: PathBuf,
+    /// The directory pandoc runs in: the staged copy's root.
+    directory: PathBuf,
+    /// The original project root, still holding the images.
+    resource_root: PathBuf,
+}
+
+/// Write the snapshot into `scratch` and return what pandoc needs.
+///
+/// The copy exists because pandoc must read the buffers on screen, not the file
+/// on disk, and because a conversion must never write into the project. Only the
+/// bytes are copied — the original root stays the resource path, so an
+/// `\includegraphics` resolves to the reader's own file rather than to a copy
+/// that disappears with the scratch directory.
+fn stage_snapshot(scratch: &Scratch, snapshot: &ExportSnapshot) -> Result<Staged, String> {
+    let root = PathBuf::from(&snapshot.root);
+    if !root.is_absolute() {
+        return Err("The LaTeX project root must be an absolute path.".into());
+    }
+    if !root.is_dir() {
+        return Err(format!("{} is not a directory.", root.display()));
+    }
+    if !safe_snapshot_path(&snapshot.main_file) {
+        return Err(format!(
+            "The main LaTeX file \"{}\" is not a safe project path.",
+            snapshot.main_file
+        ));
+    }
+
+    let directory = scratch.path().join("project");
+    std::fs::create_dir_all(&directory)
+        .map_err(|e| format!("Could not create {}: {e}", directory.display()))?;
+
+    for file in &snapshot.files {
+        if !safe_snapshot_path(&file.path) {
+            return Err(format!(
+                "The LaTeX project entry \"{}\" is not a safe project path.",
+                file.path
+            ));
+        }
+        let bytes = STANDARD
+            .decode(&file.data)
+            .map_err(|_| format!("The LaTeX project entry \"{}\" is not valid base64.", file.path))?;
+        let target = directory.join(file.path.replace('/', std::path::MAIN_SEPARATOR_STR));
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Could not create {}: {e}", parent.display()))?;
+        }
+        std::fs::write(&target, &bytes)
+            .map_err(|e| format!("Could not write {}: {e}", target.display()))?;
+    }
+
+    let main = directory.join(
+        snapshot
+            .main_file
+            .replace('/', std::path::MAIN_SEPARATOR_STR),
+    );
+    if !main.is_file() {
+        return Err(format!(
+            "The LaTeX project snapshot does not contain its main file \"{}\".",
+            snapshot.main_file
+        ));
+    }
+    Ok(Staged {
+        main,
+        directory,
+        resource_root: root,
+    })
+}
+
+/// Whether the staged project declares a bibliography.
+///
+/// Read from the staged `.tex` sources rather than from the original files, so
+/// the answer matches exactly what pandoc will read.
+fn declares_bibliography(staged: &Staged) -> bool {
+    fn walk(directory: &Path, found: &mut bool) {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, found);
+                continue;
+            }
+            if !path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("tex"))
+            {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            if text.contains("\\bibliography{")
+                || text.contains("\\addbibresource{")
+                || text.contains("\\printbibliography")
+            {
+                *found = true;
+                return;
+            }
+        }
+    }
+    let mut found = false;
+    walk(&staged.directory, &mut found);
+    found
+}
+
+/// Writers whose output is prose the reader will edit, so hard wrapping hurts.
+fn keeps_lines_unwrapped(id: &str) -> bool {
+    id.starts_with("markdown")
+        || matches!(
+            id,
+            "commonmark"
+                | "commonmark_x"
+                | "gfm"
+                | "markua"
+                | "djot"
+                | "rst"
+                | "asciidoc"
+                | "asciidoc_legacy"
+                | "asciidoctor"
+                | "textile"
+                | "mediawiki"
+                | "dokuwiki"
+                | "xwiki"
+                | "zimwiki"
+                | "jira"
+                | "org"
+                | "muse"
+                | "t2t"
+                | "vimdoc"
+                | "haddock"
+                | "typst"
+                | "context"
+                | "latex"
+                | "bbcode"
+                | "bbcode_fluxbb"
+                | "bbcode_hubzilla"
+                | "bbcode_phpbb"
+                | "bbcode_steam"
+                | "bbcode_xenforo"
+        )
+}
+
+/// Writers whose standalone output should carry its own images.
+///
+/// Only the plain HTML writers. A slide writer's template links its CSS and
+/// JavaScript from a CDN, and `--embed-resources` would make **pandoc** fetch
+/// them — a network request this application must not initiate on its own. Those
+/// writers keep their links, which is the document's own request when the reader
+/// opens it, exactly like an HTML file that names a stylesheet.
+fn embeds_resources(id: &str) -> bool {
+    matches!(id, "html" | "html4" | "html5" | "chunkedhtml")
+}
+
+/// Writers whose output is Markdown-shaped, so a relative image link survives.
+fn is_markdown_shaped(id: &str) -> bool {
+    id.starts_with("markdown") || matches!(id, "commonmark" | "commonmark_x" | "gfm" | "markua")
+}
+
+/// Point a produced Markdown file's image links at the reader's own files.
+///
+/// Pandoc writes back the path it read, which is project-relative. The export
+/// target can be in another folder, and the staged copy is about to be deleted,
+/// so a relative link would dangle. Only links that resolve inside the original
+/// project are rewritten; anything else is left exactly as pandoc wrote it.
+fn rewrite_markdown_images(text: &str, root: &Path) -> String {
+    let mut out = String::with_capacity(text.len());
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        // `![alt](target)` and `![alt](<target>)`, plus an optional title.
+        if bytes[index] == b'!'
+            && bytes.get(index + 1) == Some(&b'[')
+            && let Some(close) = text[index + 2..].find("](")
+        {
+            let target_start = index + 2 + close + 2;
+            let rest = &text[target_start..];
+            let (open, trimmed) = if let Some(stripped) = rest.strip_prefix('<') {
+                (1, stripped)
+            } else {
+                (0, rest)
+            };
+            let end = trimmed
+                .find(|c: char| c == ')' || c == '>' || c.is_whitespace())
+                .unwrap_or(trimmed.len());
+            let target = &trimmed[..end];
+            if !target.is_empty()
+                && !target.contains("://")
+                && !target.starts_with('/')
+                && !target.starts_with("data:")
+            {
+                let candidate = root.join(target.replace('/', std::path::MAIN_SEPARATOR_STR));
+                if candidate.is_file() {
+                    let absolute = candidate.to_string_lossy().replace('\\', "/");
+                    out.push_str(&text[index..target_start + open]);
+                    out.push_str(&absolute);
+                    index = target_start + open + end;
+                    continue;
+                }
+            }
+        }
+        let ch = text[index..].chars().next().unwrap_or(' ');
+        out.push(ch);
+        index += ch.len_utf8();
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Running an export
 // ---------------------------------------------------------------------------
 
@@ -528,6 +1020,76 @@ fn feed_stdin(mut stdin: std::process::ChildStdin, markdown: String) -> std::thr
         let _ = stdin.write_all(markdown.as_bytes());
         let _ = stdin.flush();
     })
+}
+
+/// Run one pandoc invocation and return its warnings.
+///
+/// Shared by the configured formats and the writer chooser so the timeout, the
+/// quiet console, the stdin thread and the exit-code explanation cannot drift
+/// apart between two routes that must behave identically.
+fn run_pandoc(
+    pandoc: &Path,
+    args: &[String],
+    scratch: &Scratch,
+    directory: &Path,
+    stdin_text: String,
+    target: &Path,
+    allow_empty: bool,
+) -> Result<String, String> {
+    let mut command = pandoc_command(pandoc, args, scratch, directory);
+    let mut child = quiet(&mut command)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Could not start pandoc: {e}"))?;
+
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Could not open pandoc's input stream.".to_string())?;
+    let writer = feed_stdin(stdin, stdin_text);
+
+    let output = wait_with_timeout(child, EXPORT_TIMEOUT)?;
+    // The writer finishes as soon as pandoc closes its end. Joining keeps the
+    // thread from outliving the buffers it borrows, and a panic there would
+    // already have aborted the process.
+    let _ = writer.join();
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !output.status.success() {
+        let code = output.status.code();
+        let mut message = format!(
+            "Pandoc exited with {}",
+            code.map(|c| c.to_string()).unwrap_or_else(|| "a signal".into())
+        );
+        // Pandoc's own message is usually the most precise thing available, so
+        // our explanation goes first and its text is kept verbatim underneath.
+        if let Some(hint) = exit_hint(code) {
+            message.push_str(".\n\n");
+            message.push_str(hint);
+        } else {
+            message.push('.');
+        }
+        if !stderr.is_empty() {
+            message.push_str("\n\n");
+            message.push_str(&stderr);
+        }
+        return Err(message);
+    }
+
+    let bytes = std::fs::metadata(target).map(|m| m.len()).unwrap_or(0);
+    if bytes == 0 && !allow_empty {
+        // A zero-byte file means pandoc reported success but produced nothing —
+        // a missing PDF engine is the usual cause. Saying so beats handing the
+        // user an empty document.
+        return Err(format!(
+            "Pandoc reported success but wrote nothing to {}.\n\nFor PDF this normally means Typst \
+             is not installed; use Help › Install Typst.",
+            target.display()
+        ));
+    }
+    Ok(stderr)
 }
 
 pub fn export<R: Runtime>(app: &AppHandle<R>, request: &ExportRequest) -> Result<ExportOutcome, String> {
@@ -605,70 +1167,60 @@ pub fn export<R: Runtime>(app: &AppHandle<R>, request: &ExportRequest) -> Result
         ));
     }
 
+    // A `.tex` project converts from the snapshot the preview compiled, because
+    // the file on disk can be older than the buffer and an `\input` chapter may
+    // never have been saved. The staged copy is also what keeps a conversion from
+    // writing into the project.
+    let staged = match &request.snapshot {
+        Some(snapshot) => Some(stage_snapshot(&scratch, snapshot)?),
+        None => None,
+    };
+    if let Some(staged) = &staged {
+        args.insert(0, staged.main.to_string_lossy().into_owned());
+        // Pandoc's LaTeX reader resolves `\input` against the working directory,
+        // not against the file's own folder (measured: an absolute main file with
+        // the include beside it still reported "Could not load include file").
+        // The staged directory therefore has to be the working directory, and the
+        // original root becomes a resource path so `\includegraphics` still finds
+        // the reader's own image rather than a copy that is about to be deleted.
+        args.push(format!("--resource-path={}", staged.resource_root.display()));
+        if declares_bibliography(staged) {
+            args.push("--citeproc".into());
+        }
+        if embeds_resources(&format.id) || embeds_resources(&format.extension) {
+            args.push("--embed-resources".into());
+        }
+    }
+
     // Pandoc creates the PDF engine's files in its working directory, so it must
     // not inherit one the launcher happened to provide. Kept alive for the whole
     // run; the guard removes the directory when the export returns.
-    let directory = pandoc_directory(request, &scratch);
-    let mut command = pandoc_command(&pandoc, &args, &scratch, directory);
-    let mut child = quiet(&mut command)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Could not start pandoc: {e}"))?;
-
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "Could not open pandoc's input stream.".to_string())?;
-    // The source is only piped when pandoc has no file to read. When it does, the
-    // stream is closed empty so pandoc does not wait on it.
-    let fed = if input_file.is_some() {
+    let directory = match &staged {
+        Some(staged) => staged.directory.clone(),
+        None => pandoc_directory(request, &scratch).to_path_buf(),
+    };
+    let target = PathBuf::from(&request.output_path);
+    let fed = if input_file.is_some() || staged.is_some() {
         String::new()
     } else {
         request.markdown.clone()
     };
-    let writer = feed_stdin(stdin, fed);
+    let stderr = run_pandoc(&pandoc, &args, &scratch, &directory, fed, &target, false)?;
 
-    let output = wait_with_timeout(child, EXPORT_TIMEOUT)?;
-    // The writer finishes as soon as pandoc closes its end. Joining keeps the
-    // thread from outliving the buffers it borrows, and a panic there would
-    // already have aborted the process.
-    let _ = writer.join();
-
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    if !output.status.success() {
-        let code = output.status.code();
-        let mut message = format!(
-            "Pandoc exited with {}",
-            code.map(|c| c.to_string()).unwrap_or_else(|| "a signal".into())
-        );
-        // Pandoc's own message is usually the most precise thing available, so
-        // our explanation goes first and its text is kept verbatim underneath.
-        if let Some(hint) = exit_hint(code) {
-            message.push_str(".\n\n");
-            message.push_str(hint);
-        } else {
-            message.push('.');
-        }
-        if !stderr.is_empty() {
-            message.push_str("\n\n");
-            message.push_str(&stderr);
-        }
-        return Err(message);
-    }
-
-    let target = PathBuf::from(&request.output_path);
     let bytes = std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
-    if bytes == 0 {
-        // A zero-byte file means pandoc reported success but produced nothing —
-        // a missing PDF engine is the usual cause. Saying so beats handing the
-        // user an empty document.
-        return Err(format!(
-            "Pandoc reported success but wrote nothing to {}.\n\nFor PDF this normally means Typst \
-             is not installed; use Help › Install Typst.",
-            target.display()
-        ));
+    if let Some(staged) = &staged
+        && (is_markdown_shaped(&format.id) || is_markdown_shaped(&format.extension))
+    {
+        // A Markdown target writes back the path it read, which is
+        // project-relative. The output can be in another folder and the staged
+        // copy is about to be deleted, so the links are pointed at the reader's
+        // own files while they still exist.
+        if let Ok(text) = std::fs::read_to_string(&target) {
+            let rewritten = rewrite_markdown_images(&text, &staged.resource_root);
+            if rewritten != text {
+                let _ = std::fs::write(&target, rewritten);
+            }
+        }
     }
 
     let after = run_after_actions(app, &target);
@@ -680,6 +1232,151 @@ pub fn export<R: Runtime>(app: &AppHandle<R>, request: &ExportRequest) -> Result
         after_errors: after.after_errors,
     })
 }
+
+/// Convert a LaTeX project with one writer the chooser picked.
+///
+/// The writer is validated against the installed binary's own list before
+/// anything runs, so a stale chooser, a pandoc update that removed a writer or a
+/// hand-edited id fails with a named error instead of a pandoc usage message. The
+/// conversion itself goes through [`run_pandoc`], the same path a configured
+/// format uses.
+pub fn export_writer<R: Runtime>(
+    app: &AppHandle<R>,
+    request: &ExportRequest,
+    writer: &str,
+) -> Result<ExportOutcome, String> {
+    let target = PathBuf::from(&request.output_path);
+    if !target.is_absolute() {
+        return Err(format!(
+            "Refusing to write to the relative path {}.",
+            target.display()
+        ));
+    }
+    let parent = target
+        .parent()
+        .ok_or_else(|| format!("{} has no parent directory.", target.display()))?;
+    if !parent.is_dir() {
+        return Err(format!("{} is not a directory.", parent.display()));
+    }
+    if !safe_writer_id(writer) {
+        return Err(format!("\"{writer}\" is not a valid pandoc writer name."));
+    }
+    // `pdf` is in pandoc's list, but converting LaTeX to Typst for PDF would
+    // change the layout and need an engine the preview does not use. The chooser
+    // turns that row into the compiled-PDF route; a direct call is refused here
+    // rather than starting a conversion that would need a TeX distribution.
+    if writer == "pdf" {
+        return Err(
+            "Use Export › PDF, which writes the PDF the LuaLaTeX preview compiled.".to_string(),
+        );
+    }
+    let known = list_writers(app)?;
+    let Some(entry) = known.iter().find(|entry| entry.id == writer) else {
+        return Err(format!(
+            "This pandoc does not offer a \"{writer}\" writer. Reopen the format list to see \
+             what it does offer."
+        ));
+    };
+
+    let found = find_pandoc(app).ok_or_else(|| {
+        "Pandoc was not found. Use Help › Install Pandoc to add it, or install it yourself."
+            .to_string()
+    })?;
+    let snapshot = request.snapshot.as_ref().ok_or_else(|| {
+        "A LaTeX conversion needs the project snapshot the preview compiled.".to_string()
+    })?;
+    // The destination must not be one of the files the conversion reads: pandoc
+    // would truncate it before writing, and the reader would lose a source file.
+    let root = PathBuf::from(&snapshot.root);
+    for file in &snapshot.files {
+        let original = root.join(file.path.replace('/', std::path::MAIN_SEPARATOR_STR));
+        if same_file(&original.to_string_lossy(), &request.output_path) {
+            return Err(format!(
+                "{} is part of the project you are converting. Choose another name.",
+                original.display()
+            ));
+        }
+    }
+
+    let scratch = Scratch::new(app)?;
+    let staged = stage_snapshot(&scratch, snapshot)?;
+    let mut args = vec![
+        "-f".to_string(),
+        "latex".to_string(),
+        "-t".to_string(),
+        writer.to_string(),
+        "-o".to_string(),
+        target.to_string_lossy().into_owned(),
+    ];
+    // `--standalone` is what makes a text writer emit a complete document rather
+    // than a fragment; the formats that cannot use it ignore it, and the ones
+    // that need a template would otherwise produce a bare body.
+    args.push("--standalone".into());
+    if keeps_lines_unwrapped(writer) {
+        args.push("--wrap=none".into());
+    }
+    if embeds_resources(writer) {
+        args.push("--embed-resources".into());
+    }
+    if declares_bibliography(&staged) {
+        args.push("--citeproc".into());
+    }
+    args.push(format!("--resource-path={}", staged.resource_root.display()));
+    args.insert(0, staged.main.to_string_lossy().into_owned());
+
+    let stderr = run_pandoc(
+        &found.path,
+        &args,
+        &scratch,
+        &staged.directory,
+        String::new(),
+        &target,
+        entry.bibliography_only,
+    )?;
+
+    if is_markdown_shaped(writer)
+        && let Ok(text) = std::fs::read_to_string(&target)
+    {
+        let rewritten = rewrite_markdown_images(&text, &staged.resource_root);
+        if rewritten != text {
+            let _ = std::fs::write(&target, rewritten);
+        }
+    }
+
+    let bytes = std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
+    let after = run_after_actions(app, &target);
+    Ok(ExportOutcome {
+        output_path: target.to_string_lossy().into_owned(),
+        bytes,
+        warnings: bibliography_note(entry, &stderr),
+        after: after.after,
+        after_errors: after.after_errors,
+    })
+}
+
+/// Pandoc's warnings, plus the explanation a bibliography-only writer needs.
+///
+/// `bibtex`, `biblatex` and `csljson` emit citation data. Pandoc's LaTeX reader
+/// does not carry the entries a `.bib` file holds, so a `.tex` source produces an
+/// empty set — `[]` or a zero-byte file that is still a *success*. Saying that
+/// plainly is better than presenting an empty file as a converted document.
+fn bibliography_note(entry: &PandocWriter, stderr: &str) -> String {
+    if !entry.bibliography_only {
+        return stderr.to_string();
+    }
+    let note = format!(
+        "The {} writer emits citation data, and pandoc's LaTeX reader does not carry the entries \
+         a bibliography file holds, so the result is empty. Convert to a document format, or \
+         export the .bib file itself.",
+        entry.label
+    );
+    if stderr.is_empty() {
+        note
+    } else {
+        format!("{note}\n\n{stderr}")
+    }
+}
+
 
 /// Export a Typst document with Typst itself, to PDF or HTML.
 ///
@@ -761,6 +1458,21 @@ fn prepare<R: Runtime>(
         && same_file(input, &request.output_path)
     {
         return Err("The export target is the document you are editing. Choose another name.".into());
+    }
+    // A LaTeX conversion reads the whole project, so its destination must not be
+    // any of the files it reads — a chapter included by the root is just as fatal
+    // to overwrite as the root itself.
+    if let Some(snapshot) = &request.snapshot {
+        let root = PathBuf::from(&snapshot.root);
+        for file in &snapshot.files {
+            let original = root.join(file.path.replace('/', std::path::MAIN_SEPARATOR_STR));
+            if same_file(&original.to_string_lossy(), &request.output_path) {
+                return Err(format!(
+                    "{} is part of the project you are converting. Choose another name.",
+                    original.display()
+                ));
+            }
+        }
     }
 
     let values = Placeholders {
@@ -1237,6 +1949,33 @@ pub async fn run_export<R: Runtime>(
         .map_err(|e| format!("The export task could not be started: {e}"))?
 }
 
+/// List every writer the installed pandoc advertises.
+///
+/// Read-only and cached against the resolved binary and version, so opening the
+/// chooser does not spawn a process each time and a pandoc update invalidates the
+/// list. `pdf` is included: the chooser turns it into the compiled-PDF route
+/// rather than a conversion.
+#[tauri::command]
+pub async fn pandoc_list_writers<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<Vec<PandocWriter>, String> {
+    tauri::async_runtime::spawn_blocking(move || list_writers(&app))
+        .await
+        .map_err(|e| format!("The writer list task could not be started: {e}"))?
+}
+
+/// Convert a LaTeX project with one writer the chooser picked.
+#[tauri::command]
+pub async fn run_pandoc_writer<R: Runtime>(
+    app: AppHandle<R>,
+    request: ExportRequest,
+    writer: String,
+) -> Result<ExportOutcome, String> {
+    tauri::async_runtime::spawn_blocking(move || export_writer(&app, &request, &writer))
+        .await
+        .map_err(|e| format!("The export task could not be started: {e}"))?
+}
+
 #[tauri::command]
 pub async fn install_pandoc<R: Runtime>(app: AppHandle<R>) -> Result<PandocStatus, String> {
     tauri::async_runtime::spawn_blocking(move || install(&app))
@@ -1410,6 +2149,7 @@ mod tests {
             input_path: Some("/docs/report.md".into()),
             language: None,
             image_root: None,
+            snapshot: None,
         };
         let directory = pandoc_directory(&request, &scratch);
         let command = pandoc_command(Path::new("/usr/bin/pandoc"), &args, &scratch, directory);
@@ -1459,6 +2199,7 @@ mod tests {
             input_path: Some(document.to_string_lossy().into_owned()),
             language: None,
             image_root: None,
+            snapshot: None,
         };
 
         // Images are inserted as `./doc.assets/a.png` by default; pandoc can only
@@ -1626,8 +2367,219 @@ mod tests {
     }
 
     #[test]
-    fn safe_stem_produces_a_usable_filename() {
-        assert_eq!(safe_stem("notes.md"), "notes");
+    fn a_writer_id_is_validated_before_it_reaches_pandoc() {
+        for good in ["docx", "markdown_strict", "commonmark_x", "jats_archiving", "html5"] {
+            assert!(safe_writer_id(good), "{good} should be accepted");
+        }
+        // Each of these would become a second argument, a path, or an option.
+        for bad in [
+            "",
+            "docx --pdf-engine=x",
+            "docx/tmp",
+            "-t",
+            "--output=/etc/passwd",
+            "docx\nmarkdown",
+            "docx;rm",
+            "a".repeat(65).as_str(),
+        ] {
+            assert!(!safe_writer_id(bad), "{bad:?} should be refused");
+        }
+    }
+
+    #[test]
+    fn a_snapshot_path_cannot_leave_the_directory_it_is_joined_onto() {
+        for good in ["main.tex", "chapters/intro.tex", "fig/a.png", "a/b/c.bib"] {
+            assert!(safe_snapshot_path(good), "{good} should be accepted");
+        }
+        for bad in [
+            "",
+            "../outside.tex",
+            "chapters/../../outside.tex",
+            "/absolute.tex",
+            r"chapters\win.tex",
+            "C:/windows.tex",
+            "a//b.tex",
+            "./main.tex",
+            "a/./b.tex",
+        ] {
+            assert!(!safe_snapshot_path(bad), "{bad:?} should be refused");
+        }
+    }
+
+    #[test]
+    fn an_unknown_writer_still_gets_a_label_and_an_extension() {
+        // The list is on-demand, so a pandoc update can name a writer this build
+        // has never heard of. It must stay selectable rather than disappear.
+        let (label, extension) = writer_metadata("some_new_writer");
+        assert_eq!(label, "Some New Writer");
+        assert_eq!(extension, "some-new-writer");
+        // A known one keeps its curated name and extension, which the save
+        // dialog relies on.
+        assert_eq!(writer_metadata("docx"), ("Word (.docx)".into(), "docx".into()));
+        assert_eq!(writer_metadata("chunkedhtml").1, "zip");
+        // A name that cannot be a filename must not produce one.
+        assert!(!writer_metadata("///").1.is_empty());
+    }
+
+    #[test]
+    fn bibliography_only_writers_are_named_rather_than_pretending_to_convert() {
+        for id in ["bibtex", "biblatex", "csljson"] {
+            assert!(bibliography_only(id), "{id} emits citation data");
+        }
+        for id in ["docx", "markdown", "html"] {
+            assert!(!bibliography_only(id), "{id} writes a document");
+        }
+        let entry = PandocWriter {
+            id: "bibtex".into(),
+            label: "BibTeX citation data".into(),
+            extension: "bib".into(),
+            bibliography_only: true,
+        };
+        let note = bibliography_note(&entry, "");
+        assert!(note.contains("citation data"), "{note}");
+        assert!(note.contains("empty"), "{note}");
+        // A document writer's note is pandoc's own warning, unchanged.
+        let document = PandocWriter {
+            bibliography_only: false,
+            ..entry
+        };
+        assert_eq!(bibliography_note(&document, "a warning"), "a warning");
+    }
+
+    #[test]
+    fn a_markdown_target_points_its_images_at_the_original_project() {
+        let root = std::env::temp_dir().join("mdraft-markdown-rewrite-test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("fig")).unwrap();
+        std::fs::write(root.join("fig/a.png"), b"png").unwrap();
+
+        let text = "![image](fig/a.png) and ![gone](fig/missing.png) and [a link](other.md)\n";
+        let rewritten = rewrite_markdown_images(text, &root);
+        assert!(
+            rewritten.contains(&format!(
+                "![image]({})",
+                root.join("fig/a.png").to_string_lossy().replace('\\', "/")
+            )),
+            "{rewritten}"
+        );
+        // A target that does not exist is left exactly as pandoc wrote it: the
+        // rewrite must not invent a destination.
+        assert!(rewritten.contains("![gone](fig/missing.png)"), "{rewritten}");
+        // An ordinary link is not an image and is not touched.
+        assert!(rewritten.contains("[a link](other.md)"), "{rewritten}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_staged_snapshot_is_written_and_removed_with_its_export() {
+        let root = std::env::temp_dir().join("mdraft-stage-snapshot-test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("fig")).unwrap();
+        std::fs::write(root.join("fig/a.png"), b"png").unwrap();
+
+        let scratch_root = std::env::temp_dir().join("mdraft-stage-scratch-test");
+        let scratch = Scratch::create(std::slice::from_ref(&scratch_root)).unwrap();
+        let snapshot = ExportSnapshot {
+            root: root.to_string_lossy().into_owned(),
+            main_file: "main.tex".into(),
+            files: vec![
+                ExportSnapshotFile {
+                    path: "main.tex".into(),
+                    data: STANDARD.encode(b"\\input{chapter}\n"),
+                },
+                ExportSnapshotFile {
+                    path: "chapter.tex".into(),
+                    data: STANDARD.encode(b"Chapter prose.\n"),
+                },
+            ],
+        };
+        let staged = stage_snapshot(&scratch, &snapshot).expect("the snapshot stages");
+        assert_eq!(
+            std::fs::read_to_string(&staged.main).unwrap(),
+            "\\input{chapter}\n"
+        );
+        assert!(staged.directory.join("chapter.tex").is_file());
+        // The original root stays the resource path, so an image is read from the
+        // reader's own folder rather than from a copy that is about to vanish.
+        assert_eq!(staged.resource_root, root);
+        assert!(!declares_bibliography(&staged));
+
+        let path = scratch.path().to_path_buf();
+        drop(scratch);
+        assert!(!path.exists(), "the staged copy outlived its export");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&scratch_root);
+    }
+
+    #[test]
+    fn a_snapshot_entry_cannot_escape_the_staging_directory() {
+        let root = std::env::temp_dir().join("mdraft-stage-escape-test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let scratch_root = std::env::temp_dir().join("mdraft-stage-escape-scratch");
+        let scratch = Scratch::create(std::slice::from_ref(&scratch_root)).unwrap();
+        let snapshot = ExportSnapshot {
+            root: root.to_string_lossy().into_owned(),
+            main_file: "main.tex".into(),
+            files: vec![ExportSnapshotFile {
+                path: "../escaped.tex".into(),
+                data: STANDARD.encode(b"x"),
+            }],
+        };
+        let error = stage_snapshot(&scratch, &snapshot).expect_err("the entry is refused");
+        assert!(error.contains("safe project path"), "{error}");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&scratch_root);
+    }
+
+    #[test]
+    fn a_bibliography_declaration_is_found_in_the_staged_sources() {
+        let root = std::env::temp_dir().join("mdraft-stage-bib-test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let scratch_root = std::env::temp_dir().join("mdraft-stage-bib-scratch");
+        let scratch = Scratch::create(std::slice::from_ref(&scratch_root)).unwrap();
+        let snapshot = ExportSnapshot {
+            root: root.to_string_lossy().into_owned(),
+            main_file: "main.tex".into(),
+            files: vec![ExportSnapshotFile {
+                path: "main.tex".into(),
+                data: STANDARD.encode(b"\\bibliography{refs}\n"),
+            }],
+        };
+        let staged = stage_snapshot(&scratch, &snapshot).unwrap();
+        assert!(declares_bibliography(&staged));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&scratch_root);
+    }
+
+    #[test]
+    fn only_the_plain_html_writers_embed_their_resources() {
+        for id in ["html", "html4", "html5", "chunkedhtml"] {
+            assert!(embeds_resources(id), "{id} should embed");
+        }
+        // A slide writer's template links its CSS and JavaScript from a CDN.
+        // `--embed-resources` would make pandoc fetch them, which is a network
+        // request this application must not start on its own.
+        for id in ["s5", "slidy", "slideous", "dzslides", "revealjs", "docx", "markdown"] {
+            assert!(!embeds_resources(id), "{id} must not embed");
+        }
+    }
+
+    #[test]
+    fn prose_writers_keep_their_lines_unwrapped() {
+        // Pandoc hard-wraps at 72 columns by default, which puts breaks inside
+        // sentences and makes every later edit a spurious diff.
+        for id in ["markdown", "markdown_strict", "commonmark", "gfm", "rst", "asciidoc", "typst"] {
+            assert!(keeps_lines_unwrapped(id), "{id} should not wrap");
+        }
+        for id in ["docx", "odt", "epub", "html", "json"] {
+            assert!(!keeps_lines_unwrapped(id), "{id} is not a wrapped prose target");
+        }
+    }
+
+    #[test]
+    fn safe_stem_produces_a_usable_filename() {        assert_eq!(safe_stem("notes.md"), "notes");
         assert_eq!(safe_stem("chapter 1.md"), "chapter 1");
         assert_eq!(safe_stem("a/b:c*.md"), "a-b-c-");
         // An empty or all-punctuation name still has to yield something.

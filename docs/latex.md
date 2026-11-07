@@ -16,9 +16,18 @@ this device.
 ## What the preview does
 
 The preview draws the PDF the compiler produced, with the real page size,
-margins and layout. Text in it is selectable, so it can be copied. Clicking an
-unambiguous location opens the source line that produced it; that is line and
-region navigation through SyncTeX, not exact word mapping.
+margins and layout. Text in it is selectable, so it can be copied. In Split
+view, selecting prose highlights the corresponding words in the other pane;
+clicking an unambiguous passage reveals its source. Sync Scroll uses the same
+accepted text matches. Words in standard `verbatim` and `verbatim*` environments
+are matched literally. A simple inline or displayed equation can highlight as
+one atomic region when its safe literal tokens identify one unique PDF
+occurrence. Macro-expanded math, figures, generated text and ambiguous or
+unsupported LaTeX may not have a match.
+
+MDraft does not request or consume SyncTeX for this correspondence. If the
+document explicitly enables SyncTeX, LuaLaTeX may still create it in its
+temporary virtual filesystem; MDraft ignores it.
 
 The main file is the compilation root, and it stays the root while an included
 chapter is open. Changes in any open project file are compiled without saving
@@ -49,18 +58,44 @@ documented rather than silently producing a wrong bibliography.
 *File › Export › PDF* writes the PDF the preview is currently showing, byte for
 byte. It never starts a compile of its own: when the preview is stale the row is
 disabled and says why. The preview's own **Save PDF** button writes the same
-bytes.
+bytes. The file is named after the project's root `.tex` file even when an
+included chapter is the active tab, because that is the document the compile
+belongs to.
 
-**Other formats go through pandoc**, which reads LaTeX with its own reader, so
-*Export › HTML* and the DOCX, ODT, EPUB and RTF targets all work on a `.tex`
-document. Those are formats LaTeX cannot write itself, so they are a real gain
-rather than a duplicate route.
+**Every other format goes through pandoc**, which reads LaTeX with its own
+reader. *Export › HTML*, *Export › Markdown* and the configured DOCX, ODT, EPUB
+and RTF targets all work on a `.tex` document. Those are formats LaTeX cannot
+write itself, so they are a real gain rather than a duplicate route.
+
+*Export › More Pandoc Formats…* opens a searchable list of **every writer the
+installed pandoc advertises** — around 77 with pandoc 3.12 — so a pandoc update
+adds formats without a settings change. Two rows behave differently:
+
+- **PDF** in that list is the compiled-PDF route, not a conversion. Converting
+  LaTeX to Typst for PDF would change the layout and need a second engine.
+- **bibtex**, **biblatex** and **csljson** emit citation data, and pandoc's LaTeX
+  reader does not carry the entries a `.bib` file holds, so they produce an empty
+  result. The row says so instead of handing you a zero-byte file.
+
+A conversion reads the **project snapshot**, not the file on disk: unsaved edits
+in the root and in any open `\input` chapter reach the export, and a reference
+outside the project root is refused rather than silently read. The snapshot is
+copied into a temporary directory, so nothing is ever written back into your
+project. A Markdown target rewrites its image links to your own files, and the
+HTML writers embed local images, because that temporary copy is deleted when the
+export returns.
+
+`--citeproc` runs when the project declares a bibliography, so a `\cite` renders
+as text rather than as `[?]`. Pandoc is a converter, not a TeX engine: it drops
+what it has no concept of, and the compiled PDF remains the authoritative layout.
 
 Two things are deliberately not offered:
 
 - **PDF (opens browser)** is disabled, because that route re-renders the document
   to HTML and prints that, producing a second layout that would contradict the
   preview. *Export › PDF* writes the compiled bytes instead.
+- **PDF (via Typst)** in the configured formats is disabled for LaTeX with the
+  same reason, and its label points at the compiled route.
 
 **Printing** prints the compiled PDF. *File › Print* writes the bytes the preview
 is holding to a temporary file and opens it in your PDF viewer, which owns the
@@ -75,8 +110,6 @@ print dialog. It refuses a stale preview and never starts a compile of its own.
   with a reason instead of producing silence.
 - **Task lists and GitHub alerts.** LaTeX has no syntax for either; the commands
   are disabled and explain the alternative.
-- **Bidirectional Sync Scroll.** Click navigation works; scroll correspondence
-  does not.
 
 ## Formatting
 
@@ -129,16 +162,16 @@ because the HTML grammar already carries its own source; in Markdown the list
 opens on the character that begins a construct (a backtick, a bracket, a pipe)
 and never in ordinary prose.
 
-*Preferences › Editor › Completion* turns the whole feature off, which removes the
-Tab binding with it.
+*Preferences › Editor › Suggest completions while typing* turns the whole
+feature off, which removes the Tab binding with it.
 
 ## Cache
 
 Downloaded TeX packages live in the application's data directory and are evicted
 least-recently-used when the cache reaches its ceiling. *Preferences › Export*
-reports the size, lets you change the ceiling (default 256 MiB) and clears the
-cache. Clearing deletes only downloaded packages: the engine is kept, and your
-documents are never touched.
+reports the size, lets you change the ceiling (default 256 MiB), clears the
+cache and opens the folder. Clearing deletes only downloaded packages: the engine
+is kept, and your documents are never touched.
 
 Turning the switch off stops the engine from serving anything and leaves the
 cache inert. It deletes nothing.

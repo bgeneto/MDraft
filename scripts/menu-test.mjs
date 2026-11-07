@@ -287,12 +287,27 @@ try {
   // The three PDF routes are one group at the foot of the submenu: the native
   // writer, the pandoc/Typst conversion, then the browser fallback. The pandoc
   // PDF is drawn from the stored format list, so this is also the check that
-  // its configured position does not scatter it back among Word and LaTeX.
-  const exportOrder = all.filter((item) => item.parent === "Export").map((item) => item.id);
+  // its configured position does not scatter it back among Word and LaTeX. The
+  // chooser row follows them, after a separator.
+  const exportOrder = all
+    .filter((item) => item.parent === "Export" && item.kind !== "predefined")
+    // A separator carries a generated numeric id; it is not a row a reader can
+    // click and it must not shift the positional assertions below.
+    .filter((item) => item.id.startsWith("export."))
+    .map((item) => item.id);
   check(
-    exportOrder.slice(-3).join(" ") === "export.pdf export.pandoc.pdf export.pdf.browser",
-    "the Export submenu ends with the three PDF routes in order",
-    exportOrder.slice(-3).join(" "),
+    exportOrder.slice(-4).join(" ") ===
+      "export.pdf export.pandoc.pdf export.pdf.browser export.pandoc.more",
+    "the Export submenu ends with the three PDF routes and the writer chooser",
+    exportOrder.slice(-4).join(" "),
+  );
+  // Markdown is a direct row, not a stored format: it is the editor's own
+  // dialect, so a Markdown document has nothing to convert.
+  check(
+    exportOrder.includes("export.markdown") &&
+      exportOrder.indexOf("export.markdown") < exportOrder.indexOf("export.pdf"),
+    "Markdown is a direct export row above the PDF group",
+    exportOrder.join(" "),
   );
 
   // -------------------------------------------------------------------------
@@ -936,6 +951,35 @@ try {
   check(
     (await itemById("export.html"))?.enabled === true,
     "LaTeX exports HTML through pandoc's LaTeX reader",
+  );
+  // The configured pandoc rows are live too. This is the defect the plan
+  // records: the menu disabled every one of them while the backend had a LaTeX
+  // reader, so a working conversion was unreachable.
+  for (const [id, label] of [
+    ["export.pandoc.docx", "Word"],
+    ["export.pandoc.odt", "OpenDocument"],
+    ["export.pandoc.epub", "EPUB"],
+    ["export.pandoc.rtf", "RTF"],
+  ]) {
+    check((await itemById(id))?.enabled === true, `LaTeX keeps the ${label} export`);
+  }
+  // Markdown is the editor's own dialect, so its direct row is the one that is
+  // live for LaTeX and disabled for Markdown.
+  check((await itemById("export.markdown"))?.enabled === true, "LaTeX exports Markdown directly");
+  check(
+    (await itemById("export.pandoc.more"))?.enabled === true,
+    "LaTeX offers the rest of the installed pandoc writers",
+  );
+  // The built-in pandoc PDF is the one exception, and it says why rather than
+  // pretending Typst is missing.
+  check(
+    (await itemById("export.pandoc.pdf"))?.enabled === false,
+    "LaTeX disables the Typst PDF route",
+  );
+  check(
+    (await itemById("export.pandoc.pdf"))?.text.endsWith("— use Export › PDF (compiled)"),
+    "the disabled Typst PDF row points at the compiled route",
+    (await itemById("export.pandoc.pdf"))?.text ?? "MISSING",
   );
   check(
     (await itemById("export.pdf.browser"))?.enabled === false,
