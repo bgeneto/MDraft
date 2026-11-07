@@ -612,7 +612,7 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
         | "view.fullscreen" | "view.interfaceTheme" | "view.codeColors"
         | "view.typography" | "navigate.gotoLine" | "navigate.openTabs"
         | "tools.spellLanguage" | "tools.statistics" | "tools.exportConfig"
-        | "tools.pandoc" | "tools.typst" | "tools.ai" => true,
+        | "tools.pandoc" | "tools.typst" | "tools.latex" | "tools.ai" => true,
         _ if id.starts_with("view.syntax.")
             || id.starts_with("themes.")
             || id.starts_with("help.") =>
@@ -1223,6 +1223,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&item(
             "tools.typst",
             "Check or Install Typst…",
+            None,
+        )?)
+        .item(&item(
+            "tools.latex",
+            "Check or Install LaTeX…",
             None,
         )?)
         .separator()

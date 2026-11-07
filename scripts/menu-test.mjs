@@ -246,6 +246,11 @@ try {
     ["tools.spellcheck", "Check Spelling While Typing"],
     ["tools.spellLanguage", "Spelling Language…"],
     ["tools.statistics", "Document Statistics…"],
+    // The three install rows sit together and must all be present: a reader who
+    // has Pandoc but not Typst should see both, and the same for LaTeX.
+    ["tools.pandoc", "Check or Install Pandoc…"],
+    ["tools.typst", "Check or Install Typst…"],
+    ["tools.latex", "Check or Install LaTeX…"],
     ["tools.ai", "AI Assistant"],
     ["edit.pastePlain", "Paste without Formatting"],
     ["edit.find", "Find"],
@@ -269,6 +274,16 @@ try {
     !textOf("edit.find").endsWith("…") && !textOf("edit.replace").endsWith("…"),
     "find and replace do not pretend to be dialogs",
   );
+  // The install rows are about the *application*, not the open document, so they
+  // are enabled whatever is on screen — including for a document whose own
+  // language has no preview at all.
+  for (const id of ["tools.pandoc", "tools.typst", "tools.latex"]) {
+    check(
+      (await itemById(id))?.enabled === true,
+      `${id} is always available`,
+      String((await itemById(id))?.enabled),
+    );
+  }
   // The three PDF routes are one group at the foot of the submenu: the native
   // writer, the pandoc/Typst conversion, then the browser fallback. The pandoc
   // PDF is drawn from the stored format list, so this is also the check that

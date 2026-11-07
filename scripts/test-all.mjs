@@ -195,6 +195,15 @@ const SUITES = [
     script: "latex-sdk-unit.mjs",
   },
   {
+    // Tools › Check or Install LaTeX… must open a dialog about the engine, not
+    // merely be present in the menu.
+    id: "latex-tools",
+    title: "Tools › Check or Install LaTeX",
+    kind: "cdp",
+    script: "latex-tools-test.mjs",
+    doc: "samples/feature-tour.md",
+  },
+  {
     // Scroll correspondence in both directions, and the fail-closed rule that
     // makes a wrong jump impossible.
     id: "latex-correspondence-unit",
