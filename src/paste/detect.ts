@@ -14,7 +14,7 @@ import type { DocumentLanguage } from "../api.ts";
 import { VOID_ELEMENTS } from "../tag-name.ts";
 import { hasInlineMath } from "../math-delimiters.ts";
 
-export type SourceFormat = "html" | "markdown" | "typst" | "asciidoc" | "plain";
+export type SourceFormat = "html" | "markdown" | "typst" | "asciidoc" | "latex" | "plain";
 
 export interface ClipboardPayload {
   html: string | null;
@@ -312,8 +312,13 @@ export function chooseSource(
   destination: DocumentLanguage,
 ): ClipboardChoice {
   const text = payload.text ?? "";
-  if (destination === "latex") return { source: "plain", native: true, fromText: true };
   const typed = detectTextSyntax(text, "clipboard");
+  // LaTeX used to short-circuit to `plain` here, which meant rich text and
+  // Markdown were never converted for a `.tex` buffer: every paste took the
+  // literal path. It now goes through the same detection as the other four, so a
+  // copied web page or a Markdown snippet becomes LaTeX structure. LaTeX *source*
+  // is still excluded from the detected set, because pasting `.tex` into `.tex`
+  // should stay native rather than round-tripping through the IR.
   const detected: Exclude<DocumentLanguage, "latex"> | null = isHtmlSource(text)
     ? "html"
     : ((typed?.language === "latex" ? null : typed?.language) ??

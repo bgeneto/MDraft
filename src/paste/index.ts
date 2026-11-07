@@ -13,9 +13,11 @@ import { readHtml, htmlToText } from "./read-html.ts";
 import { readMarkdown } from "./read-markdown.ts";
 import { readTypst } from "./read-typst.ts";
 import { readAsciidoc } from "./read-asciidoc.ts";
+import { readLatex } from "./read-latex.ts";
 import { renderMarkdown } from "./render-markdown.ts";
 import { renderTypst } from "./render-typst.ts";
 import { renderAsciidoc } from "./render-asciidoc.ts";
+import { renderLatex } from "./render-latex.ts";
 import { renderHtmlFragment } from "./render-html.ts";
 import { sanitizeHtmlFragment } from "./html-fragment.ts";
 import { escapeMarkdownCurrency } from "../math-delimiters.ts";
@@ -203,6 +205,10 @@ function literalFor(destination: DocumentLanguage, text: string): string {
   if (destination === "markdown") return renderMarkdown(blocks);
   if (destination === "typst") return renderTypst(blocks);
   if (destination === "asciidoc") return renderAsciidoc(blocks);
+  // LaTeX is named explicitly. Before this branch existed the function fell
+  // through to `renderHtmlFragment`, so plain text pasted into a `.tex` buffer
+  // arrived as HTML — a defect, not merely a missing feature.
+  if (destination === "latex") return renderLatex(blocks);
   return renderHtmlFragment(blocks);
 }
 
@@ -239,6 +245,26 @@ export async function planPaste(
     }
     const text = escapeMarkdownCurrency(raw);
     return { text, block: false, source, converted: text !== raw, notices };
+  }
+
+  // Plain text into LaTeX takes the same fast path Markdown has, for the same
+  // reason: there is no markup to parse, only characters to escape. Without it
+  // the text fell through to the Typst reader, which treated `50%` as a comment
+  // and `a_b` as markup — so a pasted sentence arrived mangled rather than
+  // escaped. `literalFor` is the one place the escape rule lives.
+  if (destination === "latex" && source === "plain") {
+    const raw = payload.text ?? "";
+    if (raw.length > MAX_TEXT) {
+      return {
+        text: raw,
+        block: false,
+        source,
+        converted: false,
+        notices: ["The clipboard was too large to convert; pasted it as plain text."],
+      };
+    }
+    const text = literalFor("latex", raw);
+    return { text, block: plainBlock(text), source, converted: text !== raw, notices };
   }
 
   // CodeMirror will insert the text flavour, untouched: the clipboard is
@@ -296,6 +322,7 @@ export async function planPaste(
     if (source === "html") blocks = await readHtml(raw);
     else if (source === "markdown") blocks = await readMarkdown(raw);
     else if (source === "asciidoc") blocks = await readAsciidoc(raw);
+    else if (source === "latex") blocks = readLatex(raw);
     else blocks = await readTypst(raw);
 
     if (countNodes(blocks) > MAX_NODES) {
@@ -316,6 +343,7 @@ export async function planPaste(
     if (destination === "markdown") text = renderMarkdown(blocks);
     else if (destination === "typst") text = renderTypst(blocks);
     else if (destination === "asciidoc") text = renderAsciidoc(blocks);
+    else if (destination === "latex") text = renderLatex(blocks);
     else text = renderHtmlFragment(blocks);
 
     if (!text.trim()) {
