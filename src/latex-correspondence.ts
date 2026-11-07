@@ -167,9 +167,13 @@ function columnSplit(regions: readonly CorrespondenceRegion[]): number {
     }
     reach = Math.max(reach, span.right);
   }
-  // A gutter is tens of points; a word space is a few. Below the threshold this is
-  // one column with ragged edges, not two columns.
-  return widest >= 24 ? split : Infinity;
+  // A gutter is a real separation; a word space is not. The threshold is small
+  // because a `multicols` gutter on A4 with the default margins is about **10pt** —
+  // measured on `samples/latex-two-column.tex`, where the left column ends at x=300
+  // and the right starts at x=310. A 24pt threshold rejected exactly the layout this
+  // function exists to detect, so the split never fired and the oscillation
+  // continued.
+  return widest >= 6 ? split : Infinity;
 }
 
 /**

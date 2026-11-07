@@ -307,40 +307,32 @@ Each step leaves the product consistent and is independently testable.
      page wide, so a wrong column costs about as much as half a page of vertical
      error, and unweighted `x` in points would dominate.
 
-  **Still not deterministic in the UI, and the remaining cause is named.** Logging
-  the hint on both sides of every scroll gave the whole sequence and then, on a
-  repeat pass over the same editor positions:
+  **The reset step produces no scroll event at all, so the convergence assertion
+  measures the harness.** Setting `editorScroll.scrollTop = 0` and dispatching a
+  `scroll` event produces **no `[latex-scroll]` line**: the log's last entry is
+  `pane=318`, the end of pass 2. CodeMirror's `onScroll` does not emit for that
+  programmatic write, so `syncLatexToPreview` never runs and the preview stays where
+  it was. The divergence is therefore an artefact of how the test drives the editor,
+  not a defect in the correspondence.
+
+  **What the log did prove, and what it fixed:** the real region geometry is
 
   ```
-  pass 1: 0 -> 0 -> 264 -> 345 -> 236
-  pass 2: 236 -> 165 -> 304 -> 243 -> 318
+  line 29: x=126 (left column)  y=450
+  line 36: x=310 (right column) y=328
+  line 43: x=310 (right column) y=477
   ```
 
-  Pass 2 starts where pass 1 ended, so the *first* step of a pass does not move —
-  which means the target was computed but the scroll was suppressed. The
-  correspondence itself is now deterministic: `latex:correspondence:unit` proves the
-  same line gives the same target regardless of the hint (33 checks), and the
-  hint is no longer an input to the choice.
+  The left column ends at `126+174 = 300` and the right starts at `310` — a **10pt**
+  gutter. `columnSplit`'s threshold was 24pt, so it rejected exactly the layout it
+  exists to detect and the split never fired. Lowered to 6pt, which is below a real
+  gutter and above a word space. `latex:correspondence:unit` still passes 33/33.
 
-  **What changed and why it is better even though the assertion still fails:**
-
-  - `previewTargetForLine` **no longer consults the hint** to choose among a line's
-    regions. It orders them by reading order — column first, then y — and takes the
-    first. A correspondence must be a function of the document: the earlier version
-    mapped the same line to different places depending on where the preview already
-    was, so a reader could never predict the result and a repeat scroll drifted.
-  - `columnSplit` infers a gutter from a horizontal gap no region crosses, with a
-    24pt threshold so a word space is not mistaken for a column.
-  - The two-column assertion was **wrong** and is corrected: a `multicols` page is
-    not monotonic in y, because the columns are balanced, so a later source line can
-    legitimately be typeset higher. Asserting "never backward" would have demanded a
-    bug. It now asserts that the preview moves, stays inside the pane, and converges
-    — and convergence is the one that fails.
-
-  **Next measurement:** the suppression window. `syncLatexToPreview` sets
-  `suppressPreviewScrollUntil` after writing, and a scroll that arrives inside that
-  window is dropped. A pass that starts immediately after the previous one therefore
-  loses its first step. That is a timing question, not a correspondence one.
+  **Honest status: the correspondence is deterministic and column-aware; the
+  two-column UI assertion cannot be satisfied by this harness.** `latex:preview`
+  stays `optIn`. What remains is a way to drive the editor's scroll that CodeMirror
+  actually observes — a real wheel event through CDP, rather than a `scrollTop`
+  write — which is a test-harness change, not a product one.
 
 - [x] **9. "Convert Rich Text on Paste" must produce valid LaTeX.** This is the
   requirement in full: **every** source format the clipboard can carry — rich
