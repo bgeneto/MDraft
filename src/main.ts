@@ -1113,6 +1113,10 @@ function applySettingsPatch(
     });
   }
 
+  // Completion is switched at runtime rather than at start-up only, so a reader
+  // who turns it off does not have to reopen the document.
+  if (patch.completion !== undefined) editor.setCompletion(settings.completion !== false);
+
   if (affectsRendering) scheduleRender(true);
 }
 
@@ -7354,6 +7358,7 @@ async function boot(): Promise<void> {
   editor = createEditor(editorHost, {
     autoClosePairs: settings.autoClosePairs,
     autoCloseTags: settings.autoCloseTags,
+    completion: settings.completion !== false,
     cursorBlink: settings.cursorBlink,
     linkAt: (pos) => linkAt(editor.getDoc(), pos, doc.language),
     linkClick: openLinkTarget,

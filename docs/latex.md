@@ -62,13 +62,34 @@ differently-laid-out PDF behind the same document would contradict the preview.
   that does nothing.
 - **Format Document.** A formatter is planned; until it lands the command is
   disabled with a reason.
-- **Completion.** Not yet offered for LaTeX.
 - **Read Aloud.** A LaTeX preview is a PDF canvas, so the command is disabled
   with a reason instead of producing silence.
 - **Task lists and GitHub alerts.** LaTeX has no syntax for either; the commands
   are disabled and explain the alternative.
 - **Bidirectional Sync Scroll.** Click navigation works; scroll correspondence
   does not.
+
+## Completion
+
+Typing `\` in a `.tex` document opens a list of commands; `\begin{` offers
+environments; `\usepackage{` offers packages; `\ref{`, `\cite{` and
+`\includegraphics{` offer the labels, citation keys and image paths the project
+already uses. **Tab** accepts the highlighted row, and Tab still indents when no
+list is open. `Ctrl+Space` opens the list explicitly, and Escape closes it.
+
+The catalog is bundled — a few hundred curated commands, environments, packages
+and snippets — and nothing in the completion path makes a network request. A
+label you wrote earlier in the same document is offered immediately, because the
+active buffer is always available; other files are offered when the project
+snapshot has been read for the preview. Completion never triggers a compile.
+
+The same layer serves Markdown and HTML. In HTML, tags and attributes are offered
+because the HTML grammar already carries its own source; in Markdown the list
+opens on the character that begins a construct (a backtick, a bracket, a pipe)
+and never in ordinary prose.
+
+*Preferences › Editor › Completion* turns the whole feature off, which removes the
+Tab binding with it.
 
 ## Cache
 

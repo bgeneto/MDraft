@@ -336,6 +336,14 @@ export interface Settings {
   autoClosePairs: boolean;
   /** Close an HTML tag when its opening `>` is typed. */
   autoCloseTags: boolean;
+  /**
+   * Offer completions while typing.
+   *
+   * The popup only opens on a construct — a backslash, a backtick, a brace
+   * argument — never on ordinary prose. Turning it off removes the extension and
+   * its Tab binding together.
+   */
+  completion: boolean;
 
   exportFormats: ExportFormat[];
 

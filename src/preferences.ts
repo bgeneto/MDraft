@@ -1691,6 +1691,14 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
           get: () => s().autoCloseTags,
           set: (value) => host.update({ autoCloseTags: value }),
         },
+        { kind: "heading", label: "Completion" },
+        {
+          kind: "checkbox",
+          label: "Suggest completions while typing",
+          help: "Opens a list of the commands, environments and project references that fit the position. In LaTeX it appears after a backslash or inside a brace argument; in Markdown after the character that starts a construct; in HTML after a tag. It never opens in ordinary prose and never makes a network request. Tab accepts the highlighted row, and Tab still indents when no list is open.",
+          get: () => s().completion,
+          set: (value) => host.update({ completion: value }),
+        },
         {
           kind: "select",
           label: "Content Width",

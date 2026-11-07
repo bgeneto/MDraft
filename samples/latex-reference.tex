@@ -156,6 +156,18 @@ It never starts a compile of its own: if the preview is stale, the row is
 disabled and says so. The preview's own \verb|Save PDF| button writes the same
 bytes. Native printing is disabled for LaTeX because the PDF already exists.
 
+\section{Completion}
+
+Typing a backslash opens a list of commands; \verb|\begin{| offers environments,
+\verb|\usepackage{| offers packages, and \verb|\ref{|, \verb|\cite{| and
+\verb|\includegraphics{| offer the labels, citation keys and image paths this
+document already uses. \verb|Tab| accepts the highlighted row and still indents
+when no list is open; \verb|Ctrl+Space| opens the list explicitly and \verb|Escape|
+closes it.
+
+The list never appears in ordinary prose, and nothing it offers leaves this
+device.
+
 \section{When something fails}
 
 A compile error appears above the preview with the compiler's own message and
