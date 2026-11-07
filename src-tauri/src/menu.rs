@@ -677,6 +677,14 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
 /// A label that depends on the document or on the reader's state.
 ///
 /// Ordinary items keep the label they were built with; `None` means "leave it".
+///
+/// **An id whose label varies with the document must never return `None`.** The
+/// sync only writes the labels this function states, so "leave it" is not a
+/// neutral answer: it keeps whatever the previous document wrote. A `.tex` file
+/// followed by a `.adoc` one therefore showed "PDF… (available after the preview
+/// compiles)" on a document that has no compile at all. Every language-varying
+/// id below ends in a catch-all arm that restates the label the menu was built
+/// with, which is what clears the previous document's.
 fn label_for(state: &MenuState, id: &str) -> Option<String> {
     let text = match id {
         "file.favorite" => {
@@ -717,6 +725,11 @@ fn label_for(state: &MenuState, id: &str) -> Option<String> {
         }
         "export.pdf" if state.document_language == "typst" => "PDF… (compiled by Typst)",
         "export.pdf" if state.document_language == "latex" => "PDF… (compiled by LuaLaTeX)",
+        // The built label, restated. An AsciiDoc, Markdown or HTML document has
+        // no compiled PDF of its own, so the row keeps the plain name — but it
+        // must *say* so, because returning `None` would leave the LaTeX document's
+        // "available after the preview compiles" behind on the next tab.
+        "export.pdf" => "PDF…",
         // Typst still points at its PDF route. LaTeX no longer does: it prints
         // the compiled PDF, so the row is a real Print row with its own label.
         "file.print" if state.document_language == "typst" => "Print… (use Export › PDF)",
@@ -725,22 +738,28 @@ fn label_for(state: &MenuState, id: &str) -> Option<String> {
         {
             "Print… (available after the preview compiles)"
         }
+        // As above: the plain label, restated so a `.tex` tab's reason cannot
+        // outlive the tab it described.
+        "file.print" => "Print…",
         "view.typstPreview"
             if state.document_language == "typst" && !state.typst_available =>
         {
             "Typst Preview — needs Typst"
         }
+        "view.typstPreview" => "Typst Preview",
         // The chooser converts a LaTeX project from its snapshot; every other
         // language already has its own configured rows.
         "export.pandoc.more" if state.document_language != "latex" => {
             "More Pandoc Formats… (LaTeX documents)"
         }
+        "export.pandoc.more" => "More Pandoc Formats…",
         // Markdown is the editor's own dialect, so writing it back through pandoc
         // would be a round trip for a Markdown document. The row is a LaTeX
         // conversion, and says so where it cannot run.
         "export.markdown" if state.document_language != "latex" => {
             "Markdown… (LaTeX documents)"
         }
+        "export.markdown" => "Markdown…",
         _ => return None,
     };
     Some(text.to_string())
@@ -2018,7 +2037,7 @@ mod tests {
         // (ADR 2026-11-06-print-the-compiled-pdf). The label is the plain one:
         // the row is a real Print row now, not a pointer at Export › PDF.
         assert_eq!(enabled_for(&state, "file.print"), Some(true));
-        assert_eq!(label_for(&state, "file.print"), None);
+        assert_eq!(label_for(&state, "file.print").as_deref(), Some("Print…"));
 
         // Before a compile exists, Print says what it is waiting for — the same
         // way the PDF row does, and for the same reason.
@@ -2031,12 +2050,66 @@ mod tests {
         state.pdf_preview_available = true;
 
         // Every other language keeps the native print surface, and its PDF row
-        // is the article the preview builds rather than a compiled file.
+        // is the article the preview builds rather than a compiled file. Both
+        // rows restate their plain label rather than returning `None`: the sync
+        // only writes what this function states, so `None` would leave the
+        // LaTeX document's reason on the next tab.
         state.document_language = "markdown".into();
         assert_eq!(enabled_for(&state, "export.pdf"), Some(true));
-        assert_eq!(label_for(&state, "export.pdf"), None);
+        assert_eq!(label_for(&state, "export.pdf").as_deref(), Some("PDF…"));
         assert_eq!(enabled_for(&state, "file.print"), Some(true));
-        assert_eq!(label_for(&state, "file.print"), None);
+        assert_eq!(label_for(&state, "file.print").as_deref(), Some("Print…"));
+    }
+
+    /// The regression this pins: a `.tex` tab followed by an AsciiDoc one.
+    ///
+    /// `label_for` used to answer `None` for every language that had no special
+    /// arm, and `apply_context` reads `None` as "leave the label alone". The
+    /// LaTeX reason therefore survived the tab switch and told an AsciiDoc
+    /// author to wait for a preview compile that does not exist.
+    #[test]
+    fn a_language_specific_label_does_not_outlive_its_document() {
+        let mut state = MenuState {
+            document_language: "latex".into(),
+            pdf_preview_available: false,
+            ..MenuState::default()
+        };
+        assert_eq!(
+            label_for(&state, "export.pdf").as_deref(),
+            Some("PDF… (available after the preview compiles)")
+        );
+        assert_eq!(
+            label_for(&state, "file.print").as_deref(),
+            Some("Print… (available after the preview compiles)")
+        );
+
+        // The same menu, now showing an AsciiDoc document. Every row that the
+        // LaTeX state rewrote must state its own label again.
+        state.document_language = "asciidoc".into();
+        for (id, expected) in [
+            ("export.pdf", "PDF…"),
+            ("file.print", "Print…"),
+            ("export.markdown", "Markdown… (LaTeX documents)"),
+            ("export.pandoc.more", "More Pandoc Formats… (LaTeX documents)"),
+            ("view.typstPreview", "Typst Preview"),
+        ] {
+            assert_eq!(
+                label_for(&state, id).as_deref(),
+                Some(expected),
+                "{id} kept a stale label on an AsciiDoc document"
+            );
+        }
+
+        // And back again: the LaTeX labels are restored, not merely cleared.
+        state.document_language = "latex".into();
+        assert_eq!(
+            label_for(&state, "export.markdown").as_deref(),
+            Some("Markdown…")
+        );
+        assert_eq!(
+            label_for(&state, "export.pandoc.more").as_deref(),
+            Some("More Pandoc Formats…")
+        );
     }
 
     #[test]

@@ -870,6 +870,25 @@ try {
     "AsciiDoc names document attributes",
     (await itemById("para.yaml"))?.text ?? "MISSING",
   );
+  // The Typst tab before this one rewrote the PDF and Print rows with reasons
+  // about a compiler. Those must not survive the switch: an AsciiDoc document
+  // has no compiled PDF, and telling its author to wait for one is the same
+  // defect as the LaTeX label this suite pins below.
+  check(
+    (await itemById("export.pdf"))?.text === "PDF…",
+    "AsciiDoc restores the plain PDF label after a Typst tab",
+    (await itemById("export.pdf"))?.text ?? "MISSING",
+  );
+  check(
+    (await itemById("file.print"))?.text === "Print…",
+    "AsciiDoc restores the plain Print label after a Typst tab",
+    (await itemById("file.print"))?.text ?? "MISSING",
+  );
+  check(
+    (await itemById("export.markdown"))?.text === "Markdown… (LaTeX documents)",
+    "AsciiDoc explains that the direct Markdown row is a LaTeX conversion",
+    (await itemById("export.markdown"))?.text ?? "MISSING",
+  );
   check((await itemById("format.document"))?.enabled === false, "AsciiDoc has no Format Document");
   check((await itemById("view.blocks"))?.enabled === false, "AsciiDoc has no folding commands");
   check((await itemById("para.task"))?.enabled === true, "AsciiDoc keeps task lists");
