@@ -539,6 +539,14 @@ pub struct Settings {
     /// in an HTML, Markdown or AsciiDoc document.
     #[serde(default = "default_true")]
     pub auto_close_tags: bool,
+    /// Offer completions while typing.
+    ///
+    /// On by default: the popup only opens on a construct (a backslash, a
+    /// backtick, a brace argument), never on ordinary prose, so it does not
+    /// interrupt writing. Turning it off removes the extension and its Tab
+    /// binding together, so Tab goes back to being only indentation.
+    #[serde(default = "default_true")]
+    pub completion: bool,
 
     // ---- Preferences: Export ---------------------------------------------
     /// Pandoc export targets, in the order the menu shows them.
@@ -697,6 +705,7 @@ impl Default for Settings {
             rich_paste_images: default_rich_paste_images(),
             auto_close_pairs: true,
             auto_close_tags: true,
+            completion: true,
 
             export_formats: default_export_formats(),
             after_open_location: false,
@@ -1297,6 +1306,21 @@ mod tests {
         assert_eq!(clamp_latex_cache_limit(1), LATEX_CACHE_MIN_MB);
         assert_eq!(clamp_latex_cache_limit(256), 256);
         assert_eq!(clamp_latex_cache_limit(u32::MAX), LATEX_CACHE_MAX_MB);
+    }
+
+    #[test]
+    fn completion_defaults_on_and_an_older_file_keeps_loading() {
+        // A settings file written before completion existed has no `completion`
+        // key. It must load, and the feature must be on: a reader who never chose
+        // anything gets the default, and an absent key is not an opt-out.
+        let legacy = r#"{"viewMode":"split","theme":"light"}"#;
+        let loaded = parse_settings(legacy).expect("a legacy file loads");
+        assert!(loaded.completion);
+
+        // An explicit off survives a round trip.
+        let off = r#"{"completion":false}"#;
+        let loaded = parse_settings(off).expect("the key loads");
+        assert!(!loaded.completion);
     }
 
     #[test]
