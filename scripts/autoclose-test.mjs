@@ -430,11 +430,17 @@ await scenario(async () => {
   check(Array.isArray(rows), "Ctrl-Space opens the LaTeX popup", rows ? "open" : "none");
   // A bare backslash has no prefix, so the popup shows the catalog from the top
   // and `section` is not in the first slice. What matters is that the rows are
-  // LaTeX commands rather than buffer words.
+  // LaTeX command names rather than buffer words — and that they are *names*,
+  // not the raw snippet templates (`section{${1}}`) the catalog stores.
   check(
-    Array.isArray(rows) && rows.some((row) => /^[a-z]+\{/.test(row) || /^\\/.test(row)),
+    Array.isArray(rows) && rows.some((row) => /^[a-z]+$/.test(row) || /^\\/.test(row)),
     "the popup offers LaTeX commands",
     rows ? rows.join(", ") : "none",
+  );
+  check(
+    Array.isArray(rows) && !rows.some((row) => row.includes("${")),
+    "the popup paints command names, not snippet templates",
+    rows ? rows.filter((row) => row.includes("${")).join(", ") || "clean" : "none",
   );
   // Typing a prefix must narrow it to the command the reader is spelling.
   await type("sec");
@@ -450,6 +456,16 @@ await scenario(async () => {
     Array.isArray(narrowed) && narrowed.some((row) => /section/i.test(row)),
     "typing a prefix narrows the popup to section",
     narrowed ? narrowed.join(", ") : "none",
+  );
+  // Accepting the row must insert the braces with the caret inside them, which
+  // is the whole point of the catalog carrying an argument shape.
+  await press("Enter", "Enter");
+  await sleep(400);
+  const accepted = await text();
+  check(
+    typeof accepted === "string" && /\\section\{\}/.test(accepted),
+    "accepting \\section inserts its braces",
+    JSON.stringify(accepted),
   );
   // The popup must be dismissable without editing the buffer.
   await press("Escape", "Escape");

@@ -277,7 +277,7 @@ rewrite from scratch.
 | `npm run autoclose:unit` | `scripts/autoclose-unit.mjs` | 17 checks of the tag matcher: attributes, custom elements, void and self-closing tags, autolinks, escapes, declarations, prose — no application |
 | `npm run autoclose` | `scripts/autoclose-test.mjs` | 36 checks of pairs, quotes, backticks, HTML tags and both preferences, typed through the real editor in Markdown, HTML, Typst and AsciiDoc, plus the HTML completion popup that `html()` supplies for free |
 | `npm run completion:unit` | `scripts/completion-unit.mjs` | 14 checks of the completion layer: the popup's configuration, the `Prec.high` keymap that keeps `indentWithTab` working, the empty source that stops a language without a catalog from offering buffer words, and the rule that no completion module can reach the network — no application |
-| `npm run completion:latex:unit` | `scripts/completion-latex-unit.mjs` | 64 checks of the LaTeX catalog and context table: 201 rows across sections, no duplicate within a section, snippets whose bodies come from `latex-commands.ts` so Format and completion cannot disagree, real newlines in multi-line templates, every context (command, environment, package, class, label, citation, image), the positions that must offer nothing (prose, `%` comment, verbatim body, after `\\`), and prefix filtering — no application |
+| `npm run completion:latex:unit` | `scripts/completion-latex-unit.mjs` | 100 checks of the LaTeX catalog and context table: 190 rows across sections, no duplicate within a section, snippets whose bodies come from `latex-commands.ts` so Format and completion cannot disagree, real newlines in multi-line templates, **argument templates** (every command that takes a brace argument inserts it — `\cite` → `\cite{}`, `\frac` → `\frac{}{}` — with an empty field rather than a placeholder, and an optional `[...]` group dropped), every context (command, environment, package, class, label, citation, image), the positions that must offer nothing (prose, `%` comment, verbatim body, after `\\`), and prefix filtering — no application |
 | `npm run spellcheck` | `scripts/spellcheck-test.mjs` | Underlines a misspelling, then clears it when spelling is turned off |
 | `npm run format:document` | `scripts/format-document-test.mjs` | 152 checks of the editor's right-click menu and **Format Document**: editing actions, clipboard wiring, the main-menu route, Markdown/HTML/Typst, background tabs, AsciiDoc disabled, LaTeX formatting through tex-fmt (with a verbatim tab and blank line surviving), a no-op scroll leaving the menu open and a real one closing it, undo and spelling; plus exact math preservation across all delimiters, tables, code/currency boundaries, repeat formatting and all 292 physics formulas through save, preview redraw and undo. `--unit` runs 47 math checks without the app; `--without-optional-corpus` tests the recorded-inventory fallback |
 | `npm run audit` | `scripts/audit-document.mjs` | Render metrics for whatever document is loaded |
@@ -643,7 +643,7 @@ Fifty-five default layers, cheapest first, plus opt-in layers. Run them in this 
 | Word sync | `npm run word-sync` | 105 | The fragment map, preview → source and source → preview, atomic code, formula and image spans, the pulse and its resting mark, reduced motion, word snapping, no scroll, Escape; exact source offsets through multiline lists in Markdown, AsciiDoc and Typst Document, a cross-item selection, the block blink beside the word correspondence, and the built-in Markdown Reference in both directions |
 | Auto-close matching | `npm run autoclose:unit` | 17 | Which tag a typed `>`, the void/self-closing/autolink/escape rules — no application |
 | Completion layer (unit) | `npm run completion:unit` | 14 | The popup's configuration, the `Prec.high` keymap that keeps `indentWithTab` working, the empty source that stops a language without a catalog from offering buffer words, and that no completion module can reach the network — no application |
-| LaTeX completion (unit) | `npm run completion:latex:unit` | 64 | The catalog's 201 rows and its section/label deduplication, snippets whose bodies come from `latex-commands.ts` so Format and completion cannot disagree, real newlines in multi-line templates, every context the decision table recognises, the positions that must offer nothing (prose, `%` comment, verbatim, after `\\`), and prefix filtering — no application |
+| LaTeX completion (unit) | `npm run completion:latex:unit` | 100 | The catalog's 190 rows and its section/label deduplication, snippets whose bodies come from `latex-commands.ts` so Format and completion cannot disagree, real newlines in multi-line templates, argument templates (a command that takes a brace argument inserts it, with an empty field and any optional `[...]` dropped), every context the decision table recognises, the positions that must offer nothing (prose, `%` comment, verbatim, after `\\`), and prefix filtering — no application |
 | Remembered tabs (unit) | `npm run tabs:restore:unit` | 33 | What is stored (order, untitled exclusion, deduplication, the 20-document cap) and what a restore plan does with it (missing files, the active-tab fallback) — no application |
 | Typst page map (unit) | `npm run typst:map:unit` | 35 | One-word lines with identical neighbours paint nothing, a unique neighbour window picks the occurrence, ligatures and soft hyphens fold, generated text stays unmapped; a multiline list keeps first-line and continuation words on their own source lines in both directions — no application |
 | HTML source map (unit) | `npm run html:map:unit` | 38 | Entities and CRLF offsets, decoded-to-raw translation, the sample mismatch, and two text nodes under one stamp — no application |
@@ -776,6 +776,40 @@ When adding a test, ask what a broken result looks like and measure that, rather
 than asserting the feature's own internal counters.
 
 ## Traps
+
+**A snippet placeholder closes the brace group, so the follow-up completion popup never opens**
+`\cite{key}` is a *complete* `\cite`, so `latexContextAt` stops reporting a
+citation context and the list of the project's real keys never appears. The same
+template also poisons the index: `projectReferences` scans the active buffer, so
+the literal `key` is harvested as a citation the document defines and is offered
+back to the reader. Argument templates therefore use **empty** tab stops —
+`cite{${1}}`, not `cite{${1:key}}` — which keeps the group open and inserts
+nothing that looks like data. `completion-latex-unit` pins
+`no argument template carries a placeholder`.
+
+**Templating an optional `[...]` group puts the first tab stop in the wrong place**
+`\includegraphics[options]{file}` templated literally starts the reader in the
+options group, which is almost never what they want to type first. The optional
+group is dropped and only the mandatory braces are templated, so the row inserts
+`\includegraphics{}` with the caret in the file argument; the `detail` column
+still tells the reader that options exist.
+
+**A completion row whose `label` is a snippet template paints `${1:…}` in the popup**
+`Completion.render` shows `displayLabel || label`, so storing the template in
+`label` puts raw tab-stop syntax in the list — `section{${1:title}}` — which is
+not LaTeX and reads as a bug. Rows carry the bare name in `label`, the template
+in `template`, and `latex-source.ts` passes `displayLabel` so the two cannot
+disagree.
+
+**`Failed to create webview: WebView2 error: WindowsError(HRESULT(0x800700AA), "The requested resource is in use.")`**
+The dev app fails before any frontend code loads, so it is never a symptom of a
+TypeScript change. It happens when a WebView2 user-data folder is still held;
+`WEBVIEW2_USER_DATA_FOLDER` pointed at a fresh directory does **not** clear it
+when the busy resource is elsewhere. Do not kill `msedgewebview2.exe`
+wholesale — most of those belong to Microsoft Teams. Verify frontend behaviour
+against a real `EditorState` instead: `latexCompletionSource` and `snippet()`
+both run headless, which is enough to prove what a row inserts and where the
+caret lands.
 
 **`Document requires XeLaTeX, which is not available in this build.` — and the false conclusion that `fontspec` is XeLaTeX-only**
 This build ships **only** the LuaLaTeX engine. The SDK's detection

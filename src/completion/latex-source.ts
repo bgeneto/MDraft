@@ -11,12 +11,29 @@ import {
   type CompletionResult,
   type CompletionSource,
 } from "@codemirror/autocomplete";
-import { latexCatalog, LATEX_CLASS_NAMES, LATEX_ENVIRONMENT_NAMES, LATEX_PACKAGE_NAMES } from "./latex-catalog.ts";
+import {
+  latexCatalog,
+  LATEX_CLASS_NAMES,
+  LATEX_ENVIRONMENT_NAMES,
+  LATEX_PACKAGE_NAMES,
+} from "./latex-catalog.ts";
 import { filterByPrefix, latexContextAt } from "./latex-context.ts";
 import { projectReferences, type ProjectReferences } from "./project-index.ts";
 
 /** Turn a catalog row into the shape CodeMirror renders. */
 function toCompletion(entry: ReturnType<typeof latexCatalog>[number]): Completion {
+  // A row with a `template` inserts the template but paints its `label`, so a
+  // command row reads `\cite` while accepting it produces `\cite{}`. The label
+  // is what CodeMirror shows unless `displayLabel` says otherwise; setting it
+  // explicitly is what keeps `${1:…}` out of the popup.
+  if (entry.template) {
+    return snippetCompletion(entry.template, {
+      label: entry.label,
+      displayLabel: entry.label,
+      detail: entry.detail,
+      section: entry.section,
+    });
+  }
   if (entry.snippet) {
     return snippetCompletion(entry.label, {
       label: entry.label.split("\n")[0],
@@ -39,11 +56,7 @@ function toCompletion(entry: ReturnType<typeof latexCatalog>[number]): Completio
  * uses is the one most likely to be wanted again, and a reader who has just
  * written `\label{sec:intro}` should not have to remember it to reference it.
  */
-function entriesFor(
-  kind: string,
-  prefix: string,
-  references: ProjectReferences,
-): Completion[] {
+function entriesFor(kind: string, prefix: string, references: ProjectReferences): Completion[] {
   const catalog = latexCatalog();
   if (kind === "label") {
     return filterByPrefix(
@@ -53,7 +66,11 @@ function entriesFor(
   }
   if (kind === "citation") {
     return filterByPrefix(
-      references.citations.map((name) => ({ label: name, detail: "citation", section: "Citations" })),
+      references.citations.map((name) => ({
+        label: name,
+        detail: "citation",
+        section: "Citations",
+      })),
       prefix,
     ).map((entry) => entry as Completion);
   }
@@ -65,7 +82,11 @@ function entriesFor(
   }
   if (kind === "environment") {
     return filterByPrefix(
-      LATEX_ENVIRONMENT_NAMES.map((name) => ({ label: name, detail: "environment", section: "Environments" })),
+      LATEX_ENVIRONMENT_NAMES.map((name) => ({
+        label: name,
+        detail: "environment",
+        section: "Environments",
+      })),
       prefix,
     ).map((entry) => entry as Completion);
   }
@@ -77,14 +98,23 @@ function entriesFor(
   }
   if (kind === "class") {
     return filterByPrefix(
-      LATEX_CLASS_NAMES.map((name) => ({ label: name, detail: "class", section: "Document classes" })),
+      LATEX_CLASS_NAMES.map((name) => ({
+        label: name,
+        detail: "class",
+        section: "Document classes",
+      })),
       prefix,
     ).map((entry) => entry as Completion);
   }
   // Commands and snippets share the catalog; the prefix is the typed command
   // name without its backslash, so the leading `\` is stripped before matching.
   const wanted = catalog.filter((entry) => {
-    if (kind === "command") return entry.section !== "Environments" && entry.section !== "Packages" && entry.section !== "Document classes";
+    if (kind === "command")
+      return (
+        entry.section !== "Environments" &&
+        entry.section !== "Packages" &&
+        entry.section !== "Document classes"
+      );
     return true;
   });
   const stripped = wanted.map((entry) => ({
