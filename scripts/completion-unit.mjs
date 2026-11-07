@@ -133,6 +133,53 @@ console.log("\n=== the layer is wired into the editor ===");
   );
 }
 
+console.log("\n=== the Markdown catalog ===");
+{
+  // The second consumer, and the proof that the layer is language-neutral: this
+  // catalog and its source are the whole Markdown integration.
+  const { markdownCatalog } = await import("../src/completion/markdown-catalog.ts");
+  const rows = markdownCatalog();
+  check(rows.length > 10, "the Markdown catalog is substantial", `${rows.length} rows`);
+
+  const keys = rows.map((row) => `${row.section}\u0000${row.label}`);
+  const duplicates = keys.filter((key, index) => keys.indexOf(key) !== index);
+  check(duplicates.length === 0, "no Markdown row appears twice in a section");
+
+  check(
+    rows.every((row) => typeof row.section === "string" && row.section.length > 0),
+    "every Markdown row has a section",
+  );
+  // Real newlines, the same rule the LaTeX catalog follows: `Snippet.parse`
+  // splits a template on them.
+  const escaped = rows.filter((row) => row.snippet && row.label.includes("\\n"));
+  check(
+    escaped.length === 0,
+    "no Markdown snippet carries a literal backslash-n",
+    escaped.length ? escaped.map((row) => row.detail).join(", ") : "none",
+  );
+  const multiline = rows.filter((row) => row.label.includes("\n"));
+  check(multiline.length > 0, "Markdown multi-line snippets use real newlines", `${multiline.length}`);
+
+  const details = rows.map((row) => row.detail);
+  for (const wanted of ["fenced code block", "table", "block quote", "task item", "link", "image"]) {
+    check(details.includes(wanted), `the catalog offers a ${wanted}`);
+  }
+}
+
+console.log("\n=== the Markdown source only fires on a construct ===");
+{
+  // A popup that opened on a letter would fire on every word of every sentence.
+  // The trigger set is the characters a reader types once they have decided to
+  // write markup.
+  const source = readFileSync(join(root, "src", "completion", "markdown-source.ts"), "utf8");
+  check(/const TRIGGERS = \/\[/.test(source), "the source has an explicit trigger set");
+  check(/if \(!TRIGGERS\.test\(before\)\) return null/.test(source), "a non-trigger returns null");
+  check(
+    /if \(inFence\(context\.state\.doc\.toString\(\), context\.pos\)\) return null/.test(source),
+    "a fenced block offers nothing",
+  );
+}
+
 const failed = checks.filter((entry) => !entry.ok).length;
 console.log(`\n${checks.length - failed}/${checks.length} checks passed`);
 process.exit(failed === 0 ? 0 : 1);
