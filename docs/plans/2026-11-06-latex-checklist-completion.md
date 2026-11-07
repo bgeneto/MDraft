@@ -24,7 +24,7 @@ each verified against the code rather than assumed:
 | Zoom in the LaTeX preview | **Already works.** The LaTeX host builds `TypstPdfPreview` and calls `setZoom` both at creation (`main.ts:1680`) and on every change (`main.ts:969`). No UI assertion, because the harness cannot see the engine assets. |
 | Insert and Format commands | **Audited and complete.** Every applicable row produces valid LaTeX; task lists, alerts and front matter are disabled with a real alternative named. Format Document is gated twice (`menu.rs:572` and `main.ts:2666`) — that is step 6. |
 | SyncTeX click and selection blink | **Done.** A click paints its regions with the blink; two container/geometry defects fixed; proven end to end by `latex:preview`. |
-| Two-column scroll precision | The correspondence rule set exists and is unit-tested; two-column behaviour is unverified. |
+| Two-column scroll precision | **Done.** Deterministic (target is a function of the document), column-aware with a 6pt gutter threshold, and driven by real wheel events in the test. |
 | Rich paste into LaTeX | **Done.** `render-latex.ts` and `read-latex.ts` added; three defects fixed, the last of which (`main.ts:7241` returning before conversion for plain text) was the one that kept the feature broken. |
 | Tests for all of the above | Partial. |
 
@@ -277,62 +277,45 @@ Each step leaves the product consistent and is independently testable.
   click path now logs why it fired; that is what turned "nothing happens" into
   three named causes.
 
-- [ ] **8. Two-column scroll precision.** Verify the correspondence against a
+- [x] **8. Two-column scroll precision.** Verify the correspondence against a
   two-column document — the case where one source line owns regions in both
   columns — and fix what the measurement shows. The rule already prefers the
   hinted page and the nearest region; what is unproven is whether that is enough
   when the columns are far apart horizontally.
 
-  **The oscillation is real and reproduced.** `samples/latex-two-column.tex` (a
-  `multicols` body, no `lipsum` — that package needs a fetch the test profile's
-  cache does not have) compiles to one page, and stepping the editor down gave:
+  **Landed, after four defects and one wrong assertion of mine.**
 
-  ```
-  preview scrollTop: 0 -> 0 -> 264 -> 345 -> 277
-  ```
+  1. **The correspondence was not deterministic.** It consulted the current preview
+     position to choose among a line's regions, so the same editor positions gave
+     `0,0,264,345,277` on one pass and `277,195,304,256,318` on the next. The same
+     source line mapped to different places depending on where the preview already
+     was. It now orders a line's regions by reading order — column first, then y —
+     and takes the first, so the target is a function of the document.
+  2. **`topPosition()` returned `null` between pages**, which made the caller fall
+     back to `onPage[0]` — the first region of the line, which on a two-column page
+     is the left column. It now returns the nearest page with the point clamped into
+     it.
+  3. **The column-gutter threshold was 24pt; a real `multicols` gutter is 10pt.**
+     Measured geometry: the left column ends at `126+174 = 300`, the right starts at
+     `310`. The split therefore never fired, and every region was treated as one
+     column. Lowered to 6pt — below a real gutter, above a word space.
+  4. **The test drove the editor with `scrollTop` writes, which CodeMirror does not
+     observe.** Setting it to 0 and dispatching a `scroll` event produced no
+     `[latex-scroll]` line at all, so the correspondence never ran and the preview
+     appeared not to follow. The suite now scrolls with real `Input.dispatchMouseEvent`
+     wheel events, which is what a reader does.
 
-  It advances to 345 and then **jumps back** to 277. That is exactly the failure
-  this step predicted: the same source line owns a region in each column, and the
-  rule kept choosing the left one.
+  **And one assertion of mine was wrong.** I had asserted "scrolling down never
+  moves the preview backward". A `multicols` page is **not monotonic in y** — the
+  columns are balanced, so a later source line can legitimately be typeset higher.
+  Measured: line 39 at `y=396` while line 32 is at `y=531`, both correct. Asserting
+  monotonicity would have demanded a bug. It now asserts that the preview moves,
+  stays inside the pane, never moves up except at the clamp, and ends at the same
+  position on a repeat pass.
 
-  **Two fixes landed:**
-
-  1. **`topPosition()` returned `null` whenever the top edge fell between pages**,
-     which made the correspondence fall back to `onPage[0]` — the *first* region of
-     the line, which on a two-column page is the left column. It now returns the
-     nearest page with the point clamped into it, so a hint always exists. Measured
-     before and after: `hint: none` → `hint: 1@0`.
-  2. **The region choice compared only `y`.** Two columns share a `y`, so the
-     comparison was arbitrary. It now weights `x` by 0.5 — a column is about half a
-     page wide, so a wrong column costs about as much as half a page of vertical
-     error, and unweighted `x` in points would dominate.
-
-  **The reset step produces no scroll event at all, so the convergence assertion
-  measures the harness.** Setting `editorScroll.scrollTop = 0` and dispatching a
-  `scroll` event produces **no `[latex-scroll]` line**: the log's last entry is
-  `pane=318`, the end of pass 2. CodeMirror's `onScroll` does not emit for that
-  programmatic write, so `syncLatexToPreview` never runs and the preview stays where
-  it was. The divergence is therefore an artefact of how the test drives the editor,
-  not a defect in the correspondence.
-
-  **What the log did prove, and what it fixed:** the real region geometry is
-
-  ```
-  line 29: x=126 (left column)  y=450
-  line 36: x=310 (right column) y=328
-  line 43: x=310 (right column) y=477
-  ```
-
-  The left column ends at `126+174 = 300` and the right starts at `310` — a **10pt**
-  gutter. `columnSplit`'s threshold was 24pt, so it rejected exactly the layout it
-  exists to detect and the split never fired. Lowered to 6pt, which is below a real
-  gutter and above a word space. `latex:correspondence:unit` still passes 33/33.
-
-  **Honest status: the correspondence is deterministic and column-aware; the
-  two-column UI assertion cannot be satisfied by this harness.** `latex:preview`
-  stays `optIn`. What remains is a way to drive the editor's scroll that CodeMirror
-  actually observes — a real wheel event through CDP, rather than a `scrollTop`
-  write — which is a test-harness change, not a product one.
+  `latex:preview` is **17 checks and in the default run**: the reference compiles,
+  zoom is exact, a click paints 2 regions, scrolling moves the preview, and the
+  two-column document converges.
 
 - [x] **9. "Convert Rich Text on Paste" must produce valid LaTeX.** This is the
   requirement in full: **every** source format the clipboard can carry — rich

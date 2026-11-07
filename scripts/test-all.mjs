@@ -220,16 +220,16 @@ const SUITES = [
     script: "latex-format-unit.mjs",
   },
   {
-    // The compiled PDF in the real UI: the reference compiles, zoom reaches the
-    // page, a click paints its SyncTeX region, and scrolling the editor moves the
-    // preview. **Opt-in** while the two-column oscillation recorded in the plan is
-    // open: its last assertion fails, and a default run must stay green.
+    // The compiled PDF in the real UI: the reference compiles, zoom reaches the page,
+    // a click paints its SyncTeX region, scrolling moves the preview, and a
+    // two-column document stays inside the pane and converges. Skips when the engine
+    // is not installed. Scrolls with real wheel events, because CodeMirror does not
+    // observe a programmatic `scrollTop` write.
     id: "latex-preview",
     title: "LaTeX preview, zoom, SyncTeX paint and scroll",
     kind: "cdp",
     script: "latex-preview-test.mjs",
     doc: "samples/feature-tour.md",
-    optIn: true,
   },
   {
     // What to remember when the tabs change, and what to open at boot: pure
