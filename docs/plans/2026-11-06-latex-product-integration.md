@@ -364,8 +364,23 @@ user-visible gain; 5–7 need their own measurement before they are committed.
 - [ ] **10. Correspondence.** Bidirectional Sync Scroll for LaTeX as a second
   implementation behind the viewer's interface, fail-closed on ambiguity, with
   the same Escape, blink and no-selection-stealing rules as Typst.
-- [ ] **11. SyncTeX source.** Public engine route first; capability-checked
+- [x] **11. SyncTeX source.** Public engine route first; capability-checked
   fallback; a pinned-SDK test that fails when the shape changes.
+
+  **Landed, and the SDK already had what the plan asked for.** The adapter had
+  been reaching into the SDK's internals — a private
+  `engine.tex.postMessageWithResponse({ cmd: "readfile" })` for
+  `<job>.synctex.gz` — because the public result carried no SyncTeX. The pinned
+  SDK now exposes both `synctex` (raw bytes) and `synctexData` (parsed), and its
+  own documentation names the order: `synctexData ?? parse(synctex)`.
+  `synctexData` matters for an incremental compile, where `synctex` is null but
+  the parsed form carries the tail spliced onto the last full compile's head —
+  exact for the spliced PDF. An engine producing neither fails with a named error
+  rather than a silent null mapping that would make every click do nothing.
+
+  `latex:sdk:unit` (11 checks) pins the shape, so an SDK upgrade that removes or
+  renames either field fails in CI rather than in a reader's document. That is the
+  "pinned-SDK test" this step asked for.
 - [x] **12. Documentation.** `samples/latex-reference.tex` and a Help entry;
   `docs/latex.md` replacing `docs/latex-poc.md`; README language list and network
   policy; `AGENTS.md` (scripts, Testing layers, traps); `docs/backlog.md`.
@@ -391,7 +406,7 @@ Landed on `codex/latex-product-integration`, in five commits:
 | 8. State, portable build and cache | done |
 | 9. Snapshot hardening | **done except the `mdraft-tex` binary route and the memory measurement** — reference-following, symlink report, generation key |
 | 10. Correspondence (Sync Scroll) | **not started** — click navigation works, scroll correspondence does not |
-| 11. SyncTeX source | **not started** — the private worker read is unchanged and still fails closed |
+| 11. SyncTeX source | **done** — public `synctexData ?? parse(synctex)`, pinned by `latex:sdk:unit` |
 | 12. Documentation | done |
 | 13. Measurement | **not started** — needs a real compile on Windows and Linux |
 | 14. ADRs and close | ADRs written; the plan stays `in progress` until 5–6 and 9–11 land |
