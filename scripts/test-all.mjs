@@ -178,6 +178,15 @@ const SUITES = [
     script: "completion-latex-unit.mjs",
   },
   {
+    // The validator that decides whether a project's references are literal
+    // paths the snapshot can resolve. It rejected the shipped LaTeX Reference
+    // before this suite existed, so the regression is pinned here.
+    id: "latex-references-unit",
+    title: "LaTeX reference validation (unit)",
+    kind: "node",
+    script: "latex-references-unit.mjs",
+  },
+  {
     // What to remember when the tabs change, and what to open at boot: pure
     // list logic, no application.
     id: "tabs-restore-unit",

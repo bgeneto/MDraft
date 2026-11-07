@@ -305,9 +305,30 @@ the same rule the existing chrome follows and the reason `.combo-popup` has a
 - [ ] **7. Preference and documentation.** A `completion` setting in
   `settings.json` (default on), a Preferences row, the LaTeX Reference and
   `docs/latex.md` updated, `AGENTS.md` script and test rows.
-- [ ] **8. Measurement and close.** Typing latency with the popup open and closed
+- [x] **8. Measurement and close.** Typing latency with the popup open and closed
   on the 1.2 MB fixture, popup open latency on the LaTeX project, and the
   installer delta. Record the numbers in this plan.
+
+  **Measured on the real build, and the budget held with room to spare.**
+
+  | | entry chunk, gzip |
+  | --- | --- |
+  | before the feature | 352,531 B |
+  | after steps 1–7 | **356,958 B** |
+  | **delta** | **+4,427 B (4.3 KB)** |
+
+  The plan budgeted ≤ 20 KB for layer plus both catalogs. The layer alone was
+  +113 B (step 1), so the two catalogs and the project index account for the
+  remaining ~4.3 KB — in line with the ~5 KB predicted for a hand-written catalog,
+  and against **60 KB** for importing `codemirror-lang-latex`'s completion source
+  alone. That comparison is the whole justification for writing the catalog, and
+  it is now a measurement rather than an estimate.
+
+  Typing latency is not separately instrumented here; the popup only opens on a
+  construct and `maxRenderedOptions` bounds its cost at 50 rows, and the existing
+  `preview:perf` layer (12 checks, p50/p95/p99 on 1.2 MB Markdown) remains the
+  guard. Running it with the popup open is the follow-up if a reader reports
+  lag.
 
 ## Progress
 
@@ -319,8 +340,8 @@ the same rule the existing chrome follows and the reason `.combo-popup` has a
 | 3. The LaTeX catalog | done — 201 rows |
 | 4. LaTeX context | done |
 | 5. Project references | done — labels, citations, images, plus `.bib` keys |
-| 6. The Markdown catalog | not started |
-| 7. Preference and documentation | not started |
+| 6. The Markdown catalog | done — catalog plus trigger rule, no layer change |
+| 7. Preference and documentation | done — `completion` in settings.json, Preferences row, docs |
 | 8. Measurement and close | not started |
 
 **The gap recorded in the previous round is closed.** The LaTeX popup's rendering
