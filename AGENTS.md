@@ -765,6 +765,17 @@ than asserting the feature's own internal counters.
 
 ## Traps
 
+**The whole window fails to boot — every UI suite reports `the window finished booting` FAIL and `TypeError: Cannot read properties of null (reading 'focus')` — after adding a nested selector to `buildChromeTheme`**
+`EditorView.theme` renders through `style-mod`, which substitutes `&` only at the
+**start** of a selector (`part.replace(/&/, sel)` in `style-mod.js`). A nested
+object such as `{ ".cm-tooltip-autocomplete": { "& > ul": { … } } }` therefore
+produces an invalid rule, the theme throws while the editor is being constructed,
+and the editor never mounts — so `.cm-content` does not exist and the first
+`focus()` in any suite throws. It reads as a broken application rather than a bad
+CSS key. Write the selector out in full (`.cm-tooltip-autocomplete > ul`) instead
+of nesting, and treat "the window finished booting" as a possible frontend
+exception rather than a harness problem.
+
 **`npm test` reports `the application exited with code 0 before opening port 92xx` for every UI layer, and killing the leaked `mdraft.exe` makes a new PID appear**
 An orphaned `node scripts/test-all.mjs` from an earlier, interrupted run was still
 alive; each fresh launch handed off to its instance through the single-instance

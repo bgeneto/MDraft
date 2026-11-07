@@ -21,6 +21,7 @@
 
 import { LanguageSupport, StreamLanguage } from "@codemirror/language";
 import { stex } from "@codemirror/legacy-modes/mode/stex";
+import { latexCompletionSource } from "./completion/latex-source.ts";
 
 let pending: Promise<LanguageSupport> | null = null;
 
@@ -38,8 +39,15 @@ export function latexLanguage(): Promise<LanguageSupport> {
       // is what makes Edit › Comment and the editor's comment command work. It is
       // restated here so the contract survives a dependency upgrade that drops
       // it: without it the menu disables a command LaTeX supports.
+      //
+      // `autocomplete` is registered here rather than in the completion layer
+      // because that is the hook `autocompletion()` reads: a language that
+      // declares a source gets the popup, and one that does not offers nothing.
       return new LanguageSupport(language, [
-        language.data.of({ commentTokens: { line: "%" } }),
+        language.data.of({
+          commentTokens: { line: "%" },
+          autocomplete: latexCompletionSource,
+        }),
       ]);
     });
   }
