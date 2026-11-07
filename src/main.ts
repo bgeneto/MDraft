@@ -1599,6 +1599,15 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
   try {
     const snapshot = await api.latexProjectSnapshot(root.path, overlays);
     if (token !== renderToken || doc.id !== activeId) return;
+    // A symlink the snapshot refused is reported before the compile, so a
+    // "File not found" from the engine is explained rather than mysterious. The
+    // project still compiles: one odd entry must not make a document unusable.
+    if (snapshot.skipped.length > 0) {
+      toast(
+        `Skipped ${snapshot.skipped.length} symlink${snapshot.skipped.length === 1 ? "" : "s"} in the project: ${snapshot.skipped.join(", ")}`,
+        6200,
+      );
+    }
     const result = await compileLatex(snapshot);
     const value = { ...owner, result };
     if (!latexCurrent(value)) return;
