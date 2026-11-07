@@ -7238,7 +7238,13 @@ function installPasteHandlers(): void {
     const choice = chooseSource(payload, destination.language);
     // Plain text, or text already in the destination's own syntax, is exactly
     // what CodeMirror's own paste does; do not interfere with it.
-    if (choice.native || choice.source === "plain") {
+    //
+    // **LaTeX is the exception.** Its ten special characters are markup, so
+    // letting the browser insert `50%` or `a_b` verbatim produces a document that
+    // does not compile. The text still has to pass through the escaper, which
+    // lives in `planPaste`; only Markdown and the other four can take the native
+    // path unchanged.
+    if ((choice.native || choice.source === "plain") && destination.language !== "latex") {
       if (destination.language === "markdown" && payload.text?.includes("$"))
         editor.prepareNativePaste(escapeMarkdownCurrency);
       return;

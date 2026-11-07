@@ -684,6 +684,174 @@ check(
   await lines(),
 );
 
+// ---------------------------------------------------------------------------
+// LaTeX as a paste destination.
+//
+// The requirement is that *Convert Rich Text on Paste* works in LaTeX documents:
+// rich text, Markdown and plain text must arrive as valid LaTeX. The pure matrix
+// (`paste:convert`) pins the conversion rules; this pins that the option is
+// actually wired for a `.tex` buffer, which is a different failure mode — the
+// rules can be right and the destination still never be offered the conversion.
+// ---------------------------------------------------------------------------
+console.log("\n=== LaTeX destination ===");
+
+/**
+ * Switch the new-document language through the Default File Extension preference.
+ *
+ * The same three helpers `autoclose-test` uses — `btn-prefs`, `.prefs-section`,
+ * `.prefs-row` — because that route is proven and it is the one a reader takes. A
+ * test-only hook would prove nothing about the shipped path, and the first
+ * attempt here invented one that does not exist.
+ */
+const labelExpr = (variable) =>
+  `(${variable}.querySelector('.prefs-label')?.textContent ?? '').replace(/\\?\\s*$/, '').trim()`;
+
+async function prefsVisible() {
+  return (await evaluate(`!document.getElementById('prefs-pane')?.hidden`)) === true;
+}
+
+async function setPrefsVisible(want) {
+  if ((await prefsVisible()) !== want) {
+    await evaluate(`document.getElementById('btn-prefs').click()`);
+    await sleep(250);
+  }
+}
+
+async function prefsSection(name) {
+  const found = await evaluate(`(() => {
+    const button = [...document.querySelectorAll('.prefs-section')]
+      .find((section) => section.textContent.trim() === ${JSON.stringify(name)});
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`);
+  await sleep(150);
+  return found;
+}
+
+async function setDefaultExtension(value) {
+  await setPrefsVisible(true);
+  await prefsSection("Files");
+  const result = await evaluate(`(() => {
+    const row = [...document.querySelectorAll('.prefs-row')]
+      .find((candidate) => ${labelExpr("candidate")} === 'Default File Extension');
+    const select = row?.querySelector('select');
+    if (!select) return 'missing';
+    select.value = ${JSON.stringify(value)};
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    return select.value;
+  })()`);
+  await sleep(350);
+  await setPrefsVisible(false);
+  return result;
+}
+
+const switched = await setDefaultExtension("tex");
+check(switched === "tex", "the default extension switches to tex", String(switched));
+
+// The option under test must be on. An earlier section toggles it off and back
+// on; asserting it here means a failure below is about the conversion rather
+// than about a preference a previous section left behind. The row lives in the
+// Editor section, which is where the earlier sections set it.
+await openSection("Editor");
+await setCheckbox("Convert Rich Text on Paste", true);
+await closePrefs();
+
+/**
+ * Record every paste the editor receives, before either case runs.
+ *
+ * `prevented` is the decisive field: the handler calls `preventDefault` only when
+ * it is going to convert, so a `false` means a guard returned early and the
+ * browser inserted the raw text. Wrapping the listener rather than replacing it
+ * keeps the real handler in charge.
+ */
+async function installPasteProbe() {
+  await evaluate(`
+    (() => {
+      window.__pasteProbe = [];
+      const content = document.querySelector('.cm-content');
+      content.addEventListener('paste', (event) => {
+        const data = event.clipboardData;
+        window.__pasteProbe.push({
+          prevented: event.defaultPrevented,
+          html: data ? (data.getData('text/html') || '').slice(0, 30) : null,
+          text: data ? (data.getData('text/plain') || '').slice(0, 30) : null,
+        });
+      }, true);
+      return true;
+    })()
+  `);
+}
+
+const probeSummary = async () =>
+  String(await evaluate(`JSON.stringify(window.__pasteProbe ?? [])`));
+
+await newTab();
+await installPasteProbe();
+await paste("<h1>Intro</h1><p>Some <strong>bold</strong> text</p>", "Intro\nSome bold text");
+const latexRich = await lines();
+const richProbe = await probeSummary();
+check(
+  latexRich.includes("\\section{Intro}"),
+  "a rich heading becomes \\section in a .tex buffer",
+  `${latexRich.slice(0, 60)} probe=${richProbe.slice(0, 120)}`,
+);
+check(
+  latexRich.includes("\\textbf{bold}"),
+  "rich emphasis becomes \\textbf",
+  latexRich.slice(0, 100),
+);
+check(
+  !latexRich.includes("<h1>") && !latexRich.includes("<strong>"),
+  "no HTML reaches the LaTeX buffer",
+  latexRich.slice(0, 100),
+);
+
+// Plain text must be escaped, not pasted raw: `50%` and `a_b` are compile errors.
+// The extension is re-applied before the tab is created: `newTab` reads the
+// preference at creation time, so switching afterwards would paste into a
+// Markdown buffer and the assertions below would be measuring the wrong thing.
+await setDefaultExtension("tex");
+await newTab();
+await installPasteProbe();
+await paste(null, "50% of a_b costs $5");
+const latexPlain = await lines();
+const plainProbe = await probeSummary();
+// `prevented` is read in the capture phase, before the application's own
+// handler, so it cannot answer "did the handler claim this". What it does show
+// is that the event carried text and no HTML — the shape that used to take the
+// native path and skip the escaper.
+check(
+  plainProbe.includes('"html":""'),
+  "the plain paste carried no HTML",
+  plainProbe.slice(0, 140),
+);
+// The buffer's language, so a failure says which side is wrong: the paste path
+// or the tab's language. `data-language` is what the editor sets on its host.
+const plainLanguage = String(
+  await evaluate(
+    `document.querySelector('[data-language]')?.dataset.language ?? document.body.dataset.language ?? ''`,
+  ),
+);
+check(
+  latexPlain.includes("50\\%"),
+  "a percent is escaped in a .tex buffer",
+  `${latexPlain.slice(0, 60)} [lang=${plainLanguage}] probe=${plainProbe.slice(0, 100)}`,
+);
+check(
+  latexPlain.includes("a\\_b"),
+  "an underscore is escaped in a .tex buffer",
+  `${latexPlain.slice(0, 60)} [lang=${plainLanguage}]`,
+);
+check(
+  !latexPlain.includes("<p>"),
+  "plain text is not rendered as HTML",
+  latexPlain.slice(0, 80),
+);
+
+// Put the preference back so a later suite is not surprised.
+await setDefaultExtension("md");
+
 if (exceptions.length > 0) {
   console.log("\n=== console exceptions ===");
   for (const line of exceptions.slice(0, 6)) console.log("  " + String(line).split("\n")[0]);
