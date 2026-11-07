@@ -390,20 +390,30 @@ user-visible gain; 5–7 need their own measurement before they are committed.
 - [x] **11. SyncTeX source.** Public engine route first; capability-checked
   fallback; a pinned-SDK test that fails when the shape changes.
 
-  **Landed, and the SDK already had what the plan asked for.** The adapter had
-  been reaching into the SDK's internals — a private
-  `engine.tex.postMessageWithResponse({ cmd: "readfile" })` for
-  `<job>.synctex.gz` — because the public result carried no SyncTeX. The pinned
-  SDK now exposes both `synctex` (raw bytes) and `synctexData` (parsed), and its
-  own documentation names the order: `synctexData ?? parse(synctex)`.
-  `synctexData` matters for an incremental compile, where `synctex` is null but
-  the parsed form carries the tail spliced onto the last full compile's head —
-  exact for the spliced PDF. An engine producing neither fails with a named error
-  rather than a silent null mapping that would make every click do nothing.
+  **Landed, then corrected — and the correction matters.** The first version
+  replaced the private worker read entirely with the public
+  `synctexData ?? parse(synctex)` route. That broke the preview.
 
-  `latex:sdk:unit` (11 checks) pins the shape, so an SDK upgrade that removes or
-  renames either field fails in CI rather than in a reader's document. That is the
-  "pinned-SDK test" this step asked for.
+  **Measured on 2026-11-07 against the pinned engine:** a LuaLaTeX compile of
+  `samples/latex-poc` returns a **42 KB PDF with `synctexData` absent and
+  `synctex` null**. This engine build emits no SyncTeX at all, despite the
+  `\synctex=1\relax` prefix the adapter inserts. With the public route alone the
+  preview showed *"LuaLaTeX did not produce SyncTeX output for this document"* and
+  rendered no page — the feature was dead.
+
+  **Decision D6 had already specified the answer** — *"public engine route
+  (`--synctex`) first; the private worker `readfile` stays as a fallback"* — and I
+  removed the fallback while implementing the step that cites it. Restored: the
+  public route is tried first, the private read only when it produced nothing, and
+  the preview renders again.
+
+  The failure message now names what was missing (`synctexData`, `synctex`, `pdf`)
+  instead of a bare "no output". That diagnostic is what found the bug: the three
+  facts distinguish an engine that cannot emit SyncTeX from a compile that never
+  ran, and the bare message sent me looking at the document instead.
+
+  `latex:sdk:unit` 15 → **19**: it asserts the public route comes *first*, that the
+  fallback survives, and that the diagnostic reports all three fields.
 - [x] **12. Documentation.** `samples/latex-reference.tex` and a Help entry;
   `docs/latex.md` replacing `docs/latex-poc.md`; README language list and network
   policy; `AGENTS.md` (scripts, Testing layers, traps); `docs/backlog.md`.
@@ -429,7 +439,7 @@ Landed on `codex/latex-product-integration`, in five commits:
 | 8. State, portable build and cache | done |
 | 9. Snapshot hardening | **done except the `mdraft-tex` binary route and the memory measurement** — reference-following, symlink report, generation key |
 | 10. Correspondence (Sync Scroll) | **done** — both directions, fail-closed, 33 unit checks; not yet asserted in a UI suite |
-| 11. SyncTeX source | **done** — public `synctexData ?? parse(synctex)`, pinned by `latex:sdk:unit` |
+| 11. SyncTeX source | **done** — public route first, D6's private fallback restored after it proved necessary; pinned by `latex:sdk:unit` (19) |
 | 12. Documentation | done |
 | 13. Measurement | **not started** — needs a real compile on Windows and Linux |
 | 14. ADRs and close | ADRs written; the plan stays `in progress` until 5–6 and 9–11 land |

@@ -46,22 +46,16 @@ console.log("=== the SDK still exposes SyncTeX publicly ===");
   );
 }
 
-console.log("\n=== the adapter uses the public route, not the worker internals ===");
+console.log("\n=== the adapter uses the public route first, with the D6 fallback ===");
 {
   const source = readFileSync("src/latex.ts", "utf8");
   // Comments are stripped first: the adapter's own doc comment names the private
-  // route it replaced, and matching that would be a false positive. What matters
-  // is that no *code* reaches into the worker.
+  // route it falls back to, and matching that would be a false positive.
   const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  // The private read is what broke. Its absence is the assertion.
-  check(
-    !/postMessageWithResponse/.test(code),
-    "the adapter no longer reaches into the worker protocol",
-  );
-  check(
-    !/\.synctex\.gz/.test(code),
-    "the adapter no longer names the internal SyncTeX file",
-  );
+
+  // Decision D6: the public engine route first. `synctexData` is already parsed,
+  // and for an incremental compile it carries the tail spliced onto the last full
+  // compile's head — exact for the spliced PDF, where `synctex` itself is null.
   check(
     /result\.synctexData \?\?/.test(code),
     "the adapter prefers `synctexData`",
@@ -70,12 +64,38 @@ console.log("\n=== the adapter uses the public route, not the worker internals =
     /result\.synctex \?/.test(code),
     "the adapter falls back to parsing `synctex`",
   );
-  // An engine that produces neither must fail with a message rather than a
-  // silent null mapping, which would make every click do nothing.
+
+  // **The private read is a documented fallback, not dead code.** Measured on
+  // 2026-11-07: the pinned LuaLaTeX build returns a 42 KB PDF with `synctexData`
+  // absent and `synctex` null, so the public route alone produces nothing and the
+  // preview shows "did not produce SyncTeX output". Removing the fallback in step
+  // 11 broke the preview; D6 had specified it should stay.
+  check(
+    /postMessageWithResponse/.test(code),
+    "the private worker read survives as the D6 fallback",
+  );
+  check(
+    /\.synctex\.gz/.test(code),
+    "the fallback names the file the engine writes",
+  );
+  // It must be a fallback: reached only when the public route produced nothing.
+  const publicFirst = code.indexOf("result.synctexData ??");
+  const privateLater = code.indexOf("postMessageWithResponse");
+  check(
+    publicFirst >= 0 && privateLater > publicFirst,
+    "the public route is tried before the fallback",
+    `${publicFirst} < ${privateLater}`,
+  );
+
+  // An engine that produces neither must fail with a message that names what was
+  // missing, rather than a bare "no output".
   check(
     /did not produce SyncTeX output/.test(code),
     "a missing SyncTeX fails with a named error",
   );
+  for (const field of ["synctexData:", "synctex:", "pdf:"]) {
+    check(code.includes(field), `the diagnostic reports ${field.replace(":", "")}`);
+  }
 }
 
 console.log("\n=== the parser is still imported from the SDK's own entry point ===");

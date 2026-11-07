@@ -197,20 +197,65 @@ export async function compileLatex(snapshot: LatexProjectSnapshot): Promise<Late
     if (/LaTeX Warning: File .+ not found/i.test(result.log)) {
       throw new Error("A project image or input is missing.\n" + result.log.slice(-6000));
     }
-    // SyncTeX comes from the public result, in the order the SDK documents:
-    // `synctexData ?? parse(synctex)`. `synctexData` is already parsed, and for an
-    // incremental compile it carries the tail spliced onto the last full
-    // compile's head — exact for the spliced PDF, where `synctex` itself is null.
+    // SyncTeX, in the order decision D6 specifies: the **public** route first
+    // (`synctexData ?? parse(synctex)`), then the private worker read as a
+    // fallback.
     //
-    // This replaces a private worker read (`engine.tex.postMessageWithResponse`)
-    // that reached into the SDK's internals for `<job>.synctex.gz`. That route
-    // broke silently whenever the SDK changed its worker shape, which is exactly
-    // what the plan's step 11 was written to remove.
+    // The fallback is not dead code. Measured against the pinned engine build on
+    // 2026-11-07: a LuaLaTeX compile of `samples/latex-poc` succeeds and returns a
+    // 42 KB PDF with `synctexData` absent and `synctex` null — the engine does not
+    // emit SyncTeX for this build at all, despite the `\synctex=1\relax` prefix.
+    // Removing the fallback in step 11 therefore turned a working feature into
+    // "LuaLaTeX did not produce SyncTeX output for this document", which is what
+    // the preview showed. D6 anticipated exactly this.
     const parser = new SynctexParser();
-    const mapping =
+    let mapping =
       result.synctexData ?? (result.synctex ? await parser.parse(new Uint8Array(result.synctex)) : null);
+
     if (!mapping) {
-      throw new Error("LuaLaTeX did not produce SyncTeX output for this document.");
+      // The private route: the pinned worker protocol exposes the file the engine
+      // wrote, which the public result does not always carry. It is a fallback, so
+      // a failure here is not fatal — the caller gets the diagnostic below.
+      const job = snapshot.mainFile
+        .split("/")
+        .pop()!
+        .replace(/\.tex$/i, "");
+      const internal = compiler as unknown as {
+        engine?: {
+          tex?: {
+            postMessageWithResponse(
+              request: { cmd: string; url: string; encoding: string },
+              response: string,
+            ): Promise<{ data?: Uint8Array | ArrayBuffer }>;
+          };
+        };
+      };
+      const worker = internal.engine?.tex;
+      if (worker) {
+        try {
+          const sync = await worker.postMessageWithResponse(
+            { cmd: "readfile", url: `${job}.synctex.gz`, encoding: "binary" },
+            "cmd:readfile",
+          );
+          if (sync.data) mapping = await parser.parse(new Uint8Array(sync.data));
+        } catch {
+          // The engine wrote no SyncTeX file either. Fall through to the
+          // diagnostic, which names what was missing.
+        }
+      }
+    }
+
+    if (!mapping) {
+      // Name what was actually missing. "Did not produce SyncTeX output" sent a
+      // reader looking at their document when the cause can be the engine build,
+      // the `\synctex=1` prefix, or a compile that never ran. The three facts that
+      // distinguish those cases are cheap to report and expensive to guess.
+      throw new Error(
+        "LuaLaTeX did not produce SyncTeX output for this document.\n" +
+          `synctexData: ${result.synctexData === undefined ? "absent" : String(result.synctexData)}\n` +
+          `synctex: ${result.synctex ? `${result.synctex.length} bytes` : "null"}\n` +
+          `pdf: ${result.pdf ? `${result.pdf.length} bytes` : "null"}`,
+      );
     }
     return {
       pdf: result.pdf.slice(),
