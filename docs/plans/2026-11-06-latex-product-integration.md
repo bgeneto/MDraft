@@ -303,9 +303,30 @@ user-visible gain; 5–7 need their own measurement before they are committed.
   actions in LaTeX syntax; rewrite the Rust test
   `latex_defers_markup_commands_but_keeps_plain_editing`; keep `format.document`
   disabled until step 5 lands. Update `menu-test.mjs` and `shortcut-test.mjs`.
-- [ ] **5. Format Document.** Measure the tex-fmt WASM build against the corpus
+- [x] **5. Format Document.** Measure the tex-fmt WASM build against the corpus
   and the installer; integrate behind `hasFormatter`/`formatDocument`; extend the
   47 unit and 143 UI checks with LaTeX rows.
+
+  **Landed.** `src/format/formatters.ts` loads `tex-fmt` lazily (`loadTexFmt`) and
+  `hasFormatter` includes `latex`, so `Format Document` reaches it. `wrap = false`,
+  because reflowing prose is not what a LaTeX formatter should do to a document
+  whose line breaks are the author's.
+
+  **The literal blocks needed masking.** tex-fmt 0.5.7 rewrites tabs to spaces and
+  collapses blank-line runs **inside `verbatim`**, whatever the configuration says.
+  `maskLatexLiterals` swaps those regions for `\mdraftliteral{n}` placeholders
+  before formatting and restores them after, so a code listing survives byte for
+  byte. `latex:format:unit` (29 checks) pins it.
+
+  **The UI rows this step asked for are now in place.** `format-document` went
+  **143 → 152**: nine LaTeX checks against `samples/format-document.tex` — the
+  menu opens, `Format Document` is enabled (a disabled row would mean
+  `hasFormatter` does not know about LaTeX), the comment action is offered, the
+  caret stays on its line, tex-fmt indents the `itemize` body, **a verbatim tab and
+  a verbatim blank line survive**, and one undo restores the exact bytes.
+
+  **Measured cost:** `tex_fmt_bg.wasm` 1,701,774 B raw / **549,610 B gzip**, its own
+  lazy chunk rather than part of the entry bundle. The binary went 18.6 → 19.0 MB.
 
   **Measured before starting (2026-11-06).** A tex-fmt WASM build exists, in
   `wasm-latex-tools` 0.2.0 (AGPL-3.0, which this project may adopt):
@@ -320,10 +341,29 @@ user-visible gain; 5–7 need their own measurement before they are committed.
   again; (b) ship it as a lazily fetched chunk like the LaTeX engine itself, so a
   reader who never formats a `.tex` file pays nothing; (c) accept the cost.
   Whichever is chosen, record the number here before writing the integration.
-- [ ] **6. Completion.** The CodeMirror layer first (keymap, theme, a11y, IME),
+- [x] **6. Completion.** The CodeMirror layer first (keymap, theme, a11y, IME),
   then the local catalog, the worker index, the stale-tag rule and the
   "no network" assertion. Ship behind the same availability rules as the other
   languages; nothing appears in the menu that cannot work.
+
+  **Landed in `docs/plans/2026-11-06-command-completion.md`**, which is `done`.
+  The layer is `src/completion/layer.ts`: `completionSupport()` returns
+  `[autocompletion(CONFIG), tabAccepts]`, where `tabAccepts` is a `Prec.high`
+  keymap binding **Tab** to `acceptCompletion` — CodeMirror's own
+  `completionKeymap` binds Enter, and Tab has to keep working for indentation
+  everywhere else. `noCompletions` is the empty source that stops a language
+  without a catalog from offering buffer words.
+
+  The LaTeX catalog is `src/completion/latex-catalog.ts` (**201 rows**) with
+  `latex-context.ts` deciding what applies where — command, environment, package,
+  class, label, citation, image — and `project-index.ts` supplying
+  `projectReferences` and `bibliographyKeys`. `completion:latex:unit` (82 checks)
+  pins the catalog, the contexts and the positions that must offer nothing: prose,
+  a `%` comment, a verbatim body, after `\\`.
+
+  **Cost, measured:** the completion layer adds **+113 B gzip**; the whole feature
+  **+4,427 B gzip** against a 20 KB budget. `codemirror-lang-latex` was rejected at
+  **60 KB gzip** — the licence was never the objection.
 - [x] **7. The native PDF row.** `save_compiled_pdf` (renamed from
   `latex_save_pdf`) behind `Export › PDF` and the preview button; `export.pdf`
   enabled for Typst and LaTeX with `pdfPreviewAvailable` from D10 and the D1b
@@ -433,8 +473,8 @@ Landed on `codex/latex-product-integration`, in five commits:
 | 2. Grammar | done |
 | 3. Language sites | done |
 | 4. Commands and menus | done |
-| 5. Format Document | **not started** — needs the tex-fmt WASM build and its measurement |
-| 6. Completion | **not started** — needs the CodeMirror completion layer, which this editor has never had |
+| 5. Format Document | **done** — tex-fmt behind `hasFormatter`, literals masked, `format-document` 152 checks |
+| 6. Completion | **done** — layer, 201-row catalog, contexts; +4,427 B gzip |
 | 7. The native PDF row | done |
 | 8. State, portable build and cache | done |
 | 9. Snapshot hardening | **done except the `mdraft-tex` binary route and the memory measurement** — reference-following, symlink report, generation key |

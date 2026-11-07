@@ -1,0 +1,27 @@
+%! A LaTeX fixture for Format Document.
+%!
+%! Two things are deliberately wrong so tex-fmt has something to change:
+%! the `itemize` body is flat, and the literal blocks are the ones tex-fmt 0.5.7
+%! rewrites on its own — it turns tabs into spaces and collapses blank-line runs
+%! inside `verbatim`. `maskLatexLiterals` protects them, and the suite asserts the
+%! bytes survive.
+\documentclass{article}
+\begin{document}
+
+\section{Formatting}
+
+\begin{itemize}
+\item First item
+\item Second item
+\end{itemize}
+
+\begin{verbatim}
+verbatim	with a tab
+blank line above
+
+and one below
+\end{verbatim}
+
+Inline literal: \verb|a	b|.
+
+\end{document}

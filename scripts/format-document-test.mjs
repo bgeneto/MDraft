@@ -262,12 +262,14 @@ const files = {
   html: path.join(workDir, "format-document.html"),
   typst: path.join(workDir, "format-document.typ"),
   asciidoc: path.join(workDir, "format-document.adoc"),
+  latex: path.join(workDir, "format-document.tex"),
   invalid: path.join(workDir, "format-invalid.typ"),
 };
 copyFileSync(path.join(repoRoot, "samples/feature-tour.md"), files.markdown);
 copyFileSync(path.join(repoRoot, "samples/html-tour/index.html"), files.html);
 copyFileSync(path.join(repoRoot, "samples/typst-tour.typ"), files.typst);
 copyFileSync(path.join(repoRoot, "samples/asciidoc-tour.adoc"), files.asciidoc);
+copyFileSync(path.join(repoRoot, "samples/format-document.tex"), files.latex);
 writeFileSync(files.invalid, "#let broken = (\n");
 writeFileSync(files.math, `# Formatting regression\n\n*emphasis*\n\n${physicsSource}`);
 
@@ -1108,6 +1110,64 @@ try {
   await undo();
   const typstRestored = await save(files.typst, (bytes) => bytes.equals(original.typst));
   check(typstRestored.equals(original.typst), "one undo restores the exact Typst bytes");
+
+  // -------------------------------------------------------------------------
+  // LaTeX formats through tex-fmt
+  // -------------------------------------------------------------------------
+  console.log("\n=== LaTeX ===");
+  const latexOpened = await openFile(files.latex);
+  check(latexOpened, "the LaTeX copy opens as its own tab");
+  const latexPoint = await clickLine(14);
+  await rightClick(latexPoint.x, latexPoint.y);
+  const latexMenu = await menuState();
+  const latexFormat = latexMenu.items.find((entry) => entry.action === "format");
+  check(latexMenu.count === 1, "right-clicking LaTeX opens the editor menu");
+  // The formatter is a lazily loaded WASM module, so the row is enabled but the
+  // work happens after the click. A disabled row here would mean `hasFormatter`
+  // does not know about LaTeX — the wiring this check exists for.
+  check(
+    latexFormat && latexFormat.disabled === false,
+    "LaTeX offers Format Document",
+    latexFormat?.title ?? "",
+  );
+  check(
+    latexMenu.items.find((entry) => entry.action === "comment")?.disabled === false,
+    "LaTeX offers the comment action",
+  );
+  const latexBeforeLine = await cursorLine();
+  await chooseFormat();
+  await pollFor(
+    `document.querySelector('.doc-tab[aria-selected="true"]')?.classList.contains('is-dirty') === true`,
+    20000,
+  );
+  const latexAfterLine = await cursorLine();
+  check(
+    latexAfterLine === latexBeforeLine && latexAfterLine > 0,
+    "the LaTeX caret stays on its line",
+    `Ln ${latexBeforeLine} -> Ln ${latexAfterLine}`,
+  );
+  const latexSaved = await save(files.latex, (bytes) => !bytes.equals(original.latex));
+  const latexText = latexSaved.toString("utf8");
+  // tex-fmt indents the body of an environment. The fixture has a deliberately
+  // flat `itemize`, so a formatted copy must indent its items.
+  check(
+    /\\begin\{itemize\}\n\s+\\item/.test(latexText),
+    "tex-fmt indents the itemize body",
+  );
+  // The literal blocks are the part tex-fmt 0.5.7 rewrites on its own: it turns
+  // tabs into spaces and collapses blank-line runs inside `verbatim`. The
+  // formatter masks them first, so the bytes must survive.
+  check(
+    latexText.includes("verbatim\twith a tab"),
+    "a verbatim tab survives formatting",
+  );
+  check(
+    latexText.includes("blank line above"),
+    "a verbatim blank line survives formatting",
+  );
+  await undo();
+  const latexRestored = await save(files.latex, (bytes) => bytes.equals(original.latex));
+  check(latexRestored.equals(original.latex), "one undo restores the exact LaTeX bytes");
 
   // -------------------------------------------------------------------------
   // AsciiDoc keeps the menu, without a formatter
