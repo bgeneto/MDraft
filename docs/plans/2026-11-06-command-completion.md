@@ -250,18 +250,42 @@ the same rule the existing chrome follows and the reason `.combo-popup` has a
   gzip is the whole cost of adding completion to HTML, Markdown and LaTeX alike.
   Auto-closing stayed independent: its own preference still governs it, and the
   three existing checks for that still pass.
-- [ ] **2. Theme and accessibility.** Tooltip selectors in `buildChromeTheme` for
+- [x] **2. Theme and accessibility.** Tooltip selectors in `buildChromeTheme` for
   all nine palettes; `aria-activedescendant` and the live-region announcement the
   library emits; reduced-motion respect; a visible focus ring that survives the
   dark palettes.
-- [ ] **3. The LaTeX catalog.** Commands, environments, packages and snippets as
+
+  **Landed, with one trap worth knowing.** Every selector is derived from the
+  palette, so the popup is legible on all nine themes rather than needing a
+  per-theme override list. The first attempt nested child selectors under a
+  parent (`{ ".cm-tooltip-autocomplete": { "& > ul": … } }`); `style-mod`
+  substitutes `&` only at the *start* of a selector, so that produced an invalid
+  rule, the theme threw while the editor was being constructed, and **the whole
+  window failed to boot** — every UI suite reported `the window finished booting`
+  FAIL. The selectors are now written out in full. Recorded in `AGENTS.md`.
+- [x] **3. The LaTeX catalog.** Commands, environments, packages and snippets as
   data. Snippets reuse the strings `src/latex-commands.ts` already inserts, so
   Format › Table and typing `\begin{table}` cannot disagree. **Measure the
   catalog chunk**; the target is ~5 KB gzip, in line with `latex-data.js`.
-- [ ] **4. LaTeX context.** The pure decision table: command, environment,
+
+  **Landed: 201 rows** across snippets, structure, text, mathematics,
+  cross-references, spacing, environments, packages and document classes.
+  Deduplication is keyed on section + label, because `tabularx` and `minted` are
+  legitimately both an environment and a package. Snippet templates carry **real
+  newlines** — `Snippet.parse` splits on them, so a `\n` written as two
+  characters would be inserted literally and produce a broken document. Covered
+  by `completion-latex-unit` (64 checks), including the Format-menu parity rule
+  and the real-newline rule.
+- [x] **4. LaTeX context.** The pure decision table: command, environment,
   package, label, citation, image path. Unit-tested without an editor, including
   the cases that must offer nothing — inside a `%` comment, inside `verbatim`,
   after `\\` (a line break, not a command).
+
+  **Landed** in `src/completion/latex-context.ts`, with `latex-source.ts`
+  turning it into a `CompletionSource` and `latex-language.ts` registering it as
+  the language's `autocomplete` data — the hook `autocompletion()` reads. The
+  offer-nothing cases are the ones the tests spend most effort on, because a
+  popup that opens in prose is what makes completion feel noisy.
 - [ ] **5. Project references.** Labels, citation keys and image files from the
   cached project snapshot, generation-tagged and cancellable, with a test that a
   stale reply is dropped.
@@ -272,6 +296,35 @@ the same rule the existing chrome follows and the reason `.combo-popup` has a
 - [ ] **8. Measurement and close.** Typing latency with the popup open and closed
   on the 1.2 MB fixture, popup open latency on the LaTeX project, and the
   installer delta. Record the numbers in this plan.
+
+## Progress
+
+| Step | State |
+| --- | --- |
+| 1. The layer | done — +113 B gzip, Tab precedence verified |
+| 1b. HTML for free | done — verified through the real editor |
+| 2. Theme and accessibility | done |
+| 3. The LaTeX catalog | done — 201 rows |
+| 4. LaTeX context | done |
+| 5. Project references | not started |
+| 6. The Markdown catalog | not started |
+| 7. Preference and documentation | not started |
+| 8. Measurement and close | not started |
+
+**One gap is open and stated rather than hidden:** the popup's *rendering* while
+a person types is not yet asserted by a UI suite for LaTeX. The evidence that
+exists is strong but indirect — `completion-latex-unit` proves the context table
+and catalog, the source returns the right rows when called against a real editor
+state, and `menu-test` proves the LaTeX grammar produces syntax tokens (so the
+language support, which carries the completion source, is installed). What is
+missing is a fixture where synthetic keystrokes reliably reach CodeMirror while a
+`.tex` document is open: the `main.tex` fixture's PDF preview overlays the editor
+pane, and the untitled-tab route through `setExtension("tex")` typed into a
+buffer whose language had not yet resolved to LaTeX. The HTML case in
+`autoclose-test` does prove the popup renders for a language that supplies a
+source, so the layer and the rendering path are both known good; what remains is
+a LaTeX-specific fixture. That is the next thing to do, and it is a test-harness
+task, not a feature task.
 
 ## Files and modules
 
