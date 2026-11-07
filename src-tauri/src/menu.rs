@@ -553,7 +553,16 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
                 true
             }
         }
-        "file.print" => !typst && !latex,
+        // LaTeX prints the PDF its own compiler produced (ADR
+        // 2026-11-06-print-the-compiled-pdf), so it needs a compiled PDF to
+        // exist — the same condition `export.pdf` uses. Typst keeps its own rule.
+        "file.print" => {
+            if latex {
+                state.pdf_preview_available
+            } else {
+                !typst
+            }
+        }
         // `Export › HTML` goes through pandoc, which reads LaTeX with its own
         // reader, so it is available for every language. The **browser** PDF
         // route stays disabled for LaTeX: it re-renders the document to HTML and
@@ -676,11 +685,13 @@ fn label_for(state: &MenuState, id: &str) -> Option<String> {
         }
         "export.pdf" if state.document_language == "typst" => "PDF… (compiled by Typst)",
         "export.pdf" if state.document_language == "latex" => "PDF… (compiled by LuaLaTeX)",
-        // Printing stays disabled for both PDF-rendered languages, and the label
-        // points at the route that does work rather than at a row that no longer
-        // exists under that name.
-        "file.print" if state.document_language == "typst" || state.document_language == "latex" => {
-            "Print… (use Export › PDF)"
+        // Typst still points at its PDF route. LaTeX no longer does: it prints
+        // the compiled PDF, so the row is a real Print row with its own label.
+        "file.print" if state.document_language == "typst" => "Print… (use Export › PDF)",
+        "file.print"
+            if state.document_language == "latex" && !state.pdf_preview_available =>
+        {
+            "Print… (available after the preview compiles)"
         }
         "view.typstPreview"
             if state.document_language == "typst" && !state.typst_available =>
@@ -1898,7 +1909,21 @@ mod tests {
             label_for(&state, "export.pdf").as_deref(),
             Some("PDF… (compiled by LuaLaTeX)")
         );
+        // Print follows the same condition, because it prints those same bytes
+        // (ADR 2026-11-06-print-the-compiled-pdf). The label is the plain one:
+        // the row is a real Print row now, not a pointer at Export › PDF.
+        assert_eq!(enabled_for(&state, "file.print"), Some(true));
+        assert_eq!(label_for(&state, "file.print"), None);
+
+        // Before a compile exists, Print says what it is waiting for — the same
+        // way the PDF row does, and for the same reason.
+        state.pdf_preview_available = false;
         assert_eq!(enabled_for(&state, "file.print"), Some(false));
+        assert_eq!(
+            label_for(&state, "file.print").as_deref(),
+            Some("Print… (available after the preview compiles)")
+        );
+        state.pdf_preview_available = true;
 
         // Every other language keeps the native print surface, and its PDF row
         // is the article the preview builds rather than a compiled file.

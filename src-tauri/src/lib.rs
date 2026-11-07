@@ -120,6 +120,7 @@ pub fn run() {
             latex::install_latex,
             latex::latex_project_snapshot,
             latex::save_compiled_pdf,
+    latex::print_compiled_pdf,
             latex::latex_cache_info,
             latex::latex_disable,
             latex::latex_clear_cache,

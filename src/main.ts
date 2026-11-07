@@ -3465,6 +3465,34 @@ async function printCurrentDocument(): Promise<void> {
     return;
   }
 
+  // LaTeX prints the PDF its own compiler produced, never a re-render: a second
+  // layout of the same document would contradict the preview beside it. See
+  // `docs/adr/2026-11-06-print-the-compiled-pdf.md`.
+  //
+  // A stale preview is refused for the same reason `Export › PDF` refuses it, and
+  // Print never starts a compile of its own — a multi-second LuaLaTeX run behind
+  // a Print row would be a surprise.
+  if (source.language === "latex") {
+    const value = latexPreview;
+    if (!latexCurrent(value)) {
+      toast("Wait for the current LaTeX compilation before printing.", 5200);
+      return;
+    }
+    const notice = toast("Preparing to print…", 0);
+    try {
+      const written = await api.printCompiledPdf(
+        bytesToBase64(value.result.pdf),
+        source.name ?? "document",
+      );
+      notice.dismiss();
+      console.info(`[print] compiled PDF written to ${written}`);
+    } catch (error) {
+      notice.dismiss();
+      await message(String(error), { title: "Could not print the LaTeX PDF", kind: "error" });
+    }
+    return;
+  }
+
   const notice = toast("Preparing to print…", 0);
   try {
     const html = await nativePrintArticle(source);

@@ -18,7 +18,7 @@ each verified against the code rather than assumed:
 | Gap | Verified state |
 | --- | --- |
 | Tools › Check or Install LaTeX… | **Missing.** Tools offers Pandoc and Typst (`menu.rs:1218–1227`); `installLatex()` exists in `src/main.ts:7557` but no menu item reaches it. |
-| Print | **Deliberately disabled** (`menu.rs:556`), label `Print… (use Export › PDF)`. The maintainer has now asked for it to print the compiled PDF. |
+| Print | **Done.** `print_compiled_pdf` writes the compiled bytes to a temporary PDF and opens it; ADR `2026-11-06-print-the-compiled-pdf.md`. Refuses a stale preview. |
 | Pandoc export for `.tex` | **Done.** The backend gained a `latex` reader arm; `export.html` and every pandoc format are available. `export.pdf.browser` stays disabled because it re-renders. |
 | Format Document | **Done.** tex-fmt behind `hasFormatter`; both gates removed. tex-fmt damages `verbatim` (tabs → spaces, blank runs collapsed) and `maskLatexLiterals` is what prevents it. |
 | Zoom in the LaTeX preview | **Already works.** The LaTeX host builds `TypstPdfPreview` and calls `setZoom` both at creation (`main.ts:1680`) and on every change (`main.ts:969`). No UI assertion, because the harness cannot see the engine assets. |
@@ -146,12 +146,35 @@ Each step leaves the product consistent and is independently testable.
   only one, and removing it without the other would have produced a row that is
   enabled and then refuses.
 
-- [ ] **4. Print the compiled PDF.** Enable `file.print` for LaTeX and route it to
+- [x] **4. Print the compiled PDF.** Enable `file.print` for LaTeX and route it to
   the PDF the preview holds: write it to a temporary file through the existing
   `print_document`-style path and print that, or hand the bytes to the webview's
   print surface. Refuse when the preview is stale, exactly as Export › PDF does.
   The label loses its "use Export › PDF" suffix. **This is the step that needs an
   ADR**, because it decides where printing a compiled document lives.
+
+  **Landed, with the ADR the step asked for:**
+  `docs/adr/2026-11-06-print-the-compiled-pdf.md`.
+
+  `print_compiled_pdf` is the PDF sibling of `export::print_document`: same
+  temporary `mdraft-print` directory, same "write then open" shape, same refusal
+  to invent content. It validates the bytes (`%PDF-` prefix, size ceiling) before
+  writing, because the file is handed to the system viewer and accepting
+  arbitrary bytes would open whatever they are. The frontend refuses a stale
+  preview with a named reason and never starts a compile of its own.
+
+  **The label changed meaning, not just wording.** It used to read
+  `Print… (use Export › PDF)` — a pointer at another row. It is now a real Print
+  row, disabled before a compile with `Print… (available after the preview
+  compiles)`, which is the same condition `export.pdf` uses because both print
+  the same bytes.
+
+  **Decision D11 is narrowed, not reversed.** The part that mattered — one PDF,
+  the compiler's, never a second layout — is unchanged. `export.pdf.browser` stays
+  disabled for LaTeX for exactly that reason.
+
+  `rust` 321 → **322**, `menu` 156 unchanged with the assertions updated to the
+  new behaviour.
 
 - [x] **5. Pandoc export for `.tex`.** Widen the export gate so `export.html` and
   the pandoc-backed formats accept LaTeX, and make `buildExportArticle` pass the

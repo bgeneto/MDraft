@@ -905,10 +905,17 @@ try {
   );
   check((await itemById("para.task"))?.enabled === false, "LaTeX has no task lists");
   check((await itemById("para.yaml"))?.enabled === false, "LaTeX has no document metadata block");
-  check((await itemById("file.print"))?.enabled === false, "LaTeX disables native printing");
+  // Print now prints the compiled PDF (ADR 2026-11-06-print-the-compiled-pdf),
+  // so it follows the same condition as the PDF row: available once a compile
+  // exists, and saying what it waits for before that. The fixture has not
+  // compiled, so the disabled label is the one to assert here.
   check(
-    (await itemById("file.print"))?.text === "Print… (use Export › PDF)",
-    "the disabled LaTeX print row points at Export › PDF",
+    (await itemById("file.print"))?.enabled === false,
+    "LaTeX print waits for a compiled preview",
+  );
+  check(
+    (await itemById("file.print"))?.text === "Print… (available after the preview compiles)",
+    "the disabled LaTeX print row says what it waits for",
     (await itemById("file.print"))?.text ?? "MISSING",
   );
   // The PDF row names the engine and is enabled only while a current PDF exists.
