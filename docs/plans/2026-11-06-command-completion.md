@@ -1,6 +1,10 @@
 # Command completion in the source editor
 
-**Status:** in progress (approved 2026-11-06)
+**Status:** done (2026-11-06)
+
+All eight steps landed. The one gap this plan carried — the LaTeX popup's
+rendering unproven through a UI suite — is closed, and the plan's own premise
+about Tab was wrong and is corrected below.
 
 **Date:** 2026-11-06
 
@@ -342,7 +346,7 @@ the same rule the existing chrome follows and the reason `.combo-popup` has a
 | 5. Project references | done — labels, citations, images, plus `.bib` keys |
 | 6. The Markdown catalog | done — catalog plus trigger rule, no layer change |
 | 7. Preference and documentation | done — `completion` in settings.json, Preferences row, docs |
-| 8. Measurement and close | not started |
+| 8. Measurement and close | done — +4.3 KB gzip total, against a 20 KB budget |
 
 **The gap recorded in the previous round is closed.** The LaTeX popup's rendering
 is now asserted through the real editor in `autoclose-test` (36 → **41** checks):
