@@ -1,5 +1,11 @@
 //! Headless LuaLaTeX adapter. The SDK and SyncTeX parser load only on use.
 import type { LatexProjectSnapshot } from "./api";
+import {
+  hasUnparsedReference,
+  isLiteralReference,
+  maskLiteralRegions,
+  referencesIn,
+} from "./latex-references.ts";
 import type { WasmTexCompiler } from "wasmtex/headless";
 import type { SynctexData, SynctexParser } from "wasmtex/synctex";
 
@@ -63,14 +69,20 @@ function binary(base64: string): Uint8Array {
   return Uint8Array.from(value, (char) => char.charCodeAt(0));
 }
 
-/** The PoC supports literal project-relative references, not TeX path macros. */
+/**
+ * The PoC supports literal project-relative references, not TeX path macros.
+ *
+ * Literal regions — `\verb`, the verbatim-like environments, `\iffalse … \fi` —
+ * are masked before the scan, so a document that *shows* `\input{…}` as an
+ * example is not mistaken for one that calls it. That distinction is the whole
+ * point: the shipped LaTeX Reference does exactly that, and rejecting it meant
+ * Help › LaTeX Reference produced a document that could not compile.
+ */
 export function validateLatexReferences(
   sources: ReadonlyMap<string, string>,
   files: ReadonlySet<string>,
   mainFile = "main.tex",
 ): void {
-  const command =
-    /\\(input|include|includegraphics|bibliography|addbibresource)\s*(?:\[[^\]]*\]\s*)?\{([^{}]*)\}/g;
   const pending = [mainFile];
   const visited = new Set<string>();
   while (pending.length) {
@@ -79,42 +91,37 @@ export function validateLatexReferences(
     visited.add(sourceName);
     const text = sources.get(sourceName);
     if (text === undefined) throw new Error(`Missing project source: ${sourceName}`);
-    for (const line of text.split(/\r?\n/)) {
-      const withoutComment = line.replace(/(^|[^\\])%.*/, "$1");
-      for (const match of withoutComment.matchAll(command)) {
-        const kind = match[1];
-        const references = kind === "bibliography" ? match[2].split(",") : [match[2]];
-        for (const raw of references) {
-          const name = raw.trim().replace(/^\.\//, "");
-          if (
-            !name ||
-            /[\\{}#$~:]/.test(name) ||
-            name.startsWith("/") ||
-            name.split("/").some((part) => !part || part === ".." || part === ".")
-          ) {
-            throw new Error(
-              `Unsupported non-literal or unsafe \\${kind} reference in ${sourceName}: ${raw}`,
-            );
-          }
-          const hasExtension = /\.[^/]+$/.test(name);
-          const suffixes = hasExtension
-            ? [""]
-            : kind === "includegraphics"
-              ? [".pdf", ".png", ".jpg", ".jpeg"]
-              : kind === "bibliography" || kind === "addbibresource"
-                ? [".bib"]
-                : [".tex"];
-          const resolved = suffixes.map((suffix) => name + suffix).find((path) => files.has(path));
-          if (!resolved) {
-            throw new Error(`Missing project file for \\${kind} in ${sourceName}: ${raw}`);
-          }
-          if ((kind === "input" || kind === "include") && sources.has(resolved))
-            pending.push(resolved);
-        }
+
+    // Mask once per file, so the reference scan and the leftover check agree
+    // about which regions are literal.
+    const masked = maskLiteralRegions(text);
+
+    for (const reference of referencesIn(masked, sourceName)) {
+      const { kind, name } = reference;
+      if (!isLiteralReference(name)) {
+        throw new Error(
+          `Unsupported non-literal or unsafe \\${kind} reference in ${sourceName}: ${name}`,
+        );
       }
-      const unmatched = withoutComment.replace(command, "");
-      if (/\\(?:input|include|includegraphics|bibliography|addbibresource)\b/.test(unmatched))
-        throw new Error(`Unsupported non-literal project reference in ${sourceName}.`);
+      const hasExtension = /\.[^/]+$/.test(name);
+      const suffixes = hasExtension
+        ? [""]
+        : kind === "includegraphics"
+          ? [".pdf", ".png", ".jpg", ".jpeg"]
+          : kind === "bibliography" || kind === "addbibresource"
+            ? [".bib"]
+            : [".tex"];
+      const resolved = suffixes.map((suffix) => name + suffix).find((path) => files.has(path));
+      if (!resolved) {
+        throw new Error(`Missing project file for \\${kind} in ${sourceName}: ${name}`);
+      }
+      if ((kind === "input" || kind === "include") && sources.has(resolved)) {
+        pending.push(resolved);
+      }
+    }
+
+    if (hasUnparsedReference(masked)) {
+      throw new Error(`Unsupported non-literal project reference in ${sourceName}.`);
     }
   }
 }
