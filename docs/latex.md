@@ -60,14 +60,31 @@ differently-laid-out PDF behind the same document would contradict the preview.
 - **Folding.** The grammar is a stream tokenizer, which produces no syntax tree,
   so there is nothing to fold. The menu says so rather than offering a control
   that does nothing.
-- **Format Document.** A formatter is planned; until it lands the command is
-  disabled with a reason.
 - **Read Aloud.** A LaTeX preview is a PDF canvas, so the command is disabled
   with a reason instead of producing silence.
 - **Task lists and GitHub alerts.** LaTeX has no syntax for either; the commands
   are disabled and explain the alternative.
 - **Bidirectional Sync Scroll.** Click navigation works; scroll correspondence
   does not.
+
+## Formatting
+
+**Format › Document** indents and aligns a `.tex` file with tex-fmt, the same
+WebAssembly formatter used for Typst. It is conservative on purpose:
+
+- **Prose is never reflowed.** A paragraph written across several source lines
+  stays across those lines, so formatting a version-controlled file produces a
+  small diff rather than a rewrite.
+- **`verbatim`, `lstlisting`, `minted`, `alltt` and `\verb` are byte-identical.**
+  These bodies are literal by definition, and tex-fmt would otherwise convert a
+  tab to spaces and collapse blank-line runs inside them — changing what the
+  document prints. The bodies are masked before formatting and restored after.
+- **Math is not rewritten.** Alignment inside `align` may be adjusted; the
+  expressions are not.
+- **Formatting twice equals formatting once**, so a second Format changes nothing.
+
+The formatter is a lazily-loaded 537 KiB module: a session that never formats a
+`.tex` file does not pay for it.
 
 ## Completion
 
