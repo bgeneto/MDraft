@@ -23,7 +23,7 @@ each verified against the code rather than assumed:
 | Format Document | **Done.** tex-fmt behind `hasFormatter`; both gates removed. tex-fmt damages `verbatim` (tabs → spaces, blank runs collapsed) and `maskLatexLiterals` is what prevents it. |
 | Zoom in the LaTeX preview | **Already works.** The LaTeX host builds `TypstPdfPreview` and calls `setZoom` both at creation (`main.ts:1680`) and on every change (`main.ts:969`). No UI assertion, because the harness cannot see the engine assets. |
 | Insert and Format commands | **Audited and complete.** Every applicable row produces valid LaTeX; task lists, alerts and front matter are disabled with a real alternative named. Format Document is gated twice (`menu.rs:572` and `main.ts:2666`) — that is step 6. |
-| SyncTeX click and selection blink | Click works. Blink parity with Typst is unverified. |
+| SyncTeX click and selection blink | Click works. Blink parity with Typst is unverified — the harness can now reach the engine (`linkLatexEngine`), but the preview still paints the enable note under test. |
 | Two-column scroll precision | The correspondence rule set exists and is unit-tested; two-column behaviour is unverified. |
 | Rich paste into LaTeX | **Done.** `render-latex.ts` and `read-latex.ts` added; three defects fixed, the last of which (`main.ts:7241` returning before conversion for plain text) was the one that kept the feature broken. |
 | Tests for all of the above | Partial. |
@@ -243,6 +243,27 @@ Each step leaves the product consistent and is independently testable.
   same way a click in the Typst Pages view does: the region painted, the four-beat
   pulse, reduced motion respected, Escape clearing it, and no selection stolen.
   `latex-correspondence-unit` covers the rules; the paint needs the viewer.
+
+  **Blocked on a harness limit that this round narrowed but did not close.** The
+  harness runs under `<identifier>.test-automation`, so the engine the developer
+  installed under `<identifier>` is invisible to it and a `.tex` document shows
+  the enable note instead of a PDF. `test-all.mjs` now links the engine
+  (`linkLatexEngine`: a junction on Windows, a symlink elsewhere, removed before
+  the developer's own settings are restored) and writes `latexEnabled` into the
+  test profile. That works — `latex_cache_info` reports
+  `installed: true, enabled: true`, and `latex_status` is `true` from the page.
+
+  **What still fails:** the preview paints the *enable* note even with the engine
+  enabled. The render calls `api.latexStatus()` itself and gets `false`, while the
+  same call from the test's own `Runtime.evaluate` gets `true`. Something between
+  the two — most plausibly the frontend's module-local `settings.latexEnabled`
+  being persisted back as `false` after `save_settings`, or the compile failing on
+  a cold package cache in the isolated profile — needs a debugging session with
+  the app's own console, which this harness does not surface.
+
+  **Honest status: not done, and not claimed.** The rule set is unit-tested
+  (33 checks); the paint is not asserted. The junction and the settings write stay
+  in `test-all.mjs` because they are correct and make the next attempt cheaper.
 
 - [ ] **8. Two-column scroll precision.** Verify the correspondence against a
   two-column document — the case where one source line owns regions in both
