@@ -45,39 +45,44 @@ export function maskLiteralRegions(text: string): string {
 
   // `\verb` and `\verb*` take their delimiter as the next character and run to
   // the next occurrence of it, on the same line.
-  masked = masked.replace(/\\verb\*?([^a-zA-Z\s*])[\s\S]*?\1/g, (block) =>
+  masked = masked.replace(/\\verb\*?([^a-zA-Z\s*])[^\n]*?\1/g, (block) =>
     block.replace(/[^\n]/g, " "),
   );
 
   // `\lstinline|…|` and `\mintinline{lang}|…|` are the same construct with a
   // different name: a delimiter, then literal text to the matching delimiter.
-  // `\lstinline` also accepts a brace form, which is covered by the brace
-  // argument mask below.
-  masked = masked.replace(
-    /\\lstinline\s*(?:\[[^\]]*\])?\s*([^a-zA-Z\s{])([\s\S]*?)\1/g,
-    (block) => block.replace(/[^\n]/g, " "),
+  masked = masked.replace(/\\lstinline\s*(?:\[[^\]]*\])?\s*([^a-zA-Z\s{])([\s\S]*?)\1/g, (block) =>
+    block.replace(/[^\n]/g, " "),
   );
   masked = masked.replace(
     /\\mintinline\s*(?:\[[^\]]*\])?\s*\{[^{}]*\}\s*([^a-zA-Z\s{])([\s\S]*?)\1/g,
     (block) => block.replace(/[^\n]/g, " "),
   );
-  masked = masked.replace(
-    /\\mintinline\s*(?:\[[^\]]*\])?\s*\{[^{}]*\}\s*\{[^{}]*\}/g,
-    (block) => block.replace(/[^\n]/g, " "),
-  );
 
-  // The verbatim-like environments, bodies included.
+  // The verbatim-like environments, bodies included. This runs before the brace
+  // forms below so their depth-aware scan only ever sees live markup: a
+  // `\lstinline{` written inside a listing is already blanked and cannot open a
+  // group that would swallow the rest of the document.
   masked = masked.replace(
     new RegExp(`\\\\begin\\{(${VERBATIM_ENVIRONMENTS})\\}[\\s\\S]*?\\\\end\\{\\1\\}`, "g"),
     (block) => block.replace(/[^\n]/g, " "),
   );
 
+  // The brace forms — `\lstinline{…}` and `\mintinline{lang}{…}` — where the
+  // argument is the literal text. These need a depth-aware scan rather than a
+  // `[^{}]*` pattern, because the body is code and may contain braces of its
+  // own: `\lstinline{\section{x}}` is one literal, not a literal followed by a
+  // stray `}`. The Rust twin (`mask_literal_regions` in `src-tauri/src/latex.rs`)
+  // already reads these with `brace_end`; this keeps the two in step.
+  for (const [start, end] of braceLiteralRanges(masked)) {
+    masked =
+      masked.slice(0, start) + masked.slice(start, end).replace(/[^\n]/g, " ") + masked.slice(end);
+  }
+
   // `\iffalse … \fi` never runs. Nested conditionals are not tracked: this is a
   // masking pass, not a TeX interpreter, and an unbalanced `\iffalse` inside a
   // document that compiles is already an error the compiler reports.
-  masked = masked.replace(/\\iffalse\b[\s\S]*?\\fi\b/g, (block) =>
-    block.replace(/[^\n]/g, " "),
-  );
+  masked = masked.replace(/\\iffalse\b[\s\S]*?\\fi\b/g, (block) => block.replace(/[^\n]/g, " "));
 
   // A command whose argument is *text*, not a path: `\texttt{\input}` names the
   // command inside a monospaced argument. The argument is masked so the leftover
@@ -90,6 +95,67 @@ export function maskLiteralRegions(text: string): string {
   );
 
   return masked;
+}
+
+/**
+ * The end of a brace-balanced group starting at `from`, which must be a `{`.
+ *
+ * An escaped brace (`\{`) is a character, not a delimiter, so a backslash skips
+ * the character after it. An unterminated group runs to the end of the text,
+ * which is what a masking pass should do: the document is already broken and the
+ * compiler will say so.
+ */
+function braceGroupEnd(text: string, from: number): number {
+  let depth = 0;
+  for (let at = from; at < text.length; at += 1) {
+    const ch = text[at];
+    if (ch === "\\") {
+      at += 1;
+      continue;
+    }
+    if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return at + 1;
+    }
+  }
+  return text.length;
+}
+
+/**
+ * The `[start, end)` ranges of the brace-form inline literals.
+ *
+ * `\lstinline{…}` takes the body directly; `\mintinline{lang}{…}` takes a
+ * language group first. Both accept an optional `[…]` before the body.
+ */
+function braceLiteralRanges(text: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  const command = /\\(lstinline|mintinline)\b/g;
+  let match: RegExpExecArray | null;
+  while ((match = command.exec(text)) !== null) {
+    let at = match.index + match[0].length;
+    const skipSpace = () => {
+      while (at < text.length && /\s/.test(text[at])) at += 1;
+    };
+    skipSpace();
+    if (text[at] === "[") {
+      const close = text.indexOf("]", at);
+      if (close < 0) continue;
+      at = close + 1;
+      skipSpace();
+    }
+    // `\mintinline` names its language in a group before the body.
+    if (match[1] === "mintinline" && text[at] === "{") {
+      at = braceGroupEnd(text, at);
+      skipSpace();
+    }
+    if (text[at] !== "{") continue;
+    const end = braceGroupEnd(text, at);
+    ranges.push([match.index, end]);
+    // Resume after the literal so a `\lstinline` inside it cannot open a second.
+    command.lastIndex = end;
+  }
+  return ranges;
 }
 
 /**
@@ -146,7 +212,9 @@ export function hasUnparsedReference(masked: string): boolean {
   for (const line of masked.split(/\r?\n/)) {
     const withoutComment = line.replace(/(^|[^\\])%.*/, "$1");
     const unmatched = withoutComment.replace(REFERENCE_COMMAND, "");
-    if (/\\(?:input|include|includegraphics|bibliography|addbibresource)\b[^\n]*\{/.test(unmatched)) {
+    if (
+      /\\(?:input|include|includegraphics|bibliography|addbibresource)\b[^\n]*\{/.test(unmatched)
+    ) {
       return true;
     }
   }

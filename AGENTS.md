@@ -299,7 +299,8 @@ rewrite from scratch.
 | `npm run tabs:restore:unit` | `scripts/tabs-restore-unit.mjs` | 33 checks of what is remembered and what is restored: tab order, untitled exclusion, deduplication under the platform's path identity, the 20-document cap, and the restore plan's handling of missing files — no application |
 | `npm run typst:map:unit` | `scripts/typst-page-map-unit.mjs` | 35 checks of the bidirectional Typst Pages prose index: formula-adjacent prose, region isolation, ambiguity, reverse lookup, PDF ActualText breaks and Unicode offsets; a repeated one-word line with identical neighbours paints nothing, a unique neighbour window picks the clicked occurrence, ligatures and soft hyphens match, and generated text stays unmapped. A multiline list keeps every first-line and continuation word on its own source line in both directions — no application |
 | `npm run latex:sync:unit` | `scripts/latex-sync-unit.mjs` | Checks exact SyncTeX regions for the multi-file LuaLaTeX fixture and rejects ambiguous positions; no application. |
-| `npm run latex:references:unit` | `scripts/latex-references-unit.mjs` | 48 checks of the validator that decides whether a project's `\input`/`\include`/`\includegraphics`/`\bibliography` references are literal paths. Pins the false-positive classes that once rejected the shipped LaTeX Reference — `\verb`, `\lstinline`, `\mintinline`, the verbatim environments, `\iffalse` blocks, `\texttt{\input}` prose and a bare command mention — and the real rejections that must survive: a macro path, a parent escape, an absolute path, a URL. Also pins that masking preserves line and column offsets — no application |
+| `npm run latex:references:unit` | `scripts/latex-references-unit.mjs` | 52 checks of the validator that decides whether a project's `\input`/`\include`/`\includegraphics`/`\bibliography` references are literal paths. Pins the false-positive classes that once rejected the shipped LaTeX Reference — `\verb`, `\lstinline`, `\mintinline` (delimiter **and** brace forms), the verbatim environments, `\iffalse` blocks, `\texttt{\input}` prose and a bare command mention — and the real rejections that must survive: a macro path, a parent escape, an absolute path, a URL. Also pins that masking preserves line and column offsets — no application |
+| `npm run latex:outline:unit` | `scripts/latex-outline-unit.mjs` | 33 checks of the Outline panel's LaTeX scan: the shipped LaTeX Reference produces exactly its own eleven headings, with no phantom row for a `\section` it only *demonstrates* inside `\verb` or a verbatim block; every sectioning command and its nesting, starred forms, the optional short title, two headings on one line, a heading that contains a `\verb` keeping its literal text, a `%` inside a literal not starting a comment, and the line numbers masking must not move — no application |
 | `npm run latex:sdk:unit` | `scripts/latex-sdk-unit.mjs` | 15 checks of the SyncTeX route and the pinned SDK shape it depends on: that `CompileResult` still declares `synctex` and `synctexData` and still documents `synctexData ?? parse(synctex)`, that the adapter no longer reaches into the worker protocol or names `<job>.synctex.gz`, that it prefers `synctexData` and falls back to parsing `synctex`, that a missing SyncTeX fails with a named error rather than a silent null mapping, and that the adapter pins `engine: "lualatex"` — because detection resolves `fontspec` to XeLaTeX, which this build does not ship, while LuaLaTeX supports it perfectly well. Fails when an SDK upgrade changes the shape — no application |
 | `npm run latex:measure` | `scripts/latex-measure.mjs` | A probe, not a check: the engine's on-disk footprint, the snapshot the compile receives against what the old directory walk would have sent (51% smaller on the fixture), and the base64 overhead. Prints no compile timing, because the engine drives a Web Worker and Node has no `Worker` global — the timings come from `latex:poc`, which launches a real instance |
 | `npm run latex:tools` | `scripts/latex-tools-test.mjs` | 7 checks that Tools › Check or Install LaTeX… reaches a handler rather than being a present-but-dead row. Uses a **positive control**: a bogus menu id must make the dispatcher warn (`[menu] no handler for …`), and `tools.latex` must not — so the check can fail. Also asserts the two rows beside it stay wired and the application survives the native dialog. The dialog itself is `plugin-dialog`, outside the webview, so no DOM selector can see it |
@@ -613,7 +614,7 @@ hash the pixels.
 
 ## Testing
 
-Fifty-four default layers, cheapest first, plus opt-in layers. Run them in this order when changing anything.
+Fifty-five default layers, cheapest first, plus opt-in layers. Run them in this order when changing anything.
 
 | Layer | Command | Count | Catches |
 | --- | --- | --- | --- |
@@ -809,6 +810,30 @@ general: **a scanner that decides what a document *means* must mask the regions
 that are literal text first** — `spellcheck.ts` and the outline extractor already
 did, and this validator was the one that did not. `latex:references:unit` pins
 every false-positive class plus the real rejections that must survive.
+
+**The Outline panel grows phantom headings for every command the LaTeX Reference merely *shows***
+`extractLatexHeadings` scanned each line as live markup, so `\verb|\section{...}|`
+in the reference's own prose produced a heading. Its hand-rolled guard knew only
+`verbatim`/`lstlisting`/`minted` bodies — not `\verb`, not `\lstinline`, not
+`\mintinline`, not `\iffalse` — so the shipped reference listed four rows that
+are sample text: `...`, `..`, `.` and a full `\section{...}` line. The fix is to
+scan a copy masked by `maskLiteralRegions` from `latex-references.ts`; masking
+preserves newlines and line lengths, so `i + 1` still names the right line.
+**Do not write a fourth literal-region scanner** — there are already three
+(`latex-references.ts`, `spellcheck.ts`, `format/formatters.ts`), and the one
+that disagreed was the one that lost track.
+
+**`\lstinline{\input{x}}` and `\mintinline{tex}{\input{x}}` are not masked, although the comment says they are**
+The brace forms of the inline literals used a flat `[^{}]*`, which cannot match a
+body that contains braces — and a code body usually does. So the brace form was
+never blanked: `latex:references:unit` rejected `\lstinline{\input{chapters/intro}}`
+as a real missing reference, and the outline listed a `\section` shown inside one.
+The Rust twin (`mask_literal_regions` in `src-tauri/src/latex.rs`) already read
+these with a depth-aware `brace_end`; `src/latex-references.ts` now does the same
+through `braceGroupEnd`/`braceLiteralRanges`, and the brace scan runs **after**
+the verbatim bodies are blanked so a `\lstinline{` written inside a listing cannot
+open a group that swallows the rest of the file. The lesson is the one the
+`\verb` trap above states: a comment claiming a region is covered is not a test.
 
 **The whole window fails to boot — every UI suite reports `the window finished booting` FAIL and `TypeError: Cannot read properties of null (reading 'focus')` — after adding a nested selector to `buildChromeTheme`**
 `EditorView.theme` renders through `style-mod`, which substitutes `&` only at the
