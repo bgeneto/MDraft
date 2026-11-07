@@ -1146,6 +1146,80 @@ const USER_STATE = [
   "ai-keys.json",
 ];
 
+/** The engine junction this run created, so it can be removed afterwards. */
+let latexEngineLink = null;
+
+/**
+ * Make the developer's installed LaTeX engine visible to the test instance.
+ *
+ * The harness runs under `<identifier>.test-automation`, so the engine the
+ * developer installed under `<identifier>` is invisible to it: a `.tex` document
+ * shows the "Enable LuaLaTeX" note instead of a PDF, and every LaTeX preview
+ * assertion has nothing to measure. That is why the scroll-correspondence, blink
+ * and two-column steps could not be tested through the UI.
+ *
+ * A **junction** (Windows) or **symlink** (elsewhere) is the answer: it costs no
+ * copying of the 10 MiB of assets, and `linkLatexEngineCleanup` removes it before
+ * the developer's own settings are restored, so nothing outside the test instance
+ * is touched. When the engine is not installed the function does nothing and the
+ * LaTeX suites that need it skip rather than fail.
+ */
+function linkLatexEngine() {
+  const source = path.join(
+    appConfigDir().replace(`${identifier}`, tauriConfig.identifier),
+    "wasmtex-poc-2025",
+  );
+  if (!fs.existsSync(path.join(source, "assets"))) return;
+  const target = path.join(appConfigDir(), "wasmtex-poc-2025");
+  if (fs.existsSync(target)) return;
+  fs.mkdirSync(appConfigDir(), { recursive: true });
+  try {
+    fs.symlinkSync(source, target, process.platform === "win32" ? "junction" : "dir");
+    latexEngineLink = target;
+    console.log(`engine   linked from ${source}\n`);
+  } catch (error) {
+    // A host that forbids links (or a target already present) is not a failure:
+    // the suites that need the engine report their own skip. Say so, because a
+    // silent skip is what made the first attempt look like it worked.
+    console.log(`engine   could not be linked (${String(error).split("\n")[0]})\n`);
+    return;
+  }
+  // The assets alone are not enough: `latex_status` is true only when the switch
+  // is on *and* the assets are present, because a switch that promises an engine
+  // it cannot run is the dead UI this project refuses. The test profile starts
+  // with the switch off, so it is turned on here — and `restoreUserState` puts
+  // the developer's own settings back afterwards, so nothing persists.
+  //
+  // `app_config_dir`, not `app_data_dir`: `AppState::load` reads the settings from
+  // the config directory, and on Windows the two are the same path only because
+  // Tauri maps both to `%APPDATA%\<identifier>`. Writing to the wrong one would
+  // leave the switch off while the assets were found, which is exactly the
+  // `installed: true, enabled: false` this produced the first time.
+  const settingsPath = path.join(appConfigDir(), "settings.json");
+  try {
+    const settings = fs.existsSync(settingsPath)
+      ? JSON.parse(fs.readFileSync(settingsPath, "utf8"))
+      : {};
+    settings.latexEnabled = true;
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    console.log(`engine   latexEnabled written to ${settingsPath}\n`);
+  } catch (error) {
+    // A settings file this run cannot write is the suite's own problem to report.
+    console.log(`engine   could not enable LaTeX (${String(error).split("\n")[0]})\n`);
+  }
+}
+
+/** Remove the engine link, leaving the developer's own directory untouched. */
+function linkLatexEngineCleanup() {
+  if (!latexEngineLink) return;
+  try {
+    fs.unlinkSync(latexEngineLink);
+  } catch {
+    // Already gone.
+  }
+  latexEngineLink = null;
+}
+
 function takeUserState(destination) {
   const saved = [];
   fs.mkdirSync(destination, { recursive: true });
@@ -1566,6 +1640,7 @@ async function main() {
       );
 
       savedUserState = takeUserState(path.join(context.stage, "user-state"));
+      linkLatexEngine();
       fixtures = snapshotFixtures(suites);
     }
 
@@ -1632,6 +1707,10 @@ async function main() {
       /mdraft-test-/.test(instance.path),
     );
     if (leftovers.length) await closeInstances(leftovers);
+    // The engine link is removed before the developer's own state is restored:
+    // it lives inside the test instance's directory, so leaving it would make the
+    // next run skip the link and the one after that inherit a stale one.
+    linkLatexEngineCleanup();
     if (savedUserState.length) restoreUserState(savedUserState);
     if (fixtures.size) restoreFixtures(fixtures);
     if (context) {
