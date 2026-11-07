@@ -91,6 +91,46 @@ console.log("\n=== the parser is still imported from the SDK's own entry point =
   );
 }
 
+console.log("\n=== the adapter pins the engine the build actually ships ===");
+{
+  // A correction worth recording. This build carries only the LuaLaTeX engine.
+  // The SDK's detection classifies `fontspec` as "requires a Unicode engine
+  // (XeTeX/LuaTeX)" and *defaults* to XeLaTeX for it — which is a preference, not
+  // a requirement: LuaLaTeX supports `fontspec` perfectly well. So a document
+  // using `fontspec` would resolve to XeLaTeX, find no such engine, and fail with
+  // "Document requires XeLaTeX, which is not available in this build".
+  //
+  // The fix is not to remove `fontspec` from the sample: it is to pass an explicit
+  // engine, which the SDK documents as the override. The adapter does that, and
+  // this check is what keeps it doing it.
+  const types = readFileSync("node_modules/wasmtex/lib/headless.d.ts", "utf8");
+  check(
+    /Set an explicit engine to override detection/.test(types),
+    "the SDK documents an explicit engine as the override",
+  );
+
+  const source = readFileSync("src/latex.ts", "utf8");
+  check(
+    /engine:\s*"lualatex"/.test(source),
+    "the adapter pins LuaLaTeX rather than trusting detection",
+  );
+
+  // The failure mode this prevents, quoted so a future reader recognises it.
+  const engine = readFileSync("node_modules/wasmtex/lib/engine/compile-engine.js", "utf8");
+  check(
+    /which is not available in this build/.test(engine),
+    "an unavailable engine fails with that named error",
+  );
+
+  // `fontspec` stays in the sample: LuaLaTeX supports it, and removing it would
+  // hide the very case the pinned engine exists to handle.
+  const sample = readFileSync("samples/latex-poc/main.tex", "utf8");
+  check(
+    /\\usepackage\{fontspec\}/.test(sample),
+    "the sample still exercises fontspec under LuaLaTeX",
+  );
+}
+
 const failed = checks.filter((entry) => !entry.ok).length;
 console.log(`\n${checks.length - failed}/${checks.length} checks passed`);
 process.exit(failed === 0 ? 0 : 1);
