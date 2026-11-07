@@ -9,6 +9,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
+use tauri::Manager;
 
 use crate::export::sha256_hex;
 
@@ -573,6 +574,48 @@ pub fn open_external(path: String) -> Result<(), String> {
         .map_err(|e| format!("Could not open {path}: {e}"))
 }
 
+/// The folders Preferences offers to open, by name.
+///
+/// A whitelist rather than a path: the frontend cannot touch the filesystem, and
+/// a command that accepted an arbitrary path would hand it that ability through
+/// the back door. Each name resolves under the application's own data directory,
+/// which is where the managed tools live.
+const APP_FOLDERS: [&str; 3] = ["pandoc", "typst", "latex"];
+
+/// The directory a named application folder resolves to, under `data_root`.
+///
+/// Split out from the command so the mapping can be tested without an
+/// `AppHandle`: an unknown name must not resolve, and the LaTeX engine keeps its
+/// historical `wasmtex-poc-2025` directory.
+fn app_folder_path(data_root: &Path, folder: &str) -> Result<PathBuf, String> {
+    if !APP_FOLDERS.contains(&folder) {
+        return Err(format!("There is no {folder} folder to open."));
+    }
+    Ok(match folder {
+        "latex" => data_root.join("wasmtex-poc-2025"),
+        other => data_root.join(other),
+    })
+}
+
+/// Open one of the application's own tool folders in the OS file manager.
+///
+/// Preferences shows a button instead of printing the path, so the reader can
+/// look at what was downloaded without reading a `C:\…` line. The folder is
+/// created when it does not exist yet: a reader who has not installed Typst
+/// still gets an answer rather than an error about a missing directory.
+#[tauri::command]
+pub fn open_app_folder(app: tauri::AppHandle, folder: String) -> Result<(), String> {
+    let data_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Cannot locate the application data directory: {e}"))?;
+    let target = app_folder_path(&data_root, &folder)?;
+    fs::create_dir_all(&target)
+        .map_err(|e| format!("Could not create {}: {e}", target.display()))?;
+    tauri_plugin_opener::open_path(&target, None::<&str>)
+        .map_err(|e| format!("Could not open {}: {e}", target.display()))
+}
+
 /// The file passed on the command line, if any (`mdraft notes.md`).
 #[tauri::command]
 pub fn startup_file() -> Option<String> {
@@ -591,6 +634,27 @@ pub fn startup_file() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_folders_are_a_whitelist_not_a_path() {
+        let root = Path::new("C:/data");
+        assert_eq!(
+            app_folder_path(root, "pandoc").unwrap(),
+            root.join("pandoc")
+        );
+        assert_eq!(app_folder_path(root, "typst").unwrap(), root.join("typst"));
+        // The LaTeX engine keeps the directory the experiment created; renaming
+        // it would strand an existing download.
+        assert_eq!(
+            app_folder_path(root, "latex").unwrap(),
+            root.join("wasmtex-poc-2025")
+        );
+        // A name that is not on the list must not resolve, so a compromised
+        // frontend cannot make the command open an arbitrary directory.
+        for bad in ["", "..", "..\\Windows", "C:/Windows", "pandoc/../..", "PANDOC"] {
+            assert!(app_folder_path(root, bad).is_err(), "{bad:?}");
+        }
+    }
 
     #[test]
     fn refuses_binary_signatures_controls_and_invalid_utf8() {

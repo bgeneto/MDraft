@@ -529,6 +529,33 @@ check(
 );
 check("Pages shows no error box", pagesShape.errors === 0);
 
+// The pages are flush: the second shell starts exactly where the first ends, and
+// neither draws a rule or a shadow. A gap here is the band of pane background the
+// reader sees between two pages, which reads as a divider rather than a document.
+const pageGap = await evaluate(`(() => {
+  const shells = [...document.querySelectorAll(".typst-page-shell")];
+  if (shells.length < 2) return null;
+  const first = shells[0].getBoundingClientRect();
+  const second = shells[1].getBoundingClientRect();
+  const style = getComputedStyle(shells[0]);
+  const host = getComputedStyle(document.querySelector(".typst-preview"));
+  return {
+    gap: second.top - first.bottom,
+    rowGap: host.rowGap,
+    shadow: style.boxShadow,
+  };
+})()`);
+check(
+  "consecutive pages sit flush with no gap",
+  pageGap !== null && Math.abs(pageGap.gap) < 1 && pageGap.rowGap === "normal",
+  pageGap ? `gap ${pageGap.gap.toFixed(1)}px, row-gap ${pageGap.rowGap}` : "no second page",
+);
+check(
+  "a page draws no rule or shadow at its edge",
+  pageGap !== null && pageGap.shadow === "none",
+  pageGap ? pageGap.shadow : "no page",
+);
+
 const viewBarStyle = await evaluate(`(() => {
   const bar = document.querySelector(".typst-viewbar");
   const button = document.querySelector(".typst-viewbutton");
@@ -1217,6 +1244,66 @@ console.log("\n=== Typst Pages list word sync ===");
   } else {
     check("the Pages list word is reachable", false);
   }
+
+  console.log("\n=== Typst rebuilding at the end ===");
+  await evaluate(`(() => {
+    const v=document.querySelector(".cm-content").cmTile.root.view;
+    v.dispatch({selection:{anchor:v.state.doc.length},scrollIntoView:true});
+    v.contentDOM.focus();
+  })()`);
+  const seed =
+    "\n\n= Tail fixture\n\n" +
+    "A typeset paragraph keeps the text flowing across the page.\n\n".repeat(100);
+  await send("Input.insertText", { text: seed });
+  const seeded = await waitFor(
+    `(() => {
+    const host=document.querySelector('.typst-preview:not([style*="hidden"])');
+    return host && host.querySelectorAll('.typst-page-shell').length >= 3 && host.textContent.includes('Tail fixture');
+  })()`,
+    40000,
+  );
+  check("the Typst tail fixture spans several pages", seeded);
+  const start = await evaluate(`(async () => {
+    const v=document.querySelector(".cm-content").cmTile.root.view, pane=document.getElementById("preview-pane");
+    v.dispatch({selection:{anchor:v.state.doc.length},scrollIntoView:true});
+    await new Promise(r=>setTimeout(r,300)); pane.scrollTop=pane.scrollHeight;
+    await new Promise(r=>setTimeout(r,150));
+    window.__typstViewport={min:pane.scrollTop,frames:0,active:true};
+    const frame=()=>{const p=window.__typstViewport;if(!p.active)return;p.min=Math.min(p.min,pane.scrollTop);p.frames++;requestAnimationFrame(frame)};
+    requestAnimationFrame(frame);v.contentDOM.focus();
+    return {top:pane.scrollTop,pages:document.querySelectorAll('.typst-page-shell').length};
+  })()`);
+  const growth =
+    "\n\n= Typst growth marker\n\n" +
+    "More text follows the reader onto another page.\n\n".repeat(100);
+  await send("Input.insertText", { text: growth });
+  const rebuilt = await waitFor(
+    `(() => {
+    const host=document.querySelector('.typst-preview:not([style*="hidden"])');
+    return host && host.textContent.includes('Typst growth marker');
+  })()`,
+    40000,
+  );
+  const after = await evaluate(`(() => {
+    const pane=document.getElementById("preview-pane"), p=window.__typstViewport;p.active=false;
+    return {top:pane.scrollTop,min:p.min,frames:p.frames,max:pane.scrollHeight-pane.clientHeight,pages:document.querySelectorAll('.typst-page-shell').length};
+  })()`);
+  check("typing rebuilds the Typst PDF", rebuilt);
+  check(
+    "Typst keeps the previous pages visible throughout rebuilding",
+    start.top > 50 && after.frames > 0 && after.min > 50,
+    JSON.stringify({ start, after }),
+  );
+  check(
+    "Typst grows onto new pages",
+    after.pages > start.pages,
+    `${start.pages} -> ${after.pages}`,
+  );
+  check(
+    "Typst follows the new last page",
+    after.max - after.top < 100,
+    `${after.top}/${after.max}`,
+  );
   fs.rmSync(directory, { recursive: true, force: true });
 }
 

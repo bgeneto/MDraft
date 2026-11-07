@@ -12,7 +12,7 @@
 // No application: the validator is pure over a source map and a file set.
 
 import { readFileSync } from "node:fs";
-import { validateLatexReferences } from "../src/latex.ts";
+import { collectLatexReferences, validateLatexReferences } from "../src/latex.ts";
 import {
   hasUnparsedReference,
   isLiteralReference,
@@ -125,6 +125,36 @@ console.log("\n=== dead code is not a reference ===");
     validate("50\\% of \\input{chapter}") !== null,
     "a reference after an escaped percent is still real",
   );
+  // The reported document had this exact shape: `%` immediately followed by
+  // `\includegraphics`, two figures in one file. It must be accepted, or the
+  // reader cannot tell a comment from a live reference.
+  check(
+    validate(
+      "\\begin{figure}\n\\centering\n%\\includegraphics[width=\\textwidth]{arquitetura.png}\n\\caption{x}\n\\end{figure}",
+    ) === null,
+    "a line beginning with % and no space is a comment",
+    validate(
+      "\\begin{figure}\n\\centering\n%\\includegraphics[width=\\textwidth]{arquitetura.png}\n\\caption{x}\n\\end{figure}",
+    ) ?? "accepted",
+  );
+  // `\\%` is a line break followed by a comment, not an escaped percent. The
+  // odd/even backslash rule was the bug: a single-character test kept the whole
+  // line and scanned the command after it.
+  check(
+    validate("a\\\\% \\input{chapters/intro}") === null,
+    "a comment after a double backslash is a comment",
+    validate("a\\\\% \\input{chapters/intro}") ?? "accepted",
+  );
+  check(
+    validate("\\begin{comment}\n\\input{chapters/intro}\n\\end{comment}") === null,
+    "the comment environment is not a reference",
+    validate("\\begin{comment}\n\\input{chapters/intro}\n\\end{comment}") ?? "accepted",
+  );
+  check(
+    validate("\\begin{filecontents}{x.bib}\n@book{a}\n\\end{filecontents}") === null,
+    "a filecontents body is not a reference",
+    validate("\\begin{filecontents}{x.bib}\n@book{a}\n\\end{filecontents}") ?? "accepted",
+  );
 }
 
 console.log("\n=== real references still resolve, and still fail when missing ===");
@@ -215,6 +245,56 @@ console.log("\n=== the helpers behave on their own ===");
     "a macro argument parses and is judged by isLiteralReference",
   );
   check(!isLiteralReference("\\m"), "a macro argument is not literal");
+}
+
+console.log("\n=== every occurrence is reported, with its line ===");
+{
+  // The reported document had two figures, both commented. If one line were
+  // still live, the old validator threw the same message again and the reader
+  // could not tell which figure it meant. The list must separate them.
+  const source = [
+    "first",
+    "%\\includegraphics{gone.png}",
+    "\\includegraphics{gone.png}",
+    "second",
+    "\\includegraphics{gone.png}",
+  ].join("\n");
+  const scan = collectLatexReferences(
+    new Map([["main.tex", source]]),
+    new Set(["main.tex"]),
+    "main.tex",
+  );
+  check(
+    scan.diagnostics.length === 2,
+    "two live occurrences are two diagnostics",
+    String(scan.diagnostics.length),
+  );
+  check(
+    scan.diagnostics[0].line === 3 && scan.diagnostics[1].line === 5,
+    "the commented line is skipped and the live lines are named",
+    scan.diagnostics.map((entry) => entry.line).join(","),
+  );
+  check(
+    scan.diagnostics[0].lineText === "\\includegraphics{gone.png}",
+    "the compiled line is captured for the panel",
+    scan.diagnostics[0].lineText,
+  );
+  check(
+    scan.diagnostics[0].text === "\\includegraphics{gone.png}",
+    "the command is captured for the mark",
+    scan.diagnostics[0].text,
+  );
+  check(
+    scan.diagnostics[0].column === 1 &&
+      scan.diagnostics[0].endColumn === "\\includegraphics{gone.png}".length + 1,
+    "the command span is 1-based and exact",
+    `${scan.diagnostics[0].column}..${scan.diagnostics[0].endColumn}`,
+  );
+  check(
+    scan.diagnostics[0].message.includes("gone.png"),
+    "the message still names the missing file",
+    scan.diagnostics[0].message,
+  );
 }
 
 const failed = checks.filter((entry) => !entry.ok).length;

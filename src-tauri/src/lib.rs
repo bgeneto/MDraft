@@ -37,10 +37,10 @@ pub fn run() {
         // The test runner checks this embedded marker before starting a binary
         // with --no-build, so an older executable cannot unexpectedly appear.
         eprintln!("MDRAFT_TEST_HIDDEN_ISOLATED_WINDOW_V2");
-        if let Ok(identifier) = std::env::var("MDRAFT_TEST_IDENTIFIER") {
-            if identifier == "io.github.bernh.mdraft.test-automation" {
-                context.config_mut().identifier = identifier;
-            }
+        if let Ok(identifier) = std::env::var("MDRAFT_TEST_IDENTIFIER")
+            && identifier == "io.github.bernh.mdraft.test-automation"
+        {
+            context.config_mut().identifier = identifier;
         }
         for window in &mut context.config_mut().app.windows {
             window.visible = false;
@@ -149,6 +149,7 @@ pub fn run() {
             documents::path_exists,
             documents::resolve_legacy_local_image,
             documents::open_external,
+            documents::open_app_folder,
             documents::startup_file,
             launch::startup_files,
             launch::take_forwarded_paths,
@@ -168,6 +169,8 @@ pub fn run() {
             images::download_image,
             export::pandoc_status,
             export::run_export,
+            export::pandoc_list_writers,
+            export::run_pandoc_writer,
             export::run_after_export,
             export::install_pandoc,
             export::print_document,

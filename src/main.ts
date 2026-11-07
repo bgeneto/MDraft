@@ -31,6 +31,7 @@ import { createDocumentLifecycle } from "./document-lifecycle";
 import { showDocumentStatistics, type DocumentStatistics } from "./statistics-dialog";
 import { askUnsaved } from "./unsaved-dialog";
 import { rewriteExportReferences } from "./export-article";
+import { showWriterChooser } from "./export-chooser";
 import { createEditor, type EditorHandle } from "./editor";
 import {
   formatDocument,
@@ -147,12 +148,18 @@ import {
 import { annotateTypstLines } from "./typst-map";
 import { paragraphRangeAt } from "./typst-page-map";
 import { TypstPdfPreview, type TypstPageContext } from "./typst-pdf";
-import { cancelLatex, compileLatex, latexSourceAt, type LatexResult } from "./latex";
-import { previewTargetForLine, regionsForLine, sourceTargetForPoint } from "./latex-correspondence";
+import {
+  cancelLatex,
+  compileLatex,
+  LatexBuildError,
+  type LatexDiagnostic,
+  type LatexResult,
+} from "./latex";
+import { diagnosticPlace, diagnosticRange, diagnosticSignature } from "./latex-diagnostics";
 import {
   clampScroll,
-  interpolate,
   mapScrollOffset,
+  interpolate,
   scrollCorrection,
   ScrollIndex,
   ScrollOwnership,
@@ -781,9 +788,7 @@ function menuStateSnapshot(): api.MenuState {
     doc?.language === "latex"
       ? latexCurrent(latexPreview) && latexPreview.token === renderToken
       : doc?.language === "typst"
-        ? settings.typstView === "pages" &&
-          Boolean(typstPdfBase64) &&
-          typstPdfToken === renderToken
+        ? settings.typstView === "pages" && Boolean(typstPdfBase64) && typstPdfToken === renderToken
         : false;
   const syntaxTheme =
     settings.syntaxTheme === "github-light" ? "catppuccin-latte" : settings.syntaxTheme;
@@ -1389,6 +1394,117 @@ function disposeTypstPdf(): void {
   typstPdfBase64 = null;
 }
 
+let stagedPdf: { view: TypstPdfPreview; host: HTMLElement } | null = null;
+let pendingPdfBookmark: {
+  view: TypstPdfPreview;
+  from: number;
+  screenY: number;
+  top: number;
+  epoch: number;
+} | null = null;
+function discardStagedPdf(): void {
+  stagedPdf?.view.dispose();
+  stagedPdf?.host.remove();
+  stagedPdf = null;
+  pendingPdfBookmark = null;
+}
+function pdfMapReady(view: TypstPdfPreview, token: number): void {
+  if (typstPdf !== view || typstPdfToken !== token || renderToken !== token) return;
+  const bookmark = pendingPdfBookmark;
+  if (bookmark?.view === view) {
+    pendingPdfBookmark = null;
+    if (
+      bookmark.epoch === scrollOwnership.epoch &&
+      Math.abs(previewPane.scrollTop - bookmark.top) < 1
+    ) {
+      suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+      view.restoreScroll({ from: bookmark.from, screenY: bookmark.screenY });
+    }
+  }
+  syncPreviewFromSource();
+}
+
+/** Build a replacement without removing the PDF the reader is using. */
+function stagedPdfHost(): HTMLDivElement {
+  discardStagedPdf();
+  const host = document.createElement("div");
+  host.className = "typst-preview";
+  // A fixed, hidden host has layout for PDF.js but cannot extend the pane's
+  // scrollable overflow while the reader is still viewing the previous PDF.
+  host.style.position = "fixed";
+  host.style.visibility = "hidden";
+  host.style.top = "0";
+  host.style.left = "0";
+  host.style.width = `${preview.clientWidth}px`;
+  preview.style.position = "relative";
+  preview.appendChild(host);
+  return host;
+}
+
+/** Commit without allowing an empty host to clamp the pane to the first page. */
+function commitPdfHost(host: HTMLElement, view: TypstPdfPreview, token: number): void {
+  const old = typstPdf;
+  const position = old?.topPosition() ?? null;
+  const bookmark = old?.scrollBookmark() ?? null;
+  const mapped = bookmark && old ? mapScrollOffset(old.source, view.source, bookmark.from) : null;
+  const top = previewPane.scrollTop;
+  const left = previewPane.scrollLeft;
+  const atEnd = old?.atEnd() ?? false;
+  const cursor = editor.cursorInfo();
+  const nearSourceEnd = cursor.line >= editor.view.state.doc.lines - 12;
+  const followTail = Boolean(
+    old && atEnd && settings.syncScroll && settings.viewMode === "split" && nearSourceEnd,
+  );
+  const hadPendingScroll = pendingPreviewScroll !== null;
+  // The decision is recorded rather than only applied: a viewport that does not
+  // survive a rebuild is otherwise indistinguishable from one that was never
+  // asked to, and the four inputs are cheap to keep.
+  preview.dataset.pdfCommit = JSON.stringify({
+    atEnd,
+    syncScroll: settings.syncScroll,
+    split: settings.viewMode === "split",
+    nearSourceEnd,
+    followTail,
+    hadPendingScroll,
+    hadPosition: position !== null,
+    hadBookmark: bookmark !== null,
+    mapped: mapped !== null,
+    top,
+    scrollHeight: previewPane.scrollHeight,
+  });
+  preview.style.minHeight = `${preview.getBoundingClientRect().height}px`;
+  old?.dispose();
+  preview.replaceChildren(host);
+  host.style.position = "";
+  host.style.visibility = "";
+  host.style.top = "";
+  host.style.left = "";
+  host.style.width = "";
+  stagedPdf = null;
+  typstPdf = view;
+  latexLastSourceScroll = null;
+  typstPdfToken = token;
+  view.activate();
+  suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+  if (pendingPreviewScroll !== null) applyPendingPreviewScroll();
+  else if (followTail) previewPane.scrollTop = previewPane.scrollHeight;
+  else if (position)
+    view.scrollToPagePosition(Math.min(position.page, view.pageCount()), position.y);
+  else previewPane.scrollTop = top;
+  preview.style.minHeight = "";
+  previewPane.scrollLeft = left;
+  if (!hadPendingScroll && !followTail && bookmark && mapped !== null) {
+    pendingPdfBookmark = {
+      view,
+      from: mapped,
+      screenY: bookmark.screenY,
+      top: previewPane.scrollTop,
+      epoch: scrollOwnership.epoch,
+    };
+    if (view.mapReady()) pdfMapReady(view, token);
+  }
+}
+
 interface LatexPreview {
   result: LatexResult;
   rootId: string;
@@ -1401,6 +1517,19 @@ let latexPreview: LatexPreview | null = null;
 /** The last measured LaTeX package cache, or null before the first read. */
 let latexCacheInfo: api.LatexCacheInfo | null = null;
 let latexNavigationRoot: string | null = null;
+/**
+ * The main file of the last failed render.
+ *
+ * A failed compile leaves `latexPreview` null, and the old root rule then
+ * treated the active tab as the project root. Clicking a problem in an included
+ * chapter silently retargeted the project at that chapter; this keeps the main
+ * file until a render succeeds or the reader opens another project.
+ */
+let latexProblemRoot: { path: string; directory: string } | null = null;
+/** The problems of the last failed compile, for the marks and the list. */
+let latexProblems: readonly LatexDiagnostic[] = [];
+/** The signature of the last auto-jumped list, so a re-render does not jump. */
+let latexProblemSignature = "";
 
 function latexCurrent(value: LatexPreview | null): value is LatexPreview {
   return Boolean(
@@ -1422,16 +1551,221 @@ function latexRelative(value: LatexPreview, path: string | null): string | null 
   return null;
 }
 
-function latexFailure(error: unknown): void {
-  previewPane.querySelector(":scope > .typst-viewbar")?.remove();
-  disposeTypstPdf();
-  preview.replaceChildren();
+/** Show a failed rebuild without removing the last readable PDF or its scroll range. */
+function showPdfRebuildError(error: unknown): void {
+  preview.querySelector(":scope > .pdf-rebuild-error")?.remove();
+  const layer = document.createElement("div");
+  layer.className = "pdf-rebuild-error";
   const box = document.createElement("pre");
   box.className = "typst-error";
   box.textContent = String(error);
-  preview.appendChild(box);
+  layer.appendChild(box);
+  preview.prepend(layer);
+}
+
+/**
+ * The problem list a failed LaTeX build shows in the pane.
+ *
+ * Each row is a button: the place, the message, and the **line the compiler
+ * read**. The last part is what ends the "I commented it and the error stays"
+ * loop — if the row still contains the command, the compile used different
+ * text, and the reader can see which file and line it did use.
+ */
+function latexProblemPanel(
+  error: unknown,
+  root: { path: string; directory: string } | null,
+): HTMLElement {
+  const problems = error instanceof LatexBuildError ? error.diagnostics : [];
+  const wrap = document.createElement("div");
+  wrap.className = "latex-problems";
+  if (problems.length) {
+    const head = document.createElement("div");
+    head.className = "latex-problems-head";
+    head.textContent =
+      problems.length === 1 ? "1 LaTeX problem" : `${problems.length} LaTeX problems`;
+    wrap.append(head);
+
+    const list = document.createElement("ol");
+    list.className = "latex-problems-list";
+    for (const problem of problems) {
+      const item = document.createElement("li");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "latex-problem";
+      const place = document.createElement("span");
+      place.className = "latex-problem-place";
+      place.textContent = diagnosticPlace(problem);
+      const message = document.createElement("span");
+      message.className = "latex-problem-message";
+      message.textContent = problem.message;
+      button.append(place, message);
+      if (problem.lineText) {
+        const source = document.createElement("code");
+        source.className = "latex-problem-source";
+        source.textContent = problem.lineText;
+        source.title = "The line the compiler read";
+        button.append(source);
+      }
+      if (problem.searched.length > 1) {
+        button.title = `Looked for: ${problem.searched.join(", ")}`;
+      }
+      button.addEventListener("click", () => void revealLatexProblem(problem, root, true));
+      item.append(button);
+      list.append(item);
+    }
+    wrap.append(list);
+
+    if (error instanceof LatexBuildError && error.truncated) {
+      const more = document.createElement("p");
+      more.className = "latex-problems-more";
+      more.textContent = "More problems were omitted; see the compiler output.";
+      wrap.append(more);
+    }
+  }
+
+  // The raw log stays one click away, and `.typst-error` stays the element the
+  // existing preview suites read, so a failed chip or compile is still visible
+  // to them.
+  const details = document.createElement("details");
+  details.className = "latex-log";
+  if (!problems.length) details.open = true;
+  const summary = document.createElement("summary");
+  summary.textContent = problems.length ? "Compiler output" : "Details";
+  const box = document.createElement("pre");
+  box.className = "typst-error";
+  const log = error instanceof LatexBuildError ? error.log : "";
+  box.textContent = log ? `${String(error)}\n\n${log}` : String(error);
+  details.append(summary, box);
+  wrap.append(details);
+  return wrap;
+}
+
+/**
+ * Whether a diagnostic names a file inside the project.
+ *
+ * The compiler occasionally reports an absolute path or a temporary file. Those
+ * are still shown, but they must not be joined to the project root and opened.
+ */
+function projectRelative(file: string): boolean {
+  return (
+    Boolean(file) &&
+    !/^[A-Za-z]:/.test(file) &&
+    !file.startsWith("/") &&
+    !file.startsWith("\\") &&
+    !file.split("/").includes("..")
+  );
+}
+
+/** The problems this project file owns, keyed by absolute path. */
+function latexProblemsForPath(
+  problems: readonly LatexDiagnostic[],
+  root: { path: string; directory: string } | null,
+  path: string | null,
+): LatexDiagnostic[] {
+  if (!path || !root) return [];
+  const key = pathKey(path);
+  return problems.filter((problem) => {
+    if (!problem.file || problem.line < 1 || !projectRelative(problem.file)) return false;
+    return pathKey(joinDir(root.directory, problem.file)) === key;
+  });
+}
+
+/** Paint the marks for one document, from the last compile's problem list. */
+function applyLatexMarks(
+  problems: readonly LatexDiagnostic[],
+  root: { path: string; directory: string } | null,
+  path: string | null,
+  pulse: boolean,
+): void {
+  if (!path || !root) {
+    editor.clearDiagnostics();
+    return;
+  }
+  const text = editor.getDoc();
+  const ranges = latexProblemsForPath(problems, root, path)
+    .map((problem) => {
+      const mapped = diagnosticRange(text, problem);
+      return mapped ? { from: mapped.from, to: mapped.to, lineFrom: mapped.lineFrom } : null;
+    })
+    .filter((range): range is { from: number; to: number; lineFrom: number } => range !== null);
+  editor.setDiagnostics(ranges, pulse);
+}
+
+/**
+ * Activate a problem's file and reveal its line.
+ *
+ * `focus` is true only for a click: an automatic jump after a failed compile
+ * must not move the caret while the reader is still working.
+ */
+async function revealLatexProblem(
+  problem: LatexDiagnostic,
+  root: { path: string; directory: string } | null,
+  focus: boolean,
+): Promise<void> {
+  if (!root || !problem.file || !projectRelative(problem.file)) return;
+  const path = joinDir(root.directory, problem.file);
+  const existing = sessions.findByPath(path);
+  if (existing) {
+    if (existing.id !== doc.id) await activateSession(existing.id);
+  } else {
+    await openPath(path, { silent: true, rememberRecent: false });
+  }
+  if (!doc.path || pathKey(doc.path) !== pathKey(path)) return;
+  applyLatexMarks(latexProblems, root, doc.path, true);
+  const mapped = diagnosticRange(editor.getDoc(), problem);
+  if (!mapped) return;
+  editor.revealOffset(mapped.from);
+  if (focus) {
+    editor.view.dispatch({ selection: { anchor: mapped.from } });
+    editor.focus();
+  }
+}
+
+/** Jump only when the problem list is new, not on every re-render of it. */
+function maybeJumpToLatexProblem(
+  problems: readonly LatexDiagnostic[],
+  root: { path: string; directory: string } | null,
+): void {
+  const signature = problems.map(diagnosticSignature).join("\n");
+  if (signature === latexProblemSignature) return;
+  latexProblemSignature = signature;
+  if (!root) return;
+  const first = problems.find((problem) => problem.file && problem.line > 0) ?? problems[0];
+  if (!first) return;
+  // Let the failure paint before the tab switch starts its own render.
+  window.setTimeout(() => void revealLatexProblem(first, root, false), 0);
+}
+
+function latexFailure(
+  error: unknown,
+  root: { path: string; directory: string } | null = null,
+): void {
+  const panel = latexProblemPanel(error, root);
+  if (typstPdf && latexPreview?.activeId === doc.id) {
+    preview.querySelector(":scope > .pdf-rebuild-error")?.remove();
+    const layer = document.createElement("div");
+    layer.className = "pdf-rebuild-error";
+    layer.append(panel);
+    preview.prepend(layer);
+  } else {
+    previewPane.querySelector(":scope > .typst-viewbar")?.remove();
+    disposeTypstPdf();
+    preview.replaceChildren(panel);
+  }
   previewStale = false;
   previewSyncReady = false;
+
+  const problems = error instanceof LatexBuildError ? error.diagnostics : [];
+  latexProblems = problems;
+  latexProblemRoot = root ? { ...root } : null;
+  if (root) {
+    applyLatexMarks(problems, root, doc.path, true);
+    maybeJumpToLatexProblem(problems, root);
+  } else {
+    latexProblemRoot = null;
+    latexProblemSignature = "";
+    editor.clearDiagnostics();
+  }
 }
 
 function showLatexLicenses(): void {
@@ -1477,148 +1811,6 @@ function latexEnableNote(): void {
   preview.appendChild(note);
 }
 
-/**
- * Scroll the preview to follow the editor's top visible line.
- *
- * The editor→preview half of step 10. It reuses the same fail-closed rule the
- * click path uses, so a line with no exact SyncTeX match simply does not move the
- * preview — a wrong jump is worse than none, because it takes the reader away
- * from what they were reading.
- *
- * The current preview position is passed as a hint so that a source line owning
- * several typeset regions (a paragraph of prose is one `\par` spanning many
- * lines) continues in the direction the reader is scrolling instead of snapping
- * back to the paragraph's first line on every event.
- */
-function syncLatexToPreview(): void {
-  if (!settings.syncScroll || settings.viewMode !== "split") return;
-  const value = latexPreview;
-  if (!latexCurrent(value) || !typstPdf) return;
-  const path = latexRelative(value, doc.path);
-  if (!path) return;
-  const hint = typstPdf.topPosition() ?? undefined;
-  const line = editor.topVisibleLine();
-  const target = previewTargetForLine(value.result, path, line, hint);
-  // Log the hint on **both** sides of a scroll, not only when a target is missing.
-  // The two-column oscillation could not be explained without knowing what the hint
-  // read after the previous scroll: if it stays at 0 the rule has no idea where the
-  // reader is, and if it tracks the scroll then the region choice is at fault.
-  console.info(
-    `[latex-scroll] ${path}:${line} hint=${hint ? `${hint.page}@${Math.round(hint.y)}/${Math.round(hint.x ?? 0)}` : "none"}` +
-      ` target=${target ? `${target.page}@${Math.round(target.y)}` : "none"}` +
-      ` pane=${Math.round(typstPdf.scrollOffset())}` +
-      ` regions=${target ? target.regions.map((r) => `${Math.round(r.x)}+${Math.round(r.width)}@${Math.round(r.y)}`).join(",") : "none"}`,
-  );
-  if (!target) return;
-  suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
-  typstPdf.scrollToPagePosition(target.page, target.y);
-}
-
-/**
- * Scroll the editor to follow the preview's top position.
- *
- * The preview→editor half. `sourceTargetForPoint` fails closed on ambiguity, so a
- * page region that two source lines share does not move the editor at all.
- */
-function syncLatexToEditor(): void {
-  if (!settings.syncScroll || settings.viewMode !== "split") return;
-  if (performance.now() < suppressPreviewScrollUntil) return;
-  const value = latexPreview;
-  if (!latexCurrent(value) || !typstPdf) return;
-  const top = typstPdf.topPosition();
-  if (!top) return;
-  const target = sourceTargetForPoint(value.result, top.page, top.x, top.y);
-  if (!target) return;
-  const path = joinDir(value.rootDirectory, target.file);
-  if (!doc.path || pathKey(doc.path) !== pathKey(path)) return;
-  if (target.line < 1 || target.line > editor.view.state.doc.lines) return;
-  editor.revealLine(target.line, false, false);
-}
-
-function latexSyncCursor(silent = false, blink = false): void {
-  const value = latexPreview;
-  if (!latexCurrent(value) || !typstPdf) return;
-  const path = latexRelative(value, doc.path);
-  if (!path) return;
-  const line = editor.cursorInfo().line;
-  const match = value.result.parser.forwardLookupDetailed(value.result.mapping, path, line);
-  if (!match || match.match !== "exact") {
-    if (!silent) toast("No exact SyncTeX region for this source line.");
-    return;
-  }
-  const regions = match.regions.filter((region) => {
-    const source = latexSourceAt(
-      value.result,
-      region.page,
-      region.x + region.width / 2,
-      region.y + region.height / 2,
-    );
-    return source?.file === path && source.line === line;
-  });
-  if (!regions.length) {
-    if (!silent) toast("This SyncTeX region is ambiguous.");
-    return;
-  }
-  typstPdf.showRegions(regions, blink);
-}
-
-async function latexSyncSource(page: number, x: number, y: number): Promise<void> {
-  const value = latexPreview;
-  // A click that does nothing is the hardest kind of bug to report, because the
-  // reader sees only "nothing happened". Each early return below says why, so the
-  // console answers the question the UI cannot.
-  if (!latexCurrent(value)) {
-    console.info("[latex-sync] click ignored: the preview is stale for this document");
-    return;
-  }
-  const match = latexSourceAt(value.result, page, x, y);
-  if (!match) {
-    // Name the two things that decide it: how many pages the mapping covers, and
-    // which files the snapshot claims. A click that resolves to nothing is almost
-    // always one of those being empty or mismatched, and neither is visible from
-    // the UI.
-    console.info(
-      `[latex-sync] no source for page ${page} at ${Math.round(x)},${Math.round(y)}` +
-        ` (mapping pages: ${value.result.mapping.pages.size}` +
-        `, files: ${[...value.result.files].slice(0, 6).join(",")}` +
-        `, inputs: ${[...value.result.mapping.inputs.values()].slice(0, 6).join(",")})`,
-    );
-    return;
-  }
-  const path = joinDir(value.rootDirectory, match.file);
-  latexNavigationRoot = value.rootId;
-  const sameFile = doc.path !== null && pathKey(doc.path) === pathKey(path);
-  if (!sameFile) await openPath(path, { silent: true });
-  if (!doc.path || pathKey(doc.path) !== pathKey(path)) {
-    console.info(`[latex-sync] resolved ${match.file}:${match.line} but that tab is not active`);
-    return;
-  }
-  const number = match.line;
-  if (number < 1 || number > editor.view.state.doc.lines) return;
-  const document = editor.view.state.doc;
-  const isProse = (text: string) => !!text.trim() && !/^\s*\\/.test(text);
-  let first = number;
-  let last = number;
-  if (isProse(document.line(number).text)) {
-    while (first > 1 && isProse(document.line(first - 1).text)) first -= 1;
-    while (last < document.lines && isProse(document.line(last + 1).text)) last += 1;
-  }
-  const range = { from: document.line(first).from, to: document.line(last).to };
-  if (!sameFile) editor.revealLine(number, false, false);
-  syncedSource = range;
-  editor.setSyncRange(range.from, range.to);
-
-  // Paint the region the click resolved, the way the Typst Pages view does. The
-  // editor-side highlight says *which source lines*; this says *where on the page*
-  // they came from, and without it a click moves the caret in the other pane and
-  // leaves the reader looking at an unchanged page.
-  //
-  // `regionsForLine` is the same fail-closed lookup the editor→preview direction
-  // uses, so an ambiguous line paints nothing rather than the wrong rectangle.
-  const regions = regionsForLine(value.result, match.file, number);
-  if (regions && regions.length > 0) typstPdf?.showRegions(regions, true);
-}
-
 async function latexSavePdf(): Promise<void> {
   const value = latexPreview;
   if (!latexCurrent(value)) {
@@ -1662,13 +1854,26 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
     disposeTypstPdf();
     latexEnableNote();
     previewStale = false;
+    latexProblems = [];
+    latexProblemRoot = null;
+    latexProblemSignature = "";
+    editor.clearDiagnostics();
     return;
   }
 
   let root = latexNavigationRoot ? sessions.byId(latexNavigationRoot) : undefined;
   if (!root?.path || !root.directory || !latexPreview || !latexRelative(latexPreview, doc.path)) {
-    root = doc;
-    latexNavigationRoot = doc.id;
+    // A failed compile has no preview to ask, so the previous root is kept while
+    // the reader is looking at a file inside it. Without this, opening a problem
+    // in an included chapter silently compiled that chapter as the main file.
+    const pinned =
+      latexProblemRoot &&
+      doc.path &&
+      pathKey(doc.path).startsWith(pathKey(latexProblemRoot.directory) + "/")
+        ? sessions.findByPath(latexProblemRoot.path)
+        : undefined;
+    root = pinned?.path ? pinned : doc;
+    latexNavigationRoot = root.id;
   }
   if (!root.path || !root.directory) {
     latexFailure("Save the main .tex file first.");
@@ -1704,34 +1909,41 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
     latexPreview = value;
     wordMap = null;
     clearPreviewWords();
-    disposeTypstPdf();
-    preview.replaceChildren();
     preview.before(latexBar());
-    const host = document.createElement("div");
-    host.className = "typst-preview";
-    preview.appendChild(host);
-    const view = new TypstPdfPreview(
-      host,
-      previewPane,
-      () => {},
-      source,
-      (page, x, y) => void latexSyncSource(page, x, y),
-    );
-    typstPdf = view;
-    typstPdfToken = token;
+    const host = stagedPdfHost();
+    const view = new TypstPdfPreview(host, previewPane, syncSourceFromPageSelection, source, {
+      language: "latex",
+      files: result.sources,
+      activeFile: latexRelative(value, doc.path) ?? "",
+      enabled: settings.viewMode === "split",
+      detached: true,
+      onReady: () => pdfMapReady(view, token),
+    });
+    stagedPdf = { view, host };
     view.setZoom(zoomFactor());
     await view.render(result.pdf.slice());
     if (!latexCurrent(value)) {
       view.dispose();
+      host.remove();
       return;
     }
+    commitPdfHost(host, view, token);
+    syncPreviewFromSource();
     preview.dataset.latexCurrent = String(token);
     preview.dataset.latexMs = String(Math.round(performance.now() - started));
     previewLinesMapped = false;
     previewStale = false;
     previewSyncReady = true;
+    // A successful compile is the only authority that clears a problem list.
+    latexProblems = [];
+    latexProblemSignature = "";
+    latexProblemRoot = null;
+    editor.clearDiagnostics();
   } catch (error) {
-    if (token === renderToken && doc.id === activeId) latexFailure(error);
+    if (token === renderToken && doc.id === activeId) {
+      discardStagedPdf();
+      latexFailure(error, { path: root.path, directory: root.directory });
+    }
   }
 }
 
@@ -1776,6 +1988,16 @@ function showTypstFailure(error: unknown, wanted: string): void {
   // retry a compile that just failed.
   previewStale = false;
   previewSyncReady = true;
+  if (
+    wanted === "pages" &&
+    typstPdf &&
+    lastTypstRender?.docId === doc.id &&
+    lastTypstRender.mode === "pages"
+  ) {
+    showPdfRebuildError(error);
+    previewSyncReady = false;
+    return;
+  }
   previewPane.querySelector(":scope > .typst-viewbar")?.remove();
   wordMap = null;
   clearPreviewWords();
@@ -1819,13 +2041,6 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
   // The compile is awaited; a mode switch during it must not make this render
   // claim a word map it never built.
   const wantsMap = settings.viewMode === "split";
-  const oldBookmark = wanted === "pages" ? typstPdf?.scrollBookmark() : null;
-  const oldSource = typstPdf?.source;
-  const bookmarkFrom =
-    oldBookmark && oldSource !== undefined
-      ? mapScrollOffset(oldSource, source, oldBookmark.from)
-      : null;
-  const bookmarkEpoch = scrollOwnership.epoch;
   const imageRoot = customImageFolder();
 
   // A Typst compile is a whole process. A theme change, a view switch or a
@@ -1849,7 +2064,10 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
     previewSyncReady = lastTypstRender.syncReady;
     // The existing PDF still belongs to this document, but doRender assigned a
     // new generation to the cache hit. Keep Pages sync owned by that generation.
-    if (wanted === "pages" && typstPdf) typstPdfToken = token;
+    if (wanted === "pages" && typstPdf) {
+      typstPdfToken = token;
+      if (wantsMap) typstPdf.ensureMap();
+    }
     return;
   }
 
@@ -1873,12 +2091,14 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
   previewPane.querySelector(":scope > .typst-viewbar")?.remove();
   wordMap = null;
   clearPreviewWords();
-  disposeTypstPdf();
+  if (rendered.kind === "document") {
+    disposeTypstPdf();
+    preview.innerHTML = "";
+  }
   // A word decoration belongs to the view that produced it. Switching to Pages,
   // or re-rendering the document, must not leave a mark that cannot be cleared.
   syncedSource = null;
   editor.clearSyncRange();
-  preview.innerHTML = "";
   preview.before(typstViewBar(rendered.kind));
 
   if (rendered.kind === "document") {
@@ -1934,38 +2154,34 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
     return;
   }
 
-  const host = document.createElement("div");
-  host.className = "typst-preview";
-  preview.appendChild(host);
-  const view = new TypstPdfPreview(host, previewPane, syncSourceFromPageSelection, source);
-  typstPdf = view;
-  typstPdfToken = token;
-  typstPdfBase64 = rendered.pdf;
+  const host = stagedPdfHost();
+  const view = new TypstPdfPreview(host, previewPane, syncSourceFromPageSelection, source, {
+    language: "typst",
+    files: [{ path: "", source }],
+    activeFile: "",
+    enabled: wantsMap,
+    detached: true,
+    onReady: () => pdfMapReady(view, token),
+  });
+  stagedPdf = { view, host };
   view.setZoom(zoomFactor());
   try {
     await view.render(decodePdf(rendered.pdf));
   } catch (error) {
     if (token !== renderToken) return;
+    discardStagedPdf();
     showTypstFailure(error, rendered.kind);
     return;
   }
   if (token !== renderToken) {
     view.dispose();
-    if (typstPdf === view) typstPdf = null;
+    host.remove();
     return;
   }
+  commitPdfHost(host, view, token);
+  typstPdfBase64 = rendered.pdf;
   // PDF correspondence has its own region adapter, not DOM block anchors.
   previewLinesMapped = false;
-  if (pendingPreviewScroll !== null) {
-    // A fit-to-width animation frame can still hold the old zero scroll. The
-    // tab's saved position owns this restoration, so invalidate that callback's
-    // scroll adjustment while letting it finish measuring page geometry.
-    view.cancelScrollRestore();
-    applyPendingPreviewScroll();
-  } else if (oldBookmark && bookmarkFrom !== null && bookmarkEpoch === scrollOwnership.epoch) {
-    suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
-    view.restoreScroll({ from: bookmarkFrom, screenY: oldBookmark.screenY });
-  }
   syncPreviewFromSource();
   previewStale = false;
   // The page view's own map is ready; switching to Split must not reload it.
@@ -2575,7 +2791,9 @@ function invalidatePreview(): void {
   delete preview.dataset.latexCurrent;
   renderToken += 1;
   wordMapGeneration += 1;
+  discardStagedPdf();
   cancelPreviewWorkers();
+  typstPdf?.cancelMap();
   cancelTypstRender();
   cancelLatex();
   window.clearTimeout(renderTimer);
@@ -2632,7 +2850,8 @@ async function showInEditor(resetHistory: boolean, tokens: number | null = null)
  * hidden. Global chrome is reapplied afterwards: a restored EditorState still
  * carries the font size and palette from the moment it was snapshotted.
  */
-async function displayDoc(): Promise<void> {
+let preservingLatexHandoff = false;
+async function displayDoc(preservePdf = false): Promise<void> {
   // A different document means the answer no longer belongs to the range it
   // was requested for. Closing here covers tab switches, new documents and
   // closing the active tab, not only `activateSession`.
@@ -2640,8 +2859,8 @@ async function displayDoc(): Promise<void> {
   // The reading belongs to the document that was on screen; a tab switch, a
   // reload or a closed tab must not leave a voice talking about another file.
   stopReadAloud();
-  invalidatePreview();
-  pendingPreviewScroll = doc.previewScroll;
+  if (!preservePdf) invalidatePreview();
+  pendingPreviewScroll = preservePdf ? null : doc.previewScroll;
   suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
   suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
   if (doc.editorState) {
@@ -2655,6 +2874,10 @@ async function displayDoc(): Promise<void> {
   // the session's language again is a no-op once that grammar is already in the
   // state, and it repairs the case where it is not.
   editor.setLanguage(doc.language);
+  // A captured EditorState keeps the marks it had; a tab that was hidden before
+  // the failure has none, so paint the last compile's list for it. No pulse: the
+  // beat belongs to the failure, not to every tab switch.
+  applyLatexMarks(latexProblems, latexProblemRoot, doc.path, false);
   syncGuest(doc.language);
   resetOutline();
   applyLayout();
@@ -2675,8 +2898,10 @@ async function displayDoc(): Promise<void> {
   renderSidebar();
   renderNotice();
   scheduleOutlineRefresh(editor.getDoc());
-  scheduleRender(true);
-  editor.focus();
+  if (!preservePdf) {
+    scheduleRender(true);
+    editor.focus();
+  }
 }
 
 async function activateSession(id: string): Promise<void> {
@@ -3098,6 +3323,83 @@ function exportSource() {
 }
 
 /**
+ * The LaTeX project a conversion reads, or a reason it cannot be read.
+ *
+ * Captured **before** any dialog opens, for the same reason `exportSource` is:
+ * the reader can switch tabs or edit while the save dialog is up, and a
+ * conversion must export the project it was started for. The snapshot is the
+ * same bounded, project-confined one the compiler receives, so an unsaved
+ * `\input` chapter reaches the export and a file outside the root is refused
+ * rather than silently read.
+ *
+ * A conversion needs no compile — pandoc reads the sources — so this asks only
+ * for a saved root. The compiled-PDF route is the one that requires a current
+ * compile, and it checks that separately.
+ */
+async function latexExportSnapshot(): Promise<
+  { snapshot: api.ExportSnapshot; root: Session } | { error: string }
+> {
+  // The preview's root wins when it is for this document, because that is the
+  // project the reader is looking at; otherwise the active tab is the root.
+  const preview = latexPreview;
+  const root =
+    (preview && preview.activeId === doc.id ? sessions.byId(preview.rootId) : undefined) ?? doc;
+  if (doc.language !== "latex") {
+    return { error: "This document is not LaTeX." };
+  }
+  if (!root.path || !root.directory) {
+    return { error: "Save the main .tex file before exporting." };
+  }
+  const rootPrefix = pathKey(root.directory) + "/";
+  const overlays = sessions
+    .list()
+    .filter(
+      (session): session is Session & { path: string } =>
+        session.path !== null &&
+        pathKey(session.path).startsWith(rootPrefix) &&
+        /\.(?:tex|bib|sty|cls|bst)$/i.test(session.path),
+    )
+    .map((session) => ({ path: session.path, text: textOf(session) }));
+  try {
+    const captured = await api.latexProjectSnapshot(root.path, overlays);
+    return {
+      snapshot: {
+        root: root.directory,
+        mainFile: captured.mainFile,
+        files: captured.files,
+      },
+      root,
+    };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+/**
+ * The request a LaTeX conversion sends, or `null` after explaining why not.
+ *
+ * Every non-PDF route shares it so the reader cannot get a conversion of a
+ * different project than the one the preview is showing.
+ */
+function latexExportRequest(
+  snapshot: api.ExportSnapshot,
+  source: ReturnType<typeof exportSource>,
+  formatId: string,
+  outputPath: string,
+  inputPath: string | null,
+): api.ExportRequest {
+  return {
+    formatId,
+    markdown: source.text,
+    outputPath,
+    inputPath,
+    language: "latex",
+    imageRoot: source.imageRoot,
+    snapshot,
+  };
+}
+
+/**
  * The article the exports write, and the stylesheet it depends on.
  *
  * Each markup uses its preview pipeline: Markdown through the preview renderer,
@@ -3230,6 +3532,13 @@ function documentStem(name: string): string {
 
 async function exportHtml(): Promise<void> {
   const source = exportSource();
+  // A `.tex` document is HTML only through pandoc's LaTeX reader: the Markdown
+  // preview renderer would treat `\section` as literal text. The snapshot is
+  // captured before the dialog, so an unsaved chapter reaches the export.
+  if (source.language === "latex") {
+    await exportLatexWithWriter("html", "HTML", "html", source);
+    return;
+  }
   const base = documentStem(source.name);
   const suggested = settings.lastDirectory
     ? joinDir(settings.lastDirectory, `${base}.html`)
@@ -3378,6 +3687,23 @@ async function saveCompiledPdf(options: {
   revision: number;
   engine: string;
   defaultPath: string;
+  /**
+   * Every project file the compile read, for a multi-file document.
+   *
+   * A LaTeX project's PDF becomes stale when any chapter changes, not only the
+   * file the tab happened to be showing, so the check after the dialog compares
+   * the whole set. Absent for a single-document engine, where `revision` is the
+   * whole story.
+   */
+  revisions?: Array<{ id: string; revision: number; path: string | null }>;
+  /**
+   * Run the global after-export options on success.
+   *
+   * Set by File › Export › PDF, which is an export; the preview's own Save PDF
+   * button is a save, and running a configured "open the file" action there
+   * would be a surprise.
+   */
+  afterExport?: boolean;
 }): Promise<boolean> {
   const chosen = await saveDialog({
     title: `Save PDF compiled by ${options.engine}`,
@@ -3386,10 +3712,16 @@ async function saveCompiledPdf(options: {
   });
   if (!chosen) return false;
   const session = sessions.byId(options.sessionId);
+  const projectChanged =
+    options.revisions?.some((item) => {
+      const current = sessions.byId(item.id);
+      return current?.revision !== item.revision || current.path !== item.path;
+    }) ?? false;
   if (
     options.token !== renderToken ||
     !session ||
-    session.revision !== options.revision
+    session.revision !== options.revision ||
+    projectChanged
   ) {
     toast("The document changed; compile again before saving.", 5200);
     return false;
@@ -3397,11 +3729,52 @@ async function saveCompiledPdf(options: {
   try {
     await api.saveCompiledPdf(chosen, options.data);
     toast(`Saved ${basename(chosen)}`);
+    // File › Export › PDF runs the global after-export actions on success only;
+    // the preview button is a save, not an export, and stays silent.
+    if (options.afterExport) {
+      const after = await api.runAfterExport(chosen);
+      if (after.afterErrors.length > 0) {
+        await message(after.afterErrors.join("\n\n"), {
+          title: "Saved, with a problem",
+          kind: "warning",
+        });
+      }
+    }
     return true;
   } catch (error) {
     await message(String(error), { title: "Could not save PDF", kind: "error" });
     return false;
   }
+}
+
+/**
+ * Save the LaTeX preview's compiled PDF, from File › Export › PDF.
+ *
+ * The same bytes, root and freshness rule as the preview's own Save PDF button:
+ * the file is named after the project root even when a chapter is the active
+ * tab, and the whole compile snapshot is checked again after the dialog closes,
+ * because a compile can finish or a tab can switch while the reader is choosing
+ * a path. It never starts a compile.
+ */
+async function exportCompiledLatexPdf(): Promise<void> {
+  const value = latexPreview;
+  if (!latexCurrent(value) || value.token !== renderToken) {
+    toast("Wait for the current LaTeX compilation before exporting the PDF.");
+    return;
+  }
+  const root = sessions.byId(value.rootId);
+  await saveCompiledPdf({
+    data: bytesToBase64(value.result.pdf),
+    token: value.token,
+    sessionId: doc.id,
+    revision: doc.revision,
+    engine: "LuaLaTeX",
+    defaultPath: (root?.path ?? "document.tex").replace(/\.tex$/i, ".pdf"),
+    // The full snapshot, not just the active tab: a chapter edit invalidates the
+    // PDF even though the root file's own revision did not move.
+    revisions: value.revisions,
+    afterExport: true,
+  });
 }
 
 /**
@@ -3417,19 +3790,7 @@ async function saveCompiledPdf(options: {
 async function exportPdf(): Promise<void> {
   const source = exportSource();
   if (source.language === "latex") {
-    const value = latexPreview;
-    if (!latexCurrent(value) || value.token !== renderToken) {
-      toast("Wait for the current LaTeX compilation before exporting the PDF.");
-      return;
-    }
-    await saveCompiledPdf({
-      data: bytesToBase64(value.result.pdf),
-      token: value.token,
-      sessionId: doc.id,
-      revision: doc.revision,
-      engine: "LuaLaTeX",
-      defaultPath: (doc.path ?? doc.name).replace(/\.tex$/i, ".pdf"),
-    });
+    await exportCompiledLatexPdf();
     return;
   }
   if (source.language === "typst") {
@@ -3716,6 +4077,13 @@ async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
     await pandocSetup();
     return;
   }
+  // The built-in pandoc PDF converts to Typst and needs that engine. For LaTeX
+  // the row is disabled with its own reason, and a stale menu must not reach
+  // here: the compiled PDF is the only PDF route a `.tex` document has.
+  if (format.id === "pdf" && snapshot.language === "latex") {
+    toast("Use Export › PDF, which writes the compiled LuaLaTeX PDF.");
+    return;
+  }
   if (format.id === "pdf") {
     if (!typstCache) await refreshTypstStatus();
     if (typstCache && !typstCache.found) {
@@ -3723,6 +4091,21 @@ async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
       await typstSetup();
       return;
     }
+  }
+
+  // A `.tex` project converts from the snapshot the preview compiled, captured
+  // before the dialog so a tab switch cannot change which project is exported.
+  let latexProject: { snapshot: api.ExportSnapshot; root: Session } | null = null;
+  if (snapshot.language === "latex") {
+    const captured = await latexExportSnapshot();
+    if ("error" in captured) {
+      await message(captured.error, {
+        title: "Could not read the LaTeX project",
+        kind: "error",
+      });
+      return;
+    }
+    latexProject = captured;
   }
 
   const chosen = await saveDialog({
@@ -3753,7 +4136,7 @@ async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
       });
       language = "html";
     }
-    const outcome = await api.runExport({
+    const request: api.ExportRequest = {
       formatId: format.id,
       markdown: source,
       outputPath,
@@ -3762,12 +4145,192 @@ async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
       // to PDF is rendered by Typst itself rather than translated through pandoc.
       language,
       imageRoot: snapshot.imageRoot,
-    });
+      // A configured format keeps its own id, arguments and style reference, so
+      // it goes through `run_export`; only the chooser's ad-hoc writer uses
+      // `run_pandoc_writer`. Both share the same staging and conversion helper.
+      snapshot: latexProject?.snapshot ?? null,
+    };
+    const outcome = await api.runExport(request);
     notice.dismiss();
     toast(`Exported ${basename(outcome.outputPath)}`);
 
     // Pandoc can succeed and still warn, and an after-export step can fail
     // without the file being wrong. Both are worth showing, neither is an error.
+    const notes = [...outcome.afterErrors];
+    if (outcome.warnings) notes.push(outcome.warnings);
+    if (notes.length > 0) {
+      await message(notes.join("\n\n"), {
+        title:
+          outcome.afterErrors.length > 0 ? "Exported, with a problem" : "Exported with warnings",
+        kind: outcome.afterErrors.length > 0 ? "warning" : "info",
+      });
+    }
+  } catch (error) {
+    notice.dismiss();
+    await message(String(error), { title: "Could not export", kind: "error" });
+  }
+}
+
+/**
+ * Convert a `.tex` project with one pandoc writer.
+ *
+ * Shared by the direct HTML and Markdown rows and by the chooser, so the
+ * snapshot capture, the tool check, the save dialog and the warning report
+ * cannot differ between two routes that produce the same kind of file. A caller
+ * that already captured the project passes it in; otherwise it is captured here,
+ * before the dialog, because the reader can switch tabs while choosing a path.
+ */
+async function exportLatexWithWriter(
+  writer: string,
+  label: string,
+  extension: string,
+  source: ReturnType<typeof exportSource>,
+  capturedProject?: { snapshot: api.ExportSnapshot; root: Session },
+): Promise<void> {
+  if (!pandocCache) await refreshPandocStatus();
+  if (pandocCache && !pandocCache.found) {
+    toast("Pandoc is not installed — install it before exporting.");
+    await pandocSetup();
+    return;
+  }
+  const captured = capturedProject ?? (await latexExportSnapshot());
+  if ("error" in captured) {
+    await message(captured.error, { title: "Could not read the LaTeX project", kind: "error" });
+    return;
+  }
+
+  const base = documentStem(captured.root.name);
+  const suggested = settings.lastDirectory
+    ? joinDir(settings.lastDirectory, `${base}.${extension}`)
+    : `${base}.${extension}`;
+  const chosen = await saveDialog({
+    title: `Export as ${label}`,
+    defaultPath: suggested,
+    filters: [
+      { name: label, extensions: [extension] },
+      { name: "All files", extensions: ["*"] },
+    ],
+  });
+  if (!chosen) return;
+  const outputPath = Array.isArray(chosen) ? chosen[0] : chosen;
+
+  const notice = toast(`Exporting with pandoc…`, 0);
+  try {
+    const outcome = await api.runPandocWriter(
+      latexExportRequest(captured.snapshot, source, writer, outputPath, captured.root.path),
+      writer,
+    );
+    notice.dismiss();
+    toast(`Exported ${basename(outcome.outputPath)}`);
+    const notes = [...outcome.afterErrors];
+    if (outcome.warnings) notes.push(outcome.warnings);
+    if (notes.length > 0) {
+      await message(notes.join("\n\n"), {
+        title:
+          outcome.afterErrors.length > 0 ? "Exported, with a problem" : "Exported with warnings",
+        kind: outcome.afterErrors.length > 0 ? "warning" : "info",
+      });
+    }
+  } catch (error) {
+    notice.dismiss();
+    await message(String(error), { title: "Could not export", kind: "error" });
+  }
+}
+
+/**
+ * Export › Markdown for a non-Markdown document.
+ *
+ * Markdown is the editor's own dialect, so writing it back through pandoc would
+ * be a round trip for a Markdown document. The direct row exists for LaTeX,
+ * which the plan names explicitly: a `.tex` author should not need a custom
+ * format recipe to reach Markdown.
+ */
+async function exportMarkdown(): Promise<void> {
+  const source = exportSource();
+  if (source.language !== "latex") {
+    toast("This document is already Markdown, or has its own Markdown target.");
+    return;
+  }
+  await exportLatexWithWriter("markdown", "Markdown", "md", source);
+}
+
+/**
+ * File › Export › More Pandoc Formats….
+ *
+ * The writer list comes from the installed pandoc, so a pandoc update adds rows
+ * without a settings migration. `pdf` becomes the compiled-PDF route rather than
+ * a conversion, and a bibliography-only writer is labelled as such instead of
+ * producing an empty file that looks like a success.
+ */
+async function openWriterChooser(): Promise<void> {
+  if (!pandocCache) await refreshPandocStatus();
+  if (pandocCache && !pandocCache.found) {
+    toast("Pandoc is not installed — install it before exporting.");
+    await pandocSetup();
+    return;
+  }
+  const source = exportSource();
+  if (source.language !== "latex") {
+    // The chooser is the LaTeX route: every other language already has its own
+    // configured rows, and offering the raw writer list there would duplicate
+    // them with different arguments.
+    toast("More Pandoc formats are available for LaTeX documents.");
+    return;
+  }
+  // The snapshot is captured before the list is even fetched, so a tab switch
+  // while the chooser is open cannot change which project is exported.
+  const captured = await latexExportSnapshot();
+  if ("error" in captured) {
+    await message(captured.error, { title: "Could not read the LaTeX project", kind: "error" });
+    return;
+  }
+
+  let writers: api.PandocWriter[];
+  try {
+    writers = await api.pandocListWriters();
+  } catch (error) {
+    await message(String(error), { title: "Could not list Pandoc formats", kind: "error" });
+    return;
+  }
+
+  const choice = await showWriterChooser(
+    {
+      writers,
+      documentName: captured.root.name,
+      pdfLabel: "PDF (compiled by LuaLaTeX)",
+    },
+    () => editor.focus(),
+  );
+  if (!choice) return;
+  if (choice.kind === "compiled-pdf") {
+    await exportCompiledLatexPdf();
+    return;
+  }
+  const writer = choice.writer;
+
+  const base = documentStem(captured.root.name);
+  const suggested = settings.lastDirectory
+    ? joinDir(settings.lastDirectory, `${base}.${writer.extension}`)
+    : `${base}.${writer.extension}`;
+  const chosen = await saveDialog({
+    title: `Export as ${writer.label}`,
+    defaultPath: suggested,
+    filters: [
+      { name: writer.label, extensions: [writer.extension] },
+      { name: "All files", extensions: ["*"] },
+    ],
+  });
+  if (!chosen) return;
+  const outputPath = Array.isArray(chosen) ? chosen[0] : chosen;
+
+  const notice = toast("Exporting with pandoc…", 0);
+  try {
+    const outcome = await api.runPandocWriter(
+      latexExportRequest(captured.snapshot, source, writer.id, outputPath, captured.root.path),
+      writer.id,
+    );
+    notice.dismiss();
+    toast(`Exported ${basename(outcome.outputPath)}`);
     const notes = [...outcome.afterErrors];
     if (outcome.warnings) notes.push(outcome.warnings);
     if (notes.length > 0) {
@@ -4716,7 +5279,9 @@ function setViewMode(mode: api.ViewMode): void {
     // A worker or delayed word map belongs to the mode in which it started.
     renderToken += 1;
     wordMapGeneration += 1;
+    discardStagedPdf();
     cancelPreviewWorkers();
+    typstPdf?.cancelMap();
     cancelTypstRender();
     cancelLatex();
     if (!wordMap) previewSyncReady = false;
@@ -5310,9 +5875,88 @@ function syncSourceFromPreview(reveal: boolean): void {
  * occurrence, and the clicked word/paragraph is then selected inside that
  * occurrence. A generated line has no match and paints nothing.
  */
-function syncSourceFromPageSelection(context: TypstPageContext | null, reveal: boolean): void {
+let latexGesture = 0;
+async function handoffLatexSelection(
+  value: LatexPreview,
+  context: TypstPageContext,
+  reveal: boolean,
+  gesture: number,
+): Promise<void> {
+  const match = context.sourceRange;
+  const view = typstPdf;
+  if (!match?.file || !view) return;
+  const selection = window.getSelection();
+  const anchor = selection?.anchorNode,
+    anchorOffset = selection?.anchorOffset;
+  const focus = selection?.focusNode,
+    focusOffset = selection?.focusOffset;
+  const sameSelection = (): boolean => {
+    const current = window.getSelection();
+    return (
+      current?.anchorNode === anchor &&
+      current?.anchorOffset === anchorOffset &&
+      current?.focusNode === focus &&
+      current?.focusOffset === focusOffset
+    );
+  };
+  const input = value.result.sources.find((file) => file.path === match.file);
+  if (!input) return;
+  const path = joinDir(value.rootDirectory, match.file);
+  let target = sessions.findByPath(path);
+  if (!target) {
+    let payload: api.DocumentPayload;
+    try {
+      payload = await api.readDocument(path);
+    } catch {
+      return;
+    }
+    if (!latexCurrent(value) || typstPdf !== view || gesture !== latexGesture || !sameSelection())
+      return;
+    if (payload.content.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n") !== input.source) return;
+    target = sessions.create();
+    describe(target, payload);
+    sessions.add(target);
+  }
   if (
-    doc.language !== "typst" ||
+    !latexCurrent(value) ||
+    typstPdf !== view ||
+    gesture !== latexGesture ||
+    !sameSelection() ||
+    textOf(target)
+      .replace(/^\uFEFF/, "")
+      .replace(/\r\n?/g, "\n") !== input.source
+  )
+    return;
+  snapshotDoc();
+  doc = sessions.setActive(target.id);
+  value.activeId = target.id;
+  value.revisions = sessions.list().map(({ id, revision, path }) => ({ id, revision, path }));
+  preservingLatexHandoff = true;
+  const showing = displayDoc(true);
+  preservingLatexHandoff = false;
+  view.setActiveFile(match.file, input.source);
+  await showing;
+  if (!latexCurrent(value) || typstPdf !== view || gesture !== latexGesture) return;
+  syncSourceFromPageSelection(context, reveal);
+}
+
+function syncSourceFromPageSelection(context: TypstPageContext | null, reveal: boolean): void {
+  const gesture = ++latexGesture;
+  if (
+    doc.language === "latex" &&
+    context?.sourceRange?.file &&
+    latexCurrent(latexPreview) &&
+    context.sourceRange.file !== latexRelative(latexPreview, doc.path)
+  ) {
+    void handoffLatexSelection(latexPreview, context, reveal, gesture);
+    return;
+  }
+  if (
+    (doc.language !== "typst" && doc.language !== "latex") ||
+    (doc.language === "latex" &&
+      (!latexCurrent(latexPreview) ||
+        (context?.sourceRange?.file !== undefined &&
+          context.sourceRange.file !== latexRelative(latexPreview, doc.path)))) ||
     settings.viewMode !== "split" ||
     typstPdfToken !== renderToken ||
     typstPdf?.source !== editor.getDoc()
@@ -5332,13 +5976,17 @@ function syncSourceFromPageSelection(context: TypstPageContext | null, reveal: b
     return;
   }
   if (syncedSource && syncedSource.from === range.from && syncedSource.to === range.to) {
-    editor.setSyncRange(range.from, range.to);
+    if (doc.language === "latex" && !context?.paragraph && context?.sourceRange?.segments?.length)
+      editor.setSyncRanges(context.sourceRange.segments);
+    else editor.setSyncRange(range.from, range.to);
     if (reveal) editor.revealOffset(range.from);
     editor.pulseSyncRange();
     return;
   }
   syncedSource = range;
-  editor.setSyncRange(range.from, range.to);
+  if (doc.language === "latex" && !context?.paragraph && context?.sourceRange?.segments?.length)
+    editor.setSyncRanges(context.sourceRange.segments);
+  else editor.setSyncRange(range.from, range.to);
   if (reveal) editor.revealOffset(range.from);
 }
 
@@ -5359,7 +6007,11 @@ function syncPreviewFromSource(): void {
     }
     return;
   }
-  if (doc.language === "typst" && settings.typstView === "pages") {
+  if ((doc.language === "typst" && settings.typstView === "pages") || doc.language === "latex") {
+    if (wordSyncDismissed) {
+      clearPreviewWords();
+      return;
+    }
     const info = editor.cursorInfo();
     const range = info.selectionLength ? snapToWords(editor.getDoc(), info.from, info.to) : null;
     const ranges =
@@ -5756,8 +6408,8 @@ function pagesScrollAvailable(): boolean {
   return (
     settings.syncScroll &&
     settings.viewMode === "split" &&
-    doc.language === "typst" &&
-    settings.typstView === "pages" &&
+    ((doc.language === "typst" && settings.typstView === "pages") ||
+      (doc.language === "latex" && latexCurrent(latexPreview))) &&
     typstPdf !== null &&
     typstPdfToken === renderToken &&
     typstPdf.source === editor.getDoc()
@@ -5773,8 +6425,13 @@ function scrollReference(): number {
   );
 }
 
+let latexLastSourceScroll: number | null = null;
 function alignPagesScroll(direction: SyncPane, refined = false): void {
   if (!pagesScrollAvailable() || syncDragging) return;
+  const sourceScroll = editor.view.scrollDOM.scrollTop;
+  const sourceDirection =
+    latexLastSourceScroll === null ? 0 : Math.sign(sourceScroll - latexLastSourceScroll);
+  if (direction === "source" && doc.language === "latex") latexLastSourceScroll = sourceScroll;
   const pdf = typstPdf!;
   const reference = scrollReference();
   const anchors =
@@ -5797,6 +6454,13 @@ function alignPagesScroll(direction: SyncPane, refined = false): void {
   }
   const delta = scrollCorrection(pairs, reference);
   if (delta === null || Math.abs(delta) < 0.5) return;
+  if (
+    direction === "source" &&
+    doc.language === "latex" &&
+    sourceDirection &&
+    Math.sign(delta) !== sourceDirection
+  )
+    return;
   if (direction === "source") {
     suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
     previewPane.scrollTop = clampScroll(
@@ -5851,7 +6515,8 @@ function queuePaneScroll(direction: SyncPane): void {
     // A selection reveal owns the source for its short hand-off window; a
     // preview-scroll correction queued before the gesture must not move it away.
     if (direction === "preview" && performance.now() < suppressEditorScrollUntil) return;
-    if (doc.language === "typst" && settings.typstView === "pages") alignPagesScroll(direction);
+    if ((doc.language === "typst" && settings.typstView === "pages") || doc.language === "latex")
+      alignPagesScroll(direction);
     else if (doc.language === "html") {
       if (direction === "source") syncEditorToHtml();
       else {
@@ -5946,8 +6611,24 @@ function installPaneSync(): void {
   // keystroke, but a click is one discrete action.
   editorPane.addEventListener("click", () => {
     if (doc.language === "latex") {
-      if (settings.viewMode === "split" && editor.cursorInfo().selectionLength === 0)
-        latexSyncCursor(true, true);
+      if (
+        settings.viewMode !== "split" ||
+        editor.cursorInfo().selectionLength ||
+        !latexCurrent(latexPreview)
+      )
+        return;
+      const source = editor.getDoc();
+      const offset = editor.cursorInfo().from;
+      const range =
+        typstPdf?.atomicRangeAtSource(source, offset) ?? paragraphRangeAt(source, offset);
+      const ranges = typstPdf?.rangesForSource(source, range.from, range.to) ?? [];
+      if (ranges.length) {
+        const key = `click:${range.from}:${range.to}`;
+        paintPreviewWords(ranges, key);
+        window.setTimeout(() => {
+          if (previewSyncKey === key) clearPreviewWords();
+        }, BLINK_MS);
+      }
       return;
     }
     if (doc.language === "html") {
@@ -5966,17 +6647,8 @@ function installPaneSync(): void {
       if (performance.now() >= suppressEditorScrollUntil) queuePaneScroll("source");
       return;
     }
-    // LaTeX scrolls through SyncTeX, not through DOM anchors: the preview is a
-    // PDF canvas, so its correspondence comes from the mapping rather than from
-    // measured elements. It fails closed, so a line with no exact region simply
-    // leaves the preview where it is.
     if (doc.language === "latex") {
-      // A scroll that arrives inside the suppression window is dropped, and that is
-      // the right behaviour for the *echo* of our own write. It is the wrong
-      // behaviour for a reader's scroll, and the two are indistinguishable here —
-      // so the drop is logged, which is how the convergence failure was traced.
-      if (performance.now() >= suppressEditorScrollUntil) syncLatexToPreview();
-      else console.info(`[latex-scroll] dropped: suppressed for ${Math.round(suppressEditorScrollUntil - performance.now())}ms`);
+      if (performance.now() >= suppressEditorScrollUntil) queuePaneScroll("source");
       return;
     }
     if (doc.language === "html") {
@@ -5991,6 +6663,7 @@ function installPaneSync(): void {
   // Click in the preview -> the source reveals that line, and the preview stays
   // exactly where it is so text selection keeps working.
   preview.addEventListener("mousedown", (event) => {
+    if (doc.language === "latex") latexGesture += 1;
     if (doc.language === "html") return;
     const target = (event.target as HTMLElement).closest<HTMLElement>("[data-line]");
     if (!target) return;
@@ -6034,6 +6707,7 @@ function installPaneSync(): void {
     "keydown",
     (event) => {
       if (event.key !== "Escape") return;
+      latexGesture += 1;
       const target = event.target;
       const selection = window.getSelection();
       const pendingPreviewSelection =
@@ -6042,7 +6716,6 @@ function installPaneSync(): void {
         syncedSource !== null ||
         previewPulseRanges.length > 0 ||
         htmlWordsActive ||
-        !!preview.querySelector(".latex-sync-region") ||
         pendingPreviewSelection;
       if (
         (target instanceof Node && (editorPane.contains(target) || previewPane.contains(target))) ||
@@ -6072,7 +6745,6 @@ function installPaneSync(): void {
       syncedSource = null;
       editor.clearSyncRange();
       clearPreviewWords();
-      if (doc.language === "latex") typstPdf?.showRegions([]);
     },
     true,
   );
@@ -6085,11 +6757,9 @@ function installPaneSync(): void {
     if (doc.language === "html") return;
     if (!settings.syncScroll || settings.viewMode !== "split") return;
     if (performance.now() < suppressPreviewScrollUntil) return;
-    // LaTeX correspondence comes from SyncTeX, so it does not go through the DOM
-    // anchor solver the other markups use.
     if (doc.language === "latex") {
       if (typstPdf?.isLayoutScroll()) return;
-      syncLatexToEditor();
+      queuePaneScroll("preview");
       return;
     }
     if (doc.language === "typst" && settings.typstView === "pages") {
@@ -6351,46 +7021,47 @@ function installResizers(): void {
 const lastActionAt = new Map<string, number>();
 
 /**
- * Whether a menu command has no LaTeX implementation yet.
+ * A menu command that has no implementation for the document on screen.
  *
- * The blanket gate that used to refuse every `format.`, `insert.`, `para.`,
- * `export.` and print command is gone; each command now answers for itself in
- * its own branch. What remains here is the short list of things LaTeX genuinely
- * cannot do yet, and each one says why instead of failing silently:
- *
- * - `format.document` waits for the tex-fmt formatter (plan step 5).
- * - Every export row waits for the native PDF route (step 7). A `.tex` file has
- *   no pandoc reader in this change, so feeding it to pandoc's Markdown reader
- *   would produce a silently wrong document.
- * - `file.print` has no article for a PDF-rendered language (decision D11).
+ * The list is empty now, and it is kept as the one place a future unimplemented
+ * command is named rather than as a language-wide gate. The gate that used to
+ * live here refused every `export.*` for LaTeX long after the backend had grown
+ * a LaTeX reader, and the reader saw a sentence describing a state that no
+ * longer existed.
  */
-function latexCommandRefused(id: string): boolean {
-  if (doc.language !== "latex") return false;
-  if (id === "format.document") return true;
-  if (id === "file.print") return true;
-  return id.startsWith("export.");
+function commandRefusedReason(_id: string): string | null {
+  return null;
 }
 
 function runMenuAction(id: string): void {
   if (
     lifecycle.committing ||
     document.querySelector(".unsaved-dialog[open]") ||
-    document.querySelector(".stats-dialog[open]")
+    document.querySelector(".stats-dialog[open]") ||
+    document.querySelector(".export-dialog[open]")
   )
     return;
-  if (latexCommandRefused(id)) {
-    toast(
-      id === "format.document"
-        ? "LaTeX formatting is not available yet."
-        : "LaTeX exports its own PDF through the preview; export formats arrive with it.",
-      4200,
-    );
+  const refused = commandRefusedReason(id);
+  if (refused) {
+    toast(refused, 4200);
     return;
   }
   const now = performance.now();
   const previous = lastActionAt.get(id) ?? 0;
   if (now - previous < 250) return;
   lastActionAt.set(id, now);
+
+  // The chooser and the direct Markdown row are not stored formats: one comes
+  // from the installed pandoc, the other is the editor's own dialect, so neither
+  // can be a key in `handlers`.
+  if (id === "export.pandoc.more") {
+    void openWriterChooser().catch((error) => toast(String(error)));
+    return;
+  }
+  if (id === "export.markdown") {
+    void exportMarkdown().catch((error) => toast(String(error)));
+    return;
+  }
 
   // The pandoc entries are generated from the user's own format list, so they
   // cannot be keys in `handlers`. The menu builds them as "export.pandoc.<id>".
@@ -7051,6 +7722,7 @@ function stopReadAloud(): void {
   if (settings.viewMode === "source" && previewStale) {
     renderToken += 1;
     cancelPreviewWorkers();
+    typstPdf?.cancelMap();
     cancelTypstRender();
   }
 }
@@ -7591,12 +8263,15 @@ async function boot(): Promise<void> {
     linkClick: openLinkTarget,
   });
   editor.onDocChanged((text) => {
+    if (preservingLatexHandoff) return;
     delete preview.dataset.latexCurrent;
     doc.revision += 1;
     // Invalidate before the debounce: the visible DOM still describes old text.
     renderToken += 1;
     wordMapGeneration += 1;
+    discardStagedPdf();
     cancelPreviewWorkers();
+    typstPdf?.cancelMap();
     cancelTypstRender();
     cancelLatex();
     lastEditAt = performance.now();
@@ -7773,12 +8448,15 @@ async function boot(): Promise<void> {
       if (open) await lifecycle.reload(open);
     },
     aiPromptsDirty: (path) => Boolean(sessions.findByPath(path)?.dirty),
-    openDocumentation: (which) =>
-      void showBuiltin(
-        which === "reference" ? REFERENCE : which === "shortcuts" ? SHORTCUTS : FONT_LICENCES,
-      ),
-    version: () => APP_VERSION,
+    openAppFolder: async (folder) => {
+      try {
+        await api.openAppFolder(folder);
+      } catch (error) {
+        toast(String(error), 5200);
+      }
+    },
     pandocStatus: () => pandocCache,
+    typstStatus: () => typstCache,
     setupPandoc: async () => {
       await pandocSetup();
       await refreshPandocStatus();

@@ -195,7 +195,8 @@ export class TypstPageMap {
   constructor(source: string, lines: readonly PageMapLine[], words: readonly SourceWord[]) {
     this.source = source;
     this.words = words;
-    const vocabulary = new Set(words.map((word) => word.norm));
+    const vocabulary = new Set<string>();
+    for (const word of words) vocabulary.add(word.norm);
     for (let line = 0; line < lines.length; line += 1) {
       const current = lines[line];
       for (const token of tokenizeWords(current.text)) {
@@ -233,22 +234,33 @@ export class TypstPageMap {
         }
       }
     }
-    const compact = this.pdf.filter((word) => word.norm.length > 0);
-    this.pdf.splice(0, this.pdf.length, ...compact);
+    // Compact in place: a second full list of PDF words spikes memory on large
+    // files, and the map is built while the reader may still be typing.
+    let write = 0;
+    for (let read = 0; read < this.pdf.length; read += 1) {
+      const word = this.pdf[read];
+      if (word.norm.length > 0) this.pdf[write++] = word;
+    }
+    this.pdf.length = write;
     this.byLine.clear();
     this.pdf.forEach((word, at) => {
+      let previousLine = -1;
       for (const part of word.parts) {
+        // A word can be split across consecutive visual lines. Avoid scanning
+        // the whole line's growing bucket for every word in a long line.
+        if (part.line === previousLine) continue;
+        previousLine = part.line;
         const bucket = this.byLine.get(part.line) ?? [];
-        if (!bucket.includes(at)) bucket.push(at);
+        bucket.push(at);
         this.byLine.set(part.line, bucket);
       }
     });
     this.links = this.pdf.map(() => null);
-    const sequence = (items: readonly { norm: string }[], at: number, size: number) =>
-      items
-        .slice(at, at + size)
-        .map((word) => word.norm)
-        .join(KEY_SEPARATOR);
+    const sequence = (items: readonly { norm: string }[], at: number, size: number) => {
+      let key = items[at].norm;
+      for (let part = 1; part < size; part += 1) key += KEY_SEPARATOR + items[at + part].norm;
+      return key;
+    };
     // Unique windows are evidence of occurrence; the editor caret is irrelevant.
     for (let size = 6; size >= 2; size -= 1) {
       const sourceIndex = new Map<string, number>();
@@ -258,12 +270,18 @@ export class TypstPageMap {
       }
       const pageIndex = new Map<string, number>();
       for (let at = 0; at + size <= this.pdf.length; at += 1) {
-        const run = this.pdf.slice(at, at + size);
-        if (
-          run.some((word) => !word.norm || word.region !== run[0].region) ||
-          !run.some((word) => /[\p{L}]/u.test(word.norm) && word.norm.length >= 3)
-        )
-          continue;
+        const region = this.pdf[at].region;
+        let valid = true;
+        let hasAnchor = false;
+        for (let part = 0; part < size; part += 1) {
+          const word = this.pdf[at + part];
+          if (!word.norm || word.region !== region) {
+            valid = false;
+            break;
+          }
+          if (/[\p{L}]/u.test(word.norm) && word.norm.length >= 3) hasAnchor = true;
+        }
+        if (!valid || !hasAnchor) continue;
         const key = sequence(this.pdf, at, size);
         pageIndex.set(key, pageIndex.has(key) ? -1 : at);
       }
@@ -303,16 +321,16 @@ export class TypstPageMap {
       if (candidates.length === 1) this.links[at] = candidates[0];
     }
     // One literal source word cannot identify two distinct rendered occurrences.
-    const inverse = new Map<number, number[]>();
+    const inverse = new Map<number, number>();
     for (let at = 0; at < this.links.length; at += 1) {
       const link = this.links[at];
       if (link === null || link < 0) continue;
-      const bucket = inverse.get(link) ?? [];
-      bucket.push(at);
-      inverse.set(link, bucket);
+      inverse.set(link, (inverse.get(link) ?? 0) + 1);
     }
-    for (const bucket of inverse.values())
-      if (bucket.length > 1) for (const at of bucket) this.links[at] = null;
+    for (let at = 0; at < this.links.length; at += 1) {
+      const link = this.links[at];
+      if (link !== null && link >= 0 && (inverse.get(link) ?? 0) > 1) this.links[at] = null;
+    }
     for (let at = 0; at < this.links.length; at++) {
       const link = this.links[at];
       if (link === null || link < 0) continue;
