@@ -1007,13 +1007,63 @@ pub async fn save_compiled_pdf(output_path: String, data: String) -> Result<(), 
     .map_err(|error| error.to_string())?
 }
 
+/// Write the PDF a document's own compiler produced, then open it to be printed.
+///
+/// The PDF sibling of `export::print_document`, and the reason it exists is the
+/// same: WebView2 exposes no print UI, so `window.print()` inside the application
+/// fires no dialog. The system's PDF viewer owns the print dialog, so the bytes go
+/// to a temporary file and the viewer is asked to open it.
+///
+/// This prints **the compiled PDF**, never a re-render — see
+/// `docs/adr/2026-11-06-print-the-compiled-pdf.md`. A second layout of the same
+/// document would contradict the preview sitting beside it.
+#[tauri::command]
+pub async fn print_compiled_pdf<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    data: String,
+    name: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if data.len() > MAX_PROJECT * 2 {
+            return Err("The PDF is too large to print.".into());
+        }
+        let bytes = STANDARD.decode(data).map_err(|_| "Invalid PDF data.")?;
+        if bytes.len() > MAX_PROJECT || !bytes.starts_with(b"%PDF-") {
+            return Err("The compiler did not produce a valid PDF.".into());
+        }
+
+        let dir = std::env::temp_dir().join("mdraft-print");
+        fs::create_dir_all(&dir)
+            .map_err(|error| format!("Could not create {}: {error}", dir.display()))?;
+        // The same stem rule the print document uses, so a name with a separator
+        // cannot escape the directory.
+        let target = dir.join(format!("{}.pdf", crate::export::safe_stem(&name)));
+        crate::print::write_pdf_atomically(&target, |pending| {
+            fs::write(pending, &bytes).map_err(|error| error.to_string())
+        })?;
+
+        tauri_plugin_opener::open_path(&target, None::<&str>).map_err(|error| {
+            format!(
+                "Wrote {} but could not open it: {error}\n\
+                 Open that file yourself and print it.",
+                target.display()
+            )
+        })?;
+
+        let _ = app;
+        Ok(target.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         cache_size, collect_referenced, evict_to_limit, mask_literal_regions, safe_relative,
+        MAX_PROJECT,
     };
-    use std::{fs, path::Path};
-    #[test]
+    use std::{fs, path::Path};    #[test]
     fn mirror_paths_cannot_escape_or_change_host() {
         for good in ["tex/latex/base/article.cls", "fonts/a-b.1"] {
             assert!(safe_relative(good));
@@ -1030,6 +1080,24 @@ mod tests {
         ] {
             assert!(!safe_relative(bad));
         }
+    }
+
+    /// The print command must refuse anything that is not a PDF.
+    ///
+    /// The validation is the same one `save_compiled_pdf` applies, and it matters
+    /// more here: the file is written to a temporary directory and handed to the
+    /// system viewer, so accepting arbitrary bytes would open whatever they are.
+    #[test]
+    fn a_print_payload_must_be_a_pdf() {
+        // The guard is inline in the command, which needs an `AppHandle`; the
+        // predicate it applies is what is worth pinning.
+        let accepts = |bytes: &[u8]| bytes.starts_with(b"%PDF-") && bytes.len() <= MAX_PROJECT;
+        assert!(accepts(b"%PDF-1.7\n..."));
+        assert!(!accepts(b"<html>not a pdf</html>"));
+        assert!(!accepts(b""));
+        // A payload over the ceiling is refused rather than written.
+        let huge = vec![b'x'; MAX_PROJECT + 1];
+        assert!(!accepts(&huge));
     }
 
     #[test]

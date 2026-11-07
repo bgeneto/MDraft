@@ -58,11 +58,13 @@ rather than a duplicate route.
 
 Two things are deliberately not offered:
 
-- **Native printing** is disabled, because the compiled PDF already exists —
-  print it from the file instead.
 - **PDF (opens browser)** is disabled, because that route re-renders the document
   to HTML and prints that, producing a second layout that would contradict the
   preview. *Export › PDF* writes the compiled bytes instead.
+
+**Printing** prints the compiled PDF. *File › Print* writes the bytes the preview
+is holding to a temporary file and opens it in your PDF viewer, which owns the
+print dialog. It refuses a stale preview and never starts a compile of its own.
 
 ## What is not implemented
 

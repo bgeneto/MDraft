@@ -1155,7 +1155,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> Result<PandocStatus, String> {
 
 /// Strip anything that cannot appear in a filename, so a document called
 /// `a/b:c*.md` still produces a usable temporary file.
-fn safe_stem(name: &str) -> String {
+pub(crate) fn safe_stem(name: &str) -> String {
     let stem = name.trim_end_matches(".md").trim();
     let cleaned: String = stem
         .chars()
