@@ -42,13 +42,19 @@ console.log("=== the layer's configuration ===");
 
 console.log("\n=== the Tab key ===");
 {
-  // The one silent-failure risk in this step. `acceptCompletion` declines when
-  // no popup is open, so a high-precedence completion keymap lets the event
-  // fall through to `indentWithTab`. Below the base keymap, Tab would indent
-  // while a popup is open and could never accept.
+  // The one silent-failure risk in this step, and a place an earlier version was
+  // simply wrong: CodeMirror's own `completionKeymap` binds Enter to accept, not
+  // Tab. Tab is bound here explicitly so accepting with Tab works, and it must
+  // sit ABOVE the base keymap that holds `indentWithTab` — `acceptCompletion`
+  // declines when no popup is open, so the event falls through to indentation.
+  // Below the base keymap, Tab would indent while a popup is open.
   check(
-    /Prec\.high\(keymap\.of\(completionKeymap\)\)/.test(layerSource),
-    "the completion keymap is above the base keymap",
+    /key: "Tab", run: acceptCompletion/.test(layerSource),
+    "Tab is bound to acceptCompletion",
+  );
+  check(
+    /Prec\.high\(\s*keymap\.of\(\[\{ key: "Tab"/.test(layerSource),
+    "the Tab binding is above the base keymap",
   );
   check(
     !/Prec\.(lowest|low)\(/.test(layerSource),
@@ -57,10 +63,21 @@ console.log("\n=== the Tab key ===");
   // The extension and the keymap are returned together: one without the other
   // is a popup the keyboard cannot drive, or a key that can never accept.
   check(
-    /export function completionSupport\(\)[\s\S]*?return \[autocompletion\(CONFIG\), Prec\.high/.test(
+    /export function completionSupport\(\)[\s\S]*?return \[autocompletion\(CONFIG\), tabAccepts\]/.test(
       layerSource,
     ),
-    "the extension and its keymap are installed as one unit",
+    "the extension and its Tab binding are installed as one unit",
+  );
+  // The redundant second copy of CodeMirror's keymap is gone: `autocompletion()`
+  // already installs it at `Prec.highest`, and duplicating it was a bug. The
+  // check reads code only — the doc comment legitimately names the keymap when
+  // explaining why it is not re-imported.
+  const codeOnly = layerSource
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+  check(
+    !/completionKeymap/.test(codeOnly),
+    "the layer does not duplicate CodeMirror's own completion keymap",
   );
 }
 

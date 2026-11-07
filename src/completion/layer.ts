@@ -2,8 +2,8 @@
 //!
 //! `@codemirror/autocomplete` was already a dependency but only `closeBrackets`
 //! was imported from it, so the editor had no completion of any kind. This module
-//! owns the one `autocompletion()` extension and its keymap, and nothing else:
-//! the catalogs live beside it and the language decides which one answers.
+//! owns the one `autocompletion()` extension and the Tab binding, and nothing
+//! else: the catalogs live beside it and the language decides which one answers.
 //!
 //! **Sources come from language data, not from here.** `autocompletion()` reads
 //! `autocomplete` from the active language's data, so a language that registers a
@@ -13,17 +13,18 @@
 //! the LaTeX and Markdown catalogs are added by giving their language support a
 //! `languageData` entry rather than by growing this file.
 //!
-//! **The Tab key is the risk.** `indentWithTab` owns Tab in the base keymap. The
-//! completion keymap binds Tab to `acceptCompletion`, which returns `false` when
-//! no completion is active — so installing the completion keymap at a *higher*
-//! precedence makes Tab accept when a popup is open and indent when it is not,
-//! without either binding being aware of the other. Getting the precedence
-//! backwards makes Tab indent while a popup is open, which is silent and looks
-//! like a broken editor.
+//! **Tab, and a correction worth recording.** CodeMirror's own `completionKeymap`
+//! binds `Ctrl-Space` to start, `Escape` to close, the arrows and Page keys to
+//! move, and **`Enter` to accept** — it does *not* bind Tab. `autocompletion()`
+//! installs that keymap itself at `Prec.highest`. An earlier version of this file
+//! installed a second copy at `Prec.high` on the belief that Tab accepted, which
+//! was both redundant and wrong. Tab is bound here explicitly, because accepting
+//! with Tab is what this editor's plan promised and what a reader coming from
+//! VS Code expects; Enter keeps working through CodeMirror's own keymap.
 
 import {
+  acceptCompletion,
   autocompletion,
-  completionKeymap,
   type CompletionSource,
 } from "@codemirror/autocomplete";
 import { Prec, type Extension } from "@codemirror/state";
@@ -45,19 +46,26 @@ const CONFIG = {
 } as const;
 
 /**
- * The completion extension and its keymap.
+ * Tab accepts a completion, and indents when there is none.
+ *
+ * `acceptCompletion` returns `false` when no popup is open, so binding it at
+ * `Prec.high` — above the base keymap that holds `indentWithTab` — lets the event
+ * fall through to indentation. Installing it *below* the base keymap would make
+ * Tab indent while a popup is open and it could never accept.
+ */
+const tabAccepts: Extension = Prec.high(
+  keymap.of([{ key: "Tab", run: acceptCompletion }]),
+);
+
+/**
+ * The completion extension and the Tab binding.
  *
  * Returned together because they must be installed and removed as a pair: a
  * keymap without the extension binds Tab to a command that can never accept, and
- * an extension without the keymap opens a popup the keyboard cannot drive.
- *
- * `Prec.high` on the keymap is what keeps `indentWithTab` working:
- * `acceptCompletion` declines when no completion is active, so the event falls
- * through to the base keymap. Below the base keymap the indent command would win
- * instead and Tab could never accept.
+ * an extension without the keymap opens a popup that Tab cannot drive.
  */
 export function completionSupport(): Extension {
-  return [autocompletion(CONFIG), Prec.high(keymap.of(completionKeymap))];
+  return [autocompletion(CONFIG), tabAccepts];
 }
 
 /**
