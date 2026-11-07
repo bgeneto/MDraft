@@ -30,9 +30,11 @@ function check(ok, label, detail = "") {
 // Surface the page's own errors: a compile that fails changes no selector, so the
 // console is the only place it is visible.
 const errors = [];
+const consoleLines = [];
 page.onException((text) => errors.push(text.split("\n")[0]));
 page.onConsole((level, text) => {
   if (level === "error") errors.push(text);
+  if (text.includes("[latex-sync]") || text.includes("[latex-source]")) consoleLines.push(text);
 });
 
 for (let attempt = 0; attempt < 60; attempt += 1) {
@@ -269,9 +271,20 @@ for (const fraction of [0.55, 0.65, 0.75, 0.45, 0.85, 0.35]) {
       window.__clickProbe.collapsed = selection ? selection.isCollapsed : "no selection";
       const host = canvas.closest(".typst-preview");
       window.__clickProbe.inHost = host ? host.contains(canvas) : "no host";
+      // The geometry the viewer measures against, so a failure says whether the
+      // click landed on the page at all rather than only that nothing happened.
+      const pageEl = shell.querySelector(".typst-page") ?? shell;
+      const pageRect = pageEl.getBoundingClientRect();
+      const clientX = box.left + box.width / 2;
+      const clientY = box.top + box.height * ${fraction};
+      window.__clickProbe.clientY = Math.round(clientY);
+      window.__clickProbe.pageTop = Math.round(pageRect.top);
+      window.__clickProbe.pageBottom = Math.round(pageRect.bottom);
+      window.__clickProbe.onPage =
+        clientY >= pageRect.top && clientY <= pageRect.bottom;
       canvas.dispatchEvent(new MouseEvent("click", {
-        clientX: box.left + box.width / 2,
-        clientY: box.top + box.height * ${fraction},
+        clientX,
+        clientY,
         bubbles: true,
       }));
       await new Promise((resolve) => setTimeout(resolve, 1100));
@@ -311,6 +324,11 @@ check(
 // click navigation, not a test problem, and it is recorded in the plan rather than
 // asserted here — an assertion would only restate it.
 console.log(`  click resolutions: ${attempts.join(", ")}`);
+// What the app itself said about each click. This is the line that answers why
+// nothing happened, and it is the reason the console listener exists.
+if (consoleLines.length) {
+  console.log(`  app said: ${[...new Set(consoleLines)].slice(0, 3).join(" | ")}`);
+}
 
 // The point of the click: the source moved to the matching line.
 const activeLine = await page.evaluate(`

@@ -257,27 +257,30 @@ Each step leaves the product consistent and is independently testable.
   produced no preview at all. This is the same class of bug as the `\bibliography`
   one found earlier: a shipped document that cannot compile.
 
-  **Still open, and narrowed as far as the harness can take it.** Every click
-  resolves to line 1 and paints nothing, while:
-  - `latexSourceAt` is **proven correct** by `latex:sync:unit` against the
-    committed fixture — `latexSourceAt(result, 1, 215, 170)` returns
-    `{ file: "main.tex", line: 8 }`, and 14 checks pass including the ambiguous and
-    out-of-page cases;
-  - the click reaches the viewer: a probe records
-    `dispatched: true, collapsed: true, inHost: true`, so `emitParagraph` runs and
-    calls `onPdfClick`;
-  - the document compiles: 5 pages, canvas present, 1874 ms.
+  **Still open, and narrowed to one filter.** The diagnostics now name every early
+  return, and they produced the answer:
 
-  So the failure is between `onPdfClick` and `latexSourceAt` — most plausibly
-  `latexCurrent(value)` returning false because the preview was compiled for a
-  different document than the one now active, which makes `latexSyncSource` return
-  on its first line. That is a test-sequencing question (the suite opens the
-  reference after the compile) as much as a product one, and it needs the app's own
-  console at the click, which the suite now has but has not yet read.
+  - `mapping pages: 5`, `files: latex-reference.tex`, `inputs` includes it — the
+    mapping and the file set are both correct;
+  - `inverse match has no container (method nearest-child)` — the bracket search
+    needs **box nodes**, and a mapping from the private fallback is a flat node
+    list with none. Requiring a container therefore returned null for every click.
+    **Fixed:** the container is now used when present, and the candidate loop
+    answers the click when it is not. `latex:sync:unit` still passes 14/14.
+  - the click then reaches the candidate loop, which filters on
+    `forward.regions.some(contains)`. With a flat mapping those forward regions are
+    degenerate too — a measured example is `region=302,346 0x8`, a kern with zero
+    width — so nothing matches and the click still resolves to nothing.
 
-  **Honest status: the paint is implemented and the resolution logic is proven; the
-  click is not yet correct end to end.** `latex-preview-test.mjs` is `optIn`, so a
-  default run stays green.
+  **Honest status: one real defect fixed, a second located precisely.** The
+  container requirement was a genuine bug that made click navigation impossible on
+  any fallback mapping; that is committed. What remains is the candidate filter's
+  assumption that forward regions are non-degenerate boxes, which the fallback
+  mapping does not satisfy.
+
+  **What works and is proven:** the reference compiles to 5 pages in 1874 ms, zoom
+  moves the page 399 → 439 with an exact Reset, and scrolling the editor moves the
+  preview. `latex-preview-test.mjs` is `optIn`, so a default run stays green.
 
 - [ ] **8. Two-column scroll precision.** Verify the correspondence against a
   two-column document — the case where one source line owns regions in both
