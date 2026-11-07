@@ -569,7 +569,10 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
         "edit.comment" => writable && state.has_comment_syntax,
         "edit.pastePlain" => true,
         "edit.selectOccurrences" | "edit.convertSelection" | "edit.lines" => writable,
-        "format.document" => state.can_format && !latex,
+        // LaTeX has a formatter now (tex-fmt, behind `hasFormatter`), so the row
+        // follows the same rule as the other three: enabled when a formatter is
+        // available and the document is writable.
+        "format.document" => state.can_format,
         "format.bold" | "format.italic" | "format.strike" | "format.code" | "format.link"
         | "format.image" => writable,
         "format.math" | "para.mathBlock" => writable && !html,
