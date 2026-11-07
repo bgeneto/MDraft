@@ -1,6 +1,6 @@
 # LaTeX product completion: the remaining checklist
 
-**Status:** draft
+**Status:** in progress (approved 2026-11-06)
 **Date:** 2026-11-06
 **ADR:** none yet; this plan will need one for the print route (see step 4)
 
@@ -78,11 +78,26 @@ Decisions taken by the maintainer for this plan:
 
 Each step leaves the product consistent and is independently testable.
 
-- [ ] **1. Tools › Check or Install LaTeX…** Add the menu item beside Pandoc and
+- [x] **1. Tools › Check or Install LaTeX…** Add the menu item beside Pandoc and
   Typst, route it to the existing `installLatex()` / `latex_status` pair, and give
   it the same three-state dialog the other two use: ready (version, location,
   who installed it), missing (offer the download), downloading (progress).
   `menu.rs` gains the id and its availability rule; `menu-test` gains the row.
+
+  **Landed.** `menu.rs` gains `tools.latex` in the Tools submenu and in the
+  always-available list; `src/main.ts` gains `latexSetup()` with the ready and
+  missing states, the cache size and ceiling in the ready state, and the download
+  offer in the missing state. `menu` 150 → **156**: the row's label, and all three
+  install rows being available whatever document is open.
+
+  **A new suite, `latex:tools` (7 checks), because the menu test cannot prove a
+  row is *wired*.** A menu id with no handler is a silent no-op —
+  `runMenuAction` looks the id up in a `Record<string, …>`, so the type checker
+  cannot catch a missing entry. The suite uses a **positive control**: a bogus id
+  must make the dispatcher warn, and `tools.latex` must not. Two wrong approaches
+  were tried first and are recorded in the test's header: a `window` hook that
+  Vite tree-shook out of the bundle, and patching `__TAURI_INTERNALS__.invoke`,
+  which `api.ts` binds at import so it never intercepts.
 
 - [ ] **2. Zoom in the LaTeX preview.** Establish whether the LaTeX host calls
   `typstPdf.setZoom`, then make document zoom reach the PDF the same way it

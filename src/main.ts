@@ -3724,6 +3724,76 @@ async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
  * already has pandoc on PATH is told that rather than being pushed into a 40 MB
  * download. Nothing is installed without an explicit confirmation.
  */
+/**
+ * Tools › Check or Install LaTeX…
+ *
+ * The same three-state dialog Pandoc and Typst use. The engine is a single
+ * boolean to the frontend — it is either enabled and verified, or it is not —
+ * so this reports which, and offers the download when it is missing.
+ *
+ * The switch lives in `settings.json` (decision D2), so enabling writes it and
+ * the next render picks it up without reopening the document.
+ */
+async function latexSetup(): Promise<void> {
+  let enabled: boolean;
+  try {
+    enabled = await api.latexStatus();
+  } catch (error) {
+    await message(String(error), { title: "Could not look for LuaLaTeX", kind: "error" });
+    return;
+  }
+
+  if (enabled) {
+    let cache: api.LatexCacheInfo | null = null;
+    try {
+      cache = await api.latexCacheInfo();
+    } catch {
+      // A cache that cannot be measured is reported as absent rather than as an
+      // error dialog: the engine itself is working, which is the answer here.
+    }
+    const size =
+      cache && cache.bytes > 0
+        ? `\nDownloaded packages and fonts: ${(cache.bytes / 1048576).toFixed(1)} MiB, under a ${cache.limitMb} MiB ceiling.`
+        : "\nNo TeX packages have been downloaded yet; they arrive on demand.";
+    await message(
+      "LuaLaTeX is ready.\n\n" +
+        "It compiles .tex documents locally. Your document never leaves this device." +
+        size +
+        "\n\nExport › PDF writes the PDF the preview is showing.",
+      { title: "LuaLaTeX", kind: "info" },
+    );
+    return;
+  }
+
+  const agreed = await ask(
+    "LuaLaTeX was not found, so .tex documents have no preview.\n\n" +
+      "MDraft can download the verified engine files — about 10 MiB — into its own data folder. " +
+      "Additional TeX packages and fonts are fetched on demand and cached locally. " +
+      "Nothing is installed system-wide, no administrator rights are needed, and turning it off " +
+      "in Preferences leaves the downloaded files on disk.\n\n" +
+      "Your document stays on this device.",
+    { title: "Install LuaLaTeX", kind: "info", okLabel: "Download", cancelLabel: "Cancel" },
+  );
+  if (!agreed) return;
+
+  const notice = toast("Downloading the LuaLaTeX engine…", 0);
+  try {
+    await api.installLatex();
+    settings.latexEnabled = true;
+    persist();
+    notice.dismiss();
+    preferences?.refresh();
+    scheduleRender(true);
+    await message(
+      "LuaLaTeX is ready.\n\nOpen or save a .tex file and its preview will appear beside it.",
+      { title: "LuaLaTeX installed", kind: "info" },
+    );
+  } catch (error) {
+    notice.dismiss();
+    await message(String(error), { title: "Could not install LuaLaTeX", kind: "error" });
+  }
+}
+
 async function pandocSetup(): Promise<void> {
   let status: api.PandocStatus;
   try {
@@ -4528,6 +4598,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "tools.exportConfig": () => preferences.openAt("export"),
   "tools.pandoc": () => void pandocSetup(),
   "tools.typst": () => void typstSetup(),
+  "tools.latex": () => void latexSetup(),
   "tools.ai": () => applySettingsPatch({ aiEnabled: settings.aiEnabled === false }),
 
   "file.preferences": () => preferences.open(),
@@ -6286,7 +6357,14 @@ function runMenuAction(id: string): void {
   }
 
   const handler = handlers[id];
-  if (!handler) return;
+  if (!handler) {
+    // A menu id with no handler is the dead UI this project forbids, and the
+    // `Record<string, …>` type cannot catch it: every string is a valid key. The
+    // console line is what makes a typo in an id visible instead of silent, and
+    // the test below reads the same table.
+    console.warn(`[menu] no handler for ${id}`);
+    return;
+  }
   void Promise.resolve(handler()).catch((error) => toast(String(error)));
 }
 
