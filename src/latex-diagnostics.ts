@@ -40,6 +40,31 @@ export function diagnosticPlace(diagnostic: LatexDiagnostic): string {
 }
 
 /**
+ * Whether `candidate` is a file the failed compile actually read.
+ *
+ * A failed compile has no result to ask, so the preview keeps the main file it
+ * used while the reader is still inside that project. The question is
+ * membership, not location: two unrelated documents share a folder, and a
+ * directory test therefore pinned every `.tex` tab beside a broken project to
+ * that project. Switching to a valid document then recompiled the broken one and
+ * showed its problems forever.
+ *
+ * `key` is the platform's path identity (`pathKey` in `sessions.ts`), passed in
+ * so this stays pure and Node can run it.
+ */
+export function latexProjectMember(
+  candidate: string | null,
+  rootPath: string | null,
+  files: readonly string[],
+  key: (path: string) => string,
+): boolean {
+  if (!candidate) return false;
+  const wanted = key(candidate);
+  if (rootPath && wanted === key(rootPath)) return true;
+  return files.some((file) => key(file) === wanted);
+}
+
+/**
  * The range a diagnostic points at in `text`, or null when the line is gone.
  *
  * `text` is the CodeMirror document, whose lines are separated by `\n`.

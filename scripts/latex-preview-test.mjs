@@ -217,23 +217,57 @@ const forward = await page.evaluate(`(() => {
  return h ? [...h].map(r=>r.toString()).join("") : "";
 })()`);
 check(forward === "draws", "source selection paints only draws in the PDF", forward);
-const reverse = await page.evaluate(`(() => {
+// Use a real PDF drag. A synthetic Range while CodeMirror retains focus can be
+// replaced by its prior editor selection when the source decoration updates.
+const phrasePoint = await page.evaluate(`(async () => {
  const phrase="A heading is a command";
- const span=[...document.querySelectorAll(".typst-page .textLayer span")].find(e=>e.firstChild?.nodeType===3 && e.textContent.includes(phrase));
- if(!span) return "missing phrase";
- span.scrollIntoView({block:"center"});
- const at=span.textContent.indexOf(phrase), r=document.createRange();
- r.setStart(span.firstChild,at);r.setEnd(span.firstChild,at+phrase.length);
- const selection=window.getSelection();selection.removeAllRanges();selection.addRange(r);
- span.dispatchEvent(new MouseEvent("mouseup",{bubbles:true}));
- return selection.toString();
+ const find=()=>[...document.querySelectorAll(".typst-page .textLayer span")].find(e=>e.firstChild?.nodeType===3 && e.textContent.includes(phrase));
+ let span=find(); if(!span) return "";
+ span.scrollIntoView({block:"center"}); await new Promise(r=>setTimeout(r,250));
+ span=find(); if(!span) return "";
+ const at=span.textContent.indexOf(phrase), first=document.createRange(), last=document.createRange();
+ first.setStart(span.firstChild,at); first.setEnd(span.firstChild,at+1);
+ last.setStart(span.firstChild,at+phrase.length-1); last.setEnd(span.firstChild,at+phrase.length);
+ const a=first.getBoundingClientRect(), b=last.getBoundingClientRect();
+ return JSON.stringify({start:{x:a.left+a.width*0.15,y:(a.top+a.bottom)/2},end:{x:b.right-b.width*0.15,y:(b.top+b.bottom)/2}});
 })()`);
+if (phrasePoint) {
+  const { start, end } = JSON.parse(phrasePoint);
+  await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...start });
+  await page.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    ...start,
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+  });
+  for (let step = 1; step <= 8; step += 1)
+    await page.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: start.x + ((end.x - start.x) * step) / 8,
+      y: start.y + ((end.y - start.y) * step) / 8,
+      button: "left",
+      buttons: 1,
+    });
+  await page.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    ...end,
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+  });
+}
 await sleep(700);
+const reverse = await page.evaluate('window.getSelection()?.toString() ?? ""');
 const sourceMark = await page.evaluate(
   '[...document.querySelectorAll(".cm-sync-word")].map(e=>e.textContent).join("")',
 );
 check(reverse === "A heading is a command", "the PDF phrase is selected", reverse);
-check(sourceMark === reverse, "PDF selection paints the same phrase in the source", sourceMark);
+check(
+  sourceMark === "A heading is a command",
+  "PDF selection paints the same phrase in the source",
+  sourceMark,
+);
 check(
   (await page.evaluate('document.querySelectorAll(".latex-sync-region").length')) === 0,
   "no whole-line SyncTeX region is painted",
