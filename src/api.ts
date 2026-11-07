@@ -627,6 +627,22 @@ export type DocumentLanguage = "markdown" | "typst" | "html" | "asciidoc" | "lat
 export interface LatexProjectSnapshot {
   mainFile: string;
   files: Array<{ path: string; data: string }>;
+  /**
+   * Project-relative paths skipped because they are symlinks.
+   *
+   * The snapshot follows the references a document declares rather than walking
+   * the directory, so a symlink it would have read is reported here instead of
+   * aborting the project. The preview surfaces them so a later "File not found"
+   * from the compiler is explained rather than mysterious.
+   */
+  skipped: string[];
+  /**
+   * A key over the main file and the referenced set.
+   *
+   * An edit that does not change which files are read leaves it alone, so a
+   * finished PDF stays current; adding an `\input` changes it.
+   */
+  generation: string;
 }
 
 export const latexStatus = () => invoke<boolean>("latex_status");

@@ -24,7 +24,6 @@ const MIRROR: &str = "https://texlive.corca.ai/snapshots/2025-0d3fc73b65e39905/2
 const MAX_FILE: usize = 32 * 1024 * 1024;
 const MAX_PROJECT: usize = 64 * 1024 * 1024;
 const MAX_FILES: usize = 256;
-const MAX_DEPTH: usize = 12;
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 static CACHE_LOCK: Mutex<()> = Mutex::new(());
 static ASSET_REQUESTS: AtomicU64 = AtomicU64::new(0);
@@ -508,64 +507,415 @@ pub struct ProjectFile {
 pub struct ProjectSnapshot {
     main_file: String,
     files: Vec<ProjectFile>,
+    /// Paths skipped because they are symlinks.
+    ///
+    /// Reported instead of aborting the project: one odd entry must not make a
+    /// document uncompilable, and the reader is told which file was left out so a
+    /// later "File not found" is not a mystery.
+    skipped: Vec<String>,
+    /// A generation key over the main file and the referenced set.
+    ///
+    /// Keying on the *set* rather than a revision counter means an edit that does
+    /// not change which files are read (a typo fix) does not invalidate a finished
+    /// PDF, while adding an `\input` does.
+    generation: String,
 }
 
-fn supported(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-        [
-            "tex", "bib", "sty", "cls", "bst", "png", "jpg", "jpeg", "pdf", "otf", "ttf",
-        ]
-        .contains(&e.to_ascii_lowercase().as_str())
+/// The character index of `needle` at or after `from`.
+fn find_from(text: &[char], needle: &str, from: usize) -> Option<usize> {
+    let needle: Vec<char> = needle.chars().collect();
+    if needle.is_empty() || text.len() < needle.len() {
+        return None;
+    }
+    (from..=text.len() - needle.len()).find(|&start| {
+        text[start..start + needle.len()]
+            .iter()
+            .zip(&needle)
+            .all(|(a, b)| a == b)
     })
 }
 
-fn collect(
-    root: &Path,
-    dir: &Path,
-    depth: usize,
-    files: &mut Vec<(PathBuf, Vec<u8>)>,
-    total: &mut usize,
-) -> Result<(), String> {
-    if depth > MAX_DEPTH {
-        return Err("The LaTeX project exceeds the directory depth limit.".into());
-    }
-    for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        if entry.file_name().to_string_lossy().starts_with('.') {
+/// Every `\name` occurrence, as `(start, end)` character indices.
+fn matches_command(text: &[char], name: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let needle = format!("\\{name}");
+    let mut from = 0;
+    while let Some(at) = find_from(text, &needle, from) {
+        // The name must end there: `\verbatim` is not `\verb`.
+        let after = at + needle.len();
+        if text
+            .get(after)
+            .is_some_and(|ch| ch.is_ascii_alphabetic() || *ch == '@')
+        {
+            from = after;
             continue;
         }
-        let path = entry.path();
-        let meta = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
-        if meta.file_type().is_symlink() {
-            return Err(format!(
-                "Project symlinks are not supported: {}",
-                path.display()
-            ));
-        }
-        let resolved = fs::canonicalize(&path).map_err(|e| e.to_string())?;
-        if !resolved.starts_with(root) {
-            return Err(format!("Project path escapes its root: {}", path.display()));
-        }
-        if meta.is_dir() {
-            collect(root, &resolved, depth + 1, files, total)?;
-        } else if meta.is_file() && supported(&path) {
-            if files.len() >= MAX_FILES || meta.len() > MAX_FILE as u64 {
-                return Err("The LaTeX project exceeds its file count or file size limit.".into());
-            }
-            let bytes = fs::read(&resolved).map_err(|e| e.to_string())?;
-            if bytes.len() > MAX_FILE {
-                return Err("A LaTeX project file exceeds 32 MiB.".into());
-            }
-            *total = total
-                .checked_add(bytes.len())
-                .ok_or("Project size overflow")?;
-            if *total > MAX_PROJECT {
-                return Err("The LaTeX project exceeds 64 MiB.".into());
-            }
-            files.push((resolved, bytes));
+        out.push((at, after));
+        from = after;
+    }
+    out
+}
+
+/// Blank a character range, keeping newlines so offsets survive.
+fn blank(out: &mut [char], from: usize, to: usize) {
+    let end = to.min(out.len());
+    for ch in out.iter_mut().take(end).skip(from) {
+        if *ch != '\n' {
+            *ch = ' ';
         }
     }
-    Ok(())
+}
+
+/// The index just past a balanced `{…}` group starting at `at`, if there is one.
+fn brace_end(out: &[char], at: usize) -> Option<usize> {
+    if out.get(at) != Some(&'{') {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut end = at;
+    while end < out.len() {
+        match out[end] {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(end + 1);
+                }
+            }
+            _ => {}
+        }
+        end += 1;
+    }
+    None
+}
+
+/// Mask the regions that are literal text, preserving offsets.
+///
+/// The Rust twin of `maskLiteralRegions` in `src/latex-references.ts`. A document
+/// that *shows* `\input{…}` inside `\verb` or a `verbatim` block is not reading
+/// that file, and the shipped LaTeX Reference does exactly that.
+///
+/// Hand-written rather than regex-driven on purpose: this crate has no `regex`
+/// dependency, and adding one for a masking pass would cost build time on every
+/// platform for a scanner that only needs a few delimiter and keyword pairs.
+fn mask_literal_regions(text: &str) -> String {
+    let mut out: Vec<char> = text.chars().collect();
+
+    // `\verb` / `\verb*`: the next non-letter character is the delimiter, and the
+    // literal runs to the next occurrence of it on the same line.
+    for (start, _) in matches_command(&out, "verb") {
+        let mut at = start + "\\verb".len();
+        if out.get(at) == Some(&'*') {
+            at += 1;
+        }
+        let Some(&delimiter) = out.get(at) else { continue };
+        if delimiter.is_ascii_alphabetic() || delimiter == ' ' {
+            continue;
+        }
+        at += 1;
+        let mut end = at;
+        while end < out.len() && out[end] != delimiter && out[end] != '\n' {
+            end += 1;
+        }
+        blank(&mut out, start, end + 1);
+    }
+
+    // The literal environments, bodies included.
+    for name in [
+        "verbatim",
+        "verbatim*",
+        "Verbatim",
+        "Verbatim*",
+        "lstlisting",
+        "minted",
+        "alltt",
+    ] {
+        let open = format!("\\begin{{{name}}}");
+        let close = format!("\\end{{{name}}}");
+        let mut from = 0;
+        while let Some(found) = find_from(&out, &open, from) {
+            let end = find_from(&out, &close, found + open.len())
+                .map(|at| at + close.len())
+                .unwrap_or(out.len());
+            blank(&mut out, found, end);
+            from = end;
+        }
+    }
+
+    // `\iffalse … \fi` never runs.
+    let mut from = 0;
+    while let Some(found) = find_from(&out, "\\iffalse", from) {
+        let end = find_from(&out, "\\fi", found + 8)
+            .map(|at| at + 3)
+            .unwrap_or(out.len());
+        blank(&mut out, found, end);
+        from = end;
+    }
+
+    // `\lstinline` and `\mintinline`, in their delimiter and brace forms.
+    for command in ["lstinline", "mintinline"] {
+        for (start, _) in matches_command(&out, command) {
+            let mut at = start + command.len() + 1;
+            while at < out.len() && out[at].is_whitespace() {
+                at += 1;
+            }
+            if out.get(at) == Some(&'[') {
+                while at < out.len() && out[at] != ']' {
+                    at += 1;
+                }
+                at += 1;
+                while at < out.len() && out[at].is_whitespace() {
+                    at += 1;
+                }
+            }
+            // `\mintinline{lang}` takes a language group before the delimiter.
+            if let Some(end) = brace_end(&out, at) {
+                at = end;
+                while at < out.len() && out[at].is_whitespace() {
+                    at += 1;
+                }
+            }
+            let Some(&delimiter) = out.get(at) else { continue };
+            if delimiter.is_ascii_alphanumeric() || delimiter == ' ' || delimiter == '\\' {
+                continue;
+            }
+            at += 1;
+            let mut end = at;
+            while end < out.len() && out[end] != delimiter {
+                end += 1;
+            }
+            blank(&mut out, start, end + 1);
+        }
+    }
+
+    // A command whose argument is text, not a path: `\texttt{\input}` names the
+    // command instead of calling it.
+    for command in [
+        "texttt", "textbf", "textit", "textrm", "textsf", "textsc", "textsl", "textup",
+        "textmd", "emph", "mbox", "hbox", "text",
+    ] {
+        for (start, _) in matches_command(&out, command) {
+            let mut at = start + command.len() + 1;
+            while at < out.len() && out[at].is_whitespace() {
+                at += 1;
+            }
+            if let Some(end) = brace_end(&out, at) {
+                blank(&mut out, start, end);
+            }
+        }
+    }
+
+    out.into_iter().collect()
+}
+
+/// The first `{…}` argument in `text`, after any optional `[…]`.
+fn first_brace_argument(text: &str) -> Option<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut at = 0;
+    while at < chars.len() && chars[at].is_whitespace() {
+        at += 1;
+    }
+    if chars.get(at) == Some(&'[') {
+        while at < chars.len() && chars[at] != ']' {
+            at += 1;
+        }
+        at += 1;
+        while at < chars.len() && chars[at].is_whitespace() {
+            at += 1;
+        }
+    }
+    let end = brace_end(&chars, at)?;
+    Some(chars[at + 1..end - 1].iter().collect())
+}
+
+/// The literal references one source declares, as `(kind, name)`.
+fn declared_references(text: &str) -> Vec<(String, String)> {
+    let masked = mask_literal_regions(text);
+    let mut out = Vec::new();
+    for line in masked.split('\n') {
+        // A `%` starts a comment unless escaped.
+        let code = match line.find('%') {
+            Some(at) if at == 0 || !line[..at].ends_with('\\') => &line[..at],
+            _ => line,
+        };
+        let chars: Vec<char> = code.chars().collect();
+        for kind in [
+            "input",
+            "include",
+            "includegraphics",
+            "bibliography",
+            "addbibresource",
+        ] {
+            for (_, after) in matches_command(&chars, kind) {
+                let rest: String = chars[after..].iter().collect();
+                let Some(argument) = first_brace_argument(&rest) else {
+                    continue;
+                };
+                let names: Vec<String> = if kind == "bibliography" {
+                    argument.split(',').map(str::to_string).collect()
+                } else {
+                    vec![argument]
+                };
+                for raw in names {
+                    let name = raw.trim().trim_start_matches("./").to_string();
+                    if !name.is_empty() {
+                        out.push((kind.to_string(), name));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The extensions a reference with no suffix may resolve to.
+fn candidate_suffixes(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "includegraphics" => &[".pdf", ".png", ".jpg", ".jpeg"],
+        "bibliography" | "addbibresource" => &[".bib"],
+        _ => &[".tex"],
+    }
+}
+
+/// Whether a reference names a literal path the snapshot may read.
+fn literal_reference(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains(['\\', '{', '}', '#', '$', '~', ':'])
+        && !name.starts_with('/')
+        && !name
+            .split('/')
+            .any(|part| part.is_empty() || part == ".." || part == ".")
+}
+
+/// A project-relative path with forward slashes, for the IPC payload.
+fn relative_to(root: &Path, path: &Path) -> Result<String, String> {
+    let relative = path.strip_prefix(root).map_err(|e| e.to_string())?;
+    let text = relative
+        .to_str()
+        .ok_or("Project paths must be valid Unicode.")?;
+    Ok(text.replace('\\', "/"))
+}
+
+/// Collect the files a document actually reads, following its references.
+///
+/// Replaces the directory walk. The old collector copied every supported file
+/// under the root — including drafts the document never mentions — and aborted
+/// the whole project on the first symlink anywhere below it. This one starts at
+/// the main file and follows what it declares, so a project with a large
+/// `figures/` folder of unused images sends only the ones it uses.
+///
+/// A symlink is **skipped and reported**, never followed: following one can leave
+/// the project root, which is the confinement the snapshot exists to enforce.
+fn collect_referenced(
+    root: &Path,
+    main: &Path,
+    overlays: &[Overlay],
+) -> Result<(Vec<(PathBuf, Vec<u8>)>, Vec<String>, String), String> {
+    // Every candidate is canonicalized before it is compared with `root`, so the
+    // root must be canonical too — otherwise a caller passing a path with a
+    // symlinked or non-normalised prefix would silently collect nothing. The
+    // command canonicalizes already; doing it here makes the invariant the
+    // function's own rather than the caller's.
+    let root = &fs::canonicalize(root).map_err(|e| e.to_string())?;
+    let main = &fs::canonicalize(main).map_err(|e| e.to_string())?;
+    let mut files: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    let mut seen: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
+    let mut pending: Vec<PathBuf> = vec![main.to_path_buf()];
+    let mut total = 0usize;
+
+    while let Some(path) = pending.pop() {
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        if files.len() >= MAX_FILES {
+            return Err("The LaTeX project exceeds its file count limit.".into());
+        }
+
+        // An open buffer wins over the bytes on disk, so an unsaved edit compiles.
+        let overlay = overlays.iter().find(|entry| {
+            fs::canonicalize(&entry.path)
+                .map(|full| full == path)
+                .unwrap_or(false)
+        });
+        let bytes = match overlay {
+            Some(entry) => {
+                if entry.text.len() > MAX_FILE {
+                    return Err("An open LaTeX project file exceeds 32 MiB.".into());
+                }
+                entry.text.clone().into_bytes()
+            }
+            None => {
+                let meta = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+                if meta.file_type().is_symlink() {
+                    skipped.push(relative_to(root, &path).unwrap_or_else(|_| path.display().to_string()));
+                    continue;
+                }
+                if meta.len() > MAX_FILE as u64 {
+                    return Err("A LaTeX project file exceeds 32 MiB.".into());
+                }
+                fs::read(&path).map_err(|e| e.to_string())?
+            }
+        };
+
+        total = total
+            .checked_add(bytes.len())
+            .ok_or("Project size overflow")?;
+        if total > MAX_PROJECT {
+            return Err("The LaTeX project exceeds 64 MiB.".into());
+        }
+
+        // Only a text source declares further references; an image does not.
+        if path.extension().is_some_and(|e| {
+            matches!(
+                e.to_ascii_lowercase().to_str(),
+                Some("tex" | "bib" | "sty" | "cls" | "bst")
+            )
+        }) {
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            for (kind, name) in declared_references(&text) {
+                // A non-literal reference is reported by the frontend validator
+                // with a named message before a compile is attempted; skipping it
+                // here keeps the snapshot from failing twice for one cause.
+                if !literal_reference(&name) {
+                    continue;
+                }
+                let base = path.parent().unwrap_or(root);
+                let has_extension = name.rsplit('/').next().is_some_and(|part| part.contains('.'));
+                let suffixes: &[&str] = if has_extension {
+                    &[""]
+                } else {
+                    candidate_suffixes(&kind)
+                };
+                for suffix in suffixes {
+                    let candidate = base.join(format!("{name}{suffix}"));
+                    let Ok(full) = fs::canonicalize(&candidate) else {
+                        continue;
+                    };
+                    // A reference resolving outside the root is refused rather
+                    // than read: the same confinement, now applied per reference.
+                    if !full.starts_with(root) || !full.is_file() {
+                        continue;
+                    }
+                    pending.push(full);
+                    break;
+                }
+            }
+        }
+
+        files.push((path, bytes));
+    }
+
+    // The generation key covers the main file and the referenced set.
+    let mut key = String::new();
+    for (path, bytes) in &files {
+        key.push_str(&relative_to(root, path).unwrap_or_default());
+        key.push('\u{0}');
+        key.push_str(&digest(bytes));
+        key.push('\n');
+    }
+    skipped.sort();
+    Ok((files, skipped, digest(key.as_bytes())))
 }
 
 /// Capture the project directory and overlay the current open text buffers.
@@ -598,44 +948,28 @@ pub async fn latex_project_snapshot(
             return Err("Choose a saved .tex file as the LaTeX project root.".into());
         }
         let mut files = Vec::new();
-        let mut total = 0;
-        collect(&root, &root, 0, &mut files, &mut total)?;
-        for overlay in overlays {
-            let Ok(full) = fs::canonicalize(&overlay.path) else {
-                continue;
-            };
-            if !full.starts_with(&root) {
-                continue;
-            }
-            if let Some((_, bytes)) = files.iter_mut().find(|(path, _)| *path == full) {
-                if overlay.text.len() > MAX_FILE {
-                    return Err("An open LaTeX project file exceeds 32 MiB.".into());
-                }
-                total = total.saturating_sub(bytes.len()) + overlay.text.len();
-                if total > MAX_PROJECT {
-                    return Err("The LaTeX project exceeds 64 MiB.".into());
-                }
-                *bytes = overlay.text.into_bytes();
-            }
-        }
-        let relative = |path: &Path| -> Result<String, String> {
-            let path = path.strip_prefix(&root).map_err(|e| e.to_string())?;
-            let text = path
-                .to_str()
-                .ok_or("Project paths must be valid Unicode.")?;
-            Ok(text.replace('\\', "/"))
-        };
-        let main_file = relative(&main)?;
+        let mut skipped = Vec::new();
+        let mut generation = String::new();
+        let (collected, skipped_paths, key) = collect_referenced(&root, &main, &overlays)?;
+        files.extend(collected);
+        skipped.extend(skipped_paths);
+        generation.push_str(&key);
+        let main_file = relative_to(&root, &main)?;
         let files = files
             .into_iter()
             .map(|(path, data)| {
                 Ok(ProjectFile {
-                    path: relative(&path)?,
+                    path: relative_to(&root, &path)?,
                     data: STANDARD.encode(data),
                 })
             })
             .collect::<Result<_, String>>()?;
-        Ok(ProjectSnapshot { main_file, files })
+        Ok(ProjectSnapshot {
+            main_file,
+            files,
+            skipped,
+            generation,
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -675,7 +1009,9 @@ pub async fn save_compiled_pdf(output_path: String, data: String) -> Result<(), 
 
 #[cfg(test)]
 mod tests {
-    use super::{cache_size, collect, evict_to_limit, safe_relative};
+    use super::{
+        cache_size, collect_referenced, evict_to_limit, mask_literal_regions, safe_relative,
+    };
     use std::{fs, path::Path};
     #[test]
     fn mirror_paths_cannot_escape_or_change_host() {
@@ -697,49 +1033,87 @@ mod tests {
     }
 
     #[test]
-    fn project_snapshot_preserves_binary_images_and_included_files() {
+    fn project_snapshot_follows_references_and_preserves_binary_images() {
         let root =
             fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../samples/latex-poc"))
                 .unwrap();
-        let mut files = Vec::new();
-        let mut total = 0;
-        collect(&root, &root, 0, &mut files, &mut total).unwrap();
+        let main = root.join("main.tex");
+        let (files, skipped, generation) = collect_referenced(&root, &main, &[]).unwrap();
+        assert!(skipped.is_empty(), "the fixture has no symlinks");
+        assert!(!generation.is_empty(), "a generation key is produced");
+
+        // The included chapter and the bibliography are reached through the
+        // document's own references, not by walking the directory.
+        assert!(
+            files
+                .iter()
+                .any(|(path, _)| path.ends_with("chapters/intro.tex")),
+            "the included chapter is collected"
+        );
+        assert!(
+            files
+                .iter()
+                .any(|(path, _)| path.ends_with("references.bib")),
+            "the bibliography is collected"
+        );
+        // The image is binary and must survive byte-for-byte.
         let image = files
             .iter()
             .find(|(path, _)| path.ends_with("figures/diagram.png"))
-            .unwrap();
+            .expect("the referenced image is collected");
         assert!(image.1.starts_with(b"\x89PNG\r\n\x1a\n"));
+    }
+
+    #[test]
+    fn a_reference_to_a_file_the_document_never_names_is_not_read() {
+        // The whole point of following references: a sibling draft is not part of
+        // the project just because it sits in the same folder.
+        let root = scratch("unreferenced");
+        fs::write(root.join("main.tex"), "\\input{used}").unwrap();
+        fs::write(root.join("used.tex"), "included").unwrap();
+        fs::write(root.join("draft.tex"), "never mentioned").unwrap();
+        let (files, _, _) = collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
+        let names: Vec<String> = files
+            .iter()
+            .map(|(path, _)| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"main.tex".to_string()));
+        assert!(names.contains(&"used.tex".to_string()));
         assert!(
-            files
-                .iter()
-                .any(|(path, _)| path.ends_with("chapters/intro.tex"))
+            !names.contains(&"draft.tex".to_string()),
+            "an unreferenced file is not collected: {names:?}"
         );
-        assert!(
-            files
-                .iter()
-                .any(|(path, _)| path.ends_with("references.bib"))
-        );
-        assert!(total > image.1.len());
+    }
+
+    #[test]
+    fn a_literal_region_is_not_a_reference() {
+        // The shipped LaTeX Reference shows these commands as examples. Reading
+        // them as references made the document uncompilable.
+        let masked = mask_literal_regions("\\verb|\\input{chapters/intro}|");
+        assert!(!masked.contains("\\input"), "the \\verb body is blanked: {masked:?}");
+        let masked = mask_literal_regions("\\begin{verbatim}\n\\input{x}\n\\end{verbatim}");
+        assert!(!masked.contains("\\input"), "the verbatim body is blanked");
+        let masked = mask_literal_regions("\\texttt{\\input} names the command");
+        assert!(!masked.contains("\\input"), "a text argument is blanked");
+        // A real reference survives.
+        assert!(mask_literal_regions("\\input{real}").contains("\\input"));
     }
 
     #[cfg(unix)]
     #[test]
-    fn project_snapshot_refuses_symlinks_even_inside_root() {
+    fn a_symlink_is_skipped_and_reported_rather_than_aborting_the_project() {
+        // The old collector failed the whole project on the first symlink. One
+        // odd entry must not make a document uncompilable; it is reported so a
+        // later "File not found" is explained.
         use std::os::unix::fs::symlink;
-        let root = std::env::temp_dir().join(format!("mdraft-latex-link-{}", std::process::id()));
-        fs::create_dir(&root).unwrap();
-        let link = root.join("escape");
-        symlink("/", &link).unwrap();
-        let mut files = Vec::new();
-        let mut total = 0;
-        let root = fs::canonicalize(root).unwrap();
-        assert!(
-            collect(&root, &root, 0, &mut files, &mut total)
-                .unwrap_err()
-                .contains("symlink")
-        );
-        fs::remove_file(link).unwrap();
-        fs::remove_dir(root).unwrap();
+        let root = scratch("symlink");
+        fs::write(root.join("main.tex"), "\\input{linked}").unwrap();
+        symlink("/etc/hostname", root.join("linked.tex")).unwrap();
+        let (files, skipped, _) = collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
+        assert!(files.iter().any(|(path, _)| path.ends_with("main.tex")));
+        assert_eq!(skipped.len(), 1, "the symlink is reported: {skipped:?}");
+        assert!(skipped[0].contains("linked.tex"));
+        fs::remove_dir_all(&root).unwrap();
     }
 
     /// A scratch directory the test process can actually write to.
