@@ -234,6 +234,17 @@ fn asciidoc_input_arguments(format: &ExportFormat, values: &Placeholders) -> Vec
     reader_arguments(format, values, "asciidoc")
 }
 
+/// Pandoc's own LaTeX reader.
+///
+/// `latex` rather than `markdown`: pandoc reads `.tex` natively, and feeding LaTeX
+/// to the Markdown reader would produce a silently wrong document — every
+/// `\section` would survive as literal text. The reader is mature enough that
+/// DOCX, ODT and EPUB come out right, which is exactly what a `.tex` author
+/// cannot produce any other way.
+fn latex_input_arguments(format: &ExportFormat, values: &Placeholders) -> Vec<String> {
+    reader_arguments(format, values, "latex")
+}
+
 // ---------------------------------------------------------------------------
 // Locating tools
 // ---------------------------------------------------------------------------
@@ -548,6 +559,7 @@ pub fn export<R: Runtime>(app: &AppHandle<R>, request: &ExportRequest) -> Result
     let mut args = match request.language.as_deref() {
         Some("html") => html_input_arguments(&format, &values),
         Some("asciidoc") => asciidoc_input_arguments(&format, &values),
+        Some("latex") => latex_input_arguments(&format, &values),
         _ => build_arguments(&format, &values),
     };
     // For any other Format a Typst document is rendered to HTML first and handed
@@ -1566,6 +1578,32 @@ mod tests {
                 "--from=latex",
                 "--toc"
             ]
+        );
+    }
+
+    #[test]
+    fn latex_uses_pandoc_latex_reader_not_the_markdown_one() {
+        // The defect this prevents: feeding `.tex` to the Markdown reader leaves
+        // every `\section` as literal text, and the export "succeeds" with a
+        // document that is silently wrong.
+        let args = latex_input_arguments(
+            &format_with("-f markdown -s -o ${outputPath}", "--toc"),
+            &values(),
+        );
+        assert_eq!(
+            args,
+            vec!["-s", "-o", "/out/report.docx", "-f", "latex", "--toc"]
+        );
+        // A user argument that names a reader is replaced, not duplicated: pandoc
+        // takes the last `-f`, so leaving the Markdown one in front would be
+        // harmless but the intent is clearer with one reader.
+        let overridden = latex_input_arguments(
+            &format_with("-f markdown -s -o ${outputPath}", "--from=markdown"),
+            &values(),
+        );
+        assert_eq!(
+            overridden,
+            vec!["-s", "-o", "/out/report.docx", "-f", "latex", "--from=markdown"]
         );
     }
 

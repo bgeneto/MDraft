@@ -19,7 +19,7 @@ each verified against the code rather than assumed:
 | --- | --- |
 | Tools › Check or Install LaTeX… | **Missing.** Tools offers Pandoc and Typst (`menu.rs:1218–1227`); `installLatex()` exists in `src/main.ts:7557` but no menu item reaches it. |
 | Print | **Deliberately disabled** (`menu.rs:556`), label `Print… (use Export › PDF)`. The maintainer has now asked for it to print the compiled PDF. |
-| Pandoc export for `.tex` | **Disabled** (`menu.rs:559`): `export.html` and `export.pdf.browser` are false for LaTeX. |
+| Pandoc export for `.tex` | **Done.** The backend gained a `latex` reader arm; `export.html` and every pandoc format are available. `export.pdf.browser` stays disabled because it re-renders. |
 | Format Document | **Done.** tex-fmt behind `hasFormatter`; both gates removed. tex-fmt damages `verbatim` (tabs → spaces, blank runs collapsed) and `maskLatexLiterals` is what prevents it. |
 | Zoom in the LaTeX preview | **Already works.** The LaTeX host builds `TypstPdfPreview` and calls `setZoom` both at creation (`main.ts:1680`) and on every change (`main.ts:969`). No UI assertion, because the harness cannot see the engine assets. |
 | Insert and Format commands | **Audited and complete.** Every applicable row produces valid LaTeX; task lists, alerts and front matter are disabled with a real alternative named. Format Document is gated twice (`menu.rs:572` and `main.ts:2666`) — that is step 6. |
@@ -153,11 +153,37 @@ Each step leaves the product consistent and is independently testable.
   The label loses its "use Export › PDF" suffix. **This is the step that needs an
   ADR**, because it decides where printing a compiled document lives.
 
-- [ ] **5. Pandoc export for `.tex`.** Widen the export gate so `export.html` and
+- [x] **5. Pandoc export for `.tex`.** Widen the export gate so `export.html` and
   the pandoc-backed formats accept LaTeX, and make `buildExportArticle` pass the
   `.tex` source to pandoc rather than trying to render it. `export.pdf.browser`
   stays disabled — that route re-renders, which is the rejected approach.
   `export-test` gains a `.tex` source case.
+
+  **Landed.** The backend gained a `latex` arm beside `html` and `asciidoc`
+  (`export.rs`), so pandoc reads `.tex` with its **own LaTeX reader** rather than
+  the Markdown one. The language already travelled with the request, which is why
+  the change is three lines and a test rather than a new pipeline.
+
+  **Three gates, and only one was in the plan.** The frontend guard
+  (`main.ts:3639`) refused LaTeX outright; `menu.rs` had `export.html` in the
+  `!latex` arm; and `export.html` had **no arm at all** in `enabled_for`, so
+  removing the `!latex` gate left it falling through to `_ => return None`
+  instead of becoming available. Only running the test found the third.
+
+  **`export.pdf.browser` stays disabled**, and for a reason worth keeping: it
+  re-renders the document to HTML and prints that, which would produce a second
+  layout contradicting the compiled PDF. `export.pdf` writes the compiled bytes.
+
+  **Verified against real pandoc 3.12.1:** the shipped LaTeX Reference converts
+  to a 15,213-byte DOCX, and to 5,680 characters of text with the sections and
+  emphasis intact. Math pandoc cannot convert is preserved as TeX with a warning
+  rather than dropped — the right behaviour for a lossy target.
+
+  `export` 40 → **44**. One assertion of mine was wrong and the real output
+  corrected it: for a LaTeX *target* pandoc legitimately writes a
+  `\documentclass` preamble and `\item` on its own line, so "no preamble" was the
+  wrong signal. The right one is that the commands are not *escaped* as literal
+  text.
 
 - [x] **6. tex-fmt as the LaTeX formatter.** Add `tex-fmt@0.5.7-npm.1` (MIT,
   **537 KiB gzip**, measured), load it lazily behind `src/format/formatters.ts`

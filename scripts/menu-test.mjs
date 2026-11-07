@@ -923,9 +923,12 @@ try {
     "the disabled LaTeX PDF row says what it waits for",
     (await itemById("export.pdf"))?.text ?? "MISSING",
   );
+  // HTML export goes through pandoc, which reads LaTeX with its own reader, so
+  // it is available now. DOCX, ODT and EPUB are formats LaTeX cannot write
+  // itself, and refusing them cost the reader real output.
   check(
-    (await itemById("export.html"))?.enabled === false,
-    "LaTeX disables the HTML export until the native PDF row lands",
+    (await itemById("export.html"))?.enabled === true,
+    "LaTeX exports HTML through pandoc's LaTeX reader",
   );
   check(
     (await itemById("export.pdf.browser"))?.enabled === false,
