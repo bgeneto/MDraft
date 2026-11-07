@@ -25,7 +25,7 @@ each verified against the code rather than assumed:
 | Insert and Format commands | **Audited and complete.** Every applicable row produces valid LaTeX; task lists, alerts and front matter are disabled with a real alternative named. Format Document is gated twice (`menu.rs:572` and `main.ts:2666`) — that is step 6. |
 | SyncTeX click and selection blink | Click works. Blink parity with Typst is unverified. |
 | Two-column scroll precision | The correspondence rule set exists and is unit-tested; two-column behaviour is unverified. |
-| Rich paste into LaTeX | **Missing.** `src/paste/` has readers and renderers for Markdown, HTML, Typst and AsciiDoc; there is no `render-latex.ts` or `read-latex.ts`. The detector scores LaTeX, so the destination is known — the conversion does not exist. |
+| Rich paste into LaTeX | **Missing, and one path is a bug.** `src/paste/` has readers and renderers for Markdown, HTML, Typst and AsciiDoc; there is no `render-latex.ts` or `read-latex.ts`. Worse, `literalFor` (`src/paste/index.ts:206`) falls through to `renderHtmlFragment` for LaTeX, so **plain text pasted into a `.tex` buffer is rendered as HTML**. |
 | Tests for all of the above | Partial. |
 
 The goal is that a reader cannot tell LaTeX is the newest language: every menu row
@@ -178,17 +178,46 @@ Each step leaves the product consistent and is independently testable.
   hinted page and the nearest region; what is unproven is whether that is enough
   when the columns are far apart horizontally.
 
-- [ ] **9. Rich paste into a LaTeX document.** `src/paste/` has readers and
-  renderers for Markdown, HTML, Typst and AsciiDoc — and **none for LaTeX**. So
-  *Convert Rich Text on Paste* has no destination for a `.tex` buffer: pasting
-  rich text, Markdown or HTML into LaTeX either inserts the source verbatim or
-  does nothing, depending on the path. Add `render-latex.ts` and
-  `read-latex.ts` to the same matrix the other four use, so a paste converts to
-  valid LaTeX: headings become `\section`, emphasis `\emph`/`\textbf`, lists
-  `itemize`/`enumerate`, code `verbatim`, links `\href`, images
-  `\includegraphics`, tables `tabular`, math preserved. The detector already
-  scores LaTeX (`scoreLatex`), so the destination is known; what is missing is the
-  conversion. `paste:convert` gains the LaTeX row in both directions.
+- [ ] **9. "Convert Rich Text on Paste" must produce valid LaTeX.** This is the
+  requirement in full: **every** source format the clipboard can carry — rich
+  text (HTML), Markdown, plain text, Typst and AsciiDoc — must paste into a `.tex`
+  document as valid LaTeX, and LaTeX source must paste into the other four.
+
+  `src/paste/` has readers and renderers for Markdown, HTML, Typst and AsciiDoc,
+  and **none for LaTeX**. Three distinct failures follow, and the third is a bug
+  rather than a gap:
+
+  1. **Rich text and Markdown into LaTeX** insert their source verbatim, because
+     there is no `render-latex.ts` for the shared IR to render into.
+  2. **Plain text into LaTeX** has no escape rule. LaTeX treats `# $ % & _ { } ~
+     ^ \` as markup, so a pasted sentence containing `50%` or `a_b` is a compile
+     error, not text.
+  3. **`literalFor` falls through to `renderHtmlFragment`** (`src/paste/index.ts:206`)
+     for any destination it does not name — so plain text pasted into a `.tex`
+     buffer is currently rendered as **HTML**. That is a defect, not a missing
+     feature, and it is the first thing to fix.
+
+  Work:
+
+  - `render-latex.ts` — the IR to LaTeX: headings to `\section`…`\subparagraph`,
+    emphasis to `\emph`/`\textbf`, lists to `itemize`/`enumerate` (nested), code
+    to `verbatim` (inline to `\texttt`), links to `\href`, images to
+    `\includegraphics`, tables to `tabular`, block quotes to `quote`, math passed
+    through unchanged. It reuses the strings `latex-commands.ts` already inserts,
+    so a pasted table and Format › Table cannot produce different bytes.
+  - `read-latex.ts` — the inverse, so `.tex` source pastes into Markdown, HTML,
+    Typst and AsciiDoc. It reads the constructs `render-latex.ts` writes; anything
+    it does not understand survives as literal text rather than being dropped.
+  - **A LaTeX escape function** for the plain-text path, covering the ten special
+    characters, and a `literalFor` branch that names LaTeX instead of falling
+    through to HTML.
+  - The detector already scores LaTeX (`scoreLatex`), so the *destination* is
+    known; what is missing is the conversion in both directions.
+
+  `paste:convert` (411 checks) gains the LaTeX row: all four sources into LaTeX,
+  LaTeX into all four, the escape table character by character, a pasted `50%`
+  and `a_b` surviving as text, nested lists, a table, math, and the fall-through
+  regression above.
 
 - [ ] **10. Measurement and close.** Typing latency with the popup open, the
   installer delta for tex-fmt, the first and warm compile through `latex:poc`, and
@@ -244,7 +273,7 @@ Named before the work starts, because the counts are a contract:
 | `latex:format:unit` (new) | tex-fmt: verbatim and math preserved byte-exact, idempotence, comments kept, a non-LaTeX file untouched |
 | `preview:zoom` (24) | + LaTeX preview zoom: chip, keyboard, Reset, Content Width |
 | `export` (40) | + a `.tex` source converting to DOCX and HTML |
-| `paste:convert` (411) | + the LaTeX row: rich text, Markdown and HTML into LaTeX, and LaTeX into the other four; heading levels, emphasis, lists, code, links, images, tables, math |
+| `paste:convert` (411) | + the LaTeX row: **all four sources** (rich text/HTML, Markdown, plain text, Typst, AsciiDoc) into LaTeX, and LaTeX into all four; heading levels, emphasis, nested lists, code, links, images, tables, math, the ten-character escape table, and the `literalFor` fall-through regression |
 | `latex:measure` (probe) | + the installer delta for tex-fmt |
 | `latex:poc` | + print produces a PDF the Poppler checks accept |
 
@@ -260,8 +289,10 @@ Named before the work starts, because the counts are a contract:
 6. The LaTeX preview zooms exactly as the Typst Pages view does.
 7. A click in the preview paints the region with the same pulse Typst uses.
 8. Scroll correspondence is precise on a two-column document in both directions.
-9. Pasting rich text, Markdown or HTML into a `.tex` document produces valid
-   LaTeX, and pasting LaTeX into the other four produces their syntax.
+9. *Convert Rich Text on Paste* produces valid LaTeX from **every** source the
+   clipboard can carry — rich text, Markdown, plain text, Typst and AsciiDoc — and
+   pasting LaTeX into the other four produces their syntax. A pasted `50%` or
+   `a_b` arrives as text, not as a compile error.
 10. `npm test` passes, and every count in `AGENTS.md` matches.
 
 ## Open questions
@@ -273,3 +304,12 @@ Named before the work starts, because the counts are a contract:
   test uses a document with a custom command to find out what a reader gets.
 - **tex-fmt and two-column layout.** Formatting may re-indent a `multicols` body
   in a way the reader did not ask for. The corpus test should include one.
+- **Paste escaping versus intent.** Escaping every special character is right for
+  plain text, but a reader who pastes `\alpha` meaning the command would get
+  `\textbackslash{}alpha`. Step 9 starts from the safe rule — plain text is text —
+  and the test pins that a pasted `50%` and `a_b` survive; whether a pasted
+  backslash-command should be recognised as markup is a judgement call to settle
+  while implementing, with the reader's likely intent as the tiebreaker.
+- **Paste into a LaTeX *project*.** A pasted image path must resolve relative to
+  the main file's directory (decision D5), not the buffer's. The test uses a
+  project with a subdirectory to pin it.
