@@ -770,6 +770,19 @@ than asserting the feature's own internal counters.
 
 ## Traps
 
+**`Help › LaTeX Reference` opens a document that cannot compile: `Missing project file for \bibliography in LaTeX Reference.tex`**
+The reference validator scanned every line as live markup, so it treated the
+document's own examples — `\verb|\input{…}|`, `\texttt{\input}`, a bare
+`\includegraphics` mention, `\iffalse` blocks, and the bodies of `verbatim`,
+`lstlisting` and `minted` — as real references to files that do not exist. Saving
+a copy of a built-in document is a normal thing to do, which is what surfaced it.
+`src/latex-references.ts` now masks those regions before scanning, preserving line
+and column offsets so an error still points at the right line. The lesson is
+general: **a scanner that decides what a document *means* must mask the regions
+that are literal text first** — `spellcheck.ts` and the outline extractor already
+did, and this validator was the one that did not. `latex:references:unit` pins
+every false-positive class plus the real rejections that must survive.
+
 **The whole window fails to boot — every UI suite reports `the window finished booting` FAIL and `TypeError: Cannot read properties of null (reading 'focus')` — after adding a nested selector to `buildChromeTheme`**
 `EditorView.theme` renders through `style-mod`, which substitutes `&` only at the
 **start** of a selector (`part.replace(/&/, sel)` in `style-mod.js`). A nested
