@@ -7,13 +7,19 @@
 // real editor; this pins what it offers and — just as important — the positions
 // where it must offer nothing.
 
-import { latexCatalog, LATEX_ENVIRONMENT_NAMES, LATEX_PACKAGE_NAMES, LATEX_CLASS_NAMES } from "../src/completion/latex-catalog.ts";
+import {
+  latexCatalog,
+  LATEX_ENVIRONMENT_NAMES,
+  LATEX_PACKAGE_NAMES,
+  LATEX_CLASS_NAMES,
+} from "../src/completion/latex-catalog.ts";
 import { filterByPrefix, latexContextAt } from "../src/completion/latex-context.ts";
 import { bibliographyKeys, projectReferences } from "../src/completion/project-index.ts";
 import {
   LATEX_ALIGN,
   LATEX_CODE,
   LATEX_DISPLAY_MATH,
+  LATEX_HEADINGS,
   LATEX_QUOTE,
   LATEX_RULE,
   LATEX_TABLE,
@@ -40,7 +46,9 @@ console.log("=== the catalog ===");
   check(
     duplicates.length === 0,
     "no row appears twice in one section",
-    duplicates.length ? [...new Set(duplicates)].map((k) => k.split("\u0000")[1]).join(", ") : "none",
+    duplicates.length
+      ? [...new Set(duplicates)].map((k) => k.split("\u0000")[1]).join(", ")
+      : "none",
   );
 
   // Every row needs a section, or the popup renders it under an empty heading.
@@ -54,7 +62,14 @@ console.log("=== the catalog ===");
     "every row has a detail string",
   );
 
-  for (const command of ["\\section", "\\begin", "\\usepackage", "\\includegraphics", "\\cite", "\\frac"]) {
+  for (const command of [
+    "\\section",
+    "\\begin",
+    "\\usepackage",
+    "\\includegraphics",
+    "\\cite",
+    "\\frac",
+  ]) {
     check(labels.includes(command), `the catalog offers ${command}`);
   }
   for (const env of ["itemize", "equation", "tabular", "figure"]) {
@@ -88,10 +103,7 @@ console.log("\n=== snippets match what the Format menu inserts ===");
       "the table snippet opens with the Format menu's first line",
       table.label.split("\n")[0],
     );
-    check(
-      table.label.includes("\\end{table}"),
-      "the table snippet closes the table environment",
-    );
+    check(table.label.includes("\\end{table}"), "the table snippet closes the table environment");
   }
 
   // The block constructs reuse the Format constants' delimiters. Most are
@@ -116,15 +128,38 @@ console.log("\n=== snippets match what the Format menu inserts ===");
     }
   }
 
-  // Inline wrappers come from `latexInline`, so the delimiters agree too.
+  // Every heading the Format menu offers must be a command row with its braces,
+  // or Format › Heading and typing the same name disagree. The headings are no
+  // longer duplicated as dedicated snippets, so this is what pins the parity.
+  for (const heading of LATEX_HEADINGS) {
+    const row = rows.find((entry) => entry.label === `\\${heading}`);
+    check(Boolean(row), `the catalog offers \\${heading}`);
+    if (row) {
+      check(
+        row.template === `${heading}{\${1}}`,
+        `\\${heading} inserts its braces`,
+        row.template ?? "none",
+      );
+    }
+  }
+
+  // Inline wrappers come from `latexInline`, so the delimiters agree too. The
+  // wrapper is now an ordinary command row (`\textbf`) whose template is derived
+  // from its argument shape, so the check reads the template rather than a
+  // dedicated snippet — and it must still agree with what Format inserts.
   const bold = latexInline("bold");
-  const boldRow = rows.find((row) => row.detail === "strong text");
-  check(Boolean(boldRow), "a strong-text snippet exists");
+  const boldRow = rows.find((row) => row.label === "\\textbf");
+  check(Boolean(boldRow), "a strong-text row exists");
   if (boldRow) {
     check(
-      boldRow.label.startsWith(bold.before) && boldRow.label.endsWith(bold.after),
-      "the strong-text snippet uses latexInline's delimiters",
+      boldRow.label === bold.before.replace(/\{$/, ""),
+      "the strong-text row is the command latexInline wraps with",
       boldRow.label,
+    );
+    check(
+      boldRow.template === `${bold.before.replace(/^\\/, "")}\${1}}`,
+      "the strong-text template inserts latexInline's braces",
+      boldRow.template,
     );
   }
 }
@@ -132,35 +167,170 @@ console.log("\n=== snippets match what the Format menu inserts ===");
 console.log("\n=== snippets use real newlines, not escapes ===");
 {
   // `Snippet.parse` splits a template on real newlines. A `\n` written as two
-  // characters would be inserted literally and produce a broken document.
+  // characters would be inserted literally and produce a broken document. A row
+  // inserts `template` when it has one, so both fields are checked.
   const rows = latexCatalog().filter((row) => row.snippet);
-  const escaped = rows.filter((row) => row.label.includes("\\n"));
+  const text = (row) => row.template ?? row.label;
+  const escaped = rows.filter((row) => text(row).includes("\\n"));
   check(
     escaped.length === 0,
     "no snippet carries a literal backslash-n",
-    escaped.length ? escaped.map((row) => row.detail).join(", ") : "none",
+    escaped.length ? escaped.map((row) => row.label).join(", ") : "none",
   );
   // And the multi-line ones really do span lines.
-  const multiline = rows.filter((row) => row.label.includes("\n"));
-  check(multiline.length > 0, "multi-line snippets contain real newlines", `${multiline.length} rows`);
+  const multiline = rows.filter((row) => text(row).includes("\n"));
+  check(
+    multiline.length > 0,
+    "multi-line snippets contain real newlines",
+    `${multiline.length} rows`,
+  );
+}
+
+console.log("\n=== commands insert their argument braces ===");
+{
+  // The behaviour this catalog exists to get right: accepting `\cite` must
+  // insert `\cite{}` with the caret inside, not the bare command. Overleaf has
+  // done this for years and a reader coming from it expects it.
+  const rows = latexCatalog();
+  const row = (label) => rows.find((entry) => entry.label === label);
+
+  for (const [label, template] of [
+    ["\\cite", "cite{${1}}"],
+    ["\\frac", "frac{${1}}{${2}}"],
+    ["\\section", "section{${1}}"],
+    ["\\href", "href{${1}}{${2}}"],
+    ["\\rule", "rule{${1}}{${2}}"],
+    ["\\label", "label{${1}}"],
+    ["\\ref", "ref{${1}}"],
+  ]) {
+    check(
+      row(label)?.template === template,
+      `${label} inserts its braces`,
+      row(label)?.template ?? "none",
+    );
+  }
+
+  // Every command row that declares a brace argument must carry a template, or
+  // the two halves of the row disagree: the detail promises braces and the
+  // insertion delivers none. The environment, package and class sections are
+  // excluded because their rows are argument *values*, not commands.
+  const promised = rows.filter(
+    (entry) =>
+      entry.section !== "Environments" &&
+      entry.section !== "Packages" &&
+      entry.section !== "Document classes" &&
+      /\{/.test(entry.detail ?? ""),
+  );
+  const missing = promised.filter((entry) => !entry.template);
+  check(
+    promised.length > 40,
+    "the catalog has command rows with brace arguments",
+    `${promised.length} rows`,
+  );
+  check(
+    missing.length === 0,
+    "every command with a brace argument has a template",
+    missing.length ? missing.map((entry) => entry.label).join(", ") : `${promised.length} rows`,
+  );
+
+  // The converse: a command with no argument must NOT gain one, or `\alpha`
+  // would insert `\alpha{}` and stop compiling.
+  for (const label of ["\\alpha", "\\maketitle", "\\tableofcontents", "\\infty"]) {
+    check(
+      row(label)?.template === undefined,
+      `${label} inserts no braces`,
+      row(label)?.template ?? "none",
+    );
+  }
+
+  // The field is empty, never a placeholder. A placeholder closes the brace
+  // group, so the follow-up popup (the project's own keys) could never open, and
+  // `projectReferences` would harvest the placeholder as a real key.
+  const placeholders = rows.filter((entry) => entry.template && /\$\{\d+:/.test(entry.template));
+  check(
+    placeholders.length === 0,
+    "no argument template carries a placeholder",
+    placeholders.length ? placeholders.map((entry) => entry.label).join(", ") : "none",
+  );
+
+  // An optional `[...]` group is dropped rather than templated: the first tab
+  // stop belongs in the mandatory argument, which is what Overleaf does.
+  check(
+    row("\\includegraphics")?.template === "includegraphics{${1}}",
+    "an optional argument is dropped, not templated",
+    row("\\includegraphics")?.template ?? "none",
+  );
+  check(
+    row("\\sqrt")?.template === "sqrt{${1}}",
+    "sqrt templates its mandatory argument only",
+    row("\\sqrt")?.template ?? "none",
+  );
+
+  // A command must not be offered both as a bare row and as a wrapper row: the
+  // popup would show `section` and `section{…}` as two rows for one command,
+  // which reads as a bug. Block constructs such as `\begin{table}` are a
+  // different thing and are deliberately allowed beside `\begin`.
+  const bare = new Set(
+    rows.filter((entry) => /^\\[a-zA-Z]+$/.test(entry.label)).map((entry) => entry.label),
+  );
+  // Only one-line wrappers are the bug class. A multi-line block construct such
+  // as `\begin{table}[htbp]` is a different thing, deliberately offered beside
+  // the bare `\begin` command.
+  const wrapped = rows.filter(
+    (entry) =>
+      /^\\[a-zA-Z]+\{/.test(entry.label) &&
+      entry.snippet &&
+      !(entry.template ?? entry.label).includes("\n"),
+  );
+  const shadowed = [];
+  for (const entry of wrapped) {
+    const match = /^\\([a-zA-Z]+)/.exec(entry.label);
+    if (match && bare.has(`\\${match[1]}`)) shadowed.push(`\\${match[1]}`);
+  }
+  check(
+    shadowed.length === 0,
+    "no command is offered both bare and wrapped",
+    shadowed.length ? [...new Set(shadowed)].join(", ") : "none",
+  );
 }
 
 console.log("\n=== the context table offers the right catalog ===");
 {
   const at = (text) => latexContextAt(text, text.length);
 
-  check(at("\\sec").kind === "command" && at("\\sec").prefix === "sec", "a partial command is a command context");
-  check(at("\\").kind === "command" && at("\\").prefix === "", "a bare backslash offers every command");
-  check(at("\\begin{ite").kind === "environment" && at("\\begin{ite").prefix === "ite", "inside \\begin{} is an environment context");
+  check(
+    at("\\sec").kind === "command" && at("\\sec").prefix === "sec",
+    "a partial command is a command context",
+  );
+  check(
+    at("\\").kind === "command" && at("\\").prefix === "",
+    "a bare backslash offers every command",
+  );
+  check(
+    at("\\begin{ite").kind === "environment" && at("\\begin{ite").prefix === "ite",
+    "inside \\begin{} is an environment context",
+  );
   check(at("\\end{ite").kind === "environment", "inside \\end{} is an environment context too");
-  check(at("\\usepackage{ams").kind === "package" && at("\\usepackage{ams").prefix === "ams", "inside \\usepackage{} is a package context");
-  check(at("\\usepackage[utf8]{ams").kind === "package", "an optional argument does not hide the package name");
+  check(
+    at("\\usepackage{ams").kind === "package" && at("\\usepackage{ams").prefix === "ams",
+    "inside \\usepackage{} is a package context",
+  );
+  check(
+    at("\\usepackage[utf8]{ams").kind === "package",
+    "an optional argument does not hide the package name",
+  );
   check(at("\\documentclass{art").kind === "class", "inside \\documentclass{} is a class context");
   check(at("\\ref{sec:").kind === "label", "inside \\ref{} is a label context");
   check(at("\\eqref{").kind === "label", "inside \\eqref{} is a label context");
   check(at("\\cite{knu").kind === "citation", "inside \\cite{} is a citation context");
-  check(at("\\includegraphics{fig").kind === "image", "inside \\includegraphics{} is an image context");
-  check(at("\\includegraphics[width=2cm]{fig").kind === "image", "an option does not hide the image path");
+  check(
+    at("\\includegraphics{fig").kind === "image",
+    "inside \\includegraphics{} is an image context",
+  );
+  check(
+    at("\\includegraphics[width=2cm]{fig").kind === "image",
+    "an option does not hide the image path",
+  );
 }
 
 console.log("\n=== the context table offers nothing where nothing can follow ===");
@@ -168,30 +338,46 @@ console.log("\n=== the context table offers nothing where nothing can follow ===
   const at = (text) => latexContextAt(text, text.length);
 
   check(at("Some prose.").kind === "none", "prose offers nothing");
-  check(at("A sentence with a \\section{prose} in it").kind === "none", "a closed command offers nothing");
-  check(at("% a comment with \\sec").kind === "none", "a comment offers nothing");
-  check(at("% a comment\n\\sec").kind === "command", "the line after a comment offers commands again");
-  check(at("50\\% of the time \\sec").kind === "command", "an escaped percent does not start a comment");
-  check(at("\\\\sec").kind === "none", "a line break followed by letters is not a command");
   check(
-    at("\\begin{verbatim}\n\\sec").kind === "none",
-    "a verbatim body offers nothing",
+    at("A sentence with a \\section{prose} in it").kind === "none",
+    "a closed command offers nothing",
   );
+  check(at("% a comment with \\sec").kind === "none", "a comment offers nothing");
+  check(
+    at("% a comment\n\\sec").kind === "command",
+    "the line after a comment offers commands again",
+  );
+  check(
+    at("50\\% of the time \\sec").kind === "command",
+    "an escaped percent does not start a comment",
+  );
+  check(at("\\\\sec").kind === "none", "a line break followed by letters is not a command");
+  check(at("\\begin{verbatim}\n\\sec").kind === "none", "a verbatim body offers nothing");
   check(
     at("\\begin{verbatim}\n\\sec\n\\end{verbatim}\n\\sec").kind === "command",
     "the line after a verbatim body offers commands again",
   );
-  check(
-    at("\\begin{lstlisting}\n\\section{x}").kind === "none",
-    "a listing body offers nothing",
-  );
+  check(at("\\begin{lstlisting}\n\\section{x}").kind === "none", "a listing body offers nothing");
 }
 
 console.log("\n=== prefix filtering ===");
 {
-  const entries = [{ label: "section" }, { label: "subsection" }, { label: "sqrt" }, { label: "Section" }];
-  check(filterByPrefix(entries, "s").length === 4, "a one-letter prefix matches all", String(filterByPrefix(entries, "s").length));
-  check(filterByPrefix(entries, "sec").length === 2, "a prefix narrows the list", String(filterByPrefix(entries, "sec").length));
+  const entries = [
+    { label: "section" },
+    { label: "subsection" },
+    { label: "sqrt" },
+    { label: "Section" },
+  ];
+  check(
+    filterByPrefix(entries, "s").length === 4,
+    "a one-letter prefix matches all",
+    String(filterByPrefix(entries, "s").length),
+  );
+  check(
+    filterByPrefix(entries, "sec").length === 2,
+    "a prefix narrows the list",
+    String(filterByPrefix(entries, "sec").length),
+  );
   check(filterByPrefix(entries, "SEC").length === 2, "filtering ignores case");
   check(filterByPrefix(entries, "zzz").length === 0, "no match yields an empty list");
   check(filterByPrefix(entries, "").length === 4, "an empty prefix keeps everything");
@@ -227,10 +413,7 @@ console.log("\n=== project references ===");
   // Order is document order, which is the order a reader expects.
   check(refs.labels[0] === "sec:intro", "labels keep document order", refs.labels.join(", "));
   // No duplicates even though `\ref{sec:intro}` also names it.
-  check(
-    refs.labels.filter((label) => label === "sec:intro").length === 1,
-    "a label appears once",
-  );
+  check(refs.labels.filter((label) => label === "sec:intro").length === 1, "a label appears once");
 
   check(refs.citations.includes("knuth84"), "a citation key is found");
   check(refs.citations.includes("lamport94"), "a comma-separated citation key is found");

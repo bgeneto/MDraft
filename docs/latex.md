@@ -105,11 +105,24 @@ environments; `\usepackage{` offers packages; `\ref{`, `\cite{` and
 already uses. **Tab** accepts the highlighted row, and Tab still indents when no
 list is open. `Ctrl+Space` opens the list explicitly, and Escape closes it.
 
-The catalog is bundled — a few hundred curated commands, environments, packages
-and snippets — and nothing in the completion path makes a network request. A
-label you wrote earlier in the same document is offered immediately, because the
-active buffer is always available; other files are offered when the project
-snapshot has been read for the preview. Completion never triggers a compile.
+**A command that takes an argument inserts its braces.** Accepting `\cite`
+produces `\cite{}` with the caret between the braces, `\frac` produces
+`\frac{}{}` with the caret in the first pair, and `\section` produces
+`\section{}` — the behaviour Overleaf has. Tab then moves to the next argument,
+so `\frac` goes numerator, denominator. An optional `[...]` argument is not
+inserted: `\includegraphics` produces `\includegraphics{}` with the caret in the
+file argument, which is where you almost always want to start. A command with no
+argument, such as `\alpha` or `\maketitle`, inserts its bare name.
+
+The braces are what make the next step work: `\cite{}` leaves the brace group
+open, so the list of the project's own citation keys appears straight away.
+Inserting a bare `\cite` would leave you to type the `{` yourself.
+
+The catalog is bundled — a curated set of commands, environments, packages and
+snippets — and nothing in the completion path makes a network request. A label
+you wrote earlier in the same document is offered immediately, because the active
+buffer is always available; other files are offered when the project snapshot has
+been read for the preview. Completion never triggers a compile.
 
 The same layer serves Markdown and HTML. In HTML, tags and attributes are offered
 because the HTML grammar already carries its own source; in Markdown the list

@@ -18,12 +18,10 @@ import {
   LATEX_ALIGN,
   LATEX_CODE,
   LATEX_DISPLAY_MATH,
-  LATEX_HEADINGS,
   LATEX_QUOTE,
   LATEX_RULE,
   LATEX_TABLE,
   LATEX_TOC,
-  latexInline,
 } from "../latex-commands.ts";
 
 /** One completion row, before it becomes a CodeMirror `Completion`. */
@@ -36,6 +34,15 @@ export interface CatalogEntry {
   section: string;
   /** A snippet template with `${…}` tab stops, rather than literal text. */
   snippet?: boolean;
+  /**
+   * A snippet template inserted **instead of** `label`, which stays the text the
+   * popup paints.
+   *
+   * This is what lets a command row read `\cite` in the list and still insert
+   * `\cite{}`. Without it the popup would have to paint the raw template —
+   * `cite{${1}}` — which is not LaTeX and reads as a bug.
+   */
+  template?: string;
 }
 
 const SECTION = {
@@ -284,38 +291,12 @@ const CLASSES: string[] = [
 function buildSnippets(): CatalogEntry[] {
   const rows: CatalogEntry[] = [];
 
-  // A generic environment pair. `${1}` is reused in `\end`, so typing the name
-  // once fills both halves.
-  rows.push({
-    label: "\\begin{${1:environment}}",
-    detail: "environment pair",
-    section: SECTION.snippet,
-    snippet: true,
-  });
-
-  for (const heading of LATEX_HEADINGS) {
-    rows.push({
-      label: `\\${heading}{\${1:title}}`,
-      detail: "sectioning",
-      section: SECTION.snippet,
-      snippet: true,
-    });
-  }
-
-  for (const [kind, detail] of [
-    ["bold", "strong text"],
-    ["italic", "emphasis"],
-    ["code", "inline code"],
-    ["link", "link"],
-  ] as const) {
-    const inline = latexInline(kind);
-    rows.push({
-      label: `${inline.before}\${1:${inline.placeholder}}${inline.after}`,
-      detail,
-      section: SECTION.snippet,
-      snippet: true,
-    });
-  }
+  // Only the **block** constructs live here. Commands that take an argument —
+  // `\section`, `\textbf`, `\begin`, `\frac` — are ordinary command rows whose
+  // template is derived from their argument shape (see `templateFor`), so they
+  // appear once, in their own section, and the popup never shows the same name
+  // twice. The Format-parity rule is still enforced: `completion-latex-unit`
+  // asserts that these rows and `latexInline`/`LATEX_HEADINGS` agree.
 
   // The block constructs, taken verbatim from the Format menu's own constants so
   // the two routes cannot drift. `LATEX_TABLE.text` already contains real
@@ -372,6 +353,53 @@ function buildSnippets(): CatalogEntry[] {
   return rows;
 }
 
+/**
+ * Turn a command's argument shape into a snippet template.
+ *
+ * `\frac` with the detail `{num}{den}` becomes `frac{${1}}{${2}}`, so accepting
+ * it inserts `\frac{}{}` with the caret in the first pair of braces — the
+ * behaviour Overleaf has, and the reason the `detail` column exists at all.
+ * Deriving the template from `detail` rather than writing it out by hand keeps
+ * the two from drifting: there is one description of the argument shape, and the
+ * popup's right-hand column and the inserted text both read it.
+ *
+ * **The fields are empty, not placeholders**, for three reasons that each bite:
+ *
+ * 1. A placeholder closes the brace group. `\cite{key}` is a *complete* `\cite`,
+ *    so `latexContextAt` stops reporting a citation context and the follow-up
+ *    popup — the one listing the project's real keys — never opens. `\cite{}`
+ *    keeps the group open, so the list appears as soon as the row is accepted.
+ * 2. `projectReferences` scans the active buffer, so a literal `key` placeholder
+ *    would be harvested as a real citation key and offered back to the reader as
+ *    if the document defined it.
+ * 3. It is what Overleaf does, and what the reader asked for: `\frac{|}{}`, not
+ *    `\frac{num}{den}` with `num` selected.
+ *
+ * An optional `[...]` group is **dropped** rather than templated, which is also
+ * Overleaf's behaviour: `\includegraphics[options]{file}` inserts
+ * `\includegraphics{}` with the caret in the file argument, and the `detail`
+ * column still tells the reader that options exist. Templating it instead would
+ * put the first tab stop in the options group, which is the one place a reader
+ * almost never wants to start.
+ *
+ * Returns `null` when the command takes no brace argument, which is the signal
+ * to insert the bare label. A `|text|` detail (`\verb`) is deliberately not a
+ * template: its delimiters are not braces and a tab stop inside them would be
+ * wrong.
+ */
+export function templateFor(label: string, detail: string | undefined): string | null {
+  if (!detail) return null;
+  let fields = 0;
+  // Optional `[...]` groups are dropped, then each brace group becomes a field.
+  const body = detail.replace(/\[[^[\]]*\]/g, "").replace(/\{[^{}]*\}/g, () => {
+    fields += 1;
+    return `{\${${fields}}}`;
+  });
+  if (fields === 0) return null;
+  // The backslash is already in the buffer: `from` starts after it.
+  return `${label.replace(/^\\/, "")}${body}`;
+}
+
 /** Every row the LaTeX popup can offer, in the order the sections appear. */
 export function latexCatalog(): CatalogEntry[] {
   const rows: CatalogEntry[] = [...buildSnippets()];
@@ -389,7 +417,15 @@ export function latexCatalog(): CatalogEntry[] {
   };
 
   for (const [label, detail] of COMMANDS) {
-    push({ label, detail, section: sectionForCommand(label) });
+    // A command with an argument inserts a template; its `label` stays the bare
+    // name so the popup paints `\cite` and not `cite{${1}}`.
+    const template = templateFor(label, detail);
+    push({
+      label,
+      detail,
+      section: sectionForCommand(label),
+      ...(template ? { template, snippet: true } : {}),
+    });
   }
   for (const [name, detail] of ENVIRONMENTS) {
     push({ label: name, detail, section: SECTION.environment });
@@ -412,21 +448,37 @@ function sectionForCommand(label: string): string {
   if (/^\\(frac|sqrt|sum|prod|int|oint|lim|infty|partial|nabla)$/.test(label)) {
     return SECTION.math;
   }
-  if (/^\\(vspace|hspace|smallskip|medskip|bigskip|newpage|clearpage|pagebreak|hrule|rule)$/.test(label)) {
+  if (
+    /^\\(vspace|hspace|smallskip|medskip|bigskip|newpage|clearpage|pagebreak|hrule|rule)$/.test(
+      label,
+    )
+  ) {
     return SECTION.spacing;
   }
   if (/^\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph)$/.test(label)) {
     return SECTION.structure;
   }
-  if (/^\\(documentclass|usepackage|begin|end|title|author|date|maketitle|tableofcontents|appendix)$/.test(label)) {
+  if (
+    /^\\(documentclass|usepackage|begin|end|title|author|date|maketitle|tableofcontents|appendix)$/.test(
+      label,
+    )
+  ) {
     return SECTION.structure;
   }
-  if (/^\\(input|include|includegraphics|bibliography|bibliographystyle|addbibresource|printbibliography)$/.test(label)) {
+  if (
+    /^\\(input|include|includegraphics|bibliography|bibliographystyle|addbibresource|printbibliography)$/.test(
+      label,
+    )
+  ) {
     return SECTION.structure;
   }
   // Greek letters and operators read as mathematics even though the name does
   // not match the list above.
-  if (/^\\(alpha|beta|gamma|delta|epsilon|theta|lambda|mu|pi|sigma|phi|omega|times|cdot|pm|leq|geq|neq|approx|equiv|in|subset|cup|cap|forall|exists|rightarrow|Rightarrow|left|right|text)$/.test(label)) {
+  if (
+    /^\\(alpha|beta|gamma|delta|epsilon|theta|lambda|mu|pi|sigma|phi|omega|times|cdot|pm|leq|geq|neq|approx|equiv|in|subset|cup|cap|forall|exists|rightarrow|Rightarrow|left|right|text)$/.test(
+      label,
+    )
+  ) {
     return SECTION.math;
   }
   return SECTION.text;
