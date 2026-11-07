@@ -41,6 +41,7 @@ import {
 } from "@codemirror/commands";
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { completionSupport } from "./completion/layer";
+import { markdownCompletionSource } from "./completion/markdown-source";
 import { html } from "@codemirror/lang-html";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
@@ -65,6 +66,7 @@ import {
   foldKeymap,
   indentOnInput,
   indentUnit,
+  LanguageSupport,
   syntaxHighlighting,
   unfoldAll as unfoldAllCommand,
   unfoldCode,
@@ -469,7 +471,11 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
   const languageCompartment = new Compartment();
   /// The markdown parser and its keymap. Kept as a value because switching back
   /// from Typst has to reinstall exactly what start-up installed.
-  const markdownSupport = markdown({
+  // `markdown()` returns a `LanguageSupport`; its `extension` is the full set it
+  // built, and `language` is the parser the completion source hangs off. Adding
+  // the source here keeps the layer language-agnostic: it reads `autocomplete`
+  // from whatever language is active, exactly as it does for LaTeX and HTML.
+  const markdownBase = markdown({
     base: markdownLanguage,
     codeLanguages: languages,
     addKeymap: true,
@@ -478,6 +484,10 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     // owns tag closing for Markdown (see tag-close.ts), so the nested one is off.
     htmlTagLanguage: html({ matchClosingTags: false, autoCloseTags: false }),
   });
+  const markdownSupport = new LanguageSupport(markdownBase.language, [
+    markdownBase,
+    markdownBase.language.data.of({ autocomplete: markdownCompletionSource }),
+  ]);
 
   const buildHistory = () => history({ minDepth: 400 });
 
