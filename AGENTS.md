@@ -300,7 +300,8 @@ rewrite from scratch.
 | `npm run typst:map:unit` | `scripts/typst-page-map-unit.mjs` | 35 checks of the bidirectional Typst Pages prose index: formula-adjacent prose, region isolation, ambiguity, reverse lookup, PDF ActualText breaks and Unicode offsets; a repeated one-word line with identical neighbours paints nothing, a unique neighbour window picks the clicked occurrence, ligatures and soft hyphens match, and generated text stays unmapped. A multiline list keeps every first-line and continuation word on its own source line in both directions — no application |
 | `npm run latex:sync:unit` | `scripts/latex-sync-unit.mjs` | Checks exact SyncTeX regions for the multi-file LuaLaTeX fixture and rejects ambiguous positions; no application. |
 | `npm run latex:references:unit` | `scripts/latex-references-unit.mjs` | 48 checks of the validator that decides whether a project's `\input`/`\include`/`\includegraphics`/`\bibliography` references are literal paths. Pins the false-positive classes that once rejected the shipped LaTeX Reference — `\verb`, `\lstinline`, `\mintinline`, the verbatim environments, `\iffalse` blocks, `\texttt{\input}` prose and a bare command mention — and the real rejections that must survive: a macro path, a parent escape, an absolute path, a URL. Also pins that masking preserves line and column offsets — no application |
-| `npm run latex:sdk:unit` | `scripts/latex-sdk-unit.mjs` | 11 checks of the SyncTeX route and the pinned SDK shape it depends on: that `CompileResult` still declares `synctex` and `synctexData` and still documents `synctexData ?? parse(synctex)`, that the adapter no longer reaches into the worker protocol or names `<job>.synctex.gz`, that it prefers `synctexData` and falls back to parsing `synctex`, and that a missing SyncTeX fails with a named error rather than a silent null mapping. Fails when an SDK upgrade changes the shape — no application |
+| `npm run latex:sdk:unit` | `scripts/latex-sdk-unit.mjs` | 15 checks of the SyncTeX route and the pinned SDK shape it depends on: that `CompileResult` still declares `synctex` and `synctexData` and still documents `synctexData ?? parse(synctex)`, that the adapter no longer reaches into the worker protocol or names `<job>.synctex.gz`, that it prefers `synctexData` and falls back to parsing `synctex`, that a missing SyncTeX fails with a named error rather than a silent null mapping, and that the adapter pins `engine: "lualatex"` — because detection resolves `fontspec` to XeLaTeX, which this build does not ship, while LuaLaTeX supports it perfectly well. Fails when an SDK upgrade changes the shape — no application |
+| `npm run latex:measure` | `scripts/latex-measure.mjs` | A probe, not a check: the engine's on-disk footprint, the snapshot the compile receives against what the old directory walk would have sent (51% smaller on the fixture), and the base64 overhead. Prints no compile timing, because the engine drives a Web Worker and Node has no `Worker` global — the timings come from `latex:poc`, which launches a real instance |
 | `npm run latex:correspondence:unit` | `scripts/latex-correspondence-unit.mjs` | 33 checks of LaTeX scroll correspondence in both directions, against a hand-built SyncTeX mapping: that a source line maps to its regions or to nothing (a *nearby* match, an empty list, a structural line, an unmapped line, a file outside the project and line zero all fail closed), that a line owning several regions follows the direction of travel instead of snapping back to the paragraph's first typeset line, that a hint for a page the line does not appear on is not trusted, that the source target fails closed when two lines share a region, when there is no container, and when the point falls outside it, and the page-fraction clamps including a zero-height page — no application |
 | `npm run latex:poc -- [port] [offline]` | `scripts/latex-poc-test.mjs` | Exercises the LuaLaTeX project in a separately launched, isolated Windows WebView2 instance; the offline mode expects a warmed cache and a process-level network block. |
 | `scripts/close-test-window.ps1 -ProcessId <pid>` | — | Posts WM_CLOSE to a hidden staged test window without changing desktop focus; refuses processes outside the test staging directory. |
@@ -771,6 +772,27 @@ When adding a test, ask what a broken result looks like and measure that, rather
 than asserting the feature's own internal counters.
 
 ## Traps
+
+**`Document requires XeLaTeX, which is not available in this build.` — and the false conclusion that `fontspec` is XeLaTeX-only**
+This build ships **only** the LuaLaTeX engine. The SDK's detection
+(`engine/engine-select.js`) puts `fontspec`, `unicode-math`, `polyglossia` and
+`mathspec` in a set whose own reason string reads *"requires a Unicode engine
+(XeTeX/LuaTeX)"* — but then **defaults to XeLaTeX** for them. With no XeLaTeX
+engine present, `compile-engine.js` fails with that message.
+
+**LuaLaTeX supports `fontspec` perfectly well**; it is the standard way to use
+OpenType fonts there. The set is a *preference*, not a requirement, and the fix is
+never to strip `fontspec` from a document. Pass an explicit engine instead — the
+SDK documents it: *"Set an explicit engine to override detection."* `src/latex.ts`
+already does (`engine: "lualatex"`), which is why the application was never
+affected.
+
+The trap is that a probe or a test that constructs `WasmTexCompiler` **without**
+that option inherits detection and fails on any `fontspec` document, and the error
+text reads like a document defect rather than a missing option. I published that
+wrong diagnosis and "fixed" the sample by deleting `fontspec` before reading the
+adapter's own options. `latex:sdk:unit` now asserts the pin, the reason string and
+that the sample still exercises `fontspec`.
 
 **`Help › LaTeX Reference` opens a document that cannot compile: `Missing project file for \bibliography in LaTeX Reference.tex`**
 The reference validator scanned every line as live markup, so it treated the
