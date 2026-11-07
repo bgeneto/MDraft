@@ -554,9 +554,13 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
             }
         }
         "file.print" => !typst && !latex,
-        // HTML export and the browser print route are pandoc/print paths that a
-        // `.tex` document has no reader for in this change.
-        "export.html" | "export.pdf.browser" => !latex,
+        // `Export › HTML` goes through pandoc, which reads LaTeX with its own
+        // reader, so it is available for every language. The **browser** PDF
+        // route stays disabled for LaTeX: it re-renders the document to HTML and
+        // prints that, which would produce a second layout contradicting the
+        // compiled PDF the preview is showing.
+        "export.html" => true,
+        "export.pdf.browser" => !latex,
         "file.close" | "file.closeAll" => true,
         "file.closeOthers" => state.tab_count > 1,
         "file.closeLeft" => state.tab_index > 0,
@@ -1808,18 +1812,27 @@ mod tests {
         // and every pandoc route (step 7), printing (D11), and the two markups
         // LaTeX has no syntax for.
         for id in [
-            "format.document",
             "format.tasks",
             "insert.alerts",
             "para.task",
             "para.alertNote",
             "para.yaml",
-            "export.html",
-            "export.pdf",
+            // The **browser** PDF route re-renders the document to HTML and
+            // prints that, which would contradict the compiled PDF the preview
+            // shows. `export.pdf` writes the compiled bytes instead.
             "export.pdf.browser",
             "file.print",
         ] {
             assert_eq!(enabled_for(&state, id), Some(false), "{id}");
+        }
+        // These two used to be in the list above and no longer are:
+        //   - `format.document`, because tex-fmt is bundled now;
+        //   - `export.html`, because pandoc reads LaTeX with its own reader.
+        // `export.pdf` is *not* asserted here: it writes the compiled PDF, so it
+        // is available exactly while such a PDF exists, and this fixture has not
+        // compiled one. The assertion for it lives with the compiled-PDF test.
+        for id in ["format.document", "export.html"] {
+            assert_eq!(enabled_for(&state, id), Some(true), "{id}");
         }
         // Plain editing keeps working, and comment toggling now does too: the
         // stream grammar carries `commentTokens` for `%`.

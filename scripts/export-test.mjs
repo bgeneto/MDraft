@@ -222,7 +222,69 @@ for (const format of formats) {
   }
 }
 
-// (3c) The AsciiDoc frontend renders the source to HTML and sends
+// (3c) A LaTeX source uses pandoc's LaTeX reader, not the Markdown one.
+//
+// This is the case that makes DOCX/ODT/EPUB reachable for a `.tex` author. With
+// the Markdown reader every `\section` would survive as literal text and the
+// export would "succeed" with a silently wrong document — which is why the
+// language travels with the request rather than being guessed from the content.
+{
+  const output = join(workDir, "latex-source.tex");
+  const source = [
+    "\\documentclass{article}",
+    "\\begin{document}",
+    "\\section{A Section}",
+    "A \\textbf{strong} word and inline $x^2$.",
+    "\\begin{itemize}",
+    "\\item first",
+    "\\item second",
+    "\\end{itemize}",
+    "\\end{document}",
+    "",
+  ].join("\n");
+  const result = await call("run_export", {
+    request: {
+      formatId: "latex",
+      markdown: source,
+      outputPath: output,
+      inputPath: null,
+      language: "latex",
+    },
+  });
+  if (!result.ok) {
+    check(false, "a LaTeX source exports through the LaTeX reader", result.error.split("\n")[0]);
+  } else {
+    const text = readFileSync(output, "utf8");
+    check(
+      text.includes("\\section{A Section}"),
+      "a LaTeX source exports through the LaTeX reader",
+      text.split("\n").find((line) => line.includes("section")) ?? "no section",
+    );
+    check(
+      text.includes("\\textbf{strong}"),
+      "LaTeX emphasis survives the conversion",
+      text.split("\n").find((line) => line.includes("textbf")) ?? "no textbf",
+    );
+    check(
+      text.includes("\\begin{itemize}") && /\\item\s+first/.test(text),
+      "a LaTeX list survives the conversion",
+      text.split("\n").find((line) => line.includes("item")) ?? "no item",
+    );
+    // The defect this pins: the Markdown reader leaves `\section` and `\textbf`
+    // in the output as literal text. The LaTeX reader turns them into structure
+    // and writes them back as LaTeX. A LaTeX target legitimately carries a
+    // `\documentclass` preamble, so that is not the signal — the *unescaped*
+    // raw command is.
+    check(
+      !text.includes("\\textbackslash{}section") && !text.includes("\\textbackslash{}textbf"),
+      "the LaTeX commands are not escaped as literal text",
+      text.split("\n").find((line) => line.includes("textbackslash")) ?? "clean",
+    );
+  }
+}
+
+
+// (3d) The AsciiDoc frontend renders the source to HTML and sends
 //      `language: "html"`. Asciidoctor emits `\(…\)` / `\[…\]`; without the
 //      backslash math extensions pandoc's HTML reader prints them literally.
 {

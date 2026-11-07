@@ -3632,14 +3632,11 @@ function exportSuggestion(format: api.ExportFormat, name: string): string {
  */
 async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
   const snapshot = exportSource();
-  // A `.tex` file has no pandoc reader in this change: pandoc would parse it
-  // with its Markdown reader and produce a silently wrong document. The menu
-  // keeps every pandoc row disabled for LaTeX; this guard covers a stale menu,
-  // a keyboard route and a settings file edited elsewhere.
-  if (snapshot.language === "latex") {
-    toast("LaTeX exports its own PDF. Open the preview to save it.");
-    return;
-  }
+  // A `.tex` file is handed to pandoc's own LaTeX reader, which is why the
+  // language travels with the request. It used to be refused here, on the belief
+  // that pandoc would parse it with the Markdown reader; that was true only
+  // because the backend had no `latex` arm. DOCX, ODT and EPUB are formats LaTeX
+  // cannot write itself, so refusing them cost the reader real output.
   // The menu disables formats whose tool is missing, but a stale menu, a
   // keyboard route or a settings file edited elsewhere must not open a save
   // dialog for an export that cannot run. Ask before choosing a path.

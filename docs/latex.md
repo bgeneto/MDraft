@@ -51,9 +51,18 @@ byte. It never starts a compile of its own: when the preview is stale the row is
 disabled and says why. The preview's own **Save PDF** button writes the same
 bytes.
 
-Native printing is disabled for LaTeX, because the PDF already exists. There is
-no pandoc route for a `.tex` document: it has its own compiler, and a second,
-differently-laid-out PDF behind the same document would contradict the preview.
+**Other formats go through pandoc**, which reads LaTeX with its own reader, so
+*Export › HTML* and the DOCX, ODT, EPUB and RTF targets all work on a `.tex`
+document. Those are formats LaTeX cannot write itself, so they are a real gain
+rather than a duplicate route.
+
+Two things are deliberately not offered:
+
+- **Native printing** is disabled, because the compiled PDF already exists —
+  print it from the file instead.
+- **PDF (opens browser)** is disabled, because that route re-renders the document
+  to HTML and prints that, producing a second layout that would contradict the
+  preview. *Export › PDF* writes the compiled bytes instead.
 
 ## What is not implemented
 
