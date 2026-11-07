@@ -187,6 +187,16 @@ const SUITES = [
     script: "latex-references-unit.mjs",
   },
   {
+    // The Outline panel's LaTeX scan. A `\section` shown inside `\verb` or a
+    // verbatim block is sample text, not structure; the shipped LaTeX Reference
+    // demonstrates every command it documents, so the regression is pinned
+    // against that fixture and then exercised on its own.
+    id: "latex-outline-unit",
+    title: "LaTeX outline (unit)",
+    kind: "node",
+    script: "latex-outline-unit.mjs",
+  },
+  {
     // The SyncTeX route and the pinned SDK shape it depends on. Fails when an
     // SDK upgrade removes or renames the fields the adapter reads.
     id: "latex-sdk-unit",

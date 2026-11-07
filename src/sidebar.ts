@@ -3,10 +3,14 @@
 import * as api from "./api";
 import { extractHeadings } from "./markdown";
 import type { Heading } from "./markdown";
+import { extractLatexHeadings } from "./latex-outline";
 
 // Single implementation of heading scanning, shared with the `[TOC]` renderer.
 export { extractHeadings };
 export type { Heading };
+// The LaTeX scan lives in its own pure module so the whole rule set is a unit
+// test with no DOM; the sidebar re-exports it for the outline's language switch.
+export { extractLatexHeadings };
 
 /**
  * The headings in a Typst document.
@@ -124,97 +128,6 @@ export function extractHtmlHeadings(source: string): Heading[] {
     headings.push({ level: Number(match[1][1]), text, line });
   }
   return headings;
-}
-
-/**
- * The headings in a LaTeX document.
- *
- * LaTeX spells its sections as commands: `\part`, `\chapter`, `\section`,
- * `\subsection`, `\subsubsection`, `\paragraph` and `\subparagraph`, in that
- * order of nesting. The starred forms (`\section*`) are unnumbered but are still
- * headings to a reader, so they are kept. `\title{}` becomes level 0 so the
- * document title heads the outline the way a Markdown `#` does.
- *
- * A source scan, like the other extractors: the outline follows what the reader
- * typed. Comment lines are skipped, and so are the bodies of `verbatim`,
- * `lstlisting` and `minted`, where a `\section` is sample code rather than
- * structure. The command may carry an optional short title (`\section[Short]{Long}`),
- * which is what a table of contents shows, so it wins when present.
- */
-export function extractLatexHeadings(source: string): Heading[] {
-  const headings: Heading[] = [];
-  const lines = source.split("\n");
-  const levels: Record<string, number> = {
-    part: 0,
-    chapter: 1,
-    section: 1,
-    subsection: 2,
-    subsubsection: 3,
-    paragraph: 4,
-    subparagraph: 5,
-  };
-  // `\chapter` only exists in the book and report classes; in an article a
-  // `\section` is the top level. The outline is flatter than the truth rather
-  // than wrong about it, so `chapter` and `section` share a level.
-  let verbatim: string | null = null;
-
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
-
-    if (verbatim) {
-      if (line.includes(`\\end{${verbatim}}`)) verbatim = null;
-      continue;
-    }
-    const open = /\\begin\{(verbatim\*?|lstlisting|minted)\}/.exec(line);
-    if (open) {
-      verbatim = open[1];
-      continue;
-    }
-    // A `%` starts a comment unless it is escaped as `\%`.
-    const code = line.replace(/(?<!\\)%.*$/, "");
-    if (!code.trim()) continue;
-
-    const title = /\\title\s*(?:\[[^\]]*\])?\s*\{/.exec(code);
-    if (title) {
-      const text = latexHeadingText(code, title.index + title[0].length);
-      if (text) headings.push({ level: 0, text, line: i + 1 });
-      continue;
-    }
-
-    const pattern = /\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?\s*(?:\[([^\]]*)\])?\s*\{/g;
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(code)) !== null) {
-      const short = match[2]?.trim();
-      const text = short || latexHeadingText(code, match.index + match[0].length);
-      if (text) headings.push({ level: levels[match[1]], text, line: i + 1 });
-    }
-  }
-
-  return headings;
-}
-
-/** Read a brace-balanced argument starting just after its `{`, and clean it. */
-function latexHeadingText(code: string, from: number): string {
-  let depth = 1;
-  let end = from;
-  for (; end < code.length; end += 1) {
-    const ch = code[end];
-    if (ch === "\\") {
-      end += 1;
-      continue;
-    }
-    if (ch === "{") depth += 1;
-    else if (ch === "}") {
-      depth -= 1;
-      if (depth === 0) break;
-    }
-  }
-  const raw = code.slice(from, end);
-  return raw
-    .replace(/\\[a-zA-Z@]+\*?\s*/g, "")
-    .replace(/[{}]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 function decodeBasicEntities(text: string): string {

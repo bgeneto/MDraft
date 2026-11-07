@@ -58,6 +58,13 @@ console.log("\n=== literal regions are not references ===");
     ["\\lstinline|\\input{chapters/intro}|", "\\lstinline with \\input"],
     ["\\lstinline[language=TeX]|\\includegraphics{x}|", "\\lstinline with options"],
     ["\\mintinline{tex}|\\input{chapters/intro}|", "\\mintinline with \\input"],
+    // The brace forms are the same construct. They were documented as covered
+    // but were not: a flat `[^{}]*` could not match a body that contains braces,
+    // so `\lstinline{\input{x}}` was read as live markup and rejected.
+    ["\\lstinline{\\input{chapters/intro}}", "\\lstinline brace form"],
+    ["\\lstinline[language=TeX]{\\input{chapters/intro}}", "\\lstinline brace form with options"],
+    ["\\mintinline{tex}{\\input{chapters/intro}}", "\\mintinline brace form"],
+    ["\\lstinline{\\section{x}}", "a brace form whose body contains braces"],
   ];
   for (const [source, label] of cases) {
     check(validate(source) === null, `${label} is not a reference`, validate(source) ?? "accepted");
@@ -66,12 +73,23 @@ console.log("\n=== literal regions are not references ===");
 
 console.log("\n=== verbatim environments are not references ===");
 {
-  for (const environment of ["verbatim", "verbatim*", "Verbatim", "lstlisting", "minted", "alltt"]) {
+  for (const environment of [
+    "verbatim",
+    "verbatim*",
+    "Verbatim",
+    "lstlisting",
+    "minted",
+    "alltt",
+  ]) {
     const source =
       environment === "minted"
         ? `\\begin{minted}{tex}\n\\input{chapters/intro}\n\\end{minted}`
         : `\\begin{${environment}}\n\\input{chapters/intro}\n\\end{${environment}}`;
-    check(validate(source) === null, `a ${environment} body is not a reference`, validate(source) ?? "accepted");
+    check(
+      validate(source) === null,
+      `a ${environment} body is not a reference`,
+      validate(source) ?? "accepted",
+    );
   }
 }
 
