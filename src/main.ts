@@ -155,7 +155,12 @@ import {
   type LatexDiagnostic,
   type LatexResult,
 } from "./latex";
-import { diagnosticPlace, diagnosticRange, diagnosticSignature } from "./latex-diagnostics";
+import {
+  diagnosticPlace,
+  diagnosticRange,
+  diagnosticSignature,
+  latexProjectMember,
+} from "./latex-diagnostics";
 import {
   clampScroll,
   mapScrollOffset,
@@ -1526,6 +1531,16 @@ let latexNavigationRoot: string | null = null;
  * file until a render succeeds or the reader opens another project.
  */
 let latexProblemRoot: { path: string; directory: string } | null = null;
+/**
+ * The absolute keys of every file the failed snapshot contained.
+ *
+ * The root alone cannot answer "is this tab part of the project that failed?".
+ * Two unrelated documents in one folder share a directory, so a pin that only
+ * compared directories matched both: switching to a valid `.tex` file beside a
+ * broken one kept compiling the broken one and showed its problems forever.
+ * Membership in the failed snapshot is the question the pin means to ask.
+ */
+let latexProblemFiles: ReadonlySet<string> = new Set();
 /** The problems of the last failed compile, for the marks and the list. */
 let latexProblems: readonly LatexDiagnostic[] = [];
 /** The signature of the last auto-jumped list, so a re-render does not jump. */
@@ -1736,9 +1751,22 @@ function maybeJumpToLatexProblem(
   window.setTimeout(() => void revealLatexProblem(first, root, false), 0);
 }
 
+/**
+ * Whether `path` is one of the files the failed compile actually read.
+ *
+ * This is the question the root pin has to ask. Comparing directories instead
+ * was the bug: `main.tex` and an unrelated `notes.tex` beside it share a folder,
+ * so every tab switch in that folder looked like "still inside the failed
+ * project" and recompiled the broken main file forever.
+ */
+function inLatexProblemProject(path: string | null): boolean {
+  return latexProjectMember(path, latexProblemRoot?.path ?? null, [...latexProblemFiles], pathKey);
+}
+
 function latexFailure(
   error: unknown,
   root: { path: string; directory: string } | null = null,
+  files: readonly string[] = [],
 ): void {
   const panel = latexProblemPanel(error, root);
   if (typstPdf && latexPreview?.activeId === doc.id) {
@@ -1758,11 +1786,17 @@ function latexFailure(
   const problems = error instanceof LatexBuildError ? error.diagnostics : [];
   latexProblems = problems;
   latexProblemRoot = root ? { ...root } : null;
+  // Record the project's actual file set, so a later tab switch can tell "inside
+  // the failed project" from "merely in the same folder".
+  latexProblemFiles = new Set(
+    files.map((file) => pathKey(root ? joinDir(root.directory, file) : file)),
+  );
   if (root) {
     applyLatexMarks(problems, root, doc.path, true);
     maybeJumpToLatexProblem(problems, root);
   } else {
     latexProblemRoot = null;
+    latexProblemFiles = new Set();
     latexProblemSignature = "";
     editor.clearDiagnostics();
   }
@@ -1856,6 +1890,7 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
     previewStale = false;
     latexProblems = [];
     latexProblemRoot = null;
+    latexProblemFiles = new Set();
     latexProblemSignature = "";
     editor.clearDiagnostics();
     return;
@@ -1866,12 +1901,14 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
     // A failed compile has no preview to ask, so the previous root is kept while
     // the reader is looking at a file inside it. Without this, opening a problem
     // in an included chapter silently compiled that chapter as the main file.
-    const pinned =
-      latexProblemRoot &&
-      doc.path &&
-      pathKey(doc.path).startsWith(pathKey(latexProblemRoot.directory) + "/")
-        ? sessions.findByPath(latexProblemRoot.path)
-        : undefined;
+    //
+    // "Inside it" means the failed snapshot contained the file — not that the
+    // file sits in the same folder. A directory test pinned every unrelated .tex
+    // tab beside a broken project to that project, so switching to a valid
+    // document recompiled the broken one and its problems never changed.
+    const pinned = inLatexProblemProject(doc.path)
+      ? sessions.findByPath(latexProblemRoot!.path)
+      : undefined;
     root = pinned?.path ? pinned : doc;
     latexNavigationRoot = root.id;
   }
@@ -1891,9 +1928,13 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
     )
     .map((session) => ({ path: session.path, text: textOf(session) }));
   const owner = { rootId: root.id, rootDirectory: root.directory, activeId, token, revisions };
+  // The snapshot's own file list is the definition of "this project", used when a
+  // failure has to decide whether a later tab switch is still inside it.
+  let snapshotFiles: string[] = [];
   try {
     const snapshot = await api.latexProjectSnapshot(root.path, overlays);
     if (token !== renderToken || doc.id !== activeId) return;
+    snapshotFiles = snapshot.files.map((file) => file.path);
     // A symlink the snapshot refused is reported before the compile, so a
     // "File not found" from the engine is explained rather than mysterious. The
     // project still compiles: one odd entry must not make a document unusable.
@@ -1938,11 +1979,12 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
     latexProblems = [];
     latexProblemSignature = "";
     latexProblemRoot = null;
+    latexProblemFiles = new Set();
     editor.clearDiagnostics();
   } catch (error) {
     if (token === renderToken && doc.id === activeId) {
       discardStagedPdf();
-      latexFailure(error, { path: root.path, directory: root.directory });
+      latexFailure(error, { path: root.path, directory: root.directory }, snapshotFiles);
     }
   }
 }

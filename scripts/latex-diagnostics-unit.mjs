@@ -7,7 +7,12 @@
 // the command the compile saw, the line is marked as stale instead of trusting
 // the old column. No application and no LaTeX engine.
 
-import { diagnosticPlace, diagnosticRange, diagnosticSignature } from "../src/latex-diagnostics.ts";
+import {
+  diagnosticPlace,
+  diagnosticRange,
+  diagnosticSignature,
+  latexProjectMember,
+} from "../src/latex-diagnostics.ts";
 
 const checks = [];
 function check(ok, label, detail = "") {
@@ -148,6 +153,39 @@ console.log("\n=== the panel strings ===");
   const one = diagnosticSignature(diagnostic());
   const two = diagnosticSignature(diagnostic({ line: 2 }));
   check(one !== two, "the signature changes with the line");
+}
+
+console.log("\n=== project membership, not directory ===");
+{
+  // The reported bug: `main.tex` fails, and a valid `notes.tex` sits beside it.
+  // A directory test said "still inside the project", so switching to the valid
+  // tab recompiled the broken main file and its problems never changed.
+  const key = (path) => path.replace(/\\/g, "/").toLowerCase();
+  const root = "C:\\proj\\main.tex";
+  const files = ["C:\\proj\\main.tex", "C:\\proj\\chapter.tex", "C:\\proj\\fig.png"];
+
+  check(latexProjectMember("C:\\proj\\main.tex", root, files, key), "the main file is a member");
+  check(
+    latexProjectMember("C:\\proj\\chapter.tex", root, files, key),
+    "an included chapter is a member",
+  );
+  check(
+    !latexProjectMember("C:\\proj\\notes.tex", root, files, key),
+    "an unrelated file in the same folder is not a member",
+  );
+  check(
+    !latexProjectMember("C:\\proj\\sub\\chapter.tex", root, files, key),
+    "a same-named file in a subfolder is not a member",
+  );
+  check(
+    latexProjectMember("c:/PROJ/MAIN.TEX", root, files, key),
+    "membership uses the platform's path identity",
+  );
+  check(!latexProjectMember(null, root, files, key), "an unsaved buffer is never a member");
+  check(
+    !latexProjectMember("C:\\proj\\main.tex", null, [], key),
+    "no failed project means no membership",
+  );
 }
 
 const failed = checks.filter((entry) => !entry.ok).length;
