@@ -5971,7 +5971,12 @@ function installPaneSync(): void {
     // measured elements. It fails closed, so a line with no exact region simply
     // leaves the preview where it is.
     if (doc.language === "latex") {
+      // A scroll that arrives inside the suppression window is dropped, and that is
+      // the right behaviour for the *echo* of our own write. It is the wrong
+      // behaviour for a reader's scroll, and the two are indistinguishable here —
+      // so the drop is logged, which is how the convergence failure was traced.
       if (performance.now() >= suppressEditorScrollUntil) syncLatexToPreview();
+      else console.info(`[latex-scroll] dropped: suppressed for ${Math.round(suppressEditorScrollUntil - performance.now())}ms`);
       return;
     }
     if (doc.language === "html") {

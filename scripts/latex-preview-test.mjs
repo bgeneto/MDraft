@@ -466,13 +466,19 @@ if (columnPages > 0) {
       "every two-column offset is inside the pane",
       `${seen.join(", ")} within 0..${max}`,
     );
-    // Convergence: the same scroll positions must produce the same offsets. A rule
-    // that oscillates drifts on a repeat pass; one that is stable does not.
+    // Convergence: the same scroll positions must produce the same offsets. The
+    // editor is **reset to the top first**, because a pass that begins where the
+    // previous one ended does not fire a scroll for its first step — the position is
+    // already there — and the comparison then measures the harness, not the rule.
     const repeat = await page.evaluate(`
       (async () => {
         const pane = document.getElementById("preview-pane");
         const editorScroll = document.querySelector(".cm-scroller");
         const range = Math.max(0, editorScroll.scrollHeight - editorScroll.clientHeight);
+        // Back to the top, and let the correspondence settle there.
+        editorScroll.scrollTop = 0;
+        editorScroll.dispatchEvent(new Event("scroll", { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 900));
         const seen = [];
         for (const fraction of [0.15, 0.35, 0.55, 0.75, 0.9]) {
           editorScroll.scrollTop = range * fraction;
@@ -486,9 +492,25 @@ if (columnPages > 0) {
     const again = JSON.parse(String(repeat));
     check(
       JSON.stringify(again) === JSON.stringify(seen),
-      "a second pass lands on the same offsets",
+      "a second pass from the top lands on the same offsets",
       `${seen.join(",")} vs ${again.join(",")}`,
     );
+    // **The reset itself is the diagnostic.** If the preview is still where pass 1
+    // left it after the editor went back to the top, then scrolling *up* does not
+    // move the preview — an asymmetry that would explain the whole divergence and is
+    // a defect in its own right.
+    check(
+      again[0] === seen[0],
+      "scrolling back to the top returns the preview to the top",
+      `${seen[0]} vs ${again[0]}`,
+    );
+    // What the app said during the reset. A target that was computed but did not
+    // move the pane is `scrollToPagePosition`'s fault; no target at all means the
+    // scroll event never reached the handler.
+    const resetLines = consoleLines.filter((line) => line.includes("[latex-scroll]"));
+    if (resetLines.length) {
+      console.log(`  scroll log (last 6):\n    ${resetLines.slice(-6).join("\n    ")}`);
+    }
     // What the app said about the scroll, when it said anything. A preview that
     // jumps back to the top is either a target that resolved to the wrong region or
     // no target at all, and those need different fixes.
