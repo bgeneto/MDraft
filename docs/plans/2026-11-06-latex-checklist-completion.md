@@ -20,7 +20,7 @@ each verified against the code rather than assumed:
 | Tools › Check or Install LaTeX… | **Missing.** Tools offers Pandoc and Typst (`menu.rs:1218–1227`); `installLatex()` exists in `src/main.ts:7557` but no menu item reaches it. |
 | Print | **Deliberately disabled** (`menu.rs:556`), label `Print… (use Export › PDF)`. The maintainer has now asked for it to print the compiled PDF. |
 | Pandoc export for `.tex` | **Disabled** (`menu.rs:559`): `export.html` and `export.pdf.browser` are false for LaTeX. |
-| Format Document | **Disabled** (`menu.rs:572`). No formatter is bundled. |
+| Format Document | **Done.** tex-fmt behind `hasFormatter`; both gates removed. tex-fmt damages `verbatim` (tabs → spaces, blank runs collapsed) and `maskLatexLiterals` is what prevents it. |
 | Zoom in the LaTeX preview | **Already works.** The LaTeX host builds `TypstPdfPreview` and calls `setZoom` both at creation (`main.ts:1680`) and on every change (`main.ts:969`). No UI assertion, because the harness cannot see the engine assets. |
 | Insert and Format commands | **Audited and complete.** Every applicable row produces valid LaTeX; task lists, alerts and front matter are disabled with a real alternative named. Format Document is gated twice (`menu.rs:572` and `main.ts:2666`) — that is step 6. |
 | SyncTeX click and selection blink | Click works. Blink parity with Typst is unverified. |
@@ -159,13 +159,36 @@ Each step leaves the product consistent and is independently testable.
   stays disabled — that route re-renders, which is the rejected approach.
   `export-test` gains a `.tex` source case.
 
-- [ ] **6. tex-fmt as the LaTeX formatter.** Add `tex-fmt@0.5.7-npm.1` (MIT,
+- [x] **6. tex-fmt as the LaTeX formatter.** Add `tex-fmt@0.5.7-npm.1` (MIT,
   **537 KiB gzip**, measured), load it lazily behind `src/format/formatters.ts`
   the way Typstyle is loaded, and enable `format.document` for LaTeX. The default
   configuration is deliberately conservative: `wrap = false`, so formatting never
   reflows a paragraph the reader wrote. A corpus test asserts that verbatim,
   `\verb`, comments and math survive byte-exact, and that formatting twice equals
   formatting once.
+
+  **Landed, and tex-fmt damages verbatim — measured, not assumed.** The module
+  rewrites a **tab to two spaces** and **collapses a run of blank lines to one**
+  inside `verbatim`, regardless of configuration. Both change what the document
+  *prints*, not just its layout, so a naive integration would have silently
+  corrupted every code listing a reader formatted.
+
+  `maskLatexLiterals` swaps `verbatim`, `lstlisting`, `minted`, `alltt` and
+  `\verb` for placeholders before formatting and restores the original bytes
+  afterwards — the same masking idea `latex-references.ts` uses, for the same
+  reason. `latex:format:unit` (29 checks) pins every one of those bodies as
+  byte-identical, plus math untouched, prose not reflowed, idempotence, a
+  non-LaTeX buffer left alone, and the shipped LaTeX Reference surviving with
+  every comment and verbatim block intact.
+
+  **Two gates, not one.** `menu.rs:572` disabled the row and
+  `formatUnavailableReason` (`main.ts:2666`) refused it a second time. Removing
+  only the menu gate would have produced a row that is enabled and then refuses.
+
+  **Cost, measured on the real build:** `tex_fmt_bg.wasm` 1,701,774 bytes raw /
+  **549,610 gzip (537 KiB)**, emitted as its own chunk and not referenced from the
+  entry bundle — so the module is genuinely lazy. The staged binary grew
+  18.6 → 19.0 MB.
 
 - [ ] **7. SyncTeX blink parity.** Make a click in the LaTeX preview paint the
   same way a click in the Typst Pages view does: the region painted, the four-beat
