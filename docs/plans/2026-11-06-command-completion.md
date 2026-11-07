@@ -290,7 +290,8 @@ the same rule the existing chrome follows and the reason `.combo-popup` has a
   cached project snapshot, generation-tagged and cancellable, with a test that a
   stale reply is dropped.
 - [ ] **6. The Markdown catalog.** The second consumer, proving the layer is
-  language-neutral.- [ ] **7. Preference and documentation.** A `completion` setting in
+  language-neutral.
+- [ ] **7. Preference and documentation.** A `completion` setting in
   `settings.json` (default on), a Preferences row, the LaTeX Reference and
   `docs/latex.md` updated, `AGENTS.md` script and test rows.
 - [ ] **8. Measurement and close.** Typing latency with the popup open and closed
