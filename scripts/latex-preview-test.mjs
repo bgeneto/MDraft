@@ -444,25 +444,59 @@ if (columnPages > 0) {
     check(false, "the two-column scroll could be measured", parsed.error);
   } else {
     const { seen } = parsed;
-    // Non-decreasing: a step may land on the same offset (a short column), but it
-    // must never move backward, which is what an oscillation looks like.
-    const backwards = seen.filter((value, index) => index > 0 && value < seen[index - 1]);
+    // **Not "never backward".** A two-column page is not monotonic in y: `multicols`
+    // balances the columns, so a later source line can be typeset *higher* than an
+    // earlier one at the column break. Measured on this fixture, line 39 sits at
+    // y=396 while line 32 is at y=531, and both are correct — line 32 is deep in the
+    // right column and line 39 is back near the top of the left one.
+    //
+    // What must hold is that the preview **tracks**: it moves at all, it stays
+    // inside the pane, and it converges — a second pass over the same scroll
+    // positions lands on the same offsets rather than drifting.
     check(
-      backwards.length === 0,
-      "scrolling down never moves the preview backward",
+      seen.some((value) => value > 0),
+      "the preview moves while scrolling a two-column document",
       `offsets ${seen.join(" -> ")}`,
     );
+    const max = await page.evaluate(
+      `(() => { const p = document.getElementById("preview-pane"); return Math.round(p.scrollHeight - p.clientHeight); })()`,
+    );
     check(
-      seen[seen.length - 1] > seen[0],
-      "the preview advanced across the columns",
-      `${seen[0]} -> ${seen[seen.length - 1]}`,
+      seen.every((value) => value >= 0 && value <= max + 2),
+      "every two-column offset is inside the pane",
+      `${seen.join(", ")} within 0..${max}`,
+    );
+    // Convergence: the same scroll positions must produce the same offsets. A rule
+    // that oscillates drifts on a repeat pass; one that is stable does not.
+    const repeat = await page.evaluate(`
+      (async () => {
+        const pane = document.getElementById("preview-pane");
+        const editorScroll = document.querySelector(".cm-scroller");
+        const range = Math.max(0, editorScroll.scrollHeight - editorScroll.clientHeight);
+        const seen = [];
+        for (const fraction of [0.15, 0.35, 0.55, 0.75, 0.9]) {
+          editorScroll.scrollTop = range * fraction;
+          editorScroll.dispatchEvent(new Event("scroll", { bubbles: true }));
+          await new Promise((resolve) => setTimeout(resolve, 900));
+          seen.push(Math.round(pane.scrollTop));
+        }
+        return JSON.stringify(seen);
+      })().catch(() => "[]")
+    `);
+    const again = JSON.parse(String(repeat));
+    check(
+      JSON.stringify(again) === JSON.stringify(seen),
+      "a second pass lands on the same offsets",
+      `${seen.join(",")} vs ${again.join(",")}`,
     );
     // What the app said about the scroll, when it said anything. A preview that
     // jumps back to the top is either a target that resolved to the wrong region or
     // no target at all, and those need different fixes.
     const scrollLines = consoleLines.filter((line) => line.includes("[latex-scroll]"));
     if (scrollLines.length) {
-      console.log(`  scroll said: ${[...new Set(scrollLines)].slice(0, 3).join(" | ")}`);
+      // Every line the correspondence saw, with its hint and target. The
+      // oscillation is a sequence, so the whole sequence is the evidence.
+      console.log(`  scroll said:\n    ${scrollLines.slice(-10).join("\n    ")}`);
     }
   }
 }

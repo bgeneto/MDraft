@@ -307,18 +307,40 @@ Each step leaves the product consistent and is independently testable.
      page wide, so a wrong column costs about as much as half a page of vertical
      error, and unweighted `x` in points would dominate.
 
-  **Still oscillating, and the reason is now specific:** the hint's `y` reads `0`
-  throughout, so the rule cannot tell where the reader actually is and keeps
-  choosing the left column. `topPosition()` computes `y - box.top` from viewport
-  coordinates, and after `scrollToPagePosition` moves the pane the page's top is
-  above the viewport — the arithmetic should give a positive offset, so either the
-  page element's rect is stale at read time or the scroll has not settled when the
-  next hint is taken. That is the next thing to measure, and it needs the hint
-  logged on both sides of a scroll rather than only when a target is missing.
+  **Still not deterministic in the UI, and the remaining cause is named.** Logging
+  the hint on both sides of every scroll gave the whole sequence and then, on a
+  repeat pass over the same editor positions:
 
-  **Honest status: two real defects fixed, the oscillation not yet closed.** The
-  two-column assertion stays in `latex:preview` and **fails**, so that suite is
-  `optIn` again until this is fixed — a default run must stay green.
+  ```
+  pass 1: 0 -> 0 -> 264 -> 345 -> 236
+  pass 2: 236 -> 165 -> 304 -> 243 -> 318
+  ```
+
+  Pass 2 starts where pass 1 ended, so the *first* step of a pass does not move —
+  which means the target was computed but the scroll was suppressed. The
+  correspondence itself is now deterministic: `latex:correspondence:unit` proves the
+  same line gives the same target regardless of the hint (33 checks), and the
+  hint is no longer an input to the choice.
+
+  **What changed and why it is better even though the assertion still fails:**
+
+  - `previewTargetForLine` **no longer consults the hint** to choose among a line's
+    regions. It orders them by reading order — column first, then y — and takes the
+    first. A correspondence must be a function of the document: the earlier version
+    mapped the same line to different places depending on where the preview already
+    was, so a reader could never predict the result and a repeat scroll drifted.
+  - `columnSplit` infers a gutter from a horizontal gap no region crosses, with a
+    24pt threshold so a word space is not mistaken for a column.
+  - The two-column assertion was **wrong** and is corrected: a `multicols` page is
+    not monotonic in y, because the columns are balanced, so a later source line can
+    legitimately be typeset higher. Asserting "never backward" would have demanded a
+    bug. It now asserts that the preview moves, stays inside the pane, and converges
+    — and convergence is the one that fails.
+
+  **Next measurement:** the suppression window. `syncLatexToPreview` sets
+  `suppressPreviewScrollUntil` after writing, and a scroll that arrives inside that
+  window is dropped. A pass that starts immediately after the previous one therefore
+  loses its first step. That is a timing question, not a correspondence one.
 
 - [x] **9. "Convert Rich Text on Paste" must produce valid LaTeX.** This is the
   requirement in full: **every** source format the clipboard can carry — rich

@@ -1499,13 +1499,17 @@ function syncLatexToPreview(): void {
   const hint = typstPdf.topPosition() ?? undefined;
   const line = editor.topVisibleLine();
   const target = previewTargetForLine(value.result, path, line, hint);
-  if (!target) {
-    // A scroll that does nothing is the hardest kind of bug to report, because the
-    // reader sees only "the preview did not follow". Name the line and whether the
-    // mapping had anything for it.
-    console.info(`[latex-scroll] no target for ${path}:${line} (hint: ${hint ? `${hint.page}@${Math.round(hint.y)}` : "none"})`);
-    return;
-  }
+  // Log the hint on **both** sides of a scroll, not only when a target is missing.
+  // The two-column oscillation could not be explained without knowing what the hint
+  // read after the previous scroll: if it stays at 0 the rule has no idea where the
+  // reader is, and if it tracks the scroll then the region choice is at fault.
+  console.info(
+    `[latex-scroll] ${path}:${line} hint=${hint ? `${hint.page}@${Math.round(hint.y)}/${Math.round(hint.x ?? 0)}` : "none"}` +
+      ` target=${target ? `${target.page}@${Math.round(target.y)}` : "none"}` +
+      ` pane=${Math.round(typstPdf.scrollOffset())}` +
+      ` regions=${target ? target.regions.map((r) => `${Math.round(r.x)}+${Math.round(r.width)}@${Math.round(r.y)}`).join(",") : "none"}`,
+  );
+  if (!target) return;
   suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
   typstPdf.scrollToPagePosition(target.page, target.y);
 }

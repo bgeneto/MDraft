@@ -593,6 +593,18 @@ export class TypstPdfPreview {
   }
 
   /**
+   * The pane's current scroll offset, in CSS pixels.
+   *
+   * Exposed because the correspondence is a loop — scroll, read the hint, choose a
+   * target, scroll again — and a loop that oscillates cannot be diagnosed from
+   * either end alone. A caller logging its hint without the offset it was taken at
+   * sees the same number twice and learns nothing.
+   */
+  scrollOffset(): number {
+    return this.disposed ? 0 : this.pane.scrollTop;
+  }
+
+  /**
    * Scroll so a point on a page sits near the top of the visible area.
    *
    * The counterpart to {@link topPosition}, and the only place that converts a
