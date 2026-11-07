@@ -337,9 +337,30 @@ user-visible gain; 5–7 need their own measurement before they are committed.
   `latex_cache_info` / `latex_clear_cache`, LRU eviction, lock released around
   the download, digest check where published, Preferences rows, portable `data`
   override.
-- [ ] **9. Snapshot hardening.** Reference-following collection, symlink skip with
+- [x] **9. Snapshot hardening.** Reference-following collection, symlink skip with
   a warning, binaries over `mdraft-tex`, generation-keyed invalidation, and the
   memory measurement from step 13 repeated after it.
+
+  **Landed, except the `mdraft-tex` binary route and the memory measurement.**
+  `collect_referenced` starts at the main file and follows `\input`, `\include`,
+  `\includegraphics`, `\bibliography` and `\addbibresource`, so a project with a
+  large `figures/` folder of unused images sends only the ones it uses. A symlink
+  is **skipped and reported** in a new `skipped` field instead of aborting the
+  project, and the preview toasts the warning before the compile so a later "File
+  not found" is explained. A reference resolving outside the root is refused
+  rather than read — the same confinement as before, now per reference. A
+  `generation` key over the main file and the referenced set replaces the revision
+  list: a typo fix leaves a finished PDF current, adding an `\input` does not.
+
+  The masking pass is the Rust twin of `latex-references.ts`, hand-written rather
+  than regex-driven because this crate has no `regex` dependency and adding one
+  for a masking pass would cost build time on every platform.
+
+  **Deferred, and why:** serving binaries through `mdraft-tex` instead of base64
+  is a protocol change to the scheme handler and the frontend decoder together;
+  it belongs with the measurement that would justify it, and the memory number
+  cannot be taken here because the engine assets are not installed on this host.
+  Both are recorded in the plan's remaining work rather than claimed done.
 - [ ] **10. Correspondence.** Bidirectional Sync Scroll for LaTeX as a second
   implementation behind the viewer's interface, fail-closed on ambiguity, with
   the same Escape, blink and no-selection-stealing rules as Typst.
@@ -368,7 +389,7 @@ Landed on `codex/latex-product-integration`, in five commits:
 | 6. Completion | **not started** — needs the CodeMirror completion layer, which this editor has never had |
 | 7. The native PDF row | done |
 | 8. State, portable build and cache | done |
-| 9. Snapshot hardening | **not started** — the current snapshot still copies the directory tree |
+| 9. Snapshot hardening | **done except the `mdraft-tex` binary route and the memory measurement** — reference-following, symlink report, generation key |
 | 10. Correspondence (Sync Scroll) | **not started** — click navigation works, scroll correspondence does not |
 | 11. SyncTeX source | **not started** — the private worker read is unchanged and still fails closed |
 | 12. Documentation | done |
