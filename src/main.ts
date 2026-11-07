@@ -148,7 +148,7 @@ import { annotateTypstLines } from "./typst-map";
 import { paragraphRangeAt } from "./typst-page-map";
 import { TypstPdfPreview, type TypstPageContext } from "./typst-pdf";
 import { cancelLatex, compileLatex, latexSourceAt, type LatexResult } from "./latex";
-import { previewTargetForLine, sourceTargetForPoint } from "./latex-correspondence";
+import { previewTargetForLine, regionsForLine, sourceTargetForPoint } from "./latex-correspondence";
 import {
   clampScroll,
   interpolate,
@@ -1575,6 +1575,16 @@ async function latexSyncSource(page: number, x: number, y: number): Promise<void
   if (!sameFile) editor.revealLine(number, false, false);
   syncedSource = range;
   editor.setSyncRange(range.from, range.to);
+
+  // Paint the region the click resolved, the way the Typst Pages view does. The
+  // editor-side highlight says *which source lines*; this says *where on the page*
+  // they came from, and without it a click moves the caret in the other pane and
+  // leaves the reader looking at an unchanged page.
+  //
+  // `regionsForLine` is the same fail-closed lookup the editor→preview direction
+  // uses, so an ambiguous line paints nothing rather than the wrong rectangle.
+  const regions = regionsForLine(value.result, match.file, number);
+  if (regions && regions.length > 0) typstPdf?.showRegions(regions, true);
 }
 
 async function latexSavePdf(): Promise<void> {

@@ -23,7 +23,7 @@ each verified against the code rather than assumed:
 | Format Document | **Done.** tex-fmt behind `hasFormatter`; both gates removed. tex-fmt damages `verbatim` (tabs → spaces, blank runs collapsed) and `maskLatexLiterals` is what prevents it. |
 | Zoom in the LaTeX preview | **Already works.** The LaTeX host builds `TypstPdfPreview` and calls `setZoom` both at creation (`main.ts:1680`) and on every change (`main.ts:969`). No UI assertion, because the harness cannot see the engine assets. |
 | Insert and Format commands | **Audited and complete.** Every applicable row produces valid LaTeX; task lists, alerts and front matter are disabled with a real alternative named. Format Document is gated twice (`menu.rs:572` and `main.ts:2666`) — that is step 6. |
-| SyncTeX click and selection blink | Click works. Blink parity with Typst is unverified — the harness can now reach the engine (`linkLatexEngine`), but the preview still paints the enable note under test. |
+| SyncTeX click and selection blink | **Paint implemented; click resolution is wrong.** A click now paints its region, but every click resolves to line 1, so nothing is painted on a typeset line. A product defect, recorded in step 7. |
 | Two-column scroll precision | The correspondence rule set exists and is unit-tested; two-column behaviour is unverified. |
 | Rich paste into LaTeX | **Done.** `render-latex.ts` and `read-latex.ts` added; three defects fixed, the last of which (`main.ts:7241` returning before conversion for plain text) was the one that kept the feature broken. |
 | Tests for all of the above | Partial. |
@@ -244,26 +244,31 @@ Each step leaves the product consistent and is independently testable.
   pulse, reduced motion respected, Escape clearing it, and no selection stolen.
   `latex-correspondence-unit` covers the rules; the paint needs the viewer.
 
-  **Blocked on a harness limit that this round narrowed but did not close.** The
-  harness runs under `<identifier>.test-automation`, so the engine the developer
-  installed under `<identifier>` is invisible to it and a `.tex` document shows
-  the enable note instead of a PDF. `test-all.mjs` now links the engine
-  (`linkLatexEngine`: a junction on Windows, a symlink elsewhere, removed before
-  the developer's own settings are restored) and writes `latexEnabled` into the
-  test profile. That works — `latex_cache_info` reports
-  `installed: true, enabled: true`, and `latex_status` is `true` from the page.
+  **The paint was missing and is now implemented.** `latexSyncSource` — the
+  preview→editor click — moved the caret and never painted, while its editor→preview
+  sibling `latexSyncCursor` did. It now calls `regionsForLine` and `showRegions`
+  with the blink, so a click paints the region it resolved. That was a genuine
+  parity gap with Typst.
 
-  **What still fails:** the preview paints the *enable* note even with the engine
-  enabled. The render calls `api.latexStatus()` itself and gets `false`, while the
-  same call from the test's own `Runtime.evaluate` gets `true`. Something between
-  the two — most plausibly the frontend's module-local `settings.latexEnabled`
-  being persisted back as `false` after `save_settings`, or the compile failing on
-  a cold package cache in the isolated profile — needs a debugging session with
-  the app's own console, which this harness does not surface.
+  **A second real defect found on the way: the shipped LaTeX Reference did not
+  compile.** `Reference 'sec:links' undefined on page 3` — the document says *"This
+  section is labelled `sec:links`"* and no `\label` existed anywhere in the file.
+  Fixed by adding it. The reference now compiles to 5 pages, where before it
+  produced no preview at all. This is the same class of bug as the `\bibliography`
+  one found earlier: a shipped document that cannot compile.
 
-  **Honest status: not done, and not claimed.** The rule set is unit-tested
-  (33 checks); the paint is not asserted. The junction and the settings write stay
-  in `test-all.mjs` because they are correct and make the next attempt cheaper.
+  **Still open, and it is a product defect rather than a test problem:** every
+  click in the reference resolves to **line 1**, so no region is painted on a
+  typeset line. `latexSourceAt`'s candidate rule is sound on paper, which points at
+  the SyncTeX mapping carrying a document-wide node that owns the whole page — the
+  same shape as the `\end{document}` case its comment already guards against, but
+  not caught. Click navigation is therefore effectively broken even though the
+  caret does move.
+
+  **Honest status: the paint is implemented, the click is not correct.** The
+  preview suite that proved zoom and scroll (`latex-preview-test.mjs`) is kept
+  outside `test-all.mjs` because two of its assertions fail on that defect; wiring
+  it in would mean either weakening them or shipping a red layer.
 
 - [ ] **8. Two-column scroll precision.** Verify the correspondence against a
   two-column document — the case where one source line owns regions in both
