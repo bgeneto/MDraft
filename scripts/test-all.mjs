@@ -162,6 +162,22 @@ const SUITES = [
     script: "autoclose-unit.mjs",
   },
   {
+    // The completion layer's configuration, its Tab precedence and the rule that
+    // a language with no catalog offers nothing. No application.
+    id: "completion-unit",
+    title: "Completion layer (unit)",
+    kind: "node",
+    script: "completion-unit.mjs",
+  },
+  {
+    // The LaTeX catalog and the context decision table: what the popup offers,
+    // and the positions where it must offer nothing at all.
+    id: "completion-latex-unit",
+    title: "LaTeX completion catalog and context (unit)",
+    kind: "node",
+    script: "completion-latex-unit.mjs",
+  },
+  {
     // What to remember when the tabs change, and what to open at boot: pure
     // list logic, no application.
     id: "tabs-restore-unit",
