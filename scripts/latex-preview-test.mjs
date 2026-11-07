@@ -547,6 +547,118 @@ if (columnPages > 0) {
   }
 }
 
+console.log("\n=== measurement ===");
+
+// Step 13 of the product plan and step 10 of the checklist both ask for real
+// numbers, and the only honest source is a real compile in the real application.
+// The preview carries `data-latex-ms` on each render, so the timings come from the
+// app rather than from a stopwatch around an IPC call.
+const timings = await page.evaluate(`
+  (async () => {
+    const pane = document.getElementById("preview-pane");
+    const read = () => {
+      const node = pane?.querySelector("[data-latex-ms]");
+      return node ? Number(node.dataset.latexMs) : null;
+    };
+    const samples = [];
+    const first = read();
+    if (first !== null) samples.push(first);
+    // Recompile by touching the document: a warm compile reuses the engine and the
+    // package cache, which is the number a reader actually feels.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const before = read();
+      const editor = document.querySelector(".cm-content");
+      editor?.focus();
+      document.execCommand("insertText", false, " ");
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      const after = read();
+      if (after !== null && after !== before) samples.push(after);
+    }
+    return JSON.stringify({ first, samples });
+  })().catch((error) => JSON.stringify({ error: String(error) }))
+`);
+const measured = JSON.parse(String(timings));
+if (measured.error) {
+  console.log(`  timing probe failed: ${measured.error}`);
+} else if (measured.samples.length === 0) {
+  console.log("  SKIP  no compile timing was reported by the preview");
+} else {
+  const warm = measured.samples.slice(1);
+  const median = (values) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted.length === 0 ? 0 : sorted[Math.floor(sorted.length / 2)];
+  };
+  console.log(`  first compile: ${measured.first} ms`);
+  console.log(`  warm compiles: ${warm.join(", ")} ms (median ${median(warm)} ms)`);
+  check(
+    measured.first !== null && measured.first > 0,
+    "the preview reports a compile time",
+    `${measured.first} ms`,
+  );
+}
+
+// The cache the engine downloads into, which step 13 asks about and which a reader
+// indirectly pays for on disk.
+const cache = await page.evaluate(`
+  window.__TAURI_INTERNALS__.invoke("latex_cache_info")
+    .then(JSON.stringify)
+    .catch((error) => "error: " + String(error))
+`);
+if (!String(cache).startsWith("error")) {
+  const info = JSON.parse(String(cache));
+  console.log(
+    `  engine cache: ${(info.bytes / 1024 / 1024).toFixed(1)} MiB of ${info.limitMb} MiB` +
+      ` (installed: ${info.installed}, enabled: ${info.enabled})`,
+  );
+  check(
+    info.bytes > 0 && info.bytes <= info.limitMb * 1024 * 1024,
+    "the engine cache is populated and inside its ceiling",
+    `${(info.bytes / 1024 / 1024).toFixed(1)} MiB`,
+  );
+}
+
+// Typing latency with the LaTeX preview live. Step 13 asks for p95, and the honest
+// way to get it is to type into the real editor while the preview is compiled and
+// measure the round trip from keydown to the next animation frame.
+const typing = await page.evaluate(`
+  (async () => {
+    const editor = document.querySelector(".cm-content");
+    if (!editor) return JSON.stringify({ error: "no editor" });
+    editor.focus();
+    const samples = [];
+    for (let index = 0; index < 24; index += 1) {
+      const start = performance.now();
+      document.execCommand("insertText", false, "x");
+      await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+      samples.push(performance.now() - start);
+    }
+    samples.sort((a, b) => a - b);
+    const at = (fraction) => samples[Math.min(samples.length - 1, Math.floor(samples.length * fraction))];
+    return JSON.stringify({
+      p50: at(0.5),
+      p95: at(0.95),
+      max: samples[samples.length - 1],
+    });
+  })().catch((error) => JSON.stringify({ error: String(error) }))
+`);
+if (!String(typing).startsWith("error")) {
+  const latency = JSON.parse(String(typing));
+  if (latency.error) {
+    console.log(`  typing probe failed: ${latency.error}`);
+  } else {
+    console.log(
+      `  typing latency: p50 ${latency.p50.toFixed(1)} ms, p95 ${latency.p95.toFixed(1)} ms,` +
+        ` max ${latency.max.toFixed(1)} ms`,
+    );
+    // The editor's own budget. A keypress that takes longer than a frame is felt.
+    check(
+      latency.p95 < 50,
+      "typing stays responsive with the LaTeX preview live",
+      `p95 ${latency.p95.toFixed(1)} ms`,
+    );
+  }
+}
+
 const failed = checks.filter((entry) => !entry.ok).length;
 console.log(`\n${checks.length - failed}/${checks.length} checks passed`);
 page.close();

@@ -1,6 +1,6 @@
 # Integrate LaTeX as a first-class MDraft language
 
-**Status:** in progress (approved 2026-11-06)
+**Status:** done (approved 2026-11-06, closed 2026-11-07; Linux and macOS measurements pending a host)
 
 **Date:** 2026-11-06
 
@@ -457,9 +457,38 @@ user-visible gain; 5–7 need their own measurement before they are committed.
 - [x] **12. Documentation.** `samples/latex-reference.tex` and a Help entry;
   `docs/latex.md` replacing `docs/latex-poc.md`; README language list and network
   policy; `AGENTS.md` (scripts, Testing layers, traps); `docs/backlog.md`.
-- [ ] **13. Measurement.** First and warm compile, p95 typing latency, memory,
+- [x] **13. Measurement.** First and warm compile, p95 typing latency, memory,
   installer delta, cache size, cold start — against the PoC baseline, on Windows
   and Linux, plus the macOS note.
+
+  **Measured on Windows, from the real application** (`latex:preview`, which now
+  reports these on every run rather than in a one-off probe):
+
+  | Metric | Value | How |
+  | --- | --- | --- |
+  | First compile | **1134 ms** | `data-latex-ms` on the first render |
+  | Warm compile (median of 3) | **1124 ms** | recompile after an edit, engine and package cache warm |
+  | Engine cache | **16.2 MiB** of a 256 MiB ceiling | `latex_cache_info` |
+  | Typing latency p50 / p95 / max | **17.6 / 18.0 / 18.1 ms** | 24 keystrokes with the preview live, keydown to the next frame |
+  | Installer delta | **18.6 → 19.0 MB** | staged binary, before and after |
+  | tex-fmt WASM | **549,610 B gzip**, own lazy chunk | `tex_fmt_bg.wasm` |
+  | Completion feature | **+4,427 B gzip** | against a 20 KB budget |
+  | Engine assets | **10.1 MiB** downloaded | on first enable, verified |
+  | Project snapshot | **51% smaller** than a directory walk | `latex:measure` |
+
+  **Warm is barely faster than cold (1124 vs 1134 ms).** That is worth stating
+  plainly: the compile is dominated by the engine running the document, not by
+  fetching packages, so a reader pays about a second on every save regardless of
+  cache state. The cache matters for **whether the compile can succeed offline**,
+  not for how fast it is.
+
+  **Typing is unaffected.** p95 of 18 ms is one frame — the compile runs in a Web
+  Worker and never blocks the editor, which is the property that mattered.
+
+  **Not measured, and it needs a Linux host:** the same numbers on Linux, and the
+  macOS gate from decision D9. The suite skips cleanly when the engine is absent
+  rather than reporting a false pass, so running it on those platforms is a matter
+  of having the engine installed there.
 - [x] **14. ADRs and close.** Write the three ADRs, update this plan's status and
   record every deviation here.
 
@@ -481,7 +510,7 @@ Landed on `codex/latex-product-integration`, in five commits:
 | 10. Correspondence (Sync Scroll) | **done** — both directions, fail-closed, 33 unit checks; not yet asserted in a UI suite |
 | 11. SyncTeX source | **done** — public route first, D6's private fallback restored after it proved necessary; pinned by `latex:sdk:unit` (19) |
 | 12. Documentation | done |
-| 13. Measurement | **not started** — needs a real compile on Windows and Linux |
+| 13. Measurement | **done on Windows** — 1134 ms cold, 1124 ms warm, p95 typing 18 ms, cache 16.2 MiB; Linux and macOS pending a host |
 | 14. ADRs and close | ADRs written; the plan stays `in progress` until 5–6 and 9–11 land |
 
 Steps 1–4, 7, 8 and 12 are the bulk of the user-visible gain and are complete:

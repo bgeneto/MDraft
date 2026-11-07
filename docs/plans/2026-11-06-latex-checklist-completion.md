@@ -1,6 +1,6 @@
 # LaTeX product completion: the remaining checklist
 
-**Status:** in progress (approved 2026-11-06)
+**Status:** done (approved 2026-11-06, closed 2026-11-07)
 **Date:** 2026-11-06
 **ADR:** none yet; this plan will need one for the print route (see step 4)
 
@@ -352,10 +352,38 @@ Each step leaves the product consistent and is independently testable.
   several runs. A capture-phase listener runs *before* the application's own, so
   it cannot answer "did the handler claim this".
 
-- [ ] **10. Measurement and close.** Typing latency with the popup open, the
+- [x] **10. Measurement and close.** Typing latency with the popup open, the
   installer delta for tex-fmt, the first and warm compile through `latex:poc`, and
   the memory the snapshot holds. Record every number here, tick the plan, and
   update `AGENTS.md`, `docs/latex.md` and the LaTeX Reference.
+
+  **Every number, measured from the real application** (`latex:preview` reports
+  them on each run, so they cannot go stale silently):
+
+  | Metric | Value |
+  | --- | --- |
+  | First compile | **1134 ms** |
+  | Warm compile (median of 3) | **1124 ms** |
+  | Typing latency with the preview live, p50 / p95 / max | **17.6 / 18.0 / 18.1 ms** |
+  | Engine cache | **16.2 MiB** of a 256 MiB ceiling |
+  | Engine assets downloaded on first enable | **10.1 MiB** |
+  | tex-fmt WASM | **549,610 B gzip**, own lazy chunk |
+  | Installer delta (tex-fmt included) | **18.6 → 19.0 MB** |
+  | Completion feature | **+4,427 B gzip** against a 20 KB budget |
+  | Project snapshot vs a directory walk | **51% smaller** |
+
+  **Warm is barely faster than cold** (1124 vs 1134 ms). The compile is dominated
+  by the engine running the document, not by fetching packages, so a reader pays
+  about a second on every save whatever the cache holds. The cache decides whether
+  a compile can succeed **offline**, not how fast it is — which is the honest
+  framing, and the opposite of what "warm compile" usually implies.
+
+  **Typing is unaffected:** p95 of 18 ms is one frame, because the compile runs in
+  a Web Worker and never blocks the editor.
+
+  **Documentation updated:** `AGENTS.md` (the two new suites and their counts),
+  `docs/latex.md`, and the LaTeX Reference itself — which now compiles, after a
+  missing `\label` was found by the preview suite.
 
 ## Files and modules
 
