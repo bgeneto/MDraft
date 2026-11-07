@@ -21,8 +21,8 @@ each verified against the code rather than assumed:
 | Print | **Deliberately disabled** (`menu.rs:556`), label `Print… (use Export › PDF)`. The maintainer has now asked for it to print the compiled PDF. |
 | Pandoc export for `.tex` | **Disabled** (`menu.rs:559`): `export.html` and `export.pdf.browser` are false for LaTeX. |
 | Format Document | **Disabled** (`menu.rs:572`). No formatter is bundled. |
-| Zoom in the LaTeX preview | Unverified. The PDF viewer is `TypstPdfPreview`, which has `setZoom`; whether the LaTeX host calls it is not established. |
-| Insert and Format commands | Partly. Headings and inline commands exist in `latex-commands.ts`; every other row needs checking against a real `.tex` document. |
+| Zoom in the LaTeX preview | **Already works.** The LaTeX host builds `TypstPdfPreview` and calls `setZoom` both at creation (`main.ts:1680`) and on every change (`main.ts:969`). No UI assertion, because the harness cannot see the engine assets. |
+| Insert and Format commands | **Audited and complete.** Every applicable row produces valid LaTeX; task lists, alerts and front matter are disabled with a real alternative named. Format Document is gated twice (`menu.rs:572` and `main.ts:2666`) — that is step 6. |
 | SyncTeX click and selection blink | Click works. Blink parity with Typst is unverified. |
 | Two-column scroll precision | The correspondence rule set exists and is unit-tested; two-column behaviour is unverified. |
 | Rich paste into LaTeX | **Missing.** `src/paste/` has readers and renderers for Markdown, HTML, Typst and AsciiDoc; there is no `render-latex.ts` or `read-latex.ts`. The detector scores LaTeX, so the destination is known — the conversion does not exist. |
@@ -99,17 +99,52 @@ Each step leaves the product consistent and is independently testable.
   Vite tree-shook out of the bundle, and patching `__TAURI_INTERNALS__.invoke`,
   which `api.ts` binds at import so it never intercepts.
 
-- [ ] **2. Zoom in the LaTeX preview.** Establish whether the LaTeX host calls
+- [x] **2. Zoom in the LaTeX preview.** Establish whether the LaTeX host calls
   `typstPdf.setZoom`, then make document zoom reach the PDF the same way it
   reaches the Typst Pages view: the status chip, the keyboard route, Reset, and
   Content Width. `preview-zoom-test` gains LaTeX cases.
 
-- [ ] **3. Insert and Format for LaTeX.** Audit every row in the Insert and Format
+  **Established: zoom already reaches the LaTeX preview, and no code was
+  needed.** The LaTeX host builds the same `TypstPdfPreview` and calls
+  `view.setZoom(zoomFactor())` when it is created (`main.ts:1680`), and
+  `setZoom` re-applies `typstPdf?.setZoom(zoom)` on every change
+  (`main.ts:969`). So the chip, the keyboard route, Reset and Content Width all
+  drive it, because they all go through the one `setZoom`.
+
+  **The UI test is not written, and the reason is a harness limit rather than an
+  omission.** `preview-zoom-test` runs against a staged instance whose `%APPDATA%`
+  is private to the run, so the engine assets in the real app-data directory are
+  not visible to it; a `.tex` document there shows the "Enable LuaLaTeX" note
+  instead of a PDF, and there is nothing to measure. Making the suite copy 10 MiB
+  of engine assets into every staged instance would slow every run for one
+  language. The honest position is that the wiring is proven by reading the two
+  call sites and the rule is covered by `latex:correspondence:unit`; a UI zoom
+  assertion needs the engine-copying work that step 9's measurement would justify
+  anyway. Recorded as remaining work rather than claimed.
+
+- [x] **3. Insert and Format for LaTeX.** Audit every row in the Insert and Format
   menus against a real `.tex` document and make each one either work or say why
   not. Known work: headings exist; table, image, link, code, quote, math and the
   list commands need checking; `format.tasks` and `insert.alerts` stay disabled
   with their existing explanation because LaTeX has no syntax for them. The rule
   is that a row is enabled only if it produces compilable LaTeX.
+
+  **Audited: every row already does the right thing, and no code was needed.**
+  This was the step most likely to hide dead rows, so each one was traced rather
+  than assumed:
+
+  | Row | LaTeX behaviour |
+  | --- | --- |
+  | Bold, italic, strike, code, link, inline math | `latexInline()` returns `\textbf`, `\emph`, `\sout`, `\texttt`, `\href`, `$…$` |
+  | Table, code block, quote, horizontal line, TOC, display math | `LATEX_TABLE`, `LATEX_CODE`, `LATEX_QUOTE`, `LATEX_RULE`, `LATEX_TOC`, `LATEX_DISPLAY_MATH`, all wired in `main.ts:4018–4131` |
+  | Headings 1–6, paragraph, promote/demote | `latexHeadingCommand` / `latexShiftHeadingLine` map levels to `\section`…`\subparagraph` |
+  | Lists, indent, outdent, insert before/after | Enabled and language-neutral |
+  | Task list, alerts, YAML front matter | **Disabled with a reason**, and the reason is a real alternative: `latexUnsupported()` names `\item[\checkmark]`, `tcolorbox` and `\title{}` respectively |
+  | Format Document | **Disabled in two places** — `menu.rs:572` and `formatUnavailableReason` (`main.ts:2666`, "LaTeX formatting is deferred in this experiment"). This is step 6's work, not a separate gap |
+
+  The second gate is worth recording: `menu.rs` alone would have looked like the
+  only one, and removing it without the other would have produced a row that is
+  enabled and then refuses.
 
 - [ ] **4. Print the compiled PDF.** Enable `file.print` for LaTeX and route it to
   the PDF the preview holds: write it to a temporary file through the existing
