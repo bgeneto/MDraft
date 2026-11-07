@@ -187,6 +187,14 @@ const SUITES = [
     script: "latex-references-unit.mjs",
   },
   {
+    // The SyncTeX route and the pinned SDK shape it depends on. Fails when an
+    // SDK upgrade removes or renames the fields the adapter reads.
+    id: "latex-sdk-unit",
+    title: "LaTeX SDK shape and SyncTeX route (unit)",
+    kind: "node",
+    script: "latex-sdk-unit.mjs",
+  },
+  {
     // What to remember when the tabs change, and what to open at boot: pure
     // list logic, no application.
     id: "tabs-restore-unit",

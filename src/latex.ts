@@ -197,31 +197,21 @@ export async function compileLatex(snapshot: LatexProjectSnapshot): Promise<Late
     if (/LaTeX Warning: File .+ not found/i.test(result.log)) {
       throw new Error("A project image or input is missing.\n" + result.log.slice(-6000));
     }
-    // The SDK's Lua result currently omits SyncTeX. Its pinned worker protocol
-    // exposes the binary file; fail closed if a future SDK changes this shape.
-    const job = snapshot.mainFile
-      .split("/")
-      .pop()!
-      .replace(/\.tex$/i, "");
-    const internal = compiler as unknown as {
-      engine?: {
-        tex?: {
-          postMessageWithResponse(
-            request: { cmd: string; url: string; encoding: string },
-            response: string,
-          ): Promise<{ data?: Uint8Array | ArrayBuffer }>;
-        };
-      };
-    };
-    const worker = internal.engine?.tex;
-    if (!worker) throw new Error("This WasmTex build cannot read LuaLaTeX SyncTeX output.");
-    const sync = await worker.postMessageWithResponse(
-      { cmd: "readfile", url: `${job}.synctex.gz`, encoding: "binary" },
-      "cmd:readfile",
-    );
-    if (!sync.data) throw new Error("LuaLaTeX did not produce SyncTeX output.");
+    // SyncTeX comes from the public result, in the order the SDK documents:
+    // `synctexData ?? parse(synctex)`. `synctexData` is already parsed, and for an
+    // incremental compile it carries the tail spliced onto the last full
+    // compile's head — exact for the spliced PDF, where `synctex` itself is null.
+    //
+    // This replaces a private worker read (`engine.tex.postMessageWithResponse`)
+    // that reached into the SDK's internals for `<job>.synctex.gz`. That route
+    // broke silently whenever the SDK changed its worker shape, which is exactly
+    // what the plan's step 11 was written to remove.
     const parser = new SynctexParser();
-    const mapping = await parser.parse(new Uint8Array(sync.data));
+    const mapping =
+      result.synctexData ?? (result.synctex ? await parser.parse(new Uint8Array(result.synctex)) : null);
+    if (!mapping) {
+      throw new Error("LuaLaTeX did not produce SyncTeX output for this document.");
+    }
     return {
       pdf: result.pdf.slice(),
       parser,
