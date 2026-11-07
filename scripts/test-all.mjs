@@ -195,6 +195,14 @@ const SUITES = [
     script: "latex-sdk-unit.mjs",
   },
   {
+    // Scroll correspondence in both directions, and the fail-closed rule that
+    // makes a wrong jump impossible.
+    id: "latex-correspondence-unit",
+    title: "LaTeX scroll correspondence (unit)",
+    kind: "node",
+    script: "latex-correspondence-unit.mjs",
+  },
+  {
     // What to remember when the tabs change, and what to open at boot: pure
     // list logic, no application.
     id: "tabs-restore-unit",
