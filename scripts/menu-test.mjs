@@ -896,9 +896,12 @@ try {
   ]) {
     check((await itemById(id))?.enabled === true, `LaTeX keeps ${label}`);
   }
+  // Format Document is enabled now that tex-fmt is behind `hasFormatter`. It was
+  // disabled in two places — this menu gate and `formatUnavailableReason` — and
+  // removing only one would have produced a row that is enabled and then refuses.
   check(
-    (await itemById("format.document"))?.enabled === false,
-    "LaTeX disables Format Document until the formatter lands",
+    (await itemById("format.document"))?.enabled === true,
+    "LaTeX enables Format Document now that tex-fmt is bundled",
   );
   check((await itemById("para.task"))?.enabled === false, "LaTeX has no task lists");
   check((await itemById("para.yaml"))?.enabled === false, "LaTeX has no document metadata block");

@@ -2661,7 +2661,6 @@ function setDirty(next: boolean): void {
 /** Why Format Document cannot run for `session`, or null when it can. */
 function formatUnavailableReason(session: Session): string | null {
   if (session.readOnly) return "This document is read-only.";
-  if (session.language === "latex") return "LaTeX formatting is deferred in this experiment.";
   if (!hasFormatter(session.language)) return "AsciiDoc documents have no formatter.";
   if (formatBusy) return "Formatting is already running.";
   if (session.id !== doc.id && !session.editorState) {

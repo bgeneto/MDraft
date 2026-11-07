@@ -212,6 +212,14 @@ const SUITES = [
     script: "latex-correspondence-unit.mjs",
   },
   {
+    // tex-fmt as the LaTeX formatter: verbatim byte-exact, math untouched, prose
+    // not reflowed, idempotent, and the shipped reference surviving intact.
+    id: "latex-format-unit",
+    title: "LaTeX formatting (unit)",
+    kind: "node",
+    script: "latex-format-unit.mjs",
+  },
+  {
     // What to remember when the tabs change, and what to open at boot: pure
     // list logic, no application.
     id: "tabs-restore-unit",

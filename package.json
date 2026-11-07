@@ -29,6 +29,7 @@
     "latex:references:unit": "node scripts/latex-references-unit.mjs",
     "latex:sdk:unit": "node scripts/latex-sdk-unit.mjs",
     "latex:correspondence:unit": "node scripts/latex-correspondence-unit.mjs",
+    "latex:format:unit": "node scripts/latex-format-unit.mjs",
     "audit": "node scripts/audit-document.mjs",
     "math": "node scripts/math-render-check.mjs",
     "syntax": "node scripts/syntax-theme-test.mjs",
@@ -117,6 +118,7 @@
     "parse5": "^8.0.1",
     "pdfjs-dist": "6.4.299",
     "prettier": "^3.9.10",
+    "tex-fmt": "^0.5.7-npm.1",
     "wasmtex": "https://github.com/corca-ai/wasmtex/releases/download/snapshot-f85a1d3cec1c0598/wasmtex-optional-monaco-d6a39bc.tgz"
   },
   "overrides": {
