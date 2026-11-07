@@ -361,9 +361,32 @@ user-visible gain; 5–7 need their own measurement before they are committed.
   it belongs with the measurement that would justify it, and the memory number
   cannot be taken here because the engine assets are not installed on this host.
   Both are recorded in the plan's remaining work rather than claimed done.
-- [ ] **10. Correspondence.** Bidirectional Sync Scroll for LaTeX as a second
+- [x] **10. Correspondence.** Bidirectional Sync Scroll for LaTeX as a second
   implementation behind the viewer's interface, fail-closed on ambiguity, with
   the same Escape, blink and no-selection-stealing rules as Typst.
+
+  **Landed.** `src/latex-correspondence.ts` holds the whole rule set as pure
+  functions over the SyncTeX mapping, so it is testable without an engine, a PDF
+  or an editor; `TypstPdfPreview` gained `topPosition()` and
+  `scrollToPagePosition()`, the only place that converts a SyncTeX point into a
+  scroll offset, and both no-op before a render so a caller racing one cannot
+  scroll to a position that does not exist yet.
+
+  The subtlety that makes scrolling feel right rather than sticky: a paragraph of
+  prose is one `\par` spanning many typeset lines, so the **same source line owns
+  several regions**. Taking the first would snap back to the top of the paragraph
+  on every scroll event, so the current preview position is passed as a hint and
+  the nearest region wins — scrolling down continues downward.
+
+  It fails closed on: a *nearby* (guessed) match, an empty region list, a
+  structural line owning more regions than a source line plausibly can, an
+  unmapped line, a file outside the project, line zero, two source lines sharing
+  a region, a missing container, and a point outside it. `latex:correspondence:unit`
+  is 33 checks.
+
+  **Not asserted through a UI suite**, for the reason step 13 records: the engine
+  assets are not installed on this host, so there is no compiled PDF to scroll.
+  The rule set is pinned; the wiring is not.
 - [x] **11. SyncTeX source.** Public engine route first; capability-checked
   fallback; a pinned-SDK test that fails when the shape changes.
 
@@ -405,7 +428,7 @@ Landed on `codex/latex-product-integration`, in five commits:
 | 7. The native PDF row | done |
 | 8. State, portable build and cache | done |
 | 9. Snapshot hardening | **done except the `mdraft-tex` binary route and the memory measurement** — reference-following, symlink report, generation key |
-| 10. Correspondence (Sync Scroll) | **not started** — click navigation works, scroll correspondence does not |
+| 10. Correspondence (Sync Scroll) | **done** — both directions, fail-closed, 33 unit checks; not yet asserted in a UI suite |
 | 11. SyncTeX source | **done** — public `synctexData ?? parse(synctex)`, pinned by `latex:sdk:unit` |
 | 12. Documentation | done |
 | 13. Measurement | **not started** — needs a real compile on Windows and Linux |
