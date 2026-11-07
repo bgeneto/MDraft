@@ -148,6 +148,7 @@ import { annotateTypstLines } from "./typst-map";
 import { paragraphRangeAt } from "./typst-page-map";
 import { TypstPdfPreview, type TypstPageContext } from "./typst-pdf";
 import { cancelLatex, compileLatex, latexSourceAt, type LatexResult } from "./latex";
+import { previewTargetForLine, sourceTargetForPoint } from "./latex-correspondence";
 import {
   clampScroll,
   interpolate,
@@ -1474,6 +1475,53 @@ function latexEnableNote(): void {
   licenses.addEventListener("click", showLatexLicenses);
   note.append(text, button, licenses);
   preview.appendChild(note);
+}
+
+/**
+ * Scroll the preview to follow the editor's top visible line.
+ *
+ * The editor→preview half of step 10. It reuses the same fail-closed rule the
+ * click path uses, so a line with no exact SyncTeX match simply does not move the
+ * preview — a wrong jump is worse than none, because it takes the reader away
+ * from what they were reading.
+ *
+ * The current preview position is passed as a hint so that a source line owning
+ * several typeset regions (a paragraph of prose is one `\par` spanning many
+ * lines) continues in the direction the reader is scrolling instead of snapping
+ * back to the paragraph's first line on every event.
+ */
+function syncLatexToPreview(): void {
+  if (!settings.syncScroll || settings.viewMode !== "split") return;
+  const value = latexPreview;
+  if (!latexCurrent(value) || !typstPdf) return;
+  const path = latexRelative(value, doc.path);
+  if (!path) return;
+  const hint = typstPdf.topPosition() ?? undefined;
+  const target = previewTargetForLine(value.result, path, editor.topVisibleLine(), hint);
+  if (!target) return;
+  suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+  typstPdf.scrollToPagePosition(target.page, target.y);
+}
+
+/**
+ * Scroll the editor to follow the preview's top position.
+ *
+ * The preview→editor half. `sourceTargetForPoint` fails closed on ambiguity, so a
+ * page region that two source lines share does not move the editor at all.
+ */
+function syncLatexToEditor(): void {
+  if (!settings.syncScroll || settings.viewMode !== "split") return;
+  if (performance.now() < suppressPreviewScrollUntil) return;
+  const value = latexPreview;
+  if (!latexCurrent(value) || !typstPdf) return;
+  const top = typstPdf.topPosition();
+  if (!top) return;
+  const target = sourceTargetForPoint(value.result, top.page, top.x, top.y);
+  if (!target) return;
+  const path = joinDir(value.rootDirectory, target.file);
+  if (!doc.path || pathKey(doc.path) !== pathKey(path)) return;
+  if (target.line < 1 || target.line > editor.view.state.doc.lines) return;
+  editor.revealLine(target.line, false, false);
 }
 
 function latexSyncCursor(silent = false, blink = false): void {
@@ -5781,6 +5829,14 @@ function installPaneSync(): void {
       if (performance.now() >= suppressEditorScrollUntil) queuePaneScroll("source");
       return;
     }
+    // LaTeX scrolls through SyncTeX, not through DOM anchors: the preview is a
+    // PDF canvas, so its correspondence comes from the mapping rather than from
+    // measured elements. It fails closed, so a line with no exact region simply
+    // leaves the preview where it is.
+    if (doc.language === "latex") {
+      if (performance.now() >= suppressEditorScrollUntil) syncLatexToPreview();
+      return;
+    }
     if (doc.language === "html") {
       if (performance.now() >= suppressEditorScrollUntil) queuePaneScroll("source");
       return;
@@ -5887,6 +5943,13 @@ function installPaneSync(): void {
     if (doc.language === "html") return;
     if (!settings.syncScroll || settings.viewMode !== "split") return;
     if (performance.now() < suppressPreviewScrollUntil) return;
+    // LaTeX correspondence comes from SyncTeX, so it does not go through the DOM
+    // anchor solver the other markups use.
+    if (doc.language === "latex") {
+      if (typstPdf?.isLayoutScroll()) return;
+      syncLatexToEditor();
+      return;
+    }
     if (doc.language === "typst" && settings.typstView === "pages") {
       if (typstPdf?.isLayoutScroll()) return;
       queuePaneScroll("preview");

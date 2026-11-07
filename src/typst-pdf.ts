@@ -535,6 +535,56 @@ export class TypstPdfPreview {
     return performance.now() < this.layoutScrollUntil;
   }
 
+  /**
+   * The PDF position at the top of the visible area, for scroll correspondence.
+   *
+   * Returns the page under the top edge and the point within it, in the page's
+   * own coordinates — the same space SyncTeX reports regions in. `null` when no
+   * page is laid out yet, which is the honest answer before a render.
+   *
+   * The horizontal component is the pane's centre: a source line maps to a
+   * region, and a line that spans a column break has regions on both sides, so
+   * the centre is the position most likely to sit inside one of them.
+   */
+  topPosition(): { page: number; x: number; y: number } | null {
+    if (this.disposed) return null;
+    const pane = this.pane.getBoundingClientRect();
+    const x = pane.left + pane.width / 2;
+    const y = pane.top + 12;
+    for (const page of this.pages) {
+      const box = page.shell.getBoundingClientRect();
+      if (box.bottom < y || box.top > y) continue;
+      const scale = this.fit > 0 ? this.fit : 1;
+      return {
+        page: page.page.pageNumber,
+        x: (x - box.left) / scale,
+        y: (y - box.top) / scale,
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Scroll so a point on a page sits near the top of the visible area.
+   *
+   * The counterpart to {@link topPosition}, and the only place that converts a
+   * SyncTeX point into a scroll offset. It does nothing when the page is not laid
+   * out, so a caller racing a render cannot scroll to a position that does not
+   * exist yet.
+   */
+  scrollToPagePosition(page: number, y: number): void {
+    if (this.disposed) return;
+    const target = this.pages.find((item) => item.page.pageNumber === page);
+    if (!target) return;
+    const scale = this.fit > 0 ? this.fit : 1;
+    const box = target.shell.getBoundingClientRect();
+    const pane = this.pane.getBoundingClientRect();
+    // Where the point is now, relative to the scroll container's content box.
+    const current = box.top - pane.top + this.pane.scrollTop + y * scale;
+    this.layoutScrollUntil = performance.now() + 150;
+    this.pane.scrollTop = Math.max(0, current - 12);
+  }
+
   scrollBookmark(): PdfScrollBookmark | null {
     if (!this.scrollIndex.anchors.length || !this.scrollRegions.length) return null;
     const reference = this.pane.getBoundingClientRect().top + 12;
