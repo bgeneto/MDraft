@@ -72,7 +72,42 @@ export function latexSourceAt(
   }
   const file = projectName(inverse.source.file);
   const key = `${file}:${inverse.source.line}`;
-  return candidates.size === 1 ? (candidates.get(key) ?? null) : null;
+
+  // **Without a container, the inverse match is the answer.**
+  //
+  // The candidate loop exists to disambiguate: several source lines can share a
+  // region, and the loop keeps only those whose *own* forward lookup lands on the
+  // click. That needs non-degenerate box geometry, which a mapping from the private
+  // worker fallback does not have — measured on the shipped reference: 510 nodes,
+  // an inverse region of `0x8`, and zero candidates for a click the inverse match
+  // had already resolved to `latex-reference.tex:30`.
+  //
+  // So the loop is the *confirmation* step for a box-rich mapping, and the inverse
+  // match is the answer when there is no container to confirm against. It has
+  // already done the geometric work: it found the node under the click and its
+  // source. Refusing that answer is what made every click do nothing.
+  if (!container) {
+    if (candidates.size > 0 && !candidates.has(key)) {
+      // The loop disagreed with the inverse match. With no container to arbitrate,
+      // the loop's evidence is the weaker kind, so the inverse match still wins —
+      // but the disagreement is worth reporting.
+      console.info(
+        `[latex-source] no container; ${candidates.size} candidate(s) disagree with ${key}`,
+      );
+    }
+    return { file, line: inverse.source.line };
+  }
+
+  if (candidates.size !== 1) {
+    console.info(
+      `[latex-source] ${candidates.size} candidate(s) for ${key}` +
+        ` (nodes: ${(result.mapping.pages.get(page) ?? []).length}` +
+        `, inverse region: ${Math.round(inverse.region.width)}x${Math.round(inverse.region.height)}` +
+        ` at ${Math.round(inverse.region.x)},${Math.round(inverse.region.y)})`,
+    );
+    return null;
+  }
+  return candidates.get(key) ?? null;
 }
 
 let active: WasmTexCompiler | null = null;

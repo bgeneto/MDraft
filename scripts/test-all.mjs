@@ -220,11 +220,12 @@ const SUITES = [
     script: "latex-format-unit.mjs",
   },
   {
-    // The compiled PDF in the real UI. **Opt-in**, because two of its assertions
-    // fail on the click-resolution defect recorded in the plan; a default run must
-    // stay green. `npm test -- --only latex-preview` runs it.
+    // The compiled PDF in the real UI: the reference compiles, zoom reaches the
+    // page, a click paints its SyncTeX region, and scrolling the editor moves the
+    // preview. **Opt-in** while the two-column oscillation recorded in the plan is
+    // open: its last assertion fails, and a default run must stay green.
     id: "latex-preview",
-    title: "LaTeX preview, zoom, SyncTeX and scroll",
+    title: "LaTeX preview, zoom, SyncTeX paint and scroll",
     kind: "cdp",
     script: "latex-preview-test.mjs",
     doc: "samples/feature-tour.md",

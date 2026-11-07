@@ -547,21 +547,49 @@ export class TypstPdfPreview {
    * the centre is the position most likely to sit inside one of them.
    */
   topPosition(): { page: number; x: number; y: number } | null {
-    if (this.disposed) return null;
+    if (this.disposed || this.pages.length === 0) return null;
     const pane = this.pane.getBoundingClientRect();
     const x = pane.left + pane.width / 2;
     const y = pane.top + 12;
+    const scale = this.fit > 0 ? this.fit : 1;
+
+    // A page that contains the top edge is the answer, when there is one.
     for (const page of this.pages) {
       const box = page.shell.getBoundingClientRect();
       if (box.bottom < y || box.top > y) continue;
-      const scale = this.fit > 0 ? this.fit : 1;
       return {
         page: page.page.pageNumber,
         x: (x - box.left) / scale,
         y: (y - box.top) / scale,
       };
     }
-    return null;
+
+    // **Otherwise the nearest page, not `null`.**
+    //
+    // The top edge can fall in the gap between two pages, or above the first one
+    // while the view is still settling. Returning `null` there made the
+    // correspondence fall back to `onPage[0]` — the *first* region of the line —
+    // which on a two-column document is the left column. That is the oscillation
+    // measured on `samples/latex-two-column.tex`: the preview advanced to 345 and
+    // then jumped back to 277 as the rule kept choosing the left column.
+    //
+    // The nearest page and the point clamped into it is a usable hint in every one
+    // of those cases, and it degrades exactly like a hint that was slightly off.
+    let nearest: { page: number; x: number; y: number; distance: number } | null = null;
+    for (const page of this.pages) {
+      const box = page.shell.getBoundingClientRect();
+      const distance = y < box.top ? box.top - y : y - box.bottom;
+      if (nearest === null || distance < nearest.distance) {
+        const localY = Math.min(box.height, Math.max(0, y - box.top));
+        nearest = {
+          page: page.page.pageNumber,
+          x: (x - box.left) / scale,
+          y: localY / scale,
+          distance,
+        };
+      }
+    }
+    return nearest ? { page: nearest.page, x: nearest.x, y: nearest.y } : null;
   }
 
   /**
