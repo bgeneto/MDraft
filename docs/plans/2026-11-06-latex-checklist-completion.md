@@ -25,6 +25,7 @@ each verified against the code rather than assumed:
 | Insert and Format commands | Partly. Headings and inline commands exist in `latex-commands.ts`; every other row needs checking against a real `.tex` document. |
 | SyncTeX click and selection blink | Click works. Blink parity with Typst is unverified. |
 | Two-column scroll precision | The correspondence rule set exists and is unit-tested; two-column behaviour is unverified. |
+| Rich paste into LaTeX | **Missing.** `src/paste/` has readers and renderers for Markdown, HTML, Typst and AsciiDoc; there is no `render-latex.ts` or `read-latex.ts`. The detector scores LaTeX, so the destination is known — the conversion does not exist. |
 | Tests for all of the above | Partial. |
 
 The goal is that a reader cannot tell LaTeX is the newest language: every menu row
@@ -33,7 +34,7 @@ test that would fail if it regressed.
 
 ## Scope and non-scope
 
-**In scope:** the eight gaps above; the tests that pin them; the documentation and
+**In scope:** the nine gaps above; the tests that pin them; the documentation and
 `AGENTS.md` rows the changes touch.
 
 **Not in scope:**
@@ -127,7 +128,19 @@ Each step leaves the product consistent and is independently testable.
   hinted page and the nearest region; what is unproven is whether that is enough
   when the columns are far apart horizontally.
 
-- [ ] **9. Measurement and close.** Typing latency with the popup open, the
+- [ ] **9. Rich paste into a LaTeX document.** `src/paste/` has readers and
+  renderers for Markdown, HTML, Typst and AsciiDoc — and **none for LaTeX**. So
+  *Convert Rich Text on Paste* has no destination for a `.tex` buffer: pasting
+  rich text, Markdown or HTML into LaTeX either inserts the source verbatim or
+  does nothing, depending on the path. Add `render-latex.ts` and
+  `read-latex.ts` to the same matrix the other four use, so a paste converts to
+  valid LaTeX: headings become `\section`, emphasis `\emph`/`\textbf`, lists
+  `itemize`/`enumerate`, code `verbatim`, links `\href`, images
+  `\includegraphics`, tables `tabular`, math preserved. The detector already
+  scores LaTeX (`scoreLatex`), so the destination is known; what is missing is the
+  conversion. `paste:convert` gains the LaTeX row in both directions.
+
+- [ ] **10. Measurement and close.** Typing latency with the popup open, the
   installer delta for tex-fmt, the first and warm compile through `latex:poc`, and
   the memory the snapshot holds. Record every number here, tick the plan, and
   update `AGENTS.md`, `docs/latex.md` and the LaTeX Reference.
@@ -181,6 +194,7 @@ Named before the work starts, because the counts are a contract:
 | `latex:format:unit` (new) | tex-fmt: verbatim and math preserved byte-exact, idempotence, comments kept, a non-LaTeX file untouched |
 | `preview:zoom` (24) | + LaTeX preview zoom: chip, keyboard, Reset, Content Width |
 | `export` (40) | + a `.tex` source converting to DOCX and HTML |
+| `paste:convert` (411) | + the LaTeX row: rich text, Markdown and HTML into LaTeX, and LaTeX into the other four; heading levels, emphasis, lists, code, links, images, tables, math |
 | `latex:measure` (probe) | + the installer delta for tex-fmt |
 | `latex:poc` | + print produces a PDF the Poppler checks accept |
 
@@ -196,7 +210,9 @@ Named before the work starts, because the counts are a contract:
 6. The LaTeX preview zooms exactly as the Typst Pages view does.
 7. A click in the preview paints the region with the same pulse Typst uses.
 8. Scroll correspondence is precise on a two-column document in both directions.
-9. `npm test` passes, and every count in `AGENTS.md` matches.
+9. Pasting rich text, Markdown or HTML into a `.tex` document produces valid
+   LaTeX, and pasting LaTeX into the other four produces their syntax.
+10. `npm test` passes, and every count in `AGENTS.md` matches.
 
 ## Open questions
 
