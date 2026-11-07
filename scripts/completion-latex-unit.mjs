@@ -9,6 +9,7 @@
 
 import { latexCatalog, LATEX_ENVIRONMENT_NAMES, LATEX_PACKAGE_NAMES, LATEX_CLASS_NAMES } from "../src/completion/latex-catalog.ts";
 import { filterByPrefix, latexContextAt } from "../src/completion/latex-context.ts";
+import { bibliographyKeys, projectReferences } from "../src/completion/project-index.ts";
 import {
   LATEX_ALIGN,
   LATEX_CODE,
@@ -194,6 +195,82 @@ console.log("\n=== prefix filtering ===");
   check(filterByPrefix(entries, "SEC").length === 2, "filtering ignores case");
   check(filterByPrefix(entries, "zzz").length === 0, "no match yields an empty list");
   check(filterByPrefix(entries, "").length === 4, "an empty prefix keeps everything");
+}
+
+console.log("\n=== project references ===");
+{
+  const sources = new Map([
+    [
+      "main.tex",
+      [
+        "\\documentclass{article}",
+        "\\begin{document}",
+        "\\section{Introduction}\\label{sec:intro}",
+        "See \\ref{sec:intro} and \\eqref{eq:main}.",
+        "\\begin{equation}\\label{eq:main} x = 1 \\end{equation}",
+        "As shown in \\cite{knuth84,lamport94} and \\citep{knuth84}.",
+        "\\includegraphics[width=2cm]{figures/plot}",
+        "% \\label{commented:out} must not appear",
+        "50\\% of \\label{after:percent} is real",
+        "\\end{document}",
+      ].join("\n"),
+    ],
+    ["chapter.tex", "\\label{sec:chapter}\n\\cite{extra2020}"],
+  ]);
+
+  const refs = projectReferences(sources);
+  check(refs.labels.includes("sec:intro"), "a label is found");
+  check(refs.labels.includes("eq:main"), "an equation label is found");
+  check(refs.labels.includes("sec:chapter"), "a label in another file is found");
+  check(refs.labels.includes("after:percent"), "a label after an escaped percent is real");
+  check(!refs.labels.includes("commented:out"), "a commented-out label is not offered");
+  // Order is document order, which is the order a reader expects.
+  check(refs.labels[0] === "sec:intro", "labels keep document order", refs.labels.join(", "));
+  // No duplicates even though `\ref{sec:intro}` also names it.
+  check(
+    refs.labels.filter((label) => label === "sec:intro").length === 1,
+    "a label appears once",
+  );
+
+  check(refs.citations.includes("knuth84"), "a citation key is found");
+  check(refs.citations.includes("lamport94"), "a comma-separated citation key is found");
+  check(refs.citations.includes("extra2020"), "a citation in another file is found");
+  check(
+    refs.citations.filter((key) => key === "knuth84").length === 1,
+    "a citation repeated across commands appears once",
+  );
+
+  check(refs.images.includes("figures/plot"), "an image path is found");
+  check(refs.images.length === 1, "only one image is offered", String(refs.images.length));
+
+  // An empty project offers nothing rather than throwing.
+  const empty = projectReferences(new Map());
+  check(
+    empty.labels.length === 0 && empty.citations.length === 0 && empty.images.length === 0,
+    "an empty project offers nothing",
+  );
+}
+
+console.log("\n=== bibliography keys ===");
+{
+  const bib = new Map([
+    [
+      "references.bib",
+      [
+        "@article{knuth84,",
+        "  author = {Donald Knuth},",
+        "  title = {Literate Programming},",
+        "}",
+        "@book{lamport94, author = {Leslie Lamport}}",
+        "@misc{knuth84, note = {duplicate}}",
+      ].join("\n"),
+    ],
+  ]);
+  const keys = bibliographyKeys(bib);
+  check(keys.includes("knuth84"), "a bib key is found");
+  check(keys.includes("lamport94"), "a second bib key is found");
+  check(keys.filter((key) => key === "knuth84").length === 1, "a duplicate bib key appears once");
+  check(bibliographyKeys(new Map()).length === 0, "an empty bibliography offers nothing");
 }
 
 const failed = checks.filter((entry) => !entry.ok).length;
