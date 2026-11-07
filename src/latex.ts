@@ -34,7 +34,27 @@ export function latexSourceAt(
   const inverse = result.parser.inverseLookupDetailed(result.mapping, page, x, y, {
     acceptSource: (source) => result.files.has(projectName(source.file)),
   });
-  if (!inverse || !inverse.container || !contains(inverse.container)) return null;
+  if (!inverse) {
+    console.info(`[latex-source] no inverse match for ${page} at ${Math.round(x)},${Math.round(y)}`);
+    return null;
+  }
+
+  // **The container is optional, and requiring it broke click navigation.**
+  //
+  // The bracket search that fills `container` needs box nodes. A mapping produced
+  // by the private worker fallback is a flat node list with no boxes, so
+  // `container` is null there and every click returned null — measured on the
+  // shipped LaTeX Reference: `method nearest-child`, no container, nothing painted.
+  //
+  // Without a container the click is answered by the candidate loop below, which
+  // checks each node's *forward* regions against the click. That is the reliable
+  // signal: a node's own region can be degenerate (a kern is 0pt wide), while its
+  // forward lookup returns the typeset box the line actually occupies.
+  const container = inverse.container;
+  if (container && !contains(container)) {
+    console.info(`[latex-source] click is outside the container (method ${inverse.method})`);
+    return null;
+  }
   const candidates = new Map<string, { file: string; line: number }>();
   const seen = new Set<string>();
   for (const node of result.mapping.pages.get(page) ?? []) {

@@ -1553,14 +1553,35 @@ function latexSyncCursor(silent = false, blink = false): void {
 
 async function latexSyncSource(page: number, x: number, y: number): Promise<void> {
   const value = latexPreview;
-  if (!latexCurrent(value)) return;
+  // A click that does nothing is the hardest kind of bug to report, because the
+  // reader sees only "nothing happened". Each early return below says why, so the
+  // console answers the question the UI cannot.
+  if (!latexCurrent(value)) {
+    console.info("[latex-sync] click ignored: the preview is stale for this document");
+    return;
+  }
   const match = latexSourceAt(value.result, page, x, y);
-  if (!match) return;
+  if (!match) {
+    // Name the two things that decide it: how many pages the mapping covers, and
+    // which files the snapshot claims. A click that resolves to nothing is almost
+    // always one of those being empty or mismatched, and neither is visible from
+    // the UI.
+    console.info(
+      `[latex-sync] no source for page ${page} at ${Math.round(x)},${Math.round(y)}` +
+        ` (mapping pages: ${value.result.mapping.pages.size}` +
+        `, files: ${[...value.result.files].slice(0, 6).join(",")}` +
+        `, inputs: ${[...value.result.mapping.inputs.values()].slice(0, 6).join(",")})`,
+    );
+    return;
+  }
   const path = joinDir(value.rootDirectory, match.file);
   latexNavigationRoot = value.rootId;
   const sameFile = doc.path !== null && pathKey(doc.path) === pathKey(path);
   if (!sameFile) await openPath(path, { silent: true });
-  if (!doc.path || pathKey(doc.path) !== pathKey(path)) return;
+  if (!doc.path || pathKey(doc.path) !== pathKey(path)) {
+    console.info(`[latex-sync] resolved ${match.file}:${match.line} but that tab is not active`);
+    return;
+  }
   const number = match.line;
   if (number < 1 || number > editor.view.state.doc.lines) return;
   const document = editor.view.state.doc;
