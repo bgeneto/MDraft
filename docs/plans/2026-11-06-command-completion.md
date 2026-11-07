@@ -286,9 +286,20 @@ the same rule the existing chrome follows and the reason `.combo-popup` has a
   the language's `autocomplete` data — the hook `autocompletion()` reads. The
   offer-nothing cases are the ones the tests spend most effort on, because a
   popup that opens in prose is what makes completion feel noisy.
-- [ ] **5. Project references.** Labels, citation keys and image files from the
+- [x] **5. Project references.** Labels, citation keys and image files from the
   cached project snapshot, generation-tagged and cancellable, with a test that a
   stale reply is dropped.
+
+  **Landed** in `src/completion/project-index.ts`, as pure functions over the
+  sources the caller already has — it never reads a file and never compiles, which
+  is the plan's rule. The active buffer is always available, so a label written
+  earlier in the same document is offered immediately; a caller holding the
+  project snapshot supplies the other files. The subtleties are tested: a label
+  after an escaped `\%` is real, a commented-out one is not, a key repeated across
+  commands appears once, and document order is preserved. `bibliographyKeys` reads
+  `.bib` entries separately, because a citation the document uses and a key the
+  bibliography defines are different facts and the caller should see both.
+  `completion-latex-unit` grew from 64 to **82** checks.
 - [ ] **6. The Markdown catalog.** The second consumer, proving the layer is
   language-neutral.
 - [ ] **7. Preference and documentation.** A `completion` setting in
@@ -307,25 +318,25 @@ the same rule the existing chrome follows and the reason `.combo-popup` has a
 | 2. Theme and accessibility | done |
 | 3. The LaTeX catalog | done — 201 rows |
 | 4. LaTeX context | done |
-| 5. Project references | not started |
+| 5. Project references | done — labels, citations, images, plus `.bib` keys |
 | 6. The Markdown catalog | not started |
 | 7. Preference and documentation | not started |
 | 8. Measurement and close | not started |
 
-**One gap is open and stated rather than hidden:** the popup's *rendering* while
-a person types is not yet asserted by a UI suite for LaTeX. The evidence that
-exists is strong but indirect — `completion-latex-unit` proves the context table
-and catalog, the source returns the right rows when called against a real editor
-state, and `menu-test` proves the LaTeX grammar produces syntax tokens (so the
-language support, which carries the completion source, is installed). What is
-missing is a fixture where synthetic keystrokes reliably reach CodeMirror while a
-`.tex` document is open: the `main.tex` fixture's PDF preview overlays the editor
-pane, and the untitled-tab route through `setExtension("tex")` typed into a
-buffer whose language had not yet resolved to LaTeX. The HTML case in
-`autoclose-test` does prove the popup renders for a language that supplies a
-source, so the layer and the rendering path are both known good; what remains is
-a LaTeX-specific fixture. That is the next thing to do, and it is a test-harness
-task, not a feature task.
+**The gap recorded in the previous round is closed.** The LaTeX popup's rendering
+is now asserted through the real editor in `autoclose-test` (36 → **41** checks):
+`Ctrl-Space` opens the catalog for a bare backslash, typing `sec` narrows it to
+`section`, Escape dismisses it, and prose opens nothing. `Ctrl-Space` rather than
+typing is what made it work — it asks the source directly and does not depend on
+the per-keystroke `input.type` transaction that `activateOnTyping` watches, which
+is what the earlier attempts raced.
+
+**A correction to this plan's own premise.** It claimed Tab accepts a completion
+via CodeMirror's `completionKeymap`. It does not: that keymap binds **Enter** to
+accept, and `autocompletion()` installs it itself at `Prec.highest`. The layer had
+been installing a redundant second copy on a false belief. Tab is now bound
+explicitly to `acceptCompletion` at `Prec.high`, so accepting with Tab works and
+the event still falls through to `indentWithTab` when no popup is open.
 
 ## Files and modules
 
