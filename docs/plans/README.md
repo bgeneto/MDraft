@@ -55,7 +55,7 @@ state: the branch, the setting, the file to restore.
 
 ## Tests and validation
 
-The layers from [Testing](../../AGENTS.md#testing) this change needs, and the one
+The layers from [Testing](../agent-guide/testing.md) this change needs, and the one
 measurement that proves it works.
 
 ## Acceptance criteria

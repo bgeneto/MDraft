@@ -1663,7 +1663,7 @@ Actual prerequisites, rather than a general dependency chain:
 
 - Start with the cheapest layer that can catch the failure: a pure unit test, then a Rust
   test, then a UI suite.
-- UI suites follow [AGENTS.md](../AGENTS.md#conventions-for-new-test-scripts):
+- UI suites follow [scripts.md](agent-guide/scripts.md#conventions-for-new-test-scripts):
   port as `argv[2]`, `Runtime.enable`, throw on `exceptionDetails`, one
   `PASS`/`FAIL` line per check, non-zero exit on failure, `ws.close()` and
   `process.exit` on both paths.
