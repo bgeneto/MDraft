@@ -195,8 +195,18 @@ export class TypstPageMap {
   constructor(source: string, lines: readonly PageMapLine[], words: readonly SourceWord[]) {
     this.source = source;
     this.words = words;
-    const vocabulary = new Set<string>();
-    for (const word of words) vocabulary.add(word.norm);
+    // Compact identifiers make the contextual keys much smaller than joining
+    // each full word into five separate window indexes. They are bijective, so
+    // equality and the ambiguity policy remain exactly the same.
+    const vocabulary = new Map<string, string>();
+    const wordId = (norm: string): string => {
+      const existing = vocabulary.get(norm);
+      if (existing !== undefined) return existing;
+      const id = vocabulary.size.toString(36);
+      vocabulary.set(norm, id);
+      return id;
+    };
+    for (const word of words) wordId(word.norm);
     for (let line = 0; line < lines.length; line += 1) {
       const current = lines[line];
       for (const token of tokenizeWords(current.text)) {
@@ -256,16 +266,20 @@ export class TypstPageMap {
       }
     });
     this.links = this.pdf.map(() => null);
-    const sequence = (items: readonly { norm: string }[], at: number, size: number) => {
-      let key = items[at].norm;
-      for (let part = 1; part < size; part += 1) key += KEY_SEPARATOR + items[at + part].norm;
+    // Add PDF-only words only after line-break joining, whose vocabulary check
+    // must continue to consider literal source words alone.
+    const sourceIds = words.map((word) => wordId(word.norm));
+    const pdfIds = this.pdf.map((word) => wordId(word.norm));
+    const sequence = (items: readonly string[], at: number, size: number) => {
+      let key = items[at];
+      for (let part = 1; part < size; part += 1) key += KEY_SEPARATOR + items[at + part];
       return key;
     };
     // Unique windows are evidence of occurrence; the editor caret is irrelevant.
     for (let size = 6; size >= 2; size -= 1) {
       const sourceIndex = new Map<string, number>();
       for (let at = 0; at + size <= words.length; at += 1) {
-        const key = sequence(words, at, size);
+        const key = sequence(sourceIds, at, size);
         sourceIndex.set(key, sourceIndex.has(key) ? -1 : at);
       }
       const pageIndex = new Map<string, number>();
@@ -282,7 +296,7 @@ export class TypstPageMap {
           if (/[\p{L}]/u.test(word.norm) && word.norm.length >= 3) hasAnchor = true;
         }
         if (!valid || !hasAnchor) continue;
-        const key = sequence(this.pdf, at, size);
+        const key = sequence(pdfIds, at, size);
         pageIndex.set(key, pageIndex.has(key) ? -1 : at);
       }
       for (const [key, at] of pageIndex) {
@@ -294,6 +308,9 @@ export class TypstPageMap {
           else this.links[at + i] = -1;
         }
       }
+      // Release this window's temporary indexes before constructing the next.
+      sourceIndex.clear();
+      pageIndex.clear();
     }
     // Fill small gaps only between two established anchors. Unknown math and
     // generated text are skipped, never used to shift all following positions.
