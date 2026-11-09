@@ -989,6 +989,31 @@ body {
   margin: 0 auto;
 }
 
+/* Soft wrapping fills the pane, and `text-wrap: pretty` stops a hard-wrapped
+   Markdown line from leaving one word alone on its last row — the
+   "…debug it, / which" break in a file wrapped at 80 columns and shown in a
+   narrower pane. `pretty` moves the break back a word so the row ends with two.
+
+   Chromium ignores `pretty` while `white-space` is `break-spaces`, which
+   CodeMirror's own `lineWrapping` sets to keep whitespace at a wrap point from
+   hanging outside the content (codemirror.next#606), so the content goes back to
+   `pre-wrap` — the value CodeMirror used before that fix. The cost is that
+   trailing whitespace at a wrap point hangs rather than wrapping; measured, it
+   reaches at most 7px, stays inside the scroller at every pane width from 360 to
+   700px, and never adds a horizontal scrollbar.
+
+   The `@supports` guard is what keeps that cost from being paid for nothing:
+   WebKitGTK, which the Linux build runs on, does not implement `pretty` yet, so
+   without the guard the editor would drop `break-spaces` and gain the hang while
+   getting no better breaks. There the rule does not apply and CodeMirror's own
+   `break-spaces` stays. */
+@supports (text-wrap: pretty) {
+  .editor-host .cm-content.cm-lineWrapping {
+    white-space: pre-wrap;
+    text-wrap: pretty;
+  }
+}
+
 /* The dictionary's underline. A wavy line, not a tint: a persistent background
    reads as markup applied to the document. */
 .cm-spell-error {
@@ -1802,6 +1827,11 @@ body {
   background: rgba(30, 30, 30, 0.92);
   color: #f2f2f2;
   font-size: 12.5px;
+  /* A warning toast carries one sentence per line; keep those breaks and let a
+     long resource path wrap rather than widen the row past the window. A
+     single-line toast is unchanged: it has no newline and shrinks to its text. */
+  white-space: pre-line;
+  overflow-wrap: anywhere;
   box-shadow: 0 6px 22px rgba(0, 0, 0, 0.28);
   z-index: 50;
   pointer-events: none;
