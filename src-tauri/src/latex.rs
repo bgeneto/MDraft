@@ -14,7 +14,7 @@ use std::{
     },
 };
 use tauri::{
-    AppHandle, Manager, UriSchemeResponder,
+    AppHandle, Emitter, Manager, UriSchemeResponder,
     http::{Request, Response, header},
 };
 
@@ -26,6 +26,7 @@ const MAX_PROJECT: usize = 64 * 1024 * 1024;
 const MAX_FILES: usize = 256;
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 static CACHE_LOCK: Mutex<()> = Mutex::new(());
+static MIGRATION_LOCK: Mutex<()> = Mutex::new(());
 static ASSET_REQUESTS: AtomicU64 = AtomicU64::new(0);
 static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 static CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
@@ -51,7 +52,9 @@ fn enabled() -> bool {
 }
 
 fn cache_limit_bytes() -> u64 {
-    CACHE_LIMIT_MB.load(Ordering::Relaxed).saturating_mul(1024 * 1024)
+    CACHE_LIMIT_MB
+        .load(Ordering::Relaxed)
+        .saturating_mul(1024 * 1024)
 }
 
 // Digests from the pinned release-cleared manifest, SHA-256 928bd4b7…3d12b4a.
@@ -90,11 +93,102 @@ const ASSETS: &[(&str, &str)] = &[
     ),
 ];
 
-fn directory(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
+fn legacy_candidates_matching(
+    root: &Path,
+    verify: &impl Fn(&Path) -> bool,
+) -> Result<Vec<PathBuf>, String> {
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("Cannot inspect the LaTeX data directory: {error}")),
+    };
+    let mut candidates = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| error.to_string())?;
+        if entry.file_name() == "latex" || !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let assets = entry.path().join("assets");
+        if !fs::symlink_metadata(&assets).is_ok_and(|meta| meta.file_type().is_dir()) {
+            continue;
+        }
+        if verify(&assets) {
+            candidates.push(entry.path());
+        }
+    }
+    Ok(candidates)
+}
+
+fn verified_legacy_assets(assets: &Path) -> bool {
+    ASSETS.iter().all(|(name, expected)| {
+        let asset = assets.join(name);
+        fs::symlink_metadata(&asset).is_ok_and(|meta| meta.file_type().is_file())
+            && fs::read(&asset).is_ok_and(|bytes| digest(&bytes) == *expected)
+    })
+}
+
+fn legacy_candidates(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let candidates = legacy_candidates_matching(root, &verified_legacy_assets)?;
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries {
+            let entry = entry.map_err(|error| error.to_string())?;
+            if entry.file_name() == "latex" || !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
+            }
+            let assets = entry.path().join("assets");
+            if !fs::symlink_metadata(&assets).is_ok_and(|meta| meta.file_type().is_dir()) {
+                continue;
+            }
+            if ASSETS.iter().any(|(name, _)| assets.join(name).exists())
+                && !candidates.contains(&entry.path())
+            {
+                return Err("An incomplete or damaged LaTeX engine directory was preserved. Repair it before migrating the bundled engine.".into());
+            }
+        }
+    }
+    Ok(candidates)
+}
+
+fn migrate_directory_matching(
+    root: &Path,
+    verify: &impl Fn(&Path) -> bool,
+) -> Result<PathBuf, String> {
+    let _guard = MIGRATION_LOCK
+        .lock()
+        .map_err(|_| "LaTeX migration is unavailable.")?;
+    let target = root.join("latex");
+    let candidates = legacy_candidates_matching(root, verify)?;
+    if candidates.len() > 1 || (!candidates.is_empty() && target.exists()) {
+        return Err("Multiple LaTeX data directories exist. They were preserved; resolve the conflict before using the bundled engine.".into());
+    }
+    if let Some(source) = candidates.first() {
+        fs::rename(source, &target).map_err(|error| {
+            format!("Could not move the existing LaTeX data; the original was preserved: {error}")
+        })?;
+    }
+    Ok(target)
+}
+
+fn migrate_directory(root: &Path) -> Result<PathBuf, String> {
+    // Check for recognizable but incomplete directories before making changes.
+    legacy_candidates(root)?;
+    migrate_directory_matching(root, &verified_legacy_assets)
+}
+
+pub(crate) fn directory(app: &AppHandle) -> Result<PathBuf, String> {
+    let root = app
+        .path()
         .app_data_dir()
-        .map(|p| p.join("wasmtex-poc-2025"))
-        .map_err(|e| format!("Cannot locate the LaTeX data directory: {e}"))
+        .map_err(|e| format!("Cannot locate the LaTeX data directory: {e}"))?;
+    if enabled() {
+        return migrate_directory(&root);
+    }
+    let target = root.join("latex");
+    let candidates = legacy_candidates(&root)?;
+    if candidates.len() > 1 || (!candidates.is_empty() && target.exists()) {
+        return Err("Multiple LaTeX data directories exist. They were preserved; resolve the conflict before using the bundled engine.".into());
+    }
+    Ok(candidates.into_iter().next().unwrap_or(target))
 }
 
 /// Whether the reader has enabled the engine.
@@ -105,23 +199,25 @@ fn directory(app: &AppHandle) -> Result<PathBuf, String> {
 /// switch that promises an engine it cannot run is the dead UI this project
 /// refuses.
 #[tauri::command]
-pub fn latex_status(app: AppHandle) -> bool {
+pub fn latex_status(app: AppHandle) -> Result<bool, String> {
     if !enabled() {
-        return false;
+        return Ok(false);
     }
-    directory(&app).is_ok_and(|dir| dir.join("assets").is_dir())
+    Ok(directory(&app)?.join("assets").is_dir())
 }
 
 /// Whether the pre-settings marker file exists, for the one-time migration.
 ///
-/// The experiment wrote `<app_data_dir>/wasmtex-poc-2025/enabled`; the product
-/// keeps the same fact in `settings.json`. `AppState::load` adopts this marker
-/// once so a reader who already enabled the engine keeps it, then the switch is
-/// the only source of truth and turning it off is not undone by a stale file.
+/// The old engine stored enablement beside its verified assets. Settings load
+/// adopts the marker only when the settings file has no explicit switch.
 pub fn legacy_marker_present<R: tauri::Runtime>(app: &AppHandle<R>) -> bool {
-    app.path()
-        .app_data_dir()
-        .is_ok_and(|dir| dir.join("wasmtex-poc-2025").join("enabled").is_file())
+    app.path().app_data_dir().is_ok_and(|dir| {
+        (dir.join("latex").join("enabled").is_file()
+            && verified_legacy_assets(&dir.join("latex").join("assets")))
+            || legacy_candidates(&dir).is_ok_and(|candidates| {
+                candidates.len() == 1 && candidates[0].join("enabled").is_file()
+            })
+    })
 }
 
 #[derive(Serialize)]
@@ -183,15 +279,6 @@ pub fn latex_disable(app: AppHandle) -> Result<(), String> {
     let mut settings = state.snapshot()?;
     settings.latex_enabled = false;
     state.save(settings)?;
-    // The pre-settings marker file is what `AppState::load` adopts for a reader
-    // who enabled the experiment. Leaving it behind would switch the engine back
-    // on at the next launch, so turning the switch off retires it. Only the
-    // marker is removed; the downloaded assets and cache are untouched, which is
-    // decision D14.
-    if let Ok(dir) = app.path().app_data_dir() {
-        let marker = dir.join("wasmtex-poc-2025").join("enabled");
-        let _ = fs::remove_file(marker);
-    }
     Ok(())
 }
 
@@ -266,7 +353,11 @@ fn digest(data: &[u8]) -> String {
 #[tauri::command]
 pub async fn install_latex(app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let root = directory(&app)?;
+        let data_root = app
+            .path()
+            .app_data_dir()
+            .map_err(|error| format!("Cannot locate the LaTeX data directory: {error}"))?;
+        let root = migrate_directory(&data_root)?;
         let assets = root.join("assets");
         for &(name, expected) in ASSETS {
             let path = assets.join(name);
@@ -385,6 +476,18 @@ fn collect_cache_files(
     Ok(())
 }
 
+fn mirror_request(path: &str) -> Option<(Option<&str>, &str)> {
+    if let Some(relative) = path.strip_prefix("/mirror/") {
+        return Some((None, relative));
+    }
+    let rest = path.strip_prefix("/jobs/")?;
+    let (job, relative) = rest.split_once("/mirror/")?;
+    if job.is_empty() || job.len() > 20 || !job.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    Some((Some(job), relative))
+}
+
 pub fn serve(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeResponder) {
     tauri::async_runtime::spawn_blocking(move || {
         let origin = request
@@ -430,7 +533,7 @@ pub fn serve(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeResp
                 };
                 return Ok((bytes, kind));
             }
-            if let Some(relative) = path.strip_prefix("/mirror/") {
+            if let Some((job, relative)) = mirror_request(path) {
                 if !safe_relative(relative) {
                     return Err("Invalid package path".into());
                 }
@@ -451,7 +554,14 @@ pub fn serve(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeResp
                     }
                 }
                 CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
-                let bytes = download(&format!("{MIRROR}{relative}"))?;
+                if let Some(job) = job {
+                    let _ = app.emit("latex-package-download", (job, true));
+                }
+                let result = download(&format!("{MIRROR}{relative}"));
+                if let Some(job) = job {
+                    let _ = app.emit("latex-package-download", (job, false));
+                }
+                let bytes = result?;
                 if bytes.len() > MAX_FILE {
                     return Err("A package is larger than the 32 MiB limit.".into());
                 }
@@ -608,7 +718,9 @@ fn mask_literal_regions(text: &str) -> String {
         if out.get(at) == Some(&'*') {
             at += 1;
         }
-        let Some(&delimiter) = out.get(at) else { continue };
+        let Some(&delimiter) = out.get(at) else {
+            continue;
+        };
         if delimiter.is_ascii_alphabetic() || delimiter == ' ' {
             continue;
         }
@@ -682,7 +794,9 @@ fn mask_literal_regions(text: &str) -> String {
                     at += 1;
                 }
             }
-            let Some(&delimiter) = out.get(at) else { continue };
+            let Some(&delimiter) = out.get(at) else {
+                continue;
+            };
             if delimiter.is_ascii_alphanumeric() || delimiter == ' ' || delimiter == '\\' {
                 continue;
             }
@@ -698,8 +812,8 @@ fn mask_literal_regions(text: &str) -> String {
     // A command whose argument is text, not a path: `\texttt{\input}` names the
     // command instead of calling it.
     for command in [
-        "texttt", "textbf", "textit", "textrm", "textsf", "textsc", "textsl", "textup",
-        "textmd", "emph", "mbox", "hbox", "text",
+        "texttt", "textbf", "textit", "textrm", "textsf", "textsc", "textsl", "textup", "textmd",
+        "emph", "mbox", "hbox", "text",
     ] {
         for (start, _) in matches_command(&out, command) {
             let mut at = start + command.len() + 1;
@@ -769,13 +883,15 @@ fn declared_references(text: &str) -> Vec<(String, String)> {
             "includegraphics",
             "bibliography",
             "addbibresource",
+            "documentclass",
+            "usepackage",
         ] {
             for (_, after) in matches_command(&chars, kind) {
                 let rest: String = chars[after..].iter().collect();
                 let Some(argument) = first_brace_argument(&rest) else {
                     continue;
                 };
-                let names: Vec<String> = if kind == "bibliography" {
+                let names: Vec<String> = if kind == "bibliography" || kind == "usepackage" {
                     argument.split(',').map(str::to_string).collect()
                 } else {
                     vec![argument]
@@ -792,11 +908,67 @@ fn declared_references(text: &str) -> Vec<(String, String)> {
     out
 }
 
+/// Literal graphics directories in the main preamble, relative to the project.
+fn graphics_paths(text: &str) -> Vec<String> {
+    let masked = mask_literal_regions(text);
+    let code = masked
+        .lines()
+        .map(|line| &line[..comment_start(line).unwrap_or(line.len())])
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut chars: Vec<char> = code.chars().collect();
+    for (start, after) in matches_command(&chars, "begin") {
+        let rest: String = chars[after..].iter().collect();
+        if first_brace_argument(&rest).as_deref() == Some("document") {
+            chars.truncate(start);
+            break;
+        }
+    }
+    let mut paths = Vec::new();
+    for (_, after) in matches_command(&chars, "graphicspath") {
+        let rest: String = chars[after..].iter().collect();
+        let Some(argument) = first_brace_argument(&rest) else {
+            continue;
+        };
+        let inner: Vec<char> = argument.chars().collect();
+        let mut at = 0;
+        let mut candidate = Vec::new();
+        while at < inner.len() {
+            while at < inner.len() && inner[at].is_whitespace() {
+                at += 1;
+            }
+            if at == inner.len() {
+                break;
+            }
+            let Some(end) = brace_end(&inner, at) else {
+                candidate.clear();
+                break;
+            };
+            let item: String = inner[at + 1..end - 1].iter().collect();
+            if item.contains(['{', '}']) {
+                candidate.clear();
+                break;
+            }
+            let path = item.trim();
+            let path = path.strip_suffix('/').unwrap_or(path);
+            let path = path.strip_prefix("./").unwrap_or(path);
+            if literal_reference(path) {
+                candidate.push(path.to_string());
+            }
+            at = end;
+        }
+        paths = candidate;
+    }
+    paths
+}
+
 /// The extensions a reference with no suffix may resolve to.
 fn candidate_suffixes(kind: &str) -> &'static [&'static str] {
     match kind {
         "includegraphics" => &[".pdf", ".png", ".jpg", ".jpeg"],
         "bibliography" | "addbibresource" => &[".bib"],
+        "documentclass" => &[".cls"],
+        "usepackage" => &[".sty"],
         _ => &[".tex"],
     }
 }
@@ -853,6 +1025,7 @@ fn collect_referenced(
     let mut seen: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
     let mut pending: Vec<PathBuf> = vec![main.to_path_buf()];
     let mut total = 0usize;
+    let mut graphics = Vec::new();
 
     while let Some(path) = pending.pop() {
         if !seen.insert(path.clone()) {
@@ -878,7 +1051,9 @@ fn collect_referenced(
             None => {
                 let meta = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
                 if meta.file_type().is_symlink() {
-                    skipped.push(relative_to(root, &path).unwrap_or_else(|_| path.display().to_string()));
+                    skipped.push(
+                        relative_to(root, &path).unwrap_or_else(|_| path.display().to_string()),
+                    );
                     continue;
                 }
                 if meta.len() > MAX_FILE as u64 {
@@ -903,6 +1078,9 @@ fn collect_referenced(
             )
         }) {
             let text = String::from_utf8_lossy(&bytes).into_owned();
+            if path == *main {
+                graphics = graphics_paths(&text);
+            }
             for (kind, name) in declared_references(&text) {
                 // A non-literal reference is reported by the frontend validator
                 // with a named message before a compile is attempted; skipping it
@@ -916,24 +1094,50 @@ fn collect_referenced(
                 // `chapters/figures/plot.png` while LuaLaTeX read
                 // `figures/plot.png`; the snapshot then omitted the image and the
                 // validator reported a file that exists.
-                let has_extension = name.rsplit('/').next().is_some_and(|part| part.contains('.'));
+                let has_extension = name
+                    .rsplit('/')
+                    .next()
+                    .is_some_and(|part| part.contains('.'));
                 let suffixes: &[&str] = if has_extension {
                     &[""]
                 } else {
                     candidate_suffixes(&kind)
                 };
-                for suffix in suffixes {
-                    let candidate = root.join(format!("{name}{suffix}"));
-                    let Ok(full) = fs::canonicalize(&candidate) else {
-                        continue;
-                    };
-                    // A reference resolving outside the root is refused rather
-                    // than read: the same confinement, now applied per reference.
-                    if !full.starts_with(root) || !full.is_file() {
-                        continue;
+                let mut prefixes = vec![String::new()];
+                if kind == "includegraphics" {
+                    prefixes.extend(graphics.iter().map(|path| format!("{path}/")));
+                }
+                'candidates: for prefix in prefixes {
+                    for suffix in suffixes {
+                        let candidate = root.join(format!("{prefix}{name}{suffix}"));
+                        // Check each component before canonicalizing: otherwise
+                        // the link itself disappears and cannot be reported.
+                        let relative = candidate.strip_prefix(root).map_err(|e| e.to_string())?;
+                        let mut component_path = root.to_path_buf();
+                        let mut link = false;
+                        for component in relative.components() {
+                            component_path.push(component);
+                            if fs::symlink_metadata(&component_path)
+                                .is_ok_and(|meta| meta.file_type().is_symlink())
+                            {
+                                skipped.push(relative_to(root, &component_path)?);
+                                link = true;
+                                break;
+                            }
+                        }
+                        if link {
+                            continue;
+                        }
+                        let Ok(full) = fs::canonicalize(&candidate) else {
+                            continue;
+                        };
+                        // Refuse references that resolve outside the project.
+                        if !full.starts_with(root) || !full.is_file() {
+                            continue;
+                        }
+                        pending.push(full);
+                        break 'candidates;
                     }
-                    pending.push(full);
-                    break;
                 }
             }
         }
@@ -1095,11 +1299,63 @@ pub async fn print_compiled_pdf<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::{
-        cache_size, collect_referenced, declared_references, evict_to_limit, mask_literal_regions,
-        safe_relative, MAX_PROJECT,
+        MAX_PROJECT, cache_size, collect_referenced, declared_references, evict_to_limit,
+        mask_literal_regions, safe_relative,
     };
-    use std::{fs, path::Path};    #[test]
+    use std::{fs, path::Path};
+
+    #[test]
+    fn migration_preserves_data_and_refuses_collisions() {
+        let root = scratch("latex-migration");
+        let old = root.join("former-engine");
+        fs::create_dir_all(old.join("assets")).unwrap();
+        fs::create_dir_all(old.join("mirror")).unwrap();
+        fs::write(old.join("assets/identity"), b"verified").unwrap();
+        fs::write(old.join("mirror/package"), b"cached").unwrap();
+        let verify =
+            |assets: &Path| fs::read(assets.join("identity")).is_ok_and(|v| v == b"verified");
+        let target = super::migrate_directory_matching(&root, &verify).unwrap();
+        assert_eq!(fs::read(target.join("mirror/package")).unwrap(), b"cached");
+        assert!(!old.exists());
+        assert_eq!(
+            super::migrate_directory_matching(&root, &verify).unwrap(),
+            target
+        );
+        fs::create_dir_all(old.join("assets")).unwrap();
+        fs::write(old.join("assets/identity"), b"verified").unwrap();
+        assert!(super::migrate_directory_matching(&root, &verify).is_err());
+        assert!(old.exists() && target.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn migration_preserves_incomplete_and_unrelated_directories() {
+        let root = scratch("latex-migration-incomplete");
+        let unrelated = root.join("other-tool").join("assets");
+        fs::create_dir_all(&unrelated).unwrap();
+        fs::write(unrelated.join("identity"), b"unrelated").unwrap();
+        assert!(super::legacy_candidates(&root).unwrap().is_empty());
+        let incomplete = root.join("former-engine").join("assets");
+        fs::create_dir_all(&incomplete).unwrap();
+        fs::write(incomplete.join(super::ASSETS[0].0), b"damaged").unwrap();
+        assert!(super::migrate_directory(&root).is_err());
+        assert!(incomplete.exists() && unrelated.exists());
+        assert!(!root.join("latex").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn mirror_paths_cannot_escape_or_change_host() {
+        assert_eq!(
+            super::mirror_request("/jobs/12/mirror/a.sty"),
+            Some((Some("12"), "a.sty"))
+        );
+        assert_eq!(
+            super::mirror_request("/mirror/a.sty"),
+            Some((None, "a.sty"))
+        );
+        assert_eq!(super::mirror_request("/jobs/bad/mirror/a.sty"), None);
+        assert_eq!(super::mirror_request("/jobs/1/other/a.sty"), None);
         for good in ["tex/latex/base/article.cls", "fonts/a-b.1"] {
             assert!(safe_relative(good));
         }
@@ -1136,10 +1392,29 @@ mod tests {
     }
 
     #[test]
+    fn project_snapshot_collects_local_classes_and_styles() {
+        let root = scratch("latex-local-classes");
+        fs::write(
+            root.join("main.tex"),
+            "\\documentclass{myclass}\\usepackage{mystyle}\\begin{document}x\\end{document}\\n",
+        )
+        .unwrap();
+        fs::write(root.join("myclass.cls"), "% local class\n").unwrap();
+        fs::write(root.join("mystyle.sty"), "% local style\n").unwrap();
+        let (files, skipped, _) =
+            collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
+        assert!(skipped.is_empty());
+        assert!(files.iter().any(|(path, _)| path.ends_with("myclass.cls")));
+        assert!(files.iter().any(|(path, _)| path.ends_with("mystyle.sty")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn project_snapshot_follows_references_and_preserves_binary_images() {
-        let root =
-            fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../samples/latex-poc"))
-                .unwrap();
+        let root = fs::canonicalize(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../samples/latex-project"),
+        )
+        .unwrap();
         let main = root.join("main.tex");
         let (files, skipped, generation) = collect_referenced(&root, &main, &[]).unwrap();
         assert!(skipped.is_empty(), "the fixture has no symlinks");
@@ -1193,7 +1468,10 @@ mod tests {
         // The shipped LaTeX Reference shows these commands as examples. Reading
         // them as references made the document uncompilable.
         let masked = mask_literal_regions("\\verb|\\input{chapters/intro}|");
-        assert!(!masked.contains("\\input"), "the \\verb body is blanked: {masked:?}");
+        assert!(
+            !masked.contains("\\input"),
+            "the \\verb body is blanked: {masked:?}"
+        );
         let masked = mask_literal_regions("\\begin{verbatim}\n\\input{x}\n\\end{verbatim}");
         assert!(!masked.contains("\\input"), "the verbatim body is blanked");
         let masked = mask_literal_regions("\\texttt{\\input} names the command");
@@ -1230,6 +1508,33 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn snapshot_uses_literal_main_preamble_graphics_paths() {
+        let root = scratch("graphics-path");
+        fs::create_dir_all(root.join("figures")).unwrap();
+        fs::create_dir_all(root.join("chapters")).unwrap();
+        fs::write(
+            root.join("main.tex"),
+            "\\graphicspath{{missing/}{./figures/}}\n\\begin{document}\n\\input{chapters/intro}",
+        )
+        .unwrap();
+        fs::write(root.join("chapters/intro.tex"), "\\includegraphics{plot}").unwrap();
+        fs::write(root.join("figures/plot.png"), b"image").unwrap();
+        let (files, _, _) = collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
+        assert!(
+            files
+                .iter()
+                .any(|(path, _)| path.ends_with("figures/plot.png"))
+        );
+        assert_eq!(
+            super::graphics_paths(
+                "% \\graphicspath{{ignored/}}\n\\graphicspath{{../unsafe/}{figures/}}\n\\begin{document}\\graphicspath{{late/}}"
+            ),
+            vec!["figures"]
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

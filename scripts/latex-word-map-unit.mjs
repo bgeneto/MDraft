@@ -316,3 +316,42 @@ const ambiguousSplitScript = await buildPdfWordAnchors(
   [splitScriptLines[0], { text: "3 3", region: "5:0" }],
 );
 assert.equal(ambiguousSplitScript.filter((anchor) => anchor.atomic).length, 0);
+
+// Distinct source formulas can each match once and still claim the same PDF
+// glyphs. Reject the whole overlapping chain, while keeping an unrelated one.
+const overlappingMath = String.raw`\begin{document}$a+b+c$ $b+c$ $c+d$ $p+q$\end{document}`;
+const overlappingAnchors = await buildPdfWordAnchors(
+  "latex",
+  [{ path: "main.tex", source: overlappingMath }],
+  [{ text: "a+b+c+d p+q", region: "1:0" }],
+);
+assert.deepEqual(
+  overlappingAnchors
+    .filter((anchor) => anchor.atomic)
+    .map((anchor) => overlappingMath.slice(anchor.from, anchor.to)),
+  ["$p+q$"],
+);
+
+const sharedScript = String.raw`\begin{document}$Q=7r^3$ $X=4y^3$\end{document}`;
+const sharedScriptAnchors = await buildPdfWordAnchors(
+  "latex",
+  [{ path: "main.tex", source: sharedScript }],
+  [
+    { text: "Q=7r", region: "1:0" },
+    { text: "3", region: "1:0" },
+    { text: "X=4y", region: "1:0" },
+  ],
+);
+assert.equal(sharedScriptAnchors.filter((anchor) => anchor.atomic).length, 0);
+
+const repeatedPdfMath = String.raw`\begin{document}$u+v$\end{document}`;
+assert.equal(
+  (
+    await buildPdfWordAnchors(
+      "latex",
+      [{ path: "main.tex", source: repeatedPdfMath }],
+      [{ text: "u+v and u+v", region: "1:0" }],
+    )
+  ).filter((anchor) => anchor.atomic).length,
+  0,
+);

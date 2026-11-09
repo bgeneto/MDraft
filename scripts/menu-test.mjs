@@ -328,6 +328,10 @@ try {
     (await itemById("view.typstPreview"))?.enabled === false,
     "Typst Preview is disabled for Markdown",
   );
+  check(
+    (await itemById("view.latexCompile"))?.enabled === false,
+    "Compile LaTeX is disabled for Markdown",
+  );
   check((await itemById("edit.delete"))?.enabled === false, "Delete Selection starts disabled");
   check((await itemById("navigate.openTarget"))?.enabled === false, "Open Target starts disabled");
 
@@ -911,7 +915,11 @@ try {
 
   // LaTeX: the commands it implements are live, and what it cannot do yet is
   // disabled rather than offered as a control that only shows a toast.
-  await openPaths([join(repoRoot, "samples", "latex-poc", "main.tex")]);
+  await openPaths([join(repoRoot, "samples", "latex-project", "main.tex")]);
+  check(
+    (await itemById("view.latexCompile"))?.enabled === true,
+    "Compile LaTeX is enabled for LaTeX",
+  );
   for (const [id, label] of [
     ["format.bold", "bold"],
     ["format.italic", "italic"],

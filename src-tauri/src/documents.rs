@@ -585,16 +585,12 @@ const APP_FOLDERS: [&str; 3] = ["pandoc", "typst", "latex"];
 /// The directory a named application folder resolves to, under `data_root`.
 ///
 /// Split out from the command so the mapping can be tested without an
-/// `AppHandle`: an unknown name must not resolve, and the LaTeX engine keeps its
-/// historical `wasmtex-poc-2025` directory.
+/// `AppHandle`: an unknown name must not resolve.
 fn app_folder_path(data_root: &Path, folder: &str) -> Result<PathBuf, String> {
     if !APP_FOLDERS.contains(&folder) {
         return Err(format!("There is no {folder} folder to open."));
     }
-    Ok(match folder {
-        "latex" => data_root.join("wasmtex-poc-2025"),
-        other => data_root.join(other),
-    })
+    Ok(data_root.join(folder))
 }
 
 /// Open one of the application's own tool folders in the OS file manager.
@@ -609,7 +605,11 @@ pub fn open_app_folder(app: tauri::AppHandle, folder: String) -> Result<(), Stri
         .path()
         .app_data_dir()
         .map_err(|e| format!("Cannot locate the application data directory: {e}"))?;
-    let target = app_folder_path(&data_root, &folder)?;
+    let target = if folder == "latex" {
+        crate::latex::directory(&app)?
+    } else {
+        app_folder_path(&data_root, &folder)?
+    };
     fs::create_dir_all(&target)
         .map_err(|e| format!("Could not create {}: {e}", target.display()))?;
     tauri_plugin_opener::open_path(&target, None::<&str>)
@@ -643,12 +643,7 @@ mod tests {
             root.join("pandoc")
         );
         assert_eq!(app_folder_path(root, "typst").unwrap(), root.join("typst"));
-        // The LaTeX engine keeps the directory the experiment created; renaming
-        // it would strand an existing download.
-        assert_eq!(
-            app_folder_path(root, "latex").unwrap(),
-            root.join("wasmtex-poc-2025")
-        );
+        assert_eq!(app_folder_path(root, "latex").unwrap(), root.join("latex"));
         // A name that is not on the list must not resolve, so a compromised
         // frontend cannot make the command open an arbitrary directory.
         for bad in ["", "..", "..\\Windows", "C:/Windows", "pandoc/../..", "PANDOC"] {

@@ -38,9 +38,13 @@ export async function openPage(port) {
 
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
-    if (message.id && pending.has(message.id)) {
-      pending.get(message.id)(message);
+    if (message.id !== undefined && pending.has(message.id)) {
+      const request = pending.get(message.id);
+      clearTimeout(request.timer);
       pending.delete(message.id);
+      if (message.error)
+        request.reject(new Error(`CDP ${request.method}: ${message.error.message}`));
+      else request.resolve(message);
       return;
     }
     // `Runtime.consoleAPICalled` carries the arguments as RemoteObjects; the
@@ -57,12 +61,33 @@ export async function openPage(port) {
       for (const listener of exceptionListeners) listener(String(text));
     }
   });
+  socket.addEventListener("close", () => {
+    for (const request of pending.values()) {
+      clearTimeout(request.timer);
+      request.reject(new Error(`CDP connection closed during ${request.method}`));
+    }
+    pending.clear();
+  });
 
   const send = (method, params = {}) =>
-    new Promise((resolve) => {
+    new Promise((resolve, reject) => {
+      if (socket.readyState !== WebSocket.OPEN) {
+        reject(new Error(`CDP connection is closed before ${method}`));
+        return;
+      }
       const id = nextId++;
-      pending.set(id, resolve);
-      socket.send(JSON.stringify({ id, method, params }));
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`CDP ${method} timed out after 30 seconds`));
+      }, 30000);
+      pending.set(id, { resolve, reject, method, timer });
+      try {
+        socket.send(JSON.stringify({ id, method, params }));
+      } catch (error) {
+        clearTimeout(timer);
+        pending.delete(id);
+        reject(error);
+      }
     });
 
   // Listeners first: `Runtime.enable` replays nothing, so an event emitted before

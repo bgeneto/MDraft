@@ -1,6 +1,6 @@
 //! Exercise the experimental LuaLaTeX preview in a running, isolated MDraft.
-//! Start it with samples/latex-poc/main.tex and a WebView2 debugging port:
-//!   node scripts/latex-poc-test.mjs 19341 [offline]
+//! Start it with samples/latex-project/main.tex and a WebView2 debugging port:
+//!   node scripts/latex-project-test.mjs 19341 [offline]
 import process from "node:process";
 
 const port = Number(process.argv[2] ?? 19341);
@@ -119,9 +119,9 @@ try {
     await evaluate(`(async () => {
       const open=document.getElementById("btn-prefs"); open?.click();
       await new Promise(r=>setTimeout(r,500));
-      [...document.querySelectorAll(".prefs-section")].find(n=>n.textContent.trim()==="Export")?.click();
+      [...document.querySelectorAll(".prefs-section")].find(n=>n.textContent.trim()==="LaTeX")?.click();
       await new Promise(r=>setTimeout(r,400));
-      const row=[...document.querySelectorAll(".prefs-row")].find(n=>/Enable LuaLaTeX/i.test(n.querySelector(".prefs-label")?.textContent ?? ""));
+      const row=[...document.querySelectorAll(".prefs-row")].find(n=>/Enable bundled LuaLaTeX/i.test(n.querySelector(".prefs-label")?.textContent ?? ""));
       const box=row?.querySelector("input[type=checkbox]"); if(box && !box.checked) box.click();
       await new Promise(r=>setTimeout(r,900)); open?.click();
     })()`);

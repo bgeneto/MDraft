@@ -2536,6 +2536,7 @@ dependencies = [
  "glib",
  "gtk",
  "keyring",
+ "libc",
  "lzma-rs",
  "objc2",
  "objc2-app-kit",

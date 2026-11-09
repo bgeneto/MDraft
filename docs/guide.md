@@ -422,8 +422,8 @@ LaTeX, reStructuredText, AsciiDoc, RTF, Textile, MediaWiki and OPML use pandoc;
 and HTML, and Typst directly for a `.typ` document.
 
 A `.tex` document is the exception to that summary in one place: **File ›
-Export › PDF** writes the PDF its own LuaLaTeX preview compiled, so it needs
-neither pandoc nor Typst. Every other format for LaTeX goes through pandoc's
+Export › PDF** writes the PDF its own LaTeX preview compiled — with the bundled
+engine or the installed distribution — so it needs neither pandoc nor Typst. Every other format for LaTeX goes through pandoc's
 LaTeX reader, and **File › Export › More Pandoc Formats…** offers the rest of the
 installed pandoc's writers — around 77 of them — in a searchable list. A
 conversion reads the project snapshot the preview compiled, so unsaved edits in
@@ -438,10 +438,19 @@ printing. **File › Export › PDF…** writes the file directly through WebVie
 WebKitGTK; **File › Print…** (`Ctrl+P`) opens the platform print dialog. The
 browser handoff remains for scripted HTML and hosts without a print API.
 
+A warning — an image that could not be fetched, a resource a printout lost, a
+pandoc complaint — appears in the same brief toast a save uses and clears itself.
+There is nothing to acknowledge: the file was written. Only a failure that stops
+the export opens a dialog.
+
 **Preferences › Export** shows whether pandoc and Typst are installed, offers to
 install or update either, and has one button per tool that opens its folder in
-the system file manager — the install path itself is not printed. The LaTeX
-cache size, its ceiling and the Clear cache action are in the same section.
+the system file manager — the install path itself is not printed. **Preferences
+› LaTeX** holds the bundled engine's cache size, its ceiling and Clear cache,
+and the separate **Installed TeX distribution** group: Find or Browse, Validate,
+the engine choice and the explicit switch. The installed backend is off by
+default. It is a separate program: it runs with your permissions and may use the
+network to install its own packages, while shell escape stays disabled.
 
 See [Export and conversion](export.md) for the exact directions, dependencies,
 configuration and fidelity notes.

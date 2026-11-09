@@ -149,18 +149,20 @@ import { annotateTypstLines } from "./typst-map";
 import { paragraphRangeAt } from "./typst-page-map";
 import { TypstPdfPreview, type TypstPageContext } from "./typst-pdf";
 import {
-  cancelLatex,
+  cancelLatex as cancelBundledLatex,
   compileLatex,
   LatexBuildError,
   type LatexDiagnostic,
   type LatexResult,
 } from "./latex";
+import { nativeToLatex } from "./latex-native";
 import {
   diagnosticPlace,
   diagnosticRange,
   diagnosticSignature,
   latexProjectMember,
 } from "./latex-diagnostics";
+import { lineTextOf } from "./latex-references";
 import {
   clampScroll,
   mapScrollOffset,
@@ -1128,6 +1130,15 @@ function applySettingsPatch(
   // who turns it off does not have to reopen the document.
   if (patch.completion !== undefined) editor.setCompletion(settings.completion !== false);
 
+  if (patch.latexAutoCompile !== undefined && doc.language === "latex") {
+    if (patch.latexAutoCompile && previewStale) scheduleRender(true);
+    else if (!patch.latexAutoCompile) {
+      window.clearTimeout(renderTimer);
+      if (latexInFlight) cancelLatexBuild();
+      else if (previewStale) setLatexStatus("Out of date · Select Compile to update the preview.");
+    }
+  }
+
   if (affectsRendering) scheduleRender(true);
 }
 
@@ -1348,6 +1359,10 @@ let pendingPreviewScroll: number | null = null;
  */
 function scheduleRender(immediate = false): void {
   window.clearTimeout(renderTimer);
+  if (doc.language === "latex" && settings.latexAutoCompile === false) {
+    if (previewStale) setLatexStatus("Out of date · Select Compile to update the preview.");
+    return;
+  }
   if (settings.viewMode === "source") {
     // The pane is not on screen. A queued or in-flight render would only take
     // the main thread away from typing, and its answer must not claim the
@@ -1521,6 +1536,11 @@ interface LatexPreview {
 let latexPreview: LatexPreview | null = null;
 /** The last measured LaTeX package cache, or null before the first read. */
 let latexCacheInfo: api.LatexCacheInfo | null = null;
+let latexCacheError: string | null = null;
+/** What validation proved in this session, for the Preferences note. */
+let latexNativeCaps: api.LatexNativeCapabilities | null = null;
+/** Metadata-only candidates from the last Find, or null before one. */
+let latexNativeCandidates: api.LatexNativeCandidate[] | null = null;
 let latexNavigationRoot: string | null = null;
 /**
  * The main file of the last failed render.
@@ -1545,6 +1565,128 @@ let latexProblemFiles: ReadonlySet<string> = new Set();
 let latexProblems: readonly LatexDiagnostic[] = [];
 /** The signature of the last auto-jumped list, so a re-render does not jump. */
 let latexProblemSignature = "";
+let latexInFlight = false;
+let navigatingLatexProblem = false;
+/** The owner token of the native job on screen, for Cancel. */
+let latexJob: string | null = null;
+/** The last engine status, so Preferences and the enable note agree. */
+let latexEngine: api.LatexEngineStatus | null = null;
+
+/**
+ * Stop whichever backend is running.
+ *
+ * The bundled SDK is disposed synchronously; the native backend is a Rust
+ * process tree, so its cancel command is asynchronous and the owner token is
+ * cleared first. A late native result is dropped by the render token, not by
+ * this function — cancelling must not wait for the process to die.
+ */
+function cancelLatex(): void {
+  cancelBundledLatex();
+  const job = latexJob;
+  latexJob = null;
+  if (job) void api.latexNativeCancel(job);
+}
+
+async function installLatexProgressListener(): Promise<void> {
+  await listen<api.LatexNativeProgress>("latex-native-progress", (event) => {
+    const progress = event.payload;
+    if (!latexJob || progress.job !== latexJob || !latexInFlight) return;
+    setLatexStatus(
+      progress.phase === "bibliography"
+        ? `Running ${progress.detail ?? "the bibliography tool"}…`
+        : `Compiling with ${progress.detail ?? "the installed engine"}…`,
+    );
+  });
+}
+
+function compileCurrentLatex(): void {
+  if (doc.language !== "latex") return;
+  window.clearTimeout(renderTimer);
+  renderToken += 1;
+  cancelLatex();
+  discardStagedPdf();
+  if (settings.viewMode === "source") setViewMode("split");
+  window.clearTimeout(renderTimer);
+  void doRender();
+}
+
+function cancelLatexBuild(): void {
+  window.clearTimeout(renderTimer);
+  renderToken += 1;
+  cancelLatex();
+  discardStagedPdf();
+  latexInFlight = false;
+  previewStale = true;
+  setLatexStatus("Out of date · Compilation cancelled; an outstanding package request may finish.");
+}
+
+function setLatexStatus(message: string): void {
+  let status = previewPane.querySelector<HTMLElement>(":scope > .latex-build-status");
+  if (!status) {
+    status = document.createElement("div");
+    status.className = "latex-build-status";
+    const label = document.createElement("span");
+    label.className = "latex-build-message";
+    label.setAttribute("role", "status");
+    const compile = document.createElement("button");
+    compile.type = "button";
+    compile.textContent = "Compile";
+    compile.addEventListener("click", compileCurrentLatex);
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "latex-cancel";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", cancelLatexBuild);
+    status.append(label, compile, cancel);
+    previewPane.prepend(status);
+  }
+  status.querySelector<HTMLElement>(".latex-build-message")!.textContent = message;
+  status.querySelector<HTMLButtonElement>(".latex-cancel")!.hidden = !latexInFlight;
+}
+
+function showLatexWarnings(result: LatexResult, root: { path: string; directory: string }): void {
+  previewPane.querySelector(":scope > .latex-warnings")?.remove();
+  const details = document.createElement("details");
+  details.className = "latex-warnings";
+  const summary = document.createElement("summary");
+  summary.textContent = result.warnings.length
+    ? `${result.warnings.length}${result.warningsTruncated ? "+" : ""} LaTeX warning${result.warnings.length === 1 && !result.warningsTruncated ? "" : "s"}`
+    : "Compiler output";
+  details.append(summary);
+  const list = document.createElement("ul");
+  for (const warning of result.warnings) {
+    const item = document.createElement("li");
+    const label = `${diagnosticPlace(warning)} ${warning.message}`.trim();
+    if (
+      warning.file &&
+      warning.line &&
+      projectRelative(warning.file) &&
+      result.sources.some((source) => source.path === warning.file)
+    ) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.addEventListener("click", () => void revealLatexProblem(warning, root, true));
+      item.append(button);
+    } else item.textContent = label;
+    list.append(item);
+  }
+  details.append(list);
+  if (result.warningsTruncated) {
+    const more = document.createElement("p");
+    more.textContent = "More diagnostics were omitted; see the compiler output.";
+    details.append(more);
+  }
+  const log = document.createElement("details");
+  const logSummary = document.createElement("summary");
+  logSummary.textContent = "Compiler output";
+  const output = document.createElement("pre");
+  output.textContent = result.log;
+  log.append(logSummary, output);
+  if (result.warnings.length) details.append(log);
+  else details.append(output);
+  preview.before(details);
+}
 
 function latexCurrent(value: LatexPreview | null): value is LatexPreview {
   return Boolean(
@@ -1589,6 +1731,7 @@ function showPdfRebuildError(error: unknown): void {
 function latexProblemPanel(
   error: unknown,
   root: { path: string; directory: string } | null,
+  files: readonly string[],
 ): HTMLElement {
   const problems = error instanceof LatexBuildError ? error.diagnostics : [];
   const wrap = document.createElement("div");
@@ -1604,8 +1747,15 @@ function latexProblemPanel(
     list.className = "latex-problems-list";
     for (const problem of problems) {
       const item = document.createElement("li");
-      const button = document.createElement("button");
-      button.type = "button";
+      const actionable = Boolean(
+        root &&
+        problem.line > 0 &&
+        problem.lineText &&
+        projectRelative(problem.file) &&
+        files.includes(problem.file),
+      );
+      const button = document.createElement(actionable ? "button" : "div");
+      if (button instanceof HTMLButtonElement) button.type = "button";
       button.className = "latex-problem";
       const place = document.createElement("span");
       place.className = "latex-problem-place";
@@ -1624,7 +1774,8 @@ function latexProblemPanel(
       if (problem.searched.length > 1) {
         button.title = `Looked for: ${problem.searched.join(", ")}`;
       }
-      button.addEventListener("click", () => void revealLatexProblem(problem, root, true));
+      if (actionable)
+        button.addEventListener("click", () => void revealLatexProblem(problem, root, true));
       item.append(button);
       list.append(item);
     }
@@ -1719,13 +1870,30 @@ async function revealLatexProblem(
 ): Promise<void> {
   if (!root || !problem.file || !projectRelative(problem.file)) return;
   const path = joinDir(root.directory, problem.file);
+  const belongsToFailure = latexProblemFiles.has(pathKey(path));
+  const belongsToPreview = latexPreview?.result.sources.some(
+    (source) => source.path === problem.file,
+  );
+  if (!belongsToFailure && !belongsToPreview) return;
   const existing = sessions.findByPath(path);
-  if (existing) {
-    if (existing.id !== doc.id) await activateSession(existing.id);
-  } else {
-    await openPath(path, { silent: true, rememberRecent: false });
+  navigatingLatexProblem = true;
+  try {
+    if (existing) {
+      if (existing.id !== doc.id) await activateSession(existing.id);
+    } else {
+      await openPath(path, { silent: true, rememberRecent: false });
+    }
+  } finally {
+    navigatingLatexProblem = false;
   }
   if (!doc.path || pathKey(doc.path) !== pathKey(path)) return;
+  if (
+    !problem.lineText ||
+    problem.line < 1 ||
+    problem.line > editor.view.state.doc.lines ||
+    lineTextOf(editor.view.state.doc.line(problem.line).text) !== problem.lineText
+  )
+    return;
   applyLatexMarks(latexProblems, root, doc.path, true);
   const mapped = diagnosticRange(editor.getDoc(), problem);
   if (!mapped) return;
@@ -1748,7 +1916,10 @@ function maybeJumpToLatexProblem(
   const first = problems.find((problem) => problem.file && problem.line > 0) ?? problems[0];
   if (!first) return;
   // Let the failure paint before the tab switch starts its own render.
-  window.setTimeout(() => void revealLatexProblem(first, root, false), 0);
+  const owner = renderToken;
+  window.setTimeout(() => {
+    if (owner === renderToken) void revealLatexProblem(first, root, false);
+  }, 0);
 }
 
 /**
@@ -1768,7 +1939,68 @@ function latexFailure(
   root: { path: string; directory: string } | null = null,
   files: readonly string[] = [],
 ): void {
-  const panel = latexProblemPanel(error, root);
+  const panel = latexProblemPanel(error, root, files);
+  if (
+    error instanceof LatexBuildError &&
+    error.partialPdf &&
+    new TextDecoder().decode(error.partialPdf.subarray(0, 5)) === "%PDF-"
+  ) {
+    const pdf = error.partialPdf;
+    const owner = renderToken;
+    const activeId = doc.id;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "typst-viewbutton";
+    button.textContent = "View partial PDF";
+    button.addEventListener("click", () => {
+      void (async () => {
+        if (owner !== renderToken || doc.id !== activeId) return;
+        latexInFlight = true;
+        setLatexStatus("Rendering partial PDF…");
+        const host = stagedPdfHost();
+        const view = new TypstPdfPreview(
+          host,
+          previewPane,
+          syncSourceFromPageSelection,
+          editor.getDoc(),
+          {
+            language: "latex",
+            files: [],
+            activeFile: "",
+            enabled: false,
+            detached: true,
+          },
+        );
+        stagedPdf = { view, host };
+        view.setZoom(zoomFactor());
+        try {
+          await view.render(pdf.slice());
+          if (owner !== renderToken || doc.id !== activeId) {
+            view.dispose();
+            host.remove();
+            return;
+          }
+          commitPdfHost(host, view, owner);
+          const layer = document.createElement("div");
+          layer.className = "pdf-rebuild-error";
+          layer.append(panel);
+          preview.prepend(layer);
+          previewStale = true;
+          previewSyncReady = false;
+          latexInFlight = false;
+          setLatexStatus("Partial PDF · compilation reported errors.");
+        } catch (failure) {
+          if (owner === renderToken && doc.id === activeId) {
+            discardStagedPdf();
+            latexInFlight = false;
+            setLatexStatus("Could not render the partial PDF.");
+            toast(String(failure), 6200);
+          }
+        }
+      })();
+    });
+    panel.append(button);
+  }
   if (typstPdf && latexPreview?.activeId === doc.id) {
     preview.querySelector(":scope > .pdf-rebuild-error")?.remove();
     const layer = document.createElement("div");
@@ -1806,18 +2038,49 @@ function showLatexLicenses(): void {
   void import("./latex-licenses").then(({ LATEX_LICENSES }) => showBuiltin(LATEX_LICENSES));
 }
 
-function latexEnableNote(): void {
+/**
+ * Probe and commit an installed distribution.
+ *
+ * Validation is the explicit action that executes external code: it reads each
+ * tool's version and compiles a one-page document. Nothing is saved unless the
+ * probe produces a readable PDF.
+ */
+async function validateNativeDirectory(directory: string): Promise<void> {
+  const notice = toast(`Validating ${directory}…`, 0);
+  try {
+    const capabilities = await api.latexNativeValidate(directory);
+    latexNativeCaps = capabilities;
+    settings.latexNativeRoot = capabilities.bin;
+    latexEngine = await api.latexEngineStatus();
+    persist();
+    toast(
+      `${capabilities.distribution} validated. Turn on "Use my installed TeX distribution" in Preferences › LaTeX to compile with it.`,
+      8200,
+    );
+  } catch (error) {
+    await message(String(error), {
+      title: "Could not validate this TeX installation",
+      kind: "error",
+    });
+  } finally {
+    notice.dismiss();
+    preferences.refresh();
+  }
+}
+
+function latexEnableNote(status?: api.LatexEngineStatus | null): void {
   preview.replaceChildren();
   const note = document.createElement("div");
   note.className = "typst-note";
   const text = document.createElement("span");
   text.className = "typst-note-text";
-  text.textContent =
-    "LuaLaTeX compiles .tex documents locally. Enabling downloads about 10 MiB of verified engine files; additional TeX packages and fonts are downloaded on demand and cached locally. Your document stays on this device.";
+  text.textContent = status?.bundledEnabled
+    ? "The bundled LuaLaTeX engine is on, but its files are missing. Turn it off and on in Preferences › LaTeX to download them again."
+    : "LaTeX compiles .tex documents locally. Enable the bundled LuaLaTeX engine, or choose a TeX distribution already on this computer in Preferences › LaTeX. Your document stays on this device.";
   const button = document.createElement("button");
   button.type = "button";
   button.className = "typst-notebutton";
-  button.textContent = "Enable LuaLaTeX…";
+  button.textContent = status?.bundledEnabled ? "Retry setup" : "Enable LuaLaTeX…";
   button.addEventListener("click", () => {
     button.disabled = true;
     button.textContent = "Downloading…";
@@ -1836,12 +2099,17 @@ function latexEnableNote(): void {
         toast(`Could not enable LuaLaTeX: ${String(error)}`, 6200);
       });
   });
+  const installed = document.createElement("button");
+  installed.type = "button";
+  installed.className = "typst-notebutton";
+  installed.textContent = "LaTeX Preferences…";
+  installed.addEventListener("click", () => preferences.openAt("latex"));
   const licenses = document.createElement("button");
   licenses.type = "button";
   licenses.className = "typst-notebutton";
   licenses.textContent = "Licences and source";
   licenses.addEventListener("click", showLatexLicenses);
-  note.append(text, button, licenses);
+  note.append(text, button, installed, licenses);
   preview.appendChild(note);
 }
 
@@ -1857,7 +2125,7 @@ async function latexSavePdf(): Promise<void> {
     token: value.token,
     sessionId: doc.id,
     revision: doc.revision,
-    engine: "LuaLaTeX",
+    engine: value.result.engine ?? "LaTeX",
     defaultPath: (root?.path ?? "document.tex").replace(/\.tex$/i, ".pdf"),
   });
 }
@@ -1867,7 +2135,7 @@ function latexBar(): HTMLElement {
   bar.className = "typst-viewbar";
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "typst-viewbutton";
+  button.className = "typst-viewbutton latex-save-pdf";
   button.textContent = "Save PDF…";
   button.addEventListener("click", () => void latexSavePdf());
   bar.appendChild(button);
@@ -1877,22 +2145,45 @@ function latexBar(): HTMLElement {
 async function renderLatexPreview(source: string, token: number): Promise<void> {
   const started = performance.now();
   const activeId = doc.id;
+  latexInFlight = true;
+  setLatexStatus("Preparing LaTeX compilation…");
   previewPane.querySelector(":scope > .typst-viewbar")?.remove();
   if (!doc.path) {
+    latexInFlight = false;
+    setLatexStatus("Save the document before compiling.");
     latexFailure("Save this .tex file before compiling.");
     return;
   }
-  const enabled = await api.latexStatus();
+  let engineStatus: api.LatexEngineStatus;
+  try {
+    engineStatus = await api.latexEngineStatus();
+  } catch (error) {
+    if (token === renderToken && doc.id === activeId) {
+      latexInFlight = false;
+      setLatexStatus("Could not check the LaTeX engine.");
+      latexFailure(error);
+    }
+    return;
+  }
+  latexEngine = engineStatus;
   if (token !== renderToken || doc.id !== activeId) return;
-  if (!enabled) {
+  if (engineStatus.backend === "none") {
+    latexInFlight = false;
+    setLatexStatus("LaTeX is not enabled.");
     disposeTypstPdf();
-    latexEnableNote();
+    latexEnableNote(engineStatus);
     previewStale = false;
     latexProblems = [];
     latexProblemRoot = null;
     latexProblemFiles = new Set();
     latexProblemSignature = "";
     editor.clearDiagnostics();
+    return;
+  }
+  if (engineStatus.problem) {
+    latexInFlight = false;
+    setLatexStatus("The installed TeX distribution is unavailable.");
+    latexFailure(new Error(engineStatus.problem));
     return;
   }
 
@@ -1913,6 +2204,8 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
     latexNavigationRoot = root.id;
   }
   if (!root.path || !root.directory) {
+    latexInFlight = false;
+    setLatexStatus("Save the main document before compiling.");
     latexFailure("Save the main .tex file first.");
     return;
   }
@@ -1944,10 +2237,42 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
         6200,
       );
     }
-    const result = await compileLatex(snapshot);
+    let result: LatexResult;
+    if (engineStatus.backend === "native") {
+      const label =
+        engineStatus.nativeEngine === "auto" ? "the installed engine" : engineStatus.nativeEngine;
+      setLatexStatus(`Compiling with ${label}…`);
+      // The preview's render token is the native job's owner too, so a Cancel
+      // or an edit can reach the process tree before its result arrives.
+      const job = `job-${token}-${Date.now()}`;
+      latexJob = job;
+      try {
+        const native = await api.latexNativeCompile({
+          job,
+          mainFile: snapshot.mainFile,
+          files: snapshot.files,
+        });
+        if (token !== renderToken || doc.id !== activeId) return;
+        result = nativeToLatex(native, snapshot);
+      } finally {
+        if (latexJob === job) latexJob = null;
+      }
+    } else {
+      setLatexStatus("Compiling LaTeX…");
+      result = await compileLatex(snapshot, (phase) => {
+        if (token === renderToken && doc.id === activeId) {
+          setLatexStatus(
+            phase === "downloading"
+              ? "Downloading LaTeX packages…"
+              : phase === "resolving"
+                ? "Resolving LaTeX packages…"
+                : "Compiling LaTeX…",
+          );
+        }
+      });
+    }
     const value = { ...owner, result };
     if (!latexCurrent(value)) return;
-    latexPreview = value;
     wordMap = null;
     clearPreviewWords();
     preview.before(latexBar());
@@ -1962,12 +2287,14 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
     });
     stagedPdf = { view, host };
     view.setZoom(zoomFactor());
+    setLatexStatus("Rendering PDF…");
     await view.render(result.pdf.slice());
     if (!latexCurrent(value)) {
       view.dispose();
       host.remove();
       return;
     }
+    latexPreview = value;
     commitPdfHost(host, view, token);
     syncPreviewFromSource();
     preview.dataset.latexCurrent = String(token);
@@ -1976,14 +2303,21 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
     previewStale = false;
     previewSyncReady = true;
     // A successful compile is the only authority that clears a problem list.
-    latexProblems = [];
+    latexProblems = result.warnings;
     latexProblemSignature = "";
     latexProblemRoot = null;
     latexProblemFiles = new Set();
     editor.clearDiagnostics();
+    showLatexWarnings(result, { path: root.path, directory: root.directory });
+    latexInFlight = false;
+    setLatexStatus(
+      `Compiled in ${((result.elapsedMs ?? performance.now() - started) / 1000).toFixed(1)} s · ${result.engine ?? "LaTeX"}${result.warnings.length ? ` · ${result.warnings.length}${result.warningsTruncated ? "+" : ""} warning${result.warnings.length === 1 && !result.warningsTruncated ? "" : "s"}` : ""}`,
+    );
   } catch (error) {
     if (token === renderToken && doc.id === activeId) {
+      latexInFlight = false;
       discardStagedPdf();
+      setLatexStatus("LaTeX compilation failed.");
       latexFailure(error, { path: root.path, directory: root.directory }, snapshotFiles);
     }
   }
@@ -2830,6 +3164,16 @@ function snapshotDoc(): void {
 
 /** A render that started for the previous tab must not paint this one. */
 function invalidatePreview(): void {
+  latexInFlight = false;
+  previewPane.querySelector(":scope > .latex-build-status")?.remove();
+  previewPane.querySelector(":scope > .latex-warnings")?.remove();
+  if (doc.language === "latex" && settings.latexAutoCompile === false && !navigatingLatexProblem) {
+    previewPane.querySelector(":scope > .typst-viewbar")?.remove();
+    disposeTypstPdf();
+    preview.replaceChildren();
+    latexPreview = null;
+    latexProblems = [];
+  }
   delete preview.dataset.latexCurrent;
   renderToken += 1;
   wordMapGeneration += 1;
@@ -3301,7 +3645,17 @@ async function saveAs(suggestedPath?: string, session: Session = doc): Promise<b
   }
 }
 async function saveSession(session: Session): Promise<boolean> {
-  return writeSession(session);
+  const saved = await writeSession(session);
+  if (
+    saved &&
+    session === doc &&
+    doc.language === "latex" &&
+    settings.latexAutoCompile !== false &&
+    previewStale &&
+    !latexInFlight
+  )
+    scheduleRender(true);
+  return saved;
 }
 async function closeSession(id: string): Promise<void> {
   await closeSessions([id]);
@@ -3810,7 +4164,7 @@ async function exportCompiledLatexPdf(): Promise<void> {
     token: value.token,
     sessionId: doc.id,
     revision: doc.revision,
-    engine: "LuaLaTeX",
+    engine: value.result.engine ?? "LaTeX",
     defaultPath: (root?.path ?? "document.tex").replace(/\.tex$/i, ".pdf"),
     // The full snapshot, not just the active tab: a chapter edit invalidates the
     // PDF even though the root file's own revision did not move.
@@ -4339,7 +4693,7 @@ async function openWriterChooser(): Promise<void> {
     {
       writers,
       documentName: captured.root.name,
-      pdfLabel: "PDF (compiled by LuaLaTeX)",
+      pdfLabel: `PDF (compiled by ${latexPreview?.result.engine ?? "LaTeX"})`,
     },
     () => editor.focus(),
   );
@@ -5205,6 +5559,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
 
   "view.source": () => setViewMode("source"),
   "view.split": () => setViewMode("split"),
+  "view.latexCompile": compileCurrentLatex,
   "view.preview": () => setViewMode("preview"),
   "view.sidebar": () => setSidebarVisible(!settings.sidebarVisible),
   "view.outline": () => setSidebarTab("outline"),
@@ -5326,6 +5681,7 @@ function setViewMode(mode: api.ViewMode): void {
     typstPdf?.cancelMap();
     cancelTypstRender();
     cancelLatex();
+    latexInFlight = false;
     if (!wordMap) previewSyncReady = false;
   }
   settings.viewMode = mode;
@@ -8308,6 +8664,19 @@ async function boot(): Promise<void> {
     if (preservingLatexHandoff) return;
     delete preview.dataset.latexCurrent;
     doc.revision += 1;
+    if (doc.language === "latex") {
+      latexInFlight = false;
+      setLatexStatus(
+        settings.latexAutoCompile === false
+          ? "Out of date · Select Compile to update the preview."
+          : "Out of date · Waiting to compile…",
+      );
+      previewPane.querySelector(":scope > .latex-warnings")?.remove();
+      preview.querySelectorAll<HTMLButtonElement>("button.latex-problem").forEach((button) => {
+        button.disabled = true;
+      });
+      editor.clearDiagnostics();
+    }
     // Invalidate before the debounce: the visible DOM still describes old text.
     renderToken += 1;
     wordMapGeneration += 1;
@@ -8417,13 +8786,14 @@ async function boot(): Promise<void> {
     exportPdf: () => void exportPdf(),
     setupTypst: () => typstSetup(),
     latexCache: () => latexCacheInfo,
+    latexCacheError: () => latexCacheError,
     refreshLatexCache: async () => {
       try {
         latexCacheInfo = await api.latexCacheInfo();
-      } catch {
-        // A cache that cannot be measured is reported as absent rather than as
-        // an error dialog: the section still explains the feature.
+        latexCacheError = null;
+      } catch (error) {
         latexCacheInfo = null;
+        latexCacheError = String(error);
       }
     },
     installLatex: async () => {
@@ -8464,6 +8834,72 @@ async function boot(): Promise<void> {
         toast(`Cleared ${(freed / (1024 * 1024)).toFixed(1)} MiB of cached TeX packages.`);
       } catch (error) {
         await message(String(error), { title: "Could not clear the cache", kind: "error" });
+      }
+      preferences.refresh();
+    },
+    nativeStatus: () => latexEngine,
+    nativeCapabilities: () => latexNativeCaps,
+    nativeCandidates: () => latexNativeCandidates,
+    refreshNativeStatus: async () => {
+      try {
+        latexEngine = await api.latexEngineStatus();
+      } catch {
+        latexEngine = null;
+      }
+    },
+    findNative: async () => {
+      try {
+        const found = await api.latexNativeDiscover();
+        latexNativeCandidates = found;
+        if (found.length === 0) {
+          toast(
+            "No TeX installation was found in PATH or the standard locations. Use Browse… to choose its engine folder.",
+            7200,
+          );
+        } else if (found.length === 1) {
+          await validateNativeDirectory(found[0].directory);
+        }
+      } catch (error) {
+        await message(String(error), { title: "Could not look for TeX", kind: "error" });
+      }
+      preferences.refresh();
+    },
+    browseNative: async () => {
+      const picked = await openDialog({
+        directory: true,
+        multiple: false,
+        title: "Choose the folder that holds lualatex, pdflatex or xelatex",
+      });
+      if (typeof picked === "string" && picked) await validateNativeDirectory(picked);
+    },
+    validateNative: async (directory) => validateNativeDirectory(directory),
+    setNativeEnabled: async (value) => {
+      try {
+        latexEngine = await api.latexNativeSetEnabled(value);
+        settings.latexNativeEnabled = latexEngine.nativeEnabled;
+        persist();
+        toast(
+          value
+            ? `Using ${latexEngine.nativeDistribution ?? "the installed TeX distribution"}.`
+            : "The installed TeX distribution is off. The bundled engine keeps its own setting.",
+        );
+        scheduleRender(true);
+      } catch (error) {
+        await message(String(error), {
+          title: value ? "Could not use the installed TeX distribution" : "Could not turn it off",
+          kind: "error",
+        });
+      }
+      preferences.refresh();
+    },
+    setNativeEngine: async (value) => {
+      try {
+        latexEngine = await api.latexNativeSetEngine(value);
+        settings.latexNativeEngine = value;
+        persist();
+        scheduleRender(true);
+      } catch (error) {
+        await message(String(error), { title: "Could not change the engine", kind: "error" });
       }
       preferences.refresh();
     },
@@ -8603,6 +9039,7 @@ async function boot(): Promise<void> {
     });
 
   await installMenuListener();
+  await installLatexProgressListener();
   // The accelerators the menu registered, bound to the keyboard. Tauri 2 never
   // translates them on Windows, so without this the menu advertises shortcuts
   // that do nothing — see installShortcuts for the whole story.

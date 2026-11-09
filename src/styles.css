@@ -2263,6 +2263,50 @@ body {
   border-color: var(--accent);
 }
 
+.latex-build-status,
+.latex-warnings {
+  padding: 6px 12px;
+  color: var(--fg);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.latex-build-status {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.latex-build-message {
+  flex: 1;
+}
+
+.latex-build-status button {
+  font: inherit;
+  color: var(--fg);
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+
+.latex-warnings summary {
+  cursor: pointer;
+}
+
+.latex-warnings pre {
+  max-height: 16em;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* The Document / Pages switch above a Typst preview. */
 .typst-viewbar {
   position: sticky;
@@ -2294,6 +2338,10 @@ body {
 .typst-viewbutton.active {
   border-color: var(--accent, #4a8cff);
   color: var(--fg, #ddd);
+}
+
+.latex-save-pdf {
+  color: var(--fg);
 }
 
 /* What the document view had to drop. Typst's HTML export cannot represent
@@ -2587,6 +2635,10 @@ body {
   font: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+.latex-problem:not(button) {
+  cursor: default;
 }
 
 .latex-problem:hover,

@@ -8,6 +8,7 @@ mod ai;
 mod images;
 mod launch;
 mod latex;
+mod latex_native;
 #[cfg(target_os = "linux")]
 mod linux_webkit_env;
 mod menu;
@@ -124,6 +125,13 @@ pub fn run() {
             latex::latex_cache_info,
             latex::latex_disable,
             latex::latex_clear_cache,
+            latex_native::latex_engine_status,
+            latex_native::latex_native_discover,
+            latex_native::latex_native_validate,
+            latex_native::latex_native_set_enabled,
+            latex_native::latex_native_set_engine,
+            latex_native::latex_native_compile,
+            latex_native::latex_native_cancel,
             settings::get_settings,
             settings::save_settings,
             settings::add_recent,

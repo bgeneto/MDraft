@@ -44,6 +44,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { otherTestHarnesses, ownsStagedExecutable } from "./test-harness-ownership.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
@@ -72,6 +73,12 @@ const runningCommands = new Set();
 // produces a wall of failures that look like regressions.
 // ---------------------------------------------------------------------------
 const SUITES = [
+  {
+    id: "test-harness-ownership-unit",
+    title: "Test harness process ownership (unit)",
+    kind: "node",
+    script: "test-harness-ownership-unit.mjs",
+  },
   {
     id: "sync-unit",
     title: "Scroll geometry (unit)",
@@ -195,6 +202,15 @@ const SUITES = [
     script: "latex-diagnostics-unit.mjs",
   },
   {
+    // The native backend's result adapter. The Rust runner owns the process and
+    // the log; this module decides what the pane may call current, so the
+    // warning-versus-error, partial-PDF and cancellation rules are pinned here.
+    id: "latex-native-unit",
+    title: "Installed TeX result handling (unit)",
+    kind: "node",
+    script: "latex-native-unit.mjs",
+  },
+  {
     // The Outline panel's LaTeX scan. A `\section` shown inside `\verb` or a
     // verbatim block is sample text, not structure; the shipped LaTeX Reference
     // demonstrates every command it documents, so the regression is pinned
@@ -266,13 +282,24 @@ const SUITES = [
     safeWithInstalledApp: true,
   },
   {
-    id: "latex-poc",
+    id: "latex-project",
     title: "LaTeX included-file PDF correspondence",
     kind: "cdp",
-    script: "latex-poc-test.mjs",
-    doc: "samples/latex-poc/main.tex",
+    script: "latex-project-test.mjs",
+    doc: "samples/latex-project/main.tex",
     // All document changes are in-memory CodeMirror edits in the isolated
     // `.test-automation` instance; the project fixture is never saved.
+    safeWithInstalledApp: true,
+  },
+  {
+    // Drives a real installed distribution through validate, enable, compile
+    // and the preview pane. It skips unless MDRAFT_TEST_TEX_BIN names the engine
+    // directory, so the default suite does not need TeX.
+    id: "latex-native",
+    title: "Installed TeX through the application",
+    kind: "cdp",
+    script: "latex-native-test.mjs",
+    doc: "samples/latex-project/main.tex",
     safeWithInstalledApp: true,
   },
   {
@@ -909,22 +936,25 @@ function appConfigDir() {
 // CloseMainWindow (WM_CLOSE) is the same path the title-bar X takes and leaves
 // the WebView2 profile intact; force-killing it can corrupt the profile.
 //
-// Only instances this script started are closed without being asked: they live
-// in a `mdraft-test-*` staging directory. A copy the developer opened is left
-// alone — closing it would discard unsaved work — and the run stops with the
-// PID list instead, the same contract `dist.mjs` uses.
+// Another run's staged window and a copy the developer opened are both left
+// alone: a shared identifier and settings directory make concurrent UI runs
+// unsafe even when their executable paths and WebView folders differ.
 async function listRunningInstances() {
   if (!isWindows) {
     const result = await run("pgrep", ["-af", "mdraf[t]"]);
     return result.out
       .split(/\r?\n/)
       .filter(Boolean)
-      .map((line) => ({ pid: Number(line.split(/\s+/)[0]), path: line }));
+      .map((line) => {
+        const match = line.match(/^\s*(\d+)\s+(.+)$/);
+        return { pid: Number(match?.[1]), path: match?.[2] ?? "" };
+      });
   }
   const query =
     "Get-CimInstance Win32_Process -ErrorAction Stop -Filter \"Name='mdraft.exe'\" | Select-Object ProcessId,ExecutablePath | ConvertTo-Json -Compress";
   const result = await run("pwsh", ["-NoProfile", "-Command", query]);
-  if (result.code !== 0) fail(`Could not inspect running MDraft instances: ${result.err}`);
+  if (result.code !== 0)
+    throw new Error(`Could not inspect running MDraft instances: ${result.err}`);
   const text = result.out.trim();
   if (!text) return [];
   const parsed = JSON.parse(text);
@@ -934,19 +964,53 @@ async function listRunningInstances() {
   }));
 }
 
+async function listOtherHarnesses() {
+  if (isWindows) {
+    const query =
+      "Get-CimInstance Win32_Process -ErrorAction Stop -Filter \"Name='node.exe'\" | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress";
+    const result = await run("pwsh", ["-NoProfile", "-Command", query]);
+    if (result.code !== 0) fail(`Could not inspect running test harnesses: ${result.err}`);
+    const text = result.out.trim();
+    if (!text) return [];
+    const parsed = JSON.parse(text);
+    const processes = (Array.isArray(parsed) ? parsed : [parsed]).map((entry) => ({
+      pid: entry.ProcessId,
+      command: entry.CommandLine ?? "",
+    }));
+    return otherTestHarnesses(processes, process.pid);
+  }
+  const result = await run("ps", ["-e", "-o", "pid=,comm=,args="]);
+  if (result.code !== 0) fail(`Could not inspect running test harnesses: ${result.err}`);
+  const processes = result.out.split(/\r?\n/).flatMap((line) => {
+    const match = line.match(/^\s*(\d+)\s+(\S+)\s+(.*)$/);
+    if (!match || !/^node(?:\.exe)?$/i.test(path.basename(match[2]))) return [];
+    return [{ pid: Number(match[1]), command: match[3] }];
+  });
+  return otherTestHarnesses(processes, process.pid);
+}
+
 async function closeInstances(instances) {
   for (const { pid } of instances) {
     if (isWindows) await closeTestWindow(pid);
     else await run("kill", [String(pid)]);
   }
   const deadline = Date.now() + 10000;
+  let remaining = instances;
   while (Date.now() < deadline) {
     const still = await listRunningInstances();
-    const left = still.filter((instance) => instances.some((gone) => gone.pid === instance.pid));
-    if (!left.length) return;
+    remaining = still.filter((instance) =>
+      instances.some(
+        (owned) =>
+          owned.pid === instance.pid &&
+          (isWindows
+            ? ownsStagedExecutable(instance.path, owned.path, "win32")
+            : instance.path === owned.path),
+      ),
+    );
+    if (!remaining.length) return;
     await sleep(500);
   }
-  for (const { pid } of instances) {
+  for (const { pid } of remaining) {
     if (isWindows) await run("taskkill", ["/PID", String(pid), "/F"]);
     else await run("kill", ["-9", String(pid)]);
   }
@@ -964,6 +1028,12 @@ async function closeTestWindow(pid) {
 }
 
 async function prepareForRun(options, suites) {
+  const harnesses = await listOtherHarnesses();
+  if (harnesses.length)
+    fail(
+      `Another MDraft test harness is running (pid ${harnesses.map((entry) => entry.pid).join(", ")}).\n` +
+        "No test state was changed. Wait for that run to finish before starting a UI suite.",
+    );
   const instances = await listRunningInstances();
   if (!instances.length) return;
   const ours = instances.filter((instance) => /mdraft-test-/.test(instance.path));
@@ -987,10 +1057,10 @@ async function prepareForRun(options, suites) {
         `the selected hidden test uses the separate ${identifier} identifier and read-only fixtures.`,
     );
   if (ours.length) {
-    console.log(
-      `closing ${ours.length} leftover test instance(s): ${ours.map((i) => i.pid).join(", ")}`,
+    fail(
+      `A staged MDraft test instance is already running (pid ${ours.map((i) => i.pid).join(", ")}).\n` +
+        "No test state was changed. Let its owner finish, or close a confirmed stale test instance explicitly.",
     );
-    await closeInstances(ours);
   }
 }
 
@@ -1243,12 +1313,25 @@ let latexEngineLink = null;
  * LaTeX suites that need it skip rather than fail.
  */
 function linkLatexEngine() {
-  const source = path.join(
-    appConfigDir().replace(`${identifier}`, tauriConfig.identifier),
-    "wasmtex-poc-2025",
-  );
-  if (!fs.existsSync(path.join(source, "assets"))) return;
-  const target = path.join(appConfigDir(), "wasmtex-poc-2025");
+  const dataRoot = appConfigDir().replace(`${identifier}`, tauriConfig.identifier);
+  let source = path.join(dataRoot, "latex");
+  if (!fs.existsSync(path.join(source, "assets"))) {
+    const digest = "9c643deba29dc4cd590c12bc4bd1d2a4ee8d588402390d3ac06818ff317914f9";
+    const candidates = fs.existsSync(dataRoot)
+      ? fs.readdirSync(dataRoot, { withFileTypes: true }).filter((entry) => {
+          if (!entry.isDirectory() || entry.name === "latex") return false;
+          const asset = path.join(dataRoot, entry.name, "assets", "wasmtex-luatex.js");
+          try {
+            return createHash("sha256").update(fs.readFileSync(asset)).digest("hex") === digest;
+          } catch {
+            return false;
+          }
+        })
+      : [];
+    if (candidates.length !== 1) return;
+    source = path.join(dataRoot, candidates[0].name);
+  }
+  const target = path.join(appConfigDir(), "latex");
   if (fs.existsSync(target)) return;
   fs.mkdirSync(appConfigDir(), { recursive: true });
   try {
@@ -1795,13 +1878,21 @@ async function main() {
       results.push({ suite, ...result });
     }
   } finally {
-    // Every exit path has to clean up: a leftover window breaks the next build,
-    // and the developer's own settings have to come back. Only instances this
-    // run started are swept — never one the developer opened.
-    const leftovers = (await listRunningInstances()).filter((instance) =>
-      /mdraft-test-/.test(instance.path),
-    );
-    if (leftovers.length) await closeInstances(leftovers);
+    // Never sweep another harness's app. App-free runs have no staged binary
+    // and must not inspect or close any MDraft process at all.
+    if (context?.staged) {
+      try {
+        if (activeApp) await stopApp(activeApp);
+        const leftovers = (await listRunningInstances()).filter((instance) =>
+          ownsStagedExecutable(instance.path, context.staged),
+        );
+        if (leftovers.length) await closeInstances(leftovers);
+      } catch (error) {
+        const detail = `Could not clean up this run's staged app: ${error.message}`;
+        console.error(detail);
+        results.push({ suite: { id: "cleanup" }, ok: false, detail });
+      }
+    }
     // The engine link is removed before the developer's own state is restored:
     // it lives inside the test instance's directory, so leaving it would make the
     // next run skip the link and the one after that inherit a stale one.

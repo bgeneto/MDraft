@@ -66,6 +66,7 @@ export interface PreferencesHost {
    * a preference, and it changes whenever a compile downloads a package.
    */
   latexCache(): api.LatexCacheInfo | null;
+  latexCacheError(): string | null;
   /** Re-read the cache size; called when the LaTeX section is drawn. */
   refreshLatexCache(): Promise<void>;
   /** Download and verify the LuaLaTeX engine, then turn the switch on. */
@@ -74,6 +75,20 @@ export interface PreferencesHost {
   disableLatex(): Promise<void>;
   /** Delete the downloaded package cache; the only destructive LaTeX action. */
   clearLatexCache(): Promise<void>;
+  /** The last engine status, or null before the LaTeX section has asked. */
+  nativeStatus(): api.LatexEngineStatus | null;
+  /** What validation proved for the committed directory, if this session did. */
+  nativeCapabilities(): api.LatexNativeCapabilities | null;
+  /** Metadata-only installation candidates, or null before Find ran. */
+  nativeCandidates(): api.LatexNativeCandidate[] | null;
+  refreshNativeStatus(): Promise<void>;
+  /** Search PATH and the standard locations, then validate a single result. */
+  findNative(): Promise<void>;
+  /** Open the folder picker and validate the chosen binary directory. */
+  browseNative(): Promise<void>;
+  validateNative(directory: string): Promise<void>;
+  setNativeEnabled(value: boolean): Promise<void>;
+  setNativeEngine(value: string): Promise<void>;
   /** Ask the user for a reference/style file. Empty string when cancelled. */
   chooseStyleReference(current: string): Promise<string>;
   /** Installed speech-synthesis voices; empty until the list has loaded. */
@@ -867,16 +882,177 @@ function removeFormat(host: PreferencesHost, id: string): void {
   host.update({ exportFormats: next });
 }
 
-function exportRows(host: PreferencesHost, refresh: () => void): Row[] {
+function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
   const s = () => host.settings();
+  if (host.latexCache() === null && host.latexCacheError() === null) {
+    void host.refreshLatexCache().then(refresh);
+  }
+  if (host.nativeStatus() === null) void host.refreshNativeStatus().then(refresh);
+  const latex = host.latexCache();
+  const native = host.nativeStatus();
+  const capabilities = host.nativeCapabilities();
+  const candidates = host.nativeCandidates();
+  const mb = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  const engineNames: Record<string, string> = {
+    auto: "Auto (% !TEX program, then LuaLaTeX)",
+    lualatex: "LuaLaTeX",
+    pdflatex: "pdfLaTeX",
+    xelatex: "XeLaTeX",
+  };
+  const available = native?.nativeEngines ?? [];
+  const engineOptions: [string, string][] = [
+    ["auto", engineNames.auto],
+    ...available.map((id): [string, string] => [id, engineNames[id] ?? id]),
+  ];
+  const installation = native?.problem
+    ? native.problem
+    : capabilities
+      ? `${capabilities.distribution} · ${capabilities.bin}`
+      : native?.nativeRoot
+        ? `${native.nativeDistribution ?? "TeX"} · ${native.nativeRoot}`
+        : "No installation selected. Use Find or Browse to choose the folder that holds lualatex, pdflatex or xelatex.";
+  const rows: Row[] = [
+    { kind: "heading", label: "Compilation" },
+    {
+      kind: "checkbox",
+      label: "Auto-compile",
+      help: "Compile after editing. When off, use Compile in the preview.",
+      get: () => s().latexAutoCompile,
+      set: (value) => host.update({ latexAutoCompile: value }),
+    },
+
+    { kind: "heading", label: "Installed TeX distribution" },
+    {
+      kind: "note",
+      label: "Trust and network",
+      text: "The engine you choose is a separate program: it runs with your operating-system permissions and may use the network to install its own packages. Only use a trusted installation and trusted documents. Shell escape and project executables stay disabled, and MDraft itself makes no network request to run it.",
+    },
+    {
+      kind: "checkbox",
+      label: "Use my installed TeX distribution",
+      help: s().latexNativeRoot
+        ? "Chooses the installed backend independently of the bundled engine. Turning it off keeps both installations and caches untouched."
+        : "Validate an installation first; the switch stays off until one has compiled the probe.",
+      disabled: () => !s().latexNativeRoot,
+      get: () => s().latexNativeEnabled,
+      set: (value) => void host.setNativeEnabled(value),
+    },
+    { kind: "note", label: "Installation", text: installation },
+    {
+      kind: "select",
+      label: "Installed engine",
+      help: "Auto recognises only % !TEX program values LuaLaTeX, pdfLaTeX and XeLaTeX. An explicit choice always wins.",
+      options: engineOptions,
+      get: () => s().latexNativeEngine,
+      set: (value) => void host.setNativeEngine(value),
+    },
+    {
+      kind: "button",
+      label: "",
+      text: "Find installation…",
+      help: "Searches PATH and the standard TeX Live, MacTeX and MiKTeX locations. It reads directory entries only; nothing starts until Validate.",
+      action: () => host.findNative(),
+    },
+    {
+      kind: "button",
+      label: "",
+      text: "Browse…",
+      help: "Choose the folder that contains the engine executables, then validate it.",
+      action: () => host.browseNative(),
+    },
+    ...(s().latexNativeRoot
+      ? [
+          {
+            kind: "button" as const,
+            label: "",
+            text: "Validate the selected installation",
+            help: "Checks the version of each tool and compiles a one-page probe before committing the directory.",
+            action: () => void host.validateNative(s().latexNativeRoot!),
+          },
+        ]
+      : []),
+    ...(candidates && candidates.length > 1
+      ? [
+          {
+            kind: "choices" as const,
+            label: "Found installations",
+            options: candidates.map(
+              (candidate): [string, string] => [
+                candidate.directory,
+                `${candidate.distribution} — ${candidate.engines.join(", ")}`,
+              ],
+            ),
+            get: () => "",
+            set: (directory: string) => void host.validateNative(directory),
+          },
+        ]
+      : []),
+
+    { kind: "heading", label: "Bundled LuaLaTeX" },
+    {
+      kind: "checkbox",
+      label: "Enable bundled LuaLaTeX",
+      help: "Compiles .tex documents in the preview and lets Export › PDF write the PDF it produces. Turning this off stops the engine from serving anything; the downloaded files stay on disk until you clear the cache.",
+      get: () => s().latexEnabled,
+      set: (value) => {
+        if (value) void host.installLatex();
+        else void host.disableLatex();
+      },
+    },
+    {
+      kind: "note",
+      label: "Engine",
+      text: host.latexCacheError() ?? (latex
+        ? latex.installed
+          ? latex.enabled
+            ? "Installed and enabled."
+            : "Installed, but the switch is off."
+          : latex.enabled
+            ? "Enabled, but the engine files are missing. Toggle the switch off and on to download them again."
+            : "Not installed. Turn the switch on to download about 10 MiB of verified engine files."
+        : "Checking…"),
+    },
+    {
+      kind: "note",
+      label: "Package cache",
+      text: latex ? `${mb(latex.bytes)} of ${latex.limitMb} MiB used.` : host.latexCacheError() ? "Unavailable." : "Checking…",
+    },
+    ...(host.latexCacheError() ? [{
+      kind: "button" as const,
+      label: "",
+      text: "Check LaTeX again",
+      action: async () => { await host.refreshLatexCache(); refresh(); },
+    }] : []),
+    {
+      kind: "number",
+      label: "Cache limit (MiB)",
+      help: "The most disk the downloaded TeX packages may use. When a compile needs a new package and the cache is full, the least recently used files are deleted first. 32 to 4096 MiB.",
+      min: 32,
+      max: 4096,
+      suffix: "MiB",
+      get: () => s().latexCacheLimitMb,
+      set: (value) => host.update({ latexCacheLimitMb: value }),
+    },
+    {
+      kind: "button",
+      label: "",
+      text: "Clear package cache",
+      help: "Deletes the downloaded TeX packages and fonts. The engine itself is kept, so the next compile re-downloads only what it needs. Your documents are not touched.",
+      action: () => void host.clearLatexCache(),
+    },
+    {
+      kind: "button",
+      label: "",
+      text: "Open the LaTeX folder",
+      action: () => host.openAppFolder("latex"),
+    },
+  ];
+  return rows;
+}
+
+function exportRows(host: PreferencesHost): Row[] {
   const formats = host.settings().exportFormats;
   const status = host.pandocStatus();
-  // The cache size is a measurement, not a preference, so it is read when the
-  // section is drawn rather than carried in settings. `refresh` is called once
-  // the read lands, which is what makes the row show a number instead of
-  // "Checking…" on the second paint.
-  if (host.latexCache() === null) void host.refreshLatexCache().then(refresh);
-
   // One status line and one folder button per tool. The install path is not
   // printed: it is long, it is not a setting, and the reader who wants to look
   // at the files has the button. The explanation of what each tool is lives in
@@ -931,68 +1107,6 @@ function exportRows(host: PreferencesHost, refresh: () => void): Row[] {
       action: () => host.openAppFolder("typst"),
     },
   ];
-
-  // ---- LaTeX -------------------------------------------------------------
-  // The switch and the cache are one section because they answer one question:
-  // "is the engine on, and how much disk is it using?" Turning it off is not a
-  // destructive action — the cache stays where it is, inert — so Clear cache is
-  // the only button here that deletes anything.
-  const latex = host.latexCache();
-  const mb = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
-  rows.push(
-    { kind: "heading", label: "LaTeX" },
-    {
-      kind: "checkbox",
-      label: "Enable LuaLaTeX",
-      help: "Compiles .tex documents in the preview and lets Export › PDF write the PDF it produces. Turning this off stops the engine from serving anything; the downloaded files stay on disk until you clear the cache.",
-      get: () => s().latexEnabled,
-      set: (value) => {
-        if (value) void host.installLatex();
-        else void host.disableLatex();
-      },
-    },
-    {
-      kind: "note",
-      label: "Engine",
-      text: latex
-        ? latex.installed
-          ? latex.enabled
-            ? "Installed and enabled."
-            : "Installed, but the switch is off."
-          : latex.enabled
-            ? "Enabled, but the engine files are missing. Toggle the switch off and on to download them again."
-            : "Not installed. Turn the switch on to download about 10 MiB of verified engine files."
-        : "Checking…",
-    },
-    {
-      kind: "note",
-      label: "Package cache",
-      text: latex ? `${mb(latex.bytes)} of ${latex.limitMb} MiB used.` : "Checking…",
-    },
-    {
-      kind: "number",
-      label: "Cache limit (MiB)",
-      help: "The most disk the downloaded TeX packages may use. When a compile needs a new package and the cache is full, the least recently used files are deleted first. 32 to 4096 MiB.",
-      min: 32,
-      max: 4096,
-      suffix: "MiB",
-      get: () => s().latexCacheLimitMb,
-      set: (value) => host.update({ latexCacheLimitMb: value }),
-    },
-    {
-      kind: "button",
-      label: "",
-      text: "Clear package cache",
-      help: "Deletes the downloaded TeX packages and fonts. The engine itself is kept, so the next compile re-downloads only what it needs. Your documents are not touched.",
-      action: () => void host.clearLatexCache(),
-    },
-    {
-      kind: "button",
-      label: "",
-      text: "Open the LaTeX folder",
-      action: () => host.openAppFolder("latex"),
-    },
-  );
 
   // After-export options are global, not per format.
   //
@@ -1911,6 +2025,11 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
       ],
     },
     {
+      id: "latex",
+      title: "LaTeX",
+      rows: latexRows(host, refresh),
+    },
+    {
       id: "export",
       title: "Export",
       rows: [
@@ -1927,7 +2046,7 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
           help: "Writes a PDF directly through the system webview. File › Export › PDF (opens browser) provides browser printing and the fallback for scripted HTML. Typst documents use PDF (via Typst).",
           action: () => host.exportPdf(),
         },
-        ...exportRows(host, refresh),
+        ...exportRows(host),
       ],
     },
     {

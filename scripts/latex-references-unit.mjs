@@ -38,6 +38,43 @@ function validate(text, files = ["main.tex"]) {
 
 console.log("=== the shipped LaTeX Reference must compile ===");
 {
+  const text = "\\graphicspath{{missing/}{./figures/}}\n\\begin{document}\n\\includegraphics{plot}";
+  check(
+    validate(text, ["main.tex", "figures/plot.png"]) === null,
+    "literal preamble graphics paths resolve",
+  );
+  const missing = collectLatexReferences(
+    new Map([["main.tex", text]]),
+    new Set(["main.tex"]),
+    "main.tex",
+  );
+  check(
+    missing.diagnostics[0]?.searched.includes("figures/plot.png"),
+    "missing image lists graphics paths",
+  );
+  check(
+    validate("% \\graphicspath{{figures/}}\n\\includegraphics{plot}", [
+      "main.tex",
+      "figures/plot.png",
+    ]) !== null,
+    "commented graphics paths are ignored",
+  );
+  check(
+    validate("\\graphicspath{{../figures/}}\n\\includegraphics{plot}", [
+      "main.tex",
+      "../figures/plot.png",
+    ]) !== null,
+    "unsafe graphics paths are ignored",
+  );
+  check(
+    validate("\\graphicspath{{old/}}\\graphicspath{{new/}}\\includegraphics{plot}", [
+      "main.tex",
+      "old/plot.png",
+    ]) !== null,
+    "a later graphics path replaces the earlier list",
+  );
+}
+{
   // The regression this file exists for. Help › LaTeX Reference opens a document
   // whose examples *show* `\input` and `\bibliography` as source; saving a copy is
   // normal, and the copy must compile.
@@ -294,6 +331,15 @@ console.log("\n=== every occurrence is reported, with its line ===");
     scan.diagnostics[0].message.includes("gone.png"),
     "the message still names the missing file",
     scan.diagnostics[0].message,
+  );
+}
+
+{
+  const line = "\\verb|literal| \\includegraphics{gone.png}";
+  const scan = collectLatexReferences(new Map([["main.tex", line]]), new Set(["main.tex"]));
+  check(
+    scan.diagnostics[0]?.lineText === line,
+    "diagnostics retain the original line when literal regions are masked",
   );
 }
 

@@ -59,7 +59,7 @@ console.log("=== the engine is reachable ===");
 // could have run it. The order matters: the harness links the engine, this turns
 // it on, and only then is there anything to measure.
 //
-// The switch lives in Preferences › Export, and the checkbox is the route that
+// The switch lives in Preferences › LaTeX, and the checkbox is the route that
 // updates the frontend's module-local settings copy as well as the backend.
 // Calling `save_settings` directly leaves that copy stale, and the next `persist()`
 // — opening a file, changing the view mode — writes false back over it.
@@ -71,11 +71,11 @@ const enabled = await page.evaluate(`
     open?.click();
     await new Promise((resolve) => setTimeout(resolve, 500));
     const section = [...document.querySelectorAll(".prefs-section")]
-      .find((node) => node.textContent.trim() === "Export");
+      .find((node) => node.textContent.trim() === "LaTeX");
     section?.click();
     await new Promise((resolve) => setTimeout(resolve, 400));
     const row = [...document.querySelectorAll(".prefs-row")]
-      .find((node) => /Enable LuaLaTeX/i.test(node.querySelector(".prefs-label")?.textContent ?? ""));
+      .find((node) => /Enable bundled LuaLaTeX/i.test(node.querySelector(".prefs-label")?.textContent ?? ""));
     const box = row?.querySelector("input[type=checkbox]");
     if (!box) return "no checkbox";
     if (!box.checked) box.click();
@@ -106,11 +106,69 @@ if (status !== "true") {
 }
 check(status === "true", "latex_status reports the engine ready", status);
 
+if (process.env.MDRAFT_LATEX_SAMPLE_ONLY === "1") {
+  const sampleDir = join(tmpdir(), "mdraft-latex-reported-sample");
+  mkdirSync(sampleDir, { recursive: true });
+  const sample = readFileSync(
+    join(process.cwd(), "docs", "samples", "Resumo-executivo.tex"),
+    "utf8",
+  );
+  const imageCommand = sample.match(/\\includegraphics[^\r\n]*/)?.[0];
+  if (!imageCommand) throw new Error("The reported sample has no image command");
+  const samplePath = join(sampleDir, "reported.tex");
+  writeFileSync(samplePath, sample);
+  await page.evaluate(
+    `window.__TAURI_INTERNALS__.invoke("plugin:event|emit", {event: "open-files", payload: [${JSON.stringify(samplePath)}]})`,
+  );
+  let missing = false;
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    missing = await page.evaluate(
+      `document.querySelector(".latex-problems")?.textContent.includes("Missing project file") ?? false`,
+    );
+    if (missing) break;
+    await sleep(250);
+  }
+  check(missing, "the reported sample identifies its missing image");
+  await page.evaluate(`(() => {
+    const view = document.querySelector(".cm-content").cmTile.root.view;
+    const command = ${JSON.stringify(imageCommand)};
+    const from = view.state.doc.toString().indexOf(command);
+    if (from < 0) throw new Error("The reported image command is not in the active buffer");
+    view.dispatch({changes: {from, to: from + command.length}});
+  })()`);
+  let state = null;
+  for (let attempt = 0; attempt < 480; attempt += 1) {
+    state = JSON.parse(
+      String(
+        await page.evaluate(
+          `JSON.stringify({current: document.querySelector("#preview")?.dataset.latexCurrent ?? null, pages: document.querySelectorAll(".typst-page-shell").length, status: document.querySelector(".latex-build-message")?.textContent ?? ""})`,
+        ),
+      ),
+    );
+    if (state.current || state.status.includes("failed")) break;
+    await sleep(500);
+  }
+  check(
+    Boolean(state.current && state.pages),
+    "removing the image command builds the sample",
+    JSON.stringify(state),
+  );
+  if (state.current && process.env.MDRAFT_LATEX_SCREENSHOT) {
+    const capture = await page.send("Page.captureScreenshot", { format: "png" });
+    writeFileSync(process.env.MDRAFT_LATEX_SCREENSHOT, Buffer.from(capture.result.data, "base64"));
+  }
+  rmSync(sampleDir, { recursive: true, force: true });
+  const failed = checks.filter((entry) => !entry.ok).length;
+  console.log(`\n${checks.length - failed}/${checks.length} checks passed`);
+  page.close();
+  process.exit(failed ? 1 : 0);
+}
+
 console.log("\n=== a real compile produces a PDF ===");
 
-// Open a fixture with real body text, not the PoC project.
+// Open a fixture with real body text, rather than the multi-file project.
 //
-// `samples/latex-poc` is mostly preamble and floats: a click anywhere on its page
+// `samples/latex-project` is mostly preamble and floats: a click anywhere on its page
 // resolves to the title block, so it cannot demonstrate a region paint. The
 // reference document has sections, prose, lists and tables, which is what a click
 // needs to land on.
@@ -676,6 +734,26 @@ check(
   "a failed compile keeps the previous PDF and viewport",
   JSON.stringify(failedView),
 );
+
+const partialOffered = await page.evaluate(
+  `Boolean([...document.querySelectorAll(".latex-problems button")].find(button => button.textContent === "View partial PDF"))`,
+);
+if (partialOffered) {
+  await page.evaluate(
+    `[...document.querySelectorAll(".latex-problems button")].find(button => button.textContent === "View partial PDF").click()`,
+  );
+  let partialShown = false;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    partialShown = await page.evaluate(
+      `document.querySelector(".latex-build-message")?.textContent.includes("Partial PDF") && Boolean(document.querySelector(".typst-page-shell")) && Boolean(document.querySelector(".latex-problems"))`,
+    );
+    if (partialShown) break;
+    await sleep(250);
+  }
+  check(partialShown, "an available partial PDF is labelled and retains the errors");
+} else {
+  console.log("  note: this compiler failure returned no partial PDF");
+}
 
 // **Undo the deliberate break.** Leaving `\mdraftUndefinedCommand` in the buffer
 // poisons every later section: the two-column fixture opens as a new tab, but the
@@ -1312,6 +1390,139 @@ console.log("\n=== a missing figure points at the included file ===");
     "a successful compile removes the marks",
     String(after),
   );
+
+  const manual = await page.evaluate(`
+    (async () => {
+      document.getElementById("btn-prefs")?.click();
+      await new Promise(r => setTimeout(r, 300));
+      [...document.querySelectorAll(".prefs-section")]
+        .find(n => n.textContent.trim() === "LaTeX")?.click();
+      await new Promise(r => setTimeout(r, 300));
+      const row = [...document.querySelectorAll(".prefs-row")]
+        .find(n => /Auto-compile/.test(n.querySelector(".prefs-label")?.textContent ?? ""));
+      const box = row?.querySelector("input[type=checkbox]");
+      if (!box) throw new Error("Auto-compile control is missing");
+      if (box.checked) box.click();
+      document.getElementById("btn-prefs")?.click();
+      const view = document.querySelector(".cm-content").cmTile.root.view;
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "\\n% manual compile test" } });
+      await new Promise(r => setTimeout(r, 1400));
+      return JSON.stringify({ status: document.querySelector(".latex-build-message")?.textContent, current: document.querySelector("#preview")?.dataset.latexCurrent ?? null });
+    })()
+  `);
+  const manualState = JSON.parse(String(manual));
+  check(
+    manualState.status?.includes("Select Compile") && manualState.current === null,
+    "manual mode marks an edit stale without compiling",
+    String(manual),
+  );
+  await page.evaluate(`
+    [...document.querySelectorAll(".latex-build-status button")]
+      .find(button => button.textContent === "Compile")?.click()
+  `);
+  let manualCompiled = false;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    manualCompiled = await page.evaluate(
+      `Boolean(document.querySelector("#preview")?.dataset.latexCurrent)`,
+    );
+    if (manualCompiled) break;
+    await sleep(500);
+  }
+  check(manualCompiled, "Compile builds the current unsaved manual-mode revision");
+
+  const shortcutHandled = await page.evaluate(`
+    (() => {
+      const view = document.querySelector(".cm-content").cmTile.root.view;
+      view.dispatch({ changes: { from: view.state.doc.length, insert: "\\nA reference: \\\\ref{mdraft-missing-label}." } });
+      const event = new KeyboardEvent("keydown", { key: "Enter", code: "Enter", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true });
+      document.querySelector(".cm-content").dispatchEvent(event);
+      return event.defaultPrevented;
+    })()
+  `);
+  check(shortcutHandled, "Ctrl+Shift+Enter reaches Compile while the editor has focus");
+  let warningPdf = false;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    warningPdf = await page.evaluate(
+      `Boolean(document.querySelector("#preview")?.dataset.latexCurrent && document.querySelector(".latex-warnings > summary")?.textContent.includes("warning"))`,
+    );
+    if (warningPdf) break;
+    await sleep(500);
+  }
+  check(warningPdf, "an undefined-reference warning remains visible beside the current PDF");
+
+  const cancelled = await page.evaluate(`(async () => {
+    const view = document.querySelector(".cm-content").cmTile.root.view;
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "\\n% cancelled compile" } });
+    [...document.querySelectorAll(".latex-build-status button")].find(b => b.textContent === "Compile")?.click();
+    const cancel = document.querySelector(".latex-cancel");
+    if (!cancel || cancel.hidden) throw new Error("Cancel was not offered during compilation");
+    cancel.click();
+    await new Promise(r => setTimeout(r, 1400));
+    return JSON.stringify({status: document.querySelector(".latex-build-message")?.textContent, current: document.querySelector("#preview")?.dataset.latexCurrent ?? null});
+  })()`);
+  const cancelledState = JSON.parse(String(cancelled));
+  check(
+    cancelledState.status?.includes("cancelled") && !cancelledState.current,
+    "Cancel invalidates the active build",
+    String(cancelled),
+  );
+
+  if (process.env.MDRAFT_LATEX_REPORTED_SAMPLE === "1") {
+    const sample = readFileSync(
+      join(process.cwd(), "docs", "samples", "Resumo-executivo.tex"),
+      "utf8",
+    );
+    const imageCommand = sample.match(/\\includegraphics[^\r\n]*/)?.[0];
+    if (!imageCommand) throw new Error("The reported sample no longer contains an image command");
+    const samplePath = join(problemsDir, "reported.tex");
+    writeFileSync(samplePath, sample);
+    await page.evaluate(`window.__TAURI_INTERNALS__.invoke("plugin:event|emit", {
+      event: "open-files", payload: [${JSON.stringify(samplePath)}]
+    })`);
+    await sleep(700);
+    await page.evaluate(
+      `[...document.querySelectorAll(".latex-build-status button")].find(b => b.textContent === "Compile")?.click()`,
+    );
+    let missing = false;
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      missing = await page.evaluate(
+        `document.querySelector(".latex-problems")?.textContent.includes("Missing project file") ?? false`,
+      );
+      if (missing) break;
+      await sleep(250);
+    }
+    check(missing, "the reported sample identifies its missing image");
+    await page.evaluate(`(() => {
+      const view = document.querySelector(".cm-content").cmTile.root.view;
+      const command = ${JSON.stringify(imageCommand)};
+      const from = view.state.doc.toString().indexOf(command);
+      if (from < 0) throw new Error("The reported image command is not in the active buffer");
+      view.dispatch({ changes: { from, to: from + command.length } });
+      [...document.querySelectorAll(".latex-build-status button")].find(b => b.textContent === "Compile")?.click();
+    })()`);
+    let outcome = null;
+    for (let attempt = 0; attempt < 480; attempt += 1) {
+      outcome = await page.evaluate(
+        `JSON.stringify({current: document.querySelector("#preview")?.dataset.latexCurrent ?? null, pages: document.querySelectorAll(".typst-page-shell").length, status: document.querySelector(".latex-build-message")?.textContent ?? "", details: document.querySelector(".latex-problems")?.textContent?.slice(0, 600) ?? ""})`,
+      );
+      const state = JSON.parse(String(outcome));
+      if (state.current || state.status.includes("failed")) break;
+      await sleep(500);
+    }
+    const state = JSON.parse(String(outcome));
+    check(
+      Boolean(state.current && state.pages),
+      "the reported sample builds after removing the image command in the unsaved buffer",
+      String(outcome),
+    );
+    if (state.current && process.env.MDRAFT_LATEX_SCREENSHOT) {
+      const capture = await page.send("Page.captureScreenshot", { format: "png" });
+      writeFileSync(
+        process.env.MDRAFT_LATEX_SCREENSHOT,
+        Buffer.from(capture.result.data, "base64"),
+      );
+    }
+  }
 
   rmSync(problemsDir, { recursive: true, force: true });
 }
