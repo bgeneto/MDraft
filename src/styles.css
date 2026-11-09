@@ -83,6 +83,21 @@
      in light mode, lighter than the panel in dark mode. */
   --scrollbar-thumb: rgba(0, 0, 0, 0.16);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.3);
+
+  /* Document tabs. An inactive tab used to be a transparent box with a
+     transparent border, so it was not a tab at all: only the file name and its
+     × were visible, and the strip read as a list of loose names. A tab now
+     carries a fill and a hairline edge of its own, and `.doc-tabs` puts a gap
+     between two tabs — three separate signals for the same boundary, because
+     each of them alone disappears at some zoom, theme or accent. The active tab
+     is the one surface that matches the editor below, which is what makes it
+     the active one without needing the strongest border. */
+  --tab-bg: #e2e7ee;
+  --tab-bg-hover: #eef2f6;
+  --tab-border: #c7cfd9;
+  --tab-border-hover: #b3bdc9;
+  --tab-fg: #525a68;
+  --tab-active-bg: var(--bg);
 }
 
 [data-theme="dark"] {
@@ -116,6 +131,15 @@
   --scroll-shadow: rgba(0, 0, 0, 0.55);
   --scrollbar-thumb: rgba(255, 255, 255, 0.15);
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.28);
+  /* The dark strip is lighter than the editor, so the direction flips: an
+     inactive tab is raised away from the strip and the active one is the hole
+     that matches the page. Same rule, inverted luminance. */
+  --tab-bg: #2e3033;
+  --tab-bg-hover: #36383c;
+  --tab-border: #474a50;
+  --tab-border-hover: #565961;
+  --tab-fg: #adb1b9;
+  --tab-active-bg: var(--bg);
 }
 
 * {
@@ -190,7 +214,11 @@ body {
 .doc-tabs {
   display: flex;
   align-items: stretch;
-  gap: 2px;
+  /* The gap is what separates two tabs whose borders would otherwise meet in
+     one continuous line. It has to be wide enough to show the strip between
+     them, which is why it is 3px and not the 2px that a transparent tab
+     allowed. */
+  gap: 3px;
   flex: 1 1 auto;
   min-width: 0;
   height: 100%;
@@ -285,22 +313,26 @@ body {
   max-width: 200px;
   height: 30px;
   padding: 0 4px 0 10px;
-  border: 1px solid transparent;
+  border: 1px solid var(--tab-border);
+  /* The strip's own bottom rule closes the shape; a bottom border here would
+     double it and cut the tab off from the rule it stands on. */
   border-bottom: none;
   border-radius: 6px 6px 0 0;
-  background: transparent;
-  color: var(--muted);
+  background: var(--tab-bg);
+  color: var(--tab-fg);
   font-family: var(--font-ui);
   font-size: 12.5px;
   cursor: pointer;
   transition:
     background-color 0.12s ease,
+    border-color 0.12s ease,
     color 0.12s ease;
 }
 
 .doc-tab:hover {
   color: var(--fg);
-  background: var(--active-line);
+  background: var(--tab-bg-hover);
+  border-color: var(--tab-border-hover);
 }
 
 .doc-tab:focus-visible {
@@ -309,12 +341,12 @@ body {
 }
 
 .doc-tab[aria-selected="true"] {
-  background: var(--bg);
+  background: var(--tab-active-bg);
   color: var(--fg);
-  border-color: var(--border);
-  /* The accent edge is the second signal after the bold name: it survives at a
-     glance when the strip is crowded and the background difference is subtle. */
-  box-shadow: inset 0 2px 0 var(--accent);
+  /* The accent edge is the first signal after the surface change: it survives
+     at a glance when the strip is crowded. It is a border rather than an inset
+     shadow so it follows the rounded corners instead of crossing them. */
+  border-top: 2px solid var(--accent);
 }
 
 .doc-tab-name {

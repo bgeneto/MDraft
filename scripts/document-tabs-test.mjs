@@ -274,17 +274,28 @@ try {
   // -------------------------------------------------------------------------
   console.log("\n=== the active tab is unmistakable ===");
   const tabStyles = await json(
-    `[...document.querySelectorAll(".doc-tab")].map((tab) => ({
-      selected: tab.getAttribute("aria-selected") === "true",
-      weight: Number(getComputedStyle(tab.querySelector(".doc-tab-name")).fontWeight),
-      edge: getComputedStyle(tab).boxShadow,
-    }))`,
+    `[...document.querySelectorAll(".doc-tab")].map((tab) => {
+      const style = getComputedStyle(tab);
+      return {
+        selected: tab.getAttribute("aria-selected") === "true",
+        weight: Number(getComputedStyle(tab.querySelector(".doc-tab-name")).fontWeight),
+        edge: style.borderTopColor,
+        edgeWidth: style.borderTopWidth,
+      };
+    })`,
   );
   const activeStyle = tabStyles.find((tab) => tab.selected) ?? { weight: 0, edge: "none" };
   const inactiveStyle = tabStyles.find((tab) => !tab.selected) ?? { weight: 0, edge: "none" };
   check(activeStyle.weight >= 600, "the active tab's name is bold", String(activeStyle.weight));
   check(inactiveStyle.weight < 600, "an inactive tab's name is not", String(inactiveStyle.weight));
-  check(activeStyle.edge !== "none", "the active tab carries its accent edge", activeStyle.edge);
+  // The accent is a thicker top border, not an inset shadow, so it follows the
+  // rounded corners. Asserting the thickness and the colour against an inactive
+  // tab keeps the check independent of which accent colour the theme picked.
+  check(
+    activeStyle.edgeWidth === "2px" && activeStyle.edge !== inactiveStyle.edge,
+    "the active tab carries its accent edge",
+    `${activeStyle.edgeWidth} ${activeStyle.edge} vs ${inactiveStyle.edge}`,
+  );
 
   // -------------------------------------------------------------------------
   // The context menu on a tab
