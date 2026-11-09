@@ -14,8 +14,10 @@ file-aware scroll anchors, included-file handoff and staged PDF replacement are
 connected. The approved math extension also handles superscript/subscript
 tokens PDF.js emits on an adjacent line when the match is unique in the same
 reading region.
-Focused Windows UI validation passed for LaTeX (59/59), Typst (70/70) and
-scroll correspondence across all five preview adapters (62/62).
+Focused Windows UI validation on the current build passed for LaTeX (69/69), Typst
+(70/70), Markdown/AsciiDoc/Typst Document word selection (105/105), HTML
+selection (60/60), scroll correspondence across all five preview adapters
+(62/62), the multi-file LaTeX project (16/16), and preview zoom (24/24).
 
 The focused Windows real-app LaTeX preview passed 59/59 checks. On the 6,515-byte
 five-page Reference, map-build wall time was 56.3 ms for 648 prose anchors, the
@@ -32,9 +34,9 @@ process peak; this is a synthetic Node worker probe, not a WebView measurement
 or representative real project. The shared matcher was then changed to avoid
 temporary vocabulary/signature arrays and inverse-match position lists; a
 single before/after probe showed lower retained worker heap and sampled RSS but
-higher wall time, so it does not establish a net performance gain. WebView
-SyncTeX-on/off peak memory and real-project comparison remain uncollected, so
-this plan stays in progress.
+higher wall time, so it does not establish a net performance gain. The later WebView comparison and its measurement limits are recorded below; a
+controlled old-route comparison and a large real-world project remain
+uncollected, so this plan stays in progress.
 
 ## Context and goal
 
@@ -459,6 +461,25 @@ Rejected alternatives:
 
 ## Steps
 
+Implementation adjustment: a synthetic PDF with 8,000 distinct simple equations
+took about 1.5 seconds to map in a Node worker probe, and doubling from 4,000
+equations made the work about four times as long. Index candidate tokens and
+equation overlaps so math-heavy documents do not repeatedly scan every line or
+every accepted prose anchor. Preserve the existing uniqueness and fail-closed
+rules, and record before/after measurements and correspondence regressions.
+
+Validation adjustment: an app-free `test-all` run closed an unrelated active
+staged test window because its cleanup matched every `mdraft-test-*` process.
+Restrict cleanup to this run's staged executable and refuse to start a UI run
+while another harness or staged instance is active. Verify ownership with a
+small app-free unit test before continuing the UI matrix.
+
+The separate UI harness remains active under another session's shared test
+identifier. To continue without interrupting it, use a temporary Tauri build
+whose config overrides only the application identifier, with its own profile,
+engine junction, WebView folder and staged executable. This test-only build
+does not change the repository's product identifier or installed application.
+
 - [x] Establish a real-app baseline on the saved LaTeX Reference: `draws` in
       source and `A heading is a command` in the PDF, plus a collapsed click;
       record actual selected text, marks and timing. Add a regression fixture and
@@ -485,6 +506,10 @@ Rejected alternatives:
       atomically map only unique, safely tokenized math regions. Cover the user's
       `\section{name}` example, inline math, displayed math, and unsupported or
       repeated equations in both unit and real-PDF tests.
+- [x] Remove the quadratic equation and overlap scans, with regression coverage
+      and a repeatable math-heavy performance measurement.
+- [x] Make test-harness cleanup respect the owning staged executable and prevent
+      concurrent UI harnesses from taking over each other's test state.
 - [x] Connect both selection directions and multi-segment editor paint; arbitrate
       single clicks versus double-clicks and preserve Escape, motion and copy.
 - [x] Replace LaTeX's SyncTeX click and scroll adapters with the accepted
@@ -565,6 +590,34 @@ unverified, not as a pass, if the LaTeX engine or target platform is unavailable
 
 **Validation completed so far (Windows x64, Node 24):**
 
+- A separate test application with its own identifier and profile ran the current
+  release build: LaTeX preview 69/69, Typst preview 70/70, cross-format word sync
+  105/105, HTML preview 60/60, five-format scroll sync 62/62, and LaTeX project
+  16/16, and preview zoom 24/24. The LaTeX phrase check now uses a real PDF
+  pointer drag and independently
+  checks the PDF selection and source highlight. The Reference map was 62.1 ms,
+  its longest reported UI binding batch 0.4 ms, and typing p95/max 16.8 ms on that
+  run. These runs do not establish every lifecycle and zoom case below.
+- `pdf:map:webview` compiled a 52,254-byte, 16-page generated project containing
+  an included file, an image and 180 safe formulas, then alternated authored
+  SyncTeX on/off twice. The 45,112-byte PDFs had equal extracted text, page
+  geometry and first/last canvas images. Enabled compiles took 966/968 ms,
+  disabled compiles 957/988 ms; map time was 81.6/98.9 ms enabled and
+  106.6/119.2 ms disabled, with longest binding batch 0.2 ms. Total measured
+  compile-to-map times were 1,870/1,867 ms enabled and 1,907/1,900 ms disabled.
+  The app plus WebView summed working-set samples peaked at 983/1,043 MiB
+  enabled and 1,023/1,164 MiB disabled; samples are 250 ms apart, include shared
+  pages and warmed caches, and are not a controlled memory comparison or a
+  measurement of the removed SyncTeX reader/parser. Twenty real keystrokes
+  overlapped map builds and recompiles: p95 25.2 ms, maximum 26 ms. A small
+  one-page included-file/image pilot also passed. The earlier engine-only
+  read/parse measurements remain the available evidence for the old parser;
+  this does not reconstruct its old WebView route or prove a general speedup.
+- The app-free default-harness selection of 13 relevant unit layers passed, as
+  did the Rust suite (336 passed, two ignored). The isolated harness ownership
+  suite passed 10/10, and preflight refused a competing UI run without changing
+  the other harness's state.
+
 - `npm test -- --only latex-preview --allow-installed --keep`: 59/59 checks.
   This was an isolated `.test-automation` instance; the installed user instance
   remained open. The suite exercises exact prose, verbatim and equation
@@ -587,12 +640,28 @@ unverified, not as a pass, if the LaTeX engine or target platform is unavailable
   allocation reduction is kept for lower transient allocation, but the paired
   one-run worker benchmark was slower; repeat it with a controlled harness
   before claiming a performance win.
+- `pdf:map:perf` on Windows x64 / Node 24.22, three fresh processes per mode:
+  8,000 unique equations (70,924 source bytes, 8,000 anchors) took a median
+  1,115.2 ms before indexing and 173.3 ms afterwards. Median 10 ms sampled
+  process RSS was about 174.6 MiB before and 177.0 MiB after. A separate
+  1,240,031-byte, 10,000-line synthetic prose input produced 110,000 anchors in
+  both versions; median map time was 738.7 ms before and 594.4 ms after, and
+  median sampled process RSS was about 478.8 MiB and 405.5 MiB respectively.
+  These synthetic process measurements include the Node host and an active
+  unrelated UI test run; they are not WebView memory or input-latency results.
+  Four hundred mixed-math and 500 Typst fixtures also matched the previous
+  implementation's exact outputs in a deterministic differential probe.
+- `test:harness:unit`: 10/10. A second UI harness was deliberately attempted
+  while another was active; preflight refused it without changing test state,
+  and the other harness remained running. The Rust suite passed 336 tests, with
+  two ignored.
 
-Still outstanding: WebView SyncTeX-on/off timing and peak-memory comparison,
-large real-project measurements, the broader cross-format word-selection UI
-matrix and the default `npm test` run. The PDF selection sources pass focused
-lint and formatting checks. These items remain unverified rather than being
-inferred from the focused pass.
+Still outstanding: a controlled old-SyncTeX-route WebView memory and navigation
+comparison, a large real-world (rather than generated) project, remaining
+lifecycle and zoom cases, Linux, and the complete default `npm test` run. Another
+independent harness still owns the shared UI test state, so this run was not
+started or interrupted. These items remain unverified rather than being inferred
+from focused passes.
 
 1. **Pure units:** literal extraction and exact UTF-16 offsets for LF/CRLF/BOM,
    accents, combining marks, supplementary characters, ligatures, hyphenation,
