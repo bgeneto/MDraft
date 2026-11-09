@@ -12,7 +12,7 @@
 // then says plainly that the compile timings need the application. A probe that
 // printed a fabricated millisecond figure would be worse than one that stops.
 //
-// The compile itself is measured through `latex:poc`, which runs a real isolated
+// The compile itself is measured through `latex:project`, which runs a real isolated
 // WebView2 instance. This file exists so the on-disk half is reproducible without
 // launching the app.
 //
@@ -22,14 +22,14 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
-const FIXTURE = "samples/latex-poc";
+const FIXTURE = "samples/latex-project";
 
 function engineDirectory() {
   // The same location the Rust side uses: the Tauri app-data directory.
   const candidates = [
-    join(homedir(), "AppData", "Roaming", "io.github.bernh.mdraft", "wasmtex-poc-2025"),
-    join(homedir(), ".local", "share", "io.github.bernh.mdraft", "wasmtex-poc-2025"),
-    join(homedir(), "Library", "Application Support", "io.github.bernh.mdraft", "wasmtex-poc-2025"),
+    join(homedir(), "AppData", "Roaming", "io.github.bernh.mdraft", "latex"),
+    join(homedir(), ".local", "share", "io.github.bernh.mdraft", "latex"),
+    join(homedir(), "Library", "Application Support", "io.github.bernh.mdraft", "latex"),
   ];
   for (const candidate of candidates) {
     try {
@@ -130,7 +130,7 @@ if (whole.total > 0) {
 console.log("\n=== the compile timings need the application ===");
 console.log("  The engine drives a Web Worker, and Node has no `Worker` global:");
 console.log("    ReferenceError: Worker is not defined (engine/worker-host.js)");
-console.log("  Measure the first and warm compile through `npm run latex:poc`, which");
+console.log("  Measure the first and warm compile through `npm run latex:project`, which");
 console.log("  launches a real isolated WebView2 instance. This probe deliberately");
 console.log("  reports no millisecond figure rather than a fabricated one.");
 console.log("");

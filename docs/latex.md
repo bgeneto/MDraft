@@ -3,15 +3,23 @@
 MDraft edits `.tex` documents as a first-class language: syntax colouring, `%`
 comments, an outline read from the sectioning commands, LaTeX-aware spelling
 skips, `\includegraphics` on image paste, and the compiled PDF in the preview.
-Compilation runs **LuaLaTeX** locally through WebAssembly, so no TeX
-installation is required.
+Compilation runs either in the bundled **LuaLaTeX** engine, which needs no TeX
+installation, or in a TeX distribution the reader has already installed and
+explicitly selected.
 
 LaTeX is **opt-in**. Open a saved `.tex` file and choose **Enable LuaLaTeX** in
-the preview, or tick the switch in *Preferences › Export*. That action downloads
+the preview, or tick the switch in *Preferences › LaTeX*. That action downloads
 about 10 MiB of engine files, each verified against a pinned SHA-256 digest. The
 TeX packages and fonts a document needs are fetched on demand from a pinned
 mirror and cached locally. Nothing about your document or bibliography leaves
 this device.
+
+An installed distribution is a second, independent choice. It is off by default
+and never chosen automatically, because it runs a program outside the bundled
+engine's WebAssembly environment. *Preferences › LaTeX* finds one (metadata
+only), validates it by compiling a probe with it, and only then offers the
+switch. The two backends keep separate settings and caches:
+turning one off does not disturb the other.
 
 ## What the preview does
 
@@ -37,21 +45,85 @@ A compile error appears above the preview with the compiler's own message and
 the line it refers to. The last successful PDF stays on screen, so a
 half-finished edit does not blank the page.
 
+The preview shows whether its result is out of date and whether LaTeX is
+preparing, resolving packages, compiling, or rendering the PDF. **Compile**
+starts a build immediately; **Cancel** stops the active compiler. A package
+request already handed to the backend may still finish after cancellation.
+Warnings from a successful build are listed above the PDF and do not prevent
+you from reading or saving it. The compiler output is available with them.
+
+*Preferences › LaTeX › Auto-compile* is on by default. Turn it off to compile
+only when you select **Compile** in the preview or **View › Compile LaTeX**.
+Saving does not start a build in manual mode; the preview remains marked out of
+date until you compile. The document and all open included files are compiled
+from their current buffers, including unsaved changes.
+
+## Installed TeX distributions
+
+*Preferences › LaTeX* has a separate **Installed TeX distribution** group. It is
+off by default. **Find installation…** searches `PATH` and the standard TeX Live,
+MacTeX and MiKTeX locations by reading directory entries; **Browse…** opens a
+folder picker for a portable installation. Neither step starts an engine.
+
+**Validate** is the explicit action that may execute external code. It:
+
+1. runs `--version` for each engine and auxiliary tool the directory contains;
+2. compiles a one-page probe through the same staging a real build uses; and
+3. saves the directory only when the probe produced a readable PDF.
+
+The selected directory must contain `lualatex`, `pdflatex` or `xelatex`. The
+engine choice offers **Auto** (which recognises only the `% !TEX program` values
+LuaLaTeX, pdfLaTeX and XeLaTeX, then prefers LuaLaTeX) and the engines actually
+present. A missing individual tool is reported when it is needed; an otherwise
+usable installation is not rejected for lacking an unrelated one.
+
+A native build stages the same bounded project snapshot as the bundled engine
+into an app-owned private directory, and runs there. Generated files — the PDF,
+`.aux`, `.log`, `.bbl` and the font cache — never enter your project. MDraft
+runs the selected engine directly, reruns for cross-references, and runs BibTeX
+or Biber when the document asks for one and the tool is present. `latexmk` is
+not invoked: it builds its own command strings and starts helpers outside the
+flags MDraft controls, so the bounded direct runner is the controlled route.
+Shell escape is disabled. MiKTeX's package installer is left enabled: a missing
+package can be downloaded by MiKTeX itself during the compile. TeX Live's
+packages are managed by its own `tlmgr`, so a missing package produces TeX
+Live's own error until you install it with that tool.
+
+**Network and trust.** The installed engine is a separate program that you
+chose. It runs with your operating-system permissions, and its package manager
+may use the network to install its own packages; MDraft does not control,
+monitor or proxy that traffic. MDraft itself makes no network request to start a
+native compile. Only use a trusted installation and trusted documents. Shell
+escape and project-supplied executables remain disabled, and a native job never
+compiles inside your project directory. The bundled engine remains the fully
+local choice for readers who do not opt in.
+
+The installed distribution owns its packages and cache. MDraft's *Clear package
+cache* and *Cache limit* apply only to the bundled engine. If a package is
+missing, install it with the distribution's own tools and compile again; MDraft
+neither updates the distribution nor downloads its packages.
+
 ## The project
 
 The project root is the main file's directory. The application reads the
 references the document declares — `\input`, `\include`, `\includegraphics`,
-`\bibliography`, `\addbibresource` — rather than copying the whole directory
-tree, and it does not expand arbitrary TeX macros to discover files. A reference
-that escapes the root is an error with a plain message.
+`\bibliography`, `\addbibresource`, and local `\documentclass`/`\usepackage`
+files — rather than copying the whole directory tree, and it does not expand
+arbitrary TeX macros to discover files. A reference
+that escapes the root is an error with a plain message. Literal directories in
+the main file's preamble, such as `\graphicspath{{figures/}{images/}}`, are
+searched for images too. Macro-expanded paths and directories declared later in
+the document are not resolved by the snapshot.
 
 The snapshot is bounded: 256 files, 32 MiB per file, 64 MiB total and 12
 directory levels. Hidden directories are skipped. A symlink is skipped with a
 named warning instead of aborting the project.
 
-Real BibTeX runs. **Biber and the full `biblatex` feature set are not
-available**; `biblatex-lite` covers the common cases, and the limitation is
-documented rather than silently producing a wrong bibliography.
+Real BibTeX runs in the bundled engine. **Biber and the full `biblatex` feature
+set are not available there**; `biblatex-lite` covers the common cases, and the
+limitation is documented rather than silently producing a wrong bibliography. An
+installed distribution uses its own BibTeX or Biber when the tool is present and
+validated, so a full `biblatex` project can compile natively.
 
 ## Exporting
 
@@ -168,7 +240,7 @@ feature off, which removes the Tab binding with it.
 ## Cache
 
 Downloaded TeX packages live in the application's data directory and are evicted
-least-recently-used when the cache reaches its ceiling. *Preferences › Export*
+least-recently-used when the cache reaches its ceiling. *Preferences › LaTeX*
 reports the size, lets you change the ceiling (default 256 MiB), clears the
 cache and opens the folder. Clearing deletes only downloaded packages: the engine
 is kept, and your documents are never touched.
@@ -178,7 +250,7 @@ cache inert. It deletes nothing.
 
 ## Trying it
 
-[The example project](../samples/latex-poc/main.tex) has a chapter, a PNG, math,
+[The example project](../samples/latex-project/main.tex) has a chapter, a PNG, math,
 `fontspec`, a local `.bib` and real BibTeX citations. *Help › LaTeX Reference*
 opens a live document that explains the syntax this application supports, and
 compiles with the same engine the preview uses.

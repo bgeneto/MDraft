@@ -359,6 +359,21 @@ export function collectLatexReferences(
   const visited = new Set<string>();
   const diagnostics: LatexDiagnostic[] = [];
   let truncated = false;
+  // Only literal paths declared in the main preamble can be captured safely.
+  // Keep this in step with the Rust snapshot collector.
+  const preamble = maskLiteralRegions(sources.get(mainFile) ?? "")
+    .split("\n")
+    .map(maskComment)
+    .join("\n")
+    .split(/\\begin\s*\{document\}/)[0];
+  const graphicsPaths: string[] = [];
+  for (const match of preamble.matchAll(/\\graphicspath\s*\{((?:\s*\{[^{}]*\}\s*)*)\}/g)) {
+    graphicsPaths.length = 0;
+    for (const item of match[1].matchAll(/\{([^{}]*)\}/g)) {
+      const path = item[1].trim().replace(/\/$/, "").replace(/^\.\//, "");
+      if (isLiteralReference(path)) graphicsPaths.push(path);
+    }
+  }
 
   const add = (diagnostic: LatexDiagnostic): void => {
     if (diagnostics.length >= limit) {
@@ -378,6 +393,7 @@ export function collectLatexReferences(
     // Mask once per file, so the reference scan and the leftover check agree
     // about which regions are literal.
     const masked = maskLiteralRegions(text);
+    const originalLines = text.split(/\r?\n/);
 
     for (const reference of referencesIn(masked, sourceName)) {
       const { kind, name } = reference;
@@ -391,7 +407,7 @@ export function collectLatexReferences(
           code: "unsafe-reference",
           message: `Unsupported non-literal or unsafe \\${kind} reference in ${sourceName}: ${name}`,
           text: reference.text,
-          lineText: reference.lineText,
+          lineText: lineTextOf(originalLines[reference.line - 1] ?? ""),
           searched: [],
         });
         continue;
@@ -404,7 +420,12 @@ export function collectLatexReferences(
           : kind === "bibliography" || kind === "addbibresource"
             ? [".bib"]
             : [".tex"];
-      const resolved = suffixes.map((suffix) => name + suffix).find((path) => files.has(path));
+      const prefixes =
+        kind === "includegraphics" ? ["", ...graphicsPaths.map((path) => `${path}/`)] : [""];
+      const candidates = prefixes.flatMap((prefix) =>
+        suffixes.map((suffix) => prefix + name + suffix),
+      );
+      const resolved = candidates.find((path) => files.has(path));
       if (!resolved) {
         add({
           file: sourceName,
@@ -415,8 +436,8 @@ export function collectLatexReferences(
           code: "missing-reference",
           message: `Missing project file for \\${kind} in ${sourceName}: ${name}`,
           text: reference.text,
-          lineText: reference.lineText,
-          searched: suffixes.map((suffix) => name + suffix),
+          lineText: lineTextOf(originalLines[reference.line - 1] ?? ""),
+          searched: candidates,
         });
         continue;
       }
@@ -436,7 +457,7 @@ export function collectLatexReferences(
         code: "unparsed-reference",
         message: `Unsupported non-literal project reference in ${sourceName}.`,
         text: "",
-        lineText: unparsed.lineText,
+        lineText: lineTextOf(originalLines[unparsed.line - 1] ?? ""),
         searched: [],
       });
     }

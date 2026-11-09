@@ -15,6 +15,12 @@ export interface LatexResult {
   files: ReadonlySet<string>;
   mainFile: string;
   log: string;
+  warnings: LatexDiagnostic[];
+  warningsTruncated: boolean;
+  /** The engine that produced the bytes, for Save/Export labels. */
+  engine?: string;
+  /** Wall-clock time the compile took, when the backend measured it. */
+  elapsedMs?: number;
 }
 
 /**
@@ -28,18 +34,21 @@ export class LatexBuildError extends Error {
   readonly diagnostics: readonly LatexDiagnostic[];
   readonly log: string;
   readonly truncated: boolean;
+  readonly partialPdf: Uint8Array | null;
 
   constructor(
     message: string,
     diagnostics: readonly LatexDiagnostic[] = [],
     log = "",
     truncated = false,
+    partialPdf: Uint8Array | null = null,
   ) {
     super(message);
     this.name = "LatexBuildError";
     this.diagnostics = diagnostics;
     this.log = log;
     this.truncated = truncated;
+    this.partialPdf = partialPdf?.slice() ?? null;
   }
 }
 
@@ -78,6 +87,20 @@ interface ReportedProblem {
   line?: number;
 }
 
+export function latexBuildFailed(result: {
+  success: boolean;
+  pdf: Uint8Array | null;
+  errors: readonly ReportedProblem[];
+  telemetry?: { diagnostics?: readonly ReportedProblem[] };
+}): boolean {
+  return (
+    !result.success ||
+    !result.pdf ||
+    result.errors.some((entry) => entry.severity === "error") ||
+    Boolean(result.telemetry?.diagnostics?.some((entry) => entry.severity === "error"))
+  );
+}
+
 /**
  * Turn the SDK's compile errors into the same diagnostics the reference scan
  * produces.
@@ -93,19 +116,25 @@ function compileDiagnostics(
     telemetry?: { diagnostics?: readonly ReportedProblem[] };
   },
   sources: ReadonlyMap<string, string>,
-): LatexDiagnostic[] {
+): { diagnostics: LatexDiagnostic[]; truncated: boolean } {
   const reported = result.telemetry?.diagnostics?.length
     ? result.telemetry.diagnostics
     : result.errors;
   const out: LatexDiagnostic[] = [];
   const seen = new Set<string>();
+  let truncated = false;
   for (const entry of reported) {
-    if (!entry.message || out.length >= MAX_REFERENCE_DIAGNOSTICS) continue;
+    if (entry.severity !== "warning" && entry.severity !== "error") continue;
+    if (!entry.message) continue;
     const file = projectSource(entry.file, sources);
     const line = entry.line ?? 0;
     const key = `${file}\u0000${line}\u0000${entry.message}`;
     if (seen.has(key)) continue;
     seen.add(key);
+    if (out.length >= MAX_REFERENCE_DIAGNOSTICS) {
+      truncated = true;
+      continue;
+    }
     out.push({
       file,
       line,
@@ -119,7 +148,7 @@ function compileDiagnostics(
       searched: [],
     });
   }
-  return out;
+  return { diagnostics: out, truncated };
 }
 
 let active: WasmTexCompiler | null = null;
@@ -152,7 +181,10 @@ export {
 } from "./latex-references.ts";
 
 /** Compile exactly this snapshot, with no engine auto-detection or remote source. */
-export async function compileLatex(snapshot: LatexProjectSnapshot): Promise<LatexResult> {
+export async function compileLatex(
+  snapshot: LatexProjectSnapshot,
+  onProgress?: (phase: "resolving" | "downloading" | "compiling") => void,
+): Promise<LatexResult> {
   cancelLatex();
   const owner = generation;
   const { WasmTexCompiler } = await import("wasmtex/headless");
@@ -181,28 +213,38 @@ export async function compileLatex(snapshot: LatexProjectSnapshot): Promise<Late
     location.protocol === "tauri:"
       ? "mdraft-tex://localhost/"
       : `${location.protocol}//mdraft-tex.localhost/`;
+  let downloads = 0;
   const compiler = new WasmTexCompiler({
     engine: "lualatex",
     texliveVersion: "2025",
-    texliveUrl: `${base}mirror/`,
+    texliveUrl: `${base}jobs/${owner}/mirror/`,
     assetBaseUrl: "/",
     formatAssetBaseUrl: base,
     mainFile: snapshot.mainFile,
     persistentCache: false, // The Rust transport persists the exact mirror URLs.
+    onLoadProgress: () => {
+      if (generation === owner && active === compiler && downloads === 0) onProgress?.("resolving");
+    },
     files,
   });
   active = compiler;
+  let unlisten: (() => void) | undefined;
   try {
+    const { listen } = await import("@tauri-apps/api/event");
+    unlisten = await listen<[string, boolean]>("latex-package-download", (event) => {
+      if (generation !== owner || active !== compiler || event.payload[0] !== String(owner)) return;
+      downloads = Math.max(0, downloads + (event.payload[1] ? 1 : -1));
+      onProgress?.(downloads ? "downloading" : "compiling");
+    });
+    if (generation !== owner) throw new Error("Compilation cancelled.");
     await compiler.init();
     const result = await compiler.compile();
-    const blocking = result.errors.filter(
-      (entry) =>
-        entry.severity === "error" ||
-        /citation .+ undefined|empty bibliography|undefined references|run biber/i.test(
-          entry.message,
-        ),
-    );
-    if (!result.success || !result.pdf || blocking.length) {
+    const log =
+      result.log.length > 200_000
+        ? `Earlier compiler output was omitted.\n\n${result.log.slice(-200_000)}`
+        : result.log;
+    const report = compileDiagnostics(result, sources);
+    if (latexBuildFailed(result) || !result.pdf) {
       const detail =
         result.errors.map((entry) => entry.message).join("\n") || result.log.slice(-6000);
       const hint = result.errors.some((entry) => entry.code === "missing-package")
@@ -210,20 +252,35 @@ export async function compileLatex(snapshot: LatexProjectSnapshot): Promise<Late
         : /biblatex/i.test(detail)
           ? "The experimental biblatex-lite fallback could not produce this bibliography; full Biber is not included.\n"
           : "";
-      const diagnostics = compileDiagnostics(result, sources);
       throw new LatexBuildError(
         hint + detail,
-        diagnostics,
-        result.log,
-        diagnostics.length >= MAX_REFERENCE_DIAGNOSTICS,
+        report.diagnostics,
+        log,
+        report.truncated,
+        result.pdf,
       );
     }
-    if (/LaTeX Warning: File .+ not found/i.test(result.log)) {
-      throw new LatexBuildError(
-        "A project image or input is missing.\n" + result.log.slice(-6000),
-        [],
-        result.log,
-      );
+    const warnings = report.diagnostics.filter((diagnostic) => diagnostic.severity === "warning");
+    let warningsTruncated = report.truncated;
+    for (const match of result.log.matchAll(/LaTeX Warning: File .+ not found[^\r\n]*/gi)) {
+      if (!warnings.some((warning) => warning.message.includes(match[0]))) {
+        if (warnings.length >= MAX_REFERENCE_DIAGNOSTICS) {
+          warningsTruncated = true;
+          break;
+        }
+        warnings.push({
+          file: "",
+          line: 0,
+          column: 0,
+          endColumn: 0,
+          severity: "warning",
+          code: "compile",
+          message: match[0],
+          text: "",
+          lineText: "",
+          searched: [],
+        });
+      }
     }
     return {
       pdf: result.pdf.slice(),
@@ -241,9 +298,13 @@ export async function compileLatex(snapshot: LatexProjectSnapshot): Promise<Late
         })),
       mainFile: snapshot.mainFile,
       files: reachable,
-      log: result.log,
+      log,
+      warnings,
+      warningsTruncated,
+      engine: "LuaLaTeX",
     };
   } finally {
+    unlisten?.();
     compiler.dispose();
     if (active === compiler) active = null;
   }

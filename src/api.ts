@@ -304,8 +304,21 @@ export interface Settings {
    * `mdraft-tex` scheme from serving anything and leaves the cache inert.
    */
   latexEnabled: boolean;
+  latexAutoCompile: boolean;
   /** The downloaded TeX package cache ceiling, in MiB. */
   latexCacheLimitMb: number;
+  /**
+   * Whether the reader chose a TeX installation already on this computer.
+   *
+   * Separate from `latexEnabled`: the two engines are different trust
+   * boundaries, and turning one off must not disturb the other. Off by default;
+   * only a validated installation can be switched on.
+   */
+  latexNativeEnabled: boolean;
+  /** The validated engine directory, or null before the first validation. */
+  latexNativeRoot: string | null;
+  /** `auto`, `lualatex`, `pdflatex` or `xelatex`. */
+  latexNativeEngine: string;
   editorMaxWidth: number;
   /** Line spacing in the source pane. The preview keeps its own reading height. */
   editorLineHeight: EditorLineHeight;
@@ -726,6 +739,98 @@ export const latexCacheInfo = () => invoke<LatexCacheInfo>("latex_cache_info");
 export const latexDisable = () => invoke<void>("latex_disable");
 /** Delete the downloaded package cache; returns the bytes freed. */
 export const latexClearCache = () => invoke<number>("latex_clear_cache");
+
+/** Which backend the preview must use for the open document. */
+export interface LatexEngineStatus {
+  backend: "native" | "bundled" | "none";
+  bundledEnabled: boolean;
+  bundledInstalled: boolean;
+  nativeEnabled: boolean;
+  nativeRoot: string | null;
+  nativeDistribution: string | null;
+  nativeEngine: string;
+  nativeEngines: string[];
+  /** Why the configured native installation cannot run, when it cannot. */
+  problem: string | null;
+}
+
+export interface LatexNativeCandidate {
+  directory: string;
+  root: string | null;
+  source: "path" | "standard";
+  /** A readable name: MiKTeX, TeX Live, MacTeX, TinyTeX. */
+  distribution: string;
+  engines: string[];
+}
+
+export interface LatexNativeTool {
+  id: string;
+  path: string;
+  version: string;
+}
+
+export interface LatexNativeCapabilities {
+  root: string;
+  bin: string;
+  distribution: string;
+  engines: LatexNativeTool[];
+  tools: LatexNativeTool[];
+}
+
+export interface LatexNativeDiagnostic {
+  file: string;
+  line: number;
+  severity: "error" | "warning";
+  message: string;
+  code: string;
+}
+
+/** The outcome of one native build. */
+export interface LatexNativeResult {
+  pdf: string | null;
+  partialPdf: string | null;
+  success: boolean;
+  cancelled: boolean;
+  timedOut: boolean;
+  engine: string;
+  distribution: string;
+  passes: number;
+  log: string;
+  logTruncated: boolean;
+  diagnostics: LatexNativeDiagnostic[];
+  warningsTruncated: boolean;
+  error: string | null;
+  elapsedMs: number;
+}
+
+export interface LatexNativeProgress {
+  job: string;
+  phase: "compiling" | "bibliography";
+  detail: string | null;
+}
+
+export const latexEngineStatus = () => invoke<LatexEngineStatus>("latex_engine_status");
+/** Metadata-only discovery; it launches nothing. */
+export const latexNativeDiscover = () =>
+  invoke<LatexNativeCandidate[]>("latex_native_discover");
+/**
+ * Probe an installation and commit the directory.
+ *
+ * This is the only discovery call that executes external code.
+ */
+export const latexNativeValidate = (directory: string) =>
+  invoke<LatexNativeCapabilities>("latex_native_validate", { directory });
+export const latexNativeSetEnabled = (enabled: boolean) =>
+  invoke<LatexEngineStatus>("latex_native_set_enabled", { enabled });
+export const latexNativeSetEngine = (engine: string) =>
+  invoke<LatexEngineStatus>("latex_native_set_engine", { engine });
+export const latexNativeCompile = (request: {
+  job: string;
+  mainFile: string;
+  files: Array<{ path: string; data: string }>;
+}) => invoke<LatexNativeResult>("latex_native_compile", { request });
+export const latexNativeCancel = (job: string) =>
+  invoke<void>("latex_native_cancel", { job });
 /**
  * Write the PDF a document's own compiler produced.
  *

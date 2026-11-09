@@ -643,6 +643,7 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
         "view.syncScroll" => state.view_mode == "split",
         "view.sidebar" | "view.outline" | "view.favorites" | "view.recent"
         | "view.sidebarPanel" => !state.focus_mode,
+        "view.latexCompile" => state.document_language == "latex",
         "view.typstPreview" | "view.typstDocument" | "view.typstPages" => {
             typst && state.typst_available
         }
@@ -1267,6 +1268,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         )?)
         .item(&check("view.split", "Split View", None)?)
         .item(&check("view.preview", "Preview Only", None)?)
+        .item(&item("view.latexCompile", "Compile LaTeX", Some("CmdOrCtrl+Shift+Enter"))?)
         .separator()
         .item(&typst_preview)
         .separator()

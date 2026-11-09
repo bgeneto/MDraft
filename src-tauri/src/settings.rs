@@ -154,6 +154,14 @@ fn default_latex_cache_limit() -> u32 {
     256
 }
 
+/// The installed backend's default engine choice.
+///
+/// `auto` reads only the `% !TEX program` allowlist and otherwise prefers
+/// LuaLaTeX, which is the engine the bundled backend uses too.
+fn default_native_engine() -> String {
+    "auto".into()
+}
+
 /// The range the cache ceiling is clamped to.
 pub const LATEX_CACHE_MIN_MB: u32 = 32;
 pub const LATEX_CACHE_MAX_MB: u32 = 4096;
@@ -463,6 +471,8 @@ pub struct Settings {
     /// inert and stops the `mdraft-tex` scheme from serving anything.
     #[serde(default)]
     pub latex_enabled: bool,
+    #[serde(default = "default_true")]
+    pub latex_auto_compile: bool,
     /// The ceiling for the downloaded TeX package cache, in MiB.
     ///
     /// Least-recently-used entries are evicted to stay under it. Clamped to a
@@ -471,6 +481,26 @@ pub struct Settings {
     /// cache stops being a cache.
     #[serde(default = "default_latex_cache_limit")]
     pub latex_cache_limit_mb: u32,
+
+    /// Whether the reader chose an installed TeX distribution.
+    ///
+    /// Separate from [`Self::latex_enabled`] on purpose: the bundled engine and a
+    /// local installation are different trust boundaries, and a reader who turned
+    /// one off must not lose the other. Off by default.
+    #[serde(default)]
+    pub latex_native_enabled: bool,
+    /// The validated binary directory of the installed distribution.
+    ///
+    /// `None` until a validation committed one. Only a directory that compiled a
+    /// probe document is written here.
+    #[serde(default)]
+    pub latex_native_root: Option<String>,
+    /// `"auto"`, `"lualatex"`, `"pdflatex"` or `"xelatex"`.
+    ///
+    /// Auto recognises only the `% !TEX program` allowlist; an explicit choice
+    /// always wins and is verified again when a job starts.
+    #[serde(default = "default_native_engine")]
+    pub latex_native_engine: String,
 
     // ---- Preferences: Files ----------------------------------------------
     /// "welcome" | "new" | "last" | "tabs"
@@ -679,7 +709,11 @@ impl Default for Settings {
             last_active_tab: None,
 
             latex_enabled: false,
+            latex_auto_compile: true,
             latex_cache_limit_mb: default_latex_cache_limit(),
+            latex_native_enabled: false,
+            latex_native_root: None,
+            latex_native_engine: default_native_engine(),
 
             on_launch: "welcome".into(),
             default_extension: "md".into(),
@@ -934,6 +968,12 @@ fn parse_settings(raw: &str) -> Option<Settings> {
     Some(settings)
 }
 
+fn adopt_latex_marker(raw: Option<&str>, marker: bool) -> bool {
+    marker && !raw
+        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+        .is_some_and(|value| value.get("latexEnabled").is_some())
+}
+
 impl AppState {
     /// Load settings from the app config directory, falling back to defaults.
     ///
@@ -946,9 +986,9 @@ impl AppState {
         let _ = std::fs::create_dir_all(&dir);
         let config_file = dir.join("settings.json");
 
-        let mut settings = std::fs::read_to_string(&config_file)
-            .ok()
-            .and_then(|raw| parse_settings(&raw))
+        let raw_settings = std::fs::read_to_string(&config_file).ok();
+        let mut settings = raw_settings.as_deref()
+            .and_then(parse_settings)
             .unwrap_or_default();
 
         // The LuaLaTeX experiment kept its switch in a marker file beside the
@@ -958,7 +998,7 @@ impl AppState {
         // would offer "Enable LuaLaTeX…" again and re-download it. Adopt the
         // marker once, then leave it alone: the switch is the source of truth
         // from here on, and turning it off must not be undone by a stale file.
-        if !settings.latex_enabled && crate::latex::legacy_marker_present(app) {
+        if adopt_latex_marker(raw_settings.as_deref(), crate::latex::legacy_marker_present(app)) {
             settings.latex_enabled = true;
         }
 
@@ -1330,34 +1370,38 @@ mod tests {
         let legacy = r#"{"viewMode":"split","theme":"light"}"#;
         let loaded = parse_settings(legacy).expect("a legacy file loads");
         assert!(!loaded.latex_enabled);
+        assert!(loaded.latex_auto_compile);
         assert_eq!(loaded.latex_cache_limit_mb, 256);
+        // A file from before installed distributions existed must not opt the
+        // reader into one, and must not break loading.
+        assert!(!loaded.latex_native_enabled);
+        assert!(loaded.latex_native_root.is_none());
+        assert_eq!(loaded.latex_native_engine, "auto");
 
         let enabled = r#"{"latexEnabled":true,"latexCacheLimitMb":512}"#;
         let loaded = parse_settings(enabled).expect("the new keys load");
         assert!(loaded.latex_enabled);
         assert_eq!(loaded.latex_cache_limit_mb, 512);
+        let manual = parse_settings(r#"{"latexAutoCompile":false}"#).unwrap();
+        assert!(!manual.latex_auto_compile);
+
+        let native = parse_settings(
+            r#"{"latexNativeEnabled":true,"latexNativeRoot":"C:/tex/bin","latexNativeEngine":"xelatex"}"#,
+        )
+        .expect("native keys load");
+        assert!(native.latex_native_enabled);
+        assert_eq!(native.latex_native_root.as_deref(), Some("C:/tex/bin"));
+        assert_eq!(native.latex_native_engine, "xelatex");
+        // The two backends are independent switches.
+        assert!(!native.latex_enabled);
     }
 
     #[test]
     fn the_legacy_marker_is_adopted_only_when_the_switch_was_never_set() {
-        // The experiment kept the switch in a marker file; the product keeps it
-        // in `settings.json`. Two rules protect the reader, and they work
-        // together:
-        //
-        // 1. `AppState::load` adopts the marker only when the stored value is
-        //    false, so an explicit `true` is never overridden.
-        // 2. `latex_disable` deletes the marker, so "off" cannot be re-adopted
-        //    at the next launch by a file that is still on disk.
-        //
-        // Without (2), rule (1) would resurrect the engine every time the reader
-        // turned it off — which is exactly the bug this pair exists to prevent.
-        let adopt = |marker: bool, stored: bool| stored || marker;
-
-        assert!(adopt(true, false), "a marker with no key adopts the switch");
-        assert!(!adopt(false, false), "no marker and no key stays off");
-        assert!(adopt(false, true), "an explicit on is kept");
-        // After `latex_disable` the marker is gone, so the reader's "off" holds.
-        assert!(!adopt(false, false), "off survives once the marker is retired");
+        assert!(super::adopt_latex_marker(Some("{}"), true));
+        assert!(!super::adopt_latex_marker(Some("{}"), false));
+        assert!(!super::adopt_latex_marker(Some(r#"{"latexEnabled":false}"#), true));
+        assert!(!super::adopt_latex_marker(Some(r#"{"latexEnabled":true}"#), true));
     }
 
     #[test]

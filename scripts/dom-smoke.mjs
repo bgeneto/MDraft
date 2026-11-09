@@ -314,11 +314,11 @@ for (const section of prefs.perSection) {
 
 check("preferences opens", prefs.open);
 check("preferences title", prefs.title === "Preferences");
-check("ten sections", prefs.sectionNames.split(",").length === 10);
+check("eleven sections", prefs.sectionNames.split(",").length === 11);
 check(
   "sections named and ordered",
   prefs.sectionNames ===
-    "Files,Editor,Image,Markdown,HTML,Export,Appearance,Typography,AI Assistant,Read Aloud",
+    "Files,Editor,Image,Markdown,HTML,LaTeX,Export,Appearance,Typography,AI Assistant,Read Aloud",
 );
 check(
   "first section selected",
@@ -335,6 +335,15 @@ check(
   Boolean(editorSection) &&
     editorSection.labels.includes("Check spelling while typing") &&
     editorSection.labels.includes("Dictionary"),
+);
+const latexSection = prefs.perSection.find((section) => section.name === "LaTeX");
+check(
+  "installed TeX controls",
+  Boolean(latexSection) &&
+    latexSection.labels.includes("Use my installed TeX distribution") &&
+    latexSection.labels.includes("Installed engine") &&
+    latexSection.labels.includes("Auto-compile"),
+  latexSection?.labels.join(", "),
 );
 
 // A heading that only repeats the row beneath it is noise. These three named

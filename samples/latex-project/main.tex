@@ -1,0 +1,18 @@
+\documentclass{article}
+\usepackage{fontspec}
+\usepackage{graphicx}
+\setmainfont{Latin Modern Roman}
+\title{LuaLaTeX in MDraft}
+\author{MDraft project}
+\begin{document}
+\maketitle
+This main-file sentence refers to \cite{knuth1984}.
+\input{chapters/intro}
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.6\linewidth]{figures/diagram.png}
+\caption{A local image.}
+\end{figure}
+\bibliographystyle{plain}
+\bibliography{references}
+\end{document}

@@ -38,9 +38,9 @@ projects easy to navigate.
 - **Typst** — a flowing Document view or a Pages view of the compiled PDF,
   with selectable text and source matching. Export directly to PDF with Typst.
 - **LaTeX** — syntax colouring, `%` comments, an outline read from `\section`
-  commands, and the compiled PDF in the preview. LuaLaTeX runs locally, so a
-  `.tex` project with `\input`, images and BibTeX compiles without a TeX
-  installation.
+  commands, and the compiled PDF in the preview. The bundled LuaLaTeX engine
+  needs no TeX installation; a TeX distribution already on the computer can be
+  selected instead, as a separate program that may install its own packages.
 - **HTML** — preview a page with its own CSS, images and scripts in a sandboxed
   view alongside its source.
 
@@ -51,10 +51,15 @@ projects easy to navigate.
 Typst preview and PDF compilation require the Typst compiler. MDraft can
 install it for you on Windows and Linux.
 
-LaTeX is opt-in: enabling it downloads about 10 MiB of verified LuaLaTeX engine
-files, and the TeX packages a document needs are fetched on demand and cached
-locally. Nothing about your document leaves this device, and *Preferences ›
-Export* reports the cache size and clears it.
+LaTeX is opt-in: enabling the bundled engine downloads about 10 MiB of verified
+LuaLaTeX files, and the TeX packages a document needs are fetched on demand and
+cached locally. *Preferences › LaTeX* can instead use a TeX distribution already
+on the computer, after MDraft has validated it; that engine runs with the
+reader's permissions; it may use the network to install its own packages, while
+shell escape remains disabled. MDraft itself makes no network request to run a
+native compile. Nothing about your document leaves this device unless the
+installed distribution downloads a package, and the same section reports the
+bundled cache size and clears it.
 
 ## An AI assistant you can configure
 
@@ -141,7 +146,9 @@ Network access is used for actions you initiate, such as installing an
 optional tool, downloading a pasted image, fetching AI models or generating
 an AI response. If you enable AI filename suggestions, saving an untitled
 document can also send text to your chosen endpoint. HTML documents may load
-remote resources referenced by their own markup.
+remote resources referenced by their own markup. An installed TeX distribution
+you select is your own program: it may download its own packages, and MDraft
+neither controls nor monitors that traffic.
 
 The [LaTeX engine](docs/latex.md) downloads its files only after explicit
 enablement and then retrieves missing TeX packages and fonts on demand. The

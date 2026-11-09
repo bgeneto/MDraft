@@ -120,12 +120,18 @@ webkit2gtk = "2.0"
 # Spell Checking API (the same service WebView2 would), Linux opens the hunspell
 # files the distro installed, and macOS uses NSSpellChecker. None of these
 # crates embeds a word list.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_Globalization",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
 ] }
 # The native print surface reaches WebView2's printing interfaces directly.
 # webview2-com 0.39 (the version wry/Tauri use) is built on windows and

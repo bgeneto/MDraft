@@ -125,6 +125,7 @@ for (const [id, expected] of [
   ["edit.find", "CmdOrCtrl+F"],
   ["file.print", "CmdOrCtrl+P"],
   ["view.source", "CmdOrCtrl+/"],
+  ["view.latexCompile", "CmdOrCtrl+Shift+Enter"],
 ]) {
   check(byId.get(id) === expected, `${id} is bound to ${expected}`, byId.get(id) ?? "MISSING");
 }
