@@ -70,7 +70,10 @@ meta refresh, child frame or active embed is not printed natively; MDraft offers
 because its printed result may depend on code the safe surface will not run.
 
 The native writer waits up to ten seconds for images and web fonts, then reports
-any resource that failed to load. The direct PDF runs the global **After Export**
+any resource that failed to load. That report, and pandoc's own warnings, appear
+in the same transient toast a save uses — no dialog and nothing to dismiss, since
+the file was written and there is no decision to make. A failure that stops the
+export is still an error dialog. The direct PDF runs the global **After Export**
 options because MDraft knows the file it wrote. The **Print** dialog does not
 claim a path, so it does not run them.
 

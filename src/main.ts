@@ -4038,12 +4038,27 @@ async function nativePrintArticle(source: ReturnType<typeof exportSource>): Prom
   );
 }
 
-async function reportPrintWarnings(failed: string[]): Promise<void> {
-  if (failed.length === 0) return;
-  await message(
-    `These resources did not load and may be missing from the printout:\n\n${failed.join("\n")}`,
-    { title: "Printed with missing resources", kind: "warning" },
-  );
+/**
+ * The one toast an export or a printout ends on.
+ *
+ * The file was written, so a resource the print surface could not fetch, or a
+ * warning pandoc emitted, leaves nothing for the reader to decide: it belongs in
+ * the same transient line as the success rather than a dialog that has to be
+ * dismissed. The toast's own rule keeps one entry per line (`pre-line`), so a
+ * list of resources stays a list. Only a failure that stops the export is still
+ * a dialog.
+ */
+function toastReport(success: string | null, details: readonly string[]): void {
+  const lines = details.filter((line) => line.length > 0);
+  if (success === null && lines.length === 0) return;
+  const text = success === null ? lines.join("\n") : [success, ...lines].join("\n");
+  toast(text, lines.length > 0 ? 8200 : 2600);
+}
+
+/** The resources the print surface could not fetch, as report lines. */
+function missingResources(failed: readonly string[]): string[] {
+  if (failed.length === 0) return [];
+  return ["These resources did not load and may be missing from the printout:", ...failed];
 }
 
 /**
@@ -4233,8 +4248,7 @@ async function exportPdf(): Promise<void> {
     }
     const result = await api.printNativePdf(html, source.name ?? "Untitled", target);
     notice.dismiss();
-    toast("Exported PDF");
-    await reportPrintWarnings(result.failedResources);
+    toastReport("Exported PDF", missingResources(result.failedResources));
     const after = await api.runAfterExport(result.path ?? target);
     if (after.afterErrors.length > 0) {
       await message(after.afterErrors.join("\n\n"), {
@@ -4310,9 +4324,7 @@ async function printCurrentDocument(): Promise<void> {
     notice.dismiss();
     // The dialog is its own feedback. A cancelled dialog stays silent; loaded
     // resource failures are reported after it closes, never over it.
-    if (result.status !== "cancelled" && result.failedResources.length > 0) {
-      await reportPrintWarnings(result.failedResources);
-    }
+    if (result.status !== "cancelled") toastReport(null, missingResources(result.failedResources));
   } catch (error) {
     notice.dismiss();
     const useBrowser = await ask(
@@ -4548,17 +4560,19 @@ async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
     };
     const outcome = await api.runExport(request);
     notice.dismiss();
-    toast(`Exported ${basename(outcome.outputPath)}`);
+    toastReport(
+      `Exported ${basename(outcome.outputPath)}`,
+      outcome.warnings ? [outcome.warnings] : [],
+    );
 
-    // Pandoc can succeed and still warn, and an after-export step can fail
-    // without the file being wrong. Both are worth showing, neither is an error.
-    const notes = [...outcome.afterErrors];
-    if (outcome.warnings) notes.push(outcome.warnings);
-    if (notes.length > 0) {
-      await message(notes.join("\n\n"), {
-        title:
-          outcome.afterErrors.length > 0 ? "Exported, with a problem" : "Exported with warnings",
-        kind: outcome.afterErrors.length > 0 ? "warning" : "info",
+    // Pandoc can warn and still write the file, and an after-export step can
+    // fail without the file being wrong. The warnings ride in the success
+    // toast; a step that failed is a failure the reader should see, so it keeps
+    // its dialog.
+    if (outcome.afterErrors.length > 0) {
+      await message(outcome.afterErrors.join("\n\n"), {
+        title: "Exported, with a problem",
+        kind: "warning",
       });
     }
   } catch (error) {
@@ -4617,14 +4631,19 @@ async function exportLatexWithWriter(
       writer,
     );
     notice.dismiss();
-    toast(`Exported ${basename(outcome.outputPath)}`);
-    const notes = [...outcome.afterErrors];
-    if (outcome.warnings) notes.push(outcome.warnings);
-    if (notes.length > 0) {
-      await message(notes.join("\n\n"), {
-        title:
-          outcome.afterErrors.length > 0 ? "Exported, with a problem" : "Exported with warnings",
-        kind: outcome.afterErrors.length > 0 ? "warning" : "info",
+    toastReport(
+      `Exported ${basename(outcome.outputPath)}`,
+      outcome.warnings ? [outcome.warnings] : [],
+    );
+
+    // Pandoc can warn and still write the file, and an after-export step can
+    // fail without the file being wrong. The warnings ride in the success
+    // toast; a step that failed is a failure the reader should see, so it keeps
+    // its dialog.
+    if (outcome.afterErrors.length > 0) {
+      await message(outcome.afterErrors.join("\n\n"), {
+        title: "Exported, with a problem",
+        kind: "warning",
       });
     }
   } catch (error) {
@@ -4726,14 +4745,19 @@ async function openWriterChooser(): Promise<void> {
       writer.id,
     );
     notice.dismiss();
-    toast(`Exported ${basename(outcome.outputPath)}`);
-    const notes = [...outcome.afterErrors];
-    if (outcome.warnings) notes.push(outcome.warnings);
-    if (notes.length > 0) {
-      await message(notes.join("\n\n"), {
-        title:
-          outcome.afterErrors.length > 0 ? "Exported, with a problem" : "Exported with warnings",
-        kind: outcome.afterErrors.length > 0 ? "warning" : "info",
+    toastReport(
+      `Exported ${basename(outcome.outputPath)}`,
+      outcome.warnings ? [outcome.warnings] : [],
+    );
+
+    // Pandoc can warn and still write the file, and an after-export step can
+    // fail without the file being wrong. The warnings ride in the success
+    // toast; a step that failed is a failure the reader should see, so it keeps
+    // its dialog.
+    if (outcome.afterErrors.length > 0) {
+      await message(outcome.afterErrors.join("\n\n"), {
+        title: "Exported, with a problem",
+        kind: "warning",
       });
     }
   } catch (error) {
