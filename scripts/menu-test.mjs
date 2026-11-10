@@ -211,12 +211,14 @@ try {
     ["file.favorite", "File"],
     ["file.print", "File"],
     ["themes.system", "Interface Theme"],
-    ["view.syntax.nord", "Code Colors"],
+    ["view.syntax.nord", "Code Themes"],
     ["navigate.openTarget", "Navigate"],
     ["file.preferences", "File"],
     ["tools.spellcheck", "Tools"],
     ["tools.statistics", "Tools"],
     ["tools.ai", "Tools"],
+    ["view.latexCompile", "Tools"],
+    ["view.latexAutoCompile", "Tools"],
     ["help.welcome", "Help"],
   ]) {
     check(parentOf(id) === parent, `${id} lives under ${parent}`, parentOf(id));
@@ -596,12 +598,12 @@ try {
   );
 
   // -------------------------------------------------------------------------
-  // Code colours and zoom-only reset
+  // Code themes and zoom-only reset
   // -------------------------------------------------------------------------
   console.log("\n=== View state and document zoom ===");
   await emitMenu("view.syntax.nord");
   await sleep(650);
-  check((await settings()).syntaxTheme === "nord", "Code Colors writes the palette to settings");
+  check((await settings()).syntaxTheme === "nord", "Code Themes writes the palette to settings");
   check(
     (await menuState()).find((item) => item.id === "view.syntax.nord")?.checked === true,
     "the Nord menu item carries the check",

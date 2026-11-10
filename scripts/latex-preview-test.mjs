@@ -267,7 +267,7 @@ console.log("\n=== the export row names its engine; Auto-compile has visible swi
   const onCheck = await menuCheck();
   check(
     onCheck?.checked === true && onCheck?.enabled === true,
-    "View › Compile LaTeX Automatically is checked and enabled for a .tex document",
+    "Tools › Compile LaTeX Automatically is checked and enabled for a .tex document",
     JSON.stringify(onCheck),
   );
 
@@ -276,14 +276,14 @@ console.log("\n=== the export row names its engine; Auto-compile has visible swi
   );
   check(await storedAuto(false), "the preview switch turns Auto-compile off in settings");
   await sleep(300);
-  check((await menuCheck())?.checked === false, "the View menu check follows the preview switch");
+  check((await menuCheck())?.checked === false, "the Tools menu check follows the preview switch");
   check((await prefsAuto()) === "false", "Preferences › LaTeX follows the preview switch");
 
   await emitMenu(page, "view.latexAutoCompile");
-  check(await storedAuto(true), "the View menu item turns Auto-compile back on");
+  check(await storedAuto(true), "the Tools menu item turns Auto-compile back on");
   await sleep(300);
-  check((await toggleState()) === "true", "the preview switch follows the View menu");
-  check((await prefsAuto()) === "true", "Preferences › LaTeX follows the View menu");
+  check((await toggleState()) === "true", "the preview switch follows the Tools menu");
+  check((await prefsAuto()) === "true", "Preferences › LaTeX follows the Tools menu");
 }
 
 console.log("\n=== zoom reaches the compiled PDF ===");

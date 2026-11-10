@@ -53,7 +53,7 @@ Warnings from a successful build are listed above the PDF and do not prevent
 you from reading or saving it. The compiler output is available with them.
 
 *Preferences › LaTeX › Auto-compile* is on by default. Turn it off to compile
-only when you select **Compile** in the preview or **View › Compile LaTeX**.
+only when you select **Compile** in the preview or **Tools › Compile LaTeX**.
 Saving does not start a build in manual mode; the preview remains marked out of
 date until you compile. The document and all open included files are compiled
 from their current buffers, including unsaved changes.
