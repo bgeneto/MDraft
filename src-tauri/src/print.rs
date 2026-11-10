@@ -34,6 +34,43 @@ const READY_TIMEOUT: Duration = Duration::from_secs(20);
 const PDF_TIMEOUT: Duration = Duration::from_secs(180);
 static NEXT_PDF: AtomicU64 = AtomicU64::new(1);
 static PRINT_JOB: Mutex<()> = Mutex::new(());
+static NEXT_HANDOFF: AtomicU64 = AtomicU64::new(1);
+
+/// A fresh folder for one file handed to an external viewer or browser.
+///
+/// The file keeps the document's own name, which the viewer shows, but no
+/// two handoffs share a path: printing the same document twice, or two
+/// documents with the same stem, must not rename over a PDF a viewer may still
+/// hold open (Windows viewers lock it) or replace a page a browser is printing.
+/// Completed files are left for the viewer and for the reader an opener-failure
+/// message points at; the system temporary directory owns their lifetime.
+pub(crate) fn handoff_dir() -> Result<PathBuf, String> {
+    let dir = std::env::temp_dir().join("mdraft-print").join(format!(
+        "{}-{}",
+        std::process::id(),
+        NEXT_HANDOFF.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| format!("Could not create {}: {error}", dir.display()))?;
+    Ok(dir)
+}
+
+/// Write one handoff file, named `file_name`, in a folder of its own.
+///
+/// A failed write removes that folder: the partial file is this handoff's own
+/// and nobody has opened it yet. A completed file is left for its viewer.
+pub(crate) fn write_handoff(
+    file_name: &str,
+    write: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<PathBuf, String> {
+    let dir = handoff_dir()?;
+    let target = dir.join(file_name);
+    if let Err(error) = write(&target) {
+        let _ = std::fs::remove_dir_all(&dir);
+        return Err(error);
+    }
+    Ok(target)
+}
 
 const PRINT_CSP: &str = "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'none'; frame-src 'none'; object-src 'none'\">";
 
@@ -822,6 +859,53 @@ pub async fn print_native_pdf<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_repeated_print_keeps_the_file_a_viewer_may_hold() {
+        let first = write_handoff("notes.pdf", |target| {
+            std::fs::write(target, b"first").map_err(|error| error.to_string())
+        })
+        .unwrap();
+        // A viewer holding the first file open, as Windows viewers do.
+        let held = std::fs::File::open(&first).unwrap();
+        let second = write_handoff("notes.pdf", |target| {
+            std::fs::write(target, b"second").map_err(|error| error.to_string())
+        })
+        .unwrap();
+        assert_ne!(first, second, "the same stem printed twice gets two paths");
+        assert_eq!(first.file_name(), second.file_name(), "the viewer still shows the name");
+        assert_eq!(std::fs::read(&first).unwrap(), b"first");
+        assert_eq!(std::fs::read(&second).unwrap(), b"second");
+        drop(held);
+        let _ = std::fs::remove_dir_all(first.parent().unwrap());
+        let _ = std::fs::remove_dir_all(second.parent().unwrap());
+    }
+
+    #[test]
+    fn a_failed_handoff_write_removes_its_partial_file() {
+        let mut written = None;
+        let error = write_handoff("broken.html", |target| {
+            std::fs::write(target, b"partial").unwrap();
+            written = Some(target.to_path_buf());
+            Err("Injected write failure".into())
+        })
+        .unwrap_err();
+        assert_eq!(error, "Injected write failure");
+        let target = written.unwrap();
+        assert!(!target.exists());
+        assert!(!target.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn every_handoff_gets_its_own_folder() {
+        let first = handoff_dir().unwrap();
+        let second = handoff_dir().unwrap();
+        assert_ne!(first, second, "a repeated print must not reuse a path");
+        assert!(first.is_dir() && second.is_dir());
+        assert_eq!(first.parent(), second.parent());
+        let _ = std::fs::remove_dir_all(&first);
+        let _ = std::fs::remove_dir_all(&second);
+    }
 
     #[test]
     fn a_hostile_document_name_becomes_a_safe_stem() {

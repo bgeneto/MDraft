@@ -26,6 +26,8 @@ const MAX_PROJECT: usize = 64 * 1024 * 1024;
 const MAX_FILES: usize = 256;
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 static CACHE_LOCK: Mutex<()> = Mutex::new(());
+/// One engine installation at a time; Pandoc and Typst have their own locks.
+static INSTALL_LOCK: Mutex<()> = Mutex::new(());
 static MIGRATION_LOCK: Mutex<()> = Mutex::new(());
 static ASSET_REQUESTS: AtomicU64 = AtomicU64::new(0);
 static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
@@ -353,6 +355,8 @@ pub(crate) fn digest(data: &[u8]) -> String {
 #[tauri::command]
 pub async fn install_latex(app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
+        // A second Download waits and then finds the verified assets in place.
+        let _install = INSTALL_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let data_root = app
             .path()
             .app_data_dir()
@@ -371,9 +375,7 @@ pub async fn install_latex(app: AppHandle) -> Result<(), String> {
                 ));
             }
             // A corrupt old file must not win the atomic-install race.
-            if path.exists() {
-                fs::remove_file(&path).map_err(|e| e.to_string())?;
-            }
+            remove_if_present(&path)?;
             write_atomic(&path, &bytes)?;
         }
         // The switch is settings-backed, so it is written through `AppState`
@@ -389,6 +391,15 @@ pub async fn install_latex(app: AppHandle) -> Result<(), String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Remove `path`; a file that is already gone is the outcome that was wanted.
+fn remove_if_present(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 fn safe_relative(path: &str) -> bool {
@@ -1271,14 +1282,16 @@ pub async fn print_compiled_pdf<R: tauri::Runtime>(
             return Err("The compiler did not produce a valid PDF.".into());
         }
 
-        let dir = std::env::temp_dir().join("mdraft-print");
-        fs::create_dir_all(&dir)
-            .map_err(|error| format!("Could not create {}: {error}", dir.display()))?;
+        // A folder per handoff: printing again must not rename over a PDF the
+        // viewer may still hold open.
         // The same stem rule the print document uses, so a name with a separator
         // cannot escape the directory.
-        let target = dir.join(format!("{}.pdf", crate::export::safe_stem(&name)));
-        crate::print::write_pdf_atomically(&target, |pending| {
-            fs::write(pending, &bytes).map_err(|error| error.to_string())
+        let file_name = format!("{}.pdf", crate::export::safe_stem(&name));
+        let target = crate::print::write_handoff(&file_name, |target| {
+            crate::print::write_pdf_atomically(target, |pending| {
+                fs::write(pending, &bytes).map_err(|error| error.to_string())
+            })
+            .map(|_| ())
         })?;
 
         tauri_plugin_opener::open_path(&target, None::<&str>).map_err(|error| {
@@ -1300,8 +1313,20 @@ pub async fn print_compiled_pdf<R: tauri::Runtime>(
 mod tests {
     use super::{
         MAX_PROJECT, cache_size, collect_referenced, declared_references, evict_to_limit,
-        mask_literal_regions, safe_relative,
+        mask_literal_regions, remove_if_present, safe_relative,
     };
+
+    #[test]
+    fn removing_an_asset_another_install_removed_is_not_an_error() {
+        let path = std::env::temp_dir().join(format!(
+            "mdraft-remove-if-present-{}",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"old").unwrap();
+        remove_if_present(&path).unwrap();
+        assert!(!path.exists());
+        remove_if_present(&path).expect("an already removed asset is the wanted state");
+    }
     use std::{fs, path::Path};
 
     #[test]
