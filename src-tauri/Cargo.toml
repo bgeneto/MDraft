@@ -20,13 +20,20 @@ pkg-config = "0.3"
 
 [dependencies]
 tauri = { version = "2.12.4", features = ["protocol-asset"] }
-tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2.8.3"
 tauri-plugin-opener = "2.7.2"
 # One process per app identity: a second launch forwards its paths and exits
 # before creating a WebView, which also prevents the 0x800700AA profile clash.
 tauri-plugin-single-instance = "2"
 tauri-plugin-window-state = "2.5.0"
+# Plain text for the editor's menu. The default features are off on purpose:
+# `image-data` would link the PNG and BMP decoders for a clipboard API this
+# application never calls (clipboard images go through `images`), and that is a
+# measurable part of the executable. `wayland-data-control` is the Linux backend
+# the removed clipboard plugin also enabled.
+arboard = { version = "3.7", default-features = false, features = [
+    "wayland-data-control",
+] }
 # Approximate token count for the status bar. Zero dependencies and no
 # vocabulary: a full BPE tokenizer would add 8.7 MB of tables and take 40-60 ms
 # per megabyte, which is far too much for a counter that follows typing.

@@ -2,11 +2,11 @@
 //!
 //! The webview's Clipboard API comes first: it can carry HTML and images, and a
 //! test can replace it. WebView2 gates `readText()` behind a permission the
-//! application has no UI to request, so the official Tauri plugin is the
-//! reliable fallback for plain text. Both paths are called from the menu's click
-//! handler, which is the user gesture the web API requires.
+//! application has no UI to request, so a plain-text backend command is the
+//! reliable fallback. Both paths are called from the menu's click handler,
+//! which is the user gesture the web API requires.
 
-import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { clipboardReadText, clipboardWriteText } from "./api";
 
 /** Write `text`, or report that both the web API and the plugin refused. */
 export async function writeClipboardText(text: string): Promise<boolean> {
@@ -19,7 +19,7 @@ export async function writeClipboardText(text: string): Promise<boolean> {
     /* fall through to the plugin */
   }
   try {
-    await writeText(text);
+    await clipboardWriteText(text);
     return true;
   } catch {
     return false;
@@ -74,7 +74,7 @@ async function readPlainText(): Promise<string | null> {
     /* fall through to the plugin */
   }
   try {
-    return await readText();
+    return await clipboardReadText();
   } catch {
     return null;
   }

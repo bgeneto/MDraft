@@ -20,10 +20,25 @@
 //   5. **A non-LaTeX file is left alone.** Pasting prose into a `.tex` buffer and
 //      formatting it must not mangle it.
 //
-// No application: the module is WebAssembly and runs under Node.
+// No application: the WebAssembly module and its glue are read from
+// `node_modules` and instantiated here, so the checks stay app-free.
 
 import { readFileSync } from "node:fs";
-import { formatDocument, hasFormatter } from "../src/format/formatters.ts";
+import { formatDocument, hasFormatter, setTexFmtLoaderForTests } from "../src/format/formatters.ts";
+
+// The shipped loader fetches the module from the backend, which does not exist
+// under Node. This is the same split with the bytes read from disk: the glue
+// sets the instance, then `__wbindgen_start` runs the module's initialiser.
+const glue = await import("../node_modules/tex-fmt/tex_fmt_bg.js");
+const wasmBytes = readFileSync(new URL("../node_modules/tex-fmt/tex_fmt_bg.wasm", import.meta.url));
+setTexFmtLoaderForTests(async () => {
+  const { instance } = await WebAssembly.instantiate(wasmBytes, {
+    "./tex_fmt_bg.js": glue,
+  });
+  glue.__wbg_set_wasm(instance.exports);
+  instance.exports.__wbindgen_start();
+  return { main: glue.main, version: () => "v0.5.7" };
+});
 
 const checks = [];
 function check(ok, label, detail = "") {
@@ -61,10 +76,7 @@ console.log("\n=== indentation is the job ===");
     formatted.split("\n").find((line) => line.includes("\\item one")),
   );
   check(formatted.includes("\\section{Introduction}"), "the section survives");
-  check(
-    formatted.trim() === formatted.trim(),
-    "no leading or trailing whitespace is introduced",
-  );
+  check(formatted.trim() === formatted.trim(), "no leading or trailing whitespace is introduced");
 }
 
 console.log("\n=== verbatim is byte-exact ===");
@@ -76,7 +88,9 @@ console.log("\n=== verbatim is byte-exact ===");
   check(
     formatted.includes(body),
     "a verbatim body keeps its exact bytes",
-    JSON.stringify(formatted.slice(formatted.indexOf("\\begin{verbatim}"), formatted.indexOf("\\end{verbatim}"))),
+    JSON.stringify(
+      formatted.slice(formatted.indexOf("\\begin{verbatim}"), formatted.indexOf("\\end{verbatim}")),
+    ),
   );
 
   // Two measured tex-fmt 0.5.7 defects, both of which change what the document
@@ -106,12 +120,20 @@ console.log("\n=== verbatim is byte-exact ===");
   ]) {
     const doc = `\\begin{document}\n${block}\n\\end{document}\n`;
     const out = await format(doc);
-    check(out.includes(block), `a ${label} body is byte-identical`, JSON.stringify(out.slice(0, 90)));
+    check(
+      out.includes(block),
+      `a ${label} body is byte-identical`,
+      JSON.stringify(out.slice(0, 90)),
+    );
   }
   // `\verb` is inline and equally literal.
   const verb = "See \\verb|a\tb| here.";
   const verbOut = await format(`\\begin{document}\n${verb}\n\\end{document}\n`);
-  check(verbOut.includes("\\verb|a\tb|"), "a \\verb argument is byte-identical", verbOut.slice(0, 80));
+  check(
+    verbOut.includes("\\verb|a\tb|"),
+    "a \\verb argument is byte-identical",
+    verbOut.slice(0, 80),
+  );
 }
 
 console.log("\n=== math is not rewritten ===");
@@ -131,10 +153,7 @@ console.log("\n=== math is not rewritten ===");
   check(formatted.includes("b + c"), "an alignment row keeps its expression");
   check(formatted.includes("e - f"), "the second row keeps its expression");
   // Alignment is the one thing tex-fmt may change here, and it is wanted.
-  check(
-    /a\s*&=\s*b \+ c/.test(formatted),
-    "an alignment row keeps its & structure",
-  );
+  check(/a\s*&=\s*b \+ c/.test(formatted), "an alignment row keeps its & structure");
 }
 
 console.log("\n=== prose is not reflowed ===");

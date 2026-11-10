@@ -316,7 +316,7 @@ fn download(url: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("Cannot read download: {e}"))
 }
 
-fn write_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
+pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
     let parent = path.parent().ok_or("Invalid cache path")?;
     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let temp = parent.join(format!(
@@ -338,7 +338,7 @@ fn write_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
     }
 }
 
-fn digest(data: &[u8]) -> String {
+pub(crate) fn digest(data: &[u8]) -> String {
     Sha256::digest(data)
         .iter()
         .map(|byte| format!("{byte:02x}"))

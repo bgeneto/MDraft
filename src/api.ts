@@ -505,6 +505,32 @@ export const spellcheckSuggest = (language: string, word: string) =>
   invoke<string[]>("spellcheck_suggest", { language, word });
 
 // ---------------------------------------------------------------------------
+// Clipboard
+// ---------------------------------------------------------------------------
+
+/**
+ * Plain-text clipboard, the fallback behind the webview's Clipboard API.
+ *
+ * WebView2 gates `navigator.clipboard.readText()` behind a permission the
+ * application has no UI to request, so the menu's paste path needs a backend
+ * that is not subject to it. Images never travel through here: they arrive as
+ * `ClipboardEvent` data and go to `saveImage`, which is why the backend links
+ * no image decoder.
+ */
+export const clipboardReadText = () => invoke<string>("clipboard_read_text");
+
+/** Write `text`; fails only when the operating system clipboard cannot open. */
+export const clipboardWriteText = (text: string) => invoke<void>("clipboard_write_text", { text });
+
+/**
+ * Bytes of tex-fmt's WebAssembly module, downloaded and verified on first use.
+ *
+ * The module is too large to embed for a formatter most sessions never touch;
+ * the backend caches it after the first Format Document of a `.tex` file.
+ */
+export const texFmtWasm = () => invoke<ArrayBuffer>("tex_fmt_wasm");
+
+// ---------------------------------------------------------------------------
 // Read Aloud's Linux speech service
 // ---------------------------------------------------------------------------
 

@@ -14,7 +14,7 @@ import type { EditorState, TransactionSpec } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import type { Options, Plugin } from "prettier";
 import type { TypstyleConfig } from "@typstyle/typstyle-wasm-bundler/typstyle_wasm_bg.js";
-import type { DocumentLanguage } from "../api";
+import { texFmtWasm, type DocumentLanguage } from "../api.ts";
 import { analyzeMath } from "../math-delimiters.ts";
 
 export type FormatOutcome = "changed" | "unchanged" | "stale";
@@ -49,22 +49,55 @@ let typstyleModule: Promise<TypstyleModule> | null = null;
 /**
  * tex-fmt, the LaTeX formatter.
  *
- * A 537 KiB gzip WebAssembly module, measured before it was taken. It is loaded
- * lazily for the same reason Typstyle is: a session that never formats a `.tex`
- * file should not pay for the module at start-up.
+ * Its npm entry imports the 1.66 MiB `.wasm` module, so importing the package
+ * would embed the formatter in every executable — including the sessions that
+ * never format a `.tex` file. The wasm-bindgen glue is 8 KiB and exposes
+ * `__wbg_set_wasm`, so the bytes are fetched from the backend on the first
+ * Format Document and instantiated here: the same shape as Typstyle, with the
+ * module arriving over IPC instead of from the bundle.
  *
- * Its npm build uses the `bundler` wasm target, which initialises on import, so
- * there is no `init()` step — unlike Typstyle, which needs its exports wired into
- * the glue before `__wbindgen_start`.
+ * The glue import is aliased in `vite.config.ts`; the package's exports map
+ * hides that subpath and the entry point would pull the wasm back in.
  */
+type TexFmtGlue = {
+  main(text: string, config: string): { output?: string; logs?: string } | null;
+  __wbg_set_wasm(exports: WebAssembly.Exports): void;
+};
+
 type TexFmtModule = {
   main(text: string, config: string): { output?: string; logs?: string } | null;
   version(): string;
 };
 let texFmtModule: Promise<TexFmtModule> | null = null;
+let texFmtLoaderOverride: (() => Promise<TexFmtModule>) | null = null;
+
+/**
+ * Test seam for the app-free LaTeX formatting layer.
+ *
+ * `scripts/latex-format-unit.mjs` runs the formatter under Node, where there is
+ * no Tauri IPC to fetch the module from; it supplies a loader that reads the
+ * glue and the bytes from `node_modules` and instantiates them itself. The
+ * shipped application never calls this.
+ */
+export function setTexFmtLoaderForTests(loader: (() => Promise<TexFmtModule>) | null): void {
+  texFmtLoaderOverride = loader;
+  texFmtModule = null;
+}
 
 function loadTexFmt(): Promise<TexFmtModule> {
-  texFmtModule ??= import("tex-fmt") as unknown as Promise<TexFmtModule>;
+  texFmtModule ??= (async () => {
+    if (texFmtLoaderOverride) return texFmtLoaderOverride();
+    // @ts-expect-error the subpath is not in the package's exports map; Vite aliases it.
+    const glue = (await import("tex-fmt/tex_fmt_bg.js")) as unknown as TexFmtGlue;
+    const bytes = await texFmtWasm();
+    const { instance } = await WebAssembly.instantiate(bytes, {
+      "./tex_fmt_bg.js": glue,
+    } as unknown as WebAssembly.Imports);
+    const exports = instance.exports as WebAssembly.Exports & { __wbindgen_start?: () => void };
+    glue.__wbg_set_wasm(exports);
+    exports.__wbindgen_start?.();
+    return { main: glue.main, version: () => "v0.5.7" };
+  })();
   return texFmtModule;
 }
 

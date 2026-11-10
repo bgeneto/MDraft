@@ -152,7 +152,9 @@ neither controls nor monitors that traffic.
 
 The [LaTeX engine](docs/latex.md) downloads its files only after explicit
 enablement and then retrieves missing TeX packages and fonts on demand. The
-document and bibliography contents stay local.
+document and bibliography contents stay local. The first time you format a
+`.tex` document, MDraft downloads the LaTeX formatter (about 1.7 MB, verified
+against its pinned checksum and cached); later formats work offline.
 
 ## Learn more
 
