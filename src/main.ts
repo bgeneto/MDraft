@@ -852,6 +852,9 @@ function menuStateSnapshot(): api.MenuState {
     typstView: settings.typstView,
     typstAvailable: typstCache?.found !== false,
     pdfPreviewAvailable,
+    pdfEngine:
+      doc?.language === "latex" && pdfPreviewAvailable ? (latexPreview?.result.engine ?? "") : "",
+    latexAutoCompile: settings.latexAutoCompile !== false,
   };
 }
 
@@ -1152,6 +1155,10 @@ function applySettingsPatch(
   // who turns it off does not have to reopen the document.
   if (patch.completion !== undefined) editor.setCompletion(settings.completion !== false);
 
+  if (patch.latexAutoCompile !== undefined) {
+    syncLatexAutoToggle();
+    syncMenuState(false);
+  }
   if (patch.latexAutoCompile !== undefined && doc.language === "latex") {
     if (patch.latexAutoCompile && previewStale) scheduleRender(true);
     else if (!patch.latexAutoCompile) {
@@ -1666,6 +1673,34 @@ function cancelLatexBuild(): void {
   setLatexStatus("Out of date · Compilation cancelled; an outstanding package request may finish.");
 }
 
+/**
+ * Turn automatic LaTeX compilation on or off.
+ *
+ * One setting with three visible controls — Preferences › LaTeX, View › Compile
+ * LaTeX Automatically, and the toggle in the preview's status bar — so all
+ * three are refreshed from here. `applySettingsPatch` owns what the change does
+ * to a build in progress.
+ */
+function setLatexAutoCompile(on: boolean): void {
+  if ((settings.latexAutoCompile !== false) === on) return;
+  applySettingsPatch({ latexAutoCompile: on });
+  preferences?.refresh();
+  toast(
+    on
+      ? "LaTeX compiles automatically after edits."
+      : "LaTeX compiles only when you select Compile.",
+    3200,
+  );
+}
+
+/** Reflect the setting in the preview's own toggle, wherever it changed. */
+function syncLatexAutoToggle(): void {
+  const toggle = previewPane.querySelector<HTMLInputElement>(
+    ":scope > .latex-build-status .latex-auto input",
+  );
+  if (toggle) toggle.checked = settings.latexAutoCompile !== false;
+}
+
 function setLatexStatus(message: string): void {
   let status = previewPane.querySelector<HTMLElement>(":scope > .latex-build-status");
   if (!status) {
@@ -1683,11 +1718,22 @@ function setLatexStatus(message: string): void {
     cancel.className = "latex-cancel";
     cancel.textContent = "Cancel";
     cancel.addEventListener("click", cancelLatexBuild);
-    status.append(label, compile, cancel);
+    // The switch sits beside Compile because that is where a reader decides
+    // whether to press it; it is the same setting as the View menu item.
+    const auto = document.createElement("label");
+    auto.className = "latex-auto";
+    auto.title = "Recompile the preview after each pause in typing";
+    const toggle = document.createElement("input");
+    toggle.type = "checkbox";
+    toggle.setAttribute("role", "switch");
+    toggle.addEventListener("change", () => setLatexAutoCompile(toggle.checked));
+    auto.append(toggle, document.createTextNode("Auto-compile"));
+    status.append(label, compile, cancel, auto);
     previewPane.prepend(status);
   }
   status.querySelector<HTMLElement>(".latex-build-message")!.textContent = message;
   status.querySelector<HTMLButtonElement>(".latex-cancel")!.hidden = !latexInFlight;
+  syncLatexAutoToggle();
 }
 
 function showLatexWarnings(result: LatexResult, root: { path: string; directory: string }): void {
@@ -5697,6 +5743,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
     persist();
     announceIfBarHidden("Typewriter mode", settings.typewriterMode);
   },
+  "view.latexAutoCompile": () => setLatexAutoCompile(settings.latexAutoCompile === false),
   "view.syncScroll": () => {
     settings.syncScroll = !settings.syncScroll;
     applyLayout();

@@ -2358,6 +2358,20 @@ body {
   cursor: pointer;
 }
 
+.latex-auto {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.latex-auto input {
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 .latex-warnings summary {
   cursor: pointer;
 }
