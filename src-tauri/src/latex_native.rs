@@ -11,7 +11,7 @@ mod discovery;
 pub mod log;
 mod runner;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -27,6 +27,8 @@ pub use discovery::Candidate;
 use discovery::{ENGINES, TOOLS, distribution_name, engine_path, has_engine, known_engine};
 use log::{Bibliography, Severity};
 
+use crate::cancel_registry::{CancelRegistry, Ticket};
+
 const MAX_FILE: usize = 32 * 1024 * 1024;
 const MAX_PROJECT: usize = 64 * 1024 * 1024;
 const MAX_FILES: usize = 256;
@@ -34,25 +36,44 @@ const COMPILE_TIMEOUT: Duration = Duration::from_secs(300);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The jobs a Cancel can reach, keyed by the caller's opaque token.
-static JOBS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
+///
+/// The frontend names the job before it invokes the compile, and an edit or
+/// Cancel can send `latex_native_cancel` before `compile` has registered it.
+/// The registry keeps such a Cancel as a tombstone, so the job starts
+/// cancelled instead of running a whole process tree nobody wants.
+static JOBS: OnceLock<Mutex<CancelRegistry<Arc<AtomicBool>>>> = OnceLock::new();
 
-fn jobs() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
-    JOBS.get_or_init(|| Mutex::new(HashMap::new()))
+fn jobs() -> &'static Mutex<CancelRegistry<Arc<AtomicBool>>> {
+    JOBS.get_or_init(|| Mutex::new(CancelRegistry::default()))
 }
 
-fn register(job: &str) -> Result<Arc<AtomicBool>, String> {
+/// One registered job; dropping it forgets the job on every return path.
+struct Registered {
+    job: String,
+    ticket: Ticket,
+}
+
+impl Drop for Registered {
+    fn drop(&mut self) {
+        if let Ok(mut registry) = jobs().lock() {
+            registry.finish(&self.job, self.ticket);
+        }
+    }
+}
+
+fn register(job: &str) -> Result<(Arc<AtomicBool>, Registered), String> {
     let token = Arc::new(AtomicBool::new(false));
-    jobs()
+    let (ticket, _) = jobs()
         .lock()
         .map_err(|_| "The LaTeX job registry is unavailable.")?
-        .insert(job.to_string(), token.clone());
-    Ok(token)
-}
-
-fn finish(job: &str) {
-    if let Ok(mut registry) = jobs().lock() {
-        registry.remove(job);
-    }
+        .register(job, token.clone());
+    Ok((
+        token,
+        Registered {
+            job: job.to_string(),
+            ticket,
+        },
+    ))
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -274,10 +295,8 @@ pub fn latex_native_set_engine(app: AppHandle, engine: String) -> Result<EngineS
 
 #[tauri::command]
 pub fn latex_native_cancel(job: String) {
-    if let Ok(registry) = jobs().lock()
-        && let Some(token) = registry.get(&job)
-    {
-        token.store(true, Ordering::SeqCst);
+    if let Ok(mut registry) = jobs().lock() {
+        registry.cancel(&job);
     }
 }
 
@@ -475,31 +494,13 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
         );
     }
     let name = distribution_name(&root);
-    let token = register(&request.job)?;
+    let (token, registration) = register(&request.job)?;
 
-    let job = match runner::job_dir(app, &request.job) {
-        Ok(job) => job,
-        Err(error) => {
-            finish(&request.job);
-            return Err(error);
-        }
-    };
+    let job = runner::job_dir(app, &request.job)?;
     let work = job.path.join("project");
     let env = base_environment(&bin, &work, &name);
-    let staged = match stage(&work, &request) {
-        Ok(staged) => staged,
-        Err(error) => {
-            finish(&request.job);
-            return Err(error);
-        }
-    };
-    let engine = match select_engine(&settings.latex_native_engine, &bin, &work, &staged.main) {
-        Ok(engine) => engine,
-        Err(error) => {
-            finish(&request.job);
-            return Err(error);
-        }
-    };
+    let staged = stage(&work, &request)?;
+    let engine = select_engine(&settings.latex_native_engine, &bin, &work, &staged.main)?;
     let main_name = staged
         .main
         .file_name()
@@ -527,10 +528,16 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
         if passes >= 3 {
             break;
         }
+        // A Cancel that arrived before registration, or between passes, stops
+        // here rather than after one more engine process.
+        if token.load(Ordering::SeqCst) {
+            cancelled = true;
+            break;
+        }
         passes += 1;
         emit(app, &request.job, "compiling", Some(&engine));
         let args = engine_arguments(&engine, &main_argument);
-        outcome = match runner::run(
+        outcome = runner::run(
             &runner::RunSpec {
                 program: engine_path(&bin, &engine),
                 args,
@@ -539,13 +546,7 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
                 timeout: COMPILE_TIMEOUT,
             },
             &token,
-        ) {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                finish(&request.job);
-                return Err(error);
-            }
-        };
+        )?;
         if token.load(Ordering::SeqCst) || outcome.cancelled {
             cancelled = true;
         }
@@ -596,7 +597,7 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
         }
         force_rerun = false;
     }
-    finish(&request.job);
+    drop(registration);
 
     let pdf = find_output(&work, &stem, "pdf");
     let parsed = log::parse(&last_log, &staged.sources);
