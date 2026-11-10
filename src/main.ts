@@ -2764,14 +2764,21 @@ function typstDroppedNote(rendered: api.RenderedTypst): HTMLElement | null {
   return note;
 }
 
-/** Delegate an HTML document to the sandboxed guest. */
-async function renderHtmlPreview(source: string, token: number): Promise<void> {
-  if (!htmlPreview) return;
+/**
+ * Delegate an HTML document to the sandboxed guest.
+ *
+ * True only when the frame built for `source` was promoted. A failed build or
+ * load, a timeout, a newer render and Source-only mode all leave the preview
+ * stale, so a later switch to Split rebuilds it instead of trusting an older
+ * frame — or no frame at all.
+ */
+async function renderHtmlPreview(source: string, token: number): Promise<boolean> {
+  if (!htmlPreview) return false;
   // In Source-only mode there is nothing to draw, and rebuilding the guest
   // would only restart its scripts.
-  if (settings.viewMode === "source") return;
+  if (settings.viewMode === "source") return false;
   htmlRestoreLine = htmlPreview.layout()?.line ?? editor.topVisibleLine();
-  await htmlPreview.render(
+  const outcome = await htmlPreview.render(
     source,
     doc.directory ?? null,
     doc.name ?? "index.html",
@@ -2780,7 +2787,7 @@ async function renderHtmlPreview(source: string, token: number): Promise<void> {
     // folder is the one extra folder the reader allowed.
     doc.path ? [customImageFolder()].filter((dir): dir is string => dir !== null) : [],
   );
-  if (token !== renderToken) return;
+  return outcome === "current" && token === renderToken;
 }
 
 async function doRender(force = false): Promise<void> {
@@ -2811,8 +2818,8 @@ async function doRender(force = false): Promise<void> {
   clearPreviewWords();
 
   if (doc.language === "html") {
-    await renderHtmlPreview(source, token);
-    if (token !== renderToken) return;
+    const current = await renderHtmlPreview(source, token);
+    if (token !== renderToken || !current) return;
     // The guest stamps its word nodes while building the copy, so Split can use
     // the same iframe without a second render.
     previewStale = false;
