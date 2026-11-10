@@ -191,9 +191,7 @@ pub async fn ai_suggest_filename(
     // Registering the same cancellation map as `ai_complete` is what lets the
     // frontend stop waiting without leaving a request running in the background.
     let (sender, mut receiver) = watch::channel(false);
-    if let Ok(mut running) = state.ai.running.lock() {
-        running.insert(id.clone(), sender);
-    }
+    let registration = state.ai.register(&id, sender);
 
     // A reader may replace the naming prompt too. A file that no longer parses
     // must not block a save: the built-in prompt is used and the error surfaces
@@ -210,9 +208,7 @@ pub async fn ai_suggest_filename(
     )
     .await;
 
-    if let Ok(mut running) = state.ai.running.lock() {
-        running.remove(&id);
-    }
+    drop(registration);
 
     match result {
         Err(_) => Err("The assistant did not answer in time.".to_string()),

@@ -9183,6 +9183,7 @@ async function boot(): Promise<void> {
         { effects: false },
       ),
     estimateTokens: (text) => api.countTokens(text),
+    track: (positions) => editor.trackPositions(positions),
   });
 
   installChrome();

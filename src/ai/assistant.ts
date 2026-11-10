@@ -121,6 +121,15 @@ export interface AssistantHost {
    * bar. The assistant never implements a second counter.
    */
   estimateTokens(text: string): Promise<number>;
+  /**
+   * Follow captured source positions through later edits of the document on
+   * screen. A position becomes null when its surroundings are deleted or the
+   * document is replaced.
+   */
+  track(positions: readonly number[]): {
+    current(): readonly (number | null)[];
+    dispose(): void;
+  };
 }
 
 export interface AssistantHandle {
@@ -1234,13 +1243,44 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
   // Panel
   // -------------------------------------------------------------------------
 
+  /**
+   * The insertion points of the current capture — the caret (or selection end)
+   * for Insert and the paragraph end for Insert below — mapped through every
+   * edit since. Replace keeps its exact-text check; these keep Insert and Insert
+   * below usable after an edit elsewhere without guessing an offset.
+   */
+  let anchors: ReturnType<AssistantHost["track"]> | null = null;
+  function trackAnchors(captured: Capture): void {
+    anchors?.dispose();
+    anchors = host.track([
+      captured.hasSelection ? captured.selectionTo : captured.caret,
+      captured.paragraphTo,
+    ]);
+  }
+  /** Where an insertion still belongs, or null when its place was deleted. */
+  function anchorAt(index: 0 | 1): number | null {
+    return anchors?.current()[index] ?? null;
+  }
+  /** Why the stale answer cannot be placed: insertion only while its anchor lives. */
+  function staleReason(): string {
+    return anchorAt(1) === null
+      ? "The document changed while the answer was arriving, and its paragraph is gone — copy it or open it in a new tab."
+      : "The document changed while the answer was arriving — insert it below or into a new tab.";
+  }
+
   function openPanel(spec: AiActionSpec): void {
-    // A new action invalidates any answer still arriving for the previous one.
+    // A new action invalidates any answer still arriving for the previous one,
+    // and abandons that request: nulling its id alone would drop the only
+    // handle that can stop it, leaving the provider working for nobody. A
+    // request merely covered by the palette or History is not abandoned until
+    // this point, so it still completes into history.
+    if (state === "running" && requestId) void api.aiCancel(requestId).catch(() => undefined);
     requestId = null;
     entryId = null;
     requestContext = null;
     action = spec;
     capture = host.capture();
+    trackAnchors(capture);
     const targetFrom = spec.apply === "replace" ? capture.passageFrom : capture.selectionFrom;
     const targetTo = spec.apply === "replace" ? capture.passageTo : capture.selectionTo;
     target = {
@@ -1422,7 +1462,9 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
   function setParameter(value: string): void {
     const changed = value !== parameterValue;
     parameterValue = value;
-    entryId = null;
+    // Choosing the value already selected is not a new request: keeping the
+    // entry lets Regenerate replace its history row instead of adding one.
+    if (changed) entryId = null;
     if (changed && state === "done") {
       resetAnswer();
       renderPanel();
@@ -1684,7 +1726,9 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     if (state === "error") {
       setStatus(errorMessage, true);
       if (answerText.trim()) {
-        footerActions.appendChild(actionButton("Copy", false, () => void copyAnswer()));
+        footerActions.appendChild(
+          actionButton("Copy", false, () => void copyAnswer(), !answerText.trim()),
+        );
       }
       footerActions.appendChild(actionButton("Retry", true, () => startRequest("retry")));
       footerActions.appendChild(actionButton("Open AI Settings", false, () => host.openSettings()));
@@ -1702,14 +1746,12 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
 
     const readOnly = !host.canWrite();
     const isStale = stale();
-    const blockedReason = readOnly
-      ? "The document is read-only."
-      : isStale
-        ? "The document changed while the answer was arriving — insert it below or into a new tab."
-        : "";
+    const blockedReason = readOnly ? "The document is read-only." : isStale ? staleReason() : "";
 
     if (spec.apply === "answer") {
-      footerActions.appendChild(actionButton("Copy", true, () => void copyAnswer()));
+      footerActions.appendChild(
+        actionButton("Copy", true, () => void copyAnswer(), !answerText.trim()),
+      );
       footerActions.appendChild(
         actionButton(
           "Insert below",
@@ -1729,7 +1771,9 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
         actionButton("Insert", true, () => applyAnswer("insert"), !canApply(), blockedReason),
       );
       footerActions.appendChild(newTabButton());
-      footerActions.appendChild(actionButton("Copy", false, () => void copyAnswer()));
+      footerActions.appendChild(
+        actionButton("Copy", false, () => void copyAnswer(), !answerText.trim()),
+      );
       return;
     }
 
@@ -1744,7 +1788,9 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
         ),
       );
       footerActions.appendChild(newTabButton());
-      footerActions.appendChild(actionButton("Copy", false, () => void copyAnswer()));
+      footerActions.appendChild(
+        actionButton("Copy", false, () => void copyAnswer(), !answerText.trim()),
+      );
       return;
     }
 
@@ -1771,13 +1817,17 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       footerActions.appendChild(newTabButton(true));
       footerActions.appendChild(replace);
       footerActions.appendChild(insertBelow);
-      footerActions.appendChild(actionButton("Copy", false, () => void copyAnswer()));
+      footerActions.appendChild(
+        actionButton("Copy", false, () => void copyAnswer(), !answerText.trim()),
+      );
       return;
     }
     footerActions.appendChild(replace);
     footerActions.appendChild(insertBelow);
     footerActions.appendChild(newTabButton());
-    footerActions.appendChild(actionButton("Copy", false, () => void copyAnswer()));
+    footerActions.appendChild(
+      actionButton("Copy", false, () => void copyAnswer(), !answerText.trim()),
+    );
   }
 
   /** A complete answer exists — not stopped, not empty, not still arriving. */
@@ -1834,10 +1884,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     let plan: ApplyPlan;
     if (kind === "replace") {
       if (stale()) {
-        setStatus(
-          "The document changed while the answer was arriving — insert it below or into a new tab.",
-          true,
-        );
+        setStatus(staleReason(), true);
         return;
       }
       plan = {
@@ -1847,10 +1894,14 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
         text: answerText.trim(),
       };
     } else if (kind === "insert") {
-      const at = Math.min(
-        capture.hasSelection ? capture.selectionTo : capture.caret,
-        current.text.length,
-      );
+      const at = anchorAt(0);
+      if (at === null || at > current.text.length) {
+        setStatus(
+          "The place this answer was meant for was deleted — copy it or open it in a new tab.",
+          true,
+        );
+        return;
+      }
       plan = {
         kind: "insert",
         from: at,
@@ -1858,7 +1909,14 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
         text: joinContinuation(current.text.slice(0, at), answerText),
       };
     } else {
-      const at = Math.min(capture.paragraphTo, current.text.length);
+      const at = anchorAt(1);
+      if (at === null || at > current.text.length) {
+        setStatus(
+          "The paragraph this answer belongs below was deleted — copy it or open it in a new tab.",
+          true,
+        );
+        return;
+      }
       plan = {
         kind: "insert",
         from: at,
@@ -2035,6 +2093,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     entryId = null;
     requestContext = null;
     capture = host.capture();
+    trackAnchors(capture);
     target = {
       sessionId: host.sessionId(),
       revision: host.revision(),
@@ -2053,6 +2112,11 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     closeCombo();
     cancel();
     requestId = null;
+    // The request was cancelled with its id; the panel must not keep claiming
+    // it runs, or the next surface inherits a request it cannot stop.
+    if (state === "running") state = "idle";
+    anchors?.dispose();
+    anchors = null;
     closeHistory();
     paletteOpen = false;
     panelOpen = false;

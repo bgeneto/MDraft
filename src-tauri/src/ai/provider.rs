@@ -491,11 +491,23 @@ pub async fn stream(
     cancel: &mut watch::Receiver<bool>,
     mut on_text: impl FnMut(&str),
 ) -> Result<Outcome, String> {
+    // A Stop that arrived before this request registered has already set the
+    // flag; nothing is sent.
+    if *cancel.borrow() {
+        return Ok(Outcome { stopped: true });
+    }
     let client = build_client(&config.base_url)?;
     let body = request_body(config, system, messages);
-    let mut response = post_chat(&client, config, body, true)
-        .await
-        .map_err(|failure| failure.message(config))?;
+    // The connect timeout does not bound a server that accepts and then never
+    // sends headers, and the retry and error-body reads are awaits of their own.
+    // Stop must win all of them, so the whole exchange races the flag.
+    let mut response = tokio::select! {
+        biased;
+        () = cancelled(cancel) => return Ok(Outcome { stopped: true }),
+        result = post_chat(&client, config, body, true) => {
+            result.map_err(|failure| failure.message(config))?
+        }
+    };
     let mut buffer = String::new();
     let mut finished = false;
     let mut stopped = false;
@@ -539,6 +551,18 @@ pub async fn stream(
     }
 
     Ok(Outcome { stopped })
+}
+
+/// Resolve once the request's flag says stop; never, if its sender is gone.
+async fn cancelled(cancel: &mut watch::Receiver<bool>) {
+    loop {
+        if *cancel.borrow_and_update() {
+            return;
+        }
+        if cancel.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
 }
 
 /// Parse one complete SSE block from `buffer`, keeping the incomplete tail.
@@ -838,6 +862,68 @@ pub async fn list_models(config: &ChatConfig) -> Result<Vec<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stalled_config(port: u16) -> ChatConfig {
+        ChatConfig {
+            provider: Provider::OpenAi,
+            base_url: format!("http://127.0.0.1:{port}/v1"),
+            model: "test".into(),
+            key: None,
+            host: "127.0.0.1".into(),
+            disable_reasoning: false,
+        }
+    }
+
+    #[test]
+    fn stop_wins_while_the_provider_withholds_headers() {
+        // Accept the connection, read the request, and never answer.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut socket, _)) = listener.accept() {
+                let mut buffer = [0u8; 4096];
+                let _ = std::io::Read::read(&mut socket, &mut buffer);
+                std::thread::sleep(Duration::from_secs(30));
+            }
+        });
+        let (sender, mut receiver) = watch::channel(false);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            sender.send_replace(true);
+            // Keep the sender alive past the cancel, as the registry does.
+            std::thread::sleep(Duration::from_secs(5));
+        });
+        let started = std::time::Instant::now();
+        let outcome = tauri::async_runtime::block_on(stream(
+            &stalled_config(port),
+            "system",
+            &[message("user", "hello")],
+            &mut receiver,
+            |_| {},
+        ))
+        .expect("a stopped request is not an error");
+        assert!(outcome.stopped);
+        assert!(started.elapsed() < Duration::from_secs(5), "Stop waited for headers");
+    }
+
+    #[test]
+    fn a_request_cancelled_before_it_starts_sends_nothing() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (sender, mut receiver) = watch::channel(false);
+        sender.send_replace(true);
+        let outcome = tauri::async_runtime::block_on(stream(
+            &stalled_config(port),
+            "system",
+            &[message("user", "hello")],
+            &mut receiver,
+            |_| {},
+        ))
+        .unwrap();
+        assert!(outcome.stopped);
+        assert!(listener.accept().is_err(), "no connection was opened");
+    }
 
     fn message(role: &str, content: &str) -> PromptMessage {
         PromptMessage {

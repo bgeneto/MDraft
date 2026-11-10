@@ -1,5 +1,6 @@
 //! MDraft — a Tauri 2 markdown editor.
 
+mod cancel_registry;
 mod clipboard;
 mod documents;
 mod export;

@@ -22,6 +22,7 @@ use tauri::ipc::Channel;
 use tauri::State;
 use tokio::sync::watch;
 
+use crate::cancel_registry::{CancelRegistry, Ticket};
 use crate::settings::AppState;
 use limits::AiLimits;
 use prompt::{AiAction, AiRequest};
@@ -32,8 +33,56 @@ use provider::{ChatConfig, Provider};
 pub struct AiState {
     /// Keys kept for this session because the OS store refused them.
     pub keys: Mutex<HashMap<String, String>>,
-    /// Cancellation senders for in-flight requests, by request id.
-    pub running: Mutex<HashMap<String, watch::Sender<bool>>>,
+    /// Cancellation senders for in-flight requests, by request id, plus the
+    /// cancels that reached Rust before their request registered.
+    running: Mutex<CancelRegistry<watch::Sender<bool>>>,
+}
+
+impl AiState {
+    /// Register a request's cancellation sender for as long as the guard lives.
+    ///
+    /// Called first in a command, before settings or the prompt file are read:
+    /// that keeps the unregistered window small, and a Cancel that still
+    /// arrives inside it is held by the registry and applied here.
+    pub fn register(&self, id: &str, sender: watch::Sender<bool>) -> Registration<'_> {
+        let ticket = self
+            .running
+            .lock()
+            .ok()
+            .map(|mut running| running.register(id, sender).0);
+        Registration {
+            state: self,
+            id: id.to_string(),
+            ticket,
+        }
+    }
+
+    pub fn cancel(&self, id: &str) {
+        if let Ok(mut running) = self.running.lock() {
+            running.cancel(id);
+        }
+    }
+
+    pub fn cancel_all(&self) {
+        if let Ok(mut running) = self.running.lock() {
+            running.cancel_all();
+        }
+    }
+}
+
+/// A registered request; dropping it forgets the request on every return path.
+pub struct Registration<'a> {
+    state: &'a AiState,
+    id: String,
+    ticket: Option<Ticket>,
+}
+
+impl Drop for Registration<'_> {
+    fn drop(&mut self) {
+        if let (Some(ticket), Ok(mut running)) = (self.ticket, self.state.running.lock()) {
+            running.finish(&self.id, ticket);
+        }
+    }
 }
 
 /// One event on the request channel. `kind` is the tag the panel switches on.
@@ -370,21 +419,15 @@ pub async fn ai_test_reasoning(
 /// provider has gone quiet.
 #[tauri::command]
 pub fn ai_cancel(state: State<'_, AppState>, id: String) {
-    if let Ok(running) = state.ai.running.lock()
-        && let Some(sender) = running.get(&id)
-    {
-        sender.send_replace(true);
-    }
+    // An id that has not registered yet is remembered, not ignored: the
+    // command that starts it may still be on its way.
+    state.ai.cancel(&id);
 }
 
 /// Cancel everything, used while the window is closing.
 #[tauri::command]
 pub fn ai_cancel_all(state: State<'_, AppState>) {
-    if let Ok(running) = state.ai.running.lock() {
-        for sender in running.values() {
-            sender.send_replace(true);
-        }
-    }
+    state.ai.cancel_all();
 }
 
 /// Run one action and stream its answer over `on_event`.
@@ -397,6 +440,8 @@ pub async fn ai_complete(
     request: AiRequest,
     on_event: Channel<AiEvent>,
 ) -> Result<(), String> {
+    let (sender, mut receiver) = watch::channel(false);
+    let registration = state.ai.register(&request.id, sender);
     let settings = state
         .settings
         .lock()
@@ -439,13 +484,6 @@ pub async fn ai_complete(
         context_truncated: prepared.context_truncated,
     });
 
-    let (sender, mut receiver) = watch::channel(false);
-    if let Ok(mut running) = state.ai.running.lock()
-        && let Some(previous) = running.insert(request.id.clone(), sender)
-    {
-        previous.send_replace(true);
-    }
-
     let mut filter = match prepared.action.output_tag() {
         Some(tag) => stream::TagFilter::new(
             tag,
@@ -472,9 +510,7 @@ pub async fn ai_complete(
     )
     .await;
 
-    if let Ok(mut running) = state.ai.running.lock() {
-        running.remove(&request.id);
-    }
+    drop(registration);
 
     match result {
         Ok(outcome) => {
