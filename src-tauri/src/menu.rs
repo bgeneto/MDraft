@@ -39,7 +39,7 @@ pub const OPEN_TAB_PREFIX: &str = "navigate.tab:";
 const OPEN_TABS_SUBMENU_ID: &str = "navigate.openTabs";
 const OPEN_TABS_EMPTY_ID: &str = "navigate.openTabs.empty";
 
-/// The editor palettes offered under View › Code Colors.
+/// The editor palettes offered under View › Code Themes.
 ///
 /// Kept in step with `src/syntax-themes.ts`; the preference resolves unknown or
 /// legacy ids to a concrete palette, so an added palette here is a menu entry and
@@ -1262,13 +1262,15 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             .item(&check("themes.dark", "Dark", None)?)
             .build()?;
 
-    let mut code_colors =
-        SubmenuBuilder::with_id(app, "view.codeColors", "Code Colors");
+    // The id keeps its historical `view.codeColors` spelling: it is a routing
+    // address for the submenu, not a label the reader sees.
+    let mut code_themes =
+        SubmenuBuilder::with_id(app, "view.codeColors", "Code Themes");
     for (id, label) in SYNTAX_THEMES {
         let menu_id = format!("view.syntax.{id}");
-        code_colors = code_colors.item(&check(&menu_id, label, None)?);
+        code_themes = code_themes.item(&check(&menu_id, label, None)?);
     }
-    let code_colors = code_colors.build()?;
+    let code_themes = code_themes.build()?;
 
     let blocks = SubmenuBuilder::with_id(app, "view.blocks", "Blocks and Sections")
         .item(&item("view.foldCurrent", "Collapse Current", None)?)
@@ -1285,8 +1287,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         )?)
         .item(&check("view.split", "Split View", None)?)
         .item(&check("view.preview", "Preview Only", None)?)
-        .item(&item("view.latexCompile", "Compile LaTeX", Some("CmdOrCtrl+Shift+Enter"))?)
-        .item(&check("view.latexAutoCompile", "Compile LaTeX Automatically", None)?)
         .separator()
         .item(&typst_preview)
         .separator()
@@ -1303,7 +1303,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .separator()
         .item(&editor_text_size)
         .item(&interface_theme)
-        .item(&code_colors)
+        .item(&code_themes)
         .item(&item("view.typography", "Fonts and Reading…", None)?)
         .item(&blocks)
         .separator()
@@ -1348,6 +1348,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             "Check or Install LaTeX…",
             None,
         )?)
+        // The compile pair belongs beside the LaTeX toolchain row: every one of
+        // these is LaTeX-only, and the install row says which engine will run
+        // the compile the reader starts here.
+        .item(&item("view.latexCompile", "Compile LaTeX", Some("CmdOrCtrl+Shift+Enter"))?)
+        .item(&check("view.latexAutoCompile", "Compile LaTeX Automatically", None)?)
         .separator()
         .item(&check("tools.ai", "AI Assistant", None)?);
     let tools = tools.build()?;

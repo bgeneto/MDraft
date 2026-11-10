@@ -1676,7 +1676,7 @@ function cancelLatexBuild(): void {
 /**
  * Turn automatic LaTeX compilation on or off.
  *
- * One setting with three visible controls — Preferences › LaTeX, View › Compile
+ * One setting with three visible controls — Preferences › LaTeX, Tools › Compile
  * LaTeX Automatically, and the toggle in the preview's status bar — so all
  * three are refreshed from here. `applySettingsPatch` owns what the change does
  * to a build in progress.
@@ -5604,7 +5604,7 @@ async function pastePlain(): Promise<void> {
   }, 2000);
 }
 
-/** Apply one of the editor palettes from View › Code Colors. */
+/** Apply one of the editor palettes from View › Code Themes. */
 function setSyntaxTheme(id: string): void {
   applySettingsPatch({ syntaxTheme: id });
 }
