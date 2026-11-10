@@ -1,6 +1,8 @@
 import { defineConfig } from "vite";
 // @ts-expect-error type error without @types/node package
 import process from "node:process";
+// @ts-expect-error type error without @types/node package
+import { fileURLToPath } from "node:url";
 const host = process.env.TAURI_DEV_HOST;
 
 // npm sets npm_package_version for scripts, so `npm run build` and
@@ -35,6 +37,20 @@ export default defineConfig(() => ({
   },
 
   plugins: [katexWoff2Only()],
+
+  resolve: {
+    alias: [
+      {
+        // `tex-fmt`'s exports map hides its wasm-bindgen glue, and its entry
+        // point imports the 1.66 MiB `.wasm` module. The frontend needs only the
+        // 8 KiB glue; the bytes come from `tex_fmt_wasm` on first use.
+        find: /^tex-fmt\/tex_fmt_bg\.js$/,
+        replacement: fileURLToPath(
+          new URL("./node_modules/tex-fmt/tex_fmt_bg.js", import.meta.url),
+        ),
+      },
+    ],
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

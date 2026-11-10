@@ -159,9 +159,14 @@ src-tauri/src/
   documents.rs       file IO, path existence, startup file
   recovery.rs        the crash-recovery journal, atomic per-entry files (+ tests)
   images.rs          image import: sniffing, sanitiser, dedup, download
+  clipboard.rs       plain-text clipboard: one arboard handle, read/write commands
+  tex_fmt.rs         tex-fmt's wasm, downloaded and hash-verified on first format
   tokens.rs          approximate token count for the status bar and AI context
   spellcheck.rs      OS spell checker: Windows ISpellChecker, Linux hunspell, macOS NSSpellChecker
-  print.rs           hidden print surface, WebView2/WebKitGTK printing, PDF verification
+  print.rs           hidden print surface, WebView2/WebKitGTK printing, PDF verification,
+                     one temp folder per viewer handoff
+  cancel_registry.rs cancel-by-id for AI requests and native LaTeX jobs, including
+                     a Cancel that arrives before its job registers (+ tests)
   menu.rs            native menu construction, Open Recent, event routing, menu probes
 scripts/             build helpers and CDP test harnesses — every one is in
                      "Repository scripts", and a new one belongs there too

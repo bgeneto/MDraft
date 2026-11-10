@@ -52,7 +52,11 @@ Two rules that are not negotiable, both documented in the README:
    contents. An installed TeX distribution, when the reader selects one, is a
    separate external program: it runs with the reader's permissions and may use
    the network to install its own packages. MDraft does not control or monitor
-   that traffic; shell escape and project executables remain disabled.
+   that traffic; shell escape and project executables remain disabled. The LaTeX
+   formatter is the same kind of exception at a smaller scale: the first Format
+   Document on a `.tex` file downloads the pinned tex-fmt WebAssembly module
+   (about 1.7 MB, SHA-256 verified, cached under the app data directory), and
+   every later format runs offline.
 2. **No dead UI.** If a Typora option is not implemented, the Preferences panel
    shows a note explaining that, never a control that does nothing.
 
@@ -365,9 +369,9 @@ routing, status bar, pane sync), `sessions.ts`, `editor.ts`, `markdown.ts`,
 `html-preview.ts`, `asciidoc-preview.ts`, `typst-*.ts`, `latex*.ts`,
 `preferences.ts`, `api.ts`, `styles.css`, plus the `ai/`, `paste/` and `format/`
 directories. `src-tauri/src/` is the backend: `lib.rs` (builder, plugins, command
-table), `documents.rs`, `settings.rs`, `menu.rs`, `images.rs`, `print.rs`,
-`recovery.rs`, `spellcheck.rs`, `html_preview.rs`, `speech.rs`, and the `ai/`
-directory.
+table), `documents.rs`, `settings.rs`, `menu.rs`, `images.rs`, `clipboard.rs`,
+`print.rs`, `recovery.rs`, `tex_fmt.rs`, `spellcheck.rs`, `html_preview.rs`,
+`speech.rs`, and the `ai/` directory.
 
 Anything under `src/` or `src-tauri/src/` that you cannot place from the map is
 probably in `main.ts`, which is the largest file and holds the shell.

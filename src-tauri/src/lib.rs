@@ -1,5 +1,6 @@
 //! MDraft — a Tauri 2 markdown editor.
 
+mod clipboard;
 mod documents;
 mod export;
 mod fonts;
@@ -17,6 +18,7 @@ mod recovery;
 mod settings;
 mod speech;
 mod spellcheck;
+mod tex_fmt;
 mod tokens;
 mod typst;
 
@@ -66,6 +68,7 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         .manage(html_preview::PreviewStore::default())
+        .manage(clipboard::ClipboardStore::new())
         .manage(fonts::FontCatalog::default())
         .manage(launch::LaunchState::default())
         .manage(speech::SpeechState::default())
@@ -83,7 +86,6 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(
             launch::on_second_instance,
         ))
-        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(
@@ -166,6 +168,9 @@ pub fn run() {
             recovery::remove_recovery,
             tokens::count_tokens,
             fonts::system_fonts,
+            clipboard::clipboard_read_text,
+            clipboard::clipboard_write_text,
+            tex_fmt::tex_fmt_wasm,
             speech::speech_status,
             speech::speech_speak,
             speech::speech_stop,
@@ -203,6 +208,12 @@ pub fn run() {
         .expect("error while building the tauri application");
 
     app.run(|app_handle, event| {
+        // The platform clipboard handle must be released while the process is
+        // still alive; on X11/Wayland it is the owner of the data.
+        if let tauri::RunEvent::Exit = event {
+            app_handle.state::<clipboard::ClipboardStore>().release();
+        }
+
         // macOS/Linux desktop environments deliver "open this file" through the
         // platform event loop rather than argv.
         #[cfg(any(target_os = "macos", target_os = "ios"))]

@@ -235,6 +235,14 @@ with `TEMP` and `TMP` pointing at a directory inside the low-labelled workspace
 (`$env:TEMP = "$PWD\\.tmp-test"`), then delete it. This is a property of the test
 host, not of the code under test.
 
+The same denial also stops the *build* of the test binary before a single test
+runs: `cl : Command line error D8050 : cannot execute '...c1.dll': failed to get
+command line into debug records`, raised while compiling `ring`'s C code. It
+looks like an MSVC 14.51 bug and is not one — `cl.exe` cannot write its `/Z7`
+debug records to the denied temp directory. With `TEMP`/`TMP` inside the
+workspace the identical command compiles with debug info; do not set
+`CARGO_PROFILE_DEV_DEBUG=0` to work around it, because that hides the cause.
+
 **You are about to reintroduce AppContainer for the installed TeX engine**
 The installed-TeX design no longer uses AppContainer, lowbox tokens, profile
 registration, distribution ACL grants or a network probe. The reader approved
@@ -257,3 +265,15 @@ policy is `danger-full-access`, which does not materialize that grant. Do not ru
 `icacls`, change an owner or widen a permission for this message; get the session
 policy changed, and if the failure survives that, report it as a harness bug
 rather than a repository one.
+
+**`smoke` fails `the choice reaches the settings file`, `p0-lifecycle` fails `newer typing remains in recovery`, `menu` fails `Code Colors writes the palette to settings`, and the LaTeX suites print `0/0 checks` — all in the same `npm test` run**
+None of these is a regression. `TEMP`/`TMP` had been pointed at
+`src-tauri/target/test-tmp` to get `cargo test` past the `T:\Temp` access
+problem above, and the same shell then ran `npm test`. The harness stages the
+binary under `%TEMP%`, so it staged it **inside the workspace**, and a binary
+launched from there cannot write `%APPDATA%`: every check that reads back the
+settings file or the recovery journal fails, and the LaTeX suites skip because
+their engine switch never reaches `settings.json`. The harness says so in its
+header — `staged … (the sandbox cannot reach %APPDATA% from inside the
+workspace)` — which is the line to read first. Set the workspace `TEMP` only on
+the `cargo test` command itself, never for `npm test`.
