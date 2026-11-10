@@ -384,6 +384,16 @@ const SUITES = [
     doc: "samples/feature-tour.md",
   },
   {
+    // Gated IPC in the page: duplicate opens, image and clipboard paste owners,
+    // Auto Save during a close dialog (one 20 s interval) and a failed HTML
+    // render. Fixtures live in the suite's own temp folder.
+    id: "ownership",
+    title: "Asynchronous operation ownership",
+    kind: "cdp",
+    script: "ownership-test.mjs",
+    doc: "samples/feature-tour.md",
+  },
+  {
     id: "typewriter",
     title: "Typewriter typing and reset",
     kind: "cdp",
@@ -661,6 +671,16 @@ const SUITES = [
     doc: "samples/feature-tour.md",
     extras: ["README.md", "docs/guide.md"],
     phases: ["phase1", "phase2", "phase3"],
+  },
+  {
+    // Phase 1 leaves two journal entries and a remembered set whose first file
+    // can no longer be read; phase 2 is the restart that restores both.
+    id: "recovery-restore",
+    title: "Crash recovery across a restart",
+    kind: "restart",
+    script: "recovery-restore-test.mjs",
+    doc: "samples/feature-tour.md",
+    phases: ["phase1", "phase2"],
   },
   {
     // The list has to survive the close flush, which saves the whole settings
