@@ -215,6 +215,77 @@ if (pages === 0) {
   process.exit(failed === 0 ? 0 : 1);
 }
 
+console.log("\n=== the export row names its engine; Auto-compile has visible switches ===");
+{
+  const invoke = (command) =>
+    page.evaluate(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)})`);
+  let pdfRow = null;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    pdfRow = (await invoke("menu_items")).find((item) => item.id === "export.pdf");
+    if (pdfRow?.text?.includes("compiled by")) break;
+    await sleep(250);
+  }
+  check(
+    pdfRow?.text === "PDF… (compiled by LuaLaTeX)",
+    "Export › PDF names the engine that compiled the preview",
+    pdfRow?.text,
+  );
+
+  const toggleState = () =>
+    page.evaluate(`(() => {
+      const input = document.querySelector("#preview-pane > .latex-build-status .latex-auto input");
+      return input ? String(input.checked) : "missing";
+    })()`);
+  const storedAuto = async (want) => {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const settings = await invoke("get_settings");
+      if (settings.latexAutoCompile === want) return true;
+      await sleep(150);
+    }
+    return false;
+  };
+  const menuCheck = async () =>
+    (await invoke("menu_state")).find((item) => item.id === "view.latexAutoCompile");
+  const prefsAuto = () =>
+    page.evaluate(`
+      (async () => {
+        document.getElementById("btn-prefs")?.click();
+        await new Promise(r => setTimeout(r, 300));
+        [...document.querySelectorAll(".prefs-section")]
+          .find(n => n.textContent.trim() === "LaTeX")?.click();
+        await new Promise(r => setTimeout(r, 300));
+        const row = [...document.querySelectorAll(".prefs-row")]
+          .find(n => /Auto-compile/.test(n.querySelector(".prefs-label")?.textContent ?? ""));
+        const value = String(row?.querySelector("input[type=checkbox]")?.checked ?? "missing");
+        document.getElementById("btn-prefs")?.click();
+        await new Promise(r => setTimeout(r, 200));
+        return value;
+      })()
+    `);
+
+  check((await toggleState()) === "true", "the preview offers an Auto-compile switch, on");
+  const onCheck = await menuCheck();
+  check(
+    onCheck?.checked === true && onCheck?.enabled === true,
+    "View › Compile LaTeX Automatically is checked and enabled for a .tex document",
+    JSON.stringify(onCheck),
+  );
+
+  await page.evaluate(
+    `document.querySelector("#preview-pane > .latex-build-status .latex-auto input").click()`,
+  );
+  check(await storedAuto(false), "the preview switch turns Auto-compile off in settings");
+  await sleep(300);
+  check((await menuCheck())?.checked === false, "the View menu check follows the preview switch");
+  check((await prefsAuto()) === "false", "Preferences › LaTeX follows the preview switch");
+
+  await emitMenu(page, "view.latexAutoCompile");
+  check(await storedAuto(true), "the View menu item turns Auto-compile back on");
+  await sleep(300);
+  check((await toggleState()) === "true", "the preview switch follows the View menu");
+  check((await prefsAuto()) === "true", "Preferences › LaTeX follows the View menu");
+}
+
 console.log("\n=== zoom reaches the compiled PDF ===");
 
 const geometry = () =>

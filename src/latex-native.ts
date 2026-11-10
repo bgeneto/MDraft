@@ -98,6 +98,22 @@ export function nativeFailureMessage(result: LatexNativeResult): string {
  * completion state: the runner's late output belongs to a revision the reader
  * has already left.
  */
+/**
+ * The name a reader knows an engine by.
+ *
+ * The native runner reports the executable it ran (`pdflatex`); every label that
+ * says what produced a PDF — the export row, the save dialog, the status line —
+ * shows this form instead. An unknown executable keeps its own name rather than
+ * being passed off as a known engine.
+ */
+export function latexEngineName(engine: string | undefined | null): string {
+  const key = (engine ?? "").trim().toLowerCase();
+  if (key === "lualatex") return "LuaLaTeX";
+  if (key === "pdflatex") return "pdfLaTeX";
+  if (key === "xelatex") return "XeLaTeX";
+  return (engine ?? "").trim() || "LaTeX";
+}
+
 export function nativeToLatex(
   result: LatexNativeResult,
   snapshot: LatexProjectSnapshot,
@@ -122,7 +138,7 @@ export function nativeToLatex(
     log: result.log,
     warnings,
     warningsTruncated: result.warningsTruncated,
-    engine: result.engine,
+    engine: latexEngineName(result.engine),
     elapsedMs: result.elapsedMs,
   };
 }

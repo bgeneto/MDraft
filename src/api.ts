@@ -837,8 +837,7 @@ export interface LatexNativeProgress {
 
 export const latexEngineStatus = () => invoke<LatexEngineStatus>("latex_engine_status");
 /** Metadata-only discovery; it launches nothing. */
-export const latexNativeDiscover = () =>
-  invoke<LatexNativeCandidate[]>("latex_native_discover");
+export const latexNativeDiscover = () => invoke<LatexNativeCandidate[]>("latex_native_discover");
 /**
  * Probe an installation and commit the directory.
  *
@@ -855,8 +854,7 @@ export const latexNativeCompile = (request: {
   mainFile: string;
   files: Array<{ path: string; data: string }>;
 }) => invoke<LatexNativeResult>("latex_native_compile", { request });
-export const latexNativeCancel = (job: string) =>
-  invoke<void>("latex_native_cancel", { job });
+export const latexNativeCancel = (job: string) => invoke<void>("latex_native_cancel", { job });
 /**
  * Write the PDF a document's own compiler produced.
  *
@@ -992,6 +990,13 @@ export interface MenuState {
    * payload does not grow a field every time a PDF-rendered markup is added.
    */
   pdfPreviewAvailable: boolean;
+  /**
+   * The engine that produced the PDF the export row writes (`LuaLaTeX`,
+   * `pdfLaTeX`, `XeLaTeX`), or empty when there is none or it is unknown.
+   */
+  pdfEngine: string;
+  /** Whether a `.tex` preview recompiles after edits; drives a View check item. */
+  latexAutoCompile: boolean;
 }
 
 /** One row of Navigate › Open Tabs. */

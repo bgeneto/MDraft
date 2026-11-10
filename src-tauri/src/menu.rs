@@ -379,6 +379,13 @@ pub struct MenuState {
     /// hang. Always true for a compiled LaTeX document; for Typst it is true only
     /// in the Pages view, which is where that language compiles a PDF.
     pub pdf_preview_available: bool,
+    /// The engine that produced those bytes, as the reader knows it (`LuaLaTeX`,
+    /// `pdfLaTeX`, `XeLaTeX`). Empty when the frontend does not know it; the row
+    /// then names no engine rather than guessing one.
+    pub pdf_engine: String,
+    /// Whether a `.tex` preview recompiles after edits. Settings-backed: the View
+    /// menu check item and the preview's own toggle report the same value.
+    pub latex_auto_compile: bool,
 }
 
 impl Default for MenuState {
@@ -426,6 +433,8 @@ impl MenuState {
             typst_view: settings.typst_view.clone(),
             typst_available: true,
             pdf_preview_available: false,
+            pdf_engine: String::new(),
+            latex_auto_compile: settings.latex_auto_compile,
         }
     }
 
@@ -451,6 +460,7 @@ impl MenuState {
         self.ai_enabled = fresh.ai_enabled;
         self.syntax_theme = fresh.syntax_theme;
         self.typst_view = fresh.typst_view;
+        self.latex_auto_compile = fresh.latex_auto_compile;
         self
     }
 }
@@ -489,6 +499,7 @@ const CHECK_IDS: &[&str] = &[
     "themes.dark",
     "tools.spellcheck",
     "tools.ai",
+    "view.latexAutoCompile",
 ];
 
 /// A legacy palette id some `settings.json` files still carry.
@@ -526,6 +537,7 @@ fn is_checked(state: &MenuState, id: &str) -> bool {
         "view.focus" => state.focus_mode,
         "view.typewriter" => state.typewriter_mode,
         "view.syncScroll" => state.sync_scroll,
+        "view.latexAutoCompile" => state.latex_auto_compile,
         "view.fullscreen" => state.fullscreen,
         "tools.spellcheck" => state.spellcheck,
         "tools.ai" => state.ai_enabled,
@@ -643,7 +655,7 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
         "view.syncScroll" => state.view_mode == "split",
         "view.sidebar" | "view.outline" | "view.favorites" | "view.recent"
         | "view.sidebarPanel" => !state.focus_mode,
-        "view.latexCompile" => state.document_language == "latex",
+        "view.latexCompile" | "view.latexAutoCompile" => state.document_language == "latex",
         "view.typstPreview" | "view.typstDocument" | "view.typstPages" => {
             typst && state.typst_available
         }
@@ -725,7 +737,12 @@ fn label_for(state: &MenuState, id: &str) -> Option<String> {
             "PDF… (available after the preview compiles)"
         }
         "export.pdf" if state.document_language == "typst" => "PDF… (compiled by Typst)",
-        "export.pdf" if state.document_language == "latex" => "PDF… (compiled by LuaLaTeX)",
+        // The installed distribution may run pdfLaTeX or XeLaTeX, and "auto"
+        // chooses per document, so the engine comes from the compile itself.
+        "export.pdf" if state.document_language == "latex" && !state.pdf_engine.is_empty() => {
+            return Some(format!("PDF… (compiled by {})", state.pdf_engine));
+        }
+        "export.pdf" if state.document_language == "latex" => "PDF… (compiled PDF)",
         // The built label, restated. An AsciiDoc, Markdown or HTML document has
         // no compiled PDF of its own, so the row keeps the plain name — but it
         // must *say* so, because returning `None` would leave the LaTeX document's
@@ -1269,6 +1286,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&check("view.split", "Split View", None)?)
         .item(&check("view.preview", "Preview Only", None)?)
         .item(&item("view.latexCompile", "Compile LaTeX", Some("CmdOrCtrl+Shift+Enter"))?)
+        .item(&check("view.latexAutoCompile", "Compile LaTeX Automatically", None)?)
         .separator()
         .item(&typst_preview)
         .separator()
@@ -2031,9 +2049,20 @@ mod tests {
         );
         state.pdf_preview_available = true;
         assert_eq!(enabled_for(&state, "export.pdf"), Some(true));
+        // The row names the engine that produced the current PDF, which the
+        // installed distribution may have chosen per document.
+        for engine in ["LuaLaTeX", "pdfLaTeX", "XeLaTeX"] {
+            state.pdf_engine = engine.into();
+            assert_eq!(
+                label_for(&state, "export.pdf"),
+                Some(format!("PDF… (compiled by {engine})"))
+            );
+        }
+        state.pdf_engine.clear();
         assert_eq!(
             label_for(&state, "export.pdf").as_deref(),
-            Some("PDF… (compiled by LuaLaTeX)")
+            Some("PDF… (compiled PDF)"),
+            "an unknown engine is not guessed"
         );
         // Print follows the same condition, because it prints those same bytes
         // (ADR 2026-11-06-print-the-compiled-pdf). The label is the plain one:
@@ -2061,6 +2090,23 @@ mod tests {
         assert_eq!(label_for(&state, "export.pdf").as_deref(), Some("PDF…"));
         assert_eq!(enabled_for(&state, "file.print"), Some(true));
         assert_eq!(label_for(&state, "file.print").as_deref(), Some("Print…"));
+    }
+
+    #[test]
+    fn auto_compile_is_a_settings_backed_latex_check_item() {
+        let mut settings = crate::settings::Settings {
+            latex_auto_compile: false,
+            ..Default::default()
+        };
+        let mut state = MenuState::from_settings(&settings);
+        assert!(CHECK_IDS.contains(&"view.latexAutoCompile"));
+        assert!(!is_checked(&state, "view.latexAutoCompile"));
+        assert_eq!(enabled_for(&state, "view.latexAutoCompile"), Some(false));
+        state.document_language = "latex".into();
+        assert_eq!(enabled_for(&state, "view.latexAutoCompile"), Some(true));
+        settings.latex_auto_compile = true;
+        let rebuilt = state.with_settings(&settings);
+        assert!(is_checked(&rebuilt, "view.latexAutoCompile"));
     }
 
     /// The regression this pins: a `.tex` tab followed by an AsciiDoc one.

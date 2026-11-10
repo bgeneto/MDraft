@@ -14,6 +14,7 @@ import {
   nativeFailureMessage,
   nativeSources,
   nativeToLatex,
+  latexEngineName,
 } from "../src/latex-native.ts";
 
 const checks = [];
@@ -83,7 +84,7 @@ console.log("=== a warning-only build is current ===");
     project,
   );
   check(converted.pdf.length > 0, "the PDF bytes survive");
-  check(converted.engine === "lualatex", "the engine is carried for Save/Export");
+  check(converted.engine === "LuaLaTeX", "the engine is carried for Save/Export by its own name");
   check(converted.warnings.length === 1, "the warning is visible");
   check(
     converted.warnings[0].lineText === "\\bad",
@@ -171,6 +172,18 @@ console.log("=== failure messages ===");
       "The compiler produced no PDF.",
     "no PDF is stated plainly",
   );
+}
+
+for (const [raw, shown] of [
+  ["lualatex", "LuaLaTeX"],
+  ["pdflatex", "pdfLaTeX"],
+  ["xelatex", "XeLaTeX"],
+  ["PDFLATEX", "pdfLaTeX"],
+  ["mystery-tex", "mystery-tex"],
+  ["", "LaTeX"],
+  [undefined, "LaTeX"],
+]) {
+  check(latexEngineName(raw) === shown, `the engine ${JSON.stringify(raw)} is shown as ${shown}`);
 }
 
 const failed = checks.filter((entry) => !entry.ok);
