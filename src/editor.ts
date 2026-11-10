@@ -10,9 +10,11 @@ import {
   RangeSetBuilder,
   StateEffect,
   StateField,
+  MapMode,
   type Extension,
   type Range,
   type Text,
+  type TransactionSpec,
 } from "@codemirror/state";
 import {
   Decoration,
@@ -235,6 +237,14 @@ export interface EditorHandle {
   insertAsciiDocAttributes(): void;
   insertToc(): void;
   insertAsciiDocToc(): void;
+  /**
+   * Follow source positions through every later edit of this view.
+   *
+   * A position whose surroundings are deleted becomes null, and every position
+   * becomes null when the buffer is replaced (`setDoc`, `restoreState`): an
+   * offset captured for one text must not be applied to another.
+   */
+  trackPositions(positions: readonly number[]): TrackedPositions;
   insertBlock(text: string): void;
   insertBlockWithCaret(text: string, caretOffset: number): void;
   /** Replace a source range in one transaction; returns false if the range is invalid. */
@@ -506,6 +516,125 @@ function linkSupport(options: EditorOptions): Extension {
   });
 }
 
+/**
+ * One paste insertion, described independently of the view that receives it.
+ *
+ * A paste can finish after its tab was hidden. The same insertion is then
+ * applied to that tab's stored `EditorState`, so it lands where the reader
+ * pasted, with the same separation rules and as one undo step.
+ */
+export type PasteInsertion =
+  | { kind: "block"; text: string }
+  | { kind: "pasted"; text: string; block: boolean }
+  | { kind: "native"; text: string };
+
+/** Append a block after the selection's line, separated by a blank line if needed. */
+function blockInsertSpec(state: EditorState, text: string): TransactionSpec {
+  const range = state.selection.main;
+  const line = state.doc.lineAt(range.to);
+  const needsLead = line.text.trim().length > 0;
+  const insert = `${needsLead ? "\n\n" : ""}${text}\n`;
+  const at = needsLead ? line.to : range.to;
+  return {
+    changes: { from: at, insert },
+    selection: { anchor: at + insert.length },
+    scrollIntoView: true,
+  };
+}
+
+/** Native text semantics: one line per cursor when the counts match. */
+function nativeTextSpec(state: EditorState, text: string): TransactionSpec {
+  const input = state.toText(text);
+  let line = 1;
+  const changes =
+    input.lines === state.selection.ranges.length
+      ? state.changeByRange((range) => {
+          const insert = input.line(line++).text;
+          return {
+            changes: { from: range.from, to: range.to, insert },
+            range: EditorSelection.cursor(range.from + insert.length),
+          };
+        })
+      : state.replaceSelection(input);
+  return { ...changes, userEvent: "input.paste", scrollIntoView: true };
+}
+
+/**
+ * Pasted text at the selection. A block fragment gets blank lines around it and
+ * reuses the current indentation; inline text replaces the selection as-is.
+ */
+function pastedInsertSpec(
+  state: EditorState,
+  text: string,
+  block: boolean,
+): TransactionSpec | null {
+  const normalized = text.replace(/\r\n?/g, "\n").replace(/^\n+|\n+$/g, "");
+  if (!normalized) return null;
+
+  const range = state.selection.main;
+  const doc = state.doc;
+  if (!block) {
+    return {
+      changes: { from: range.from, to: range.to, insert: normalized },
+      selection: { anchor: range.from + normalized.length },
+      scrollIntoView: true,
+      userEvent: "input.paste",
+    };
+  }
+
+  const startLine = doc.lineAt(range.from);
+  const endLine = doc.lineAt(range.to);
+  const before = doc.sliceString(startLine.from, range.from);
+  const after = doc.sliceString(range.to, endLine.to);
+  const indent = /^\s*$/.test(before) ? before : "";
+  let insertion = normalized;
+  if (indent) {
+    insertion = insertion
+      .split("\n")
+      .map((line, index) => (index === 0 ? line : `${indent}${line}`))
+      .join("\n");
+  }
+
+  let prefix = "";
+  if (before.trim() !== "") prefix = "\n\n";
+  else if (startLine.from > 0) {
+    const previous = doc.line(startLine.number - 1);
+    if (previous.text.trim() !== "") prefix = "\n";
+  }
+
+  // A block must not swallow the rest of the line. When there is content
+  // after the paste it starts a fresh paragraph; when there is only
+  // whitespace it is discarded.
+  let suffix = "";
+  let to = range.to;
+  if (after.trim() !== "") suffix = "\n\n";
+  else to = endLine.to;
+
+  const insert = `${prefix}${insertion}${suffix}`;
+  return {
+    changes: { from: range.from, to, insert },
+    selection: { anchor: range.from + prefix.length + insertion.length },
+    scrollIntoView: true,
+    userEvent: "input.paste",
+  };
+}
+
+/** The transaction a paste insertion makes against `state`, or null for nothing. */
+export function pasteInsertionSpec(
+  state: EditorState,
+  insertion: PasteInsertion,
+): TransactionSpec | null {
+  if (insertion.kind === "block") return blockInsertSpec(state, insertion.text);
+  if (insertion.kind === "native") return nativeTextSpec(state, insertion.text);
+  return pastedInsertSpec(state, insertion.text, insertion.block);
+}
+
+/** Positions captured from the view and mapped through its later edits. */
+export interface TrackedPositions {
+  current(): readonly (number | null)[];
+  dispose(): void;
+}
+
 export function createEditor(host: HTMLElement, options: EditorOptions = {}): EditorHandle {
   let nativeTransform: ((text: string) => string) | null = null;
   let nativeInput: { before: string; after: string } | null = null;
@@ -606,6 +735,11 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
   };
 
   let onDocChanged: (text: string) => void = () => {};
+  /** Live position trackers; mapped by the update listener, cleared on replacement. */
+  const trackers = new Set<{ positions: (number | null)[] }>();
+  const dropTrackedPositions = () => {
+    for (const tracker of trackers) tracker.positions = tracker.positions.map(() => null);
+  };
   let onCursor: (info: CursorInfo) => void = () => {};
   let onScroll: (info: ScrollInfo) => void = () => {};
   let typewriter = false;
@@ -857,6 +991,13 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     typewriterPlugin,
     EditorView.updateListener.of((update) => {
       if (update.docChanged) {
+        // Associate forward: text typed exactly at an anchor stays before the
+        // insertion point, so an answer lands after what the reader added.
+        for (const tracker of trackers) {
+          tracker.positions = tracker.positions.map((pos) =>
+            pos === null ? null : update.changes.mapPos(pos, 1, MapMode.TrackDel),
+          );
+        }
         applyWordChanges(update);
         onDocChanged(update.state.doc.toString());
       }
@@ -904,16 +1045,7 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
 
   /** Append a block after the current line, separated by a blank line if needed. */
   function insertBlockText(text: string): void {
-    const range = view.state.selection.main;
-    const line = view.state.doc.lineAt(range.to);
-    const needsLead = line.text.trim().length > 0;
-    const insert = `${needsLead ? "\n\n" : ""}${text}\n`;
-    const at = needsLead ? line.to : range.to;
-    view.dispatch({
-      changes: { from: at, insert },
-      selection: { anchor: at + insert.length },
-      scrollIntoView: true,
-    });
+    view.dispatch(blockInsertSpec(view.state, text));
     view.focus();
   }
 
@@ -1004,7 +1136,19 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
       view.requestMeasure();
     },
 
+    trackPositions(positions) {
+      const tracker = { positions: [...positions] as (number | null)[] };
+      trackers.add(tracker);
+      return {
+        current: () => tracker.positions,
+        dispose: () => {
+          trackers.delete(tracker);
+        },
+      };
+    },
+
     setDoc(text, resetHistory = false) {
+      dropTrackedPositions();
       resetSpellLanguage();
       // The parse state in this state was built for the text being replaced. If
       // it was carried over from another document, its ranges lie outside this
@@ -1145,6 +1289,7 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     },
 
     restoreState(state, scrollTop) {
+      dropTrackedPositions();
       // Drop a grammar promise that belongs to the buffer we just left.
       languageGeneration += 1;
       resetSpellLanguage();
@@ -1681,76 +1826,14 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     },
 
     insertNativeText(text) {
-      const state = view.state;
-      const input = state.toText(text);
-      let line = 1;
-      const changes =
-        input.lines === state.selection.ranges.length
-          ? state.changeByRange((range) => {
-              const insert = input.line(line++).text;
-              return {
-                changes: { from: range.from, to: range.to, insert },
-                range: EditorSelection.cursor(range.from + insert.length),
-              };
-            })
-          : state.replaceSelection(input);
-      view.dispatch(changes, { userEvent: "input.paste", scrollIntoView: true });
+      view.dispatch(nativeTextSpec(view.state, text));
       view.focus();
     },
 
     insertPasted(text, block) {
-      const normalized = text.replace(/\r\n?/g, "\n").replace(/^\n+|\n+$/g, "");
-      if (!normalized) return;
-
-      const state = view.state;
-      const range = state.selection.main;
-      const doc = state.doc;
-      if (!block) {
-        view.dispatch({
-          changes: { from: range.from, to: range.to, insert: normalized },
-          selection: { anchor: range.from + normalized.length },
-          scrollIntoView: true,
-          userEvent: "input.paste",
-        });
-        view.focus();
-        return;
-      }
-
-      const startLine = doc.lineAt(range.from);
-      const endLine = doc.lineAt(range.to);
-      const before = doc.sliceString(startLine.from, range.from);
-      const after = doc.sliceString(range.to, endLine.to);
-      const indent = /^\s*$/.test(before) ? before : "";
-      let insertion = normalized;
-      if (indent) {
-        insertion = insertion
-          .split("\n")
-          .map((line, index) => (index === 0 ? line : `${indent}${line}`))
-          .join("\n");
-      }
-
-      let prefix = "";
-      if (before.trim() !== "") prefix = "\n\n";
-      else if (startLine.from > 0) {
-        const previous = doc.line(startLine.number - 1);
-        if (previous.text.trim() !== "") prefix = "\n";
-      }
-
-      // A block must not swallow the rest of the line. When there is content
-      // after the paste it starts a fresh paragraph; when there is only
-      // whitespace it is discarded.
-      let suffix = "";
-      let to = range.to;
-      if (after.trim() !== "") suffix = "\n\n";
-      else to = endLine.to;
-
-      const insert = `${prefix}${insertion}${suffix}`;
-      view.dispatch({
-        changes: { from: range.from, to, insert },
-        selection: { anchor: range.from + prefix.length + insertion.length },
-        scrollIntoView: true,
-        userEvent: "input.paste",
-      });
+      const spec = pastedInsertSpec(view.state, text, block);
+      if (!spec) return;
+      view.dispatch(spec);
       view.focus();
     },
 

@@ -333,6 +333,17 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
     }
   }
 
+  /**
+   * Run `task` under the same per-path key Save As uses for its target.
+   *
+   * An open reads a path and adopts it into the store; a Save As writes a path
+   * and adopts it. Ordering both on one key is what keeps them from each
+   * concluding "not open yet" and leaving two tabs for one file. The task must
+   * not wait on a dialog: it holds the key.
+   */
+  const exclusivePath = <T>(path: string, task: () => Promise<T>) =>
+    queue(`path:${pathKey(path)}`, task);
+
   return {
     save,
     saveAs,
@@ -342,8 +353,13 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
     idle,
     snapshot,
     current,
+    exclusivePath,
     get committing() {
       return committing;
+    },
+    /** True while a close is waiting for decisions or committing. */
+    get closing() {
+      return closing;
     },
   };
 }

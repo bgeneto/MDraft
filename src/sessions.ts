@@ -19,6 +19,13 @@ export interface Session {
   dirty: boolean;
   /** Runtime content generation; never persisted in settings or recovery. */
   revision: number;
+  /**
+   * Runtime document generation: advanced only when the buffer is replaced by
+   * another document (a read into this tab, a reload), never by typing or
+   * saving. A paste that started before a replacement must not land after it.
+   * Never persisted.
+   */
+  incarnation: number;
   /** "\n" or "\r\n". Untitled documents use "\n" until the first save. */
   lineEnding: string;
   hadBom: boolean;
@@ -68,6 +75,14 @@ export interface SessionStore {
   untitledName(): string;
   /** Insert after the active session and make it active. */
   add(session: Session): void;
+  /**
+   * Append a session without changing which one is active.
+   *
+   * Recovery inserts several tabs across awaits; moving the store's active ID
+   * there would let it disagree with the tab on screen until the loop ends, and
+   * Next/Previous Tab and new-tab placement read the store.
+   */
+  append(session: Session): void;
   setActive(id: string): Session;
   /**
    * Move a session to `index` in the final order, where 0 is the left edge.
@@ -101,6 +116,7 @@ function blank(): Session {
     savedContent: "",
     dirty: false,
     revision: 0,
+    incarnation: 0,
     lineEnding: "\n",
     hadBom: false,
     lossy: false,
@@ -175,6 +191,10 @@ export function createSessionStore(): SessionStore {
       const index = items.findIndex((item) => item.id === activeId);
       items.splice(index + 1, 0, session);
       activeId = session.id;
+    },
+
+    append(session) {
+      items.push(session);
     },
 
     move(id, index) {
