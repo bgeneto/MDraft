@@ -91,12 +91,15 @@
      between two tabs — three separate signals for the same boundary, because
      each of them alone disappears at some zoom, theme or accent. The active tab
      is the one surface that matches the editor below, which is what makes it
-     the active one without needing the strongest border. */
-  --tab-bg: #e2e7ee;
-  --tab-bg-hover: #eef2f6;
-  --tab-border: #c7cfd9;
-  --tab-border-hover: #b3bdc9;
-  --tab-fg: #525a68;
+     the active one without needing the strongest border. The inactive fill is
+     a near-neutral gray rather than the blue-cast one it used to be: at this
+     lightness a blue tint reads as a second accent, and the dark border made
+     the step to the white active tab harsher than the state is worth. */
+  --tab-bg: #eef0f2;
+  --tab-bg-hover: #f5f6f8;
+  --tab-border: #dfe2e6;
+  --tab-border-hover: #cfd3d8;
+  --tab-fg: #585d65;
   --tab-active-bg: var(--bg);
 }
 
