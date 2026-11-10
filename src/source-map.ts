@@ -429,6 +429,14 @@ function fragmentForOffset(map: WordMap, offset: number): number {
       high = mid - 1;
     }
   }
+  if (found < 0) return -1;
+  // A selection on Markdown syntax just before a word may snap forward, but only
+  // within the word's own line. Raw HTML markup is a whole block away from the
+  // next fragment; snapping there would paint a different paragraph.
+  if (map.fragments[found].src0 > offset) {
+    const line = lineBounds(map.source, offset);
+    if (map.fragments[found].src0 > line.end) return -1;
+  }
   return found;
 }
 

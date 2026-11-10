@@ -223,6 +223,88 @@ try {
     `sync ${oversized.syncMs.toFixed(1)} ms, worker path ${oversized.liveMs.toFixed(1)} ms`,
   );
 
+  const rawSync = await evaluate(`(async()=>{
+    const sourceMap=await import('/src/source-map.ts');
+    const source=await (await fetch('/samples/raw-html-sync.md')).text();
+    const host=document.createElement('div');document.body.replaceChildren(host);
+    const result=await window.previewTest.renderPreviewInto(host,source,
+      {baseDir:null,math:true,mermaid:false,map:true},()=>false);
+    const map=await sourceMap.bindWordMapAsync(host,{source,fragments:result.fragments},()=>false);
+    const previewWord=(needle)=>{
+      const walker=document.createTreeWalker(host,NodeFilter.SHOW_TEXT);
+      for(let node=walker.nextNode();node;node=walker.nextNode()){
+        const at=node.data.indexOf(needle);
+        if(at<0)continue;
+        const range=sourceMap.sourceRangeFor(map,node,at,at+needle.length);
+        return range?source.slice(range.from,range.to):null;
+      }
+      return null;
+    };
+    const sourceRanges=(needle)=>{
+      const from=source.indexOf(needle);
+      return from<0?null:sourceMap.rangesForSource(map,from,from+needle.length).map(r=>r.toString());
+    };
+    const markup=source.indexOf('<div style="text-align: center;"><img src="SEI_');
+    return {
+      linesMapped:result.linesMapped,
+      anchors:host.querySelectorAll(':scope > [data-line]').length,
+      children:host.children.length,
+      table:previewWord('Modalidade'),
+      div:previewWord('sei!'),
+      sourceTable:sourceRanges('Modalidade'),
+      sourceDiv:sourceRanges('sei!'),
+      sourceMarkup:markup<0?null:sourceMap.rangesForSource(map,markup,markup+80).map(r=>r.toString()),
+    };
+  })()`);
+  check(
+    "cross-token raw HTML keeps every top-level element anchored",
+    rawSync.linesMapped === true && rawSync.anchors === rawSync.children && rawSync.anchors >= 70,
+    JSON.stringify({
+      lines: rawSync.linesMapped,
+      anchors: rawSync.anchors,
+      children: rawSync.children,
+    }),
+  );
+  check(
+    "a raw HTML table cell maps preview to source",
+    rawSync.table === "Modalidade",
+    String(rawSync.table),
+  );
+  check("Markdown inside a raw HTML div maps preview to source", rawSync.div === "sei!");
+  check(
+    "a raw HTML table cell maps source to preview",
+    JSON.stringify(rawSync.sourceTable) === JSON.stringify(["Modalidade"]),
+    JSON.stringify(rawSync.sourceTable),
+  );
+  check(
+    "Markdown inside a raw HTML div maps source to preview",
+    JSON.stringify(rawSync.sourceDiv) === JSON.stringify(["sei!"]),
+    JSON.stringify(rawSync.sourceDiv),
+  );
+  check(
+    "raw HTML tag markup fails safe instead of painting the next block",
+    JSON.stringify(rawSync.sourceMarkup) === JSON.stringify([]),
+    JSON.stringify(rawSync.sourceMarkup),
+  );
+
+  const sameLine = await evaluate(`(async()=>{
+    const sourceMap=await import('/src/source-map.ts');
+    const source='**bold text** and more';
+    const host=document.createElement('div');document.body.replaceChildren(host);
+    const result=window.previewTest.renderPreview(source,{baseDir:null,math:false,mermaid:false,map:true});
+    host.innerHTML=result.html;
+    const map=await sourceMap.bindWordMapAsync(host,{source,fragments:result.fragments},()=>false);
+    const close=source.indexOf('**',2)+2;
+    const whole=sourceMap.rangeForSource(map,0,close)?.toString()??null;
+    const marker=sourceMap.rangeForSource(map,0,2)?.toString()??null;
+    return {whole,marker};
+  })()`);
+  check(
+    "same-line Markdown syntax still snaps to its word",
+    sameLine.whole === "bold text" && sameLine.marker === "bold text",
+    JSON.stringify(sameLine),
+  );
+
   const security = await evaluate(`(async()=>{
     const source='<div onclick="window.bad=1"><img onerror="window.bad=2"><a href="javascript:alert(1)">link</a><script>window.bad=3</script><p>safe</p></div>';
     const opts={baseDir:null,math:false,mermaid:false,map:true};

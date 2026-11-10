@@ -168,7 +168,10 @@ function validMarkdownData(value: unknown): boolean {
         typeof data.legacyImages === "object" &&
         !Array.isArray(data.legacyImages))) &&
     (data.fragments === undefined || Array.isArray(data.fragments)) &&
-    (data.lines === null || Array.isArray(data.lines))
+    (data.lines === null || Array.isArray(data.lines)) &&
+    (data.elementLines === undefined ||
+      data.elementLines === null ||
+      Array.isArray(data.elementLines))
   );
 }
 

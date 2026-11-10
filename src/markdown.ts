@@ -362,9 +362,11 @@ function finishPreview(
   addHeadingIds(host);
   buildTableOfContents(host);
   // The line list belongs to the original source and is already in document
-  // order; if a sanitised chunk produced a different number of top-level
-  // elements, the annotation is dropped rather than pointing at a wrong line.
-  const lines = data.lines;
+  // order. Raw HTML can merge several Markdown tokens into one element, so the
+  // element list, not the token list, is authoritative whenever it is present.
+  // If neither list matches the sanitised element count, the annotation is
+  // dropped rather than pointing at a wrong line.
+  const lines = data.elementLines ?? data.lines;
   const blocks = Array.from(host.children) as HTMLElement[];
   if (!grouped && lines && lines.length === blocks.length) {
     for (let i = 0; i < blocks.length; i += 1) {
@@ -378,12 +380,16 @@ function describePreview(
   data: PreviewChunks,
   grouped = false,
 ): PreviewDescription {
-  const lines = data.lines;
+  const lines = data.elementLines ?? data.lines;
+  const elements = Array.from(host.children) as HTMLElement[];
+  const anchored = grouped
+    ? (lines?.length ?? 0)
+    : elements.filter((el) => el.hasAttribute("data-line")).length;
   const mapped =
-    lines !== null && lines.length > 0 && (grouped || lines.length === host.children.length);
+    !!lines && lines.length > 0 && (grouped || (anchored > 0 && anchored === elements.length));
   return {
     linesMapped: mapped,
-    anchors: mapped && lines ? lines.length : 0,
+    anchors: mapped ? anchored : 0,
     fragments: data.fragments,
     legacyImages: data.legacyImages,
   };

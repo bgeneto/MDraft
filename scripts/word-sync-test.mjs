@@ -1220,6 +1220,129 @@ for (const [word, note] of [
   );
 }
 
+// ---------------------------------------------------------------------------
+// Raw HTML that crosses token boundaries: the reported document shape
+// ---------------------------------------------------------------------------
+
+console.log("\n=== raw HTML sync ===");
+const rawDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "mdraft-sync-raw-html-"));
+const rawFiller = (prefix, count) =>
+  Array.from(
+    { length: count },
+    (_, i) => `${prefix} paragraph ${i + 1} keeps the panes tall enough to scroll.`,
+  );
+const rawSource = [
+  "# Raw HTML sync",
+  "",
+  ...rawFiller("Opening", 12),
+  "",
+  "<table border=1><tr><td>tableword</td><td>secondcell</td></tr></table>",
+  "",
+  '<div style="text-align: center;">',
+  "",
+  "divword inside the div",
+  "",
+  "</div>",
+  "",
+  ...rawFiller("Closing", 12),
+  "",
+].join("\n");
+const rawFile = path.join(rawDirectory, "raw-html-sync.md");
+fs.writeFileSync(rawFile, rawSource);
+{
+  const settings = await evaluate(`window.__TAURI_INTERNALS__.invoke('get_settings')`);
+  const menu = async (id) => {
+    await evaluate(
+      `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'menu',payload:${JSON.stringify(id)}})`,
+    );
+    await sleep(320);
+  };
+  if (!settings?.syncScroll) await menu("view.syncScroll");
+  await menu("view.split");
+}
+await evaluate(
+  `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'open-files',payload:[${JSON.stringify(rawFile)}]})`,
+);
+for (let attempt = 0; attempt < 120; attempt++) {
+  if (
+    await evaluate(`(() => {
+      const preview = document.getElementById("preview");
+      return document.title.includes("raw-html-sync.md") &&
+        preview.querySelectorAll(":scope > [data-line]").length >= 4 &&
+        preview.querySelectorAll("table [data-f]").length > 0;
+    })()`)
+  )
+    break;
+  await sleep(100);
+}
+await resetView();
+{
+  const shape = await evaluate(`(() => {
+    const preview = document.getElementById("preview");
+    const children = [...preview.children];
+    return {
+      children: children.length,
+      anchored: children.filter((element) => element.hasAttribute("data-line")).length,
+      tableFragments: preview.querySelectorAll("table [data-f]").length,
+      divFragments: preview.querySelectorAll('div[style] [data-f]').length,
+    };
+  })()`);
+  check(
+    "cross-token raw HTML anchors every top-level element",
+    shape.children >= 4 && shape.anchored === shape.children,
+    JSON.stringify(shape),
+  );
+  check(
+    "raw HTML table and div text carry fragments",
+    shape.tableFragments >= 2 && shape.divFragments >= 1,
+    JSON.stringify(shape),
+  );
+
+  await resetView();
+  await sleep(250);
+  await evaluate(`document.querySelector(".cm-scroller").scrollTop = 400`);
+  await sleep(400);
+  const sourceScrolled = await scrollState();
+  check(
+    "scrolling the source follows through raw HTML",
+    typeof sourceScrolled.preview === "number" && sourceScrolled.preview > 40,
+    JSON.stringify(sourceScrolled),
+  );
+
+  await resetView();
+  await sleep(250);
+  await evaluate(`document.getElementById("preview-pane").scrollTop = 400`);
+  await sleep(400);
+  const previewScrolled = await scrollState();
+  check(
+    "scrolling the preview follows through raw HTML",
+    typeof previewScrolled.source === "number" && previewScrolled.source > 40,
+    JSON.stringify(previewScrolled),
+  );
+
+  await resetView();
+  const table = await wordPoint("tableword", "#preview");
+  if (table) await doubleClickAt(table.x, table.y);
+  await sleep(250);
+  check(
+    "a raw HTML table word paints the source",
+    (await paintedWord()) === "tableword",
+    (await paintedWord()) ?? "nothing",
+  );
+
+  await resetView();
+  const cell = await wordPoint("secondcell", ".cm-content");
+  if (cell) await doubleClickAt(cell.x, cell.y);
+  await sleep(250);
+  const ranges = await paintedPreviewRanges();
+  check(
+    "a source word inside the raw HTML table paints the preview",
+    Array.isArray(ranges) &&
+      ranges.some((range) => range.text === "secondcell" && range.block === "TABLE"),
+    JSON.stringify(ranges),
+  );
+}
+
 ws.close();
 await new Promise((resolve) => setTimeout(resolve, 200));
 console.log(`\n${passed}/${passed + failed} checks passed`);
