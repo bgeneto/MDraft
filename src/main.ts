@@ -1632,6 +1632,30 @@ function compileCurrentLatex(): void {
   void doRender();
 }
 
+/**
+ * The compile backend or engine changed: no PDF built before this moment is
+ * current any more, and no build started before it may finish as current.
+ *
+ * The render token is the build owner, so bumping it invalidates both. In
+ * manual mode nothing is compiled; the last PDF stays readable and the status
+ * says it is out of date. With auto-compile on, the caller's `scheduleRender`
+ * starts the new build.
+ */
+function invalidateLatexBuild(): void {
+  if (doc.language !== "latex") return;
+  window.clearTimeout(renderTimer);
+  renderToken += 1;
+  cancelLatex();
+  discardStagedPdf();
+  delete preview.dataset.latexCurrent;
+  latexInFlight = false;
+  previewStale = true;
+  if (settings.latexAutoCompile === false) {
+    setLatexStatus("Out of date · The engine changed; select Compile to update the preview.");
+  }
+  syncMenuState(false);
+}
+
 function cancelLatexBuild(): void {
   window.clearTimeout(renderTimer);
   renderToken += 1;
@@ -1961,6 +1985,8 @@ function latexFailure(
   root: { path: string; directory: string } | null = null,
   files: readonly string[] = [],
 ): void {
+  // A failed build has no current PDF, whatever the previous one recorded.
+  delete preview.dataset.latexCurrent;
   const panel = latexProblemPanel(error, root, files);
   if (
     error instanceof LatexBuildError &&
@@ -2192,6 +2218,7 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
   if (engineStatus.backend === "none") {
     latexInFlight = false;
     setLatexStatus("LaTeX is not enabled.");
+    delete preview.dataset.latexCurrent;
     disposeTypstPdf();
     latexEnableNote(engineStatus);
     previewStale = false;
@@ -4528,17 +4555,22 @@ async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
   // The menu disables formats whose tool is missing, but a stale menu, a
   // keyboard route or a settings file edited elsewhere must not open a save
   // dialog for an export that cannot run. Ask before choosing a path.
-  if (!pandocCache) await refreshPandocStatus();
-  if (pandocCache && !pandocCache.found) {
-    toast("Pandoc is not installed — install it before exporting.");
-    await pandocSetup();
-    return;
-  }
+  //
   // The built-in pandoc PDF converts to Typst and needs that engine. For LaTeX
   // the row is disabled with its own reason, and a stale menu must not reach
   // here: the compiled PDF is the only PDF route a `.tex` document has.
   if (format.id === "pdf" && snapshot.language === "latex") {
-    toast("Use Export › PDF, which writes the compiled LuaLaTeX PDF.");
+    toast("Use Export › PDF, which writes the PDF this document's engine compiled.");
+    return;
+  }
+  // A `.tex` project converts from a snapshot of the project this export was
+  // started for. It is captured before the first await — the tool lookup
+  // included — so a tab switch cannot pair this source with another project.
+  const latexCapture = snapshot.language === "latex" ? latexExportSnapshot() : null;
+  if (!pandocCache) await refreshPandocStatus();
+  if (pandocCache && !pandocCache.found) {
+    toast("Pandoc is not installed — install it before exporting.");
+    await pandocSetup();
     return;
   }
   if (format.id === "pdf") {
@@ -4550,11 +4582,9 @@ async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
     }
   }
 
-  // A `.tex` project converts from the snapshot the preview compiled, captured
-  // before the dialog so a tab switch cannot change which project is exported.
   let latexProject: { snapshot: api.ExportSnapshot; root: Session } | null = null;
-  if (snapshot.language === "latex") {
-    const captured = await latexExportSnapshot();
+  if (latexCapture) {
+    const captured = await latexCapture;
     if ("error" in captured) {
       await message(captured.error, {
         title: "Could not read the LaTeX project",
@@ -4646,13 +4676,16 @@ async function exportLatexWithWriter(
   source: ReturnType<typeof exportSource>,
   capturedProject?: { snapshot: api.ExportSnapshot; root: Session },
 ): Promise<void> {
+  // Started before the tool lookup can yield: the project is the one this
+  // export was started for, whatever tab is active when the lookup returns.
+  const capture = capturedProject ?? latexExportSnapshot();
   if (!pandocCache) await refreshPandocStatus();
   if (pandocCache && !pandocCache.found) {
     toast("Pandoc is not installed — install it before exporting.");
     await pandocSetup();
     return;
   }
-  const captured = capturedProject ?? (await latexExportSnapshot());
+  const captured = await capture;
   if ("error" in captured) {
     await message(captured.error, { title: "Could not read the LaTeX project", kind: "error" });
     return;
@@ -4727,12 +4760,6 @@ async function exportMarkdown(): Promise<void> {
  * producing an empty file that looks like a success.
  */
 async function openWriterChooser(): Promise<void> {
-  if (!pandocCache) await refreshPandocStatus();
-  if (pandocCache && !pandocCache.found) {
-    toast("Pandoc is not installed — install it before exporting.");
-    await pandocSetup();
-    return;
-  }
   const source = exportSource();
   if (source.language !== "latex") {
     // The chooser is the LaTeX route: every other language already has its own
@@ -4741,9 +4768,16 @@ async function openWriterChooser(): Promise<void> {
     toast("More Pandoc formats are available for LaTeX documents.");
     return;
   }
-  // The snapshot is captured before the list is even fetched, so a tab switch
-  // while the chooser is open cannot change which project is exported.
-  const captured = await latexExportSnapshot();
+  // The source and project are captured before the tool lookup and before the
+  // list is fetched, so a tab switch meanwhile cannot change what is exported.
+  const capture = latexExportSnapshot();
+  if (!pandocCache) await refreshPandocStatus();
+  if (pandocCache && !pandocCache.found) {
+    toast("Pandoc is not installed — install it before exporting.");
+    await pandocSetup();
+    return;
+  }
+  const captured = await capture;
   if ("error" in captured) {
     await message(captured.error, { title: "Could not read the LaTeX project", kind: "error" });
     return;
@@ -9053,6 +9087,7 @@ async function boot(): Promise<void> {
         latexEngine = await api.latexNativeSetEnabled(value);
         settings.latexNativeEnabled = latexEngine.nativeEnabled;
         persist();
+        invalidateLatexBuild();
         toast(
           value
             ? `Using ${latexEngine.nativeDistribution ?? "the installed TeX distribution"}.`
@@ -9072,6 +9107,7 @@ async function boot(): Promise<void> {
         latexEngine = await api.latexNativeSetEngine(value);
         settings.latexNativeEngine = value;
         persist();
+        invalidateLatexBuild();
         scheduleRender(true);
       } catch (error) {
         await message(String(error), { title: "Could not change the engine", kind: "error" });
