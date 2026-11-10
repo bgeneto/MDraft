@@ -177,3 +177,36 @@ launched normally from the temp directory, yet `$p.CloseMainWindow()` returned
 window-state flush still runs. Use that when a harness needs a graceful exit
 and `CloseMainWindow()` refuses; reserve `Stop-Process -Force` for the case where
 the profile is already known to be disposable.
+
+**A programmatic preview scroll right after `resetView()` moves nothing, and the next scroll event is already gone**
+The pane sync intentionally suppresses corrections for `SYNC_SUPPRESS_MS` (150 ms)
+after it writes a scroll offset. `resetView()` sets both panes to 0, the resulting
+correction starts that window, and the test then waited only 120 ms before
+setting `#preview-pane.scrollTop = 400`. The scroll event fired while
+`suppressEditorScrollUntil` was still active, the queued correction returned
+early, and no second event followed: the test reported
+`{"preview":399.9999694824219,"source":0}` even though the sync was healthy.
+Wait at least 250 ms after reset before a programmatic scroll, as
+`word-sync-test.mjs` now does; the existing content-scroll suite uses the same
+guard between probes.
+
+**A raw `<div>` silently disables `data-line`, scroll sync and click reveal for the whole document**
+`marked` emits a raw HTML block that contains Markdown as separate tokens: the
+opening tag, the paragraph and the closing tag. `finishPreview` zipped the
+non-silent token line list against `host.children`, so a three-token div that
+parsed as one element made the counts disagree and every anchor was dropped. In
+`docs/samples/SEI_15117522_Memorando_Circular_00035_2026.md` that was 77 token
+lines against 73 elements; `renderPreviewInto(...).linesMapped` became `false`,
+`#preview [data-line]` was 0, and `editor.onScroll` returned early for the whole
+file (the console note is `[sync] positional pane sync is unavailable for this
+document; scrolling stays independent`). The same function also held the only
+line anchors used by preview-click reveal and the block blink. Do not diagnose
+this as a scroll solver bug or a missing word map: inspect
+`document.querySelectorAll('#preview [data-line]').length` and compare
+`host.children.length` with the token count first. Raw HTML text has no `data-f`
+either, so a table cell word maps in neither direction; and `pointForSource`
+snaps an offset before the next fragment to that fragment's start, which paints
+the paragraph after the table. The durable fix is in
+`docs/adr/2026-11-10-raw-html-sync.md`: derive `elementLines` from the rendered
+tree when raw HTML crosses tokens, treat visible raw HTML text as fragments, and
+only snap a fragment gap within the same source line.

@@ -11,6 +11,7 @@
 
 import { Marked, Renderer, type RendererObject, type Token } from "marked";
 import katex from "katex";
+import { parseFragment } from "parse5";
 import { analyzeMath } from "./math-delimiters.ts";
 import { markdownCodeSpans } from "./markdown-context.ts";
 import { indexOffsets, type Fragment, type Substitution } from "./source-map.ts";
@@ -59,6 +60,13 @@ export interface PreviewChunks {
   fragments?: Fragment[];
   /** One line per element that renders, or null when the counts disagree. */
   lines: number[] | null;
+  /**
+   * One line per rendered top-level element when raw HTML crosses token
+   * boundaries. Used instead of `lines`, whose one-entry-per-token shape cannot
+   * describe two elements merged by an opening tag in one token and a closing
+   * tag in another.
+   */
+  elementLines?: number[] | null;
   legacyImages?: Record<string, { candidate: string; parsed: string }>;
 }
 
@@ -74,12 +82,148 @@ export function escapeHtml(input: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Raw HTML text
+// ---------------------------------------------------------------------------
+
+/** A visible text node of a raw HTML token, as an offset pair in the token. */
+interface HtmlTextSlot {
+  start: number;
+  end: number;
+}
+
+/**
+ * Text nodes inside these elements are not prose: scripts and styles are not
+ * displayed, form options are sanitised away or rendered as controls, and
+ * template content is inert. Wrapping their text would change neither the text
+ * nor the map, but it can change how the browser parses the element.
+ */
+const HTML_TEXT_SKIP = new Set([
+  "script",
+  "style",
+  "textarea",
+  "title",
+  "noscript",
+  "template",
+  "option",
+  "optgroup",
+  "select",
+  "iframe",
+  "object",
+  "embed",
+  "xmp",
+  "plaintext",
+  "noembed",
+  "noframes",
+]);
+
+const HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
+
+/**
+ * Locate the visible text runs of a raw HTML token.
+ *
+ * `marked` hands raw HTML through untouched, so its text nodes have no source
+ * positions and cannot join the word map. `parse5` has already parsed the same
+ * markup for the HTML preview; here it supplies only the source offsets of text
+ * nodes, which are exact slices of the token.
+ *
+ * Foreign content (SVG, MathML) is skipped because inserting an HTML `<span>`
+ * into it would change the namespace and break the drawing.
+ */
+function htmlTextSlots(raw: string): HtmlTextSlot[] {
+  if (!raw.includes("<")) return [];
+  let tree: unknown;
+  try {
+    tree = parseFragment(raw, { sourceCodeLocationInfo: true });
+  } catch {
+    return [];
+  }
+
+  const slots: HtmlTextSlot[] = [];
+  const walk = (node: unknown): void => {
+    if (!node || typeof node !== "object") return;
+    const item = node as {
+      nodeName?: string;
+      tagName?: string;
+      namespaceURI?: string;
+      childNodes?: unknown[];
+      content?: unknown;
+      sourceCodeLocation?: { startOffset?: number; endOffset?: number } | null;
+    };
+    if (item.nodeName === "#text") {
+      const location = item.sourceCodeLocation;
+      const start = location?.startOffset;
+      const end = location?.endOffset;
+      if (
+        typeof start !== "number" ||
+        typeof end !== "number" ||
+        !Number.isInteger(start) ||
+        !Number.isInteger(end) ||
+        end <= start
+      )
+        return;
+      if (!raw.slice(start, end).trim()) return;
+      slots.push({ start, end });
+      return;
+    }
+    if (item.tagName && item.namespaceURI && item.namespaceURI !== HTML_NAMESPACE) return;
+    if (item.tagName && HTML_TEXT_SKIP.has(item.tagName)) return;
+    if (Array.isArray(item.childNodes)) for (const child of item.childNodes) walk(child);
+    if (item.content) walk(item.content);
+  };
+  walk(tree);
+  slots.sort((a, b) => a.start - b.start || a.end - b.end);
+  return slots;
+}
+
+/**
+ * Splice one fragment span into each raw text run that is not a code/math
+ * placeholder. Placeholders stay untouched: `restorePlaceholders` replaces
+ * them with code or KaTeX nodes, which are not text fragments.
+ */
+function renderRawHtmlText(
+  raw: string,
+  srcStart: number,
+  sourceOf: (prepared: number) => number,
+  push: (fragment: Fragment) => number,
+): string {
+  const slots = htmlTextSlots(raw);
+  if (slots.length === 0) return raw;
+
+  let out = "";
+  let cursor = 0;
+  for (const slot of slots) {
+    if (slot.start < cursor) continue;
+    out += raw.slice(cursor, slot.start);
+    const text = raw.slice(slot.start, slot.end);
+    for (const piece of splitPieces(text)) {
+      const end = piece.start + piece.text.length;
+      const html = text.slice(piece.start, end);
+      if (piece.kind !== "raw" || html.length === 0) {
+        out += html;
+        continue;
+      }
+      const index = push({
+        src0: sourceOf(srcStart + slot.start + piece.start),
+        src1: sourceOf(srcStart + slot.start + end),
+        raw: html,
+        kind: "text",
+      });
+      out += `<span data-f="${index}">${html}</span>`;
+    }
+    cursor = slot.end;
+  }
+  out += raw.slice(cursor);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Word-level source fragments
 // ---------------------------------------------------------------------------
 
 /** A token carrying the offsets `marked` does not provide. */
 interface Positioned {
   type?: string;
+  block?: boolean;
   srcStart?: number;
   srcEnd?: number;
   srcRuns?: SourceRun[];
@@ -723,6 +867,16 @@ function renderMappedChunks(
       });
       return injectAttribute(html, "img", `data-f="${index}"`);
     },
+
+    html(token) {
+      const positioned = token as unknown as Positioned;
+      const raw = token.raw ?? token.text ?? "";
+      // An inline HTML token is a tag without text; its surrounding text tokens
+      // already carry fragments. Only a block token can own a text run.
+      if (positioned.block !== true || positioned.srcStart === undefined || raw.length === 0)
+        return raw;
+      return renderRawHtmlText(raw, positioned.srcStart, sourceOf, push);
+    },
   };
 
   const instance = new Marked({ gfm: true, breaks: false, pedantic: false });
@@ -817,18 +971,102 @@ function lineOf(starts: number[], offset: number): number {
  * zipped index by index. A disagreement drops the whole annotation rather than
  * pointing at the wrong line.
  */
-function blockLines(source: string): number[] | null {
+function blockLines(
+  source: string,
+  chunkLinesNeeded: boolean,
+): { lines: number[]; chunkLines: number[] } | null {
   const instance = new Marked({ gfm: true, breaks: false, pedantic: false });
-  const tokens = instance.lexer(source).filter((token) => !rendersNothing(token));
+  const tokens = instance.lexer(source);
   const starts = lineStarts(source);
   let cursor = 0;
   const lines: number[] = [];
+  const chunkLines: number[] = [];
   for (const token of tokens) {
     const raw = token.raw ?? "";
-    const at = raw.length > 0 ? source.indexOf(raw, cursor) : -1;
+    if (raw.length === 0) {
+      if (chunkLinesNeeded) chunkLines.push(lineOf(starts, cursor));
+      continue;
+    }
+    const at = source.indexOf(raw, cursor);
     if (at < 0) return null;
     cursor = at + raw.length;
-    lines.push(lineOf(starts, at));
+    const line = lineOf(starts, at);
+    if (chunkLinesNeeded) chunkLines.push(line);
+    if (!rendersNothing(token)) lines.push(line);
+  }
+  return { lines, chunkLines };
+}
+
+/**
+ * One source line per rendered top-level element for documents with raw HTML.
+ *
+ * A raw `<div>` can arrive as three Markdown tokens — open tag, paragraph,
+ * close tag — but parses as one top-level element, so `blockLines` cannot be
+ * zipped against the DOM. `parse5` is already the parser of record for raw
+ * HTML; its source locations identify the opening tag of every top-level
+ * element, and the chunk start offsets identify the token that opened it. The
+ * result is one line per element, in DOM order.
+ *
+ * Returns null when any element has no source location or the chunk/token
+ * counts disagree. The caller then keeps the existing no-anchor fallback.
+ */
+function elementLinesFor(
+  chunks: readonly string[],
+  chunkLines: readonly number[],
+): number[] | null {
+  if (chunks.length !== chunkLines.length) return null;
+  const joined = chunks.join("");
+  if (!joined) return [];
+  let tree: unknown;
+  try {
+    tree = parseFragment(joined, { sourceCodeLocationInfo: true });
+  } catch {
+    return null;
+  }
+  const root = tree as { childNodes?: unknown[] };
+  if (!Array.isArray(root.childNodes)) return null;
+
+  const starts: number[] = [];
+  const indices: number[] = [];
+  let at = 0;
+  for (let i = 0; i < chunks.length; i += 1) {
+    if (chunks[i].length > 0) {
+      starts.push(at);
+      indices.push(i);
+    }
+    at += chunks[i].length;
+  }
+
+  const lines: number[] = [];
+  for (const node of root.childNodes) {
+    if (!node || typeof node !== "object") continue;
+    const element = node as {
+      tagName?: string;
+      sourceCodeLocation?: {
+        startOffset?: number;
+        startTag?: { startOffset?: number } | null;
+      } | null;
+    };
+    // Text and comment nodes render nothing in `host.children`.
+    if (!element.tagName) continue;
+    const location = element.sourceCodeLocation;
+    const offset = location?.startTag?.startOffset ?? location?.startOffset;
+    if (typeof offset !== "number" || !Number.isFinite(offset)) return null;
+
+    let low = 0;
+    let high = starts.length - 1;
+    let found = -1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (starts[mid] <= offset) {
+        found = mid;
+        low = mid + 1;
+      } else high = mid - 1;
+    }
+    if (found < 0) return null;
+    const line = chunkLines[indices[found]];
+    if (typeof line !== "number" || !Number.isFinite(line)) return null;
+    lines.push(line);
   }
   return lines;
 }
@@ -933,13 +1171,18 @@ export function renderChunks(source: string, options: ChunkOptions = {}): Previe
     legacyImages = plain.legacyImages;
   }
 
+  const lineInfo = blockLines(source, hasRawHtml);
+  const elementLines =
+    hasRawHtml && lineInfo ? elementLinesFor(chunks, lineInfo.chunkLines) : undefined;
+
   return {
     chunks,
     hasRawHtml,
     codes,
     maths: renderMath(maths),
     fragments,
-    lines: blockLines(source),
+    lines: lineInfo?.lines ?? null,
+    elementLines,
     legacyImages,
   };
 }
