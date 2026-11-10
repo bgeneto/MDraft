@@ -67,16 +67,28 @@ export interface HtmlPreviewCallbacks {
   onScrollInput?(dragging: boolean): void;
 }
 
+/**
+ * How one render ended. Only `current` means the frame for this source was
+ * promoted on its bridge's `ready`; a failed build or IPC call, a load that
+ * timed out, and a render replaced by a newer one or by a reset are not.
+ */
+export type HtmlRenderOutcome = "current" | "failed" | "superseded";
+
 export interface HtmlPreviewHandle {
   /** Start a new document: new nonce, new origin, no stale state. */
   reset(): void;
+  /**
+   * Build and load a frame for `source`. Resolves when that frame is promoted
+   * or can no longer be, so the shell marks the preview current only for a
+   * frame that is actually on screen.
+   */
   render(
     source: string,
     root: string | null,
     filename: string,
     scripts: boolean,
     imageRoots?: string[],
-  ): Promise<void>;
+  ): Promise<HtmlRenderOutcome>;
   dispose(): void;
   setAccelerators(list: HtmlAccelerator[]): void;
   scrollTo(top: number, input?: number): void;
@@ -108,6 +120,8 @@ interface FrameState {
   timer: number;
   /** The word table this frame's copy was built with. */
   fragments: HtmlTextFragment[];
+  /** Resolves the render that created this frame; a no-op once settled. */
+  settle: (outcome: HtmlRenderOutcome) => void;
 }
 
 const BLOCK_TAGS = new Set([
@@ -568,6 +582,7 @@ export function createHtmlPreview(
       }
       postTo(frame, { type: "keys", list: accelerators });
       callbacks.onReady(layout);
+      frame.settle("current");
       return;
     }
 
@@ -713,7 +728,16 @@ export function createHtmlPreview(
     frame.setAttribute("referrerpolicy", "no-referrer");
     frame.src = `${url}?v=${generation}`;
     host.appendChild(frame);
-    return { frame, token, generation, ready: false, timer: 0, fragments, source: "" };
+    return {
+      frame,
+      token,
+      generation,
+      ready: false,
+      timer: 0,
+      fragments,
+      source: "",
+      settle: () => {},
+    };
   }
 
   function dropFrames(): void {
@@ -721,6 +745,8 @@ export function createHtmlPreview(
     scrollIndex = new ScrollIndex([]);
     window.clearTimeout(pending?.timer ?? 0);
     window.clearTimeout(active?.timer ?? 0);
+    // A render still waiting for its frame must not be left pending forever.
+    pending?.settle("superseded");
     pending?.frame.remove();
     active?.frame.remove();
     pending = null;
@@ -754,11 +780,11 @@ export function createHtmlPreview(
       try {
         built = await buildHtmlPreview(source, token, bridgeNonce);
       } catch (error) {
-        if (mine !== generation) return;
+        if (mine !== generation) return "superseded";
         callbacks.onError(`Could not prepare the HTML preview: ${String(error)}`);
-        return;
+        return "failed";
       }
-      if (mine !== generation) return;
+      if (mine !== generation) return "superseded";
 
       let url: string;
       try {
@@ -774,11 +800,11 @@ export function createHtmlPreview(
           })
         ).url;
       } catch (error) {
-        if (mine !== generation) return;
+        if (mine !== generation) return "superseded";
         callbacks.onError(`Could not start the HTML preview: ${String(error)}`);
-        return;
+        return "failed";
       }
-      if (mine !== generation) return;
+      if (mine !== generation) return "superseded";
 
       const next = makeFrame(url, token, built.fragments);
       next.source = source;
@@ -787,14 +813,23 @@ export function createHtmlPreview(
       if (pending) {
         window.clearTimeout(pending.timer);
         pending.frame.remove();
+        pending.settle("superseded");
       }
+      const outcome = new Promise<HtmlRenderOutcome>((resolve) => {
+        next.settle = (value) => {
+          next.settle = () => {};
+          resolve(value);
+        };
+      });
       next.timer = window.setTimeout(() => {
         if (pending !== next) return;
         pending = null;
         next.frame.remove();
+        next.settle("failed");
         callbacks.onError("The HTML preview did not finish loading.");
       }, 12_000);
       pending = next;
+      return outcome;
     },
 
     dispose() {
