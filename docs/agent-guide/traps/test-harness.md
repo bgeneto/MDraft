@@ -104,3 +104,16 @@ the overlay, so this looked like a guest focus or IPC failure. Close
 `.prefs-close` before mouse probes and measure both the actual guest selection
 and source decoration. A programmatic click succeeding does not prove a real
 pointer can reach the same target.
+
+**`p0-unit` reports `FAIL  Pandoc retains source/path/language/image root during delayed tools` (and `picker`, `convert`) — `110/113` — while export ownership is intact**
+`scripts/p0-unit.mjs` never imports `src/main.ts`: it selects named function
+declarations by AST (`exportNames`) and runs them in a `vm` context whose
+globals are hand-written stubs. When one of those functions starts calling a
+helper that is neither selected nor stubbed — `toastReport` in
+`exportWithPandoc` — the call throws `ReferenceError: toastReport is not
+defined` inside the export's own `try`, the `catch` hands it to the stubbed
+`message()`, and the check fails on `h.errors.length === 0`. The FAIL line names
+an ownership property, so it reads as a tab-switch regression; it is not. Print
+`h.errors` before suspecting the shell. Add the helper to `exportNames` so its
+real body runs, or stub it in the context — and do the same for every new free
+identifier a selected function gains.

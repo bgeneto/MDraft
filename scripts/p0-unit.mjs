@@ -9,10 +9,12 @@
 import { buildRecoveryEntry, createRecoveryScheduler, newRecoveryId } from "../src/recovery.ts";
 import { classifyDiskChange } from "../src/disk-change.ts";
 import { createDocumentLifecycle } from "../src/document-lifecycle.ts";
-import { createSessionStore } from "../src/sessions.ts";
+import { createSessionStore, pathKey } from "../src/sessions.ts";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
+import { EditorSelection, EditorState } from "@codemirror/state";
+import { history, undo } from "@codemirror/commands";
 import {
   TYPST_DISPLAY_MATH,
   TYPST_OUTLINE,
@@ -769,6 +771,11 @@ const exportNames = [
   "exportPdf",
   "exportPdfBrowser",
   "exportWithPandoc",
+  // Helpers the selected routes call. A free identifier that is neither
+  // selected nor stubbed throws inside the export's own try and fails the
+  // ownership checks for an unrelated reason.
+  "toastReport",
+  "missingResources",
 ];
 const exportCode = ts.transpileModule(
   shell.statements
@@ -967,6 +974,850 @@ for (const delay of ["tools", "picker", "convert"]) {
       request.imageRoot === "/origin/images",
     `Pandoc retains source/path/language/image root during delayed ${delay}`,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Shell ownership: the real `src/main.ts` bodies, selected by name, run against
+// a real session store and a scripted editor. Every free identifier a selected
+// function uses must be provided by the harness context.
+// ---------------------------------------------------------------------------
+
+function shellCode(names) {
+  const found = shell.statements.filter(
+    (n) => ts.isFunctionDeclaration(n) && names.includes(n.name?.text),
+  );
+  const missing = names.filter((name) => !found.some((n) => n.name.text === name));
+  if (missing.length) throw new Error(`main.ts no longer declares ${missing.join(", ")}`);
+  return ts.transpileModule(found.map((n) => n.getText(shell)).join("\n"), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+  }).outputText;
+}
+
+/** A scripted single editor view whose programmatic edits fire the change listener. */
+function scriptedEditor(context) {
+  let text = "";
+  const editor = {
+    getDoc: () => text,
+    setDoc(next) {
+      const changed = next !== text;
+      text = next;
+      if (changed) context.onDocChanged(next);
+    },
+    type(next) {
+      text = next;
+      context.onDocChanged(next);
+    },
+    captureState: () => {
+      const captured = text;
+      return { doc: { toString: () => captured, length: captured.length } };
+    },
+    restoreState(state) {
+      text = state.doc.toString();
+    },
+    view: { scrollDOM: { scrollTop: 0 }, state: { doc: { lines: 1 } } },
+  };
+  for (const name of [
+    "setLanguage",
+    "setSpellcheck",
+    "focus",
+    "clearDiagnostics",
+    "clearSyncRange",
+    "scrollToLine",
+  ])
+    editor[name] = () => {};
+  return editor;
+}
+
+const shellNoops = [
+  "stopReadAloud",
+  "invalidatePreview",
+  "applyLatexMarks",
+  "syncGuest",
+  "resetOutline",
+  "applyLayout",
+  "resetTokenCount",
+  "scheduleTokenCount",
+  "refreshTitle",
+  "refreshStatus",
+  "renderDocTabs",
+  "renderSidebar",
+  "renderNotice",
+  "scheduleOutlineRefresh",
+  "scheduleRender",
+  "toast",
+];
+
+function shellHarness(names, extra = {}) {
+  const sessions = createSessionStore();
+  const journal = new Map();
+  const context = {
+    sessions,
+    settings: { spellcheck: false, spellcheckWords: [] },
+    performance: { now: () => 0 },
+    SYNC_SUPPRESS_MS: 0,
+    latexProblems: [],
+    latexProblemRoot: null,
+    htmlScrollTop: 0,
+    previewPane: { scrollTop: 0 },
+    pendingPreviewScroll: null,
+    suppressEditorScrollUntil: 0,
+    suppressPreviewScrollUntil: 0,
+    assistant: null,
+    languageForExtension: () => "markdown",
+    console: { warn() {} },
+    recovery: {
+      schedule: (s, text) => journal.set(s.id, text),
+      forget: async (s) => journal.delete(s.id),
+    },
+    ...extra,
+  };
+  for (const name of shellNoops) if (!(name in context)) context[name] = () => {};
+  context.onDocChanged = (text) => {
+    // The parts of the shell's change listener that ownership depends on.
+    context.doc.revision += 1;
+    context.doc.dirty = text !== context.doc.savedContent;
+    if (context.doc.dirty) journal.set(context.doc.id, text);
+    else journal.delete(context.doc.id);
+  };
+  context.editor = scriptedEditor(context);
+  context.doc = sessions.active();
+  runInNewContext(`${shellCode(names)}\nglobalThis.fns={${names.join(",")}};`, context);
+  return { context, sessions, journal, fns: context.fns, editor: context.editor };
+}
+
+function describeFile(s, path, content) {
+  s.path = path;
+  s.name = path.split("/").pop();
+  s.directory = path.slice(0, path.lastIndexOf("/"));
+  s.savedContent = content;
+  s.dirty = false;
+}
+
+function filePayload(path, content) {
+  return {
+    path,
+    name: path.split("/").pop(),
+    directory: path.slice(0, path.lastIndexOf("/")),
+    content,
+    lineEnding: "\n",
+    hadBom: false,
+    lossy: false,
+    readOnly: false,
+    size: content.length,
+    modifiedMs: 1,
+    sha256: null,
+    tokens: 0,
+  };
+}
+
+const recoveryNames = [
+  "restoreRecovery",
+  "snapshotDoc",
+  "displayDoc",
+  "activateSession",
+  "textOf",
+  "closeSessions",
+  "basename",
+  "directoryOf",
+  "languageFor",
+  "recoveryLanguage",
+];
+
+/** Two open documents, A on screen and B hidden, plus the journal `entries`. */
+function recoveryHarness(entries, files = {}) {
+  const h = shellHarness(recoveryNames, {
+    api: {
+      listRecovery: async () => entries.map((item) => ({ ...item })),
+      removeRecovery: async () => {},
+      readDocument: async (path) => {
+        await delay(1);
+        if (!(path in files)) throw new Error("missing");
+        return filePayload(path, files[path]);
+      },
+    },
+    lifecycle: { close: async (_targets, finalize) => finalize(() => true) },
+    loadUntitled: async () => {},
+    defaultDocumentLanguage: () => "markdown",
+    recoveryNotice: null,
+  });
+  const a = h.context.doc;
+  describeFile(a, "/p/a.md", "disk A");
+  h.editor.setDoc("disk A");
+  const b = h.sessions.create();
+  describeFile(b, "/p/b.md", "disk B");
+  h.sessions.add(b);
+  h.sessions.setActive(a.id);
+  return { ...h, a, b };
+}
+
+const journalEntry = (path, content, updatedMs) => ({
+  id: `j-${path}`,
+  path,
+  name: path.split("/").pop(),
+  language: "markdown",
+  content,
+  updatedMs,
+  lineEnding: "\n",
+  hadBom: false,
+  lossy: false,
+  readOnly: false,
+  baseModifiedMs: 1,
+  baseSize: 6,
+  baseSha256: null,
+});
+const consistent = (h) =>
+  h.sessions.active() === h.context.doc && h.sessions.byId(h.context.doc.id) === h.context.doc;
+
+{
+  // The hidden tab's entry is newer, so recovery activates it first. The tab on
+  // screen must keep its own draft through that switch.
+  const h = recoveryHarness([
+    journalEntry("/p/b.md", "draft B", 2),
+    journalEntry("/p/a.md", "draft A", 1),
+  ]);
+  await h.fns.restoreRecovery();
+  check(h.context.doc === h.b, "recovery activates the newest recovered tab");
+  check(h.fns.textOf(h.a) === "draft A", "the tab that was on screen keeps its recovered draft");
+  check(h.fns.textOf(h.b) === "draft B", "the newest recovered tab shows its draft");
+  check(h.a.dirty && h.journal.get(h.a.id) === "draft A", "the shadowed draft stays journaled");
+  await h.fns.activateSession(h.a.id);
+  check(h.editor.getDoc() === "draft A", "returning to the first tab shows its draft, not disk");
+  check(consistent(h), "displayed and store active sessions agree after recovery");
+}
+{
+  // The tab on screen is the newest entry and a second entry opens a new tab.
+  const h = recoveryHarness(
+    [journalEntry("/p/a.md", "draft A", 2), journalEntry("/p/c.md", "draft C", 1)],
+    { "/p/c.md": "disk C" },
+  );
+  await h.fns.restoreRecovery();
+  const c = h.sessions.findByPath("/p/c.md");
+  check(h.context.doc === h.a && h.editor.getDoc() === "draft A", "the on-screen draft is shown");
+  check(c?.draft === "draft C" && h.fns.textOf(c) === "draft C", "the new tab holds its draft");
+  check(consistent(h), "a new recovered tab does not move the store's active session");
+  check(
+    h.sessions.next() === h.b && h.sessions.list().at(-1) === c,
+    "Next Tab follows the tab on screen; recovered tabs append at the end",
+  );
+  await h.fns.closeSessions([h.a.id]);
+  check(
+    !h.sessions.byId(h.a.id) && consistent(h),
+    "closing the displayed recovered tab leaves a tab that is in the store",
+  );
+}
+{
+  // An edit while later entries are still being read must build on the draft.
+  const h = recoveryHarness(
+    [journalEntry("/p/a.md", "draft A", 3), journalEntry("/p/c.md", "draft C", 1)],
+    { "/p/c.md": "disk C" },
+  );
+  const job = h.fns.restoreRecovery();
+  await delay(0);
+  h.editor.type(`${h.editor.getDoc()}!`);
+  await job;
+  check(h.journal.get(h.a.id) === "draft A!", "an edit during restore journals the recovered text");
+  check(consistent(h), "the active session stays consistent through an edit during restore");
+}
+
+// ---------------------------------------------------------------------------
+// LaTeX export ownership (F14): the project snapshot belongs to the tab the
+// export started on, even when the Pandoc lookup yields to a tab switch.
+// ---------------------------------------------------------------------------
+
+function latexExportHarness() {
+  const release = deferred();
+  const requests = [];
+  const errors = [];
+  const h = shellHarness(
+    [
+      "exportWithPandoc",
+      "exportLatexWithWriter",
+      "openWriterChooser",
+      "latexExportSnapshot",
+      "latexExportRequest",
+      "exportSource",
+      "exportSuggestion",
+      "documentStem",
+      "toastReport",
+      "missingResources",
+      "basename",
+      "joinDir",
+      "textOf",
+    ],
+    {
+      pathKey,
+      latexPreview: null,
+      pandocCache: null,
+      typstCache: { found: true },
+      customImageFolder: () => null,
+      toast: () => ({ dismiss() {} }),
+      saveDialog: async () => "/out/result",
+      message: async (text) => errors.push(String(text)),
+      pandocSetup: async () => {},
+      typstSetup: async () => {},
+      refreshTypstStatus: async () => {},
+      renderAsciidocForExport: async (text) => text,
+      showWriterChooser: async () => ({ writer: "html", label: "HTML", extension: "html" }),
+      api: {
+        latexProjectSnapshot: async (root, overlays) => ({
+          mainFile: root.split("/").pop(),
+          files: overlays.map((item) => ({ path: item.path, data: item.text })),
+          skipped: [],
+        }),
+        pandocListWriters: async () => [{ name: "html", label: "HTML", extension: "html" }],
+        runExport: async (request) => {
+          requests.push(request);
+          return { outputPath: request.outputPath, afterErrors: [], warnings: "" };
+        },
+        runPandocWriter: async (request) => {
+          requests.push(request);
+          return { outputPath: request.outputPath, afterErrors: [], warnings: "" };
+        },
+      },
+    },
+  );
+  h.context.refreshPandocStatus = async () => {
+    await release.promise;
+    h.context.pandocCache = { found: true };
+  };
+  const a = h.context.doc;
+  describeFile(a, "/a/main.tex", "\\section{A}");
+  a.language = "latex";
+  h.editor.setDoc("\\section{A} unsaved");
+  const b = h.sessions.create();
+  describeFile(b, "/b/main.tex", "\\section{B}");
+  b.language = "latex";
+  h.sessions.add(b);
+  h.sessions.setActive(a.id);
+  const md = h.sessions.create();
+  describeFile(md, "/m/notes.md", "# notes");
+  h.sessions.add(md);
+  h.sessions.setActive(a.id);
+  const switchTo = (session) => {
+    h.context.doc = h.sessions.setActive(session.id);
+    h.editor.setDoc(session.savedContent);
+  };
+  return { ...h, a, b, md, release, requests, errors, switchTo };
+}
+
+for (const [route, run] of [
+  [
+    "configured format",
+    (h) => h.fns.exportWithPandoc({ id: "docx", label: "Word", extension: "docx" }),
+  ],
+  [
+    "direct writer",
+    (h) => h.fns.exportLatexWithWriter("html", "HTML", "html", h.fns.exportSource()),
+  ],
+]) {
+  for (const target of ["b", "md"]) {
+    const h = latexExportHarness();
+    const job = run(h);
+    await delay(0);
+    h.switchTo(h[target]);
+    h.release.resolve();
+    await job;
+    const request = h.requests[0];
+    const files = request?.snapshot?.files ?? [];
+    check(
+      h.errors.length === 0 &&
+        request?.inputPath === "/a/main.tex" &&
+        files.some((file) => file.path === "/a/main.tex" && file.data === "\\section{A} unsaved") &&
+        !files.some((file) => file.path.startsWith("/b/")),
+      `${route} export keeps project A when the lookup yields to ${target === "b" ? "LaTeX B" : "a Markdown tab"}`,
+      h.errors.join("; "),
+    );
+  }
+}
+{
+  const h = latexExportHarness();
+  const job = h.fns.openWriterChooser();
+  await delay(0);
+  h.switchTo(h.b);
+  h.release.resolve();
+  await job;
+  check(
+    h.requests[0]?.inputPath === "/a/main.tex" &&
+      !h.requests[0].snapshot.files.some((file) => file.path.startsWith("/b/")),
+    "the writer chooser keeps project A when the lookup yields to LaTeX B",
+    h.errors.join("; "),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Paste ownership (F2): a delayed paste lands in the document it was made in —
+// at the live caret, or in its hidden tab's stored state — and nowhere else.
+// ---------------------------------------------------------------------------
+
+const editorSource = ts.createSourceFile(
+  "editor.ts",
+  readFileSync(new URL("../src/editor.ts", import.meta.url), "utf8"),
+  ts.ScriptTarget.Latest,
+  true,
+);
+const insertionContext = { EditorSelection };
+runInNewContext(
+  `${
+    ts.transpileModule(
+      editorSource.statements
+        .filter(
+          (n) =>
+            ts.isFunctionDeclaration(n) &&
+            [
+              "blockInsertSpec",
+              "nativeTextSpec",
+              "pastedInsertSpec",
+              "pasteInsertionSpec",
+            ].includes(n.name?.text),
+        )
+        .map((n) => n.getText(editorSource).replace(/^export /, ""))
+        .join("\n"),
+      { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } },
+    ).outputText
+  }\nglobalThis.pasteInsertionSpec = pasteInsertionSpec;`,
+  insertionContext,
+);
+
+function pasteHarness() {
+  const toasts = [];
+  const h = shellHarness(
+    ["capturePasteOwner", "pasteOwnerState", "insertForOwner", "resolveRichImage", "altFromPath"],
+    {
+      pasteInsertionSpec: insertionContext.pasteInsertionSpec,
+      toast: (text) => {
+        toasts.push(text);
+        return { dismiss() {} };
+      },
+      settings: { richPasteImages: "download", imageApplyLocal: true },
+      richImageOptions: () => ({ rule: "assetsFolder" }),
+      hasImageDestination: (_language, path) => path !== null,
+      typstImageProblem: () => null,
+      KEEP_ORIGINAL_RICH: "kept",
+      NO_FOLDER_KEPT: "no folder",
+    },
+  );
+  const live = [];
+  h.editor.insertBlock = (text) => live.push(text);
+  h.editor.insertPasted = (text) => live.push(text);
+  h.editor.insertNativeText = (text) => live.push(text);
+  const a = h.context.doc;
+  describeFile(a, "/a/doc.md", "para\n");
+  const b = h.sessions.create();
+  describeFile(b, "/b/other.md", "other\n");
+  h.sessions.add(b);
+  h.sessions.setActive(a.id);
+  /** Leave A for B, the way activateSession stores the hidden tab's state. */
+  const hideA = () => {
+    a.editorState = EditorState.create({
+      doc: "para\n",
+      selection: { anchor: 4 },
+      extensions: [history()],
+    });
+    h.context.doc = h.sessions.setActive(b.id);
+  };
+  return { ...h, a, b, live, toasts, hideA };
+}
+const block = (text) => ({ kind: "block", text });
+
+{
+  const h = pasteHarness();
+  const owner = h.fns.capturePasteOwner();
+  h.a.revision += 3; // typing in the same document does not invalidate the paste
+  check(
+    h.fns.insertForOwner(owner, block("![x](assets/x.png)")) && h.live.length === 1,
+    "a delayed paste into the tab on screen goes to the live caret, even after typing",
+  );
+}
+{
+  const h = pasteHarness();
+  const owner = h.fns.capturePasteOwner();
+  h.hideA();
+  const inserted = h.fns.insertForOwner(owner, block("![x](assets/x.png)"), ["/a/assets/x.png"]);
+  const text = h.a.editorState.doc.toString();
+  check(
+    inserted && h.live.length === 0 && text === "para\n\n![x](assets/x.png)\n\n",
+    "a paste whose tab was hidden lands in that tab's stored state",
+    JSON.stringify(text),
+  );
+  check(
+    h.a.dirty && h.journal.get(h.a.id) === text && h.toasts.some((t) => t.includes("doc.md")),
+    "the hidden tab becomes dirty, is journaled, and the reader is told where the paste went",
+  );
+  let undone = h.a.editorState;
+  undo({ state: undone, dispatch: (tr) => (undone = tr.state) });
+  check(undone.doc.toString() === "para\n", "the hidden-tab paste undoes as one step");
+}
+for (const [label, change] of [
+  ["closed", (h) => h.sessions.remove(h.a.id)],
+  ["reloaded", (h) => (h.a.incarnation += 1)],
+  ["saved to another folder", (h) => ((h.a.path = "/c/doc.md"), (h.a.directory = "/c"))],
+  ["saved as another language", (h) => (h.a.language = "typst")],
+]) {
+  const h = pasteHarness();
+  const owner = h.fns.capturePasteOwner();
+  h.hideA();
+  change(h);
+  const inserted = h.fns.insertForOwner(owner, block("![x](assets/x.png)"), ["/a/assets/x.png"]);
+  check(
+    !inserted &&
+      h.live.length === 0 &&
+      h.a.editorState.doc.toString() === "para\n" &&
+      h.toasts.some((t) => t.includes("/a/assets/x.png")),
+    `a paste whose document was ${label} inserts nothing and names the saved image`,
+  );
+}
+{
+  const h = pasteHarness();
+  const owner = h.fns.capturePasteOwner();
+  h.hideA();
+  h.a.path = "/a/renamed.md";
+  h.a.name = "renamed.md";
+  check(
+    h.fns.insertForOwner(owner, block("![x](assets/x.png)")) &&
+      h.a.editorState.doc.toString().includes("assets/x.png"),
+    "a rename in the same folder keeps the paste valid",
+  );
+}
+{
+  const h = pasteHarness();
+  const owner = h.fns.capturePasteOwner();
+  h.context.doc = h.sessions.setActive(h.b.id);
+  h.a.draft = "recovered";
+  check(
+    !h.fns.insertForOwner(owner, block("x")) && h.a.draft === "recovered",
+    "a hidden tab holding a never-shown recovered draft is not edited",
+  );
+}
+{
+  // An image resolved after a tab switch still saves under the paste's folder.
+  const h = pasteHarness();
+  const calls = [];
+  h.context.api = {
+    downloadImage: async (_url, path) => {
+      calls.push(path);
+      return { absolutePath: `${path}-x.png`, markdownPath: "x.png", bytes: 1, source: "remote" };
+    },
+  };
+  const owner = h.fns.capturePasteOwner();
+  h.hideA();
+  const assets = [];
+  const resolved = await h.fns.resolveRichImage(
+    { src: "https://example.test/x.png", alt: "" },
+    "markdown",
+    () => {},
+    owner,
+    assets,
+  );
+  check(
+    calls[0] === "/a/doc.md" && resolved?.src === "x.png" && assets[0] === "/a/doc.md-x.png",
+    "a rich-paste image resolves against the pasting document, not the tab on screen",
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Open and startup ownership (F3): one tab per path, and a blank startup tab
+// that is filled at most once and never over the reader's typing.
+// ---------------------------------------------------------------------------
+
+function openHarness() {
+  const reads = new Map();
+  const errors = [];
+  const writes = [];
+  let writeGate = null;
+  const h = shellHarness(
+    [
+      "openPath",
+      "openPaths",
+      "loadUntitled",
+      "takeStartupSlot",
+      "restoreLastTabs",
+      "snapshotDoc",
+      "describe",
+      "activateSession",
+      "displayDoc",
+      "textOf",
+      "languageFor",
+    ],
+    {
+      settings: { recordRecent: false, sidebarTab: "outline", lastTabs: [], lastActiveTab: null },
+      message: async (text) => errors.push(String(text)),
+      openPathChain: Promise.resolve(),
+      planRestore: (saved, active, exists) => ({
+        tabs: saved.filter(exists),
+        active,
+        missing: 0,
+      }),
+    },
+  );
+  h.context.toast = (text) => errors.push(String(text));
+  h.context.showInEditor = async () => {
+    h.editor.setDoc(h.context.doc.draft ?? h.context.doc.savedContent);
+    h.context.doc.draft = null;
+  };
+  h.context.api = {
+    readDocument: (path) => {
+      const gate = reads.get(path) ?? deferred();
+      reads.set(path, gate);
+      return gate.promise.then((content) => {
+        if (content instanceof Error) throw content;
+        return filePayload(path, content);
+      });
+    },
+    pathExists: async () => true,
+  };
+  h.context.lifecycle = createDocumentLifecycle({
+    sessions: h.sessions,
+    text: (s) => h.fns.textOf(s),
+    read: async () => {
+      throw new Error("unused");
+    },
+    stat: async () => ({ exists: false }),
+    write: async (path, text) => {
+      writes.push(path);
+      if (writeGate) await writeGate.promise;
+      return { written: true, modifiedMs: 2, size: text.length, sha256: null };
+    },
+    recovery: { schedule() {}, forget: async () => {}, flush: async () => {} },
+    choosePath: async () => "/p/x.md",
+    decide: async () => "cancel",
+    replace() {},
+    adoptPath: (s, path) => {
+      s.path = path;
+      s.name = path.split("/").pop();
+      s.directory = path.slice(0, path.lastIndexOf("/"));
+    },
+    changed() {},
+    conflict() {},
+    notify: (text) => errors.push(text),
+    committing() {},
+  });
+  h.context.startupSlot = { session: h.context.doc, revision: h.context.doc.revision };
+  const release = (path, content) => {
+    const gate = reads.get(path) ?? deferred();
+    reads.set(path, gate);
+    gate.resolve(content);
+  };
+  return {
+    ...h,
+    errors,
+    writes,
+    release,
+    gateWrites: () => (writeGate = deferred()),
+    openWrites: () => writeGate.resolve(),
+    tabsFor: (path) => h.sessions.list().filter((s) => s.path === path),
+  };
+}
+
+{
+  const h = openHarness();
+  h.context.startupSlot = null;
+  const first = h.fns.openPath("/p/x.md");
+  const second = h.fns.openPath("/p/x.md");
+  await delay(0);
+  h.release("/p/x.md", "X");
+  const [one, two] = await Promise.all([first, second]);
+  check(
+    h.tabsFor("/p/x.md").length === 1 && one === two && h.context.doc === one,
+    "two concurrent opens of one path leave one tab and resolve to it",
+  );
+}
+{
+  const h = openHarness();
+  const blank = h.context.doc;
+  const job = h.fns.openPath("/p/x.md");
+  await delay(0);
+  h.editor.type("typed while starting");
+  h.release("/p/x.md", "X");
+  const opened = await job;
+  check(
+    opened !== blank && blank.path === null && h.fns.textOf(blank) === "typed while starting",
+    "a startup read does not replace a blank tab the reader typed in",
+  );
+  check(
+    h.journal.get(blank.id) === "typed while starting" && h.sessions.byId(blank.id) === blank,
+    "the typed tab keeps its recovery entry",
+  );
+}
+{
+  const h = openHarness();
+  const blank = h.context.doc;
+  const a = h.fns.openPath("/p/a.md");
+  const b = h.fns.openPath("/p/b.md");
+  await delay(0);
+  h.release("/p/b.md", "B");
+  h.release("/p/a.md", "A");
+  await Promise.all([a, b]);
+  check(
+    h.tabsFor("/p/a.md").length === 1 &&
+      h.tabsFor("/p/b.md").length === 1 &&
+      h.sessions.list().length === 2,
+    "two startup reads fill the blank tab once and open the other as a tab",
+  );
+  check(blank.path !== null, "the blank startup tab is reused rather than left empty");
+}
+{
+  // Save As holds the path while it writes; the open must then focus that tab.
+  const h = openHarness();
+  h.context.startupSlot = null;
+  const other = h.context.doc;
+  describeFile(other, "/p/other.md", "other");
+  h.editor.setDoc("other");
+  h.gateWrites();
+  const saving = h.context.lifecycle.saveAs(other);
+  await delay(0);
+  const opening = h.fns.openPath("/p/x.md");
+  await delay(0);
+  h.release("/p/x.md", "disk X");
+  h.openWrites();
+  await saving;
+  const opened = await opening;
+  check(
+    h.tabsFor("/p/x.md").length === 1 && opened === other,
+    "an open racing a Save As to the same path focuses the saved tab instead of duplicating it",
+  );
+}
+{
+  const h = openHarness();
+  h.context.settings.lastTabs = ["/p/gone.md", "/p/kept.md"];
+  const job = h.fns.restoreLastTabs();
+  await delay(0);
+  h.release("/p/gone.md", new Error("vanished"));
+  await delay(5);
+  h.release("/p/kept.md", "K");
+  await job;
+  check(
+    h.sessions.list().length === 1 && h.tabsFor("/p/kept.md").length === 1,
+    "a failed first remembered tab leaves the slot for the next one, not an empty tab",
+  );
+}
+{
+  const h = openHarness();
+  h.sessions.remove(h.context.doc.id);
+  await h.fns.loadUntitled("", "markdown");
+  check(
+    h.sessions.byId(h.context.doc.id) === h.context.doc && h.sessions.list().length === 1,
+    "a startup fill after the blank tab was closed creates a tab that is in the store",
+  );
+}
+
+// ---------------------------------------------------------------------------
+// LaTeX engine freshness (F6): a backend or engine change makes the compiled
+// PDF stale at once, and manual mode does not compile because of it.
+// ---------------------------------------------------------------------------
+
+for (const autoCompile of [false, true]) {
+  const statuses = [];
+  let compiles = 0;
+  const h = shellHarness(["invalidateLatexBuild", "latexCurrent"], {
+    renderToken: 7,
+    renderTimer: 0,
+    latexInFlight: true,
+    previewStale: false,
+    preview: { dataset: { latexCurrent: "7" } },
+    window: { clearTimeout() {} },
+    cancelLatex() {},
+    discardStagedPdf() {},
+    syncMenuState() {},
+    doRender: () => compiles++,
+    setLatexStatus: (text) => statuses.push(text),
+  });
+  h.context.settings.latexAutoCompile = autoCompile;
+  h.context.doc.language = "latex";
+  const preview = { token: 7, activeId: h.context.doc.id, revisions: [] };
+  check(h.fns.latexCurrent(preview), "a compiled LaTeX PDF is current before the engine changes");
+  h.fns.invalidateLatexBuild();
+  check(
+    !h.fns.latexCurrent(preview) &&
+      h.context.previewStale &&
+      !("latexCurrent" in h.context.preview.dataset) &&
+      compiles === 0,
+    `an engine change makes the PDF stale without compiling (auto-compile ${autoCompile ? "on" : "off"})`,
+  );
+  check(
+    autoCompile ? statuses.length === 0 : statuses.some((text) => text.includes("engine changed")),
+    `manual mode says why the preview is out of date (auto-compile ${autoCompile ? "on" : "off"})`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Auto Save and a deciding close (F16): a background save must not void the
+// reader's answer to the unsaved-changes dialog.
+// ---------------------------------------------------------------------------
+
+function autoSaveHarness() {
+  const decision = deferred();
+  let writeGate = null;
+  const writes = [];
+  const h = shellHarness(["autoSaveTick", "writeSession", "textOf"], {
+    autoSaveRunning: false,
+    message: async () => {},
+  });
+  h.context.settings.autoSave = true;
+  const s = h.context.doc;
+  describeFile(s, "/p/a.md", "saved");
+  h.editor.type("edited");
+  h.context.lifecycle = createDocumentLifecycle({
+    sessions: h.sessions,
+    text: (x) => h.fns.textOf(x),
+    read: async () => filePayload("/p/a.md", "saved"),
+    stat: async () => ({ exists: true, modifiedMs: 0, size: 0, sha256: null, readOnly: false }),
+    write: async (path, text) => {
+      writes.push(text);
+      if (writeGate) await writeGate.promise;
+      return { written: true, modifiedMs: 0, size: 5, sha256: null };
+    },
+    recovery: { schedule() {}, forget: async () => {}, flush: async () => {} },
+    choosePath: async () => null,
+    decide: () => decision.promise,
+    replace() {},
+    adoptPath() {},
+    changed() {},
+    conflict() {},
+    notify() {},
+    committing() {},
+  });
+  return {
+    ...h,
+    s,
+    writes,
+    decision,
+    gateWrites: () => (writeGate = deferred()),
+    openWrites: () => writeGate.resolve(),
+  };
+}
+
+for (const answer of ["discard", "save"]) {
+  const h = autoSaveHarness();
+  let closed = false;
+  const closing = h.context.lifecycle.close([h.s], async () => (closed = true));
+  await delay(0);
+  await h.fns.autoSaveTick();
+  check(h.writes.length === 0, `Auto Save waits while the close dialog is open (${answer})`);
+  h.decision.resolve(answer);
+  const result = await closing;
+  check(
+    result && closed,
+    `choosing ${answer} in the close dialog closes the tab despite Auto Save`,
+  );
+}
+{
+  // The mechanism the guard prevents: a save during the dialog voids the answer.
+  const h = autoSaveHarness();
+  const closing = h.context.lifecycle.close([h.s], async () => true);
+  await delay(0);
+  await h.context.lifecycle.save(h.s, true);
+  h.decision.resolve("discard");
+  check(!(await closing), "a save during the close dialog invalidates the close's snapshot");
+}
+{
+  const h = autoSaveHarness();
+  h.gateWrites();
+  const first = h.fns.autoSaveTick();
+  await delay(0);
+  await h.fns.autoSaveTick();
+  h.openWrites();
+  await first;
+  check(h.writes.length === 1, "an Auto Save tick does not overlap one still running");
 }
 
 const failed = checks.filter((entry) => !entry.ok).length;
