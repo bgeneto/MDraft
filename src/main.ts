@@ -32,7 +32,7 @@ import { showDocumentStatistics, type DocumentStatistics } from "./statistics-di
 import { askUnsaved } from "./unsaved-dialog";
 import { rewriteExportReferences } from "./export-article";
 import { showWriterChooser } from "./export-chooser";
-import { createEditor, type EditorHandle } from "./editor";
+import { createEditor, pasteInsertionSpec, type EditorHandle, type PasteInsertion } from "./editor";
 import {
   formatDocument,
   formatEditor,
@@ -405,10 +405,32 @@ function installTabs(): void {
   });
 }
 /**
- * Boot installs the startup file into the first tab. After that, Open and New
- * add a tab instead of replacing the one the reader is in.
+ * The blank tab the window boots with, offered to the startup choice.
+ *
+ * Boot installs the first startup document into it; after that, Open and New
+ * add a tab instead of replacing the one the reader is in. It is a reserved
+ * session, not a boolean: two reads that both saw "still starting" must not
+ * both fill it, and a tab the reader has typed in, or closed, is no longer
+ * blank. `takeStartupSlot` consumes it at most once.
  */
-let installingStartup = true;
+interface StartupSlot {
+  session: Session;
+  revision: number;
+}
+let startupSlot: StartupSlot | null = { session: doc, revision: doc.revision };
+
+/** True, once, when the reserved blank tab may still be replaced. */
+function takeStartupSlot(): boolean {
+  const slot = startupSlot;
+  startupSlot = null;
+  return Boolean(
+    slot &&
+    slot.session === doc &&
+    sessions.byId(slot.session.id) === slot.session &&
+    slot.session.revision === slot.revision &&
+    !slot.session.dirty,
+  );
+}
 /** One full-document format at a time, whichever tab it belongs to. */
 let formatBusy = false;
 let isDark = false;
@@ -3124,6 +3146,7 @@ function syncGuest(next: api.DocumentLanguage): void {
 /** Copy a file read onto a session. The EditorState is left for the caller. */
 function describe(session: Session, payload: api.DocumentPayload): void {
   session.revision += 1;
+  session.incarnation += 1;
   session.path = payload.path;
   session.name = payload.name;
   session.directory = payload.directory || null;
@@ -3399,26 +3422,47 @@ interface OpenOptions {
   rememberRecent?: boolean;
 }
 
-async function openPath(path: string, options: OpenOptions = {}): Promise<void> {
+/**
+ * Open `path`, or focus the tab that already holds it.
+ *
+ * Resolves to the session that now shows the file, or null when it could not
+ * be read; a caller that acts afterwards acts on that session, not on whatever
+ * `doc` is by then. The read and the adoption into the store run under the
+ * lifecycle's per-path key, and the store is checked again after the read: a
+ * second open of the same path, or a Save As to it, finishes first or waits.
+ */
+async function openPath(path: string, options: OpenOptions = {}): Promise<Session | null> {
   const { silent = false, rememberRecent = true } = options;
   const existing = sessions.findByPath(path);
   if (existing) {
     await activateSession(existing.id);
-    return;
+    return existing;
   }
 
   try {
-    const payload = await api.readDocument(path);
-    if (installingStartup) {
-      describe(doc, payload);
-    } else {
-      snapshotDoc();
-      const session = sessions.create();
-      describe(session, payload);
-      sessions.add(session);
-      doc = session;
+    const adopted = await lifecycle.exclusivePath(path, async () => {
+      const payload = await api.readDocument(path);
+      const raced = sessions.findByPath(path);
+      if (raced) return { session: raced, payload, showing: null };
+      if (takeStartupSlot()) {
+        describe(doc, payload);
+      } else {
+        snapshotDoc();
+        const session = sessions.create();
+        describe(session, payload);
+        sessions.add(session);
+        doc = session;
+      }
+      // Installed in the same turn as the adoption, so no other open sees the
+      // new tab in the store with the previous document still in the editor.
+      return { session: doc, payload, showing: showInEditor(true, payload.tokens) };
+    });
+    if (!adopted.showing) {
+      await activateSession(adopted.session.id);
+      return adopted.session;
     }
-    await showInEditor(true, payload.tokens);
+    const payload = adopted.payload;
+    await adopted.showing;
 
     if (rememberRecent && settings.recordRecent) {
       // Queued: the reply must not replace a favorite that was added while the
@@ -3444,12 +3488,14 @@ async function openPath(path: string, options: OpenOptions = {}): Promise<void> 
       );
     }
     if (payload.readOnly) toast("This file is read-only.");
+    return adopted.session;
   } catch (error) {
     if (!silent) {
       await message(String(error), { title: "Could not open file", kind: "error" });
     } else {
       toast(String(error));
     }
+    return null;
   }
 }
 
@@ -3477,7 +3523,7 @@ async function loadUntitled(
   // CodeMirror uses LF internally; raw bundled documents can contain CRLF.
   // Their baseline must match the editor so opening Help is not an unsaved edit.
   content = content.replace(/\r\n?/g, "\n");
-  const fill = replace || installingStartup;
+  const fill = replace || takeStartupSlot();
   if (!fill) {
     snapshotDoc();
     const session = sessions.create();
@@ -3489,6 +3535,7 @@ async function loadUntitled(
     doc = session;
   } else {
     doc.revision += 1;
+    doc.incarnation += 1;
     doc.path = null;
     doc.name = "Untitled";
     doc.directory = null;
@@ -3670,8 +3717,10 @@ async function closeSessions(ids: readonly string[]): Promise<void> {
       const activeRemoved = targets.some((session) => session === doc);
       const next = sessions.removeMany(targets.map((session) => session.id));
       if (!sessions.list().length) await loadUntitled("", defaultDocumentLanguage());
-      else if (activeRemoved && next) {
-        doc = next;
+      else if (activeRemoved) {
+        // `next` is null only if the store disagreed about the active tab; the
+        // removed `doc` must not stay on screen either way.
+        doc = next ?? sessions.setActive(sessions.list()[0].id);
         await displayDoc();
       } else renderDocTabs();
       return true;
@@ -5426,12 +5475,20 @@ function openLinkUnderCursor(): void {
  * document caret.
  */
 async function pastePlain(): Promise<void> {
+  // The target is the field or document focused when the command ran. The
+  // clipboard keeps its data, so a target that changed during the read is a
+  // cancelled paste the reader can repeat, never a paste into another place.
+  const target = document.activeElement;
+  const owner = capturePasteOwner();
   const data = await readClipboardData();
   if (!data) {
     toast("Could not read the clipboard.", 4200);
     return;
   }
-  const target = document.activeElement;
+  if (document.activeElement !== target || pasteOwnerState(owner) !== "live") {
+    toast("The document changed before the clipboard was read — paste again.", 4200);
+    return;
+  }
   const text = data.getData("text/plain");
   if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
     if (!text) return;
@@ -7340,8 +7397,10 @@ function openLinkTarget(target: LinkTarget): void {
   }
 
   if (editableDocument(path)) {
-    void openPath(path).then(() => {
-      if (!fragment) return;
+    void openPath(path).then((opened) => {
+      // The fragment belongs to the opened document; after a failed open or a
+      // tab switch it must not scroll whatever is on screen.
+      if (!fragment || !opened || opened !== doc) return;
       if (doc.language === "html" && htmlPreview) htmlPreview.scrollToId(fragment);
       else revealPreviewId(fragment);
     });
@@ -8168,8 +8227,95 @@ function renderReadingChip(state: ReadingState): void {
 // Image paste and drop
 // ---------------------------------------------------------------------------
 
+/**
+ * The document a paste or drop was made in, captured before its first await.
+ *
+ * Image downloads and imports take seconds, and the reader can switch tabs,
+ * save elsewhere or close the tab meanwhile. The paste belongs to this owner,
+ * never to whichever tab is on screen when the work finishes. Typing does not
+ * invalidate it (insertion follows the caret), and neither does a save in
+ * place; a replaced buffer, another folder or another language does.
+ */
+interface PasteOwner {
+  session: Session;
+  incarnation: number;
+  path: string | null;
+  directory: string | null;
+  language: api.DocumentLanguage;
+}
+
+function capturePasteOwner(): PasteOwner {
+  return {
+    session: doc,
+    incarnation: doc.incarnation,
+    path: doc.path,
+    directory: doc.directory,
+    language: doc.language,
+  };
+}
+
+/** Where a delayed paste may still land: on screen, in its hidden tab, or nowhere. */
+function pasteOwnerState(owner: PasteOwner): "live" | "hidden" | null {
+  const session = owner.session;
+  if (sessions.byId(session.id) !== session || session.incarnation !== owner.incarnation)
+    return null;
+  // A relative reference and the markup syntax were resolved for this folder
+  // and language; after Save As elsewhere or to another format they are wrong.
+  if (session.directory !== owner.directory || session.language !== owner.language) return null;
+  if (session === doc) return "live";
+  // A hidden tab that has never been shown has no state to edit yet.
+  return session.editorState && session.draft === null ? "hidden" : null;
+}
+
+/**
+ * Commit a delayed paste to its owner.
+ *
+ * On screen it goes to the live caret, as an immediate paste would. In a hidden
+ * tab it is applied to that tab's stored state at its saved selection, as one
+ * undo step — the same in-place edit `formatSession` makes — so it lands where
+ * the reader pasted. Otherwise nothing is inserted and the reader is told where
+ * any saved image went: it is on disk, so nothing is lost.
+ */
+function insertForOwner(
+  owner: PasteOwner,
+  insertion: PasteInsertion,
+  assets: readonly string[] = [],
+): boolean {
+  const where = pasteOwnerState(owner);
+  if (where === "live") {
+    if (insertion.kind === "block") editor.insertBlock(insertion.text);
+    else if (insertion.kind === "native") editor.insertNativeText(insertion.text);
+    else editor.insertPasted(insertion.text, insertion.block);
+    return true;
+  }
+  const session = owner.session;
+  if (where === "hidden" && session.editorState) {
+    const spec = pasteInsertionSpec(session.editorState, insertion);
+    if (!spec) return true;
+    session.editorState = session.editorState.update(spec).state;
+    session.revision += 1;
+    const text = session.editorState.doc.toString();
+    session.dirty = text !== session.savedContent;
+    if (session.dirty) recovery.schedule(session, text);
+    else void recovery.forget(session);
+    renderDocTabs();
+    toast(`Pasted into “${session.name}”.`, 3200);
+    return true;
+  }
+  const saved =
+    assets.length === 0
+      ? ""
+      : ` ${assets.length === 1 ? "The image was" : "The images were"} saved to ${assets.join(", ")}.`;
+  toast(
+    `The paste was not inserted: its document was closed, reloaded or saved elsewhere meanwhile.${saved}`,
+    7200,
+  );
+  return false;
+}
+
 function imageContext(hasSelection = false): ImageContext {
   const language = doc.language;
+  const owner = capturePasteOwner();
   return {
     // A relative image path is the only kind the HTML guest and the Typst
     // compiler can reach from the document's own folder.
@@ -8177,7 +8323,7 @@ function imageContext(hasSelection = false): ImageContext {
     language,
     documentPath: doc.path,
     hasSelection,
-    insert: (text) => editor.insertBlock(text),
+    insert: (text, assets = []) => insertForOwner(owner, { kind: "block", text }, assets),
     imageSyntax: (alt, src) => imageSyntaxFor(language, alt, src),
     notify: (text, isError = false) => toast(text, isError ? 5200 : 3200),
   };
@@ -8201,86 +8347,76 @@ function richImageOptions(language: api.DocumentLanguage): api.ImageOptions {
 const KEEP_ORIGINAL_RICH = "The image keeps its original address (Preferences › Image).";
 
 /** The configured custom image folder, made absolute, or null. */
-function customImageFolder(): string | null {
+function customImageFolder(directory: string | null = doc.directory): string | null {
   if (settings.imageRule !== "custom") return null;
   const dir = settings.imageCustomDir?.trim();
   if (!dir) return null;
   if (/^[A-Za-z]:[\\/]/.test(dir) || dir.startsWith("\\\\") || dir.startsWith("/")) return dir;
-  return doc.directory ? joinDir(doc.directory, dir) : null;
+  return directory ? joinDir(directory, dir) : null;
 }
 
+/**
+ * Resolve one image of a rich paste against the document the paste was made
+ * in. `owner.path` is read, never the live `doc.path`: a tab switch during an
+ * earlier download must not send a later image to another document's folder.
+ * Every file written is added to `assets`, so a paste that cannot be inserted
+ * can still say where its images went.
+ */
 async function resolveRichImage(
   image: ImageRequest,
   language: api.DocumentLanguage,
   report: (note: string) => void,
+  owner: PasteOwner,
+  assets: string[],
 ): Promise<ResolvedImage | null> {
+  const path = owner.path;
   const remote = /^https?:/i.test(image.src);
   if (remote && settings.richPasteImages === "url") return null;
   const options = richImageOptions(language);
-  const destination = hasImageDestination(
-    language,
-    doc.path,
-    options.rule,
-    settings.imageCustomDir,
-  );
+  const destination = hasImageDestination(language, path, options.rule, settings.imageCustomDir);
   const keeping = options.rule === "keepOriginal";
 
   /** Keep the address as it is, saying why when it cannot render. */
   const keep = (why: string): null => {
-    report(typstImageProblem(language, image.src, doc.path) ?? why);
+    report(typstImageProblem(language, image.src, path) ?? why);
     return null;
+  };
+  /** The reference to a file written for this paste, or null with a reason. */
+  const use = (saved: api.SavedImage, copied = true): ResolvedImage | null => {
+    if (copied) assets.push(saved.absolutePath);
+    const problem = typstImageProblem(language, saved.markdownPath, path);
+    if (problem) {
+      report(copied ? `${problem} Saved to ${saved.markdownPath}.` : problem);
+      return null;
+    }
+    return { src: saved.markdownPath, alt: image.alt || altFromPath(saved.markdownPath) };
   };
 
   if (/^data:/i.test(image.src)) {
     if (keeping) return keep(KEEP_ORIGINAL_RICH);
     if (!destination) return keep(NO_FOLDER_KEPT);
-    const saved = await api.saveClipboardImage(image.src, null, doc.path, options);
-    const problem = typstImageProblem(language, saved.markdownPath, doc.path);
-    if (problem) {
-      report(`${problem} Saved to ${saved.markdownPath}.`);
-      return null;
-    }
-    return { src: saved.markdownPath, alt: image.alt || altFromPath(saved.markdownPath) };
+    return use(await api.saveClipboardImage(image.src, null, path, options));
   }
 
   if (remote) {
     if (keeping) return keep(KEEP_ORIGINAL_RICH);
     if (!destination) return keep(NO_FOLDER_KEPT);
-    const saved = await api.downloadImage(image.src, doc.path, options, 8000);
-    const problem = typstImageProblem(language, saved.markdownPath, doc.path);
-    if (problem) {
-      report(`${problem} Saved to ${saved.markdownPath}.`);
-      return null;
-    }
-    return { src: saved.markdownPath, alt: image.alt || altFromPath(saved.markdownPath) };
+    return use(await api.downloadImage(image.src, path, options, 8000));
   }
 
   if (!settings.imageApplyLocal) return null;
   if (!/^(?:[A-Za-z]:[\\/]|\/|file:)/i.test(image.src)) return null;
   const local = image.src.replace(/^file:\/\//i, "");
-  const exists = await api.pathExists(local, doc.path).catch(() => false);
+  const exists = await api.pathExists(local, path).catch(() => false);
   if (!exists) return null;
 
   if (keeping) {
     // No copy, but the backend may turn an absolute path inside the document's
     // folder into the relative form Typst can read.
-    const saved = await api.importImage(local, doc.path, options);
-    const problem = typstImageProblem(language, saved.markdownPath, doc.path);
-    if (problem) {
-      report(problem);
-      return null;
-    }
-    return { src: saved.markdownPath, alt: image.alt || altFromPath(saved.markdownPath) };
+    return use(await api.importImage(local, path, options), false);
   }
   if (!destination) return keep(NO_FOLDER_KEPT);
-
-  const saved = await api.importImage(local, doc.path, options);
-  const problem = typstImageProblem(language, saved.markdownPath, doc.path);
-  if (problem) {
-    report(`${problem} Saved to ${saved.markdownPath}.`);
-    return null;
-  }
-  return { src: saved.markdownPath, alt: image.alt || altFromPath(saved.markdownPath) };
+  return use(await api.importImage(local, path, options));
 }
 
 function languageLabel(language: api.DocumentLanguage): string {
@@ -8298,20 +8434,23 @@ function languageLabel(language: api.DocumentLanguage): string {
 async function applyRichPaste(
   payload: ClipboardPayload,
   destination: PasteDestination,
+  owner: PasteOwner,
 ): Promise<void> {
+  const assets: string[] = [];
   const result = await planPaste(payload, destination.language, {
-    resolveImage: (image, report) => resolveRichImage(image, destination.language, report),
+    resolveImage: (image, report) =>
+      resolveRichImage(image, destination.language, report, owner, assets),
   });
   if (!result) return;
-  if (
+  const insertion: PasteInsertion =
     destination.language === "markdown" &&
     (result.source === "markdown" || result.source === "plain")
-  )
-    editor.insertNativeText(result.text);
-  else editor.insertPasted(result.text, result.block);
+      ? { kind: "native", text: result.text }
+      : { kind: "pasted", text: result.text, block: result.block };
+  if (!insertForOwner(owner, insertion, assets)) return;
 
   if (destination.detected && result.converted) {
-    const key = `${doc.id}:${destination.language}`;
+    const key = `${owner.session.id}:${destination.language}`;
     if (key !== pasteNoticeKey) {
       pasteNoticeKey = key;
       const extension =
@@ -8422,7 +8561,7 @@ function installPasteHandlers(): void {
 
     event.preventDefault();
     event.stopPropagation();
-    void applyRichPaste(payload, destination).catch((error) => {
+    void applyRichPaste(payload, destination, capturePasteOwner()).catch((error) => {
       console.warn(`[paste] ${String(error)}`);
       toast(`Paste failed: ${String(error)}`, 5200);
     });
@@ -8549,7 +8688,6 @@ async function restoreRecovery(): Promise<void> {
       }
       existing.revision += 1;
       existing.lossy = existing.lossy || entry.lossy;
-      existing.draft = entry.content;
       existing.editorState = null;
       existing.recoveryId = entry.id;
       // Keep the base the journal recorded: if the file moved while MDraft was
@@ -8562,6 +8700,15 @@ async function restoreRecovery(): Promise<void> {
       existing.sha256 = entry.baseSha256 ?? null;
       existing.dirty = true;
       existing.conflict = null;
+      if (existing === doc) {
+        // The tab on screen takes the draft now, before the next await. A
+        // pending `draft` on the displayed session is invisible to `textOf`,
+        // and switching tabs would snapshot the disk text over it.
+        existing.draft = null;
+        editor.setDoc(entry.content, false);
+      } else {
+        existing.draft = entry.content;
+      }
       recovered.push(existing);
       continue;
     }
@@ -8596,17 +8743,17 @@ async function restoreRecovery(): Promise<void> {
     session.size = entry.baseSize;
     session.sha256 = entry.baseSha256 ?? null;
     session.conflict = null;
-    sessions.add(session);
-    // `add` inserts after the active tab. Recovered tabs belong at the end so
-    // a remembered set keeps its order and the recovery does not land in the
-    // middle of it.
-    sessions.move(session.id, sessions.list().length - 1);
+    // Recovered tabs belong at the end so a remembered set keeps its order, and
+    // they do not become active here: `doc` and the store must agree across
+    // the reads still to come.
+    sessions.append(session);
     recovered.push(session);
   }
 
   if (recovered.length === 0) return;
   const first = recovered[0];
-  if (first.id === doc.id) await displayDoc();
+  // A recovered `doc` already shows its draft; only another tab is activated.
+  if (first.id === doc.id) renderDocTabs();
   else await activateSession(first.id);
   recoveryNotice = `Recovered ${recovered.length} unsaved ${
     recovered.length === 1 ? "document" : "documents"
@@ -8619,8 +8766,8 @@ async function restoreRecovery(): Promise<void> {
  *
  * Every path is checked before anything is opened, so a vanished file is
  * skipped and counted in one toast instead of producing one error per file. The
- * first survivor fills the initial blank tab (`installingStartup` is still
- * true); the rest become tabs. Recents are deliberately not written: restoring
+ * first survivor that is actually read fills the initial blank tab (the startup
+ * slot); the rest become tabs. Recents are deliberately not written: restoring
  * is not the reader opening ten documents.
  */
 async function restoreLastTabs(): Promise<void> {
@@ -8648,11 +8795,11 @@ async function restoreLastTabs(): Promise<void> {
     return;
   }
 
-  // The first survivor fills the blank session the window booted with; once it
-  // is installed, `installingStartup` has to be off or every later file would
-  // replace it in the same tab instead of becoming a tab of its own.
-  for (const [index, path] of plan.tabs.entries()) {
-    if (index === 1) installingStartup = false;
+  // The first document that is read fills the blank session the window booted
+  // with and consumes the slot; every later one becomes a tab of its own. A path
+  // that fails to read leaves the slot for the next one rather than stranding
+  // an empty tab beside the restored set.
+  for (const path of plan.tabs) {
     await openPath(path, { silent: true, rememberRecent: false });
   }
 
@@ -8767,6 +8914,10 @@ async function boot(): Promise<void> {
     reading: readingMenuState,
     readAloud: startReadAloud,
     stopReading: stopReadAloud,
+    pasteTarget: () => {
+      const owner = capturePasteOwner();
+      return () => pasteOwnerState(owner) === "live";
+    },
     toast,
   });
 
@@ -9090,12 +9241,9 @@ async function boot(): Promise<void> {
 
   const startup = await api.startupFiles().catch(() => [] as string[]);
   if (startup.length > 0) {
-    const [first, ...rest] = startup;
-    // The first path fills the window's blank session. Every later path must
-    // be a tab, or each one would replace the same session.
-    await openPath(first, { silent: true });
-    installingStartup = false;
-    if (rest.length > 0) await openPaths(rest);
+    // The first path that is read fills the window's blank session; the slot is
+    // consumed once, so every later path becomes a tab.
+    await openPaths(startup);
   } else if (settings.onLaunch === "tabs") {
     await restoreLastTabs();
   } else if (settings.onLaunch === "new") {
@@ -9105,7 +9253,7 @@ async function boot(): Promise<void> {
   } else {
     await loadUntitled(WELCOME);
   }
-  installingStartup = false;
+  startupSlot = null;
   await restoreRecovery();
 
   readyForPaths = true;
@@ -9123,21 +9271,38 @@ async function boot(): Promise<void> {
 
 /** Save in place on a timer when Auto Save is enabled in Preferences. */
 function installAutoSave(): void {
-  window.setInterval(() => {
-    if (!settings.autoSave) return;
-    const pending = sessions
-      .list()
-      .filter((session) => session.dirty && session.path && !session.readOnly && !session.conflict);
-    if (pending.length === 0) return;
-    void (async () => {
-      let saved = 0;
-      for (const session of pending) {
-        if (await writeSession(session, true)) saved += 1;
-      }
-      if (saved === 1) toast("Auto saved", 1400);
-      else if (saved > 1) toast(`Auto saved ${saved} files`, 1400);
-    })();
-  }, AUTO_SAVE_INTERVAL_MS);
+  window.setInterval(() => void autoSaveTick(), AUTO_SAVE_INTERVAL_MS);
+}
+
+let autoSaveRunning = false;
+
+/**
+ * One Auto Save pass.
+ *
+ * Skipped while a close is deciding: a background save changes the snapshot
+ * the close compares after the reader answers, and the close would then drop
+ * the reader's Save or Discard without a word. The tab is saved on the next
+ * tick if the close is cancelled. A pass still running also skips the next
+ * one, so a slow volume does not queue saves behind saves.
+ */
+async function autoSaveTick(): Promise<void> {
+  if (!settings.autoSave || autoSaveRunning || lifecycle.closing) return;
+  const pending = sessions
+    .list()
+    .filter((session) => session.dirty && session.path && !session.readOnly && !session.conflict);
+  if (pending.length === 0) return;
+  autoSaveRunning = true;
+  try {
+    let saved = 0;
+    for (const session of pending) {
+      if (lifecycle.closing) break;
+      if (await writeSession(session, true)) saved += 1;
+    }
+    if (saved === 1) toast("Auto saved", 1400);
+    else if (saved > 1) toast(`Auto saved ${saved} files`, 1400);
+  } finally {
+    autoSaveRunning = false;
+  }
 }
 
 void boot().catch(async (error) => {
