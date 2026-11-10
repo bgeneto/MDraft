@@ -1832,7 +1832,14 @@ fn download_binary(agent: &ureq::Agent) -> Result<(String, Vec<u8>), String> {
 }
 
 /// Download, verify and unpack pandoc into the application's data directory.
+/// One Pandoc installation at a time; Typst and LaTeX have their own locks.
+static PANDOC_INSTALL: Mutex<()> = Mutex::new(());
+
 pub fn install<R: Runtime>(app: &AppHandle<R>) -> Result<PandocStatus, String> {
+    // Two presses of Install must not write the same executable at once. The
+    // second waits, then installs over a complete file. A poisoned lock only
+    // means an earlier install panicked; the file write below is atomic.
+    let _install = PANDOC_INSTALL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let (tag, binary) = download_binary(&http_agent())?;
 
     let root =
@@ -1840,7 +1847,10 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> Result<PandocStatus, String> {
     let dir = root.join(&tag);
     std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
     let target = dir.join(pandoc_exe());
-    std::fs::write(&target, &binary).map_err(|e| format!("Could not write {}: {e}", target.display()))?;
+    // Temporary file and rename: an interrupted or concurrent write never leaves
+    // a truncated executable at the path the probe and every export run.
+    crate::latex::write_atomic(&target, &binary)
+        .map_err(|e| format!("Could not write {}: {e}", target.display()))?;
 
     #[cfg(unix)]
     {
@@ -1900,16 +1910,14 @@ pub(crate) fn safe_stem(name: &str) -> String {
 /// nothing, so the document has to be printed by a browser that does implement
 /// it.
 ///
-/// Returns the path written, which is under the system temporary directory and
-/// is replaced on every export.
+/// Returns the path written, under a folder of its own in the system temporary
+/// directory (see [`crate::print::handoff_dir`]).
 #[tauri::command]
 pub fn print_document<R: Runtime>(app: AppHandle<R>, html: String, name: String) -> Result<String, String> {
-    let dir = std::env::temp_dir().join("mdraft-print");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
-    let target = dir.join(format!("{}.html", safe_stem(&name)));
-
-    std::fs::write(&target, html.as_bytes())
-        .map_err(|e| format!("Could not write {}: {e}", target.display()))?;
+    let target = crate::print::write_handoff(&format!("{}.html", safe_stem(&name)), |target| {
+        std::fs::write(target, html.as_bytes())
+            .map_err(|e| format!("Could not write {}: {e}", target.display()))
+    })?;
 
     tauri_plugin_opener::open_path(&target, None::<&str>).map_err(|e| {
         format!(

@@ -372,7 +372,12 @@ pub async fn install_typst<R: Runtime>(app: AppHandle<R>) -> Result<TypstStatus,
         .map_err(|e| format!("The install task could not be started: {e}"))?
 }
 
+/// One Typst installation at a time; Pandoc and LaTeX have their own locks.
+static TYPST_INSTALL: Mutex<()> = Mutex::new(());
+
 fn install<R: Runtime>(app: &AppHandle<R>) -> Result<TypstStatus, String> {
+    // A second Install waits for the first instead of writing the same file.
+    let _install = TYPST_INSTALL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let (tag, binary) = download_binary(&http_agent())?;
 
     let root = managed_root(app).ok_or_else(|| {
@@ -383,7 +388,7 @@ fn install<R: Runtime>(app: &AppHandle<R>) -> Result<TypstStatus, String> {
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
     let target = dir.join(typst_exe());
-    std::fs::write(&target, &binary)
+    crate::latex::write_atomic(&target, &binary)
         .map_err(|e| format!("Could not write {}: {e}", target.display()))?;
 
     #[cfg(unix)]
