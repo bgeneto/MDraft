@@ -24,7 +24,8 @@ use windows::Win32::System::JobObjects::{
     SetInformationJobObject, TerminateJobObject,
 };
 use windows::Win32::System::Threading::{
-    CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
+    CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
+    DeleteProcThreadAttributeList,
     EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, InitializeProcThreadAttributeList,
     LPPROC_THREAD_ATTRIBUTE_LIST, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION,
     ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, UpdateProcThreadAttribute,
@@ -198,7 +199,16 @@ pub(super) fn run(spec: &RunSpec, cancel: &AtomicBool) -> Result<RunOutcome, Str
     let cwd = wide(spec.cwd.as_os_str());
     let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
     let started = Instant::now();
-    let flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT;
+    // CREATE_NO_WINDOW: this GUI process owns no console, so without it Windows
+    // opens a visible console for every engine, probe and BibTeX run (and the
+    // helpers they start inherit it). The child still gets a console, so the
+    // redirected handles keep working. This is the one spawn site that cannot
+    // use `export::quiet()`; see the console-flash entry in
+    // docs/agent-guide/traps/editor-and-ui.md.
+    let flags = EXTENDED_STARTUPINFO_PRESENT
+        | CREATE_SUSPENDED
+        | CREATE_UNICODE_ENVIRONMENT
+        | CREATE_NO_WINDOW;
     let created = unsafe {
         CreateProcessW(
             windows::core::PCWSTR::null(),
@@ -273,4 +283,118 @@ pub(super) fn run(spec: &RunSpec, cancel: &AtomicBool) -> Result<RunOutcome, Str
         timed_out,
         console: console_text,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    // Declared here rather than enabling the windows crate's Console feature
+    // for test-only calls.
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetConsoleWindow() -> *mut c_void;
+        fn FreeConsole() -> i32;
+    }
+
+    const PROBE: &str = "MDRAFT_TEST_CONSOLE_PROBE";
+    const NAME: &str = "latex_native::runner::windows::tests::console_probe";
+
+    fn window_state() -> &'static str {
+        if unsafe { GetConsoleWindow() }.is_null() {
+            "none"
+        } else {
+            "visible"
+        }
+    }
+
+    /// Helper mode, launched by the test below in a child test process. In
+    /// `parent` mode it also starts itself once more, the way an engine starts
+    /// kpsewhich or a MiKTeX helper, and relays that grandchild's report. With
+    /// no marker it is a no-op in an ordinary suite run.
+    #[test]
+    fn console_probe() {
+        let Some(mode) = std::env::var_os(PROBE) else {
+            return;
+        };
+        println!("child-window={}", window_state());
+        if mode == "parent" {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", NAME, "--nocapture", "--test-threads=1"])
+                .env(PROBE, "grandchild")
+                .output()
+                .unwrap();
+            let text = String::from_utf8_lossy(&output.stdout);
+            // libtest prints the marker on its own "test … ... " line.
+            let state = text
+                .split("child-window=")
+                .nth(1)
+                .and_then(|rest| rest.split_whitespace().next())
+                .unwrap_or("missing");
+            println!("grandchild-window={state}");
+        }
+    }
+
+    const LAUNCHER: &str = "latex_native::runner::windows::tests::console_launcher";
+
+    /// Launcher mode: become what the release app is — a process with no
+    /// console — and start the probe through the real runner. A test process
+    /// started from a terminal (or from an agent's windowless shell) would
+    /// otherwise hand the probe its own console, and the probe would report
+    /// that console's window state, which says nothing about the flag.
+    #[test]
+    fn console_launcher() {
+        if std::env::var_os("MDRAFT_TEST_CONSOLE_LAUNCHER").is_none() {
+            return;
+        }
+        unsafe { FreeConsole() };
+        let cwd = std::env::temp_dir().join(format!(
+            "mdraft-console-probe-{}-{}",
+            std::process::id(),
+            JOB_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&cwd).unwrap();
+        let mut env: Vec<(String, String)> = std::env::vars()
+            .filter(|(key, _)| key != "MDRAFT_TEST_CONSOLE_LAUNCHER")
+            .collect();
+        env.push((PROBE.into(), "parent".into()));
+        let outcome = run(
+            &RunSpec {
+                program: std::env::current_exe().unwrap(),
+                args: ["--exact", NAME, "--nocapture", "--test-threads=1"]
+                    .iter()
+                    .map(OsString::from)
+                    .collect(),
+                cwd: cwd.clone(),
+                env,
+                timeout: Duration::from_secs(60),
+            },
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&cwd);
+        println!("status={}", outcome.status);
+        println!("{}", outcome.console);
+    }
+
+    #[test]
+    fn engines_run_in_a_hidden_console_with_working_output() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", LAUNCHER, "--nocapture", "--test-threads=1"])
+            .env("MDRAFT_TEST_CONSOLE_LAUNCHER", "1")
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&output.stdout);
+        // The markers arriving at all prove stdout still reaches console.log.
+        assert!(
+            text.contains("child-window=none"),
+            "the engine must get a console without a window:\n{text}"
+        );
+        assert!(
+            text.contains("grandchild-window=none"),
+            "a helper the engine starts must inherit the hidden console:\n{text}"
+        );
+        assert!(text.contains("status=0"), "{text}");
+    }
 }
