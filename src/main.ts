@@ -112,6 +112,14 @@ import {
   type OwnerProbe,
   type PreviewOwner,
 } from "./preview-owner";
+import { createPreviewStore } from "./preview-store";
+import {
+  htmlKey,
+  latexKey,
+  type LatexEngineIdentity,
+  proseKey,
+  typstKey,
+} from "./preview-freshness";
 import {
   bindWordMapAsync,
   blockRangeForNode,
@@ -1145,7 +1153,39 @@ function setTheme(mode: api.ThemeMode): void {
   applyTheme();
   syncMenuState();
   persist();
-  scheduleRender(true);
+  retheme();
+}
+
+/**
+ * Bumped by every theme change, so a mermaid pass started under the previous
+ * theme stops writing instead of overwriting the re-themed diagrams.
+ */
+let themeEpoch = 0;
+
+/**
+ * Bring the committed preview to the current theme without rebuilding it.
+ *
+ * The theme is not an input of any compiled output: PDFs go dark through a CSS
+ * filter on their canvases, code highlighting is a swapped stylesheet, and the
+ * HTML guest draws the document's own styles. Sending a theme change through
+ * `scheduleRender` recompiled a whole LaTeX project and restarted an HTML
+ * document's scripts for a colour change. Mermaid SVG is the one output that
+ * carries theme colours, so only its blocks are redrawn — from the cache when
+ * the diagram was already drawn in this theme.
+ */
+function retheme(): void {
+  const epoch = ++themeEpoch;
+  if (doc.language !== "markdown" && doc.language !== "asciidoc") return;
+  if (!preview.querySelector(".mermaid[data-mermaid]")) return;
+  const token = renderToken;
+  const cancelled = () => epoch !== themeEpoch || token !== renderToken;
+  void renderMermaidIn(preview, isDark, cancelled).then(() => {
+    if (cancelled()) return;
+    // A diagram's size can differ between themes; rebuild the anchor list so a
+    // replaced node is not kept, then realign the panes.
+    rebuildAnchors();
+    syncPreviewFromSource();
+  });
 }
 
 /**
@@ -1165,9 +1205,13 @@ function applySettingsPatch(
   const affectsRendering =
     patch.enableMath !== undefined ||
     patch.enableMermaid !== undefined ||
-    patch.htmlPreviewScripts !== undefined ||
-    patch.editorMaxWidth !== undefined ||
-    patch.syntaxTheme !== undefined;
+    patch.htmlPreviewScripts !== undefined;
+  // `syntaxTheme` is the editor's palette and `editorMaxWidth` a CSS length
+  // that `applyLayout` below applies, like zoom: neither is an input of any
+  // preview. Listing them as rendering inputs recompiled a LaTeX project for a
+  // colour or width change. A width change only needs the panes realigned once
+  // the new layout has settled.
+  const affectsLayoutOnly = patch.editorMaxWidth !== undefined;
 
   settings = { ...settings, ...patch };
   if (effects) {
@@ -1213,6 +1257,7 @@ function applySettingsPatch(
     preferences?.refresh();
   }
   if (affectsRendering) scheduleRender(true);
+  else if (affectsLayoutOnly) requestAnimationFrame(() => syncPreviewFromSource());
 }
 
 // ---------------------------------------------------------------------------
@@ -1417,6 +1462,54 @@ let previewSyncReady = false;
  * owner removes it.
  */
 let previewOwner: PreviewOwner | null = null;
+/**
+ * The freshness key of what the pane shows (`src/preview-freshness.ts`), or
+ * null when the content cannot vouch for itself: before a commit, after a
+ * retirement or a guest reset, and after any commit that was not a successful
+ * build — a failure note, a partial PDF, the "not enabled" note. A render whose
+ * wanted key equals this one has nothing to build.
+ */
+let committedKey: string | null = null;
+/**
+ * The word-map inputs of the last Markdown/AsciiDoc build, kept with its key.
+ * An edit drops the bound map; when the edit is undone before the render runs,
+ * the DOM is still stamped for this source and the map is rebound from these
+ * instead of converting the document again.
+ */
+interface ProseMap {
+  key: string;
+  fragments: Parameters<typeof bindPreviewWords>[1];
+  blocks: Parameters<typeof bindPreviewWords>[2];
+  linesMapped: boolean;
+}
+let proseMap: ProseMap | null = null;
+/**
+ * Compiled output kept across tab switches, under freshness keys, so a return to
+ * an unchanged document draws its output instead of building it. In memory
+ * only; see `src/preview-store.ts` for the budget and eviction.
+ */
+const latexStore = createPreviewStore<LatexResult>();
+const typstStore = createPreviewStore<api.RenderedTypst>();
+
+/** What a stored LaTeX result costs: the PDF, plus the log and sources as UTF-16. */
+function latexResultBytes(result: LatexResult): number {
+  let bytes = result.pdf.byteLength + result.log.length * 2;
+  for (const file of result.sources) bytes += file.source.length * 2;
+  return bytes;
+}
+
+/**
+ * Set by Compile and consumed by the next LaTeX or Typst render: that render
+ * builds, whatever the freshness key, the store or a parked preview say.
+ */
+let forceNextBuild = false;
+
+/** Starts of the compilers, for the freshness suite. Never read by the shell. */
+let compileCount = 0;
+function countCompile(): void {
+  compileCount += 1;
+  preview.dataset.compileCount = String(compileCount);
+}
 
 /** The active document as ownership sees it. */
 function probeOf(session: Session): OwnerProbe {
@@ -1435,10 +1528,161 @@ function probeOf(session: Session): OwnerProbe {
  * document guards. The pending surface belongs to the wait, not to the result,
  * so it is cleared here rather than by each renderer.
  */
-function commitPreview(owner: PreviewOwner): void {
+function commitPreview(owner: PreviewOwner, key: string | null = null): void {
   previewStale = false;
   previewOwner = owner;
+  committedKey = key;
+  committedDoc = { id: doc.id, incarnation: doc.incarnation };
   clearPending();
+}
+
+/**
+ * The document that was active at the last commit. A LaTeX project owner names
+ * its root, not the chapter on screen, so this is how a retirement knows which
+ * tab the parked preview belongs to.
+ */
+let committedDoc: { id: string; incarnation: number } | null = null;
+
+/**
+ * A preview taken off screen with its tab, so a return shows it again without
+ * rebuilding anything: the article DOM, or the PDF view with its parsed
+ * document, plus the state that makes it rebindable. It is restored as if it
+ * had never left; the render that follows checks the freshness key and only
+ * rebinds — or, when an input changed meanwhile, rebuilds over it, which is the
+ * same stale-while-revalidate a single document already gets.
+ */
+interface PreviewSlot {
+  sessionId: string;
+  incarnation: number;
+  language: api.DocumentLanguage;
+  owner: PreviewOwner;
+  key: string;
+  holder: HTMLElement;
+  pdf: TypstPdfPreview | null;
+  pdfToken: number;
+  pdfBase64: string | null;
+  proseMap: ProseMap | null;
+  typst: TypstRenderKey | null;
+  linesMapped: boolean;
+  scrollTop: number;
+  scrollLeft: number;
+  latex: LatexPreview | null;
+}
+/** How many hidden tabs keep their preview. A PDF view is the costly one. */
+const PREVIEW_SLOTS = 3;
+const previewSlots = new Map<string, PreviewSlot>();
+
+function disposeSlot(slot: PreviewSlot): void {
+  slot.pdf?.dispose();
+  slot.holder.replaceChildren();
+}
+
+/**
+ * Move the committed preview into a slot for the tab it belongs to, before a
+ * retirement would destroy it. Only output that vouches for itself (a
+ * committed freshness key) is kept; HTML is not, because moving an iframe
+ * reloads it and a hidden live guest would keep running its scripts.
+ */
+function parkPreview(): void {
+  for (const [id, slot] of previewSlots) {
+    if (!sessions.byId(id)) {
+      previewSlots.delete(id);
+      disposeSlot(slot);
+    }
+  }
+  const owner = previewOwner;
+  const key = committedKey;
+  const from = committedDoc;
+  if (!owner || !key || !from) return;
+  const session = sessions.byId(from.id);
+  if (!session || session.incarnation !== from.incarnation || session.language === "html") return;
+  if (!preview.firstChild) return;
+  const latex =
+    owner.kind === "latex-project" && latexPreview && latexPreview.token === typstPdfToken
+      ? latexPreview
+      : null;
+  if (session.language === "latex" && !latex) return;
+  const holder = document.createElement("div");
+  holder.append(...preview.childNodes);
+  const view = typstPdf;
+  view?.park();
+  const slot: PreviewSlot = {
+    sessionId: from.id,
+    incarnation: from.incarnation,
+    language: session.language,
+    owner,
+    key,
+    holder,
+    pdf: view,
+    pdfToken: typstPdfToken,
+    pdfBase64: typstPdfBase64,
+    proseMap,
+    typst: lastTypstRender,
+    linesMapped: previewLinesMapped,
+    scrollTop: previewPane.scrollTop,
+    scrollLeft: previewPane.scrollLeft,
+    latex,
+  };
+  // The retirement that follows must not dispose what the slot now owns.
+  typstPdf = null;
+  typstPdfBase64 = null;
+  const previous = previewSlots.get(from.id);
+  if (previous) {
+    previewSlots.delete(from.id);
+    disposeSlot(previous);
+  }
+  previewSlots.set(from.id, slot);
+  while (previewSlots.size > PREVIEW_SLOTS) {
+    const [oldest, evicted] = previewSlots.entries().next().value as [string, PreviewSlot];
+    previewSlots.delete(oldest);
+    disposeSlot(evicted);
+  }
+}
+
+/**
+ * Put the active tab's parked preview back, when it has one for this exact
+ * incarnation. Returns true when the pane now shows it; the caller's render
+ * then decides, by key, whether anything needs building.
+ */
+function restorePreview(): boolean {
+  const slot = previewSlots.get(doc.id);
+  if (!slot) return false;
+  previewSlots.delete(doc.id);
+  if (
+    previewOwner !== null ||
+    slot.incarnation !== doc.incarnation ||
+    slot.language !== doc.language
+  ) {
+    disposeSlot(slot);
+    return false;
+  }
+  clearPending();
+  preview.replaceChildren(...slot.holder.childNodes);
+  if (slot.pdf) {
+    typstPdf = slot.pdf;
+    typstPdfToken = slot.pdfToken;
+    typstPdfBase64 = slot.pdfBase64;
+    slot.pdf.setZoom(zoomFactor());
+    slot.pdf.activate();
+  }
+  proseMap = slot.proseMap;
+  lastTypstRender = slot.typst;
+  previewLinesMapped = slot.linesMapped;
+  if (slot.latex) {
+    // The project this tab belongs to, as of its own last build. Another
+    // project compiled meanwhile moved both; the tab's own root comes back.
+    latexPreview = slot.latex;
+    latexNavigationRoot = slot.latex.rootId;
+  }
+  previewOwner = slot.owner;
+  committedKey = slot.key;
+  committedDoc = { id: slot.sessionId, incarnation: slot.incarnation };
+  suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+  previewPane.scrollTop = pendingPreviewScroll ?? slot.scrollTop;
+  previewPane.scrollLeft = slot.scrollLeft;
+  rebuildAnchors();
+  preview.dataset.restored = String((Number(preview.dataset.restored ?? 0) || 0) + 1);
+  return true;
 }
 
 /**
@@ -1597,6 +1841,11 @@ function scheduleRender(immediate = false): void {
   if (doc.language === "typst" && settings.typstAutoCompile === false) {
     if (previewStale) setTypstStatus("Out of date · Select Compile to update the preview.");
     armPending({ immediate: true });
+    // Manual mode never compiles on its own, but output already built from
+    // exactly this text is current, not stale: show it.
+    if (immediate && previewOwner === null && settings.viewMode !== "source" && typstStoreHit()) {
+      renderTimer = window.setTimeout(() => void doRender(), 0);
+    }
     return;
   }
   if (doc.language === "latex" && settings.latexAutoCompile === false) {
@@ -1605,6 +1854,17 @@ function scheduleRender(immediate = false): void {
     // has no content for this file, say so at once instead of leaving an empty
     // pane or, worse, another tab's preview.
     armPending({ immediate: true });
+    // A PDF the store holds for exactly these inputs is current, so a return to
+    // a manual tab may show it. Only a snapshot can tell, and the probe never
+    // compiles or reports a failure.
+    if (immediate && previewOwner === null && settings.viewMode !== "source") {
+      const token = ++renderToken;
+      const source = editor.getDoc();
+      renderTimer = window.setTimeout(
+        () => void renderLatexPreview(source, token, { storeOnly: true }),
+        0,
+      );
+    }
     return;
   }
   if (settings.viewMode === "source") {
@@ -1637,17 +1897,21 @@ let typstPdf: TypstPdfPreview | null = null;
 let typstPdfToken = -1;
 let typstPdfBase64: string | null = null;
 /**
- * What the last successful Typst compile was for. A theme change, a mode switch
- * or a view switch must reuse it instead of starting another compiler process;
- * an edit changes the revision, and a tab switch clears it.
+ * What the last successful Typst compile was for. A mode switch or a view
+ * switch must reuse it instead of starting another compiler process. `key` is
+ * its freshness key (`typstKey`); a match also needs `committedKey` to agree,
+ * which a failure, a retirement or Compile clears.
  */
 interface TypstRenderKey {
+  key: string;
   docId: string;
   revision: number;
-  source: string;
   mode: string;
-  imageRoot: string | null;
   syncReady: boolean;
+  /** The compile's result, so a restored preview can redraw its toolbar. */
+  rendered: api.RenderedTypst;
+  /** How long the compile took, as the toolbar shows it. */
+  seconds: string;
   /** Source ranges already annotated on the cached Document DOM. */
   blocks?: BlockRange[];
 }
@@ -1880,6 +2144,8 @@ function compileCurrentDocument(): void {
   renderToken += 1;
   discardStagedPdf();
   lastTypstRender = null;
+  committedKey = null;
+  forceNextBuild = true;
   if (previewOwner === null) {
     clearPending();
     armPending();
@@ -1919,6 +2185,10 @@ function setTypstStatus(message: string, saveable = false, state?: CompiledStatu
 
 function compileCurrentLatex(): void {
   if (doc.language !== "latex") return;
+  // Compile always builds: the reader may be retrying a flaky engine or a
+  // package fetch, and an unchanged key must not turn the button into a no-op.
+  committedKey = null;
+  forceNextBuild = true;
   if (previewOwner === null) {
     clearPending();
     armPending();
@@ -1944,7 +2214,13 @@ function compileCurrentLatex(): void {
 function invalidateLatexBuild(
   reason = "The engine changed; select Compile to update the preview.",
 ): void {
+  // Kept PDFs were built by the previous engine or libraries. Their keys would
+  // no longer match, but they would still hold memory.
+  latexStore.clear();
   if (doc.language !== "latex") return;
+  // The engine or a library is part of the key, but a library edit can keep a
+  // revision string while its files change; the next build must not be skipped.
+  committedKey = null;
   window.clearTimeout(renderTimer);
   renderToken += 1;
   cancelLatex();
@@ -2038,6 +2314,105 @@ function latexCurrent(value: LatexPreview | null): value is LatexPreview {
       return session?.revision === item.revision && session.path === item.path;
     }),
   );
+}
+
+/** The parts of the engine status that decide which compiler builds the PDF. */
+function latexEngineIdentity(status: api.LatexEngineStatus): LatexEngineIdentity {
+  return {
+    backend: status.backend,
+    nativeRoot: status.nativeRoot,
+    nativeDistribution: status.nativeDistribution,
+    nativeEngine: status.nativeEngine,
+    nativeWsl: status.nativeWsl ? `${status.nativeWsl.distro}:${status.nativeWsl.bin}` : null,
+  };
+}
+
+/**
+ * Hand the PDF on screen to this render when it was built from exactly these
+ * inputs, instead of compiling again.
+ *
+ * `key` is built from the snapshot's content digest, so it matches only when
+ * every file the compile would read is byte-identical to the last successful
+ * build's, under the same root and engine: a save of a buffer the preview
+ * already showed, an edit that was undone, a move to another chapter of the same
+ * project. The render token, the active document and the revisions are then
+ * rebound the way a chapter handoff rebinds them, and the success state —
+ * warnings, status, Export › PDF — is restored, because an edit cleared it.
+ *
+ * Returns false, changing nothing, when anything does not line up.
+ */
+function rebindLatexPreview(
+  key: string,
+  root: Session,
+  source: string,
+  token: number,
+  activeId: string,
+  revisions: LatexPreview["revisions"],
+): boolean {
+  const value = latexPreview;
+  const view = typstPdf;
+  if (
+    key !== committedKey ||
+    !value ||
+    !view ||
+    typstPdfToken !== value.token ||
+    value.rootId !== root.id ||
+    !root.path ||
+    !root.directory ||
+    !covers(previewOwner, probeOf(doc))
+  )
+    return false;
+  const file = latexRelative(value, doc.path);
+  if (file === null) return false;
+
+  value.token = token;
+  value.activeId = activeId;
+  value.revisions = revisions;
+  typstPdfToken = token;
+  // The map follows one file of the project. Another chapter, or the same file
+  // with a different text (an edit and its undo produce the same digest only
+  // when the text is identical, so this is the chapter case), needs it rebuilt.
+  if (view.currentFile !== file || view.source !== source) view.setActiveFile(file, source);
+  else if (settings.viewMode === "split") view.ensureMap();
+  if (pendingPreviewScroll !== null) applyPendingPreviewScroll();
+  if (view.mapReady()) pdfMapReady(view, token);
+  latexPartial = null;
+  delete preview.dataset.latexPartial;
+  preview.dataset.latexCurrent = String(token);
+  commitPreview(previewOwner!, key);
+  previewSyncReady = true;
+  latexInFlight = false;
+
+  const result = value.result;
+  const rootRef = { path: root.path, directory: root.directory };
+  latexProblems = result.warnings;
+  latexProblemRoot = null;
+  latexProblemFiles = new Set();
+  editor.clearDiagnostics();
+  // As after a compile: a warning the reader selected stays marked while the
+  // same warning still exists. Entering Split from a warning click lands here,
+  // and dropping the mark would undo the click that asked for it.
+  const selected =
+    selectedLatexProblem?.path === pathKey(doc.path ?? "")
+      ? result.warnings.find(
+          (problem) => diagnosticSignature(problem) === selectedLatexProblem?.signature,
+        )
+      : null;
+  if (selected) applyLatexMarks([selected], rootRef, doc.path, false);
+  else selectedLatexProblem = null;
+  showLatexWarnings(result, rootRef);
+  const seconds = ((result.elapsedMs ?? 0) / 1000).toFixed(1);
+  const warnings = result.warnings.length
+    ? ` · ${result.warnings.length}${result.warningsTruncated ? "+" : ""} warning${result.warnings.length === 1 && !result.warningsTruncated ? "" : "s"}`
+    : "";
+  setLatexStatus(`Up to date · ${result.engine ?? "LaTeX"}${warnings}`, {
+    label: "PDF ready",
+    severity: result.warnings.length ? "warning" : "success",
+    detail: compiledUi.issueSummary,
+    engine: `${result.engine ?? "LaTeX"} · ${seconds} s`,
+  });
+  syncMenuState(false);
+  return true;
 }
 
 function latexRelative(value: LatexPreview, path: string | null): string | null {
@@ -2288,6 +2663,9 @@ async function latexFailure(
   attempt?: Omit<LatexPreview, "result">,
   build?: { engine: string; elapsedMs: number },
 ): Promise<void> {
+  // Whatever stays on screen — the last good PDF, a partial one or a note — no
+  // longer vouches for the inputs; the next render must build.
+  committedKey = null;
   delete preview.dataset.latexCurrent;
   delete preview.dataset.latexPartial;
   latexPartial = null;
@@ -2438,6 +2816,7 @@ function showLatexLicenses(): void {
  * stale. Auto-compile rebuilds; manual mode stays manual.
  */
 function latexLibrariesChanged(reason: string): void {
+  latexStore.clear();
   latexLibraryRevision = null;
   if (doc.language !== "latex") return;
   invalidateLatexBuild(`${reason}; select Compile to update the preview.`);
@@ -2654,12 +3033,30 @@ async function latexSavePdf(): Promise<void> {
   });
 }
 
-async function renderLatexPreview(source: string, token: number): Promise<void> {
+/**
+ * Build, rebind or restore the LaTeX preview.
+ *
+ * `storeOnly` is manual-compile mode returning to a tab: it may show a PDF the
+ * store already holds for exactly these inputs — that PDF is current, not
+ * stale — but it never compiles and never reports a failure, so a project that
+ * was never compiled keeps its idle "select Compile" surface.
+ */
+async function renderLatexPreview(
+  source: string,
+  token: number,
+  options: { storeOnly?: boolean } = {},
+): Promise<void> {
+  const storeOnly = options.storeOnly === true;
+  const force = !storeOnly && forceNextBuild;
+  if (!storeOnly) forceNextBuild = false;
   const started = performance.now();
   const activeId = doc.id;
-  latexInFlight = true;
-  setLatexStatus("Preparing LaTeX compilation…");
+  if (!storeOnly) {
+    latexInFlight = true;
+    setLatexStatus("Preparing LaTeX compilation…");
+  }
   previewPane.querySelector(":scope > .typst-viewbar")?.remove();
+  if (storeOnly && !doc.path) return;
   if (!doc.path) {
     latexInFlight = false;
     setLatexStatus("Save the document before compiling.");
@@ -2670,6 +3067,7 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
   try {
     engineStatus = await api.latexEngineStatus();
   } catch (error) {
+    if (storeOnly) return;
     if (token === renderToken && doc.id === activeId) {
       latexInFlight = false;
       setLatexStatus("Could not check the LaTeX engine.");
@@ -2679,6 +3077,7 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
   }
   latexEngine = engineStatus;
   if (token !== renderToken || doc.id !== activeId) return;
+  if (storeOnly && (engineStatus.backend === "none" || engineStatus.problem)) return;
   if (engineStatus.backend === "none") {
     latexInFlight = false;
     setLatexStatus("LaTeX is not enabled.");
@@ -2716,6 +3115,7 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
     root = pinned?.path ? pinned : doc;
     latexNavigationRoot = root.id;
   }
+  if (storeOnly && (!root.path || !root.directory)) return;
   if (!root.path || !root.directory) {
     latexInFlight = false;
     setLatexStatus("Save the main document before compiling.");
@@ -2752,17 +3152,26 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
     latexLibraryRevision = snapshot.texmf?.revision ?? null;
     // Completion follows the latest capture, in this editor state only.
     editor.view.dispatch({ effects: setLocalLatexNames.of(libraryNames(snapshot.texmf)) });
+    const key = latexKey(root, snapshot.generation, latexEngineIdentity(engineStatus));
+    if (!force && rebindLatexPreview(key, root, source, token, activeId, revisions)) return;
+    // A PDF already built from exactly these inputs — typically the one this
+    // tab showed before the reader switched away — is drawn instead of compiled.
+    const stored = force ? undefined : latexStore.get(key);
+    if (storeOnly && !stored) return;
+    if (stored) latexInFlight = true;
     // A symlink the snapshot refused is reported before the compile, so a
     // "File not found" from the engine is explained rather than mysterious. The
     // project still compiles: one odd entry must not make a document unusable.
-    if (snapshot.skipped.length > 0) {
+    if (!stored && snapshot.skipped.length > 0) {
       toast(
         `Skipped ${snapshot.skipped.length} symlink${snapshot.skipped.length === 1 ? "" : "s"} in the project: ${snapshot.skipped.join(", ")}`,
         6200,
       );
     }
     let result: LatexResult;
-    if (engineStatus.backend === "native") {
+    if (stored) {
+      result = stored;
+    } else if (engineStatus.backend === "native") {
       const label =
         engineStatus.nativeEngine === "auto" ? "the installed engine" : engineStatus.nativeEngine;
       setLatexStatus(`Compiling with ${label}…`);
@@ -2770,6 +3179,7 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
       // or an edit can reach the process tree before its result arrives.
       const job = `job-${token}-${Date.now()}`;
       latexJob = job;
+      countCompile();
       try {
         const native = await api.latexNativeCompile({
           job,
@@ -2785,6 +3195,7 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
       }
     } else {
       setLatexStatus("Compiling LaTeX…");
+      countCompile();
       result = await compileLatex(snapshot, (phase) => {
         if (token === renderToken && doc.id === activeId) {
           setLatexStatus(
@@ -2799,6 +3210,7 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
     }
     const value = { ...owner, result };
     if (!latexCurrent(value)) return;
+    if (!stored) latexStore.set(key, result, latexResultBytes(result));
     // Narrowed once for the closure: the map callback is not where a mutable
     // `let root` keeps its non-null narrowing.
     const rootDirectory = root.directory;
@@ -2812,7 +3224,9 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
       activeFile: latexRelative(value, doc.path) ?? "",
       enabled: settings.viewMode === "split",
       detached: true,
-      onReady: () => pdfMapReady(view, token),
+      // The committed token, not this build's: a freshness rebind hands the view
+      // to a newer render, and its map may finish after that.
+      onReady: () => pdfMapReady(view, typstPdfToken),
     });
     stagedPdf = { view, host };
     view.setZoom(zoomFactor());
@@ -2836,6 +3250,7 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
         root,
         [...result.files].map((file) => pathKey(joinDir(rootDirectory, file))),
       ),
+      key,
     );
     previewSyncReady = true;
     // A successful compile is the only authority that clears a problem list.
@@ -2855,8 +3270,10 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
     else selectedLatexProblem = null;
     showLatexWarnings(result, { path: root.path, directory: root.directory });
     latexInFlight = false;
+    if (stored) preview.dataset.latexFromStore = String(token);
+    else delete preview.dataset.latexFromStore;
     setLatexStatus(
-      `Compiled in ${((result.elapsedMs ?? performance.now() - started) / 1000).toFixed(1)} s · ${result.engine ?? "LaTeX"}${result.warnings.length ? ` · ${result.warnings.length}${result.warningsTruncated ? "+" : ""} warning${result.warnings.length === 1 && !result.warningsTruncated ? "" : "s"}` : ""}`,
+      `${stored ? "Up to date" : `Compiled in ${((result.elapsedMs ?? performance.now() - started) / 1000).toFixed(1)} s`} · ${result.engine ?? "LaTeX"}${result.warnings.length ? ` · ${result.warnings.length}${result.warningsTruncated ? "+" : ""} warning${result.warnings.length === 1 && !result.warningsTruncated ? "" : "s"}` : ""}`,
       {
         label: "PDF ready",
         severity: result.warnings.length ? "warning" : "success",
@@ -2869,6 +3286,14 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
     // "available after the preview compiles" until the next caret move.
     syncMenuState(false);
   } catch (error) {
+    if (storeOnly) {
+      // A probe that could not read the project leaves manual mode as it was.
+      if (token === renderToken && doc.id === activeId) {
+        latexInFlight = false;
+        discardStagedPdf();
+      }
+      return;
+    }
     if (token === renderToken && doc.id === activeId) {
       latexInFlight = false;
       discardStagedPdf();
@@ -2993,21 +3418,26 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
   // claim a word map it never built.
   const wantsMap = settings.viewMode === "split";
   const imageRoot = customImageFolder();
+  const key = typstKey(doc, source, { mode: wanted, imageRoot });
+  const force = forceNextBuild;
+  forceNextBuild = false;
 
-  // A Typst compile is a whole process. A theme change, a view switch or a
-  // repeated render of the same revision has nothing new to compile.
+  // A Typst compile is a whole process. A view switch or a repeated render of
+  // the same inputs has nothing new to compile.
   if (
+    !force &&
     lastTypstRender &&
-    lastTypstRender.docId === doc.id &&
-    lastTypstRender.revision === doc.revision &&
-    lastTypstRender.source === source &&
-    lastTypstRender.mode === wanted &&
-    lastTypstRender.imageRoot === imageRoot &&
+    lastTypstRender.key === key &&
+    committedKey === key &&
     // Document ranges survive a mode change and can be rebound without another
     // compiler process, even when a pending map build was invalidated.
     (lastTypstRender.syncReady || !wantsMap || (wanted === "document" && lastTypstRender.blocks))
   ) {
-    commitPreview(documentOwner(doc));
+    commitPreview(documentOwner(doc), key);
+    // A preview restored from its slot lost the toolbar with the retirement;
+    // redrawing it from the kept result is idempotent for one that did not.
+    showTypstChrome(lastTypstRender.rendered, lastTypstRender.seconds);
+    if (pendingPreviewScroll !== null) applyPendingPreviewScroll();
     if (wanted === "document" && wantsMap && !wordMap && lastTypstRender.blocks) {
       bindPreviewWords(source, undefined, lastTypstRender.blocks, true);
       lastTypstRender.syncReady = true;
@@ -3022,21 +3452,40 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
     return;
   }
 
+  // A result kept from before a tab switch, for exactly these inputs. Only a
+  // document that reads nothing else from disk is kept: the key cannot see an
+  // imported file or an image change (freshness plan, open question 1).
+  const storable = typstStorable(source);
+  const stored = storable && !force ? typstStore.get(key) : undefined;
   let rendered: api.RenderedTypst;
-  typstInFlight = token;
-  setTypstStatus("Compiling Typst…");
-  try {
-    rendered = await api.renderTypst(doc.path, source, wanted, imageRoot, token);
-  } catch (error) {
+  if (stored) {
+    rendered = stored;
+  } else {
+    typstInFlight = token;
+    countCompile();
+    setTypstStatus("Compiling Typst…");
+    try {
+      rendered = await api.renderTypst(doc.path, source, wanted, imageRoot, token);
+    } catch (error) {
+      if (token !== renderToken) return;
+      // Shown in place of the preview, not as a toast: a Typst error is about a
+      // line of this document, and the pane is where the document is looked at.
+      showTypstFailure(error, wanted);
+      return;
+    } finally {
+      if (typstInFlight === token) typstInFlight = null;
+    }
     if (token !== renderToken) return;
-    // Shown in place of the preview, not as a toast: a Typst error is about a
-    // line of this document, and the pane is where the document is looked at.
-    showTypstFailure(error, wanted);
-    return;
-  } finally {
-    if (typstInFlight === token) typstInFlight = null;
+    if (storable) {
+      typstStore.set(
+        key,
+        rendered,
+        ((rendered.pdf?.length ?? 0) + (rendered.html?.length ?? 0) + (rendered.css?.length ?? 0)) *
+          2 +
+          rendered.compilerOutput.length * 2,
+      );
+    }
   }
-  if (token !== renderToken) return;
 
   // A cache hit above keeps the current controls and word map intact. Only a
   // result that will replace the DOM may discard them.
@@ -3051,45 +3500,15 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
   // or re-rendering the document, must not leave a mark that cannot be cleared.
   syncedSource = null;
   editor.clearSyncRange();
-  const issues = document.createElement("div");
-  issues.className = "compiled-problems";
-  for (const warning of rendered.warnings) {
-    const row = document.createElement("div");
-    row.className = "compiled-issue compiled-warning";
-    row.textContent = warning;
-    issues.append(row);
-  }
-  compiledUi.details(
-    issues,
-    rendered.compilerOutput ?? rendered.warnings.join("\n"),
-    rendered.warnings.length,
-    false,
-  );
-  compiledUi.outputReady();
-  compiledUi.note(null);
+  showTypstIssues(rendered);
 
   if (rendered.kind === "document") {
-    const dropped = typstDroppedNote(rendered);
-    compiledUi.note(dropped);
     const host = document.createElement("div");
     // The same class the Markdown preview uses, so every rule that shapes prose,
     // headings, code, tables and quotes applies to this document too.
     host.className = "markdown-body typst-document";
     host.innerHTML = rendered.html ?? "";
     preview.appendChild(host);
-
-    if (rendered.css) {
-      // The export's stylesheet is mostly MathML alignment inside tables, which
-      // no browser resolves unaided. Kept in one element so it is replaced rather
-      // than accumulated across renders.
-      let style = document.getElementById("typst-export-css") as HTMLStyleElement | null;
-      if (!style) {
-        style = document.createElement("style");
-        style.id = "typst-export-css";
-        document.head.appendChild(style);
-      }
-      style.textContent = rendered.css;
-    }
     // Typst's HTML export carries no source positions, so the blocks are matched
     // back to the source by their text — see typst-map.ts. The returned ranges
     // feed the same block-record word map AsciiDoc uses; generated text simply
@@ -3102,15 +3521,16 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
     else applyPendingPreviewScroll();
     updateActiveOutline();
     syncPreviewFromSource();
-    commitPreview(documentOwner(doc));
+    commitPreview(documentOwner(doc), key);
     previewSyncReady = wantsMap;
     lastTypstRender = {
+      key,
       docId: doc.id,
       revision: doc.revision,
-      source,
       mode: wanted,
-      imageRoot,
       syncReady: wantsMap,
+      rendered,
+      seconds: ((performance.now() - started) / 1000).toFixed(1),
       blocks: mapped.blocks,
     };
     setTypstStatus(
@@ -3160,16 +3580,17 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
   // PDF correspondence has its own region adapter, not DOM block anchors.
   previewLinesMapped = false;
   syncPreviewFromSource();
-  commitPreview(documentOwner(doc));
+  commitPreview(documentOwner(doc), key);
   // The page view's own map is ready; switching to Split must not reload it.
   previewSyncReady = true;
   lastTypstRender = {
+    key,
     docId: doc.id,
     revision: doc.revision,
-    source,
     mode: wanted,
-    imageRoot,
     syncReady: true,
+    rendered,
+    seconds: ((performance.now() - started) / 1000).toFixed(1),
   };
   setTypstStatus(
     `Compiled with Typst${rendered.warnings.length ? ` · ${rendered.warnings.length} warnings` : ""}`,
@@ -3181,6 +3602,32 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
       engine: `Typst · ${((performance.now() - started) / 1000).toFixed(1)} s`,
     },
   );
+}
+
+/**
+ * True when a Typst document's output depends on its own text alone.
+ *
+ * Deliberately broad: any import, include, or function that reads a file
+ * (images, data files, bibliographies, plugins) makes the document ineligible
+ * for the cross-tab store, because nothing tells the key that such a file
+ * changed. A false "ineligible" costs one compile on return; a false
+ * "eligible" would show an outdated preview as current.
+ */
+const TYPST_READS_FILES =
+  /#\s*(?:import|include)\b|\b(?:image|read|json|csv|yaml|toml|xml|cbor|plugin|bibliography)\s*\(/;
+
+/** True when the Typst store holds output for the active document as it is now. */
+function typstStoreHit(): boolean {
+  const source = editor.getDoc();
+  if (!typstStorable(source)) return false;
+  const mode = settings.typstView === "pages" ? "pages" : "document";
+  return (
+    typstStore.get(typstKey(doc, source, { mode, imageRoot: customImageFolder() })) !== undefined
+  );
+}
+
+function typstStorable(source: string): boolean {
+  return !TYPST_READS_FILES.test(source);
 }
 
 function typstPdfCurrent(): boolean {
@@ -3238,6 +3685,60 @@ const TYPST_CONTENT_LOSS = new Set(["align", "columns", "grid", "pad", "place", 
  * into `ignored`. Without this note the pane silently shows less than the
  * document contains — the one failure mode a preview must not have.
  */
+/**
+ * The Typst toolbar's problems, Logs text and Document note, plus the export
+ * stylesheet a Document view needs. One function for a fresh compile and for a
+ * preview that comes back from its slot, so the two cannot drift.
+ */
+function showTypstIssues(rendered: api.RenderedTypst): void {
+  const issues = document.createElement("div");
+  issues.className = "compiled-problems";
+  for (const warning of rendered.warnings) {
+    const row = document.createElement("div");
+    row.className = "compiled-issue compiled-warning";
+    row.textContent = warning;
+    issues.append(row);
+  }
+  compiledUi.details(
+    issues,
+    rendered.compilerOutput ?? rendered.warnings.join("\n"),
+    rendered.warnings.length,
+    false,
+  );
+  compiledUi.outputReady();
+  compiledUi.note(rendered.kind === "document" ? typstDroppedNote(rendered) : null);
+  if (rendered.kind === "document" && rendered.css) {
+    // The export's stylesheet is mostly MathML alignment inside tables, which
+    // no browser resolves unaided. Kept in one element so it is replaced rather
+    // than accumulated across renders — and re-applied when another file's
+    // Document preview comes back from its slot.
+    let style = document.getElementById("typst-export-css") as HTMLStyleElement | null;
+    if (!style) {
+      style = document.createElement("style");
+      style.id = "typst-export-css";
+      document.head.appendChild(style);
+    }
+    style.textContent = rendered.css;
+  }
+}
+
+/** The toolbar of a Typst preview that is current without a compile. */
+function showTypstChrome(rendered: api.RenderedTypst, seconds: string): void {
+  configureCompiledUi();
+  showTypstIssues(rendered);
+  const pages = rendered.kind === "pages";
+  setTypstStatus(
+    `Compiled with Typst${rendered.warnings.length ? ` · ${rendered.warnings.length} warnings` : ""}`,
+    pages,
+    {
+      label: pages ? "PDF ready" : "Document ready",
+      severity: rendered.warnings.length ? "warning" : "success",
+      detail: compiledUi.issueSummary,
+      engine: `Typst · ${seconds} s`,
+    },
+  );
+}
+
 function typstDroppedNote(rendered: api.RenderedTypst): HTMLElement | null {
   const lost = rendered.ignored.filter((name) => TYPST_CONTENT_LOSS.has(name));
   if (lost.length === 0) return null;
@@ -3278,16 +3779,26 @@ async function renderHtmlPreview(source: string, token: number): Promise<boolean
   // would only restart its scripts.
   if (settings.viewMode === "source") return false;
   htmlRestoreLine = htmlPreview.layout()?.line ?? editor.topVisibleLine();
-  const outcome = await htmlPreview.render(
-    source,
-    doc.directory ?? null,
-    doc.name ?? "index.html",
-    settings.htmlPreviewScripts !== false,
+  const inputs = htmlInputs();
+  const outcome = await htmlPreview.render(source, inputs.baseDir, inputs.name, inputs.scripts, [
+    ...inputs.roots,
+  ]);
+  return outcome === "current" && token === renderToken;
+}
+
+/**
+ * What the HTML guest is built from besides the text. One function feeds both
+ * the build and its freshness key, so the two cannot disagree.
+ */
+function htmlInputs(): { baseDir: string | null; name: string; scripts: boolean; roots: string[] } {
+  return {
+    baseDir: doc.directory ?? null,
+    name: doc.name ?? "index.html",
+    scripts: settings.htmlPreviewScripts !== false,
     // Only a saved document has a root the guest can resolve against; a custom
     // folder is the one extra folder the reader allowed.
-    doc.path ? [customImageFolder()].filter((dir): dir is string => dir !== null) : [],
-  );
-  return outcome === "current" && token === renderToken;
+    roots: doc.path ? [customImageFolder()].filter((dir): dir is string => dir !== null) : [],
+  };
 }
 
 async function doRender(force = false): Promise<void> {
@@ -3318,20 +3829,60 @@ async function doRender(force = false): Promise<void> {
 
   // Typst controls live outside #preview and belong only to a Typst result.
   previewPane.querySelector(":scope > .typst-viewbar")?.remove();
-  wordMap = null;
-  clearPreviewWords();
 
   if (doc.language === "html") {
+    const key = htmlKey(doc, source, htmlInputs());
+    // The guest keeps the copy it built, stamped for this exact source; an
+    // edit only cleared the highlight. Rebuilding would restart its scripts.
+    if (!force && key === committedKey && covers(previewOwner, probeOf(doc))) {
+      commitPreview(documentOwner(doc), key);
+      previewSyncReady = true;
+      return;
+    }
+    wordMap = null;
+    clearPreviewWords();
     const current = await renderHtmlPreview(source, token);
     if (token !== renderToken || !current) return;
     // The guest stamps its word nodes while building the copy, so Split can use
     // the same iframe without a second render.
-    commitPreview(documentOwner(doc));
+    commitPreview(documentOwner(doc), key);
     previewSyncReady = true;
     return;
   }
 
+  const language = doc.language === "asciidoc" ? "asciidoc" : "markdown";
+  const key = proseKey(language, doc, source, {
+    baseDir: doc.directory ?? null,
+    documentPath: language === "markdown" ? doc.path : null,
+    math: settings.enableMath,
+    mermaid: settings.enableMermaid,
+  });
+  if (
+    key === committedKey &&
+    proseMap?.key === key &&
+    covers(previewOwner, probeOf(doc)) &&
+    (!wantsMap || proseMap.fragments !== undefined || proseMap.blocks !== undefined)
+  ) {
+    // The DOM on screen was built from this exact text and these options —
+    // typically an edit undone before the debounce ran. Rebind what the edit
+    // dropped instead of converting the document again.
+    if (!wordMap) bindPreviewWords(source, proseMap.fragments, proseMap.blocks, wantsMap);
+    previewLinesMapped = proseMap.linesMapped;
+    drawDiagrams(token);
+    rebuildAnchors();
+    if (pendingPreviewScroll !== null) applyPendingPreviewScroll();
+    syncPreviewFromSource();
+    commitPreview(documentOwner(doc), key);
+    previewSyncReady = wantsMap;
+    return;
+  }
+  wordMap = null;
+  clearPreviewWords();
+
   if (doc.language === "asciidoc") {
+    // AsciiDoc draws its diagrams before the commit, with the theme of the
+    // moment it started; a theme change during the build re-themes afterwards.
+    const epoch = themeEpoch;
     const result = await renderAsciidocPreviewInto(
       preview,
       source,
@@ -3351,8 +3902,15 @@ async function doRender(force = false): Promise<void> {
     else applyPendingPreviewScroll();
     updateActiveOutline();
     syncPreviewFromSource();
-    commitPreview(documentOwner(doc));
+    commitPreview(documentOwner(doc), key);
+    proseMap = {
+      key,
+      fragments: undefined,
+      blocks: wantsMap ? result.blocks : undefined,
+      linesMapped: result.linesMapped,
+    };
     previewSyncReady = wantsMap;
+    if (epoch !== themeEpoch) retheme();
     return;
   }
 
@@ -3383,16 +3941,7 @@ async function doRender(force = false): Promise<void> {
     }
   }
 
-  // Diagrams are not part of the first paint: their SVGs are large and mermaid
-  // renders sequentially. Start them, let the reader see the text immediately,
-  // and re-anchor once the sizes settle. A newer render cancels this pass.
-  if (preview.querySelector(".mermaid[data-mermaid]")) {
-    void renderMermaidIn(preview, isDark).then(() => {
-      if (token !== renderToken) return;
-      rebuildAnchors();
-      if (pendingPreviewScroll === null && !caretByPointer) revealCursorInPreview();
-    });
-  }
+  drawDiagrams(token);
 
   // Diagram sizes only settle after mermaid runs, so anchor once it is done.
   rebuildAnchors();
@@ -3400,8 +3949,34 @@ async function doRender(force = false): Promise<void> {
   else applyPendingPreviewScroll();
   updateActiveOutline();
   syncPreviewFromSource();
-  commitPreview(documentOwner(doc));
+  commitPreview(documentOwner(doc), key);
+  proseMap = {
+    key,
+    fragments: wantsMap ? result.fragments : undefined,
+    blocks: undefined,
+    linesMapped: result.linesMapped,
+  };
   previewSyncReady = wantsMap;
+}
+
+/**
+ * Draw the Markdown preview's diagrams after the first paint.
+ *
+ * Their SVGs are large and mermaid renders sequentially, so the reader sees the
+ * text first and the anchors are rebuilt once the sizes settle. A newer render
+ * or a theme change cancels the pass. A freshness match calls this too: an
+ * edit that was undone may have cancelled the previous pass halfway, and a
+ * diagram already drawn comes from the cache.
+ */
+function drawDiagrams(token: number): void {
+  if (!preview.querySelector(".mermaid[data-mermaid]")) return;
+  const epoch = themeEpoch;
+  const cancelled = () => token !== renderToken || epoch !== themeEpoch;
+  void renderMermaidIn(preview, isDark, cancelled).then(() => {
+    if (cancelled()) return;
+    rebuildAnchors();
+    if (pendingPreviewScroll === null && !caretByPointer) revealCursorInPreview();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -3723,6 +4298,8 @@ async function assistantFileName(
 /** Drop the guest when the editor leaves HTML; start a fresh nonce when it enters. */
 function syncGuest(next: api.DocumentLanguage): void {
   if (!htmlPreview) return;
+  // A reset guest is blank, whatever key the last build left behind.
+  if (next === "html") committedKey = null;
   if (next === "html") htmlPreview.reset();
   else htmlPreview.dispose();
 }
@@ -3796,11 +4373,15 @@ function retirePreview(): void {
   latexLastSourceScroll = null;
   previewLinesMapped = false;
   previewOwner = null;
+  committedKey = null;
+  proseMap = null;
   clearPending();
 }
 
 /** A render that started for the previous tab must not paint this one. */
 function invalidatePreview(): void {
+  // Keep the outgoing tab's preview for its return instead of destroying it.
+  if (!covers(previewOwner, probeOf(doc))) parkPreview();
   latexInFlight = false;
   latexPartial = null;
   delete preview.dataset.latexPartial;
@@ -3886,6 +4467,11 @@ async function displayDoc(preservePdf = false): Promise<void> {
   stopReadAloud();
   if (!preservePdf) invalidatePreview();
   pendingPreviewScroll = preservePdf ? null : doc.previewScroll;
+  // A kept preview comes back at the tab's remembered offset. The offset also
+  // stays pending: the render that follows applies it right before it syncs
+  // the panes, in the same order a full rebuild does, so the sync cannot move
+  // the preview away from where the reader left it.
+  if (!preservePdf) restorePreview();
   suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
   suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
   if (doc.editorState) {
@@ -5588,6 +6174,8 @@ async function pandocSetup(): Promise<void> {
  * reasonable offer rather than an imposition.
  */
 async function typstSetup(): Promise<void> {
+  // A new compiler may render the same source differently.
+  typstStore.clear();
   let status: api.TypstStatus;
   try {
     status = await api.typstStatus();
@@ -8649,7 +9237,7 @@ function installSystemThemeWatcher(): void {
   media.addEventListener("change", () => {
     if (settings.theme !== "system") return;
     applyTheme();
-    scheduleRender(true);
+    retheme();
   });
 }
 
@@ -9656,6 +10244,8 @@ async function boot(): Promise<void> {
       if (!confirmed) return;
       try {
         const freed = await api.latexClearCache();
+        // The reader asked for a clean slate; kept PDFs go with the packages.
+        latexStore.clear();
         toast(`Cleared ${(freed / (1024 * 1024)).toFixed(1)} MiB of cached TeX packages.`);
       } catch (error) {
         await message(String(error), { title: "Could not clear the cache", kind: "error" });

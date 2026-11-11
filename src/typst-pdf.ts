@@ -429,6 +429,11 @@ export class TypstPdfPreview {
     if (!this.sourceMap && !this.mapWorker && !this.mapTimer && !this.disposed) this.startMap();
   }
 
+  /** The project file the word map follows; "" for a single-file document. */
+  get currentFile(): string {
+    return this.activeFile;
+  }
+
   setActiveFile(file: string, source: string): void {
     this.cancelMap();
     this.geometryGeneration++;
@@ -443,7 +448,27 @@ export class TypstPdfPreview {
   activate(): void {
     this.detached = false;
     this.cancelScrollRestore();
+    // A parked view stopped observing the pane; observing again also delivers
+    // one initial callback, which refits the pages if the pane changed width.
+    if (!this.disposed) this.resizeObserver?.observe(this.pane);
     this.measureScrollRegions();
+  }
+
+  /**
+   * Take the view off screen without destroying it, so a return to its tab can
+   * show it again without a rebuild.
+   *
+   * Detached, it must not move the shared pane: fitting is not observed, a
+   * pending scroll restore is dropped, and a map build stops (`ensureMap`
+   * resumes it). The page observer unpaints every canvas once the host leaves
+   * the document, so a parked view keeps the parsed PDF, not its pixels.
+   */
+  park(): void {
+    if (this.disposed) return;
+    this.detached = true;
+    this.cancelScrollRestore();
+    this.cancelMap();
+    this.resizeObserver?.disconnect();
   }
 
   mapReady(): boolean {

@@ -165,6 +165,21 @@ const SUITES = [
     script: "preview-owner-unit.mjs",
   },
   {
+    // What a preview depends on, as one key. Pure logic: every input changes
+    // the key, and an edit undone before the render keeps it.
+    id: "preview-freshness-unit",
+    title: "Preview freshness keys (unit)",
+    kind: "node",
+    script: "preview-freshness-unit.mjs",
+  },
+  {
+    // The compiled-output store kept across tab switches: byte-bounded LRU.
+    id: "preview-store-unit",
+    title: "Preview output store (unit)",
+    kind: "node",
+    script: "preview-store-unit.mjs",
+  },
+  {
     id: "preview-dom",
     title: "Preview DOM and sanitizer",
     kind: "node",
@@ -460,6 +475,16 @@ const SUITES = [
     script: "preview-ownership-test.mjs",
     doc: "samples/feature-tour.md",
     safeWithInstalledApp: true,
+  },
+  {
+    // Theme, palette and width are not preview inputs. Counts the render
+    // commands at the IPC boundary (latex_engine_status, render_typst,
+    // set_html_preview), so it runs with no engine installed. Temp fixtures.
+    id: "preview-freshness",
+    title: "No rebuild for a change that is not a preview input",
+    kind: "cdp",
+    script: "preview-freshness-test.mjs",
+    doc: "samples/feature-tour.md",
   },
   {
     id: "preview-perf",
