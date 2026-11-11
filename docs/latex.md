@@ -77,6 +77,13 @@ Saving does not start a build in manual mode; the preview remains marked out of
 date until you compile. The document and all open included files are compiled
 from their current buffers, including unsaved changes.
 
+An automatic build is skipped when nothing it would read has changed. MDraft
+fingerprints every file of the project (open buffers included) and the local
+libraries before each build; when the fingerprint, the main file and the engine
+match the PDF on screen, the preview says **Up to date** instead of compiling.
+That covers saving a file the preview already showed, undoing an edit, and moving
+between chapters of the same project. **Compile** always builds.
+
 ## Installed TeX distributions
 
 *Preferences › LaTeX* has a separate **Installed TeX distribution** group. It is
