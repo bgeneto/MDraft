@@ -983,9 +983,17 @@ fn parse_settings(raw: &str) -> Option<Settings> {
 }
 
 fn adopt_latex_marker(raw: Option<&str>, marker: bool) -> bool {
-    marker && !raw
+    marker && raw
         .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
-        .is_some_and(|value| value.get("latexEnabled").is_some())
+        .is_none_or(|value| value.get("latexEnabled").is_none())
+}
+
+fn initialize_local_packages(raw: Option<&str>, config_exists: bool) -> bool {
+    !config_exists || raw.is_some_and(|raw| {
+        serde_json::from_str::<serde_json::Value>(raw).is_ok_and(|value| {
+            value.as_object().is_some_and(|fields| !fields.contains_key("latexTexmfRoots"))
+        })
+    })
 }
 
 impl AppState {
@@ -1005,6 +1013,11 @@ impl AppState {
             .and_then(parse_settings)
             .unwrap_or_default();
 
+        // Profiles from before local libraries have no key yet. An explicit
+        // empty list is a deliberate choice and must survive every startup.
+        let fresh = initialize_local_packages(raw_settings.as_deref(), config_file.exists());
+        let _ = crate::latex_texmf::initialize(&dir, &mut settings.latex_texmf_roots, fresh);
+
         // The LuaLaTeX experiment kept its switch in a marker file beside the
         // cache; the product keeps it here. A reader who enabled the experiment
         // has the marker and no `latexEnabled` key, so without this they would
@@ -1014,6 +1027,9 @@ impl AppState {
         // from here on, and turning it off must not be undone by a stale file.
         if adopt_latex_marker(raw_settings.as_deref(), crate::latex::legacy_marker_present(app)) {
             settings.latex_enabled = true;
+        }
+        if fresh {
+            let _ = write_json(&config_file, &settings);
         }
 
         // The `mdraft-tex` scheme handler is synchronous and cannot parse this
@@ -1287,6 +1303,16 @@ pub fn same_path(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_packages_initialize_once_without_resurrecting_removed_roots() {
+        assert!(initialize_local_packages(None, false));
+        assert!(initialize_local_packages(Some(r#"{"latexEnabled":true}"#), true));
+        assert!(!initialize_local_packages(Some(r#"{"latexTexmfRoots":[]}"#), true));
+        assert!(!initialize_local_packages(Some(r#"{"latexTexmfRoots":[{"enabled":false}]}"#), true));
+        assert!(!initialize_local_packages(Some("corrupt"), true));
+        assert!(!initialize_local_packages(None, true), "an unreadable existing file is not a new profile");
+    }
 
     #[test]
     fn cursor_blink_defaults_by_platform_and_round_trips() {

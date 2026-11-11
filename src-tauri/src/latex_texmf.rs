@@ -14,7 +14,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
@@ -152,6 +152,10 @@ pub enum TexmfAction {
         layout: Option<Layout>,
     },
     UsePersonal,
+    SetPrimary {
+        path: Option<String>,
+        layout: Option<Layout>,
+    },
     SetEnabled {
         id: String,
         enabled: bool,
@@ -521,9 +525,38 @@ fn personal_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|error| format!("Cannot locate the configuration folder: {error}"))
 }
 
+fn default_path(config: &Path, layout: Layout) -> PathBuf {
+    let tree = config.join("texmf");
+    match layout {
+        Layout::Tds => tree,
+        Layout::Packages => tree.join("tex").join("latex").join("local"),
+    }
+}
+
+/// Called for each user's configuration, including portable profiles. Existing
+/// registrations (even an intentionally empty list) must survive an upgrade.
+pub fn initialize(config: &Path, roots: &mut Vec<TexmfRoot>, fresh: bool) -> Result<(), String> {
+    if fresh && roots.is_empty() {
+        roots.push(TexmfRoot {
+            id: new_id(),
+            kind: RootKind::Personal,
+            path: None,
+            layout: Layout::Packages,
+            enabled: true,
+        });
+    }
+    let local = default_path(config, Layout::Packages);
+    fs::create_dir_all(&local)
+        .map_err(|error| format!("Cannot create {}: {error}", local.display()))
+}
+
 fn resolve(app: &AppHandle, root: &TexmfRoot) -> Result<PathBuf, String> {
     match root.kind {
-        RootKind::Personal => personal_dir(app),
+        RootKind::Personal => app
+            .path()
+            .app_config_dir()
+            .map(|config| default_path(&config, root.layout))
+            .map_err(|error| error.to_string()),
         RootKind::Folder => root
             .path
             .as_deref()
@@ -534,7 +567,7 @@ fn resolve(app: &AppHandle, root: &TexmfRoot) -> Result<PathBuf, String> {
 
 fn label_for(root: &TexmfRoot, resolved: &Path) -> String {
     match root.kind {
-        RootKind::Personal => "Personal folder".into(),
+        RootKind::Personal => "Local packages".into(),
         RootKind::Folder => resolved
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -595,6 +628,50 @@ fn apply(
             .ok_or_else(|| "That library is no longer registered.".to_string())
     };
     match action {
+        TexmfAction::SetPrimary { path, layout } => {
+            // Validate against the other roots before touching the live list.
+            // A failed replacement must not remove the working registration.
+            let previous = roots.first().cloned();
+            let mut remaining: Vec<_> = roots.iter().skip(1).cloned().collect();
+            let mut replacement = if let Some(path) = path {
+                apply(
+                    &mut remaining,
+                    TexmfAction::AddFolder { path, layout },
+                    resolved,
+                )?;
+                remaining.pop().ok_or("The folder could not be selected.")?
+            } else {
+                if remaining.iter().any(|root| root.kind == RootKind::Personal) {
+                    return Err("The default folder is already in the additional folders.".into());
+                }
+                TexmfRoot {
+                    id: new_id(),
+                    kind: RootKind::Personal,
+                    path: None,
+                    layout: layout.unwrap_or(Layout::Packages),
+                    enabled: true,
+                }
+            };
+            if let Some(previous) = previous {
+                replacement.id = previous.id;
+                replacement.enabled = previous.enabled;
+            }
+            if replacement.kind == RootKind::Personal
+                && let Some(candidate) = resolved(&replacement).and_then(|path| identity(&path))
+            {
+                for root in &remaining {
+                    if let Some(other) = resolved(root).and_then(|path| identity(&path))
+                        && (contains(&candidate, &other) || contains(&other, &candidate))
+                    {
+                        return Err("The default folder overlaps an additional folder.".into());
+                    }
+                }
+            }
+            let id = replacement.id.clone();
+            remaining.insert(0, replacement);
+            *roots = remaining;
+            Ok(Some(id))
+        }
         TexmfAction::AddFolder { path, layout } => {
             let requested = PathBuf::from(&path);
             if !requested.is_absolute() {
@@ -667,8 +744,19 @@ fn apply(
         }
         TexmfAction::SetLayout { id, layout } => {
             let at = position(roots, &id)?;
-            if roots[at].kind == RootKind::Personal && layout != Layout::Tds {
-                return Err("The personal folder is always a TEXMF tree.".into());
+            let mut candidate = roots[at].clone();
+            candidate.layout = layout;
+            if let Some(path) = resolved(&candidate).and_then(|path| identity(&path)) {
+                for (index, root) in roots.iter().enumerate() {
+                    if index == at {
+                        continue;
+                    }
+                    if let Some(other) = resolved(root).and_then(|path| identity(&path))
+                        && (contains(&path, &other) || contains(&other, &path))
+                    {
+                        return Err("This layout overlaps another registered folder.".into());
+                    }
+                }
             }
             roots[at].layout = layout;
             Ok(Some(id))
@@ -710,6 +798,28 @@ pub async fn latex_texmf_configure(
     tauri::async_runtime::spawn_blocking(move || {
         let state = state(&app)?;
         let mut settings = state.snapshot()?;
+        // Choosing the standard location must keep portable profiles relative
+        // to their config directory, just like the automatically chosen default.
+        let action = match action {
+            TexmfAction::SetPrimary {
+                path: Some(path),
+                layout,
+            } => {
+                let layout = layout.unwrap_or_else(|| detect_layout(Path::new(&path)));
+                let config = app
+                    .path()
+                    .app_config_dir()
+                    .map_err(|error| error.to_string())?;
+                let standard = default_path(&config, layout);
+                let is_standard =
+                    identity(Path::new(&path)).is_some_and(|p| Some(p) == identity(&standard));
+                TexmfAction::SetPrimary {
+                    path: if is_standard { None } else { Some(path) },
+                    layout: Some(layout),
+                }
+            }
+            action => action,
+        };
         let personal = matches!(action, TexmfAction::UsePersonal);
         let app_for_resolve = app.clone();
         apply(&mut settings.latex_texmf_roots, action, &|root| {
@@ -866,13 +976,7 @@ pub fn latex_texmf_open(app: AppHandle, id: String) -> Result<(), String> {
         .iter()
         .find(|root| root.id == id)
         .ok_or("That library is no longer registered.")?;
-    let mut dir = resolve(&app, root)?;
-    if root.kind == RootKind::Personal {
-        let local = dir.join("tex").join("latex").join("local");
-        if local.is_dir() {
-            dir = local;
-        }
-    }
+    let dir = resolve(&app, root)?;
     if !dir.is_dir() {
         return Err(format!("{} is not available.", dir.display()));
     }
@@ -925,7 +1029,7 @@ fn capture_once(roots: &[(TexmfRoot, PathBuf, String)]) -> Result<TexmfSnapshot,
     for (position, (root, dir, label)) in roots.iter().enumerate() {
         let index = index_root(dir, root.layout).map_err(|error| {
             CaptureError::Fatal(format!(
-                "The local library \"{label}\" cannot be used: {} Turn it off in Preferences › LaTeX › Local packages and classes to compile without it.",
+                "The local library \"{label}\" cannot be used: {} Turn it off in Preferences › LaTeX › Local packages to compile without it.",
                 error.message()
             ))
         })?;
@@ -1281,6 +1385,90 @@ mod tests {
     }
 
     #[test]
+    fn default_initialization_preserves_files_and_user_choices() {
+        let config = temp("default ü");
+        let mut roots = Vec::new();
+        initialize(&config, &mut roots, true).unwrap();
+        let local = default_path(&config, Layout::Packages);
+        assert!(local.is_dir());
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].layout, Layout::Packages);
+        assert!(roots[0].enabled);
+        write(&local.join("mine.sty"), "my package");
+        roots[0].enabled = false;
+        let saved = roots.clone();
+        initialize(&config, &mut roots, false).unwrap();
+        assert_eq!(roots, saved);
+        assert_eq!(
+            fs::read_to_string(local.join("mine.sty")).unwrap(),
+            "my package"
+        );
+        roots.clear();
+        initialize(&config, &mut roots, false).unwrap();
+        assert!(roots.is_empty(), "an intentional removal survives restart");
+        assert_eq!(default_path(&config, Layout::Tds), config.join("texmf"));
+        let portable = temp("portable config");
+        assert_eq!(
+            default_path(&portable, Layout::Packages),
+            portable.join("texmf/tex/latex/local")
+        );
+        assert_ne!(
+            default_path(&config, Layout::Packages),
+            default_path(&portable, Layout::Packages)
+        );
+    }
+
+    #[test]
+    fn primary_replacement_is_atomic_and_keeps_order_and_enablement() {
+        let a = temp("replace-a");
+        let b = temp("replace-b");
+        let c = temp("replace-c ü");
+        write(&c.join("custom.sty"), "x");
+        let resolver = |root: &TexmfRoot| root.path.as_deref().map(PathBuf::from);
+        let mut roots = Vec::new();
+        for path in [&a, &b] {
+            apply(
+                &mut roots,
+                TexmfAction::AddFolder {
+                    path: path.display().to_string(),
+                    layout: None,
+                },
+                &resolver,
+            )
+            .unwrap();
+        }
+        roots[0].enabled = false;
+        let saved = roots.clone();
+        for path in [b.clone(), b.join("missing"), PathBuf::from("relative")] {
+            assert!(apply(
+                &mut roots,
+                TexmfAction::SetPrimary {
+                    path: Some(path.display().to_string()),
+                    layout: None
+                },
+                &resolver
+            )
+            .is_err());
+            assert_eq!(roots, saved, "failed replacement must keep the old list");
+        }
+        apply(
+            &mut roots,
+            TexmfAction::SetPrimary {
+                path: Some(c.display().to_string()),
+                layout: None,
+            },
+            &resolver,
+        )
+        .unwrap();
+        assert_eq!(roots[0].id, saved[0].id);
+        assert!(!roots[0].enabled);
+        assert_eq!(roots[0].layout, Layout::Packages);
+        assert_eq!(roots[1], saved[1]);
+        assert!(a.is_dir());
+        assert!(c.join("custom.sty").is_file());
+    }
+
+    #[test]
     fn configure_rules() {
         let a = temp("cfg-a");
         let inner = a.join("inner");
@@ -1300,41 +1488,35 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(roots[0].layout, Layout::Packages);
-        assert!(
-            apply(
-                &mut roots,
-                TexmfAction::AddFolder {
-                    path: a.display().to_string(),
-                    layout: None
-                },
-                &resolve
-            )
-            .unwrap_err()
-            .contains("already registered")
-        );
-        assert!(
-            apply(
-                &mut roots,
-                TexmfAction::AddFolder {
-                    path: inner.display().to_string(),
-                    layout: None
-                },
-                &resolve
-            )
-            .unwrap_err()
-            .contains("overlaps")
-        );
-        assert!(
-            apply(
-                &mut roots,
-                TexmfAction::AddFolder {
-                    path: "relative/path".into(),
-                    layout: None
-                },
-                &resolve
-            )
-            .is_err()
-        );
+        assert!(apply(
+            &mut roots,
+            TexmfAction::AddFolder {
+                path: a.display().to_string(),
+                layout: None
+            },
+            &resolve
+        )
+        .unwrap_err()
+        .contains("already registered"));
+        assert!(apply(
+            &mut roots,
+            TexmfAction::AddFolder {
+                path: inner.display().to_string(),
+                layout: None
+            },
+            &resolve
+        )
+        .unwrap_err()
+        .contains("overlaps"));
+        assert!(apply(
+            &mut roots,
+            TexmfAction::AddFolder {
+                path: "relative/path".into(),
+                layout: None
+            },
+            &resolve
+        )
+        .is_err());
         let second = apply(
             &mut roots,
             TexmfAction::AddFolder {
@@ -1355,17 +1537,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(roots[0].id, second);
-        assert!(
-            apply(
-                &mut roots,
-                TexmfAction::Move {
-                    id: second.clone(),
-                    offset: -1
-                },
-                &resolve
-            )
-            .is_err()
-        );
+        assert!(apply(
+            &mut roots,
+            TexmfAction::Move {
+                id: second.clone(),
+                offset: -1
+            },
+            &resolve
+        )
+        .is_err());
         apply(
             &mut roots,
             TexmfAction::SetEnabled {
@@ -1385,17 +1565,15 @@ mod tests {
                 .unwrap(),
             personal
         );
-        assert!(
-            apply(
-                &mut roots,
-                TexmfAction::SetLayout {
-                    id: personal.clone(),
-                    layout: Layout::Packages
-                },
-                &resolve
-            )
-            .is_err()
-        );
+        assert!(apply(
+            &mut roots,
+            TexmfAction::SetLayout {
+                id: personal.clone(),
+                layout: Layout::Packages
+            },
+            &resolve
+        )
+        .is_ok());
         apply(&mut roots, TexmfAction::Remove { id }, &resolve).unwrap();
         assert_eq!(roots.len(), 2);
         // Remove never touched the folder itself.

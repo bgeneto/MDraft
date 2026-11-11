@@ -2,6 +2,9 @@
 
 **Status:** accepted
 **Date:** 2026-11-11
+**Default-folder setup and Preferences UI superseded by:**
+[2026-11-11-latex-local-folder-default.md](2026-11-11-latex-local-folder-default.md).
+The capture, search precedence and distribution wiring decisions remain accepted.
 
 ## Context
 

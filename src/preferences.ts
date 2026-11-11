@@ -10,7 +10,11 @@
 //! be dragged and resized without leaving the webview.
 
 import * as api from "./api";
-import { texmfRows, type TexmfPreferencesHost } from "./latex-texmf-preferences.ts";
+import {
+  renderTexmfControl,
+  texmfRows,
+  type TexmfPreferencesHost,
+} from "./latex-texmf-preferences.ts";
 import {
   BUNDLED_FAMILIES,
   CUSTOM_PRESET,
@@ -128,6 +132,12 @@ export interface PreferencesHandle {
 export type Row =
   | { kind: "heading"; label: string }
   | { kind: "note"; label: string; text: string }
+  | { kind: "localPackages"; label: string; host: TexmfPreferencesHost; refresh: () => void }
+  | {
+      kind: "actions";
+      label: string;
+      actions: { text: string; action: () => void | Promise<void> }[];
+    }
   | {
       kind: "checkbox";
       label: string;
@@ -266,6 +276,13 @@ interface AiUiState {
 /** Everything a row can be found by, lower-cased once. */
 function rowSearchText(row: Row): string {
   const parts: string[] = [row.label];
+  if (row.kind === "actions") parts.push(...row.actions.map((action) => action.text));
+  if (row.kind === "localPackages") {
+    parts.push(
+      "TEXMF local packages classes folder layout",
+      ...(row.host.texmfConfig()?.roots ?? []).map((root) => root.resolved),
+    );
+  }
   if ("help" in row && row.help) parts.push(row.help);
   if (row.kind === "note" || row.kind === "button") parts.push(row.text);
   if (row.kind === "select" || row.kind === "choices") {
@@ -920,11 +937,10 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
         ? `${native.nativeDistribution ?? "TeX Live (WSL)"} · ${native.nativeWsl.bin}`
         : native?.nativeRoot
           ? `${native.nativeDistribution ?? "TeX"} · ${native.nativeRoot}`
-          : "No installation selected. Use Find or Browse to choose the folder that holds lualatex, pdflatex or xelatex.";
+          : "No installation selected.";
   const wslDistributions = host.nativeWslDistributions() ?? [];
   const wslCandidates = host.nativeWslCandidates() ?? [];
   const rows: Row[] = [
-    { kind: "heading", label: "Compilation" },
     {
       kind: "checkbox",
       label: "Auto-compile",
@@ -937,17 +953,10 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
 
     { kind: "heading", label: "Installed TeX distribution" },
     {
-      kind: "note",
-      label: "Trust and network",
-      text: "The engine you choose is a separate program: it runs with your operating-system permissions and may use the network to install its own packages. In WSL it runs as your Linux user and can read Windows drives mounted in the distribution. Only use a trusted installation and trusted documents. Shell escape and project executables stay disabled, and MDraft itself makes no network request to run it.",
-    },
-    {
       kind: "checkbox",
       label: "Use my installed TeX distribution",
-      help: s().latexNativeRoot
-        ? "Chooses the installed backend independently of the bundled engine. Turning it off keeps both installations and caches untouched."
-        : "Validate an installation first; the switch stays off until one has compiled the probe.",
-      disabled: () => !s().latexNativeRoot,
+      help: "Choose and validate a TeX installation first.",
+      disabled: () => !s().latexNativeRoot && !s().latexNativeWsl,
       get: () => s().latexNativeEnabled,
       set: (value) => void host.setNativeEnabled(value),
     },
@@ -961,30 +970,24 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
       set: (value) => void host.setNativeEngine(value),
     },
     {
-      kind: "button",
+      kind: "actions",
       label: "",
-      text: "Find installation…",
-      help: "Searches PATH and the standard TeX Live, MacTeX and MiKTeX locations, and lists your WSL distributions. It reads directory entries and the registry only; nothing starts until you look inside a WSL distribution or validate.",
-      action: () => host.findNative(),
+      actions: [
+        { text: "Find installation…", action: () => host.findNative() },
+        { text: "Browse…", action: () => host.browseNative() },
+        ...(s().latexNativeRoot
+          ? [{ text: "Validate", action: () => host.validateNative(s().latexNativeRoot!) }]
+          : s().latexNativeWsl
+            ? [
+                {
+                  text: "Validate",
+                  action: () =>
+                    host.validateWsl(s().latexNativeWsl!.distro, s().latexNativeWsl!.bin),
+                },
+              ]
+            : []),
+      ],
     },
-    {
-      kind: "button",
-      label: "",
-      text: "Browse…",
-      help: "Choose the folder that contains the engine executables, then validate it.",
-      action: () => host.browseNative(),
-    },
-    ...(s().latexNativeRoot
-      ? [
-          {
-            kind: "button" as const,
-            label: "",
-            text: "Validate the selected installation",
-            help: "Checks the version of each tool and compiles a one-page probe before committing the directory.",
-            action: () => void host.validateNative(s().latexNativeRoot!),
-          },
-        ]
-      : []),
     ...(candidates && candidates.length > 1
       ? [
           {
@@ -1030,7 +1033,7 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
     {
       kind: "checkbox",
       label: "Enable bundled LuaLaTeX",
-      help: "Compiles .tex documents in the preview and lets Export › PDF write the PDF it produces. Turning this off stops the engine from serving anything; the downloaded files stay on disk until you clear the cache.",
+      help: "Downloads the engine on first use. Compiles .tex files in the preview.",
       get: () => s().latexEnabled,
       set: (value) => {
         if (value) void host.installLatex();
@@ -1094,7 +1097,7 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
     {
       kind: "button",
       label: "",
-      text: "Open the LaTeX folder",
+      text: "Open engine folder",
       action: () => host.openAppFolder("latex"),
     },
   ];
@@ -2429,6 +2432,9 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
         button.setAttribute("role", "tab");
         button.setAttribute("aria-selected", String(section.id === activeId));
         button.addEventListener("click", () => {
+          if (section.id === "latex" && activeId !== "latex" && host.texmfBusy() === null) {
+            void host.refreshTexmf().then(render);
+          }
           activeId = section.id;
           render();
         });
@@ -2438,6 +2444,22 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
   }
 
   function control(row: Row): HTMLElement | null {
+    if (row.kind === "actions") {
+      const group = document.createElement("div");
+      group.className = "prefs-actions";
+      for (const action of row.actions) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "prefs-button";
+        button.textContent = action.text;
+        button.addEventListener("click", () => {
+          button.disabled = true;
+          void Promise.resolve(action.action()).finally(render);
+        });
+        group.append(button);
+      }
+      return group;
+    }
     if (row.kind === "checkbox") {
       const input = document.createElement("input");
       input.type = "checkbox";
@@ -2638,6 +2660,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       button.type = "button";
       button.className = "prefs-button";
       button.textContent = row.text;
+      if (row.help) button.title = row.help;
       if (row.disabled?.()) {
         button.disabled = true;
         button.title = row.disabledTitle ?? "This preset is already at its defaults.";
@@ -2681,6 +2704,10 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
     fragment.appendChild(title);
 
     for (const row of section.rows) {
+      if (row.kind === "localPackages") {
+        fragment.append(renderTexmfControl(row.host, row.refresh));
+        continue;
+      }
       if (row.kind === "heading") {
         const heading = document.createElement("div");
         heading.className = "prefs-group";
@@ -2706,7 +2733,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
         continue;
       }
 
-      if ("help" in row && row.help) {
+      if (row.label && "help" in row && row.help) {
         const help = document.createElement("span");
         help.className = "prefs-help";
         help.textContent = "?";
@@ -2727,7 +2754,14 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
     contentEl.replaceChildren(fragment);
   }
 
+  let pendingControlFocus: string | undefined;
   function render(): void {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.dataset.prefsFocus) {
+      pendingControlFocus = active.dataset.prefsFocus;
+    } else if (active && active !== document.body) {
+      pendingControlFocus = undefined;
+    }
     // The rows are about to be replaced; a fixed popup would otherwise keep
     // pointing at an input that no longer exists.
     closeModelCombo();
@@ -2738,6 +2772,15 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
     }
     renderNav(sections);
     renderContent(sections);
+    if (pendingControlFocus) {
+      const target = [...contentEl.querySelectorAll<HTMLElement>("[data-prefs-focus]")].find(
+        (element) => element.dataset.prefsFocus === pendingControlFocus,
+      );
+      if (target && !target.matches(":disabled")) {
+        target.focus({ preventScroll: true });
+        pendingControlFocus = undefined;
+      }
+    }
     if (focusFontLabel !== null) {
       // A chosen family rebuilds the row; return focus to the new trigger so a
       // keyboard reader can continue from the control they just used.
@@ -2754,6 +2797,9 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
 
   function open(): void {
     overlay.hidden = false;
+    if (activeId === "latex" && host.texmfBusy() === null) {
+      void host.refreshTexmf().then(render);
+    }
     query = "";
     searchEl.value = "";
     // A failed scan is retried only when the panel is reopened, never from the
@@ -2789,6 +2835,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
   }
 
   function close(): void {
+    pendingControlFocus = undefined;
     closeModelCombo();
     closeFontPicker();
     clearPendingReset();

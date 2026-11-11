@@ -56,7 +56,7 @@ landed, because the fix is what makes it recur.
 | [traps/builds-and-packaging.md](traps/builds-and-packaging.md) | 13 | The bundle, staging, installer and release-artifact problems: what `npm run dist` produces and what it silently keeps. |
 | [traps/processes-and-app-state.md](traps/processes-and-app-state.md) | 14 | Launched instances, leaked processes, the WebView2 profile, `settings.json` and recovery state. |
 | [traps/test-runner.md](traps/test-runner.md) | 16 | `scripts/test-all.mjs` itself: the order it runs, the guards it applies, the cleanup it owes. |
-| [traps/test-harness.md](traps/test-harness.md) | 16 | Individual suites: what they assert, what they leave behind, and why one passes alone and fails in the full run. |
+| [traps/test-harness.md](traps/test-harness.md) | 19 | Individual suites: what they assert, what they leave behind, and why one passes alone and fails in the full run. |
 | [traps/debugging-probes.md](traps/debugging-probes.md) | 22 | CDP drivers, stubs and probes that report the wrong thing for a reason the driver owns. |
 | [traps/dom-measurement.md](traps/dom-measurement.md) | 18 | Probes that read layout, selection, focus or visibility: what the DOM reports versus what the reader sees. |
 | [traps/editor-and-ui.md](traps/editor-and-ui.md) | 30 | CodeMirror, the theme layer, menus, shortcuts, Preferences and the DOM measurements that decide what the reader sees. |

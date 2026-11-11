@@ -356,6 +356,16 @@ check(
 );
 const latexSection = prefs.perSection.find((section) => section.name === "LaTeX");
 check(
+  "local packages use one folder control without explanatory paragraphs",
+  Boolean(latexSection) &&
+    latexSection.labels.includes("Use local packages") &&
+    latexSection.labels.includes("Folder") &&
+    latexSection.labels.includes("Layout") &&
+    !latexSection.labels.some((label) =>
+      ["Search order", "Getting started", "Trust and network"].includes(label),
+    ),
+);
+check(
   "installed TeX controls",
   Boolean(latexSection) &&
     latexSection.labels.includes("Use my installed TeX distribution") &&

@@ -141,3 +141,17 @@ counted request with the step that was running (`preview-freshness-test.mjs`
 prints `<ms>  <step>: <command>`): the stray requests followed `activate`, not
 the action. After any action that can start a render, wait long enough for it to
 reach the IPC line (900 ms) before waiting for quiet.
+
+**`FAIL the run completed — Error: CDP Runtime.evaluate timed out after 30 seconds` during cold LaTeX setup**
+The CDP helper limits each request to 30 seconds, while `install_latex`
+downloads and verifies eight assets and may take longer on a cold cache. The
+test profile contained seven verified assets when the command timed out: the
+absence of new PASS lines did not mean installation had never started. The
+first diagnosis blamed a hidden confirmation after reading `latexSetup`, but
+Preferences uses its separate `installLatex` handler, which has no confirmation.
+Start the install promise in the page without awaiting it in that one CDP
+request, then poll its explicit completion/error state with a bounded overall
+deadline. After direct backend setup, use the Preferences checkbox to update
+the frontend settings copy, or the next view-mode save can disable it again.
+Run independent folder UI checks before engine setup so a network failure
+cannot hide their results.

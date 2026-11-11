@@ -149,19 +149,31 @@ Cancel and the time limit end the engine inside the distribution too. The first
 compile after the distribution stopped takes a few seconds longer while WSL
 starts it.
 
-## Local packages and classes
+## Local packages
 
-*Preferences › LaTeX › Local packages and classes* registers folders of your own
-classes, packages, styles and fonts once, for every project:
+*Preferences › LaTeX › Local packages* sets the folder of custom classes and
+packages used by every LaTeX project, with either compilation backend.
 
-- **Create personal folder…** creates `texmf/tex/latex/local` inside MDraft's
-  settings folder, adds it to the list and opens it. A portable build keeps it
-  beside its settings. Repeating the action only opens it.
-- **Add folder…** takes an existing TEXMF tree (for example `~/texmf`, or
-  `\\wsl.localhost\<distro>\home\<you>\texmf` for a tree inside WSL) or a plain
-  folder of `.sty`/`.cls` files with any subfolders. The folder is checked before
-  it is added and shows its classes and packages; nothing is copied, and you
-  can correct the detected layout afterwards.
+MDraft creates `texmf/tex/latex/local` inside its settings folder on first
+launch. New profiles use it automatically with **Folder of packages** layout:
+put your `.sty` and `.cls` files there, in subfolders if desired. **Open** opens
+the displayed folder; **Choose folder…** selects another location. Cancelling
+or choosing an unreadable folder leaves the previous choice intact. Nothing is
+copied or moved. A portable build resolves the default folder beside its settings.
+
+**Layout** offers **Folder of packages** or **TEXMF tree**. For the default
+hierarchy, TEXMF mode uses the `texmf` root; the displayed path and Open change
+to that root. For a chosen directory, its path is the root for either layout.
+An existing tree such as `~/texmf` or
+`\\wsl.localhost\<distro>\home\<you>\texmf` can therefore be selected directly.
+
+The status refreshes when you open Preferences, change the folder/layout, or
+return from another application. **Retry** appears when a check fails.
+**Use local packages** turns the folder off without deleting files. Existing
+profiles keep their registered folders, layouts, enablement and search order;
+additional registrations are under **Additional folders**, with ordering and
+removal in each folder's **⋯** menu. A deliberately empty list stays empty on
+restart. There is no separate personal-folder setting.
 
 In a TEXMF tree, give each package its own folder:
 
