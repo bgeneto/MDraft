@@ -152,9 +152,10 @@ same, and the active tab is always scrolled back into view. Tabs can be dragged
 to a new position (or moved one place with `Alt+Shift+Left` / `Alt+Shift+Right`
 while a tab has focus). Right-click a tab for **Close Tab**, **Close Other
 Tabs**, **Close Tabs to the Left**, **Close Tabs to the Right**, **Close Other
-Unchanged Tabs**, **Close All Tabs**, **Save**, **Save As…** and **Show in
-Folder**; right-click the empty part of the strip for **New Tab**, **Close All
-Tabs** and **Close Other Unchanged Tabs**. Double-clicking the empty part starts
+Unchanged Tabs**, **Close All Tabs**, **Move Tab Left**, **Move Tab Right**,
+**Save**, **Save As…** and **Show in Folder**; right-click the empty part of the
+strip for **New Tab**, **Close All Tabs** and **Close Other Unchanged Tabs**.
+Double-clicking the empty part starts
 a new tab. The active tab's name is shown in Semibold and carries an accent edge.
 **File › Close Tabs › All Tabs** closes the whole strip, with the usual save
 prompt for each dirty tab.

@@ -348,6 +348,16 @@ try {
     "Close All Tabs is present in the tab context",
     JSON.stringify(menuAction("closeAll") ?? null),
   );
+  check(
+    menuAction("moveLeft")?.label === "Move Tab Left" && menuAction("moveLeft").disabled,
+    "Move Tab Left is present and disabled on the first tab",
+    JSON.stringify(menuAction("moveLeft") ?? null),
+  );
+  check(
+    menuAction("moveRight")?.label === "Move Tab Right" && !menuAction("moveRight").disabled,
+    "Move Tab Right is present and available",
+    JSON.stringify(menuAction("moveRight") ?? null),
+  );
   check(menuAction("save") && menuAction("save").disabled, "Save is disabled on a clean tab");
   check(
     menuAction("reveal") && !menuAction("reveal").disabled,
@@ -360,6 +370,40 @@ try {
     })()`,
   );
   check(menuClosed, "Escape closes the menu");
+
+  const tabOrder = () =>
+    evaluate(
+      `[...document.querySelectorAll(".doc-tab .doc-tab-name")].map((entry) => entry.textContent)`,
+    );
+  const clickMenuAction = (action) =>
+    evaluate(
+      `(() => {
+        const tab = [...document.querySelectorAll(".doc-tab")].find(
+          (entry) => entry.querySelector(".doc-tab-name")?.textContent === "feature-tour.md",
+        );
+        const bounds = tab.getBoundingClientRect();
+        tab.dispatchEvent(new MouseEvent("contextmenu", {
+          bubbles: true, cancelable: true, button: 2,
+          clientX: bounds.left + 12, clientY: bounds.top + 12,
+        }));
+        const button = document.querySelector('.tab-menu-item[data-action="${action}"]');
+        if (!button) return "missing";
+        if (button.disabled) return "disabled";
+        button.click();
+        return "clicked";
+      })()`,
+    );
+
+  check((await clickMenuAction("moveRight")) === "clicked", "Move Tab Right was clicked");
+  const moved = await tabOrder();
+  check(moved[1] === "feature-tour.md", "the tab moved one place right", moved.join(", "));
+  check((await clickMenuAction("moveLeft")) === "clicked", "Move Tab Left was clicked");
+  const backAtLeft = await tabOrder();
+  check(
+    backAtLeft[0] === "feature-tour.md",
+    "the tab moved back to the left edge",
+    backAtLeft.join(", "),
+  );
 
   // -------------------------------------------------------------------------
   // Keyboard navigation between tabs

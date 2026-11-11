@@ -307,6 +307,21 @@ export function createTabsUi(options: TabsOptions): TabsUi {
       { kind: "separator" },
       {
         kind: "item",
+        id: "moveLeft",
+        label: "Move Tab Left",
+        disabled: index === 0,
+        action: () => moveById(id, -1),
+      },
+      {
+        kind: "item",
+        id: "moveRight",
+        label: "Move Tab Right",
+        disabled: index === list.length - 1,
+        action: () => moveById(id, 1),
+      },
+      { kind: "separator" },
+      {
+        kind: "item",
         id: "save",
         label: "Save",
         shortcut: shortcutLabel("S"),
@@ -706,17 +721,20 @@ export function createTabsUi(options: TabsOptions): TabsUi {
     );
   }
 
+  function moveById(id: string, delta: number): boolean {
+    const list = store.list();
+    const index = list.findIndex((session) => session.id === id);
+    const target = index + delta;
+    if (index < 0 || target < 0 || target >= list.length) return false;
+    store.move(id, target);
+    render();
+    return true;
+  }
+
   function reorder(tab: HTMLElement, delta: number): void {
     const id = tab.dataset.id;
     if (!id) return;
-    const list = store.list();
-    const index = list.findIndex((session) => session.id === id);
-    if (index < 0) return;
-    const target = Math.max(0, Math.min(list.length - 1, index + delta));
-    if (target === index) return;
-    store.move(id, target);
-    render();
-    focusTab(id);
+    if (moveById(id, delta)) focusTab(id);
   }
 
   bar.addEventListener("keydown", (event) => {
