@@ -128,3 +128,16 @@ an ownership property, so it reads as a tab-switch regression; it is not. Print
 `h.errors` before suspecting the shell. Add the helper to `exportNames` so its
 real body runs, or stub it in the context — and do the same for every new free
 identifier a selected function gains.
+
+**`fresh.typ: theme toggle starts no render — render_typst +1` after the theme fix had landed**
+A "wait until the IPC line is quiet" helper returned at once after a tab click:
+`displayDoc` awaits the title and status before it schedules the render, so
+for a few hundred milliseconds after the click nothing has been requested and
+the line still looks quiet from the previous step. The activation's own render
+then arrived inside the next step and was counted against the theme toggle (and,
+for `.tex`, against the syntax palette). The almost-published conclusion was that
+the theme still reached `scheduleRender` through another path. Label every
+counted request with the step that was running (`preview-freshness-test.mjs`
+prints `<ms>  <step>: <command>`): the stray requests followed `activate`, not
+the action. After any action that can start a render, wait long enough for it to
+reach the IPC line (900 ms) before waiting for quiet.

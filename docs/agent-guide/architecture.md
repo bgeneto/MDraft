@@ -109,6 +109,9 @@ src/
                      button, its right-click menu, palette, history and panel,
                      the Translate target's language table, and the decaying
                      per-action usage behind the derived *Most used* section
+  preview-freshness.ts what each preview depends on, as one key; equal keys skip
+                     the build (theme, palette and width are not inputs)
+  preview-store.ts   byte-bounded LRU of compiled LaTeX/Typst output, by key
   markdown.ts        markdown → HTML; math extraction, mermaid, alerts, anchors
   html-preview.ts    sandboxed HTML guest: parse5 splice, iframe, bridge protocol
   html-source-map.ts host-side source offsets for the guest's text nodes

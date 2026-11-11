@@ -39,6 +39,9 @@ the same rows by subject.
 | Second launch | `npm run single:instance` | [catalog/editor-and-documents.md](catalog/editor-and-documents.md) |
 | Document zoom | `npm run preview:zoom` | [catalog/preview-and-sync.md](catalog/preview-and-sync.md) |
 | Preview pane ownership | `npm test -- --only preview-ownership` | [catalog/preview-and-sync.md](catalog/preview-and-sync.md) |
+| Preview freshness (unit) | `npm run preview-freshness:unit` | [catalog/preview-and-sync.md](catalog/preview-and-sync.md) |
+| Preview output store (unit) | `npm run preview-store:unit` | [catalog/preview-and-sync.md](catalog/preview-and-sync.md) |
+| Preview freshness | `npm test -- --only preview-freshness` | [catalog/preview-and-sync.md](catalog/preview-and-sync.md) |
 | Preview performance | `npm run preview:perf` | [catalog/preview-and-sync.md](catalog/preview-and-sync.md) |
 | Typewriter | `npm run typewriter` | [catalog/editor-and-documents.md](catalog/editor-and-documents.md) |
 | Word sync | `npm run word-sync` | [catalog/preview-and-sync.md](catalog/preview-and-sync.md) |
