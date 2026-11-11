@@ -59,7 +59,7 @@ landed, because the fix is what makes it recur.
 | [traps/test-harness.md](traps/test-harness.md) | 16 | Individual suites: what they assert, what they leave behind, and why one passes alone and fails in the full run. |
 | [traps/debugging-probes.md](traps/debugging-probes.md) | 22 | CDP drivers, stubs and probes that report the wrong thing for a reason the driver owns. |
 | [traps/dom-measurement.md](traps/dom-measurement.md) | 18 | Probes that read layout, selection, focus or visibility: what the DOM reports versus what the reader sees. |
-| [traps/editor-and-ui.md](traps/editor-and-ui.md) | 29 | CodeMirror, the theme layer, menus, shortcuts, Preferences and the DOM measurements that decide what the reader sees. |
+| [traps/editor-and-ui.md](traps/editor-and-ui.md) | 30 | CodeMirror, the theme layer, menus, shortcuts, Preferences and the DOM measurements that decide what the reader sees. |
 | [traps/paste-and-images.md](traps/paste-and-images.md) | 11 | Rich paste, the clipboard, image destinations and the markup each document format expects. |
 | [traps/preview-and-sync.md](traps/preview-and-sync.md) | 23 | The preview renderers, the source maps behind word sync, the PDF text layer and the measured cost of rendering. |
 | [traps/latex-typst-asciidoc.md](traps/latex-typst-asciidoc.md) | 25 | The non-Markdown formats: engine selection, reference validation, includes, outline scans and PDF correspondence. |

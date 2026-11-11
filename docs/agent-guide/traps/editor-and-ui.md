@@ -108,6 +108,24 @@ Two fixes, and both are needed:
 `CREATE_NO_WINDOW` rather than `DETACHED_PROCESS`: the child still gets a console,
 so its standard handles keep working, which is how pandoc's output is read.
 
+The LaTeX native runner (`latex_native/runner/windows.rs`) was a fifth spawn
+site that skipped the helper, because it calls `CreateProcessW` directly for its
+job object and cannot use `Command`. Choosing an installed MiKTeX or TeX Live then
+flashed up to eight windows during validation and one per compile pass. It now
+sets `CREATE_NO_WINDOW` itself; any new raw `CreateProcessW` site must too.
+
+**A "no console window" test passes with the fix removed**
+The first version of the runner test started the probe from the test process
+and asserted `GetConsoleWindow()` was null in the child. It passed **with and
+without** `CREATE_NO_WINDOW`: a child without the flag inherits its parent's
+console, and an agent's shell (and so `cargo test`) already runs in a console
+that has no window, so the child reported "no window" either way. A terminal
+would have produced the opposite false result. The release app has *no* console,
+which is the only state where the flag matters. The test therefore runs a
+launcher process that calls `FreeConsole()` first and starts the probe through
+the real `run()`. Without the flag it now reports `child-window=visible`. Before
+trusting a test like this, remove the fix once and watch it fail.
+
 **Tauri 2 never translates menu accelerators on Windows, so the menu lies**
 *Symptom:* the File, Paragraph, Format and View shortcuts do nothing while the
 Edit ones work, and the menu prints "Ctrl+N" beside *New* regardless.
