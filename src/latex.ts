@@ -110,10 +110,11 @@ export function latexBuildFailed(result: {
  * preferred because it is the superset and carries a stable `code`; `errors`
  * is the fallback for an older asset.
  */
-function compileDiagnostics(
+export function compileDiagnostics(
   result: {
     errors: readonly ReportedProblem[];
     telemetry?: { diagnostics?: readonly ReportedProblem[] };
+    log?: string;
   },
   sources: ReadonlyMap<string, string>,
 ): { diagnostics: LatexDiagnostic[]; truncated: boolean } {
@@ -122,12 +123,38 @@ function compileDiagnostics(
     : result.errors;
   const out: LatexDiagnostic[] = [];
   const seen = new Set<string>();
+  // The SDK looks only five lines ahead of `! ...`. Normal LaTeX help text
+  // already exceeds that, so valid project errors lost their line and link.
+  // Recover the compiler's own l.<n> pointer within the same error block.
+  const pointers = new Map<string, number[]>();
+  let pendingMessage: string | null = null;
+  for (const line of (result.log ?? "").split(/\r?\n/)) {
+    const error = /^!\s+(.+)/.exec(line);
+    if (error) pendingMessage = error[1].trim();
+    else if (
+      /^(?:LaTeX Warning:|Package \S+ Warning:|Overfull |Underfull |Output written |Transcript written )/.test(
+        line,
+      )
+    )
+      pendingMessage = null;
+    else {
+      const pointer = /^l\.(\d+)(?:\s|$)/.exec(line);
+      if (pendingMessage && pointer) {
+        const locations = pointers.get(pendingMessage) ?? [];
+        locations.push(Number(pointer[1]));
+        pointers.set(pendingMessage, locations);
+        pendingMessage = null;
+      }
+    }
+  }
   let truncated = false;
   for (const entry of reported) {
     if (entry.severity !== "warning" && entry.severity !== "error") continue;
     if (!entry.message) continue;
     const file = projectSource(entry.file, sources);
-    const line = entry.line ?? 0;
+    const pointer =
+      entry.severity === "error" ? pointers.get(entry.message.trim())?.shift() : undefined;
+    const line = entry.line || pointer || 0;
     const key = `${file}\u0000${line}\u0000${entry.message}`;
     if (seen.has(key)) continue;
     seen.add(key);

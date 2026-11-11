@@ -14,3 +14,14 @@ const __mdraftImport = self.importScripts.bind(self);
 self.importScripts = (...urls) =>
   __mdraftImport(...urls.map((url) => new URL(url, __mdraftRoot).href));
 self.importScripts("wasmtex-luatex.worker.js");
+
+// Lua `require "name"` and TeX `\input name` share the worker's flat /tex cache.
+// Keep their real extensions or loading luavlna.lua overwrites luavlna.tex,
+// after which Lua code is typeset as TeX and every source location is misleading.
+const __mdraftCacheFileName = self.cacheFileName;
+if (typeof __mdraftCacheFileName !== "function")
+  throw new Error("LuaLaTeX cache-name compatibility hook unavailable");
+self.cacheFileName = (format, name) => {
+  const suffix = { 26: ".tex", 51: ".lua" }[format];
+  return suffix && !name.includes(".") ? `${name}${suffix}` : __mdraftCacheFileName(format, name);
+};
