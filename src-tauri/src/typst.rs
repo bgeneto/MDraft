@@ -19,8 +19,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -377,11 +377,14 @@ static TYPST_INSTALL: Mutex<()> = Mutex::new(());
 
 fn install<R: Runtime>(app: &AppHandle<R>) -> Result<TypstStatus, String> {
     // A second Install waits for the first instead of writing the same file.
-    let _install = TYPST_INSTALL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _install = TYPST_INSTALL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let (tag, binary) = download_binary(&http_agent())?;
 
     let root = managed_root(app).ok_or_else(|| {
-        "The application could not work out where to put Typst, so it was not installed.".to_string()
+        "The application could not work out where to put Typst, so it was not installed."
+            .to_string()
     })?;
     let version = tag.trim_start_matches('v').to_string();
     let dir = root.join(&version);
@@ -483,8 +486,10 @@ fn extract_binary(archive: &[u8]) -> Result<Vec<u8>, String> {
             return Ok(bytes);
         }
     }
-    Err("The downloaded archive did not contain a typst binary. Its layout may have changed."
-        .to_string())
+    Err(
+        "The downloaded archive did not contain a typst binary. Its layout may have changed."
+            .to_string(),
+    )
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
@@ -499,6 +504,8 @@ fn extract_binary(_archive: &[u8]) -> Result<Vec<u8>, String> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderedTypst {
+    pub compiler_output: String,
+    pub compiler_output_truncated: bool,
     /// `"document"` when the pane should show flowing HTML, `"pages"` when it
     /// should show the compiler's PDF pages.
     pub kind: String,
@@ -718,6 +725,20 @@ fn run_typst_command(
 /// not. Only the headline of each diagnostic survives, and the two that describe
 /// the exporter itself rather than this document are dropped — they appeared on
 /// every single document and would train the reader to ignore the banner.
+fn bounded_compiler_output(stderr: &str) -> (String, bool) {
+    const LIMIT: usize = 64 * 1024;
+    let mut end = stderr.len().min(LIMIT);
+    while !stderr.is_char_boundary(end) {
+        end -= 1;
+    }
+    let truncated = end < stderr.len();
+    let mut output = stderr[..end].to_owned();
+    if truncated {
+        output.push_str("\n[Compiler output truncated after 64 KiB]");
+    }
+    (output, truncated)
+}
+
 fn diagnostics(stderr: &str) -> Vec<String> {
     stderr
         .lines()
@@ -774,16 +795,11 @@ fn render_document(
     };
     if !ok {
         let _ = std::fs::remove_file(&target);
-        let message: Vec<String> = stderr
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .take(20)
-            .map(str::to_string)
-            .collect();
-        return Err(if message.is_empty() {
+        let (message, _) = bounded_compiler_output(&stderr);
+        return Err(if message.trim().is_empty() {
             "Typst produced no document view.".to_string()
         } else {
-            message.join("\n")
+            message
         });
     }
 
@@ -805,7 +821,10 @@ fn render_document(
     let warnings = diagnostics(&stderr);
     let ignored = ignored_constructs(&warnings);
 
+    let (compiler_output, compiler_output_truncated) = bounded_compiler_output(&stderr);
     Ok(RenderedTypst {
+        compiler_output,
+        compiler_output_truncated,
         kind: "document".into(),
         html: Some(body),
         css,
@@ -849,15 +868,11 @@ fn render_pages(
 
     if !ok {
         let _ = std::fs::remove_file(&target);
-        let message: Vec<&str> = stderr
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .take(20)
-            .collect();
-        return Err(if message.is_empty() {
+        let (message, _) = bounded_compiler_output(&stderr);
+        return Err(if message.trim().is_empty() {
             "Typst produced no PDF and said nothing.".to_string()
         } else {
-            message.join("\n")
+            message
         });
     }
 
@@ -868,7 +883,10 @@ fn render_pages(
         return Err("Typst produced an empty PDF. The document may be empty.".into());
     }
 
+    let (compiler_output, compiler_output_truncated) = bounded_compiler_output(&stderr);
     Ok(RenderedTypst {
+        compiler_output,
+        compiler_output_truncated,
         kind: "pages".into(),
         html: None,
         css: None,
@@ -942,7 +960,8 @@ fn render<R: Runtime>(
     })?;
 
     let dir = std::env::temp_dir().join("mdraft-typst");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
 
     // `--root` bounds what the document may read. Pointing it at the document's
     // own folder is what lets `#image("img/plot.png")` resolve; an untitled
@@ -1037,6 +1056,20 @@ fn is_within(child: &Path, ancestor: &Path) -> bool {
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn compiler_output_is_bounded_without_splitting_utf8() {
+        let text = format!("{}é", "a".repeat(65535));
+        let (output, truncated) = super::bounded_compiler_output(&text);
+        assert!(truncated);
+        assert!(output.starts_with(&"a".repeat(65535)));
+        assert!(output.contains("Compiler output truncated"));
+        let (output, truncated) = super::bounded_compiler_output("");
+        assert_eq!(output, "");
+        assert!(!truncated);
+        let text = "warning: example\n".repeat(30);
+        assert_eq!(super::bounded_compiler_output(&text), (text, false));
+    }
+
     use super::*;
 
     #[test]

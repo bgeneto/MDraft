@@ -198,3 +198,16 @@ because the application was not running and the driver had died with
 clean pass. **Check the driver printed its own success line, and that the files it
 should have produced exist**, before believing a zero. This is the same trap as
 the CDP suites that "pass" against a window showing the wrong document.
+
+**`sky.get_window_state({ window: mdraftWindow })` shows another app over MDraft**
+On this Windows host, the returned window metadata identified MDraft correctly,
+but the screenshot included a foreground application obscuring it. The almost
+wrong conclusion was that the foreground app's controls belonged to MDraft, or
+that an occluded-window capture was necessarily an unobscured app image.
+Calling `sky.activate_window({ window: mdraftWindow })`, then capturing fresh
+state, exposed the actual MDraft layout. Inspect screenshot content as well as
+window metadata before choosing coordinates; do not reuse the pre-activation
+screenshot or element indexes.
+
+**A page-side wrapper around `window.__TAURI_INTERNALS__.invoke` silently does nothing**
+The intended hold looked correct: `internals.invoke = (cmd, args, opts) => ...` was installed, `window.__ownerHolds` held the command, yet the command resolved immediately at full speed. `Object.getOwnPropertyDescriptor` explains it: both `window.__TAURI_INTERNALS__` and its `invoke` are `writable: false, configurable: false`, so the assignment is a silent no-op in a non-strict script. Do not diagnose this as "the API captured invoke at module load"; `@tauri-apps/api/core` does resolve `window.__TAURI_INTERNALS__.invoke` at call time, but the property cannot be replaced. Hold at the IPC boundary instead: every command is an HTTP request to `http://ipc.localhost/<command>` and CDP `Fetch.enable` with a URL pattern can pause it (`Fetch.requestPaused`), then `Fetch.continueRequest` releases it. Extend `scripts/cdp-page.mjs` with `onEvent` for the event stream; the alternative real check is a slow build, which no engine-free host can provide.

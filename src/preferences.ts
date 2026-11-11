@@ -976,12 +976,10 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
           {
             kind: "choices" as const,
             label: "Found installations",
-            options: candidates.map(
-              (candidate): [string, string] => [
-                candidate.directory,
-                `${candidate.distribution} — ${candidate.engines.join(", ")}`,
-              ],
-            ),
+            options: candidates.map((candidate): [string, string] => [
+              candidate.directory,
+              `${candidate.distribution} — ${candidate.engines.join(", ")}`,
+            ]),
             get: () => "",
             set: (directory: string) => void host.validateNative(directory),
           },
@@ -1002,27 +1000,40 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
     {
       kind: "note",
       label: "Engine",
-      text: host.latexCacheError() ?? (latex
-        ? latex.installed
-          ? latex.enabled
-            ? "Installed and enabled."
-            : "Installed, but the switch is off."
-          : latex.enabled
-            ? "Enabled, but the engine files are missing. Toggle the switch off and on to download them again."
-            : "Not installed. Turn the switch on to download about 10 MiB of verified engine files."
-        : "Checking…"),
+      text:
+        host.latexCacheError() ??
+        (latex
+          ? latex.installed
+            ? latex.enabled
+              ? "Installed and enabled."
+              : "Installed, but the switch is off."
+            : latex.enabled
+              ? "Enabled, but the engine files are missing. Toggle the switch off and on to download them again."
+              : "Not installed. Turn the switch on to download about 10 MiB of verified engine files."
+          : "Checking…"),
     },
     {
       kind: "note",
       label: "Package cache",
-      text: latex ? `${mb(latex.bytes)} of ${latex.limitMb} MiB used.` : host.latexCacheError() ? "Unavailable." : "Checking…",
+      text: latex
+        ? `${mb(latex.bytes)} of ${latex.limitMb} MiB used.`
+        : host.latexCacheError()
+          ? "Unavailable."
+          : "Checking…",
     },
-    ...(host.latexCacheError() ? [{
-      kind: "button" as const,
-      label: "",
-      text: "Check LaTeX again",
-      action: async () => { await host.refreshLatexCache(); refresh(); },
-    }] : []),
+    ...(host.latexCacheError()
+      ? [
+          {
+            kind: "button" as const,
+            label: "",
+            text: "Check LaTeX again",
+            action: async () => {
+              await host.refreshLatexCache();
+              refresh();
+            },
+          },
+        ]
+      : []),
     {
       kind: "number",
       label: "Cache limit (MiB)",
@@ -1080,6 +1091,13 @@ function exportRows(host: PreferencesHost): Row[] {
       label: "",
       text: "Open the pandoc folder",
       action: () => host.openAppFolder("pandoc"),
+    },
+    {
+      kind: "checkbox",
+      label: "Auto-compile Typst",
+      help: "Update the preview after edits. Turn off to compile with the preview toolbar.",
+      get: () => host.settings().typstAutoCompile !== false,
+      set: (value) => host.update({ typstAutoCompile: value }),
     },
     {
       kind: "note",

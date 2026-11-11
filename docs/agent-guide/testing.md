@@ -10,7 +10,7 @@ the failures these suites keep rediscovering.
 
 ## The order layers run in
 
-Fifty-seven default layers, cheapest first, plus opt-in layers. Run them in this
+Fifty-nine default layers, cheapest first, plus opt-in layers. Run them in this
 order when changing anything. Each row links to the catalog file that carries
 its full description; the table is in run order, and the catalog file groups
 the same rows by subject.
@@ -26,6 +26,7 @@ the same rows by subject.
 | AsciiDoc export source | `npm run asciidoc:export:unit` | [catalog/latex-and-formats.md](catalog/latex-and-formats.md) |
 | Preview pipeline (unit) | `npm run preview:unit` | [catalog/preview-and-sync.md](catalog/preview-and-sync.md) |
 | Preview worker ownership | `npm run preview:worker:unit` | [catalog/preview-and-sync.md](catalog/preview-and-sync.md) |
+| Preview ownership (unit) | `npm run preview-owner:unit` | [catalog/preview-and-sync.md](catalog/preview-and-sync.md) |
 | Preview DOM and security | `npm run preview:dom` | [catalog/preview-and-sync.md](catalog/preview-and-sync.md) |
 | Export paths (unit) | `npm run export:paths:unit` | [catalog/export-and-print.md](catalog/export-and-print.md) |
 | Browser exports | `npm run export:browser` | [catalog/export-and-print.md](catalog/export-and-print.md) |
@@ -37,6 +38,7 @@ the same rows by subject.
 | P0 lifecycle (UI) | `npm run p0:lifecycle` | [catalog/editor-and-documents.md](catalog/editor-and-documents.md) |
 | Second launch | `npm run single:instance` | [catalog/editor-and-documents.md](catalog/editor-and-documents.md) |
 | Document zoom | `npm run preview:zoom` | [catalog/preview-and-sync.md](catalog/preview-and-sync.md) |
+| Preview pane ownership | `npm test -- --only preview-ownership` | [catalog/preview-and-sync.md](catalog/preview-and-sync.md) |
 | Preview performance | `npm run preview:perf` | [catalog/preview-and-sync.md](catalog/preview-and-sync.md) |
 | Typewriter | `npm run typewriter` | [catalog/editor-and-documents.md](catalog/editor-and-documents.md) |
 | Word sync | `npm run word-sync` | [catalog/preview-and-sync.md](catalog/preview-and-sync.md) |

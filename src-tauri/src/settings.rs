@@ -436,6 +436,8 @@ pub struct Settings {
     /// text. Defaults to `document` because reading is what a preview is for.
     #[serde(default = "default_typst_view")]
     pub typst_view: String,
+    #[serde(default = "default_true")]
+    pub typst_auto_compile: bool,
     #[serde(default)]
     pub slashed_zero: bool,
     /// Editor syntax palette id, or "auto" to follow the application theme.
@@ -700,6 +702,7 @@ impl Default for Settings {
             tabular_figures: true,
             oldstyle_figures: false,
             typst_view: default_typst_view(),
+            typst_auto_compile: true,
             slashed_zero: false,
             syntax_theme: "auto".into(),
             recent_files: Vec::new(),
@@ -1371,6 +1374,7 @@ mod tests {
         let loaded = parse_settings(legacy).expect("a legacy file loads");
         assert!(!loaded.latex_enabled);
         assert!(loaded.latex_auto_compile);
+        assert!(loaded.typst_auto_compile);
         assert_eq!(loaded.latex_cache_limit_mb, 256);
         // A file from before installed distributions existed must not opt the
         // reader into one, and must not break loading.

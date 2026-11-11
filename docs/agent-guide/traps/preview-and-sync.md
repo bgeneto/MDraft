@@ -210,3 +210,17 @@ the paragraph after the table. The durable fix is in
 `docs/adr/2026-11-10-raw-html-sync.md`: derive `elementLines` from the rendered
 tree when raw HTML crosses tokens, treat visible raw HTML text as fragments, and
 only snap a fragment gap within the same source line.
+
+**After a tab switch the preview shows the previous document until the new one commits**
+Build-off-screen-and-swap is correct only while one document is being rebuilt. Nothing recorded whose output was on screen, so switching from Markdown to a `.tex` tab left the Markdown preview visible for the whole compile — minutes when packages download — under a status strip that said "Compiling LaTeX…". The strip describes the build, not the pane's content: do not read it as proof the pane is current. The fix is an owner stamp on every commit plus a retire in `invalidatePreview()` when the new active document is not covered; stale-while-revalidate stays for the same owner. Two conclusions to avoid: `latexPreview` cannot be nulled on retire (it is also the project-root memory that decides what a chapter compiles against — nulling it made a chapter compile standalone after a switch), and the old manual-compile special case is not the place to clear the pane (it ran before the cancellations and only for LaTeX). Check the pair of smaller defects the same cause produced: `commitPdfHost` mapped the previous PDF's scroll bookmark even when the PDF belonged to another document, and a switch made in Source mode left the old DOM mounted until the next render.
+
+
+**A fixed compiler toolbar makes the scroll test report `pages: settled p95 correspondence error ... 79.00350570678711`**
+The test positioned its source word at the source pane's top + 12px. With a
+reserved toolbar, that word was above the PDF viewport, while the production
+solver correctly chose a reference visible in both panes. The almost wrong
+conclusion was that the wrapper broke PDF correspondence. The errors occurred
+in source-driven probes; comparing the two pane rectangles revealed their
+different top edges. Position the probe at `max(source.top, preview.top) + 12`
+like `scrollReference()`, retaining the existing accuracy limits. This also
+avoids extrapolating across a PDF page boundary for an invisible probe word.

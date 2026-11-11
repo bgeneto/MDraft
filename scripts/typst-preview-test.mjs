@@ -275,7 +275,7 @@ async function markedLine() {
 }
 
 async function switchView(label) {
-  await evaluate(`[...document.querySelectorAll(".typst-viewbutton")]
+  await evaluate(`[...document.querySelectorAll(".compiled-mode")]
     .find((button) => button.textContent === ${JSON.stringify(label)})?.click()`);
   await sleep(200);
 }
@@ -311,13 +311,95 @@ await switchView("Document");
 const documentReady = await waitFor(`Boolean(document.querySelector(".typst-document"))`);
 check("Document view is available", documentReady);
 
+console.log("=== shared compiler controls and Typst messages ===");
+let compiledBuildCalls = 0;
+ws.addEventListener("message", (event) => {
+  const response = JSON.parse(event.data);
+  if (response.method !== "Fetch.requestPaused") return;
+  const params = response.params;
+  void (async () => {
+    const bodyResponse = await send("Fetch.getResponseBody", { requestId: params.requestId });
+    if (bodyResponse.error) throw new Error(JSON.stringify(bodyResponse.error));
+    const body = bodyResponse.result.base64Encoded
+      ? Buffer.from(bodyResponse.result.body, "base64").toString("utf8")
+      : bodyResponse.result.body;
+    const result = JSON.parse(body);
+    compiledBuildCalls++;
+    const value = {
+      ...result,
+      warnings: ["warning: shared Typst warning probe"],
+      compilerOutput:
+        "warning: shared Typst warning probe\nFull diagnostic context beyond the headline.",
+      compilerOutputTruncated: false,
+    };
+    await send("Fetch.fulfillRequest", {
+      requestId: params.requestId,
+      responseCode: params.responseStatusCode,
+      responseHeaders: params.responseHeaders.filter(
+        (header) => !["content-length", "content-encoding"].includes(header.name.toLowerCase()),
+      ),
+      body: Buffer.from(JSON.stringify(value)).toString("base64"),
+    });
+  })().catch((error) => {
+    console.error(error);
+    void send("Fetch.continueRequest", { requestId: params.requestId });
+  });
+});
+await send("Fetch.enable", {
+  patterns: [{ urlPattern: "http://ipc.localhost/render_typst", requestStage: "Response" }],
+});
+await evaluate(`document.querySelector('.compiled-compile').click()`);
+check(
+  "successful Typst warnings reach the shared Logs count",
+  await waitFor(`document.querySelector('.compiled-issue-count')?.textContent.trim()==='1'`),
+);
+const warningUi = await evaluate(`(() => {
+  document.querySelector('.compiled-logs-toggle').click();
+  document.querySelector('#compiler-output-tab').click();
+  const result={separate:!document.querySelector('#preview').textContent.includes('warning probe'),raw:document.querySelector('#compiler-output').textContent.includes('Full diagnostic context'),open:document.querySelector('.compiled-logs-toggle').getAttribute('aria-pressed')==='true'};
+  document.querySelector('.compiled-logs-toggle').click();
+  document.querySelector('.compiled-auto input').click();
+  const view=document.querySelector('.cm-content').cmTile.root.view;
+  view.dispatch({changes:{from:view.state.doc.length,insert:'\\n// manual compile UI probe\\n'}});
+  return result;
+})()`);
+check(
+  "Typst raw output is separate from generated content",
+  warningUi.separate && warningUi.raw && warningUi.open,
+);
+await sleep(900);
+check(
+  "manual Typst mode does not compile after edits",
+  compiledBuildCalls === 1 &&
+    (await evaluate(
+      `document.querySelector('.compiled-message').textContent.includes('Out of date')`,
+    )),
+);
+await evaluate(`document.querySelector('.compiled-compile').click()`);
+check(
+  "Compile works in manual Typst mode",
+  (await waitFor(`document.querySelector('.compiled-compile').textContent==='Compile'`)) &&
+    compiledBuildCalls === 2,
+);
+await send("Fetch.disable");
+await evaluate(`(() => {
+
+  document.querySelector('.compiled-auto input').click();
+  const view=document.querySelector('.cm-content').cmTile.root.view;
+  const marker='\\n// manual compile UI probe\\n',at=view.state.doc.toString().indexOf(marker);
+  if(at>=0)view.dispatch({changes:{from:at,to:at+marker.length}});
+})()`);
+await waitFor(
+  `!document.querySelector('#compiler-output')?.textContent.includes('Full diagnostic context')`,
+);
+
 // A theme change requests a fresh paint of the same revision. The cached Typst
 // result must keep its view controls and word mapping instead of clearing them.
 await evaluate(`document.getElementById("btn-theme")?.click()`);
 await sleep(1000);
 check(
   "a theme change keeps the Typst view controls",
-  (await evaluate(`document.querySelectorAll(".typst-viewbutton").length`)) === 2,
+  (await evaluate(`document.querySelectorAll(".compiled-mode").length`)) === 2,
 );
 
 // Hold the map's idle callback across a Source -> Split round trip. The cached
@@ -326,12 +408,12 @@ await evaluate(`(() => {
   window.__typstIdleOriginal=window.requestIdleCallback;
   window.__typstIdleHeld=[];
   window.requestIdleCallback=(callback)=>{window.__typstIdleHeld.push(callback);return 0;};
-  window.__typstBarBefore=document.querySelector('.typst-viewbar');
+  window.__typstBarBefore=document.querySelector('.typst-document');
   const view=document.querySelector('.cm-content').cmTile.root.view;
   view.dispatch({changes:{from:view.state.doc.length,insert:'\\n// deferred map test\\n'}});
 })()`);
 const newDocumentRender = await waitFor(
-  `document.querySelector('.typst-viewbar') !== window.__typstBarBefore`,
+  `document.querySelector('.typst-document') !== window.__typstBarBefore`,
   20000,
 );
 const oldMapHeld = await waitFor(`window.__typstIdleHeld.length > 0`, 6000);
@@ -528,6 +610,23 @@ check(
   pagesShape.ratio.toFixed(4),
 );
 check("Pages shows no error box", pagesShape.errors === 0);
+const compiledChrome = await evaluate(`(() => {
+  const toolbar=document.querySelector('.compiled-toolbar'), compile=document.querySelector('.compiled-compile');
+  return {
+    icons:['.compiled-compile','.compiled-logs-toggle','.compiled-save-pdf'].every(selector=>document.querySelector(selector+' svg[aria-hidden="true"]')),
+    primary:getComputedStyle(compile).backgroundColor!==getComputedStyle(toolbar).backgroundColor,
+    label:document.querySelector('.compiled-state-label').textContent,
+    engine:document.querySelector('.compiled-engine').textContent,
+  };
+})()`);
+check(
+  "Typst shares the prototype's primary action, outline icons and structured status",
+  compiledChrome.icons &&
+    compiledChrome.primary &&
+    compiledChrome.label === "PDF ready" &&
+    /Typst.*s/.test(compiledChrome.engine),
+  JSON.stringify(compiledChrome),
+);
 
 // The pages are flush: the second shell starts exactly where the first ends, and
 // neither draws a rule or a shadow. A gap here is the band of pane background the
@@ -556,21 +655,95 @@ check(
   pageGap ? pageGap.shadow : "no page",
 );
 
+const logsToggleProbe = await evaluate(`(() => {
+ const pane=document.getElementById('preview-pane'), button=document.querySelector('.compiled-logs-toggle');
+ const canvas=document.querySelector('#preview canvas'), before=pane.scrollTop;
+ button.click();
+ const opened=button.getAttribute('aria-pressed')==='true' && pane.inert && getComputedStyle(pane).visibility==='hidden';
+ button.click();
+ return opened && !pane.inert && Math.abs(pane.scrollTop-before)<1 && document.querySelector('#preview canvas')===canvas;
+})()`);
+check("Typst uses the same reversible Logs toggle without rerendering its PDF", logsToggleProbe);
+
+await evaluate(`(() => {
+  const pane=document.getElementById('preview-pane'), source=document.querySelector('.cm-content').cmTile.root.view.scrollDOM;
+  window.__compiledLogsScroll={pdf:pane.scrollTop,source:source.scrollTop};
+  document.querySelector('.compiled-logs-toggle').click();
+  source.scrollTop += 120;
+})()`);
+await sleep(350);
+const hiddenPdfStayed = await evaluate(`(() => {
+  const stayed=Math.abs(document.getElementById('preview-pane').scrollTop-window.__compiledLogsScroll.pdf)<1;
+  document.querySelector('.cm-content').cmTile.root.view.scrollDOM.scrollTop=window.__compiledLogsScroll.source;
+  return stayed;
+})()`);
+await sleep(150);
+await evaluate(`document.querySelector('.compiled-logs-toggle').click()`);
+check("source scrolling while reading Logs leaves the hidden PDF position intact", hiddenPdfStayed);
+
+// Toolbar geometry is a user-visible contract at each supported pane width.
+const originalPreviewFlex = await evaluate(`document.getElementById('preview-shell').style.flex`);
+await send("Emulation.setDeviceMetricsOverride", {
+  width: 1440,
+  height: 1000,
+  deviceScaleFactor: 1,
+  mobile: false,
+});
+for (const width of [320, 480, 900]) {
+  await evaluate(`document.getElementById('preview-shell').style.flex='0 0 ${width}px'`);
+  await sleep(500);
+  const geometry = await evaluate(`(() => {
+    const bar=document.querySelector('.compiled-toolbar'), pane=document.getElementById('preview-pane');
+    const toolbar=bar.getBoundingClientRect(), viewport=pane.getBoundingClientRect();
+    const controls=[...bar.querySelectorAll('button,label')].filter(node=>node.getClientRects().length);
+    return {reserved:viewport.top>=toolbar.bottom-1,reachable:controls.every(node=>{const box=node.getBoundingClientRect();return box.left>=toolbar.left-1 && box.right<=toolbar.right+1 && box.bottom<=toolbar.bottom+1;}),width:viewport.width};
+  })()`);
+  check(
+    `shared toolbar reserves content space at ${width}px`,
+    geometry.reserved && geometry.reachable,
+    JSON.stringify(geometry),
+  );
+  if (process.env.MDRAFT_COMPILED_UI_SCREENSHOTS) {
+    fs.mkdirSync(process.env.MDRAFT_COMPILED_UI_SCREENSHOTS, { recursive: true });
+    const clip = await evaluate(
+      `(() => { const r=document.getElementById('preview-shell').getBoundingClientRect(); return {x:r.left,y:r.top,width:r.width,height:Math.min(r.height,innerHeight-r.top),scale:1}; })()`,
+    );
+    const shot = await send("Page.captureScreenshot", { format: "png", clip });
+    fs.writeFileSync(
+      path.join(process.env.MDRAFT_COMPILED_UI_SCREENSHOTS, `typst-pdf-${width}.png`),
+      Buffer.from(shot.result.data, "base64"),
+    );
+    await evaluate(`document.querySelector('.compiled-logs-toggle').click()`);
+    const logsShot = await send("Page.captureScreenshot", { format: "png", clip });
+    fs.writeFileSync(
+      path.join(process.env.MDRAFT_COMPILED_UI_SCREENSHOTS, `typst-logs-${width}.png`),
+      Buffer.from(logsShot.result.data, "base64"),
+    );
+    await evaluate(`document.querySelector('.compiled-logs-toggle').click()`);
+  }
+}
+await evaluate(
+  `document.getElementById('preview-shell').style.flex=${JSON.stringify(originalPreviewFlex)}`,
+);
+await send("Emulation.clearDeviceMetricsOverride");
+await sleep(700);
+
 const viewBarStyle = await evaluate(`(() => {
-  const bar = document.querySelector(".typst-viewbar");
-  const button = document.querySelector(".typst-viewbutton");
+  const bar = document.querySelector(".compiled-toolbar");
+  const button = document.querySelector(".compiled-mode");
   if (!bar || !button) return null;
   const barStyle = getComputedStyle(bar);
   const buttonStyle = getComputedStyle(button);
   return {
+    reserved: bar.getBoundingClientRect().bottom <= document.getElementById("preview-pane").getBoundingClientRect().top + 1,
     blur: barStyle.backdropFilter,
     barBackground: barStyle.backgroundColor,
     buttonBackground: buttonStyle.backgroundColor,
   };
 })()`);
 check(
-  "the view bar does not blur the page",
-  viewBarStyle?.blur === "none" && viewBarStyle?.barBackground === "rgba(0, 0, 0, 0)",
+  "the shared toolbar reserves space above the page",
+  viewBarStyle?.blur === "none" && viewBarStyle?.reserved === true,
   viewBarStyle ? `${viewBarStyle.blur}/${viewBarStyle.barBackground}` : "missing",
 );
 check(
@@ -1042,7 +1215,7 @@ const reference = JSON.parse(
       table: host?.querySelector('table') !== null,
       contents: host?.querySelector('nav[role="doc-toc"]') !== null,
       error: document.querySelector('.typst-error')?.textContent ?? null,
-      viewbar: document.querySelectorAll('.typst-viewbutton').length,
+      viewbar: document.querySelectorAll('.compiled-mode').length,
     });
   })()`),
 );

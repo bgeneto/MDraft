@@ -27,6 +27,7 @@ import { installEditorContextMenu, titleCase, type ReadingMenuState } from "./co
 import { createReadAloud, type ReadAloudHandle, type ReadingState } from "./read-aloud";
 import { createSystemSpeech, needsSystemSpeech } from "./system-speech";
 import { readClipboardData } from "./clipboard";
+import { CompiledPreviewUi, type CompiledStatus } from "./compiled-preview-ui";
 import { createDocumentLifecycle } from "./document-lifecycle";
 import { showDocumentStatistics, type DocumentStatistics } from "./statistics-dialog";
 import { askUnsaved } from "./unsaved-dialog";
@@ -99,6 +100,18 @@ import {
   wrapStandaloneHtml,
 } from "./markdown";
 import { cancelPreviewWorkers } from "./preview-worker-client";
+import {
+  covers,
+  documentOwner,
+  ELAPSED_AFTER_MS,
+  ELAPSED_AFTER_REDUCED_MS,
+  formatElapsed,
+  PENDING_GRACE_MS,
+  pendingPhase,
+  projectOwner,
+  type OwnerProbe,
+  type PreviewOwner,
+} from "./preview-owner";
 import {
   bindWordMapAsync,
   blockRangeForNode,
@@ -190,6 +203,25 @@ const editorHost = el<HTMLDivElement>("editor-host");
 const editorPane = el<HTMLElement>("editor-pane");
 const previewPane = el<HTMLElement>("preview-pane");
 const preview = el<HTMLElement>("preview");
+const previewShell = el<HTMLElement>("preview-shell");
+const compiledUi = new CompiledPreviewUi(previewShell, previewPane, el("compiler-logs"), {
+  compile: compileCurrentDocument,
+  cancel: () => (doc.language === "latex" ? cancelLatexBuild() : cancelTypstBuild()),
+  auto: (on) =>
+    doc.language === "latex"
+      ? setLatexAutoCompile(on)
+      : applySettingsPatch({ typstAutoCompile: on }),
+  save: () => {
+    void (doc.language === "latex" ? latexSavePdf() : saveTypstPagesPdf());
+  },
+  mode: chooseTypstView,
+  copy: (text) => {
+    void api.clipboardWriteText(text).then(
+      () => toast("Copied compiler output"),
+      (error) => toast(String(error)),
+    );
+  },
+});
 const statusFile = el<HTMLSpanElement>("status-file");
 const statusTokens = el<HTMLButtonElement>("status-tokens");
 const statusWords = el<HTMLButtonElement>("status-words");
@@ -817,7 +849,7 @@ function menuStateSnapshot(): api.MenuState {
     doc?.language === "latex"
       ? latexCurrent(latexPreview) && latexPreview.token === renderToken
       : doc?.language === "typst"
-        ? settings.typstView === "pages" && Boolean(typstPdfBase64) && typstPdfToken === renderToken
+        ? settings.typstView === "pages" && typstPdfCurrent()
         : false;
   const syntaxTheme =
     settings.syntaxTheme === "github-light" ? "catppuccin-latte" : settings.syntaxTheme;
@@ -1168,6 +1200,16 @@ function applySettingsPatch(
     }
   }
 
+  if (patch.typstAutoCompile !== undefined && doc.language === "typst") {
+    configureCompiledUi();
+    if (patch.typstAutoCompile) scheduleRender(true);
+    else {
+      window.clearTimeout(renderTimer);
+      if (typstInFlight !== null) cancelTypstBuild();
+      else setTypstStatus("Out of date · Select Compile to update the preview.");
+    }
+    preferences?.refresh();
+  }
   if (affectsRendering) scheduleRender(true);
 }
 
@@ -1367,6 +1409,167 @@ let previewStale = true;
  * Preview Only has no word map, so entering Split has to rebuild it.
  */
 let previewSyncReady = false;
+/**
+ * What the pane's content was built from, or null before a commit and after a
+ * retirement. A rebuild of the same owner keeps the content; a change to another
+ * owner removes it.
+ */
+let previewOwner: PreviewOwner | null = null;
+
+/** The active document as ownership sees it. */
+function probeOf(session: Session): OwnerProbe {
+  return {
+    id: session.id,
+    incarnation: session.incarnation,
+    path: session.path,
+    language: session.language,
+  };
+}
+
+/**
+ * Record that the pane now describes `owner`.
+ *
+ * Every renderer swaps its result in and then calls this, after its token and
+ * document guards. The pending surface belongs to the wait, not to the result,
+ * so it is cleared here rather than by each renderer.
+ */
+function commitPreview(owner: PreviewOwner): void {
+  previewStale = false;
+  previewOwner = owner;
+  clearPending();
+}
+
+/**
+ * The waiting surface shown while the pane has no content for this document.
+ *
+ * It is a child of `.preview-pane`, never of `#preview`: Document Zoom scales
+ * the article, and a status surface that scaled with it would be the wrong size
+ * for the pane it fills.
+ */
+let pending: {
+  sessionId: string;
+  incarnation: number;
+  startedAt: number;
+  graceTimer: number;
+  tick: number;
+  node: HTMLElement | null;
+} | null = null;
+
+function prefersReducedMotion(): boolean {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+function pendingIdle(): boolean {
+  return (
+    (doc.language === "latex" && settings.latexAutoCompile === false && !latexInFlight) ||
+    (doc.language === "typst" && settings.typstAutoCompile === false && typstInFlight === null)
+  );
+}
+
+/** The strip's current sentence, so the surface does not contradict it. */
+function currentLatexPhase(): string {
+  return compiledUi.phase;
+}
+
+function updatePendingElapsed(entry: NonNullable<typeof pending>): void {
+  if (pending !== entry || !entry.node) return;
+  const label = entry.node.querySelector<HTMLElement>(".preview-pending-elapsed");
+  if (!label) return;
+  const elapsed = performance.now() - entry.startedAt;
+  const threshold = prefersReducedMotion() ? ELAPSED_AFTER_REDUCED_MS : ELAPSED_AFTER_MS;
+  label.textContent = elapsed >= threshold ? formatElapsed(elapsed) : "";
+}
+
+function showPending(entry: NonNullable<typeof pending>): void {
+  if (pending !== entry) return;
+  if (previewOwner !== null || settings.viewMode === "source") {
+    clearPending();
+    return;
+  }
+  if (doc.id !== entry.sessionId || doc.incarnation !== entry.incarnation) {
+    clearPending();
+    return;
+  }
+  const idle = pendingIdle();
+  const node = document.createElement("div");
+  node.className = "preview-pending";
+  node.dataset.state = idle ? "idle" : "pending";
+  const spinner = document.createElement("div");
+  spinner.className = "preview-pending-spinner";
+  spinner.setAttribute("aria-hidden", "true");
+  const title = document.createElement("div");
+  title.className = "preview-pending-title";
+  title.textContent = doc.name;
+  const phase = document.createElement("div");
+  phase.className = "preview-pending-phase";
+  // Only the phase is a live region: the elapsed counter changes every second
+  // and must not interrupt a screen reader that often.
+  phase.setAttribute("role", "status");
+  phase.setAttribute("aria-live", "polite");
+  phase.textContent = idle
+    ? "Not compiled yet — select Compile."
+    : doc.language === "latex"
+      ? currentLatexPhase() || pendingPhase(doc.language)
+      : pendingPhase(doc.language);
+  const elapsed = document.createElement("div");
+  elapsed.className = "preview-pending-elapsed";
+  elapsed.setAttribute("aria-hidden", "true");
+  node.append(spinner, title, phase, elapsed);
+  previewPane.appendChild(node);
+  entry.node = node;
+  if (!idle) entry.tick = window.setInterval(() => updatePendingElapsed(entry), 1000);
+}
+
+function clearPending(): void {
+  if (!pending) return;
+  window.clearTimeout(pending.graceTimer);
+  window.clearInterval(pending.tick);
+  pending.node?.remove();
+  pending = null;
+}
+
+/** Turn a visible surface idle without starting a new wait. */
+function showPendingIdle(message: string): void {
+  const entry = pending;
+  if (!entry) return;
+  if (!entry.node) showPending(entry);
+  if (!entry.node) return;
+  window.clearInterval(entry.tick);
+  entry.tick = 0;
+  entry.node.dataset.state = "idle";
+  const phase = entry.node.querySelector<HTMLElement>(".preview-pending-phase");
+  if (phase) phase.textContent = message;
+  const elapsed = entry.node.querySelector<HTMLElement>(".preview-pending-elapsed");
+  if (elapsed) elapsed.textContent = "";
+}
+
+/**
+ * Start waiting for `doc`, unless its content is already on screen.
+ *
+ * The grace timer keeps an ordinary rebuild invisible; `startedAt` survives a
+ * repeated call for the same document, so several renders of one wait do not
+ * each restart the counter.
+ */
+function armPending(opts: { immediate?: boolean } = {}): void {
+  if (doc.language === "html" || previewOwner !== null) return;
+  if (settings.viewMode === "source") return;
+  if (pending && pending.sessionId === doc.id && pending.incarnation === doc.incarnation) return;
+  clearPending();
+  const entry = {
+    sessionId: doc.id,
+    incarnation: doc.incarnation,
+    startedAt: performance.now(),
+    graceTimer: 0,
+    tick: 0,
+    node: null,
+  };
+  pending = entry;
+  entry.graceTimer = window.setTimeout(
+    () => showPending(entry),
+    opts.immediate ? 0 : PENDING_GRACE_MS,
+  );
+}
+
 let lastMappedState: boolean | null = null;
 /** Source line the guest should restore after the next re-render. */
 let htmlRestoreLine: number | null = null;
@@ -1388,8 +1591,18 @@ let pendingPreviewScroll: number | null = null;
  */
 function scheduleRender(immediate = false): void {
   window.clearTimeout(renderTimer);
+  configureCompiledUi();
+  if (doc.language === "typst" && settings.typstAutoCompile === false) {
+    if (previewStale) setTypstStatus("Out of date · Select Compile to update the preview.");
+    armPending({ immediate: true });
+    return;
+  }
   if (doc.language === "latex" && settings.latexAutoCompile === false) {
     if (previewStale) setLatexStatus("Out of date · Select Compile to update the preview.");
+    // Nothing will render here until the reader presses Compile. If the pane
+    // has no content for this file, say so at once instead of leaving an empty
+    // pane or, worse, another tab's preview.
+    armPending({ immediate: true });
     return;
   }
   if (settings.viewMode === "source") {
@@ -1400,6 +1613,7 @@ function scheduleRender(immediate = false): void {
     previewStale = true;
     previewSyncReady = false;
     cancelLatex();
+    clearPending();
     return;
   }
   renderTimer = window.setTimeout(() => void doRender(), immediate ? 0 : renderDelay());
@@ -1592,10 +1806,10 @@ let latexProblemRoot: { path: string; directory: string } | null = null;
 let latexProblemFiles: ReadonlySet<string> = new Set();
 /** The problems of the last failed compile, for the marks and the list. */
 let latexProblems: readonly LatexDiagnostic[] = [];
+let selectedLatexProblem: { path: string; signature: string } | null = null;
 /** The signature of the last auto-jumped list, so a re-render does not jump. */
-let latexProblemSignature = "";
+
 let latexInFlight = false;
-let navigatingLatexProblem = false;
 /** The owner token of the native job on screen, for Cancel. */
 let latexJob: string | null = null;
 /** The last engine status, so Preferences and the enable note agree. */
@@ -1628,8 +1842,70 @@ async function installLatexProgressListener(): Promise<void> {
   });
 }
 
+function configureCompiledUi(): void {
+  const fileName = doc.path ? basename(doc.path) : "Untitled";
+  if (doc.language === "latex")
+    compiledUi.configure("latex", settings.latexAutoCompile !== false, "pages", fileName);
+  else if (doc.language === "typst")
+    compiledUi.configure(
+      "typst",
+      settings.typstAutoCompile !== false,
+      settings.typstView,
+      fileName,
+    );
+  else compiledUi.reset();
+}
+
+function compileCurrentDocument(): void {
+  if (doc.language === "latex") return compileCurrentLatex();
+  if (doc.language !== "typst") return;
+  cancelTypstRender();
+  renderToken += 1;
+  discardStagedPdf();
+  lastTypstRender = null;
+  if (previewOwner === null) {
+    clearPending();
+    armPending();
+  }
+  if (settings.viewMode === "source") setViewMode("split");
+  window.clearTimeout(renderTimer);
+  void doRender();
+}
+
+function cancelTypstBuild(): void {
+  window.clearTimeout(renderTimer);
+  cancelTypstRender();
+  renderToken += 1;
+  discardStagedPdf();
+  previewStale = true;
+  setTypstStatus("Compilation cancelled · Select Compile to update the preview.");
+  if (previewOwner === null) showPendingIdle("Compilation cancelled.");
+}
+
+function setTypstStatus(message: string, saveable = false, state?: CompiledStatus): void {
+  configureCompiledUi();
+  compiledUi.status(message, typstInFlight !== null, saveable && !previewStale, state);
+  syncMenuState(false);
+  const phase = pending?.node?.querySelector<HTMLElement>(".preview-pending-phase");
+  if (phase) phase.textContent = message;
+  if (
+    pending?.node &&
+    (latexInFlight || typstInFlight !== null) &&
+    pending.node.dataset.state === "idle"
+  ) {
+    pending.node.dataset.state = "pending";
+    pending.startedAt = performance.now();
+    const entry = pending;
+    entry.tick = window.setInterval(() => updatePendingElapsed(entry), 1000);
+  }
+}
+
 function compileCurrentLatex(): void {
   if (doc.language !== "latex") return;
+  if (previewOwner === null) {
+    clearPending();
+    armPending();
+  }
   window.clearTimeout(renderTimer);
   renderToken += 1;
   cancelLatex();
@@ -1671,6 +1947,9 @@ function cancelLatexBuild(): void {
   latexInFlight = false;
   previewStale = true;
   setLatexStatus("Out of date · Compilation cancelled; an outstanding package request may finish.");
+  // With no committed content the pane has only the wait to show. Leaving the
+  // spinner turning after Cancel would say work is still happening.
+  if (previewOwner === null) showPendingIdle("Compilation cancelled.");
 }
 
 /**
@@ -1695,89 +1974,39 @@ function setLatexAutoCompile(on: boolean): void {
 
 /** Reflect the setting in the preview's own toggle, wherever it changed. */
 function syncLatexAutoToggle(): void {
-  const toggle = previewPane.querySelector<HTMLInputElement>(
-    ":scope > .latex-build-status .latex-auto input",
-  );
-  if (toggle) toggle.checked = settings.latexAutoCompile !== false;
+  if (doc.language === "latex") configureCompiledUi();
 }
 
-function setLatexStatus(message: string): void {
-  let status = previewPane.querySelector<HTMLElement>(":scope > .latex-build-status");
-  if (!status) {
-    status = document.createElement("div");
-    status.className = "latex-build-status";
-    const label = document.createElement("span");
-    label.className = "latex-build-message";
-    label.setAttribute("role", "status");
-    const compile = document.createElement("button");
-    compile.type = "button";
-    compile.textContent = "Compile";
-    compile.addEventListener("click", compileCurrentLatex);
-    const cancel = document.createElement("button");
-    cancel.type = "button";
-    cancel.className = "latex-cancel";
-    cancel.textContent = "Cancel";
-    cancel.addEventListener("click", cancelLatexBuild);
-    // The switch sits beside Compile because that is where a reader decides
-    // whether to press it; it is the same setting as the View menu item.
-    const auto = document.createElement("label");
-    auto.className = "latex-auto";
-    auto.title = "Recompile the preview after each pause in typing";
-    const toggle = document.createElement("input");
-    toggle.type = "checkbox";
-    toggle.setAttribute("role", "switch");
-    toggle.addEventListener("change", () => setLatexAutoCompile(toggle.checked));
-    auto.append(toggle, document.createTextNode("Auto-compile"));
-    status.append(label, compile, cancel, auto);
-    previewPane.prepend(status);
+function setLatexStatus(message: string, state?: CompiledStatus): void {
+  if (doc.language !== "latex") return;
+  configureCompiledUi();
+  compiledUi.status(
+    message,
+    latexInFlight,
+    latexCurrent(latexPreview) || latexPartialCurrent(),
+    state,
+  );
+  const phase = pending?.node?.querySelector<HTMLElement>(".preview-pending-phase");
+  if (phase) phase.textContent = message;
+  if (
+    pending?.node &&
+    (latexInFlight || typstInFlight !== null) &&
+    pending.node.dataset.state === "idle"
+  ) {
+    pending.node.dataset.state = "pending";
+    pending.startedAt = performance.now();
+    const entry = pending;
+    entry.tick = window.setInterval(() => updatePendingElapsed(entry), 1000);
   }
-  status.querySelector<HTMLElement>(".latex-build-message")!.textContent = message;
-  status.querySelector<HTMLButtonElement>(".latex-cancel")!.hidden = !latexInFlight;
-  syncLatexAutoToggle();
 }
 
 function showLatexWarnings(result: LatexResult, root: { path: string; directory: string }): void {
-  previewPane.querySelector(":scope > .latex-warnings")?.remove();
-  const details = document.createElement("details");
-  details.className = "latex-warnings";
-  const summary = document.createElement("summary");
-  summary.textContent = result.warnings.length
-    ? `${result.warnings.length}${result.warningsTruncated ? "+" : ""} LaTeX warning${result.warnings.length === 1 && !result.warningsTruncated ? "" : "s"}`
-    : "Compiler output";
-  details.append(summary);
-  const list = document.createElement("ul");
-  for (const warning of result.warnings) {
-    const item = document.createElement("li");
-    const label = `${diagnosticPlace(warning)} ${warning.message}`.trim();
-    if (
-      warning.file &&
-      warning.line &&
-      projectRelative(warning.file) &&
-      result.sources.some((source) => source.path === warning.file)
-    ) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.textContent = label;
-      button.addEventListener("click", () => void revealLatexProblem(warning, root, true));
-      item.append(button);
-    } else item.textContent = label;
-    list.append(item);
-  }
-  details.append(list);
-  if (result.warningsTruncated) {
-    const more = document.createElement("p");
-    more.textContent = "More diagnostics were omitted; see the compiler output.";
-    details.append(more);
-  }
-  const log = document.createElement("details");
-  const logSummary = document.createElement("summary");
-  logSummary.textContent = "Compiler output";
-  const output = document.createElement("pre");
-  output.textContent = result.log;
-  log.append(logSummary, output);
-  if (result.warnings.length) details.append(log);
-  else details.append(output);
-  preview.before(details);
+  const panel = latexProblemPanel(new LatexBuildError("", result.warnings), root, [
+    ...result.files,
+  ]);
+  panel.querySelector(".latex-log")?.remove();
+  compiledUi.details(panel, result.log, result.warnings.length, false);
+  compiledUi.outputReady();
 }
 
 function latexCurrent(value: LatexPreview | null): value is LatexPreview {
@@ -1798,18 +2027,6 @@ function latexRelative(value: LatexPreview, path: string | null): string | null 
     if (pathKey(joinDir(value.rootDirectory, file)) === pathKey(path)) return file;
   }
   return null;
-}
-
-/** Show a failed rebuild without removing the last readable PDF or its scroll range. */
-function showPdfRebuildError(error: unknown): void {
-  preview.querySelector(":scope > .pdf-rebuild-error")?.remove();
-  const layer = document.createElement("div");
-  layer.className = "pdf-rebuild-error";
-  const box = document.createElement("pre");
-  box.className = "typst-error";
-  box.textContent = String(error);
-  layer.appendChild(box);
-  preview.prepend(layer);
 }
 
 /**
@@ -1849,13 +2066,17 @@ function latexProblemPanel(
       const button = document.createElement(actionable ? "button" : "div");
       if (button instanceof HTMLButtonElement) button.type = "button";
       button.className = "latex-problem";
+      button.dataset.severity = problem.severity;
       const place = document.createElement("span");
       place.className = "latex-problem-place";
       place.textContent = diagnosticPlace(problem);
       const message = document.createElement("span");
       message.className = "latex-problem-message";
       message.textContent = problem.message;
-      button.append(place, message);
+      const severity = document.createElement("span");
+      severity.className = "latex-problem-severity";
+      severity.textContent = problem.severity === "warning" ? "Warning" : "Error";
+      button.append(place, severity, message);
       if (problem.lineText) {
         const source = document.createElement("code");
         source.className = "latex-problem-source";
@@ -1868,6 +2089,11 @@ function latexProblemPanel(
       }
       if (actionable)
         button.addEventListener("click", () => void revealLatexProblem(problem, root, true));
+      else if (!button.title)
+        button.title =
+          problem.file && !projectRelative(problem.file)
+            ? "Reported inside a compiler package; no matching source line in this project."
+            : "The compiler did not provide a matching project source line.";
       item.append(button);
       list.append(item);
     }
@@ -1941,12 +2167,22 @@ function applyLatexMarks(
   }
   const text = editor.getDoc();
   const ranges = latexProblemsForPath(problems, root, path)
+    .filter(latexProblemMatchesLine)
     .map((problem) => {
       const mapped = diagnosticRange(text, problem);
       return mapped ? { from: mapped.from, to: mapped.to, lineFrom: mapped.lineFrom } : null;
     })
     .filter((range): range is { from: number; to: number; lineFrom: number } => range !== null);
   editor.setDiagnostics(ranges, pulse);
+}
+
+function latexProblemMatchesLine(problem: LatexDiagnostic): boolean {
+  return Boolean(
+    problem.lineText &&
+    problem.line > 0 &&
+    problem.line <= editor.view.state.doc.lines &&
+    lineTextOf(editor.view.state.doc.line(problem.line).text) === problem.lineText,
+  );
 }
 
 /**
@@ -1968,25 +2204,19 @@ async function revealLatexProblem(
   );
   if (!belongsToFailure && !belongsToPreview) return;
   const existing = sessions.findByPath(path);
-  navigatingLatexProblem = true;
-  try {
-    if (existing) {
-      if (existing.id !== doc.id) await activateSession(existing.id);
-    } else {
-      await openPath(path, { silent: true, rememberRecent: false });
-    }
-  } finally {
-    navigatingLatexProblem = false;
+  if (existing) {
+    if (existing.id !== doc.id) await activateSession(existing.id);
+  } else {
+    await openPath(path, { silent: true, rememberRecent: false });
   }
   if (!doc.path || pathKey(doc.path) !== pathKey(path)) return;
-  if (
-    !problem.lineText ||
-    problem.line < 1 ||
-    problem.line > editor.view.state.doc.lines ||
-    lineTextOf(editor.view.state.doc.line(problem.line).text) !== problem.lineText
-  )
+  if (!latexProblemMatchesLine(problem)) {
+    toast("The source line changed; compile again to update this location.");
     return;
-  applyLatexMarks(latexProblems, root, doc.path, true);
+  }
+  if (focus && settings.viewMode === "preview") setViewMode("split");
+  selectedLatexProblem = { path: pathKey(path), signature: diagnosticSignature(problem) };
+  applyLatexMarks([problem], root, doc.path, true);
   const mapped = diagnosticRange(editor.getDoc(), problem);
   if (!mapped) return;
   editor.revealOffset(mapped.from);
@@ -1994,24 +2224,6 @@ async function revealLatexProblem(
     editor.view.dispatch({ selection: { anchor: mapped.from } });
     editor.focus();
   }
-}
-
-/** Jump only when the problem list is new, not on every re-render of it. */
-function maybeJumpToLatexProblem(
-  problems: readonly LatexDiagnostic[],
-  root: { path: string; directory: string } | null,
-): void {
-  const signature = problems.map(diagnosticSignature).join("\n");
-  if (signature === latexProblemSignature) return;
-  latexProblemSignature = signature;
-  if (!root) return;
-  const first = problems.find((problem) => problem.file && problem.line > 0) ?? problems[0];
-  if (!first) return;
-  // Let the failure paint before the tab switch starts its own render.
-  const owner = renderToken;
-  window.setTimeout(() => {
-    if (owner === renderToken) void revealLatexProblem(first, root, false);
-  }, 0);
 }
 
 /**
@@ -2026,89 +2238,112 @@ function inLatexProblemProject(path: string | null): boolean {
   return latexProjectMember(path, latexProblemRoot?.path ?? null, [...latexProblemFiles], pathKey);
 }
 
-function latexFailure(
+let latexPartial: {
+  pdf: Uint8Array;
+  token: number;
+  activeId: string;
+  rootPath: string;
+  revision: number;
+  revisions: LatexPreview["revisions"];
+} | null = null;
+
+function latexPartialCurrent(): boolean {
+  const value = latexPartial;
+  return Boolean(
+    value &&
+    value.token === renderToken &&
+    value.activeId === doc.id &&
+    value.revision === doc.revision &&
+    preview.dataset.latexPartial === String(value.token) &&
+    value.revisions.every((item) => {
+      const current = sessions.byId(item.id);
+      return current?.revision === item.revision && current.path === item.path;
+    }),
+  );
+}
+
+async function latexFailure(
   error: unknown,
   root: { path: string; directory: string } | null = null,
   files: readonly string[] = [],
-): void {
-  // A failed build has no current PDF, whatever the previous one recorded.
+  attempt?: Omit<LatexPreview, "result">,
+  build?: { engine: string; elapsedMs: number },
+): Promise<void> {
   delete preview.dataset.latexCurrent;
+  delete preview.dataset.latexPartial;
+  latexPartial = null;
   const panel = latexProblemPanel(error, root, files);
-  if (
-    error instanceof LatexBuildError &&
-    error.partialPdf &&
-    new TextDecoder().decode(error.partialPdf.subarray(0, 5)) === "%PDF-"
-  ) {
-    const pdf = error.partialPdf;
-    const owner = renderToken;
-    const activeId = doc.id;
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "typst-viewbutton";
-    button.textContent = "View partial PDF";
-    button.addEventListener("click", () => {
-      void (async () => {
-        if (owner !== renderToken || doc.id !== activeId) return;
-        latexInFlight = true;
-        setLatexStatus("Rendering partial PDF…");
-        const host = stagedPdfHost();
-        const view = new TypstPdfPreview(
-          host,
-          previewPane,
-          syncSourceFromPageSelection,
-          editor.getDoc(),
-          {
-            language: "latex",
-            files: [],
-            activeFile: "",
-            enabled: false,
-            detached: true,
-          },
-        );
-        stagedPdf = { view, host };
-        view.setZoom(zoomFactor());
-        try {
-          await view.render(pdf.slice());
-          if (owner !== renderToken || doc.id !== activeId) {
-            view.dispose();
-            host.remove();
-            return;
-          }
-          commitPdfHost(host, view, owner);
-          const layer = document.createElement("div");
-          layer.className = "pdf-rebuild-error";
-          layer.append(panel);
-          preview.prepend(layer);
-          previewStale = true;
-          previewSyncReady = false;
-          latexInFlight = false;
-          setLatexStatus("Partial PDF · compilation reported errors.");
-        } catch (failure) {
-          if (owner === renderToken && doc.id === activeId) {
-            discardStagedPdf();
-            latexInFlight = false;
-            setLatexStatus("Could not render the partial PDF.");
-            toast(String(failure), 6200);
-          }
-        }
-      })();
-    });
-    panel.append(button);
+  panel.querySelector(".latex-log")?.remove();
+  const issues = error instanceof LatexBuildError ? error.diagnostics : [];
+  const output =
+    error instanceof LatexBuildError ? `${String(error)}\n\n${error.log}` : String(error);
+  compiledUi.details(panel, output, issues.length, true);
+  const partial = error instanceof LatexBuildError ? error.partialPdf : null;
+  const token = renderToken;
+  const activeId = doc.id;
+  const revision = doc.revision;
+  const revisions =
+    attempt?.revisions ?? sessions.list().map(({ id, revision, path }) => ({ id, revision, path }));
+  let shownPartial = false;
+  if (partial && new TextDecoder().decode(partial.subarray(0, 5)) === "%PDF-") {
+    latexInFlight = true;
+    setLatexStatus("Rendering PDF with errors…");
+    const host = stagedPdfHost();
+    const view = new TypstPdfPreview(
+      host,
+      previewPane,
+      syncSourceFromPageSelection,
+      editor.getDoc(),
+      {
+        language: "latex",
+        files: [],
+        activeFile: "",
+        enabled: false,
+        detached: true,
+      },
+    );
+    stagedPdf = { view, host };
+    view.setZoom(zoomFactor());
+    try {
+      await view.render(partial.slice());
+      if (token !== renderToken || activeId !== doc.id) {
+        view.dispose();
+        host.remove();
+        return;
+      }
+      commitPdfHost(host, view, token);
+      latexPartial = {
+        pdf: partial.slice(),
+        token,
+        activeId,
+        revision,
+        revisions,
+        rootPath: root?.path ?? doc.path ?? "document.tex",
+      };
+      preview.dataset.latexPartial = String(token);
+      shownPartial = true;
+    } catch (failure) {
+      if (token !== renderToken || activeId !== doc.id) return;
+      discardStagedPdf();
+      compiledUi.details(
+        panel,
+        `${output}\n\nCould not render partial PDF: ${String(failure)}`,
+        issues.length,
+        true,
+      );
+    }
   }
-  if (typstPdf && latexPreview?.activeId === doc.id) {
-    preview.querySelector(":scope > .pdf-rebuild-error")?.remove();
-    const layer = document.createElement("div");
-    layer.className = "pdf-rebuild-error";
-    layer.append(panel);
-    preview.prepend(layer);
-  } else {
-    previewPane.querySelector(":scope > .typst-viewbar")?.remove();
-    disposeTypstPdf();
-    preview.replaceChildren(panel);
-  }
-  previewStale = false;
+  if (token !== renderToken || activeId !== doc.id) return;
+  latexInFlight = false;
+  if (!typstPdf) {
+    preview.replaceChildren();
+    const empty = document.createElement("div");
+    empty.className = "compiled-empty";
+    empty.textContent = "No PDF produced. Open Logs for the compilation problems.";
+    preview.append(empty);
+    compiledUi.showLogs(true, false);
+  } else compiledUi.outputReady();
   previewSyncReady = false;
-
   const problems = error instanceof LatexBuildError ? error.diagnostics : [];
   latexProblems = problems;
   latexProblemRoot = root ? { ...root } : null;
@@ -2117,15 +2352,43 @@ function latexFailure(
   latexProblemFiles = new Set(
     files.map((file) => pathKey(root ? joinDir(root.directory, file) : file)),
   );
+  // A failure panel belongs to the project too: moving to a chapter of the
+  // failed project may keep the problems visible while the next build runs.
+  // The owner uses the set this failure records, not the previous failure's.
+  const failureRoot = root ? sessions.findByPath(root.path) : undefined;
+  const failureRootPath = failureRoot?.path ?? null;
+  commitPreview(
+    failureRoot && failureRootPath
+      ? projectOwner(failureRoot, [...latexProblemFiles, pathKey(failureRootPath)])
+      : documentOwner(doc),
+  );
   if (root) {
     applyLatexMarks(problems, root, doc.path, true);
-    maybeJumpToLatexProblem(problems, root);
   } else {
     latexProblemRoot = null;
     latexProblemFiles = new Set();
-    latexProblemSignature = "";
+
     editor.clearDiagnostics();
   }
+  setLatexStatus(
+    shownPartial
+      ? "PDF with errors · Compilation reported problems; see Logs."
+      : typstPdf
+        ? "Build failed · Showing previous PDF; see Logs."
+        : "No PDF produced · See Logs.",
+    {
+      label: shownPartial ? "PDF with errors" : typstPdf ? "Build failed" : "No PDF produced",
+      severity: "error",
+      detail: [
+        typstPdf && !shownPartial ? "Showing previous PDF" : "",
+        compiledUi.issueSummary || "See Logs",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      engine: build ? `${build.engine} · ${(build.elapsedMs / 1000).toFixed(1)} s` : undefined,
+    },
+  );
+  syncMenuState(false);
 }
 
 function showLatexLicenses(): void {
@@ -2208,6 +2471,20 @@ function latexEnableNote(status?: api.LatexEngineStatus | null): void {
 }
 
 async function latexSavePdf(): Promise<void> {
+  if (latexPartialCurrent() && latexPartial) {
+    const value = latexPartial;
+    await saveCompiledPdf({
+      data: bytesToBase64(value.pdf),
+      token: value.token,
+      sessionId: value.activeId,
+      revision: value.revision,
+      revisions: value.revisions,
+      engine: "LaTeX",
+      title: "Save PDF with compilation errors",
+      defaultPath: value.rootPath.replace(/\.tex$/i, "-partial.pdf"),
+    });
+    return;
+  }
   const value = latexPreview;
   if (!latexCurrent(value)) {
     toast("Wait for the current LaTeX compilation before saving.");
@@ -2221,19 +2498,8 @@ async function latexSavePdf(): Promise<void> {
     revision: doc.revision,
     engine: value.result.engine ?? "LaTeX",
     defaultPath: (root?.path ?? "document.tex").replace(/\.tex$/i, ".pdf"),
+    revisions: value.revisions,
   });
-}
-
-function latexBar(): HTMLElement {
-  const bar = document.createElement("div");
-  bar.className = "typst-viewbar";
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "typst-viewbutton latex-save-pdf";
-  button.textContent = "Save PDF…";
-  button.addEventListener("click", () => void latexSavePdf());
-  bar.appendChild(button);
-  return bar;
 }
 
 async function renderLatexPreview(source: string, token: number): Promise<void> {
@@ -2267,11 +2533,11 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
     delete preview.dataset.latexCurrent;
     disposeTypstPdf();
     latexEnableNote(engineStatus);
-    previewStale = false;
+    commitPreview(documentOwner(doc));
     latexProblems = [];
     latexProblemRoot = null;
     latexProblemFiles = new Set();
-    latexProblemSignature = "";
+
     editor.clearDiagnostics();
     return;
   }
@@ -2319,6 +2585,12 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
   // The snapshot's own file list is the definition of "this project", used when a
   // failure has to decide whether a later tab switch is still inside it.
   let snapshotFiles: string[] = [];
+  let buildEngine =
+    engineStatus.backend === "native"
+      ? engineStatus.nativeEngine === "auto"
+        ? "Installed TeX"
+        : engineStatus.nativeEngine
+      : "LuaLaTeX";
   try {
     const snapshot = await api.latexProjectSnapshot(root.path, overlays);
     if (token !== renderToken || doc.id !== activeId) return;
@@ -2348,6 +2620,7 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
           files: snapshot.files,
         });
         if (token !== renderToken || doc.id !== activeId) return;
+        buildEngine = native.engine;
         result = nativeToLatex(native, snapshot);
       } finally {
         if (latexJob === job) latexJob = null;
@@ -2368,9 +2641,12 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
     }
     const value = { ...owner, result };
     if (!latexCurrent(value)) return;
+    // Narrowed once for the closure: the map callback is not where a mutable
+    // `let root` keeps its non-null narrowing.
+    const rootDirectory = root.directory;
     wordMap = null;
     clearPreviewWords();
-    preview.before(latexBar());
+
     const host = stagedPdfHost();
     const view = new TypstPdfPreview(host, previewPane, syncSourceFromPageSelection, source, {
       language: "latex",
@@ -2389,31 +2665,63 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
       host.remove();
       return;
     }
+    latexPartial = null;
+    delete preview.dataset.latexPartial;
     latexPreview = value;
     commitPdfHost(host, view, token);
     syncPreviewFromSource();
     preview.dataset.latexCurrent = String(token);
     preview.dataset.latexMs = String(Math.round(performance.now() - started));
     previewLinesMapped = false;
-    previewStale = false;
+    commitPreview(
+      projectOwner(
+        root,
+        [...result.files].map((file) => pathKey(joinDir(rootDirectory, file))),
+      ),
+    );
     previewSyncReady = true;
     // A successful compile is the only authority that clears a problem list.
     latexProblems = result.warnings;
-    latexProblemSignature = "";
+
     latexProblemRoot = null;
     latexProblemFiles = new Set();
     editor.clearDiagnostics();
+    const selected =
+      selectedLatexProblem?.path === pathKey(doc.path ?? "")
+        ? result.warnings.find(
+            (problem) => diagnosticSignature(problem) === selectedLatexProblem?.signature,
+          )
+        : null;
+    if (selected)
+      applyLatexMarks([selected], { path: root.path, directory: root.directory }, doc.path, false);
+    else selectedLatexProblem = null;
     showLatexWarnings(result, { path: root.path, directory: root.directory });
     latexInFlight = false;
     setLatexStatus(
       `Compiled in ${((result.elapsedMs ?? performance.now() - started) / 1000).toFixed(1)} s · ${result.engine ?? "LaTeX"}${result.warnings.length ? ` · ${result.warnings.length}${result.warningsTruncated ? "+" : ""} warning${result.warnings.length === 1 && !result.warningsTruncated ? "" : "s"}` : ""}`,
+      {
+        label: "PDF ready",
+        severity: result.warnings.length ? "warning" : "success",
+        detail: compiledUi.issueSummary,
+        engine: `${result.engine ?? "LaTeX"} · ${((result.elapsedMs ?? performance.now() - started) / 1000).toFixed(1)} s`,
+      },
     );
+    // Export › PDF and Print are enabled by this commit and name its engine.
+    // Nothing else re-sends the menu state here, so without this the rows kept
+    // "available after the preview compiles" until the next caret move.
+    syncMenuState(false);
   } catch (error) {
     if (token === renderToken && doc.id === activeId) {
       latexInFlight = false;
       discardStagedPdf();
       setLatexStatus("LaTeX compilation failed.");
-      latexFailure(error, { path: root.path, directory: root.directory }, snapshotFiles);
+      await latexFailure(
+        error,
+        { path: root.path, directory: root.directory },
+        snapshotFiles,
+        owner,
+        { engine: buildEngine, elapsedMs: performance.now() - started },
+      );
     }
   }
 }
@@ -2455,40 +2763,53 @@ function typstMissingNote(message: string): HTMLElement {
 
 /** Replace the pane with a Typst error, keeping the view switch available. */
 function showTypstFailure(error: unknown, wanted: string): void {
-  // Whatever the pane shows now is the current answer; a mode switch must not
-  // retry a compile that just failed.
-  previewStale = false;
-  previewSyncReady = true;
-  if (
-    wanted === "pages" &&
-    typstPdf &&
-    lastTypstRender?.docId === doc.id &&
-    lastTypstRender.mode === "pages"
-  ) {
-    showPdfRebuildError(error);
-    previewSyncReady = false;
-    return;
+  typstInFlight = null;
+  const hadOutput =
+    covers(previewOwner, probeOf(doc)) &&
+    Boolean(preview.querySelector(".typst-preview,.typst-document"));
+  const text = String(error);
+  commitPreview(documentOwner(doc));
+  previewSyncReady = false;
+  const panel = document.createElement("div");
+  panel.className = "compiled-problems";
+  const headlines = text.split("\n").filter((line) => /^\s*(error|warning):/.test(line));
+  for (const headline of headlines.length ? headlines : [text]) {
+    const row = document.createElement("div");
+    row.className = "compiled-issue";
+    row.textContent = headline;
+    panel.append(row);
   }
-  previewPane.querySelector(":scope > .typst-viewbar")?.remove();
-  wordMap = null;
-  clearPreviewWords();
-  disposeTypstPdf();
-  preview.innerHTML = "";
-  previewLinesMapped = false;
-  const message = String(error);
-  if (message.includes(TYPST_MISSING)) {
-    // Neither view can render without the compiler, so a Document/Pages switch
-    // would be a dead control. The note offers the fix instead.
-    preview.appendChild(typstMissingNote(message));
-    applyPendingPreviewScroll();
-    return;
+  compiledUi.details(panel, text, headlines.length || 1, true);
+  if (!hadOutput) {
+    disposeTypstPdf();
+    preview.replaceChildren();
+    if (text.includes(TYPST_MISSING)) {
+      preview.append(typstMissingNote(text));
+      compiledUi.showLogs(false, false);
+    } else {
+      const empty = document.createElement("div");
+      empty.className = "compiled-empty";
+      empty.textContent = "No preview produced. Open Logs for the compilation problems.";
+      preview.append(empty);
+      compiledUi.showLogs(true, false);
+    }
   }
-  preview.appendChild(typstViewBar(wanted));
-  const box = document.createElement("pre");
-  box.className = "typst-error";
-  box.textContent = message;
-  preview.appendChild(box);
-  applyPendingPreviewScroll();
+  configureCompiledUi();
+  setTypstStatus(
+    hadOutput
+      ? "Build failed · Showing previous output; see Logs."
+      : "No preview produced · See Logs.",
+    false,
+    {
+      label: hadOutput ? "Build failed" : "No output produced",
+      severity: "error",
+      detail: [hadOutput ? "Showing previous output" : "", compiledUi.issueSummary]
+        .filter(Boolean)
+        .join(" · "),
+      engine: "Typst",
+    },
+  );
+  void wanted;
 }
 
 /**
@@ -2508,6 +2829,7 @@ function showTypstFailure(error: unknown, wanted: string): void {
  * click away, and the pane says so when the document view had to drop something.
  */
 async function renderTypstPreview(source: string, token: number): Promise<void> {
+  const started = performance.now();
   const wanted = settings.typstView === "pages" ? "pages" : "document";
   // The compile is awaited; a mode switch during it must not make this render
   // claim a word map it never built.
@@ -2527,7 +2849,7 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
     // compiler process, even when a pending map build was invalidated.
     (lastTypstRender.syncReady || !wantsMap || (wanted === "document" && lastTypstRender.blocks))
   ) {
-    previewStale = false;
+    commitPreview(documentOwner(doc));
     if (wanted === "document" && wantsMap && !wordMap && lastTypstRender.blocks) {
       bindPreviewWords(source, undefined, lastTypstRender.blocks, true);
       lastTypstRender.syncReady = true;
@@ -2544,6 +2866,7 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
 
   let rendered: api.RenderedTypst;
   typstInFlight = token;
+  setTypstStatus("Compiling Typst…");
   try {
     rendered = await api.renderTypst(doc.path, source, wanted, imageRoot, token);
   } catch (error) {
@@ -2570,11 +2893,26 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
   // or re-rendering the document, must not leave a mark that cannot be cleared.
   syncedSource = null;
   editor.clearSyncRange();
-  preview.before(typstViewBar(rendered.kind));
+  const issues = document.createElement("div");
+  issues.className = "compiled-problems";
+  for (const warning of rendered.warnings) {
+    const row = document.createElement("div");
+    row.className = "compiled-issue compiled-warning";
+    row.textContent = warning;
+    issues.append(row);
+  }
+  compiledUi.details(
+    issues,
+    rendered.compilerOutput ?? rendered.warnings.join("\n"),
+    rendered.warnings.length,
+    false,
+  );
+  compiledUi.outputReady();
+  compiledUi.note(null);
 
   if (rendered.kind === "document") {
     const dropped = typstDroppedNote(rendered);
-    if (dropped) preview.appendChild(dropped);
+    compiledUi.note(dropped);
     const host = document.createElement("div");
     // The same class the Markdown preview uses, so every rule that shapes prose,
     // headings, code, tables and quotes applies to this document too.
@@ -2606,7 +2944,7 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
     else applyPendingPreviewScroll();
     updateActiveOutline();
     syncPreviewFromSource();
-    previewStale = false;
+    commitPreview(documentOwner(doc));
     previewSyncReady = wantsMap;
     lastTypstRender = {
       docId: doc.id,
@@ -2617,6 +2955,16 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
       syncReady: wantsMap,
       blocks: mapped.blocks,
     };
+    setTypstStatus(
+      `Compiled with Typst${rendered.warnings.length ? ` · ${rendered.warnings.length} warnings` : ""}`,
+      false,
+      {
+        label: "Document ready",
+        severity: rendered.warnings.length ? "warning" : "success",
+        detail: compiledUi.issueSummary,
+        engine: `Typst · ${((performance.now() - started) / 1000).toFixed(1)} s`,
+      },
+    );
     return;
   }
 
@@ -2654,7 +3002,7 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
   // PDF correspondence has its own region adapter, not DOM block anchors.
   previewLinesMapped = false;
   syncPreviewFromSource();
-  previewStale = false;
+  commitPreview(documentOwner(doc));
   // The page view's own map is ready; switching to Split must not reload it.
   previewSyncReady = true;
   lastTypstRender = {
@@ -2665,39 +3013,33 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
     imageRoot,
     syncReady: true,
   };
+  setTypstStatus(
+    `Compiled with Typst${rendered.warnings.length ? ` · ${rendered.warnings.length} warnings` : ""}`,
+    true,
+    {
+      label: "PDF ready",
+      severity: rendered.warnings.length ? "warning" : "success",
+      detail: compiledUi.issueSummary,
+      engine: `Typst · ${((performance.now() - started) / 1000).toFixed(1)} s`,
+    },
+  );
 }
 
-/** The Document / Pages switch shown above a Typst preview. */
-function typstViewBar(active: string): HTMLElement {
-  const bar = document.createElement("div");
-  bar.className = "typst-viewbar";
-  const choices: Array<[string, string, string]> = [
-    ["document", "Document", "Flowing text, styled like the Markdown preview"],
-    ["pages", "Pages", "The pages as they will print"],
-  ];
-  for (const [id, label, title] of choices) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "typst-viewbutton" + (id === active ? " active" : "");
-    button.textContent = label;
-    button.title = title;
-    button.addEventListener("click", () => chooseTypstView(id as api.TypstView));
-    bar.appendChild(button);
-  }
-  if (active === "pages") {
-    const save = document.createElement("button");
-    save.type = "button";
-    save.className = "typst-viewbutton";
-    save.textContent = "Save PDF…";
-    save.addEventListener("click", () => void saveTypstPagesPdf());
-    bar.appendChild(save);
-  }
-  return bar;
+function typstPdfCurrent(): boolean {
+  return Boolean(
+    typstPdfBase64 &&
+    typstPdfToken === renderToken &&
+    lastTypstRender &&
+    lastTypstRender.docId === doc.id &&
+    lastTypstRender.revision === doc.revision &&
+    lastTypstRender.mode === "pages" &&
+    !previewStale,
+  );
 }
 
 async function saveTypstPagesPdf(): Promise<void> {
   const data = typstPdfBase64;
-  if (!data || typstPdfToken !== renderToken) {
+  if (!data || !typstPdfCurrent()) {
     toast("Wait for the current Typst page preview before saving.");
     return;
   }
@@ -2717,7 +3059,7 @@ function chooseTypstView(view: api.TypstView): void {
   settings.typstView = view;
   syncMenuState();
   persist();
-  scheduleRender(true);
+  compileCurrentDocument();
 }
 
 /**
@@ -2797,6 +3139,10 @@ async function doRender(force = false): Promise<void> {
     previewSyncReady = false;
     return;
   }
+  // A render is now on its way for whatever document is active. If no content
+  // has committed for it, the pane shows the wait rather than a foreign tab's
+  // output. Repeated calls for the same wait are ignored by `armPending`.
+  if (previewOwner === null) armPending();
   const source = editor.getDoc();
   // Capture the mode once: a mermaid/Asciidoctor await may span a mode switch,
   // and the map the render produced must match the map the split pane expects.
@@ -2822,7 +3168,7 @@ async function doRender(force = false): Promise<void> {
     if (token !== renderToken || !current) return;
     // The guest stamps its word nodes while building the copy, so Split can use
     // the same iframe without a second render.
-    previewStale = false;
+    commitPreview(documentOwner(doc));
     previewSyncReady = true;
     return;
   }
@@ -2847,7 +3193,7 @@ async function doRender(force = false): Promise<void> {
     else applyPendingPreviewScroll();
     updateActiveOutline();
     syncPreviewFromSource();
-    previewStale = false;
+    commitPreview(documentOwner(doc));
     previewSyncReady = wantsMap;
     return;
   }
@@ -2896,7 +3242,7 @@ async function doRender(force = false): Promise<void> {
   else applyPendingPreviewScroll();
   updateActiveOutline();
   syncPreviewFromSource();
-  previewStale = false;
+  commitPreview(documentOwner(doc));
   previewSyncReady = wantsMap;
 }
 
@@ -3265,18 +3611,43 @@ function snapshotDoc(): void {
   doc.previewScroll = doc.language === "html" ? htmlScrollTop : previewPane.scrollTop;
 }
 
+/**
+ * Remove preview content that does not belong to the active document.
+ *
+ * This is the one place foreign content is taken off screen. The pane's view
+ * objects go with it: a PDF view still owns page canvases and a map worker, and
+ * a Typst host still holds its export stylesheet. `latexPreview` deliberately
+ * stays — it is also the project-root memory that decides which file a chapter
+ * compiles against.
+ */
+function retirePreview(): void {
+  selectedLatexProblem = null;
+  compiledUi.reset();
+  latexPartial = null;
+  delete preview.dataset.latexPartial;
+  previewPane.querySelector(":scope > .typst-viewbar")?.remove();
+  previewPane.querySelector(":scope > .latex-warnings")?.remove();
+  previewPane.querySelector(":scope > .latex-build-status")?.remove();
+  preview.replaceChildren();
+  preview.style.minHeight = "";
+  delete preview.dataset.latexCurrent;
+  delete preview.dataset.latexMs;
+  delete preview.dataset.pdfCommit;
+  disposeTypstPdf();
+  typstPdfToken = -1;
+  latexLastSourceScroll = null;
+  previewLinesMapped = false;
+  previewOwner = null;
+  clearPending();
+}
+
 /** A render that started for the previous tab must not paint this one. */
 function invalidatePreview(): void {
   latexInFlight = false;
+  latexPartial = null;
+  delete preview.dataset.latexPartial;
   previewPane.querySelector(":scope > .latex-build-status")?.remove();
   previewPane.querySelector(":scope > .latex-warnings")?.remove();
-  if (doc.language === "latex" && settings.latexAutoCompile === false && !navigatingLatexProblem) {
-    previewPane.querySelector(":scope > .typst-viewbar")?.remove();
-    disposeTypstPdf();
-    preview.replaceChildren();
-    latexPreview = null;
-    latexProblems = [];
-  }
   delete preview.dataset.latexCurrent;
   renderToken += 1;
   wordMapGeneration += 1;
@@ -3297,6 +3668,13 @@ function invalidatePreview(): void {
   previewStale = true;
   previewSyncReady = false;
   lastTypstRender = null;
+  // A rebuild for the same owner keeps the last readable output; another
+  // document's content is removed before the new render can be slow. The
+  // pending surface is re-armed for whichever document is now active.
+  if (!covers(previewOwner, probeOf(doc))) {
+    retirePreview();
+    armPending();
+  }
 }
 
 /**
@@ -4244,9 +4622,10 @@ async function saveCompiledPdf(options: {
    * would be a surprise.
    */
   afterExport?: boolean;
+  title?: string;
 }): Promise<boolean> {
   const chosen = await saveDialog({
-    title: `Save PDF compiled by ${options.engine}`,
+    title: options.title ?? `Save PDF compiled by ${options.engine}`,
     defaultPath: options.defaultPath,
     filters: [{ name: "PDF", extensions: ["pdf"] }],
   });
@@ -4334,7 +4713,7 @@ async function exportPdf(): Promise<void> {
     return;
   }
   if (source.language === "typst") {
-    if (settings.typstView !== "pages" || !typstPdfBase64 || typstPdfToken !== renderToken) {
+    if (settings.typstView !== "pages" || !typstPdfBase64 || !typstPdfCurrent()) {
       toast("Switch to the Pages view and wait for the compile before exporting the PDF.");
       return;
     }
@@ -5859,8 +6238,10 @@ function setViewMode(mode: api.ViewMode): void {
   if (mode === "source") {
     // Drop a queued rebuild: the pane is hidden, and the next edit should not
     // spend the main thread on it. A current preview stays valid for the switch
-    // back; an edit marks it stale as usual.
+    // back; an edit marks it stale as usual. A waiting surface has no pane to
+    // fill while hidden, so it goes with the queued render.
     window.clearTimeout(renderTimer);
+    clearPending();
     return;
   }
   // Preview Only can reuse a Split render, but Split needs the word map, which
@@ -6414,6 +6795,7 @@ function sourceFromPreviewSelection(): { from: number; to: number } | null {
  * never move the pane out from under the pointer.
  */
 function syncSourceFromPreview(reveal: boolean): void {
+  if (compiledUi.logsOpen) return;
   if (!wordSyncAvailable()) return;
   clearPreviewWords();
   const range = sourceFromPreviewSelection();
@@ -6508,6 +6890,7 @@ async function handoffLatexSelection(
 }
 
 function syncSourceFromPageSelection(context: TypstPageContext | null, reveal: boolean): void {
+  if (compiledUi.logsOpen) return;
   const gesture = ++latexGesture;
   if (
     doc.language === "latex" &&
@@ -6564,6 +6947,7 @@ function syncSourceFromPageSelection(context: TypstPageContext | null, reveal: b
  * on every arrow key, which reads as markup the document does not have.
  */
 function syncPreviewFromSource(): void {
+  if (compiledUi.logsOpen) return;
   if (doc.language === "html") {
     const info = editor.cursorInfo();
     if (settings.viewMode === "split" && info.selectionLength > 0) {
@@ -6633,6 +7017,7 @@ function applyPendingPreviewScroll(): void {
 
 /** Keep the caret's block in the preview across a re-render, without jumping. */
 function revealCursorInPreview(): void {
+  if (compiledUi.logsOpen) return;
   if (settings.viewMode !== "split" || !previewLinesMapped) return;
   // A re-render can land just after a click (a pending mermaid pass, a debounced
   // render). Revealing then would move the preview for a caret the reader placed
@@ -6907,6 +7292,7 @@ function previewScrollOffset(reference: number): number | null {
 }
 
 function alignDomTextScroll(direction: SyncPane, refined = false): boolean {
+  if (compiledUi.logsOpen) return true;
   if (syncDragging || !wordMap || wordMap.source !== editor.getDoc()) return false;
   const reference = scrollReference();
   const offset =
@@ -6973,6 +7359,7 @@ function alignDomTextScroll(direction: SyncPane, refined = false): boolean {
 
 function pagesScrollAvailable(): boolean {
   return (
+    !compiledUi.logsOpen &&
     settings.syncScroll &&
     settings.viewMode === "split" &&
     ((doc.language === "typst" && settings.typstView === "pages") ||
@@ -7060,6 +7447,7 @@ function alignPagesScroll(direction: SyncPane, refined = false): void {
 }
 
 function queuePaneScroll(direction: SyncPane): void {
+  if (compiledUi.logsOpen) return;
   if (!settings.syncScroll || settings.viewMode !== "split" || syncDragging || htmlScrollDragging)
     return;
   const top =
@@ -7077,7 +7465,7 @@ function queuePaneScroll(direction: SyncPane): void {
     paneSyncFrame = 0;
     // A new gesture owns the panes immediately; a correction queued before it
     // must not scroll the source out from under the pointer or a fresh reveal.
-    if (token !== renderToken || epoch !== scrollOwnership.epoch) return;
+    if (token !== renderToken || epoch !== scrollOwnership.epoch || compiledUi.logsOpen) return;
     if (syncDragging || htmlScrollDragging) return;
     // A selection reveal owns the source for its short hand-off window; a
     // preview-scroll correction queued before the gesture must not move it away.
@@ -7563,7 +7951,7 @@ function installResizers(): void {
     if (rect.width < 360) return;
     const offset = Math.min(Math.max(event.clientX - rect.left, 180), rect.width - 180);
     editorPane.style.flex = `0 0 ${offset}px`;
-    previewPane.style.flex = "1 1 auto";
+    previewShell.style.flex = "1 1 auto";
   });
 
   window.addEventListener("mouseup", () => {
@@ -8413,7 +8801,15 @@ function imageContext(hasSelection = false): ImageContext {
     hasSelection,
     insert: (text, assets = []) => insertForOwner(owner, { kind: "block", text }, assets),
     imageSyntax: (alt, src) => imageSyntaxFor(language, alt, src),
-    notify: (text, isError = false) => toast(text, isError ? 5200 : 3200),
+    // The "saved to" notice follows the insert and replaces its toast, so a
+    // paste that landed in a tab the reader has left must name that tab here.
+    notify: (text, isError = false) =>
+      toast(
+        !isError && pasteOwnerState(owner) === "hidden"
+          ? `Pasted into “${owner.session.name}”. ${text}`
+          : text,
+        isError ? 5200 : 3200,
+      ),
   };
 }
 
@@ -8931,9 +9327,9 @@ async function boot(): Promise<void> {
           : "Out of date · Waiting to compile…",
       );
       previewPane.querySelector(":scope > .latex-warnings")?.remove();
-      preview.querySelectorAll<HTMLButtonElement>("button.latex-problem").forEach((button) => {
-        button.disabled = true;
-      });
+      // Unchanged compiled lines remain useful after an edit elsewhere. The
+      // click revalidates the target line before navigating or painting it.
+      selectedLatexProblem = null;
       editor.clearDiagnostics();
     }
     // Invalidate before the debounce: the visible DOM still describes old text.
@@ -8948,6 +9344,12 @@ async function boot(): Promise<void> {
     wordMap = null;
     previewStale = true;
     previewSyncReady = false;
+    if (doc.language === "typst")
+      setTypstStatus(
+        settings.typstAutoCompile === false
+          ? "Out of date · Select Compile to update the preview."
+          : "Out of date · Waiting to compile…",
+      );
     syncedSource = null;
     window.clearTimeout(selectionTimer);
     editor.clearSyncRange();

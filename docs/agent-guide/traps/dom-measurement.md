@@ -101,3 +101,14 @@ Tauri injects the application CSP as a **response header** for the custom protoc
 
 **A theme check clicks the theme button once and expects dark, but the app is already dark**
 The fresh profile stores `theme: "system"`, and the status-bar button toggles between light and dark. On a host whose system theme is dark, the first click goes to light, so the assertion fails in the harness while passing on a light host. Read `documentElement.dataset.theme` first and click until it is the target, then restore the original in the same loop; do not assume the starting side.
+
+
+**The active-tab accent test reports `1.81818px` although CSS specifies `border-top: 2px`**
+`getComputedStyle` reports a used width rounded to physical pixels at fractional
+WebView scaling. Comparing the string with `"2px"` made a visible, correctly
+colored edge fail. The almost wrong conclusion was that an unrelated preview
+layout change altered the tab styles; the tab CSS had no diff. Compare its
+numeric width with the intended width within one device pixel, using
+`devicePixelRatio`, and retain both checks that it is thicker than the inactive
+edge and has a different color. Do not change product CSS to satisfy an exact
+computed-width string.

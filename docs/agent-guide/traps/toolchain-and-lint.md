@@ -71,3 +71,6 @@ library win. No repository file should change for this.
 
 **`typescript-eslint does not support TS 7.0` although `npx tsc --version` prints 7.0.2**
 TypeScript 7 ships no programmatic API, so typescript-eslint needs the 6.0 API. `package.json` therefore aliases `typescript` to `@typescript/typescript6` for the linter and `@typescript/native` to TypeScript 7 for the `tsc` binary. Do not "fix" the error with `npm install typescript@latest`, which replaces the linter's API with 7 and makes ESLint abort, and do not hide it with `--legacy-peer-deps`. Verify both halves: `npx tsc --version` is 7.0.2 while `node_modules/typescript/package.json` is 6.0.x.
+
+**`ERR_MODULE_NOT_FOUND: Cannot find module '.../src/sessions' imported from .../src/preview-owner.ts`**
+A pure module with `import { pathKey } from "./sessions"` type-checks under `moduleResolution: "bundler"` and bundles in Vite, but Node 24's type stripping resolves ESM specifiers literally: an extensionless import has no file to load. Any module a `kind: "node"` layer imports must name the extension in its **runtime** imports (`from "./sessions.ts"`); type-only imports are erased before resolution, but the repository writes those with `.ts` too. The failure appears only when the node layer runs, which can be long after `npm run build` passed — run the new unit layer before believing the module is wired.

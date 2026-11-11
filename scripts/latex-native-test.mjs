@@ -114,10 +114,10 @@ check(committed, "preview commits the native PDF");
 check(
   committed
     ? await page.evaluate(
-        `document.querySelector(".latex-build-message")?.textContent?.includes("Compiled") === true`,
+        `document.querySelector(".compiled-state-label")?.textContent === "PDF ready"`,
       )
     : false,
-  "preview says it compiled",
+  "preview reports its PDF is ready",
 );
 
 await invoke("latex_native_set_enabled", { enabled: false });

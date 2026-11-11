@@ -41,16 +41,35 @@ The main file is the compilation root, and it stays the root while an included
 chapter is open. Changes in any open project file are compiled without saving
 first.
 
-A compile error appears above the preview with the compiler's own message and
-the line it refers to. The last successful PDF stays on screen, so a
-half-finished edit does not blank the page.
+MDraft also recognizes literal image filenames such as
+`\qrcode{qrcode.png}` and file-like class defaults such as `{ school_logo }`.
+It does not expand arbitrary TeX to discover computed filenames.
+
+The toolbar above the preview contains Compile/Cancel, Auto-compile, Logs and
+Save PDF. **Logs** is a toggle: press it to inspect problems or compiler output
+in the full preview area; press it again to return to the same PDF page. Logs
+and controls never cover or become part of the rendered document. Typst uses
+the same toolbar and log presentation, retaining its Document/Pages choice.
+
+When a build reports errors but produces a readable PDF, MDraft displays that
+PDF automatically and labels it **PDF with errors**. Save PDF offers those exact
+bytes as `<root>-partial.pdf`; the partial result does not enable successful
+PDF export, printing or source correspondence. If no new PDF can be read, the
+same project's previous PDF remains visible and is labelled as previous output.
+Without usable output, Logs opens to explain the failure.
 
 The preview shows whether its result is out of date and whether LaTeX is
 preparing, resolving packages, compiling, or rendering the PDF. **Compile**
 starts a build immediately; **Cancel** stops the active compiler. A package
 request already handed to the backend may still finish after cancellation.
-Warnings from a successful build are listed above the PDF and do not prevent
-you from reading or saving it. The compiler output is available with them.
+Warnings from a successful build appear in **Logs** and do not prevent you from
+reading or saving the PDF. The compiler output is available there too.
+
+Click a project warning or error to reveal its source line with a light-red
+highlight. From Preview-only, this opens Split so the source is visible. An
+edit elsewhere does not disable a still-matching location; if the target line
+has changed, compile again to update it. Internal package messages without a
+matching project source location remain visible in Logs.
 
 *Preferences › LaTeX › Auto-compile* is on by default. Turn it off to compile
 only when you select **Compile** in the preview or **Tools › Compile LaTeX**.

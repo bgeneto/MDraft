@@ -267,7 +267,11 @@ async function scrollSourceTo(word) {
       const v=${view};
       const pos=v.state.doc.toString().indexOf(${JSON.stringify(word)});
       const r=v.coordsAtPos(pos);
-      return r ? { top:r.top, paneTop:v.scrollDOM.getBoundingClientRect().top } : null;
+      // Compiler chrome reserves space above the preview, so source top is not
+      // necessarily visible in both panes. Probe the same shared reference as
+      // the solver rather than demanding a word behind the toolbar align.
+      const commonTop=Math.max(v.scrollDOM.getBoundingClientRect().top,document.getElementById('preview-pane').getBoundingClientRect().top);
+      return r ? { top:r.top, paneTop:commonTop } : null;
     })()`);
     if (point) {
       const delta = point.top - point.paneTop - 12;

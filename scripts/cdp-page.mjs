@@ -35,6 +35,7 @@ export async function openPage(port) {
   const pending = new Map();
   const consoleListeners = [];
   const exceptionListeners = [];
+  const eventListeners = [];
 
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
@@ -46,6 +47,9 @@ export async function openPage(port) {
         request.reject(new Error(`CDP ${request.method}: ${message.error.message}`));
       else request.resolve(message);
       return;
+    }
+    if (message.method) {
+      for (const listener of eventListeners) listener(message.method, message.params ?? {});
     }
     // `Runtime.consoleAPICalled` carries the arguments as RemoteObjects; the
     // `value` is present for primitives, `description` for everything else.
@@ -94,6 +98,7 @@ export async function openPage(port) {
   // it is lost forever.
   const onConsole = (listener) => consoleListeners.push(listener);
   const onException = (listener) => exceptionListeners.push(listener);
+  const onEvent = (listener) => eventListeners.push(listener);
   await send("Runtime.enable");
 
   /** Evaluate and return the value, throwing on a rejected promise. */
@@ -109,7 +114,7 @@ export async function openPage(port) {
     return result.result?.result?.value;
   }
 
-  return { send, evaluate, onConsole, onException, close: () => socket.close() };
+  return { send, evaluate, onConsole, onException, onEvent, close: () => socket.close() };
 }
 
 /** Emit a menu event, the way the native menu does. */
