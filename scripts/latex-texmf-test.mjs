@@ -16,7 +16,7 @@
 // Network: the bundled engine downloads standard packages from its pinned
 // mirror, as the other bundled LaTeX layers do; the private files never are.
 
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { emitMenu, openPage, sleep } from "./cdp-page.mjs";
@@ -100,26 +100,157 @@ const pdfText = () =>
     `[...document.querySelectorAll(".typst-page .textLayer")].map((layer) => layer.textContent).join(" ")`,
   );
 
+async function showPreferences() {
+  await page.evaluate(`(() => {
+    if (document.querySelector('.prefs-overlay')?.hidden !== false) document.getElementById('btn-prefs')?.click();
+    [...document.querySelectorAll('.prefs-section')].find(n => n.textContent.trim() === 'LaTeX')?.click();
+  })()`);
+  await waitFor(
+    `!!document.querySelector('.prefs-local-packages') && ![...document.querySelectorAll('.prefs-folder-status')].some(n => n.textContent === 'Checking…')`,
+    10000,
+  );
+}
+
+async function screenshot(name) {
+  const directory = process.env.MDRAFT_COMPILED_UI_SCREENSHOTS;
+  if (!directory) return;
+  mkdirSync(directory, { recursive: true });
+  const result = await page.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+  if (!result.result?.data) throw new Error("Preferences screenshot failed");
+  writeFileSync(join(directory, `${name}.png`), Buffer.from(result.result.data, "base64"));
+}
+
 try {
   if (!(await waitFor('!!document.querySelector(".cm-content")', 30000)))
     throw new Error("Editor did not open.");
-  if ((await invoke("latex_status")).value !== true) {
-    // Same route as the other bundled layers: the Preferences switch
-    // downloads and verifies the engine, then turns it on.
-    await page.evaluate(`(async () => {
-      const open = document.getElementById("btn-prefs"); open?.click();
-      await new Promise((r) => setTimeout(r, 500));
-      [...document.querySelectorAll(".prefs-section")].find((n) => n.textContent.trim() === "LaTeX")?.click();
-      await new Promise((r) => setTimeout(r, 400));
-      const row = [...document.querySelectorAll(".prefs-row")].find((n) => /Enable bundled LuaLaTeX/i.test(n.querySelector(".prefs-label")?.textContent ?? ""));
-      const box = row?.querySelector("input[type=checkbox]"); if (box && !box.checked) box.click();
-      await new Promise((r) => setTimeout(r, 900)); open?.click();
-    })()`);
-    if (!(await waitFor(`window.__TAURI_INTERNALS__.invoke("latex_status")`, 180000))) {
-      console.log("SKIP: the bundled LaTeX engine is not installed in this test profile.");
-      finish();
-    }
+  const defaults = await invoke("latex_texmf_list");
+  check(
+    defaults.ok &&
+      defaults.value.roots.length === 1 &&
+      defaults.value.roots[0].enabled &&
+      defaults.value.roots[0].layout === "packages" &&
+      existsSync(defaults.value.roots[0].resolved),
+    "the default packages folder exists and is registered before Preferences opens",
+  );
+  await showPreferences();
+  const normal = await page.evaluate(`(() => {
+    const block = document.querySelector('.prefs-local-packages');
+    const text = document.querySelector('.prefs-panel').textContent;
+    return { buttons: [...block.querySelectorAll('button')].map(n => n.textContent),
+      additional: !!block.querySelector('.prefs-additional-folders'),
+      noProse: !/Search order|Getting started|Trust and network|Personal folder/.test(text) };
+  })()`);
+  check(
+    normal.buttons.join("|") === "Open|Choose folder…" && !normal.additional,
+    "normal configuration has exactly two folder actions and no additional-folder UI",
+  );
+  check(normal.noProse, "technical paragraphs and the personal-folder category are absent");
+  await screenshot("latex-preferences-normal");
+
+  // Stub only the IPC transport for native dialogs. The production handlers
+  // still run, and a cancelled picker must not call configure at all.
+  await page.evaluate(`(() => {
+    window.__texmfDialogs = { original: window.fetch, next: null, picks: 0, changes: 0 };
+    window.fetch = async function(input, options) {
+      const state = window.__texmfDialogs;
+      const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+      const command = decodeURIComponent(url.pathname.slice(1));
+      if (url.hostname === 'ipc.localhost' && command === 'plugin:dialog|message') {
+        return new Response(JSON.stringify('Ok'), {headers: {'Content-Type':'application/json', 'Tauri-Response':'ok'}});
+      }
+      if (url.hostname === 'ipc.localhost' && command === 'plugin:dialog|open') {
+        state.picks++;
+        return new Response(JSON.stringify(state.next), {headers: {'Content-Type':'application/json', 'Tauri-Response':'ok'}});
+      }
+      if (url.hostname === 'ipc.localhost' && command === 'latex_texmf_configure') state.changes++;
+      return state.original.call(window, input, options);
+    };
+    [...document.querySelectorAll('.prefs-local-packages button')].find(n => n.textContent === 'Choose folder…').click();
+  })()`);
+  await waitFor(
+    `window.__texmfDialogs.picks === 1 && ![...document.querySelectorAll('.prefs-local-packages button')].some(n => n.disabled)`,
+    10000,
+  );
+  check(
+    await page.evaluate(`window.__texmfDialogs.changes === 0`),
+    "cancelling the folder picker leaves the registration untouched",
+  );
+  await page.evaluate(`window.__texmfDialogs.next = ${JSON.stringify(one)};
+    document.querySelector('[data-prefs-focus="primary-choose"]').click();`);
+  const replaced = await waitFor(
+    `document.querySelector('.prefs-folder-path')?.textContent === ${JSON.stringify(one)} &&
+    !document.querySelector('[data-prefs-focus="primary-choose"]').disabled`,
+    10000,
+  );
+  const selected = await invoke("latex_texmf_list");
+  check(
+    replaced &&
+      selected.ok &&
+      selected.value.roots.length === 1 &&
+      selected.value.roots[0].id === defaults.value.roots[0].id &&
+      selected.value.roots[0].layout === "packages",
+    "choosing a folder replaces the primary registration through the real UI",
+  );
+  await page.evaluate(`window.__texmfDialogs.next = ${JSON.stringify(join(library, "missing"))};
+    document.querySelector('[data-prefs-focus="primary-choose"]').click();`);
+  await waitFor(
+    `window.__texmfDialogs.picks === 3 && !document.querySelector('[data-prefs-focus="primary-choose"]').disabled`,
+    10000,
+  );
+  check(
+    await page.evaluate(
+      `window.__texmfDialogs.changes === 1 && document.querySelector('.prefs-folder-path').textContent === ${JSON.stringify(one)}`,
+    ),
+    "an unavailable choice leaves the working folder unchanged",
+  );
+  await page.evaluate(
+    `window.fetch = window.__texmfDialogs.original; delete window.__texmfDialogs;`,
+  );
+
+  await page.evaluate(`document.querySelector('[data-prefs-focus="primary-enabled"]').focus()`);
+  for (const type of ["keyDown", "keyUp"]) {
+    await page.send("Input.dispatchKeyEvent", {
+      type,
+      key: " ",
+      code: "Space",
+      windowsVirtualKeyCode: 32,
+    });
   }
+  check(
+    await waitFor(
+      `document.activeElement?.dataset.prefsFocus === 'primary-enabled' &&
+    !document.activeElement.disabled && !document.activeElement.checked`,
+      10000,
+    ),
+    "keyboard toggle keeps focus after the asynchronous configuration update",
+  );
+  for (const type of ["keyDown", "keyUp"]) {
+    await page.send("Input.dispatchKeyEvent", {
+      type,
+      key: " ",
+      code: "Space",
+      windowsVirtualKeyCode: 32,
+    });
+  }
+  await waitFor(
+    `document.querySelector('[data-prefs-focus="primary-enabled"]').checked &&
+    !document.querySelector('[data-prefs-focus="primary-enabled"]').disabled`,
+    10000,
+  );
+  await invoke("latex_texmf_configure", { action: { type: "setPrimary" } });
+
+  const defaultId = defaults.value.roots[0].id;
+  await invoke("latex_texmf_configure", {
+    action: { type: "setLayout", id: defaultId, layout: "tds" },
+  });
+  const tds = await invoke("latex_texmf_list");
+  check(
+    tds.ok && tds.value.roots[0].resolved === defaults.value.personalPath,
+    "TEXMF mode selects the standard tree root without adding a second library",
+  );
+  // The precedence fixture below deliberately owns exactly two external roots.
+  await invoke("latex_texmf_configure", { action: { type: "remove", id: defaultId } });
+  await page.evaluate(`document.getElementById('btn-prefs')?.click()`);
   await emitMenu(page, "view.split");
 
   // ---- registration and inspection -----------------------------------------
@@ -167,6 +298,105 @@ try {
     "the shadowed package in root 1 is reported, not blocked",
   );
 
+  // Preferences shows the group, its rows and its search terms.
+  await page.evaluate(`(async () => {
+    document.getElementById("btn-prefs")?.click();
+    await new Promise((r) => setTimeout(r, 500));
+    [...document.querySelectorAll(".prefs-section")].find((n) => n.textContent.trim() === "LaTeX")?.click();
+  })()`);
+  // The rows load the registered list asynchronously when the section is drawn.
+  await waitFor(
+    `(document.querySelector(".prefs-panel")?.textContent ?? "").includes("one-packages")`,
+    10000,
+  );
+  const prefs = await page.evaluate(`document.querySelector(".prefs-panel")?.textContent ?? ""`);
+  check(prefs.includes("Local packages"), "Preferences › LaTeX shows the library group");
+  check(
+    prefs.includes("zero-texmf") && prefs.includes("one-packages"),
+    "both folders are listed in order",
+  );
+  check(
+    await page.evaluate(`(() => {
+      const details = document.querySelector('.prefs-additional-folders');
+      return details && !details.open && details.querySelector('summary').textContent === 'Additional folders (1)';
+    })()`),
+    "existing additional folders are preserved behind a collapsed disclosure",
+  );
+  await page.evaluate(`document.querySelector('.prefs-additional-folders > summary').click()`);
+  check(
+    await page.evaluate(
+      `document.querySelector('.prefs-additional-folders').open && !!document.querySelector('summary[aria-label="Actions for one-packages"]')`,
+    ),
+    "additional folders have accessible overflow actions",
+  );
+  await screenshot("latex-preferences-existing-folders");
+  await page.evaluate(`document.querySelector('.prefs-additional-folders > summary').click();
+    document.querySelector('.prefs-panel').style.width = '420px'; window.dispatchEvent(new Event('resize'));`);
+  await sleep(250);
+  check(
+    await page.evaluate(`(() => {
+    const panel = document.querySelector('.prefs-content');
+    return panel.scrollWidth <= panel.clientWidth + 1;
+  })()`),
+    "the folder control fits a narrow Preferences panel",
+  );
+  await page.evaluate(
+    `document.querySelector('.prefs-local-packages').scrollIntoView({ block: 'start' })`,
+  );
+  await screenshot("latex-preferences-narrow");
+  await page.evaluate(
+    `document.querySelector('.prefs-panel').style.width = ''; window.dispatchEvent(new Event('resize'));`,
+  );
+  check(
+    await page.evaluate(`(() => {
+    const search = document.querySelector('.prefs-search');
+    search.value = 'TEXMF'; search.dispatchEvent(new Event('input', { bubbles: true }));
+    const found = !!document.querySelector('.prefs-local-packages');
+    search.value = ''; search.dispatchEvent(new Event('input', { bubbles: true }));
+    return found;
+  })()`),
+    "Preferences search finds the complete folder control by TEXMF",
+  );
+  check(
+    await page.evaluate(
+      `[...document.querySelectorAll('.prefs-label:has(.prefs-help)')].every(n => n.textContent.replace(/\\?/g, '').trim())`,
+    ),
+    "help icons always accompany a visible label",
+  );
+  await page.evaluate(`document.getElementById("btn-prefs")?.click()`);
+
+  if ((await invoke("latex_status")).value !== true) {
+    // Installation can exceed CDP's per-request deadline on a cold cache.
+    await page.evaluate(`(() => {
+      window.__texmfInstall = { done: false, error: null };
+      window.__TAURI_INTERNALS__.invoke('install_latex').then(
+        () => { window.__texmfInstall.done = true; },
+        error => { window.__texmfInstall.error = String(error); window.__texmfInstall.done = true; }
+      );
+    })()`);
+    if (!(await waitFor("window.__texmfInstall.done", 180000)))
+      throw new Error("Engine setup exceeded 180 seconds");
+    const error = await page.evaluate("window.__texmfInstall.error");
+    if (error) throw new Error(`Could not prepare the bundled engine: ${error}`);
+    // Synchronize the frontend's settings copy through its own checkbox.
+    await showPreferences();
+    await page.evaluate(`(() => {
+      const row = [...document.querySelectorAll('.prefs-row')].find(n => n.querySelector('.prefs-label')?.textContent.includes('Enable bundled LuaLaTeX'));
+      const checkbox = row?.querySelector('input[type=checkbox]');
+      if (checkbox && !checkbox.checked) checkbox.click();
+    })()`);
+    if (
+      !(await waitFor(
+        `(() => {
+      const row = [...document.querySelectorAll('.prefs-row')].find(n => n.querySelector('.prefs-label')?.textContent.includes('Enable bundled LuaLaTeX'));
+      return row?.querySelector('input[type=checkbox]')?.checked;
+    })()`,
+        10000,
+      ))
+    )
+      throw new Error("Bundled engine switch did not update");
+    await page.evaluate(`document.getElementById('btn-prefs')?.click()`);
+  }
   // ---- the bundled engine, through the real preview -------------------------
   await emitMenu(page, "view.latexCompile");
   const rendered = await waitFor(
@@ -184,32 +414,6 @@ try {
     ),
     "the preview reports a current PDF",
   );
-
-  // Preferences shows the group, its rows and its search terms.
-  await page.evaluate(`(async () => {
-    document.getElementById("btn-prefs")?.click();
-    await new Promise((r) => setTimeout(r, 500));
-    [...document.querySelectorAll(".prefs-section")].find((n) => n.textContent.trim() === "LaTeX")?.click();
-  })()`);
-  // The rows load the registered list asynchronously when the section is drawn.
-  await waitFor(
-    `(document.querySelector(".prefs-panel")?.textContent ?? "").includes("one-packages")`,
-    10000,
-  );
-  const prefs = await page.evaluate(`document.querySelector(".prefs-panel")?.textContent ?? ""`);
-  check(
-    prefs.includes("Local packages and classes"),
-    "Preferences › LaTeX shows the library group",
-  );
-  check(
-    prefs.includes("zero-texmf") && prefs.includes("one-packages"),
-    "both folders are listed in order",
-  );
-  check(
-    /Remove one-packages/.test(prefs) && /Move zero-texmf up/.test(prefs),
-    "each folder has labelled actions",
-  );
-  await page.evaluate(`document.getElementById("btn-prefs")?.click()`);
 
   // ---- a second, unrelated project captures the same library ----------------
   const second = resolve("samples/latex-texmf/second/main.tex");

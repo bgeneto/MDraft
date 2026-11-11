@@ -808,6 +808,7 @@ export interface LatexTexmfSnapshot {
 export type LatexTexmfAction =
   | { type: "addFolder"; path: string; layout?: LatexTexmfLayout }
   | { type: "usePersonal" }
+  | { type: "setPrimary"; path?: string; layout?: LatexTexmfLayout }
   | { type: "setEnabled"; id: string; enabled: boolean }
   | { type: "setLayout"; id: string; layout: LatexTexmfLayout }
   | { type: "move"; id: string; offset: -1 | 1 }

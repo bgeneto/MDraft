@@ -2058,8 +2058,9 @@ let latexWslCandidates: api.LatexWslCandidate[] | null = null;
 let texmfConfig: api.LatexTexmfConfig | null = null;
 /** The latest inspection per library id. */
 const texmfReports = new Map<string, api.LatexTexmfReport>();
-/** The library id (or "all"/"add") an inspection or action is running for. */
+/** The library id or operation currently reading/changing local packages. */
 let texmfBusyId: string | null = null;
+let texmfError: string | null = null;
 /** When the library list and reports were last read. */
 let texmfLoadedAt = 0;
 /** The library revision the current LaTeX preview was compiled from. */
@@ -2829,8 +2830,7 @@ function focusLocalLibraries(): void {
   window.setTimeout(() => {
     const heading = [...document.querySelectorAll<HTMLElement>(".prefs-panel *")].find(
       (element) =>
-        element.children.length === 0 &&
-        element.textContent?.trim() === "Local packages and classes",
+        element.children.length === 0 && element.textContent?.trim() === "Local packages",
     );
     if (!heading) return;
     heading.scrollIntoView({ block: "start" });
@@ -2848,6 +2848,8 @@ function focusLocalLibraries(): void {
 
 async function refreshTexmf(ids?: string[]): Promise<void> {
   texmfBusyId = ids?.[0] ?? "all";
+  texmfError = null;
+  texmfLoadedAt = Date.now();
   try {
     texmfConfig = await api.latexTexmfList();
     texmfLoadedAt = Date.now();
@@ -2856,13 +2858,17 @@ async function refreshTexmf(ids?: string[]): Promise<void> {
       if (report.id) texmfReports.set(report.id, report);
     }
   } catch (error) {
-    toast(`Could not check the local libraries: ${String(error)}`, 7200);
+    texmfError = `Could not check the folder: ${String(error)}`;
   } finally {
+    texmfLoadedAt = Date.now();
     texmfBusyId = null;
   }
 }
 
 async function texmfConfigure(action: api.LatexTexmfAction): Promise<boolean> {
+  if (texmfBusyId !== null) return false;
+  texmfBusyId = "configure";
+  preferences.refresh();
   try {
     texmfConfig = await api.latexTexmfConfigure(action);
     settings.latexTexmfRoots = texmfConfig.roots.map(({ id, kind, path, layout, enabled }) => ({
@@ -2876,9 +2882,13 @@ async function texmfConfigure(action: api.LatexTexmfAction): Promise<boolean> {
     await refreshTexmf();
     return true;
   } catch (error) {
-    await message(String(error), { title: "Could not change the local libraries", kind: "error" });
+    await message(String(error), {
+      title: "Could not change the local packages folder",
+      kind: "error",
+    });
     return false;
   } finally {
+    texmfBusyId = null;
     preferences.refresh();
   }
 }
@@ -2904,7 +2914,17 @@ async function checkLibrariesOnFocus(): Promise<void> {
     texmfFocusCheck = false;
   }
 }
-window.addEventListener("focus", () => void checkLibrariesOnFocus());
+window.addEventListener("focus", () => {
+  void checkLibrariesOnFocus();
+  if (
+    preferences.isOpen() &&
+    document.querySelector(".prefs-local-packages") &&
+    texmfBusyId === null &&
+    Date.now() - texmfLoadedAt > 2000
+  ) {
+    void refreshTexmf().then(() => preferences.refresh());
+  }
+});
 
 async function validateWslInstallation(distro: string, bin: string): Promise<void> {
   const notice = toast(`Validating ${bin} in ${distro}…`, 0);
@@ -10322,6 +10342,7 @@ async function boot(): Promise<void> {
     texmfStale: () => Date.now() - texmfLoadedAt > 2000,
     texmfReport: (id) => texmfReports.get(id),
     texmfBusy: () => texmfBusyId,
+    texmfError: () => texmfError,
     refreshTexmf: async (ids) => {
       await refreshTexmf(ids);
       preferences.refresh();
@@ -10329,47 +10350,32 @@ async function boot(): Promise<void> {
     texmfAction: async (action) => {
       await texmfConfigure(action);
     },
-    texmfAddFolder: async () => {
-      const picked = await openDialog({
-        directory: true,
-        multiple: false,
-        title: "Choose a TEXMF tree or a folder of LaTeX packages",
-      });
-      if (typeof picked !== "string" || !picked) return;
-      texmfBusyId = "add";
+    texmfChooseFolder: async () => {
+      if (texmfBusyId !== null) return;
+      texmfBusyId = "choose";
       preferences.refresh();
       try {
+        const picked = await openDialog({
+          directory: true,
+          multiple: false,
+          title: "Choose local packages folder",
+        });
+        if (typeof picked !== "string" || !picked) return;
         const [report] = await api.latexTexmfInspect({ candidate: picked });
-        if (!report || ["missing", "unreadable", "oversized"].includes(report.status)) {
-          await message(report?.message ?? "This folder cannot be read.", {
-            title: "This folder cannot be added",
+        if (!report || !["ok", "empty"].includes(report.status)) {
+          await message(report?.message ?? "This folder cannot be used.", {
+            title: "Could not use the folder",
             kind: "error",
           });
           return;
         }
-        const layout = report.layout === "tds" ? "a TEXMF tree" : "a folder of packages";
-        const conflicts = report.issues
-          .filter((issue) => issue.severity === "error")
-          .map((issue) => `\n• ${issue.message} ${issue.paths.join(", ")}`)
-          .join("");
-        const confirmed = await ask(
-          `${report.path}\n\nLooks like ${layout}: ${report.names.classes.length} classes, ${report.names.packages.length} packages, ${report.files} files.${conflicts ? `\n\nFix before compiling:${conflicts}` : ""}\n\nNothing is copied; you can change the layout in Preferences afterwards.`,
-          { title: "Add this folder to the search order?", kind: "info", okLabel: "Add folder" },
-        );
-        if (!confirmed) return;
         texmfBusyId = null;
-        await texmfConfigure({ type: "addFolder", path: picked, layout: report.layout });
+        await texmfConfigure({ type: "setPrimary", path: picked, layout: report.layout });
       } catch (error) {
-        await message(String(error), { title: "Could not add the folder", kind: "error" });
+        await message(String(error), { title: "Could not choose the folder", kind: "error" });
       } finally {
         texmfBusyId = null;
         preferences.refresh();
-      }
-    },
-    texmfUsePersonal: async () => {
-      if (await texmfConfigure({ type: "usePersonal" })) {
-        const personal = texmfConfig?.roots.find((root) => root.kind === "personal");
-        if (personal) await api.latexTexmfOpen(personal.id).catch(() => undefined);
       }
     },
     texmfOpen: async (id) => {
