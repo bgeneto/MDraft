@@ -55,8 +55,11 @@ install it for you on Windows and Linux.
 
 LaTeX is opt-in: enabling the bundled engine downloads about 10 MiB of verified
 LuaLaTeX files, and the TeX packages a document needs are fetched on demand and
-cached locally. *Preferences › LaTeX* can instead use a TeX distribution already
-on the computer, after MDraft has validated it; that engine runs with the
+cached locally. Your own classes and packages can live in folders registered
+once under *Preferences › LaTeX › Local packages and classes* and are found by
+every project, with either engine. *Preferences › LaTeX* can instead use a TeX
+distribution already on the computer — including TeX Live inside a WSL
+distribution on Windows — after MDraft has validated it; that engine runs with the
 reader's permissions; it may use the network to install its own packages, while
 shell escape remains disabled. MDraft itself makes no network request to run a
 native compile. Nothing about your document leaves this device unless the

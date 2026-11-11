@@ -288,3 +288,26 @@ and start bisecting it. Check for another `node … test-all.mjs` or `vite`
 process first (`Get-CimInstance Win32_Process -Filter "Name='node.exe'"`), wait
 for it to finish, and rerun; the harness's own refusal of a second harness does
 not cover a plain `npm run build` in the other session.
+
+**A WSL test fails with `Access is denied. Error code: Wsl/E_ACCESSDENIED` (wsl.exe exit -1) while the same `wsl.exe` command works in a terminal**
+Not a launcher, quoting or automount bug. The `cargo test` binary lives under the
+Low-integrity-labelled workspace, so it runs at Low integrity (see the `T:\Temp`
+entry above), and the WSL service refuses Low-integrity callers. The first
+version of the error said only "cannot reach … check automount", which pointed at
+`/etc/wsl.conf`; the exit status and wsl.exe's own text are now part of the
+message. Run WSL tests from a Medium copy of the test binary:
+`Copy-Item src-tauri\target\debug\deps\mdraft_lib-<hash>.exe T:\Temp\mdraft-wsl-medium\`,
+then `& T:\Temp\mdraft-wsl-medium\mdraft_lib-….exe --ignored a_wsl_distribution --nocapture`
+with `MDRAFT_TEST_WSL_DISTRO` set. The installed application runs at Medium and
+is not affected.
+
+**`git diff --stat` shows a whole-file rewrite (e.g. `1779 + / 1725 -` for `latex.rs`) after a few small scripted edits**
+Not a bad merge. Python's text mode on Windows writes `\r\n`, and this repository
+keeps `core.autocrlf=false` with LF in the index for most files — so a Python
+`open(p).read() … open(p, "w").write()` edit converts every line. A few files are
+stored with CRLF instead (`git ls-files --eol` shows `i/crlf`, e.g.
+`src-tauri/src/settings.rs`), so "convert back to LF" is also wrong for them.
+Check `git ls-files --eol -- <file>` and make `w/` match `i/`; edit with the Edit
+tool, `node` (`fs.writeFileSync` keeps `\n`) or Python with `newline=""`. Compare
+`git diff --numstat` with `git diff --ignore-cr-at-eol --numstat` before trusting
+a diff size.

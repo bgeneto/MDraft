@@ -122,12 +122,96 @@ cache* and *Cache limit* apply only to the bundled engine. If a package is
 missing, install it with the distribution's own tools and compile again; MDraft
 neither updates the distribution nor downloads its packages.
 
+On Windows, a choice of distribution — even a portable MiKTeX — no longer opens
+console windows: every engine, probe and helper runs without one.
+
+### TeX Live inside WSL
+
+On Windows, **Find installation…** also lists your WSL distributions. It reads
+the registry only, so nothing starts. **Look for TeX in WSL: <name>…** is the
+explicit step that starts that distribution (if it is stopped) and looks for
+`lualatex`, `pdflatex` and `xelatex` in `/usr/bin`, `/usr/local/bin`,
+`/usr/local/texlive/<year>/bin/<arch>` and `~/.TinyTeX/bin`. Validation then
+runs the same version probes and probe compile, inside the distribution.
+
+A WSL build stages the project on the Windows side, as usual, and runs the
+engine with `wsl.exe --exec` — no shell, no login profile — with an exact Linux
+environment and a `PATH` that leaves out the Windows `PATH`. The engine runs as
+your Linux user and can read the Windows drives mounted in that distribution.
+Cancel and the time limit end the engine inside the distribution too. The first
+compile after the distribution stopped takes a few seconds longer while WSL
+starts it.
+
+## Local packages and classes
+
+*Preferences › LaTeX › Local packages and classes* registers folders of your own
+classes, packages, styles and fonts once, for every project:
+
+- **Create personal folder…** creates `texmf/tex/latex/local` inside MDraft's
+  settings folder, adds it to the list and opens it. A portable build keeps it
+  beside its settings. Repeating the action only opens it.
+- **Add folder…** takes an existing TEXMF tree (for example `~/texmf`, or
+  `\\wsl.localhost\<distro>\home\<you>\texmf` for a tree inside WSL) or a plain
+  folder of `.sty`/`.cls` files with any subfolders. The folder is checked before
+  it is added and shows its classes and packages; nothing is copied, and you
+  can correct the detected layout afterwards.
+
+In a TEXMF tree, give each package its own folder:
+
+    texmf/
+      tex/latex/my-package/my-package.sty
+      tex/latex/my-class/my-class.cls
+      bibtex/bst/my-style/my-style.bst
+      fonts/opentype/my-font/MyFont.otf
+
+**Search order:** project files first, then the enabled folders from top to
+bottom, then the engine's standard packages. Within a TEXMF tree the
+engine-specific directories (`tex/lualatex`, `tex/xelatex`) come before
+`tex/latex` and `tex/generic`, as in TeX Live. A folder that provides the same
+name as one above it is reported as shadowed, not blocked; two files with the
+same name inside one folder are a conflict you have to resolve, because which
+one TeX would load is arbitrary.
+
+What a library may contain: classes, packages, `.def`/`.cfg`/`.fd` files and
+package data under `tex/`, Lua modules under `scripts/` or `tex/`, BibTeX styles
+and databases under `bibtex/`, and fonts under `fonts/` loaded **by file name**
+(`\setmainfont{MyFont.otf}`). Not captured: `doc/`, `source/`, `web2c/`, `bin/`,
+hidden files, links and junctions, executables, `texmf.cnf`, format dumps and
+compiled Lua. Font *family* names of private fonts are not registered.
+
+How each engine sees them — you set no `TEXMFHOME` or `TEXINPUTS` yourself:
+
+| Engine | How the folders are passed | Verified |
+| --- | --- | --- |
+| Bundled LuaLaTeX | Through the engine's in-memory file system, searched before its package mirror | classes, packages, `.def`, Lua, fonts, BibTeX |
+| TeX Live (Linux, macOS, Windows, WSL) | A private `TEXMFHOME` list in the job | TeX Live 2025: LuaLaTeX, pdfLaTeX; BibTeX |
+| MiKTeX | Private `TEXINPUTS`/`BSTINPUTS`/`BIBINPUTS`/`LUAINPUTS`/font paths in the job | MiKTeX 23.1: LuaLaTeX, pdfLaTeX, XeLaTeX; BibTeX |
+
+Every compile reads the enabled folders afresh into a private copy, so a
+library is never changed by MDraft, never registered with your distribution,
+and never evicted with the package cache. An enabled folder that is missing,
+unreadable or too large stops the compile with a message; turn it off to
+compile without it. Limits: 8 folders, 4,096 files and 64 MiB together, 32 MiB
+per file, 16 levels.
+
+With the bundled engine, a library `.bst` or `.bib` is found when the document
+or a class names it literally (`\bibliographystyle{house}`); a computed name is
+not. A project file of the same name always wins.
+
+Changing the list, or editing a library file in another program, marks the
+preview out of date when MDraft regains focus; auto-compile rebuilds, manual
+mode waits for **Compile**. Local class and package names appear in completion
+after the next compile, marked *Local*. Exports to other formats never include
+library files. **Remove** only takes a folder off the list; it never deletes it.
+
 ## The project
 
 The project root is the main file's directory. The application reads the
 references the document declares — `\input`, `\include`, `\includegraphics`,
-`\bibliography`, `\addbibresource`, and local `\documentclass`/`\usepackage`
-files — rather than copying the whole directory tree, and it does not expand
+`\bibliography`, `\bibliographystyle`, `\addbibresource`, and local
+`\documentclass`/`\usepackage` files, including the `\LoadClass` and
+`\RequirePackage` (and `…WithOptions`) loads inside a local class or package —
+rather than copying the whole directory tree, and it does not expand
 arbitrary TeX macros to discover files. A reference
 that escapes the root is an error with a plain message. Literal directories in
 the main file's preamble, such as `\graphicspath{{figures/}{images/}}`, are
