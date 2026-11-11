@@ -920,8 +920,21 @@ export function renderMermaidError(container: HTMLElement, error: unknown): void
   container.replaceChildren(box);
 }
 
-/** Fill every `.mermaid[data-mermaid]` element inside `root`. */
-export async function renderMermaidIn(root: HTMLElement, isDark: boolean): Promise<void> {
+/**
+ * Fill every `.mermaid[data-mermaid]` element inside `root`.
+ *
+ * `cancelled` is checked before every write. A theme change re-runs this over
+ * the committed preview while an earlier pass may still be awaiting
+ * `mermaid.render`; without the check the older pass would paint diagrams in
+ * the theme the reader just left. A cancelled result is not cached either:
+ * `initialize` is global, so a render that straddled the newer pass's
+ * `initialize` may carry the other theme's colours.
+ */
+export async function renderMermaidIn(
+  root: HTMLElement,
+  isDark: boolean,
+  cancelled: () => boolean = () => false,
+): Promise<void> {
   const blocks = Array.from(root.querySelectorAll<HTMLElement>(".mermaid[data-mermaid]"));
   if (blocks.length === 0) return;
 
@@ -937,6 +950,7 @@ export async function renderMermaidIn(root: HTMLElement, isDark: boolean): Promi
     const code = block.getAttribute("data-mermaid") ?? "";
     const key = `${isDark ? "dark" : "light"}\u0000${code}`;
 
+    if (cancelled()) return;
     const cached = mermaidCache.get(key);
     if (cached) {
       block.innerHTML = cached;
@@ -945,6 +959,7 @@ export async function renderMermaidIn(root: HTMLElement, isDark: boolean): Promi
 
     try {
       const { svg } = await mermaid.render(`mmd-${++mermaidSequence}`, code);
+      if (cancelled()) return;
       mermaidCache.set(key, svg);
       block.innerHTML = svg;
     } catch (error) {

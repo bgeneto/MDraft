@@ -151,12 +151,18 @@ async function menu(id) {
   await sleep(320);
 }
 
-async function connectGuest(expectedSrc = null) {
+/**
+ * Connect to the active guest. With `expectedSrc`, wait for a different frame —
+ * but only for `graceMs`: an unchanged document keeps its guest (the freshness
+ * key skips the rebuild), so after the grace period the same frame is accepted.
+ */
+async function connectGuest(expectedSrc = null, graceMs = Infinity) {
+  const started = Date.now();
   for (let i = 0; i < 120; i += 1) {
     const src = await page.evaluate(
       `document.querySelector('.html-preview-frame.active')?.src ?? null`,
     );
-    if (src && (!expectedSrc || src !== expectedSrc)) {
+    if (src && (!expectedSrc || src !== expectedSrc || Date.now() - started > graceMs)) {
       const target = (await targets()).find(
         (candidate) => candidate.type === "iframe" && candidate.url.startsWith(src),
       );
@@ -535,8 +541,9 @@ try {
       await menu("view.split");
       await sleep(350);
       if (mode === "html") {
-        // Returning to Split re-renders the guest; the old iframe target is gone.
-        guest = await connectGuest(previousSrc);
+        // Returning to Split keeps an unchanged guest (its freshness key
+        // matches) and replaces a changed one; follow whichever is active.
+        guest = await connectGuest(previousSrc, 1500);
         await sleep(400);
       }
       const oldTop = await previewTop();

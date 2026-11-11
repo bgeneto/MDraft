@@ -1031,6 +1031,7 @@ function scriptedEditor(context) {
 const shellNoops = [
   "stopReadAloud",
   "invalidatePreview",
+  "restorePreview",
   "applyLatexMarks",
   "syncGuest",
   "resetOutline",
@@ -1714,6 +1715,9 @@ for (const autoCompile of [false, true]) {
     latexInFlight: true,
     previewStale: false,
     preview: { dataset: { latexCurrent: "7" } },
+    // The engine change also empties the compiled-output store and the key.
+    latexStore: { clear() {} },
+    committedKey: "k",
     window: { clearTimeout() {} },
     cancelLatex() {},
     discardStagedPdf() {},

@@ -77,6 +77,8 @@
     "preview:unit": "node scripts/preview-render-unit.mjs",
     "preview:worker:unit": "node scripts/preview-worker-unit.mjs",
     "preview-owner:unit": "node scripts/preview-owner-unit.mjs",
+    "preview-freshness:unit": "node scripts/preview-freshness-unit.mjs",
+    "preview-store:unit": "node scripts/preview-store-unit.mjs",
     "preview:dom": "node scripts/preview-dom-test.mjs",
     "preview:perf": "node scripts/preview-performance-test.mjs",
     "typewriter": "node scripts/typewriter-test.mjs",
