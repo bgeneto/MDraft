@@ -213,3 +213,50 @@ entries above describe the withdrawn isolation experiment. The current design
 runs the selected engine directly, allows MiKTeX to install its own packages, and
 keeps shell escape disabled; see
 `docs/adr/2026-11-08-native-tex-user-responsibility.md`.
+
+**The PDF prints `-- Module luavlna` and reports `Missing \begin{document}` / `Missing $ inserted` under `/tex/luavlna`**
+The bundled worker uses format-qualified lookup keys, but cached extensionless
+TeX and Lua lookups in the same flat `/tex/luavlna` file. Portuguese polyglossia
+loads both `luavlna.lua` and `luavlna.tex`; Lua source was then read by `\input`
+and typeset, producing 50 misleading package diagnostics. The almost wrong
+conclusion was that the UI had misattributed a document error or removed its
+source link. The raw transcript showed `l.1 -- Module luavlna`, and the cached
+`.sty` showed `\input luavlna`. Keep `.tex` and `.lua` on the worker's physical
+cache filenames, including preloads. The local bootstrap compatibility hook
+does this without altering the verified downloaded assets or their hashes;
+the SDK unit and a real Portuguese polyglossia fixture pin both paths.
+
+**An error names the right `.tex` file but has no line or clickable source link, although the raw log has `l.19 \header`**
+The SDK's error parser searches only five lines after `! ...`. Ordinary LaTeX
+help text can already put the pointer farther away. The missing line is not
+proof that the compiler supplied none. Recover the pointer inside that error's
+own block; stop at another error or warning, preserve an existing SDK line,
+and consume repeated-message pointers in order before deduplicating. A raw
+transcript from the reported project exposed this after the Lua cache problem
+was fixed. Do not invent a source file for internal package errors.
+
+**A class's logo or QR image is reported missing even though the image exists beside the main file**
+The bounded snapshot follows declared references instead of copying the whole
+directory. `\customimage{qr.png}` and a class constant `{ school_logo }` hide
+the filename from the normal `\includegraphics` scan. Comparing the snapshot's
+file list with the existing files revealed the omission; the almost wrong
+conclusion was that the reader had a missing image. File-like literal graphics
+arguments/defaults now pass through the same root, symlink and size checks as
+ordinary graphics references. Comments, literal examples and unnamed sibling
+images stay excluded; computed TeX filenames still are not evaluated.
+
+**The diagnostic jump works but the source line stays gray instead of pink**
+Clicking a diagnostic makes its line CodeMirror's active line. The theme's
+active-line background outranked `.cm-latex-error-line`; a probe that only
+checked for a nontransparent background falsely passed with
+`rgba(255, 255, 255, 0.05)`. Inspect the actual computed color, not just the
+presence of the mark class. Scope the diagnostic wash to
+`.cm-editor .cm-line.cm-latex-error-line` so it wins over active-line styling,
+and verify that its red channel exceeds green and blue in light/dark themes.
+
+**The partial-PDF test reports `this failure returned no partial PDF` while the preview is still rendering it**
+Logs are published before the asynchronous PDF render completes. Waiting only
+for `.typst-error` let the suite sample `data-latex-partial` too early and skip
+all partial-save checks. This almost looked like the compiler had stopped
+returning PDF bytes. Wait for the compiler action to return from Cancel to
+Compile as well as the error log before checking the committed partial output.

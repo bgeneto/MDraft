@@ -915,6 +915,36 @@ fn declared_references(text: &str) -> Vec<(String, String)> {
                 }
             }
         }
+        // Custom classes accept assets through commands such as
+        // `\qrcode{qrcode.png}` and constants such as `{ logo_unb_vert }`.
+        // They are still literal names. Reuse the confined graphics resolver
+        // for file-like arguments instead of copying unrelated sibling files.
+        let mut starts = Vec::new();
+        for (index, ch) in chars.iter().enumerate() {
+            if *ch == '{' {
+                starts.push(index);
+            } else if *ch == '}'
+                && let Some(start) = starts.pop()
+            {
+                let argument: String = chars[start + 1..index].iter().collect();
+                let name = argument.trim().trim_start_matches("./");
+                let lower = name.to_ascii_lowercase();
+                let image_suffix = [".pdf", ".png", ".jpg", ".jpeg"]
+                    .iter()
+                    .any(|suffix| lower.ends_with(suffix));
+                let bare_file_name = name.contains('_')
+                    && !name.contains('.')
+                    && !name.chars().any(char::is_whitespace);
+                if (image_suffix || bare_file_name)
+                    && literal_reference(name)
+                    && !out
+                        .iter()
+                        .any(|(kind, existing)| kind == "includegraphics" && existing == name)
+                {
+                    out.push(("includegraphics".to_string(), name.to_string()));
+                }
+            }
+        }
     }
     out
 }
@@ -1486,6 +1516,52 @@ mod tests {
             !names.contains(&"draft.tex".to_string()),
             "an unreferenced file is not collected: {names:?}"
         );
+    }
+
+    #[test]
+    fn class_macro_graphics_are_collected_without_unrelated_images() {
+        let root = scratch("macro-graphics");
+        fs::write(root.join("main.tex"), "\\documentclass{assessment}\n\\qrcode{qrcode.png}\n% \\logo{ignored.png}\n\\texttt{example.png}").unwrap();
+        fs::write(
+            root.join("assessment.cls"),
+            "\\tl_gset:Nn \\g_logo_tl { logo_unb_vert }\n\\includegraphics{\\g_logo_tl}",
+        )
+        .unwrap();
+        fs::write(root.join("qrcode.png"), b"qr binary").unwrap();
+        fs::write(root.join("logo_unb_vert.jpg"), b"logo binary").unwrap();
+        for name in ["unused.png", "ignored.png", "example.png"] {
+            fs::write(root.join(name), b"not referenced").unwrap();
+        }
+        let (files, skipped, _) = collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
+        assert!(skipped.is_empty());
+        assert_eq!(
+            files
+                .iter()
+                .find(|(path, _)| path.ends_with("qrcode.png"))
+                .unwrap()
+                .1,
+            b"qr binary"
+        );
+        assert_eq!(
+            files
+                .iter()
+                .find(|(path, _)| path.ends_with("logo_unb_vert.jpg"))
+                .unwrap()
+                .1,
+            b"logo binary"
+        );
+        assert_eq!(
+            files.len(),
+            4,
+            "only the source, class and named images are read"
+        );
+        assert!(
+            declared_references(
+                "\\qrcode{../outside.png}\n\\qrcode{C:/private.png}\n\\qrcode{/private.png}"
+            )
+            .is_empty()
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
