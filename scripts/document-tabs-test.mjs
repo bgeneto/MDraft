@@ -281,6 +281,7 @@ try {
         weight: Number(getComputedStyle(tab.querySelector(".doc-tab-name")).fontWeight),
         edge: style.borderTopColor,
         edgeWidth: style.borderTopWidth,
+        pixelRatio: window.devicePixelRatio,
       };
     })`,
   );
@@ -291,8 +292,12 @@ try {
   // The accent is a thicker top border, not an inset shadow, so it follows the
   // rounded corners. Asserting the thickness and the colour against an inactive
   // tab keeps the check independent of which accent colour the theme picked.
+  // Used border widths snap to device pixels: a 2px rule can be 1.81818px at
+  // fractional scaling. It must still be thicker and within one device pixel.
   check(
-    activeStyle.edgeWidth === "2px" && activeStyle.edge !== inactiveStyle.edge,
+    Number.parseFloat(activeStyle.edgeWidth) > Number.parseFloat(inactiveStyle.edgeWidth) &&
+      Math.abs(Number.parseFloat(activeStyle.edgeWidth) - 2) < 1 / activeStyle.pixelRatio &&
+      activeStyle.edge !== inactiveStyle.edge,
     "the active tab carries its accent edge",
     `${activeStyle.edgeWidth} ${activeStyle.edge} vs ${inactiveStyle.edge}`,
   );

@@ -327,8 +327,26 @@ check(
 check("every section has rows", prefs.emptySections === "");
 check("rows rendered", prefs.totalRows >= 24);
 check("controls present", prefs.selects >= 2 && prefs.checkboxes >= 2 && prefs.buttons >= 1);
+check(
+  "Typst offers an auto-compile preference",
+  prefs.perSection.some((section) => section.labels.includes("Auto-compile Typst")),
+);
 check("default extension offers Typst", prefs.defaultExtensionOptions.includes("typ"));
 check("search box present", prefs.hasSearch);
+const typstAutoPreference = await evaluate(`(async () => {
+  const before=await window.__TAURI_INTERNALS__.invoke('get_settings');
+  [...document.querySelectorAll('.prefs-section')].find(button=>button.textContent==='Export').click();
+  const row=[...document.querySelectorAll('.prefs-row')].find(row=>row.querySelector('.prefs-label')?.textContent.includes('Auto-compile Typst'));
+  const input=row?.querySelector('input[type=checkbox]');
+  if(!input)return false;
+  input.click();
+  await new Promise(resolve=>setTimeout(resolve,550));
+  const after=await window.__TAURI_INTERNALS__.invoke('get_settings');
+  input.click();
+  [...document.querySelectorAll('.prefs-section')].find(button=>button.textContent==='Files').click();
+  return after.typstAutoCompile===!before.typstAutoCompile && after.latexAutoCompile===before.latexAutoCompile;
+})()`);
+check("Typst auto-compile preference works independently of LaTeX", typstAutoPreference);
 const editorSection = prefs.perSection.find((section) => section.name === "Editor");
 check(
   "spelling preference",

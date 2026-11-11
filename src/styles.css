@@ -191,7 +191,7 @@ body {
   display: none;
 }
 
-.app.mode-source .preview-pane,
+.app.mode-source .preview-shell,
 .app.mode-source .splitter,
 .app.mode-preview .editor-pane,
 .app.mode-preview .splitter {
@@ -2328,62 +2328,71 @@ body {
   border-color: var(--accent);
 }
 
-.latex-build-status,
-.latex-warnings {
-  padding: 6px 12px;
+/* The pane is padded and scrolls; while the surface is shown it is neither, so
+   the surface can fill it without changing the sticky strip's width. */
+.preview-pane:has(> .preview-pending) {
+  position: relative;
+  overflow: hidden;
+}
+
+.preview-pending {
+  position: absolute;
+  inset: 0;
+  z-index: 1; /* below .latex-build-status (z-index 4) */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+  pointer-events: none;
+}
+
+.preview-pending-spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2.5px solid var(--border);
+  border-top-color: var(--accent);
+  animation: preview-spin 0.9s linear infinite;
+}
+
+.preview-pending[data-state="idle"] .preview-pending-spinner {
+  display: none;
+}
+
+.preview-pending-title {
+  max-width: 70%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--fg);
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.preview-pending-phase,
+.preview-pending-elapsed {
   font-size: 12px;
 }
 
-.latex-build-status {
-  position: sticky;
-  top: 0;
-  z-index: 4;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+.preview-pending-elapsed {
+  min-height: 1.2em; /* the counter appearing must not move the column */
+  font-variant-numeric: tabular-nums;
 }
 
-.latex-build-message {
-  flex: 1;
+@keyframes preview-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
-.latex-build-status button {
-  font: inherit;
-  color: var(--fg);
-  background: var(--code-bg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 4px 9px;
-  cursor: pointer;
-}
-
-.latex-auto {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  cursor: pointer;
-  user-select: none;
-}
-
-.latex-auto input {
-  margin: 0;
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-
-.latex-warnings summary {
-  cursor: pointer;
-}
-
-.latex-warnings pre {
-  max-height: 16em;
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+@media (prefers-reduced-motion: reduce) {
+  .preview-pending-spinner {
+    animation: none; /* a static arc; the counter carries liveness */
+  }
 }
 
 /* The Document / Pages switch above a Typst preview. */
@@ -2487,44 +2496,6 @@ body {
   flex-direction: column;
   align-items: center;
   padding: 22px 0 40px;
-}
-
-/* Compile errors float above the last successful PDF without changing its
-   scroll height; the next successful replacement removes the layer. */
-.pdf-rebuild-error {
-  position: sticky;
-  top: 0;
-  height: 0;
-  z-index: 5;
-}
-.pdf-rebuild-error .typst-error {
-  position: absolute;
-  top: 0;
-  left: 8px;
-  right: 8px;
-  max-height: 35vh;
-  overflow: auto;
-  background: var(--bg);
-}
-
-/* The navigable panel replaces the bare <pre> as the layer's visible content.
-   The raw log keeps its own scrolling inside the panel. */
-.pdf-rebuild-error .latex-problems {
-  position: absolute;
-  top: 0;
-  left: 8px;
-  right: 8px;
-  max-height: 45vh;
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-}
-
-.pdf-rebuild-error .latex-problems .typst-error {
-  position: static;
-  max-height: none;
-  background: transparent;
 }
 
 /* Pages own the pane from edge to edge: the fitted page is a few pixels wider
@@ -3088,7 +3059,9 @@ body {
   animation: latex-error-pulse 520ms ease-in-out 3;
 }
 
-.cm-latex-error-line {
+/* A diagnostic click also makes this CodeMirror's active line. Its pink wash
+   must outrank the editor theme's active-line background. */
+.cm-editor .cm-line.cm-latex-error-line {
   background-color: color-mix(in srgb, var(--diagnostic-error) 55%, transparent);
 }
 
@@ -4556,4 +4529,348 @@ body {
   .ai-fab {
     transition: none;
   }
+}
+
+/* The scroll owner retains its ID and geometry; chrome owns a separate row.
+   Both viewports stay laid out so toggling Logs cannot refit or reset a PDF. */
+.preview-shell {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  container-type: inline-size;
+  container-name: compiled-workspace;
+}
+.compiled-preview {
+  --compiled-bg: light-dark(#ffffff, #22252a);
+  --compiled-fg: light-dark(#2b3038, #e8eaf0);
+  --compiled-muted: light-dark(#656d78, #b0b7c3);
+  --compiled-line: light-dark(#e2e5e9, #414650);
+  --compiled-soft: light-dark(#f4f5f7, #2d3138);
+  --compiled-accent: light-dark(#286cc4, #8bbaff);
+  /* The primary action's hover fill: a step darker in the light theme, a step
+     lighter in the dark one, so the button stays the most saturated control. */
+  --compiled-accent-hover: light-dark(#225da9, #a6c9ff);
+  --compiled-selected: light-dark(#eaf2ff, #303f56);
+  --compiled-error: light-dark(#b32949, #ff9ab1);
+  --compiled-warning: light-dark(#886014, #efc46f);
+}
+.preview-stage {
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.preview-stage > .preview-pane,
+.compiler-logs {
+  grid-area: 1 / 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+.compiler-logs {
+  visibility: hidden;
+  pointer-events: none;
+  overflow-y: auto;
+  padding: 16px 18px 24px;
+  color: var(--compiled-fg);
+  background: var(--compiled-bg);
+  font: 13px/1.45 var(--font-ui);
+}
+.logs-open .compiler-logs {
+  visibility: visible;
+  pointer-events: auto;
+}
+.logs-open .preview-pane {
+  visibility: hidden;
+  pointer-events: none;
+}
+.compiled-preview .preview-pane {
+  padding-top: 0;
+}
+.compiled-toolbar {
+  flex: none;
+  padding: 9px 12px 7px;
+  color: var(--compiled-fg);
+  background: var(--compiled-bg);
+  border-bottom: 1px solid var(--compiled-line);
+  font: 13px/1.45 var(--font-ui);
+}
+.compiled-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.compiled-toolbar button,
+.compiler-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  font: inherit;
+  padding: 5px 10px;
+  border: 1px solid var(--compiled-line);
+  border-radius: 5px;
+  background: var(--compiled-bg);
+  color: var(--compiled-fg);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.compiled-toolbar button:hover,
+.compiler-tabs button:hover {
+  background: var(--compiled-soft);
+}
+.compiled-toolbar button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.compiled-toolbar .compiled-compile {
+  min-width: 92px;
+  background: var(--compiled-accent);
+  border-color: var(--compiled-accent);
+  color: light-dark(#ffffff, #152338);
+}
+/* The generic toolbar hover above is more specific than `.compiled-compile`
+   (two class-level selectors and a pseudo-class against two), so without a
+   hover fill of its own the accent button turns into the neutral soft surface
+   and its label loses all contrast — near-black on near-black in the dark
+   theme, white on near-white in the light one. Keep the accent instead. */
+.compiled-toolbar .compiled-compile:hover {
+  background: var(--compiled-accent-hover);
+  border-color: var(--compiled-accent-hover);
+}
+.compiled-icon {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+}
+.compiled-auto {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.compiled-auto input {
+  margin: 0;
+  width: 14px;
+  height: 14px;
+  accent-color: var(--compiled-accent);
+}
+.compiled-modes {
+  display: flex;
+  gap: 2px;
+}
+.compiled-toolbar .compiled-mode {
+  border-color: transparent;
+  padding: 6px 8px;
+}
+.compiled-toolbar .compiled-logs-toggle {
+  margin-left: auto;
+  border-color: transparent;
+  background: transparent;
+  padding: 6px 9px;
+}
+.compiled-toolbar .compiled-logs-toggle[aria-pressed="true"] {
+  background: var(--compiled-selected);
+  border-color: var(--compiled-accent);
+  color: var(--compiled-accent);
+}
+.compiled-toolbar .compiled-mode[aria-pressed="true"] {
+  background: var(--compiled-soft);
+  color: var(--compiled-accent);
+}
+.compiled-issue-count {
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--compiled-warning);
+  background: light-dark(#fbf0d7, #493b22);
+}
+.compiled-issue-count[data-severity="error"] {
+  color: var(--compiled-error);
+  background: light-dark(#fbe8ed, #4b2a35);
+}
+.compiled-message {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 9px;
+  margin-top: 7px;
+  color: var(--compiled-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.compiled-condition {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--compiled-fg);
+}
+.compiled-condition[data-severity="error"] {
+  color: var(--compiled-error);
+}
+.compiled-condition[data-severity="warning"] {
+  color: var(--compiled-warning);
+}
+.compiled-state-detail,
+.compiled-engine {
+  font-variant-numeric: tabular-nums;
+}
+.compiled-notice {
+  margin-top: 6px;
+}
+.compiled-notice .typst-note {
+  margin: 0;
+  padding: 6px 0;
+  font: inherit;
+}
+.compiler-logs h2 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.compiler-log-caption {
+  margin: 0 0 12px;
+  color: var(--compiled-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.compiler-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--compiled-line);
+}
+.compiler-tabs .compiler-tab {
+  border: 0;
+  background: transparent;
+  padding: 5px 9px;
+  border-radius: 4px;
+}
+.compiler-tabs .compiler-tab[aria-selected="true"] {
+  color: var(--compiled-accent);
+  background: var(--compiled-selected);
+}
+.compiled-copy-log {
+  margin-left: auto;
+}
+.compiler-logs .compiler-output {
+  margin: 16px 0 0;
+  padding: 0;
+  color: var(--compiled-fg);
+  max-height: none;
+  overflow: visible;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 12px/1.65 var(--font-mono);
+}
+.compiler-logs .latex-problems {
+  padding: 0;
+  font-family: var(--font-ui);
+}
+.compiler-logs .latex-problems-head {
+  display: none;
+}
+.compiler-logs .latex-problems-list {
+  gap: 0;
+}
+.compiler-logs .latex-problem,
+.compiled-issue {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 13px 0;
+  border: 0;
+  border-bottom: 1px solid var(--compiled-line);
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  overflow-wrap: anywhere;
+}
+.compiler-logs button.latex-problem:hover {
+  background: var(--compiled-soft);
+}
+.compiler-logs button.latex-problem:disabled {
+  cursor: default;
+}
+.compiler-logs .latex-problem > .compiled-icon,
+.compiled-issue > .compiled-icon {
+  margin-top: 2px;
+  color: var(--compiled-error);
+}
+.compiler-logs .latex-problem[data-severity="warning"] > .compiled-icon,
+.compiled-issue[data-severity="warning"] > .compiled-icon {
+  color: var(--compiled-warning);
+}
+.compiled-issue-body {
+  flex: 1;
+  min-width: 0;
+}
+.compiled-empty {
+  font: 14px/1.6 var(--font-ui);
+  color: var(--muted);
+  padding: 36px 24px;
+  text-align: center;
+}
+.compiler-logs .latex-problem-place {
+  color: var(--compiled-accent);
+  font: 12px var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.compiler-logs .latex-problem-message {
+  display: block;
+  margin-top: 3px;
+  font: inherit;
+}
+.latex-problem-severity {
+  margin-left: 7px;
+  color: var(--compiled-muted);
+  font-size: 12px;
+}
+.compiler-logs .latex-problem-source {
+  display: block;
+  margin-top: 6px;
+  padding: 5px 7px;
+  border-radius: 3px;
+  background: var(--compiled-soft);
+  font: 12px/1.5 var(--font-mono);
+}
+
+/* The pane can be narrow inside a wide window, so use its own width. */
+@container compiled-workspace (max-width: 480px) {
+  .compiled-toolbar {
+    padding: 8px;
+  }
+  .compiled-actions {
+    gap: 7px 9px;
+  }
+  .compiled-toolbar .compiled-logs-toggle {
+    margin-left: 0;
+  }
+  .compiled-toolbar .compiled-save-pdf {
+    margin-left: auto;
+  }
+  .compiler-logs {
+    padding: 13px;
+  }
+}
+
+#compiled-controls[hidden],
+.compiled-toolbar [hidden],
+.compiler-logs [hidden] {
+  display: none !important;
+}
+
+.compiler-tabs [role="tablist"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }

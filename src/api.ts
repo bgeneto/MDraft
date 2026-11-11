@@ -296,6 +296,7 @@ export interface Settings {
    * page view cannot reflow or be read as text.
    */
   typstView: TypstView;
+  typstAutoCompile: boolean;
   /**
    * Whether the reader has enabled the experimental LuaLaTeX engine.
    *
@@ -901,6 +902,8 @@ export type TypstView = "document" | "pages";
  * warnings, and `ignored` names the constructs the document view had to drop.
  */
 export interface RenderedTypst {
+  compilerOutput: string;
+  compilerOutputTruncated: boolean;
   kind: TypstView;
   html: string | null;
   css: string | null;

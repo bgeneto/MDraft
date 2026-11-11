@@ -89,8 +89,20 @@
           <div id="editor-host" class="editor-host"></div>
         </section>
         <div id="splitter" class="splitter" role="separator" aria-orientation="vertical"></div>
-        <section id="preview-pane" class="pane preview-pane">
-          <article id="preview" class="markdown-body"></article>
+        <section id="preview-shell" class="pane preview-shell">
+          <div id="compiled-controls" hidden></div>
+          <div class="preview-stage">
+            <section id="preview-pane" class="preview-pane">
+              <article id="preview" class="markdown-body"></article>
+            </section>
+            <section
+              id="compiler-logs"
+              class="compiler-logs"
+              aria-label="Compiler logs"
+              aria-hidden="true"
+              inert
+            ></section>
+          </div>
         </section>
       </main>
 

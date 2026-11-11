@@ -106,6 +106,66 @@ if (status !== "true") {
 }
 check(status === "true", "latex_status reports the engine ready", status);
 
+// A reader's failing project can be inspected without editing or saving it.
+if (process.env.MDRAFT_LATEX_NAVIGATION_SAMPLE) {
+  const samplePath = process.env.MDRAFT_LATEX_NAVIGATION_SAMPLE;
+  const snapshotFiles = await page.evaluate(
+    `window.__TAURI_INTERNALS__.invoke('latex_project_snapshot',{path:${JSON.stringify(samplePath)},overlays:[]}).then(snapshot=>snapshot.files.map(file=>file.path))`,
+  );
+  await page.evaluate(
+    `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'open-files',payload:[${JSON.stringify(samplePath)}]})`,
+  );
+  let outcome;
+  for (let attempt = 0; attempt < 480; attempt++) {
+    outcome = await page.evaluate(
+      `JSON.stringify({title:document.title,current:document.querySelector('#preview')?.dataset.latexCurrent,phase:document.querySelector('.compiled-message')?.textContent,busy:document.querySelector('.compiled-compile')?.textContent,rows:[...document.querySelectorAll('.latex-problem')].map(row=>({place:row.querySelector('.latex-problem-place')?.textContent,message:row.querySelector('.latex-problem-message')?.textContent,button:row.tagName==='BUTTON',disabled:row.disabled})),log:document.getElementById('compiler-output')?.textContent})`,
+    );
+    const parsed = JSON.parse(outcome);
+    if (attempt > 5 && parsed.busy === "Compile" && (parsed.current || parsed.rows.length)) break;
+    await sleep(500);
+  }
+  const result = JSON.parse(outcome);
+  result.snapshotFiles = snapshotFiles;
+  const directory = process.env.MDRAFT_COMPILED_UI_SCREENSHOTS ?? tmpdir();
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, "navigation-sample.json"), JSON.stringify(result, null, 2));
+  const clip = await page.evaluate(
+    `(() => {const r=document.getElementById('preview-shell').getBoundingClientRect();return {x:r.left,y:r.top,width:r.width,height:Math.min(r.height,innerHeight-r.top),scale:1};})()`,
+  );
+  const shot = await page.send("Page.captureScreenshot", { format: "png", clip });
+  writeFileSync(join(directory, "navigation-sample.png"), Buffer.from(shot.result.data, "base64"));
+  console.log(JSON.stringify({ ...result, log: result.log?.slice(-1500) }, null, 2));
+  check(
+    Boolean(result.rows.length || result.current),
+    "the navigation reproduction finishes a real compile",
+  );
+  check(
+    !result.rows.some((row) => /\/tex\/luavlna(?::|$)/.test(row.place ?? "")),
+    "the Lua dependency is not typeset as TeX",
+  );
+  const navigation = await page.evaluate(`(async () => {
+    const row=[...document.querySelectorAll('button.latex-problem')].find(row=>row.dataset.severity==='error') ?? document.querySelector('button.latex-problem');
+    if(!row)return null;
+    const place=row.querySelector('.latex-problem-place').textContent;
+    const toggle=document.querySelector('.compiled-logs-toggle');
+    if(toggle.getAttribute('aria-pressed')!=='true')toggle.click();
+    row.click();
+    await new Promise(resolve=>setTimeout(resolve,150));
+    const view=document.querySelector('.cm-content').cmTile.root.view;
+    return {place,line:view.state.doc.lineAt(view.state.selection.main.head).number,marks:document.querySelectorAll('.cm-latex-error-line').length};
+  })()`);
+  if (navigation)
+    check(
+      Boolean(navigation.marks && navigation.place.endsWith(":" + navigation.line)),
+      "a project diagnostic reveals and highlights its source line",
+      JSON.stringify(navigation),
+    );
+  else check(Boolean(result.current), "the example compiles successfully without source errors");
+  console.log(`${checks.filter((check) => check.ok).length}/${checks.length} checks passed`);
+  page.close();
+  process.exit(checks.every((check) => check.ok) ? 0 : 1);
+}
+
 if (process.env.MDRAFT_LATEX_SAMPLE_ONLY === "1") {
   const sampleDir = join(tmpdir(), "mdraft-latex-reported-sample");
   mkdirSync(sampleDir, { recursive: true });
@@ -233,7 +293,7 @@ console.log("\n=== the export row names its engine; Auto-compile has visible swi
 
   const toggleState = () =>
     page.evaluate(`(() => {
-      const input = document.querySelector("#preview-pane > .latex-build-status .latex-auto input");
+      const input = document.querySelector("#compiled-controls .latex-auto input");
       return input ? String(input.checked) : "missing";
     })()`);
   const storedAuto = async (want) => {
@@ -271,9 +331,7 @@ console.log("\n=== the export row names its engine; Auto-compile has visible swi
     JSON.stringify(onCheck),
   );
 
-  await page.evaluate(
-    `document.querySelector("#preview-pane > .latex-build-status .latex-auto input").click()`,
-  );
+  await page.evaluate(`document.querySelector("#compiled-controls .latex-auto input").click()`);
   check(await storedAuto(false), "the preview switch turns Auto-compile off in settings");
   await sleep(300);
   check((await menuCheck())?.checked === false, "the Tools menu check follows the preview switch");
@@ -788,7 +846,7 @@ await page.evaluate(`(() => {
 let shownError = false;
 for (let attempt = 0; attempt < 80; attempt++) {
   shownError = await page.evaluate(
-    'Boolean(document.querySelector("#preview .pdf-rebuild-error .typst-error"))',
+    'Boolean(document.querySelector("#compiler-logs .typst-error")) && document.querySelector(".compiled-compile")?.textContent === "Compile"',
   );
   if (shownError) break;
   await sleep(250);
@@ -806,24 +864,213 @@ check(
   JSON.stringify(failedView),
 );
 
-const partialOffered = await page.evaluate(
-  `Boolean([...document.querySelectorAll(".latex-problems button")].find(button => button.textContent === "View partial PDF"))`,
+const partialShown = await page.evaluate(
+  `Boolean(document.querySelector('#preview[data-latex-partial]'))`,
 );
-if (partialOffered) {
-  await page.evaluate(
-    `[...document.querySelectorAll(".latex-problems button")].find(button => button.textContent === "View partial PDF").click()`,
+check(
+  await page.evaluate(`!document.querySelector('#preview .pdf-rebuild-error,.typst-viewbar')`),
+  "no diagnostics or toolbar cover the PDF",
+);
+if (partialShown) {
+  check(
+    await page.evaluate(
+      `document.querySelector('.compiled-message').textContent.includes('PDF with errors')`,
+    ),
+    "partial output is displayed automatically and labelled",
   );
-  let partialShown = false;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    partialShown = await page.evaluate(
-      `document.querySelector(".latex-build-message")?.textContent.includes("Partial PDF") && Boolean(document.querySelector(".typst-page-shell")) && Boolean(document.querySelector(".latex-problems"))`,
+} else console.log("  note: this failure returned no partial PDF");
+const toggleRestored = await page.evaluate(`(() => {
+  const pane=document.getElementById('preview-pane'), toggle=document.querySelector('.compiled-logs-toggle');
+  const before=pane.scrollTop, canvas=document.querySelector('#preview canvas');
+  toggle.click();
+  const open=toggle.getAttribute('aria-pressed')==='true' && pane.inert && getComputedStyle(pane).visibility==='hidden';
+  toggle.click();
+  return open && toggle.getAttribute('aria-pressed')==='false' && !pane.inert && Math.abs(pane.scrollTop-before)<1 && document.querySelector('#preview canvas')===canvas;
+})()`);
+check(toggleRestored, "Logs toggles without replacing or moving the PDF");
+
+const sourceErrorClick = await page.evaluate(`(async () => {
+  const toggle=document.querySelector('.compiled-logs-toggle');
+  toggle.click();
+  const row=document.querySelector('button.latex-problem[data-severity="error"]');
+  if(!row){toggle.click();return null;}
+  const expected=Number(row.querySelector('.latex-problem-place').textContent.match(/:(\\d+)$/)?.[1]);
+  row.click();
+  await new Promise(resolve=>setTimeout(resolve,100));
+  const view=document.querySelector('.cm-content').cmTile.root.view;
+  const mark=document.querySelector('.cm-latex-error-line');
+  const color=mark?getComputedStyle(mark).backgroundColor:'';
+  const channels=(color.match(/[\\d.]+/g)??[]).map(Number);
+  const pink=channels.length>=3 && channels[0]>channels[1] && channels[0]>channels[2];
+  const result={expected,line:view.state.doc.lineAt(view.state.selection.main.head).number,marked:Boolean(mark),color,pink};
+  return result;
+})()`);
+check(
+  Boolean(
+    sourceErrorClick?.marked &&
+    sourceErrorClick.line === sourceErrorClick.expected &&
+    sourceErrorClick.pink,
+  ),
+  "clicking a compiler error reveals its source line with the light-red highlight",
+  JSON.stringify(sourceErrorClick),
+);
+if (process.env.MDRAFT_COMPILED_UI_SCREENSHOTS) {
+  mkdirSync(process.env.MDRAFT_COMPILED_UI_SCREENSHOTS, { recursive: true });
+  const shot = await page.send("Page.captureScreenshot", { format: "png" });
+  writeFileSync(
+    join(process.env.MDRAFT_COMPILED_UI_SCREENSHOTS, "latex-source-error.png"),
+    Buffer.from(shot.result.data, "base64"),
+  );
+}
+await page.evaluate(
+  `(() => {const toggle=document.querySelector('.compiled-logs-toggle');if(toggle.getAttribute('aria-pressed')==='true')toggle.click();})()`,
+);
+
+const partialChrome = await page.evaluate(`(() => {
+  const toolbar=document.querySelector('.compiled-toolbar'), compile=document.querySelector('.compiled-compile');
+  const status=document.querySelector('.compiled-condition'), badge=document.querySelector('.compiled-issue-count');
+  return {
+    icons:['.compiled-compile','.compiled-logs-toggle','.compiled-save-pdf'].every(selector=>document.querySelector(selector+' svg[aria-hidden="true"]')),
+    primary:getComputedStyle(compile).backgroundColor!==getComputedStyle(toolbar).backgroundColor,
+    condition:status.dataset.severity,
+    summary:document.querySelector('.compiled-state-detail').textContent,
+    engine:document.querySelector('.compiled-engine').textContent,
+    badge:!badge.hidden && getComputedStyle(badge).backgroundColor!=='rgba(0, 0, 0, 0)',
+    rows:[...document.querySelectorAll('.latex-problem')].every(row=>row.querySelector(':scope > svg') && parseFloat(getComputedStyle(row).borderLeftWidth)===0 && getComputedStyle(row).borderRadius==='0px'),
+  };
+})()`);
+check(
+  partialChrome.icons && partialChrome.primary && partialChrome.badge && partialChrome.rows,
+  "compiler actions, issue badge and flat diagnostic rows retain the approved visual hierarchy",
+  JSON.stringify(partialChrome),
+);
+check(
+  partialChrome.condition === "error" &&
+    /error/i.test(partialChrome.summary) &&
+    /LaTeX.*s/.test(partialChrome.engine),
+  "failed output separates its error condition, issue totals and engine timing",
+  JSON.stringify(partialChrome),
+);
+
+if (process.env.MDRAFT_COMPILED_UI_SCREENSHOTS) {
+  const directory = process.env.MDRAFT_COMPILED_UI_SCREENSHOTS;
+  mkdirSync(directory, { recursive: true });
+  const previousFlex = await page.evaluate(`document.getElementById('preview-shell').style.flex`);
+  await page.send("Emulation.setDeviceMetricsOverride", {
+    width: 1440,
+    height: 1000,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await page.evaluate(`document.getElementById('preview-shell').style.flex='0 0 900px'`);
+  await sleep(500);
+  const clip = await page.evaluate(
+    `(() => { const r=document.getElementById('preview-shell').getBoundingClientRect(); return {x:r.left,y:r.top,width:r.width,height:Math.min(r.height,innerHeight-r.top),scale:1}; })()`,
+  );
+  const pdfShot = await page.send("Page.captureScreenshot", { format: "png", clip });
+  writeFileSync(
+    join(directory, "latex-partial-pdf.png"),
+    Buffer.from(pdfShot.result.data, "base64"),
+  );
+  const toolbarClip = await page.evaluate(
+    `(() => {const r=document.querySelector('.compiled-toolbar').getBoundingClientRect();return {x:r.left,y:r.top,width:r.width,height:r.height,scale:1};})()`,
+  );
+  const toolbarShot = await page.send("Page.captureScreenshot", {
+    format: "png",
+    clip: toolbarClip,
+  });
+  writeFileSync(
+    join(directory, "latex-error-toolbar.png"),
+    Buffer.from(toolbarShot.result.data, "base64"),
+  );
+  await page.evaluate(`document.querySelector('.compiled-logs-toggle').click()`);
+  const activeToolbarShot = await page.send("Page.captureScreenshot", {
+    format: "png",
+    clip: toolbarClip,
+  });
+  writeFileSync(
+    join(directory, "latex-logs-toolbar.png"),
+    Buffer.from(activeToolbarShot.result.data, "base64"),
+  );
+  const logsShot = await page.send("Page.captureScreenshot", { format: "png", clip });
+  writeFileSync(join(directory, "latex-problems.png"), Buffer.from(logsShot.result.data, "base64"));
+  await page.evaluate(`document.querySelector('.compiled-logs-toggle').click()`);
+  await page.evaluate(
+    `document.getElementById('preview-shell').style.flex=${JSON.stringify(previousFlex)}`,
+  );
+  await page.send("Emulation.clearDeviceMetricsOverride");
+  await sleep(500);
+}
+
+if (partialShown) {
+  console.log("\n=== saving displayed partial output and rejecting stale saves ===");
+  const target = join(tmpdir(), "mdraft-partial-output.pdf");
+  await page.evaluate(`(() => {
+    const state=window.__partialSaveProbe={original:window.fetch,dialogs:[],writes:[],hold:false,release:null};
+    const respond=value=>new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json','Tauri-Response':'ok'}});
+    window.fetch=async function(input,options) {
+      const url=new URL(typeof input==='string'?input:input.url,location.href);
+      if(url.hostname!=='ipc.localhost') return state.original.call(this,input,options);
+      const command=decodeURIComponent(url.pathname.slice(1));
+      const args=typeof options?.body==='string'?JSON.parse(options.body):{};
+      if(command==='plugin:dialog|save') {
+        state.dialogs.push(args);
+        if(state.hold)return new Promise(resolve=>state.release=()=>resolve(respond(${JSON.stringify(target)})));
+        return respond(${JSON.stringify(target)});
+      }
+      if(command==='save_compiled_pdf')state.writes.push(args);
+      return state.original.call(this,input,options);
+    };
+    document.querySelector('.compiled-save-pdf').click();
+  })()`);
+  try {
+    for (let attempt = 0; attempt < 50 && !existsSync(target); attempt++) await sleep(100);
+    const saved = JSON.parse(
+      await page.evaluate(
+        `JSON.stringify({dialog:window.__partialSaveProbe.dialogs[0],write:window.__partialSaveProbe.writes[0],partial:document.querySelector('#preview')?.dataset.latexPartial,current:document.querySelector('#preview')?.dataset.latexCurrent})`,
+      ),
     );
-    if (partialShown) break;
-    await sleep(250);
+    check(
+      Boolean(saved.partial && !saved.current && saved.write && existsSync(target)),
+      "Save PDF writes partial output without declaring a successful compile",
+    );
+    const dialog = saved.dialog?.options ?? saved.dialog;
+    check(
+      dialog?.title === "Save PDF with compilation errors" &&
+        /-partial\.pdf$/i.test(dialog?.defaultPath ?? ""),
+      "partial Save clearly identifies its errors and default filename",
+      JSON.stringify(dialog),
+    );
+    const bytes = existsSync(target) ? readFileSync(target) : Buffer.alloc(0);
+    check(
+      bytes.subarray(0, 5).toString() === "%PDF-" && bytes.toString("base64") === saved.write?.data,
+      "partial Save writes exactly the bytes passed to the PDF writer",
+    );
+    await page.evaluate(
+      `(() => {window.__partialSaveProbe.hold=true;document.querySelector('.compiled-save-pdf').click();})()`,
+    );
+    for (let attempt = 0; attempt < 30; attempt++) {
+      if (await page.evaluate(`typeof window.__partialSaveProbe.release==='function'`)) break;
+      await sleep(50);
+    }
+    await page.evaluate(`(() => {
+      const view=document.querySelector('.cm-content').cmTile.root.view;
+      view.dispatch({changes:{from:view.state.doc.length,insert:'\\n% partial save freshness probe\\n'}});
+      window.__partialSaveProbe.release();
+    })()`);
+    let rejected = false;
+    for (let attempt = 0; attempt < 30; attempt++) {
+      rejected = await page.evaluate(
+        `window.__partialSaveProbe.writes.length===1 && document.getElementById('toast')?.textContent.includes('The document changed')`,
+      );
+      if (rejected) break;
+      await sleep(100);
+    }
+    check(rejected, "editing while the partial save dialog is open prevents a stale write");
+  } finally {
+    await page.evaluate(`window.fetch=window.__partialSaveProbe.original`);
+    rmSync(target, { force: true });
   }
-  check(partialShown, "an available partial PDF is labelled and retains the errors");
-} else {
-  console.log("  note: this compiler failure returned no partial PDF");
 }
 
 // **Undo the deliberate break.** Leaving `\mdraftUndefinedCommand` in the buffer
@@ -1391,6 +1638,17 @@ console.log("\n=== a missing figure points at the included file ===");
     rows[0]?.source ?? "none",
   );
 
+  check(
+    await page.evaluate(
+      `document.querySelector('.doc-tab[aria-selected="true"]')?.textContent.includes('main.tex')`,
+    ),
+    "reporting a failure keeps the reader in the active source file",
+  );
+  await page.evaluate(`(() => {
+    const toggle=document.querySelector('.compiled-logs-toggle');
+    if(toggle.getAttribute('aria-pressed')!=='true')toggle.click();
+    document.querySelector('button.latex-problem')?.click();
+  })()`);
   await sleep(600);
   const jumped = await page.evaluate(`
     (() => {
@@ -1410,7 +1668,7 @@ console.log("\n=== a missing figure points at the included file ===");
   const jump = JSON.parse(String(jumped));
   check(
     jump.tab.includes("Resumo executivo.tex"),
-    "a new failure opens the included file",
+    "an explicit diagnostic click opens the included file",
     jump.tab || "none",
   );
   check(
@@ -1438,7 +1696,7 @@ console.log("\n=== a missing figure points at the included file ===");
   for (let attempt = 0; attempt < 120; attempt += 1) {
     cleared = await page.evaluate(`
       Boolean(
-        !document.querySelector(".latex-problems") &&
+        !document.querySelector('.latex-problem[data-severity="error"]') &&
         document.querySelector("#preview .typst-page-shell")
       )
     `);
@@ -1488,7 +1746,7 @@ console.log("\n=== a missing figure points at the included file ===");
     String(manual),
   );
   await page.evaluate(`
-    [...document.querySelectorAll(".latex-build-status button")]
+    [...document.querySelectorAll(".compiled-toolbar button")]
       .find(button => button.textContent === "Compile")?.click()
   `);
   let manualCompiled = false;
@@ -1514,17 +1772,67 @@ console.log("\n=== a missing figure points at the included file ===");
   let warningPdf = false;
   for (let attempt = 0; attempt < 120; attempt += 1) {
     warningPdf = await page.evaluate(
-      `Boolean(document.querySelector("#preview")?.dataset.latexCurrent && document.querySelector(".latex-warnings > summary")?.textContent.includes("warning"))`,
+      `Boolean(document.querySelector("#preview")?.dataset.latexCurrent && Number(document.querySelector(".compiled-issue-count")?.textContent) > 0 && [...document.querySelectorAll('.latex-problem[data-severity="warning"]')].some(row => /undefined/i.test(row.textContent)))`,
     );
     if (warningPdf) break;
     await sleep(500);
   }
-  check(warningPdf, "an undefined-reference warning remains visible beside the current PDF");
+  check(warningPdf, "an undefined-reference warning appears in Logs while its PDF remains current");
+  if (warningPdf && process.env.MDRAFT_COMPILED_UI_SCREENSHOTS) {
+    const clip = await page.evaluate(
+      `(() => {const r=document.querySelector('.compiled-toolbar').getBoundingClientRect();return {x:r.left,y:r.top,width:r.width,height:r.height,scale:1};})()`,
+    );
+    const capture = await page.send("Page.captureScreenshot", { format: "png", clip });
+    writeFileSync(
+      join(process.env.MDRAFT_COMPILED_UI_SCREENSHOTS, "latex-warning-toolbar.png"),
+      Buffer.from(capture.result.data, "base64"),
+    );
+  }
+
+  await emitMenu(page, "view.preview");
+  await sleep(100);
+  const warningClick = await page.evaluate(`(async () => {
+    const toggle=document.querySelector('.compiled-logs-toggle');
+    if(toggle.getAttribute('aria-pressed')!=='true')toggle.click();
+    const row=[...document.querySelectorAll('button.latex-problem[data-severity="warning"]')].find(row=>/undefined/i.test(row.textContent));
+    if(!row)return null;
+    window.__sourceWarningProbe={row,line:Number(row.querySelector('.latex-problem-place').textContent.match(/:(\\d+)$/)?.[1])};
+    row.click();
+    await new Promise(resolve=>setTimeout(resolve,100));
+    const view=document.querySelector('.cm-content').cmTile.root.view;
+    return {split:document.getElementById('app').classList.contains('mode-split'),line:view.state.doc.lineAt(view.state.selection.main.head).number,expected:window.__sourceWarningProbe.line,marks:document.querySelectorAll('.cm-latex-error-line').length};
+  })()`);
+  check(
+    Boolean(
+      warningClick?.split && warningClick.marks && warningClick.line === warningClick.expected,
+    ),
+    "a warning click from Preview-only shows Split and highlights the source line",
+    JSON.stringify(warningClick),
+  );
+  const unchangedWarning = await page.evaluate(`(async () => {
+    const view=document.querySelector('.cm-content').cmTile.root.view;
+    view.dispatch({changes:{from:view.state.doc.length,insert:'\\n% unrelated navigation edit\\n'}});
+    window.__sourceWarningProbe.row.click();
+    await new Promise(resolve=>setTimeout(resolve,100));
+    return !window.__sourceWarningProbe.row.disabled && document.querySelectorAll('.cm-latex-error-line').length>0 && view.state.doc.lineAt(view.state.selection.main.head).number===window.__sourceWarningProbe.line;
+  })()`);
+  check(unchangedWarning, "editing another line keeps a compiled warning navigable");
+  const staleWarning = await page.evaluate(`(async () => {
+    const view=document.querySelector('.cm-content').cmTile.root.view;
+    const line=view.state.doc.line(window.__sourceWarningProbe.line);
+    view.dispatch({changes:{from:line.from,insert:'% changed '}});
+    window.__sourceWarningProbe.row.click();
+    await new Promise(resolve=>setTimeout(resolve,100));
+    const safe=!document.querySelector('.cm-latex-error-line') && document.getElementById('toast')?.textContent.includes('source line changed');
+    view.dispatch({changes:{from:line.from,to:line.from+10}});
+    return safe;
+  })()`);
+  check(staleWarning, "changing the diagnostic line explains why its old location is stale");
 
   const cancelled = await page.evaluate(`(async () => {
     const view = document.querySelector(".cm-content").cmTile.root.view;
     view.dispatch({ changes: { from: view.state.doc.length, insert: "\\n% cancelled compile" } });
-    [...document.querySelectorAll(".latex-build-status button")].find(b => b.textContent === "Compile")?.click();
+    [...document.querySelectorAll(".compiled-toolbar button")].find(b => b.textContent === "Compile")?.click();
     const cancel = document.querySelector(".latex-cancel");
     if (!cancel || cancel.hidden) throw new Error("Cancel was not offered during compilation");
     cancel.click();
@@ -1552,7 +1860,7 @@ console.log("\n=== a missing figure points at the included file ===");
     })`);
     await sleep(700);
     await page.evaluate(
-      `[...document.querySelectorAll(".latex-build-status button")].find(b => b.textContent === "Compile")?.click()`,
+      `[...document.querySelectorAll(".compiled-toolbar button")].find(b => b.textContent === "Compile")?.click()`,
     );
     let missing = false;
     for (let attempt = 0; attempt < 120; attempt += 1) {
@@ -1569,7 +1877,7 @@ console.log("\n=== a missing figure points at the included file ===");
       const from = view.state.doc.toString().indexOf(command);
       if (from < 0) throw new Error("The reported image command is not in the active buffer");
       view.dispatch({ changes: { from, to: from + command.length } });
-      [...document.querySelectorAll(".latex-build-status button")].find(b => b.textContent === "Compile")?.click();
+      [...document.querySelectorAll(".compiled-toolbar button")].find(b => b.textContent === "Compile")?.click();
     })()`);
     let outcome = null;
     for (let attempt = 0; attempt < 480; attempt += 1) {
@@ -1596,6 +1904,47 @@ console.log("\n=== a missing figure points at the included file ===");
   }
 
   rmSync(problemsDir, { recursive: true, force: true });
+}
+
+console.log("\n=== TeX and Lua modules with the same basename ===");
+const luaCollisionFixture = join(tmpdir(), "mdraft-luavlna-compat.tex");
+writeFileSync(
+  luaCollisionFixture,
+  String.raw`\documentclass{article}
+\usepackage{polyglossia}
+\setdefaultlanguage{portuguese}
+\begin{document}
+Compatibilidade entre TeX e Lua. Este texto deve aparecer no documento.
+\end{document}
+`,
+);
+try {
+  await page.evaluate(
+    `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'open-files',payload:[${JSON.stringify(luaCollisionFixture)}]})`,
+  );
+  await sleep(400);
+  await page.evaluate(`document.querySelector('.compiled-compile').click()`);
+  let collisionResult;
+  for (let attempt = 0; attempt < 160; attempt++) {
+    collisionResult = await page.evaluate(
+      `JSON.stringify({title:document.title,current:Boolean(document.querySelector('#preview')?.dataset.latexCurrent),busy:document.querySelector('.compiled-compile')?.textContent,errors:[...document.querySelectorAll('.latex-problem[data-severity="error"]')].map(row=>row.textContent),text:[...document.querySelectorAll('.textLayer')].map(layer=>layer.textContent).join(' ')})`,
+    );
+    const result = JSON.parse(collisionResult);
+    if (attempt > 2 && result.busy === "Compile" && (result.current || result.errors.length)) break;
+    await sleep(500);
+  }
+  const result = JSON.parse(collisionResult);
+  check(
+    result.current && !result.errors.length,
+    "Portuguese polyglossia compiles without luavlna dependency errors",
+    JSON.stringify(result.errors),
+  );
+  check(
+    result.text.includes("Compatibilidade") && !result.text.includes("Module luavlna"),
+    "the PDF contains the document, with no Lua source code typeset",
+  );
+} finally {
+  rmSync(luaCollisionFixture, { force: true });
 }
 
 const failed = checks.filter((entry) => !entry.ok).length;

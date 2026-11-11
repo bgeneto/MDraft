@@ -157,6 +157,14 @@ const SUITES = [
     script: "preview-worker-unit.mjs",
   },
   {
+    // What the pane's content was built from. Pure logic: an owner covers its
+    // own document incarnation, or a LaTeX project's member files.
+    id: "preview-owner-unit",
+    title: "Preview ownership (unit)",
+    kind: "node",
+    script: "preview-owner-unit.mjs",
+  },
+  {
     id: "preview-dom",
     title: "Preview DOM and sanitizer",
     kind: "node",
@@ -419,6 +427,17 @@ const SUITES = [
     kind: "cdp",
     script: "preview-zoom-test.mjs",
     doc: "samples/export-tour.md",
+  },
+  {
+    // The pane belongs to the active document. Holds `latex_engine_status` and
+    // `render_typst` in the page to sample a slow switch, so it runs with no
+    // engine installed; PDF-only checks skip. Temp fixtures and memory only.
+    id: "preview-ownership",
+    title: "Preview pane ownership across tabs",
+    kind: "cdp",
+    script: "preview-ownership-test.mjs",
+    doc: "samples/feature-tour.md",
+    safeWithInstalledApp: true,
   },
   {
     id: "preview-perf",

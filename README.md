@@ -37,6 +37,8 @@ projects easy to navigate.
   for manuals and technical documentation.
 - **Typst** — a flowing Document view or a Pages view of the compiled PDF,
   with selectable text and source matching. Export directly to PDF with Typst.
+  Typst and LaTeX share Compile/Cancel, Auto-compile, Save PDF and a Logs toggle;
+  compiler messages stay separate from the rendered document.
 - **LaTeX** — syntax colouring, `%` comments, an outline read from `\section`
   commands, and the compiled PDF in the preview. The bundled LuaLaTeX engine
   needs no TeX installation; a TeX distribution already on the computer can be
