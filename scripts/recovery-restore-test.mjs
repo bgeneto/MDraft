@@ -175,6 +175,20 @@ try {
       await invoke("plugin:event|emit", { event: "open-files", payload: [file] });
       await pollFor(`${tab(path.basename(file))}?.getAttribute('aria-selected')==='true'`);
     }
+    // The harness launches phase 1 with its own document; left open, it would
+    // become the remembered set's first path instead of the unreadable first.md.
+    const launched = await evaluate(
+      `[...document.querySelectorAll('.doc-tab-name')].map(t=>t.textContent).find(n=>!['first.md','a.md','b.md'].includes(n)) ?? ''`,
+    );
+    if (launched) {
+      await evaluate(`${tab(launched)}.querySelector('.doc-tab-close').click()`);
+      await pollFor(`!${tab(launched)}`, 4000);
+    }
+    check(
+      "only the three fixtures are remembered",
+      JSON.stringify(await names()) === JSON.stringify(["first.md", "a.md", "b.md"]),
+      JSON.stringify(await names()),
+    );
     await select("a.md");
     check("a.md is the active remembered tab", (await active()) === "a.md", await active());
     check('On Launch holds "tabs"', (await setOnLaunch("tabs")) === "tabs");

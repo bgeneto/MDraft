@@ -65,6 +65,17 @@ passes once and fails on re-run is usually this.
   the pane, so the word itself stayed off screen and the click selected nothing.
   Center the word's range in `#preview-pane` before dispatching the click.
 
+  The AI suite hit the comparison form of it: `the replaced document is
+  restored  (824 vs 615: "# MDraft — feature tour\nsequenceDiagram…")`. Its
+  `editorText()` helper joins the rendered `.cm-line`s, so "before" and "after
+  one undo" were two different viewports of the same document, and the undo
+  looked broken when it was not. Resetting the scroll does not fix this, because
+  undoing a whole-document replacement moves the view itself. **Compare documents
+  through the editor state** —
+  `document.querySelector('.cm-content').cmTile.root.view.state.doc.toString()`,
+  the suite's `documentText()` — and keep `.cm-line` reads for "what is on
+  screen" questions only.
+
 **GitHub's Windows runner accepts "recieve"**
 `spellcheck::windows_tests` asserted that the runner's English dictionary rejects
 a particular misspelling, and the Windows image GitHub uses accepted it:

@@ -1,6 +1,6 @@
 # Protect document and asynchronous operation ownership
 
-**Status:** in progress
+**Status:** done
 
 **Approval:** approved in conversation, 2026-11-10 — "consider plan approved and
 implement"; the paste open question was answered "a paste should land in the
@@ -321,7 +321,7 @@ unless the reviewer reorders them; record any reordering here.
   and overlapping same-stem HTML/PDF jobs, opener failure, partial write failure,
   unique paths and viewer lifetime. Isolate file ownership and preserve
   documented manual-open behavior.
-- [ ] **12. Validate and document.** Run the applicable gates below, record
+- [x] **12. Validate and document.** Run the applicable gates below, record
   results and unavailable platforms, update affected documentation/catalogs and
   the audit's status, tick each completed step and record deviations here. Stop
   and update this plan before any change outside its approved scope.
@@ -370,14 +370,15 @@ contracts change, by that explicit request:
 - `MenuState` / `menu_state` gains `pdfEngine` (the engine that produced the
   current PDF, empty when unknown) and `latexAutoCompile`.
 - A new menu event and check item, `view.latexAutoCompile` ("Compile LaTeX
-  Automatically", View menu, under Compile LaTeX), enabled for `.tex` documents.
+  Automatically", Tools menu, under Compile LaTeX; the id keeps the `view.`
+  prefix the Compile row already has), enabled for `.tex` documents.
 
 What landed:
 
 | Item | Change | Test |
 | --- | --- | --- |
 | Engine label | `latexEngineName()` normalises the runner's executable name once in `nativeToLatex`; the export row reads `PDF… (compiled by <engine>)`, or `(compiled PDF)` when unknown; the stale "compiled LuaLaTeX PDF" toast no longer names an engine | Rust `menu` label test for LuaLaTeX/pdfLaTeX/XeLaTeX/unknown; 7 `latex-native-unit` checks; `latex-preview` reads the real row after a bundled compile |
-| Auto-compile switch | `setLatexAutoCompile()` is the one writer; an "Auto-compile" switch sits beside Compile in the preview's status bar; the View check item and Preferences follow it | Rust settings-backed check-item test; `latex-preview` toggles from the preview and from the menu and reads settings, the menu check and Preferences each time |
+| Auto-compile switch | `setLatexAutoCompile()` is the one writer; an "Auto-compile" switch sits beside Compile in the preview's status bar; the Tools check item and Preferences follow it | Rust settings-backed check-item test; `latex-preview` toggles from the preview and from the menu and reads settings, the menu check and Preferences each time |
 | Recovery restart (1) | `scripts/recovery-restore-test.mjs`, harness id `recovery-restore` | two launches with crafted journal entries and an unreadable first remembered tab |
 | Paste, open, Auto Save, HTML (3, 4, 7, 9) | `scripts/ownership-test.mjs`, harness id `ownership` | gated IPC in the page: duplicate drag-drop opens, hidden/closed image-paste owner, cancelled clipboard-read paste, Discard across one Auto Save interval, failed HTML render rebuilds |
 | AI (5, 6) | additions at the end of `scripts/ai-assistant-test.mjs`; the mock gains a `stallHeaders` mode | covered completion, abandoned request closed at the provider, Stop before headers, disabled empty Copy, mapped Insert below and its undo, refused deleted target, one history row after re-choosing the same target |
@@ -391,6 +392,34 @@ What landed:
 - Print handoffs (step 11): `print_document` and `print_compiled_pdf` always
   launch the system browser or PDF viewer. A UI test would open real external
   applications, so they are tested at `write_handoff`, which both now use.
+
+**UI results (2026-11-10, Windows, release build, `npm test --only …`):**
+ownership 20/20, recovery-restore 4/4 + 9/9, ai 337/337, html 60/60, menu
+172/172, tabs 107/107, tabs-restore 36/36, shortcuts 52/52, image-rules 43/43,
+format-document 152/152, pdf-native 24/24, smoke 117/117, p0-lifecycle 39/39,
+paste 95/95, single-instance 12/12, latex-project 16/16, latex-native PASS.
+`latex-preview` passed every check this plan added (engine label, three
+Auto-compile switches); its one failure in that run came from another session's
+uncommitted Logs-panel move, whose test update was not yet on disk. `close` was
+skipped by the harness (it needs a visible window). Linux and macOS were not
+run.
+
+The UI run found two product defects, both fixed in `main.ts`:
+
+- A successful LaTeX compile never re-sent the menu state, so Export › PDF and
+  Print kept "available after the preview compiles" until the next caret move.
+  The commit path now calls `syncMenuState(false)`.
+- A paste into a hidden tab announced "Pasted into …", and the image module's
+  "Image saved to …" toast replaced it at once. The image context's `notify`
+  now names the receiving tab while its owner is hidden.
+
+Three failures were in the new tests themselves and are recorded as traps
+where they can recur: the restart suite left the harness's launch document in
+the remembered set; the AI block started on the prompts tab and undid with
+focus outside the editor; and it compared `.cm-line` text, which is only the
+rendered viewport (`traps/test-harness.md`). A concurrent `npm run build` in
+another session breaking `generate_context!` is in
+`traps/build-and-environment.md`.
 
 ## Files and modules
 

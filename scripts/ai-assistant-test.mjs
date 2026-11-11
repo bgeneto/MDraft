@@ -883,6 +883,15 @@ async function editorText() {
   );
 }
 
+/**
+ * The whole document from the editor state. `editorText` reads only the lines
+ * CodeMirror has rendered, and that set moves with the scroll position, so it
+ * cannot compare a long document before and after an edit far from the caret.
+ */
+async function documentText() {
+  return evaluate(`document.querySelector('.cm-content').cmTile.root.view.state.doc.toString()`);
+}
+
 async function rectOf(word) {
   return evaluate(`(() => {
     const root = document.querySelector('#editor-pane');
@@ -3896,6 +3905,16 @@ try {
   console.log("\nOwnership: a covered request still completes");
   await closePanel();
   await closeHistory();
+  // The prompt-reset checks above leave ai-prompts.md on screen.
+  check(
+    "the fixture tab is on screen for the ownership checks",
+    await evaluate(`(() => {
+      const tab = [...document.querySelectorAll('.doc-tab')].find(t => t.querySelector('.doc-tab-name')?.textContent === "feature-tour.md");
+      tab?.click();
+      return Boolean(tab);
+    })()`),
+  );
+  await sleep(200);
   control.mode = "hold";
   await clickEditorWord("Regular");
   await chooseAction("Summarize");
@@ -3977,7 +3996,7 @@ try {
   await closePanel();
 
   console.log("\nOwnership: Insert below follows an edit above the passage");
-  const beforeAnchor = await editorText();
+  const beforeAnchor = await documentText();
   control.mode = "hold";
   await clickEditorWord("Regular");
   const anchorLine = await evaluate(
@@ -3997,12 +4016,19 @@ try {
   const answerIndex = afterAnchor.findIndex((line) =>
     line.includes("Improved passage from the mock."),
   );
+  // Insert below goes after the whole paragraph, so the block just above the
+  // answer must be the one that holds the line the request was made from.
   let previous = answerIndex - 1;
   while (previous >= 0 && afterAnchor[previous].trim() === "") previous -= 1;
+  const above = [];
+  while (previous >= 0 && afterAnchor[previous].trim() !== "") {
+    above.unshift(afterAnchor[previous]);
+    previous -= 1;
+  }
   check(
     "the answer lands below the paragraph it was requested for",
-    answerIndex > 0 && afterAnchor[previous] === anchorLine,
-    `${JSON.stringify(afterAnchor[previous])} vs ${JSON.stringify(anchorLine)}`,
+    answerIndex > 0 && above.includes(anchorLine),
+    `${JSON.stringify(above)} vs ${JSON.stringify(anchorLine)}`,
   );
   await undo();
   check(
@@ -4012,7 +4038,7 @@ try {
   );
   await undo();
   await closePanel();
-  check("the document is back to its text", (await editorText()) === beforeAnchor);
+  check("the document is back to its text", (await documentText()) === beforeAnchor);
 
   console.log("\nOwnership: a deleted target is not guessed");
   control.mode = "hold";
@@ -4038,8 +4064,16 @@ try {
     await panelStatus(),
   );
   await closePanel();
+  // Closing the panel leaves focus on its frame, where Ctrl+Z does nothing.
+  await evaluate(`document.querySelector('.cm-content').focus()`);
   await undo();
-  check("the replaced document is restored", (await editorText()) === beforeAnchor);
+  await sleep(200);
+  const restored = await documentText();
+  check(
+    "the replaced document is restored",
+    restored === beforeAnchor,
+    `${restored.length} vs ${beforeAnchor.length}: ${JSON.stringify(restored.slice(0, 80))}`,
+  );
 
   console.log("\nOwnership: choosing the same target again keeps one history row");
   await clickEditorWord("Regular");

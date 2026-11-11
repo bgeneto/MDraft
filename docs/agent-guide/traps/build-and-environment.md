@@ -277,3 +277,14 @@ their engine switch never reaches `settings.json`. The harness says so in its
 header — `staged … (the sandbox cannot reach %APPDATA% from inside the
 workspace)` — which is the line to read first. Set the workspace `TEMP` only on
 the `cargo test` command itself, never for `npm test`.
+
+**`npm test` fails at `building` with `error: failed to read asset at …\src-tauri\../dist\assets\index-<hash>.css because The system cannot find the path specified. (os error 3)` from `tauri::generate_context!()`**
+Not a broken build and not a missing file in the change. Another agent session
+working in the same checkout ran `npm run build` (or its own `npm test`) while
+this one was compiling: Vite empties `dist/` and writes assets under new hashes,
+so the hashed name `generate_context!` had resolved from `dist/index.html` was
+gone by the time the macro read it. It is tempting to blame the frontend change
+and start bisecting it. Check for another `node … test-all.mjs` or `vite`
+process first (`Get-CimInstance Win32_Process -Filter "Name='node.exe'"`), wait
+for it to finish, and rerun; the harness's own refusal of a second harness does
+not cover a plain `npm run build` in the other session.
