@@ -10,6 +10,7 @@
 import type { LatexNativeResult, LatexProjectSnapshot } from "./api";
 import { LatexBuildError, type LatexDiagnostic, type LatexResult } from "./latex.ts";
 import { lineTextOf } from "./latex-references.ts";
+import { libraryOrigin } from "./latex-texmf.ts";
 
 function decodeBase64Data(data: string): Uint8Array {
   const binary = atob(data);
@@ -64,18 +65,24 @@ export function nativeDiagnostics(
   snapshot: LatexProjectSnapshot,
 ): { diagnostics: LatexDiagnostic[]; warnings: LatexDiagnostic[] } {
   const sourceMap = new Map(nativeSources(snapshot).map((file) => [file.path, file.source]));
-  const diagnostics = result.diagnostics.map((entry) => ({
-    file: entry.file,
-    line: entry.line,
-    column: 0,
-    endColumn: 0,
-    severity: entry.severity,
-    code: entry.code,
-    message: entry.message,
-    text: "",
-    lineText: lineText(sourceMap, entry.file, entry.line),
-    searched: [],
-  }));
+  const diagnostics = result.diagnostics.map((entry) => {
+    // A message from a staged library names the reader's own file, never the
+    // job path. It has no line text, so it is shown but cannot navigate: a
+    // library file is not a project source.
+    const origin = libraryOrigin(snapshot.texmf, entry.file);
+    return {
+      file: origin ?? entry.file,
+      line: entry.line,
+      column: 0,
+      endColumn: 0,
+      severity: entry.severity,
+      code: origin ? "library" : entry.code,
+      message: origin ? `${entry.message} (local library: ${origin})` : entry.message,
+      text: "",
+      lineText: origin ? "" : lineText(sourceMap, entry.file, entry.line),
+      searched: [],
+    };
+  });
   return {
     diagnostics,
     warnings: diagnostics.filter((entry) => entry.severity === "warning"),

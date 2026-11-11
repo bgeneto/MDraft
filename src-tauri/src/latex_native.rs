@@ -10,6 +10,7 @@
 mod discovery;
 pub mod log;
 mod runner;
+pub mod wsl;
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -88,6 +89,8 @@ pub struct EngineStatus {
     pub native_distribution: Option<String>,
     pub native_engine: String,
     pub native_engines: Vec<String>,
+    /// The selected TeX Live inside WSL, when that is the native engine.
+    pub native_wsl: Option<wsl::WslInstallation>,
     /// Why the configured native installation cannot be used, when it cannot.
     pub problem: Option<String>,
 }
@@ -132,6 +135,9 @@ pub struct NativeCompileRequest {
     job: String,
     main_file: String,
     files: Vec<NativeFile>,
+    /// Captured local libraries, staged beside the project, never inside it.
+    #[serde(default)]
+    texmf: Option<crate::latex_texmf::TexmfSnapshot>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -176,7 +182,8 @@ pub fn latex_engine_status(app: AppHandle) -> Result<EngineStatus, String> {
     let settings = state.snapshot()?;
     let bundled_installed = crate::latex::latex_status(app.clone()).unwrap_or(false);
     let native_root = settings.latex_native_root.clone();
-    let native_engines = native_root
+    let native_wsl = settings.latex_native_wsl.clone();
+    let mut native_engines = native_root
         .as_deref()
         .map(|root| {
             let directory = Path::new(root);
@@ -188,7 +195,16 @@ pub fn latex_engine_status(app: AppHandle) -> Result<EngineStatus, String> {
         })
         .unwrap_or_default();
     let mut problem = None;
-    if settings.latex_native_enabled {
+    if let Some(selected) = &native_wsl {
+        native_engines = selected.engines.clone();
+        // Registry only: a status read must never start the distribution.
+        if settings.latex_native_enabled && !wsl_registered(&selected.distro) {
+            problem = Some(format!(
+                "The WSL distribution {} is no longer registered. Find an installation again, or turn off the installed engine.",
+                selected.distro
+            ));
+        }
+    } else if settings.latex_native_enabled {
         match native_root.as_deref() {
             None => problem = Some("No installed TeX distribution is selected.".into()),
             Some(root) if !Path::new(root).is_dir() => {
@@ -216,10 +232,14 @@ pub fn latex_engine_status(app: AppHandle) -> Result<EngineStatus, String> {
         bundled_enabled: settings.latex_enabled,
         bundled_installed,
         native_enabled: settings.latex_native_enabled,
-        native_distribution: native_root.as_deref().map(distribution_name),
+        native_distribution: match &native_wsl {
+            Some(selected) => Some(wsl_distribution_name(&selected.distro)),
+            None => native_root.as_deref().map(distribution_name),
+        },
         native_root,
         native_engine: settings.latex_native_engine,
         native_engines,
+        native_wsl,
         problem,
     })
 }
@@ -251,7 +271,14 @@ pub fn latex_native_set_enabled(app: AppHandle, enabled: bool) -> Result<EngineS
         .try_state::<crate::settings::AppState>()
         .ok_or("The settings store is unavailable.")?;
     let mut settings = state.snapshot()?;
-    if enabled {
+    if enabled && let Some(selected) = &settings.latex_native_wsl {
+        if !wsl_registered(&selected.distro) {
+            return Err(format!(
+                "The WSL distribution {} is no longer registered.",
+                selected.distro
+            ));
+        }
+    } else if enabled {
         let root = settings
             .latex_native_root
             .as_deref()
@@ -280,7 +307,16 @@ pub fn latex_native_set_engine(app: AppHandle, engine: String) -> Result<EngineS
         .try_state::<crate::settings::AppState>()
         .ok_or("The settings store is unavailable.")?;
     let mut settings = state.snapshot()?;
-    if let Some(root) = settings.latex_native_root.as_deref()
+    if let Some(selected) = &settings.latex_native_wsl
+        && let Some(engine) = known_engine(&engine)
+        && !selected.engines.iter().any(|known| known == engine)
+    {
+        return Err(format!(
+            "The selected installation does not contain {engine}."
+        ));
+    }
+    if settings.latex_native_wsl.is_none()
+        && let Some(root) = settings.latex_native_root.as_deref()
         && let Some(engine) = known_engine(&engine)
         && !has_engine(Path::new(root), engine)
     {
@@ -309,6 +345,182 @@ pub async fn latex_native_compile(
     tauri::async_runtime::spawn_blocking(move || compile(&app, request))
         .await
         .map_err(|error| error.to_string())?
+}
+
+/// Registered WSL distributions, from the registry only. Starts nothing.
+#[tauri::command]
+pub fn latex_native_wsl_distributions() -> Vec<wsl::WslDistribution> {
+    #[cfg(windows)]
+    {
+        wsl::distributions()
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
+}
+
+/// Look for TeX engines inside one distribution. This starts its VM, which is
+/// why it is a separate, explicit action rather than part of discovery.
+#[tauri::command]
+pub async fn latex_native_wsl_look(
+    app: AppHandle,
+    distro: String,
+) -> Result<Vec<wsl::WslCandidate>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(windows)]
+        {
+            let job = runner::job_dir(&app, "wsl-look")?;
+            wsl::look_inside(&distro, &job.path)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (app, distro);
+            Err("WSL is available only on Windows.".to_string())
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Validate a TeX Live inside WSL with version probes and a probe compile,
+/// then commit it as the installed engine.
+#[tauri::command]
+pub async fn latex_native_wsl_validate(
+    app: AppHandle,
+    distro: String,
+    bin: String,
+) -> Result<Capabilities, String> {
+    tauri::async_runtime::spawn_blocking(move || validate_wsl(&app, &distro, &bin))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[cfg(not(windows))]
+fn validate_wsl(_app: &AppHandle, _distro: &str, _bin: &str) -> Result<Capabilities, String> {
+    Err("WSL is available only on Windows.".into())
+}
+
+#[cfg(windows)]
+fn validate_wsl(app: &AppHandle, distro: &str, bin: &str) -> Result<Capabilities, String> {
+    if !wsl::registered(distro) {
+        return Err(format!("{distro} is not a registered WSL distribution."));
+    }
+    if !wsl::safe_linux_dir(bin) {
+        return Err("Choose an absolute Linux directory such as /usr/bin.".into());
+    }
+    let job = runner::job_dir(app, "validate-wsl")?;
+    let work = job.path.join("project");
+    std::fs::create_dir_all(&work).map_err(|error| error.to_string())?;
+    let _ = base_environment(Path::new(bin), &work, "TeX Live");
+    let linux = wsl::linux_path(distro, &job.path, &work)?;
+    let env = wsl_environment(bin, &linux, "lualatex", 0);
+    let probe = |program: &str| -> Result<Option<String>, String> {
+        let outcome = runner::run(
+            &wsl::engine_spec(
+                distro,
+                &work,
+                &env,
+                &format!("{bin}/{program}"),
+                &[OsString::from("--version")],
+                PROBE_TIMEOUT,
+            )?,
+            &AtomicBool::new(false),
+        )?;
+        Ok((outcome.status == 0).then(|| {
+            outcome
+                .console
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .unwrap_or("found")
+                .to_string()
+        }))
+    };
+    let mut engines = Vec::new();
+    for engine in ENGINES {
+        if let Some(version) = probe(engine)? {
+            engines.push(ToolInfo {
+                id: (*engine).into(),
+                path: format!("{bin}/{engine}"),
+                version,
+            });
+        }
+    }
+    if engines.is_empty() {
+        return Err(format!(
+            "No LuaLaTeX, pdfLaTeX or XeLaTeX could start from {bin} in {distro}."
+        ));
+    }
+    let mut tools = Vec::new();
+    for tool in TOOLS {
+        if let Some(version) = probe(tool)? {
+            tools.push(ToolInfo {
+                id: (*tool).into(),
+                path: format!("{bin}/{tool}"),
+                version,
+            });
+        }
+    }
+    std::fs::write(
+        work.join("mdraft-probe.tex"),
+        b"\\documentclass{article}\n\\begin{document}\nMDraft native probe.\n\\end{document}\n",
+    )
+    .map_err(|error| error.to_string())?;
+    let preferred = engines
+        .iter()
+        .find(|entry| entry.id == "lualatex")
+        .unwrap_or(&engines[0])
+        .id
+        .clone();
+    let outcome = runner::run(
+        &wsl::engine_spec(
+            distro,
+            &work,
+            &env,
+            &format!("{bin}/{preferred}"),
+            &engine_arguments(&preferred, "mdraft-probe.tex"),
+            PROBE_TIMEOUT * 3,
+        )?,
+        &AtomicBool::new(false),
+    )?;
+    let log = std::fs::read_to_string(work.join("mdraft-probe.log")).unwrap_or_default();
+    let Some(pdf) = find_output(&work, "mdraft-probe", "pdf") else {
+        return Err(format!(
+            "The installation could not compile the probe document (exit {}).\n\n{}",
+            outcome.status,
+            tail(&log, &outcome.console)
+        ));
+    };
+    if !pdf.starts_with(b"%PDF-") {
+        return Err("The probe produced a file that is not a PDF.".into());
+    }
+    let state = app
+        .try_state::<crate::settings::AppState>()
+        .ok_or("The settings store is unavailable.")?;
+    let mut settings = state.snapshot()?;
+    settings.latex_native_wsl = Some(wsl::WslInstallation {
+        distro: distro.to_string(),
+        bin: bin.to_string(),
+        engines: engines.iter().map(|entry| entry.id.clone()).collect(),
+        tools: tools.iter().map(|entry| entry.id.clone()).collect(),
+    });
+    settings.latex_native_root = None;
+    if settings.latex_native_engine != "auto"
+        && !engines
+            .iter()
+            .any(|entry| entry.id == settings.latex_native_engine)
+    {
+        settings.latex_native_engine = "auto".into();
+    }
+    state.save(settings)?;
+    Ok(Capabilities {
+        root: format!("{distro}:{bin}"),
+        bin: bin.to_string(),
+        distribution: wsl_distribution_name(distro),
+        engines,
+        tools,
+    })
 }
 
 fn validate(app: &AppHandle, directory: &str) -> Result<Capabilities, String> {
@@ -430,6 +642,7 @@ fn validate(app: &AppHandle, directory: &str) -> Result<Capabilities, String> {
         .ok_or("The settings store is unavailable.")?;
     let mut settings = state.snapshot()?;
     settings.latex_native_root = Some(bin.display().to_string());
+    settings.latex_native_wsl = None;
     if settings.latex_native_engine != "auto"
         && !engines.contains(&settings.latex_native_engine.as_str())
     {
@@ -483,24 +696,23 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
     if !settings.latex_native_enabled {
         return Err("The installed TeX distribution is turned off.".into());
     }
-    let root = settings
-        .latex_native_root
-        .clone()
-        .ok_or("No installed TeX distribution is selected.")?;
-    let bin = PathBuf::from(&root);
-    if !bin.is_dir() {
-        return Err(
-            "The selected TeX installation has moved. Find it again in Preferences › LaTeX.".into(),
-        );
-    }
-    let name = distribution_name(&root);
+    let target = Target::from_settings(&settings)?;
+    let name = target.distribution();
     let (token, registration) = register(&request.job)?;
 
     let job = runner::job_dir(app, &request.job)?;
     let work = job.path.join("project");
-    let env = base_environment(&bin, &work, &name);
     let staged = stage(&work, &request)?;
-    let engine = select_engine(&settings.latex_native_engine, &bin, &work, &staged.main)?;
+    let roots = stage_texmf(&job.path.join("texmf"), request.texmf.as_ref())?;
+    let engine = select_engine_with(
+        &settings.latex_native_engine,
+        &|engine| target.has_engine(engine),
+        &staged.main,
+    )?;
+    if matches!(target, Target::Wsl(_)) {
+        emit(app, &request.job, "starting-wsl", None);
+    }
+    let env = target.environment(&job.path, &work, &engine, roots)?;
     let main_name = staged
         .main
         .file_name()
@@ -538,13 +750,7 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
         emit(app, &request.job, "compiling", Some(&engine));
         let args = engine_arguments(&engine, &main_argument);
         outcome = runner::run(
-            &runner::RunSpec {
-                program: engine_path(&bin, &engine),
-                args,
-                cwd: work.clone(),
-                env: env.clone(),
-                timeout: COMPILE_TIMEOUT,
-            },
+            &target.spec(&engine, args, &work, &env, COMPILE_TIMEOUT)?,
             &token,
         )?;
         if token.load(Ordering::SeqCst) || outcome.cancelled {
@@ -565,18 +771,12 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
                 Bibliography::Biber => "biber",
                 Bibliography::None => "",
             };
-            if bin.join(discovery::exe(tool)).is_file() {
+            if target.has_tool(tool) {
                 bibliography_run = parsed.bibliography;
                 emit(app, &request.job, "bibliography", Some(tool));
                 let args = vec![OsString::from(stem.clone())];
                 let helper = runner::run(
-                    &runner::RunSpec {
-                        program: bin.join(discovery::exe(tool)),
-                        args,
-                        cwd: work.clone(),
-                        env: env.clone(),
-                        timeout: PROBE_TIMEOUT * 3,
-                    },
+                    &target.spec(tool, args, &work, &env, PROBE_TIMEOUT * 3)?,
                     &token,
                 )?;
                 if !helper.console.trim().is_empty() {
@@ -795,9 +995,18 @@ fn is_executable(path: &str) -> bool {
     .any(|suffix| lower.ends_with(suffix))
 }
 
-fn select_engine(requested: &str, bin: &Path, work: &Path, main: &Path) -> Result<String, String> {
+#[cfg(test)]
+fn select_engine(requested: &str, bin: &Path, _work: &Path, main: &Path) -> Result<String, String> {
+    select_engine_with(requested, &|engine| has_engine(bin, engine), main)
+}
+
+fn select_engine_with(
+    requested: &str,
+    has: &dyn Fn(&str) -> bool,
+    main: &Path,
+) -> Result<String, String> {
     if let Some(engine) = known_engine(requested) {
-        if !has_engine(bin, engine) {
+        if !has(engine) {
             return Err(format!(
                 "The selected installation does not contain {engine}."
             ));
@@ -820,20 +1029,295 @@ fn select_engine(requested: &str, bin: &Path, work: &Path, main: &Path) -> Resul
             };
             let value = value.trim_start_matches([' ', '=']).trim();
             if let Some(engine) = known_engine(value)
-                && has_engine(bin, engine)
+                && has(engine)
             {
-                let _ = work;
                 return Ok(engine.to_string());
             }
         }
     }
     for engine in ENGINES {
-        if has_engine(bin, engine) {
+        if has(engine) {
             return Ok((*engine).to_string());
         }
     }
     Err("The selected installation has no usable engine.".into())
 }
+
+/// Where a job runs: a host binary directory, or TeX Live inside WSL.
+enum Target {
+    Path { bin: PathBuf, name: String },
+    Wsl(wsl::WslInstallation),
+}
+
+/// How a distribution finds files outside its own trees.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Family {
+    /// TeX Live, MacTeX, TinyTeX and distribution packages.
+    Kpathsea,
+    /// MiKTeX ignores TEXMFHOME; it honours `.;`-prefixed search variables.
+    Miktex,
+}
+
+impl Target {
+    fn from_settings(settings: &crate::settings::Settings) -> Result<Target, String> {
+        if let Some(selected) = &settings.latex_native_wsl {
+            if !wsl_registered(&selected.distro) {
+                return Err(format!(
+                    "The WSL distribution {} is no longer registered. Find an installation again in Preferences › LaTeX.",
+                    selected.distro
+                ));
+            }
+            return Ok(Target::Wsl(selected.clone()));
+        }
+        let root = settings
+            .latex_native_root
+            .clone()
+            .ok_or("No installed TeX distribution is selected.")?;
+        let bin = PathBuf::from(&root);
+        if !bin.is_dir() {
+            return Err(
+                "The selected TeX installation has moved. Find it again in Preferences › LaTeX."
+                    .into(),
+            );
+        }
+        Ok(Target::Path {
+            name: distribution_name(&root),
+            bin,
+        })
+    }
+
+    fn distribution(&self) -> String {
+        match self {
+            Target::Path { name, .. } => name.clone(),
+            Target::Wsl(selected) => wsl_distribution_name(&selected.distro),
+        }
+    }
+
+    fn family(&self) -> Family {
+        match self {
+            Target::Path { name, .. } if name == "MiKTeX" => Family::Miktex,
+            _ => Family::Kpathsea,
+        }
+    }
+
+    fn has_engine(&self, engine: &str) -> bool {
+        match self {
+            Target::Path { bin, .. } => has_engine(bin, engine),
+            Target::Wsl(selected) => selected.engines.iter().any(|known| known == engine),
+        }
+    }
+
+    fn has_tool(&self, tool: &str) -> bool {
+        match self {
+            Target::Path { bin, .. } => bin.join(discovery::exe(tool)).is_file(),
+            Target::Wsl(selected) => selected.tools.iter().any(|known| known == tool),
+        }
+    }
+
+    fn environment(
+        &self,
+        job: &Path,
+        work: &Path,
+        engine: &str,
+        roots: usize,
+    ) -> Result<Vec<(String, String)>, String> {
+        match self {
+            Target::Path { bin, name } => {
+                let mut env = base_environment(bin, work, name);
+                for (key, value) in library_environment(self.family(), engine, roots) {
+                    set_env(&mut env, &key, value);
+                }
+                Ok(env)
+            }
+            Target::Wsl(selected) => {
+                // Creates the private directories on the Windows side.
+                let _ = base_environment(Path::new(&selected.bin), work, "TeX Live");
+                let linux = wsl_linux_path(&selected.distro, job)?;
+                Ok(wsl_environment(&selected.bin, &linux, engine, roots))
+            }
+        }
+    }
+
+    fn spec(
+        &self,
+        program: &str,
+        args: Vec<OsString>,
+        work: &Path,
+        env: &[(String, String)],
+        timeout: Duration,
+    ) -> Result<runner::RunSpec, String> {
+        match self {
+            Target::Path { bin, .. } => Ok(runner::RunSpec {
+                program: engine_path(bin, program),
+                args,
+                cwd: work.to_path_buf(),
+                env: env.to_vec(),
+                timeout,
+            }),
+            Target::Wsl(selected) => wsl_engine_spec(selected, work, env, program, &args, timeout),
+        }
+    }
+}
+
+/// The exact Linux environment of a WSL job. `job` is the Linux form of the
+/// Windows job directory; everything writable stays inside it.
+fn wsl_environment(bin: &str, job: &str, engine: &str, roots: usize) -> Vec<(String, String)> {
+    let work = format!("{job}/project");
+    let mut env = vec![
+        // Not the Windows PATH that WSL interop appends.
+        ("PATH".to_string(), format!("{bin}:/usr/bin:/bin")),
+        ("LANG".to_string(), "C.UTF-8".to_string()),
+        ("LC_ALL".to_string(), "C.UTF-8".to_string()),
+        ("HOME".to_string(), work.clone()),
+        ("TMPDIR".to_string(), format!("{work}/tmp")),
+        ("TEXMFVAR".to_string(), format!("{work}/data")),
+        ("TEXMFCONFIG".to_string(), format!("{work}/config")),
+        ("TEXMFHOME".to_string(), format!("{work}/home")),
+    ];
+    for (key, value) in library_environment(Family::Kpathsea, engine, roots) {
+        set_env(&mut env, &key, value);
+    }
+    env
+}
+
+/// The search-path variables that put staged libraries after the project and
+/// before the distribution. Paths are relative to the engine's working
+/// directory (job/project), so a job path with a comma, brace or non-ASCII
+/// letter never enters a search-path expression. Measured on TeX Live 2025 and
+/// MiKTeX 23.1; see the support matrix in the local TEXMF plan.
+fn library_environment(family: Family, engine: &str, roots: usize) -> Vec<(String, String)> {
+    if roots == 0 {
+        return Vec::new();
+    }
+    let root = |n: usize| format!("../texmf/{n}");
+    match family {
+        Family::Kpathsea => {
+            // TEXMFHOME is part of $TEXMF, so the distribution's own cnf supplies
+            // format-aware TEXINPUTS.<fmt>, BSTINPUTS, LUAINPUTS and font paths.
+            let list: Vec<String> = (0..roots).map(root).collect();
+            vec![("TEXMFHOME".into(), format!("{{{}}}", list.join(",")))]
+        }
+        Family::Miktex => {
+            let tex: &[&str] = match engine {
+                "lualatex" => &["tex/lualatex", "tex/latex", "tex/luatex", "tex/generic"],
+                "xelatex" => &["tex/xelatex", "tex/latex", "tex/xetex", "tex/generic"],
+                _ => &["tex/latex", "tex/pdftex", "tex/generic"],
+            };
+            let over = |subdirs: &[&str]| -> String {
+                // The leading `.` keeps the project first: MiKTeX otherwise
+                // searches these variables before the working directory.
+                let mut value = String::from(".;");
+                for n in 0..roots {
+                    for dir in subdirs {
+                        value.push_str(&format!("{}/{dir}//;", root(n)));
+                    }
+                }
+                value
+            };
+            vec![
+                ("TEXINPUTS".into(), over(tex)),
+                ("BSTINPUTS".into(), over(&["bibtex/bst"])),
+                ("BIBINPUTS".into(), over(&["bibtex/bib"])),
+                (
+                    "LUAINPUTS".into(),
+                    over(&["scripts", "tex/luatex", "tex/lualatex", "tex/latex", "tex/generic"]),
+                ),
+                ("OPENTYPEFONTS".into(), over(&["fonts/opentype"])),
+                ("TTFONTS".into(), over(&["fonts/truetype"])),
+            ]
+        }
+    }
+}
+
+/// Write a validated library snapshot as job/texmf/<n>/<TDS path>.
+fn stage_texmf(
+    dir: &Path,
+    snapshot: Option<&crate::latex_texmf::TexmfSnapshot>,
+) -> Result<usize, String> {
+    let Some(snapshot) = snapshot else {
+        return Ok(0);
+    };
+    crate::latex_texmf::validate_snapshot(snapshot)?;
+    for index in 0..snapshot.roots.len() {
+        std::fs::create_dir_all(dir.join(index.to_string())).map_err(|error| error.to_string())?;
+    }
+    for file in &snapshot.files {
+        let bytes = STANDARD
+            .decode(&file.data)
+            .map_err(|_| format!("{} is not valid library data.", file.path))?;
+        if bytes.len() > MAX_FILE {
+            return Err(format!("{} exceeds the 32 MiB file limit.", file.path));
+        }
+        let target = dir.join(file.root.to_string()).join(&file.path);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        std::fs::write(&target, &bytes)
+            .map_err(|error| format!("Cannot stage the library file {}: {error}", file.path))?;
+    }
+    Ok(snapshot.roots.len())
+}
+
+fn wsl_distribution_name(distro: &str) -> String {
+    format!("TeX Live (WSL: {distro})")
+}
+
+#[cfg(windows)]
+fn wsl_registered(distro: &str) -> bool {
+    wsl::registered(distro)
+}
+
+#[cfg(not(windows))]
+fn wsl_registered(_distro: &str) -> bool {
+    false
+}
+
+#[cfg(windows)]
+fn wsl_linux_path(distro: &str, job: &Path) -> Result<String, String> {
+    wsl::linux_path(distro, job, job)
+}
+
+#[cfg(not(windows))]
+fn wsl_linux_path(_distro: &str, _job: &Path) -> Result<String, String> {
+    Err("WSL is available only on Windows.".into())
+}
+
+#[cfg(windows)]
+fn wsl_engine_spec(
+    selected: &wsl::WslInstallation,
+    work: &Path,
+    env: &[(String, String)],
+    program: &str,
+    args: &[OsString],
+    timeout: Duration,
+) -> Result<runner::RunSpec, String> {
+    if !wsl::safe_linux_dir(&selected.bin)
+        || !(known_engine(program).is_some() || TOOLS.contains(&program))
+    {
+        return Err("Invalid WSL program.".into());
+    }
+    wsl::engine_spec(
+        &selected.distro,
+        work,
+        env,
+        &format!("{}/{program}", selected.bin),
+        args,
+        timeout,
+    )
+}
+
+#[cfg(not(windows))]
+fn wsl_engine_spec(
+    _selected: &wsl::WslInstallation,
+    _work: &Path,
+    _env: &[(String, String)],
+    _program: &str,
+    _args: &[OsString],
+    _timeout: Duration,
+) -> Result<runner::RunSpec, String> {
+    Err("WSL is available only on Windows.".into())
+}
+
 
 fn set_env(env: &mut Vec<(String, String)>, key: &str, value: String) {
     env.retain(|(existing, _)| !existing.eq_ignore_ascii_case(key));
@@ -1237,5 +1721,246 @@ mod tests {
             .unwrap();
         assert!(temp.starts_with(&root.display().to_string()));
         assert!(env.iter().any(|(key, _)| key == "TEXMFVAR"));
+    }
+
+    fn value<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {
+        env.iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.as_str())
+    }
+
+    #[test]
+    fn library_search_paths_follow_the_distribution_family() {
+        assert!(library_environment(Family::Kpathsea, "lualatex", 0).is_empty());
+        assert!(library_environment(Family::Miktex, "lualatex", 0).is_empty());
+        let kpathsea = library_environment(Family::Kpathsea, "pdflatex", 2);
+        assert_eq!(value(&kpathsea, "TEXMFHOME"), Some("{../texmf/0,../texmf/1}"));
+        let miktex = library_environment(Family::Miktex, "lualatex", 2);
+        let tex = value(&miktex, "TEXINPUTS").unwrap();
+        // Project first (MiKTeX searches these before the working directory),
+        // then roots in order with format-specific directories first.
+        assert!(tex.starts_with(".;../texmf/0/tex/lualatex//;../texmf/0/tex/latex//;"), "{tex}");
+        assert!(tex.find("../texmf/0/").unwrap() < tex.find("../texmf/1/").unwrap());
+        assert!(!tex.contains("tex/xelatex"));
+        assert!(value(&miktex, "BSTINPUTS").unwrap().starts_with(".;../texmf/0/bibtex/bst//;"));
+        assert!(value(&miktex, "LUAINPUTS").unwrap().contains("../texmf/1/scripts//;"));
+        assert!(value(&miktex, "OPENTYPEFONTS").is_some());
+        let xelatex = library_environment(Family::Miktex, "xelatex", 1);
+        assert!(value(&xelatex, "TEXINPUTS").unwrap().starts_with(".;../texmf/0/tex/xelatex//;"));
+        // Every entry is relative: a job path never enters a search expression.
+        for (_, value) in kpathsea.iter().chain(&miktex) {
+            assert!(!value.contains(':') || value.starts_with(".;"), "{value}");
+            assert!(!value.contains('\\'));
+        }
+    }
+
+    #[test]
+    fn the_wsl_environment_is_exact_and_job_local() {
+        let env = wsl_environment("/usr/local/texlive/2025/bin/x86_64-linux", "/mnt/c/jobs/a, b", "lualatex", 1);
+        assert_eq!(
+            value(&env, "PATH"),
+            Some("/usr/local/texlive/2025/bin/x86_64-linux:/usr/bin:/bin")
+        );
+        assert_eq!(value(&env, "HOME"), Some("/mnt/c/jobs/a, b/project"));
+        assert_eq!(value(&env, "TEXMFHOME"), Some("{../texmf/0}"));
+        assert!(value(&env, "TEXMFVAR").unwrap().starts_with("/mnt/c/jobs/a, b/"));
+        let without = wsl_environment("/usr/bin", "/mnt/c/jobs/x", "pdflatex", 0);
+        assert_eq!(value(&without, "TEXMFHOME"), Some("/mnt/c/jobs/x/project/home"));
+    }
+
+    fn library_snapshot(files: &[(usize, &str, &[u8])], roots: usize) -> crate::latex_texmf::TexmfSnapshot {
+        crate::latex_texmf::TexmfSnapshot {
+            revision: "test".into(),
+            roots: (0..roots)
+                .map(|n| crate::latex_texmf::SnapshotRoot {
+                    id: n.to_string(),
+                    label: n.to_string(),
+                    layout: crate::latex_texmf::Layout::Tds,
+                    path: String::new(),
+                })
+                .collect(),
+            files: files
+                .iter()
+                .map(|(root, path, data)| crate::latex_texmf::TexmfFile {
+                    root: *root,
+                    path: (*path).into(),
+                    origin: String::new(),
+                    data: STANDARD.encode(data),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn libraries_are_staged_beside_the_project_and_revalidated() {
+        let job = std::env::temp_dir().join(format!(
+            "mdraft-stage-texmf-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let snapshot = library_snapshot(
+            &[(0, "tex/latex/a/a.sty", b"x"), (1, "fonts/opentype/f/F.otf", &[0, 255])],
+            3,
+        );
+        assert_eq!(stage_texmf(&job.join("texmf"), Some(&snapshot)).unwrap(), 3);
+        assert_eq!(std::fs::read(job.join("texmf/0/tex/latex/a/a.sty")).unwrap(), b"x");
+        assert_eq!(std::fs::read(job.join("texmf/1/fonts/opentype/f/F.otf")).unwrap(), [0, 255]);
+        assert!(job.join("texmf/2").is_dir(), "an empty root still exists");
+        let escaping = library_snapshot(&[(0, "tex/../../project/main.tex", b"x")], 1);
+        assert!(stage_texmf(&job.join("texmf2"), Some(&escaping)).is_err());
+        assert_eq!(stage_texmf(&job.join("none"), None).unwrap(), 0);
+        let _ = std::fs::remove_dir_all(job);
+    }
+
+    /// The staged fixture used by the real-engine library tests: a class in
+    /// root 0 that loads a package present in roots 0 and 1 (root 0 wins), a
+    /// root-1-only package, format-specific copies, a project file shadowing a
+    /// root file (the project wins), and a .bst/.bib pair.
+    fn library_fixture(job: &Path) -> (crate::latex_texmf::TexmfSnapshot, &'static str) {
+        let project = job.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("main.tex"),
+            "\\documentclass{mdraftcls}\\usepackage{mdraftover}\n\\begin{document}\nGate.\\nocite{*}\\bibliographystyle{mdraftgate}\\bibliography{mdraftgate}\n\\end{document}\n",
+        )
+        .unwrap();
+        std::fs::write(project.join("mdraftover.sty"), "\\ProvidesPackage{mdraftover}\\typeout{RESULT-OVER: project}\n").unwrap();
+        let bst = concat!(
+            "ENTRY{title}{}{}\n",
+            "FUNCTION{misc}{ \"\\bibitem{\" cite$ * \"}\" * write$ newline$ title write$ newline$ }\n",
+            "READ\n",
+            "FUNCTION{begin.bib}{ \"\\begin{thebibliography}{1}\" write$ newline$ }\n",
+            "EXECUTE{begin.bib}\n",
+            "ITERATE{call.type$}\n",
+            "FUNCTION{end.bib}{ \"\\end{thebibliography}\" write$ newline$ }\n",
+            "EXECUTE{end.bib}\n",
+        );
+        let files: Vec<(usize, &str, Vec<u8>)> = vec![
+            (0, "tex/latex/mdraftcls/mdraftcls.cls", b"\\NeedsTeXFormat{LaTeX2e}\\ProvidesClass{mdraftcls}\\LoadClassWithOptions{article}\\RequirePackage{mdraftpkg}\\RequirePackageWithOptions{mdraftdup}\\InputIfFileExists{mdraftcls-extra.def}{}{\\typeout{RESULT-DEF: missing}}\n".to_vec()),
+            (0, "tex/latex/mdraftcls/mdraftcls-extra.def", b"\\typeout{RESULT-DEF: r0}\n".to_vec()),
+            (0, "tex/latex/mdraftpkg/mdraftpkg.sty", b"\\ProvidesPackage{mdraftpkg}\\typeout{RESULT-PKG: r0}\\RequirePackage{mdraftronly}\n".to_vec()),
+            (0, "tex/latex/mdraftover/mdraftover.sty", b"\\ProvidesPackage{mdraftover}\\typeout{RESULT-OVER: r0}\n".to_vec()),
+            (0, "tex/lualatex/mdraftdup/mdraftdup.sty", b"\\ProvidesPackage{mdraftdup}\\typeout{RESULT-DUP: lualatex}\n".to_vec()),
+            (0, "tex/latex/mdraftdup/mdraftdup.sty", b"\\ProvidesPackage{mdraftdup}\\typeout{RESULT-DUP: latex}\n".to_vec()),
+            (0, "tex/context/mdraftdup/mdraftdup.sty", b"\\ProvidesPackage{mdraftdup}\\typeout{RESULT-DUP: context}\n".to_vec()),
+            (0, "bibtex/bst/mdraftgate/mdraftgate.bst", bst.as_bytes().to_vec()),
+            (0, "bibtex/bib/mdraftgate/mdraftgate.bib", b"@misc{gate, title={RESULTBIB}}\n".to_vec()),
+            (1, "tex/latex/mdraftpkg/mdraftpkg.sty", b"\\ProvidesPackage{mdraftpkg}\\typeout{RESULT-PKG: r1}\n".to_vec()),
+            (1, "tex/latex/x/mdraftronly.sty", b"\\ProvidesPackage{mdraftronly}\\typeout{RESULT-RONLY: r1}\n".to_vec()),
+        ];
+        let borrowed: Vec<(usize, &str, &[u8])> = files.iter().map(|(r, p, d)| (*r, *p, d.as_slice())).collect();
+        (library_snapshot(&borrowed, 2), "main.tex")
+    }
+
+    fn assert_library_markers(log: &str, engine: &str) {
+        let expect = [
+            ("RESULT-PKG: r0", "root 0 wins over root 1"),
+            ("RESULT-RONLY: r1", "a root-1-only package resolves"),
+            ("RESULT-DEF: r0", "an optional internal file resolves"),
+            ("RESULT-OVER: project", "the project wins over every root"),
+        ];
+        for (marker, why) in expect {
+            assert!(log.contains(marker), "{engine}: {why} ({marker} missing)\n{}", &log[log.len().saturating_sub(3000)..]);
+        }
+        let dup = if engine == "lualatex" { "RESULT-DUP: lualatex" } else { "RESULT-DUP: latex" };
+        assert!(log.contains(dup), "{engine}: format-specific copy ({dup} missing)");
+        assert!(!log.contains("RESULT-DUP: context"));
+    }
+
+    #[test]
+    #[ignore = "requires MDRAFT_TEST_TEX_BIN to name a real TeX binary directory"]
+    fn a_real_distribution_resolves_staged_libraries() {
+        let bin = PathBuf::from(std::env::var("MDRAFT_TEST_TEX_BIN").unwrap());
+        let name = distribution_name(&bin.display().to_string());
+        let target = Target::Path { bin: bin.clone(), name };
+        // A comma, a space and a non-ASCII letter in the job path: search paths
+        // are relative, so none of it reaches a search-path expression.
+        let job = std::env::temp_dir().join(format!("mdraft-texmf, real ü-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&job);
+        let (snapshot, main) = library_fixture(&job);
+        let roots = stage_texmf(&job.join("texmf"), Some(&snapshot)).unwrap();
+        let work = job.join("project");
+        for engine in ["lualatex", "pdflatex", "xelatex"] {
+            if !target.has_engine(engine) {
+                eprintln!("{engine}: not installed (not run)");
+                continue;
+            }
+            let env = target.environment(&job, &work, engine, roots).unwrap();
+            let run = |program: &str, args: Vec<OsString>| {
+                runner::run(&target.spec(program, args, &work, &env, Duration::from_secs(600)).unwrap(), &AtomicBool::new(false)).unwrap()
+            };
+            run(engine, engine_arguments(engine, main));
+            run("bibtex", vec!["main".into()]);
+            let outcome = run(engine, engine_arguments(engine, main));
+            let log = read_log(&work, "main");
+            assert_library_markers(&log, engine);
+            let bbl = std::fs::read_to_string(work.join("main.bbl")).unwrap_or_default();
+            assert!(bbl.contains("RESULTBIB"), "{engine}: the private .bst/.bib reached BibTeX");
+            assert!(find_output(&work, "main", "pdf").is_some_and(|pdf| pdf.starts_with(b"%PDF-")), "{engine}: {}", outcome.console);
+            eprintln!("{engine}: library resolution verified");
+        }
+        let _ = std::fs::remove_dir_all(job);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires MDRAFT_TEST_WSL_DISTRO (and optionally MDRAFT_TEST_WSL_BIN)"]
+    fn a_wsl_distribution_resolves_staged_libraries_and_cancels() {
+        let distro = std::env::var("MDRAFT_TEST_WSL_DISTRO").unwrap();
+        let bin = std::env::var("MDRAFT_TEST_WSL_BIN").unwrap_or_else(|_| "/usr/bin".into());
+        let selected = wsl::WslInstallation {
+            distro: distro.clone(),
+            bin: bin.clone(),
+            engines: vec!["lualatex".into(), "pdflatex".into()],
+            tools: vec!["bibtex".into()],
+        };
+        let target = Target::Wsl(selected);
+        let job = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target/test-tmp")
+            .join(format!("wsl, job ü-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&job);
+        let (snapshot, main) = library_fixture(&job);
+        let roots = stage_texmf(&job.join("texmf"), Some(&snapshot)).unwrap();
+        let work = job.join("project");
+        for engine in ["lualatex", "pdflatex"] {
+            let env = target.environment(&job, &work, engine, roots).unwrap();
+            let run = |program: &str, args: Vec<OsString>| {
+                runner::run(&target.spec(program, args, &work, &env, Duration::from_secs(600)).unwrap(), &AtomicBool::new(false)).unwrap()
+            };
+            run(engine, engine_arguments(engine, main));
+            run("bibtex", vec!["main".into()]);
+            run(engine, engine_arguments(engine, main));
+            assert_library_markers(&read_log(&work, "main"), engine);
+            let bbl = std::fs::read_to_string(work.join("main.bbl")).unwrap_or_default();
+            assert!(bbl.contains("RESULTBIB"), "{engine}: BibTeX through the launcher");
+        }
+        // Cancel ends the Linux process tree, not only wsl.exe.
+        std::fs::write(work.join("spin.tex"), "\\def\\spin{\\spin}\\spin\n").unwrap();
+        let env = target.environment(&job, &work, "pdflatex", roots).unwrap();
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let signal = cancel.clone();
+        let canceller = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(4));
+            signal.store(true, Ordering::SeqCst);
+        });
+        let started = Instant::now();
+        let outcome = runner::run(
+            &target.spec("pdflatex", engine_arguments("pdflatex", "spin.tex"), &work, &env, Duration::from_secs(600)).unwrap(),
+            &cancel,
+        )
+        .unwrap();
+        canceller.join().unwrap();
+        assert!(outcome.cancelled && started.elapsed() < Duration::from_secs(30));
+        std::thread::sleep(Duration::from_secs(2));
+        let survivors = runner::run(
+            &wsl::spec(&distro, &work, vec!["/usr/bin/pgrep".into(), "-f".into(), "spin.tex".into()], Duration::from_secs(60)).unwrap(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_ne!(survivors.status, 0, "an engine survived Cancel: {}", survivors.console);
+        let _ = std::fs::remove_dir_all(job);
     }
 }

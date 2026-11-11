@@ -254,6 +254,14 @@ const SUITES = [
     script: "latex-sdk-unit.mjs",
   },
   {
+    // Local TEXMF libraries: namespaced bundled inputs, the bibliography
+    // handoff, library-aware reference checks and editor-scoped completion.
+    id: "latex-texmf-unit",
+    title: "Local TEXMF libraries (unit)",
+    kind: "node",
+    script: "latex-texmf-unit.mjs",
+  },
+  {
     // Tools › Check or Install LaTeX… must open a dialog about the engine, not
     // merely be present in the menu.
     id: "latex-tools",
@@ -297,6 +305,20 @@ const SUITES = [
     doc: "samples/latex-project/main.tex",
     // All document changes are in-memory CodeMirror edits in the isolated
     // `.test-automation` instance; the project fixture is never saved.
+    safeWithInstalledApp: true,
+  },
+  {
+    // Registers a private two-root library outside the project and proves,
+    // through compiled PDF text, that the bundled engine resolved the class,
+    // a transitive package, a .def and a Lua module from it in order. With
+    // MDRAFT_TEST_TEX_BIN it compiles the same library natively too.
+    id: "latex-texmf",
+    title: "Local TEXMF libraries through the application",
+    kind: "cdp",
+    script: "latex-texmf-test.mjs",
+    doc: "samples/latex-texmf/main.tex",
+    // Library folders live in a temporary directory; registration is in the
+    // isolated `.test-automation` profile and is removed at the end.
     safeWithInstalledApp: true,
   },
   {

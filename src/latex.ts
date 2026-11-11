@@ -7,6 +7,12 @@ import {
   type LatexDiagnostic,
 } from "./latex-references.ts";
 import type { WasmTexCompiler } from "wasmtex/headless";
+import {
+  bundledLibraryFiles,
+  LIBRARY_PREFIX,
+  libraryLookupNames,
+  reservedProjectPath,
+} from "./latex-texmf.ts";
 import type { PdfSourceFile } from "./pdf-page-map";
 
 export interface LatexResult {
@@ -229,7 +235,16 @@ export async function compileLatex(
         /\.tex$/i.test(entry[0]) && typeof entry[1] === "string",
     ),
   );
-  const scan = collectLatexReferences(sources, new Set(Object.keys(files)), snapshot.mainFile);
+  const reserved = Object.keys(files).find(reservedProjectPath);
+  if (reserved) {
+    throw new Error(
+      `${reserved} uses the name MDraft reserves for local libraries (${LIBRARY_PREFIX}). Rename it.`,
+    );
+  }
+  // Libraries resolve through the engine's search path; the check only needs to
+  // know their names, so a library input is not reported as a missing file.
+  const known = new Set([...Object.keys(files), ...libraryLookupNames(snapshot.texmf)]);
+  const scan = collectLatexReferences(sources, known, snapshot.mainFile);
   if (scan.diagnostics.length) {
     throw new LatexBuildError(scan.diagnostics[0].message, scan.diagnostics, "", scan.truncated);
   }
@@ -241,6 +256,17 @@ export async function compileLatex(
       ? "mdraft-tex://localhost/"
       : `${location.protocol}//mdraft-tex.localhost/`;
   let downloads = 0;
+  // Library files travel separately from `files`: they are engine inputs, not
+  // project sources, so they never reach `sources`, `reachable` or the result.
+  const library = bundledLibraryFiles(
+    snapshot.texmf,
+    new Set(Object.keys(files)),
+    [...sources.values()].concat(
+      Object.entries(files)
+        .filter(([path, value]) => /\.(?:cls|sty)$/i.test(path) && typeof value === "string")
+        .map(([, value]) => value as string),
+    ),
+  );
   const compiler = new WasmTexCompiler({
     engine: "lualatex",
     texliveVersion: "2025",
@@ -252,7 +278,7 @@ export async function compileLatex(
     onLoadProgress: () => {
       if (generation === owner && active === compiler && downloads === 0) onProgress?.("resolving");
     },
-    files,
+    files: { ...library.files, ...files },
   });
   active = compiler;
   let unlisten: (() => void) | undefined;

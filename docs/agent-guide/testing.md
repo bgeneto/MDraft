@@ -45,6 +45,8 @@ the same rows by subject.
 | Auto-close matching | `npm run autoclose:unit` | [catalog/editor-and-documents.md](catalog/editor-and-documents.md) |
 | Completion layer (unit) | `npm run completion:unit` | [catalog/editor-and-documents.md](catalog/editor-and-documents.md) |
 | LaTeX completion (unit) | `npm run completion:latex:unit` | [catalog/latex-and-formats.md](catalog/latex-and-formats.md) |
+| Local TEXMF libraries (unit) | `npm run latex:texmf:unit` | [catalog/latex-and-formats.md](catalog/latex-and-formats.md) |
+| Local TEXMF libraries | `npm test -- --only latex-texmf` | [catalog/latex-and-formats.md](catalog/latex-and-formats.md) |
 | Remembered tabs (unit) | `npm run tabs:restore:unit` | [catalog/editor-and-documents.md](catalog/editor-and-documents.md) |
 | Typst page map (unit) | `npm run typst:map:unit` | [catalog/preview-and-sync.md](catalog/preview-and-sync.md) |
 | HTML source map (unit) | `npm run html:map:unit` | [catalog/preview-and-sync.md](catalog/preview-and-sync.md) |

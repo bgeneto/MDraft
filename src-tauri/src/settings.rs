@@ -503,6 +503,15 @@ pub struct Settings {
     /// always wins and is verified again when a job starts.
     #[serde(default = "default_native_engine")]
     pub latex_native_engine: String,
+    /// A TeX Live installation inside a WSL distribution, when that is the
+    /// selected native engine (Windows only). Exclusive with
+    /// [`Self::latex_native_root`]: a validation of one clears the other.
+    #[serde(default)]
+    pub latex_native_wsl: Option<crate::latex_native::wsl::WslInstallation>,
+    /// Registered local TEXMF libraries, in search order. Owned by the
+    /// `latex_texmf_*` commands; a whole-object save keeps the stored value.
+    #[serde(default)]
+    pub latex_texmf_roots: Vec<crate::latex_texmf::TexmfRoot>,
 
     // ---- Preferences: Files ----------------------------------------------
     /// "welcome" | "new" | "last" | "tabs"
@@ -717,6 +726,8 @@ impl Default for Settings {
             latex_native_enabled: false,
             latex_native_root: None,
             latex_native_engine: default_native_engine(),
+            latex_native_wsl: None,
+            latex_texmf_roots: Vec::new(),
 
             on_launch: "welcome".into(),
             default_extension: "md".into(),
@@ -1088,6 +1099,15 @@ pub fn save_settings<R: Runtime>(
         )
     };
 
+    // Backend-owned: these change only through their validated commands, so a
+    // stale or hand-built frontend payload cannot register a library folder or
+    // point the native engine at an unvalidated distribution.
+    let mut settings = settings;
+    {
+        let current = state.settings.lock().map_err(|e| e.to_string())?;
+        settings.latex_texmf_roots = current.latex_texmf_roots.clone();
+        settings.latex_native_wsl = current.latex_native_wsl.clone();
+    }
     let saved = state.save(settings)?;
 
     // Two parts of the native menu are generated from settings: the Export

@@ -318,6 +318,10 @@ export interface Settings {
   latexNativeEnabled: boolean;
   /** The validated engine directory, or null before the first validation. */
   latexNativeRoot: string | null;
+  /** TeX Live inside WSL, when that is the native engine. Backend-owned. */
+  latexNativeWsl?: LatexWslInstallation | null;
+  /** Registered local TEXMF libraries in search order. Backend-owned. */
+  latexTexmfRoots?: LatexTexmfRoot[];
   /** `auto`, `lualatex`, `pdflatex` or `xelatex`. */
   latexNativeEngine: string;
   editorMaxWidth: number;
@@ -741,17 +745,128 @@ export interface LatexProjectSnapshot {
    * A key over the main file and the referenced set.
    *
    * An edit that does not change which files are read leaves it alone, so a
-   * finished PDF stays current; adding an `\input` changes it.
+   * finished PDF stays current; adding an `\input` changes it. It also covers
+   * the local library revision.
    */
   generation: string;
+  /**
+   * Enabled local libraries, captured apart from the project. Library files
+   * never become chapters, source-map candidates or project members.
+   */
+  texmf?: LatexTexmfSnapshot;
 }
+
+export type LatexTexmfLayout = "tds" | "packages";
+
+export interface LatexTexmfRoot {
+  id: string;
+  kind: "personal" | "folder";
+  path?: string;
+  layout: LatexTexmfLayout;
+  enabled: boolean;
+}
+
+export interface LatexTexmfRootView extends LatexTexmfRoot {
+  resolved: string;
+  label: string;
+}
+
+export interface LatexTexmfConfig {
+  roots: LatexTexmfRootView[];
+  personalPath: string;
+}
+
+export interface LatexTexmfIssue {
+  severity: "error" | "warning" | "info";
+  code: string;
+  message: string;
+  paths: string[];
+}
+
+export interface LatexTexmfReport {
+  id: string | null;
+  path: string;
+  label: string;
+  layout: LatexTexmfLayout;
+  detectedLayout: LatexTexmfLayout;
+  enabled: boolean;
+  status: "ok" | "empty" | "missing" | "unreadable" | "oversized" | "conflicting";
+  message: string | null;
+  files: number;
+  bytes: number;
+  issues: LatexTexmfIssue[];
+  names: { classes: string[]; packages: string[] };
+}
+
+export interface LatexTexmfSnapshot {
+  revision: string;
+  roots: Array<{ id: string; label: string; layout: LatexTexmfLayout; path: string }>;
+  /** `path` is TDS-relative; `origin` is the reader's own file, for messages. */
+  files: Array<{ root: number; path: string; origin: string; data: string }>;
+}
+
+export type LatexTexmfAction =
+  | { type: "addFolder"; path: string; layout?: LatexTexmfLayout }
+  | { type: "usePersonal" }
+  | { type: "setEnabled"; id: string; enabled: boolean }
+  | { type: "setLayout"; id: string; layout: LatexTexmfLayout }
+  | { type: "move"; id: string; offset: -1 | 1 }
+  | { type: "remove"; id: string };
+
+export const latexTexmfList = () => invoke<LatexTexmfConfig>("latex_texmf_list");
+/** Remove only unregisters a folder; it never deletes files. */
+export const latexTexmfConfigure = (action: LatexTexmfAction) =>
+  invoke<LatexTexmfConfig>("latex_texmf_configure", { action });
+/** Reads files only; never compiles or downloads. */
+export const latexTexmfInspect = (options: {
+  ids?: string[];
+  candidate?: string;
+  layout?: LatexTexmfLayout;
+}) =>
+  invoke<LatexTexmfReport[]>("latex_texmf_inspect", {
+    ids: options.ids ?? null,
+    candidate: options.candidate ?? null,
+    layout: options.layout ?? null,
+  });
+export const latexTexmfOpen = (id: string) => invoke<void>("latex_texmf_open", { id });
+/** The enabled libraries' current revision, or null when none is enabled. */
+export const latexTexmfRevision = () => invoke<string | null>("latex_texmf_revision");
+
+export interface LatexWslInstallation {
+  distro: string;
+  bin: string;
+  engines: string[];
+  tools: string[];
+}
+
+export interface LatexWslDistribution {
+  name: string;
+  version: number;
+}
+
+export interface LatexWslCandidate {
+  distro: string;
+  bin: string;
+  engines: string[];
+}
+
+/** Registered WSL distributions, read from the registry; nothing starts. */
+export const latexNativeWslDistributions = () =>
+  invoke<LatexWslDistribution[]>("latex_native_wsl_distributions");
+/** Look inside one distribution for TeX. This starts its VM. */
+export const latexNativeWslLook = (distro: string) =>
+  invoke<LatexWslCandidate[]>("latex_native_wsl_look", { distro });
+/** Probe and commit a TeX Live inside WSL. */
+export const latexNativeWslValidate = (distro: string, bin: string) =>
+  invoke<LatexNativeCapabilities>("latex_native_wsl_validate", { distro, bin });
 
 export const latexStatus = () => invoke<boolean>("latex_status");
 export const installLatex = () => invoke<void>("install_latex");
 export const latexProjectSnapshot = (
   path: string,
   overlays: Array<{ path: string; text: string }>,
-) => invoke<LatexProjectSnapshot>("latex_project_snapshot", { path, overlays });
+  includeLibraries = true,
+) => invoke<LatexProjectSnapshot>("latex_project_snapshot", { path, overlays, includeLibraries });
 
 /** What Preferences reports about the downloaded TeX package cache. */
 export interface LatexCacheInfo {
@@ -777,6 +892,8 @@ export interface LatexEngineStatus {
   nativeDistribution: string | null;
   nativeEngine: string;
   nativeEngines: string[];
+  /** The selected TeX Live inside WSL, when that is the native engine. */
+  nativeWsl: LatexWslInstallation | null;
   /** Why the configured native installation cannot run, when it cannot. */
   problem: string | null;
 }
@@ -832,7 +949,7 @@ export interface LatexNativeResult {
 
 export interface LatexNativeProgress {
   job: string;
-  phase: "compiling" | "bibliography";
+  phase: "compiling" | "bibliography" | "starting-wsl";
   detail: string | null;
 }
 
@@ -854,6 +971,7 @@ export const latexNativeCompile = (request: {
   job: string;
   mainFile: string;
   files: Array<{ path: string; data: string }>;
+  texmf?: LatexTexmfSnapshot;
 }) => invoke<LatexNativeResult>("latex_native_compile", { request });
 export const latexNativeCancel = (job: string) => invoke<void>("latex_native_cancel", { job });
 /**

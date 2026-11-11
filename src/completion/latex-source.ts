@@ -17,8 +17,49 @@ import {
   LATEX_ENVIRONMENT_NAMES,
   LATEX_PACKAGE_NAMES,
 } from "./latex-catalog.ts";
+import { StateEffect, StateField } from "@codemirror/state";
 import { filterByPrefix, latexContextAt } from "./latex-context.ts";
 import { projectReferences, type ProjectReferences } from "./project-index.ts";
+
+/** Class and package names from the reader's registered local libraries. */
+export interface LocalLatexNames {
+  classes: ReadonlyArray<{ name: string; origin: string }>;
+  packages: ReadonlyArray<{ name: string; origin: string }>;
+}
+
+const NO_LOCAL_NAMES: LocalLatexNames = { classes: [], packages: [] };
+
+/** Replace the local names of one editor state, after a library capture. */
+export const setLocalLatexNames = StateEffect.define<LocalLatexNames>();
+
+/**
+ * The local names live in the editor state, not in a module global: they belong
+ * to the document whose compile captured them, and switching documents swaps
+ * the whole state, so another document's library context cannot leak in.
+ * Completion reads this field and never touches the disk.
+ */
+export const localLatexNames = StateField.define<LocalLatexNames>({
+  create: () => NO_LOCAL_NAMES,
+  update(value, transaction) {
+    for (const effect of transaction.effects) {
+      if (effect.is(setLocalLatexNames)) return effect.value;
+    }
+    return value;
+  },
+});
+
+function localRows(
+  names: ReadonlyArray<{ name: string; origin: string }>,
+  section: string,
+  known: readonly string[],
+): Array<{ label: string; detail: string; section: string }> {
+  return names.map(({ name, origin }) => ({
+    label: name,
+    // A local name that shadows a standard one is still the one TeX loads.
+    detail: `Local: ${origin}${known.includes(name) ? " (overrides standard)" : ""}`,
+    section,
+  }));
+}
 
 /** Turn a catalog row into the shape CodeMirror renders. */
 function toCompletion(entry: ReturnType<typeof latexCatalog>[number]): Completion {
@@ -56,7 +97,12 @@ function toCompletion(entry: ReturnType<typeof latexCatalog>[number]): Completio
  * uses is the one most likely to be wanted again, and a reader who has just
  * written `\label{sec:intro}` should not have to remember it to reference it.
  */
-function entriesFor(kind: string, prefix: string, references: ProjectReferences): Completion[] {
+function entriesFor(
+  kind: string,
+  prefix: string,
+  references: ProjectReferences,
+  local: LocalLatexNames = NO_LOCAL_NAMES,
+): Completion[] {
   const catalog = latexCatalog();
   if (kind === "label") {
     return filterByPrefix(
@@ -91,18 +137,30 @@ function entriesFor(kind: string, prefix: string, references: ProjectReferences)
     ).map((entry) => entry as Completion);
   }
   if (kind === "package") {
+    const own = new Set(local.packages.map((entry) => entry.name));
     return filterByPrefix(
-      LATEX_PACKAGE_NAMES.map((name) => ({ label: name, detail: "package", section: "Packages" })),
+      [
+        ...localRows(local.packages, "Local packages", LATEX_PACKAGE_NAMES),
+        ...LATEX_PACKAGE_NAMES.filter((name) => !own.has(name)).map((name) => ({
+          label: name,
+          detail: "package",
+          section: "Packages",
+        })),
+      ],
       prefix,
     ).map((entry) => entry as Completion);
   }
   if (kind === "class") {
+    const own = new Set(local.classes.map((entry) => entry.name));
     return filterByPrefix(
-      LATEX_CLASS_NAMES.map((name) => ({
-        label: name,
-        detail: "class",
-        section: "Document classes",
-      })),
+      [
+        ...localRows(local.classes, "Local classes", LATEX_CLASS_NAMES),
+        ...LATEX_CLASS_NAMES.filter((name) => !own.has(name)).map((name) => ({
+          label: name,
+          detail: "class",
+          section: "Document classes",
+        })),
+      ],
       prefix,
     ).map((entry) => entry as Completion);
   }
@@ -113,7 +171,9 @@ function entriesFor(kind: string, prefix: string, references: ProjectReferences)
       return (
         entry.section !== "Environments" &&
         entry.section !== "Packages" &&
-        entry.section !== "Document classes"
+        entry.section !== "Document classes" &&
+        entry.section !== "Local packages" &&
+        entry.section !== "Local classes"
       );
     return true;
   });
@@ -152,7 +212,8 @@ export const latexCompletionSource: CompletionSource = (context: CompletionConte
   // the project snapshot can register a richer source ahead of this one; the
   // active document is always the most immediate answer.
   const references = projectReferences(new Map([["active.tex", text]]));
-  const options = entriesFor(found.kind, found.prefix, references);
+  const local = context.state.field(localLatexNames, false) ?? NO_LOCAL_NAMES;
+  const options = entriesFor(found.kind, found.prefix, references, local);
   if (options.length === 0) return null;
 
   return {

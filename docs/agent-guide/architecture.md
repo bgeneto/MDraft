@@ -117,6 +117,9 @@ src/
   asciidoc-language.ts AsciiDoc stream highlighter
   asciidoc-preview.ts Asciidoctor preview: registry, data-line markers, KaTeX
   asciidoc-render.ts shared Asciidoctor load/include and the pandoc export HTML
+  latex-texmf.ts     local libraries, pure: bundled MEMFS namespace + manifest,
+                     bibliography handoff, lookup names, origins, completion names
+  latex-texmf-preferences.ts the Preferences › LaTeX library rows
   syntax-themes.ts   editor palettes: token colours and writing surface
   image-syntax.ts    the one image markup builder for Markdown, Typst, HTML and AsciiDoc
   images.ts          paste, drop and download of images; the four rules and the
@@ -161,6 +164,10 @@ src-tauri/src/
   images.rs          image import: sniffing, sanitiser, dedup, download
   clipboard.rs       plain-text clipboard: one arboard handle, read/write commands
   tex_fmt.rs         tex-fmt's wasm, downloaded and hash-verified on first format
+  latex_texmf.rs     registered local TEXMF libraries: configure/inspect/open
+                     commands, bounded index, per-compile captured snapshot (+ tests)
+  latex_native/wsl.rs TeX Live inside WSL: registry listing, explicit look-inside,
+                     the `wsl.exe --exec env -i` launcher, wslpath (+ tests)
   tokens.rs          approximate token count for the status bar and AI context
   spellcheck.rs      OS spell checker: Windows ISpellChecker, Linux hunspell, macOS NSSpellChecker
   print.rs           hidden print surface, WebView2/WebKitGTK printing, PDF verification,
