@@ -169,6 +169,8 @@ import {
   type LatexResult,
 } from "./latex";
 import { nativeToLatex } from "./latex-native";
+import { libraryNames } from "./latex-texmf";
+import { setLocalLatexNames } from "./completion/latex-source";
 import {
   diagnosticPlace,
   diagnosticRange,
@@ -1784,6 +1786,21 @@ let latexCacheError: string | null = null;
 let latexNativeCaps: api.LatexNativeCapabilities | null = null;
 /** Metadata-only candidates from the last Find, or null before one. */
 let latexNativeCandidates: api.LatexNativeCandidate[] | null = null;
+/** Registered WSL distributions from the last Find (registry only). */
+let latexWslDistributions: api.LatexWslDistribution[] | null = null;
+/** Engines found by an explicit look inside a WSL distribution. */
+let latexWslCandidates: api.LatexWslCandidate[] | null = null;
+/** The registered local libraries, or null before Preferences asked. */
+let texmfConfig: api.LatexTexmfConfig | null = null;
+/** The latest inspection per library id. */
+const texmfReports = new Map<string, api.LatexTexmfReport>();
+/** The library id (or "all"/"add") an inspection or action is running for. */
+let texmfBusyId: string | null = null;
+/** When the library list and reports were last read. */
+let texmfLoadedAt = 0;
+/** The library revision the current LaTeX preview was compiled from. */
+let latexLibraryRevision: string | null = null;
+
 let latexNavigationRoot: string | null = null;
 /**
  * The main file of the last failed render.
@@ -1924,7 +1941,9 @@ function compileCurrentLatex(): void {
  * says it is out of date. With auto-compile on, the caller's `scheduleRender`
  * starts the new build.
  */
-function invalidateLatexBuild(): void {
+function invalidateLatexBuild(
+  reason = "The engine changed; select Compile to update the preview.",
+): void {
   if (doc.language !== "latex") return;
   window.clearTimeout(renderTimer);
   renderToken += 1;
@@ -1934,7 +1953,7 @@ function invalidateLatexBuild(): void {
   latexInFlight = false;
   previewStale = true;
   if (settings.latexAutoCompile === false) {
-    setLatexStatus("Out of date · The engine changed; select Compile to update the preview.");
+    setLatexStatus(`Out of date · ${reason}`);
   }
   syncMenuState(false);
 }
@@ -2278,6 +2297,17 @@ async function latexFailure(
   const output =
     error instanceof LatexBuildError ? `${String(error)}\n\n${error.log}` : String(error);
   compiledUi.details(panel, output, issues.length, true);
+  // A missing class or package is often one that lives in a local library the
+  // reader has not registered (or turned off). The action sits in the Logs
+  // problem panel, never over the PDF.
+  if (/File `[^`']+\.(?:cls|sty)' not found|local library/i.test(output)) {
+    const manage = document.createElement("button");
+    manage.type = "button";
+    manage.className = "typst-notebutton latex-manage-libraries";
+    manage.textContent = "Manage local packages…";
+    manage.addEventListener("click", () => focusLocalLibraries());
+    panel.prepend(manage);
+  }
   const partial = error instanceof LatexBuildError ? error.partialPdf : null;
   const token = renderToken;
   const activeId = doc.id;
@@ -2402,12 +2432,134 @@ function showLatexLicenses(): void {
  * tool's version and compiles a one-page document. Nothing is saved unless the
  * probe produces a readable PDF.
  */
+/**
+ * A library was added, removed, reordered, switched or edited: any running
+ * compile is superseded (its token can no longer publish) and the preview is
+ * stale. Auto-compile rebuilds; manual mode stays manual.
+ */
+function latexLibrariesChanged(reason: string): void {
+  latexLibraryRevision = null;
+  if (doc.language !== "latex") return;
+  invalidateLatexBuild(`${reason}; select Compile to update the preview.`);
+  if (settings.latexAutoCompile !== false) scheduleRender(true);
+}
+
+/** Open Preferences › LaTeX on the local library group, focused for the keyboard. */
+function focusLocalLibraries(): void {
+  preferences.openAt("latex");
+  window.setTimeout(() => {
+    const heading = [...document.querySelectorAll<HTMLElement>(".prefs-panel *")].find(
+      (element) =>
+        element.children.length === 0 &&
+        element.textContent?.trim() === "Local packages and classes",
+    );
+    if (!heading) return;
+    heading.scrollIntoView({ block: "start" });
+    const rows = [
+      ...document.querySelectorAll<HTMLElement>(".prefs-panel button, .prefs-panel input"),
+    ];
+    const first = rows.find(
+      (control) =>
+        heading.compareDocumentPosition(control) & Node.DOCUMENT_POSITION_FOLLOWING &&
+        !(control as HTMLButtonElement).disabled,
+    );
+    first?.focus();
+  }, 120);
+}
+
+async function refreshTexmf(ids?: string[]): Promise<void> {
+  texmfBusyId = ids?.[0] ?? "all";
+  try {
+    texmfConfig = await api.latexTexmfList();
+    texmfLoadedAt = Date.now();
+    if (!ids) texmfReports.clear();
+    for (const report of await api.latexTexmfInspect({ ids })) {
+      if (report.id) texmfReports.set(report.id, report);
+    }
+  } catch (error) {
+    toast(`Could not check the local libraries: ${String(error)}`, 7200);
+  } finally {
+    texmfBusyId = null;
+  }
+}
+
+async function texmfConfigure(action: api.LatexTexmfAction): Promise<boolean> {
+  try {
+    texmfConfig = await api.latexTexmfConfigure(action);
+    settings.latexTexmfRoots = texmfConfig.roots.map(({ id, kind, path, layout, enabled }) => ({
+      id,
+      kind,
+      path,
+      layout,
+      enabled,
+    }));
+    latexLibrariesChanged("The local libraries changed");
+    await refreshTexmf();
+    return true;
+  } catch (error) {
+    await message(String(error), { title: "Could not change the local libraries", kind: "error" });
+    return false;
+  } finally {
+    preferences.refresh();
+  }
+}
+
+let texmfFocusCheck = false;
+/**
+ * On focus, a library file may have changed in another program. Compare the
+ * enabled libraries' revision with the one the preview was built from; reading
+ * is bounded and coalesced, and nothing runs while typing or for other files.
+ */
+async function checkLibrariesOnFocus(): Promise<void> {
+  if (texmfFocusCheck || doc.language !== "latex" || !latexPreview) return;
+  if (!settings.latexTexmfRoots?.some((root) => root.enabled) && latexLibraryRevision === null)
+    return;
+  texmfFocusCheck = true;
+  const before = latexLibraryRevision;
+  try {
+    const current = await api.latexTexmfRevision().catch(() => "unavailable");
+    if (current !== before && latexLibraryRevision === before) {
+      latexLibrariesChanged("A local library changed");
+    }
+  } finally {
+    texmfFocusCheck = false;
+  }
+}
+window.addEventListener("focus", () => void checkLibrariesOnFocus());
+
+async function validateWslInstallation(distro: string, bin: string): Promise<void> {
+  const notice = toast(`Validating ${bin} in ${distro}…`, 0);
+  try {
+    const capabilities = await api.latexNativeWslValidate(distro, bin);
+    latexNativeCaps = capabilities;
+    latexEngine = await api.latexEngineStatus();
+    // The backend cleared the host path; keep the in-memory copy in step so a
+    // later whole-settings save does not write it back.
+    settings.latexNativeRoot = null;
+    settings.latexNativeWsl = latexEngine.nativeWsl;
+    persist();
+    toast(
+      `${capabilities.distribution} validated. Turn on "Use my installed TeX distribution" in Preferences › LaTeX to compile with it.`,
+      8200,
+    );
+  } catch (error) {
+    await message(String(error), {
+      title: "Could not validate TeX in WSL",
+      kind: "error",
+    });
+  } finally {
+    notice.dismiss();
+    preferences.refresh();
+  }
+}
+
 async function validateNativeDirectory(directory: string): Promise<void> {
   const notice = toast(`Validating ${directory}…`, 0);
   try {
     const capabilities = await api.latexNativeValidate(directory);
     latexNativeCaps = capabilities;
     settings.latexNativeRoot = capabilities.bin;
+    settings.latexNativeWsl = null;
     latexEngine = await api.latexEngineStatus();
     persist();
     toast(
@@ -2595,6 +2747,11 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
     const snapshot = await api.latexProjectSnapshot(root.path, overlays);
     if (token !== renderToken || doc.id !== activeId) return;
     snapshotFiles = snapshot.files.map((file) => file.path);
+    // The library revision is part of what this compile read. A later focus
+    // check compares against it; completion follows the latest capture.
+    latexLibraryRevision = snapshot.texmf?.revision ?? null;
+    // Completion follows the latest capture, in this editor state only.
+    editor.view.dispatch({ effects: setLocalLatexNames.of(libraryNames(snapshot.texmf)) });
     // A symlink the snapshot refused is reported before the compile, so a
     // "File not found" from the engine is explained rather than mysterious. The
     // project still compiles: one odd entry must not make a document unusable.
@@ -2618,6 +2775,7 @@ async function renderLatexPreview(source: string, token: number): Promise<void> 
           job,
           mainFile: snapshot.mainFile,
           files: snapshot.files,
+          texmf: snapshot.texmf,
         });
         if (token !== renderToken || doc.id !== activeId) return;
         buildEngine = native.engine;
@@ -4264,7 +4422,9 @@ async function latexExportSnapshot(): Promise<
     )
     .map((session) => ({ path: session.path, text: textOf(session) }));
   try {
-    const captured = await api.latexProjectSnapshot(root.path, overlays);
+    // Conversions keep their project-only snapshot: a registered library is
+    // never injected into Pandoc, and a broken one does not block an export.
+    const captured = await api.latexProjectSnapshot(root.path, overlays, false);
     return {
       snapshot: {
         root: root.directory,
@@ -9516,7 +9676,13 @@ async function boot(): Promise<void> {
       try {
         const found = await api.latexNativeDiscover();
         latexNativeCandidates = found;
-        if (found.length === 0) {
+        latexWslDistributions = await api.latexNativeWslDistributions().catch(() => []);
+        if (found.length === 0 && latexWslDistributions.length > 0) {
+          toast(
+            "No TeX installation was found on Windows. Look inside a WSL distribution below, or use Browse… to choose an engine folder.",
+            7200,
+          );
+        } else if (found.length === 0) {
           toast(
             "No TeX installation was found in PATH or the standard locations. Use Browse… to choose its engine folder.",
             7200,
@@ -9538,6 +9704,91 @@ async function boot(): Promise<void> {
       if (typeof picked === "string" && picked) await validateNativeDirectory(picked);
     },
     validateNative: async (directory) => validateNativeDirectory(directory),
+    nativeWslDistributions: () => latexWslDistributions,
+    nativeWslCandidates: () => latexWslCandidates,
+    lookInsideWsl: async (distro) => {
+      const notice = toast(`Looking for TeX in ${distro} (starting it if needed)…`, 0);
+      try {
+        const found = await api.latexNativeWslLook(distro);
+        latexWslCandidates = [
+          ...(latexWslCandidates ?? []).filter((candidate) => candidate.distro !== distro),
+          ...found,
+        ];
+        if (found.length === 0) {
+          toast(`No lualatex, pdflatex or xelatex was found in ${distro}.`, 7200);
+        } else if (found.length === 1) {
+          notice.dismiss();
+          await validateWslInstallation(found[0].distro, found[0].bin);
+        }
+      } catch (error) {
+        await message(String(error), { title: `Could not look inside ${distro}`, kind: "error" });
+      } finally {
+        notice.dismiss();
+        preferences.refresh();
+      }
+    },
+    validateWsl: async (distro, bin) => validateWslInstallation(distro, bin),
+    texmfConfig: () => texmfConfig,
+    texmfStale: () => Date.now() - texmfLoadedAt > 2000,
+    texmfReport: (id) => texmfReports.get(id),
+    texmfBusy: () => texmfBusyId,
+    refreshTexmf: async (ids) => {
+      await refreshTexmf(ids);
+      preferences.refresh();
+    },
+    texmfAction: async (action) => {
+      await texmfConfigure(action);
+    },
+    texmfAddFolder: async () => {
+      const picked = await openDialog({
+        directory: true,
+        multiple: false,
+        title: "Choose a TEXMF tree or a folder of LaTeX packages",
+      });
+      if (typeof picked !== "string" || !picked) return;
+      texmfBusyId = "add";
+      preferences.refresh();
+      try {
+        const [report] = await api.latexTexmfInspect({ candidate: picked });
+        if (!report || ["missing", "unreadable", "oversized"].includes(report.status)) {
+          await message(report?.message ?? "This folder cannot be read.", {
+            title: "This folder cannot be added",
+            kind: "error",
+          });
+          return;
+        }
+        const layout = report.layout === "tds" ? "a TEXMF tree" : "a folder of packages";
+        const conflicts = report.issues
+          .filter((issue) => issue.severity === "error")
+          .map((issue) => `\n• ${issue.message} ${issue.paths.join(", ")}`)
+          .join("");
+        const confirmed = await ask(
+          `${report.path}\n\nLooks like ${layout}: ${report.names.classes.length} classes, ${report.names.packages.length} packages, ${report.files} files.${conflicts ? `\n\nFix before compiling:${conflicts}` : ""}\n\nNothing is copied; you can change the layout in Preferences afterwards.`,
+          { title: "Add this folder to the search order?", kind: "info", okLabel: "Add folder" },
+        );
+        if (!confirmed) return;
+        texmfBusyId = null;
+        await texmfConfigure({ type: "addFolder", path: picked, layout: report.layout });
+      } catch (error) {
+        await message(String(error), { title: "Could not add the folder", kind: "error" });
+      } finally {
+        texmfBusyId = null;
+        preferences.refresh();
+      }
+    },
+    texmfUsePersonal: async () => {
+      if (await texmfConfigure({ type: "usePersonal" })) {
+        const personal = texmfConfig?.roots.find((root) => root.kind === "personal");
+        if (personal) await api.latexTexmfOpen(personal.id).catch(() => undefined);
+      }
+    },
+    texmfOpen: async (id) => {
+      try {
+        await api.latexTexmfOpen(id);
+      } catch (error) {
+        await message(String(error), { title: "Could not open the folder", kind: "error" });
+      }
+    },
     setNativeEnabled: async (value) => {
       try {
         latexEngine = await api.latexNativeSetEnabled(value);

@@ -4874,3 +4874,8 @@ body {
   flex-wrap: wrap;
   gap: 6px;
 }
+
+/* Preferences › LaTeX › Local packages: the Logs action that leads there. */
+.latex-manage-libraries {
+  margin: 0 0 8px;
+}

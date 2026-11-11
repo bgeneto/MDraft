@@ -25,3 +25,64 @@ self.cacheFileName = (format, name) => {
   const suffix = { 26: ".tex", 51: ".lua" }[format];
   return suffix && !name.includes(".") ? `${name}${suffix}` : __mdraftCacheFileName(format, name);
 };
+
+// Local TEXMF libraries (docs/adr/2026-11-10-local-texmf-libraries.md). The host
+// passes each captured library tree through the SDK's public `files` option as
+// /work/.mdraft-texmf/<n>/<TDS path>, plus a versioned manifest. kpathsea searches
+// MEMFS directories before the worker's mirror resolver, so a private name never
+// meets the resolver's Bloom filter or negative cache. The order per root follows
+// TeX Live's lualatex search: project (.), then roots 0..n-1, then the mirror cache.
+const __mdraftLibraryPrefix = "/work/.mdraft-texmf";
+const __mdraftLibraryDirs = {
+  TEXINPUTS: ["tex/lualatex", "tex/latex", "tex/luatex", "tex/generic", "tex"],
+  LUAINPUTS: ["scripts", "tex/luatex", "tex/plain", "tex/generic", "tex/latex", "tex"],
+  TEXFONTMAPS: ["fonts/map"],
+  ENCFONTS: ["fonts/enc"],
+  OPENTYPEFONTS: ["fonts/opentype"],
+  TTFONTS: ["fonts/truetype"],
+  T1FONTS: ["fonts/type1"],
+  TFMFONTS: ["fonts/tfm"],
+  VFFONTS: ["fonts/vf"],
+};
+/** Root count from the manifest text; a present but unsupported manifest fails loudly. */
+self.mdraftLibraryRoots = (text) => {
+  const manifest = JSON.parse(text);
+  if (
+    !manifest ||
+    manifest.version !== 1 ||
+    !Number.isInteger(manifest.roots) ||
+    manifest.roots < 0 ||
+    manifest.roots > 8
+  )
+    throw new Error("Unsupported local library manifest");
+  return manifest.roots;
+};
+/** Insert the library directories after `.` in each search-path line of the cnf. */
+self.mdraftLibraryCnf = (cnf, roots) => {
+  let next = cnf;
+  for (const [name, dirs] of Object.entries(__mdraftLibraryDirs)) {
+    const paths = [];
+    for (let root = 0; root < roots; root++)
+      for (const dir of dirs) paths.push(`${__mdraftLibraryPrefix}/${root}/${dir}//`);
+    const line = new RegExp(`^${name} = \\.;`, "m");
+    if (!line.test(next)) throw new Error(`LuaLaTeX search path ${name} has an unexpected form`);
+    next = next.replace(line, `${name} = .;${paths.join(";")};`);
+  }
+  return next;
+};
+const __mdraftWriteTexmfCnf = self.writeTexmfCnf;
+if (typeof __mdraftWriteTexmfCnf !== "function")
+  throw new Error("LuaLaTeX search-path hook unavailable");
+self.writeTexmfCnf = () => {
+  __mdraftWriteTexmfCnf();
+  let manifest = null;
+  try {
+    manifest = FS.readFile(`${__mdraftLibraryPrefix}/manifest.json`, { encoding: "utf8" });
+  } catch {
+    return; // No libraries: the upstream configuration is used unchanged.
+  }
+  const roots = self.mdraftLibraryRoots(manifest);
+  if (!roots) return;
+  const cnf = FS.readFile("/work/texmf.cnf", { encoding: "utf8" });
+  FS.writeFile("/work/texmf.cnf", self.mdraftLibraryCnf(cnf, roots));
+};

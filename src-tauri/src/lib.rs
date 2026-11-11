@@ -11,6 +11,7 @@ mod images;
 mod launch;
 mod latex;
 mod latex_native;
+mod latex_texmf;
 #[cfg(target_os = "linux")]
 mod linux_webkit_env;
 mod menu;
@@ -133,6 +134,14 @@ pub fn run() {
             latex_native::latex_native_validate,
             latex_native::latex_native_set_enabled,
             latex_native::latex_native_set_engine,
+            latex_native::latex_native_wsl_distributions,
+            latex_native::latex_native_wsl_look,
+            latex_native::latex_native_wsl_validate,
+            latex_texmf::latex_texmf_list,
+            latex_texmf::latex_texmf_configure,
+            latex_texmf::latex_texmf_inspect,
+            latex_texmf::latex_texmf_open,
+            latex_texmf::latex_texmf_revision,
             latex_native::latex_native_compile,
             latex_native::latex_native_cancel,
             settings::get_settings,

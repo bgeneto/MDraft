@@ -638,8 +638,13 @@ pub struct ProjectSnapshot {
     ///
     /// Keying on the *set* rather than a revision counter means an edit that does
     /// not change which files are read (a typo fix) does not invalidate a finished
-    /// PDF, while adding an `\input` does.
+    /// PDF, while adding an `\input` does. It also covers the library revision.
     generation: String,
+    /// Registered local libraries, captured separately from the project so a
+    /// library file never becomes a chapter, a source-map candidate or a
+    /// project member. `None` when no library is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    texmf: Option<crate::latex_texmf::TexmfSnapshot>,
 }
 
 /// The character index of `needle` at or after `from`.
@@ -888,16 +893,24 @@ fn declared_references(text: &str) -> Vec<(String, String)> {
     for line in masked.split('\n') {
         let code = &line[..comment_start(line).unwrap_or(line.len())];
         let chars: Vec<char> = code.chars().collect();
-        for kind in [
-            "input",
-            "include",
-            "includegraphics",
-            "bibliography",
-            "addbibresource",
-            "documentclass",
-            "usepackage",
+        // A class or package loads its own dependencies with the LaTeX2e
+        // kernel forms; without them a project-local class that needs a
+        // project-local package compiled with that package missing.
+        for (command, kind) in [
+            ("input", "input"),
+            ("include", "include"),
+            ("includegraphics", "includegraphics"),
+            ("bibliography", "bibliography"),
+            ("addbibresource", "addbibresource"),
+            ("documentclass", "documentclass"),
+            ("LoadClass", "documentclass"),
+            ("LoadClassWithOptions", "documentclass"),
+            ("usepackage", "usepackage"),
+            ("RequirePackage", "usepackage"),
+            ("RequirePackageWithOptions", "usepackage"),
+            ("bibliographystyle", "bibliographystyle"),
         ] {
-            for (_, after) in matches_command(&chars, kind) {
+            for (_, after) in matches_command(&chars, command) {
                 let rest: String = chars[after..].iter().collect();
                 let Some(argument) = first_brace_argument(&rest) else {
                     continue;
@@ -1010,6 +1023,7 @@ fn candidate_suffixes(kind: &str) -> &'static [&'static str] {
         "bibliography" | "addbibresource" => &[".bib"],
         "documentclass" => &[".cls"],
         "usepackage" => &[".sty"],
+        "bibliographystyle" => &[".bst"],
         _ => &[".tex"],
     }
 }
@@ -1201,8 +1215,10 @@ fn collect_referenced(
 /// Capture the project directory and overlay the current open text buffers.
 #[tauri::command]
 pub async fn latex_project_snapshot(
+    app: AppHandle,
     path: String,
     overlays: Vec<Overlay>,
+    include_libraries: Option<bool>,
 ) -> Result<ProjectSnapshot, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let requested = Path::new(&path);
@@ -1244,11 +1260,22 @@ pub async fn latex_project_snapshot(
                 })
             })
             .collect::<Result<_, String>>()?;
+        let texmf = if include_libraries.unwrap_or(true) {
+            crate::latex_texmf::capture(&app)?
+        } else {
+            None
+        };
+        if let Some(texmf) = &texmf {
+            generation.push_str("
+texmf:");
+            generation.push_str(&texmf.revision);
+        }
         Ok(ProjectSnapshot {
             main_file,
             files,
             skipped,
             generation,
+            texmf,
         })
     })
     .await
@@ -1461,6 +1488,33 @@ mod tests {
         assert!(skipped.is_empty());
         assert!(files.iter().any(|(path, _)| path.ends_with("myclass.cls")));
         assert!(files.iter().any(|(path, _)| path.ends_with("mystyle.sty")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_snapshot_follows_kernel_loads_inside_classes_and_packages() {
+        let root = scratch("latex-kernel-loads");
+        fs::write(
+            root.join("main.tex"),
+            "\\documentclass{outer}\\bibliographystyle{house}\\begin{document}x\\end{document}\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("outer.cls"),
+            "\\LoadClassWithOptions{inner}\n\\RequirePackage{first,second}\n\\RequirePackageWithOptions{third}\n% \\RequirePackage{commented}\n",
+        )
+        .unwrap();
+        fs::write(root.join("inner.cls"), "\\LoadClass{article}\n").unwrap();
+        for name in ["first", "second", "third", "commented"] {
+            fs::write(root.join(format!("{name}.sty")), "% package\n").unwrap();
+        }
+        fs::write(root.join("house.bst"), "ENTRY{}{}{}\n").unwrap();
+        let (files, _, _) = collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
+        let has = |name: &str| files.iter().any(|(path, _)| path.ends_with(name));
+        for name in ["inner.cls", "first.sty", "second.sty", "third.sty", "house.bst"] {
+            assert!(has(name), "{name} was not collected");
+        }
+        assert!(!has("commented.sty"), "a commented load is not a reference");
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -10,6 +10,7 @@
 //! be dragged and resized without leaving the webview.
 
 import * as api from "./api";
+import { texmfRows, type TexmfPreferencesHost } from "./latex-texmf-preferences.ts";
 import {
   BUNDLED_FAMILIES,
   CUSTOM_PRESET,
@@ -34,7 +35,7 @@ import { dictionaryOptions, spellcheckAvailabilityNote } from "./spellcheck";
 import { MAX_RATE, MIN_RATE, voiceAvailabilityNote, type VoiceOption } from "./read-aloud";
 import { attachModelCombo, closeModelCombo } from "./model-combo";
 
-export interface PreferencesHost {
+export interface PreferencesHost extends TexmfPreferencesHost {
   settings(): api.Settings;
   update(patch: Partial<api.Settings>): void;
   clearRecent(): void;
@@ -87,6 +88,13 @@ export interface PreferencesHost {
   /** Open the folder picker and validate the chosen binary directory. */
   browseNative(): Promise<void>;
   validateNative(directory: string): Promise<void>;
+  /** Registered WSL distributions (registry only), or null before Find ran. */
+  nativeWslDistributions(): api.LatexWslDistribution[] | null;
+  /** Engines found inside WSL distributions this session, or null. */
+  nativeWslCandidates(): api.LatexWslCandidate[] | null;
+  /** Look inside one distribution; this starts its VM. */
+  lookInsideWsl(distro: string): Promise<void>;
+  validateWsl(distro: string, bin: string): Promise<void>;
   setNativeEnabled(value: boolean): Promise<void>;
   setNativeEngine(value: string): Promise<void>;
   /** Ask the user for a reference/style file. Empty string when cancelled. */
@@ -117,7 +125,7 @@ export interface PreferencesHandle {
   refresh(): void;
 }
 
-type Row =
+export type Row =
   | { kind: "heading"; label: string }
   | { kind: "note"; label: string; text: string }
   | {
@@ -908,9 +916,13 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
     ? native.problem
     : capabilities
       ? `${capabilities.distribution} · ${capabilities.bin}`
-      : native?.nativeRoot
-        ? `${native.nativeDistribution ?? "TeX"} · ${native.nativeRoot}`
-        : "No installation selected. Use Find or Browse to choose the folder that holds lualatex, pdflatex or xelatex.";
+      : native?.nativeWsl
+        ? `${native.nativeDistribution ?? "TeX Live (WSL)"} · ${native.nativeWsl.bin}`
+        : native?.nativeRoot
+          ? `${native.nativeDistribution ?? "TeX"} · ${native.nativeRoot}`
+          : "No installation selected. Use Find or Browse to choose the folder that holds lualatex, pdflatex or xelatex.";
+  const wslDistributions = host.nativeWslDistributions() ?? [];
+  const wslCandidates = host.nativeWslCandidates() ?? [];
   const rows: Row[] = [
     { kind: "heading", label: "Compilation" },
     {
@@ -921,11 +933,13 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
       set: (value) => host.update({ latexAutoCompile: value }),
     },
 
+    ...texmfRows(host, refresh),
+
     { kind: "heading", label: "Installed TeX distribution" },
     {
       kind: "note",
       label: "Trust and network",
-      text: "The engine you choose is a separate program: it runs with your operating-system permissions and may use the network to install its own packages. Only use a trusted installation and trusted documents. Shell escape and project executables stay disabled, and MDraft itself makes no network request to run it.",
+      text: "The engine you choose is a separate program: it runs with your operating-system permissions and may use the network to install its own packages. In WSL it runs as your Linux user and can read Windows drives mounted in the distribution. Only use a trusted installation and trusted documents. Shell escape and project executables stay disabled, and MDraft itself makes no network request to run it.",
     },
     {
       kind: "checkbox",
@@ -950,7 +964,7 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
       kind: "button",
       label: "",
       text: "Find installation…",
-      help: "Searches PATH and the standard TeX Live, MacTeX and MiKTeX locations. It reads directory entries only; nothing starts until Validate.",
+      help: "Searches PATH and the standard TeX Live, MacTeX and MiKTeX locations, and lists your WSL distributions. It reads directory entries and the registry only; nothing starts until you look inside a WSL distribution or validate.",
       action: () => host.findNative(),
     },
     {
@@ -982,6 +996,32 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
             ]),
             get: () => "",
             set: (directory: string) => void host.validateNative(directory),
+          },
+        ]
+      : []),
+
+    ...wslDistributions.map((distribution): Row => ({
+      kind: "button",
+      label: "",
+      text: `Look for TeX in WSL: ${distribution.name}…`,
+      help: `Starts the ${distribution.name} WSL distribution if it is stopped, then looks for lualatex, pdflatex and xelatex in /usr/bin, /usr/local/texlive and ~/.TinyTeX. Nothing is installed or changed.`,
+      action: () => host.lookInsideWsl(distribution.name),
+    })),
+    ...(wslCandidates.length > 0
+      ? [
+          {
+            kind: "choices" as const,
+            label: "Found in WSL",
+            help: "Validating compiles a one-page probe inside the distribution before it is used.",
+            options: wslCandidates.map((candidate): [string, string] => [
+              `${candidate.distro}\u0000${candidate.bin}`,
+              `${candidate.distro}: ${candidate.bin} — ${candidate.engines.join(", ")}`,
+            ]),
+            get: () => "",
+            set: (value: string) => {
+              const [distro, bin] = value.split("\u0000");
+              void host.validateWsl(distro, bin);
+            },
           },
         ]
       : []),

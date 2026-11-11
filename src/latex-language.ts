@@ -21,7 +21,7 @@
 
 import { LanguageSupport, StreamLanguage } from "@codemirror/language";
 import { stex } from "@codemirror/legacy-modes/mode/stex";
-import { latexCompletionSource } from "./completion/latex-source.ts";
+import { latexCompletionSource, localLatexNames } from "./completion/latex-source.ts";
 
 let pending: Promise<LanguageSupport> | null = null;
 
@@ -48,6 +48,7 @@ export function latexLanguage(): Promise<LanguageSupport> {
           commentTokens: { line: "%" },
           autocomplete: latexCompletionSource,
         }),
+        localLatexNames,
       ]);
     });
   }
