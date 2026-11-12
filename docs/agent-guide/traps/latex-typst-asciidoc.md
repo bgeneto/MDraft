@@ -260,3 +260,19 @@ for `.typst-error` let the suite sample `data-latex-partial` too early and skip
 all partial-save checks. This almost looked like the compiler had stopped
 returning PDF bytes. Wait for the compiler action to return from Cancel to
 Compile as well as the error log before checking the committed partial output.
+
+**`a warning click from Preview-only shows Split and highlights the source line — null`**
+The undefined-reference row was a `<div>` with the title "The compiler did not
+provide a matching project source line." The bundled SDK reports LaTeX warnings
+with `line: 0`, and its message is the first physical log line only: TeX wraps
+the log at 79 columns, so the text ends `... undefined on input li` and the
+number is on the next line. The first fix — parsing `on input line N` from the
+message — passed its unit test and changed nothing in the app, because the unit
+fixture had the whole sentence. Print the row's `textContent` before trusting a
+parser. The second fix recovered line 10 and still changed nothing: the \ref
+was in an `\input` chapter (`("./Resumo executivo.tex"` in the log) while the
+SDK names the main file, which has no line 10. `compileDiagnostics` now finds
+the message in the log, undoes the wrap, takes the file TeX had open there
+(`openFileAt`, a parenthesis stack), and keeps a cursor per message so repeated
+warnings get their own lines. The failure also predated the preview-freshness
+work: check `HEAD` before blaming the change under test.
