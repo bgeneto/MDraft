@@ -615,7 +615,7 @@ try {
   check("get_settings has no key", !JSON.stringify(settings).includes(apiKey));
   const configPath = path.join(
     process.env.APPDATA ?? "",
-    "io.github.bernh.mdraft",
+    "io.github.bgeneto.mdraft",
     "settings.json",
   );
   if (fs.existsSync(configPath)) {
@@ -624,7 +624,7 @@ try {
   } else {
     check("settings.json has no key", true, "no settings file");
   }
-  const recoveryPath = path.join(process.env.APPDATA ?? "", "io.github.bernh.mdraft", "recovery");
+  const recoveryPath = path.join(process.env.APPDATA ?? "", "io.github.bgeneto.mdraft", "recovery");
   const recoveryText = fs.existsSync(recoveryPath)
     ? fs
         .readdirSync(recoveryPath)

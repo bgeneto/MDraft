@@ -49,7 +49,7 @@ Rejected:
 - **Rename the binary or `productName`.** Changes the installed command,
   package and release artefact names, and existing users' package identity.
 - **`app.enableGTKAppId`.** It would make the app id
-  `io.github.bernh.mdraft`, while the installed file remains
+  `io.github.bgeneto.mdraft`, while the installed file remains
   `MDraft.desktop`; the mismatch would only move.
 - **A KDE window rule.** Fixes one user's desktop, not the installed
   application.

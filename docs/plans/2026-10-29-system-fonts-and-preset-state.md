@@ -473,7 +473,7 @@ Deviations and lessons:
   was corrected before the passing run; the suite now returns its object
   directly.
 - **The disposable build was used because the installed MDraft was open.** Its
-  identifier was `io.github.bernh.mdraft.fontstest`, and its settings/WebView
+  identifier was `io.github.bgeneto.mdraft.fontstest`, and its settings/WebView
   profile were removed afterwards. `Copy-Item` failed once because the old test
   process had not exited and the single-instance plugin forwarded the new launch
   to it; the trap is recorded in `AGENTS.md`.

@@ -257,7 +257,7 @@ no Read Aloud count and has no Read Aloud bullet to update.
   pandoc layers are unrelated.
 - The UI layer ran through `npm test -- --only read-aloud`, which stages the
   binary, backs up and restores the real profile and uses a disposable settings
-  directory. A separate build with identifier `io.github.bernh.mdraft.langtest`
+  directory. A separate build with identifier `io.github.bgeneto.mdraft.langtest`
   was used for the measurements below and then deleted; the user's profile was
   never opened by it.
 

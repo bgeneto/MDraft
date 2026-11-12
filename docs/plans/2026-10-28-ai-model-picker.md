@@ -197,7 +197,7 @@ Rejected alternatives:
 - **Deviation:** an installed MDraft window was open during the first
   `npm test -- --only ai`, so the single-instance plugin forwarded the staged
   launch to it and the harness saw exit code 0. The suite was run against a
-  disposable build with `identifier: io.github.bernh.mdraft.aitest` and its own
+  disposable build with `identifier: io.github.bgeneto.mdraft.aitest` and its own
   settings and WebView profile; both were deleted afterwards and the normal
   `src-tauri/target/release/mdraft.exe` was restored. The user's installed
   window was not closed or killed. A later `tauri build --no-bundle` for the

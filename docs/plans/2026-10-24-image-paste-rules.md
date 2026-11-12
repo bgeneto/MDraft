@@ -20,7 +20,7 @@ The evidence is on this machine:
 
 - `C:\Users\bernh\Documents\fupia.md` contains
   `![generated image 1](https://fupia.sistema.pro.br/api/v1/interpreter/files/05782d7c9d9c/XJnZGxn5U2BViaxH/rk8_comparacao.png)`.
-- `%APPDATA%\io.github.bernh.mdraft\settings.json` has `imageRule: "custom"`,
+- `%APPDATA%\io.github.bgeneto.mdraft\settings.json` has `imageRule: "custom"`,
   `imageCustomDir: "C:\\Users\\bernh\\Pictures"`,
   `imageApplyLocal: true`, `imageApplyOnline: true`,
   `richPasteImages: "download"`, `richPaste: true`.

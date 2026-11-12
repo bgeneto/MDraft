@@ -21,7 +21,7 @@ import zlib from "node:zlib";
 import { rankMostUsed } from "../src/ai/usage.ts";
 
 const port = process.argv[2] ?? "9222";
-const appIdentifier = process.env.MDRAFT_TEST_IDENTIFIER ?? "io.github.bernh.mdraft";
+const appIdentifier = process.env.MDRAFT_TEST_IDENTIFIER ?? "io.github.bgeneto.mdraft";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ---------------------------------------------------------------------------

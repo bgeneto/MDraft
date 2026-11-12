@@ -202,7 +202,7 @@ Implemented as planned, with these deviations and measurements:
   fallback; the rule was present and the check failed anyway. The assertion now
   accepts the fallback form, and the trap is recorded in `AGENTS.md`.
 - **The UI suites ran on a disposable build** with identifier
-  `io.github.bernh.mdraft.codescaletest`, because the installed MDraft was open
+  `io.github.bgeneto.mdraft.codescaletest`, because the installed MDraft was open
   and the harness correctly refuses to disturb a user instance. Its settings,
   WebView profile and executable were removed afterwards, and the ordinary
   release binary was rebuilt so `src-tauri/target/release/mdraft.exe` is not the

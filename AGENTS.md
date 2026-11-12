@@ -287,10 +287,10 @@ reader's prompt overrides: deleting only `settings.json` leaves the prompts in
 force.
 
 ```powershell
-Remove-Item "$env:APPDATA\io.github.bernh.mdraft\settings.json" -Force
+Remove-Item "$env:APPDATA\io.github.bgeneto.mdraft\settings.json" -Force
 ```
 
-Settings live in `%APPDATA%\io.github.bernh.mdraft\settings.json` on Windows
+Settings live in `%APPDATA%\io.github.bgeneto.mdraft\settings.json` on Windows
 (`~/Library/Application Support/…` on macOS, `~/.config/…` on Linux).
 
 The CDP snippet, the logging detail, the state paths and the screenshot-measuring

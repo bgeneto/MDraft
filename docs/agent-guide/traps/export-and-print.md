@@ -151,7 +151,7 @@ the builder instead of the list order (the pandoc PDF is, through
 `is_pandoc_pdf`). A fresh profile can show a new order while the developer's own
 does not, and editing the defaults alone moves no row that is pinned. Read the
 real file before suspecting a stale build:
-`(Get-Content "$env:APPDATA\io.github.bernh.mdraft\settings.json" -Raw | ConvertFrom-Json).exportFormats.id`.
+`(Get-Content "$env:APPDATA\io.github.bgeneto.mdraft\settings.json" -Raw | ConvertFrom-Json).exportFormats.id`.
 Place a fixed row in `build` and assert it through `menu_items` in
 `scripts/menu-test.mjs`; that probe is the only way to see a native menu.
 

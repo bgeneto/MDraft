@@ -19,7 +19,7 @@ both run headless, which is enough to prove what a row inserts and where the
 caret lands.
 
 **A hand-launched `mdraft.exe` panics with `HRESULT(0x800700AA)` and a new PID appears after `taskkill`**
-Two causes stacked. The WebView2 profile was held by a leftover instance, and an orphaned `node scripts/test-all.mjs` from an interrupted run was relaunching it through the single-instance plugin — so killing the app produced a fresh PID. `Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*test-all.mjs*' }` found the parent; stop it first, then the app. To screenshot the panel afterwards, copy the binary outside the workspace and launch it with `MDRAFT_TEST_HIDDEN=1`, `MDRAFT_TEST_IDENTIFIER=io.github.bernh.mdraft.test-automation` and its own `WEBVIEW2_USER_DATA_FOLDER`; a copy inside the workspace cannot create the profile at all.
+Two causes stacked. The WebView2 profile was held by a leftover instance, and an orphaned `node scripts/test-all.mjs` from an interrupted run was relaunching it through the single-instance plugin — so killing the app produced a fresh PID. `Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*test-all.mjs*' }` found the parent; stop it first, then the app. To screenshot the panel afterwards, copy the binary outside the workspace and launch it with `MDRAFT_TEST_HIDDEN=1`, `MDRAFT_TEST_IDENTIFIER=io.github.bgeneto.mdraft.test-automation` and its own `WEBVIEW2_USER_DATA_FOLDER`; a copy inside the workspace cannot create the profile at all.
 
 **`pkill -f <pattern>` kills the shell running it**
 `pkill -f` matches against full command lines, and the shell's own command line
@@ -43,7 +43,7 @@ when a script needs the app gone.
 
 **The release build dies with `BEX64` while the portable build is open**
 The portable build redirects only the config directory; it shares
-`%LOCALAPPDATA%\io.github.bernh.mdraft\EBWebView` with the ordinary build.
+`%LOCALAPPDATA%\io.github.bgeneto.mdraft\EBWebView` with the ordinary build.
 Starting one while the other runs makes the new process die on launch with the
 same `Event Name: BEX64` signature as profile corruption, and deleting the
 profile fails with `being used by another process`. Close the other MDraft
@@ -92,7 +92,7 @@ directory with the two settings files, and `resetAppState` clears it between
 suites. Any new launcher outside that harness must do the same, or build with its
 own `identifier`.
 
-**`%APPDATA%\io.github.bernh.mdraft\settings.json` ends up with a mock AI endpoint and no favorites after a test run**
+**`%APPDATA%\io.github.bgeneto.mdraft\settings.json` ends up with a mock AI endpoint and no favorites after a test run**
 Two `scripts/test-all.mjs` runs overlapped and both used the same application identifier. Each copies `settings.json`, `.window-state.json` and `recovery` into its own stage and deletes the originals; when one restored, it wrote the other run's test profile back as the "developer's" state, and the original favorites, recents and tabs were gone. The harness is not concurrency-safe. Before starting it, check for another `test-all.mjs`/`npm test` and for any MDraft process, and run one harness at a time; a concurrent audit needs a build with its own identifier. Restore the values captured before the run; a missing recovery journal and `.window-state.json` may not be recoverable.
 
 **`APPDATA` and `LOCALAPPDATA` do not isolate a one-off close test**
@@ -100,7 +100,7 @@ Tauri resolves `app_config_dir()` and the WebView2 profile through Windows Known
 Folders, not through those environment variables. A redirected `Start-Process`
 with both variables pointed at a temp folder still opened the developer's real
 settings, added the fixture to Recents, changed `lastDirectory` and rewrote
-`%APPDATA%\io.github.bernh.mdraft\.window-state.json`. It proved WM_CLOSE exits
+`%APPDATA%\io.github.bgeneto.mdraft\.window-state.json`. It proved WM_CLOSE exits
 with code 0 and writes the state file, but it did so at the owner's expense. Use
 `scripts/test-all.mjs` (which backs up and restores the whole state), or a build
 with its own `identifier`; never treat environment redirection as isolation.

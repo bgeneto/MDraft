@@ -21,7 +21,7 @@ use std::sync::Mutex;
 
 /// Service name in the platform store. It is the application identifier, not a
 /// product label, so a rename does not strand existing credentials.
-const SERVICE: &str = "io.github.bernh.mdraft.ai";
+const SERVICE: &str = "io.github.bgeneto.mdraft.ai";
 
 /// The fallback file's name, beside `settings.json`.
 pub(crate) const KEYS_FILE: &str = "ai-keys.json";

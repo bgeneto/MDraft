@@ -221,7 +221,7 @@ Verification on 2026-11-02:
 - `npm run ai:unit` — 128/128.
 - `npm run ai` — 221/221 against a local mock. The installed MDraft was running,
   so the suite used a disposable build with identifier
-  `io.github.bernh.mdraft.aicontexttest` and its own settings/profile; the
+  `io.github.bgeneto.mdraft.aicontexttest` and its own settings/profile; the
   normal release binary was rebuilt afterwards.
 - `npm run lint` — clean.
 - Prettier check on every touched TypeScript and script file — clean. A

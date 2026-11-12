@@ -147,7 +147,7 @@ Essas falhas não são sete regressões funcionais do aplicativo. As tentativas
 podem ter encaminhado amostras à janela existente; não inspecionei essa janela.
 
 As rodadas seguintes usaram um build temporário com identifier
-`io.github.bernh.mdraft.backlogaudit`, configurações separadas e um harness
+`io.github.bgeneto.mdraft.backlogaudit`, configurações separadas e um harness
 temporário coerente com esse identifier. Não fechei a instalação existente.
 O executável release original foi restaurado e seu hash conferido.
 

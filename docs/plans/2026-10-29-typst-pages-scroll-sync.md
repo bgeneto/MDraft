@@ -402,7 +402,7 @@ fast two-page example as sufficient performance evidence.
   preview column). Existing smoke remains 114/114. Flowing-mode p95 with just
   coordinate normalisation: Markdown/AsciiDoc 1.15px, Document 1.38px, HTML
   2.35px. Continuing with phase 2 and lifecycle/zoom stress validation.
-- Baseline: private identifier `io.github.bernh.mdraft.scrolltest`, because an
+- Baseline: private identifier `io.github.bgeneto.mdraft.scrolltest`, because an
   installed production instance was open. The temporary runner and build config
   are under ignored `node_modules/.cache/mdraft-scroll`; production settings and
   recovery are never touched. Existing smoke: 114/114 passed. Forty probes per

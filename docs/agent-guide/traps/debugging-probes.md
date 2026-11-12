@@ -110,7 +110,7 @@ script.
 
 **A second MDraft for a CDP test dies with `HRESULT(0x800700AA)`, even when the exe is outside the workspace**
 WebView2 allows one browser process per user-data folder, and every instance
-defaults to `%LOCALAPPDATA%\io.github.bernh.mdraft\EBWebView`. While another
+defaults to `%LOCALAPPDATA%\io.github.bgeneto.mdraft\EBWebView`. While another
 MDraft window — including the user's portable build — is open, launching a test
 copy with the same `identifier` fails with
 `failed to create webview: WebView2 error: WindowsError(Error { code: HRESULT(0x800700AA), message: "The requested resource is in use." })`.
@@ -127,7 +127,7 @@ kill the user's instance or delete the shared profile.
 The existing `0x800700AA` entries describe the profile conflict; what they do not
 say is that the *release* binary already supports an isolated launch, so no
 throwaway build is needed: set `MDRAFT_TEST_HIDDEN=1` and
-`MDRAFT_TEST_IDENTIFIER=io.github.bernh.mdraft.test-automation` and copy the exe
+`MDRAFT_TEST_IDENTIFIER=io.github.bgeneto.mdraft.test-automation` and copy the exe
 outside the workspace. It prints `MDRAFT_TEST_HIDDEN_ISOLATED_WINDOW_V2` on
 stderr, which is how a probe confirms it took that path. Two failure modes cost
 time anyway. First, an orphaned `node scripts/test-all.mjs` from an earlier

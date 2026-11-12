@@ -105,7 +105,7 @@ missing one fails in a way that does not point at the cause:
 | `productName` | `tauri.conf.json`, names every bundle | `MDraft` |
 | `productName` (Linux) | `tauri.linux.conf.json`, kebab-cased into dpkg's `Package:` | `mdraft` |
 | Desktop label | `linux.desktop.hbs` `Name=` (a literal since the Linux rename) | `MDraft` |
-| `identifier` | `tauri.conf.json`, **moves the settings directory** | `io.github.bernh.mdraft` |
+| `identifier` | `tauri.conf.json`, **moves the settings directory** | `io.github.bgeneto.mdraft` |
 | npm package | `package.json` and the lock file | `mdraft` |
 | Display strings | window title, menus, About, welcome document | `MDraft` |
 

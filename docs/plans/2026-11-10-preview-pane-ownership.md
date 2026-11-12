@@ -777,7 +777,7 @@ pre-fix failures were confirmed from the code and from the first post-fix runs:
 `retirePreview` did not exist, `invalidatePreview` left `#preview` mounted, and
 no `.preview-pending` element existed, so the synchronous marker assertions and
 every waiting-surface assertion fail on the old binary. The layer was run against
-a private build (identifier `io.github.bernh.mdraft.test-preview-owner`) instead
+a private build (identifier `io.github.bgeneto.mdraft.test-preview-owner`) instead
 of through `test-all`.
 
 **The test found two defects in itself, both recorded as traps:**

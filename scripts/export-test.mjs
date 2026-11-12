@@ -13,7 +13,7 @@
 //! slow and too network-dependent to sit in the default run.
 //!
 //! The window must have `samples/feature-tour.md` (or any document) open, and
-//! `%APPDATA%\io.github.bernh.mdraft\settings.json` must have been deleted so
+//! `%APPDATA%\io.github.bgeneto.mdraft\settings.json` must have been deleted so
 //! the default format list is in place.
 
 import { mkdirSync, readFileSync, rmSync, existsSync, statSync, writeFileSync } from "node:fs";

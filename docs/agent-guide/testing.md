@@ -136,7 +136,7 @@ against `samples/feature-tour.md`; the math test against
 document produces a wall of failures that look like regressions.
 
 ```powershell
-Remove-Item "$env:APPDATA\io.github.bernh.mdraft\settings.json" -Force -ErrorAction SilentlyContinue
+Remove-Item "$env:APPDATA\io.github.bgeneto.mdraft\settings.json" -Force -ErrorAction SilentlyContinue
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
 Start-Process ".\src-tauri\target\release\MDraft.exe" -ArgumentList "`"$PWD\samples\feature-tour.md`""
 Start-Sleep -Seconds 15

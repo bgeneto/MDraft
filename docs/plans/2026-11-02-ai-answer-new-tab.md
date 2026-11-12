@@ -181,7 +181,7 @@ deleted icon.
   a Convert → Typst tab.
 
 Run on 2026-11-02 against a disposable build with its own identifier
-(`io.github.bernh.mdraft.aitest`), because the installed application was open:
+(`io.github.bgeneto.mdraft.aitest`), because the installed application was open:
 `npm run ai:unit` 136/136, `npm run build`, `npm run lint`, `npm run format:check`
 and `npm run knip` clean, and fourteen full `npm run ai` runs. The final run is
 **255/255**, including the typed-target block another session added in the same

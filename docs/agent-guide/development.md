@@ -198,7 +198,7 @@ Useful commands:
 
 ### Application state
 
-Settings live in `%APPDATA%\io.github.bernh.mdraft\settings.json` on
+Settings live in `%APPDATA%\io.github.bgeneto.mdraft\settings.json` on
 Windows (`~/Library/Application Support/…` on macOS,
 `~/.config/…` on Linux).
 
@@ -212,7 +212,7 @@ rule applies, and `scripts/test-all.mjs` backs it up and restores it with the
 settings. Deleting only `settings.json` leaves the prompts in force.
 
 ```powershell
-Remove-Item "$env:APPDATA\io.github.bernh.mdraft\settings.json" -Force
+Remove-Item "$env:APPDATA\io.github.bgeneto.mdraft\settings.json" -Force
 ```
 
 ### Reading a screenshot

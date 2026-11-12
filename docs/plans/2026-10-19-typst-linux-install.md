@@ -220,7 +220,7 @@ Layers, cheapest first:
   `cargo test -- --ignored --nocapture downloading_typst`.
 - Manual Linux check, because WebKitGTK has no CDP and the UI suites cannot run
   there: launch the built app, delete
-  `~/.local/share/io.github.bernh.mdraft/typst/` first, choose
+  `~/.local/share/io.github.bgeneto.mdraft/typst/` first, choose
   **Help › Install Typst**, then:
   - the dialog says about 20 MB and the progress toast appears;
   - `<app data>/typst/<version>/typst --version` prints `typst <version>`;

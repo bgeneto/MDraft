@@ -288,7 +288,7 @@ Implemented on 2026-11-02.
   export suite already exercises the embedded faces.
 - **Isolation.** The installed MDraft window was open, so the UI suites ran
   against a disposable build with identifier
-  `io.github.bernh.mdraft.playfairtest`; the installed window, its settings and
+  `io.github.bgeneto.mdraft.playfairtest`; the installed window, its settings and
   its recovery journal were not touched. That build and its profile were
   removed afterwards.
 - **Visual.** A screenshot of Editorial at 17 px showed Playfair prose, Archivo
