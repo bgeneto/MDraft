@@ -34,7 +34,8 @@ export function escapeLatex(value: string): string {
     .replace(/([#$%&_{}])/g, "\\$1")
     .replace(/~/g, "\\textasciitilde{}")
     .replace(/\^/g, "\\textasciicircum{}")
-    .replace(/\u0000/g, "\\textbackslash{}");
+    .split(BACKSLASH)
+    .join("\\textbackslash{}");
 }
 
 /** A URL for `\href` and `\includegraphics`: braces and backslashes break them. */
@@ -139,11 +140,15 @@ function renderTable(block: Extract<Block, { kind: "table" }>): string {
     "    \\hline",
   ];
   if (block.header) {
-    lines.push(`    ${Array.from({ length: columns }, (_, index) => cell(block.header?.[index])).join(" & ")} \\\\`);
+    lines.push(
+      `    ${Array.from({ length: columns }, (_, index) => cell(block.header?.[index])).join(" & ")} \\\\`,
+    );
     lines.push("    \\hline");
   }
   for (const row of block.rows) {
-    lines.push(`    ${Array.from({ length: columns }, (_, index) => cell(row[index])).join(" & ")} \\\\`);
+    lines.push(
+      `    ${Array.from({ length: columns }, (_, index) => cell(row[index])).join(" & ")} \\\\`,
+    );
   }
   lines.push("    \\hline", "  \\end{tabular}", "\\end{table}");
   return lines.join("\n");

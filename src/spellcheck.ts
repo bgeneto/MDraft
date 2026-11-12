@@ -5,13 +5,14 @@
 //! Code, URLs and mathematics are not sent. A language the system does not
 //! have is not guessed at: the paragraph stays clean.
 
-import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
+import { ensureSyntaxTree, language as activeLanguage, syntaxTree } from "@codemirror/language";
 import {
   Facet,
   RangeSetBuilder,
   StateEffect,
   type EditorState,
   type Extension,
+  type Text,
 } from "@codemirror/state";
 import {
   Decoration,
@@ -22,7 +23,22 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import * as api from "./api";
-import { voteProse } from "./language.ts";
+import {
+  declaredLanguage,
+  normalizeLanguageTag,
+  voteProse,
+  type MarkupLanguage,
+} from "./language.ts";
+import {
+  webSpellingPassages,
+  type StringMode,
+  type WebLanguage,
+  type WebPassage,
+} from "./spelling/web-passages.ts";
+import { passageWords } from "./spelling/words.ts";
+import { encodeReplacement } from "./spelling/replacement.ts";
+import { ALLOWED, collectWords, type WordHit } from "./spelling/legacy-prose.ts";
+import { TypstRangeClient } from "./spelling/typst-client.ts";
 
 export interface SpellOptions {
   enabled: boolean;
@@ -32,42 +48,11 @@ export interface SpellOptions {
   documentLanguage?: string;
   /** Words the reader ignored or added. Compared case-insensitively. */
   words: readonly string[];
+  stringMode?: StringMode;
+  identifiers?: boolean;
+  readOnly?: boolean;
+  sessionKey?: string;
 }
-
-const ALLOWED = new Set([
-  "mdraft",
-  "tauri",
-  "codemirror",
-  "pandoc",
-  "typst",
-  "katex",
-  "mermaid",
-  "webview2",
-  "github",
-  "asciidoc",
-  "asciidoctor",
-  "asciimath",
-  "latexmath",
-]);
-
-/** Nodes whose text is not prose. Link labels and image alt text stay. */
-const SKIP_NODES = new Set([
-  "FencedCode",
-  "CodeBlock",
-  "InlineCode",
-  "URL",
-  "Autolink",
-  "HTMLBlock",
-  "HTMLTag",
-  "Comment",
-  // AsciiDoc stream token names.
-  "monospace",
-  "listing",
-  "literal",
-  "passthrough",
-  "comment",
-  "meta",
-]);
 
 const spellError = Decoration.mark({ class: "cm-spell-error" });
 
@@ -75,6 +60,9 @@ interface Miss {
   from: number;
   to: number;
   word: string;
+  raw: string;
+  language: string;
+  passage?: WebPassage;
 }
 
 interface Marks {
@@ -88,17 +76,36 @@ interface SpellConfig {
   language: string;
   documentLanguage: string;
   words: readonly string[];
+  stringMode: StringMode;
+  identifiers: boolean;
+  readOnly: boolean;
+  sessionKey: string;
 }
 
 const spellConfig = Facet.define<SpellConfig, SpellConfig>({
   combine(values) {
-    return values[0] ?? { language: "auto", documentLanguage: "markdown", words: [] };
+    return (
+      values[0] ?? {
+        language: "auto",
+        documentLanguage: "markdown",
+        words: [],
+        stringMode: "human",
+        identifiers: false,
+        readOnly: false,
+        sessionKey: "",
+      }
+    );
   },
 });
 
 let installed: string[] = [];
 let installedKnown = false;
+let installedError = false;
+let installedRevision = 0;
 let remember: (word: string) => void = () => {};
+let ignore: (word: string) => void = () => {};
+export type SpellingStatus = "pending" | "active" | "missing" | "error";
+let reportStatus: (sessionKey: string, status: SpellingStatus) => void = () => {};
 
 let committed: "en" | "pt-BR" | null = null;
 let streakLang: "en" | "pt-BR" | null = null;
@@ -111,9 +118,11 @@ export function resetSpellLanguage(): void {
   streak = 0;
 }
 
-export function setInstalledLanguages(languages: readonly string[]): void {
+export function setInstalledLanguages(languages: readonly string[], failed = false): void {
   installed = [...languages];
   installedKnown = true;
+  installedError = failed;
+  installedRevision += 1;
 }
 
 export function installedLanguages(): readonly string[] {
@@ -122,6 +131,16 @@ export function installedLanguages(): readonly string[] {
 
 export function setSpellRemember(callback: (word: string) => void): void {
   remember = callback;
+}
+
+export function setSpellIgnore(callback: (word: string) => void): void {
+  ignore = callback;
+}
+
+export function setSpellStatus(
+  callback: (sessionKey: string, status: SpellingStatus) => void,
+): void {
+  reportStatus = callback;
 }
 
 export function languageLabel(tag: string): string {
@@ -157,6 +176,8 @@ export function dictionaryOptions(current: string): [string, string][] {
  */
 export function spellcheckAvailabilityNote(): string | null {
   if (!installedKnown) return null;
+  if (installedError)
+    return "The spelling service could not list dictionaries. Try restarting MDraft.";
   const hasEn = installed.some((tag) => tag === "en" || tag === "en-GB");
   const hasPt = installed.includes("pt-BR");
   if (hasEn && hasPt) return null;
@@ -184,6 +205,10 @@ export function spellExtension(options: SpellOptions): Extension {
       language: options.language,
       documentLanguage: options.documentLanguage ?? "markdown",
       words: options.words,
+      stringMode: options.stringMode ?? "human",
+      identifiers: options.identifiers ?? false,
+      readOnly: options.readOnly ?? false,
+      sessionKey: options.sessionKey ?? "",
     }),
     spellPlugin,
   ];
@@ -191,30 +216,6 @@ export function spellExtension(options: SpellOptions): Extension {
 
 function normalize(word: string): string {
   return word.replace(/[\u2019\u2018\u02BC]/g, "'");
-}
-
-function acceptedForm(word: string): string | null {
-  const trimmed = word.replace(/^['\u2019\u2018-]+|['\u2019\u2018-]+$/gu, "");
-  if ([...trimmed].length < 2) return null;
-  let letters = 0;
-  let uppers = 0;
-  let seenLetter = false;
-  let internalCapital = false;
-  let normalized = "";
-  for (const ch of trimmed) {
-    if (/\p{N}/u.test(ch)) return null;
-    const folded = ch === "\u2019" || ch === "\u2018" || ch === "\u02BC" ? "'" : ch;
-    if (/\p{L}/u.test(folded)) {
-      letters += 1;
-      if (folded === folded.toUpperCase() && folded !== folded.toLowerCase()) uppers += 1;
-      if (seenLetter && folded >= "A" && folded <= "Z") internalCapital = true;
-      seenLetter = true;
-    }
-    normalized += folded;
-  }
-  if (letters < 2 || internalCapital || (uppers === letters && letters >= 2)) return null;
-  if (ALLOWED.has(normalized.toLowerCase())) return null;
-  return normalized;
 }
 
 function confirm(sample: "en" | "pt-BR"): "en" | "pt-BR" | null {
@@ -262,190 +263,100 @@ function detectLanguage(words: readonly string[]): "en" | "pt-BR" | null {
   return confirm(sample);
 }
 
-function frontMatterEnd(state: EditorState): number {
-  const text = state.doc.sliceString(0, Math.min(state.doc.length, 8_000));
-  if (!text.startsWith("---\n") && !text.startsWith("---\r\n")) return 0;
-  const lines = text.split(/\r?\n/);
-  let offset = lines[0].length + (text.startsWith("---\r\n") ? 2 : 1);
-  for (let i = 1; i < lines.length; i++) {
-    if (lines[i] === "---") return offset + lines[i].length + 1;
-    offset += lines[i].length + 1;
-  }
-  return 0;
-}
-
-/**
- * The ranges a LaTeX document must not be spell-checked in.
- *
- * The shared list already covers `$…$`, `\[…\]`, URLs and angle brackets, which
- * LaTeX uses too. What it cannot know is that LaTeX spells its structure as
- * commands: `\documentclass{article}` would underline `documentclass` and
- * `article`, and `\begin{figure}` would underline both. This pass covers the
- * command names, their brace arguments, the verbatim-like environments, the
- * preamble, and `%` comments — leaving the prose inside `\section{…}`,
- * `\textbf{…}` and the body for the checker, which is the point.
- */
-function latexSkips(text: string, base: number): Array<[number, number]> {
-  const ranges: Array<[number, number]> = [];
-  const add = (from: number, to: number) => {
-    if (to > from) ranges.push([base + from, base + to]);
-  };
-
-  // Verbatim-like bodies first: everything inside them is literal, including
-  // `%`, so they must be claimed before the comment rule sees a `%` in code.
-  const verbatim = /\\begin\{(verbatim\*?|Verbatim\*?|lstlisting|minted|alltt)\}[\s\S]*?\\end\{\1\}/g;
-  let match: RegExpExecArray | null;
-  while ((match = verbatim.exec(text)) !== null) add(match.index, match.index + match[0].length);
-
-  // `%` comments run to the end of the line and are not prose. An escaped `\%`
-  // is a percent sign in the text, so it does not open one.
-  const comment = /(?<!\\)%.*$/gm;
-  while ((match = comment.exec(text)) !== null) add(match.index, match.index + match[0].length);
-
-  // A command name and its optional/required arguments, up to three deep:
-  // `\includegraphics[width=2cm]{figs/plot}` and `\cite[p.~3]{knuth84}`.
-  const command = /\\[a-zA-Z@]+\*?(?:\s*\[[^\]]*\])?(?:\s*\{[^{}]*\}){0,3}/g;
-  while ((match = command.exec(text)) !== null) add(match.index, match.index + match[0].length);
-
-  // Remaining bare braces and brackets hold keys, labels and dimensions, not
-  // prose: `{2cm}`, `{htbp}`, `{figure}`. Prose inside a command's argument was
-  // already claimed above, so this only reaches what a command did not.
-  const braces = /\{[^{}\n]*\}/g;
-  while ((match = braces.exec(text)) !== null) add(match.index, match.index + match[0].length);
-
-  return ranges;
-}
-
-function extraSkips(text: string, base: number, documentLanguage: string): Array<[number, number]> {
-  const ranges: Array<[number, number]> = [];
-  const patterns = [
-    /\$\$[\s\S]*?\$\$/g,
-    /\\\([\s\S]*?\\\)/g,
-    /\\\[[\s\S]*?\\\]/g,
-    /\$[^\s$][^$\n]*[^\s$]\$/g,
-    /\$[^\s$\n]\$/g,
-    /https?:\/\/\S+/g,
-    /www\.\S+/g,
-    /<[^>\n]{1,200}>/g,
-    // AsciiDoc markup that is not prose.
-    /image::?[^[\n]*\[[^\]]*\]/g,
-    /(?:include|xref|link|footnote|kbd|btn|menu|latexmath|stem):[^\s[]*\[[^\]]*\]/g,
-    /^:[A-Za-z0-9_-]+:.*$/gm,
-    /<<[^>\n]+>>/g,
-    /\[\[[^\]\n]+\]\]/g,
-    /^\s{0,3}(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION):/gm,
-  ];
-  for (const pattern of patterns) {
-    pattern.lastIndex = 0;
-    let match = pattern.exec(text);
-    while (match) {
-      ranges.push([base + match.index, base + match.index + match[0].length]);
-      match = pattern.exec(text);
-    }
-  }
-  if (documentLanguage === "latex") ranges.push(...latexSkips(text, base));
-  return ranges;
-}
-
-function covered(index: number, ranges: Array<[number, number]>): boolean {
-  return ranges.some(([from, to]) => index >= from && index < to);
-}
-
-interface WordHit {
-  from: number;
-  to: number;
-  form: string;
-}
-
-function collectWords(
-  state: EditorState,
-  from: number,
-  to: number,
-  ignored: Set<string>,
-  documentLanguage: string,
-): WordHit[] {
-  const tree = syntaxTree(state);
-  const skipped: Array<[number, number]> = [];
-  const matter = frontMatterEnd(state);
-  if (matter > from) skipped.push([from, Math.min(matter, to)]);
-  tree.iterate({
-    from,
-    to,
-    enter(node) {
-      if (SKIP_NODES.has(node.name)) {
-        skipped.push([Math.max(node.from, from), Math.min(node.to, to)]);
-        return false;
-      }
-    },
-  });
-  const slice = state.doc.sliceString(from, to);
-  skipped.push(...extraSkips(slice, from, documentLanguage));
-
-  const hits: WordHit[] = [];
-  let token = "";
-  let tokenFrom = from;
-  const flush = (at: number) => {
-    if (!token) return;
-    const parts = token.split("-");
-    let cursor = tokenFrom;
-    for (const part of parts) {
-      const form = acceptedForm(part);
-      const start = cursor;
-      const end = cursor + part.length;
-      if (form && !ignored.has(form.toLowerCase())) {
-        hits.push({ from: start, to: end, form });
-      }
-      cursor = end + 1;
-    }
-    token = "";
-    tokenFrom = at;
-  };
-
-  for (let index = from; index < to;) {
-    const ch = state.doc.sliceString(index, index + 1);
-    const size = ch.length || 1;
-    if (covered(index, skipped) || ch === "\n" || ch === "\r") {
-      flush(index + size);
-      index += size;
-      continue;
-    }
-    if (/\p{L}/u.test(ch) || ch === "'" || ch === "\u2019" || ch === "\u2018" || ch === "-") {
-      if (!token) tokenFrom = index;
-      token += ch;
-    } else {
-      flush(index + size);
-    }
-    index += size;
-  }
-  flush(to);
-  return hits;
-}
-
 function sampleWords(
   state: EditorState,
   ignored: Set<string>,
   documentLanguage: string,
+  typstRanges?: ReadonlyArray<readonly [number, number]>,
 ): string[] {
   const limit = Math.min(state.doc.length, 20_000);
   ensureSyntaxTree(state, limit, 100);
+  if (isWebLanguage(documentLanguage)) {
+    return webSpellingPassages(state, documentLanguage, 0, limit).flatMap((passage) =>
+      passageWords(
+        passage,
+        (from, to) => state.sliceDoc(from, to),
+        passage.language,
+        state.doc.length,
+      )
+        .map((word) => word.word)
+        .filter((word) => !ignored.has(word.toLowerCase())),
+    );
+  }
+  if (documentLanguage === "typst")
+    return typstWords(state, 0, limit, ignored, typstRanges ?? []).map((hit) => hit.form);
   return collectWords(state, 0, limit, ignored, documentLanguage).map((hit) => hit.form);
+}
+
+function typstWords(
+  state: EditorState,
+  from: number,
+  to: number,
+  ignored: Set<string>,
+  ranges: ReadonlyArray<readonly [number, number]>,
+): WordHit[] {
+  const hits: WordHit[] = [];
+  for (const [start, end] of ranges) {
+    if (
+      !Number.isInteger(start) ||
+      !Number.isInteger(end) ||
+      start < 0 ||
+      end > state.doc.length ||
+      end <= start
+    )
+      continue;
+    const lo = Math.max(start, from);
+    const hi = Math.min(end, to);
+    if (lo < hi) hits.push(...collectWords(state, lo, hi, ignored, "typst"));
+  }
+  return hits;
+}
+
+function isWebLanguage(value: string): value is WebLanguage {
+  return value === "html" || value === "javascript" || value === "json" || value === "css";
+}
+
+function installedTag(raw: string): string | null {
+  const tag = normalizeLanguageTag(raw);
+  if (!tag) return null;
+  const exact = installed.find((candidate) => candidate.toLowerCase() === tag.toLowerCase());
+  if (exact) return exact;
+  if (tag === "pt" && installed.includes("pt-PT")) return "pt-PT";
+  return null;
 }
 
 function chosenLanguage(
   config: SpellConfig,
   state: EditorState,
   ignored: Set<string>,
+  typstRanges?: ReadonlyArray<readonly [number, number]>,
 ): string | null {
   if (!installedKnown) return null;
-  const requested =
-    config.language === "auto"
-      ? detectLanguage(sampleWords(state, ignored, config.documentLanguage))
-      : config.language;
+  let requested = config.language;
+  if (requested === "auto") {
+    const markup = ["markdown", "typst", "html", "asciidoc", "latex"].includes(
+      config.documentLanguage,
+    )
+      ? (config.documentLanguage as MarkupLanguage)
+      : null;
+    const declared = markup
+      ? declaredLanguage(state.sliceDoc(0, Math.min(state.doc.length, 8_000)), markup)
+      : null;
+    if (declared) return installedTag(declared);
+    requested =
+      detectLanguage(sampleWords(state, ignored, config.documentLanguage, typstRanges)) ?? "";
+  }
+  if (!requested && config.language === "auto") {
+    for (const locale of navigator.languages ?? []) {
+      const found = installedTag(locale);
+      if (found) return found;
+    }
+  }
   if (!requested) return null;
   if (requested === "en") {
     return installed.some((tag) => tag === "en" || tag === "en-GB") ? "en" : null;
   }
-  return installed.includes(requested) ? requested : null;
+  return installedTag(requested);
 }
 
 class SpellPlugin implements PluginValue {
@@ -453,13 +364,17 @@ class SpellPlugin implements PluginValue {
   misses: Miss[] = [];
   private timer = 0;
   private request = 0;
-  private language: string | null = null;
   /** One extra pass after open, so a short document can confirm its language. */
   private followUp = false;
   private menu: HTMLDivElement | null = null;
   private menuGen = 0;
   private readonly onContext: (event: MouseEvent) => void;
   private view: EditorView;
+  private typstClient: TypstRangeClient | null = null;
+  private typstCache: { doc: Text; ranges: Array<[number, number]> } | null = null;
+  private readonly wordCache = new Map<string, boolean>();
+  private cacheRevision = -1;
+  private cacheSettings = "";
 
   constructor(view: EditorView) {
     this.view = view;
@@ -470,7 +385,14 @@ class SpellPlugin implements PluginValue {
 
   update(update: ViewUpdate): void {
     this.view = update.view;
+    const configChanged = update.startState.facet(spellConfig) !== update.state.facet(spellConfig);
+    if (configChanged) {
+      this.closeMenu();
+      this.deco = Decoration.none;
+      this.misses = [];
+    }
     if (update.docChanged) {
+      this.closeMenu();
       update.changes.iterChanges((fromA, toA) => {
         if (fromA === 0 && toA === update.startState.doc.length) this.followUp = false;
       });
@@ -491,18 +413,67 @@ class SpellPlugin implements PluginValue {
         }
       }
     }
-    if (update.docChanged || update.viewportChanged || update.focusChanged) this.schedule();
+    if (
+      configChanged ||
+      update.docChanged ||
+      update.viewportChanged ||
+      update.focusChanged ||
+      syntaxTree(update.state) !== syntaxTree(update.startState)
+    )
+      this.schedule();
   }
 
   destroy(): void {
+    this.request += 1;
+    this.typstClient?.destroy();
     window.clearTimeout(this.timer);
     this.view.dom.removeEventListener("contextmenu", this.onContext);
     this.closeMenu();
   }
 
   private schedule(): void {
+    this.request += 1;
     window.clearTimeout(this.timer);
     this.timer = window.setTimeout(() => void this.run(), 400);
+  }
+
+  private async checkWords(
+    language: string,
+    words: readonly string[],
+    config: SpellConfig,
+    request: number,
+  ): Promise<number[]> {
+    const settings = JSON.stringify([
+      config.language,
+      config.stringMode,
+      config.identifiers,
+      config.words,
+    ]);
+    if (this.cacheRevision !== installedRevision || this.cacheSettings !== settings) {
+      this.wordCache.clear();
+      this.cacheRevision = installedRevision;
+      this.cacheSettings = settings;
+    }
+    const results = new Map<string, boolean>();
+    const pending: string[] = [];
+    for (const word of new Set(words)) {
+      const cached = this.wordCache.get(`${language}\0${word}`);
+      if (cached === undefined) pending.push(word);
+      else results.set(word, cached);
+    }
+    for (let offset = 0; offset < pending.length; offset += 1_500) {
+      if (request !== this.request) return [];
+      const chunk = pending.slice(offset, offset + 1_500);
+      const bad = new Set(await api.spellcheckCheck(language, chunk));
+      if (request !== this.request) return [];
+      for (let index = 0; index < chunk.length; index += 1) {
+        if (this.wordCache.size >= 4_000)
+          this.wordCache.delete(this.wordCache.keys().next().value!);
+        this.wordCache.set(`${language}\0${chunk[index]}`, bad.has(index));
+        results.set(chunk[index], bad.has(index));
+      }
+    }
+    return words.flatMap((word, index) => (results.get(word) ? [index] : []));
   }
 
   private async run(): Promise<void> {
@@ -511,15 +482,43 @@ class SpellPlugin implements PluginValue {
     // does: one follow-up is not enough when the query is slower than 50 ms,
     // and a miss here leaves the document clean until the next keystroke.
     if (!installedKnown) {
+      reportStatus(view.state.facet(spellConfig).sessionKey, "pending");
       this.timer = window.setTimeout(() => void this.run(), 100);
       return;
     }
     const config = view.state.facet(spellConfig);
     const ignored = new Set(config.words.map((word) => normalize(word).toLowerCase()));
-    const language = chosenLanguage(config, view.state, ignored);
+    let typstRanges: Array<[number, number]> | undefined;
+    if (config.documentLanguage === "typst") {
+      const doc = view.state.doc;
+      if (this.typstCache?.doc === doc) typstRanges = this.typstCache.ranges;
+      else {
+        reportStatus(config.sessionKey, "pending");
+        const request = ++this.request;
+        try {
+          this.typstClient ??= new TypstRangeClient();
+          const ranges = await this.typstClient.request(doc.toString());
+          if (request !== this.request || view.state.doc !== doc || !ranges) {
+            if (view.state.doc !== doc) this.schedule();
+            return;
+          }
+          typstRanges = ranges;
+          this.typstCache = { doc, ranges };
+        } catch {
+          if (request === this.request && view.state.doc === doc)
+            reportStatus(config.sessionKey, "error");
+          return;
+        }
+      }
+    }
+    const language = chosenLanguage(config, view.state, ignored, typstRanges);
+    if (isWebLanguage(config.documentLanguage)) {
+      await this.runWeb(config, ignored, language, config.documentLanguage);
+      return;
+    }
     const doc = view.state.doc;
-    this.language = language;
     if (!language) {
+      reportStatus(config.sessionKey, "missing");
       if (this.deco.size) {
         view.dispatch({ effects: setMarks.of({ deco: Decoration.none, misses: [] }) });
       }
@@ -535,17 +534,24 @@ class SpellPlugin implements PluginValue {
     this.followUp = false;
     const hits: WordHit[] = [];
     for (const range of view.visibleRanges) {
-      hits.push(...collectWords(view.state, range.from, range.to, ignored, config.documentLanguage));
-      if (hits.length >= 1_500) break;
+      hits.push(
+        ...(config.documentLanguage === "typst"
+          ? typstWords(view.state, range.from, range.to, ignored, typstRanges ?? [])
+          : collectWords(view.state, range.from, range.to, ignored, config.documentLanguage)),
+      );
     }
     const request = ++this.request;
     let bad: number[];
     try {
-      bad = await api.spellcheckCheck(
+      bad = await this.checkWords(
         language,
         hits.map((hit) => hit.form),
+        config,
+        request,
       );
     } catch {
+      if (request === this.request && view.state.doc === doc)
+        reportStatus(config.sessionKey, "error");
       return;
     }
     if (request !== this.request || view.state.doc !== doc) {
@@ -560,10 +566,139 @@ class SpellPlugin implements PluginValue {
       const hit = hits[index];
       if (!hit || hit.from >= hit.to || hit.from < previous) continue;
       previous = hit.to;
-      misses.push({ from: hit.from, to: hit.to, word: hit.form });
+      misses.push({
+        from: hit.from,
+        to: hit.to,
+        word: hit.form,
+        raw: view.state.doc.sliceString(hit.from, hit.to),
+        language,
+      });
       builder.add(hit.from, hit.to, spellError);
     }
     view.dispatch({ effects: setMarks.of({ deco: builder.finish(), misses }) });
+    reportStatus(config.sessionKey, "active");
+  }
+
+  private async runWeb(
+    config: SpellConfig,
+    ignored: Set<string>,
+    fallback: string | null,
+    documentLanguage: WebLanguage,
+  ): Promise<void> {
+    const view = this.view;
+    const state = view.state;
+    const doc = state.doc;
+    if (state.facet(activeLanguage)?.name !== documentLanguage) {
+      reportStatus(config.sessionKey, "pending");
+      return;
+    }
+    const end = Math.max(0, ...view.visibleRanges.map((range) => range.to));
+    if (!ensureSyntaxTree(state, end, 20)) {
+      reportStatus(config.sessionKey, "pending");
+      return;
+    }
+    const groups = new Map<string, ReturnType<typeof passageWords>>();
+    let missing = config.language !== "auto" && !fallback;
+    for (const range of view.visibleRanges) {
+      const passages = webSpellingPassages(
+        state,
+        documentLanguage,
+        range.from,
+        range.to,
+        config.stringMode,
+        config.identifiers,
+      );
+      for (const passage of passages) {
+        const language =
+          config.language === "auto" && passage.language !== null
+            ? installedTag(passage.language)
+            : fallback;
+        if (!language) {
+          missing = true;
+          continue;
+        }
+        if (!groups.has(language)) {
+          groups.set(language, []);
+        }
+        const words = passageWords(
+          passage,
+          (from, to) => doc.sliceString(from, to),
+          language,
+          doc.length,
+        );
+        for (const word of words) {
+          if (word.to <= range.from || word.from >= range.to) continue;
+          if (ignored.has(word.word.toLowerCase()) || ALLOWED.has(word.word.toLowerCase()))
+            continue;
+          groups.get(language)!.push(word);
+        }
+      }
+    }
+    const request = ++this.request;
+    const entries = [...groups];
+    const replies: Array<
+      PromiseSettledResult<{
+        language: string;
+        words: ReturnType<typeof passageWords>;
+        bad: number[];
+      }>
+    > = [];
+    for (let offset = 0; offset < entries.length; offset += 8) {
+      if (request !== this.request || view.state.doc !== doc) return;
+      replies.push(
+        ...(await Promise.allSettled(
+          entries.slice(offset, offset + 8).map(async ([language, words]) => ({
+            language,
+            words,
+            bad: await this.checkWords(
+              language,
+              words.map((word) => word.word),
+              config,
+              request,
+            ),
+          })),
+        )),
+      );
+    }
+    if (request !== this.request || view.state.doc !== doc) {
+      if (view.state.doc !== doc) this.schedule();
+      return;
+    }
+    const misses: Miss[] = [];
+    for (const reply of replies) {
+      if (reply.status !== "fulfilled") continue;
+      for (const index of reply.value.bad) {
+        const hit = reply.value.words[index];
+        if (!hit || hit.from >= hit.to) continue;
+        misses.push({
+          from: hit.from,
+          to: hit.to,
+          word: hit.word,
+          raw: hit.raw,
+          language: reply.value.language,
+          passage: hit.passage,
+        });
+      }
+    }
+    misses.sort((a, b) => a.from - b.from || a.to - b.to);
+    const accepted: Miss[] = [];
+    const builder = new RangeSetBuilder<Decoration>();
+    let previous = -1;
+    for (const miss of misses) {
+      if (miss.from < previous) continue;
+      previous = miss.to;
+      accepted.push(miss);
+      builder.add(miss.from, miss.to, spellError);
+    }
+    view.dispatch({ effects: setMarks.of({ deco: builder.finish(), misses: accepted }) });
+    reportStatus(
+      config.sessionKey,
+      replies.some((reply) => reply.status === "rejected")
+        ? "error"
+        : missing
+          ? "missing"
+          : "active",
+    );
   }
 
   private missAt(pos: number): Miss | null {
@@ -578,9 +713,11 @@ class SpellPlugin implements PluginValue {
     event.preventDefault();
     event.stopPropagation();
     this.closeMenu();
-    const language = this.language;
+    const language = miss.language;
     if (!language) return;
     const gen = ++this.menuGen;
+    const snapshot = this.view.state.doc;
+    const sessionKey = this.view.state.facet(spellConfig).sessionKey;
     const host = document.createElement("div");
     host.className = "spell-menu";
     host.setAttribute("role", "menu");
@@ -609,35 +746,65 @@ class SpellPlugin implements PluginValue {
       document.removeEventListener("mousedown", onPointer, true);
       document.removeEventListener("keydown", onKey, true);
     };
+    if (miss.passage?.kind === "identifier") {
+      this.fillMenu(host, miss, [], snapshot, sessionKey);
+      this.placeMenu(host, event.clientX, event.clientY);
+      return;
+    }
     void api
       .spellcheckSuggest(language, miss.word)
       .then((suggestions) => {
         if (this.menuGen !== gen || this.menu !== host) return;
-        this.fillMenu(host, miss, suggestions);
+        this.fillMenu(host, miss, suggestions, snapshot, sessionKey);
         this.placeMenu(host, event.clientX, event.clientY);
       })
       .catch(() => {
-        if (this.menu === host) this.fillMenu(host, miss, []);
+        if (this.menu === host) {
+          this.fillMenu(host, miss, [], snapshot, sessionKey);
+          const pending = host.querySelector<HTMLElement>(".spell-menu-pending");
+          if (pending) pending.textContent = "Suggestions unavailable";
+          reportStatus(sessionKey, "error");
+        }
       });
   }
 
-  private fillMenu(host: HTMLDivElement, miss: Miss, suggestions: readonly string[]): void {
+  private fillMenu(
+    host: HTMLDivElement,
+    miss: Miss,
+    suggestions: readonly string[],
+    snapshot: Text,
+    sessionKey: string,
+  ): void {
     host.replaceChildren();
-    if (suggestions.length === 0) {
+    if (suggestions.length === 0 && miss.passage?.kind !== "identifier") {
       const empty = document.createElement("div");
       empty.className = "spell-menu-pending";
       empty.textContent = "No suggestions";
       host.appendChild(empty);
     }
     for (const suggestion of suggestions) {
+      const replacement = miss.passage ? encodeReplacement(suggestion, miss.passage) : suggestion;
+      if (
+        replacement === null ||
+        this.view.state.readOnly ||
+        this.view.state.facet(spellConfig).readOnly
+      )
+        continue;
       host.appendChild(
         this.item(suggestion, () => {
           const view = this.view;
           const current = view.state.doc.sliceString(miss.from, miss.to);
-          if (normalize(current).toLowerCase() !== miss.word.toLowerCase()) return;
+          if (
+            view.state.doc !== snapshot ||
+            view.state.facet(spellConfig).sessionKey !== sessionKey ||
+            current !== miss.raw ||
+            view.state.readOnly ||
+            view.state.facet(spellConfig).readOnly
+          )
+            return;
           view.dispatch({
-            changes: { from: miss.from, to: miss.to, insert: suggestion },
-            selection: { anchor: miss.from + suggestion.length },
+            changes: { from: miss.from, to: miss.to, insert: replacement },
+            selection: { anchor: miss.from + replacement.length },
           });
           view.focus();
         }),
@@ -646,7 +813,7 @@ class SpellPlugin implements PluginValue {
     const rule = document.createElement("div");
     rule.className = "spell-menu-sep";
     host.appendChild(rule);
-    host.appendChild(this.item("Ignore", () => remember(miss.word)));
+    host.appendChild(this.item("Ignore", () => ignore(miss.word)));
     host.appendChild(this.item("Add to dictionary", () => remember(miss.word)));
   }
 

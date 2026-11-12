@@ -25,11 +25,10 @@ use windows::Win32::System::JobObjects::{
 };
 use windows::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
-    DeleteProcThreadAttributeList,
-    EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, InitializeProcThreadAttributeList,
-    LPPROC_THREAD_ATTRIBUTE_LIST, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION,
-    ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, UpdateProcThreadAttribute,
-    WaitForSingleObject,
+    DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
+    InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
+    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES,
+    STARTUPINFOEXW, UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
 use super::{JobDir, RunOutcome, RunSpec};

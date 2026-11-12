@@ -143,7 +143,15 @@ import { createRecoveryScheduler } from "./recovery";
 import { createSessionStore, pathKey, type Session } from "./sessions";
 import { planRestore, rememberTabs, type RememberedTabs } from "./tab-restore";
 import { resolveDocumentLanguage as resolveLanguage } from "./language";
-import { installedLanguages, setInstalledLanguages, setSpellRemember } from "./spellcheck";
+import { pathSpellingChoice, rememberPathSpellingChoice } from "./spelling/document-choice";
+import {
+  installedLanguages,
+  setInstalledLanguages,
+  setSpellIgnore,
+  setSpellRemember,
+  setSpellStatus,
+  type SpellingStatus,
+} from "./spellcheck";
 import * as sidebarPanel from "./sidebar";
 import { resolvePalette } from "./syntax-themes";
 import { createTabsUi, type TabsUi } from "./tabs";
@@ -315,7 +323,9 @@ const lifecycle = createDocumentLifecycle({
     });
     // A suggested path (a conflict copy) and a saved file's own path are already
     // names. Only an untitled buffer is named from its contents.
-    let defaultPath = suggested ?? (session.lossy ? conflictCopyPath(session) : session.path);
+    let defaultPath =
+      suggested ??
+      (session.lossy || session.encodingBlocked ? conflictCopyPath(session) : session.path);
     if (!defaultPath) {
       const extension = suggestion.extension ?? settings.defaultExtension;
       const name = await suggestedFileName(
@@ -327,18 +337,20 @@ const lifecycle = createDocumentLifecycle({
       defaultPath = settings.lastDirectory ? joinDir(settings.lastDirectory, name) : name;
     }
     const chosen = await saveDialog({
-      title: session.lossy ? "Save a UTF-8 copy" : "Save As",
+      title: session.lossy || session.encodingBlocked ? "Save a UTF-8 copy" : "Save As",
       defaultPath,
       filters: documentFilters(suggestion.language),
     });
     return Array.isArray(chosen) ? (chosen[0] ?? null) : chosen;
   },
   adoptPath: (session, path) => {
+    const spellingChoice = documentSpellingChoice(session);
     suggestedNames.delete(session.id);
     session.path = path;
     session.name = basename(path);
     session.directory = directoryOf(path);
     session.language = languageFor(path);
+    setDocumentSpellingChoice(session, spellingChoice);
   },
   replace: (session, payload) => {
     const active = session === doc,
@@ -653,6 +665,21 @@ function renderNotice(): void {
     );
     return;
   }
+  if (doc.encodingBlocked) {
+    const session = doc;
+    showNotice(
+      `"${doc.name}" contains characters ${displayEncoding(doc.encoding)} cannot store. The file was not changed; save a UTF-8 copy instead.`,
+      "warning",
+      [
+        {
+          label: "Save a UTF-8 copy…",
+          run: () => saveAs(conflictCopyPath(session), session, "UTF-8").then(() => {}),
+        },
+      ],
+      false,
+    );
+    return;
+  }
   if (doc.conflict === "modified") {
     showNotice(
       `"${doc.name}" changed on disk. Choose what to keep before saving.`,
@@ -785,6 +812,13 @@ function setStatusFlag(
   button.setAttribute("aria-label", `${label}: ${on ? "on" : "off"}`);
 }
 
+let spellingDiscovery: "pending" | "ready" | "error" = "pending";
+let spellingStatus: { key: string; status: SpellingStatus } | null = null;
+
+function spellingSessionKey(session: Session = doc): string {
+  return `${session.id}:${session.incarnation}`;
+}
+
 /** Refresh the editor flags from the settings they mirror. */
 function updateStatusFlags(): void {
   setStatusFlag("flag-focus", settings.focusMode, false, "Focus mode", "F8");
@@ -805,17 +839,34 @@ function updateStatusFlags(): void {
     "",
     "Saves to disk every 20 seconds while there are unsaved changes.",
   );
-  // HTML source is markup: `applySpellcheck` leaves the dictionary out of it, so
-  // the setting stays on but the flag says it is doing nothing here.
+  const spellState =
+    spellingStatus?.key === spellingSessionKey() ? spellingStatus.status : "pending";
+  const spellHint =
+    settings.spellcheck === false
+      ? "Spelling is off."
+      : spellingDiscovery === "error"
+        ? "The spelling service is unavailable."
+        : spellingDiscovery === "pending"
+          ? "Checking installed dictionaries."
+          : installedLanguages().length === 0
+            ? "No installed spelling dictionary is available."
+            : spellState === "pending"
+              ? "Preparing the document for spelling."
+              : spellState === "missing"
+                ? "Some text has no matching installed dictionary."
+                : spellState === "error"
+                  ? "The spelling service could not check this document."
+                  : "Underlines words the installed dictionary does not recognise.";
   setStatusFlag(
     "flag-spellcheck",
     settings.spellcheck !== false,
-    doc.language === "html" || api.isWebSource(doc.language),
+    settings.spellcheck !== false &&
+      (spellingDiscovery !== "ready" ||
+        installedLanguages().length === 0 ||
+        spellState !== "active"),
     "Check spelling",
     "",
-    doc.language === "html" || api.isWebSource(doc.language)
-      ? "No effect on this source document."
-      : "Underlines words the installed dictionary does not recognise.",
+    spellHint,
   );
 }
 
@@ -901,7 +952,7 @@ function menuStateSnapshot(): api.MenuState {
     isFavorite: doc?.path ? isFavoritePath(doc.path) : false,
     canFold,
     spellcheck: settings.spellcheck !== false,
-    spellcheckAvailable: installedLanguages().length > 0 && doc?.language !== "html",
+    spellcheckAvailable: installedLanguages().length > 0,
     aiEnabled: settings.aiEnabled,
     syntaxTheme,
     typstView: settings.typstView,
@@ -998,6 +1049,51 @@ function syncOpenTabs(): void {
   })();
 }
 
+const ignoredSpelling = new Map<string, { incarnation: number; words: string[] }>();
+const documentSpelling = new Map<string, { incarnation: number; choice: string }>();
+
+function documentSpellingChoice(session: Session = doc): string {
+  const current = documentSpelling.get(session.id);
+  if (current?.incarnation === session.incarnation) return current.choice;
+  if (!session.path) return "follow";
+  return pathSpellingChoice(settings.spellcheckDocumentLanguages ?? [], session.path);
+}
+
+function setDocumentSpellingChoice(session: Session, choice: string): void {
+  documentSpelling.delete(session.id);
+  documentSpelling.set(session.id, { incarnation: session.incarnation, choice });
+  while (documentSpelling.size > 100)
+    documentSpelling.delete(documentSpelling.keys().next().value!);
+  if (session.path) {
+    const entries = rememberPathSpellingChoice(
+      settings.spellcheckDocumentLanguages ?? [],
+      session.path,
+      choice,
+    );
+    applySettingsPatch({ spellcheckDocumentLanguages: entries });
+  } else if (session === doc) applySpellcheck();
+  if (session === doc) preferences?.refresh();
+}
+
+function effectiveSpellingLanguage(session: Session = doc): string {
+  const choice = documentSpellingChoice(session);
+  return choice === "follow" ? settings.spellcheckLanguage || "auto" : choice;
+}
+
+function ignoredSpellingWords(): string[] {
+  const entry = ignoredSpelling.get(doc.id);
+  return entry?.incarnation === doc.incarnation ? entry.words : [];
+}
+
+function ignoreSpelling(word: string): void {
+  const words = ignoredSpellingWords();
+  if (!words.some((entry) => entry.toLowerCase() === word.toLowerCase())) words.push(word);
+  ignoredSpelling.delete(doc.id);
+  ignoredSpelling.set(doc.id, { incarnation: doc.incarnation, words: words.slice(-500) });
+  while (ignoredSpelling.size > 100) ignoredSpelling.delete(ignoredSpelling.keys().next().value!);
+  applySpellcheck();
+}
+
 function rememberSpelling(word: string): void {
   const folded = word.replace(/[\u2019\u2018\u02BC]/g, "'").trim();
   if (!folded) return;
@@ -1011,13 +1107,14 @@ function rememberSpelling(word: string): void {
 
 function applySpellcheck(): void {
   editor?.setSpellcheck({
-    // HTML source is markup; the dictionary's node names are Markdown-shaped and
-    // would underline tags and attribute names.
-    enabled:
-      settings.spellcheck !== false && doc.language !== "html" && !api.isWebSource(doc.language),
-    language: settings.spellcheckLanguage || "auto",
+    enabled: settings.spellcheck !== false,
+    language: effectiveSpellingLanguage(),
     documentLanguage: doc.language,
-    words: settings.spellcheckWords ?? [],
+    words: [...(settings.spellcheckWords ?? []), ...ignoredSpellingWords()],
+    stringMode: settings.spellcheckStringMode,
+    identifiers: settings.spellcheckIdentifiers,
+    readOnly: doc.readOnly,
+    sessionKey: spellingSessionKey(),
   });
 }
 
@@ -1375,6 +1472,22 @@ function scheduleTokenCount(text: string, immediate = false): void {
   tokenCountTimer = window.setTimeout(run, immediate ? 0 : TOKEN_COUNT_DELAY_MS);
 }
 
+/** Human-facing names for the canonical labels `encoding_rs` returns. */
+function displayEncoding(encoding: string): string {
+  switch (encoding) {
+    case "UTF-16LE":
+      return "UTF-16 LE";
+    case "UTF-16BE":
+      return "UTF-16 BE";
+    case "windows-1252":
+      return "Windows-1252";
+    default:
+      return /^windows-\d+$/i.test(encoding)
+        ? `Windows-${encoding.slice("windows-".length)}`
+        : encoding;
+  }
+}
+
 function refreshStatus(): void {
   const cursor = editor.cursorInfo();
   const { words, lines, chars } = editor.metrics();
@@ -1397,7 +1510,7 @@ function refreshStatus(): void {
     statusEncoding.textContent = "UTF-8 · not saved";
   } else {
     const eol = doc.lineEnding === "\r\n" ? "CRLF" : "LF";
-    statusEncoding.textContent = `UTF-8${doc.hadBom ? " BOM" : ""} · ${eol}${
+    statusEncoding.textContent = `${displayEncoding(doc.encoding)}${doc.hadBom ? " BOM" : ""} · ${eol}${
       doc.readOnly ? " · read-only" : ""
     }`;
   }
@@ -3207,7 +3320,13 @@ async function renderLatexPreview(
         pathKey(session.path).startsWith(rootPrefix) &&
         /\.(?:tex|bib|sty|cls|bst)$/i.test(session.path),
     )
-    .map((session) => ({ path: session.path, text: textOf(session) }));
+    .map((session) => ({
+      path: session.path,
+      text: textOf(session),
+      encoding: session.encoding,
+      hadBom: session.hadBom,
+      lineEnding: session.lineEnding,
+    }));
   const owner = { rootId: root.id, rootDirectory: root.directory, activeId, token, revisions };
   // The snapshot's own file list is the definition of "this project", used when a
   // failure has to decide whether a later tab switch is still inside it.
@@ -4425,6 +4544,8 @@ function describe(session: Session, payload: api.DocumentPayload): void {
   session.dirty = false;
   session.lineEnding = payload.lineEnding;
   session.hadBom = payload.hadBom;
+  session.encoding = payload.encoding;
+  session.encodingBlocked = false;
   session.lossy = payload.lossy;
   session.size = payload.size;
   session.modifiedMs = payload.modifiedMs;
@@ -4557,6 +4678,7 @@ async function showInEditor(resetHistory: boolean, tokens: number | null = null)
   await refreshTitle();
   refreshStatus();
   renderDocTabs();
+  if (preferences?.isOpen()) preferences.refresh();
   renderSidebar();
   renderNotice();
   scheduleRender(true);
@@ -4606,11 +4728,14 @@ async function displayDoc(preservePdf = false): Promise<void> {
   applyLayout();
   editor.setSpellcheck(
     {
-      enabled:
-        settings.spellcheck !== false && doc.language !== "html" && !api.isWebSource(doc.language),
-      language: settings.spellcheckLanguage || "auto",
+      enabled: settings.spellcheck !== false,
+      language: effectiveSpellingLanguage(),
       documentLanguage: doc.language,
-      words: settings.spellcheckWords ?? [],
+      words: [...(settings.spellcheckWords ?? []), ...ignoredSpellingWords()],
+      stringMode: settings.spellcheckStringMode,
+      identifiers: settings.spellcheckIdentifiers,
+      readOnly: doc.readOnly,
+      sessionKey: spellingSessionKey(),
     },
     true,
   );
@@ -4619,6 +4744,7 @@ async function displayDoc(preservePdf = false): Promise<void> {
   await refreshTitle();
   refreshStatus();
   renderDocTabs();
+  if (preferences?.isOpen()) preferences.refresh();
   renderSidebar();
   renderNotice();
   scheduleOutlineRefresh(editor.getDoc());
@@ -4859,6 +4985,8 @@ async function loadUntitled(
     doc.dirty = false;
     doc.lineEnding = "\n";
     doc.hadBom = false;
+    doc.encoding = "UTF-8";
+    doc.encodingBlocked = false;
     doc.lossy = false;
     doc.size = content.length;
     doc.modifiedMs = 0;
@@ -4996,9 +5124,13 @@ async function save(): Promise<boolean> {
   if (ok) toast("Saved");
   return ok;
 }
-async function saveAs(suggestedPath?: string, session: Session = doc): Promise<boolean> {
+async function saveAs(
+  suggestedPath?: string,
+  session: Session = doc,
+  encoding?: string,
+): Promise<boolean> {
   try {
-    const ok = await lifecycle.saveAs(session, suggestedPath);
+    const ok = await lifecycle.saveAs(session, suggestedPath, encoding);
     if (ok) toast("Saved");
     return ok;
   } catch (error) {
@@ -5119,7 +5251,13 @@ async function latexExportSnapshot(): Promise<
         pathKey(session.path).startsWith(rootPrefix) &&
         /\.(?:tex|bib|sty|cls|bst)$/i.test(session.path),
     )
-    .map((session) => ({ path: session.path, text: textOf(session) }));
+    .map((session) => ({
+      path: session.path,
+      text: textOf(session),
+      encoding: session.encoding,
+      hadBom: session.hadBom,
+      lineEnding: session.lineEnding,
+    }));
   try {
     // Conversions keep their project-only snapshot: a registered library is
     // never injected into Pandoc, and a broken one does not block an export.
@@ -10046,6 +10184,8 @@ async function restoreRecovery(): Promise<void> {
         continue;
       }
       existing.revision += 1;
+      existing.encoding = entry.encoding ?? existing.encoding;
+      existing.encodingBlocked = false;
       existing.lossy = existing.lossy || entry.lossy;
       existing.editorState = null;
       existing.recoveryId = entry.id;
@@ -10094,6 +10234,8 @@ async function restoreRecovery(): Promise<void> {
     session.dirty = entry.content !== session.savedContent;
     session.lineEnding = base?.lineEnding ?? (entry.lineEnding === "\r\n" ? "\r\n" : "\n");
     session.hadBom = base?.hadBom ?? entry.hadBom;
+    session.encoding = entry.encoding ?? base?.encoding ?? "UTF-8";
+    session.encodingBlocked = false;
     session.lossy = (base?.lossy ?? false) || entry.lossy;
     session.readOnly = base?.readOnly ?? entry.readOnly;
     // The journal's base, not the file's current stat: the disk poll compares
@@ -10314,6 +10456,8 @@ async function boot(): Promise<void> {
   preferences = createPreferences({
     settings: () => settings,
     update: applySettingsPatch,
+    documentSpellLanguage: () => documentSpellingChoice(),
+    setDocumentSpellLanguage: (value) => setDocumentSpellingChoice(doc, value),
     clearRecent: clearRecentFiles,
     readAloudVoices: () => readAloud?.voices() ?? [],
     refreshReadAloudVoices: async () => {
@@ -10651,6 +10795,12 @@ async function boot(): Promise<void> {
   installSystemThemeWatcher();
 
   setSpellRemember(rememberSpelling);
+  setSpellIgnore(ignoreSpelling);
+  setSpellStatus((key, status) => {
+    if (key !== spellingSessionKey()) return;
+    spellingStatus = { key, status };
+    updateStatusFlags();
+  });
   applyLayout();
   // The language list is a local COM/hunspell query, not a download. It still
   // waits until after the first paint: start-up does not block on it, and the
@@ -10658,13 +10808,17 @@ async function boot(): Promise<void> {
   void api
     .spellcheckLanguages()
     .then((languages) => {
+      spellingDiscovery = "ready";
       setInstalledLanguages(languages);
       applySpellcheck();
+      updateStatusFlags();
       syncMenuState();
       preferences?.refresh();
     })
     .catch(() => {
-      setInstalledLanguages([]);
+      spellingDiscovery = "error";
+      setInstalledLanguages([], true);
+      updateStatusFlags();
       syncMenuState();
       preferences?.refresh();
     });

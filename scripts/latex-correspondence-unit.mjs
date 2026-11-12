@@ -18,6 +18,10 @@ assert.equal(map.sourceRange(1, 0, 1, 11), null);
 assert.equal(map.sourceRange(0, 6, 0, 5), null);
 assert.deepEqual(map.partsForSource("main.tex", 16, 20), [anchors[1]]);
 assert.deepEqual(map.partsForSource("chapter.tex", 16, 20), []);
-const reordered = new PdfPageMap(lines, [anchors[0], { ...anchors[1], from: 20, to: 24 }, { ...anchors[2], from: 16, to: 26 }], true);
+const reordered = new PdfPageMap(
+  lines,
+  [anchors[0], { ...anchors[1], from: 20, to: 24 }, { ...anchors[2], from: 16, to: 26 }],
+  true,
+);
 assert.equal(reordered.sourceRange(0, 0, 0, 16), null);
 console.log("7/7 file-aware correspondence checks passed");

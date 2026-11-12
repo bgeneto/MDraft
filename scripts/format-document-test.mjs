@@ -1150,21 +1150,12 @@ try {
   const latexText = latexSaved.toString("utf8");
   // tex-fmt indents the body of an environment. The fixture has a deliberately
   // flat `itemize`, so a formatted copy must indent its items.
-  check(
-    /\\begin\{itemize\}\n\s+\\item/.test(latexText),
-    "tex-fmt indents the itemize body",
-  );
+  check(/\\begin\{itemize\}\n\s+\\item/.test(latexText), "tex-fmt indents the itemize body");
   // The literal blocks are the part tex-fmt 0.5.7 rewrites on its own: it turns
   // tabs into spaces and collapses blank-line runs inside `verbatim`. The
   // formatter masks them first, so the bytes must survive.
-  check(
-    latexText.includes("verbatim\twith a tab"),
-    "a verbatim tab survives formatting",
-  );
-  check(
-    latexText.includes("blank line above"),
-    "a verbatim blank line survives formatting",
-  );
+  check(latexText.includes("verbatim\twith a tab"), "a verbatim tab survives formatting");
+  check(latexText.includes("blank line above"), "a verbatim blank line survives formatting");
   await undo();
   const latexRestored = await save(files.latex, (bytes) => bytes.equals(original.latex));
   check(latexRestored.equals(original.latex), "one undo restores the exact LaTeX bytes");

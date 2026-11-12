@@ -907,7 +907,7 @@ try {
     "HTML disables an inserted table of contents",
   );
   check((await itemById("format.document"))?.enabled === true, "HTML keeps Format Document");
-  check((await itemById("tools.spellcheck"))?.enabled === false, "HTML disables spelling");
+  check((await itemById("tools.spellcheck"))?.enabled === true, "HTML enables spelling");
   check((await itemById("file.print"))?.enabled === true, "HTML keeps native printing");
   check((await itemById("export.pdf"))?.enabled === true, "HTML keeps the direct PDF writer");
   check(

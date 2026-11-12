@@ -22,11 +22,7 @@
 //! with Tab is what this editor's plan promised and what a reader coming from
 //! VS Code expects; Enter keeps working through CodeMirror's own keymap.
 
-import {
-  acceptCompletion,
-  autocompletion,
-  type CompletionSource,
-} from "@codemirror/autocomplete";
+import { acceptCompletion, autocompletion, type CompletionSource } from "@codemirror/autocomplete";
 import { Prec, type Extension } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
 
@@ -53,9 +49,7 @@ const CONFIG = {
  * fall through to indentation. Installing it *below* the base keymap would make
  * Tab indent while a popup is open and it could never accept.
  */
-const tabAccepts: Extension = Prec.high(
-  keymap.of([{ key: "Tab", run: acceptCompletion }]),
-);
+const tabAccepts: Extension = Prec.high(keymap.of([{ key: "Tab", run: acceptCompletion }]));
 
 /**
  * The completion extension and the Tab binding.

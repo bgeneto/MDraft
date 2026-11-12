@@ -19,6 +19,8 @@ use tauri::{
     http::{Request, Response, header},
 };
 
+use crate::text_encoding;
+
 pub const SCHEME: &str = "mdraft-tex";
 /// Written last by `install_latex`: names the engine release whose files are all there.
 const RELEASE_MARKER: &str = ".release";
@@ -118,10 +120,17 @@ fn validate_engine_config(config: &EngineConfig) -> Result<(), String> {
                 .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
     };
     if !config.profiles.contains_key(&config.active) {
-        return Err(format!("\"active\" is {}, which has no profile", config.active));
+        return Err(format!(
+            "\"active\" is {}, which has no profile",
+            config.active
+        ));
     }
     let names = |profile: &EngineProfile| -> Vec<String> {
-        profile.assets.iter().map(|asset| asset.name.clone()).collect()
+        profile
+            .assets
+            .iter()
+            .map(|asset| asset.name.clone())
+            .collect()
     };
     let expected = names(config.profiles.values().next().ok_or("no profiles")?);
     for (year, profile) in &config.profiles {
@@ -133,7 +142,9 @@ fn validate_engine_config(config: &EngineConfig) -> Result<(), String> {
             ("mirrorRevision", &profile.mirror_revision),
         ] {
             if !segment(value) || !value.starts_with(&format!("{year}-")) {
-                return Err(format!("{year}: {what} \"{value}\" does not start with the year"));
+                return Err(format!(
+                    "{year}: {what} \"{value}\" does not start with the year"
+                ));
             }
         }
         if profile.assets.is_empty() {
@@ -142,11 +153,16 @@ fn validate_engine_config(config: &EngineConfig) -> Result<(), String> {
         // The files live in one flat `assets/` folder and are migrated by name, so
         // every year must ship the same set.
         if names(profile) != expected {
-            return Err(format!("{year}: the asset names differ from the other profiles"));
+            return Err(format!(
+                "{year}: the asset names differ from the other profiles"
+            ));
         }
         for asset in &profile.assets {
             if !segment(&asset.name) {
-                return Err(format!("{year}: asset name \"{}\" is not a file name", asset.name));
+                return Err(format!(
+                    "{year}: asset name \"{}\" is not a file name",
+                    asset.name
+                ));
             }
             let hex = asset.sha256.len() == 64
                 && asset
@@ -154,7 +170,10 @@ fn validate_engine_config(config: &EngineConfig) -> Result<(), String> {
                     .bytes()
                     .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
             if !hex {
-                return Err(format!("{year}: {} has no 64-digit lowercase SHA-256", asset.name));
+                return Err(format!(
+                    "{year}: {} has no 64-digit lowercase SHA-256",
+                    asset.name
+                ));
             }
         }
     }
@@ -501,7 +520,9 @@ pub(crate) fn digest(data: &[u8]) -> String {
 pub async fn install_latex(app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         // A second Download waits and then finds the verified assets in place.
-        let _install = INSTALL_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _install = INSTALL_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let data_root = app
             .path()
             .app_data_dir()
@@ -765,6 +786,17 @@ pub fn serve(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeResp
 pub struct Overlay {
     path: String,
     text: String,
+    /// Canonical encoding of the buffer this text came from. Absent means
+    /// UTF-8, which keeps an old caller's default.
+    #[serde(default)]
+    encoding: Option<String>,
+    /// The buffer's original BOM. UTF-16 always receives one when encoded.
+    #[serde(default)]
+    had_bom: Option<bool>,
+    /// The buffer's original line ending, so an unchanged open file reaches the
+    /// compiler with the same bytes it has on disk.
+    #[serde(default)]
+    line_ending: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -772,6 +804,9 @@ pub struct Overlay {
 pub struct ProjectFile {
     path: String,
     data: String,
+    /// The encoding a text source was decoded from. Images have no label.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    encoding: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1210,9 +1245,14 @@ fn relative_to(root: &Path, path: &Path) -> Result<String, String> {
 /// the project root, which is the confinement the snapshot exists to enforce.
 /// The files a project reads, the symlinks skipped, and the generation key.
 ///
-/// A named alias rather than a bare tuple: the return type is three collections
+/// A named alias rather than a bare tuple: the return type is four collections
 /// deep, and a reader (and Clippy) should not have to decode it at every call.
-type CollectedProject = (Vec<(PathBuf, Vec<u8>)>, Vec<String>, String);
+type CollectedProject = (
+    Vec<(PathBuf, Vec<u8>)>,
+    Vec<String>,
+    String,
+    BTreeMap<PathBuf, String>,
+);
 
 fn collect_referenced(
     root: &Path,
@@ -1228,6 +1268,7 @@ fn collect_referenced(
     let main = &fs::canonicalize(main).map_err(|e| e.to_string())?;
     let mut files: Vec<(PathBuf, Vec<u8>)> = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
+    let mut encodings: BTreeMap<PathBuf, String> = BTreeMap::new();
     let mut seen: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
     let mut pending: Vec<PathBuf> = vec![main.to_path_buf()];
     let mut total = 0usize;
@@ -1241,31 +1282,61 @@ fn collect_referenced(
             return Err("The LaTeX project exceeds its file count limit.".into());
         }
 
+        let is_text = path.extension().is_some_and(|e| {
+            matches!(
+                e.to_ascii_lowercase().to_str(),
+                Some("tex" | "bib" | "sty" | "cls" | "bst")
+            )
+        });
+        let named = relative_to(root, &path).unwrap_or_else(|_| path.display().to_string());
+
         // An open buffer wins over the bytes on disk, so an unsaved edit compiles.
         let overlay = overlays.iter().find(|entry| {
             fs::canonicalize(&entry.path)
                 .map(|full| full == path)
                 .unwrap_or(false)
         });
-        let bytes = match overlay {
+        let (bytes, text) = match overlay {
             Some(entry) => {
                 if entry.text.len() > MAX_FILE {
                     return Err("An open LaTeX project file exceeds 32 MiB.".into());
                 }
-                entry.text.clone().into_bytes()
+                let codec = text_encoding::for_label(entry.encoding.as_deref().unwrap_or("UTF-8"))
+                    .map_err(|error| format!("Cannot compile {named}: {error}"))?;
+                let bytes = text_encoding::encode_body(
+                    &entry.text,
+                    codec,
+                    entry.had_bom.unwrap_or(false),
+                    entry.line_ending.as_deref().unwrap_or("\n"),
+                )
+                .map_err(|error| format!("Cannot compile {named}: {error}"))?;
+                if is_text {
+                    encodings.insert(path.clone(), text_encoding::label(codec).to_string());
+                }
+                (bytes, is_text.then(|| entry.text.clone()))
             }
             None => {
                 let meta = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
                 if meta.file_type().is_symlink() {
-                    skipped.push(
-                        relative_to(root, &path).unwrap_or_else(|_| path.display().to_string()),
-                    );
+                    skipped.push(named);
                     continue;
                 }
                 if meta.len() > MAX_FILE as u64 {
                     return Err("A LaTeX project file exceeds 32 MiB.".into());
                 }
-                fs::read(&path).map_err(|e| e.to_string())?
+                let bytes = fs::read(&path).map_err(|e| e.to_string())?;
+                let text = if is_text {
+                    let decoded = text_encoding::decode(&bytes)
+                        .map_err(|error| format!("Cannot compile {named}: {error}"))?;
+                    encodings.insert(
+                        path.clone(),
+                        text_encoding::label(decoded.encoding).to_string(),
+                    );
+                    Some(decoded.text)
+                } else {
+                    None
+                };
+                (bytes, text)
             }
         };
 
@@ -1277,13 +1348,7 @@ fn collect_referenced(
         }
 
         // Only a text source declares further references; an image does not.
-        if path.extension().is_some_and(|e| {
-            matches!(
-                e.to_ascii_lowercase().to_str(),
-                Some("tex" | "bib" | "sty" | "cls" | "bst")
-            )
-        }) {
-            let text = String::from_utf8_lossy(&bytes).into_owned();
+        if let Some(text) = text {
             if path == *main {
                 graphics = graphics_paths(&text);
             }
@@ -1360,7 +1425,7 @@ fn collect_referenced(
         key.push('\n');
     }
     skipped.sort();
-    Ok((files, skipped, digest(key.as_bytes())))
+    Ok((files, skipped, digest(key.as_bytes()), encodings))
 }
 
 /// Capture the project directory and overlay the current open text buffers.
@@ -1397,7 +1462,8 @@ pub async fn latex_project_snapshot(
         let mut files = Vec::new();
         let mut skipped = Vec::new();
         let mut generation = String::new();
-        let (collected, skipped_paths, key) = collect_referenced(&root, &main, &overlays)?;
+        let (collected, skipped_paths, key, encodings) =
+            collect_referenced(&root, &main, &overlays)?;
         files.extend(collected);
         skipped.extend(skipped_paths);
         generation.push_str(&key);
@@ -1405,9 +1471,11 @@ pub async fn latex_project_snapshot(
         let files = files
             .into_iter()
             .map(|(path, data)| {
+                let encoding = encodings.get(&path).cloned();
                 Ok(ProjectFile {
                     path: relative_to(&root, &path)?,
                     data: STANDARD.encode(data),
+                    encoding,
                 })
             })
             .collect::<Result<_, String>>()?;
@@ -1417,8 +1485,10 @@ pub async fn latex_project_snapshot(
             None
         };
         if let Some(texmf) = &texmf {
-            generation.push_str("
-texmf:");
+            generation.push_str(
+                "
+texmf:",
+            );
             generation.push_str(&texmf.revision);
         }
         Ok(ProjectSnapshot {
@@ -1520,16 +1590,14 @@ pub async fn print_compiled_pdf<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_PROJECT, cache_size, collect_referenced, declared_references, evict_to_limit,
+        MAX_PROJECT, Overlay, cache_size, collect_referenced, declared_references, evict_to_limit,
         mask_literal_regions, remove_if_present, safe_relative,
     };
 
     #[test]
     fn removing_an_asset_another_install_removed_is_not_an_error() {
-        let path = std::env::temp_dir().join(format!(
-            "mdraft-remove-if-present-{}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("mdraft-remove-if-present-{}", std::process::id()));
         std::fs::write(&path, b"old").unwrap();
         remove_if_present(&path).unwrap();
         assert!(!path.exists());
@@ -1692,11 +1760,7 @@ mod tests {
             !super::engine_installed(&assets),
             "files with no marker are an earlier release"
         );
-        fs::write(
-            assets.join(super::RELEASE_MARKER),
-            "1999-0000000000000000",
-        )
-        .unwrap();
+        fs::write(assets.join(super::RELEASE_MARKER), "1999-0000000000000000").unwrap();
         assert!(
             !super::engine_installed(&assets),
             "another release's marker"
@@ -1740,7 +1804,10 @@ mod tests {
             &root,
             [other.as_slice(), wanted.as_slice()].into_iter()
         ));
-        assert!(!super::assets_match_any(&root, [other.as_slice()].into_iter()));
+        assert!(!super::assets_match_any(
+            &root,
+            [other.as_slice()].into_iter()
+        ));
         fs::write(root.join("b"), b"changed").unwrap();
         assert!(!super::assets_match(&root, &wanted), "one file differs");
         fs::remove_dir_all(root).unwrap();
@@ -1820,11 +1887,72 @@ mod tests {
         .unwrap();
         fs::write(root.join("myclass.cls"), "% local class\n").unwrap();
         fs::write(root.join("mystyle.sty"), "% local style\n").unwrap();
-        let (files, skipped, _) =
+        let (files, skipped, _, _) =
             collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
         assert!(skipped.is_empty());
         assert!(files.iter().any(|(path, _)| path.ends_with("myclass.cls")));
         assert!(files.iter().any(|(path, _)| path.ends_with("mystyle.sty")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_snapshot_preserves_legacy_encodings_and_encodes_overlays() {
+        let root = scratch("legacy-encoding");
+        fs::create_dir_all(root.join("chapters")).unwrap();
+        fs::write(root.join("main.tex"), b"\\input{chapters/cap01}\n").unwrap();
+        let legacy = b"Cap\xedtulo: a\xe7\xe3o";
+        fs::write(root.join("chapters/cap01.tex"), legacy).unwrap();
+
+        let (files, _, _, encodings) =
+            collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
+        let chapter = files
+            .iter()
+            .find(|(path, _)| path.ends_with("chapters/cap01.tex"))
+            .expect("the chapter is collected");
+        assert_eq!(chapter.1, legacy);
+        assert_eq!(
+            encodings.get(&chapter.0).map(String::as_str),
+            Some("windows-1252")
+        );
+
+        // An open chapter is encoded back to its original bytes before the
+        // compiler sees it, even though the editor buffer is Unicode text.
+        let overlays = vec![Overlay {
+            path: root
+                .join("chapters/cap01.tex")
+                .to_string_lossy()
+                .into_owned(),
+            text: "Capítulo: ação".into(),
+            encoding: Some("windows-1252".into()),
+            had_bom: Some(false),
+            line_ending: Some("\n".into()),
+        }];
+        let (files, _, _, encodings) =
+            collect_referenced(&root, &root.join("main.tex"), &overlays).unwrap();
+        let chapter = files
+            .iter()
+            .find(|(path, _)| path.ends_with("chapters/cap01.tex"))
+            .expect("the overlaid chapter is collected");
+        assert_eq!(chapter.1, legacy);
+        assert_eq!(
+            encodings.get(&chapter.0).map(String::as_str),
+            Some("windows-1252")
+        );
+
+        let overlays = vec![Overlay {
+            path: root
+                .join("chapters/cap01.tex")
+                .to_string_lossy()
+                .into_owned(),
+            text: "Capítulo: ação 😀".into(),
+            encoding: Some("windows-1252".into()),
+            had_bom: Some(false),
+            line_ending: Some("\n".into()),
+        }];
+        let error = collect_referenced(&root, &root.join("main.tex"), &overlays).unwrap_err();
+        assert!(error.contains("cap01.tex"), "{error}");
+        assert!(error.contains("cannot store"), "{error}");
+
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1846,9 +1974,15 @@ mod tests {
             fs::write(root.join(format!("{name}.sty")), "% package\n").unwrap();
         }
         fs::write(root.join("house.bst"), "ENTRY{}{}{}\n").unwrap();
-        let (files, _, _) = collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
+        let (files, _, _, _) = collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
         let has = |name: &str| files.iter().any(|(path, _)| path.ends_with(name));
-        for name in ["inner.cls", "first.sty", "second.sty", "third.sty", "house.bst"] {
+        for name in [
+            "inner.cls",
+            "first.sty",
+            "second.sty",
+            "third.sty",
+            "house.bst",
+        ] {
             assert!(has(name), "{name} was not collected");
         }
         assert!(!has("commented.sty"), "a commented load is not a reference");
@@ -1862,7 +1996,7 @@ mod tests {
         )
         .unwrap();
         let main = root.join("main.tex");
-        let (files, skipped, generation) = collect_referenced(&root, &main, &[]).unwrap();
+        let (files, skipped, generation, _) = collect_referenced(&root, &main, &[]).unwrap();
         assert!(skipped.is_empty(), "the fixture has no symlinks");
         assert!(!generation.is_empty(), "a generation key is produced");
 
@@ -1896,7 +2030,7 @@ mod tests {
         fs::write(root.join("main.tex"), "\\input{used}").unwrap();
         fs::write(root.join("used.tex"), "included").unwrap();
         fs::write(root.join("draft.tex"), "never mentioned").unwrap();
-        let (files, _, _) = collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
+        let (files, _, _, _) = collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
         let names: Vec<String> = files
             .iter()
             .map(|(path, _)| path.file_name().unwrap().to_string_lossy().into_owned())
@@ -1923,7 +2057,8 @@ mod tests {
         for name in ["unused.png", "ignored.png", "example.png"] {
             fs::write(root.join(name), b"not referenced").unwrap();
         }
-        let (files, skipped, _) = collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
+        let (files, skipped, _, _) =
+            collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
         assert!(skipped.is_empty());
         assert_eq!(
             files
@@ -1988,7 +2123,7 @@ mod tests {
         )
         .unwrap();
         fs::write(root.join("figures/plot.png"), b"\x89PNG\r\n\x1a\n").unwrap();
-        let (files, _, _) = collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
+        let (files, _, _, _) = collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
         assert!(
             files
                 .iter()
@@ -2014,7 +2149,7 @@ mod tests {
         .unwrap();
         fs::write(root.join("chapters/intro.tex"), "\\includegraphics{plot}").unwrap();
         fs::write(root.join("figures/plot.png"), b"image").unwrap();
-        let (files, _, _) = collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
+        let (files, _, _, _) = collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
         assert!(
             files
                 .iter()
@@ -2053,7 +2188,8 @@ mod tests {
         let root = scratch("symlink");
         fs::write(root.join("main.tex"), "\\input{linked}").unwrap();
         symlink("/etc/hostname", root.join("linked.tex")).unwrap();
-        let (files, skipped, _) = collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
+        let (files, skipped, _, _) =
+            collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
         assert!(files.iter().any(|(path, _)| path.ends_with("main.tex")));
         assert_eq!(skipped.len(), 1, "the symlink is reported: {skipped:?}");
         assert!(skipped[0].contains("linked.tex"));

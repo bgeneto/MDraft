@@ -60,9 +60,10 @@ export function latexHeadingLevel(command: string): number {
 export function latexHeadingLine(line: string, level: number): string {
   const indent = /^\s*/.exec(line)?.[0] ?? "";
   const body = line.slice(indent.length);
-  const existing = /^\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph)(\*?)\s*\{([\s\S]*)\}\s*$/.exec(
-    body,
-  );
+  const existing =
+    /^\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph)(\*?)\s*\{([\s\S]*)\}\s*$/.exec(
+      body,
+    );
   const command = latexHeadingCommand(level);
   if (command === null) return `${indent}${existing ? existing[3] : body}`;
   const text = existing ? existing[3] : body;
@@ -73,9 +74,10 @@ export function latexHeadingLine(line: string, level: number): string {
 export function latexShiftHeadingLine(line: string, delta: number): string {
   const indent = /^\s*/.exec(line)?.[0] ?? "";
   const body = line.slice(indent.length);
-  const existing = /^\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph)(\*?)\s*\{([\s\S]*)\}\s*$/.exec(
-    body,
-  );
+  const existing =
+    /^\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph)(\*?)\s*\{([\s\S]*)\}\s*$/.exec(
+      body,
+    );
   if (!existing) {
     // A plain paragraph becomes the first heading when pushed up, matching the
     // Markdown and Typst commands.

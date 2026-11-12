@@ -127,11 +127,7 @@ fn drain(state: &LaunchState) -> Vec<String> {
 /// Emitting as well keeps a normal, already-running window immediate; opening
 /// a path that arrived through both routes focuses the existing tab instead of
 /// duplicating it.
-pub fn on_second_instance<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-    args: Vec<String>,
-    cwd: String,
-) {
+pub fn on_second_instance<R: tauri::Runtime>(app: &AppHandle<R>, args: Vec<String>, cwd: String) {
     let paths = launch_paths(&args, Path::new(&cwd));
     if !paths.is_empty() {
         if let Some(state) = app.try_state::<LaunchState>() {
@@ -166,8 +162,14 @@ mod tests {
         assert_eq!(
             paths,
             vec![
-                Path::new("base").join("notes.md").to_string_lossy().to_string(),
-                Path::new("base").join("-dashed.md").to_string_lossy().to_string(),
+                Path::new("base")
+                    .join("notes.md")
+                    .to_string_lossy()
+                    .to_string(),
+                Path::new("base")
+                    .join("-dashed.md")
+                    .to_string_lossy()
+                    .to_string(),
             ]
         );
         assert!(launch_paths(&[], Path::new("base")).is_empty());
@@ -183,8 +185,14 @@ mod tests {
         assert_eq!(
             paths,
             vec![
-                Path::new("base").join("notes.md").to_string_lossy().to_string(),
-                Path::new("base").join("other.md").to_string_lossy().to_string(),
+                Path::new("base")
+                    .join("notes.md")
+                    .to_string_lossy()
+                    .to_string(),
+                Path::new("base")
+                    .join("other.md")
+                    .to_string_lossy()
+                    .to_string(),
             ]
         );
     }
@@ -192,14 +200,26 @@ mod tests {
     #[test]
     fn keeps_missing_paths_and_deduplicates() {
         let paths = launch_paths(
-            &args(&["mdraft.exe", "missing.md", "missing.md", "notes.md", "./notes.md"]),
+            &args(&[
+                "mdraft.exe",
+                "missing.md",
+                "missing.md",
+                "notes.md",
+                "./notes.md",
+            ]),
             Path::new("base"),
         );
         assert_eq!(
             paths,
             vec![
-                Path::new("base").join("missing.md").to_string_lossy().to_string(),
-                Path::new("base").join("notes.md").to_string_lossy().to_string(),
+                Path::new("base")
+                    .join("missing.md")
+                    .to_string_lossy()
+                    .to_string(),
+                Path::new("base")
+                    .join("notes.md")
+                    .to_string_lossy()
+                    .to_string(),
             ]
         );
     }

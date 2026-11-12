@@ -12,6 +12,8 @@ export interface DocumentPayload {
   /** "\n" or "\r\n" */
   lineEnding: string;
   hadBom: boolean;
+  /** Canonical encoding the file was decoded from, e.g. "UTF-8" or "windows-1252". */
+  encoding: string;
   lossy: boolean;
   size: number;
   modifiedMs: number;
@@ -33,7 +35,7 @@ export interface SavedInfo {
  */
 export interface CheckedWrite {
   written: boolean;
-  change: "saved" | "modified" | "deleted";
+  change: "saved" | "modified" | "deleted" | "encoding";
   size: number;
   modifiedMs: number;
   sha256: string;
@@ -69,6 +71,8 @@ export interface RecoveryEntry {
   content: string;
   lineEnding: string;
   hadBom: boolean;
+  /** Canonical encoding the buffer was decoded from. Absent in old journals. */
+  encoding?: string | null;
   lossy: boolean;
   readOnly: boolean;
   baseModifiedMs: number;
@@ -378,6 +382,9 @@ export interface Settings {
   spellcheckLanguage: string;
   /** Words ignored or added. Not written into the operating system's dictionary. */
   spellcheckWords: string[];
+  spellcheckStringMode: "human" | "all" | "off";
+  spellcheckIdentifiers: boolean;
+  spellcheckDocumentLanguages: Array<{ path: string; language: string }>;
 
   imageRule: ImageRule;
   imageCustomDir: string;
@@ -509,19 +516,19 @@ export const readDocument = (path: string) => invoke<DocumentPayload>("read_docu
  */
 export const countTokens = (text: string) => invoke<number>("count_tokens", { text });
 
-/** Languages the operating system can spell, as `en`, `en-GB`, `pt-BR`, `pt-PT`. */
+/** Compatible installed operating-system dictionary language tags. */
 export const spellcheckLanguages = () => invoke<string[]>("spellcheck_languages");
 
 /**
  * Indices of `words` the dictionary rejects.
  *
  * Tokens the backend declines to check — capitals, digits, CamelCase — are
- * never included. An unknown language returns an empty list.
+ * never included. An unavailable dictionary or engine failure rejects.
  */
 export const spellcheckCheck = (language: string, words: readonly string[]) =>
   invoke<number[]>("spellcheck_check", { language, words });
 
-/** Up to eight suggestions for one word. Empty when the language is not installed. */
+/** Up to eight suggestions for one word; engine and dictionary failures reject. */
 export const spellcheckSuggest = (language: string, word: string) =>
   invoke<string[]>("spellcheck_suggest", { language, word });
 
@@ -580,8 +587,13 @@ export const speechSpeak = (text: string, lang: string, voice: string, rate: num
 /** Stop the current sentence and clear anything already queued. */
 export const speechStop = () => invoke<void>("speech_stop");
 
-export const writeDocument = (path: string, content: string, lineEnding: string, hadBom: boolean) =>
-  invoke<SavedInfo>("write_document", { path, content, lineEnding, hadBom });
+export const writeDocument = (
+  path: string,
+  content: string,
+  lineEnding: string,
+  hadBom: boolean,
+  encoding = "UTF-8",
+) => invoke<SavedInfo>("write_document", { path, content, lineEnding, hadBom, encoding });
 
 /**
  * Save only if the raw bytes on disk still match the revision the buffer was
@@ -593,6 +605,7 @@ export const writeDocumentChecked = (
   lineEnding: string,
   hadBom: boolean,
   expectedSha256: string | null,
+  encoding = "UTF-8",
 ) =>
   invoke<CheckedWrite>("write_document_checked", {
     path,
@@ -600,6 +613,7 @@ export const writeDocumentChecked = (
     lineEnding,
     hadBom,
     expectedSha256,
+    encoding,
   });
 
 /** Read the current raw-byte digest without decoding the document. */
@@ -751,7 +765,12 @@ export const isWebSource = (language: DocumentLanguage): boolean =>
 
 export interface LatexProjectSnapshot {
   mainFile: string;
-  files: Array<{ path: string; data: string }>;
+  files: Array<{
+    path: string;
+    data: string;
+    /** Canonical encoding for a text source; omitted for images. */
+    encoding?: string;
+  }>;
   /**
    * Project-relative paths skipped because they are symlinks.
    *
@@ -885,7 +904,13 @@ export const latexStatus = () => invoke<boolean>("latex_status");
 export const installLatex = () => invoke<void>("install_latex");
 export const latexProjectSnapshot = (
   path: string,
-  overlays: Array<{ path: string; text: string }>,
+  overlays: Array<{
+    path: string;
+    text: string;
+    encoding?: string;
+    hadBom?: boolean;
+    lineEnding?: string;
+  }>,
   includeLibraries = true,
 ) => invoke<LatexProjectSnapshot>("latex_project_snapshot", { path, overlays, includeLibraries });
 

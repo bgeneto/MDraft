@@ -237,17 +237,17 @@ mod tests {
             clean_answer("  The Negotiation Brief  \nA second line"),
             "The Negotiation Brief"
         );
-        assert_eq!(
-            clean_answer("```\nReal Name\n```"),
-            "Real Name"
-        );
+        assert_eq!(clean_answer("```\nReal Name\n```"), "Real Name");
         assert_eq!(clean_answer("   \n\n"), "");
     }
 
     #[test]
     fn labels_quotes_and_extensions_are_removed() {
         assert_eq!(clean_answer("File name: \"Notes.md\""), "Notes");
-        assert_eq!(clean_answer("Filename - Relações EUA-China"), "Relações EUA-China");
+        assert_eq!(
+            clean_answer("Filename - Relações EUA-China"),
+            "Relações EUA-China"
+        );
         assert_eq!(clean_answer("Título: A Mudança"), "A Mudança");
         assert_eq!(
             clean_answer("Filename conventions are hard"),

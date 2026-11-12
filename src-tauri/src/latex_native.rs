@@ -1220,7 +1220,13 @@ fn library_environment(family: Family, engine: &str, roots: usize) -> Vec<(Strin
                 ("BIBINPUTS".into(), over(&["bibtex/bib"])),
                 (
                     "LUAINPUTS".into(),
-                    over(&["scripts", "tex/luatex", "tex/lualatex", "tex/latex", "tex/generic"]),
+                    over(&[
+                        "scripts",
+                        "tex/luatex",
+                        "tex/lualatex",
+                        "tex/latex",
+                        "tex/generic",
+                    ]),
                 ),
                 ("OPENTYPEFONTS".into(), over(&["fonts/opentype"])),
                 ("TTFONTS".into(), over(&["fonts/truetype"])),
@@ -1317,7 +1323,6 @@ fn wsl_engine_spec(
 ) -> Result<runner::RunSpec, String> {
     Err("WSL is available only on Windows.".into())
 }
-
 
 fn set_env(env: &mut Vec<(String, String)>, key: &str, value: String) {
     env.retain(|(existing, _)| !existing.eq_ignore_ascii_case(key));
@@ -1734,19 +1739,37 @@ mod tests {
         assert!(library_environment(Family::Kpathsea, "lualatex", 0).is_empty());
         assert!(library_environment(Family::Miktex, "lualatex", 0).is_empty());
         let kpathsea = library_environment(Family::Kpathsea, "pdflatex", 2);
-        assert_eq!(value(&kpathsea, "TEXMFHOME"), Some("{../texmf/0,../texmf/1}"));
+        assert_eq!(
+            value(&kpathsea, "TEXMFHOME"),
+            Some("{../texmf/0,../texmf/1}")
+        );
         let miktex = library_environment(Family::Miktex, "lualatex", 2);
         let tex = value(&miktex, "TEXINPUTS").unwrap();
         // Project first (MiKTeX searches these before the working directory),
         // then roots in order with format-specific directories first.
-        assert!(tex.starts_with(".;../texmf/0/tex/lualatex//;../texmf/0/tex/latex//;"), "{tex}");
+        assert!(
+            tex.starts_with(".;../texmf/0/tex/lualatex//;../texmf/0/tex/latex//;"),
+            "{tex}"
+        );
         assert!(tex.find("../texmf/0/").unwrap() < tex.find("../texmf/1/").unwrap());
         assert!(!tex.contains("tex/xelatex"));
-        assert!(value(&miktex, "BSTINPUTS").unwrap().starts_with(".;../texmf/0/bibtex/bst//;"));
-        assert!(value(&miktex, "LUAINPUTS").unwrap().contains("../texmf/1/scripts//;"));
+        assert!(
+            value(&miktex, "BSTINPUTS")
+                .unwrap()
+                .starts_with(".;../texmf/0/bibtex/bst//;")
+        );
+        assert!(
+            value(&miktex, "LUAINPUTS")
+                .unwrap()
+                .contains("../texmf/1/scripts//;")
+        );
         assert!(value(&miktex, "OPENTYPEFONTS").is_some());
         let xelatex = library_environment(Family::Miktex, "xelatex", 1);
-        assert!(value(&xelatex, "TEXINPUTS").unwrap().starts_with(".;../texmf/0/tex/xelatex//;"));
+        assert!(
+            value(&xelatex, "TEXINPUTS")
+                .unwrap()
+                .starts_with(".;../texmf/0/tex/xelatex//;")
+        );
         // Every entry is relative: a job path never enters a search expression.
         for (_, value) in kpathsea.iter().chain(&miktex) {
             assert!(!value.contains(':') || value.starts_with(".;"), "{value}");
@@ -1756,19 +1779,34 @@ mod tests {
 
     #[test]
     fn the_wsl_environment_is_exact_and_job_local() {
-        let env = wsl_environment("/usr/local/texlive/2025/bin/x86_64-linux", "/mnt/c/jobs/a, b", "lualatex", 1);
+        let env = wsl_environment(
+            "/usr/local/texlive/2025/bin/x86_64-linux",
+            "/mnt/c/jobs/a, b",
+            "lualatex",
+            1,
+        );
         assert_eq!(
             value(&env, "PATH"),
             Some("/usr/local/texlive/2025/bin/x86_64-linux:/usr/bin:/bin")
         );
         assert_eq!(value(&env, "HOME"), Some("/mnt/c/jobs/a, b/project"));
         assert_eq!(value(&env, "TEXMFHOME"), Some("{../texmf/0}"));
-        assert!(value(&env, "TEXMFVAR").unwrap().starts_with("/mnt/c/jobs/a, b/"));
+        assert!(
+            value(&env, "TEXMFVAR")
+                .unwrap()
+                .starts_with("/mnt/c/jobs/a, b/")
+        );
         let without = wsl_environment("/usr/bin", "/mnt/c/jobs/x", "pdflatex", 0);
-        assert_eq!(value(&without, "TEXMFHOME"), Some("/mnt/c/jobs/x/project/home"));
+        assert_eq!(
+            value(&without, "TEXMFHOME"),
+            Some("/mnt/c/jobs/x/project/home")
+        );
     }
 
-    fn library_snapshot(files: &[(usize, &str, &[u8])], roots: usize) -> crate::latex_texmf::TexmfSnapshot {
+    fn library_snapshot(
+        files: &[(usize, &str, &[u8])],
+        roots: usize,
+    ) -> crate::latex_texmf::TexmfSnapshot {
         crate::latex_texmf::TexmfSnapshot {
             revision: "test".into(),
             roots: (0..roots)
@@ -1802,12 +1840,21 @@ mod tests {
                 .as_nanos()
         ));
         let snapshot = library_snapshot(
-            &[(0, "tex/latex/a/a.sty", b"x"), (1, "fonts/opentype/f/F.otf", &[0, 255])],
+            &[
+                (0, "tex/latex/a/a.sty", b"x"),
+                (1, "fonts/opentype/f/F.otf", &[0, 255]),
+            ],
             3,
         );
         assert_eq!(stage_texmf(&job.join("texmf"), Some(&snapshot)).unwrap(), 3);
-        assert_eq!(std::fs::read(job.join("texmf/0/tex/latex/a/a.sty")).unwrap(), b"x");
-        assert_eq!(std::fs::read(job.join("texmf/1/fonts/opentype/f/F.otf")).unwrap(), [0, 255]);
+        assert_eq!(
+            std::fs::read(job.join("texmf/0/tex/latex/a/a.sty")).unwrap(),
+            b"x"
+        );
+        assert_eq!(
+            std::fs::read(job.join("texmf/1/fonts/opentype/f/F.otf")).unwrap(),
+            [0, 255]
+        );
         assert!(job.join("texmf/2").is_dir(), "an empty root still exists");
         let escaping = library_snapshot(&[(0, "tex/../../project/main.tex", b"x")], 1);
         assert!(stage_texmf(&job.join("texmf2"), Some(&escaping)).is_err());
@@ -1827,7 +1874,11 @@ mod tests {
             "\\documentclass{mdraftcls}\\usepackage{mdraftover}\n\\begin{document}\nGate.\\nocite{*}\\bibliographystyle{mdraftgate}\\bibliography{mdraftgate}\n\\end{document}\n",
         )
         .unwrap();
-        std::fs::write(project.join("mdraftover.sty"), "\\ProvidesPackage{mdraftover}\\typeout{RESULT-OVER: project}\n").unwrap();
+        std::fs::write(
+            project.join("mdraftover.sty"),
+            "\\ProvidesPackage{mdraftover}\\typeout{RESULT-OVER: project}\n",
+        )
+        .unwrap();
         let bst = concat!(
             "ENTRY{title}{}{}\n",
             "FUNCTION{misc}{ \"\\bibitem{\" cite$ * \"}\" * write$ newline$ title write$ newline$ }\n",
@@ -1851,7 +1902,10 @@ mod tests {
             (1, "tex/latex/mdraftpkg/mdraftpkg.sty", b"\\ProvidesPackage{mdraftpkg}\\typeout{RESULT-PKG: r1}\n".to_vec()),
             (1, "tex/latex/x/mdraftronly.sty", b"\\ProvidesPackage{mdraftronly}\\typeout{RESULT-RONLY: r1}\n".to_vec()),
         ];
-        let borrowed: Vec<(usize, &str, &[u8])> = files.iter().map(|(r, p, d)| (*r, *p, d.as_slice())).collect();
+        let borrowed: Vec<(usize, &str, &[u8])> = files
+            .iter()
+            .map(|(r, p, d)| (*r, *p, d.as_slice()))
+            .collect();
         (library_snapshot(&borrowed, 2), "main.tex")
     }
 
@@ -1863,10 +1917,21 @@ mod tests {
             ("RESULT-OVER: project", "the project wins over every root"),
         ];
         for (marker, why) in expect {
-            assert!(log.contains(marker), "{engine}: {why} ({marker} missing)\n{}", &log[log.len().saturating_sub(3000)..]);
+            assert!(
+                log.contains(marker),
+                "{engine}: {why} ({marker} missing)\n{}",
+                &log[log.len().saturating_sub(3000)..]
+            );
         }
-        let dup = if engine == "lualatex" { "RESULT-DUP: lualatex" } else { "RESULT-DUP: latex" };
-        assert!(log.contains(dup), "{engine}: format-specific copy ({dup} missing)");
+        let dup = if engine == "lualatex" {
+            "RESULT-DUP: lualatex"
+        } else {
+            "RESULT-DUP: latex"
+        };
+        assert!(
+            log.contains(dup),
+            "{engine}: format-specific copy ({dup} missing)"
+        );
         assert!(!log.contains("RESULT-DUP: context"));
     }
 
@@ -1875,7 +1940,10 @@ mod tests {
     fn a_real_distribution_resolves_staged_libraries() {
         let bin = PathBuf::from(std::env::var("MDRAFT_TEST_TEX_BIN").unwrap());
         let name = distribution_name(&bin.display().to_string());
-        let target = Target::Path { bin: bin.clone(), name };
+        let target = Target::Path {
+            bin: bin.clone(),
+            name,
+        };
         // A comma, a space and a non-ASCII letter in the job path: search paths
         // are relative, so none of it reaches a search-path expression.
         let job = std::env::temp_dir().join(format!("mdraft-texmf, real ü-{}", std::process::id()));
@@ -1890,7 +1958,13 @@ mod tests {
             }
             let env = target.environment(&job, &work, engine, roots).unwrap();
             let run = |program: &str, args: Vec<OsString>| {
-                runner::run(&target.spec(program, args, &work, &env, Duration::from_secs(600)).unwrap(), &AtomicBool::new(false)).unwrap()
+                runner::run(
+                    &target
+                        .spec(program, args, &work, &env, Duration::from_secs(600))
+                        .unwrap(),
+                    &AtomicBool::new(false),
+                )
+                .unwrap()
             };
             run(engine, engine_arguments(engine, main));
             run("bibtex", vec!["main".into()]);
@@ -1898,8 +1972,15 @@ mod tests {
             let log = read_log(&work, "main");
             assert_library_markers(&log, engine);
             let bbl = std::fs::read_to_string(work.join("main.bbl")).unwrap_or_default();
-            assert!(bbl.contains("RESULTBIB"), "{engine}: the private .bst/.bib reached BibTeX");
-            assert!(find_output(&work, "main", "pdf").is_some_and(|pdf| pdf.starts_with(b"%PDF-")), "{engine}: {}", outcome.console);
+            assert!(
+                bbl.contains("RESULTBIB"),
+                "{engine}: the private .bst/.bib reached BibTeX"
+            );
+            assert!(
+                find_output(&work, "main", "pdf").is_some_and(|pdf| pdf.starts_with(b"%PDF-")),
+                "{engine}: {}",
+                outcome.console
+            );
             eprintln!("{engine}: library resolution verified");
         }
         let _ = std::fs::remove_dir_all(job);
@@ -1928,14 +2009,23 @@ mod tests {
         for engine in ["lualatex", "pdflatex"] {
             let env = target.environment(&job, &work, engine, roots).unwrap();
             let run = |program: &str, args: Vec<OsString>| {
-                runner::run(&target.spec(program, args, &work, &env, Duration::from_secs(600)).unwrap(), &AtomicBool::new(false)).unwrap()
+                runner::run(
+                    &target
+                        .spec(program, args, &work, &env, Duration::from_secs(600))
+                        .unwrap(),
+                    &AtomicBool::new(false),
+                )
+                .unwrap()
             };
             run(engine, engine_arguments(engine, main));
             run("bibtex", vec!["main".into()]);
             run(engine, engine_arguments(engine, main));
             assert_library_markers(&read_log(&work, "main"), engine);
             let bbl = std::fs::read_to_string(work.join("main.bbl")).unwrap_or_default();
-            assert!(bbl.contains("RESULTBIB"), "{engine}: BibTeX through the launcher");
+            assert!(
+                bbl.contains("RESULTBIB"),
+                "{engine}: BibTeX through the launcher"
+            );
         }
         // Cancel ends the Linux process tree, not only wsl.exe.
         std::fs::write(work.join("spin.tex"), "\\def\\spin{\\spin}\\spin\n").unwrap();
@@ -1948,7 +2038,15 @@ mod tests {
         });
         let started = Instant::now();
         let outcome = runner::run(
-            &target.spec("pdflatex", engine_arguments("pdflatex", "spin.tex"), &work, &env, Duration::from_secs(600)).unwrap(),
+            &target
+                .spec(
+                    "pdflatex",
+                    engine_arguments("pdflatex", "spin.tex"),
+                    &work,
+                    &env,
+                    Duration::from_secs(600),
+                )
+                .unwrap(),
             &cancel,
         )
         .unwrap();
@@ -1956,11 +2054,21 @@ mod tests {
         assert!(outcome.cancelled && started.elapsed() < Duration::from_secs(30));
         std::thread::sleep(Duration::from_secs(2));
         let survivors = runner::run(
-            &wsl::spec(&distro, &work, vec!["/usr/bin/pgrep".into(), "-f".into(), "spin.tex".into()], Duration::from_secs(60)).unwrap(),
+            &wsl::spec(
+                &distro,
+                &work,
+                vec!["/usr/bin/pgrep".into(), "-f".into(), "spin.tex".into()],
+                Duration::from_secs(60),
+            )
+            .unwrap(),
             &AtomicBool::new(false),
         )
         .unwrap();
-        assert_ne!(survivors.status, 0, "an engine survived Cancel: {}", survivors.console);
+        assert_ne!(
+            survivors.status, 0,
+            "an engine survived Cancel: {}",
+            survivors.console
+        );
         let _ = std::fs::remove_dir_all(job);
     }
 }

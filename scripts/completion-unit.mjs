@@ -27,10 +27,7 @@ console.log("=== the layer's configuration ===");
 {
   // The numbers are a contract: `maxRenderedOptions` bounds the popup's cost and
   // `activateOnTyping` is what makes typing open the list at all.
-  check(
-    /activateOnTyping:\s*true/.test(layerSource),
-    "the popup opens while typing",
-  );
+  check(/activateOnTyping:\s*true/.test(layerSource), "the popup opens while typing");
   check(/closeOnBlur:\s*true/.test(layerSource), "the popup closes when focus leaves");
   check(
     /maxRenderedOptions:\s*50/.test(layerSource),
@@ -48,10 +45,7 @@ console.log("\n=== the Tab key ===");
   // sit ABOVE the base keymap that holds `indentWithTab` — `acceptCompletion`
   // declines when no popup is open, so the event falls through to indentation.
   // Below the base keymap, Tab would indent while a popup is open.
-  check(
-    /key: "Tab", run: acceptCompletion/.test(layerSource),
-    "Tab is bound to acceptCompletion",
-  );
+  check(/key: "Tab", run: acceptCompletion/.test(layerSource), "Tab is bound to acceptCompletion");
   check(
     /Prec\.high\(\s*keymap\.of\(\[\{ key: "Tab"/.test(layerSource),
     "the Tab binding is above the base keymap",
@@ -72,9 +66,7 @@ console.log("\n=== the Tab key ===");
   // already installs it at `Prec.highest`, and duplicating it was a bug. The
   // check reads code only — the doc comment legitimately names the keymap when
   // explaining why it is not re-imported.
-  const codeOnly = layerSource
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^\s*\/\/.*$/gm, "");
+  const codeOnly = layerSource.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   check(
     !/completionKeymap/.test(codeOnly),
     "the layer does not duplicate CodeMirror's own completion keymap",
@@ -117,7 +109,10 @@ console.log("\n=== completion never reaches the network ===");
 console.log("\n=== the layer is wired into the editor ===");
 {
   const editor = readFileSync(join(root, "src", "editor.ts"), "utf8");
-  check(/completionCompartment\s*=\s*new Compartment\(\)/.test(editor), "completion has its own compartment");
+  check(
+    /completionCompartment\s*=\s*new Compartment\(\)/.test(editor),
+    "completion has its own compartment",
+  );
   check(
     /completionCompartment\.of\(options\.completion === false \? \[\] : completionSupport\(\)\)/.test(
       editor,
@@ -158,10 +153,21 @@ console.log("\n=== the Markdown catalog ===");
     escaped.length ? escaped.map((row) => row.detail).join(", ") : "none",
   );
   const multiline = rows.filter((row) => row.label.includes("\n"));
-  check(multiline.length > 0, "Markdown multi-line snippets use real newlines", `${multiline.length}`);
+  check(
+    multiline.length > 0,
+    "Markdown multi-line snippets use real newlines",
+    `${multiline.length}`,
+  );
 
   const details = rows.map((row) => row.detail);
-  for (const wanted of ["fenced code block", "table", "block quote", "task item", "link", "image"]) {
+  for (const wanted of [
+    "fenced code block",
+    "table",
+    "block quote",
+    "task item",
+    "link",
+    "image",
+  ]) {
     check(details.includes(wanted), `the catalog offers a ${wanted}`);
   }
 }

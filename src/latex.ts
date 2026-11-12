@@ -270,19 +270,25 @@ export async function compileLatex(
   const owner = generation;
   const { WasmTexCompiler } = await import("wasmtex/headless");
   if (generation !== owner) throw new Error("Compilation cancelled.");
+  const textSource = /\.(?:tex|bib|sty|cls|bst)$/i;
   const files: Record<string, string | Uint8Array> = {};
+  const decoded = new Map<string, string>();
   for (const file of snapshot.files) {
     const bytes = binary(file.data);
-    files[file.path] = /\.(?:tex|bib|sty|cls|bst)$/i.test(file.path)
-      ? new TextDecoder("utf-8", { fatal: true }).decode(bytes)
-      : bytes;
+    if (!textSource.test(file.path)) {
+      files[file.path] = bytes;
+      continue;
+    }
+    const encoding = file.encoding ?? "UTF-8";
+    const source = new TextDecoder(encoding, { fatal: true }).decode(bytes);
+    decoded.set(file.path, source);
+    // A UTF-8 string reaches the engine as UTF-8. A legacy source must travel
+    // as its original bytes: re-encoding it as a JavaScript string would change
+    // what the document's `inputenc` reads. TextDecoder above is only for the
+    // reference scan and diagnostics.
+    files[file.path] = encoding.toUpperCase() === "UTF-8" ? source : bytes;
   }
-  const sources = new Map(
-    Object.entries(files).filter(
-      (entry): entry is [string, string] =>
-        /\.tex$/i.test(entry[0]) && typeof entry[1] === "string",
-    ),
-  );
+  const sources = new Map([...decoded.entries()].filter(([path]) => /\.tex$/i.test(path)));
   const reserved = Object.keys(files).find(reservedProjectPath);
   if (reserved) {
     throw new Error(
@@ -297,8 +303,7 @@ export async function compileLatex(
     throw new LatexBuildError(scan.diagnostics[0].message, scan.diagnostics, "", scan.truncated);
   }
   const reachable = scan.reachable;
-  const original = files[snapshot.mainFile];
-  if (typeof original !== "string") throw new Error("The main .tex file is missing.");
+  if (!decoded.has(snapshot.mainFile)) throw new Error("The main .tex file is missing.");
   const base =
     location.protocol === "tauri:"
       ? "mdraft-tex://localhost/"
@@ -310,9 +315,9 @@ export async function compileLatex(
     snapshot.texmf,
     new Set(Object.keys(files)),
     [...sources.values()].concat(
-      Object.entries(files)
-        .filter(([path, value]) => /\.(?:cls|sty)$/i.test(path) && typeof value === "string")
-        .map(([, value]) => value as string),
+      [...decoded.entries()]
+        .filter(([path]) => /\.(?:cls|sty)$/i.test(path))
+        .map(([, value]) => value),
     ),
   );
   const compiler = new WasmTexCompiler({
@@ -387,11 +392,8 @@ export async function compileLatex(
     }
     return {
       pdf: result.pdf.slice(),
-      sources: Object.entries(files)
-        .filter(
-          (entry): entry is [string, string] =>
-            reachable.has(entry[0]) && /\.tex$/i.test(entry[0]) && typeof entry[1] === "string",
-        )
+      sources: [...decoded.entries()]
+        .filter(([path]) => reachable.has(path) && /\.tex$/i.test(path))
         .sort(([a], [b]) =>
           a === snapshot.mainFile ? -1 : b === snapshot.mainFile ? 1 : a.localeCompare(b),
         )

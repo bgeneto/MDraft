@@ -535,7 +535,7 @@ check(
   "search narrows sections",
   search.mermaid.sections === "Markdown" &&
     search.syntax.sections === "Image" &&
-    search.autosave.sections === "Files" &&
+    search.autosave.sections === "Files,Editor" &&
     search.clear.sections === "Files",
 );
 check(

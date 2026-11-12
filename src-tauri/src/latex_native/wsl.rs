@@ -555,8 +555,7 @@ mod tests {
 
     #[test]
     fn engine_paths_are_grouped_by_directory_in_engine_order() {
-        let output =
-            "/usr/bin/pdflatex\n/usr/bin/lualatex\n/usr/local/texlive/2025/bin/x86_64-linux/xelatex\nMDRAFT-LOOK-END\n";
+        let output = "/usr/bin/pdflatex\n/usr/bin/lualatex\n/usr/local/texlive/2025/bin/x86_64-linux/xelatex\nMDRAFT-LOOK-END\n";
         assert_eq!(
             group_engines(output),
             vec![

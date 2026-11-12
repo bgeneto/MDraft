@@ -50,6 +50,7 @@ export function buildRecoveryEntry(
     content,
     lineEnding: session.lineEnding,
     hadBom: session.hadBom,
+    encoding: session.encoding,
     lossy: session.lossy,
     readOnly: session.readOnly,
     baseModifiedMs: session.modifiedMs,

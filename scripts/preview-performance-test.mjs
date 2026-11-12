@@ -706,6 +706,120 @@ if (extreme) {
     30000,
   );
   await measureVisibleRender("AsciiDoc 600 KB", "asciidocfinalpreviewmarker", false);
+
+  // Compare the same real keyboard events with spelling off and on. Keep the
+  // editor in Source mode so preview conversion does not obscure this cost.
+  await invoke("plugin:event|emit", { event: "menu", payload: "file.save" });
+  await waitFor(
+    "the AsciiDoc document saves",
+    `!document.title.includes(String.fromCharCode(8226))`,
+    10000,
+  );
+  const spellFiles = [
+    ["Markdown", file],
+    ["HTML", path.join(directory, "spell-performance.html")],
+    ["JavaScript", path.join(directory, "spell-performance.js")],
+    ["JSON", path.join(directory, "spell-performance.json")],
+  ];
+  const sentence = "This ordinary paragraph contains several words for local spelling checks.";
+  fs.writeFileSync(
+    spellFiles[1][1],
+    `<html><body>\n${`<p>${sentence}</p>\n`.repeat(15000)}</body></html>`,
+  );
+  fs.writeFileSync(spellFiles[2][1], `// ${sentence}\n`.repeat(15000));
+  fs.writeFileSync(
+    spellFiles[3][1],
+    `{\n${Array.from({ length: 12000 }, (_, index) => `"description${index}": "${sentence}"`).join(",\n")}\n}`,
+  );
+  const languages = await invoke("spellcheck_languages");
+  if (!languages.length) {
+    console.log("  SKIP  spelling performance comparison: no installed dictionary");
+  } else {
+    const dictionary = languages.includes("en") ? "en" : languages[0];
+    async function setSpelling(enabled) {
+      return evaluate(`(() => {
+        document.getElementById('btn-prefs').click();
+        [...document.querySelectorAll('.prefs-section')].find(section => section.textContent === 'Editor')?.click();
+        const row = label => [...document.querySelectorAll('.prefs-row')].find(item => item.textContent.includes(label));
+        const select = row('Dictionary')?.querySelector('select');
+        if (select) { select.value = ${JSON.stringify(dictionary)}; select.dispatchEvent(new Event('change', {bubbles:true})); }
+        const box = row('Check spelling while typing')?.querySelector('input[type=checkbox]');
+        if (box && box.checked !== ${enabled}) { box.checked = ${enabled}; box.dispatchEvent(new Event('change', {bubbles:true})); }
+        const ok = Boolean(box && box.checked === ${enabled} && select?.value === ${JSON.stringify(dictionary)});
+        document.querySelector('.prefs-close')?.click();
+        return ok;
+      })()`);
+    }
+    await invoke("plugin:event|emit", { event: "menu", payload: "view.source" });
+    for (const [label, sourceFile] of spellFiles) {
+      await invoke("plugin:event|emit", { event: "open-files", payload: [sourceFile] });
+      if (
+        !(await waitFor(
+          `${label} spelling fixture opens`,
+          `document.title.includes(${JSON.stringify(path.basename(sourceFile))})`,
+          30000,
+        ))
+      )
+        continue;
+      const samples = { off: [], on: [] };
+      for (const enabled of [false, true]) {
+        const mode = enabled ? "on" : "off";
+        if (!(await setSpelling(enabled))) {
+          check(`${label}: spelling ${mode} can be selected`, false);
+          continue;
+        }
+        await sleep(900);
+        if (
+          enabled &&
+          !(await waitFor(
+            `${label}: spelling becomes active`,
+            `document.getElementById('flag-spellcheck')?.title.includes('Underlines words')`,
+            30000,
+          ))
+        )
+          continue;
+        for (let run = 1; run <= 3; run += 1) {
+          const positioned = await evaluate(`(() => {
+            const view = document.querySelector('.cm-content')?.cmTile?.root?.view;
+            if (!view) return false;
+            const text = view.state.doc.toString();
+            const at = ${JSON.stringify(label)} === 'Markdown' ? 100 : text.indexOf(${JSON.stringify(sentence)});
+            if (at < 0) return false;
+            view.dispatch({selection: {anchor: at + 5}});
+            return true;
+          })()`);
+          if (!positioned) {
+            check(`${label}: spelling ${mode} run ${run} positions the caret in prose`, false);
+            continue;
+          }
+          await focusEditor();
+          await resetProbe();
+          await typeText("ordinaryspellingperformancesample", 15);
+          await sleep(500);
+          const sample = await readProbe();
+          const memory = await evaluate(`performance.memory?.usedJSHeapSize ?? null`);
+          samples[mode].push(sample.all.p95);
+          check(
+            `${label}: spelling ${mode} run ${run} input budget`,
+            sample.all.count >= 30 && sample.all.p95 <= 100 && sample.all.max <= 150,
+            `${describe(sample.all)}, heap=${memory === null ? "unavailable" : `${(memory / 1048576).toFixed(1)} MB`}`,
+          );
+        }
+      }
+      if (samples.on.length === 3 && samples.off.length === 3) {
+        const median = (values) => [...values].sort((a, b) => a - b)[1];
+        console.log(
+          `  INFO  ${label} spelling median p95 difference: ${(median(samples.on) - median(samples.off)).toFixed(1)} ms`,
+        );
+      }
+      await invoke("plugin:event|emit", { event: "menu", payload: "file.save" });
+      await waitFor(
+        `${label} spelling fixture saves`,
+        `!document.title.includes(String.fromCharCode(8226))`,
+        10000,
+      );
+    }
+  }
 }
 
 try {

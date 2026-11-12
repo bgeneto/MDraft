@@ -85,7 +85,7 @@ function parseInline(text: string): Inline[] {
     }
   };
 
-  for (let at = 0; at < text.length; ) {
+  for (let at = 0; at < text.length;) {
     // Inline math: `$…$`, kept verbatim because it is LaTeX already.
     if (text[at] === "$") {
       const close = text.indexOf("$", at + 1);
@@ -215,9 +215,7 @@ function tableRows(body: string): Inline[][][] {
     .split(/\\\\/)
     .map((row) => row.replace(/\\hline/g, "").trim())
     .filter((row) => row !== "")
-    .map((row) =>
-      row.split("&").map((cell) => parseInline(cell.trim())),
-    );
+    .map((row) => row.split("&").map((cell) => parseInline(cell.trim())));
 }
 
 /** Parse a block-level environment body, or return null when it is not literal. */
@@ -285,9 +283,7 @@ function environment(text: string, at: number): { block: Block; end: number } | 
     // A float or a centring wrapper: its contents are the block, and the
     // environment itself has no meaning once the content is extracted.
     const inner = parseBlocks(body);
-    return inner.length
-      ? { block: inner[0], end }
-      : null;
+    return inner.length ? { block: inner[0], end } : null;
   }
 
   return null;
@@ -411,8 +407,6 @@ export function readLatex(text: string): Block[] {
   const begin = text.indexOf("\\begin{document}");
   const end = text.lastIndexOf("\\end{document}");
   const body =
-    begin >= 0 && end > begin
-      ? text.slice(begin + "\\begin{document}".length, end)
-      : text;
+    begin >= 0 && end > begin ? text.slice(begin + "\\begin{document}".length, end) : text;
   return trimBlocks(parseBlocks(body));
 }

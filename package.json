@@ -95,6 +95,7 @@
     "typst:preview": "node scripts/typst-preview-test.mjs",
     "licence": "node scripts/licence-test.mjs",
     "spellcheck": "node scripts/spellcheck-test.mjs",
+    "spellcheck:unit": "node scripts/spellcheck-unit.mjs",
     "format:document": "node scripts/format-document-test.mjs",
     "images": "node scripts/image-paste-test.mjs",
     "screenshot": "node scripts/screenshot.mjs",

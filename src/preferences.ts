@@ -43,6 +43,8 @@ import { attachModelCombo, closeModelCombo } from "./model-combo";
 export interface PreferencesHost extends TexmfPreferencesHost {
   settings(): api.Settings;
   update(patch: Partial<api.Settings>): void;
+  documentSpellLanguage(): string;
+  setDocumentSpellLanguage(value: string): void;
   clearRecent(): void;
   /** Return the AI Assistant's floating button and panel to their defaults. */
   resetAssistantPosition(): void;
@@ -1963,6 +1965,39 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
           options: dictionaryOptions(s().spellcheckLanguage),
           get: () => s().spellcheckLanguage,
           set: (value) => host.update({ spellcheckLanguage: value }),
+        },
+        {
+          kind: "select",
+          label: "Dictionary for this document",
+          help: "Overrides the global dictionary for this document. Saved files remember their choice.",
+          options: [
+            ["follow", "Follow global"],
+            ...dictionaryOptions(
+              host.documentSpellLanguage() === "follow" ? "auto" : host.documentSpellLanguage(),
+            ),
+          ],
+          get: () => host.documentSpellLanguage(),
+          set: (value) => host.setDocumentSpellLanguage(value),
+        },
+        {
+          kind: "select",
+          label: "Code and JSON strings",
+          help: "Choose which strings are checked. Paths, URLs and machine values are skipped.",
+          options: [
+            ["human", "Human-readable"],
+            ["all", "All eligible strings"],
+            ["off", "Off"],
+          ],
+          get: () => s().spellcheckStringMode,
+          set: (value) =>
+            host.update({ spellcheckStringMode: value as api.Settings["spellcheckStringMode"] }),
+        },
+        {
+          kind: "checkbox",
+          label: "Check code identifiers",
+          help: "Checks parts of JavaScript identifiers and JSON keys. Corrections do not rename symbols.",
+          get: () => s().spellcheckIdentifiers,
+          set: (value) => host.update({ spellcheckIdentifiers: value }),
         },
         ...(spellcheckAvailabilityNote()
           ? [{ kind: "note" as const, label: "", text: spellcheckAvailabilityNote() ?? "" }]

@@ -161,9 +161,11 @@ fn request_body_with(
         Provider::OpenAi => {
             let mut all = Vec::with_capacity(merged.len() + 1);
             all.push(json!({ "role": "system", "content": system }));
-            all.extend(merged.iter().map(|message| {
-                json!({ "role": message.role, "content": message.content })
-            }));
+            all.extend(
+                merged
+                    .iter()
+                    .map(|message| json!({ "role": message.role, "content": message.content })),
+            );
             json!({
                 "model": config.model,
                 "messages": all,
@@ -173,9 +175,7 @@ fn request_body_with(
         Provider::Anthropic => {
             let all: Vec<Value> = merged
                 .iter()
-                .map(|message| {
-                    json!({ "role": message.role, "content": message.content })
-                })
+                .map(|message| json!({ "role": message.role, "content": message.content }))
                 .collect();
             json!({
                 "model": config.model,
@@ -257,10 +257,7 @@ fn merge_roles(messages: &[PromptMessage]) -> Vec<PromptMessage> {
 /// inference engines usually have authentication disabled, and pre-judging an
 /// endpoint by its provider or host would refuse a working one; the endpoint
 /// itself is the authority, and a 401 explains what it needs.
-fn auth(
-    request: reqwest::RequestBuilder,
-    config: &ChatConfig,
-) -> reqwest::RequestBuilder {
+fn auth(request: reqwest::RequestBuilder, config: &ChatConfig) -> reqwest::RequestBuilder {
     match config.provider {
         Provider::OpenAi => match &config.key {
             Some(key) => request.bearer_auth(key),
@@ -684,9 +681,7 @@ fn model_list_error(
         );
     }
     let snippet = sanitize(&String::from_utf8_lossy(bytes));
-    if content_type.to_ascii_lowercase().contains("html")
-        || snippet.trim_start().starts_with('<')
-    {
+    if content_type.to_ascii_lowercase().contains("html") || snippet.trim_start().starts_with('<') {
         return format!(
             "The endpoint returned an HTML page instead of a model list (HTTP {status}). Check the Base URL ({base_url}); it usually ends with /v1.{scheme_hint}"
         );
@@ -764,7 +759,10 @@ fn transport_error(error: &reqwest::Error, host: &str) -> String {
     } else if error.is_decode() {
         "The provider sent a response MDraft could not read.".to_string()
     } else {
-        format!("The request to {host} failed: {}", sanitize(&error.to_string()))
+        format!(
+            "The request to {host} failed: {}",
+            sanitize(&error.to_string())
+        )
     }
 }
 
@@ -903,7 +901,10 @@ mod tests {
         ))
         .expect("a stopped request is not an error");
         assert!(outcome.stopped);
-        assert!(started.elapsed() < Duration::from_secs(5), "Stop waited for headers");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "Stop waited for headers"
+        );
     }
 
     #[test]
@@ -1001,7 +1002,11 @@ mod tests {
         let body = request_body(
             &config,
             "system text",
-            &[message("user", "hello"), message("assistant", "hi"), message("user", "again")],
+            &[
+                message("user", "hello"),
+                message("assistant", "hi"),
+                message("user", "again"),
+            ],
         );
         assert_eq!(body["model"], "gpt-test");
         assert_eq!(body["stream"], true);
@@ -1044,23 +1049,37 @@ mod tests {
 
     #[test]
     fn reasoning_off_uses_each_protocol_s_own_field() {
-        let openai = request_body(&config(Provider::OpenAi, true), "system", &[message("user", "hi")]);
+        let openai = request_body(
+            &config(Provider::OpenAi, true),
+            "system",
+            &[message("user", "hi")],
+        );
         assert_eq!(openai["reasoning_effort"], "none");
         assert!(openai.get("thinking").is_none());
 
-        let anthropic =
-            request_body(&config(Provider::Anthropic, true), "system", &[message("user", "hi")]);
+        let anthropic = request_body(
+            &config(Provider::Anthropic, true),
+            "system",
+            &[message("user", "hi")],
+        );
         assert_eq!(anthropic["thinking"]["type"], "disabled");
         assert!(anthropic.get("reasoning_effort").is_none());
     }
 
     #[test]
     fn reasoning_fields_are_absent_when_the_setting_is_off() {
-        let openai = request_body(&config(Provider::OpenAi, false), "system", &[message("user", "hi")]);
+        let openai = request_body(
+            &config(Provider::OpenAi, false),
+            "system",
+            &[message("user", "hi")],
+        );
         assert!(openai.get("reasoning_effort").is_none());
 
-        let anthropic =
-            request_body(&config(Provider::Anthropic, false), "system", &[message("user", "hi")]);
+        let anthropic = request_body(
+            &config(Provider::Anthropic, false),
+            "system",
+            &[message("user", "hi")],
+        );
         assert!(anthropic.get("thinking").is_none());
     }
 
@@ -1200,7 +1219,13 @@ mod tests {
         assert!(without.contains("No API key is saved"), "{without}");
         assert!(!without.contains("was rejected"), "{without}");
 
-        let with = http_error(401, "", "api.example.com", "https://api.example.com/v1", true);
+        let with = http_error(
+            401,
+            "",
+            "api.example.com",
+            "https://api.example.com/v1",
+            true,
+        );
         assert!(with.contains("API key was rejected"), "{with}");
     }
 
@@ -1213,8 +1238,13 @@ mod tests {
 
         let html = b"<!doctype html><title>gateway</title>";
         let html_error = serde_json::from_slice::<Value>(html).unwrap_err();
-        let html_message =
-            model_list_error(200, "text/html; charset=utf-8", html, "http://host/v1", &html_error);
+        let html_message = model_list_error(
+            200,
+            "text/html; charset=utf-8",
+            html,
+            "http://host/v1",
+            &html_error,
+        );
         assert!(html_message.contains("HTML page"));
 
         let bad = b"{not json";

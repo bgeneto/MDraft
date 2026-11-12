@@ -137,7 +137,11 @@ check(real.length === 0, "tools.latex reaches a handler", real.join("; ") || "no
 // Its neighbours must still be wired, so the group stays coherent.
 for (const id of ["tools.pandoc", "tools.typst"]) {
   const warnings = await warnFor(id);
-  check(warnings.length === 0, `${id} still reaches a handler`, warnings.join("; ") || "no warning");
+  check(
+    warnings.length === 0,
+    `${id} still reaches a handler`,
+    warnings.join("; ") || "no warning",
+  );
 }
 
 // Give the handler time to reach its first await (`latexStatus`).
