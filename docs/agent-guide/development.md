@@ -10,9 +10,9 @@ Related: [scripts.md](scripts.md) for the command catalog,
 ## Prerequisites
 
 - **Rust** 1.91+ (`x86_64-pc-windows-msvc` target on Windows)
-- **Node.js** 20+ and npm; **Node 24** for the app-free suites. This repo uses
-  **npm**; pnpm is not installed here. The application build works on Node 20/22
-  (the release workflow uses 22), but suites such as `read-aloud:unit`,
+- **Node.js** 22.13+ and npm; **Node 24** for the app-free suites. This repo uses
+  **npm**; pnpm is not installed here. The release workflow uses Node 22;
+  dependencies including PDF.js require at least Node 22.13. Suites such as `read-aloud:unit`,
   `p0:unit` and `test:sessions` import `.ts` sources directly. Node 22 is built
   without TypeScript support; Node 24 strips the types.
 - **Python 3** with `fonttools` and `brotli`, only to refresh the bundled fonts
@@ -22,6 +22,16 @@ Related: [scripts.md](scripts.md) for the command catalog,
 - **macOS**: Xcode command line tools
 - **Linux**: `webkit2gtk-4.1`, `libayatana-appindicator3`, `librsvg2`, `patchelf`, `libhunspell-dev` (spelling; the dictionaries themselves are `hunspell-en-us` and `hunspell-pt-br`, which are not bundled)
 - **PDF visual tests only**: Poppler (`pdfinfo`, `pdffonts`, `pdftotext`, `pdfimages`, `pdftoppm`). On Windows the commands are usually run through WSL (`--rasterizer wsl`); on Debian install `poppler-utils`. Poppler is never bundled or called by the application.
+
+### npm lockfile
+
+`package-lock.json` is versioned. Run `npm ci` to install the recorded tree;
+do not regenerate it for ordinary development. For dependency changes, use Node
+24 and npm 11.19.1, update the exact direct versions in `package.json`, run
+`npm install --package-lock-only`, review and commit both files, then run
+`npm ci` and the relevant tests. On a merge conflict, resolve `package.json`
+first and regenerate the lockfile with the same toolchain; review the resulting
+dependency changes instead of accepting one side blindly.
 
 ### Windows: everything through `scripts\with-msvc.cmd`
 

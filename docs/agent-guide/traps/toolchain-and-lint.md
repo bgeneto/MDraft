@@ -74,3 +74,11 @@ TypeScript 7 ships no programmatic API, so typescript-eslint needs the 6.0 API. 
 
 **`ERR_MODULE_NOT_FOUND: Cannot find module '.../src/sessions' imported from .../src/preview-owner.ts`**
 A pure module with `import { pathKey } from "./sessions"` type-checks under `moduleResolution: "bundler"` and bundles in Vite, but Node 24's type stripping resolves ESM specifiers literally: an extensionless import has no file to load. Any module a `kind: "node"` layer imports must name the extension in its **runtime** imports (`from "./sessions.ts"`); type-only imports are erased before resolution, but the repository writes those with `.ts` too. The failure appears only when the node layer runs, which can be long after `npm run build` passed — run the new unit layer before believing the module is wired.
+
+**`Code style issues found in 222 files` after running Prettier in a Git archive on Windows**
+The archive inherited the host's line-ending conversion, giving the extracted
+files CRLF despite this repository's LF Prettier setting. Comparing newline bytes
+in the workspace and archive showed the difference; attributing the failures to
+the Prettier upgrade would have been wrong. Create the archive with
+`git -c core.autocrlf=false archive HEAD` before extracting it, then rerun the
+check. Remaining warnings can be real baseline issues.
