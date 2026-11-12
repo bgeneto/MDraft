@@ -180,7 +180,7 @@ async function setCheckbox(label, want) {
   await setPrefsVisible(true);
   await evaluate(`(() => {
     const button = [...document.querySelectorAll('.prefs-section')]
-      .find((section) => section.textContent.trim() === 'Editor');
+      .find((section) => section.textContent.trim() === 'HTML');
     button?.click();
   })()`);
   await sleep(150);

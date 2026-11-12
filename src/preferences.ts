@@ -1882,13 +1882,6 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
           set: (value) => host.update({ completion: value }),
         },
         {
-          kind: "checkbox",
-          label: "Expand Emmet abbreviations with Tab",
-          help: 'In HTML and CSS documents, Tab turns the abbreviation before the caret into markup or a declaration: ul>li*3 into a list, m10 into margin: 10px;. It also works inside <style> and style="…". It never acts in a tag, an attribute, a comment, a script or a selector, and Tab indents as usual when there is nothing to expand. An open completion list accepts Tab first; press Escape to close it and expand. Nothing is sent over the network.',
-          get: () => s().emmet,
-          set: (value) => host.update({ emmet: value }),
-        },
-        {
           kind: "select",
           label: "Content Width",
           options: [
@@ -2089,6 +2082,17 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
           kind: "note",
           label: "Sandbox",
           text: "An HTML preview behaves like a local page: it may read and run files in its own folder and load the network resources it references. It cannot reach the editor, its files outside that folder, or MDraft's commands. Math and diagram settings above apply to Markdown and Typst; an HTML document uses its own libraries.",
+        },
+        {
+          kind: "checkbox",
+          label: "Expand Emmet abbreviations with Tab",
+          get: () => s().emmet,
+          set: (value) => host.update({ emmet: value }),
+        },
+        {
+          kind: "note",
+          label: "Emmet",
+          text: "A shorthand for writing HTML and CSS. Press Tab after an abbreviation to expand it: ul>li*3 becomes a list of three items, and m10 in a CSS rule becomes margin: 10px. Tab still indents when there is nothing to expand, and an open completion list takes Tab first.",
         },
       ],
     },

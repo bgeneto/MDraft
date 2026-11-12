@@ -48,7 +48,7 @@ projects easy to navigate.
   abbreviation: `ul>li*3` becomes a list and `m10` becomes `margin: 10px;`,
   also inside `<style>` and `style="…"`. It is on by default, never acts in a
   tag, attribute, comment, script or selector, and can be turned off in
-  *Preferences › Editor*.
+  *Preferences › HTML*.
 
 ![A Typst conference paper in MDraft, showing source on the left and its compiled two-column PDF in Pages view on the right.](docs/screenshots/typst-ieee-conference-paper.webp)
 
