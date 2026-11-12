@@ -57,3 +57,20 @@ Median-cut quantisation spent every palette entry on the navy↔white antialiasi
 
 **`icon .../src-tauri/icons/32x32.png is not RGBA` while the Windows build and every test pass**
 Tauri's Linux `generate_context!` reads the bundle PNGs as RGBA and rejects an indexed PNG; the Windows build does not check the colour type. `scripts/build-icons.mjs` used to write palette PNGs for the bundle (the size saving is only safe inside ICO/ICNS, whose frames are expanded), so `build-linux.sh` failed at the Rust proc macro after compiling every dependency. The bundle PNGs are colour type 6 now and the generator writes `rgbaPng` for them; verify with byte 25 of the IHDR (`6`, not `3`) and sample the accent pixel. The master `docs/icon/mdraft-icon.png` is absent from this checkout, so `npm run icons` cannot regenerate; converting the committed PNGs with `System.Drawing` preserves their quantised colours and the `[11,186,244]` accent.
+
+**`FAIL index.html: all six artifact names and links match v0.8.0` despite correct download links**
+Prettier can wrap the end of an anchor as `</a` followed by whitespace and `>`.
+That is valid HTML, but a validator extracting links with a literal `</a>`
+reports every wrapped anchor as missing. Inspecting the generated `_site/`
+markup exposed this before the links themselves were changed unnecessarily.
+Allow whitespace before the closing `>` (`</a\s*>`) in the extraction regex;
+do not conclude that the release URLs or filename substitutions are broken.
+
+**A section screenshot paints the sticky site header across the introduction**
+Playwright's element screenshot can capture a section taller than the viewport
+with the sticky header at its current viewport position inside the resulting
+image. It looked like the new HTML section's lead text was covered; a real
+anchor click instead measured section top 79.94 px and header bottom 74.60 px
+on desktop (80.22/66.60 px on mobile). For layout QA, click the section anchor,
+measure those boxes and take a viewport screenshot. Do not change the page's
+spacing to compensate for a misleading whole-element capture.

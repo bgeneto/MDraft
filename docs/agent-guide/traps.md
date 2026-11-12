@@ -65,7 +65,7 @@ landed, because the fix is what makes it recur.
 | [traps/latex-typst-asciidoc.md](traps/latex-typst-asciidoc.md) | 25 | The non-Markdown formats: engine selection, reference validation, includes, outline scans and PDF correspondence. |
 | [traps/export-and-print.md](traps/export-and-print.md) | 29 | Pandoc, the browser-readable artifacts, WebView2 and WebKitGTK printing, and the PDF measurements that follow them. |
 | [traps/ai-accessibility-and-typography.md](traps/ai-accessibility-and-typography.md) | 27 | The AI Assistant, Read Aloud and speech backends, and the bundled typefaces with their subsetting pipeline. |
-| [traps/assets-and-site.md](traps/assets-and-site.md) | 9 | Icons, the GitHub Pages site, its images and the documentation assets that ship beside the application. |
+| [traps/assets-and-site.md](traps/assets-and-site.md) | 11 | Icons, the GitHub Pages site, its images and the documentation assets that ship beside the application. |
 
 ## Searching the record
 

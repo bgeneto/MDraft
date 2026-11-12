@@ -27,10 +27,10 @@ uses `dist`, `stage` and `check:version` is in
 | `npm run check:rust` | `cargo check` | Fastest Rust feedback |
 | `npm run test:rust` | `cargo test` | 271 passed on Windows, 270 on Linux; two ignored downloads, plus the ignored display-owned Linux print probe |
 | `npm run screenshot` | `scripts/screenshot.mjs` | PNG of the running window |
-| `npm run site` | `scripts/build-site.mjs` | Build and validate the landing page into `_site/`: copies the fonts, icons and WebP screenshots, injects the origin/version, generates the sitemap and fails on a broken link, a bad canonical, invalid JSON-LD or a bilingual mismatch |
+| `npm run site` | `scripts/build-site.mjs` | Build and validate the landing page into `_site/`: copies fonts/icons/WebP screenshots, injects the origin and stable version, renders pinned artifact links, validates LaTeX/Emmet metadata, generates the sitemap, and rejects unresolved filenames, inconsistent downloads, broken links, bad metadata or bilingual mismatches. `SITE_VERSION` is required in CI; local builds fall back to `package.json` |
 | `npm run site:serve` | `scripts/build-site.mjs --serve` | The same build, then serves `_site/` at `http://127.0.0.1:4173/MDraft/` with Node's `http` module |
 | `npm run site:images` | `scripts/optimize-site-images.py --write` | Resize and encode the landing-page captures from `docs/screenshots/` into `site/assets/img/*.webp`; needs Pillow, and is run by hand, never by CI |
-| `npm run site:images:check` | `scripts/optimize-site-images.py --check` | Verify the committed WebP files: format, expected dimensions, no upscaling |
+| `npm run site:images:check` | `scripts/optimize-site-images.py --check` | Verify the committed WebP files, including the HTML editor capture: format, expected dimensions, no upscaling |
 
 ## Test harnesses
 

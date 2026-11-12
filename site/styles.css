@@ -913,6 +913,37 @@ figcaption {
   border-radius: 14px;
 }
 
+.feature-note {
+  padding: 18px 22px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--cyan-strong);
+  border-radius: 12px;
+  background: var(--surface-2);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.emmet-demo {
+  margin: 34px 0;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  line-height: 1.55;
+}
+
+.emmet-demo .gallery-pair {
+  margin: 20px 0;
+}
+
+.emmet-demo kbd {
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+
 /* --------------------------------------------------------------------------
    Typography and math galleries
    -------------------------------------------------------------------------- */
@@ -965,6 +996,10 @@ figcaption {
     border-color 0.16s ease,
     transform 0.16s ease,
     box-shadow 0.16s ease;
+}
+
+.lang-card-wide {
+  grid-column: 1 / -1;
 }
 
 .lang-card:hover {
@@ -1201,6 +1236,18 @@ figcaption {
 
 .artifact-list code {
   color: #cfe9ff;
+  overflow-wrap: anywhere;
+}
+
+.artifact-list a {
+  display: inline-block;
+  max-width: 100%;
+  padding: 4px 0;
+  text-underline-offset: 4px;
+}
+
+.download-notes code {
+  overflow-wrap: anywhere;
 }
 
 .download-notes {

@@ -65,7 +65,11 @@ Three things are easy to get wrong here and are worth knowing:
 `npm run site` assembles and validates it, and `npm run site:serve` serves it at
 `http://127.0.0.1:4173/MDraft/`. The deploy is
 `.github/workflows/pages.yml`, which uploads only `_site/` on a site change, on
-a published release (to refresh the version) and on manual dispatch.
+a manually published release, a successful tag `Release` workflow completion
+(to refresh automated releases), and manual dispatch. The completion trigger is
+needed because a release created with `GITHUB_TOKEN` does not trigger another
+workflow's `release: published` event. Failed and non-tag Release runs are
+skipped, and Pages always checks out the default branch's site source.
 
 The page is bilingual: English at `/` and Brazilian Portuguese at `/pt-br/`.
 Both are static HTML with one stylesheet and one small script (theme toggle and
@@ -83,12 +87,21 @@ What the build enforces, and what a change must keep true:
   `npm run site:images` when a screenshot changes, then commit the results;
   `npm run site:images:check` verifies format and dimensions. Pillow is needed
   only for that script, never for the site build or CI.
-- The version chip and `softwareVersion` come from the latest release tag in
-  CI, with `package.json` as the local fallback.
+- The version chips, `softwareVersion`, installer filenames and pinned download
+  links come from the same latest stable release tag in CI. Every deployment,
+  including an old release rerun, resolves `/releases/latest` again; a failed
+  lookup or malformed tag stops deployment. `SITE_VERSION` is required in CI;
+  `package.json` is a local-only fallback. Set `SITE_VERSION` explicitly (for
+  example, `0.9.0`) to preview a release instead of the development package version.
+- Product copy covers the 0.9.0 feature set, including LaTeX and Emmet in HTML
+  and CSS. Release versions are substituted at build time; visitors make no
+  release API requests. Keep feature descriptions current when shipping a new
+  version; its version number and download filenames update automatically.
 - A broken link, a missing image, a wrong dimension, a bad canonical, invalid
   JSON-LD, a FAQ answer that is not visible, a missing Portuguese section or a
-  payload over the budget fails the build. The site is not part of `npm test`;
-  validate it with `npm run site`, then `npm run format:check`,
+  payload over the budget fails the build. So do literal `<version>` filenames,
+  inconsistent artifact names/URLs and missing LaTeX/Emmet metadata. The site
+  is not part of `npm test`; validate it with `npm run site`, then `npm run format:check`,
   `npm run lint`, `npm run knip` and `npm run build`.
 - **Pages must be enabled once with Source: GitHub Actions.** The workflow's
   `GITHUB_TOKEN` cannot do it: `configure-pages`'s `enablement` input needs a
