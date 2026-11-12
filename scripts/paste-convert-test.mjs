@@ -41,7 +41,9 @@ import { escapeLatex, renderLatex } from "../src/paste/render-latex.ts";
 import { renderHtmlFragment } from "../src/paste/render-html.ts";
 import { readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { runInNewContext } from "node:vm";
 import { marked } from "marked";
+import ts from "typescript";
 
 let passed = 0;
 let total = 0;
@@ -1345,17 +1347,8 @@ check(
 // ---------------------------------------------------------------------------
 // LaTeX as a paste destination and source.
 //
-// The requirement is that *Convert Rich Text on Paste* produces valid LaTeX from
-// every source the clipboard can carry — rich text, Markdown, plain text, Typst
-// and AsciiDoc — and that LaTeX source pastes into the other four.
-//
-// Two defects made this impossible before the work below:
-//   1. `chooseSource` short-circuited LaTeX to `plain`, so rich text and Markdown
-//      were never converted for a `.tex` buffer.
-//   2. `literalFor` fell through to `renderHtmlFragment`, so plain text pasted
-//      into a `.tex` buffer arrived as HTML.
-// Both are pinned here, because both are silent: the paste "works" and produces
-// the wrong syntax.
+// Rich text and explicitly represented Markdown can be converted to LaTeX;
+// text-only and recognizable LaTeX source must stay exactly as copied.
 // ---------------------------------------------------------------------------
 console.log("\n=== LaTeX: escaping ===");
 {
@@ -1384,24 +1377,52 @@ console.log("\n=== LaTeX: escaping ===");
   check(escapeLatex("plain prose") === "plain prose", "ordinary prose is untouched");
 }
 
-console.log("\n=== LaTeX: plain text pastes as text, not HTML ===");
+console.log("\n=== LaTeX: source pastes unchanged ===");
 {
-  // The `literalFor` fall-through. Before the fix this returned `<p>…</p>`.
-  const plan = await planPaste(
-    { text: "50% of a_b is $5", html: null, markdown: null },
-    "latex",
-    {},
-  );
-  check(
-    !plan.text.includes("<p>") && !plan.text.includes("</p>"),
-    "plain text into LaTeX is not HTML",
-    plan.text.slice(0, 60),
-  );
-  check(
-    plan.text.includes("50\\%") && plan.text.includes("a\\_b") && plan.text.includes("\\$5"),
-    "plain text into LaTeX is escaped",
-    plan.text.slice(0, 60),
-  );
+  const command = String.raw`\usepackage[a4paper,margin=0.1in]{geometry}`;
+  const fragments = [
+    ["the reported command", command],
+    ["a partial subscript and percent comment", "x_1 % comment"],
+    ["a custom command and math", String.raw`\myCustomCommand{a_b} $\alpha^2$`],
+    ["control symbols", String.raw`\{x\} \% \\`],
+    ["surrounding blank lines", `\n\n${command}\n\n`],
+    ["Markdown-shaped source", "## Heading\n\n- one\n- two"],
+  ];
+  for (const [label, text] of fragments) {
+    const data = payload(null, text);
+    const choice = chooseSource(data, "latex");
+    const result = await planPaste(data, "latex");
+    check(choice.native, `${label}: native paste`, JSON.stringify(choice));
+    check(result?.text === text && !result.converted, `${label}: exact source`, result?.text);
+  }
+
+  for (const [label, text, html] of [
+    ["highlighted command", command, `<span style="color:blue">${command}</span>`],
+    ["highlighted partial math", "x_1", '<div style="white-space: pre"><span>x_1</span></div>'],
+    ["inline highlighted subscript", "x_1", '<span style="color:blue">x_1</span>'],
+    ["inline highlighted braces", "{geometry}", "<span>{geometry}</span>"],
+    ["inline highlighted comment", "% a comment", "<span>% a comment</span>"],
+    ["code fragment", "a_b % note", "<pre><code>a_b % note</code></pre>"],
+    ["inline math", "$x_1$", "<span>$x_1$</span>"],
+  ]) {
+    const data = payload(html, text);
+    const choice = chooseSource(data, "latex");
+    const result = await planPaste(data, "latex");
+    check(choice.native && result?.text === text, `${label}: exact source`, JSON.stringify(choice));
+  }
+
+  for (const [label, input] of [
+    ["saved", { saved: true, language: "latex", buffer: "" }],
+    ["detected", { saved: false, language: "markdown", buffer: "\\documentclass{article}\n" }],
+  ]) {
+    const destination = resolvePasteDestination(input);
+    const result = await planPaste(payload(null, command), destination.language);
+    check(
+      destination.language === "latex" && result?.text === command && !result.converted,
+      `${label} LaTeX destination keeps the command`,
+      JSON.stringify(destination),
+    );
+  }
 }
 
 console.log("\n=== LaTeX: rich text and Markdown are converted ===");
@@ -1427,9 +1448,29 @@ console.log("\n=== LaTeX: rich text and Markdown are converted ===");
     "rich emphasis becomes \\textbf",
     rich.text.slice(0, 80),
   );
+  const richSpecial = await planPaste(
+    payload("<p>50% of a_b is <strong>important</strong></p>", "50% of a_b is important"),
+    "latex",
+  );
+  check(
+    richSpecial.text.includes("50\\%") &&
+      richSpecial.text.includes("a\\_b") &&
+      richSpecial.text.includes("\\textbf{important}"),
+    "formatted prose still escapes its LaTeX special characters",
+    richSpecial.text,
+  );
+  const richPre = await planPaste(
+    payload('<p style="white-space: pre-wrap">Hello <strong>bold</strong></p>', "Hello bold"),
+    "latex",
+  );
+  check(
+    richPre.text.includes("\\textbf{bold}"),
+    "rich formatting converts even with preformatted spacing",
+    richPre.text,
+  );
 
   const markdown = await planPaste(
-    { text: "## Heading\n\n- one\n- two", html: null, markdown: null },
+    { text: "## Heading\n\n- one\n- two", html: null, markdown: "## Heading\n\n- one\n- two" },
     "latex",
     {},
   );
@@ -1442,6 +1483,120 @@ console.log("\n=== LaTeX: rich text and Markdown are converted ===");
     markdown.text.includes("\\begin{itemize}") && markdown.text.includes("\\item one"),
     "a Markdown list becomes itemize",
     markdown.text.slice(0, 120),
+  );
+}
+
+console.log("\n=== LaTeX: real paste-handler routing ===");
+{
+  // Run the actual shell handler with the browser and image boundaries stubbed.
+  // This checks whether CodeMirror receives the event, which the pure planner
+  // cannot prove and the UI suite otherwise needs a running application for.
+  const shell = ts.createSourceFile(
+    "main.ts",
+    readFileSync(new URL("../src/main.ts", import.meta.url), "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const declaration = shell.statements.find(
+    (node) => ts.isFunctionDeclaration(node) && node.name?.text === "installPasteHandlers",
+  );
+  if (!declaration) throw new Error("main.ts no longer declares installPasteHandlers");
+  const code = ts.transpileModule(declaration.getText(shell), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+  }).outputText;
+
+  function handlerFor(doc, buffer) {
+    let handler;
+    const conversions = [];
+    const target = { closest: () => null };
+    const contentDOM = {
+      contains: (node) => node === target,
+      addEventListener: (name, listener) => {
+        if (name === "paste") handler = listener;
+      },
+    };
+    const context = {
+      window: { addEventListener() {}, setTimeout() {} },
+      editor: {
+        view: { contentDOM },
+        cursorInfo: () => ({ selectionLength: 0 }),
+        getDoc: () => buffer,
+        inCodeContext: () => false,
+        prepareNativePaste() {},
+      },
+      previewPane: { contains: () => false, addEventListener() {} },
+      api: { isWebSource: () => false },
+      doc,
+      settings: { richPaste: true },
+      plainPastePending: false,
+      handleImagePaste: () => false,
+      imageContext: () => ({}),
+      resolvePasteDestination,
+      chooseSource,
+      capturePasteOwner: () => ({}),
+      applyRichPaste: (data, destination) => {
+        conversions.push({ data, destination });
+        return Promise.resolve();
+      },
+      escapeMarkdownCurrency,
+      console,
+    };
+    runInNewContext(`${code}\ninstallPasteHandlers();`, context);
+    if (!handler) throw new Error("paste handler was not installed");
+    return {
+      dispatch(data) {
+        const event = {
+          target,
+          clipboardData: {
+            getData: (type) =>
+              ({ "text/plain": data.text, "text/html": data.html, "text/markdown": data.markdown })[
+                type
+              ] ?? "",
+          },
+          prevented: false,
+          stopped: false,
+          preventDefault() {
+            this.prevented = true;
+          },
+          stopPropagation() {
+            this.stopped = true;
+          },
+        };
+        handler(event);
+        return event;
+      },
+      conversions,
+    };
+  }
+
+  const command = String.raw`\usepackage[a4paper,margin=0.1in]{geometry}`;
+  for (const [label, doc, buffer] of [
+    ["saved", { path: "C:/paper.tex", language: "latex" }, ""],
+    ["detected", { path: null, language: "markdown" }, "\\documentclass{article}\n"],
+    ["default", { path: null, language: "latex" }, ""],
+  ]) {
+    const h = handlerFor(doc, buffer);
+    for (const data of [
+      payload(null, command),
+      payload("<pre><span>highlighted</span></pre>", command),
+      payload(null, "\n\nx_1 % note\n\n"),
+    ]) {
+      const event = h.dispatch(data);
+      check(
+        !event.prevented && !event.stopped && h.conversions.length === 0,
+        `${label} LaTeX source reaches native paste`,
+        JSON.stringify(data),
+      );
+    }
+  }
+
+  const h = handlerFor({ path: "C:/paper.tex", language: "latex" }, "");
+  const rich = h.dispatch(payload("<h1>Intro</h1><p><strong>bold</strong></p>", "Intro\nbold"));
+  check(rich.prevented && h.conversions.length === 1, "rich HTML still reaches conversion");
+  const markdown = h.dispatch(payload(null, "## Heading", "## Heading"));
+  check(
+    markdown.prevented && h.conversions.length === 2,
+    "explicit Markdown still reaches conversion",
   );
 }
 
