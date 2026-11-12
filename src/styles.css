@@ -1836,7 +1836,10 @@ body {
   white-space: pre-line;
   overflow-wrap: anywhere;
   box-shadow: 0 6px 22px rgba(0, 0, 0, 0.28);
-  z-index: 50;
+  /* Above the Preferences overlay (100) and its popups (120/121). Actions
+     started from a Preferences row report progress and results only through a
+     toast, so a lower layer made them look like clicks that did nothing. */
+  z-index: 130;
   pointer-events: none;
 }
 

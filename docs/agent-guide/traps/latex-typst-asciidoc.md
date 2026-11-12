@@ -291,3 +291,20 @@ console error. Rerun once the cache is warm and the suites pass (`latex-project`
 `"bytes":0` right after the switch is the tell. The same run also lost both profile
 folders mid-run; see the Recycle Bin entry in
 [build-and-environment.md](build-and-environment.md).
+
+**`typst: excludes labelled code` fails although the Typst source is syntax highlighted**
+The first diagnosis was that the spelling skip-node set was merely missing
+`Raw`. Printing `ensureSyntaxTree(state, length, 1000).toString()` for
+a heading followed by a backtick-delimited raw word returned only `Typst`:
+the installed `codemirror-lang-typst` highlighter paints its own decorations
+while its CodeMirror parser deliberately returns a placeholder tree with no
+children. Waiting longer or adding node names cannot repair that tree. Use the
+package's separate `codemirror-lang-typst/lezer` structural parser for
+context, and avoid parsing large documents synchronously on every keystroke.
+The spelling corpus checks both the raw exclusion and the prose around it.
+
+**`System32\wsl.exe` silently re-launches `C:\Program Files\WSL\wsl.exe`, so every WSL step costs two processes**
+Sampling the process tree during one `wsl.exe -d Debian --exec /usr/bin/sleep 8` showed two `wsl.exe` processes with the same start second: the System32 inbox stub as parent and the Program Files Store CLI as its child. `CREATE_NO_WINDOW` on the parent cannot cover the child the stub creates, so a chain of probes paid twice for each launch (and its console allocation). The launcher now prefers `%ProgramW6432%\WSL\wsl.exe` (then `%ProgramFiles%`) and falls back to System32 only when the Store CLI is absent. Both accept `-d`, `--cd` and `--exec`; a console-attach probe showed both consoles hidden with `CREATE_NO_WINDOW`.
+
+**A WSL "look for TeX" that never ran still reported "no TeX installed"**
+`look_inside` ignored the launch outcome: any empty `console` — a timed-out launch, a `wsl.exe` that refused to start, a distribution still booting — became `group_engines("")`, which is `[]`. The panel then showed the ordinary "No lualatex, pdflatex or xelatex was found" toast, so there was no way to tell a missing installation from a failed probe, and the only recovery was clicking again. The one script a look runs now ends with `MDRAFT-LOOK-END`; a missing sentinel is an error that names the distribution and the exit status, and the look retries once before reporting it. The same script replaced the `printenv` + `find` pair: it uses `command -v` (the distribution's own `PATH`, which is what `which` in a terminal shows) and the versioned TeX Live/TinyTeX trees, in one launch.
