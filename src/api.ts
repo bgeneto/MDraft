@@ -508,6 +508,49 @@ export interface SavedImage {
 
 export const readDocument = (path: string) => invoke<DocumentPayload>("read_document", { path });
 
+/** Reopen `path` decoded strictly with a reader-chosen encoding (Reinterpret). */
+export const readDocumentAs = (path: string, encoding: string) =>
+  invoke<DocumentPayload>("read_document_as", { path, encoding });
+
+export interface LineEndingCounts {
+  crlf: number;
+  /** `\n` not preceded by `\r`. */
+  lf: number;
+  /** `\r` not followed by `\n`. */
+  cr: number;
+}
+
+export interface EncodingCandidate {
+  encoding: string;
+  valid: boolean;
+  error: string | null;
+  /** Lines with non-ASCII characters as this encoding reads them, 1-based. */
+  samples: { line: number; text: string }[];
+}
+
+export interface EncodingInspection {
+  /** What automatic detection picks, or null when it refuses the bytes. */
+  detected: string | null;
+  detectError: string | null;
+  hadBom: boolean;
+  lineEndings: LineEndingCounts;
+  candidates: EncodingCandidate[];
+}
+
+/** How the bytes on disk read under every offered encoding. */
+export const inspectDocumentEncoding = (path: string) =>
+  invoke<EncodingInspection>("inspect_document_encoding", { path });
+
+export interface EncodingFit {
+  unmappable: number;
+  firstChar: string | null;
+  /** UTF-16 offset of the first unmappable character in the editor text. */
+  firstOffset: number | null;
+}
+
+export const checkEncodingFit = (content: string, encoding: string) =>
+  invoke<EncodingFit>("check_encoding_fit", { content, encoding });
+
 /**
  * Approximate token count for a buffer.
  *

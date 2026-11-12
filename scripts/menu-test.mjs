@@ -216,6 +216,7 @@ try {
     ["file.preferences", "File"],
     ["tools.spellcheck", "Tools"],
     ["tools.statistics", "Tools"],
+    ["tools.encoding", "Tools"],
     ["tools.ai", "Tools"],
     ["view.latexCompile", "Tools"],
     ["view.latexAutoCompile", "Tools"],
@@ -248,6 +249,7 @@ try {
     ["tools.spellcheck", "Check Spelling While Typing"],
     ["tools.spellLanguage", "Spelling Language…"],
     ["tools.statistics", "Document Statistics…"],
+    ["tools.encoding", "Encoding and Line Endings…"],
     // The three install rows sit together and must all be present: a reader who
     // has Pandoc but not Typst should see both, and the same for LaTeX.
     ["tools.pandoc", "Check or Install Pandoc…"],

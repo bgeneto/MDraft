@@ -362,6 +362,14 @@ const SUITES = [
     safeWithInstalledApp: true,
   },
   {
+    // The encoding catalogue matches Rust's OFFERED list, and inputenc/meta/XML
+    // declarations are found at exact offsets: pure, no application.
+    id: "encoding-unit",
+    title: "Encoding catalogue and declarations (unit)",
+    kind: "node",
+    script: "encoding-unit.mjs",
+  },
+  {
     // What to remember when the tabs change, and what to open at boot: pure
     // list logic, no application.
     id: "tabs-restore-unit",
@@ -440,6 +448,17 @@ const SUITES = [
     title: "P0 document lifecycle",
     kind: "cdp",
     script: "p0-lifecycle-test.mjs",
+    doc: "samples/feature-tour.md",
+  },
+  {
+    // Tools › Encoding and Line Endings and the status-bar button: reinterpret
+    // with preview, Convert and Save with the inputenc update, the fit check,
+    // mixed line endings, a disk conflict and an untitled buffer. Fixtures live
+    // in the suite's own temp folder.
+    id: "encoding-dialog",
+    title: "Encoding and line-ending conversion",
+    kind: "cdp",
+    script: "encoding-dialog-test.mjs",
     doc: "samples/feature-tour.md",
   },
   {

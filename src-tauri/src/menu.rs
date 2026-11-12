@@ -722,6 +722,7 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
         | "navigate.openTabs"
         | "tools.spellLanguage"
         | "tools.statistics"
+        | "tools.encoding"
         | "tools.exportConfig"
         | "tools.pandoc"
         | "tools.typst"
@@ -1334,6 +1335,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         )?)
         .item(&item("tools.spellLanguage", "Spelling Language…", None)?)
         .item(&item("tools.statistics", "Document Statistics…", None)?)
+        .item(&item("tools.encoding", "Encoding and Line Endings…", None)?)
         .separator()
         .item(&item("tools.exportConfig", "Configure Export…", None)?)
         .item(&item("tools.pandoc", "Check or Install Pandoc…", None)?)
@@ -2215,6 +2217,7 @@ mod tests {
         assert_eq!(enabled_for(&state, "view.typstPreview"), Some(true));
         assert_eq!(enabled_for(&state, "view.zoomIn"), Some(true));
         assert_eq!(enabled_for(&state, "tools.statistics"), Some(true));
+        assert_eq!(enabled_for(&state, "tools.encoding"), Some(true));
 
         state.document_language = "html".into();
         state.link_kind = "file".into();

@@ -30,6 +30,9 @@ import { readClipboardData } from "./clipboard";
 import { CompiledPreviewUi, type CompiledStatus } from "./compiled-preview-ui";
 import { createDocumentLifecycle } from "./document-lifecycle";
 import { showDocumentStatistics, type DocumentStatistics } from "./statistics-dialog";
+import { showEncodingDialog, type DeclarationEdit } from "./encoding-dialog";
+import { displayEncoding } from "./encodings";
+import type { SaveFormat } from "./document-lifecycle";
 import { askUnsaved } from "./unsaved-dialog";
 import { rewriteExportReferences } from "./export-article";
 import { showWriterChooser } from "./export-chooser";
@@ -245,7 +248,7 @@ const statusFile = el<HTMLSpanElement>("status-file");
 const statusTokens = el<HTMLButtonElement>("status-tokens");
 const statusWords = el<HTMLButtonElement>("status-words");
 const statusCursor = el<HTMLSpanElement>("status-cursor");
-const statusEncoding = el<HTMLSpanElement>("status-encoding");
+const statusEncoding = el<HTMLButtonElement>("status-encoding");
 const statusZoom = el<HTMLButtonElement>("status-zoom");
 const statusReading = el<HTMLButtonElement>("status-reading");
 const noticeBar = el<HTMLDivElement>("notice-bar");
@@ -1472,22 +1475,6 @@ function scheduleTokenCount(text: string, immediate = false): void {
   tokenCountTimer = window.setTimeout(run, immediate ? 0 : TOKEN_COUNT_DELAY_MS);
 }
 
-/** Human-facing names for the canonical labels `encoding_rs` returns. */
-function displayEncoding(encoding: string): string {
-  switch (encoding) {
-    case "UTF-16LE":
-      return "UTF-16 LE";
-    case "UTF-16BE":
-      return "UTF-16 BE";
-    case "windows-1252":
-      return "Windows-1252";
-    default:
-      return /^windows-\d+$/i.test(encoding)
-        ? `Windows-${encoding.slice("windows-".length)}`
-        : encoding;
-  }
-}
-
 function refreshStatus(): void {
   const cursor = editor.cursorInfo();
   const { words, lines, chars } = editor.metrics();
@@ -1506,14 +1493,12 @@ function refreshStatus(): void {
       : ""
   }`;
 
-  if (!doc.path) {
-    statusEncoding.textContent = "UTF-8 · not saved";
-  } else {
-    const eol = doc.lineEnding === "\r\n" ? "CRLF" : "LF";
-    statusEncoding.textContent = `${displayEncoding(doc.encoding)}${doc.hadBom ? " BOM" : ""} · ${eol}${
-      doc.readOnly ? " · read-only" : ""
-    }`;
-  }
+  const eol = doc.lineEnding === "\r\n" ? "CRLF" : "LF";
+  const format = `${displayEncoding(doc.encoding)}${doc.hadBom ? " BOM" : ""} · ${eol}`;
+  statusEncoding.textContent = doc.path
+    ? `${format}${doc.readOnly ? " · read-only" : ""}`
+    : `${format} · not saved`;
+  statusEncoding.title = `${format} — click to convert or reinterpret`;
 }
 
 /**
@@ -5064,6 +5049,110 @@ function clearConflict(session: Session): void {
   if (session.id === doc.id) renderNotice();
 }
 
+/**
+ * Tools › Encoding and Line Endings, for the active document.
+ *
+ * The dialog is modal and receives one text snapshot; the actions re-check that
+ * the same session is still active and its text unchanged before applying an
+ * in-document declaration edit, because a Save As or reload prompt can sit
+ * between the dialog closing and the action running.
+ */
+function openEncodingDialog(
+  extra: { tab?: "convert" | "reinterpret"; notice?: string } = {},
+): void {
+  const session = doc;
+  const text = editor.getDoc();
+  showEncodingDialog(
+    {
+      name: session.name ?? "Untitled",
+      path: session.path,
+      readOnly: session.readOnly,
+      dirty: session.dirty,
+      language: session.language,
+      encoding: session.encoding,
+      hadBom: session.hadBom,
+      lineEnding: session.lineEnding === "\r\n" ? "\r\n" : "\n",
+      text,
+      ...extra,
+    },
+    {
+      inspect: () => (session.path ? api.inspectDocumentEncoding(session.path) : null),
+      fit: (encoding) => api.checkEncodingFit(text, encoding),
+      reopen: (encoding) => void reopenWithEncoding(session, encoding),
+      convert: (format, copy, edits) => void convertDocument(session, format, copy, edits, text),
+      apply: (format, edits) => {
+        applyDeclarationEdits(session, edits, text);
+        session.encoding = format.encoding;
+        session.hadBom = format.hadBom;
+        session.lineEnding = format.lineEnding;
+        if (session === doc) refreshStatus();
+        toast(`The first save will write ${formatLabel(format)}`);
+      },
+      goTo: (offset) => {
+        if (session !== doc) return;
+        const code = editor.getDoc().codePointAt(offset) ?? 0;
+        editor.view.dispatch({
+          selection: { anchor: offset, head: offset + (code > 0xffff ? 2 : 1) },
+          scrollIntoView: true,
+        });
+        editor.focus();
+      },
+      focusEditor: () => editor.focus(),
+    },
+  );
+}
+
+function formatLabel(format: SaveFormat): string {
+  const bom = format.hadBom && format.encoding === "UTF-8" ? " with BOM" : "";
+  return `${displayEncoding(format.encoding)}${bom} · ${format.lineEnding === "\r\n" ? "CRLF" : "LF"}`;
+}
+
+/** One undoable transaction, only on the text the dialog measured. */
+function applyDeclarationEdits(session: Session, edits: DeclarationEdit[], snapshot: string): void {
+  if (!edits.length) return;
+  if (session !== doc || editor.getDoc() !== snapshot) {
+    toast("The text changed, so its encoding declaration was not updated.", 4200);
+    return;
+  }
+  editor.view.dispatch({ changes: edits, userEvent: "input" });
+}
+
+async function convertDocument(
+  session: Session,
+  format: SaveFormat,
+  copy: boolean,
+  edits: DeclarationEdit[],
+  snapshot: string,
+): Promise<void> {
+  applyDeclarationEdits(session, edits, snapshot);
+  try {
+    if (await lifecycle.convert(session, format, copy)) toast(`Saved as ${formatLabel(format)}`);
+  } catch (error) {
+    await message(String(error), { title: "Could not convert", kind: "error" });
+  }
+  if (session === doc) refreshStatus();
+}
+
+/** Reinterpret: replace the buffer with a strict decode in a chosen encoding. */
+async function reopenWithEncoding(session: Session, encoding: string): Promise<void> {
+  try {
+    if (!(await lifecycle.reload(session, (path) => api.readDocumentAs(path, encoding)))) return;
+  } catch (error) {
+    await message(String(error), { title: "Could not reopen", kind: "error" });
+    return;
+  }
+  if (session !== doc) return;
+  refreshStatus();
+  // The reading lasts while the tab is open; detection runs again on the next
+  // open. Offer the conversion that makes it permanent straight away.
+  openEncodingDialog({
+    tab: "convert",
+    notice:
+      `Reopened as ${displayEncoding(encoding)}. MDraft detects the encoding again the next time ` +
+      "it opens this file, so convert it to keep this reading.",
+  });
+}
+
 /** Replace a conflicted buffer with the file, keeping one undo step. */
 async function reloadConflict(session: Session): Promise<void> {
   try {
@@ -7176,6 +7265,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
       () => editor.focus(),
     );
   },
+  "tools.encoding": () => openEncodingDialog(),
   "tools.exportConfig": () => preferences.openAt("export"),
   "tools.pandoc": () => void pandocSetup(),
   "tools.typst": () => void typstSetup(),
@@ -9012,6 +9102,7 @@ function runMenuAction(id: string): void {
     lifecycle.committing ||
     document.querySelector(".unsaved-dialog[open]") ||
     document.querySelector(".stats-dialog[open]") ||
+    document.querySelector(".encoding-dialog[open]") ||
     document.querySelector(".export-dialog[open]")
   )
     return;
@@ -10094,6 +10185,7 @@ function installChrome(): void {
   // same dialog as Tools › Document Statistics, through the same guard.
   statusWords.addEventListener("click", () => runMenuAction("tools.statistics"));
   statusTokens.addEventListener("click", () => runMenuAction("tools.statistics"));
+  statusEncoding.addEventListener("click", () => runMenuAction("tools.encoding"));
 
   // The flags take the same route as the native menu items, so the two can never
   // disagree and the 250 ms double-run guard lives in one place.

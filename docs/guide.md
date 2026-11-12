@@ -279,6 +279,30 @@ Other editor features:
   written and MDraft offers **Save a UTF-8 copy…**. A legacy recovered lossy
   buffer keeps its text, pauses Auto Save and offers the same copy route; the
   original is protected.
+- **Encoding and line endings.** Click the encoding in the status bar (for
+  example `Windows-1252 · CRLF`) or choose **Tools › Encoding and Line
+  Endings…**.
+  - **Convert** keeps the text and changes what is written: UTF-8 (recommended),
+    UTF-8 with BOM, UTF-16 LE/BE, the current encoding, or any legacy encoding,
+    with LF or CRLF line endings. A live check names the first character the
+    target cannot store, with a **Go to** link, and blocks the save until it
+    fits. **Convert and Save** writes the file at once (unsaved edits included);
+    **Save Converted Copy…** writes a copy instead. A disk change since the file
+    was opened is a conflict, never an overwrite.
+  - When the document declares its encoding — `\usepackage[latin1]{inputenc}`,
+    `<meta charset>` or an XML `encoding` — the dialog offers to update the
+    declaration in the same step; Ctrl+Z undoes it. For a legacy LaTeX file
+    without its own declaration, it reminds you that the preamble and the
+    project's other files must match.
+  - The dialog reports mixed line endings on disk; saving normalises them.
+  - **Reinterpret** reads the file on disk again as another encoding, for when
+    automatic detection picked the wrong one. Each encoding shows a preview of
+    the lines with accented or non-Latin characters, and encodings that cannot
+    read the bytes are hidden. Reinterpreting writes nothing; MDraft detects
+    the encoding again the next time it opens the file, so convert afterwards
+    to keep the new reading.
+  - An untitled document chooses the encoding and line ending of its first
+    save.
 - **Save As** stays attached to the initiating tab even if another tab becomes
   active. It preserves typing and undo history. A destination already open in
   another tab is refused; choose another name or close that tab first.

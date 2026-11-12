@@ -8,6 +8,18 @@ import { classifyDiskChange } from "./disk-change.ts";
 
 export type UnsavedDecision = "save" | "discard" | "cancel";
 
+/**
+ * What a save writes when the reader chose it explicitly (the encoding
+ * dialog). The session keeps its old format until the write succeeds, so a
+ * conflict, an I/O error or an unmappable character leaves both the file and
+ * the status bar as they were.
+ */
+export interface SaveFormat {
+  encoding: string;
+  hadBom: boolean;
+  lineEnding: "\n" | "\r\n";
+}
+
 export interface DocumentLifecycleDeps {
   sessions: SessionStore;
   text(session: Session): string;
@@ -116,6 +128,7 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
     automatic: boolean,
     suggested?: string,
     encodingOverride?: string,
+    format?: SaveFormat,
   ) {
     if ((s.lossy || s.encodingBlocked) && automatic) {
       if (!warned.has(s.id)) {
@@ -133,7 +146,9 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
     const target = copy ? await deps.choosePath(s, suggested) : sourcePath;
     if (!target || !exists(s) || s.path !== sourcePath) return false;
     const samePath = s.path !== null && pathKey(s.path) === pathKey(target);
-    if ((s.lossy || s.encodingBlocked) && samePath) {
+    // An explicit conversion is the reader's consent to change the encoding in
+    // place; only recovered lossy text keeps its original protected.
+    if ((s.lossy || (s.encodingBlocked && !format)) && samePath) {
       deps.notify("Choose a different filename for the UTF-8 copy; the original is protected.");
       return false;
     }
@@ -176,17 +191,27 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
       // during write remains newer than this exact disk snapshot. The expected
       // hash belongs to the same-path revision; Save As has no baseline.
       const text = deps.text(s);
-      const targetEncoding = encodingOverride ?? s.encoding;
+      const targetEncoding = format?.encoding ?? encodingOverride ?? s.encoding;
+      const targetEol = format?.lineEnding ?? (s.lineEnding || "\n");
+      const targetBom = format?.hadBom ?? s.hadBom;
       const info = await deps.write(
         target,
         text,
-        s.lineEnding || "\n",
-        s.hadBom,
+        targetEol,
+        targetBom,
         samePath ? s.sha256 : null,
         targetEncoding,
       );
       if (!exists(s) || s.path !== sourcePath) return false;
       if (!info.written) {
+        if (info.change === "encoding" && format) {
+          // Text typed after the dialog's fit check. The document's own
+          // encoding is unchanged, so this is not an Auto Save block.
+          deps.notify(
+            `"${s.name}" now contains characters ${targetEncoding} cannot store. The file was not changed.`,
+          );
+          return false;
+        }
         if (info.change === "encoding") {
           s.encodingBlocked = true;
           deps.notify(
@@ -213,6 +238,8 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
         s.readOnly = false;
       }
       s.encoding = targetEncoding;
+      s.lineEnding = targetEol;
+      s.hadBom = targetBom;
       s.savedContent = text;
       s.modifiedMs = info.modifiedMs;
       s.size = info.size;
@@ -238,7 +265,15 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
       ),
     );
 
-  async function reload(s: Session): Promise<boolean> {
+  /**
+   * Write the document in a reader-chosen format, in place or as a copy.
+   * Unsaved edits are written too; the encoding dialog says so.
+   */
+  const convert = (s: Session, format: SaveFormat, copy: boolean) =>
+    run(s, () => saveJob(s, copy, false, undefined, undefined, format));
+
+  /** `read` is the decoder: detection by default, a chosen encoding for Reinterpret. */
+  async function reload(s: Session, read = deps.read): Promise<boolean> {
     return run(s, async () => {
       if (!s.path) return false;
       const decisionSnapshot = snapshot(s);
@@ -248,7 +283,7 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
         if (decision === "save" && (!(await saveJob(s, false, false)) || s.dirty)) return false;
       }
       const before = snapshot(s);
-      const payload = await deps.read(s.path!);
+      const payload = await read(s.path!);
       if (!current(before)) {
         deps.notify("The document changed while reloading; your edits were kept.");
         return false;
@@ -381,6 +416,7 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
   return {
     save,
     saveAs,
+    convert,
     reload,
     poll,
     close,

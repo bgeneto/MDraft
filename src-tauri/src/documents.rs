@@ -128,10 +128,59 @@ pub fn read_document(path: String) -> Result<DocumentPayload, String> {
     let p = PathBuf::from(&path);
     let bytes = fs::read(&p).map_err(|e| format!("Could not read {path}: {e}"))?;
     let meta = fs::metadata(&p).map_err(|e| e.to_string())?;
-    let sha256 = sha256_hex(&bytes);
 
     let decoded =
         text_encoding::decode(&bytes).map_err(|error| format!("Could not open {path}: {error}"))?;
+    Ok(payload(&p, &bytes, &meta, decoded))
+}
+
+/// Reopen a document with an encoding the reader chose (Reinterpret).
+///
+/// Same payload as `read_document`, so the shell's reload path replaces the
+/// buffer. Decoding is strict: an encoding that would need a replacement
+/// character is refused rather than opened lossily.
+#[tauri::command]
+pub fn read_document_as(path: String, encoding: String) -> Result<DocumentPayload, String> {
+    let p = PathBuf::from(&path);
+    let codec = text_encoding::for_label(&encoding)?;
+    let bytes = fs::read(&p).map_err(|e| format!("Could not read {path}: {e}"))?;
+    let meta = fs::metadata(&p).map_err(|e| e.to_string())?;
+    let decoded = text_encoding::decode_as(&bytes, codec)
+        .map_err(|error| format!("Could not reopen {path}: {error}"))?;
+    Ok(payload(&p, &bytes, &meta, decoded))
+}
+
+/// What the file on disk contains, for the encoding dialog: the detector's
+/// choice, BOM, raw line-ending counts and how every offered encoding reads it.
+///
+/// Async so up to ~40 strict decodes of a large file run off the main thread.
+#[tauri::command]
+pub async fn inspect_document_encoding(path: String) -> Result<text_encoding::Inspection, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = fs::read(&path).map_err(|e| format!("Could not read {path}: {e}"))?;
+        Ok(text_encoding::inspect(&bytes))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Whether `content` can be stored in `encoding`, and where it first cannot.
+#[tauri::command]
+pub async fn check_encoding_fit(
+    content: String,
+    encoding: String,
+) -> Result<text_encoding::Fit, String> {
+    let codec = text_encoding::for_label(&encoding)?;
+    Ok(text_encoding::fit(&content, codec))
+}
+
+fn payload(
+    p: &Path,
+    bytes: &[u8],
+    meta: &fs::Metadata,
+    decoded: text_encoding::DecodedText,
+) -> DocumentPayload {
+    let sha256 = sha256_hex(bytes);
     let had_bom = decoded.had_bom;
     let encoding = text_encoding::label(decoded.encoding).to_string();
     let text = decoded.text;
@@ -140,9 +189,9 @@ pub fn read_document(path: String) -> Result<DocumentPayload, String> {
     let content = text.replace("\r\n", "\n").replace('\r', "\n");
     let tokens = crate::tokens::estimate_tokens(&content);
 
-    Ok(DocumentPayload {
+    DocumentPayload {
         path: p.to_string_lossy().to_string(),
-        name: display_name(&p),
+        name: display_name(p),
         directory: p
             .parent()
             .map(|d| d.to_string_lossy().to_string())
@@ -154,10 +203,10 @@ pub fn read_document(path: String) -> Result<DocumentPayload, String> {
         encoding,
         lossy: false,
         size: meta.len(),
-        modified_ms: modified_ms(&meta),
+        modified_ms: modified_ms(meta),
         read_only: meta.permissions().readonly(),
         sha256,
-    })
+    }
 }
 
 /// Save `content` to `path`, restoring the original line ending, BOM and

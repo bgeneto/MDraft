@@ -298,7 +298,7 @@ commands: [development.md](docs/agent-guide/development.md#debugging).
 
 ## Testing
 
-Eighty-two default layers, cheapest first, plus opt-in layers. **Run them in
+Eighty-four default layers, cheapest first, plus opt-in layers. **Run them in
 order when changing anything**, and run the cheapest layer that can catch the
 mistake rather than the whole suite out of habit.
 
