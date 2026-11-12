@@ -100,3 +100,6 @@ above), so the script prints `launching mdraft.exe` and then never returns. This
 is the harness, not a close regression. Run the script from a normal terminal for
 the release check, or use a redirected `Start-Process` plus `taskkill /PID`
 without `/F`, and own the profile as described above.
+
+**`Another MDraft test harness is running (pid 8680). No test state was changed.` — and a `--verbose` run piped through `grep` printed nothing at all**
+Another session or terminal had started `node scripts/test-all.mjs --only …`; the lock is correct and the filter simply hid the refusal. Find the holder with `Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object CommandLine -match 'test-all'`, do not kill it, and wait for it to exit (a background `until ! tasklist //FI "PID eq <pid>" | grep -q node.exe; do sleep 20; done`). Run the harness without a filter once, or `tail`, so a refusal is visible. One run that overlapped other UI activity on the machine showed 11 unrelated `smoke` failures (editor font size, Auto Save, math) and 6 `emmet` failures that were all green on the next quiet run; rerun on a quiet machine before diagnosing a failure that has nothing to do with the change.

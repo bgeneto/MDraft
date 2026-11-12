@@ -10,7 +10,7 @@ the failures these suites keep rediscovering.
 
 ## The order layers run in
 
-Fifty-nine default layers, cheapest first, plus opt-in layers. Run them in this
+Eighty-two default layers, cheapest first, plus opt-in layers. Run them in this
 order when changing anything. Each row links to the catalog file that carries
 its full description; the table is in run order, and the catalog file groups
 the same rows by subject.
@@ -47,6 +47,7 @@ the same rows by subject.
 | Word sync | `npm run word-sync` | [catalog/preview-and-sync.md](catalog/preview-and-sync.md) |
 | Auto-close matching | `npm run autoclose:unit` | [catalog/editor-and-documents.md](catalog/editor-and-documents.md) |
 | Completion layer (unit) | `npm run completion:unit` | [catalog/editor-and-documents.md](catalog/editor-and-documents.md) |
+| Emmet abbreviations (unit) | `npm run emmet:unit` | [catalog/editor-and-documents.md](catalog/editor-and-documents.md) |
 | LaTeX completion (unit) | `npm run completion:latex:unit` | [catalog/latex-and-formats.md](catalog/latex-and-formats.md) |
 | Local TEXMF libraries (unit) | `npm run latex:texmf:unit` | [catalog/latex-and-formats.md](catalog/latex-and-formats.md) |
 | Local TEXMF libraries | `npm test -- --only latex-texmf` | [catalog/latex-and-formats.md](catalog/latex-and-formats.md) |
@@ -61,6 +62,7 @@ the same rows by subject.
 | Read Aloud (unit) | `npm run read-aloud:unit` | [catalog/ai-accessibility-and-typography.md](catalog/ai-accessibility-and-typography.md) |
 | Read Aloud | `npm run read-aloud` | [catalog/ai-accessibility-and-typography.md](catalog/ai-accessibility-and-typography.md) |
 | Auto-close typing | `npm run autoclose` | [catalog/editor-and-documents.md](catalog/editor-and-documents.md) |
+| Emmet on Tab | `npm run emmet` | [catalog/editor-and-documents.md](catalog/editor-and-documents.md) |
 | Rich paste | `npm run paste` | [catalog/editor-and-documents.md](catalog/editor-and-documents.md) |
 | Image syntax | `npm run image:syntax` | [catalog/editor-and-documents.md](catalog/editor-and-documents.md) |
 | Image rules | `npm run image:rules` | [catalog/editor-and-documents.md](catalog/editor-and-documents.md) |

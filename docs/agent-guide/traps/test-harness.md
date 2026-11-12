@@ -159,3 +159,9 @@ cannot hide their results.
 ## Paste inventory on a CRLF checkout
 
 **`FAIL  independent baseline source hash: samples/feature-tour.md` and `FAIL  every baseline body/range/display kind: samples/feature-tour.md`** can occur together on Windows even when the source is unchanged. The inventory pins the LF bytes and offsets, but `git ls-files --eol samples/feature-tour.md` reported `i/lf w/crlf` on this host. Hashing after replacing CRLF with LF matched the pinned SHA-256; the apparent parser regression was a checkout line-ending mismatch. Verify the normalized hash and run the inventory against an LF checkout rather than updating the baseline to match CRLF.
+
+**A `dom-smoke.mjs` check fails as `FAIL  <label>` with no value, and the harness log it points to is gone**
+`const check = (label, ok) => expectations.push([label, Boolean(ok)])` takes two arguments and drops a third, so `check(label, ok, JSON.stringify(value))` prints nothing extra, and the harness deletes its staging directory and per-suite logs when it finishes unless `--keep` is given. Put a temporary `console.log("DEBUG", JSON.stringify(value))` before the check, run `node scripts/test-all.mjs --only smoke --no-build --verbose`, read the line, and remove it. Reading the label alone, "persists a change and is restored", pointed at persistence, which was fine.
+
+**A preferences check that clicks a checkbox twice "restores" nothing: `restored: false` although the first click worked**
+The Preferences panel re-renders its rows after every change, so a checkbox node captured before the first click is detached by the second, and `.click()` on a detached node does nothing, silently. Look the row up again before each click. The Typst auto-compile check in the same file clicks its captured node a second time and never reads the result, so its "restore" is unverified.

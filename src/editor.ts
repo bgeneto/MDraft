@@ -55,6 +55,8 @@ import { isCodeContext } from "./code-context";
 import { markdownProseSelection } from "./math-delimiters";
 import type { LinkTarget } from "./links";
 import { DEFAULT_EDITOR_FONT_SIZE } from "./fonts";
+import { emmetSupport } from "./emmet";
+import { emmetEngine } from "./emmet-language";
 import { htmlLanguage } from "./html-language";
 import { latexHeadingLine, latexShiftHeadingLine } from "./latex-commands";
 import { latexLanguage } from "./latex-language";
@@ -274,6 +276,11 @@ export interface EditorHandle {
   setAutoClose(options: { pairs: boolean; tags: boolean }): void;
   /** Turn completion on or off. Off removes the keymap with the extension. */
   setCompletion(enabled: boolean): void;
+  /**
+   * Turn Emmet abbreviation expansion on Tab on or off. It only ever applies to
+   * HTML and CSS documents; the language decides, the preference allows.
+   */
+  setEmmet(enabled: boolean): void;
   insertAtTop(text: string): void;
   wrapSelection(before: string, after: string, placeholder: string): void;
   onDocChanged(cb: (text: string) => void): void;
@@ -437,6 +444,8 @@ export interface EditorOptions {
   autoCloseTags?: boolean;
   /** Offer completions. Off installs nothing, so the keymap goes with it. */
   completion?: boolean;
+  /** Expand Emmet abbreviations with Tab in HTML and CSS documents. */
+  emmet?: boolean;
   /** Blink the caret. Off leaves a solid caret and stops a continuous repaint. */
   cursorBlink?: boolean;
   /** Resolve the link or image at a document offset. */
@@ -649,6 +658,13 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
   /// Completion is switched at runtime, so it cannot be a static extension: the
   /// preference turns it off and a language with no catalog must offer nothing.
   const completionCompartment = new Compartment();
+  /// Emmet follows the document type *and* the preference, and its engine arrives
+  /// asynchronously, so like completion it cannot be a static extension.
+  const emmetCompartment = new Compartment();
+  let emmetEnabled = options.emmet !== false;
+  /// The engine is a dynamic import. Only the newest request may install it, or a
+  /// tab switched away from HTML while it loads would still receive the Tab key.
+  let emmetGeneration = 0;
   let spellKey = "";
   let autoPairs = options.autoClosePairs ?? true;
   let autoTags = options.autoCloseTags ?? true;
@@ -731,6 +747,27 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
       })
       .catch((error) => {
         console.warn(`[editor] the HTML grammar could not be loaded: ${error}`);
+      });
+  };
+
+  /**
+   * Install Emmet's Tab binding for an HTML or CSS document, and remove it for
+   * every other kind. Called with the document type on every language change, so
+   * a restored tab never keeps the binding of the one it replaced.
+   */
+  const syncEmmet = (kind: DocumentLanguage): void => {
+    const generation = ++emmetGeneration;
+    if (!emmetEnabled || (kind !== "html" && kind !== "css")) {
+      view.dispatch({ effects: emmetCompartment.reconfigure([]) });
+      return;
+    }
+    void emmetEngine()
+      .then((engine) => {
+        if (generation !== emmetGeneration) return;
+        view.dispatch({ effects: emmetCompartment.reconfigure(emmetSupport(engine)) });
+      })
+      .catch((error) => {
+        console.warn(`[editor] the Emmet engine could not be loaded: ${error}`);
       });
   };
 
@@ -979,6 +1016,8 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     pairCompartment.of(autoPairs ? pairSupport() : []),
     tagCompartment.of(tagSupport("markdown")),
     completionCompartment.of(options.completion === false ? [] : completionSupport()),
+    // After completion, so an open popup accepts Tab before Emmet reads it.
+    emmetCompartment.of([]),
     linkSupport(options),
     keymap.of([...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, indentWithTab]),
     fontSizeCompartment.of(
@@ -1225,6 +1264,7 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
       // The tag closer follows the document type, not the grammar's promise:
       // switching to Typst must drop a handler that would insert `</a>`.
       view.dispatch({ effects: tagCompartment.reconfigure(tagSupport(kind)) });
+      syncEmmet(kind);
       if (kind === "javascript" || kind === "css" || kind === "json") {
         const name = kind === "javascript" ? "JavaScript" : kind === "css" ? "CSS" : "JSON";
         const description = languages.find((entry) => entry.name === name);
@@ -1276,6 +1316,12 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
       view.dispatch({
         effects: completionCompartment.reconfigure(enabled ? completionSupport() : []),
       });
+    },
+
+    setEmmet(enabled) {
+      if (enabled === emmetEnabled) return;
+      emmetEnabled = enabled;
+      syncEmmet(currentLanguage);
     },
 
     setAutoClose(next) {

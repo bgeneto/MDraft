@@ -588,6 +588,13 @@ pub struct Settings {
     /// binding together, so Tab goes back to being only indentation.
     #[serde(default = "default_true")]
     pub completion: bool,
+    /// Expand Emmet abbreviations with Tab in HTML and CSS documents.
+    ///
+    /// On by default because that is the feature; it only ever acts where an
+    /// abbreviation is allowed, and Tab still indents everywhere else. Turning it
+    /// off removes the Tab binding, so Tab is only indentation again.
+    #[serde(default = "default_true")]
+    pub emmet: bool,
 
     // ---- Preferences: Export ---------------------------------------------
     /// Pandoc export targets, in the order the menu shows them.
@@ -754,6 +761,7 @@ impl Default for Settings {
             auto_close_pairs: true,
             auto_close_tags: true,
             completion: true,
+            emmet: true,
 
             export_formats: default_export_formats(),
             after_open_location: false,
@@ -1410,6 +1418,19 @@ mod tests {
         let off = r#"{"completion":false}"#;
         let loaded = parse_settings(off).expect("the key loads");
         assert!(!loaded.completion);
+    }
+
+    #[test]
+    fn emmet_defaults_on_and_an_older_file_keeps_loading() {
+        // A file written before Emmet existed has no `emmet` key. It must load
+        // with the feature on, and an explicit off must survive.
+        let legacy = r#"{"viewMode":"split","theme":"light"}"#;
+        let loaded = parse_settings(legacy).expect("a legacy file loads");
+        assert!(loaded.emmet);
+
+        let off = r#"{"emmet":false}"#;
+        let loaded = parse_settings(off).expect("the key loads");
+        assert!(!loaded.emmet);
     }
 
     #[test]

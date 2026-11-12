@@ -82,3 +82,6 @@ in the workspace and archive showed the difference; attributing the failures to
 the Prettier upgrade would have been wrong. Create the archive with
 `git -c core.autocrlf=false archive HEAD` before extracting it, then rerun the
 check. Remaining warnings can be real baseline issues.
+
+**`error TS7016: Could not find a declaration file for module 'emmet'` although `There are types at '…/emmet/dist/index.d.ts', but this result could not be resolved when respecting package.json "exports"`**
+The package declares `"types"` but its `exports` map has only `import` and `require`, and `"moduleResolution": "bundler"` respects `exports`. Do not silence it with `skipLibCheck` (it does not apply to a missing declaration), `// @ts-expect-error` or a hand-written `declare module`, which would drift from the package. Map the specifier to the shipped typings in `tsconfig.json`: `"paths": { "emmet": ["./node_modules/emmet/dist/index.d.ts"] }`. Vite ignores `paths`, so the bundle still resolves the real module through `exports`. Verify with `npx tsc --noEmit`.
