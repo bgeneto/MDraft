@@ -1,6 +1,6 @@
 //! Pin the no-SyncTeX compilation contract and the chosen LuaLaTeX engine.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { createContext, runInContext } from "node:vm";
 import { compileDiagnostics, latexBuildFailed, openFileAt } from "../src/latex.ts";
 const adapter = readFileSync("src/latex.ts", "utf8");
@@ -13,6 +13,35 @@ assert.doesNotMatch(
 assert.match(compile, /sources:\s*Object\.entries\(files\)/);
 assert.match(compile, /mainFile:\s*snapshot\.mainFile/);
 assert.match(readFileSync("samples/latex-project/main.tex", "utf8"), /\\usepackage\{fontspec\}/);
+
+// The TeX Live year is one pinned unit (docs/adr/2026-11-12-engine-year-and-cache-namespace.md).
+// The SDK year, the worker shims, the scheme prefix, the asset root and the mirror
+// must agree, and nothing else would notice: the `mdraft-tex` URL carries no year
+// for the SDK to check.
+const year = adapter.match(/texliveVersion:\s*"(\d{4})"/)?.[1];
+assert.ok(year, "latex.ts hands the SDK a TeX Live year");
+const rust = readFileSync("src-tauri/src/latex.rs", "utf8");
+assert.match(rust, new RegExp(`const ASSET_PREFIX: &str = "/wasmtex/${year}/";`));
+assert.match(
+  rust,
+  new RegExp(`const ASSET_ROOT: &str = "https://corca-ai\\.github\\.io/wasmtex/wasmtex/${year}/";`),
+);
+const mirror = rust.match(
+  new RegExp(
+    `const MIRROR: &str = "https://texlive\\.corca\\.ai/snapshots/(${year}-[0-9a-f]{16})/${year}/";`,
+  ),
+);
+assert.ok(mirror, "the package mirror names the same year");
+assert.match(rust, new RegExp(`const MIRROR_REVISION: &str = "${mirror[1]}";`));
+assert.match(rust, new RegExp(`const ENGINE_RELEASE: &str = "${year}-[0-9a-f]{16}";`));
+for (const shim of ["wasmtex-luatex.worker.js", "wasmtex-bibtex.worker.js"]) {
+  assert.match(
+    readFileSync(`public/wasmtex/${year}/${shim}`, "utf8"),
+    new RegExp(`new URL\\("wasmtex/${year}/", __mdraftBase\\)`),
+    `${shim} reads the engine from the same year`,
+  );
+}
+assert.deepEqual(readdirSync("public/wasmtex"), [year], "no other year's shims remain");
 const pdf = new Uint8Array([37, 80, 68, 70]);
 assert.equal(
   latexBuildFailed({
@@ -67,7 +96,7 @@ runtime.importScripts = () =>
 `,
     runtime,
   );
-runInContext(readFileSync("public/wasmtex/2025/wasmtex-luatex.worker.js", "utf8"), runtime);
+runInContext(readFileSync(`public/wasmtex/${year}/wasmtex-luatex.worker.js`, "utf8"), runtime);
 assert.equal(runtime.locate(26, "luavlna"), "/tex/luavlna.tex");
 assert.equal(runtime.locate(51, "luavlna"), "/tex/luavlna.lua");
 assert.notEqual(runtime.locate(26, "luavlna"), runtime.locate(51, "luavlna"));

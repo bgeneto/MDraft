@@ -112,7 +112,7 @@ try {
   )
     throw new Error("The LaTeX preview did not start.");
   const setup = await evaluate(
-    '!![...document.querySelectorAll("button")].find(b => b.textContent.includes("Enable LuaLaTeX"))',
+    '!![...document.querySelectorAll("button")].find(b => b.textContent.includes("Enable bundled TeX"))',
   );
   if (setup && offline) throw new Error("The offline run started without the warmed engine.");
   if (setup) {
@@ -121,7 +121,7 @@ try {
       await new Promise(r=>setTimeout(r,500));
       [...document.querySelectorAll(".prefs-section")].find(n=>n.textContent.trim()==="LaTeX")?.click();
       await new Promise(r=>setTimeout(r,400));
-      const row=[...document.querySelectorAll(".prefs-row")].find(n=>/Enable bundled LuaLaTeX/i.test(n.querySelector(".prefs-label")?.textContent ?? ""));
+      const row=[...document.querySelectorAll(".prefs-row")].find(n=>/Enable bundled TeX/i.test(n.querySelector(".prefs-label")?.textContent ?? ""));
       const box=row?.querySelector("input[type=checkbox]"); if(box && !box.checked) box.click();
       await new Promise(r=>setTimeout(r,900)); open?.click();
     })()`);

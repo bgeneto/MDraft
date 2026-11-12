@@ -1029,10 +1029,10 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
         ]
       : []),
 
-    { kind: "heading", label: "Bundled LuaLaTeX" },
+    { kind: "heading", label: "Bundled TeX distribution" },
     {
       kind: "checkbox",
-      label: "Enable bundled LuaLaTeX",
+      label: "Enable bundled TeX",
       help: "Downloads the engine on first use. Compiles .tex files in the preview.",
       get: () => s().latexEnabled,
       set: (value) => {
@@ -1051,8 +1051,8 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
               ? "Installed and enabled."
               : "Installed, but the switch is off."
             : latex.enabled
-              ? "Enabled, but the engine files are missing. Toggle the switch off and on to download them again."
-              : "Not installed. Turn the switch on to download about 10 MiB of verified engine files."
+              ? "Enabled, but the engine files are missing or out of date. Toggle the switch off and on to download the TeX Live 2026 engine (about 12 MiB)."
+              : "Not installed. Turn the switch on to download about 12 MiB of verified engine files."
           : "Checking…"),
     },
     {
@@ -2811,6 +2811,18 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
     if (activeId === "latex" && host.texmfBusy() === null) {
       void host.refreshTexmf().then(render);
     }
+    // The package cache grows during compiles, and the engine can be installed
+    // from Tools or the preview without this panel open. Re-read it on every
+    // open and redraw only when the answer changed, like the voices below.
+    const latexBefore = JSON.stringify([host.latexCache(), host.latexCacheError()]);
+    void host.refreshLatexCache().then(() => {
+      if (
+        !overlay.hidden &&
+        JSON.stringify([host.latexCache(), host.latexCacheError()]) !== latexBefore
+      ) {
+        render();
+      }
+    });
     query = "";
     searchEl.value = "";
     // A failed scan is retried only when the panel is reopened, never from the

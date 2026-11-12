@@ -2051,6 +2051,24 @@ let latexPreview: LatexPreview | null = null;
 /** The last measured LaTeX package cache, or null before the first read. */
 let latexCacheInfo: api.LatexCacheInfo | null = null;
 let latexCacheError: string | null = null;
+
+/**
+ * Re-read whether the bundled engine is installed and how big its cache is.
+ *
+ * Preferences fetches this only while the cached answer is empty, so every
+ * action that changes either fact has to call this before it redraws. Without
+ * it the panel kept the first answer ("Not installed") after a successful
+ * download until the app restarted.
+ */
+async function refreshLatexCacheInfo(): Promise<void> {
+  try {
+    latexCacheInfo = await api.latexCacheInfo();
+    latexCacheError = null;
+  } catch (error) {
+    latexCacheInfo = null;
+    latexCacheError = String(error);
+  }
+}
 /** What validation proved in this session, for the Preferences note. */
 let latexNativeCaps: api.LatexNativeCapabilities | null = null;
 /** Metadata-only candidates from the last Find, or null before one. */
@@ -2988,12 +3006,12 @@ function latexEnableNote(status?: api.LatexEngineStatus | null): void {
   const text = document.createElement("span");
   text.className = "typst-note-text";
   text.textContent = status?.bundledEnabled
-    ? "The bundled LuaLaTeX engine is on, but its files are missing. Turn it off and on in Preferences › LaTeX to download them again."
-    : "LaTeX compiles .tex documents locally. Enable the bundled LuaLaTeX engine, or choose a TeX distribution already on this computer in Preferences › LaTeX. Your document stays on this device.";
+    ? "Bundled TeX is on, but its files are missing or out of date. Press Retry setup, or turn it off and on in Preferences › LaTeX, to download the TeX Live 2026 engine (about 12 MiB)."
+    : "LaTeX compiles .tex documents locally. Enable bundled TeX, or choose a TeX distribution already on this computer in Preferences › LaTeX. Your document stays on this device.";
   const button = document.createElement("button");
   button.type = "button";
   button.className = "typst-notebutton";
-  button.textContent = status?.bundledEnabled ? "Retry setup" : "Enable LuaLaTeX…";
+  button.textContent = status?.bundledEnabled ? "Retry setup" : "Enable bundled TeX…";
   button.addEventListener("click", () => {
     button.disabled = true;
     button.textContent = "Downloading…";
@@ -3004,12 +3022,13 @@ function latexEnableNote(status?: api.LatexEngineStatus | null): void {
         // before the next render; otherwise the note would come back.
         settings.latexEnabled = true;
         persist();
+        void refreshLatexCacheInfo().then(() => preferences?.refresh());
         scheduleRender(true);
       })
       .catch((error: unknown) => {
         button.disabled = false;
         button.textContent = "Retry setup";
-        toast(`Could not enable LuaLaTeX: ${String(error)}`, 6200);
+        toast(`Could not enable bundled TeX: ${String(error)}`, 6200);
       });
   });
   const installed = document.createElement("button");
@@ -6108,7 +6127,7 @@ async function latexSetup(): Promise<void> {
   try {
     enabled = await api.latexStatus();
   } catch (error) {
-    await message(String(error), { title: "Could not look for LuaLaTeX", kind: "error" });
+    await message(String(error), { title: "Could not look for bundled TeX", kind: "error" });
     return;
   }
 
@@ -6125,41 +6144,42 @@ async function latexSetup(): Promise<void> {
         ? `\nDownloaded packages and fonts: ${(cache.bytes / 1048576).toFixed(1)} MiB, under a ${cache.limitMb} MiB ceiling.`
         : "\nNo TeX packages have been downloaded yet; they arrive on demand.";
     await message(
-      "LuaLaTeX is ready.\n\n" +
+      "Bundled TeX is ready.\n\n" +
         "It compiles .tex documents locally. Your document never leaves this device." +
         size +
         "\n\nExport › PDF writes the PDF the preview is showing.",
-      { title: "LuaLaTeX", kind: "info" },
+      { title: "Bundled TeX", kind: "info" },
     );
     return;
   }
 
   const agreed = await ask(
-    "LuaLaTeX was not found, so .tex documents have no preview.\n\n" +
-      "MDraft can download the verified engine files — about 10 MiB — into its own data folder. " +
+    "Bundled TeX is not installed, so .tex documents have no preview.\n\n" +
+      "MDraft can download the verified TeX Live 2026 engine files — about 12 MiB — into its own data folder. " +
       "Additional TeX packages and fonts are fetched on demand and cached locally. " +
       "Nothing is installed system-wide, no administrator rights are needed, and turning it off " +
       "in Preferences leaves the downloaded files on disk.\n\n" +
       "Your document stays on this device.",
-    { title: "Install LuaLaTeX", kind: "info", okLabel: "Download", cancelLabel: "Cancel" },
+    { title: "Install bundled TeX", kind: "info", okLabel: "Download", cancelLabel: "Cancel" },
   );
   if (!agreed) return;
 
-  const notice = toast("Downloading the LuaLaTeX engine…", 0);
+  const notice = toast("Downloading bundled TeX…", 0);
   try {
     await api.installLatex();
     settings.latexEnabled = true;
     persist();
     notice.dismiss();
+    await refreshLatexCacheInfo();
     preferences?.refresh();
     scheduleRender(true);
     await message(
-      "LuaLaTeX is ready.\n\nOpen or save a .tex file and its preview will appear beside it.",
-      { title: "LuaLaTeX installed", kind: "info" },
+      "Bundled TeX is ready.\n\nOpen or save a .tex file and its preview will appear beside it.",
+      { title: "Bundled TeX installed", kind: "info" },
     );
   } catch (error) {
     notice.dismiss();
-    await message(String(error), { title: "Could not install LuaLaTeX", kind: "error" });
+    await message(String(error), { title: "Could not install bundled TeX", kind: "error" });
   }
 }
 
@@ -10277,27 +10297,20 @@ async function boot(): Promise<void> {
     setupTypst: () => typstSetup(),
     latexCache: () => latexCacheInfo,
     latexCacheError: () => latexCacheError,
-    refreshLatexCache: async () => {
-      try {
-        latexCacheInfo = await api.latexCacheInfo();
-        latexCacheError = null;
-      } catch (error) {
-        latexCacheInfo = null;
-        latexCacheError = String(error);
-      }
-    },
+    refreshLatexCache: refreshLatexCacheInfo,
     installLatex: async () => {
-      const notice = toast("Downloading the LuaLaTeX engine…", 0);
+      const notice = toast("Downloading bundled TeX…", 0);
       try {
         await api.installLatex();
         settings.latexEnabled = true;
         persist();
         notice.dismiss();
-        toast("LuaLaTeX is enabled.");
+        toast("Bundled TeX is enabled.");
       } catch (error) {
         notice.dismiss();
-        await message(String(error), { title: "Could not enable LuaLaTeX", kind: "error" });
+        await message(String(error), { title: "Could not enable bundled TeX", kind: "error" });
       }
+      await refreshLatexCacheInfo();
       preferences.refresh();
     },
     disableLatex: async () => {
@@ -10305,10 +10318,11 @@ async function boot(): Promise<void> {
         await api.latexDisable();
         settings.latexEnabled = false;
         persist();
-        toast("LuaLaTeX is off. The downloaded files stay on disk.");
+        toast("Bundled TeX is off. The downloaded files stay on disk.");
       } catch (error) {
-        await message(String(error), { title: "Could not turn LuaLaTeX off", kind: "error" });
+        await message(String(error), { title: "Could not turn bundled TeX off", kind: "error" });
       }
+      await refreshLatexCacheInfo();
       preferences.refresh();
     },
     clearLatexCache: async () => {
@@ -10327,6 +10341,7 @@ async function boot(): Promise<void> {
       } catch (error) {
         await message(String(error), { title: "Could not clear the cache", kind: "error" });
       }
+      await refreshLatexCacheInfo();
       preferences.refresh();
     },
     nativeStatus: () => latexEngine,

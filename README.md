@@ -40,8 +40,8 @@ projects easy to navigate.
   Typst and LaTeX share Compile/Cancel, Auto-compile, Save PDF and a Logs toggle;
   compiler messages stay separate from the rendered document.
 - **LaTeX** — syntax colouring, `%` comments, an outline read from `\section`
-  commands, and the compiled PDF in the preview. The bundled LuaLaTeX engine
-  needs no TeX installation; a TeX distribution already on the computer can be
+  commands, and the compiled PDF in the preview. The bundled TeX distribution
+  needs no separate installation; a TeX distribution already on the computer can be
   selected instead, as a separate program that may install its own packages.
 - **HTML** — preview a page with its own CSS, images and scripts in a sandboxed
   view alongside its source. In HTML and CSS documents, Tab expands an Emmet
@@ -57,8 +57,8 @@ projects easy to navigate.
 Typst preview and PDF compilation require the Typst compiler. MDraft can
 install it for you on Windows and Linux.
 
-LaTeX is opt-in: enabling the bundled engine downloads about 10 MiB of verified
-LuaLaTeX files, and the TeX packages a document needs are fetched on demand and
+LaTeX is opt-in: enabling bundled TeX downloads about 12 MiB of verified
+engine files, and the TeX packages a document needs are fetched on demand and
 cached locally. Your own classes and packages can live in folders registered
 once under *Preferences › LaTeX › Local packages* and are found by
 every project, with either engine. *Preferences › LaTeX* can instead use a TeX
@@ -172,7 +172,7 @@ against its pinned checksum and cached); later formats work offline.
 ## Learn more
 
 - [User guide](docs/guide.md) — editing, previews, shortcuts and troubleshooting.
-- [LaTeX](docs/latex.md) — the local LuaLaTeX engine, the project snapshot and PDF export.
+- [LaTeX](docs/latex.md) — the bundled TeX distribution, the project snapshot and PDF export.
 - [Export and conversion](docs/export.md) — supported formats and dependencies.
 - [Typography](docs/typography.md) — fonts, presets and OpenType options.
 - [Contributing](CONTRIBUTING.md) — report a problem, build MDraft or contribute.

@@ -75,13 +75,23 @@ const enabled = await page.evaluate(`
     section?.click();
     await new Promise((resolve) => setTimeout(resolve, 400));
     const row = [...document.querySelectorAll(".prefs-row")]
-      .find((node) => /Enable bundled LuaLaTeX/i.test(node.querySelector(".prefs-label")?.textContent ?? ""));
+      .find((node) => /Enable bundled TeX/i.test(node.querySelector(".prefs-label")?.textContent ?? ""));
     const box = row?.querySelector("input[type=checkbox]");
     if (!box) return "no checkbox";
     if (!box.checked) box.click();
-    await new Promise((resolve) => setTimeout(resolve, 900));
+    // The download takes seconds. The panel must report the result by itself,
+    // without a restart, so poll the Engine note the reader is looking at.
+    const engineNote = () =>
+      [...document.querySelectorAll(".prefs-row")]
+        .find((node) => node.querySelector(".prefs-label")?.textContent.trim() === "Engine")
+        ?.querySelector(".prefs-note")?.textContent ?? "";
+    const deadline = Date.now() + 60000;
+    while (Date.now() < deadline && !/Installed and enabled/.test(engineNote())) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    const note = engineNote();
     open?.click();
-    return "enabled";
+    return /Installed and enabled/.test(note) ? "enabled" : "stale engine note: " + note;
   })().catch((error) => "error: " + String(error))
 `);
 
@@ -105,6 +115,11 @@ if (status !== "true") {
   process.exit(0);
 }
 check(status === "true", "latex_status reports the engine ready", status);
+check(
+  enabled === "already on" || enabled === "enabled",
+  "Preferences reports the engine installed once the download finishes, without a restart",
+  enabled,
+);
 
 // A reader's failing project can be inspected without editing or saving it.
 if (process.env.MDRAFT_LATEX_NAVIGATION_SAMPLE) {
