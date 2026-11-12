@@ -14,7 +14,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
@@ -1440,15 +1440,17 @@ mod tests {
         roots[0].enabled = false;
         let saved = roots.clone();
         for path in [b.clone(), b.join("missing"), PathBuf::from("relative")] {
-            assert!(apply(
-                &mut roots,
-                TexmfAction::SetPrimary {
-                    path: Some(path.display().to_string()),
-                    layout: None
-                },
-                &resolver
-            )
-            .is_err());
+            assert!(
+                apply(
+                    &mut roots,
+                    TexmfAction::SetPrimary {
+                        path: Some(path.display().to_string()),
+                        layout: None
+                    },
+                    &resolver
+                )
+                .is_err()
+            );
             assert_eq!(roots, saved, "failed replacement must keep the old list");
         }
         apply(
@@ -1488,35 +1490,41 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(roots[0].layout, Layout::Packages);
-        assert!(apply(
-            &mut roots,
-            TexmfAction::AddFolder {
-                path: a.display().to_string(),
-                layout: None
-            },
-            &resolve
-        )
-        .unwrap_err()
-        .contains("already registered"));
-        assert!(apply(
-            &mut roots,
-            TexmfAction::AddFolder {
-                path: inner.display().to_string(),
-                layout: None
-            },
-            &resolve
-        )
-        .unwrap_err()
-        .contains("overlaps"));
-        assert!(apply(
-            &mut roots,
-            TexmfAction::AddFolder {
-                path: "relative/path".into(),
-                layout: None
-            },
-            &resolve
-        )
-        .is_err());
+        assert!(
+            apply(
+                &mut roots,
+                TexmfAction::AddFolder {
+                    path: a.display().to_string(),
+                    layout: None
+                },
+                &resolve
+            )
+            .unwrap_err()
+            .contains("already registered")
+        );
+        assert!(
+            apply(
+                &mut roots,
+                TexmfAction::AddFolder {
+                    path: inner.display().to_string(),
+                    layout: None
+                },
+                &resolve
+            )
+            .unwrap_err()
+            .contains("overlaps")
+        );
+        assert!(
+            apply(
+                &mut roots,
+                TexmfAction::AddFolder {
+                    path: "relative/path".into(),
+                    layout: None
+                },
+                &resolve
+            )
+            .is_err()
+        );
         let second = apply(
             &mut roots,
             TexmfAction::AddFolder {
@@ -1537,15 +1545,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(roots[0].id, second);
-        assert!(apply(
-            &mut roots,
-            TexmfAction::Move {
-                id: second.clone(),
-                offset: -1
-            },
-            &resolve
-        )
-        .is_err());
+        assert!(
+            apply(
+                &mut roots,
+                TexmfAction::Move {
+                    id: second.clone(),
+                    offset: -1
+                },
+                &resolve
+            )
+            .is_err()
+        );
         apply(
             &mut roots,
             TexmfAction::SetEnabled {
@@ -1565,15 +1575,17 @@ mod tests {
                 .unwrap(),
             personal
         );
-        assert!(apply(
-            &mut roots,
-            TexmfAction::SetLayout {
-                id: personal.clone(),
-                layout: Layout::Packages
-            },
-            &resolve
-        )
-        .is_ok());
+        assert!(
+            apply(
+                &mut roots,
+                TexmfAction::SetLayout {
+                    id: personal.clone(),
+                    layout: Layout::Packages
+                },
+                &resolve
+            )
+            .is_ok()
+        );
         apply(&mut roots, TexmfAction::Remove { id }, &resolve).unwrap();
         assert_eq!(roots.len(), 2);
         // Remove never touched the folder itself.

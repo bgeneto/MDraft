@@ -47,6 +47,8 @@ function session(id, overrides = {}) {
     revision: 0,
     lineEnding: "\n",
     hadBom: false,
+    encoding: "UTF-8",
+    encodingBlocked: false,
     lossy: false,
     size: 6,
     modifiedMs: 100,
@@ -329,6 +331,7 @@ function lifecycleHarness(overrides = {}) {
       tokens: 1,
       lineEnding: "\n",
       hadBom: false,
+      encoding: "UTF-8",
       lossy: false,
       readOnly: false,
       ...disk.get(path),
@@ -441,18 +444,60 @@ function lifecycleHarness(overrides = {}) {
 {
   const h = lifecycleHarness();
   let expected = "unset";
+  let forwardedEncoding = "unset";
   const realWrite = h.deps.write;
   h.deps.write = async (...args) => {
     expected = args[4];
+    forwardedEncoding = args[5];
     return realWrite(...args);
   };
   h.edit(h.first, "checked save");
   await h.controller.save(h.first);
   check(expected === digest("base"), "save forwards the session's baseline hash");
+  check(forwardedEncoding === h.first.encoding, "save forwards the document's encoding");
   check(
     h.first.sha256 === digest("checked save") && !h.first.dirty,
     "a successful checked save adopts the returned digest",
   );
+  h.recovery.dispose();
+}
+
+{
+  // A save the chosen encoding cannot represent is refused without inventing a
+  // replacement character, and Save As falls back to UTF-8 for the copy.
+  const h = lifecycleHarness();
+  h.first.encoding = "windows-1252";
+  h.edit(h.first, "café 😀");
+  h.deps.write = async (_path, _content, _eol, _bom, _expected, encoding) => {
+    if (encoding === "windows-1252") {
+      return { written: false, change: "encoding", size: 0, modifiedMs: 0, sha256: "" };
+    }
+    return {
+      written: true,
+      change: "saved",
+      size: 9,
+      modifiedMs: 201,
+      sha256: digest("café 😀"),
+    };
+  };
+  const refused = await h.controller.save(h.first);
+  check(!refused && h.first.encodingBlocked, "an unmappable save sets the encoding-blocked flag");
+  check(h.first.dirty, "an encoding refusal leaves the buffer dirty");
+  check(
+    h.notices.some((text) => text.includes("cannot store")),
+    "an encoding refusal is explained",
+  );
+  h.deps.choosePath = async () => h.first.path;
+  const samePath = await h.controller.saveAs(h.first);
+  check(
+    !samePath && h.first.encoding === "windows-1252",
+    "Save As cannot UTF-8-convert the protected original in place",
+  );
+  h.deps.choosePath = async () => "café-utf8.md";
+  const copy = await h.controller.saveAs(h.first, "café-utf8.md");
+  check(copy && h.first.encoding === "UTF-8", "Save As writes the blocked text as UTF-8");
+  check(h.first.path === "café-utf8.md", "the UTF-8 copy adopts its new path");
+  check(!h.first.encodingBlocked, "a successful UTF-8 copy clears the blocked state");
   h.recovery.dispose();
 }
 
@@ -1065,6 +1110,12 @@ function shellHarness(names, extra = {}) {
     suppressPreviewScrollUntil: 0,
     assistant: null,
     languageForExtension: () => "markdown",
+    // displayDoc reads these spelling globals; the ownership tests below do not
+    // exercise spelling, so the harness supplies neutral values.
+    effectiveSpellingLanguage: () => "en",
+    ignoredSpellingWords: () => [],
+    spellingSessionKey: () => "test",
+    preferences: null,
     console: { warn() {} },
     recovery: {
       schedule: (s, text) => journal.set(s.id, text),
@@ -1102,6 +1153,7 @@ function filePayload(path, content) {
     content,
     lineEnding: "\n",
     hadBom: false,
+    encoding: "UTF-8",
     lossy: false,
     readOnly: false,
     size: content.length,
@@ -1160,6 +1212,7 @@ const journalEntry = (path, content, updatedMs) => ({
   updatedMs,
   lineEnding: "\n",
   hadBom: false,
+  encoding: "UTF-8",
   lossy: false,
   readOnly: false,
   baseModifiedMs: 1,

@@ -23,7 +23,7 @@
 use std::collections::HashMap;
 
 use crate::ai::naming;
-use crate::ai::prompt::{AiAction};
+use crate::ai::prompt::AiAction;
 
 /// The file's name, as the reader sees it in an error message.
 pub const FILE_NAME: &str = "ai-prompts.md";
@@ -283,7 +283,8 @@ pub fn parse(raw: &str) -> Result<Overrides, String> {
         while index < lines.len() && lines[index].trim().is_empty() {
             index += 1;
         }
-        let Some((character, length)) = lines.get(index).and_then(|line| opening_fence(line)) else {
+        let Some((character, length)) = lines.get(index).and_then(|line| opening_fence(line))
+        else {
             return Err(format!(
                 "{FILE_NAME} line {}: `{id}` needs its prompt in a fenced block (``` or ~~~) on the lines below",
                 index + 1
@@ -427,7 +428,10 @@ mod tests {
     #[test]
     fn a_partial_file_overrides_one_section() {
         let parsed = parse("## summarize\n\n```text\nWrite three words.\n```\n").expect("parse");
-        assert_eq!(parsed.action(AiAction::Summarize), Some("Write three words."));
+        assert_eq!(
+            parsed.action(AiAction::Summarize),
+            Some("Write three words.")
+        );
         assert_eq!(parsed.action(AiAction::Improve), None);
         assert_eq!(parsed.customised(), 1);
     }
@@ -440,8 +444,10 @@ mod tests {
 
     #[test]
     fn unknown_sections_are_refused_with_their_line() {
-        let error = parse("## preamble\n\n```\nx {markup} {syntax_rule}\n```\n\n## summarise\n\n```\nx\n```\n")
-            .expect_err("unknown section");
+        let error = parse(
+            "## preamble\n\n```\nx {markup} {syntax_rule}\n```\n\n## summarise\n\n```\nx\n```\n",
+        )
+        .expect_err("unknown section");
         assert!(error.contains("line 7"), "{error}");
         assert!(error.contains("unknown action `summarise`"), "{error}");
     }
@@ -456,7 +462,10 @@ mod tests {
     #[test]
     fn a_section_without_a_fence_is_refused() {
         let error = parse("## summarize\n\nWrite three words.\n").expect_err("no fence");
-        assert!(error.contains("needs its prompt in a fenced block"), "{error}");
+        assert!(
+            error.contains("needs its prompt in a fenced block"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -473,7 +482,8 @@ mod tests {
 
     #[test]
     fn placeholders_are_checked_against_the_action() {
-        let error = parse("## summarize\n\n```\nUse {tone}.\n```\n").expect_err("wrong placeholder");
+        let error =
+            parse("## summarize\n\n```\nUse {tone}.\n```\n").expect_err("wrong placeholder");
         assert!(error.contains("cannot fill {tone}"), "{error}");
         let unknown =
             parse("## summarize\n\n```\nUse {target_lenght}.\n```\n").expect_err("unknown");
@@ -484,7 +494,9 @@ mod tests {
     fn the_preamble_must_keep_the_markup_contract() {
         let error = parse("## preamble\n\n```\nYou are helpful.\n```\n").expect_err("no markup");
         assert!(error.contains("must keep {markup}"), "{error}");
-        assert!(parse("## preamble\n\n```\nMarkup {markup}. {syntax_rule}\nBe brief.\n```\n").is_ok());
+        assert!(
+            parse("## preamble\n\n```\nMarkup {markup}. {syntax_rule}\nBe brief.\n```\n").is_ok()
+        );
     }
 
     #[test]
@@ -515,7 +527,10 @@ mod tests {
     fn crlf_and_a_bom_are_accepted() {
         let file = "\u{feff}## summarize\r\n\r\n```text\r\nWrite three words.\r\n```\r\n";
         let parsed = parse(file).expect("parse");
-        assert_eq!(parsed.action(AiAction::Summarize), Some("Write three words."));
+        assert_eq!(
+            parsed.action(AiAction::Summarize),
+            Some("Write three words.")
+        );
     }
 
     #[test]
@@ -541,7 +556,11 @@ mod tests {
         assert_eq!(fence_for("Use ``` fences."), "```");
         assert_eq!(fence_for("Write:\n```\ncode\n```"), "````");
         assert_eq!(fence_for("No code here."), "```");
-        let file = format!("## improve\n\n{}\nWrite:\n```\ncode\n```\n{}\n", fence_for("Write:\n```\ncode\n```"), fence_for("Write:\n```\ncode\n```"));
+        let file = format!(
+            "## improve\n\n{}\nWrite:\n```\ncode\n```\n{}\n",
+            fence_for("Write:\n```\ncode\n```"),
+            fence_for("Write:\n```\ncode\n```")
+        );
         assert_eq!(
             parse(&file).expect("parse").action(AiAction::Improve),
             Some("Write:\n```\ncode\n```")
@@ -581,7 +600,11 @@ mod tests {
     fn the_generated_file_names_every_action() {
         let file = serialize_defaults();
         for action in AiAction::ALL {
-            assert!(file.contains(&format!("## {}", action.id())), "{}", action.id());
+            assert!(
+                file.contains(&format!("## {}", action.id())),
+                "{}",
+                action.id()
+            );
         }
         assert!(file.contains("## preamble"));
         assert!(file.contains("## suggestFileName"));

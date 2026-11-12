@@ -128,10 +128,7 @@ impl TagFilter {
                 }
                 State::Inside => {
                     let close = format!("</{}>", self.tag);
-                    let secondary_open = self
-                        .secondary
-                        .as_ref()
-                        .map(|tag| format!("<{}>", tag));
+                    let secondary_open = self.secondary.as_ref().map(|tag| format!("<{}>", tag));
                     let close_at = find_ci(&self.buffer, &close);
                     let secondary_at = secondary_open
                         .as_deref()
@@ -430,7 +427,8 @@ mod tests {
 
     #[test]
     fn a_code_block_inside_the_answer_is_kept() {
-        let (text, _) = collect(&["<mdraft-revised>See this:\n```js\nx()\n```\nDone.</mdraft-revised>"]);
+        let (text, _) =
+            collect(&["<mdraft-revised>See this:\n```js\nx()\n```\nDone.</mdraft-revised>"]);
         assert!(text.contains("```js"));
         assert!(text.ends_with("Done."));
     }
@@ -445,8 +443,8 @@ mod tests {
     #[test]
     fn notes_are_not_streamed() {
         let mut filter = TagFilter::new("mdraft-revised", Some("mdraft-notes"));
-        let visible =
-            filter.feed("<mdraft-revised>Answer\n</mdraft-revised><mdraft-notes>secret</mdraft-notes>");
+        let visible = filter
+            .feed("<mdraft-revised>Answer\n</mdraft-revised><mdraft-notes>secret</mdraft-notes>");
         assert_eq!(visible, "Answer\n");
         assert!(!visible.contains("secret"));
     }

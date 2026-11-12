@@ -346,3 +346,12 @@ Lezer's CSS grammar recovers a half-typed property as the selector of a nested r
 
 **A Preferences action looks like a click that did nothing, because every toast renders behind the panel**
 `.toast` was `z-index: 50` while `.prefs-overlay` is `z-index: 100`, so progress and result toasts started from a Preferences row — including *Look for TeX in WSL*, whose only feedback for a completed look is `toast()` — were painted under the panel. The action itself ran and the row changed state, so nothing in the backend looked broken; the reader saw no reaction and clicked again. Set the toast above the overlay (and its popup layers, 120/121) and disable a button for the duration of its action: repeating *Look for TeX in WSL* used to start another WSL session, another validation and another probe compile. There was a second, independent reason the result was invisible: the actions hold a progress toast with `ms=0`, show a result toast, then call the progress handle's `dismiss()` in `finally` — the handle hid the shared element regardless of which toast was showing. `toast()` now tags each message with a generation, and a stale handle is a no-op.
+
+**`Ignore removes the mark without saving a personal word` fails with `{"saved":false,"marks":["mispeling"]}`**
+The session ignore was recorded, but a CodeMirror compartment reconfiguration
+retained the same view-plugin instance and its existing decorations. The first
+diagnosis was a slow dictionary response or a stale personal-word setting; a
+poll showed the setting was absent while the same mark remained for seconds.
+The plugin must notice its configuration facet changing, invalidate old marks
+and schedule a new pass. The real-dictionary spelling UI test now exercises
+Ignore and Add separately, including a read-only document and a tab switch.

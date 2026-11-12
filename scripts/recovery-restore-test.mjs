@@ -148,6 +148,7 @@ async function journalEntry(id, file, content) {
     content,
     lineEnding: "\n",
     hadBom: false,
+    encoding: "UTF-8",
     lossy: false,
     readOnly: false,
     baseModifiedMs: stat.modifiedMs,

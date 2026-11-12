@@ -1,17 +1,17 @@
 //! MDraft — a Tauri 2 markdown editor.
 
+mod ai;
 mod cancel_registry;
 mod clipboard;
 mod documents;
 mod export;
 mod fonts;
 mod html_preview;
-mod ai;
 mod images;
-mod launch;
 mod latex;
 mod latex_native;
 mod latex_texmf;
+mod launch;
 #[cfg(target_os = "linux")]
 mod linux_webkit_env;
 mod menu;
@@ -21,6 +21,7 @@ mod settings;
 mod speech;
 mod spellcheck;
 mod tex_fmt;
+mod text_encoding;
 mod tokens;
 mod typst;
 
@@ -125,7 +126,7 @@ pub fn run() {
             latex::install_latex,
             latex::latex_project_snapshot,
             latex::save_compiled_pdf,
-    latex::print_compiled_pdf,
+            latex::print_compiled_pdf,
             latex::latex_cache_info,
             latex::latex_disable,
             latex::latex_clear_cache,

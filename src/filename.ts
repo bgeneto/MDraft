@@ -229,10 +229,18 @@ function isStructuralLine(line: string, language: DocumentLanguage): boolean {
     // A comment, a preamble command, or a sectioning command that is not a
     // title: none of these is the document's prose.
     if (/^%/.test(trimmed)) return true;
-    if (/^\\(?:documentclass|usepackage|input|include|includeonly|bibliography|bibliographystyle|addbibresource|newcommand|renewcommand|providecommand|def|let|graphicspath|hypersetup|pagestyle|thispagestyle|setlength|setcounter|label|ref|eqref|cite|nocite|begin|end|maketitle|tableofcontents|appendix|clearpage|newpage|vspace|hspace|noindent|centering|includegraphics|footnote|index)\b/.test(trimmed)) {
+    if (
+      /^\\(?:documentclass|usepackage|input|include|includeonly|bibliography|bibliographystyle|addbibresource|newcommand|renewcommand|providecommand|def|let|graphicspath|hypersetup|pagestyle|thispagestyle|setlength|setcounter|label|ref|eqref|cite|nocite|begin|end|maketitle|tableofcontents|appendix|clearpage|newpage|vspace|hspace|noindent|centering|includegraphics|footnote|index)\b/.test(
+        trimmed,
+      )
+    ) {
       return true;
     }
-    if (/^\\(?:part|chapter|section|subsection|subsubsection|paragraph|subparagraph|title)\b/.test(trimmed)) {
+    if (
+      /^\\(?:part|chapter|section|subsection|subsubsection|paragraph|subparagraph|title)\b/.test(
+        trimmed,
+      )
+    ) {
       return true;
     }
   }

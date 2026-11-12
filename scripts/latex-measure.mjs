@@ -73,7 +73,9 @@ if (!engine) {
 const assets = directorySize(join(engine, "assets"));
 console.log("=== the engine on disk ===");
 console.log(`  engine directory      ${engine}`);
-console.log(`  assets                ${(assets.total / 1048576).toFixed(1)} MiB in ${assets.files} files`);
+console.log(
+  `  assets                ${(assets.total / 1048576).toFixed(1)} MiB in ${assets.files} files`,
+);
 for (const name of readdirSync(join(engine, "assets"))) {
   const size = statSync(join(engine, "assets", name)).size;
   if (size > 100 * 1024) console.log(`    ${name.padEnd(34)} ${(size / 1048576).toFixed(2)} MiB`);
@@ -109,22 +111,34 @@ console.log("\n=== the snapshot the compile receives ===");
 for (const path of referenced) {
   const size = statSync(path).size;
   snapshotBytes += size;
-  console.log(`  ${path.slice(FIXTURE.length + 1).padEnd(28)} ${size.toLocaleString().padStart(9)} bytes`);
+  console.log(
+    `  ${path.slice(FIXTURE.length + 1).padEnd(28)} ${size.toLocaleString().padStart(9)} bytes`,
+  );
 }
-console.log(`  total                 ${snapshotBytes.toLocaleString()} bytes (${(snapshotBytes / 1024).toFixed(1)} KiB)`);
+console.log(
+  `  total                 ${snapshotBytes.toLocaleString()} bytes (${(snapshotBytes / 1024).toFixed(1)} KiB)`,
+);
 // Base64 is 4 bytes per 3, and the IPC carries it as a JSON string.
 const base64 = Math.ceil(snapshotBytes / 3) * 4;
-console.log(`  base64 over IPC       ${base64.toLocaleString()} bytes (${((base64 / snapshotBytes - 1) * 100).toFixed(0)}% overhead)`);
+console.log(
+  `  base64 over IPC       ${base64.toLocaleString()} bytes (${((base64 / snapshotBytes - 1) * 100).toFixed(0)}% overhead)`,
+);
 console.log("  why step 9 matters    the old collector walked the directory; this is the");
 console.log("                        referenced set only, which is what the snapshot now sends");
 
 // What the whole directory would have cost, for the comparison step 9 claims.
 const whole = directorySize(FIXTURE);
 console.log("\n=== against the old directory walk ===");
-console.log(`  whole directory       ${whole.total.toLocaleString()} bytes in ${whole.files} files`);
-console.log(`  referenced set        ${snapshotBytes.toLocaleString()} bytes in ${referenced.length} files`);
+console.log(
+  `  whole directory       ${whole.total.toLocaleString()} bytes in ${whole.files} files`,
+);
+console.log(
+  `  referenced set        ${snapshotBytes.toLocaleString()} bytes in ${referenced.length} files`,
+);
 if (whole.total > 0) {
-  console.log(`  avoided               ${((1 - snapshotBytes / whole.total) * 100).toFixed(0)}% of the directory`);
+  console.log(
+    `  avoided               ${((1 - snapshotBytes / whole.total) * 100).toFixed(0)}% of the directory`,
+  );
 }
 
 console.log("\n=== the compile timings need the application ===");
@@ -135,7 +149,7 @@ console.log("  launches a real isolated WebView2 instance. This probe deliberate
 console.log("  reports no millisecond figure rather than a fabricated one.");
 console.log("");
 console.log("  When you do construct a compiler outside the app, pass the engine");
-console.log("  explicitly: `new WasmTexCompiler({ engine: \"lualatex\", ... })`. Without");
+console.log('  explicitly: `new WasmTexCompiler({ engine: "lualatex", ... })`. Without');
 console.log("  it, detection sees `fontspec` and resolves to XeLaTeX -- which this");
 console.log("  build does not ship -- and the compile fails with");
 console.log("    Document requires XeLaTeX, which is not available in this build.");

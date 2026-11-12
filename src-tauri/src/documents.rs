@@ -12,56 +12,21 @@ use std::time::UNIX_EPOCH;
 use tauri::Manager;
 
 use crate::export::sha256_hex;
+use crate::text_encoding;
 
-const BOM: &str = "\u{feff}";
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
 
 /// Refuse destructive decoding before a buffer or replacement is created.
-/// A text file mentioning a signature later in prose is still text.
-fn validated_text(bytes: &[u8]) -> Result<&str, String> {
-    if bytes.starts_with(&[0xff, 0xfe, 0, 0]) || bytes.starts_with(&[0, 0, 0xfe, 0xff]) {
-        return Err(
-            "UTF-32 text is not supported yet. Convert a copy to UTF-8 before opening it.".into(),
-        );
-    }
-    if bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]) {
-        return Err(
-            "UTF-16 text is not supported yet. Convert a copy to UTF-8 before opening it.".into(),
-        );
-    }
-    let header = bytes
-        .iter()
-        .position(|byte| !byte.is_ascii_whitespace())
-        .unwrap_or(0);
-    let prefix = &bytes[header..];
-    let binary_signature = prefix.starts_with(b"%PDF-")
-        || bytes.starts_with(b"GIF87a")
-        || bytes.starts_with(b"GIF89a")
-        || bytes.starts_with(b"PK\x03\x04")
-        || bytes.starts_with(b"PK\x05\x06")
-        || bytes.starts_with(b"PK\x07\x08")
-        || bytes.starts_with(b"\x89PNG\r\n\x1a\n")
-        || bytes.starts_with(b"\xff\xd8\xff")
-        || (bytes.starts_with(b"RIFF")
-            && bytes
-                .get(8..12)
-                .is_some_and(|kind| kind == b"WEBP" || kind == b"WAVE" || kind == b"AVI "));
-    if binary_signature
-        || bytes
-            .iter()
-            .any(|byte| matches!(byte, 0..=8 | 11 | 14..=31 | 127))
-    {
-        return Err("This is a binary/non-text file. It cannot be edited as a document.".into());
-    }
-    std::str::from_utf8(bytes).map_err(|_| {
-        "This file is not valid UTF-8. Convert a copy to UTF-8; opening it lossily could destroy its original characters.".into()
-    })
+///
+/// The decision itself belongs to `text_encoding`: this helper only keeps the
+/// destination guard readable where it does not need the decoded text.
+fn validated_text(bytes: &[u8]) -> Result<(), String> {
+    text_encoding::decode(bytes).map(|_| ())
 }
 
 fn validate_destination(path: &Path) -> Result<(), String> {
     match fs::read(path) {
         Ok(bytes) => validated_text(&bytes)
-            .map(|_| ())
             .map_err(|error| format!("Refusing to overwrite {}: {error}", path.display())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(format!(
@@ -86,6 +51,9 @@ pub struct DocumentPayload {
     /// "\n" or "\r\n"
     pub line_ending: String,
     pub had_bom: bool,
+    /// The canonical encoding the file was decoded from, such as `UTF-8` or
+    /// `windows-1252`. Saving uses this label; it is never guessed again.
+    pub encoding: String,
     /// Retained for IPC/legacy recovery compatibility; new unsafe reads fail.
     pub lossy: bool,
     pub size: u64,
@@ -162,13 +130,11 @@ pub fn read_document(path: String) -> Result<DocumentPayload, String> {
     let meta = fs::metadata(&p).map_err(|e| e.to_string())?;
     let sha256 = sha256_hex(&bytes);
 
-    let mut text = validated_text(&bytes)
-        .map_err(|error| format!("Could not open {path}: {error}"))?
-        .to_owned();
-    let had_bom = text.starts_with(BOM);
-    if had_bom {
-        text = text.trim_start_matches(BOM).to_string();
-    }
+    let decoded =
+        text_encoding::decode(&bytes).map_err(|error| format!("Could not open {path}: {error}"))?;
+    let had_bom = decoded.had_bom;
+    let encoding = text_encoding::label(decoded.encoding).to_string();
+    let text = decoded.text;
 
     let line_ending = if text.contains("\r\n") { "\r\n" } else { "\n" };
     let content = text.replace("\r\n", "\n").replace('\r', "\n");
@@ -185,6 +151,7 @@ pub fn read_document(path: String) -> Result<DocumentPayload, String> {
         tokens,
         line_ending: line_ending.to_string(),
         had_bom,
+        encoding,
         lossy: false,
         size: meta.len(),
         modified_ms: modified_ms(&meta),
@@ -193,28 +160,37 @@ pub fn read_document(path: String) -> Result<DocumentPayload, String> {
     })
 }
 
-/// Save `content` to `path`, restoring the original line ending and BOM.
+/// Save `content` to `path`, restoring the original line ending, BOM and
+/// encoding.
 ///
 /// The write goes to a temporary sibling first and is then renamed over the
 /// target, so an interrupted save cannot leave a half-written document.
 ///
 /// Existing callers (HTML export, for example) have no disk baseline and keep
 /// this command's shape. `write_document_checked` is the guarded variant the
-/// editor uses.
+/// editor uses. `encoding` is optional so old callers keep writing UTF-8.
 #[tauri::command]
 pub fn write_document(
     path: String,
     content: String,
     line_ending: Option<String>,
     had_bom: Option<bool>,
+    encoding: Option<String>,
 ) -> Result<SavedInfo, String> {
+    let label = encoding.as_deref().unwrap_or("UTF-8").to_string();
     let outcome = write_document_inner(
         &PathBuf::from(&path),
         &content,
         line_ending,
         had_bom,
+        encoding.as_deref(),
         None,
     )?;
+    if outcome.change == "encoding" {
+        return Err(format!(
+            "The text contains characters that {label} cannot store. Save it as a UTF-8 copy instead."
+        ));
+    }
     Ok(SavedInfo {
         size: outcome.size,
         modified_ms: outcome.modified_ms,
@@ -237,12 +213,14 @@ pub fn write_document_checked(
     line_ending: Option<String>,
     had_bom: Option<bool>,
     expected_sha256: Option<String>,
+    encoding: Option<String>,
 ) -> Result<CheckedWrite, String> {
     write_document_inner(
         &PathBuf::from(&path),
         &content,
         line_ending,
         had_bom,
+        encoding.as_deref(),
         expected_sha256.as_deref(),
     )
 }
@@ -252,11 +230,13 @@ fn write_document_inner(
     content: &str,
     line_ending: Option<String>,
     had_bom: Option<bool>,
+    encoding: Option<&str>,
     expected_sha256: Option<&str>,
 ) -> Result<CheckedWrite, String> {
     let path = p.display();
     let eol = line_ending.unwrap_or_else(|| "\n".to_string());
     let bom = had_bom.unwrap_or(false);
+    let codec = text_encoding::for_label(encoding.unwrap_or("UTF-8"))?;
 
     if let Some(expected) = expected_sha256 {
         if let Some(conflict) = check_expected(p, expected)? {
@@ -266,15 +246,21 @@ fn write_document_inner(
         validate_destination(p)?;
     }
 
-    let mut body = String::with_capacity(content.len() + 3);
-    if bom {
-        body.push_str(BOM);
-    }
-    if eol == "\r\n" {
-        body.push_str(&content.replace('\n', "\r\n"));
-    } else {
-        body.push_str(content);
-    }
+    // Encode before creating a temporary sibling. An unmappable character must
+    // leave the destination untouched, including its directory listing.
+    let body = match text_encoding::encode_body(content, codec, bom, &eol) {
+        Ok(body) => body,
+        Err(text_encoding::EncodeError::Unmappable) => {
+            return Ok(CheckedWrite {
+                written: false,
+                change: "encoding".into(),
+                size: 0,
+                modified_ms: 0,
+                sha256: String::new(),
+            });
+        }
+        Err(error) => return Err(error.to_string()),
+    };
 
     if let Some(parent) = p.parent()
         && !parent.as_os_str().is_empty()
@@ -294,9 +280,7 @@ fn write_document_inner(
             Err(error) => return Err(format!("Could not write {path}: {error}")),
         }
     };
-    let written = file
-        .write_all(body.as_bytes())
-        .and_then(|_| file.sync_all());
+    let written = file.write_all(&body).and_then(|_| file.sync_all());
     drop(file);
     if let Err(error) = written {
         let _ = fs::remove_file(&tmp);
@@ -331,7 +315,7 @@ fn write_document_inner(
         change: "saved".into(),
         size: meta.len(),
         modified_ms: modified_ms(&meta),
-        sha256: sha256_hex(body.as_bytes()),
+        sha256: sha256_hex(&body),
     })
 }
 
@@ -349,8 +333,9 @@ fn check_expected(path: &Path, expected: &str) -> Result<Option<CheckedWrite>, S
                 // The baseline was a text document, but validate again: a
                 // caller could otherwise pass a binary file's digest and turn
                 // this command into an arbitrary overwrite.
-                validated_text(&bytes)
-                    .map_err(|error| format!("Refusing to overwrite {}: {error}", path.display()))?;
+                validated_text(&bytes).map_err(|error| {
+                    format!("Refusing to overwrite {}: {error}", path.display())
+                })?;
                 return Ok(None);
             }
             let meta = fs::metadata(path).map_err(|e| e.to_string())?;
@@ -497,8 +482,8 @@ fn local_fixed_presence(_path: &Path) -> Option<(bool, bool, PathBuf)> {
 fn local_fixed_presence(path: &Path) -> Option<(bool, bool, PathBuf)> {
     use std::os::windows::fs::MetadataExt;
     use std::path::{Component, Prefix};
-    use windows::core::PCWSTR;
     use windows::Win32::Storage::FileSystem::GetDriveTypeW;
+    use windows::core::PCWSTR;
 
     let mut components = path.components();
     let drive = match components.next()? {
@@ -535,7 +520,9 @@ fn local_fixed_presence(path: &Path) -> Option<(bool, bool, PathBuf)> {
         match std::fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.file_attributes() & 0x400 == 0 => is_file = metadata.is_file(),
             Ok(_) => return None, // FILE_ATTRIBUTE_REPARSE_POINT
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Some((false, false, current)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Some((false, false, current));
+            }
             Err(_) => return None,
         }
     }
@@ -646,13 +633,20 @@ mod tests {
         assert_eq!(app_folder_path(root, "latex").unwrap(), root.join("latex"));
         // A name that is not on the list must not resolve, so a compromised
         // frontend cannot make the command open an arbitrary directory.
-        for bad in ["", "..", "..\\Windows", "C:/Windows", "pandoc/../..", "PANDOC"] {
+        for bad in [
+            "",
+            "..",
+            "..\\Windows",
+            "C:/Windows",
+            "pandoc/../..",
+            "PANDOC",
+        ] {
             assert!(app_folder_path(root, bad).is_err(), "{bad:?}");
         }
     }
 
     #[test]
-    fn refuses_binary_signatures_controls_and_invalid_utf8() {
+    fn refuses_binary_signatures_and_controls() {
         for bytes in [
             b"%PDF-1.7\nplain-looking payload".as_slice(),
             b" \n%PDF-1.4\nobject",
@@ -663,22 +657,17 @@ mod tests {
             b"\xff\xd8\xffimage",
             b"text\0with a NUL",
             b"bad\x1bcontrol",
-            b"caf\xe9",
+            b"bad\x80\x81",
         ] {
             assert!(validated_text(bytes).is_err(), "{bytes:?}");
         }
     }
 
     #[test]
-    fn identifies_unsupported_encoding_before_binary_nuls() {
-        for (bytes, encoding) in [
-            (b"\xff\xfeh\0i\0".as_slice(), "UTF-16"),
-            (b"\xfe\xff\0h\0i", "UTF-16"),
-            (b"\xff\xfe\0\0h\0\0\0", "UTF-32"),
-            (b"\0\0\xfe\xff\0\0\0h", "UTF-32"),
-        ] {
+    fn identifies_utf32_before_binary_nuls() {
+        for bytes in [b"\xff\xfe\0\0h\0\0\0".as_slice(), b"\0\0\xfe\xff\0\0\0h"] {
             let error = validated_text(bytes).unwrap_err();
-            assert!(error.contains(encoding), "{error}");
+            assert!(error.contains("UTF-32"), "{error}");
             assert!(!error.contains("binary"), "{error}");
         }
     }
@@ -694,8 +683,9 @@ mod tests {
             "```\n%PDF-1.7\n```",
             "MZ is a word",
             "PK is text",
+            "caf\u{e9}",
         ] {
-            assert_eq!(validated_text(text.as_bytes()).unwrap(), text);
+            assert!(validated_text(text.as_bytes()).is_ok(), "{text:?}");
         }
     }
 
@@ -717,14 +707,14 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         for (name, bytes) in [
             ("a.pdf", b"%PDF-1.7\noriginal".as_slice()),
-            ("b.txt", b"\xff\xfeh\0i\0"),
-            ("c.md", b"caf\xe9"),
+            ("b.txt", b"bad\0text"),
         ] {
             let path = dir.join(name);
             fs::write(&path, bytes).unwrap();
             let error = write_document(
                 path.to_string_lossy().into(),
                 "replacement".into(),
+                None,
                 None,
                 None,
             )
@@ -738,13 +728,99 @@ mod tests {
             "caf\u{fffd}".into(),
             None,
             None,
+            None,
         )
         .unwrap();
         assert_eq!(fs::read_to_string(copy).unwrap(), "caf\u{fffd}");
         assert_eq!(
             fs::read_dir(&dir).unwrap().count(),
-            4,
+            3,
             "no temporary siblings left"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn windows_1252_document_opens_and_saves_identical_bytes() {
+        let dir = std::env::temp_dir().join(format!("tt-legacy-round-trip-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("tese.tex");
+        let bytes = b"Tese apresentada ao Instituto de F\xedsica da Universidade de Bras\xedlia, \
+                      para obten\xe7\xe3o do t\xedtulo de Doutor em F\xedsica.";
+        fs::write(&file, bytes).unwrap();
+
+        let document = read_document(file.to_string_lossy().to_string()).unwrap();
+        assert_eq!(document.encoding, "windows-1252");
+        assert!(document.content.contains("Física"));
+        assert!(document.content.contains("Brasília"));
+        assert!(document.content.contains("obtenção"));
+
+        let outcome = write_document_checked(
+            file.to_string_lossy().to_string(),
+            document.content,
+            Some(document.line_ending),
+            Some(document.had_bom),
+            Some(document.sha256),
+            Some(document.encoding),
+        )
+        .unwrap();
+        assert!(outcome.written);
+        assert_eq!(fs::read(&file).unwrap(), bytes);
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_windows_1252_edit_keeps_the_encoding_and_accents() {
+        let dir = std::env::temp_dir().join(format!("tt-legacy-edit-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("cap01.tex");
+        fs::write(&file, b"caf\xe9").unwrap();
+
+        let document = read_document(file.to_string_lossy().to_string()).unwrap();
+        let outcome = write_document_checked(
+            file.to_string_lossy().to_string(),
+            "café ação".into(),
+            Some(document.line_ending),
+            Some(document.had_bom),
+            Some(document.sha256),
+            Some(document.encoding),
+        )
+        .unwrap();
+        assert!(outcome.written);
+        assert_eq!(fs::read(&file).unwrap(), b"caf\xe9 a\xe7\xe3o");
+
+        let reopened = read_document(file.to_string_lossy().to_string()).unwrap();
+        assert_eq!(reopened.encoding, "windows-1252");
+        assert_eq!(reopened.content, "café ação");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_unmappable_character_is_refused_without_touching_disk() {
+        let dir = std::env::temp_dir().join(format!("tt-unmappable-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("tese.tex");
+        let bytes = b"caf\xe9";
+        fs::write(&file, bytes).unwrap();
+
+        let document = read_document(file.to_string_lossy().to_string()).unwrap();
+        let outcome = write_document_checked(
+            file.to_string_lossy().to_string(),
+            format!("{} \u{1f600}", document.content),
+            Some(document.line_ending),
+            Some(document.had_bom),
+            Some(document.sha256),
+            Some(document.encoding),
+        )
+        .unwrap();
+        assert!(!outcome.written);
+        assert_eq!(outcome.change, "encoding");
+        assert_eq!(fs::read(&file).unwrap(), bytes);
+        assert_eq!(
+            fs::read_dir(&dir).unwrap().count(),
+            1,
+            "an encoding refusal must not leave a temporary sibling"
         );
         fs::remove_dir_all(dir).unwrap();
     }
@@ -775,6 +851,7 @@ mod tests {
             None,
             None,
             Some(baseline),
+            None,
         )
         .unwrap();
         assert!(!outcome.written);
@@ -802,6 +879,7 @@ mod tests {
             Some("\r\n".into()),
             Some(true),
             Some(baseline),
+            None,
         )
         .unwrap();
         assert!(outcome.written);
@@ -823,6 +901,7 @@ mod tests {
             None,
             None,
             Some(sha256_hex(b"old")),
+            None,
         )
         .unwrap();
         assert!(!outcome.written);
@@ -863,6 +942,7 @@ mod tests {
             None,
             None,
             Some(sha256_hex(bytes)),
+            None,
         )
         .unwrap_err();
         assert!(error.contains("Refusing to overwrite"), "{error}");
@@ -879,7 +959,14 @@ mod tests {
         let second = temp_sibling(&path);
         assert_ne!(first, second);
         fs::write(&first, "another writer's scratch").unwrap();
-        write_document(path.to_string_lossy().into(), "new text".into(), None, None).unwrap();
+        write_document(
+            path.to_string_lossy().into(),
+            "new text".into(),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(
             fs::read_to_string(&first).unwrap(),
             "another writer's scratch"
@@ -898,7 +985,8 @@ mod tests {
             .map(|n| {
                 let path = path.to_string_lossy().to_string();
                 std::thread::spawn(move || {
-                    write_document(path, format!("writer {n}\n").repeat(100), None, None).unwrap();
+                    write_document(path, format!("writer {n}\n").repeat(100), None, None, None)
+                        .unwrap();
                 })
             })
             .collect();
@@ -938,7 +1026,10 @@ mod tests {
         fs::write(&candidate, b"image").unwrap();
         let p = primary.to_string_lossy().into_owned();
         let c = candidate.to_string_lossy().into_owned();
-        assert_eq!(resolve_legacy_local_image_inner(p.clone(), c.clone(), None), Some(c.clone()));
+        assert_eq!(
+            resolve_legacy_local_image_inner(p.clone(), c.clone(), None),
+            Some(c.clone())
+        );
         let document = root.join("docs").join("doc.md");
         fs::create_dir_all(document.parent().unwrap()).unwrap();
         assert_eq!(
@@ -950,8 +1041,14 @@ mod tests {
             Some(c.clone())
         );
         fs::write(&primary, b"ordinary target").unwrap();
-        assert_eq!(resolve_legacy_local_image_inner(p.clone(), c.clone(), None), None);
-        assert_eq!(resolve_legacy_local_image_inner(p, r"\\server\share\image.png".into(), None), None);
+        assert_eq!(
+            resolve_legacy_local_image_inner(p.clone(), c.clone(), None),
+            None
+        );
+        assert_eq!(
+            resolve_legacy_local_image_inner(p, r"\\server\share\image.png".into(), None),
+            None
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -964,7 +1061,9 @@ mod tests {
         fs::write(&literal, b"image").unwrap();
         assert_eq!(
             resolve_legacy_local_image_inner(
-                root.join("images.hiddenimage.png").to_string_lossy().into_owned(),
+                root.join("images.hiddenimage.png")
+                    .to_string_lossy()
+                    .into_owned(),
                 literal.to_string_lossy().into_owned(),
                 None,
             ),
@@ -985,7 +1084,10 @@ mod tests {
         assert_eq!(doc.line_ending, "\r\n");
         assert_eq!(doc.content, "# Title\n\nbody\n");
         // The identity is the raw revision, before BOM/EOL normalisation.
-        assert_eq!(doc.sha256, sha256_hex("\u{feff}# Title\r\n\r\nbody\r\n".as_bytes()));
+        assert_eq!(
+            doc.sha256,
+            sha256_hex("\u{feff}# Title\r\n\r\nbody\r\n".as_bytes())
+        );
         // "#" + "Title" + "body": the open path counts the normalised text.
         assert_eq!(doc.tokens, 3);
 
@@ -994,6 +1096,7 @@ mod tests {
             doc.content.clone(),
             Some(doc.line_ending.clone()),
             Some(doc.had_bom),
+            Some(doc.encoding.clone()),
         )
         .unwrap();
 
@@ -1012,6 +1115,7 @@ mod tests {
             "abc".into(),
             Some("\n".into()),
             Some(false),
+            None,
         )
         .unwrap();
         assert_eq!(fs::read_to_string(&file).unwrap(), "abc");

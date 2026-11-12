@@ -181,6 +181,8 @@ function cleanHeadingText(raw: string): string {
     .trim();
 
   return protectedText.replace(
+    // NULs are deliberate sentinels inserted by hold() above.
+    // eslint-disable-next-line no-control-regex
     /\u0000(\d+)\u0000/g,
     (_match, index: string) => literals[Number(index)] ?? "",
   );

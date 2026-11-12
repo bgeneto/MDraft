@@ -233,11 +233,7 @@ fn expand_argument_text(text: &str, values: &Placeholders) -> Vec<String> {
 /// exports with the dialect this editor writes. An HTML or AsciiDoc source must
 /// not be fed to that reader. The user's extra arguments stay last, so an
 /// explicit `-f` there still wins.
-fn reader_arguments(
-    format: &ExportFormat,
-    values: &Placeholders,
-    reader: &str,
-) -> Vec<String> {
+fn reader_arguments(format: &ExportFormat, values: &Placeholders, reader: &str) -> Vec<String> {
     let mut head = expand_argument_text(&format.arguments, values);
     let tail = expand_argument_text(&format.extra_arguments, values);
     let mut index = 0;
@@ -285,7 +281,11 @@ fn latex_input_arguments(format: &ExportFormat, values: &Placeholders) -> Vec<St
 
 /// The executable name on this platform.
 fn pandoc_exe() -> &'static str {
-    if cfg!(windows) { "pandoc.exe" } else { "pandoc" }
+    if cfg!(windows) {
+        "pandoc.exe"
+    } else {
+        "pandoc"
+    }
 }
 
 /// Prepare a console program to run without flashing a console window.
@@ -684,7 +684,11 @@ fn writer_metadata(id: &str) -> (String, String) {
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
     (
-        if label.is_empty() { id.to_string() } else { label },
+        if label.is_empty() {
+            id.to_string()
+        } else {
+            label
+        },
         if extension.is_empty() {
             "txt".to_string()
         } else {
@@ -833,9 +837,12 @@ fn stage_snapshot(scratch: &Scratch, snapshot: &ExportSnapshot) -> Result<Staged
                 file.path
             ));
         }
-        let bytes = STANDARD
-            .decode(&file.data)
-            .map_err(|_| format!("The LaTeX project entry \"{}\" is not valid base64.", file.path))?;
+        let bytes = STANDARD.decode(&file.data).map_err(|_| {
+            format!(
+                "The LaTeX project entry \"{}\" is not valid base64.",
+                file.path
+            )
+        })?;
         let target = directory.join(file.path.replace('/', std::path::MAIN_SEPARATOR_STR));
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent)
@@ -1012,7 +1019,10 @@ fn rewrite_markdown_images(text: &str, root: &Path) -> String {
 /// The write happens on its own thread because pandoc may already be writing to
 /// stderr: if it filled that pipe while we were still writing stdin, a
 /// single-threaded write-then-wait would deadlock on a large document.
-fn feed_stdin(mut stdin: std::process::ChildStdin, markdown: String) -> std::thread::JoinHandle<()> {
+fn feed_stdin(
+    mut stdin: std::process::ChildStdin,
+    markdown: String,
+) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         use std::io::Write;
         // A broken pipe here means pandoc exited early; the status code carries
@@ -1061,7 +1071,8 @@ fn run_pandoc(
         let code = output.status.code();
         let mut message = format!(
             "Pandoc exited with {}",
-            code.map(|c| c.to_string()).unwrap_or_else(|| "a signal".into())
+            code.map(|c| c.to_string())
+                .unwrap_or_else(|| "a signal".into())
         );
         // Pandoc's own message is usually the most precise thing available, so
         // our explanation goes first and its text is kept verbatim underneath.
@@ -1092,7 +1103,10 @@ fn run_pandoc(
     Ok(stderr)
 }
 
-pub fn export<R: Runtime>(app: &AppHandle<R>, request: &ExportRequest) -> Result<ExportOutcome, String> {
+pub fn export<R: Runtime>(
+    app: &AppHandle<R>,
+    request: &ExportRequest,
+) -> Result<ExportOutcome, String> {
     let (format, values) = prepare(app, request)?;
 
     // A Typst document exported to PDF or HTML goes straight to Typst. For PDF
@@ -1114,7 +1128,7 @@ pub fn export<R: Runtime>(app: &AppHandle<R>, request: &ExportRequest) -> Result
                 "Pandoc was not found. Use Help › Install Pandoc to add it, or install it \
                  yourself."
                     .to_string(),
-            )
+            );
         }
     };
 
@@ -1183,7 +1197,10 @@ pub fn export<R: Runtime>(app: &AppHandle<R>, request: &ExportRequest) -> Result
         // The staged directory therefore has to be the working directory, and the
         // original root becomes a resource path so `\includegraphics` still finds
         // the reader's own image rather than a copy that is about to be deleted.
-        args.push(format!("--resource-path={}", staged.resource_root.display()));
+        args.push(format!(
+            "--resource-path={}",
+            staged.resource_root.display()
+        ));
         if declares_bibliography(staged) {
             args.push("--citeproc".into());
         }
@@ -1321,7 +1338,10 @@ pub fn export_writer<R: Runtime>(
     if declares_bibliography(&staged) {
         args.push("--citeproc".into());
     }
-    args.push(format!("--resource-path={}", staged.resource_root.display()));
+    args.push(format!(
+        "--resource-path={}",
+        staged.resource_root.display()
+    ));
     args.insert(0, staged.main.to_string_lossy().into_owned());
 
     let stderr = run_pandoc(
@@ -1376,7 +1396,6 @@ fn bibliography_note(entry: &PandocWriter, stderr: &str) -> String {
         format!("{note}\n\n{stderr}")
     }
 }
-
 
 /// Export a Typst document with Typst itself, to PDF or HTML.
 ///
@@ -1457,7 +1476,9 @@ fn prepare<R: Runtime>(
         && !input.is_empty()
         && same_file(input, &request.output_path)
     {
-        return Err("The export target is the document you are editing. Choose another name.".into());
+        return Err(
+            "The export target is the document you are editing. Choose another name.".into(),
+        );
     }
     // A LaTeX conversion reads the whole project, so its destination must not be
     // any of the files it reads — a chapter included by the root is just as fatal
@@ -1490,11 +1511,7 @@ fn prepare<R: Runtime>(
 fn same_file(a: &str, b: &str) -> bool {
     let norm = |s: &str| {
         let s = s.replace('\\', "/");
-        if cfg!(windows) {
-            s.to_lowercase()
-        } else {
-            s
-        }
+        if cfg!(windows) { s.to_lowercase() } else { s }
     };
     norm(a) == norm(b)
 }
@@ -1513,7 +1530,7 @@ fn wait_with_timeout(
             Ok(Some(_)) => {
                 return child
                     .wait_with_output()
-                    .map_err(|e| format!("Could not collect pandoc's output: {e}"))
+                    .map_err(|e| format!("Could not collect pandoc's output: {e}"));
             }
             Ok(None) => {
                 if std::time::Instant::now() >= deadline {
@@ -1671,7 +1688,7 @@ fn asset_suffix() -> Result<&'static str, String> {
             return Err(format!(
                 "There is no pandoc build for {os} on {arch}. Install pandoc yourself and it will \
                  be picked up from PATH."
-            ))
+            ));
         }
     };
     Ok(suffix)
@@ -1770,8 +1787,10 @@ fn extract_binary(archive: &[u8]) -> Result<Vec<u8>, String> {
             return Ok(bytes);
         }
     }
-    Err("The downloaded archive did not contain a pandoc binary. Its layout may have changed."
-        .to_string())
+    Err(
+        "The downloaded archive did not contain a pandoc binary. Its layout may have changed."
+            .to_string(),
+    )
 }
 
 /// Fetch the release, pick this platform's asset, verify its digest, and unpack
@@ -1839,13 +1858,16 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> Result<PandocStatus, String> {
     // Two presses of Install must not write the same executable at once. The
     // second waits, then installs over a complete file. A poisoned lock only
     // means an earlier install panicked; the file write below is atomic.
-    let _install = PANDOC_INSTALL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _install = PANDOC_INSTALL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let (tag, binary) = download_binary(&http_agent())?;
 
     let root =
         managed_root(app).ok_or_else(|| "No writable application data directory.".to_string())?;
     let dir = root.join(&tag);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
     let target = dir.join(pandoc_exe());
     // Temporary file and rename: an interrupted or concurrent write never leaves
     // a truncated executable at the path the probe and every export run.
@@ -1913,7 +1935,11 @@ pub(crate) fn safe_stem(name: &str) -> String {
 /// Returns the path written, under a folder of its own in the system temporary
 /// directory (see [`crate::print::handoff_dir`]).
 #[tauri::command]
-pub fn print_document<R: Runtime>(app: AppHandle<R>, html: String, name: String) -> Result<String, String> {
+pub fn print_document<R: Runtime>(
+    app: AppHandle<R>,
+    html: String,
+    name: String,
+) -> Result<String, String> {
     let target = crate::print::write_handoff(&format!("{}.html", safe_stem(&name)), |target| {
         std::fs::write(target, html.as_bytes())
             .map_err(|e| format!("Could not write {}: {e}", target.display()))
@@ -2251,7 +2277,10 @@ mod tests {
             ),
             &values(),
         );
-        assert_eq!(args, vec!["-s", "-o", "/out/report.docx", "-f", HTML_READER]);
+        assert_eq!(
+            args,
+            vec!["-s", "-o", "/out/report.docx", "-f", HTML_READER]
+        );
         assert!(!args.iter().any(|arg| arg.contains("tex_math_dollars")));
     }
 
@@ -2281,7 +2310,10 @@ mod tests {
             &format_with("--from markdown -s -o ${outputPath} --from", ""),
             &values(),
         );
-        assert_eq!(args, vec!["-s", "-o", "/out/report.docx", "-f", HTML_READER]);
+        assert_eq!(
+            args,
+            vec!["-s", "-o", "/out/report.docx", "-f", HTML_READER]
+        );
     }
 
     #[test]
@@ -2352,7 +2384,14 @@ mod tests {
         );
         assert_eq!(
             overridden,
-            vec!["-s", "-o", "/out/report.docx", "-f", "latex", "--from=markdown"]
+            vec![
+                "-s",
+                "-o",
+                "/out/report.docx",
+                "-f",
+                "latex",
+                "--from=markdown"
+            ]
         );
     }
 
@@ -2376,7 +2415,13 @@ mod tests {
 
     #[test]
     fn a_writer_id_is_validated_before_it_reaches_pandoc() {
-        for good in ["docx", "markdown_strict", "commonmark_x", "jats_archiving", "html5"] {
+        for good in [
+            "docx",
+            "markdown_strict",
+            "commonmark_x",
+            "jats_archiving",
+            "html5",
+        ] {
             assert!(safe_writer_id(good), "{good} should be accepted");
         }
         // Each of these would become a second argument, a path, or an option.
@@ -2423,7 +2468,10 @@ mod tests {
         assert_eq!(extension, "some-new-writer");
         // A known one keeps its curated name and extension, which the save
         // dialog relies on.
-        assert_eq!(writer_metadata("docx"), ("Word (.docx)".into(), "docx".into()));
+        assert_eq!(
+            writer_metadata("docx"),
+            ("Word (.docx)".into(), "docx".into())
+        );
         assert_eq!(writer_metadata("chunkedhtml").1, "zip");
         // A name that cannot be a filename must not produce one.
         assert!(!writer_metadata("///").1.is_empty());
@@ -2472,7 +2520,10 @@ mod tests {
         );
         // A target that does not exist is left exactly as pandoc wrote it: the
         // rewrite must not invent a destination.
-        assert!(rewritten.contains("![gone](fig/missing.png)"), "{rewritten}");
+        assert!(
+            rewritten.contains("![gone](fig/missing.png)"),
+            "{rewritten}"
+        );
         // An ordinary link is not an image and is not touched.
         assert!(rewritten.contains("[a link](other.md)"), "{rewritten}");
         let _ = std::fs::remove_dir_all(&root);
@@ -2569,7 +2620,9 @@ mod tests {
         // A slide writer's template links its CSS and JavaScript from a CDN.
         // `--embed-resources` would make pandoc fetch them, which is a network
         // request this application must not start on its own.
-        for id in ["s5", "slidy", "slideous", "dzslides", "revealjs", "docx", "markdown"] {
+        for id in [
+            "s5", "slidy", "slideous", "dzslides", "revealjs", "docx", "markdown",
+        ] {
             assert!(!embeds_resources(id), "{id} must not embed");
         }
     }
@@ -2578,16 +2631,28 @@ mod tests {
     fn prose_writers_keep_their_lines_unwrapped() {
         // Pandoc hard-wraps at 72 columns by default, which puts breaks inside
         // sentences and makes every later edit a spurious diff.
-        for id in ["markdown", "markdown_strict", "commonmark", "gfm", "rst", "asciidoc", "typst"] {
+        for id in [
+            "markdown",
+            "markdown_strict",
+            "commonmark",
+            "gfm",
+            "rst",
+            "asciidoc",
+            "typst",
+        ] {
             assert!(keeps_lines_unwrapped(id), "{id} should not wrap");
         }
         for id in ["docx", "odt", "epub", "html", "json"] {
-            assert!(!keeps_lines_unwrapped(id), "{id} is not a wrapped prose target");
+            assert!(
+                !keeps_lines_unwrapped(id),
+                "{id} is not a wrapped prose target"
+            );
         }
     }
 
     #[test]
-    fn safe_stem_produces_a_usable_filename() {        assert_eq!(safe_stem("notes.md"), "notes");
+    fn safe_stem_produces_a_usable_filename() {
+        assert_eq!(safe_stem("notes.md"), "notes");
         assert_eq!(safe_stem("chapter 1.md"), "chapter 1");
         assert_eq!(safe_stem("a/b:c*.md"), "a-b-c-");
         // An empty or all-punctuation name still has to yield something.
@@ -2621,7 +2686,8 @@ mod tests {
     }
 
     #[test]
-    fn sha256_matches_a_known_vector() {        // FIPS 180-4 test vector, so a broken hex writer cannot pass unnoticed.
+    fn sha256_matches_a_known_vector() {
+        // FIPS 180-4 test vector, so a broken hex writer cannot pass unnoticed.
         assert_eq!(
             sha256_hex(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
@@ -2633,7 +2699,11 @@ mod tests {
         for format in crate::settings::default_export_formats() {
             assert!(!format.id.is_empty(), "a format has no id");
             assert!(!format.label.is_empty(), "{} has no label", format.id);
-            assert!(!format.extension.is_empty(), "{} has no extension", format.id);
+            assert!(
+                !format.extension.is_empty(),
+                "{} has no extension",
+                format.id
+            );
             assert!(
                 format.arguments.contains("${outputPath}"),
                 "{} never says where to write",
@@ -2715,7 +2785,8 @@ mod tests {
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
 
-        let version = probe_version(&path).expect("the extracted pandoc runs and reports a version");
+        let version =
+            probe_version(&path).expect("the extracted pandoc runs and reports a version");
         println!("extracted pandoc {version} from tag {tag}");
         assert!(
             version.starts_with(char::is_numeric),

@@ -12,14 +12,7 @@
 
 /** Which catalog a position asks for. */
 export type LatexContextKind =
-  | "command"
-  | "environment"
-  | "package"
-  | "class"
-  | "label"
-  | "citation"
-  | "image"
-  | "none";
+  "command" | "environment" | "package" | "class" | "label" | "citation" | "image" | "none";
 
 export interface LatexContext {
   kind: LatexContextKind;

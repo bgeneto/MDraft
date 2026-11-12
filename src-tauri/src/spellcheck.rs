@@ -44,7 +44,7 @@ fn accepted_form(word: &str) -> Option<String> {
     let trimmed = word.trim_matches(|c: char| {
         c == '\'' || c == '\u{2019}' || c == '\u{2018}' || c == '-' || c == '\u{2010}'
     });
-    if trimmed.chars().count() < 2 {
+    if trimmed.is_empty() {
         return None;
     }
     let mut normalized = String::with_capacity(trimmed.len());
@@ -74,10 +74,13 @@ fn accepted_form(word: &str) -> Option<String> {
         }
         normalized.push(ch);
     }
-    if letters < 2 || internal_capital || uppers == letters {
+    if letters == 0 || internal_capital || (letters >= 2 && uppers == letters) {
         return None;
     }
-    if ALLOWED.iter().any(|entry| entry.eq_ignore_ascii_case(&normalized)) {
+    if ALLOWED
+        .iter()
+        .any(|entry| entry.eq_ignore_ascii_case(&normalized))
+    {
         return None;
     }
     Some(normalized)
@@ -131,7 +134,8 @@ fn mask_uncheckable(text: &str) -> String {
     blank_pattern(&mut bytes, match_url);
     blank_pattern(&mut bytes, match_math);
     blank_pattern(&mut bytes, match_html);
-    String::from_utf8(bytes).unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned())
+    String::from_utf8(bytes)
+        .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned())
 }
 
 #[cfg(test)]
@@ -216,10 +220,18 @@ fn blank_fences(bytes: &mut [u8]) {
                 }
                 j += 1;
             }
-            let until = if close < lines.len() { lines[close].2 } else { bytes.len() };
+            let until = if close < lines.len() {
+                lines[close].2
+            } else {
+                bytes.len()
+            };
             let _ = next;
             blank_range(bytes, start, until);
-            i = if close < lines.len() { close + 1 } else { lines.len() };
+            i = if close < lines.len() {
+                close + 1
+            } else {
+                lines.len()
+            };
         } else {
             i += 1;
         }
@@ -348,100 +360,91 @@ fn find_bytes(bytes: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
         .map(|at| from + at)
 }
 
-/// Our tags, in the order the preference list shows them.
-fn public_tags(raws: &[String]) -> Vec<String> {
-    let mut en = false;
-    let mut en_gb = false;
-    let mut pt_br = false;
-    let mut pt_pt = false;
-    for raw in raws {
-        match public_tag(raw) {
-            Some("en") => en = true,
-            Some("en-GB") => {
-                en = true;
-                en_gb = true;
-            }
-            Some("pt-BR") => pt_br = true,
-            Some("pt-PT") => pt_pt = true,
-            _ => {}
+/// Canonicalize a bounded BCP 47-shaped OS tag without accepting paths.
+pub(crate) fn normalize_tag(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.len() > 64 || raw.is_empty() {
+        return None;
+    }
+    let raw = raw.replace('_', "-");
+    let mut parts = raw.split('-');
+    let first = parts.next()?;
+    if !(2..=3).contains(&first.len()) || !first.bytes().all(|b| b.is_ascii_alphabetic()) {
+        return None;
+    }
+    let mut out = first.to_ascii_lowercase();
+    for part in parts {
+        if part.is_empty() || part.len() > 8 || !part.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            return None;
+        }
+        out.push('-');
+        if part.len() == 2 && part.bytes().all(|b| b.is_ascii_alphabetic()) {
+            out.push_str(&part.to_ascii_uppercase());
+        } else if part.len() == 4 && part.bytes().all(|b| b.is_ascii_alphabetic()) {
+            let mut chars = part.chars();
+            out.push(chars.next()?.to_ascii_uppercase());
+            out.push_str(&chars.as_str().to_ascii_lowercase());
+        } else {
+            out.push_str(&part.to_ascii_lowercase());
         }
     }
-    let mut out = Vec::new();
-    if en {
-        out.push("en".to_string());
-    }
-    if en_gb {
-        out.push("en-GB".to_string());
-    }
-    if pt_br {
-        out.push("pt-BR".to_string());
-    }
-    if pt_pt {
-        out.push("pt-PT".to_string());
-    }
-    out
+    Some(out)
 }
 
-/// Map an OS language tag onto the small set the editor knows.
-fn public_tag(raw: &str) -> Option<&'static str> {
-    let tag = raw.trim().to_ascii_lowercase().replace('_', "-");
-    if tag == "en-gb" || tag.starts_with("en-gb-") {
-        return Some("en-GB");
+/// Keep historic English and Portuguese aliases while exposing OS languages.
+fn public_tags(raws: &[String]) -> Vec<String> {
+    let mut tags = raws
+        .iter()
+        .filter_map(|raw| normalize_tag(raw))
+        .collect::<Vec<_>>();
+    if tags.iter().any(|tag| tag == "en" || tag.starts_with("en-")) {
+        tags.push("en".into());
     }
-    if tag == "en" || tag.starts_with("en-") {
-        return Some("en");
+    if tags.iter().any(|tag| tag == "pt") {
+        tags.push("pt-PT".into());
     }
-    if tag == "pt-br" || tag.starts_with("pt-br-") {
-        return Some("pt-BR");
-    }
-    if tag == "pt-pt" || tag == "pt" || tag.starts_with("pt-") {
-        return Some("pt-PT");
-    }
-    None
-}
-
-/// Lower is a better match. `en-US` beats `en-AU` when the reader asked for `en`.
-fn tag_rank(raw: &str) -> u8 {
-    let tag = raw.trim().to_ascii_lowercase().replace('_', "-");
-    if tag == "en-us" || tag == "en-gb" || tag == "pt-br" || tag == "pt-pt" {
-        0
-    } else {
-        1
-    }
+    tags.sort();
+    tags.dedup();
+    tags
 }
 
 fn resolve<'a>(raws: &'a [String], requested: &str) -> Option<&'a str> {
-    let mut exact: Option<&str> = None;
-    let mut exact_rank = u8::MAX;
-    let mut english: Option<&str> = None;
-    let mut english_rank = u8::MAX;
+    let requested = normalize_tag(requested)?;
+    let mut fallback: Option<(&str, u8)> = None;
     for raw in raws {
-        let Some(tag) = public_tag(raw) else {
+        let Some(tag) = normalize_tag(raw) else {
             continue;
         };
-        let rank = tag_rank(raw);
-        if tag == requested && rank < exact_rank {
-            exact = Some(raw.as_str());
-            exact_rank = rank;
+        if tag == requested && requested != "en" {
+            return Some(raw);
         }
-        // A machine with only British English still has an English dictionary.
-        // `en` should use it rather than underline every word.
-        if requested == "en" && (tag == "en" || tag == "en-GB") && rank < english_rank {
-            english = Some(raw.as_str());
-            english_rank = rank;
+        let rank = if requested == "en" {
+            match tag.as_str() {
+                "en-US" => 0,
+                "en" => 1,
+                "en-GB" => 2,
+                _ if tag.starts_with("en-") => 3,
+                _ => continue,
+            }
+        } else if requested == "pt-PT" && tag == "pt" {
+            0
+        } else {
+            continue;
+        };
+        if fallback.is_none_or(|(_, previous)| rank < previous) {
+            fallback = Some((raw.as_str(), rank));
         }
     }
-    exact.or(english)
+    fallback.map(|(raw, _)| raw)
 }
 
 /// Indices into `words` that the dictionary rejects.
 ///
-/// Tokens that [`accepted_form`] declines are not errors. An unknown language
-/// yields an empty list: underlining the whole paragraph is worse than checking
-/// nothing.
-fn misspelled_indices(language: &str, words: &[String]) -> Vec<u32> {
+/// Tokens that [`accepted_form`] declines are not errors. An unavailable
+/// dictionary or engine failure is returned to the caller.
+fn misspelled_indices(language: &str, words: &[String]) -> Result<Vec<u32>, String> {
     if language.is_empty() || language == "auto" {
-        return Vec::new();
+        return Err("Choose an available spelling dictionary.".into());
     }
     let mut unique: Vec<String> = Vec::new();
     let mut owners: Vec<Vec<u32>> = Vec::new();
@@ -459,46 +462,46 @@ fn misspelled_indices(language: &str, words: &[String]) -> Vec<u32> {
         }
     }
     if unique.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut out = Vec::new();
-    for slot in engine::check(language, &unique) {
+    for slot in engine::check(language, &unique)? {
         if let Some(group) = owners.get(slot as usize) {
             out.extend_from_slice(group);
         }
     }
     out.sort_unstable();
-    out
+    Ok(out)
 }
 
-fn suggestions_for(language: &str, word: &str) -> Vec<String> {
+fn suggestions_for(language: &str, word: &str) -> Result<Vec<String>, String> {
     let Some(form) = accepted_form(word) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    let mut list = engine::suggest(language, &form);
+    let mut list = engine::suggest(language, &form)?;
     list.truncate(8);
-    list
+    Ok(list)
 }
 
 #[tauri::command]
-pub async fn spellcheck_languages() -> Vec<String> {
+pub async fn spellcheck_languages() -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(engine::languages)
         .await
-        .unwrap_or_default()
+        .map_err(|_| "Could not discover spelling dictionaries.".to_string())?
 }
 
 #[tauri::command]
-pub async fn spellcheck_check(language: String, words: Vec<String>) -> Vec<u32> {
+pub async fn spellcheck_check(language: String, words: Vec<String>) -> Result<Vec<u32>, String> {
     tauri::async_runtime::spawn_blocking(move || misspelled_indices(&language, &words))
         .await
-        .unwrap_or_default()
+        .map_err(|_| "Could not check spelling.".to_string())?
 }
 
 #[tauri::command]
-pub async fn spellcheck_suggest(language: String, word: String) -> Vec<String> {
+pub async fn spellcheck_suggest(language: String, word: String) -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(move || suggestions_for(&language, &word))
         .await
-        .unwrap_or_default()
+        .map_err(|_| "Could not obtain spelling suggestions.".to_string())?
 }
 
 // ---------------------------------------------------------------------------
@@ -514,27 +517,29 @@ pub async fn spellcheck_suggest(language: String, word: String) -> Vec<String> {
 mod engine {
     use super::{public_tags, resolve};
     use std::collections::HashMap;
-    use std::sync::mpsc::{self, Receiver, Sender};
     use std::sync::OnceLock;
+    use std::sync::mpsc::{self, Receiver, Sender};
     use std::time::Duration;
-    use windows::core::{HSTRING, PWSTR};
-    use windows::Win32::Globalization::{IEnumSpellingError, ISpellChecker, ISpellCheckerFactory, SpellCheckerFactory};
-    use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CoTaskMemFree, IEnumString, CLSCTX_INPROC_SERVER,
-        COINIT_APARTMENTTHREADED,
+    use windows::Win32::Globalization::{
+        IEnumSpellingError, ISpellChecker, ISpellCheckerFactory, SpellCheckerFactory,
     };
+    use windows::Win32::System::Com::{
+        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+        CoTaskMemFree, IEnumString,
+    };
+    use windows::core::{HSTRING, PWSTR};
 
     enum Request {
-        Languages(Sender<Vec<String>>),
+        Languages(Sender<Result<Vec<String>, String>>),
         Check {
             language: String,
             words: Vec<String>,
-            reply: Sender<Vec<u32>>,
+            reply: Sender<Result<Vec<u32>, String>>,
         },
         Suggest {
             language: String,
             word: String,
-            reply: Sender<Vec<String>>,
+            reply: Sender<Result<Vec<String>, String>>,
         },
     }
 
@@ -550,33 +555,43 @@ mod engine {
         })
     }
 
-    fn ask<T: Default>(build: impl FnOnce(Sender<T>) -> Request) -> T {
+    fn ask<T>(build: impl FnOnce(Sender<Result<T, String>>) -> Request) -> Result<T, String> {
         let (tx, rx) = mpsc::channel();
-        if worker().send(build(tx)).is_err() {
-            return T::default();
-        }
-        rx.recv_timeout(Duration::from_secs(3)).unwrap_or_default()
+        worker()
+            .send(build(tx))
+            .map_err(|_| "The spelling service is unavailable.".to_string())?;
+        rx.recv_timeout(Duration::from_secs(3))
+            .map_err(|_| "The spelling service did not respond.".to_string())?
     }
 
-    pub fn languages() -> Vec<String> {
+    pub fn languages() -> Result<Vec<String>, String> {
         ask(Request::Languages)
     }
 
-    pub fn check(language: &str, words: &[String]) -> Vec<u32> {
+    pub fn check(language: &str, words: &[String]) -> Result<Vec<u32>, String> {
         let language = language.to_string();
         let words = words.to_vec();
-        ask(|reply| Request::Check { language, words, reply })
+        ask(|reply| Request::Check {
+            language,
+            words,
+            reply,
+        })
     }
 
-    pub fn suggest(language: &str, word: &str) -> Vec<String> {
+    pub fn suggest(language: &str, word: &str) -> Result<Vec<String>, String> {
         let language = language.to_string();
         let word = word.to_string();
-        ask(|reply| Request::Suggest { language, word, reply })
+        ask(|reply| Request::Suggest {
+            language,
+            word,
+            reply,
+        })
     }
 
     struct Session {
         factory: Option<ISpellCheckerFactory>,
         raw_tags: Vec<String>,
+        init_error: Option<String>,
         checkers: HashMap<String, ISpellChecker>,
     }
 
@@ -588,51 +603,73 @@ mod engine {
                 let factory: windows::core::Result<ISpellCheckerFactory> =
                     CoCreateInstance(&SpellCheckerFactory, None, CLSCTX_INPROC_SERVER);
                 let Ok(factory) = factory else {
-                    return Self { factory: None, raw_tags: Vec::new(), checkers: HashMap::new() };
+                    return Self {
+                        factory: None,
+                        raw_tags: Vec::new(),
+                        init_error: Some("The Windows spelling service is unavailable.".into()),
+                        checkers: HashMap::new(),
+                    };
                 };
-                let raw_tags = factory
+                let tags = factory
                     .SupportedLanguages()
-                    .map(|list| read_strings(&list))
-                    .unwrap_or_default();
-                Self { factory: Some(factory), raw_tags, checkers: HashMap::new() }
+                    .map_err(|_| "Could not discover Windows spelling dictionaries.".to_string())
+                    .and_then(|list| read_strings(&list));
+                let (raw_tags, init_error) = match tags {
+                    Ok(tags) => (tags, None),
+                    Err(error) => (Vec::new(), Some(error)),
+                };
+                Self {
+                    factory: Some(factory),
+                    raw_tags,
+                    init_error,
+                    checkers: HashMap::new(),
+                }
             }
         }
 
-        fn languages(&self) -> Vec<String> {
-            public_tags(&self.raw_tags)
+        fn languages(&self) -> Result<Vec<String>, String> {
+            if let Some(error) = &self.init_error {
+                return Err(error.clone());
+            }
+            Ok(public_tags(&self.raw_tags))
         }
 
-        fn checker(&mut self, language: &str) -> Option<ISpellChecker> {
-            let raw = resolve(&self.raw_tags, language)?.to_string();
+        fn checker(&mut self, language: &str) -> Result<ISpellChecker, String> {
+            if let Some(error) = &self.init_error {
+                return Err(error.clone());
+            }
+            let raw = resolve(&self.raw_tags, language)
+                .ok_or_else(|| "The selected spelling dictionary is not installed.".to_string())?
+                .to_string();
             if let Some(existing) = self.checkers.get(&raw) {
-                return Some(existing.clone());
+                return Ok(existing.clone());
             }
-            let factory = self.factory.as_ref()?;
-            let created = unsafe { factory.CreateSpellChecker(&HSTRING::from(&raw)) }.ok()?;
+            let factory = self
+                .factory
+                .as_ref()
+                .ok_or_else(|| "The Windows spelling service is unavailable.".to_string())?;
+            let created = unsafe { factory.CreateSpellChecker(&HSTRING::from(&raw)) }
+                .map_err(|_| "Could not open the spelling dictionary.".to_string())?;
             self.checkers.insert(raw, created.clone());
-            Some(created)
+            Ok(created)
         }
 
-        fn check(&mut self, language: &str, words: &[String]) -> Vec<u32> {
-            let Some(checker) = self.checker(language) else {
-                return Vec::new();
-            };
+        fn check(&mut self, language: &str, words: &[String]) -> Result<Vec<u32>, String> {
+            let checker = self.checker(language)?;
             let mut bad = Vec::new();
             for (index, word) in words.iter().enumerate() {
-                if is_misspelled(&checker, word) {
+                if is_misspelled(&checker, word)? {
                     bad.push(index as u32);
                 }
             }
-            bad
+            Ok(bad)
         }
 
-        fn suggest(&mut self, language: &str, word: &str) -> Vec<String> {
-            let Some(checker) = self.checker(language) else {
-                return Vec::new();
-            };
+        fn suggest(&mut self, language: &str, word: &str) -> Result<Vec<String>, String> {
+            let checker = self.checker(language)?;
             unsafe { checker.Suggest(&HSTRING::from(word)) }
-                .map(|list| read_strings(&list))
-                .unwrap_or_default()
+                .map_err(|_| "Could not obtain spelling suggestions.".to_string())
+                .and_then(|list| read_strings(&list))
         }
     }
 
@@ -643,59 +680,73 @@ mod engine {
                 Request::Languages(reply) => {
                     let _ = reply.send(session.languages());
                 }
-                Request::Check { language, words, reply } => {
+                Request::Check {
+                    language,
+                    words,
+                    reply,
+                } => {
                     let _ = reply.send(session.check(&language, &words));
                 }
-                Request::Suggest { language, word, reply } => {
+                Request::Suggest {
+                    language,
+                    word,
+                    reply,
+                } => {
                     let _ = reply.send(session.suggest(&language, &word));
                 }
             }
         }
     }
 
-    fn is_misspelled(checker: &ISpellChecker, word: &str) -> bool {
-        let Ok(errors) = (unsafe { checker.Check(&HSTRING::from(word)) }) else {
-            return false;
-        };
-        next_error(&errors).is_some()
+    fn is_misspelled(checker: &ISpellChecker, word: &str) -> Result<bool, String> {
+        let errors = unsafe { checker.Check(&HSTRING::from(word)) }
+            .map_err(|_| "The spelling service could not check a word.".to_string())?;
+        next_error(&errors)
     }
 
-    fn next_error(errors: &IEnumSpellingError) -> Option<()> {
+    fn next_error(errors: &IEnumSpellingError) -> Result<bool, String> {
         // `Next` returns S_FALSE and a null pointer when the word is clean.
         // Any real error means the dictionary rejected the token.
         unsafe {
             let mut slot = None;
             let hr = errors.Next(&mut slot);
             if hr.is_err() {
-                return None;
+                return Err("The spelling service could not read its result.".into());
             }
-            slot.map(|_| ())
+            Ok(slot.is_some())
         }
     }
 
-    fn read_strings(list: &IEnumString) -> Vec<String> {
+    fn read_strings(list: &IEnumString) -> Result<Vec<String>, String> {
         let mut out = Vec::new();
         loop {
             let mut buf = [PWSTR::null()];
             let mut fetched = 0u32;
             let hr = unsafe { list.Next(&mut buf, Some(std::ptr::addr_of_mut!(fetched))) };
-            if fetched == 0 || hr.is_err() {
+            if hr.is_err() {
+                if !buf[0].is_null() {
+                    unsafe { CoTaskMemFree(Some(buf[0].as_ptr() as *const std::ffi::c_void)) };
+                }
+                return Err("The spelling service could not enumerate its results.".into());
+            }
+            if fetched == 0 {
                 break;
             }
             if buf[0].is_null() {
                 break;
             }
-            if let Ok(text) = unsafe { buf[0].to_string() }
-                && !text.is_empty()
-            {
+            let text = unsafe { buf[0].to_string() };
+            unsafe { CoTaskMemFree(Some(buf[0].as_ptr() as *const std::ffi::c_void)) };
+            let text =
+                text.map_err(|_| "The spelling service returned invalid text.".to_string())?;
+            if !text.is_empty() {
                 out.push(text);
             }
-            unsafe { CoTaskMemFree(Some(buf[0].as_ptr() as *const std::ffi::c_void)) };
-            if out.len() >= 32 {
+            if out.len() >= 256 {
                 break;
             }
         }
-        out
+        Ok(out)
     }
 }
 
@@ -710,8 +761,9 @@ mod engine {
 
 #[cfg(target_os = "linux")]
 mod engine {
-    use super::{public_tags, resolve};
+    use super::{normalize_tag, public_tags, resolve};
     use std::ffi::{CStr, CString};
+    use std::io::Read;
     use std::os::raw::{c_char, c_int};
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
@@ -758,12 +810,33 @@ mod engine {
     impl Engine {
         fn scan() -> Self {
             let mut raw_tags = Vec::new();
-            for key in ["en_US", "en-US", "en_GB", "en-GB", "en", "pt_BR", "pt-BR", "pt_PT", "pt-PT"] {
-                if locate(key).is_some() {
-                    raw_tags.push(key.replace('_', "-"));
+            for root in ROOTS {
+                let Ok(entries) = std::fs::read_dir(root) else {
+                    continue;
+                };
+                for entry in entries.take(4096).flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|part| part.to_str()) != Some("aff") {
+                        continue;
+                    }
+                    let Some(stem) = path.file_stem().and_then(|part| part.to_str()) else {
+                        continue;
+                    };
+                    if normalize_tag(stem).is_some()
+                        && path.with_extension("dic").is_file()
+                        && is_utf8_dictionary(&path)
+                    {
+                        raw_tags.push(stem.to_string());
+                    }
                 }
             }
-            Self { raw_tags, open: Vec::new() }
+            raw_tags.sort();
+            raw_tags.dedup();
+            raw_tags.truncate(256);
+            Self {
+                raw_tags,
+                open: Vec::new(),
+            }
         }
 
         fn dict_for(&mut self, language: &str) -> Option<*mut Hunhandle> {
@@ -790,6 +863,29 @@ mod engine {
         "/usr/local/share/hunspell",
     ];
 
+    fn utf8_aff(bytes: &[u8]) -> bool {
+        let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
+        for line in bytes.split(|byte| *byte == b'\n') {
+            let mut fields = line
+                .split(u8::is_ascii_whitespace)
+                .filter(|field| !field.is_empty());
+            if fields.next() == Some(b"SET".as_slice()) {
+                return fields.next().is_some_and(|value| {
+                    value.eq_ignore_ascii_case(b"UTF-8") || value.eq_ignore_ascii_case(b"UTF8")
+                });
+            }
+        }
+        false
+    }
+
+    fn is_utf8_dictionary(path: &Path) -> bool {
+        let Ok(file) = std::fs::File::open(path) else {
+            return false;
+        };
+        let mut bytes = Vec::new();
+        file.take(65_536).read_to_end(&mut bytes).is_ok() && utf8_aff(&bytes)
+    }
+
     fn locate(stem: &str) -> Option<(PathBuf, PathBuf)> {
         let stem = stem.replace('-', "_");
         let alt = stem.replace('_', "-");
@@ -797,7 +893,7 @@ mod engine {
             for name in [&stem, &alt] {
                 let aff = Path::new(root).join(format!("{name}.aff"));
                 let dic = Path::new(root).join(format!("{name}.dic"));
-                if aff.is_file() && dic.is_file() {
+                if aff.is_file() && dic.is_file() && is_utf8_dictionary(&aff) {
                     return Some((aff, dic));
                 }
             }
@@ -805,49 +901,67 @@ mod engine {
         None
     }
 
-    pub fn languages() -> Vec<String> {
+    #[cfg(test)]
+    mod tests {
+        use super::utf8_aff;
+
+        #[test]
+        fn dictionary_encoding_is_checked_before_exposing_it() {
+            assert!(utf8_aff(b"# comment\nSET UTF-8\n"));
+            assert!(utf8_aff(b"SET utf8\r\n"));
+            assert!(utf8_aff(b"\xef\xbb\xbfSET UTF-8\n"));
+            assert!(!utf8_aff(b"SET ISO8859-1\n"));
+            assert!(!utf8_aff(b"# missing encoding\n"));
+        }
+    }
+
+    pub fn languages() -> Result<Vec<String>, String> {
         engine()
             .lock()
             .map(|engine| public_tags(&engine.raw_tags))
-            .unwrap_or_default()
+            .map_err(|_| "The spelling dictionary service is unavailable.".to_string())
     }
 
-    pub fn check(language: &str, words: &[String]) -> Vec<u32> {
-        let Ok(mut engine) = engine().lock() else {
-            return Vec::new();
-        };
-        let Some(handle) = engine.dict_for(language) else {
-            return Vec::new();
-        };
+    pub fn check(language: &str, words: &[String]) -> Result<Vec<u32>, String> {
+        let mut engine = engine()
+            .lock()
+            .map_err(|_| "The spelling dictionary service is unavailable.".to_string())?;
+        let handle = engine.dict_for(language).ok_or_else(|| {
+            "The selected spelling dictionary is not installed or could not be opened.".to_string()
+        })?;
         let mut bad = Vec::new();
         for (index, word) in words.iter().enumerate() {
-            let Ok(c) = CString::new(word.as_str()) else {
-                continue;
-            };
+            let c = CString::new(word.as_str())
+                .map_err(|_| "The word cannot be checked.".to_string())?;
             let ok = unsafe { Hunspell_spell(handle, c.as_ptr()) };
             if ok == 0 {
                 bad.push(index as u32);
             }
         }
-        bad
+        Ok(bad)
     }
 
-    pub fn suggest(language: &str, word: &str) -> Vec<String> {
-        let Ok(mut engine) = engine().lock() else {
-            return Vec::new();
-        };
-        let Some(handle) = engine.dict_for(language) else {
-            return Vec::new();
-        };
-        let Ok(c) = CString::new(word) else {
-            return Vec::new();
-        };
+    pub fn suggest(language: &str, word: &str) -> Result<Vec<String>, String> {
+        let mut engine = engine()
+            .lock()
+            .map_err(|_| "The spelling dictionary service is unavailable.".to_string())?;
+        let handle = engine.dict_for(language).ok_or_else(|| {
+            "The selected spelling dictionary is not installed or could not be opened.".to_string()
+        })?;
+        let c = CString::new(word).map_err(|_| "The word cannot be checked.".to_string())?;
         let mut list: *mut *mut c_char = std::ptr::null_mut();
         let count = unsafe { Hunspell_suggest(handle, &mut list, c.as_ptr()) };
-        if count <= 0 || list.is_null() {
-            return Vec::new();
+        if count < 0 || (count > 0 && list.is_null()) {
+            return Err("The spelling dictionary could not provide suggestions.".into());
+        }
+        if count == 0 {
+            if !list.is_null() {
+                unsafe { Hunspell_free_list(handle, &mut list, count) };
+            }
+            return Ok(Vec::new());
         }
         let mut out = Vec::new();
+        let mut invalid = false;
         for index in 0..count {
             let ptr = unsafe { *list.add(index as usize) };
             if ptr.is_null() {
@@ -855,10 +969,16 @@ mod engine {
             }
             if let Ok(text) = unsafe { CStr::from_ptr(ptr) }.to_str() {
                 out.push(text.to_string());
+            } else {
+                invalid = true;
             }
         }
         unsafe { Hunspell_free_list(handle, &mut list, count) };
-        out
+        if invalid {
+            Err("The spelling dictionary returned invalid text.".into())
+        } else {
+            Ok(out)
+        }
     }
 }
 
@@ -891,7 +1011,7 @@ mod engine {
         rx.recv().ok()
     }
 
-    fn raw_tags() -> Vec<String> {
+    fn raw_tags() -> Result<Vec<String>, String> {
         with_checker(|checker| {
             let langs: &NSArray<NSString> = &checker.availableLanguages();
             let mut out = Vec::new();
@@ -900,18 +1020,18 @@ mod engine {
             }
             out
         })
-        .unwrap_or_default()
+        .ok_or_else(|| "The macOS spelling service is unavailable.".to_string())
     }
 
-    pub fn languages() -> Vec<String> {
-        public_tags(&raw_tags())
+    pub fn languages() -> Result<Vec<String>, String> {
+        Ok(public_tags(&raw_tags()?))
     }
 
-    pub fn check(language: &str, words: &[String]) -> Vec<u32> {
-        let tags = raw_tags();
-        let Some(raw) = resolve(&tags, language).map(str::to_string) else {
-            return Vec::new();
-        };
+    pub fn check(language: &str, words: &[String]) -> Result<Vec<u32>, String> {
+        let tags = raw_tags()?;
+        let raw = resolve(&tags, language)
+            .map(str::to_string)
+            .ok_or_else(|| "The selected spelling dictionary is not installed.".to_string())?;
         with_checker(|checker| {
             let lang = NSString::from_str(&raw);
             let mut bad = Vec::new();
@@ -933,14 +1053,14 @@ mod engine {
             }
             bad
         })
-        .unwrap_or_default()
+        .ok_or_else(|| "The macOS spelling service is unavailable.".to_string())
     }
 
-    pub fn suggest(language: &str, word: &str) -> Vec<String> {
-        let tags = raw_tags();
-        let Some(raw) = resolve(&tags, language).map(str::to_string) else {
-            return Vec::new();
-        };
+    pub fn suggest(language: &str, word: &str) -> Result<Vec<String>, String> {
+        let tags = raw_tags()?;
+        let raw = resolve(&tags, language)
+            .map(str::to_string)
+            .ok_or_else(|| "The selected spelling dictionary is not installed.".to_string())?;
         with_checker(|checker| {
             let lang = NSString::from_str(&raw);
             let text = NSString::from_str(word);
@@ -949,7 +1069,12 @@ mod engine {
                 length: text.length(),
             };
             let Some(guesses) = checker
-                .guessesForWordRange_inString_language_inSpellDocumentWithTag(range, &text, Some(&lang), 0)
+                .guessesForWordRange_inString_language_inSpellDocumentWithTag(
+                    range,
+                    &text,
+                    Some(&lang),
+                    0,
+                )
             else {
                 return Vec::new();
             };
@@ -959,28 +1084,70 @@ mod engine {
             }
             out
         })
-        .unwrap_or_default()
+        .ok_or_else(|| "The macOS spelling service is unavailable.".to_string())
     }
 }
 
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 mod engine {
-    pub fn languages() -> Vec<String> {
-        Vec::new()
+    pub fn languages() -> Result<Vec<String>, String> {
+        Err("Spelling is not available on this platform.".into())
     }
 
-    pub fn check(_language: &str, _words: &[String]) -> Vec<u32> {
-        Vec::new()
+    pub fn check(_language: &str, _words: &[String]) -> Result<Vec<u32>, String> {
+        Err("Spelling is not available on this platform.".into())
     }
 
-    pub fn suggest(_language: &str, _word: &str) -> Vec<String> {
-        Vec::new()
+    pub fn suggest(_language: &str, _word: &str) -> Result<Vec<String>, String> {
+        Err("Spelling is not available on this platform.".into())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::prose_words;
+    use super::{
+        accepted_form, misspelled_indices, normalize_tag, prose_words, public_tags, resolve,
+    };
+
+    #[test]
+    fn unavailable_dictionary_is_an_error_not_a_clean_result() {
+        assert!(misspelled_indices("../bad", &["word".into()]).is_err());
+        assert!(misspelled_indices("auto", &["word".into()]).is_err());
+    }
+
+    #[test]
+    fn single_letter_words_reach_the_dictionary_in_all_scripts() {
+        assert_eq!(accepted_form("a").as_deref(), Some("a"));
+        assert_eq!(accepted_form("à").as_deref(), Some("à"));
+        assert_eq!(accepted_form("中").as_deref(), Some("中"));
+        assert_eq!(accepted_form("ALLCAPS"), None);
+    }
+
+    #[test]
+    fn installed_tags_are_normalized_without_accepting_paths() {
+        assert_eq!(normalize_tag(" zh_hant_tw ").as_deref(), Some("zh-Hant-TW"));
+        assert_eq!(normalize_tag("fr_FR").as_deref(), Some("fr-FR"));
+        for bad in ["../fr", "fr/../../tmp", "fr--FR", "fr.UTF-8", "", "a"] {
+            assert_eq!(normalize_tag(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn installed_languages_preserve_legacy_aliases_and_exact_regions() {
+        let raw = ["en_GB", "fr_FR", "pt", "en_US"]
+            .map(str::to_string)
+            .to_vec();
+        let public = public_tags(&raw);
+        for tag in ["en", "en-GB", "en-US", "fr-FR", "pt-PT"] {
+            assert!(public.iter().any(|item| item == tag), "{public:?}");
+        }
+        assert_eq!(resolve(&raw, "en"), Some("en_US"));
+        assert_eq!(resolve(&raw, "en-GB"), Some("en_GB"));
+        assert_eq!(resolve(&raw, "pt-PT"), Some("pt"));
+        assert_eq!(resolve(&raw, "fr-FR"), Some("fr_FR"));
+        assert_eq!(resolve(&raw, "../fr"), None);
+        assert_eq!(resolve(&raw, "fr-CA"), None);
+    }
 
     #[test]
     fn prose_words_skip_code_urls_math_camel_case_and_normalize_apostrophes() {
@@ -1010,13 +1177,21 @@ CamelCase ALLCAPS word2 d\u{2019}água
         let words = prose_words("Before.\n~~~\nrecieve\n~~~\nAfter recieve.\n");
         assert!(words.iter().any(|word| word == "Before"), "{words:?}");
         assert!(words.iter().any(|word| word == "After"), "{words:?}");
-        assert_eq!(words.iter().filter(|word| *word == "recieve").count(), 1, "{words:?}");
+        assert_eq!(
+            words.iter().filter(|word| *word == "recieve").count(),
+            1,
+            "{words:?}"
+        );
     }
 
     #[test]
     fn front_matter_is_not_prose() {
         let words = prose_words("---\ntitle: recieve\n---\n\nA real recieve.\n");
-        assert_eq!(words.iter().filter(|word| *word == "recieve").count(), 1, "{words:?}");
+        assert_eq!(
+            words.iter().filter(|word| *word == "recieve").count(),
+            1,
+            "{words:?}"
+        );
         assert!(!words.iter().any(|word| word == "title"), "{words:?}");
     }
 }
@@ -1028,7 +1203,7 @@ mod windows_tests {
 
     #[test]
     fn english_dictionary_flags_a_nonsense_word() {
-        let languages = engine::languages();
+        let languages = engine::languages().expect("enumerate installed dictionaries");
         if !languages.iter().any(|language| language == "en") {
             return;
         }
@@ -1037,7 +1212,8 @@ mod windows_tests {
         // accepted "recieve" (2026-10-18), a dictionary difference rather than
         // a bug here, so a misspelling that a dictionary happens to know is not
         // this test's business.
-        let bad = misspelled_indices("en", &["zzqx".into(), "the".into(), "CamelCase".into()]);
+        let bad = misspelled_indices("en", &["zzqx".into(), "the".into(), "CamelCase".into()])
+            .expect("check English words");
         if !bad.contains(&0) {
             eprintln!("the English dictionary flagged nothing; skipping");
             return;
@@ -1054,11 +1230,12 @@ mod windows_tests {
 
     #[test]
     fn portuguese_flags_a_typo_only_when_the_dictionary_is_installed() {
-        let languages = engine::languages();
+        let languages = engine::languages().expect("enumerate installed dictionaries");
         if !languages.iter().any(|language| language == "pt-BR") {
             return;
         }
-        let bad = misspelled_indices("pt-BR", &["recceber".into(), "receber".into()]);
+        let bad = misspelled_indices("pt-BR", &["recceber".into(), "receber".into()])
+            .expect("check Portuguese words");
         assert!(bad.contains(&0), "recceber should be rejected, bad={bad:?}");
         assert!(!bad.contains(&1), "receber is a word, bad={bad:?}");
     }

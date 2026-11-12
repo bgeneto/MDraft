@@ -78,7 +78,7 @@ non-obvious lesson is added to the Traps section.
 | GAP-013 | P1 | S/M | Markdown | YAML front matter handling | open |
 | GAP-017 | P1 | M | Platform | Reliable second-launch handoff and multi-file opening | in progress |
 | GAP-019 | P1 | M | Preview | Working preview zoom and zoom-only reset | in progress |
-| GAP-021 | P1 | M | Platform | UTF-16 round-trip; broader encoding support follows at P2 | open |
+| GAP-021 | P2 | M | Platform | Legacy/UTF-16 round-trip delivered; Reopen with Encoding remains | in progress |
 | GAP-006 | P2 | M/L | Workspace | Read-only folder tree before file management | open |
 | GAP-007 | P2 | M | Workspace | Read-only cross-file search before multi-file Replace | open |
 | GAP-008 | P2 | M | Workspace | Quick open over tabs, recents and favorites | open |
@@ -360,27 +360,30 @@ tab of replacement characters, and saving rewrites the original file. Link
 navigation now routes recognized editable extensions through `openLinkTarget`
 and other targets through the OS opener.
 
-**Delivered P0.** Rust validates bytes before decoding: binary signatures,
-NUL/non-text controls and invalid UTF-8 are refused; UTF-16/32 BOMs receive an
-encoding explanation. Existing write destinations receive the same guard.
-Legacy lossy recovery remains journaled; Auto Save pauses and manual save offers
-an acknowledged UTF-8 copy to a different path. BOM/EOL text round-trips and image
-import remain covered. This does not implement size thresholds or new decoders.
+**Delivered P0.** Rust validates bytes before decoding: binary signatures and
+NUL/non-text controls are refused. Text encoding now follows the delivered
+GAP-021 path (UTF-8, BOM-marked UTF-16, round-tripped legacy encodings); UTF-32
+and BOM-less UTF-16 still receive an encoding explanation. Existing write
+destinations receive the same guard. Legacy lossy recovery remains journaled;
+Auto Save pauses and manual save offers an acknowledged UTF-8 copy to a different
+path. BOM/EOL text round-trips and image import remain covered. This does not
+implement size thresholds or new decoders.
 
 **Target.** A `FileKind` classifier used by Open, drop and link opening:
 `text` (editable), `image` (import/drop), `binary` (refuse or open with the OS),
-`too_large` (warn or refuse), `missing`. Text detection checks a BOM, UTF-8
-validity and NUL bytes. Retain the delivered refusal policy and explicit UTF-8
-copy route for legacy lossy recovery; broader decoding belongs to GAP-021.
+`too_large` (warn or refuse), `missing`. Text detection uses the shared
+`text_encoding` decision (BOM/UTF-8/legacy round-trip) plus NUL/control checks.
+Retain the delivered refusal policy and explicit UTF-8 copy route for legacy
+lossy recovery; GAP-021 owns the decoder and picker slices.
 
 **Acceptance.**
 
 - Opening or dropping a PDF/DOCX/ZIP/image does not create a text tab; images
   still import, and other binaries go to the OS opener (subject to the
   executable refusal) or are refused with a message.
-- A UTF-16 BOM is recognized as text in an unsupported encoding, not mislabeled
-  binary or opened lossily. Until GAP-021 ships, refuse it with a clear encoding
-  explanation; afterward route it through the supported decoding path.
+- A UTF-16 BOM is recognized as text and routed through the supported decoding
+  path; BOM-less UTF-16 gets a clear encoding explanation rather than a binary
+  label or a lossy open.
 - A legacy lossy buffer can only be saved to an explicitly acknowledged UTF-8
   copy at a different path; the original remains protected.
 - The guard covers manual save, Auto Save, Save As, close-save and recovered
@@ -1064,9 +1067,10 @@ and Mermaid SVGs need care; `devicePixelRatio` on high-DPI.
 
 **Priority:** P2 · **Effort:** M · **Workstream:** Platform · **Status:** open
 
-**Evidence.** `spellcheck.rs` `resolve()` maps only `en`, `pt-BR` and `pt-PT`;
-the Hunspell path probes only those keys. `dictionaryOptions` offers the same
-short list. An installed French or German dictionary is ignored.
+**Evidence.** Syntax-aware spellchecking now discovers compatible installed
+languages and supports per-document choices. Linux discovery is limited to UTF-8
+Hunspell dictionaries, and platform coverage beyond the available Windows and
+Linux test hosts still needs validation.
 
 **Target.** List every language the OS reports, accept any tag the engine can
 resolve, and map a requested tag to the best installed match. Keep the current
@@ -1092,40 +1096,47 @@ nothing rather than guess.
 
 ### GAP-021 — UTF-16 round-trip, then broader encoding support
 
-**Priority:** P1 · **Effort:** M · **Workstream:** Platform · **Status:** open
+**Priority:** P2 · **Effort:** M · **Workstream:** Platform · **Status:** in progress
 
-**Slices.** P1: BOM-detected UTF-16LE/BE open/save round-trip. P2 (M): broader
-encodings, including Windows-1252, and Reopen with Encoding. GAP-005 owns the P0
-guard against unconfirmed lossy rewrites across every save path; reuse it.
+**Plan:** [Open and save legacy-encoded documents without loss](plans/2026-11-12-legacy-text-encodings.md)
 
-**Evidence.** `read_document` decodes every file as UTF-8 lossily, records
-`lossy`, and warns after opening; saving rewrites the bytes. UTF-8 BOM and EOL
-preservation are already implemented. There is no other encoding
-picker, no UTF-16 detection and no "Reopen with Encoding".
+**Delivered 2026-11-12.** BOM-marked UTF-8/UTF-16LE/BE and round-trippable legacy
+encodings (Windows-1252 and others via `chardetng`) open with their real text.
+The encoding is remembered per document, saved back with the original BOM and
+line endings, shown in the status bar, and carried through crash recovery and
+the LaTeX project snapshot. An unrepresentable character refuses the save and
+offers a UTF-8 copy. See the plan and
+[the ADR](adr/2026-11-12-text-encoding-round-trip.md).
 
-**Target.** Detect a BOM (UTF-8/UTF-16LE/BE), validate UTF-8, and fall back to an
-encoding picker (UTF-8, UTF-16, Windows-1252 at minimum). Remember the chosen
-encoding per document; save in the same encoding; preserve BOM and EOL.
-The P1 slice may continue refusing unsupported encodings under GAP-005 while
-the later picker is unavailable. Never bypass that guard in Auto Save or recovery.
+**Remaining slice.** “Reopen with Encoding…” for the rare wrong guess, without
+touching disk; dirty-buffer handling needs an explicit cancellation-safe
+decision. The automatic detector and byte-round-trip check are the current
+safety net.
 
-**Acceptance.**
+**Evidence.** `read_document` now accepts supported encodings instead of refusing
+every non-UTF-8 file. UTF-32 and UTF-16 without a BOM are still refused with an
+explanation. There is no manual encoding picker.
+
+**Acceptance for the delivered slice.**
 
 - Open a UTF-16 file with a BOM: it opens correctly and saves back as UTF-16
-  with the same BOM.
-- In the P2 slice, open a Windows-1252 file: the picker offers it, the text is
-  correct, and saving does not replace accents with `?`.
-- In the P2 slice, Reopen with Encoding changes decoding without touching disk;
-  dirty-buffer handling uses an explicit cancellation-safe decision.
+  with the same BOM and bytes.
+- Open a Windows-1252 file automatically: the text is correct, the status bar
+  names it, and saving does not replace accents with `?` or a replacement
+  character.
+- Saving an unedited file reproduces every byte; a character the encoding cannot
+  store leaves the file untouched and offers a UTF-8 copy.
 - The status bar shows the encoding in use.
 - A file with mixed/invalid bytes never silently becomes valid UTF-8 on save.
 
-**Tests.** Rust unit over byte fixtures; UI with temporary files; round-trip
-byte comparison; `npm run test:rust`.
+**Tests.** Rust unit over byte fixtures and the reported thesis; real-UI
+open/save/status checks; `npm run test:rust`, `npm run p0:unit` and
+`npm run p0:lifecycle`.
 
-**Risks.** A new dependency (`encoding_rs` or similar) needs a plan; heuristic
-detection can be wrong; invalid sequences in the middle of a file. Prefer BOM,
-then valid UTF-8, then the reader's choice.
+**Risks.** Heuristic detection can be wrong; invalid sequences in the middle of
+a file. The detector is accepted only when re-encoding reproduces the input, and
+Windows-1250 is normalized to Windows-1252 when both decode the same bytes.
+Prefer BOM, then valid UTF-8, then the detected legacy encoding.
 
 **Related.** GAP-005.
 

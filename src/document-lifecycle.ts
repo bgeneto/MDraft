@@ -19,6 +19,7 @@ export interface DocumentLifecycleDeps {
     eol: string,
     bom: boolean,
     expected: string | null,
+    encoding: string,
   ): Promise<CheckedWrite>;
   recovery: Pick<RecoveryScheduler, "schedule" | "forget" | "flush">;
   choosePath(session: Session, suggested?: string): Promise<string | null>;
@@ -109,11 +110,21 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
     }
   }
 
-  async function saveJob(s: Session, as: boolean, automatic: boolean, suggested?: string) {
-    if (s.lossy && automatic) {
+  async function saveJob(
+    s: Session,
+    as: boolean,
+    automatic: boolean,
+    suggested?: string,
+    encodingOverride?: string,
+  ) {
+    if ((s.lossy || s.encodingBlocked) && automatic) {
       if (!warned.has(s.id)) {
         warned.add(s.id);
-        deps.notify(`Auto Save paused for "${s.name}": save its recovered text as a UTF-8 copy.`);
+        deps.notify(
+          s.encodingBlocked
+            ? `Auto Save paused for "${s.name}": its ${s.encoding} text contains characters that encoding cannot store.`
+            : `Auto Save paused for "${s.name}": save its recovered text as a UTF-8 copy.`,
+        );
       }
       return false;
     }
@@ -122,7 +133,7 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
     const target = copy ? await deps.choosePath(s, suggested) : sourcePath;
     if (!target || !exists(s) || s.path !== sourcePath) return false;
     const samePath = s.path !== null && pathKey(s.path) === pathKey(target);
-    if (s.lossy && samePath) {
+    if ((s.lossy || s.encodingBlocked) && samePath) {
       deps.notify("Choose a different filename for the UTF-8 copy; the original is protected.");
       return false;
     }
@@ -165,15 +176,25 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
       // during write remains newer than this exact disk snapshot. The expected
       // hash belongs to the same-path revision; Save As has no baseline.
       const text = deps.text(s);
+      const targetEncoding = encodingOverride ?? s.encoding;
       const info = await deps.write(
         target,
         text,
         s.lineEnding || "\n",
         s.hadBom,
         samePath ? s.sha256 : null,
+        targetEncoding,
       );
       if (!exists(s) || s.path !== sourcePath) return false;
       if (!info.written) {
+        if (info.change === "encoding") {
+          s.encodingBlocked = true;
+          deps.notify(
+            `"${s.name}" contains characters ${s.encoding} cannot store. The file was not changed; save a UTF-8 copy instead.`,
+          );
+          deps.changed(s);
+          return false;
+        }
         deps.conflict(s, info.change === "deleted" ? "deleted" : "modified");
         return false;
       }
@@ -191,11 +212,14 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
         s.lossy = false;
         s.readOnly = false;
       }
+      s.encoding = targetEncoding;
       s.savedContent = text;
       s.modifiedMs = info.modifiedMs;
       s.size = info.size;
       s.sha256 = info.sha256;
       s.conflict = null;
+      s.encodingBlocked = false;
+      warned.delete(s.id);
       await journal(s);
       deps.changed(s, !samePath);
       return true;
@@ -203,8 +227,16 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
   }
 
   const save = (s: Session, automatic = false) => run(s, () => saveJob(s, false, automatic));
-  const saveAs = (s: Session, suggested?: string) =>
-    run(s, () => saveJob(s, true, false, suggested));
+  const saveAs = (s: Session, suggested?: string, encodingOverride?: string) =>
+    run(s, () =>
+      saveJob(
+        s,
+        true,
+        false,
+        suggested,
+        encodingOverride ?? (s.lossy || s.encodingBlocked ? "UTF-8" : undefined),
+      ),
+    );
 
   async function reload(s: Session): Promise<boolean> {
     return run(s, async () => {
@@ -263,6 +295,8 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
             s.sha256 = payload.sha256;
             s.lineEnding = payload.lineEnding;
             s.hadBom = payload.hadBom;
+            s.encoding = payload.encoding;
+            s.encodingBlocked = false;
             s.readOnly = payload.readOnly;
             s.conflict = null;
           } else if (!s.dirty) deps.replace(s, payload);

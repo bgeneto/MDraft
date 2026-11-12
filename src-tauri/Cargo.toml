@@ -87,6 +87,12 @@ percent-encoding = "2"
 # runtime is pulled in.
 ureq = "3.4.2"
 base64 = "0.23.1"
+# Legacy text decoding. `encoding_rs` is already compiled through reqwest's
+# `charset` feature; declaring it directly pins the API and the lock version the
+# encoding module uses. `chardetng` is Firefox's small, pure-Rust detector, so
+# legacy files need no C build, no iconv and no network.
+encoding_rs = "0.8.42"
+chardetng = "1.0.0"
 # Pandoc archives are compressed. `rust_backend` keeps flate2 pure Rust, so no C
 # toolchain is needed on any platform.
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }

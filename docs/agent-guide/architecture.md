@@ -162,7 +162,9 @@ src-tauri/src/
   speech.rs          Linux Read Aloud through speech-dispatcher: `spd-say -L`
                      parsing, speech/stop commands and their tests
   linux_webkit_env.rs pre-GTK Wayland/NVIDIA DMA-BUF workaround (+ tests)
-  documents.rs       file IO, path existence, startup file
+  documents.rs       file IO, text decoding/encoding, path existence, startup file
+  text_encoding.rs   BOM/UTF-8/legacy detection, strict round-trip decoding and
+                     per-document encoding (+ tests)
   recovery.rs        the crash-recovery journal, atomic per-entry files (+ tests)
   images.rs          image import: sniffing, sanitiser, dedup, download
   clipboard.rs       plain-text clipboard: one arboard handle, read/write commands

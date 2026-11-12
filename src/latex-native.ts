@@ -21,8 +21,8 @@ function decodeBase64Data(data: string): Uint8Array {
   return bytes;
 }
 
-function decodeText(data: string): string {
-  return new TextDecoder("utf-8", { fatal: false }).decode(decodeBase64Data(data));
+function decodeText(data: string, encoding = "UTF-8"): string {
+  return new TextDecoder(encoding, { fatal: false }).decode(decodeBase64Data(data));
 }
 
 /** The project's `.tex` sources, in the order the viewer maps them. */
@@ -33,7 +33,7 @@ export function nativeSources(
     .filter((file) => /\.tex$/i.test(file.path))
     .map((file) => ({
       path: file.path,
-      source: decodeText(file.data)
+      source: decodeText(file.data, file.encoding)
         .replace(/^\uFEFF/, "")
         .replace(/\r\n?/g, "\n"),
     }))

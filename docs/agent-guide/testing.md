@@ -19,6 +19,7 @@ the same rows by subject.
 | --- | --- | --- |
 | Typecheck | `npm run build` | [catalog/build-and-site.md](catalog/build-and-site.md) |
 | Rust unit | `npm run test:rust` | [catalog/build-and-site.md](catalog/build-and-site.md) |
+| Spelling corpus (unit) | `npm run spellcheck:unit` | [catalog/editor-and-documents.md](catalog/editor-and-documents.md) |
 | Session store | `npm run test:sessions` | [catalog/editor-and-documents.md](catalog/editor-and-documents.md) |
 | P0 data safety (unit) | `npm run p0:unit` | [catalog/editor-and-documents.md](catalog/editor-and-documents.md) |
 | File name suggestions (unit) | `npm run filename:unit` | [catalog/editor-and-documents.md](catalog/editor-and-documents.md) |

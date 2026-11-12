@@ -10,7 +10,8 @@ assert.doesNotMatch(
   compile,
   /wasmtex\/synctex|SynctexParser|synctexData|postMessageWithResponse|\\synctex=1/i,
 );
-assert.match(compile, /sources:\s*Object\.entries\(files\)/);
+assert.match(compile, /sources:\s*\[\.\.\.decoded\.entries\(\)\]/);
+assert.match(compile, /encoding\.toUpperCase\(\) === "UTF-8" \? source : bytes/);
 assert.match(compile, /mainFile:\s*snapshot\.mainFile/);
 assert.match(readFileSync("samples/latex-project/main.tex", "utf8"), /\\usepackage\{fontspec\}/);
 

@@ -1410,7 +1410,7 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
       // The language is part of the key: switching a tab from Markdown to LaTeX
       // changes which ranges are prose, so the plugin must be rebuilt even when
       // the dictionary and the word list are unchanged.
-      const key = `${options.enabled}\0${options.language}\0${options.documentLanguage ?? ""}\0${options.words.join("\n")}`;
+      const key = `${options.enabled}\0${options.language}\0${options.documentLanguage ?? ""}\0${options.stringMode ?? "human"}\0${options.identifiers ?? false}\0${options.readOnly ?? false}\0${options.sessionKey ?? ""}\0${options.words.join("\n")}`;
       if (!force && key === spellKey) return;
       spellKey = key;
       view.dispatch({

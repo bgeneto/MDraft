@@ -59,13 +59,13 @@ landed, because the fix is what makes it recur.
 | [traps/test-harness.md](traps/test-harness.md) | 22 | Individual suites: what they assert, what they leave behind, and why one passes alone and fails in the full run. |
 | [traps/debugging-probes.md](traps/debugging-probes.md) | 22 | CDP drivers, stubs and probes that report the wrong thing for a reason the driver owns. |
 | [traps/dom-measurement.md](traps/dom-measurement.md) | 18 | Probes that read layout, selection, focus or visibility: what the DOM reports versus what the reader sees. |
-| [traps/editor-and-ui.md](traps/editor-and-ui.md) | 37 | CodeMirror, the theme layer, menus, shortcuts, Preferences and the DOM measurements that decide what the reader sees. |
+| [traps/editor-and-ui.md](traps/editor-and-ui.md) | 38 | CodeMirror, the theme layer, menus, shortcuts, Preferences and the DOM measurements that decide what the reader sees. |
 | [traps/paste-and-images.md](traps/paste-and-images.md) | 11 | Rich paste, the clipboard, image destinations and the markup each document format expects. |
 | [traps/preview-and-sync.md](traps/preview-and-sync.md) | 23 | The preview renderers, the source maps behind word sync, the PDF text layer and the measured cost of rendering. |
 | [traps/latex-typst-asciidoc.md](traps/latex-typst-asciidoc.md) | 25 | The non-Markdown formats: engine selection, reference validation, includes, outline scans and PDF correspondence. |
 | [traps/export-and-print.md](traps/export-and-print.md) | 29 | Pandoc, the browser-readable artifacts, WebView2 and WebKitGTK printing, and the PDF measurements that follow them. |
 | [traps/ai-accessibility-and-typography.md](traps/ai-accessibility-and-typography.md) | 27 | The AI Assistant, Read Aloud and speech backends, and the bundled typefaces with their subsetting pipeline. |
-| [traps/assets-and-site.md](traps/assets-and-site.md) | 11 | Icons, the GitHub Pages site, its images and the documentation assets that ship beside the application. |
+| [traps/assets-and-site.md](traps/assets-and-site.md) | 12 | Icons, the GitHub Pages site, its images and the documentation assets that ship beside the application. |
 
 ## Searching the record
 

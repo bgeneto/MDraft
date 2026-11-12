@@ -74,3 +74,13 @@ anchor click instead measured section top 79.94 px and header bottom 74.60 px
 on desktop (80.22/66.60 px on mobile). For layout QA, click the section anchor,
 measure those boxes and take a viewport screenshot. Do not change the page's
 spacing to compensate for a misleading whole-element capture.
+
+**`Opening tag "a" not terminated. (906:17)` from `npm run format:check`**
+The Portuguese landing page was already malformed in the committed tree even
+though `git status` showed no site changes. The tempting conclusion was that
+a concurrent working-tree edit had broken it. `git blame` identified commit
+`8fe4d513`, and `git show 8fe4d513^:site/pt-br/index.html` revealed the
+original image paths and caption: text intended for zoom hints had been inserted
+inside several unrelated attributes and after closing captions. Restore those
+individual values, then run both the formatter check and `npm run site`;
+do not revert the whole page and lose its later content.

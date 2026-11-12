@@ -18,8 +18,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tauri::ipc::Channel;
 use tauri::State;
+use tauri::ipc::Channel;
 use tokio::sync::watch;
 
 use crate::cancel_registry::{CancelRegistry, Ticket};
@@ -87,7 +87,11 @@ impl Drop for Registration<'_> {
 
 /// One event on the request channel. `kind` is the tag the panel switches on.
 #[derive(Clone, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum AiEvent {
     Started {
         model: String,

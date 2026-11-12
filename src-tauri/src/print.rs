@@ -873,7 +873,11 @@ mod tests {
         })
         .unwrap();
         assert_ne!(first, second, "the same stem printed twice gets two paths");
-        assert_eq!(first.file_name(), second.file_name(), "the viewer still shows the name");
+        assert_eq!(
+            first.file_name(),
+            second.file_name(),
+            "the viewer still shows the name"
+        );
         assert_eq!(std::fs::read(&first).unwrap(), b"first");
         assert_eq!(std::fs::read(&second).unwrap(), b"second");
         drop(held);

@@ -270,11 +270,15 @@ Other editor features:
   refused. Checking and replacing a file are still separate operations from
   other programs' point of view: the window is narrow and the answer is safe
   (it refuses), but it is not an atomic compare-and-swap.
-- **Safe text opening.** Binary files and invalid UTF-8 are refused rather than
-  opened with replacement characters. UTF-16/32 receives an encoding explanation;
-  convert a copy to UTF-8 until those encodings are supported. UTF-8 BOM and line
-  endings are preserved. A legacy recovered lossy buffer keeps its text, pauses
-  Auto Save and offers **Save a UTF-8 copy…**; the original is protected.
+- **Safe text opening.** Binary files and UTF-32 are refused rather than opened
+  with replacement characters. UTF-8, BOM-marked UTF-16LE/BE and round-trippable
+  legacy encodings such as Windows-1252 open with their real characters, and the
+  status bar names the encoding. Saving writes the same encoding, BOM and line
+  endings; a file is decoded only when re-encoding reproduces its bytes exactly.
+  If new text contains a character that encoding cannot store, nothing is
+  written and MDraft offers **Save a UTF-8 copy…**. A legacy recovered lossy
+  buffer keeps its text, pauses Auto Save and offers the same copy route; the
+  original is protected.
 - **Save As** stays attached to the initiating tab even if another tab becomes
   active. It preserves typing and undo history. A destination already open in
   another tab is refused; choose another name or close that tab first.
@@ -286,9 +290,15 @@ Other editor features:
 - **Themes** follow the system, or are fixed to light or dark.
 - The source pane has eight syntax palettes, each with its own surface rather
   than a single set of token colours.
-- **Spellchecking** uses the operating system's dictionaries. Code, URLs and
-  mathematics are not sent to the checker. HTML documents are not spellchecked.
-  A language the system does not have underlines nothing rather than guessing.
+- **Spellchecking** uses installed operating-system dictionaries and checks
+  source prose in Markdown, Typst, AsciiDoc, LaTeX, HTML, JavaScript, JSON and
+  CSS. It excludes code, URLs, mathematics and machine-oriented values; code
+  and JSON string selection uses conservative heuristics. Preferences let you
+  change string checking and optionally check identifier components. A document
+  can follow the global language, choose Automatic, or use an installed language;
+  HTML language declarations also apply in Automatic mode. Missing dictionaries
+  are reported rather than replaced with an unrelated language. Linux supports
+  installed UTF-8 Hunspell dictionaries. No dictionary is downloaded.
 - Unsaved changes produce **Save / Discard / Cancel**. Escape and dismissal
   cancel, as do Save As cancellation, save failure or unresolved conflicts.
   Cancelling a bulk close keeps every tab; earlier successful saves are retained,

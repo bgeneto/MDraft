@@ -78,7 +78,6 @@ pub fn take_last_tokens(text: &str, limit: usize) -> String {
     text[boundaries[low]..].to_string()
 }
 
-
 #[tauri::command]
 pub async fn count_tokens(text: String) -> usize {
     tauri::async_runtime::spawn_blocking(move || estimate_tokens(&text))

@@ -240,6 +240,10 @@ fn default_spellcheck_language() -> String {
     "auto".to_string()
 }
 
+fn default_spellcheck_string_mode() -> String {
+    "human".into()
+}
+
 /// KaTeX draws every formula at 1.21em. The default scales that down to sit
 /// with the prose; 100 is KaTeX's own ratio, kept as the upper bound's anchor.
 fn default_math_font_scale() -> u32 {
@@ -253,7 +257,8 @@ fn default_code_font_scale() -> u32 {
     100
 }
 
-pub fn default_export_formats() -> Vec<ExportFormat> {    let args = |rest: &str| format!("{PANDOC_INPUT} {rest}");
+pub fn default_export_formats() -> Vec<ExportFormat> {
+    let args = |rest: &str| format!("{PANDOC_INPUT} {rest}");
     vec![
         ExportFormat::new(
             "pdf",
@@ -273,15 +278,30 @@ pub fn default_export_formats() -> Vec<ExportFormat> {    let args = |rest: &str
             "odt",
             &args("-s -o ${outputPath} --reference-doc=${styleReference}"),
         ),
-        ExportFormat::new("latex", "LaTeX", "tex", &args("-s -t latex -o ${outputPath} --wrap=none")),
-        ExportFormat::new("rst", "reStructuredText", "rst", &args("-s -t rst -o ${outputPath} --wrap=none")),
+        ExportFormat::new(
+            "latex",
+            "LaTeX",
+            "tex",
+            &args("-s -t latex -o ${outputPath} --wrap=none"),
+        ),
+        ExportFormat::new(
+            "rst",
+            "reStructuredText",
+            "rst",
+            &args("-s -t rst -o ${outputPath} --wrap=none"),
+        ),
         ExportFormat::new(
             "asciidoc",
             "AsciiDoc",
             "adoc",
             &args("-s -t asciidoc -o ${outputPath} --wrap=none"),
         ),
-        ExportFormat::new("epub", "EPUB", "epub", &args("-s -o ${outputPath} --css=${styleReference}")),
+        ExportFormat::new(
+            "epub",
+            "EPUB",
+            "epub",
+            &args("-s -o ${outputPath} --css=${styleReference}"),
+        ),
         ExportFormat::new("rtf", "RTF", "rtf", &args("-s -o ${outputPath}")),
         ExportFormat::new(
             "textile",
@@ -333,6 +353,13 @@ pub struct PresetOverride {
     pub oldstyle_figures: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slashed_zero: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpellDocumentLanguage {
+    pub path: String,
+    pub language: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -571,6 +598,15 @@ pub struct Settings {
     /// user dictionary and would change spelling in every other program.
     #[serde(default)]
     pub spellcheck_words: Vec<String>,
+    /// Scope of JavaScript and JSON string checking.
+    #[serde(default = "default_spellcheck_string_mode")]
+    pub spellcheck_string_mode: String,
+    /// Check components of code identifiers without offering a rename.
+    #[serde(default)]
+    pub spellcheck_identifiers: bool,
+    /// Least-recently-set first; bounded and validated on load and save.
+    #[serde(default)]
+    pub spellcheck_document_languages: Vec<SpellDocumentLanguage>,
 
     // ---- Preferences: Image ----------------------------------------------
     /// "assetsFolder" | "assetsDir" | "custom" | "keepOriginal"
@@ -776,6 +812,9 @@ impl Default for Settings {
             spellcheck: true,
             spellcheck_language: default_spellcheck_language(),
             spellcheck_words: Vec::new(),
+            spellcheck_string_mode: default_spellcheck_string_mode(),
+            spellcheck_identifiers: false,
+            spellcheck_document_languages: Vec::new(),
 
             image_rule: "assetsFolder".into(),
             image_custom_dir: String::new(),
@@ -1003,8 +1042,7 @@ fn parse_settings(raw: &str) -> Option<Settings> {
     }
 
     // Only a deliberate choice is carried forward; see the doc comment above.
-    let chose_something =
-        open_location || open_file || run_command || !command.trim().is_empty();
+    let chose_something = open_location || open_file || run_command || !command.trim().is_empty();
     if legacy && chose_something {
         object.insert("afterOpenLocation".into(), open_location.into());
         object.insert("afterOpenFile".into(), open_file.into());
@@ -1021,6 +1059,13 @@ fn parse_settings(raw: &str) -> Option<Settings> {
     settings.recent_files.truncate(MAX_RECENT);
     normalize_favorites(&mut settings.favorites);
     settings.last_tabs.truncate(MAX_LAST_TABS);
+    normalize_spell_document_languages(&mut settings.spellcheck_document_languages);
+    if !matches!(
+        settings.spellcheck_string_mode.as_str(),
+        "human" | "all" | "off"
+    ) {
+        settings.spellcheck_string_mode = default_spellcheck_string_mode();
+    }
     settings.ai_context_tokens = clamp_context_tokens(settings.ai_context_tokens);
     settings.latex_cache_limit_mb = clamp_latex_cache_limit(settings.latex_cache_limit_mb);
     // The Files panel was replaced by Favorites. An older file that was last
@@ -1033,17 +1078,21 @@ fn parse_settings(raw: &str) -> Option<Settings> {
 }
 
 fn adopt_latex_marker(raw: Option<&str>, marker: bool) -> bool {
-    marker && raw
-        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
-        .is_none_or(|value| value.get("latexEnabled").is_none())
+    marker
+        && raw
+            .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+            .is_none_or(|value| value.get("latexEnabled").is_none())
 }
 
 fn initialize_local_packages(raw: Option<&str>, config_exists: bool) -> bool {
-    !config_exists || raw.is_some_and(|raw| {
-        serde_json::from_str::<serde_json::Value>(raw).is_ok_and(|value| {
-            value.as_object().is_some_and(|fields| !fields.contains_key("latexTexmfRoots"))
+    !config_exists
+        || raw.is_some_and(|raw| {
+            serde_json::from_str::<serde_json::Value>(raw).is_ok_and(|value| {
+                value
+                    .as_object()
+                    .is_some_and(|fields| !fields.contains_key("latexTexmfRoots"))
+            })
         })
-    })
 }
 
 impl AppState {
@@ -1059,7 +1108,8 @@ impl AppState {
         let config_file = dir.join("settings.json");
 
         let raw_settings = std::fs::read_to_string(&config_file).ok();
-        let mut settings = raw_settings.as_deref()
+        let mut settings = raw_settings
+            .as_deref()
             .and_then(parse_settings)
             .unwrap_or_default();
 
@@ -1075,7 +1125,10 @@ impl AppState {
         // would offer "Enable LuaLaTeX…" again and re-download it. Adopt the
         // marker once, then leave it alone: the switch is the source of truth
         // from here on, and turning it off must not be undone by a stale file.
-        if adopt_latex_marker(raw_settings.as_deref(), crate::latex::legacy_marker_present(app)) {
+        if adopt_latex_marker(
+            raw_settings.as_deref(),
+            crate::latex::legacy_marker_present(app),
+        ) {
             settings.latex_enabled = true;
         }
         if fresh {
@@ -1109,6 +1162,13 @@ impl AppState {
         next.recent_files.truncate(MAX_RECENT);
         normalize_favorites(&mut next.favorites);
         next.last_tabs.truncate(MAX_LAST_TABS);
+        normalize_spell_document_languages(&mut next.spellcheck_document_languages);
+        if !matches!(
+            next.spellcheck_string_mode.as_str(),
+            "human" | "all" | "off"
+        ) {
+            next.spellcheck_string_mode = default_spellcheck_string_mode();
+        }
         next.ai_context_tokens = clamp_context_tokens(next.ai_context_tokens);
         next.latex_cache_limit_mb = clamp_latex_cache_limit(next.latex_cache_limit_mb);
         sort_ai_usage(&mut next.ai_action_usage);
@@ -1138,11 +1198,7 @@ pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
 
 #[tauri::command]
 pub fn get_settings(state: tauri::State<'_, AppState>) -> Settings {
-    state
-        .settings
-        .lock()
-        .map(|s| s.clone())
-        .unwrap_or_default()
+    state.settings.lock().map(|s| s.clone()).unwrap_or_default()
 }
 
 /// Save settings, rebuilding the native menu when the export targets changed.
@@ -1258,11 +1314,7 @@ pub fn add_recent<R: Runtime>(
     state: tauri::State<'_, AppState>,
     path: String,
 ) -> Result<Settings, String> {
-    let mut next = state
-        .settings
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone();
+    let mut next = state.settings.lock().map_err(|e| e.to_string())?.clone();
 
     let previous = next.recent_files.clone();
     record_recent(&mut next, &path);
@@ -1283,11 +1335,7 @@ pub fn clear_recent<R: Runtime>(
     app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Settings, String> {
-    let mut next = state
-        .settings
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone();
+    let mut next = state.settings.lock().map_err(|e| e.to_string())?.clone();
     let had_recent = !next.recent_files.is_empty();
     next.recent_files.clear();
     let saved = state.save(next)?;
@@ -1303,15 +1351,8 @@ pub fn clear_recent<R: Runtime>(
 /// A duplicate is a successful no-op: clicking Add twice cannot create two rows.
 /// The native menu does not show favorites, so no menu rebuild is needed.
 #[tauri::command]
-pub fn add_favorite(
-    state: tauri::State<'_, AppState>,
-    path: String,
-) -> Result<Settings, String> {
-    let mut next = state
-        .settings
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone();
+pub fn add_favorite(state: tauri::State<'_, AppState>, path: String) -> Result<Settings, String> {
+    let mut next = state.settings.lock().map_err(|e| e.to_string())?.clone();
     if !add_favorite_path(&mut next, &path)? {
         return Ok(next);
     }
@@ -1324,11 +1365,7 @@ pub fn remove_favorite(
     state: tauri::State<'_, AppState>,
     path: String,
 ) -> Result<Settings, String> {
-    let mut next = state
-        .settings
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone();
+    let mut next = state.settings.lock().map_err(|e| e.to_string())?.clone();
     if !remove_favorite_path(&mut next, &path) {
         return Ok(next);
     }
@@ -1350,18 +1387,80 @@ pub fn same_path(a: &str, b: &str) -> bool {
     normalize(a) == normalize(b)
 }
 
+fn normalize_spell_document_languages(entries: &mut Vec<SpellDocumentLanguage>) {
+    let mut kept: Vec<SpellDocumentLanguage> = Vec::new();
+    for mut entry in entries.drain(..).rev().take(2_000) {
+        if entry.path.trim().is_empty() || entry.path.len() > 8_192 || entry.path.contains('\0') {
+            continue;
+        }
+        if entry.language != "auto" {
+            let Some(language) = crate::spellcheck::normalize_tag(&entry.language) else {
+                continue;
+            };
+            entry.language = language;
+        }
+        if kept.iter().any(|other| same_path(&other.path, &entry.path)) {
+            continue;
+        }
+        kept.push(entry);
+        if kept.len() == 100 {
+            break;
+        }
+    }
+    kept.reverse();
+    *entries = kept;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    fn spelling_document_choices_keep_newest_valid_entries() {
+        let mut entries = (0..101)
+            .map(|index| SpellDocumentLanguage {
+                path: format!("/docs/{index}.md"),
+                language: "pt_br".into(),
+            })
+            .collect::<Vec<_>>();
+        entries.push(SpellDocumentLanguage {
+            path: "/docs/100.md".into(),
+            language: "auto".into(),
+        });
+        entries.push(SpellDocumentLanguage {
+            path: "../invalid".into(),
+            language: "../fr".into(),
+        });
+        normalize_spell_document_languages(&mut entries);
+        assert_eq!(entries.len(), 100);
+        assert_eq!(
+            entries.last().map(|entry| entry.language.as_str()),
+            Some("auto")
+        );
+        assert_eq!(entries[0].language, "pt-BR");
+        assert!(!entries.iter().any(|entry| entry.path == "/docs/0.md"));
+    }
+
+    #[test]
     fn local_packages_initialize_once_without_resurrecting_removed_roots() {
         assert!(initialize_local_packages(None, false));
-        assert!(initialize_local_packages(Some(r#"{"latexEnabled":true}"#), true));
-        assert!(!initialize_local_packages(Some(r#"{"latexTexmfRoots":[]}"#), true));
-        assert!(!initialize_local_packages(Some(r#"{"latexTexmfRoots":[{"enabled":false}]}"#), true));
+        assert!(initialize_local_packages(
+            Some(r#"{"latexEnabled":true}"#),
+            true
+        ));
+        assert!(!initialize_local_packages(
+            Some(r#"{"latexTexmfRoots":[]}"#),
+            true
+        ));
+        assert!(!initialize_local_packages(
+            Some(r#"{"latexTexmfRoots":[{"enabled":false}]}"#),
+            true
+        ));
         assert!(!initialize_local_packages(Some("corrupt"), true));
-        assert!(!initialize_local_packages(None, true), "an unreadable existing file is not a new profile");
+        assert!(
+            !initialize_local_packages(None, true),
+            "an unreadable existing file is not a new profile"
+        );
     }
 
     #[test]
@@ -1412,8 +1511,8 @@ mod tests {
             .expect("an overgrown budget is still settings");
         assert_eq!(too_high.ai_context_tokens, 32_768);
 
-        let too_low = parse_settings(r#"{"aiContextTokens": 1}"#)
-            .expect("a tiny budget is still settings");
+        let too_low =
+            parse_settings(r#"{"aiContextTokens": 1}"#).expect("a tiny budget is still settings");
         assert_eq!(too_low.ai_context_tokens, 1_024);
     }
 
@@ -1513,8 +1612,14 @@ mod tests {
     fn the_legacy_marker_is_adopted_only_when_the_switch_was_never_set() {
         assert!(super::adopt_latex_marker(Some("{}"), true));
         assert!(!super::adopt_latex_marker(Some("{}"), false));
-        assert!(!super::adopt_latex_marker(Some(r#"{"latexEnabled":false}"#), true));
-        assert!(!super::adopt_latex_marker(Some(r#"{"latexEnabled":true}"#), true));
+        assert!(!super::adopt_latex_marker(
+            Some(r#"{"latexEnabled":false}"#),
+            true
+        ));
+        assert!(!super::adopt_latex_marker(
+            Some(r#"{"latexEnabled":true}"#),
+            true
+        ));
     }
 
     #[test]
@@ -1628,6 +1733,9 @@ mod tests {
         assert!(settings.spellcheck);
         assert_eq!(settings.spellcheck_language, "auto");
         assert!(settings.spellcheck_words.is_empty());
+        assert_eq!(settings.spellcheck_string_mode, "human");
+        assert!(!settings.spellcheck_identifiers);
+        assert!(settings.spellcheck_document_languages.is_empty());
     }
 
     #[test]
@@ -1801,15 +1909,21 @@ mod tests {
         assert_eq!(json["presetOverrides"]["superfamily"]["mathFontScale"], 83);
         assert_eq!(json["presetOverrides"]["superfamily"]["codeFontScale"], 116);
         assert!(
-            json["presetOverrides"]["system"].get("editorFontSize").is_none(),
+            json["presetOverrides"]["system"]
+                .get("editorFontSize")
+                .is_none(),
             "a missing size must stay absent rather than serialising as null"
         );
         assert!(
-            json["presetOverrides"]["system"].get("mathFontScale").is_none(),
+            json["presetOverrides"]["system"]
+                .get("mathFontScale")
+                .is_none(),
             "a missing size must stay absent rather than serialising as null"
         );
         assert!(
-            json["presetOverrides"]["system"].get("codeFontScale").is_none(),
+            json["presetOverrides"]["system"]
+                .get("codeFontScale")
+                .is_none(),
             "a missing size must stay absent rather than serialising as null"
         );
     }
@@ -1855,7 +1969,9 @@ mod tests {
         );
         assert_eq!(json["presetOverrides"]["custom"]["tabularFigures"], false);
         assert!(
-            json["presetOverrides"]["custom"].get("editorFontSize").is_none(),
+            json["presetOverrides"]["custom"]
+                .get("editorFontSize")
+                .is_none(),
             "an unadjusted size must stay absent, not serialise as null"
         );
     }
@@ -1900,9 +2016,7 @@ mod tests {
     fn adding_at_the_cap_is_refused_without_evicting() {
         let mut settings = Settings::default();
         for index in 0..MAX_FAVORITES {
-            assert!(
-                add_favorite_path(&mut settings, &format!("C:/Docs/file{index}.md")).unwrap()
-            );
+            assert!(add_favorite_path(&mut settings, &format!("C:/Docs/file{index}.md")).unwrap());
         }
         let first = settings.favorites[0].clone();
         let error = add_favorite_path(&mut settings, "C:/Docs/one-too-many.md").unwrap_err();
@@ -2289,4 +2403,3 @@ mod tests {
         assert!(seen.welcome_seen);
     }
 }
-

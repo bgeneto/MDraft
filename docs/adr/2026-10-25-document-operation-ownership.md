@@ -2,6 +2,9 @@
 
 **Status:** accepted
 **Date:** 2026-10-25
+**Encoding note:** the paragraph refusing invalid UTF-8 and UTF-16/32 is
+replaced by [Text files keep their encoding](2026-11-12-text-encoding-round-trip.md);
+the rest of this decision still stands.
 
 ## Context
 

@@ -58,7 +58,9 @@ impl ClipboardStore {
 }
 
 #[tauri::command]
-pub async fn clipboard_read_text(state: tauri::State<'_, ClipboardStore>) -> Result<String, String> {
+pub async fn clipboard_read_text(
+    state: tauri::State<'_, ClipboardStore>,
+) -> Result<String, String> {
     state.read_text()
 }
 

@@ -86,6 +86,12 @@ const SUITES = [
     script: "scroll-sync-unit.mjs",
   },
   {
+    id: "spellcheck-unit",
+    title: "Spelling corpus (unit)",
+    kind: "node",
+    script: "spellcheck-unit.mjs",
+  },
+  {
     id: "rust",
     title: "Rust unit tests",
     kind: "rust",

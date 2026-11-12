@@ -29,6 +29,10 @@ export interface Session {
   /** "\n" or "\r\n". Untitled documents use "\n" until the first save. */
   lineEnding: string;
   hadBom: boolean;
+  /** Canonical encoding the file was decoded from; saves use the same one. */
+  encoding: string;
+  /** Runtime-only: the last save was refused because the text cannot be encoded. */
+  encodingBlocked: boolean;
   lossy: boolean;
   size: number;
   modifiedMs: number;
@@ -119,6 +123,8 @@ function blank(): Session {
     incarnation: 0,
     lineEnding: "\n",
     hadBom: false,
+    encoding: "UTF-8",
+    encodingBlocked: false,
     lossy: false,
     size: 0,
     modifiedMs: 0,

@@ -75,8 +75,10 @@ export function projectReferences(sources: ReadonlyMap<string, string>): Project
   if (sources.size === 0) return EMPTY;
 
   const labels = collect(sources, /\\label\s*\{([^{}]*)\}/g, (raw) => [raw]);
-  const citations = collect(sources, /\\[cC]ite[a-zA-Z]*\*?\s*(?:\[[^\]]*\]\s*){0,2}\{([^{}]*)\}/g, (raw) =>
-    raw.split(","),
+  const citations = collect(
+    sources,
+    /\\[cC]ite[a-zA-Z]*\*?\s*(?:\[[^\]]*\]\s*){0,2}\{([^{}]*)\}/g,
+    (raw) => raw.split(","),
   );
   const images = collect(
     sources,
