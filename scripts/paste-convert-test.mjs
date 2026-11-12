@@ -282,10 +282,18 @@ console.log("\n=== LaTeX detection ===");
     "a Markdown document mentioning a LaTeX command is not reclassified",
     String(detectTextSyntax(PROSE, "document")?.language),
   );
-  check(scoreLatex(PROSE) < 4, "a prose mention does not reach the threshold", String(scoreLatex(PROSE)));
+  check(
+    scoreLatex(PROSE) < 4,
+    "a prose mention does not reach the threshold",
+    String(scoreLatex(PROSE)),
+  );
 
   // The boundary the plan names: score >= 4 and a lead >= 2.
-  check(scoreLatex(DOCUMENT) >= 4, "a document clears the score gate", String(scoreLatex(DOCUMENT)));
+  check(
+    scoreLatex(DOCUMENT) >= 4,
+    "a document clears the score gate",
+    String(scoreLatex(DOCUMENT)),
+  );
   check(
     scoreLatex("\\documentclass{article}") === 5 &&
       scoreLatex("\\begin{document}\nx\n\\end{document}") === 8,
@@ -366,6 +374,12 @@ console.log("\n=== LaTeX detection ===");
   check(
     languageForExtension(null) === "markdown" && languageForExtension("noextension") === "markdown",
     "an absent or unknown extension is Markdown",
+  );
+  check(
+    ["app.js", "app.mjs", "app.CJS"].every((name) => languageForExtension(name) === "javascript") &&
+      languageForExtension("style.CSS") === "css" &&
+      languageForExtension("package.json") === "json",
+    "web source extensions resolve to their syntax languages",
   );
   check(
     CANONICAL_EXTENSION.latex === "tex" &&
@@ -1447,7 +1461,9 @@ console.log("\n=== LaTeX: math is passed through, not escaped ===");
 {
   // Escaping math would turn `\alpha` into `\textbackslash{}alpha`, which is the
   // single worst outcome for a reader pasting a formula.
-  const blocks = await readMarkdown("Inline $\\alpha + \\beta$ and display:\n\n$$\\int_0^1 x\\,dx$$\n");
+  const blocks = await readMarkdown(
+    "Inline $\\alpha + \\beta$ and display:\n\n$$\\int_0^1 x\\,dx$$\n",
+  );
   const latex = renderLatex(blocks);
   check(latex.includes("\\alpha + \\beta"), "inline math keeps its commands", latex.slice(0, 90));
   check(!latex.includes("\\textbackslash{}alpha"), "math is not escaped");
@@ -1460,7 +1476,10 @@ console.log("\n=== LaTeX: reading LaTeX source back ===");
   const blocks = readLatex(
     "\\section{Intro}\n\nSome \\textbf{bold} and \\emph{italic} text.\n\n\\begin{itemize}\n\\item one\n\\item two\n\\end{itemize}\n",
   );
-  check(blocks.some((block) => block.kind === "heading"), "a section is read as a heading");
+  check(
+    blocks.some((block) => block.kind === "heading"),
+    "a section is read as a heading",
+  );
   const markdown = renderMarkdown(blocks);
   check(markdown.includes("# Intro"), "a section becomes an H1", markdown.slice(0, 60));
   check(markdown.includes("**bold**"), "textbf becomes strong", markdown.slice(0, 120));

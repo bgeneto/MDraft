@@ -35,7 +35,7 @@ export interface ClipboardChoice {
 }
 
 export interface Detection {
-  language: DocumentLanguage;
+  language: Exclude<DocumentLanguage, "javascript" | "css" | "json">;
   score: number;
   runnerUp: number;
 }
@@ -141,7 +141,8 @@ export function scoreLatex(raw: string): number {
   if (/^ {0,3}\\begin\s*\{document\}/m.test(text)) score += 6;
   if (/^ {0,3}\\documentclass\b/m.test(text)) score += 5;
   if (/^ {0,3}\\end\s*\{document\}/m.test(text)) score += 2;
-  if (count(text, /^ {0,3}\\(?:usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{/gm) > 0) score += 4;
+  if (count(text, /^ {0,3}\\(?:usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{/gm) > 0)
+    score += 4;
   if (
     count(
       text,
@@ -150,7 +151,10 @@ export function scoreLatex(raw: string): number {
   ) {
     score += 4;
   }
-  if (count(text, /^ {0,3}\\(?:newcommand|renewcommand|providecommand|def|DeclareMathOperator)\b/gm) > 0) {
+  if (
+    count(text, /^ {0,3}\\(?:newcommand|renewcommand|providecommand|def|DeclareMathOperator)\b/gm) >
+    0
+  ) {
     score += 4;
   }
   if (count(text, /^ {0,3}\\begin\s*\{(?!document\})[A-Za-z*]+\}/gm) > 0) score += 3;
@@ -250,7 +254,7 @@ export function detectTextSyntax(
   const typst = scoreTypst(raw);
   const asciidoc = scoreAsciidoc(raw);
   const latex = scoreLatex(raw);
-  const scores: Array<[DocumentLanguage, number]> = [
+  const scores: Array<[Detection["language"], number]> = [
     ["html", html],
     ["markdown", markdown],
     ["typst", typst],
@@ -319,7 +323,7 @@ export function chooseSource(
   // copied web page or a Markdown snippet becomes LaTeX structure. LaTeX *source*
   // is still excluded from the detected set, because pasting `.tex` into `.tex`
   // should stay native rather than round-tripping through the IR.
-  const detected: Exclude<DocumentLanguage, "latex"> | null = isHtmlSource(text)
+  const detected: Exclude<Detection["language"], "latex"> | null = isHtmlSource(text)
     ? "html"
     : ((typed?.language === "latex" ? null : typed?.language) ??
       (carriesMarkdown(text) ? "markdown" : null));

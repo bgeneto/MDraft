@@ -2442,6 +2442,11 @@ body {
   animation: preview-spin 0.9s linear infinite;
 }
 
+.source-preview-icon {
+  font-size: 28px;
+  line-height: 1;
+}
+
 .preview-pending[data-state="idle"] .preview-pending-spinner {
   display: none;
 }

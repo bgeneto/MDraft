@@ -90,6 +90,9 @@ export const CANONICAL_EXTENSION: Record<DocumentLanguage, string> = {
   html: "html",
   asciidoc: "adoc",
   latex: "tex",
+  javascript: "js",
+  css: "css",
+  json: "json",
 };
 
 /**
@@ -107,6 +110,9 @@ export const LANGUAGE_EXTENSIONS: Record<DocumentLanguage, readonly string[]> = 
   html: [CANONICAL_EXTENSION.html, "htm"],
   asciidoc: [CANONICAL_EXTENSION.asciidoc, "asciidoc"],
   latex: [CANONICAL_EXTENSION.latex],
+  javascript: ["js", "mjs", "cjs"],
+  css: ["css"],
+  json: ["json"],
 };
 
 /** A file extension without its dot, lowercased; null when there is none. */

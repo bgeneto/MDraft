@@ -727,7 +727,11 @@ export const runAfterExport = (path: string) =>
 export const installPandoc = () => invoke<PandocStatus>("install_pandoc");
 
 /** Which markup the buffer holds. */
-export type DocumentLanguage = "markdown" | "typst" | "html" | "asciidoc" | "latex";
+export type DocumentLanguage =
+  "markdown" | "typst" | "html" | "asciidoc" | "latex" | "javascript" | "css" | "json";
+
+export const isWebSource = (language: DocumentLanguage): boolean =>
+  language === "javascript" || language === "css" || language === "json";
 
 export interface LatexProjectSnapshot {
   mainFile: string;

@@ -1225,6 +1225,18 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
       // The tag closer follows the document type, not the grammar's promise:
       // switching to Typst must drop a handler that would insert `</a>`.
       view.dispatch({ effects: tagCompartment.reconfigure(tagSupport(kind)) });
+      if (kind === "javascript" || kind === "css" || kind === "json") {
+        const name = kind === "javascript" ? "JavaScript" : kind === "css" ? "CSS" : "JSON";
+        const description = languages.find((entry) => entry.name === name);
+        if (description)
+          void description
+            .load()
+            .then(install)
+            .catch((error) => {
+              console.warn(`[editor] the ${name} grammar could not be loaded: ${error}`);
+            });
+        return;
+      }
       if (kind === "latex") {
         // The stream grammar arrives asynchronously like Typst's; until it does
         // the buffer keeps the parser it had rather than losing colouring.
