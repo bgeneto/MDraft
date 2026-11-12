@@ -67,6 +67,12 @@ IMAGES = [
         "quality": 84,
     },
     {
+        "source": "html-editor.webp",
+        "output": "html-editor.webp",
+        "width": 1800,
+        "quality": 86,
+    },
+    {
         "source": "typography-presets-proposal.png",
         "output": "typography-presets.webp",
         "width": 1500,

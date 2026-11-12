@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>MDraft — editor de Markdown, AsciiDoc, Typst e HTML</title>
+    <title>MDraft — editor de Markdown, AsciiDoc, Typst, LaTeX e HTML</title>
     <meta
       name="description"
-      content="Editor gratuito de Markdown, AsciiDoc, Typst e HTML. Pré-visualização, matemática, tipografia e PDF para notas e pesquisas. Windows e Linux."
+      content="Editor gratuito de Markdown, AsciiDoc, Typst, LaTeX e HTML. Pré-visualização, matemática, tipografia e PDF para notas e pesquisas. Windows e Linux."
     />
     <meta name="author" content="MDraft contributors" />
     <meta name="robots" content="index, follow, max-image-preview:large" />
@@ -87,24 +87,31 @@
             "name": "MDraft",
             "applicationCategory": "DeveloperApplication",
             "operatingSystem": "Windows 10, Windows 11, Linux",
-            "description": "Editor gratuito de Markdown, AsciiDoc, Typst e HTML para notas, documentação técnica e escrita científica, com pré-visualização, matemática e exportação em PDF.",
+            "description": "Editor gratuito de Markdown, AsciiDoc, Typst, LaTeX e HTML para notas, documentação técnica e escrita científica, com pré-visualização, matemática e exportação em PDF.",
             "url": "{{SITE_URL}}pt-br/",
-            "downloadUrl": "{{RELEASE_URL}}",
+            "downloadUrl": "{{TAG_URL}}",
             "softwareVersion": "{{VERSION}}",
             "inLanguage": "pt-BR",
             "isAccessibleForFree": true,
             "license": "https://github.com/bgeneto/MDraft/blob/master/LICENSE",
-            "screenshot": "{{SITE_URL}}assets/img/scroll-sync.webp",
+            "screenshot": [
+              "{{SITE_URL}}assets/img/scroll-sync.webp",
+              "{{SITE_URL}}assets/img/html-editor.webp"
+            ],
             "image": "{{OG_IMAGE}}",
             "sameAs": ["https://github.com/bgeneto/MDraft"],
-            "author": { "@id": "{{SITE_URL}}pt-br/#publisher" },
+            "author": {
+              "@id": "{{SITE_URL}}pt-br/#publisher"
+            },
             "offers": {
               "@type": "Offer",
               "price": "0",
               "priceCurrency": "USD"
             },
             "featureList": [
-              "Pré-visualização ao vivo para Markdown, AsciiDoc, Typst e HTML",
+              "Abreviações Emmet para HTML e CSS",
+              "Compilação LaTeX local, projetos e sugestões de comandos",
+              "Pré-visualização ao vivo para Markdown, AsciiDoc, Typst, LaTeX e HTML",
               "Rolagem sincronizada e destaque de trechos correspondentes",
               "Visões Documento e Páginas do Typst",
               "Presets tipográficos com escalas independentes para matemática e código",
@@ -124,7 +131,9 @@
             "url": "{{SITE_URL}}pt-br/",
             "name": "MDraft",
             "inLanguage": "pt-BR",
-            "publisher": { "@id": "{{SITE_URL}}pt-br/#publisher" }
+            "publisher": {
+              "@id": "{{SITE_URL}}pt-br/#publisher"
+            }
           },
           {
             "@type": "FAQPage",
@@ -144,7 +153,7 @@
                 "name": "O MDraft funciona offline?",
                 "acceptedAnswer": {
                   "@type": "Answer",
-                  "text": "Sim. Edição, pré-visualização, ortografia e exportação em HTML, PDF e Impressão funcionam sem conexão. O MDraft não faz nenhuma requisição na inicialização. Ele fica online apenas para uma ação sua, como instalar pandoc ou Typst, baixar a URL de uma imagem colada ou usar o Assistente de IA depois que você o habilita."
+                  "text": "Sim. Edição local, pré-visualização, ortografia e exportações funcionam offline quando as ferramentas e os recursos necessários já estão disponíveis. O MDraft não faz requisições na inicialização. Instalar ferramentas opcionais, baixar uma imagem colada ou usar o Assistente de IA habilitado depende da ação que você escolhe. Páginas HTML podem carregar recursos remotos. A configuração do LaTeX e pacotes ausentes também exigem downloads; recursos em cache podem ser reutilizados offline."
                 }
               },
               {
@@ -202,6 +211,22 @@
                   "@type": "Answer",
                   "text": "Toda versão publica SHA256SUMS-windows-amd64.txt e SHA256SUMS-linux-amd64.txt. Compare o checksum do arquivo baixado com a linha correspondente nos anexos da versão."
                 }
+              },
+              {
+                "@type": "Question",
+                "name": "Posso editar e compilar LaTeX?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Sim. O mecanismo LuaLaTeX integrado dispensa uma instalação separada do TeX. Habilite-o para baixar os arquivos verificados; pacotes e fontes necessários são baixados sob demanda e ficam no cache. Você também pode selecionar uma distribuição TeX instalada e validada. Ela executa como programa separado e pode baixar seus próprios pacotes. O conteúdo do documento e da bibliografia fica no dispositivo."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "O que posso fazer com arquivos HTML?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Edite HTML com destaque de sintaxe, fechamento opcional de tags, abreviações Emmet com Tab e formatação de documento. Veja a página com seu próprio CSS, imagens e scripts, navegue pelos títulos e localize texto visível entre código e pré-visualização. Imprima HTML estático ou salve em PDF; use a impressão pelo navegador em páginas que dependem de scripts. Sugestões de tags e atributos também estão incluídas."
+                }
               }
             ]
           }
@@ -223,12 +248,12 @@
           <a href="#sync">Rolagem</a>
           <a href="#typst">Typst</a>
           <a href="#typography">Tipografia</a>
-          <a href="#math">Matemática</a>
-          <a href="#languages">Linguagens</a>
+          <a href="#latex">LaTeX</a>
+          <a href="#html">HTML</a>
           <a href="#download">Download</a>
         </nav>
         <div class="header-actions">
-          <a class="btn btn-primary header-cta" href="{{RELEASE_URL}}">Baixar {{VERSION_CHIP}}</a>
+          <a class="btn btn-primary header-cta" href="#download">Baixar {{VERSION_CHIP}}</a>
           <a
             class="icon-button"
             href="https://github.com/bgeneto/MDraft"
@@ -290,18 +315,19 @@
             </h1>
             <p class="lead">
               Escreva artigos científicos, anotações de aula, documentação e muito mais em Markdown,
-              AsciiDoc, Typst ou HTML. Veja o código e a pré-visualização lado a lado, ajuste a
-              tipografia e exporte em PDF e outros formatos.
+              AsciiDoc, Typst, LaTeX ou HTML. Veja o código e a pré-visualização lado a lado, ajuste
+              a tipografia e exporte em PDF e outros formatos.
             </p>
+
             <div class="actions">
-              <a class="btn btn-primary" href="{{RELEASE_URL}}">Baixar o MDraft {{VERSION_CHIP}}</a>
+              <a class="btn btn-primary" href="#download">Baixar o MDraft {{VERSION_CHIP}}</a>
               <a class="btn btn-ghost" href="https://github.com/bgeneto/MDraft">Ver no GitHub</a>
             </div>
             <p class="fineprint">
               Sem conta. Sem telemetria. Nenhuma requisição na inicialização. Licença MIT.
             </p>
             <div class="chips" aria-label="Em resumo">
-              <span class="chip"><strong>4</strong> linguagens de marcação</span>
+              <span class="chip"><strong>5</strong> linguagens de marcação</span>
               <span class="chip"><strong>13</strong> famílias tipográficas</span>
               <span class="chip"><strong>Sem</strong> telemetria</span>
             </div>
@@ -410,7 +436,7 @@
                 A paleta, com um grupo <em>Mais usadas</em> aprendido e o botão azul do assistente
                 no canto.
                 <span class="zoom-hint">Clique para ampliar</span>
-              </figcaption>
+              </figcaption>Clique na imagem para ampliar
             </figure>
           </div>
           <div class="token-strip">
@@ -496,7 +522,7 @@
                 <figcaption>
                   Fonte: a frase que você selecionou.
                   <span class="zoom-hint">Clique para ampliar</span>
-                </figcaption>
+                </figcaption>Clique na imagem para ampliar
               </figure>
               <figure>
                 <div class="shot-frame">
@@ -520,7 +546,7 @@
                 <figcaption>
                   Pré-visualização: a ocorrência verificada, não uma correspondência próxima.
                   <span class="zoom-hint">Clique para ampliar</span>
-                </figcaption>
+                </figcaption>Clique na imagem para ampliar
               </figure>
             </div>
           </div>
@@ -588,6 +614,187 @@
         </div>
       </section>
 
+      <section id="latex" class="section" aria-labelledby="latex-title">
+        <div class="container">
+          <div class="section-head">
+            <p class="eyebrow">LaTeX</p>
+            <h2 id="latex-title">Do código .tex ao PDF pronto.</h2>
+            <p class="lead">
+              Escreva artigos, teses e relatórios com o código LaTeX ao lado do PDF compilado.
+              Trabalhe com projetos completos, consulte as mensagens do compilador e salve as
+              páginas prontas.
+            </p>
+          </div>
+
+          <div class="mini-grid">
+            <article class="mini-card">
+              <span class="num">01</span>
+              <h3>Comece sem instalar TeX.</h3>
+              <p>
+                Habilite o mecanismo LuaLaTeX integrado quando precisar. Os arquivos verificados são
+                baixados uma vez; pacotes TeX e fontes necessários são baixados sob demanda e ficam
+                no cache local.
+              </p>
+            </article>
+            <article class="mini-card">
+              <span class="num">02</span>
+              <h3>Veja o PDF de verdade.</h3>
+              <p>
+                Leia páginas com texto selecionável e o layout do compilador. Compile, cancele ou
+                habilite a compilação automática; abra Logs para consultar mensagens, volte ao PDF e
+                salve-o.
+              </p>
+            </article>
+            <article class="mini-card">
+              <span class="num">03</span>
+              <h3>Mantenha o projeto unido.</h3>
+              <p>
+                O arquivo principal continua sendo a raiz da compilação enquanto você edita os
+                capítulos incluídos. As compilações usam os arquivos abertos com alterações ainda
+                não salvas, além de imagens e arquivos bibliográficos.
+              </p>
+            </article>
+          </div>
+          <ul class="feature-list">
+            <li>
+              <strong>Escreva com contexto.</strong> Destaque de sintaxe, sumário de seções,
+              sugestões de comandos e ambientes, além de rótulos, citações e nomes de imagens do
+              projeto.
+            </li>
+            <li>
+              <strong>Encontre e corrija problemas.</strong> Siga um aviso ou erro do compilador até
+              sua linha no código. Formate um documento .tex com uma única edição que pode ser
+              desfeita.
+            </li>
+            <li>
+              <strong>Use seu próprio TeX.</strong> Compartilhe classes e pacotes locais entre
+              projetos ou selecione explicitamente uma instalação validada do TeX Live ou MiKTeX,
+              incluindo TeX no WSL do Windows.
+            </li>
+            <li>
+              <strong>Localize trechos correspondentes.</strong> Seleções no código e no PDF podem
+              destacar a mesma passagem. Trechos ambíguos ou sem suporte ficam sem destaque;
+              equações complexas e texto gerado podem não ter correspondência.
+            </li>
+          </ul>
+          <p class="fineprint">
+            LaTeX precisa ser habilitado. A configuração inicial baixa cerca de 10 MiB; a primeira
+            ação Formatar documento em LaTeX baixa um formatador separado e verificado de cerca de
+            1,7 MB. O uso posterior reaproveita o cache, mas novos pacotes podem exigir downloads. O
+            conteúdo do documento e da bibliografia fica no seu dispositivo. Uma distribuição TeX
+            instalada executa como programa separado e pode baixar seus próprios pacotes; a execução
+            de comandos externos pelo documento permanece desabilitada.
+          </p>
+          <a class="text-link" href="https://github.com/bgeneto/MDraft/blob/master/docs/latex.md">
+            Leia o guia de LaTeX
+          </a>
+        </div>
+      </section>
+
+      <section id="html" class="section" aria-labelledby="html-title">
+        <div class="container">
+          <div class="section-head">
+            <p class="eyebrow">Edição HTML</p>
+            <h2 id="html-title">Edite o código. Veja a página inteira.</h2>
+            <p class="lead">
+              Crie uma página com seu próprio CSS, imagens e JavaScript e veja o resultado ao lado
+              do código. Folhas de estilo e imagens locais são resolvidas em relação ao documento,
+              para trabalhar com uma página existente sem configurar um servidor de desenvolvimento.
+            </p>
+          </div>
+          <figure class="wide-shot">
+            <a
+              class="shot"
+              href="../assets/img/html-editor.webp"
+              data-full="../assets/img/html-editor.webp"
+              data-gallery="html"
+              data-caption="Edição HTML no MDraft: sumário do documento, código com destaque, página renderizada com seus próprios estilos e a paleta opcional do Assistente de IA."
+            >
+              <img
+                src="../assets/img/html-editor.webp"
+                width="1800"
+                height="985"
+                alt="MDraft editando uma página HTML, com sumário de títulos à esquerda, código HTML com destaque ao centro, página estilizada ao vivo à direita e a paleta opcional do Assistente de IA aberta."
+                loading="lazy"
+                decoding="async"
+              />
+            </a>
+            <figcaption>
+              O código e o design da sua página, lado a lado.
+              <span class="zoom-hint">Clique na imagem para ampliar</span>
+            </figcaption>
+          </figure>
+          <div class="mini-grid">
+            <article class="mini-card">
+              <span class="num">01</span>
+              <h3>Veja a página que você escreveu.</h3>
+              <p>
+                A pré-visualização isolada executa os estilos e scripts da página, separadamente do
+                editor. Use a visão Dividida, Código ou Pré-visualização para dar espaço à tarefa.
+              </p>
+            </article>
+            <article class="mini-card">
+              <span class="num">02</span>
+              <h3>Mantenha o código legível.</h3>
+              <p>
+                Destaque de sintaxe e fechamento automático opcional de tags ajudam durante a
+                digitação. Formatar documento organiza o HTML com uma única edição que pode ser
+                desfeita.
+              </p>
+            </article>
+            <article class="mini-card">
+              <span class="num">03</span>
+              <h3>Encontre seu lugar na página.</h3>
+              <p>
+                Navegue pelos títulos no sumário. Role o código e a pré-visualização juntos ou
+                selecione texto visível para destacar a passagem correspondente no outro painel.
+              </p>
+            </article>
+          </div>
+
+          <div class="emmet-demo">
+            <h3>Expanda abreviações Emmet com Tab.</h3>
+            <p>
+              Escreva uma abreviação e pressione Tab para criar a estrutura HTML ou uma declaração
+              CSS. O Emmet funciona offline, vem habilitado por padrão e mantém os campos do trecho
+              gerado navegáveis com Tab.
+            </p>
+            <div class="gallery-pair">
+              <div>
+                <p><code>ul&gt;li*3</code> + <kbd>Tab</kbd></p>
+                <pre class="snippet"><code>&lt;ul&gt;
+  &lt;li&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;/li&gt;
+&lt;/ul&gt;</code></pre>
+              </div>
+              <div>
+                <p><code>m10</code> + <kbd>Tab</kbd> (CSS)</p>
+                <pre class="snippet"><code>margin: 10px;</code></pre>
+              </div>
+            </div>
+            <p class="fineprint">
+              As abreviações CSS também funcionam dentro de &lt;style&gt; e de atributos style.
+              Desative a expansão em Preferências › Editor se preferir. Quando não há abreviação,
+              Tab continua recuando o código; com a lista de sugestões aberta, Tab aceita a sugestão
+              primeiro.
+            </p>
+          </div>
+          <p class="feature-note">
+            <strong>Sugestões enquanto você digita.</strong> Complete tags e atributos HTML e edite
+            arquivos complementares de CSS, JavaScript, TypeScript e JSON em abas próprias com
+            destaque de sintaxe. Esses arquivos complementares não têm pré-visualização de página.
+          </p>
+
+          <p class="fineprint">
+            HTML estático pode ser impresso ou salvo em PDF diretamente. Para páginas cujo conteúdo
+            final depende de scripts, use a impressão pelo navegador. Recursos remotos vinculados
+            podem usar a rede; a pré-visualização não transforma um arquivo HTML em um site
+            hospedado.
+          </p>
+        </div>
+      </section>
+
       <section id="typography" class="section" aria-labelledby="typography-title">
         <div class="container">
           <div class="section-head">
@@ -606,7 +813,7 @@
                   class="shot"
                   href="../assets/img/typography-presets.webp"
                   data-full="../assets/img/typography-presets.webp"
-                  data-caption="Um estudo inicial de quatro estilos tipográficos: Renascença, Editorial, Bauhaus e Caderno. O preset Editorial final usa Playfair no lugar da Bodoni mostrada."
+                  data-caption="Um estudClique na imagem para ampliar estilos tipográficos: Renascença, Editorial, Bauhaus e Caderno. O preset Editorial final usa Playfair no lugar da Bodoni mostrada."
                   data-gallery="typography"
                 >
                   <img
@@ -630,7 +837,7 @@
                 <a
                   class="shot"
                   href="../assets/img/typography-settings.webp"
-                  data-full="../assets/img/typography-settings.webp"
+                  data-full="../assets/iClique na imagem para ampliarngs.webp"
                   data-caption="Preferências › Tipografia: presets, famílias independentes, escala da matemática e opções OpenType."
                   data-gallery="typography"
                 >
@@ -699,7 +906,7 @@
                 <a
                   class="shot"
                   href="../assets/img/math-light.webp"
-                  data-full="../assets/img/math-light.webp"
+                  data-full="../assets/iClique na imagem para ampliar
                   data-caption="Um artigo de física no tema claro: código matemático à esquerda, KaTeX tipografado à direita, com 14.248 tokens e 6.578 palavras na barra de status."
                   data-gallery="math"
                 >
@@ -707,7 +914,7 @@
                     src="../assets/img/math-light.webp"
                     width="1400"
                     height="902"
-                    alt="MDraft no tema claro mostrando um artigo de física com código LaTeX e equações tipografadas, incluindo uma fração e um radical."
+                    alt="MDraft no tema claro mostrando um artigo de física com código Markdown, matemática no estilo LaTeX e equações tipografadas, incluindo uma fração e um radical."
                     loading="lazy"
                     decoding="async"
                   />
@@ -723,7 +930,7 @@
                 <a
                   class="shot"
                   href="../assets/img/math-dark.webp"
-                  data-full="../assets/img/math-dark.webp"
+                  data-full="../assets/iClique na imagem para ampliar
                   data-caption="O mesmo artigo de física no tema escuro, com as mesmas equações e a mesma contagem de tokens."
                   data-gallery="math"
                 >
@@ -764,8 +971,8 @@
       <section id="languages" class="section" aria-labelledby="languages-title">
         <div class="container">
           <div class="section-head">
-            <p class="eyebrow">Quatro linguagens</p>
-            <h2 id="languages-title">Quatro linguagens de marcação. Uma janela.</h2>
+            <p class="eyebrow">Cinco linguagens</p>
+            <h2 id="languages-title">Cinco linguagens de marcação. Uma janela.</h2>
             <p class="lead">
               Cada linguagem recebe a pré-visualização que merece e mantém sua própria sintaxe. Abra
               uma nota Markdown ao lado de um manual AsciiDoc, um artigo Typst e uma página HTML —
@@ -817,6 +1024,18 @@ image::figura.png[]</code></pre>
   &lt;h1&gt;A Máquina Silenciosa&lt;/h1&gt;
   &lt;p&gt;Texto e &lt;em&gt;markup&lt;/em&gt;.&lt;/p&gt;
 &lt;/article&gt;</code></pre>
+            </article>
+            <article class="lang-card lang-card-wide">
+              <h3>LaTeX</h3>
+              <p>
+                PDF compilado, projetos com capítulos e bibliografia, sugestões de comandos e
+                diagnóstico no código. <a href="#latex">Conheça o fluxo LaTeX</a>.
+              </p>
+
+              <pre class="snippet"><code>\documentclass{article}
+\begin{document}
+\section{Introduction}
+\end{document}</code></pre>
             </article>
           </div>
         </div>
@@ -883,6 +1102,11 @@ image::figura.png[]</code></pre>
               EPUB, LaTeX e outros formatos, use o pandoc. O MDraft pode instalar essas duas
               ferramentas opcionais para você.
             </p>
+            <p>
+              HTML estático também pode ser impresso ou salvo em PDF; páginas que dependem de
+              scripts usam a impressão pelo navegador. Documentos LaTeX são compilados e salvos
+              diretamente em PDF.
+            </p>
             <a class="text-link" href="https://github.com/bgeneto/MDraft/blob/master/docs/export.md"
               >Ler o guia de exportação</a
             >
@@ -896,6 +1120,7 @@ image::figura.png[]</code></pre>
             <li>EPUB<small>via pandoc</small></li>
             <li>LaTeX<small>via pandoc</small></li>
             <li>PDF Typst<small>compilação direta</small></li>
+            <li>PDF LaTeX<small>compilação direta</small></li>
           </ul>
         </div>
       </section>
@@ -928,8 +1153,14 @@ image::figura.png[]</code></pre>
             habilita e pressiona Gerar ou Buscar, ou salva um documento sem título com sugestão de
             nome ativada. Apenas Gerar e a sugestão de nome enviam texto do documento. Uma URL de
             imagem colada pode ser baixada, e um documento HTML pode pedir os recursos que seu
-            próprio markup referencia. Ambos são pedidos dos seus documentos, não uma verificação em
-            segundo plano.
+            próprio markup referencia. Essas requisições seguem suas ações, em vez de uma
+            verificação de atualizações em segundo plano.
+          </p>
+          <p class="fineprint">
+            No fluxo LaTeX, a configuração inicial, pacotes ausentes e o primeiro uso do formatador
+            exigem downloads explícitos. Arquivos em cache podem ser reutilizados offline. O
+            conteúdo do documento e da bibliografia fica no dispositivo. Uma distribuição TeX
+            externa escolhida por você pode fazer seus próprios downloads de pacotes.
           </p>
         </div>
       </section>
@@ -948,6 +1179,11 @@ image::figura.png[]</code></pre>
               mais recente traz as notas, os checksums e todos os artefatos em uma página.
             </p>
           </div>
+          <p>
+            <a class="text-link" href="{{TAG_URL}}"
+              >Notas da versão v{{VERSION}} e todos os downloads</a
+            >
+          </p>
           <div class="download-grid">
             <article class="platform-card">
               <h3>
@@ -963,11 +1199,25 @@ image::figura.png[]</code></pre>
                 Instale com o setup NSIS ou o MSI. O executável portátil mantém as configurações ao
                 lado de si, para viver em um pendrive.
               </p>
-              <a class="btn btn-primary" href="{{RELEASE_URL}}">Baixar para Windows</a>
+              <a class="btn btn-primary" href="{{DOWNLOAD_URL}}/mdraft_{{VERSION}}_x64-setup.exe"
+                >Baixar para Windows</a
+              >
               <ul class="artifact-list">
-                <li><code>mdraft_&lt;version&gt;_x64-setup.exe</code></li>
-                <li><code>mdraft_&lt;version&gt;_x64_en-us.msi</code></li>
-                <li><code>mdraft_&lt;version&gt;_x64-portable.exe</code></li>
+                <li>
+                  <a href="{{DOWNLOAD_URL}}/mdraft_{{VERSION}}_x64-setup.exe"
+                    ><code>mdraft_{{VERSION}}_x64-setup.exe</code></a
+                  >
+                </li>
+                <li>
+                  <a href="{{DOWNLOAD_URL}}/mdraft_{{VERSION}}_x64_en-us.msi"
+                    ><code>mdraft_{{VERSION}}_x64_en-us.msi</code></a
+                  >
+                </li>
+                <li>
+                  <a href="{{DOWNLOAD_URL}}/mdraft_{{VERSION}}_x64-portable.exe"
+                    ><code>mdraft_{{VERSION}}_x64-portable.exe</code></a
+                  >
+                </li>
               </ul>
             </article>
             <article class="platform-card">
@@ -990,11 +1240,23 @@ image::figura.png[]</code></pre>
                 Instale o pacote Debian, execute o AppImage ou pegue o binário puro. O pacote
                 declara as dependências de WebKitGTK e GTK.
               </p>
-              <a class="btn btn-primary" href="{{RELEASE_URL}}">Baixar para Linux</a>
+              <a class="btn btn-primary" href="{{DOWNLOAD_URL}}/mdraft_{{VERSION}}_amd64.deb"
+                >Baixar para Linux</a
+              >
               <ul class="artifact-list">
-                <li><code>mdraft_&lt;version&gt;_amd64.deb</code></li>
-                <li><code>mdraft_&lt;version&gt;_amd64.AppImage</code></li>
-                <li><code>mdraft</code> (binário puro)</li>
+                <li>
+                  <a href="{{DOWNLOAD_URL}}/mdraft_{{VERSION}}_amd64.deb"
+                    ><code>mdraft_{{VERSION}}_amd64.deb</code></a
+                  >
+                </li>
+                <li>
+                  <a href="{{DOWNLOAD_URL}}/mdraft_{{VERSION}}_amd64.AppImage"
+                    ><code>mdraft_{{VERSION}}_amd64.AppImage</code></a
+                  >
+                </li>
+                <li>
+                  <a href="{{DOWNLOAD_URL}}/mdraft"><code>mdraft</code></a> (binário puro)
+                </li>
               </ul>
             </article>
           </div>
@@ -1005,7 +1267,13 @@ image::figura.png[]</code></pre>
             </li>
             <li>
               <strong>Checksums.</strong> Toda versão publica
-              <code>SHA256SUMS-windows-amd64.txt</code> e <code>SHA256SUMS-linux-amd64.txt</code>.
+              <a href="{{DOWNLOAD_URL}}/SHA256SUMS-windows-amd64.txt"
+                ><code>SHA256SUMS-windows-amd64.txt</code></a
+              >
+              e
+              <a href="{{DOWNLOAD_URL}}/SHA256SUMS-linux-amd64.txt"
+                ><code>SHA256SUMS-linux-amd64.txt</code></a
+              >.
             </li>
             <li>
               <strong>Typst e pandoc são opcionais.</strong> O MDraft pode instalá-los para você no
@@ -1037,10 +1305,12 @@ image::figura.png[]</code></pre>
             <details>
               <summary>O MDraft funciona offline?</summary>
               <p>
-                Sim. Edição, pré-visualização, ortografia e exportação em HTML, PDF e Impressão
-                funcionam sem conexão. O MDraft não faz nenhuma requisição na inicialização. Ele
-                fica online apenas para uma ação sua, como instalar pandoc ou Typst, baixar a URL de
-                uma imagem colada ou usar o Assistente de IA depois que você o habilita.
+                Sim. Edição local, pré-visualização, ortografia e exportações funcionam offline
+                quando as ferramentas e os recursos necessários já estão disponíveis. O MDraft não
+                faz requisições na inicialização. Instalar ferramentas opcionais, baixar uma imagem
+                colada ou usar o Assistente de IA habilitado depende da ação que você escolhe.
+                Páginas HTML podem carregar recursos remotos. A configuração do LaTeX e pacotes
+                ausentes também exigem downloads; recursos em cache podem ser reutilizados offline.
               </p>
             </details>
             <details>
@@ -1080,8 +1350,8 @@ image::figura.png[]</code></pre>
             <details>
               <summary>Onde ficam minhas configurações?</summary>
               <p>
-                No Windows, na pasta de dados de aplicativo de io.github.bgeneto.mdraft; no Linux, na
-                pasta de configuração correspondente. A versão portátil do Windows mantém as
+                No Windows, na pasta de dados de aplicativo de io.github.bgeneto.mdraft; no Linux,
+                na pasta de configuração correspondente. A versão portátil do Windows mantém as
                 configurações ao lado do executável. Os prompts de IA ficam em ai-prompts.md ao lado
                 de settings.json.
               </p>
@@ -1101,6 +1371,27 @@ image::figura.png[]</code></pre>
                 versão.
               </p>
             </details>
+            <details>
+              <summary>Posso editar e compilar LaTeX?</summary>
+              <p>
+                Sim. O mecanismo LuaLaTeX integrado dispensa uma instalação separada do TeX.
+                Habilite-o para baixar os arquivos verificados; pacotes e fontes necessários são
+                baixados sob demanda e ficam no cache. Você também pode selecionar uma distribuição
+                TeX instalada e validada. Ela executa como programa separado e pode baixar seus
+                próprios pacotes. O conteúdo do documento e da bibliografia fica no dispositivo.
+              </p>
+            </details>
+            <details>
+              <summary>O que posso fazer com arquivos HTML?</summary>
+              <p>
+                Edite HTML com destaque de sintaxe, fechamento opcional de tags, abreviações Emmet
+                com Tab e formatação de documento. Veja a página com seu próprio CSS, imagens e
+                scripts, navegue pelos títulos e localize texto visível entre código e
+                pré-visualização. Imprima HTML estático ou salve em PDF; use a impressão pelo
+                navegador em páginas que dependem de scripts. Sugestões de tags e atributos também
+                estão incluídas.
+              </p>
+            </details>
           </div>
         </div>
       </section>
@@ -1114,7 +1405,7 @@ image::figura.png[]</code></pre>
             vivo, matemática e tipografia cuidadosamente projetada.
           </p>
           <div class="actions">
-            <a class="btn btn-primary" href="{{RELEASE_URL}}">Baixar o MDraft {{VERSION_CHIP}}</a>
+            <a class="btn btn-primary" href="#download">Baixar o MDraft {{VERSION_CHIP}}</a>
             <a class="btn btn-ghost" href="https://github.com/bgeneto/MDraft">Ver no GitHub</a>
           </div>
         </div>
@@ -1130,8 +1421,8 @@ image::figura.png[]</code></pre>
               <span>MDraft</span>
             </a>
             <p class="footer-about">
-              Um editor nativo de Markdown, AsciiDoc, Typst e HTML com pré-visualização ao vivo,
-              feito com Rust e Tauri. Licença MIT.
+              Um editor nativo de Markdown, AsciiDoc, Typst, LaTeX e HTML com pré-visualização ao
+              vivo, feito com Rust e Tauri. Licença MIT.
             </p>
           </div>
           <div class="footer-col">
@@ -1140,6 +1431,9 @@ image::figura.png[]</code></pre>
               <li><a href="#ai">Assistente de IA</a></li>
               <li><a href="#sync">Precisão de rolagem</a></li>
               <li><a href="#typst">Visões Typst</a></li>
+              <li><a href="#latex">LaTeX</a></li>
+              <li><a href="#html">Edição HTML</a></li>
+              <li><a href="#languages">Linguagens</a></li>
               <li><a href="#typography">Tipografia</a></li>
               <li><a href="#download">Download</a></li>
             </ul>
@@ -1147,6 +1441,11 @@ image::figura.png[]</code></pre>
           <div class="footer-col">
             <h3>Documentação</h3>
             <ul>
+              <li>
+                <a href="https://github.com/bgeneto/MDraft/blob/master/docs/latex.md"
+                  >Guia de LaTeX</a
+                >
+              </li>
               <li>
                 <a href="https://github.com/bgeneto/MDraft/blob/master/docs/guide.md"
                   >Guia do usuário</a
