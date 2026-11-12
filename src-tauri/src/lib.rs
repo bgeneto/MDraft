@@ -43,7 +43,7 @@ pub fn run() {
         // with --no-build, so an older executable cannot unexpectedly appear.
         eprintln!("MDRAFT_TEST_HIDDEN_ISOLATED_WINDOW_V2");
         if let Ok(identifier) = std::env::var("MDRAFT_TEST_IDENTIFIER")
-            && identifier == "io.github.bernh.mdraft.test-automation"
+            && identifier == "io.github.bgeneto.mdraft.test-automation"
         {
             context.config_mut().identifier = identifier;
         }

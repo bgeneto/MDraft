@@ -27,9 +27,9 @@ const FIXTURE = "samples/latex-project";
 function engineDirectory() {
   // The same location the Rust side uses: the Tauri app-data directory.
   const candidates = [
-    join(homedir(), "AppData", "Roaming", "io.github.bernh.mdraft", "latex"),
-    join(homedir(), ".local", "share", "io.github.bernh.mdraft", "latex"),
-    join(homedir(), "Library", "Application Support", "io.github.bernh.mdraft", "latex"),
+    join(homedir(), "AppData", "Roaming", "io.github.bgeneto.mdraft", "latex"),
+    join(homedir(), ".local", "share", "io.github.bgeneto.mdraft", "latex"),
+    join(homedir(), "Library", "Application Support", "io.github.bgeneto.mdraft", "latex"),
   ];
   for (const candidate of candidates) {
     try {
