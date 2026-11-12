@@ -142,9 +142,9 @@ the window keeps independent panes.
 ## Editing
 
 Documents open in tabs. Each tab keeps its text, caret, scroll position and
-undo history while another tab is in front. The tab list is remembered when
-**Reopen the last tabs** is selected under **On Launch**; the recovery journal
-covers unsaved text separately.
+undo history while another tab is in front. The tab list is remembered and
+restored at the next launch, because **Reopen the last tabs** is the default
+under **On Launch**; the recovery journal covers unsaved text separately.
 
 When more tabs are open than fit, the strip scrolls horizontally: the arrow
 buttons at its right edge move it, a vertical wheel over the strip does the
@@ -223,10 +223,11 @@ and Preferences. Sidebar width and the editor/preview split are not persisted.
 **On Launch** (Preferences › Files) chooses what a new window opens with: the
 welcome document, a new file, the most recent file, or **Reopen the last tabs** —
 every saved document that was open when MDraft last closed, in the same order
-with the same tab active. The list remembers paths; untitled or unsaved text is
-restored by the recovery journal described below, not by the tab list. A file
-that has since been deleted is skipped and reported. When no saved document was
-open — including after **Close All Tabs** — the window starts with one blank
+with the same tab active. **Reopen the last tabs** is the default. The list
+remembers paths; untitled or unsaved text is restored by the recovery journal
+described below, not by the tab list. A file that has since been deleted is
+skipped and reported. When no saved document was open — including after
+**Close All Tabs** — the window starts with one blank
 **Untitled** tab; the welcome document remains its own On Launch choice and is
 always available from **Help › Welcome**. A document named on the
 command line still wins over the remembered set. Several paths on one command
