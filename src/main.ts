@@ -4249,20 +4249,23 @@ function defaultDocumentLanguage(): api.DocumentLanguage {
 }
 
 /**
- * The file dialog filters: the markup being saved or opened first, the rest
- * alphabetical.
+ * The file dialog filters: the markup being saved first, the rest alphabetical,
+ * or All files first for Open.
  *
  * The native dialog selects the first entry and offers no way to select another
  * (rfd declares `SetFileTypeIndex` but never calls it), so that first filter is
  * also what supplies the extension when the reader types a bare name. Save As
  * passes the language the buffer was detected as, because the extension in
- * `defaultPath` stops counting the moment the name is edited; Open passes the
- * default language. The remaining entries are ordered by name — All files,
- * AsciiDoc, HTML, Markdown, Typst — so the list reads the same in every dialog
- * rather than in the order the markup types happened to be introduced.
+ * `defaultPath` stops counting the moment the name is edited. Open puts All
+ * files first instead: keyed to the default extension, the dialog would hide
+ * every `.tex`, `.typ` or `.html` file behind a filter change. The remaining
+ * entries keep name order — All files, AsciiDoc, HTML, Markdown, Typst — so the
+ * list reads the same in every dialog rather than in the order the markup types
+ * happened to be introduced.
  */
 function documentFilters(
   language: api.DocumentLanguage = defaultDocumentLanguage(),
+  allFilesFirst = false,
 ): { name: string; extensions: string[] }[] {
   // The extension lists come from `LANGUAGE_EXTENSIONS`, the same table
   // `languageForExtension` classifies with, so a filter can never offer a name
@@ -4292,7 +4295,8 @@ function documentFilters(
     json,
   } satisfies Record<api.DocumentLanguage, { name: string; extensions: string[] }>;
   const first = preferred[language];
-  return [first, ...alphabetical.filter((entry) => entry !== first)];
+  const ordered = [first, ...alphabetical.filter((entry) => entry !== first)];
+  return allFilesFirst ? [all, ...ordered.filter((entry) => entry !== all)] : ordered;
 }
 
 /**
@@ -6826,7 +6830,9 @@ const handlers: Record<string, () => void | Promise<void>> = {
       multiple: true,
       directory: false,
       defaultPath: settings.lastDirectory ?? undefined,
-      filters: documentFilters(),
+      // All files leads, so a document of any markup type is visible without
+      // first switching the filter away from the default extension.
+      filters: documentFilters(defaultDocumentLanguage(), true),
     });
     if (!chosen) return;
     const paths = Array.isArray(chosen) ? chosen : [chosen];
