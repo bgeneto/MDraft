@@ -515,9 +515,19 @@ pub struct Settings {
 
     // ---- Preferences: Files ----------------------------------------------
     /// "welcome" | "new" | "last" | "tabs"
+    ///
+    /// Defaults to `"tabs"`: a reader who closes the window and opens it again
+    /// gets the documents they were working on, not a welcome page they have
+    /// already read. A profile with nothing remembered falls back to one blank
+    /// tab, which is what `restoreLastTabs` does for an empty set.
     pub on_launch: String,
     pub default_extension: String,
     pub record_recent: bool,
+    /// Write dirty files in place every 20 seconds.
+    ///
+    /// Off by default: a background write is a change to the reader's file that
+    /// they did not ask for, so it stays a deliberate choice. Untitled buffers
+    /// have no path and are never written either way.
     pub auto_save: bool,
 
     // ---- Preferences: Markdown -------------------------------------------
@@ -608,9 +618,16 @@ pub struct Settings {
     /// three paths that write a file — pandoc, Typst and HTML — all run them.
     /// PDF (Print) is the one exception: the browser chooses where the PDF
     /// goes, so MDraft has no path to open.
+    ///
+    /// Opening the exported file is on by default; revealing its folder and
+    /// running a command are not. A file the reader just asked to export is the
+    /// one thing they are most likely to want to look at, while a second window
+    /// in the file manager and an arbitrary shell command are choices to opt
+    /// into. An older profile that actually chose one of these keeps that
+    /// choice; see `parse_settings`.
     #[serde(default)]
     pub after_open_location: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub after_open_file: bool,
     #[serde(default)]
     pub after_run_command: bool,
@@ -736,7 +753,7 @@ impl Default for Settings {
             latex_native_wsl: None,
             latex_texmf_roots: Vec::new(),
 
-            on_launch: "welcome".into(),
+            on_launch: "tabs".into(),
             default_extension: "md".into(),
             record_recent: true,
             auto_save: false,
@@ -765,7 +782,7 @@ impl Default for Settings {
 
             export_formats: default_export_formats(),
             after_open_location: false,
-            after_open_file: false,
+            after_open_file: true,
             after_run_command: false,
             after_command: String::new(),
 
@@ -902,11 +919,22 @@ fn normalize_ai_usage(object: &mut serde_json::Map<String, serde_json::Value>) {
 ///
 /// The flags used to live on each `ExportFormat`, which meant a box ticked for
 /// Word did nothing when the user exported HTML or PDF. They are global now.
+///
 /// A file written before that change has no `afterOpenLocation` key at the top
 /// level, so its per-format values are OR-ed together and the old keys are
-/// removed. Once a top-level key exists the file belongs to the new shape and
-/// is left alone: otherwise unchecking a global box would be undone on the next
+/// removed. Once a top-level key exists the file belongs to the new shape and is
+/// left alone: otherwise unchecking a global box would be undone on the next
 /// start by the obsolete per-format value.
+///
+/// The one subtlety is what "carrying forward" means for a reader who never
+/// touched the option. Every release that had the per-format flags **wrote all
+/// four of them on every format**, so the presence of the keys proves nothing:
+/// a default profile has them, all `false`. Writing `false` forward would pin
+/// that reader to the old answer forever and deny them the shipped default
+/// (opening the exported file). So only an actual **choice** is carried forward —
+/// any flag set to `true`, or a non-empty command. A profile with every flag
+/// `false` gets no top-level keys at all and falls through to the serde
+/// defaults, which is the same answer the reader would get from a fresh install.
 fn parse_settings(raw: &str) -> Option<Settings> {
     let mut value: serde_json::Value = serde_json::from_str(raw).ok()?;
     let object = value.as_object_mut()?;
@@ -963,7 +991,10 @@ fn parse_settings(raw: &str) -> Option<Settings> {
         }
     }
 
-    if legacy {
+    // Only a deliberate choice is carried forward; see the doc comment above.
+    let chose_something =
+        open_location || open_file || run_command || !command.trim().is_empty();
+    if legacy && chose_something {
         object.insert("afterOpenLocation".into(), open_location.into());
         object.insert("afterOpenFile".into(), open_file.into());
         object.insert("afterRunCommand".into(), run_command.into());
@@ -1680,8 +1711,9 @@ mod tests {
         assert_eq!(parsed.theme, "dark");
         assert_eq!(parsed.view_mode, "split");
         assert!(parsed.sidebar_visible);
-        // Settings written by an older build must still load.
-        assert_eq!(parsed.on_launch, "welcome");
+        // Settings written by an older build must still load, and the fields it
+        // never wrote come back with the current defaults.
+        assert_eq!(parsed.on_launch, "tabs");
         assert_eq!(parsed.editor_line_height, "normal");
         assert!(parsed.enable_math);
         assert!(!parsed.auto_save);
@@ -2152,12 +2184,88 @@ mod tests {
     }
 
     #[test]
-    fn after_export_defaults_are_off() {
+    fn after_export_defaults_open_the_file_only() {
+        // Opening the file the reader just exported is the useful default;
+        // a second file-manager window and an arbitrary command are opt-ins.
         let settings = Settings::default();
         assert!(!settings.after_open_location);
-        assert!(!settings.after_open_file);
+        assert!(settings.after_open_file);
         assert!(!settings.after_run_command);
         assert!(settings.after_command.is_empty());
+        // An older file that has no after-export keys at all gets the same
+        // answers, not the struct's serde defaults by accident.
+        let parsed = parse_settings(r#"{"theme":"dark"}"#).expect("old settings load");
+        assert!(!parsed.after_open_location);
+        assert!(parsed.after_open_file);
+        assert!(!parsed.after_run_command);
+    }
+
+    #[test]
+    fn a_default_profile_from_the_old_shape_gets_the_new_after_export_default() {
+        // This is the shape every release before the options became global
+        // actually wrote: the flags are on each format, and a reader who never
+        // touched them has all of them `false`. The presence of the keys must
+        // not be read as a choice, or upgrading would silently keep the file
+        // closed and deny the new default to every existing install.
+        let untouched = r#"{
+            "theme": "dark",
+            "exportFormats": [
+                {
+                    "id": "docx", "label": "Word (.docx)", "extension": "docx",
+                    "arguments": "-s -o ${outputPath}", "extraArguments": "",
+                    "styleReference": "",
+                    "afterOpenLocation": false, "afterOpenFile": false,
+                    "afterRunCommand": false, "afterCommand": ""
+                }
+            ]
+        }"#;
+        let parsed = parse_settings(untouched).expect("an untouched old profile loads");
+        assert!(!parsed.after_open_location);
+        assert!(
+            parsed.after_open_file,
+            "an untouched old profile must get the shipped default, not a false nobody chose"
+        );
+        assert!(!parsed.after_run_command);
+        assert_eq!(parsed.after_command, "");
+
+        // A reader who did choose something keeps exactly that choice.
+        let chose = r#"{
+            "exportFormats": [
+                {
+                    "id": "docx", "label": "Word (.docx)", "extension": "docx",
+                    "arguments": "-s -o ${outputPath}", "extraArguments": "",
+                    "styleReference": "",
+                    "afterOpenLocation": true, "afterOpenFile": false,
+                    "afterRunCommand": false, "afterCommand": ""
+                }
+            ]
+        }"#;
+        let parsed = parse_settings(chose).expect("a profile with a choice loads");
+        assert!(parsed.after_open_location);
+        assert!(
+            !parsed.after_open_file,
+            "an explicit choice is carried forward, not replaced by the new default"
+        );
+    }
+
+    #[test]
+    fn launch_defaults_to_the_working_set_and_autosave_stays_opt_in() {
+        // A fresh profile reopens the documents that were open. Auto Save is
+        // deliberately still off: it writes the reader's file in the background,
+        // which is a change they have to ask for.
+        let settings = Settings::default();
+        assert_eq!(settings.on_launch, "tabs");
+        assert!(!settings.auto_save);
+
+        let parsed = parse_settings(r#"{"theme":"dark"}"#).expect("old settings load");
+        assert_eq!(parsed.on_launch, "tabs");
+        assert!(!parsed.auto_save);
+
+        // An explicit choice still wins over the default.
+        let chosen = parse_settings(r#"{"onLaunch":"welcome","autoSave":true}"#)
+            .expect("an explicit choice loads");
+        assert_eq!(chosen.on_launch, "welcome");
+        assert!(chosen.auto_save);
     }
 }
 
