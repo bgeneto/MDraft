@@ -151,9 +151,8 @@ Rejected:
 - [x] 10. Trap entry in `docs/agent-guide/traps/latex-typst-asciidoc.md` if the
       upgrade surfaces anything non-obvious. Catalog entries if a script is added
       (none planned).
-- [ ] 11. Validate (below), then `npm run site`. Validation items 1-3 and 6 are
-      done; items 4 and 5 need the engine enabled in the real app, see
-      "Status and deviations".
+- [x] 11. Validate (below), then `npm run site`. All six items ran; see "Status and
+      deviations" for the one failing check and what was not verified.
 
 ## Files and modules
 
@@ -222,7 +221,8 @@ Cheapest first; the whole suite is not needed.
 
 ## Status and deviations
 
-**Implemented 2026-11-12; in-app verification still open.**
+**Implemented and verified in the app 2026-11-12, with one pre-existing failure and
+one unverified claim (below).**
 
 Done and passing: the eight 2026 files were downloaded and each matched the manifest
 digest (12,572,568 bytes); `npm run build`, `tsc --noEmit`, eslint and prettier on the
@@ -232,12 +232,35 @@ four-file difference, release marker, byte comparison, cache namespace); and 12
 app-free layers (`latex-sdk-unit` now 35 checks, including the year agreeing across
 `latex.ts`, the Rust constants and the shims).
 
-Not run: the CDP layers (`latex-preview`, `latex-project`, `latex-texmf`,
-`preview-freshness`) and the validation item 5 measurement. `scripts/test-all.mjs`
-links the developer's installed engine into the test instance, which is still the
-2025 one, so those layers would skip, and enabling it through the harness would
-write the 2026 files into the developer's real `latex/` folder. That is the reader's
-step (Retry setup, or the switch off and on), not the agent's.
+In the app (release build, the harness's `.test-automation` profile):
+
+- The test profile held a 2025 engine. Turning the switch on in Preferences upgraded
+  it in place, and the Engine note read "Installed and enabled." without a restart.
+  `latex_status` was true and `latex_cache_info` reported `"installed":true`.
+- `samples/latex-reference.tex` compiled to 5 pages, "PDF ready 1 warning LuaLaTeX ·
+  67.0 s", with no console error and the app alive throughout (a debug script that
+  launched the staged build and captured console, exception and crash events).
+- With the cache warm: `latex-project` 16/16, `latex-texmf` 35/35,
+  `preview-freshness` 21/21, `latex-tools` 7/7.
+- `latex-preview` passed 76 of 77 checks. The failure, "the last page remains visible
+  while following the end", is recorded as failing on 2026-11-07, with the 2025
+  engine, in `2026-11-07-latex-export-formats.md`. The run then ended in the test's own
+  cleanup (`rmSync` of the export folder, `EPERM`) after the last export check
+  passed, so the checks after that point did not run.
+
+**The first run failed four of five suites, and that was not the engine.** The 2026
+package cache is a new namespace and starts empty, so the first compile downloaded
+every package again: 67 s here, against a 60 s wait for the first page in
+`latex-preview-test.mjs` ("0 page(s)"). The same run also had both profile folders,
+`io.github.bgeneto.mdraft` and `…test-automation`, moved to the Recycle Bin at 09:59,
+mid-run, by something other than this work, which invalidated its later suites.
+The reruns above are the evidence.
+
+Not verified: the checks of `latex-preview` after its cleanup crash; a 2025 baseline
+of the scroll-follow check (the 2026-11-07 record is the only evidence it predates
+this change); and the upgrade of a reader's *real* 2025 install. The developer's own
+engine folder was one of the two moved to the Recycle Bin, so the real-profile path
+(Retry setup on a 2025 install) was exercised only in the test profile.
 
 Deviations from the plan as approved:
 

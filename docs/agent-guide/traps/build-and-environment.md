@@ -329,3 +329,16 @@ Every failing test creates a temporary directory first (`fs::create_dir_all(&dir
 
 **A Node script given to the Bash tool as a quoted heredoc ran as if its backslashes were halved: `indexOf('…("\\n=== heading')` found nothing, `new RegExp("\\(traps/" + f)` matched the empty string, and the splice that followed wrote 601 lines into a 3-line edit of `traps.md`**
 Inside the heredoc `\\` reached Node as a single `\`, so string escapes and regex escapes meant something else; the first sign, three edits earlier, was `"#{x}".replace(/[{}]/g, "\\$&")` returning the text unchanged. The script then computed `at = indexOf(from)` from a pattern that never matched, and `idx.slice(0, at)` with `at === -1` is not an error — it is "everything but the last character". Write a script that contains backslashes to a file with the Write tool and run `node <file>`; throw when an `indexOf` is `-1` before slicing; never splice with a position you did not check; and run `git diff --stat` after any scripted edit, which showed `601 +++++` for a file that should have changed three lines. `git checkout -- <file>` undid it only because the file was tracked.
+
+**`%APPDATA%\io.github.bgeneto.mdraft` and `…\io.github.bgeneto.mdraft.test-automation` vanish while a UI run is in progress, and the run's later suites fail**
+Both folders were gone mid-run: `Get-ChildItem $env:APPDATA` listed only the
+`.test-automation` folder, recreated empty, and `latex\assets` and the cache with it.
+Do not assume the harness did it. `scripts/test-all.mjs` only touches the
+`.test-automation` identity's own state files, and a second session's runner waits on
+its lock (`Another MDraft test harness is running`), so two runs do not overlap. The
+Recycle Bin settles it, because a shell delete is recoverable and names the time:
+`(New-Object -ComObject Shell.Application).NameSpace(10).Items()` listed both folders
+as deleted at 09:59, inside the run. Something outside the harness removed them (a
+person or another session resetting to first-run state). The harness cannot defend
+against that, so a run whose app data disappears is invalid from that moment: check
+the Recycle Bin, restore only with the owner's say, and rerun in isolation.

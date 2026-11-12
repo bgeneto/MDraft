@@ -276,3 +276,18 @@ the message in the log, undoes the wrap, takes the file TeX had open there
 (`openFileAt`, a parenthesis stack), and keeps a cursor per message so repeated
 warnings get their own lines. The failure also predated the preview-freshness
 work: check `HEAD` before blaming the change under test.
+
+**After moving the bundled engine to a new TeX Live year, `latex-preview` fails with `the preview renders at least one page — 0 page(s)` and `latex-texmf` fails every compile check**
+It reads as a broken engine, and a first run did fail four of five LaTeX suites. It
+was a cold cache. The package cache is namespaced by mirror revision
+(`mirror/<revision>/…`), so the first compile in the new namespace downloads every
+package again: 67 s here, against the 60 s the preview test waits for the first
+page. Prove it before touching the engine: launch the staged build with a small CDP
+script that prints `Runtime.consoleAPICalled`, `Runtime.exceptionThrown` and the
+`.compiled-message` text every few seconds. The preview said "Downloading LaTeX
+packages…" for a minute and then "PDF ready 1 warning LuaLaTeX · 67.0 s", with no
+console error. Rerun once the cache is warm and the suites pass (`latex-project`
+16/16, `latex-texmf` 35/35, `preview-freshness` 21/21). `cache info` reporting
+`"bytes":0` right after the switch is the tell. The same run also lost both profile
+folders mid-run; see the Recycle Bin entry in
+[build-and-environment.md](build-and-environment.md).
