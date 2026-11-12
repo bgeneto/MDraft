@@ -153,7 +153,9 @@ export class CompiledPreviewUi {
     const paths: Record<Icon, string> = {
       play: '<path d="m9 5 12 7-12 7a1 1 0 0 1-1.5-.9V5.9A1 1 0 0 1 9 5Z"/>',
       stop: '<rect x="6" y="6" width="12" height="12" rx="1"/>',
-      logs: '<path d="M21 12h-8M21 6H8M21 18h-8M3 6v4a2 2 0 0 0 2 2h3M3 10v6a2 2 0 0 0 2 2h3"/>',
+      // A console window with a prompt: reads as "compiler output" at 16 px,
+      // where the old tree-of-lines glyph looked like a broken list icon.
+      logs: '<rect x="2.5" y="4" width="19" height="16" rx="2.5"/><path d="m7 9.5 3 2.5-3 2.5M13 15h4"/>',
       download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
       copy: '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
       error: '<circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>',
