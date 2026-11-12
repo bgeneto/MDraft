@@ -76,6 +76,32 @@ function projectSource(value: string | undefined, sources: ReadonlyMap<string, s
   return name;
 }
 
+/**
+ * The file TeX had open at offset `at` of its log, or null.
+ *
+ * TeX prints `(` and the file name when it opens a file and `)` when it closes
+ * it; names with spaces are quoted (`("./Resumo executivo.tex"`). Walking the
+ * log up to `at` with a stack of those parentheses gives the innermost open
+ * file — the usual way TeX log readers place a warning. A parenthesis that does
+ * not start a file name (prose such as "(see the transcript file)") is pushed
+ * as null, so its `)` pops the right entry.
+ */
+export function openFileAt(log: string, at: number): string | null {
+  const stack: Array<string | null> = [];
+  const name = /\("([^"]+)"|\(([^\s()"]+)/y;
+  for (let i = 0; i < at; i += 1) {
+    const char = log[i];
+    if (char === "(") {
+      name.lastIndex = i;
+      const match = name.exec(log);
+      const candidate = match ? (match[1] ?? match[2]) : null;
+      stack.push(candidate && /\.[A-Za-z]{1,4}$/.test(candidate) ? candidate : null);
+    } else if (char === ")") stack.pop();
+  }
+  for (let i = stack.length - 1; i >= 0; i -= 1) if (stack[i]) return stack[i];
+  return null;
+}
+
 /** The compiled line a diagnostic points at, or "" when there is none. */
 function sourceLine(sources: ReadonlyMap<string, string>, file: string, line: number): string {
   const text = sources.get(file);
@@ -154,13 +180,34 @@ export function compileDiagnostics(
     }
   }
   let truncated = false;
+  // A LaTeX warning carries its place in its own text ("... undefined on input
+  // line 12."), and the SDK reports such warnings with line 0 and the main file.
+  // TeX wraps the log at 79 columns and the SDK keeps only the first physical
+  // line, so the number is usually cut off ("... on input li") and is read from
+  // the log with the wrap undone. The file is the one TeX had open at that
+  // point of the log — an `\input` chapter, not necessarily the main file. A
+  // cursor per message keeps two identical warnings on their own occurrences.
+  const log = result.log ?? "";
+  const warningCursor = new Map<string, number>();
+  const warningPlace = (message: string): { line: number; file: string | null } => {
+    const from = warningCursor.get(message) ?? 0;
+    const at = log.indexOf(message, from);
+    if (at >= 0) warningCursor.set(message, at + message.length);
+    const own = /\bon input line (\d+)/.exec(message);
+    const tail = at >= 0 ? log.slice(at, at + message.length + 240).replace(/\r?\n/g, "") : "";
+    const line = Number(own?.[1] ?? /\bon input line (\d+)/.exec(tail)?.[1] ?? 0);
+    const open = at >= 0 ? openFileAt(log, at) : null;
+    const file = open ? projectSource(open, sources) : "";
+    return { line, file: file && sources.has(file) ? file : null };
+  };
   for (const entry of reported) {
     if (entry.severity !== "warning" && entry.severity !== "error") continue;
     if (!entry.message) continue;
-    const file = projectSource(entry.file, sources);
+    const place = entry.severity === "warning" && !entry.line ? warningPlace(entry.message) : null;
+    const file = place?.file ?? projectSource(entry.file, sources);
     const pointer =
       entry.severity === "error" ? pointers.get(entry.message.trim())?.shift() : undefined;
-    const line = entry.line || pointer || 0;
+    const line = entry.line || pointer || place?.line || 0;
     const key = `${file}\u0000${line}\u0000${entry.message}`;
     if (seen.has(key)) continue;
     seen.add(key);

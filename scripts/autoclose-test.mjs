@@ -433,7 +433,9 @@ await scenario(async () => {
   // LaTeX command names rather than buffer words — and that they are *names*,
   // not the raw snippet templates (`section{${1}}`) the catalog stores.
   check(
-    Array.isArray(rows) && rows.some((row) => /^[a-z]+$/.test(row) || /^\\/.test(row)),
+    // A row is a command name, optionally followed by its readable signature
+    // (`frac{num}{den}`, `sqrt[n]{x}`); raw templates are rejected below.
+    Array.isArray(rows) && rows.some((row) => /^\\?[a-zA-Z]+(?:\[[^\]]*\]|\{[^}]*\})*$/.test(row)),
     "the popup offers LaTeX commands",
     rows ? rows.join(", ") : "none",
   );

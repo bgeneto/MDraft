@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createContext, runInContext } from "node:vm";
-import { compileDiagnostics, latexBuildFailed } from "../src/latex.ts";
+import { compileDiagnostics, latexBuildFailed, openFileAt } from "../src/latex.ts";
 const adapter = readFileSync("src/latex.ts", "utf8");
 const compile = adapter.slice(adapter.indexOf("export async function compileLatex"));
 assert.match(compile, /engine:\s*["']lualatex["']/);
@@ -173,4 +173,78 @@ const supplied = compileDiagnostics(
   new Map([["main.tex", sourceLines]]),
 );
 assert.equal(supplied.diagnostics[0].line, 7);
-console.log("26/26 LaTeX adapter checks passed");
+// The SDK reports LaTeX warnings with line 0; the line is in the message.
+const reference = compileDiagnostics(
+  {
+    errors: [
+      {
+        severity: "warning",
+        file: "main.tex",
+        line: 0,
+        message: "LaTeX Warning: Reference `missing' on page 1 undefined on input line 19.",
+      },
+    ],
+    log: "",
+  },
+  new Map([["main.tex", sourceLines]]),
+);
+assert.equal(reference.diagnostics[0].line, 19);
+assert.equal(reference.diagnostics[0].lineText, "\\header");
+const summary = compileDiagnostics(
+  {
+    errors: [
+      {
+        severity: "warning",
+        file: "main.tex",
+        line: 0,
+        message: "LaTeX Warning: There were undefined references.",
+      },
+    ],
+    log: "",
+  },
+  new Map([["main.tex", sourceLines]]),
+);
+assert.equal(summary.diagnostics[0].line, 0, "a warning with no place stays unplaced");
+// TeX wraps the log at 79 columns and the SDK keeps the first physical line,
+// so the message is cut before its line number; the log has the rest.
+const cut = "LaTeX Warning: Reference `mdraft-missing-label' on page 1 undefined on input li";
+const wrapped = compileDiagnostics(
+  {
+    errors: [
+      { severity: "warning", file: "main.tex", line: 0, message: cut },
+      { severity: "warning", file: "main.tex", line: 0, message: cut },
+    ],
+    log: `${cut}\nne 3.\n\n${cut}\nne 19.\n`,
+  },
+  new Map([["main.tex", sourceLines]]),
+);
+assert.deepEqual(
+  wrapped.diagnostics.map((diagnostic) => diagnostic.line),
+  [3, 19],
+  "a wrapped warning recovers its line, and a repeat gets its own",
+);
+// The SDK names the main file; the log shows which file TeX had open. This is
+// the shape of the bundled engine's real log for a \ref in an \input chapter.
+const chapterLog =
+  '(./main.tex (/tex/article.cls (/tex/size10.clo)) (/tex/l3backend-luatex.def)\nNo file main.aux.\n("./Resumo executivo.tex"\n\n' +
+  `${cut}\nne 4.\n\n) [1{/tex/pdftex.map}] (./main.aux)\n\nLaTeX Warning: There were undefined references.\n\n)\n`;
+assert.equal(openFileAt(chapterLog, chapterLog.indexOf(cut)), "./Resumo executivo.tex");
+assert.equal(
+  openFileAt(chapterLog, chapterLog.indexOf("There were")),
+  "./main.tex",
+  "a closed chapter and a closed system file are popped",
+);
+const chapter = compileDiagnostics(
+  {
+    errors: [{ severity: "warning", file: "main.tex", line: 0, message: cut }],
+    log: chapterLog,
+  },
+  new Map([
+    ["main.tex", "\\documentclass{article}"],
+    ["Resumo executivo.tex", "one\ntwo\nthree\nA reference: \\ref{mdraft-missing-label}."],
+  ]),
+);
+assert.equal(chapter.diagnostics[0].file, "Resumo executivo.tex");
+assert.equal(chapter.diagnostics[0].line, 4);
+assert.equal(chapter.diagnostics[0].lineText, "A reference: \\ref{mdraft-missing-label}.");
+console.log("35/35 LaTeX adapter checks passed");
