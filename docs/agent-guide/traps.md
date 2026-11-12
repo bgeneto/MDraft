@@ -52,7 +52,7 @@ landed, because the fix is what makes it recur.
 | File | Entries | Covers |
 | --- | --- | --- |
 | [traps/build-and-environment.md](traps/build-and-environment.md) | 40 | Host, shell, path, permission and WSL problems that stop a command before any application code runs. |
-| [traps/toolchain-and-lint.md](traps/toolchain-and-lint.md) | 15 | Compiler versions, Clippy, ESLint, Prettier and the CI-only failures a green local run does not predict. |
+| [traps/toolchain-and-lint.md](traps/toolchain-and-lint.md) | 16 | Compiler versions, Clippy, ESLint, Prettier and the CI-only failures a green local run does not predict. |
 | [traps/builds-and-packaging.md](traps/builds-and-packaging.md) | 13 | The bundle, staging, installer and release-artifact problems: what `npm run dist` produces and what it silently keeps. |
 | [traps/processes-and-app-state.md](traps/processes-and-app-state.md) | 14 | Launched instances, leaked processes, the WebView2 profile, `settings.json` and recovery state. |
 | [traps/test-runner.md](traps/test-runner.md) | 17 | `scripts/test-all.mjs` itself: the order it runs, the guards it applies, the cleanup it owes. |
