@@ -155,6 +155,9 @@ fn export_enabled_for(
     availability: ExportAvailability,
     language: &str,
 ) -> bool {
+    if matches!(language, "javascript" | "css" | "json") {
+        return false;
+    }
     if is_pandoc_pdf(format) && language == "latex" {
         return false;
     }
@@ -561,6 +564,12 @@ fn is_checked(state: &MenuState, id: &str) -> bool {
 /// accident. The handler still validates the context, because a stale menu or a
 /// keyboard route can outlive the state that disabled it.
 fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
+    let source = matches!(state.document_language.as_str(), "javascript" | "css" | "json");
+    if source && (id.starts_with("format.") || id.starts_with("para.")
+        || id.starts_with("insert.") || id.starts_with("export.")
+        || id == "file.print" || id == "tools.spellcheck") {
+        return Some(false);
+    }
     let writable = !state.read_only;
     let html = state.document_language == "html";
     let typst = state.document_language == "typst";
@@ -1861,6 +1870,18 @@ pub fn recent_menu<R: Runtime>(app: AppHandle<R>) -> Vec<RecentMenuItem> {
 mod tests {
     use super::*;
     use crate::settings::Settings;
+
+    #[test]
+    fn web_source_disables_markup_and_preview_actions() {
+        for language in ["javascript", "css", "json"] {
+            let mut state = MenuState::from_settings(&Settings::default());
+            state.document_language = language.into();
+            for id in ["format.bold", "para.h1", "insert.alerts", "export.html", "export.pdf", "file.print", "tools.spellcheck"] {
+                assert_eq!(enabled_for(&state, id), Some(false), "{language}: {id}");
+            }
+            assert_eq!(enabled_for(&state, "file.save"), Some(true));
+        }
+    }
 
     #[test]
     fn check_state_tracks_settings() {

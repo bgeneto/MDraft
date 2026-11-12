@@ -355,8 +355,11 @@ const lifecycle = createDocumentLifecycle({
   changed: (session, pathChanged) => {
     if (session === doc) {
       if (pathChanged) {
+        invalidatePreview();
+        retirePreview();
         syncGuest(session.language);
         editor.setLanguage(session.language);
+        assistant?.sync();
         applyLayout();
         scheduleRender(true);
         scheduleOutlineRefresh(editor.getDoc());
@@ -797,11 +800,11 @@ function updateStatusFlags(): void {
   setStatusFlag(
     "flag-spellcheck",
     settings.spellcheck !== false,
-    doc.language === "html",
+    doc.language === "html" || api.isWebSource(doc.language),
     "Check spelling",
     "",
-    doc.language === "html"
-      ? "No effect on HTML documents, whose source is markup."
+    doc.language === "html" || api.isWebSource(doc.language)
+      ? "No effect on this source document."
       : "Underlines words the installed dictionary does not recognise.",
   );
 }
@@ -1000,7 +1003,8 @@ function applySpellcheck(): void {
   editor?.setSpellcheck({
     // HTML source is markup; the dictionary's node names are Markdown-shaped and
     // would underline tags and attribute names.
-    enabled: settings.spellcheck !== false && doc.language !== "html",
+    enabled:
+      settings.spellcheck !== false && doc.language !== "html" && !api.isWebSource(doc.language),
     language: settings.spellcheckLanguage || "auto",
     documentLanguage: doc.language,
     words: settings.spellcheckWords ?? [],
@@ -3828,6 +3832,29 @@ async function doRender(force = false): Promise<void> {
     previewSyncReady = false;
     return;
   }
+  if (api.isWebSource(doc.language)) {
+    clearPending();
+    preview.replaceChildren();
+    previewPane.querySelector(":scope > .source-preview-warning")?.remove();
+    const warning = document.createElement("div");
+    warning.className = "preview-pending source-preview-warning";
+    warning.setAttribute("role", "status");
+    const icon = document.createElement("div");
+    icon.className = "source-preview-icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = "⚠️";
+    const title = document.createElement("div");
+    title.className = "preview-pending-title";
+    title.textContent = "Preview unavailable";
+    const message = document.createElement("div");
+    message.className = "preview-pending-phase";
+    message.textContent = "This file can be edited in the source pane.";
+    warning.append(icon, title, message);
+    previewPane.append(warning);
+    previewStale = false;
+    previewSyncReady = false;
+    return;
+  }
   // A render is now on its way for whatever document is active. If no content
   // has committed for it, the pane shows the wait rather than a foreign tab's
   // output. Repeated calls for the same wait are ignored by `armPending`.
@@ -4123,8 +4150,9 @@ function refreshOutline(text = editor.getDoc()): void {
   window.clearTimeout(outlineTimer);
 
   const language = doc.language;
-  outlineHeadings =
-    language === "typst"
+  outlineHeadings = api.isWebSource(language)
+    ? []
+    : language === "typst"
       ? sidebarPanel.extractTypstHeadings(text)
       : language === "html"
         ? sidebarPanel.extractHtmlHeadings(text)
@@ -4227,14 +4255,20 @@ function documentFilters(
   const html = filter("HTML", "html");
   const latex = filter("LaTeX", "latex");
   const asciidoc = filter("AsciiDoc", "asciidoc");
+  const javascript = filter("JavaScript", "javascript");
+  const css = filter("CSS", "css");
+  const json = filter("JSON", "json");
   const all = { name: "All files", extensions: ["*"] };
-  const alphabetical = [all, asciidoc, html, latex, markdown, typst];
+  const alphabetical = [all, asciidoc, css, html, javascript, json, latex, markdown, typst];
   const preferred = {
     markdown,
     typst,
     html,
     asciidoc,
     latex,
+    javascript,
+    css,
+    json,
   } satisfies Record<api.DocumentLanguage, { name: string; extensions: string[] }>;
   const first = preferred[language];
   return [first, ...alphabetical.filter((entry) => entry !== first)];
@@ -4376,6 +4410,7 @@ function snapshotDoc(): void {
  * compiles against.
  */
 function retirePreview(): void {
+  previewPane.querySelector(":scope > .source-preview-warning")?.remove();
   selectedLatexProblem = null;
   compiledUi.reset();
   latexPartial = null;
@@ -4456,6 +4491,7 @@ async function showInEditor(resetHistory: boolean, tokens: number | null = null)
   doc.draft = null;
   syncGuest(doc.language);
   editor.setLanguage(doc.language);
+  assistant?.sync();
   // The backend counted while reading the file, so opening does not send the
   // document back over IPC. This also cancels the debounced scan that the
   // `setDoc` update just scheduled. A buffer with no count of its own is scanned.
@@ -4505,6 +4541,7 @@ async function displayDoc(preservePdf = false): Promise<void> {
   // the session's language again is a no-op once that grammar is already in the
   // state, and it repairs the case where it is not.
   editor.setLanguage(doc.language);
+  assistant?.sync();
   // A captured EditorState keeps the marks it had; a tab that was hidden before
   // the failure has none, so paint the last compile's list for it. No pulse: the
   // beat belongs to the failure, not to every tab switch.
@@ -4514,7 +4551,8 @@ async function displayDoc(preservePdf = false): Promise<void> {
   applyLayout();
   editor.setSpellcheck(
     {
-      enabled: settings.spellcheck !== false && doc.language !== "html",
+      enabled:
+        settings.spellcheck !== false && doc.language !== "html" && !api.isWebSource(doc.language),
       language: settings.spellcheckLanguage || "auto",
       documentLanguage: doc.language,
       words: settings.spellcheckWords ?? [],
@@ -8755,6 +8793,16 @@ const lastActionAt = new Map<string, number>();
  * longer existed.
  */
 function commandRefusedReason(_id: string): string | null {
+  if (
+    api.isWebSource(doc.language) &&
+    (_id.startsWith("format.") ||
+      _id.startsWith("para.") ||
+      _id.startsWith("insert.") ||
+      _id.startsWith("export.") ||
+      _id === "file.print")
+  ) {
+    return "This command is not available for source files.";
+  }
   return null;
 }
 
@@ -9285,6 +9333,7 @@ function blockText(block: HTMLElement): string {
 
 /** Why no reading can start for the document on screen, or null. */
 function readAloudBlockedReason(): string | null {
+  if (api.isWebSource(doc.language)) return "Source files have no preview to read aloud.";
   if (!readAloud) return "The editor is still loading.";
   // The HTML tab renders into an opaque-origin iframe: its text is not the
   // parent document's to read, so there is nothing to speak.
@@ -9346,7 +9395,9 @@ function previewReadAloudText(fromStart: boolean): string {
 async function resolveDocumentLanguage(spokenText: string): Promise<string> {
   return resolveLanguage({
     source: textOf(doc).slice(0, 8_000),
-    markup: doc.language,
+    markup: api.isWebSource(doc.language)
+      ? "markdown"
+      : (doc.language as Exclude<api.DocumentLanguage, "javascript" | "css" | "json">),
     spokenText,
     pinned: settings.spellcheckLanguage,
     candidates: installedLanguages(),
@@ -9750,6 +9801,7 @@ function installPasteHandlers(): void {
   const handler = (event: ClipboardEvent) => {
     const plainPaste = plainPastePending;
     plainPastePending = false;
+    if (api.isWebSource(doc.language)) return;
     // A paste over the preview targets the block under the pointer: move the
     // caret there first so the content lands where the user aimed.
     const target = event.target as Node | null;
@@ -9898,6 +9950,9 @@ function recoveryLanguage(value: string): api.DocumentLanguage {
     case "html":
     case "asciidoc":
     case "latex":
+    case "javascript":
+    case "css":
+    case "json":
       return value;
     default:
       return "markdown";
@@ -10479,7 +10534,7 @@ async function boot(): Promise<void> {
 
   assistant = createAssistant(editorPane, {
     config: () => ({
-      enabled: settings.aiEnabled,
+      enabled: settings.aiEnabled && !api.isWebSource(doc.language),
       provider: settings.aiProvider,
       baseUrl: settings.aiBaseUrl,
       model: settings.aiModel,

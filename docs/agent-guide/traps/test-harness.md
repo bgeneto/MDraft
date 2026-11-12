@@ -155,3 +155,7 @@ deadline. After direct backend setup, use the Preferences checkbox to update
 the frontend settings copy, or the next view-mode save can disable it again.
 Run independent folder UI checks before engine setup so a network failure
 cannot hide their results.
+
+## Paste inventory on a CRLF checkout
+
+**`FAIL  independent baseline source hash: samples/feature-tour.md` and `FAIL  every baseline body/range/display kind: samples/feature-tour.md`** can occur together on Windows even when the source is unchanged. The inventory pins the LF bytes and offsets, but `git ls-files --eol samples/feature-tour.md` reported `i/lf w/crlf` on this host. Hashing after replacing CRLF with LF matched the pinned SHA-256; the apparent parser regression was a checkout line-ending mismatch. Verify the normalized hash and run the inventory against an LF checkout rather than updating the baseline to match CRLF.

@@ -142,6 +142,10 @@ To work with Typst files, choose **Tools › Check or Install Typst…**. For
 Pandoc exports, choose **Tools › Check or Install Pandoc…**. Neither is needed
 to edit or preview Markdown, AsciiDoc or HTML.
 
+JavaScript (`.js`, `.mjs`, `.cjs`), CSS and JSON files can also be opened and
+edited with syntax highlighting. These source files do not have a live preview;
+open an HTML document to preview a page.
+
 ## Privacy
 
 MDraft requires no account or activation. It has no telemetry, update checks
