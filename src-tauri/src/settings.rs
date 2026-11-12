@@ -529,6 +529,16 @@ pub struct Settings {
     /// they did not ask for, so it stays a deliberate choice. Untitled buffers
     /// have no path and are never written either way.
     pub auto_save: bool,
+    /// Whether the welcome document has been shown once already.
+    ///
+    /// Only the **first** launch of a profile shows it. `on_launch` defaults to
+    /// `"tabs"`, and its empty-set fallback is deliberately a blank tab so that
+    /// **Close All Tabs** is not undone at the next start; that would otherwise
+    /// make a brand-new install open on an empty buffer with no introduction.
+    /// This flag is what tells the two apart. It is set the first time the
+    /// welcome document is shown at boot, and never cleared.
+    #[serde(default)]
+    pub welcome_seen: bool,
 
     // ---- Preferences: Markdown -------------------------------------------
     pub enable_math: bool,
@@ -757,6 +767,7 @@ impl Default for Settings {
             default_extension: "md".into(),
             record_recent: true,
             auto_save: false,
+            welcome_seen: false,
 
             enable_math: true,
             enable_mermaid: true,
@@ -2256,16 +2267,26 @@ mod tests {
         let settings = Settings::default();
         assert_eq!(settings.on_launch, "tabs");
         assert!(!settings.auto_save);
+        // Nothing has been shown yet, so the first launch still introduces the
+        // application before "tabs" has anything to restore.
+        assert!(!settings.welcome_seen);
 
         let parsed = parse_settings(r#"{"theme":"dark"}"#).expect("old settings load");
         assert_eq!(parsed.on_launch, "tabs");
         assert!(!parsed.auto_save);
+        // An existing profile has already been introduced: it must not be shown
+        // the welcome document again just because this field is new.
+        assert!(!parsed.welcome_seen);
 
         // An explicit choice still wins over the default.
         let chosen = parse_settings(r#"{"onLaunch":"welcome","autoSave":true}"#)
             .expect("an explicit choice loads");
         assert_eq!(chosen.on_launch, "welcome");
         assert!(chosen.auto_save);
+
+        // The flag round-trips, so the second launch takes the "tabs" path.
+        let seen = parse_settings(r#"{"welcomeSeen":true}"#).expect("the flag loads");
+        assert!(seen.welcome_seen);
     }
 }
 
