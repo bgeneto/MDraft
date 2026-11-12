@@ -10,6 +10,7 @@
 //! be dragged and resized without leaving the webview.
 
 import * as api from "./api";
+import { LATEX_DOWNLOAD_MIB, LATEX_ENGINE_YEAR } from "./latex-engine";
 import {
   renderTexmfControl,
   texmfRows,
@@ -1051,8 +1052,8 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
               ? "Installed and enabled."
               : "Installed, but the switch is off."
             : latex.enabled
-              ? "Enabled, but the engine files are missing or out of date. Toggle the switch off and on to download the TeX Live 2026 engine (about 12 MiB)."
-              : "Not installed. Turn the switch on to download about 12 MiB of verified engine files."
+              ? `Enabled, but the engine files are missing or out of date. Toggle the switch off and on to download the TeX Live ${LATEX_ENGINE_YEAR} engine (about ${LATEX_DOWNLOAD_MIB} MiB).`
+              : `Not installed. Turn the switch on to download about ${LATEX_DOWNLOAD_MIB} MiB of verified engine files.`
           : "Checking…"),
     },
     {

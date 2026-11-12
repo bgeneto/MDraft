@@ -1420,15 +1420,23 @@ function linkLatexEngine() {
   const dataRoot = appConfigDir().replace(`${identifier}`, tauriConfig.identifier);
   let source = path.join(dataRoot, "latex");
   if (!fs.existsSync(path.join(source, "assets"))) {
-    // `wasmtex-luatex.js` of the pinned engine release (TeX Live 2026). A directory
-    // that still holds the 2025 file is not the engine this build runs.
-    const digest = "2b16bc7f892a068a548e8950b7d3987f6b23ff2bac4ba6258520739a402906ef";
+    // `wasmtex-luatex.js` of any engine profile in `src-tauri/latex-engine.json`, the
+    // same rule the backend uses to migrate a directory from before `latex/` existed.
+    // The release marker, not this digest, decides whether the files are the active year.
+    const engineConfig = JSON.parse(
+      fs.readFileSync(path.join(repoRoot, "src-tauri", "latex-engine.json"), "utf8"),
+    );
+    const digests = new Set(
+      Object.values(engineConfig.profiles).map(
+        (profile) => profile.assets.find((asset) => asset.name === "wasmtex-luatex.js").sha256,
+      ),
+    );
     const candidates = fs.existsSync(dataRoot)
       ? fs.readdirSync(dataRoot, { withFileTypes: true }).filter((entry) => {
           if (!entry.isDirectory() || entry.name === "latex") return false;
           const asset = path.join(dataRoot, entry.name, "assets", "wasmtex-luatex.js");
           try {
-            return createHash("sha256").update(fs.readFileSync(asset)).digest("hex") === digest;
+            return digests.has(createHash("sha256").update(fs.readFileSync(asset)).digest("hex"));
           } catch {
             return false;
           }

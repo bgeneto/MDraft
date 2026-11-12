@@ -211,3 +211,20 @@ screenshot or element indexes.
 
 **A page-side wrapper around `window.__TAURI_INTERNALS__.invoke` silently does nothing**
 The intended hold looked correct: `internals.invoke = (cmd, args, opts) => ...` was installed, `window.__ownerHolds` held the command, yet the command resolved immediately at full speed. `Object.getOwnPropertyDescriptor` explains it: both `window.__TAURI_INTERNALS__` and its `invoke` are `writable: false, configurable: false`, so the assignment is a silent no-op in a non-strict script. Do not diagnose this as "the API captured invoke at module load"; `@tauri-apps/api/core` does resolve `window.__TAURI_INTERNALS__.invoke` at call time, but the property cannot be replaced. Hold at the IPC boundary instead: every command is an HTTP request to `http://ipc.localhost/<command>` and CDP `Fetch.enable` with a URL pattern can pause it (`Fetch.requestPaused`), then `Fetch.continueRequest` releases it. Extend `scripts/cdp-page.mjs` with `onEvent` for the event stream; the alternative real check is a slow build, which no engine-free host can provide.
+
+**A hand-launched copy of the staged build runs under the user's real profile, or exits with code 0 and never opens CDP**
+Setting `MDRAFT_TEST_IDENTIFIER=io.github.bgeneto.mdraft.test-automation` is not
+enough. `src-tauri/src/lib.rs` applies that identity and hides the window only when
+`MDRAFT_TEST_HIDDEN` is also set; the harness sets both, which is why a debug script
+copied from the harness's `env` block with one of them looks isolated and is not. The
+first launch showed a visible window and wrote the **real** `%APPDATA%\io.github.bgeneto.mdraft`
+(a fresh `settings.json` with the LaTeX switch on, plus the engine and its cache). A
+launch while the user's own MDraft was open then exited with code 0 in about a second,
+which reads as a crash and is not one: `tauri-plugin-single-instance` handed the
+launch, document argument included, to the user's instance. The false conclusion was
+"the app dies on start"; `Get-CimInstance Win32_Process -Filter "Name='mdraft.exe'"`
+showed `C:\Program Files\MDraft\mdraft.exe` running. Set **both** variables, pass **no**
+document argument (open files over CDP instead), look for
+`MDRAFT_TEST_HIDDEN_ISOLATED_WINDOW_V2` on stderr before trusting the run, and prefer
+`scripts/test-all.mjs`, which also refuses to start beside a running MDraft. A script
+that was not run through the harness has not earned the word "isolated".

@@ -183,6 +183,7 @@ import {
   diagnosticPlace,
   diagnosticRange,
   diagnosticSignature,
+import { LATEX_DOWNLOAD_MIB, LATEX_ENGINE_YEAR } from "./latex-engine";
   latexProjectMember,
 } from "./latex-diagnostics";
 import { lineTextOf } from "./latex-references";
@@ -3006,7 +3007,7 @@ function latexEnableNote(status?: api.LatexEngineStatus | null): void {
   const text = document.createElement("span");
   text.className = "typst-note-text";
   text.textContent = status?.bundledEnabled
-    ? "Bundled TeX is on, but its files are missing or out of date. Press Retry setup, or turn it off and on in Preferences › LaTeX, to download the TeX Live 2026 engine (about 12 MiB)."
+    ? `Bundled TeX is on, but its files are missing or out of date. Press Retry setup, or turn it off and on in Preferences › LaTeX, to download the TeX Live ${LATEX_ENGINE_YEAR} engine (about ${LATEX_DOWNLOAD_MIB} MiB).`
     : "LaTeX compiles .tex documents locally. Enable bundled TeX, or choose a TeX distribution already on this computer in Preferences › LaTeX. Your document stays on this device.";
   const button = document.createElement("button");
   button.type = "button";
@@ -6155,7 +6156,7 @@ async function latexSetup(): Promise<void> {
 
   const agreed = await ask(
     "Bundled TeX is not installed, so .tex documents have no preview.\n\n" +
-      "MDraft can download the verified TeX Live 2026 engine files — about 12 MiB — into its own data folder. " +
+      `MDraft can download the verified TeX Live ${LATEX_ENGINE_YEAR} engine files — about ${LATEX_DOWNLOAD_MIB} MiB — into its own data folder. ` +
       "Additional TeX packages and fonts are fetched on demand and cached locally. " +
       "Nothing is installed system-wide, no administrator rights are needed, and turning it off " +
       "in Preferences leaves the downloaded files on disk.\n\n" +

@@ -232,14 +232,19 @@ four-file difference, release marker, byte comparison, cache namespace); and 12
 app-free layers (`latex-sdk-unit` now 35 checks, including the year agreeing across
 `latex.ts`, the Rust constants and the shims).
 
-In the app (release build, the harness's `.test-automation` profile):
+In the app (release build). The harness bullets ran in its `.test-automation` profile;
+the 5-page compile did **not**, see the correction below:
 
 - The test profile held a 2025 engine. Turning the switch on in Preferences upgraded
   it in place, and the Engine note read "Installed and enabled." without a restart.
   `latex_status` was true and `latex_cache_info` reported `"installed":true`.
 - `samples/latex-reference.tex` compiled to 5 pages, "PDF ready 1 warning LuaLaTeX ·
-  67.0 s", with no console error and the app alive throughout (a debug script that
-  launched the staged build and captured console, exception and crash events).
+  67.0 s", with no console error and the app alive throughout. This came from a debug
+  script that launched the staged build and captured console, exception and crash
+  events. **Correction (2026-11-12):** that script set `MDRAFT_TEST_IDENTIFIER` but not
+  `MDRAFT_TEST_HIDDEN`, so it ran under the user's real profile, not the test one, and
+  recreated `%APPDATA%\io.github.bgeneto.mdraft` (see `traps/debugging-probes.md`). The
+  compile result stands; where it ran was wrong.
 - With the cache warm: `latex-project` 16/16, `latex-texmf` 35/35,
   `preview-freshness` 21/21, `latex-tools` 7/7.
 - `latex-preview` passed 76 of 77 checks. The failure, "the last page remains visible

@@ -14,34 +14,43 @@ assert.match(compile, /sources:\s*Object\.entries\(files\)/);
 assert.match(compile, /mainFile:\s*snapshot\.mainFile/);
 assert.match(readFileSync("samples/latex-project/main.tex", "utf8"), /\\usepackage\{fontspec\}/);
 
-// The TeX Live year is one pinned unit (docs/adr/2026-11-12-engine-year-and-cache-namespace.md).
-// The SDK year, the worker shims, the scheme prefix, the asset root and the mirror
-// must agree, and nothing else would notice: the `mdraft-tex` URL carries no year
-// for the SDK to check.
-const year = adapter.match(/texliveVersion:\s*"(\d{4})"/)?.[1];
-assert.ok(year, "latex.ts hands the SDK a TeX Live year");
-const rust = readFileSync("src-tauri/src/latex.rs", "utf8");
-assert.match(rust, new RegExp(`const ASSET_PREFIX: &str = "/wasmtex/${year}/";`));
+// The TeX Live year is one pinned unit read from one file
+// (docs/adr/2026-11-12-engine-profile-config.md): `src-tauri/latex-engine.json` names the
+// active year and one profile per year. Rust derives its URLs from it, `latex-engine.ts`
+// hands the SDK the year, and each profile needs a `public/wasmtex/<year>/` folder of
+// identical shims that read their year from their own URL. The `mdraft-tex` URL carries
+// no year the SDK could check, so the pieces are checked against each other here; the
+// Rust side is covered by `cargo test --lib latex::`.
+const engine = JSON.parse(readFileSync("src-tauri/latex-engine.json", "utf8"));
+const years = Object.keys(engine.profiles);
+assert.ok(years.length >= 2, "both years stay switchable");
+assert.ok(years.includes(engine.active), `"active" is ${engine.active}, which has no profile`);
 assert.match(
-  rust,
-  new RegExp(`const ASSET_ROOT: &str = "https://corca-ai\\.github\\.io/wasmtex/wasmtex/${year}/";`),
+  adapter,
+  /texliveVersion:\s*LATEX_ENGINE_YEAR/,
+  "latex.ts takes the year from the config",
 );
-const mirror = rust.match(
-  new RegExp(
-    `const MIRROR: &str = "https://texlive\\.corca\\.ai/snapshots/(${year}-[0-9a-f]{16})/${year}/";`,
-  ),
+assert.match(
+  readFileSync("src/latex-engine.ts", "utf8"),
+  /from "\.\.\/src-tauri\/latex-engine\.json"/,
+  "latex-engine.ts reads the file the backend reads",
 );
-assert.ok(mirror, "the package mirror names the same year");
-assert.match(rust, new RegExp(`const MIRROR_REVISION: &str = "${mirror[1]}";`));
-assert.match(rust, new RegExp(`const ENGINE_RELEASE: &str = "${year}-[0-9a-f]{16}";`));
-for (const shim of ["wasmtex-luatex.worker.js", "wasmtex-bibtex.worker.js"]) {
-  assert.match(
-    readFileSync(`public/wasmtex/${year}/${shim}`, "utf8"),
-    new RegExp(`new URL\\("wasmtex/${year}/", __mdraftBase\\)`),
-    `${shim} reads the engine from the same year`,
+assert.deepEqual(
+  readdirSync("public/wasmtex").sort(),
+  [...years].sort(),
+  "one shim folder per profile, and no other year's",
+);
+const shimNames = ["wasmtex-luatex.worker.js", "wasmtex-bibtex.worker.js"];
+const shims = {};
+for (const shim of shimNames) {
+  const texts = years.map((year) => readFileSync(`public/wasmtex/${year}/${shim}`, "utf8"));
+  assert.ok(
+    texts.every((text) => text === texts[0]),
+    `${shim} is identical in every year folder`,
   );
+  assert.doesNotMatch(texts[0], /wasmtex\/\d{4}\//, `${shim} names no year of its own`);
+  shims[shim] = texts[0];
 }
-assert.deepEqual(readdirSync("public/wasmtex"), [year], "no other year's shims remain");
 const pdf = new Uint8Array([37, 80, 68, 70]);
 assert.equal(
   latexBuildFailed({
@@ -73,20 +82,28 @@ assert.equal(
 
 // Exercise the actual bootstrap against a classic-script worker: its function
 // binding is also used by unqualified calls inside the verified remote worker.
-const runtime = createContext({
-  URL,
-  location: { protocol: "https:" },
-  XMLHttpRequest: class {
-    status = 200;
-    response = new ArrayBuffer(1);
-    open() {}
-    send() {}
-  },
-});
-runtime.self = runtime;
-runtime.importScripts = () =>
-  runInContext(
-    `
+function bootstrap(year, shim = "wasmtex-luatex.worker.js", folder = `wasmtex/${year}`) {
+  const urls = [];
+  const runtime = createContext({
+    URL,
+    location: {
+      protocol: "https:",
+      pathname: `/${folder}/${shim}`,
+      href: `https://mdraft.localhost/${folder}/${shim}`,
+    },
+    XMLHttpRequest: class {
+      status = 200;
+      response = new ArrayBuffer(1);
+      open(_method, url) {
+        urls.push(url);
+      }
+      send() {}
+    },
+  });
+  runtime.self = runtime;
+  runtime.importScripts = () =>
+    runInContext(
+      `
   function cacheFileName(format,name) {
     const suffix={3:'.tfm',33:'.vf'}[format];
     return suffix && !name.endsWith(suffix)?name+suffix:name;
@@ -94,9 +111,28 @@ runtime.importScripts = () =>
   function locate(format,name) {return '/tex/'+cacheFileName(format,name);}
   function writeTexmfCnf() {}
 `,
-    runtime,
-  );
-runInContext(readFileSync(`public/wasmtex/${year}/wasmtex-luatex.worker.js`, "utf8"), runtime);
+      runtime,
+    );
+  runInContext(shims[shim], runtime);
+  return { runtime, urls };
+}
+// Each shim reads the engine from the folder it was loaded from, whatever the year, so
+// one file serves every profile; without a year in its URL it refuses to guess.
+for (const year of years) {
+  for (const shim of shimNames) {
+    const wasm = shim.replace(".worker.js", ".wasm");
+    assert.deepEqual(
+      bootstrap(year, shim).urls,
+      [`https://mdraft-tex.localhost/wasmtex/${year}/${wasm}`],
+      `${shim} loads ${year}'s engine`,
+    );
+  }
+}
+assert.throws(
+  () => bootstrap("none", "wasmtex-luatex.worker.js", "elsewhere"),
+  /cannot read its TeX Live year/,
+);
+const { runtime } = bootstrap(engine.active);
 assert.equal(runtime.locate(26, "luavlna"), "/tex/luavlna.tex");
 assert.equal(runtime.locate(51, "luavlna"), "/tex/luavlna.lua");
 assert.notEqual(runtime.locate(26, "luavlna"), runtime.locate(51, "luavlna"));
