@@ -351,6 +351,15 @@ export interface Settings {
   defaultExtension: string;
   recordRecent: boolean;
   autoSave: boolean;
+  /**
+   * Whether the welcome document has already been shown once.
+   *
+   * Only the first launch of a profile shows it. `onLaunch` defaults to
+   * `"tabs"`, whose empty-set fallback is a blank tab on purpose so that
+   * **Close All Tabs** is not undone; this flag is what tells a brand-new
+   * install apart from a session the reader emptied deliberately.
+   */
+  welcomeSeen: boolean;
 
   enableMath: boolean;
   enableMermaid: boolean;

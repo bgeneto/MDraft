@@ -226,10 +226,12 @@ every saved document that was open when MDraft last closed, in the same order
 with the same tab active. **Reopen the last tabs** is the default. The list
 remembers paths; untitled or unsaved text is restored by the recovery journal
 described below, not by the tab list. A file that has since been deleted is
-skipped and reported. When no saved document was open — including after
-**Close All Tabs** — the window starts with one blank
-**Untitled** tab; the welcome document remains its own On Launch choice and is
-always available from **Help › Welcome**. A document named on the
+skipped and reported. The **first** launch of a new profile shows the welcome
+document once, so a fresh install is introduced before there is anything to
+reopen; every launch after that goes straight to the remembered set. When no
+saved document was open — including after **Close All Tabs** — the window starts
+with one blank **Untitled** tab; the welcome document remains its own On Launch
+choice and is always available from **Help › Welcome**. A document named on the
 command line still wins over the remembered set. Several paths on one command
 line open as tabs, in order, with the last one active.
 

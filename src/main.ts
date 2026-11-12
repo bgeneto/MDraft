@@ -10657,7 +10657,12 @@ async function boot(): Promise<void> {
     // consumed once, so every later path becomes a tab.
     await openPaths(startup);
   } else if (settings.onLaunch === "tabs") {
-    await restoreLastTabs();
+    // A brand-new profile shows the welcome document once, then behaves like
+    // "tabs" from the second launch on. The empty-set fallback inside
+    // `restoreLastTabs` stays a blank tab on purpose, so that Close All Tabs is
+    // not undone at the next start; `welcomeSeen` is what tells the two apart.
+    if (settings.welcomeSeen) await restoreLastTabs();
+    else await loadUntitled(WELCOME);
   } else if (settings.onLaunch === "new") {
     await loadUntitled("", defaultDocumentLanguage());
   } else if (settings.onLaunch === "last" && settings.recentFiles.length > 0) {
@@ -10666,6 +10671,15 @@ async function boot(): Promise<void> {
     await loadUntitled(WELCOME);
   }
   startupSlot = null;
+  // The profile has now been introduced, however that happened: the welcome
+  // document was shown, or the reader launched straight into their own file.
+  // Recording it here rather than in the branch above means a first launch by
+  // double-clicking a document also counts, so the next start restores the
+  // remembered tabs instead of showing the welcome document a second time.
+  if (!settings.welcomeSeen) {
+    settings.welcomeSeen = true;
+    persist();
+  }
   await restoreRecovery();
 
   readyForPaths = true;
