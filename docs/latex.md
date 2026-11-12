@@ -161,9 +161,14 @@ console windows: every engine, probe and helper runs without one.
 On Windows, **Find installation…** also lists your WSL distributions. It reads
 the registry only, so nothing starts. **Look for TeX in WSL: <name>…** is the
 explicit step that starts that distribution (if it is stopped) and looks for
-`lualatex`, `pdflatex` and `xelatex` in `/usr/bin`, `/usr/local/bin`,
-`/usr/local/texlive/<year>/bin/<arch>` and `~/.TinyTeX/bin`. Validation then
-runs the same version probes and probe compile, inside the distribution.
+`lualatex`, `pdflatex` and `xelatex` the way a terminal's `which` does — through
+the distribution's `PATH` — and also in `~/.TinyTeX/bin`, `~/texlive/<year>/bin`,
+`/usr/local/texlive/<year>/bin/<arch>` and `/opt/texlive`. The whole search is a
+single launch inside the distribution; a launch that does not finish is reported
+as an error instead of "no TeX found", and one retry covers a distribution that
+was still starting. Validation then runs the same version probes and probe
+compile, inside the distribution. Repeating the click while that work is in
+flight does nothing; the row stays disabled until it settles.
 
 A WSL build stages the project on the Windows side, as usual, and runs the
 engine with `wsl.exe --exec` — no shell, no login profile — with an exact Linux

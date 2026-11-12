@@ -176,6 +176,7 @@ import {
   type LatexDiagnostic,
   type LatexResult,
 } from "./latex";
+import { LATEX_DOWNLOAD_MIB, LATEX_ENGINE_YEAR } from "./latex-engine";
 import { nativeToLatex } from "./latex-native";
 import { libraryNames } from "./latex-texmf";
 import { setLocalLatexNames } from "./completion/latex-source";
@@ -183,7 +184,6 @@ import {
   diagnosticPlace,
   diagnosticRange,
   diagnosticSignature,
-import { LATEX_DOWNLOAD_MIB, LATEX_ENGINE_YEAR } from "./latex-engine";
   latexProjectMember,
 } from "./latex-diagnostics";
 import { lineTextOf } from "./latex-references";
@@ -566,12 +566,21 @@ let caretCameFromPreview = false;
  * `ms` of 0 keeps it up until the returned handle is dismissed, which is what
  * the export and download paths use: they know the work has started but not how
  * long it will take.
+ *
+ * A handle only owns the toast it created. The long-running actions show a
+ * progress toast with `0`, then replace it with a result toast and dismiss the
+ * progress handle in `finally`; without this guard that dismissal hid the
+ * result immediately, so the reader saw the work start and never saw how it
+ * ended.
  */
+let toastSequence = 0;
 function toast(text: string, ms = 2600): { dismiss: () => void } {
+  const generation = ++toastSequence;
   toastEl.textContent = text;
   toastEl.hidden = false;
   window.clearTimeout(toastTimer);
   const dismiss = () => {
+    if (generation !== toastSequence) return;
     window.clearTimeout(toastTimer);
     toastEl.hidden = true;
   };
@@ -2078,6 +2087,17 @@ let latexNativeCandidates: api.LatexNativeCandidate[] | null = null;
 let latexWslDistributions: api.LatexWslDistribution[] | null = null;
 /** Engines found by an explicit look inside a WSL distribution. */
 let latexWslCandidates: api.LatexWslCandidate[] | null = null;
+/**
+ * One look per distribution at a time.
+ *
+ * A click starts the distribution, probes it and then validates what it found.
+ * Before this guard every impatient repeat click queued another WSL session —
+ * the launches contend, each one looks slower, and the reader clicks again.
+ * Sharing the outstanding promise makes the extra clicks harmless.
+ */
+const wslLooks = new Map<string, Promise<void>>();
+/** One validation per distribution and engine directory at a time. */
+const wslValidations = new Map<string, Promise<void>>();
 /** The registered local libraries, or null before Preferences asked. */
 let texmfConfig: api.LatexTexmfConfig | null = null;
 /** The latest inspection per library id. */
@@ -2950,30 +2970,43 @@ window.addEventListener("focus", () => {
   }
 });
 
-async function validateWslInstallation(distro: string, bin: string): Promise<void> {
-  const notice = toast(`Validating ${bin} in ${distro}…`, 0);
-  try {
-    const capabilities = await api.latexNativeWslValidate(distro, bin);
-    latexNativeCaps = capabilities;
-    latexEngine = await api.latexEngineStatus();
-    // The backend cleared the host path; keep the in-memory copy in step so a
-    // later whole-settings save does not write it back.
-    settings.latexNativeRoot = null;
-    settings.latexNativeWsl = latexEngine.nativeWsl;
-    persist();
-    toast(
-      `${capabilities.distribution} validated. Turn on "Use my installed TeX distribution" in Preferences › LaTeX to compile with it.`,
-      8200,
-    );
-  } catch (error) {
-    await message(String(error), {
-      title: "Could not validate TeX in WSL",
-      kind: "error",
-    });
-  } finally {
-    notice.dismiss();
-    preferences.refresh();
-  }
+/** The one message a finished validation shows, on either backend. */
+function validatedEngineMessage(distribution: string): string {
+  return settings.latexNativeEnabled
+    ? `${distribution} validated and in use.`
+    : `${distribution} validated. Turn on "Use my installed TeX distribution" in Preferences › LaTeX to compile with it.`;
+}
+
+function validateWslInstallation(distro: string, bin: string): Promise<void> {
+  const key = `${distro}\u0000${bin}`;
+  const running = wslValidations.get(key);
+  if (running) return running;
+  const work = (async () => {
+    const notice = toast(`Validating ${bin} in ${distro}…`, 0);
+    try {
+      const capabilities = await api.latexNativeWslValidate(distro, bin);
+      latexNativeCaps = capabilities;
+      latexEngine = await api.latexEngineStatus();
+      // The backend cleared the host path; keep the in-memory copy in step so a
+      // later whole-settings save does not write it back.
+      settings.latexNativeRoot = null;
+      settings.latexNativeWsl = latexEngine.nativeWsl;
+      persist();
+      toast(validatedEngineMessage(capabilities.distribution), 8200);
+    } catch (error) {
+      await message(String(error), {
+        title: "Could not validate TeX in WSL",
+        kind: "error",
+      });
+    } finally {
+      notice.dismiss();
+      preferences.refresh();
+    }
+  })();
+  wslValidations.set(key, work);
+  const clear = () => wslValidations.delete(key);
+  void work.then(clear, clear);
+  return work;
 }
 
 async function validateNativeDirectory(directory: string): Promise<void> {
@@ -2985,10 +3018,7 @@ async function validateNativeDirectory(directory: string): Promise<void> {
     settings.latexNativeWsl = null;
     latexEngine = await api.latexEngineStatus();
     persist();
-    toast(
-      `${capabilities.distribution} validated. Turn on "Use my installed TeX distribution" in Preferences › LaTeX to compile with it.`,
-      8200,
-    );
+    toast(validatedEngineMessage(capabilities.distribution), 8200);
   } catch (error) {
     await message(String(error), {
       title: "Could not validate this TeX installation",
@@ -10395,26 +10425,39 @@ async function boot(): Promise<void> {
     validateNative: async (directory) => validateNativeDirectory(directory),
     nativeWslDistributions: () => latexWslDistributions,
     nativeWslCandidates: () => latexWslCandidates,
-    lookInsideWsl: async (distro) => {
-      const notice = toast(`Looking for TeX in ${distro} (starting it if needed)…`, 0);
-      try {
-        const found = await api.latexNativeWslLook(distro);
-        latexWslCandidates = [
-          ...(latexWslCandidates ?? []).filter((candidate) => candidate.distro !== distro),
-          ...found,
-        ];
-        if (found.length === 0) {
-          toast(`No lualatex, pdflatex or xelatex was found in ${distro}.`, 7200);
-        } else if (found.length === 1) {
+    lookInsideWsl: (distro) => {
+      const running = wslLooks.get(distro);
+      if (running) return running;
+      const work = (async () => {
+        const notice = toast(`Looking for TeX in ${distro} (starting it if needed)…`, 0);
+        try {
+          const found = await api.latexNativeWslLook(distro);
+          latexWslCandidates = [
+            ...(latexWslCandidates ?? []).filter((candidate) => candidate.distro !== distro),
+            ...found,
+          ];
+          if (found.length === 0) {
+            toast(`No lualatex, pdflatex or xelatex was found in ${distro}.`, 7200);
+          } else if (found.length === 1) {
+            notice.dismiss();
+            await validateWslInstallation(found[0].distro, found[0].bin);
+          } else {
+            toast(
+              `Found ${found.length} TeX installations in ${distro}. Choose one under “Found in WSL”.`,
+              8200,
+            );
+          }
+        } catch (error) {
+          await message(String(error), { title: `Could not look inside ${distro}`, kind: "error" });
+        } finally {
           notice.dismiss();
-          await validateWslInstallation(found[0].distro, found[0].bin);
+          preferences.refresh();
         }
-      } catch (error) {
-        await message(String(error), { title: `Could not look inside ${distro}`, kind: "error" });
-      } finally {
-        notice.dismiss();
-        preferences.refresh();
-      }
+      })();
+      wslLooks.set(distro, work);
+      const clear = () => wslLooks.delete(distro);
+      void work.then(clear, clear);
+      return work;
     },
     validateWsl: async (distro, bin) => validateWslInstallation(distro, bin),
     texmfConfig: () => texmfConfig,

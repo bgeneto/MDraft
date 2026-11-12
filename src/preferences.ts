@@ -1008,7 +1008,7 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
       kind: "button",
       label: "",
       text: `Look for TeX in WSL: ${distribution.name}…`,
-      help: `Starts the ${distribution.name} WSL distribution if it is stopped, then looks for lualatex, pdflatex and xelatex in /usr/bin, /usr/local/texlive and ~/.TinyTeX. Nothing is installed or changed.`,
+      help: `Starts the ${distribution.name} WSL distribution if it is stopped, then looks for lualatex, pdflatex and xelatex on its PATH and in the TeX Live and TinyTeX folders. Nothing is installed or changed.`,
       action: () => host.lookInsideWsl(distribution.name),
     })),
     ...(wslCandidates.length > 0
@@ -2680,6 +2680,11 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       // Redraw once the action settles: adding, removing or reconfiguring an
       // export format all change which rows this panel should be showing.
       button.addEventListener("click", () => {
+        // Starting a WSL look twice used to queue two sessions, a second
+        // validation and a second probe compile. The button stays inert until
+        // this action settles and the panel is rebuilt from the new state.
+        button.disabled = true;
+        button.setAttribute("aria-busy", "true");
         void Promise.resolve(row.action()).finally(() => render());
       });
       return button;
