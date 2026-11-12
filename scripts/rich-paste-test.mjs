@@ -7,6 +7,10 @@
 // subject of most checks: an unsaved tab is the only way to exercise the
 // default-extension fallback and the detected-destination notice.
 
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const port = Number(process.argv[2] ?? 9222);
 const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
 const page = list.find((t) => t.type === "page");
@@ -83,11 +87,12 @@ async function type(text) {
   await sleep(250);
 }
 
-async function paste(html, plain = null) {
+async function paste(html, plain = null, markdown = null) {
   const raw = await evaluate(`(() => {
     const data = new DataTransfer();
     ${html ? `data.setData('text/html', ${JSON.stringify(html)});` : ""}
     ${plain !== null ? `data.setData('text/plain', ${JSON.stringify(plain)});` : ""}
+    ${markdown !== null ? `data.setData('text/markdown', ${JSON.stringify(markdown)});` : ""}
     const event = new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true });
     document.querySelector('.cm-content').dispatchEvent(event);
     return String(event.defaultPrevented);
@@ -558,6 +563,7 @@ await evaluate(`(async () => {
     new ClipboardItem(Object.fromEntries(await Promise.all(item.types.map(async type =>
       [type, await item.getType(type)]))))));
 })()`);
+let clipboardUsableForLatex = false;
 try {
   // A locked session (or the agent sandbox) can grant the permission and still
   // lose the write: the read comes back empty, and a real Ctrl+V then pastes
@@ -570,6 +576,7 @@ try {
       return false;
     }
   })()`);
+  clipboardUsableForLatex = clipboardUsable;
   if (!clipboardUsable) {
     console.log("  SKIP  real Ctrl+V in Find and Replace — the session cannot own the clipboard");
   } else {
@@ -687,11 +694,8 @@ check(
 // ---------------------------------------------------------------------------
 // LaTeX as a paste destination.
 //
-// The requirement is that *Convert Rich Text on Paste* works in LaTeX documents:
-// rich text, Markdown and plain text must arrive as valid LaTeX. The pure matrix
-// (`paste:convert`) pins the conversion rules; this pins that the option is
-// actually wired for a `.tex` buffer, which is a different failure mode — the
-// rules can be right and the destination still never be offered the conversion.
+// Rich content converts, while LaTeX source and text-only clipboard contents
+// retain CodeMirror's native insertion semantics in saved and detected buffers.
 // ---------------------------------------------------------------------------
 console.log("\n=== LaTeX destination ===");
 
@@ -807,47 +811,151 @@ check(
   latexRich.slice(0, 100),
 );
 
-// Plain text must be escaped, not pasted raw: `50%` and `a_b` are compile errors.
-// The extension is re-applied before the tab is created: `newTab` reads the
-// preference at creation time, so switching afterwards would paste into a
-// Markdown buffer and the assertions below would be measuring the wrong thing.
+await newTab();
+await paste('<p style="white-space: pre-wrap">Hello <strong>bold</strong></p>', "Hello bold");
+check(
+  (await lines()).includes("\\textbf{bold}"),
+  "rich formatting converts even with preformatted spacing",
+  JSON.stringify(await lines()),
+);
+
+// A .tex buffer is source code: the same characters may be math, comments or
+// partial edits, so even a text-only paste must not be interpreted as prose.
 await setDefaultExtension("tex");
 await newTab();
 await installPasteProbe();
-await paste(null, "50% of a_b costs $5");
+const latexCommand = String.raw`\usepackage[a4paper,margin=0.1in]{geometry}`;
+await paste(null, latexCommand);
 const latexPlain = await lines();
 const plainProbe = await probeSummary();
-// `prevented` is read in the capture phase, before the application's own
-// handler, so it cannot answer "did the handler claim this". What it does show
-// is that the event carried text and no HTML — the shape that used to take the
-// native path and skip the escaper.
 check(
   plainProbe.includes('"html":""'),
   "the plain paste carried no HTML",
   plainProbe.slice(0, 140),
 );
-// The buffer's language, so a failure says which side is wrong: the paste path
-// or the tab's language. `data-language` is what the editor sets on its host.
-const plainLanguage = String(
-  await evaluate(
-    `document.querySelector('[data-language]')?.dataset.language ?? document.body.dataset.language ?? ''`,
-  ),
-);
 check(
-  latexPlain.includes("50\\%"),
-  "a percent is escaped in a .tex buffer",
-  `${latexPlain.slice(0, 60)} [lang=${plainLanguage}] probe=${plainProbe.slice(0, 100)}`,
+  latexPlain === latexCommand,
+  "the reported LaTeX command is pasted unchanged",
+  JSON.stringify(latexPlain),
 );
+
+await newTab();
+const sourceWithBlankLines = `\n\n${String.raw`\custom{x_1} % comment`}\n\n`;
+await paste(null, sourceWithBlankLines);
 check(
-  latexPlain.includes("a\\_b"),
-  "an underscore is escaped in a .tex buffer",
-  `${latexPlain.slice(0, 60)} [lang=${plainLanguage}]`,
+  (await lines()) === sourceWithBlankLines,
+  "native LaTeX paste preserves math, comments and surrounding blank lines",
+  JSON.stringify(await lines()),
 );
+
+await newTab();
+await paste(`<pre><span>${latexCommand}</span></pre>`, latexCommand);
 check(
-  !latexPlain.includes("<p>"),
-  "plain text is not rendered as HTML",
-  latexPlain.slice(0, 80),
+  (await lines()) === latexCommand,
+  "highlighted LaTeX source is not escaped or wrapped in verbatim",
+  JSON.stringify(await lines()),
 );
+await key("KeyZ", "z", { ctrlKey: true });
+check((await lines()) === "", "one undo removes the highlighted source paste", await lines());
+
+await newTab();
+await paste('<span style="color:blue">x_1</span>', "x_1");
+check(
+  (await lines()) === "x_1",
+  "an inline highlighted math fragment is pasted unchanged",
+  JSON.stringify(await lines()),
+);
+
+if (clipboardUsableForLatex) {
+  await newTab();
+  await evaluate(`(async () => {
+    const items = (await navigator.clipboard.read()).filter(item => item.types.length > 0);
+    window.__latexPasteClipboard = await Promise.all(items.map(async item =>
+      new ClipboardItem(Object.fromEntries(await Promise.all(item.types.map(async type =>
+        [type, await item.getType(type)]))))));
+  })()`);
+  try {
+    const wrote = await evaluate(`(async () => {
+      await navigator.clipboard.writeText(${JSON.stringify(latexCommand)});
+      return (await navigator.clipboard.readText()) === ${JSON.stringify(latexCommand)};
+    })()`);
+    if (!wrote) console.log("  SKIP  real Ctrl+V in LaTeX — the session cannot own the clipboard");
+    else {
+      await evaluate("document.querySelector('.cm-content').focus()");
+      for (const type of ["keyDown", "keyUp"]) {
+        const result = await send("Input.dispatchKeyEvent", {
+          type,
+          key: "v",
+          code: "KeyV",
+          windowsVirtualKeyCode: 86,
+          modifiers: 2,
+        });
+        if (result.error) throw new Error(result.error.message);
+      }
+      await sleep(500);
+      check(
+        (await lines()) === latexCommand,
+        "real Ctrl+V preserves a LaTeX command",
+        JSON.stringify(await lines()),
+      );
+    }
+  } finally {
+    await evaluate(`(async () => {
+      if (window.__latexPasteClipboard.length) await navigator.clipboard.write(window.__latexPasteClipboard);
+      else await navigator.clipboard.writeText('');
+      delete window.__latexPasteClipboard;
+    })()`);
+  }
+} else console.log("  SKIP  real Ctrl+V in LaTeX — the session cannot own the clipboard");
+
+await newTab();
+await paste(null, "50% of a_b costs $5");
+check(
+  (await lines()) === "50% of a_b costs $5",
+  "plain characters are not escaped in a LaTeX buffer",
+  JSON.stringify(await lines()),
+);
+
+await newTab();
+const markdownSnippet = "## Heading\n\n- one\n- two";
+await paste(null, markdownSnippet, markdownSnippet);
+check(
+  (await lines()).includes("\\subsection{Heading}") && (await lines()).includes("\\begin{itemize}"),
+  "explicit Markdown still converts to LaTeX",
+  JSON.stringify(await lines()),
+);
+
+// The language can come from the unsaved buffer, even when the new-tab default
+// is Markdown; the paste must use the detected destination.
+await setDefaultExtension("md");
+await newTab();
+await type("\\documentclass{article}\n");
+const detectedBefore = await lines();
+await paste(null, latexCommand);
+check(
+  (await lines()) === detectedBefore + latexCommand,
+  "a detected LaTeX buffer pastes the command unchanged",
+  JSON.stringify(await lines()),
+);
+
+// Exercise a saved .tex path without saving any edits to the fixture.
+const savedLatexPath = join(repoRoot, "samples", "latex-project", "chapters", "intro.tex");
+await evaluate(
+  `window.__TAURI_INTERNALS__.invoke('plugin:event|emit', {event: 'open-files', payload: [${JSON.stringify(savedLatexPath)}]})`,
+);
+for (let attempt = 0; attempt < 40 && !(await title()).includes("intro.tex"); attempt++)
+  await sleep(250);
+check((await title()).includes("intro.tex"), "the saved LaTeX fixture opened", await title());
+const savedBefore = await lines();
+await key("KeyA", "a", { ctrlKey: true });
+await paste(null, latexCommand);
+check(
+  (await lines()) === latexCommand,
+  "a saved LaTeX document pastes the command unchanged",
+  JSON.stringify(await lines()),
+);
+await key("KeyZ", "z", { ctrlKey: true });
+check((await lines()) === savedBefore, "one undo restores the saved LaTeX buffer", await lines());
 
 // Put the preference back so a later suite is not surprised.
 await setDefaultExtension("md");
