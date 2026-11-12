@@ -111,7 +111,7 @@ Asked for after the work above was committed. The checkbox now sits in the HTML 
 
 Touched: `src/preferences.ts`; `scripts/dom-smoke.mjs` (looks in the HTML section, plus a check that Editor does not list the row, 123 checks); `scripts/emmet-test.mjs` (opens the HTML section); the README line that names the location; the smoke counts in the catalog.
 
-Verified: `tsc`, ESLint and Prettier clean on the changed files; `emmet:unit` 93/93; and the real Preferences panel rendered in a temporary dev page with a stubbed host, which listed the row and the note under HTML and not under Editor (the page is deleted). **Not run:** the `smoke` and `emmet` UI layers on a rebuilt binary, because another session's test harness held the lock. The new section lookups in `dom-smoke.mjs` and `emmet-test.mjs` are therefore unexercised.
+Verified: `tsc`, ESLint and Prettier clean on the changed files; `emmet:unit` 93/93; and the real Preferences panel rendered in a temporary dev page with a stubbed host, which listed the row and the note under HTML and not under Editor (the page is deleted). The `smoke` and `emmet` UI layers could not run at first because another session's test harness held the lock. Once it let go they ran on a rebuilt release binary: `smoke` 123/123 and `emmet` 28/28, which exercises the new section lookups in `dom-smoke.mjs` and `emmet-test.mjs`. That binary was built from the working tree, so it also contained the other session's uncommitted TeX Live changes.
 
 ## Files and modules
 
