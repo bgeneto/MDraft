@@ -2,7 +2,12 @@ const __mdraftBase =
   self.location.protocol === "tauri:"
     ? "mdraft-tex://localhost/"
     : `${self.location.protocol}//mdraft-tex.localhost/`;
-const __mdraftRoot = new URL("wasmtex/2026/", __mdraftBase).href;
+// The year is the folder this script was loaded from, so every profile's folder holds
+// the same file (docs/adr/2026-11-12-engine-profile-config.md).
+const __mdraftYear = /\/wasmtex\/(\d{4})\//.exec(self.location.pathname)?.[1];
+if (!__mdraftYear)
+  throw new Error("The LaTeX worker cannot read its TeX Live year from " + self.location.href);
+const __mdraftRoot = new URL(`wasmtex/${__mdraftYear}/`, __mdraftBase).href;
 const __mdraftXhr = new XMLHttpRequest();
 __mdraftXhr.open("GET", new URL("wasmtex-bibtex.wasm", __mdraftRoot).href, false);
 __mdraftXhr.responseType = "arraybuffer";

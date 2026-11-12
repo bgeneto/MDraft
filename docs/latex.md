@@ -21,6 +21,23 @@ of date; press **Retry setup**, or turn the switch off and on, to download the
 never read by the 2026 engine. They still count toward the cache limit, are
 evicted first, and are removed by *Clear package cache*.
 
+**Switching the bundled engine's TeX Live year (developers).** The year is one line,
+`"active"`, in `src-tauri/latex-engine.json`, which holds a profile for 2025 and for
+2026: the engine release, the package-mirror revision and the SHA-256 and size of each
+file. Rust and TypeScript both read it, and everything else is derived from it: the
+asset URL, the mirror, the download size in the messages, and the shim folder
+`public/wasmtex/<year>/`, whose worker files are identical in every year and read their
+year from their own URL. After changing the line, `npm run tauri dev` (or a build)
+picks it up; the engine then reads as out of date until you press **Retry setup**,
+which fetches only the files whose digest differs. Each year keeps its own package
+cache, so switching back finds the earlier one warm. The 2025 profile is the exact
+pin MDraft shipped before TeX Live 2026, not a newer 2025 snapshot. To add a year,
+add a profile and a `public/wasmtex/<year>/` folder with copies of the two shims;
+`cargo test --lib latex::` and `node scripts/latex-sdk-unit.mjs` fail if either is
+missing, if a profile ships a different set of files, or if a derived value disagrees
+with its year. The README, the site and this page describe the shipped default
+(2026, about 12 MiB).
+
 An installed distribution is a second, independent choice. It is off by default
 and never chosen automatically, because it runs a program outside the bundled
 engine's WebAssembly environment. *Preferences › LaTeX* finds one (metadata

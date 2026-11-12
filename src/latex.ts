@@ -13,6 +13,7 @@ import {
   libraryLookupNames,
   reservedProjectPath,
 } from "./latex-texmf.ts";
+import { LATEX_ENGINE_YEAR } from "./latex-engine.ts";
 import type { PdfSourceFile } from "./pdf-page-map";
 
 export interface LatexResult {
@@ -316,9 +317,9 @@ export async function compileLatex(
   );
   const compiler = new WasmTexCompiler({
     engine: "lualatex",
-    // One pinned unit with the Rust constants and the worker shims in
-    // `public/wasmtex/<year>/` (docs/adr/2026-11-12-engine-year-and-cache-namespace.md).
-    texliveVersion: "2026",
+    // From `src-tauri/latex-engine.json`, the file the Rust side derives its asset
+    // root, mirror and digests from (docs/adr/2026-11-12-engine-profile-config.md).
+    texliveVersion: LATEX_ENGINE_YEAR,
     texliveUrl: `${base}jobs/${owner}/mirror/`,
     assetBaseUrl: "/",
     formatAssetBaseUrl: base,

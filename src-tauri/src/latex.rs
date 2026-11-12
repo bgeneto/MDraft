@@ -6,10 +6,11 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     sync::{
-        Mutex,
+        Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
@@ -19,21 +20,7 @@ use tauri::{
 };
 
 pub const SCHEME: &str = "mdraft-tex";
-// The TeX Live year is one pinned unit (docs/adr/2026-11-12-engine-year-and-cache-namespace.md).
-// The engine, its format, the worker shims in `public/wasmtex/<year>/`, the SDK
-// year in `src/latex.ts` and the package mirror must all name the same year and
-// snapshot, and the `mdraft-tex` URL carries no year the SDK could check, so
-// `year_is_one_pinned_unit` and `scripts/latex-sdk-unit.mjs` fail when they drift.
-// This is upstream's `2026-latest` profile `2026-20260826-f5d9443`.
-const ASSET_ROOT: &str = "https://corca-ai.github.io/wasmtex/wasmtex/2026/";
-/// The path the worker shims and the SDK request assets under.
-const ASSET_PREFIX: &str = "/wasmtex/2026/";
-const MIRROR: &str = "https://texlive.corca.ai/snapshots/2026-d26706764b740276/2026/";
-/// Names the mirror's cache directory: the same relative path holds different
-/// bytes in another revision, so a flat cache would mix years.
-const MIRROR_REVISION: &str = "2026-d26706764b740276";
-/// The engine release the pinned digests belong to; `assets/.release` names it.
-const ENGINE_RELEASE: &str = "2026-f5d94438a7c75a23";
+/// Written last by `install_latex`: names the engine release whose files are all there.
 const RELEASE_MARKER: &str = ".release";
 const MAX_FILE: usize = 32 * 1024 * 1024;
 const MAX_PROJECT: usize = 64 * 1024 * 1024;
@@ -73,88 +60,147 @@ fn cache_limit_bytes() -> u64 {
         .saturating_mul(1024 * 1024)
 }
 
-// Digests from the pinned release-cleared manifest of release 2026-f5d94438a7c75a23,
-// SHA-256 46ec5ab3…509f6, checked against the downloaded files, not only the manifest.
-const ASSETS: &[(&str, &str)] = &[
-    (
-        "wasmtex-luatex.js",
-        "2b16bc7f892a068a548e8950b7d3987f6b23ff2bac4ba6258520739a402906ef",
-    ),
-    (
-        "wasmtex-luatex.wasm",
-        "a5d940bf6e8f989c55816ceb06dfad8687100a58d109fa92873175ed4e48b53e",
-    ),
-    (
-        "wasmtex-luatex.worker.js",
-        "9a065d4c22b05ac7d937956fc3d654079a599744e5e8fb753fa528e7489da084",
-    ),
-    (
-        "wasmtex-luatex.fmt.gz",
-        "1e58b5d1ee400e937c5b690cc4e34af20458c42162b0340f8c06903c40a5ed0b",
-    ),
-    (
-        "wasmtex-luatex-resolver-evidence.js",
-        "f42ab09591de3108ac07635f060cc1fca27571f62a852edf5e6307515b83b728",
-    ),
-    (
-        "wasmtex-bibtex.js",
-        "1355f9aa7a7fa27a514876a448bbe7b17ba07cfb1ec2c1a251a2d4f0ebc9d9b4",
-    ),
-    (
-        "wasmtex-bibtex.wasm",
-        "7ee47f5959d9f2a0d4cbde264be97472b6c1b7a1da2ca58b67baea759b03c3d6",
-    ),
-    (
-        "wasmtex-bibtex.worker.js",
-        "73700491b6c38c1d1ba7275e294542dcce9d3ef4485b12dcb63bf53a23a4d990",
-    ),
-];
+// The engine's TeX Live year, release, package mirror and pinned digests live in
+// `src-tauri/latex-engine.json`; its `active` line switches the year
+// (docs/adr/2026-11-12-engine-profile-config.md). The engine, its format, the worker
+// shims in `public/wasmtex/<year>/`, the SDK year in `src/latex-engine.ts` and the
+// package mirror must all name the same year and snapshot, and the `mdraft-tex` URL
+// carries no year the SDK could check, so everything below is derived from that file
+// and `scripts/latex-sdk-unit.mjs` checks the shims against it.
+const ENGINE_CONFIG: &str = include_str!("../latex-engine.json");
 
-/// The previous release's digests (2025-3a6c0df0b2b95005, manifest SHA-256
-/// 928bd4b7…3d12b4a). Used only to recognise a pre-`latex/` directory that still
-/// holds those files, so it migrates instead of being refused as damaged. Four
-/// entries differ from `ASSETS`; the names are the same.
-const ASSETS_2025: &[(&str, &str)] = &[
-    (
-        "wasmtex-luatex.js",
-        "9c643deba29dc4cd590c12bc4bd1d2a4ee8d588402390d3ac06818ff317914f9",
-    ),
-    (
-        "wasmtex-luatex.wasm",
-        "e5b585bf6b575b379ec2e390fa1572160c9578f12238f55164ab3f8cea7b75cf",
-    ),
-    (
-        "wasmtex-luatex.worker.js",
-        "9a065d4c22b05ac7d937956fc3d654079a599744e5e8fb753fa528e7489da084",
-    ),
-    (
-        "wasmtex-luatex.fmt.gz",
-        "ae8d91969476536758a18aaf6da91cb94f056b3bc568878a2852a7b8ff43e070",
-    ),
-    (
-        "wasmtex-luatex-resolver-evidence.js",
-        "f42ab09591de3108ac07635f060cc1fca27571f62a852edf5e6307515b83b728",
-    ),
-    (
-        "wasmtex-bibtex.js",
-        "1355f9aa7a7fa27a514876a448bbe7b17ba07cfb1ec2c1a251a2d4f0ebc9d9b4",
-    ),
-    (
-        "wasmtex-bibtex.wasm",
-        "8073e95a81cf03376bbbe503ecd7fcf748a5f897ea308f0e5e42162e78b7b3df",
-    ),
-    (
-        "wasmtex-bibtex.worker.js",
-        "73700491b6c38c1d1ba7275e294542dcce9d3ef4485b12dcb63bf53a23a4d990",
-    ),
-];
+#[derive(Deserialize)]
+struct EngineConfig {
+    active: String,
+    profiles: BTreeMap<String, EngineProfile>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EngineProfile {
+    /// The engine release the digests were pinned from; `assets/.release` names it.
+    release: String,
+    /// Names the mirror's cache directory: the same relative path holds different
+    /// bytes in another revision, so a flat cache would mix years.
+    mirror_revision: String,
+    assets: Vec<EngineAsset>,
+}
+
+#[derive(Deserialize)]
+struct EngineAsset {
+    name: String,
+    sha256: String,
+}
+
+/// The profile this build installs and serves, with every URL derived from it.
+struct ActiveEngine {
+    release: &'static str,
+    mirror_revision: &'static str,
+    assets: &'static [EngineAsset],
+    /// `https://corca-ai.github.io/wasmtex/wasmtex/<year>/`
+    asset_root: String,
+    /// `/wasmtex/<year>/`: where the worker shims and the SDK request assets.
+    asset_prefix: String,
+    /// `https://texlive.corca.ai/snapshots/<revision>/<year>/`
+    mirror: String,
+}
+
+/// Reject a file that would make the engine inconsistent before it is used.
+///
+/// Only a developer edits the file, so this panics with a message instead of
+/// returning an error nobody could act on; `engine_config_is_valid` runs it in
+/// `cargo test`.
+fn validate_engine_config(config: &EngineConfig) -> Result<(), String> {
+    let segment = |value: &str| {
+        !value.is_empty()
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+    };
+    if !config.profiles.contains_key(&config.active) {
+        return Err(format!("\"active\" is {}, which has no profile", config.active));
+    }
+    let names = |profile: &EngineProfile| -> Vec<String> {
+        profile.assets.iter().map(|asset| asset.name.clone()).collect()
+    };
+    let expected = names(config.profiles.values().next().ok_or("no profiles")?);
+    for (year, profile) in &config.profiles {
+        if year.len() != 4 || !year.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(format!("profile \"{year}\" is not a four-digit year"));
+        }
+        for (what, value) in [
+            ("release", &profile.release),
+            ("mirrorRevision", &profile.mirror_revision),
+        ] {
+            if !segment(value) || !value.starts_with(&format!("{year}-")) {
+                return Err(format!("{year}: {what} \"{value}\" does not start with the year"));
+            }
+        }
+        if profile.assets.is_empty() {
+            return Err(format!("{year}: no assets"));
+        }
+        // The files live in one flat `assets/` folder and are migrated by name, so
+        // every year must ship the same set.
+        if names(profile) != expected {
+            return Err(format!("{year}: the asset names differ from the other profiles"));
+        }
+        for asset in &profile.assets {
+            if !segment(&asset.name) {
+                return Err(format!("{year}: asset name \"{}\" is not a file name", asset.name));
+            }
+            let hex = asset.sha256.len() == 64
+                && asset
+                    .sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+            if !hex {
+                return Err(format!("{year}: {} has no 64-digit lowercase SHA-256", asset.name));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn config() -> &'static EngineConfig {
+    static CONFIG: OnceLock<EngineConfig> = OnceLock::new();
+    CONFIG.get_or_init(|| {
+        let config: EngineConfig = serde_json::from_str(ENGINE_CONFIG)
+            .expect("src-tauri/latex-engine.json does not match the engine config shape");
+        if let Err(problem) = validate_engine_config(&config) {
+            panic!("src-tauri/latex-engine.json: {problem}");
+        }
+        config
+    })
+}
+
+/// The profile for `year`, with its URLs derived from the year and the revision.
+fn engine_for(year: &str) -> Option<ActiveEngine> {
+    let (year, profile) = config().profiles.get_key_value(year)?;
+    Some(ActiveEngine {
+        release: &profile.release,
+        mirror_revision: &profile.mirror_revision,
+        assets: &profile.assets,
+        asset_root: format!("https://corca-ai.github.io/wasmtex/wasmtex/{year}/"),
+        asset_prefix: format!("/wasmtex/{year}/"),
+        mirror: format!(
+            "https://texlive.corca.ai/snapshots/{}/{year}/",
+            profile.mirror_revision
+        ),
+    })
+}
+
+/// The engine this build installs and serves: the config's `active` year.
+fn engine() -> &'static ActiveEngine {
+    static ACTIVE: OnceLock<ActiveEngine> = OnceLock::new();
+    ACTIVE.get_or_init(|| engine_for(&config().active).expect("validated with the config"))
+}
 
 /// Whether `assets` holds every file of `set`, byte for byte.
-fn assets_match(assets: &Path, set: &[(&str, &str)]) -> bool {
-    set.iter().all(|(name, expected)| {
-        let asset = assets.join(name);
+fn assets_match(assets: &Path, set: &[EngineAsset]) -> bool {
+    set.iter().all(|expected| {
+        let asset = assets.join(&expected.name);
         fs::symlink_metadata(&asset).is_ok_and(|meta| meta.file_type().is_file())
-            && fs::read(&asset).is_ok_and(|bytes| digest(&bytes) == *expected)
+            && fs::read(&asset).is_ok_and(|bytes| digest(&bytes) == expected.sha256)
     })
 }
 
@@ -168,15 +214,18 @@ fn assets_match(assets: &Path, set: &[(&str, &str)]) -> bool {
 /// as not installed instead of as working and then failing every compile.
 fn engine_installed(assets: &Path) -> bool {
     fs::read_to_string(assets.join(RELEASE_MARKER))
-        .is_ok_and(|text| text.trim() == ENGINE_RELEASE)
-        && ASSETS.iter().all(|(name, _)| {
-            fs::symlink_metadata(assets.join(name)).is_ok_and(|meta| meta.file_type().is_file())
+        .is_ok_and(|text| text.trim() == engine().release)
+        && engine().assets.iter().all(|asset| {
+            fs::symlink_metadata(assets.join(&asset.name))
+                .is_ok_and(|meta| meta.file_type().is_file())
         })
 }
 
 /// Where the mirror caches `relative`: namespaced by the pinned revision.
 fn cache_path(root: &Path, relative: &str) -> PathBuf {
-    root.join("mirror").join(MIRROR_REVISION).join(relative)
+    root.join("mirror")
+        .join(engine().mirror_revision)
+        .join(relative)
 }
 
 fn legacy_candidates_matching(
@@ -205,9 +254,21 @@ fn legacy_candidates_matching(
     Ok(candidates)
 }
 
-/// A directory from before `latex/` counts when it holds either release's files.
+/// Whether `assets` holds every file of at least one of `sets`.
+fn assets_match_any<'a>(assets: &Path, mut sets: impl Iterator<Item = &'a [EngineAsset]>) -> bool {
+    sets.any(|set| assets_match(assets, set))
+}
+
+/// A directory from before `latex/` counts when it holds any profile's files, so
+/// switching the active year never strands one that was installed under the other.
 fn verified_legacy_assets(assets: &Path) -> bool {
-    assets_match(assets, ASSETS) || assets_match(assets, ASSETS_2025)
+    assets_match_any(
+        assets,
+        config()
+            .profiles
+            .values()
+            .map(|profile| profile.assets.as_slice()),
+    )
 }
 
 fn legacy_candidates(root: &Path) -> Result<Vec<PathBuf>, String> {
@@ -222,7 +283,10 @@ fn legacy_candidates(root: &Path) -> Result<Vec<PathBuf>, String> {
             if !fs::symlink_metadata(&assets).is_ok_and(|meta| meta.file_type().is_dir()) {
                 continue;
             }
-            if ASSETS.iter().any(|(name, _)| assets.join(name).exists())
+            if engine()
+                .assets
+                .iter()
+                .any(|asset| assets.join(&asset.name).exists())
                 && !candidates.contains(&entry.path())
             {
                 return Err("An incomplete or damaged LaTeX engine directory was preserved. Repair it before migrating the bundled engine.".into());
@@ -447,15 +511,17 @@ pub async fn install_latex(app: AppHandle) -> Result<(), String> {
         // Retire the marker first: a directory that is part-way between two
         // releases must never claim either one.
         remove_if_present(&assets.join(RELEASE_MARKER))?;
-        for &(name, expected) in ASSETS {
-            let path = assets.join(name);
-            if fs::read(&path).is_ok_and(|bytes| digest(&bytes) == expected) {
+        let engine = engine();
+        for asset in engine.assets {
+            let path = assets.join(&asset.name);
+            if fs::read(&path).is_ok_and(|bytes| digest(&bytes) == asset.sha256) {
                 continue;
             }
-            let bytes = download(&format!("{ASSET_ROOT}{name}"))?;
-            if digest(&bytes) != expected {
+            let bytes = download(&format!("{}{}", engine.asset_root, asset.name))?;
+            if digest(&bytes) != asset.sha256 {
                 return Err(format!(
-                    "The downloaded {name} failed SHA-256 verification."
+                    "The downloaded {} failed SHA-256 verification.",
+                    asset.name
                 ));
             }
             // A corrupt old file must not win the atomic-install race.
@@ -463,7 +529,7 @@ pub async fn install_latex(app: AppHandle) -> Result<(), String> {
             write_atomic(&path, &bytes)?;
         }
         // Every file is verified, so the release can be claimed. Written last.
-        write_atomic(&assets.join(RELEASE_MARKER), ENGINE_RELEASE.as_bytes())?;
+        write_atomic(&assets.join(RELEASE_MARKER), engine.release.as_bytes())?;
         // The switch is settings-backed, so it is written through `AppState`
         // rather than as a marker file beside the cache.
         if let Some(state) = app.try_state::<crate::settings::AppState>() {
@@ -609,14 +675,13 @@ pub fn serve(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeResp
                 return Err("LuaLaTeX is not enabled.".into());
             }
             let path = request.uri().path();
-            if let Some(name) = path.strip_prefix(ASSET_PREFIX) {
-                let Some((_, expected)) = ASSETS.iter().find(|(allowed, _)| *allowed == name)
-                else {
+            if let Some(name) = path.strip_prefix(engine().asset_prefix.as_str()) {
+                let Some(asset) = engine().assets.iter().find(|asset| asset.name == name) else {
                     return Err("Unknown asset".into());
                 };
                 ASSET_REQUESTS.fetch_add(1, Ordering::Relaxed);
                 let bytes = fs::read(root.join("assets").join(name)).map_err(|e| e.to_string())?;
-                if digest(&bytes) != *expected {
+                if digest(&bytes) != asset.sha256 {
                     return Err(
                         "Engine asset failed SHA-256 verification; reinstall bundled TeX (turn it off and on in Preferences › LaTeX).".into(),
                     );
@@ -654,7 +719,7 @@ pub fn serve(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeResp
                 if let Some(job) = job {
                     let _ = app.emit("latex-package-download", (job, true));
                 }
-                let result = download(&format!("{MIRROR}{relative}"));
+                let result = download(&format!("{}{relative}", engine().mirror));
                 if let Some(job) = job {
                     let _ = app.emit("latex-package-download", (job, false));
                 }
@@ -1505,7 +1570,7 @@ mod tests {
         assert!(super::legacy_candidates(&root).unwrap().is_empty());
         let incomplete = root.join("former-engine").join("assets");
         fs::create_dir_all(&incomplete).unwrap();
-        fs::write(incomplete.join(super::ASSETS[0].0), b"damaged").unwrap();
+        fs::write(incomplete.join(&super::engine().assets[0].name), b"damaged").unwrap();
         assert!(super::migrate_directory(&root).is_err());
         assert!(incomplete.exists() && unrelated.exists());
         assert!(!root.join("latex").exists());
@@ -1513,57 +1578,104 @@ mod tests {
     }
 
     #[test]
-    fn year_is_one_pinned_unit() {
-        // The year is read from the scheme prefix and every other constant must
-        // agree with it. `scripts/latex-sdk-unit.mjs` covers the TypeScript side
-        // and the worker shims.
-        let year = super::ASSET_PREFIX
-            .trim_matches('/')
-            .rsplit('/')
-            .next()
-            .unwrap();
-        assert_eq!(super::ASSET_PREFIX, format!("/wasmtex/{year}/"));
-        assert_eq!(
-            super::ASSET_ROOT,
-            format!("https://corca-ai.github.io/wasmtex/wasmtex/{year}/")
-        );
-        assert!(super::MIRROR_REVISION.starts_with(&format!("{year}-")));
-        assert_eq!(
-            super::MIRROR,
-            format!(
-                "https://texlive.corca.ai/snapshots/{}/{year}/",
-                super::MIRROR_REVISION
-            )
-        );
-        assert!(super::ENGINE_RELEASE.starts_with(&format!("{year}-")));
+    fn engine_config_is_valid() {
+        // The real file: `config()` panics on a malformed or inconsistent one, so a
+        // bad edit of `src-tauri/latex-engine.json` fails here and not at first use.
+        let config = super::config();
+        super::validate_engine_config(config).unwrap();
+        assert!(config.profiles.contains_key(&config.active));
+        assert!(config.profiles.len() >= 2, "both years stay switchable");
     }
 
     #[test]
-    fn pinned_digests_are_well_formed_and_the_previous_release_differs() {
-        for set in [super::ASSETS, super::ASSETS_2025] {
-            for (name, digest) in set {
-                assert!(safe_relative(name), "{name}");
-                assert!(
-                    digest.len() == 64
-                        && digest
-                            .bytes()
-                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
-                    "{name} digest is not 64 lowercase hex digits"
-                );
+    fn every_profile_derives_one_consistent_year() {
+        // The `mdraft-tex` URL carries no year the SDK could check, so each derived
+        // value is compared with the year it came from. `scripts/latex-sdk-unit.mjs`
+        // covers the TypeScript side and the worker shims.
+        for year in super::config().profiles.keys() {
+            let engine = super::engine_for(year).unwrap();
+            assert_eq!(engine.asset_prefix, format!("/wasmtex/{year}/"));
+            assert_eq!(
+                engine.asset_root,
+                format!("https://corca-ai.github.io/wasmtex/wasmtex/{year}/")
+            );
+            assert!(engine.mirror_revision.starts_with(&format!("{year}-")));
+            assert_eq!(
+                engine.mirror,
+                format!(
+                    "https://texlive.corca.ai/snapshots/{}/{year}/",
+                    engine.mirror_revision
+                )
+            );
+            assert!(engine.release.starts_with(&format!("{year}-")));
+        }
+        let active = &super::config().active;
+        assert!(super::engine().asset_prefix.contains(active.as_str()));
+    }
+
+    #[test]
+    fn profiles_ship_the_same_files_with_different_bytes() {
+        // Switching the year replaces files in one flat `assets/` folder, so the
+        // names must match and at least one digest must differ.
+        let mut profiles = super::config().profiles.values();
+        let first = profiles.next().unwrap();
+        for other in profiles {
+            assert_ne!(first.release, other.release);
+            assert_ne!(first.mirror_revision, other.mirror_revision);
+            assert_eq!(first.assets.len(), other.assets.len());
+            for (a, b) in first.assets.iter().zip(&other.assets) {
+                assert_eq!(a.name, b.name, "the same files in the same order");
             }
+            assert!(
+                first
+                    .assets
+                    .iter()
+                    .zip(&other.assets)
+                    .any(|(a, b)| a.sha256 != b.sha256)
+            );
         }
-        assert_eq!(super::ASSETS.len(), super::ASSETS_2025.len());
-        for (new, old) in super::ASSETS.iter().zip(super::ASSETS_2025) {
-            assert_eq!(new.0, old.0, "the same files in the same order");
-        }
-        let changed = super::ASSETS
-            .iter()
-            .zip(super::ASSETS_2025)
-            .filter(|(new, old)| new.1 != old.1)
-            .count();
-        assert_eq!(
-            changed, 4,
-            "TeX Live 2026 changed the engine, wasm, format and BibTeX wasm"
+    }
+
+    #[test]
+    fn validation_rejects_an_inconsistent_config() {
+        let edited = |edit: &dyn Fn(&mut super::EngineConfig)| {
+            let mut config: super::EngineConfig =
+                serde_json::from_str(super::ENGINE_CONFIG).unwrap();
+            edit(&mut config);
+            super::validate_engine_config(&config)
+        };
+        assert!(edited(&|_| {}).is_ok());
+        assert!(
+            edited(&|config| config.active = "1999".into()).is_err(),
+            "an active year with no profile"
+        );
+        assert!(
+            edited(&|config| {
+                config.profiles.values_mut().next().unwrap().release = "9999-x".into();
+            })
+            .is_err(),
+            "a release that does not start with its year"
+        );
+        assert!(
+            edited(&|config| {
+                config.profiles.values_mut().next().unwrap().assets[0].sha256 = "ABC".into();
+            })
+            .is_err(),
+            "a digest that is not 64 lowercase hex digits"
+        );
+        assert!(
+            edited(&|config| {
+                config.profiles.values_mut().next().unwrap().assets[0].name = "../x".into();
+            })
+            .is_err(),
+            "an asset name that is not a file name"
+        );
+        assert!(
+            edited(&|config| {
+                config.profiles.values_mut().next().unwrap().assets.pop();
+            })
+            .is_err(),
+            "a profile that ships a different set of files"
         );
     }
 
@@ -1573,8 +1685,8 @@ mod tests {
         let assets = root.join("assets");
         fs::create_dir_all(&assets).unwrap();
         assert!(!super::engine_installed(&assets), "an empty directory");
-        for (name, _) in super::ASSETS {
-            fs::write(assets.join(name), b"x").unwrap();
+        for asset in super::engine().assets {
+            fs::write(assets.join(&asset.name), b"x").unwrap();
         }
         assert!(
             !super::engine_installed(&assets),
@@ -1582,7 +1694,7 @@ mod tests {
         );
         fs::write(
             assets.join(super::RELEASE_MARKER),
-            "2025-3a6c0df0b2b95005",
+            "1999-0000000000000000",
         )
         .unwrap();
         assert!(
@@ -1591,11 +1703,11 @@ mod tests {
         );
         fs::write(
             assets.join(super::RELEASE_MARKER),
-            format!("{}\n", super::ENGINE_RELEASE),
+            format!("{}\n", super::engine().release),
         )
         .unwrap();
         assert!(super::engine_installed(&assets));
-        fs::remove_file(assets.join(super::ASSETS[3].0)).unwrap();
+        fs::remove_file(assets.join(&super::engine().assets[3].name)).unwrap();
         assert!(!super::engine_installed(&assets), "a missing file");
         fs::remove_dir_all(root).unwrap();
     }
@@ -1603,16 +1715,34 @@ mod tests {
     #[test]
     fn assets_match_compares_bytes_and_ignores_names_it_was_not_asked_about() {
         let root = scratch("latex-assets-match");
-        let one = super::digest(b"one");
-        let two = super::digest(b"two");
-        let set = [("a", one.as_str()), ("b", two.as_str())];
-        assert!(!super::assets_match(&root, &set), "files are missing");
+        let set = |one: &[u8], two: &[u8]| {
+            vec![
+                super::EngineAsset {
+                    name: "a".into(),
+                    sha256: super::digest(one),
+                },
+                super::EngineAsset {
+                    name: "b".into(),
+                    sha256: super::digest(two),
+                },
+            ]
+        };
+        let wanted = set(b"one", b"two");
+        assert!(!super::assets_match(&root, &wanted), "files are missing");
         fs::write(root.join("a"), b"one").unwrap();
         fs::write(root.join("b"), b"two").unwrap();
         fs::write(root.join("extra"), b"other").unwrap();
-        assert!(super::assets_match(&root, &set));
+        assert!(super::assets_match(&root, &wanted));
+        // A directory that holds either profile's files is recognised, so
+        // switching the active year never strands one installed under the other.
+        let other = set(b"one", b"changed");
+        assert!(super::assets_match_any(
+            &root,
+            [other.as_slice(), wanted.as_slice()].into_iter()
+        ));
+        assert!(!super::assets_match_any(&root, [other.as_slice()].into_iter()));
         fs::write(root.join("b"), b"changed").unwrap();
-        assert!(!super::assets_match(&root, &set), "one file differs");
+        assert!(!super::assets_match(&root, &wanted), "one file differs");
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1623,7 +1753,7 @@ mod tests {
         assert_eq!(
             path,
             root.join("mirror")
-                .join(super::MIRROR_REVISION)
+                .join(super::engine().mirror_revision)
                 .join("pdftex/26/article.cls")
         );
         assert_ne!(
