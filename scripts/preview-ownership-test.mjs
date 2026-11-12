@@ -90,8 +90,9 @@ async function clickTab(name, markers = {}) {
     return {
       clicked: true,
       at: performance.now(),
-      staleBefore: Object.values(${JSON.stringify(markers)}).some((marker) => before.includes(marker)),
-      staleAfter: Object.values(${JSON.stringify(markers)}).some((marker) => after.includes(marker)),
+      staleBefore: Object.keys(${JSON.stringify(markers)}).some((marker) => before.includes(marker)),
+      staleAfter: Object.entries(${JSON.stringify(markers)}).some(([marker, owner]) => owner !== name && after.includes(marker)),
+      targetAfter: Object.entries(${JSON.stringify(markers)}).some(([marker, owner]) => owner === name && after.includes(marker)),
       active: document.querySelector('.doc-tab[aria-selected="true"] .doc-tab-name')?.textContent ?? "",
     };
   })()`);
@@ -357,6 +358,14 @@ const htmlDoc = fixture(
 const manualDoc = fixture(
   "manual.tex",
   "\\documentclass{article}\n\\begin{document}\nOWNER-MARKER-MANUAL\n\\end{document}\n",
+);
+const packageDoc = fixture(
+  "example.sty",
+  "\\ProvidesPackage{example}\n% source comment\n\\newcommand{\\foo@bar}{x}\n",
+);
+const classDoc = fixture(
+  "example.CLS",
+  "\\ProvidesClass{example}\n% source comment\n\\LoadClass{article}\n",
 );
 const projectDir = join(workDir, "latex-project");
 cpSync(resolve("samples", "latex-project"), projectDir, { recursive: true });
@@ -692,9 +701,9 @@ try {
     `(document.getElementById("preview")?.textContent ?? "").includes("OWNER-MARKER-MD-A")`,
     10000,
   );
+  await sampleStart(MARKERS, "OWNER-MARKER-MD-B");
   const mdSwitch = await clickTab("b.md", MARKERS);
   check(!mdSwitch.staleAfter, "the previous Markdown preview is retired at the click");
-  await sampleStart(MARKERS, "OWNER-MARKER-MD-B");
   await waitFor(
     `(document.getElementById("preview")?.textContent ?? "").includes("OWNER-MARKER-MD-B")`,
     10000,
@@ -707,10 +716,13 @@ try {
     `${mdSample.violations} violations`,
   );
   check(
-    mdSample.emptyWindowMs !== null && mdSample.emptyWindowMs < 150,
-    "the empty-pane window stays under the grace delay",
+    (mdSample.emptyWindowMs !== null && mdSample.emptyWindowMs < 150) ||
+      (mdSample.emptyWindowMs === null && mdSwitch.targetAfter && mdSample.targetSeen),
+    "the next preview is immediate or the empty pane stays under the grace delay",
     mdSample.emptyWindowMs === null
-      ? "the pane never emptied"
+      ? mdSwitch.targetAfter
+        ? "the cached preview was restored during the click"
+        : "no empty pane was sampled and the preview was not immediate"
       : `${Math.round(mdSample.emptyWindowMs)} ms`,
   );
 
@@ -907,6 +919,54 @@ try {
     "leaving HTML disposes the guest",
   );
   check(!(await hasPending()), "no waiting surface survives the return to Markdown");
+
+  // -------------------------------------------------------------------------
+  // LaTeX package and class syntax
+  // -------------------------------------------------------------------------
+  console.log("\n=== LaTeX package and class highlighting ===");
+  await emitMenu(page, "view.source");
+  const highlighted = (command) => `(() => {
+    const lines = [...document.querySelectorAll('.cm-line')];
+    const command = lines.find(line => line.textContent.includes(${JSON.stringify(command)}));
+    const comment = lines.find(line => line.textContent.includes('% source comment'));
+    return !!command && !!comment &&
+      [...command.querySelectorAll('span[class]')].some(span => span.textContent.includes(${JSON.stringify(command)})) &&
+      [...comment.querySelectorAll('span[class]')].some(span => span.textContent.includes('% source comment'));
+  })()`;
+  for (const [path, name, command] of [
+    [packageDoc, "example.sty", "\\ProvidesPackage"],
+    [classDoc, "example.CLS", "\\ProvidesClass"],
+  ]) {
+    await emitOpenFiles([path]);
+    const active = await waitFor(
+      `document.querySelector('.doc-tab[aria-selected="true"] .doc-tab-name')?.textContent === ${JSON.stringify(name)}`,
+      20000,
+    );
+    check(
+      active && (await waitFor(highlighted(command))),
+      `${name} highlights commands and comments`,
+    );
+    if (name === "example.sty") {
+      check(
+        active && (await waitFor(highlighted("\\foo@bar"))),
+        "package macros containing @ are highlighted as a single command",
+      );
+    }
+  }
+  await clickTab("example.sty", MARKERS);
+  check(
+    await waitFor(
+      `document.querySelector('.doc-tab[aria-selected="true"] .doc-tab-name')?.textContent === "example.sty" && ${highlighted("\\ProvidesPackage")}`,
+    ),
+    "returning to a package tab restores LaTeX highlighting",
+  );
+  await clickTab("a.md", MARKERS);
+  check(
+    await waitFor(
+      `document.querySelector('.doc-tab[aria-selected="true"] .doc-tab-name')?.textContent === "a.md" && !![...document.querySelectorAll('.cm-line span[class]')].find(span => span.textContent.includes('OWNER-MARKER-MD-A'))`,
+    ),
+    "returning to Markdown restores its highlighting",
+  );
 
   // -------------------------------------------------------------------------
   // 11. The startup-slot incarnation rule

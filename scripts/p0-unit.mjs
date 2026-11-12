@@ -1133,8 +1133,45 @@ function shellHarness(names, extra = {}) {
   };
   context.editor = scriptedEditor(context);
   context.doc = sessions.active();
-  runInNewContext(`${shellCode(names)}\nglobalThis.fns={${names.join(",")}};`, context);
+  runInNewContext(
+    `${shellCode([...names, "editorLanguageFor"])}\nglobalThis.fns={${names.join(",")}};`,
+    context,
+  );
   return { context, sessions, journal, fns: context.fns, editor: context.editor };
+}
+
+{
+  const h = shellHarness(["editorLanguageFor", "showInEditor", "displayDoc"]);
+  const selected = [];
+  h.editor.setLanguage = (language) => selected.push(language);
+  for (const path of ["/p/example.sty", "/p/example.cls", "C:\\p\\example.CLS", "/p/example.STY"]) {
+    check(
+      h.fns.editorLanguageFor({ path, language: "markdown" }) === "latex",
+      `${path} selects LaTeX editor syntax`,
+    );
+  }
+  for (const [path, language] of [
+    [null, "typst"],
+    ["/p/example.md", "markdown"],
+    ["/p/example.sty.tex", "latex"],
+    ["/p/example.cls.txt", "markdown"],
+  ]) {
+    check(
+      h.fns.editorLanguageFor({ path, language }) === language,
+      `${path ?? "untitled"} keeps its document language`,
+    );
+  }
+  h.context.doc.path = "/p/example.sty";
+  await h.fns.showInEditor(true);
+  h.context.doc.path = "/p/example.CLS";
+  await h.fns.displayDoc();
+  h.context.doc.path = "/p/example.md";
+  await h.fns.displayDoc();
+  check(
+    selected.join(",") === "latex,latex,markdown",
+    "opening and switching tabs install each file's editor grammar",
+    selected.join(","),
+  );
 }
 
 function describeFile(s, path, content) {

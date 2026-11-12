@@ -371,7 +371,7 @@ const lifecycle = createDocumentLifecycle({
         invalidatePreview();
         retirePreview();
         syncGuest(session.language);
-        editor.setLanguage(session.language);
+        editor.setLanguage(editorLanguageFor(session));
         assistant?.sync();
         applyLayout();
         scheduleRender(true);
@@ -4384,6 +4384,11 @@ function languageFor(path: string | null): api.DocumentLanguage {
   return languageForExtension(path);
 }
 
+/** Packages and classes use LaTeX syntax, but are not standalone .tex documents. */
+function editorLanguageFor(session: Pick<Session, "path" | "language">): api.DocumentLanguage {
+  return session.path && /\.(?:sty|cls)$/i.test(session.path) ? "latex" : session.language;
+}
+
 /**
  * The markup a new document starts in.
  *
@@ -4666,7 +4671,7 @@ async function showInEditor(resetHistory: boolean, tokens: number | null = null)
   // The live view is now the authority; a recovered draft must not shadow it.
   doc.draft = null;
   syncGuest(doc.language);
-  editor.setLanguage(doc.language);
+  editor.setLanguage(editorLanguageFor(doc));
   assistant?.sync();
   // The backend counted while reading the file, so opening does not send the
   // document back over IPC. This also cancels the debounced scan that the
@@ -4717,7 +4722,7 @@ async function displayDoc(preservePdf = false): Promise<void> {
   // The snapshot may have been taken before an async grammar arrived. Installing
   // the session's language again is a no-op once that grammar is already in the
   // state, and it repairs the case where it is not.
-  editor.setLanguage(doc.language);
+  editor.setLanguage(editorLanguageFor(doc));
   assistant?.sync();
   // A captured EditorState keeps the marks it had; a tab that was hidden before
   // the failure has none, so paint the last compile's list for it. No pulse: the
