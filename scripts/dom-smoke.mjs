@@ -354,6 +354,38 @@ check(
     editorSection.labels.includes("Check spelling while typing") &&
     editorSection.labels.includes("Dictionary"),
 );
+// Emmet on Tab: on for a reader who never chose, persisted when changed, and put
+// back so the suites after this one still start from the default.
+check(
+  "Editor offers the Emmet preference",
+  Boolean(editorSection) && editorSection.labels.includes("Expand Emmet abbreviations with Tab"),
+);
+const emmetPreference = await evaluate(`(async () => {
+  const before=await window.__TAURI_INTERNALS__.invoke('get_settings');
+  [...document.querySelectorAll('.prefs-section')].find(button=>button.textContent==='Editor').click();
+  // The panel re-renders after every change, so the checkbox that was clicked is
+  // a detached node by the time of the second click. Look it up again.
+  const emmetBox=()=>[...document.querySelectorAll('.prefs-row')].find(row=>row.querySelector('.prefs-label')?.textContent.includes('Expand Emmet abbreviations with Tab'))?.querySelector('input[type=checkbox]');
+  const input=emmetBox();
+  if(!input)return {found:false};
+  const shownOn=input.checked;
+  input.click();
+  await new Promise(resolve=>setTimeout(resolve,550));
+  const after=await window.__TAURI_INTERNALS__.invoke('get_settings');
+  emmetBox()?.click();
+  await new Promise(resolve=>setTimeout(resolve,550));
+  const restored=await window.__TAURI_INTERNALS__.invoke('get_settings');
+  [...document.querySelectorAll('.prefs-section')].find(button=>button.textContent==='Files').click();
+  return {found:true,defaultOn:before.emmet===true&&shownOn,flipped:after.emmet===!before.emmet,restored:restored.emmet===before.emmet};
+})()`);
+check(
+  "Emmet preference is on by default, persists a change and is restored",
+  emmetPreference.found &&
+    emmetPreference.defaultOn &&
+    emmetPreference.flipped &&
+    emmetPreference.restored,
+  JSON.stringify(emmetPreference),
+);
 const latexSection = prefs.perSection.find((section) => section.name === "LaTeX");
 check(
   "local packages use one folder control without explanatory paragraphs",

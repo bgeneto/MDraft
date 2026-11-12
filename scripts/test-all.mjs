@@ -192,6 +192,14 @@ const SUITES = [
     script: "autoclose-unit.mjs",
   },
   {
+    // Where an Emmet abbreviation may expand, what it becomes, how the snippet
+    // indents it and that the engine stays out of the main bundle. No application.
+    id: "emmet-unit",
+    title: "Emmet abbreviations (unit)",
+    kind: "node",
+    script: "emmet-unit.mjs",
+  },
+  {
     // The completion layer's configuration, its Tab precedence and the rule that
     // a language with no catalog offers nothing. No application.
     id: "completion-unit",
@@ -523,6 +531,16 @@ const SUITES = [
     title: "Auto-close pairs and tags",
     kind: "cdp",
     script: "autoclose-test.mjs",
+    doc: "samples/feature-tour.md",
+  },
+  {
+    // Tab on HTML and CSS through the real editor: expansion, tab stops, undo,
+    // the popup winning, the preference, and the lazily fetched engine. It opens
+    // its own empty temporary files, so the fixture is only the first tab.
+    id: "emmet",
+    title: "Emmet on Tab",
+    kind: "cdp",
+    script: "emmet-test.mjs",
     doc: "samples/feature-tour.md",
   },
   {

@@ -395,6 +395,13 @@ export interface Settings {
    * its Tab binding together.
    */
   completion: boolean;
+  /**
+   * Expand Emmet abbreviations with Tab in HTML and CSS documents.
+   *
+   * It acts only where an abbreviation is allowed, and Tab still indents
+   * everywhere else. Turning it off removes the Tab binding.
+   */
+  emmet: boolean;
 
   exportFormats: ExportFormat[];
 

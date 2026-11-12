@@ -44,7 +44,11 @@ projects easy to navigate.
   needs no TeX installation; a TeX distribution already on the computer can be
   selected instead, as a separate program that may install its own packages.
 - **HTML** — preview a page with its own CSS, images and scripts in a sandboxed
-  view alongside its source.
+  view alongside its source. In HTML and CSS documents, Tab expands an Emmet
+  abbreviation: `ul>li*3` becomes a list and `m10` becomes `margin: 10px;`,
+  also inside `<style>` and `style="…"`. It is on by default, never acts in a
+  tag, attribute, comment, script or selector, and can be turned off in
+  *Preferences › Editor*.
 
 ![A Typst conference paper in MDraft, showing source on the left and its compiled two-column PDF in Pages view on the right.](docs/screenshots/typst-ieee-conference-paper.webp)
 

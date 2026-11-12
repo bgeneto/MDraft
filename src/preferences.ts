@@ -1882,6 +1882,13 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
           set: (value) => host.update({ completion: value }),
         },
         {
+          kind: "checkbox",
+          label: "Expand Emmet abbreviations with Tab",
+          help: 'In HTML and CSS documents, Tab turns the abbreviation before the caret into markup or a declaration: ul>li*3 into a list, m10 into margin: 10px;. It also works inside <style> and style="…". It never acts in a tag, an attribute, a comment, a script or a selector, and Tab indents as usual when there is nothing to expand. An open completion list accepts Tab first; press Escape to close it and expand. Nothing is sent over the network.',
+          get: () => s().emmet,
+          set: (value) => host.update({ emmet: value }),
+        },
+        {
           kind: "select",
           label: "Content Width",
           options: [
