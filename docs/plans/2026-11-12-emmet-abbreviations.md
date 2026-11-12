@@ -105,6 +105,14 @@ The cost of the chosen route is that **MDraft owns the context rules** (step 2) 
 - Typing latency and the installer delta, as above.
 - Rust: 81 tests in the full `cargo test` fail with `Os { code: 5, kind: PermissionDenied }` when creating temporary directories, across modules this change did not touch (`documents`, `images`, `print`, `export`, `ai::secret`, and three file-writing tests in `settings`). Re-running two of them against the original `settings.rs` fails the same way, so this session's environment, not the change, is the cause; 318 others pass, including the new one.
 
+### Follow-up: the preference moved to Preferences › HTML
+
+Asked for after the work above was committed. The checkbox now sits in the HTML section, after the existing scripts option and Sandbox note, and the Editor section no longer carries it. Its label and the `emmet` setting are unchanged, so nothing in `settings.json` moves. Its hover tooltip was long and hid what Emmet is, so it was dropped for a note shown under the checkbox: "A shorthand for writing HTML and CSS. Press Tab after an abbreviation to expand it: `ul>li*3` becomes a list of three items, and `m10` in a CSS rule becomes `margin: 10px`. Tab still indents when there is nothing to expand, and an open completion list takes Tab first."
+
+Touched: `src/preferences.ts`; `scripts/dom-smoke.mjs` (looks in the HTML section, plus a check that Editor does not list the row, 123 checks); `scripts/emmet-test.mjs` (opens the HTML section); the README line that names the location; the smoke counts in the catalog.
+
+Verified: `tsc`, ESLint and Prettier clean on the changed files; `emmet:unit` 93/93; and the real Preferences panel rendered in a temporary dev page with a stubbed host, which listed the row and the note under HTML and not under Editor (the page is deleted). **Not run:** the `smoke` and `emmet` UI layers on a rebuilt binary, because another session's test harness held the lock. The new section lookups in `dom-smoke.mjs` and `emmet-test.mjs` are therefore unexercised.
+
 ## Files and modules
 
 - `package.json`, `package-lock.json`: add `emmet` (exact pin, like the other dependencies); no other package is added.

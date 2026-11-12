@@ -356,13 +356,18 @@ check(
 );
 // Emmet on Tab: on for a reader who never chose, persisted when changed, and put
 // back so the suites after this one still start from the default.
+const htmlSection = prefs.perSection.find((section) => section.name === "HTML");
 check(
-  "Editor offers the Emmet preference",
-  Boolean(editorSection) && editorSection.labels.includes("Expand Emmet abbreviations with Tab"),
+  "HTML offers the Emmet preference",
+  Boolean(htmlSection) && htmlSection.labels.includes("Expand Emmet abbreviations with Tab"),
+);
+check(
+  "the Editor section no longer carries it",
+  Boolean(editorSection) && !editorSection.labels.includes("Expand Emmet abbreviations with Tab"),
 );
 const emmetPreference = await evaluate(`(async () => {
   const before=await window.__TAURI_INTERNALS__.invoke('get_settings');
-  [...document.querySelectorAll('.prefs-section')].find(button=>button.textContent==='Editor').click();
+  [...document.querySelectorAll('.prefs-section')].find(button=>button.textContent==='HTML').click();
   // The panel re-renders after every change, so the checkbox that was clicked is
   // a detached node by the time of the second click. Look it up again.
   const emmetBox=()=>[...document.querySelectorAll('.prefs-row')].find(row=>row.querySelector('.prefs-label')?.textContent.includes('Expand Emmet abbreviations with Tab'))?.querySelector('input[type=checkbox]');
