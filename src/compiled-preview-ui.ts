@@ -22,7 +22,9 @@ export class CompiledPreviewUi {
   private compile = this.button("Compile", "compiled-compile", "play");
   private auto = document.createElement("input");
   private toggle = this.button("Logs", "compiled-logs-toggle", "logs");
-  private save = this.button("Save PDF…", "compiled-save-pdf", "download");
+  // The visible label is short to leave the status beside it room; the
+  // accessible name (set in the constructor) stays the full "Save PDF".
+  private save = this.button("PDF", "compiled-save-pdf", "download");
   private modes = document.createElement("div");
   private message = document.createElement("span");
   private condition = document.createElement("span");
@@ -88,8 +90,12 @@ export class CompiledPreviewUi {
     this.message.append(this.condition, " ", this.stateDetail, " ", this.engine);
     this.notice.className = "compiled-notice";
     this.notice.hidden = true;
-    row.append(this.compile, label, this.modes, this.toggle, this.save);
-    header.append(row, this.message, this.notice);
+    this.save.setAttribute("aria-label", "Save PDF");
+    // The status shares the action row, right-aligned beside Logs and Save, so
+    // the preview does not pay a whole extra line of height for it. It wraps to
+    // a row of its own only when the pane is too narrow to hold both.
+    row.append(this.compile, label, this.modes, this.message, this.toggle, this.save);
+    header.append(row, this.notice);
     this.compile.addEventListener("click", () =>
       this.busy ? actions.cancel() : actions.compile(),
     );
