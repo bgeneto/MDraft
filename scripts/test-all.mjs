@@ -1406,12 +1406,12 @@ let latexEngineLink = null;
  *
  * The harness runs under `<identifier>.test-automation`, so the engine the
  * developer installed under `<identifier>` is invisible to it: a `.tex` document
- * shows the "Enable LuaLaTeX" note instead of a PDF, and every LaTeX preview
+ * shows the "Enable bundled TeX" note instead of a PDF, and every LaTeX preview
  * assertion has nothing to measure. That is why the scroll-correspondence, blink
  * and two-column steps could not be tested through the UI.
  *
  * A **junction** (Windows) or **symlink** (elsewhere) is the answer: it costs no
- * copying of the 10 MiB of assets, and `linkLatexEngineCleanup` removes it before
+ * copying of the 12 MiB of assets, and `linkLatexEngineCleanup` removes it before
  * the developer's own settings are restored, so nothing outside the test instance
  * is touched. When the engine is not installed the function does nothing and the
  * LaTeX suites that need it skip rather than fail.
@@ -1420,7 +1420,9 @@ function linkLatexEngine() {
   const dataRoot = appConfigDir().replace(`${identifier}`, tauriConfig.identifier);
   let source = path.join(dataRoot, "latex");
   if (!fs.existsSync(path.join(source, "assets"))) {
-    const digest = "9c643deba29dc4cd590c12bc4bd1d2a4ee8d588402390d3ac06818ff317914f9";
+    // `wasmtex-luatex.js` of the pinned engine release (TeX Live 2026). A directory
+    // that still holds the 2025 file is not the engine this build runs.
+    const digest = "2b16bc7f892a068a548e8950b7d3987f6b23ff2bac4ba6258520739a402906ef";
     const candidates = fs.existsSync(dataRoot)
       ? fs.readdirSync(dataRoot, { withFileTypes: true }).filter((entry) => {
           if (!entry.isDirectory() || entry.name === "latex") return false;

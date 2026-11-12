@@ -316,7 +316,9 @@ export async function compileLatex(
   );
   const compiler = new WasmTexCompiler({
     engine: "lualatex",
-    texliveVersion: "2025",
+    // One pinned unit with the Rust constants and the worker shims in
+    // `public/wasmtex/<year>/` (docs/adr/2026-11-12-engine-year-and-cache-namespace.md).
+    texliveVersion: "2026",
     texliveUrl: `${base}jobs/${owner}/mirror/`,
     assetBaseUrl: "/",
     formatAssetBaseUrl: base,

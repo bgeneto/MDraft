@@ -430,7 +430,7 @@ try {
         .find((node) => node.textContent.trim() === "LaTeX")?.click();
       await new Promise((resolve) => setTimeout(resolve, 400));
       const row = [...document.querySelectorAll(".prefs-row")]
-        .find((node) => /Enable bundled LuaLaTeX/i.test(node.querySelector(".prefs-label")?.textContent ?? ""));
+        .find((node) => /Enable bundled TeX/i.test(node.querySelector(".prefs-label")?.textContent ?? ""));
       const box = row?.querySelector("input[type=checkbox]");
       if (box && !box.checked) box.click();
       await new Promise((resolve) => setTimeout(resolve, 900));

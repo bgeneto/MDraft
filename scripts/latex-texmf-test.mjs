@@ -381,14 +381,14 @@ try {
     // Synchronize the frontend's settings copy through its own checkbox.
     await showPreferences();
     await page.evaluate(`(() => {
-      const row = [...document.querySelectorAll('.prefs-row')].find(n => n.querySelector('.prefs-label')?.textContent.includes('Enable bundled LuaLaTeX'));
+      const row = [...document.querySelectorAll('.prefs-row')].find(n => n.querySelector('.prefs-label')?.textContent.includes('Enable bundled TeX'));
       const checkbox = row?.querySelector('input[type=checkbox]');
       if (checkbox && !checkbox.checked) checkbox.click();
     })()`);
     if (
       !(await waitFor(
         `(() => {
-      const row = [...document.querySelectorAll('.prefs-row')].find(n => n.querySelector('.prefs-label')?.textContent.includes('Enable bundled LuaLaTeX'));
+      const row = [...document.querySelectorAll('.prefs-row')].find(n => n.querySelector('.prefs-label')?.textContent.includes('Enable bundled TeX'));
       return row?.querySelector('input[type=checkbox]')?.checked;
     })()`,
         10000,

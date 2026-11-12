@@ -233,7 +233,13 @@ every test that creates a scratch file is denied. The failures look like 70
 unrelated regressions in `documents`, `export`, `images` and `ai`. Run the suite
 with `TEMP` and `TMP` pointing at a directory inside the low-labelled workspace
 (`$env:TEMP = "$PWD\\.tmp-test"`), then delete it. This is a property of the test
-host, not of the code under test.
+host, not of the code under test. The agent scratchpad is **not** "inside the
+workspace": it is also under `T:\Temp`, and pointing `TEMP`/`TMP` there still
+fails the test that writes to `std::env::temp_dir()`
+(`removing_an_asset_another_install_removed_is_not_an_error`, `Access is denied`)
+while every test using `target\latex-tests` passes — a split that reads as one
+flaky test. Use `src-tauri\target\test-tmp\cargo`, the folder `scripts/test-all.mjs`
+uses, and the same filter then reports all 22 `latex::` tests passing.
 
 The same denial also stops the *build* of the test binary before a single test
 runs: `cl : Command line error D8050 : cannot execute '...c1.dll': failed to get

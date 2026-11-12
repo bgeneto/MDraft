@@ -3,16 +3,23 @@
 MDraft edits `.tex` documents as a first-class language: syntax colouring, `%`
 comments, an outline read from the sectioning commands, LaTeX-aware spelling
 skips, `\includegraphics` on image paste, and the compiled PDF in the preview.
-Compilation runs either in the bundled **LuaLaTeX** engine, which needs no TeX
-installation, or in a TeX distribution the reader has already installed and
+Compilation runs either in the **bundled TeX distribution** (LuaLaTeX compiled to
+WebAssembly), which needs no TeX installation, or in a TeX distribution the reader has already installed and
 explicitly selected.
 
-LaTeX is **opt-in**. Open a saved `.tex` file and choose **Enable LuaLaTeX** in
+LaTeX is **opt-in**. Open a saved `.tex` file and choose **Enable bundled TeX** in
 the preview, or tick the switch in *Preferences › LaTeX*. That action downloads
-about 10 MiB of engine files, each verified against a pinned SHA-256 digest. The
-TeX packages and fonts a document needs are fetched on demand from a pinned
-mirror and cached locally. Nothing about your document or bibliography leaves
-this device.
+about 12 MiB of TeX Live 2026 engine files, each verified against a pinned SHA-256
+digest. The TeX packages and fonts a document needs are fetched on demand from a
+pinned TeX Live 2026 package snapshot and cached locally, in a folder named for
+that snapshot. Nothing about your document or bibliography leaves this device.
+
+An engine installed by an earlier MDraft (TeX Live 2025) is not replaced
+automatically. The preview and *Preferences › LaTeX* report it as missing or out
+of date; press **Retry setup**, or turn the switch off and on, to download the
+2026 files. Only the files that changed are fetched. Packages cached for 2025 are
+never read by the 2026 engine. They still count toward the cache limit, are
+evicted first, and are removed by *Clear package cache*.
 
 An installed distribution is a second, independent choice. It is off by default
 and never chosen automatically, because it runs a program outside the bundled
@@ -202,7 +209,7 @@ How each engine sees them — you set no `TEXMFHOME` or `TEXINPUTS` yourself:
 
 | Engine | How the folders are passed | Verified |
 | --- | --- | --- |
-| Bundled LuaLaTeX | Through the engine's in-memory file system, searched before its package mirror | classes, packages, `.def`, Lua, fonts, BibTeX |
+| Bundled TeX | Through the engine's in-memory file system, searched before its package mirror | classes, packages, `.def`, Lua, fonts, BibTeX |
 | TeX Live (Linux, macOS, Windows, WSL) | A private `TEXMFHOME` list in the job | TeX Live 2025: LuaLaTeX, pdfLaTeX; BibTeX |
 | MiKTeX | Private `TEXINPUTS`/`BSTINPUTS`/`BIBINPUTS`/`LUAINPUTS`/font paths in the job | MiKTeX 23.1: LuaLaTeX, pdfLaTeX, XeLaTeX; BibTeX |
 
