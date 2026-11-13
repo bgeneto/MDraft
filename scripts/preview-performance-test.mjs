@@ -16,8 +16,9 @@ import {
   installGroupedChunksPrototype,
 } from "../docs/audits/preview-group-prototype.mjs";
 
-const port = process.argv[2] ?? "9222";
-const extreme = process.env.MDRAFT_PREVIEW_EXTREME === "1";
+const cliArgs = process.argv.slice(2);
+const port = cliArgs.find((arg) => !arg.startsWith("--")) ?? "9222";
+const extreme = process.env.MDRAFT_PREVIEW_EXTREME === "1" || cliArgs.includes("--extreme");
 
 // ---------------------------------------------------------------------------
 // CDP, the same shape every script here uses.
@@ -30,6 +31,16 @@ if (!page) throw new Error(`no page target on ${port}`);
 const ws = new WebSocket(page.webSocketDebuggerUrl);
 let nextId = 1;
 const pending = new Map();
+const eventHandlers = new Map();
+const addCdpListener = (method, handler) => {
+  let set = eventHandlers.get(method);
+  if (!set) {
+    set = new Set();
+    eventHandlers.set(method, set);
+  }
+  set.add(handler);
+  return () => set.delete(handler);
+};
 ws.addEventListener("message", (event) => {
   const message = JSON.parse(event.data);
   if (message.id !== undefined && pending.has(message.id)) {
@@ -37,6 +48,10 @@ ws.addEventListener("message", (event) => {
     if (message.error) reject(new Error(JSON.stringify(message.error)));
     else resolve(message);
     pending.delete(message.id);
+  } else if (message.method && eventHandlers.has(message.method)) {
+    for (const handler of eventHandlers.get(message.method)) {
+      Promise.resolve(handler(message.params)).catch(() => {});
+    }
   }
 });
 await new Promise((resolve, reject) => {
@@ -162,7 +177,8 @@ async function installProbe() {
   await evaluate(`(() => {
     const probe = window.__previewPerf = {
       events: [], inputs: 0, active: new Map(), starts: 0, baselineStarts: 0,
-      long: [], longSupported: false, lastInput: null, expected: null, finalMs: null
+      long: [], longSupported: false, lastInput: null, expected: null, finalMs: null,
+      trackMutations: false, mutationNodes: 0
     };
     const observed = new WeakSet();
     const nativePost = Worker.prototype.postMessage;
@@ -204,7 +220,16 @@ async function installProbe() {
     }
     const preview = document.querySelector("#preview");
     if (!preview) throw new Error("No preview element");
-    new MutationObserver(() => {
+    new MutationObserver((records) => {
+      if (probe.trackMutations) {
+        for (const record of records) {
+          if (record.type === "characterData") {
+            probe.mutationNodes += 1;
+          } else {
+            probe.mutationNodes += record.addedNodes.length + record.removedNodes.length;
+          }
+        }
+      }
       if (!probe.expected || probe.lastInput === null || probe.finalMs !== null ||
           !preview.textContent.includes(probe.expected)) return;
       requestAnimationFrame(() => {
@@ -212,15 +237,16 @@ async function installProbe() {
           probe.finalMs = performance.now() - probe.lastInput;
         }
       });
-    }).observe(preview, { childList: true });
+    }).observe(preview, { childList: true, subtree: true, characterData: true });
     return true;
   })()`);
 }
 
-async function resetProbe(expected = null) {
+async function resetProbe(expected = null, trackMutations = false) {
   await evaluate(`(() => {
     const p = window.__previewPerf;
     p.events = []; p.inputs = 0; p.long = []; p.lastInput = null; p.finalMs = null;
+    p.trackMutations = ${Boolean(trackMutations)}; p.mutationNodes = 0;
     if ('mapFirst' in p) { p.mapFirst=null; p.mapLast=null; }
     p.expected = ${JSON.stringify(expected)}; p.baselineStarts = p.starts;
   })()`);
@@ -241,7 +267,8 @@ async function readProbe() {
       longSupported: p.longSupported, longCount: p.long.length,
       longest: p.long.length ? Math.max(...p.long.map((entry)=>entry.duration)) : null,
       longEvents: p.long.map((entry)=>({...entry, relativeToLastInput:entry.start-p.lastInput})),
-      finalMs: p.finalMs };
+      finalMs: p.finalMs,
+      mutationNodes: p.mutationNodes ?? 0 };
   })()`);
 }
 
@@ -283,6 +310,284 @@ async function waitForWorker(timeoutMs = 15000) {
     await sleep(20);
   }
   return false;
+}
+
+const prosePerfReport = {
+  mode: extreme ? "extreme" : "standard",
+  firstPaintE2PMs: null,
+  wordMapReadyMs: null,
+  domMutationNodesCount: null,
+  unchangedSubtreeIdentityRate: null,
+  includeIpcCallsPerEdit: null,
+  mermaidBlockingPaintMs: null,
+  proseMarks: null,
+  samples: {},
+};
+
+async function waitQuiet(expression, timeoutMs = 15000, intervalMs = 50) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await evaluate(expression)) return true;
+    await sleep(intervalMs);
+  }
+  return false;
+}
+
+/**
+ * Snapshot element identity across `#preview` `<p>`, `<pre>`, and `<img>` siblings
+ * using a `WeakSet` + tag counts before a single-char mid-document edit.
+ */
+async function captureSubtreeSnapshot() {
+  return evaluate(`(() => {
+    const preview = document.querySelector("#preview");
+    if (!preview) return null;
+    const nodes = [...preview.querySelectorAll("p, pre, img")];
+    const byTag = { P: 0, PRE: 0, IMG: 0 };
+    for (const node of nodes) {
+      if (node.tagName in byTag) byTag[node.tagName] += 1;
+    }
+    window.__mdraftSubtreeSnap = {
+      set: new WeakSet(nodes),
+      total: nodes.length,
+      byTag,
+    };
+    return { total: nodes.length, byTag };
+  })()`);
+}
+
+async function diffSubtreeIdentity() {
+  return evaluate(`(() => {
+    const snap = window.__mdraftSubtreeSnap;
+    const preview = document.querySelector("#preview");
+    delete window.__mdraftSubtreeSnap;
+    if (!snap || !preview) return null;
+    const after = [...preview.querySelectorAll("p, pre, img")];
+    let reused = 0;
+    const reusedByTag = { P: 0, PRE: 0, IMG: 0 };
+    const afterByTag = { P: 0, PRE: 0, IMG: 0 };
+    for (const node of after) {
+      if (node.tagName in afterByTag) afterByTag[node.tagName] += 1;
+      if (snap.set.has(node)) {
+        reused += 1;
+        if (node.tagName in reusedByTag) reusedByTag[node.tagName] += 1;
+      }
+    }
+    const denom = Math.max(snap.total, after.length);
+    return {
+      beforeTotal: snap.total,
+      afterTotal: after.length,
+      reused,
+      beforeByTag: snap.byTag,
+      afterByTag,
+      reusedByTag,
+      unchangedSubtreeIdentityRate:
+        denom > 0 ? Math.round((reused / denom) * 1000000) / 1000000 : null,
+    };
+  })()`);
+}
+
+async function readProsePerfMarks(sinceTime = 0) {
+  return evaluate(`(() => {
+    const names = [...new Set(
+      performance
+        .getEntries()
+        .filter((entry) => entry.name.startsWith("mdraft:prose:"))
+        .map((entry) => entry.name),
+    )];
+    const entries = [];
+    const byName = {};
+    for (const name of names) {
+      const matched = performance
+        .getEntriesByName(name)
+        .filter((entry) => entry.startTime >= ${sinceTime})
+        .map((entry) => ({
+          name: entry.name,
+          entryType: entry.entryType,
+          startTime: Math.round(entry.startTime * 1000) / 1000,
+          duration: Math.round(entry.duration * 1000) / 1000,
+        }));
+      if (matched.length > 0) {
+        byName[name] = matched;
+        entries.push(...matched);
+      }
+    }
+    return entries.length > 0 ? { count: entries.length, byName, entries } : null;
+  })()`);
+}
+
+/**
+ * Count `read_document` Tauri IPC calls via CDP `Fetch.enable` (safe on non-writable
+ * `__TAURI_INTERNALS__`, falling back to `null` if interception is unavailable).
+ */
+async function countIncludeIpcDuring(asyncFn) {
+  let ipcCalls = 0;
+  let enabled = false;
+  const off = addCdpListener("Fetch.requestPaused", async (params) => {
+    if (params.request?.url?.includes("read_document")) {
+      ipcCalls += 1;
+    }
+    await send("Fetch.continueRequest", { requestId: params.requestId }).catch(() => {});
+  });
+  try {
+    await send("Fetch.enable", {
+      patterns: [
+        { urlPattern: "http://ipc.localhost/read_document*" },
+        { urlPattern: "ipc://localhost/read_document*" },
+      ],
+    });
+    enabled = true;
+  } catch {
+    off();
+    await asyncFn();
+    return null;
+  }
+  try {
+    await asyncFn();
+    return ipcCalls;
+  } finally {
+    off();
+    if (enabled) {
+      await send("Fetch.disable").catch(() => {});
+    }
+  }
+}
+
+/**
+ * Helper ready for Phase 0/1 Mermaid (`adoc-tour`) CDP runs: measures long-task
+ * blocking and rAF settle around rendered `#preview` Mermaid SVGs, or `null` when absent.
+ */
+async function measureMermaidBlockingPaintMs(timeoutMs = 5000) {
+  const diagramCount = await evaluate(
+    `document.querySelectorAll('#preview svg[id^="mermaid"], #preview .mermaid svg, #preview [data-mermaid]').length`,
+  );
+  if (!diagramCount) return null;
+  const beforeLongCount = await evaluate(`window.__previewPerf?.long?.length ?? 0`);
+  const t0 = await evaluate(`performance.now()`);
+  await evaluate(
+    `new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))`,
+  );
+  const afterInfo = await evaluate(`(() => {
+    const p = window.__previewPerf;
+    const recent = (p?.long ?? []).slice(${beforeLongCount});
+    return {
+      rAFSettleMs: Math.round((performance.now() - ${t0}) * 1000) / 1000,
+      blockingLongTaskMaxMs: recent.length
+        ? Math.round(Math.max(...recent.map((e) => e.duration)) * 1000) / 1000
+        : 0,
+    };
+  })()`);
+  void timeoutMs;
+  return { diagramCount, ...afterInfo };
+}
+
+/**
+ * Observational single-char mid-document edit probe capturing first-paint E2P,
+ * wordMapReadyMs (`null`-safe before coordinator hooks), DOM mutation nodes,
+ * WeakSet subtree identity rate, and `mdraft:prose:*` marks. Never alters `failed`.
+ */
+async function measureSingleCharProseSnapshot(label, waitTimeoutMs = 20000) {
+  const markBaseline = await evaluate(`performance.now()`);
+  const setup = await evaluate(`(() => {
+    const view = document.querySelector('.cm-content')?.cmTile?.root?.view;
+    if (!view) return null;
+    const doc = view.state.doc.toString();
+    const mid = Math.floor(doc.length * 0.5);
+    const matches = [...doc.matchAll(/^(?:##|==) Section \\d+$/gm)];
+    let match = null;
+    let bestDist = Infinity;
+    for (const m of matches) {
+      const dist = Math.abs(m.index - mid);
+      if (dist < bestDist) {
+        bestDist = dist;
+        match = m;
+      }
+    }
+    let anchorPos = null;
+    let baseToken = null;
+    if (match) {
+      baseToken = match[0].replace(/^(?:##|==)\\s+/, "");
+      anchorPos = match.index + match[0].length;
+    } else {
+      const sliceStart = Math.max(0, mid - 200);
+      const wordMatch = /\\b[A-Za-z][A-Za-z0-9_]{5,}\\b/.exec(doc.slice(sliceStart));
+      if (!wordMatch) return null;
+      baseToken = wordMatch[0];
+      anchorPos = sliceStart + wordMatch.index + wordMatch[0].length;
+    }
+    const expected = baseToken + "z";
+    if (doc.includes(expected)) return null;
+    view.dispatch({ selection: { anchor: anchorPos }, scrollIntoView: true });
+    return { expected, anchorPos };
+  })()`);
+
+  if (!setup) {
+    return {
+      label,
+      skipped: true,
+      firstPaintE2PMs: null,
+      wordMapReadyMs: null,
+      domMutationNodesCount: null,
+      unchangedSubtreeIdentityRate: null,
+      subtreeDetail: null,
+      proseMarks: null,
+    };
+  }
+
+  await evaluate(`new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`);
+  await sleep(100);
+  await focusEditor();
+  await captureSubtreeSnapshot();
+  await resetProbe(setup.expected, true);
+  await typeText("z");
+
+  const painted = await waitQuiet("window.__previewPerf.finalMs !== null", waitTimeoutMs, 25);
+  const firstPaintE2PMs = painted ? await evaluate("window.__previewPerf.finalMs") : null;
+
+  let wordMapReadyMs = null;
+  if (painted) {
+    const hasHooks = await evaluate(
+      `Boolean(window.__mdraftDebug || ('mapLast' in (window.__previewPerf ?? {}) && window.__previewPerf.mapLast !== null))`,
+    );
+    const pollBudget = hasHooks ? 2500 : 150;
+    const deadline = Date.now() + pollBudget;
+    while (Date.now() < deadline) {
+      const candidate = await evaluate(`(() => {
+        const dbg = window.__mdraftDebug;
+        const p = window.__previewPerf;
+        if (dbg && typeof dbg.wordMapReadyMs === "number") return dbg.wordMapReadyMs;
+        if (dbg && typeof dbg.lastWordMapMs === "number") return dbg.lastWordMapMs;
+        if (dbg && typeof dbg.wordMapDoneAt === "number" && p?.lastInput !== null) {
+          return Math.max(0, dbg.wordMapDoneAt - p.lastInput);
+        }
+        if (typeof p?.mapLast === "number" && p.lastInput !== null && p.mapLast >= p.lastInput) {
+          return p.mapLast - p.lastInput;
+        }
+        return null;
+      })()`);
+      if (typeof candidate === "number") {
+        wordMapReadyMs = Math.round(candidate * 1000) / 1000;
+        break;
+      }
+      await sleep(50);
+    }
+  }
+
+  const [probe, subtreeDetail, proseMarks] = await Promise.all([
+    readProbe(),
+    diffSubtreeIdentity(),
+    readProsePerfMarks(markBaseline),
+  ]);
+
+  return {
+    label,
+    skipped: false,
+    firstPaintE2PMs: firstPaintE2PMs === null ? null : Math.round(firstPaintE2PMs * 1000) / 1000,
+    wordMapReadyMs,
+    domMutationNodesCount: probe.mutationNodes ?? null,
+    unchangedSubtreeIdentityRate: subtreeDetail?.unchangedSubtreeIdentityRate ?? null,
+    subtreeDetail,
+    proseMarks,
+  };
 }
 
 async function measureVisibleRender(label, marker, enforceBudget) {
@@ -639,6 +944,13 @@ if (extreme) {
       ax.result.nodes.some((node) => !node.ignored && node.role?.value === "paragraph"),
     );
   }
+  const extremeSample = await measureSingleCharProseSnapshot("md-extreme-single-char", 60000);
+  prosePerfReport.samples.markdownExtreme = extremeSample;
+  prosePerfReport.firstPaintE2PMs = extremeSample.firstPaintE2PMs;
+  prosePerfReport.wordMapReadyMs = extremeSample.wordMapReadyMs;
+  prosePerfReport.domMutationNodesCount = extremeSample.domMutationNodesCount;
+  prosePerfReport.unchangedSubtreeIdentityRate = extremeSample.unchangedSubtreeIdentityRate;
+  prosePerfReport.proseMarks = extremeSample.proseMarks;
 } else {
   await measureVisibleRender("Markdown 1.2 MB", "markdownfinalpreviewmarker", true);
 
@@ -693,6 +1005,14 @@ if (extreme) {
     ),
   );
 
+  const mdSample = await measureSingleCharProseSnapshot("md-single-char", 20000);
+  prosePerfReport.samples.markdown = mdSample;
+  prosePerfReport.firstPaintE2PMs = mdSample.firstPaintE2PMs;
+  prosePerfReport.wordMapReadyMs = mdSample.wordMapReadyMs;
+  prosePerfReport.domMutationNodesCount = mdSample.domMutationNodesCount;
+  prosePerfReport.unchangedSubtreeIdentityRate = mdSample.unchangedSubtreeIdentityRate;
+  prosePerfReport.proseMarks = mdSample.proseMarks;
+
   await invoke("plugin:event|emit", { event: "menu", payload: "file.save" });
   await waitFor(
     "the Markdown document saves",
@@ -706,6 +1026,14 @@ if (extreme) {
     30000,
   );
   await measureVisibleRender("AsciiDoc 600 KB", "asciidocfinalpreviewmarker", false);
+
+  let adocSample = null;
+  const includeIpc = await countIncludeIpcDuring(async () => {
+    adocSample = await measureSingleCharProseSnapshot("adoc-single-char", 20000);
+  });
+  prosePerfReport.includeIpcCallsPerEdit = includeIpc;
+  prosePerfReport.mermaidBlockingPaintMs = await measureMermaidBlockingPaintMs();
+  prosePerfReport.samples.asciidoc = adocSample;
 
   // Compare the same real keyboard events with spelling off and on. Keep the
   // editor in Source mode so preview conversion does not obscure this cost.
@@ -834,6 +1162,7 @@ try {
   // The OS temp directory can clean an open fixture later.
 }
 
+console.log(`PROSE_PERF_JSON ${JSON.stringify(prosePerfReport)}`);
 console.log(`\n${passed}/${passed + failed} checks passed`);
 ws.close();
 process.exit(failed === 0 ? 0 : 1);

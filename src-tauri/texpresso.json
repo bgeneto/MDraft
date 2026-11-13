@@ -1,0 +1,103 @@
+{
+  "note": "Where the TeXpresso preview backend downloads from, and the SHA-256 of everything it may download. \"origin\" is the one string between the local origin server (scripts/texpresso-origin-server.mjs) and the production bucket. Read only by src-tauri/src/latex_texpresso.rs; checked against an origin by scripts/texpresso-origin-check.mjs. Docs: docs/adr/2026-11-13-latex-preview-backends.md.",
+  "origin": "http://127.0.0.1:8717/",
+  "appRelease": "release-0-133-g454f1bc",
+  "snapshot": "tt2026-2026-11",
+  "bundle": {
+    "list": {
+      "path": "tt2026/v3.lst",
+      "bytes": 3877910,
+      "sha256": "cecf22b8241330f350d883f327f3553f874186f8683d1e7106998fe80889861c"
+    },
+    "files": [
+      {
+        "path": "tt2026/v3-36c268c2b4d8b963.deps",
+        "bytes": 3638053,
+        "sha256": "36c268c2b4d8b96358ceb6933be59d2c72a4d3354b11fc0e42c608b2ddc71e34"
+      },
+      {
+        "path": "tt2026/v3-3f7cdba0ab1f1379.fmt",
+        "bytes": 27439216,
+        "sha256": "3f7cdba0ab1f137988d31493f6a6a33bf881c4e0f27fa53b0ab956a5ea65db99"
+      },
+      {
+        "path": "tt2026/v3-d094cf86958dd603.luatex.fmt",
+        "bytes": 6866549,
+        "sha256": "d094cf86958dd60374354a722dd6c3085e92f24bfb3497f317768619840e0649"
+      },
+      {
+        "path": "tt2026/v3-33a89a90d6d9c9e4.luatex-cache.tar",
+        "bytes": 15912960,
+        "sha256": "33a89a90d6d9c9e469199649b6bb103c45ba57531cb83d089cc41eee2c7b1a71"
+      }
+    ]
+  },
+  "digests": {
+    "path": "digests.bin",
+    "entries": 163011,
+    "bytes": 2608176,
+    "sha256": "b6539b89a37a28580f4c09239610fc99faea41f5e9f186c1204eae6e1d7be000"
+  },
+  "assets": [
+    {
+      "path": "ocaml.js",
+      "bytes": 806308,
+      "sha256": "55d1b7a0f5b7083bec1772215558b32c37cbeda239acfdbe07148f7e20ed5234"
+    },
+    {
+      "path": "ocaml-worker.js",
+      "bytes": 210530,
+      "sha256": "b15bee9aaba43a4199ded3d15dd88e7a5f447970389b9ae57f7c1a506582c081"
+    },
+    {
+      "path": "dluatex-bin-jspi.js",
+      "bytes": 116167,
+      "sha256": "5b3ebab77b71f56e7a24f37c7c4bd567461691bf53a35bdecd4fd403beb1c288"
+    },
+    {
+      "path": "dluatex-bin-jspi.wasm",
+      "bytes": 8270998,
+      "sha256": "cbe52cfdf529c8922fb0c880907c80e76c81c185f2c49a4d998ff7707db1a0fa"
+    },
+    {
+      "path": "dxetex-bin-jspi.js",
+      "bytes": 93716,
+      "sha256": "4af44ecd15f92bc3b8f7ec70a19598dde93ef4c9746d735379eba597a1456834"
+    },
+    {
+      "path": "dxetex-bin-jspi.wasm",
+      "bytes": 3767682,
+      "sha256": "0c459c0f32f35376ed161cea709cdc598245dbe1c7bfac06f0a6b87050135c0c"
+    },
+    {
+      "path": "xdvipdfmx.js",
+      "bytes": 79369,
+      "sha256": "9d61def67ef2a6fba9f9cc376bc7b5248329667b6c9c183f0482902c4d17e784"
+    },
+    {
+      "path": "xdvipdfmx.wasm",
+      "bytes": 632148,
+      "sha256": "016b5815f4344eca313c442ba6d9c0d2942e32d35c373bc22a8bf1ae9c5f60b2"
+    },
+    {
+      "path": "vendor/fzstd.mjs",
+      "bytes": 24407,
+      "sha256": "1a901fc5a58c349bbdb4f2aa1e688637ef56891ec58243a9f0cd863166b0d2a4"
+    },
+    {
+      "path": "vendor/opentype.module.js",
+      "bytes": 235816,
+      "sha256": "8e2871685981559754e78611887fc7b910deed76113b5a6c52d3f7a54cc36884"
+    },
+    {
+      "path": "vendor/codemirror/codemirror.js",
+      "bytes": 160813,
+      "sha256": "00de189a2e0a02083969ad5fa3f00f2faf7356b12966ebe8e2b86c0c5d0fd7f8"
+    },
+    {
+      "path": "vendor/codemirror/chunk-6GSBRFPY.js",
+      "bytes": 353459,
+      "sha256": "918b7fcff4646eb002d72a29c99003b8a61f9d50bbf89d9311ba91d0dfb37009"
+    }
+  ]
+}

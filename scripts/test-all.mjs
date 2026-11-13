@@ -283,6 +283,16 @@ const SUITES = [
     script: "latex-sdk-unit.mjs",
   },
   {
+    // The TeXpresso backend's pure half: the default constant and the loopback
+    // rule, engine mapping, every fallback's precedence and sentence, message
+    // validation, the pins in texpresso.json, the absence of a TeXpresso
+    // service host, project preparation, and the scroll/selection mapping.
+    id: "texpresso-unit",
+    title: "TeXpresso backend (unit)",
+    kind: "node",
+    script: "texpresso-unit.mjs",
+  },
+  {
     // The live-preview scheduler (latest-wins, adaptive delay) and the
     // main-document rules of GAP-034.
     id: "latex-scheduler-unit",
@@ -390,6 +400,31 @@ const SUITES = [
     safeWithInstalledApp: true,
   },
   {
+    // The TeXpresso backend (docs/plans/2026-11-13-texpresso-backend.md): its
+    // own frame on `mdraft-tex`, correspondence, the idle shadow compile, zoom,
+    // themes, manual mode, privacy and the switch back. Opt-in because it needs
+    // the local origin: `startTexpressoOrigin` serves `MDRAFT_TEXPRESSO_MIRROR`
+    // and `MDRAFT_TEXPRESSO_ENGINE` on the pinned loopback address, and the
+    // layer is skipped with one line when either is missing.
+    id: "latex-texpresso",
+    title: "TeXpresso preview backend",
+    kind: "cdp",
+    script: "latex-texpresso-test.mjs",
+    doc: "samples/latex-perf/book/main.tex",
+    safeWithInstalledApp: true,
+    optIn: true,
+    origin: true,
+    reuseProfile: true,
+    // The layer types into the real editor, and the application saves those
+    // buffers on close; the harness puts both fixtures back afterwards.
+    writesDoc: true,
+    fixtures: [
+      "samples/latex-perf/book/main.tex",
+      "samples/latex-perf/book/chapters/ch06.tex",
+      "samples/latex-perf/book/chapters/ch01.tex",
+    ],
+  },
+  {
     // Registers a private two-root library outside the project and proves,
     // through compiled PDF text, that the bundled engine resolved the class,
     // a transitive package, a .def and a Lua module from it in order. With
@@ -430,6 +465,7 @@ const SUITES = [
       "book, one file",
     ],
     ["latex-perf-tikz", "tikz", "samples/latex-perf/tikz.tex", "twelve TikZ figures"],
+    ["latex-perf-plain", "plain", "samples/latex-engines/plain.tex", "plain.tex, three engines"],
     [
       "latex-perf-tikz-auto",
       "tikz-auto",
@@ -445,6 +481,34 @@ const SUITES = [
     env: { MDRAFT_LATEX_PERF_FIXTURE: fixture },
     safeWithInstalledApp: true,
     optIn: true,
+  })),
+  // The same fixtures on the TeXpresso backend, for the comparison the plan
+  // requires: E2P and p95 from the frame's own paint, the shadow compile's
+  // export against the frame's `xdvipdfmx` output, and the process tree's RSS.
+  // Each layer needs the local origin and keeps its WebView2 profile, because a
+  // cold profile rebuilds the engine's font cache first.
+  ...[
+    ["small", "samples/latex-perf/small.tex", "small single file"],
+    ["huge", "samples/latex-perf/huge/main.tex", "12 included chapters"],
+    ["book", "samples/latex-perf/book/main.tex", "book, included chapters"],
+    ["book-flat", "samples/latex-perf/book-flat/main.tex", "book, one file"],
+    ["tikz", "samples/latex-perf/tikz.tex", "twelve TikZ figures"],
+    ["bibliography", "samples/latex-perf/book/main.tex", "book with its bibliography"],
+    ["plain", "samples/latex-engines/plain.tex", "plain.tex, three engines"],
+  ].map(([fixture, doc, label]) => ({
+    id: `latex-perf-texpresso-${fixture}`,
+    title: `TeXpresso live-preview probe (${label})`,
+    kind: "cdp",
+    script: "latex-performance-test.mjs",
+    doc,
+    env: {
+      MDRAFT_LATEX_PERF_FIXTURE: fixture === "bibliography" ? "book" : fixture,
+      MDRAFT_LATEX_PERF_BACKEND: "texpresso",
+    },
+    safeWithInstalledApp: true,
+    optIn: true,
+    origin: true,
+    reuseProfile: true,
   })),
   {
     // Stage 3.4: seeded edits on the 12-chapter project, each compared page
@@ -1692,8 +1756,11 @@ function snapshotFixtures(suites) {
   const snapshots = new Map();
   for (const suite of suites) {
     if (!suite.writesDoc || !suite.doc) continue;
-    const file = path.join(repoRoot, suite.doc);
-    if (fs.existsSync(file)) snapshots.set(file, fs.readFileSync(file));
+    const files = suite.fixtures ?? [suite.doc];
+    for (const relative of files) {
+      const file = path.join(repoRoot, relative);
+      if (fs.existsSync(file)) snapshots.set(file, fs.readFileSync(file));
+    }
   }
   return snapshots;
 }
@@ -1772,6 +1839,11 @@ async function launchApp(
     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,
     WEBVIEW2_USER_DATA_FOLDER: userData,
   };
+  // A layer that measures incremental typesetting can ask for a visible window
+  // (`visible: true`) when the engine needs a compositor. The TeXpresso layer
+  // does not: it reports paints from the app's own `idle()`, which works in a
+  // hidden window and draws the same pages.
+  if (suite.visible) delete env.MDRAFT_TEST_HIDDEN;
   // The isolated profile cannot see MDraft's managed Typst. Reuse the existing
   // binary through this child process's PATH, without modifying either profile.
   if (process.platform === "win32" && process.env.APPDATA) {
@@ -1816,6 +1888,77 @@ async function launchApp(
   return { child, outFd, errFd };
 }
 
+/**
+ * The local TeXpresso origin (docs/plans/2026-11-13-texpresso-backend.md).
+ *
+ * `scripts/texpresso-origin-server.mjs` serves `MDRAFT_TEXPRESSO_MIRROR` at the
+ * pinned snapshot prefix and `MDRAFT_TEXPRESSO_ENGINE` at `/engine/`, exactly
+ * where `src-tauri/texpresso.json` looks. The runner starts it for the
+ * `latex-texpresso` layer only, so no default layer depends on a server.
+ */
+let texpressoOrigin = null;
+
+const ORIGIN_PORT = 8717;
+
+/** The pins: the snapshot's prefix and the release folder inside `/engine/`. */
+function texpressoPins() {
+  return JSON.parse(fs.readFileSync(path.join(repoRoot, "src-tauri", "texpresso.json"), "utf8"));
+}
+
+async function originAnswers() {
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${ORIGIN_PORT}/engine/${texpressoPins().appRelease}/ocaml.js`,
+      { method: "HEAD", signal: AbortSignal.timeout(2000) },
+    );
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function startTexpressoOrigin() {
+  const mirror = process.env.MDRAFT_TEXPRESSO_MIRROR;
+  const engine = process.env.MDRAFT_TEXPRESSO_ENGINE;
+  if (!mirror || !engine) return;
+  // A server the reader started by hand is used as it is: two processes cannot
+  // hold one port, and its mounts are the same pinned ones.
+  if (await originAnswers()) return;
+  const prefix = `/texlive/${texpressoPins().snapshot}/`;
+  // The case-collision overlay: `Cherokee.tfm` and `cherokee.tfm` are two files
+  // on the bucket and one on NTFS, so the mirror may need a second folder.
+  const mounts = [`${prefix}=${mirror}`];
+  const overlay = process.env.MDRAFT_TEXPRESSO_CASE;
+  if (overlay) mounts.push(`${prefix}=${overlay}`);
+  mounts.push(`/engine/=${engine}`);
+  const args = ["scripts/texpresso-origin-server.mjs"];
+  for (const mount of mounts) args.push("--mount", mount);
+  args.push("--port", String(ORIGIN_PORT));
+  texpressoOrigin = spawn(process.execPath, args, {
+    cwd: repoRoot,
+    stdio: ["ignore", "ignore", "pipe"],
+    windowsHide: true,
+  });
+  texpressoOrigin.stderr.on("data", (chunk) => process.stderr.write(chunk));
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (await originAnswers()) return;
+    await sleep(200);
+  }
+  throw new Error("the local TeXpresso origin did not start");
+}
+
+async function stopTexpressoOrigin() {
+  if (!texpressoOrigin) return;
+  texpressoOrigin.kill();
+  texpressoOrigin = null;
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (!(await originAnswers())) return;
+    await sleep(150);
+  }
+}
+
 /** A layer that runs without the application: plain Node against the sources. */
 async function runNodeSuite(suite, options) {
   const result = await run(process.execPath, [path.join("scripts", suite.script)], {
@@ -1830,13 +1973,45 @@ async function runNodeSuite(suite, options) {
 
 async function runCdpSuite(suite, port, options, context) {
   resetAppState();
+  // The TeXpresso layer fetches its engine and TeX Live data from the pinned
+  // loopback origin, so the runner serves it for exactly that layer.
+  if (suite.origin) {
+    await startTexpressoOrigin();
+    resetTexmf();
+  }
+  try {
+    return await runCdpSuiteBody(suite, port, options, context);
+  } finally {
+    if (suite.origin) await stopTexpressoOrigin();
+  }
+}
+
+/**
+ * Empty the test profile's own TEXMF root.
+ *
+ * A local library is reader state that outlives a run; the TeXpresso layer
+ * asserts the no-library path, and its `library` fallback has its own check.
+ * Leftovers from an earlier `latex-texmf` run would make every project fall
+ * back before the frame is ever mounted.
+ */
+function resetTexmf() {
+  fs.rmSync(path.join(appConfigDir(), "texmf"), { recursive: true, force: true });
+}
+
+async function runCdpSuiteBody(suite, port, options, context) {
   // The application and the suite must agree on the temporary directory: the
   // export layer looks for the print document the application wrote, under
   // `os.tmpdir()` on one side and `std::env::temp_dir()` on the other. Giving
   // both the same one also keeps everything they write inside the staging
   // directory, which is removed afterwards.
   const temp = path.join(context.stage, "tmp", suite.id);
-  const userData = path.join(context.stage, "webview", suite.id);
+  // A layer whose engine keeps a multi-minute cache may keep its WebView2
+  // profile between runs (`reuseProfile`): a cold profile rebuilds TeXpresso's
+  // font cache from the bundle on every run, which is longer than a test may
+  // wait. The folder is outside the staging directory so it survives the run.
+  const userData = suite.reuseProfile
+    ? path.join(os.tmpdir(), "mdraft-profile", suite.id)
+    : path.join(context.stage, "webview", suite.id);
   fs.mkdirSync(temp, { recursive: true });
   fs.mkdirSync(userData, { recursive: true });
   const env = {

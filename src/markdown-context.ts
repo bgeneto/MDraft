@@ -10,6 +10,7 @@ export interface SourceRange {
 }
 
 export function markdownCodeSpans(source: string): SourceRange[] {
+  if (!source.includes("`")) return [];
   const ranges: SourceRange[] = [];
   markdownLanguage.parser.parse(source).iterate({
     enter(node) {
@@ -36,9 +37,24 @@ const PROTECTED = new Set([
 ]);
 
 export function markdownProtectedRanges(source: string): SourceRange[] {
+  return markdownScanProtectedAndCode(source, false).protectedRanges;
+}
+
+/**
+ * Extract both inline code spans and math-protected ranges in a single Lezer parse
+ * so `renderChunks` never parses the source twice.
+ */
+export function markdownScanProtectedAndCode(
+  source: string,
+  collectCode = true,
+): { codeSpans: SourceRange[]; protectedRanges: SourceRange[] } {
+  const codeSpans: SourceRange[] = [];
   const ranges: SourceRange[] = [];
   markdownLanguage.parser.parse(source).iterate({
     enter(node) {
+      if (collectCode && node.name === "InlineCode") {
+        codeSpans.push({ from: node.from, to: node.to });
+      }
       if (PROTECTED.has(node.name)) {
         ranges.push({
           from: node.from,
@@ -51,10 +67,12 @@ export function markdownProtectedRanges(source: string): SourceRange[] {
   });
   // HTMLBlock is deliberately not protected wholesale: its visible text can
   // contain money/math. Protect tag syntax, comments, and raw code contents.
-  const tags =
-    /<!--[\s\S]*?(?:-->|$)|<(?:pre|code|script|style|textarea)\b[^>]*>[\s\S]*?(?:<\/(?:pre|code|script|style|textarea)\s*>|$)|<\/?[A-Za-z][\w:-]*(?:\s(?:"[^"]*"|'[^']*'|[^<>"'])*)?\s*\/?>|<\?[^>]*\?>/gi;
-  for (const match of source.matchAll(tags)) {
-    ranges.push({ from: match.index, to: match.index + match[0].length, barrier: true });
+  if (source.includes("<")) {
+    const tags =
+      /<!--[\s\S]*?(?:-->|$)|<(?:pre|code|script|style|textarea)\b[^>]*>[\s\S]*?(?:<\/(?:pre|code|script|style|textarea)\s*>|$)|<\/?[A-Za-z][\w:-]*(?:\s(?:"[^"]*"|'[^']*'|[^<>"'])*)?\s*\/?>|<\?[^>]*\?>/gi;
+    for (const match of source.matchAll(tags)) {
+      ranges.push({ from: match.index, to: match.index + match[0].length, barrier: true });
+    }
   }
   ranges.sort((a, b) => a.from - b.from || b.to - a.to);
   const merged: SourceRange[] = [];
@@ -65,5 +83,5 @@ export function markdownProtectedRanges(source: string): SourceRange[] {
       last.barrier = last.barrier !== false || range.barrier !== false;
     } else merged.push({ ...range });
   }
-  return merged;
+  return { codeSpans, protectedRanges: merged };
 }

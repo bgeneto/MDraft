@@ -32,6 +32,15 @@ const port = process.argv[2] ?? "9222";
 const root = process.cwd();
 const fixtureName = process.env.MDRAFT_LATEX_PERF_FIXTURE ?? "small";
 const mode = process.env.MDRAFT_LATEX_PERF_MODE ?? "matrix";
+/**
+ * Which preview backend is measured.
+ *
+ * `wasmtex` (the default) measures a full compile to PDF.js. `texpresso` keeps
+ * the frame on screen and measures the frame's own edit-to-paint, while the
+ * WasmTex compile still runs, at idle, as the shadow that export reads. The
+ * comparison the plan requires runs both against the same fixtures.
+ */
+const backend = process.env.MDRAFT_LATEX_PERF_BACKEND === "texpresso" ? "texpresso" : "wasmtex";
 const runs = Math.max(1, Number.parseInt(process.env.MDRAFT_LATEX_PERF_RUNS ?? "5", 10) || 5);
 const outDir = process.env.MDRAFT_LATEX_PERF_OUT ?? null;
 const base = join(root, "samples", "latex-perf");
@@ -76,6 +85,18 @@ const FIXTURES = {
       { id: "F06", file: "book-flat/main.tex", position: 6 / 13 },
       { id: "F12", file: "book-flat/main.tex", position: 12 / 13 },
     ],
+  },
+  // The smallest LaTeX document in the repository: no probe paragraph, so the
+  // edit lands at the end of the document (see `edit`). It is the fixture the
+  // engine-choice layers share.
+  plain: {
+    doc: "../latex-engines/plain.tex",
+    hash: ["../latex-engines/plain.tex"],
+    needle: "\\documentclass",
+    // No "performance probe paragraph" marker, so WasmTex cannot locate the
+    // painted page; E2P is unavailable by design and E2C is still measured.
+    noPaint: true,
+    scenarios: [{ id: "P1", file: "../latex-engines/plain.tex", position: 0.5 }],
   },
 };
 const fixture = FIXTURES[fixtureName];
@@ -314,10 +335,43 @@ async function main() {
     if ((await invoke("latex_status")) !== true)
       throw new Error("the bundled engine is not available");
 
+    if (backend === "texpresso") {
+      stage = "backend";
+      log("switching the preview to TeXpresso");
+      await evaluate(
+        `window.__TAURI_INTERNALS__.invoke("plugin:event|emit",{event:"menu",payload:"view.latexBackend.texpresso"})`,
+      );
+      await waitFor(
+        `document.querySelector("#preview")?.dataset.texpressoReady === "1"`,
+        180_000,
+        "the TeXpresso frame",
+      );
+      const ready = await evaluate(
+        `JSON.stringify({ chip: document.getElementById("status-latex-engine")?.textContent,
+           backend: document.getElementById("status-latex-engine")?.dataset.previewBackend })`,
+      ).then(JSON.parse);
+      if (ready.backend !== "texpresso")
+        throw new Error(`the chip did not accept TeXpresso: ${JSON.stringify(ready)}`);
+      log(`TeXpresso ready (chip: ${ready.chip})`);
+    }
+
     stage = "cold-compile";
     const coldSince = Date.now();
     let token = await previewToken();
-    if (token === 0) {
+    if (backend === "texpresso") {
+      // The frame's first paint is the cold measure: the engine has just booted
+      // and typeset the whole project. The shadow compile follows at idle.
+      await waitFor(
+        `document.querySelector("#preview")?.dataset.texpressoPainted ?? ""`,
+        900_000,
+        "the frame's first paint",
+      );
+      token = Number(
+        (await evaluate(`document.querySelector("#preview")?.dataset.texpressoPainted ?? "0"`)) ||
+          0,
+      );
+      log(`TeXpresso cold paint (paint ${token}, ${Date.now() - coldSince} ms)`);
+    } else if (token === 0) {
       await sleep(3000);
       if ((await previewToken()) === 0 && !(await busy())) {
         log("no compile started on its own: sending Compile");
@@ -341,6 +395,7 @@ async function main() {
     const environment = {
       fixture: fixtureName,
       mode,
+      backend,
       host: hostname(),
       os: release(),
       commit: (() => {
@@ -388,7 +443,9 @@ async function main() {
             ? await soak(fixture.scenarios[Math.min(2, fixture.scenarios.length - 1)])
             : mode === "differential"
               ? await differential()
-              : await matrix();
+              : backend === "texpresso"
+                ? { ...(await texpressoMatrix()), fidelity: await texpressoFidelity() }
+                : await matrix();
     rss.afterRuns = rssTree(pid);
     const output = { schema: 1, ...environment, cold, rss, ...result, consoleErrors };
     const line = JSON.stringify(output);
@@ -421,9 +478,10 @@ async function readRun(editAt) {
       .filter((e) => e.name.startsWith("mdraft:latex:"))
       .map((e) => ({ name: e.name.slice(13), ms: e.duration, detail: e.detail ?? null })),
     dataMs: Number(document.querySelector("#preview")?.dataset.latexMs ?? "NaN"),
+    texpressoPages: Number(document.querySelector("#preview")?.dataset.texpressoPages ?? "NaN"),
     pages: document.querySelectorAll(".typst-page").length
   })`);
-  const { marks, measures, dataMs, pages } = JSON.parse(raw);
+  const { marks, measures, dataMs, pages, texpressoPages } = JSON.parse(raw);
   const mark = (name) => marks.find((m) => m.name === name) ?? null;
   const measure = (name) => measures.find((m) => m.name === name) ?? null;
   const renderStart = mark("render-start")?.at ?? null;
@@ -450,7 +508,7 @@ async function readRun(editAt) {
     decodedBytes: measure("snapshot-decode")?.detail?.bytes ?? null,
     files: measure("snapshot-ipc")?.detail?.files ?? null,
     dataMs,
-    pages,
+    pages: backend === "texpresso" && Number.isFinite(texpressoPages) ? texpressoPages : pages,
     paints: marks
       .filter((m) => m.name === "paint")
       .map((m) => ({ page: m.detail?.page, at: m.at })),
@@ -483,7 +541,7 @@ async function revealMarker(id) {
 
 async function openScenarioFile(scenario) {
   const path = join(base, scenario.file);
-  const needle = `erformance probe paragraph ${scenario.id}`;
+  const needle = fixture.needle ?? `erformance probe paragraph ${scenario.id}`;
   const already = await evaluate(
     `document.querySelector(".cm-content")?.cmTile?.root?.view?.state.doc.toString().includes(${JSON.stringify(needle)}) ?? false`,
   );
@@ -521,8 +579,12 @@ async function edit(scenario, tag) {
   return evaluate(`(() => {
     const view = document.querySelector(".cm-content").cmTile.root.view;
     const text = view.state.doc.toString();
-    const at = text.indexOf(${JSON.stringify(`erformance probe paragraph ${scenario.id}`)}) - 1;
-    if (at < 0) return { error: "marker not found" };
+    const marker = ${JSON.stringify("erformance probe paragraph ")} + ${JSON.stringify(scenario.id)};
+    const found = text.indexOf(marker);
+    // A fixture without a probe paragraph (plain.tex) gets a comment at the end:
+    // the edit still changes the document, which is all the probe measures.
+    const at = found >= 0 ? found - 1 : text.length;
+    if (found < 0 && !${JSON.stringify(fixtureName)}.includes("plain")) return { error: "marker not found" };
     for (const entry of performance.getEntriesByName("perf:edit")) performance.clearMarks("perf:edit");
     window.__latexPerfProbe.long = [];
     const mark = performance.mark("perf:edit", { detail: ${JSON.stringify({ scenario: scenario.id, tag })} });
@@ -530,7 +592,10 @@ async function edit(scenario, tag) {
     // engine places its heap checkpoint at the caret (stage 3.3), so a probe
     // that left the caret at the top measured checkpoints in the wrong place.
     view.dispatch({
-      changes: { from: at, to: at + 1, insert: ${JSON.stringify(letter)} },
+      changes:
+        found >= 0
+          ? { from: at, to: at + 1, insert: ${JSON.stringify(letter)} }
+          : { from: at, insert: "\\n% " + ${JSON.stringify(tag)} + " " + ${JSON.stringify(letter)} + "\\n" },
       selection: { anchor: at + 1 },
     });
     return { at: mark.startTime };
@@ -573,6 +638,151 @@ async function measuredEdit(scenario, tag) {
   };
 }
 
+/**
+ * The TeXpresso matrix: the same fixtures and edits, measured on the frame.
+ *
+ * WasmTex's E2P is the page paint after a full compile; TeXpresso's is its own
+ * `data-texpresso-e2p`, which the host starts when the edit leaves the editor
+ * and stops at the frame's paint. No compile is waited for: the shadow compile
+ * runs separately, at idle, and is measured by `texpressoFidelity`.
+ */
+async function texpressoMatrix() {
+  const rows = [];
+  const invalid = [];
+  for (const scenario of fixture.scenarios) {
+    await openScenarioFile(scenario);
+    await waitFor(
+      `(() => {
+        const frame = document.querySelector(".texpresso-frame");
+        if (!frame) return false;
+        return true;
+      })() && document.querySelector("#preview")?.dataset.texpressoReady === "1"`,
+      60_000,
+      `the frame to be ready for ${scenario.file}`,
+    );
+    log(`${scenario.id}: warm-up`);
+    await texpressoEdit(scenario, "warm-up");
+    for (let run = 1; run <= runs; run += 1) {
+      const row = await texpressoEdit(scenario, `run ${run}`);
+      const problems = [];
+      if (row.e2p === null) problems.push("the frame reported no paint");
+      if (row.e2p !== null && row.e2p > 60_000) problems.push("the paint took over a minute");
+      row.problems = problems;
+      if (problems.length) invalid.push(`${scenario.id} run ${run}: ${problems.join("; ")}`);
+      rows.push(row);
+      log(
+        `${scenario.id} #${run}: E2P ${fmt(row.e2p)}, pages ${row.pages}, shadow ${row.shadowToken}` +
+          `${problems.length ? `  INVALID: ${problems.join("; ")}` : ""}`,
+      );
+    }
+  }
+  const summary = {};
+  for (const scenario of fixture.scenarios) {
+    const set = rows.filter((row) => row.scenario === scenario.id);
+    const values = set.map((row) => row.e2p).filter(Number.isFinite);
+    const sorted = [...values].sort((a, b) => a - b);
+    summary[scenario.id] = {
+      e2p: median(values),
+      p95: sorted.length
+        ? sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1)]
+        : null,
+      samples: values.length,
+      pages: set.at(-1)?.pages ?? null,
+    };
+  }
+  console.log(`\n${fixtureName}: ${rows.length} TeXpresso edits, ${invalid.length} invalid`);
+  for (const [id, values] of Object.entries(summary))
+    console.log(
+      `  ${id.padEnd(4)} E2P ${fmt(values.e2p)}  p95 ${fmt(values.p95)}  pages ${values.pages}`,
+    );
+  return { runs: rows, summary, invalid, valid: invalid.length === 0 };
+}
+
+/** One measured edit on the frame. */
+async function texpressoEdit(scenario, tag) {
+  stage = `${scenario.id} ${tag}`;
+  await revealMarker(scenario.id);
+  await sleep(300);
+  const before = Number(
+    (await evaluate(`document.querySelector("#preview")?.dataset.texpressoPainted ?? "0"`)) || 0,
+  );
+  const edited = await edit(scenario, tag);
+  if (edited.error) throw new Error(edited.error);
+  await waitFor(
+    `Number(document.querySelector("#preview")?.dataset.texpressoPainted ?? "0") > ${before}`,
+    120_000,
+    `the ${scenario.id} ${tag} paint`,
+  );
+  return {
+    scenario: scenario.id,
+    position: scenario.position,
+    tag,
+    e2p: Number(
+      await evaluate(`document.querySelector("#preview")?.dataset.texpressoE2p ?? "NaN"`),
+    ),
+    pages: Number(
+      await evaluate(`document.querySelector("#preview")?.dataset.texpressoPages ?? "0"`),
+    ),
+    shadowToken: await evaluate(`document.querySelector("#preview")?.dataset.latexShadow ?? null`),
+  };
+}
+
+/**
+ * Fidelity: TeXpresso's own `xdvipdfmx` export against the shadow compile's PDF.
+ *
+ * The shadow compile is the authority for export, print and Save PDF; its page
+ * count and per-page text are compared with the frame's export so a DVI-mode
+ * difference is a recorded number, not an assumption.
+ */
+async function texpressoFidelity() {
+  stage = "fidelity";
+  await waitFor(
+    `document.querySelector("#preview")?.dataset.latexCurrent ?? ""`,
+    600_000,
+    "the shadow compile",
+  );
+  // The engine typesets page by page, around what is on screen. Scroll the
+  // editor to the end first, so the frame reaches the last page and the export
+  // is the whole document rather than the part that happened to be visible.
+  await evaluate(`(() => {
+    const view = document.querySelector(".cm-content").cmTile.root.view;
+    view.dispatch({ selection: { anchor: view.state.doc.length }, scrollIntoView: true });
+    view.scrollDOM.scrollTop = view.scrollDOM.scrollHeight;
+    view.scrollDOM.dispatchEvent(new Event("scroll"));
+    return true;
+  })()`);
+  await sleep(1500);
+  // Then wait for the page count to stop moving.
+  let last = -1;
+  let stableSince = Date.now();
+  const deadline = Date.now() + 180_000;
+  while (Date.now() < deadline) {
+    const pages = Number(
+      (await evaluate(`document.querySelector("#preview")?.dataset.texpressoPages ?? "0"`)) || 0,
+    );
+    if (pages !== last) {
+      last = pages;
+      stableSince = Date.now();
+    } else if (Date.now() - stableSince > 5000) break;
+    await sleep(500);
+  }
+  await evaluate(
+    `window.__TAURI_INTERNALS__.invoke("plugin:event|emit",{event:"menu",payload:"view.latexTexpressoExport"})`,
+  );
+  await waitFor(
+    `Boolean(document.querySelector("#preview")?.dataset.texpressoExport)`,
+    180_000,
+    "the export comparison",
+  );
+  const outcome = await evaluate(
+    `document.querySelector("#preview")?.dataset.texpressoExport ?? "null"`,
+  ).then(JSON.parse);
+  log(
+    `fidelity: pages ${outcome.pages?.join(" vs ")}, identical text ${outcome.identicalText}, first differing page ${outcome.firstDifferentPage}, export ${outcome.ms} ms`,
+  );
+  return outcome;
+}
+
 async function matrix() {
   const rows = [];
   const invalid = [];
@@ -591,7 +801,10 @@ async function matrix() {
         problems.push(
           `scheduler delay ${Math.round(row.tDelay)} ms exceeds any configured delay (throttled timers?)`,
         );
-      if (row.e2p === null) problems.push("the edited page was not painted");
+      // A fixture with no probe paragraph (plain.tex) has no text layer to find
+      // the edit in, so its paint cannot be located: report E2C only rather
+      // than calling the run invalid.
+      if (row.e2p === null && !fixture.noPaint) problems.push("the edited page was not painted");
       row.problems = problems;
       if (problems.length) invalid.push(`${scenario.id} run ${run}: ${problems.join("; ")}`);
       rows.push(row);

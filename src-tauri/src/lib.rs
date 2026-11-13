@@ -11,6 +11,7 @@ mod images;
 mod latex;
 mod latex_native;
 mod latex_texmf;
+mod latex_texpresso;
 mod launch;
 #[cfg(target_os = "linux")]
 mod linux_webkit_env;

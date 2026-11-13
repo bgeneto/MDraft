@@ -516,6 +516,11 @@ pub struct Settings {
     pub typst_view: String,
     #[serde(default = "default_true")]
     pub typst_auto_compile: bool,
+    /// Opt-in persistent in-memory Typst incremental service in `app_data_dir`.
+    /// Defaults to false and falls back cleanly to stock CLI `typst` when
+    /// disabled, missing, or unresponsive.
+    #[serde(default)]
+    pub typst_incremental_service: bool,
     #[serde(default)]
     pub slashed_zero: bool,
     /// Editor syntax palette id, or "auto" to follow the application theme.
@@ -853,6 +858,7 @@ impl Default for Settings {
             oldstyle_figures: false,
             typst_view: default_typst_view(),
             typst_auto_compile: true,
+            typst_incremental_service: false,
             slashed_zero: false,
             syntax_theme: "auto".into(),
             recent_files: Vec::new(),

@@ -10,12 +10,12 @@
 //! what stops the two paths from drifting.
 
 import { Marked, Renderer, type RendererObject, type Token } from "marked";
-import katex from "katex";
 import { parseFragment } from "parse5";
-import { analyzeMath } from "./math-delimiters.ts";
-import { markdownCodeSpans } from "./markdown-context.ts";
+import { analyzeMath, hasMathDelimiters } from "./math-delimiters.ts";
+import { markdownCodeSpans, markdownScanProtectedAndCode } from "./markdown-context.ts";
 import { indexOffsets, type Fragment, type Substitution } from "./source-map.ts";
 import { legacyImageCandidate } from "./legacy-image-paths.ts";
+import { renderKatexCached } from "./katex-cache.ts";
 
 export interface ChunkOptions {
   /** Render `$…$` with KaTeX. */
@@ -770,6 +770,7 @@ function renderMappedChunks(
   lineSubstitutions: readonly Substitution[] = [],
 ): {
   chunks: string[];
+  tokens: Token[];
   fragments: Fragment[];
   hasRawHtml: boolean;
   legacyImages: NonNullable<PreviewChunks["legacyImages"]>;
@@ -886,12 +887,13 @@ function renderMappedChunks(
   assignOffsets(tokens, prepared);
   const hasRawHtml = prepared.includes("<") && containsRawHtml(instance, tokens);
   const chunks = tokens.map((token) => instance.parser([token]) as string);
-  return { chunks, fragments, hasRawHtml, legacyImages: legacy.images };
+  return { chunks, tokens, fragments, hasRawHtml, legacyImages: legacy.images };
 }
 
 /** Render the prepared markdown without a fragment table. */
 function renderPlainChunks(prepared: string): {
   chunks: string[];
+  tokens: Token[];
   hasRawHtml: boolean;
   legacyImages: NonNullable<PreviewChunks["legacyImages"]>;
 } {
@@ -909,6 +911,7 @@ function renderPlainChunks(prepared: string): {
   const hasRawHtml = prepared.includes("<") && containsRawHtml(instance, tokens);
   return {
     chunks: tokens.map((token) => instance.parser([token]) as string),
+    tokens,
     hasRawHtml,
     legacyImages: legacy.images,
   };
@@ -971,12 +974,16 @@ function lineOf(starts: number[], offset: number): number {
  * zipped index by index. A disagreement drops the whole annotation rather than
  * pointing at the wrong line.
  */
-function blockLines(
+export function blockLines(
   source: string,
   chunkLinesNeeded: boolean,
+  primaryTokens?: readonly Token[],
+  normalizedSource?: string,
+  toOriginalOffset?: (normOffset: number) => number,
 ): { lines: number[]; chunkLines: number[] } | null {
-  const instance = new Marked({ gfm: true, breaks: false, pedantic: false });
-  const tokens = instance.lexer(source);
+  const tokens =
+    primaryTokens ?? new Marked({ gfm: true, breaks: false, pedantic: false }).lexer(source);
+  const matchSource = normalizedSource ?? source;
   const starts = lineStarts(source);
   let cursor = 0;
   const lines: number[] = [];
@@ -984,13 +991,15 @@ function blockLines(
   for (const token of tokens) {
     const raw = token.raw ?? "";
     if (raw.length === 0) {
-      if (chunkLinesNeeded) chunkLines.push(lineOf(starts, cursor));
+      const origCursor = toOriginalOffset ? toOriginalOffset(cursor) : cursor;
+      if (chunkLinesNeeded) chunkLines.push(lineOf(starts, origCursor));
       continue;
     }
-    const at = source.indexOf(raw, cursor);
+    const at = matchSource.indexOf(raw, cursor);
     if (at < 0) return null;
     cursor = at + raw.length;
-    const line = lineOf(starts, at);
+    const origAt = toOriginalOffset ? toOriginalOffset(at) : at;
+    const line = lineOf(starts, origAt);
     if (chunkLinesNeeded) chunkLines.push(line);
     if (!rendersNothing(token)) lines.push(line);
   }
@@ -1010,7 +1019,7 @@ function blockLines(
  * Returns null when any element has no source location or the chunk/token
  * counts disagree. The caller then keeps the existing no-anchor fallback.
  */
-function elementLinesFor(
+export function elementLinesFor(
   chunks: readonly string[],
   chunkLines: readonly number[],
 ): number[] | null {
@@ -1077,21 +1086,13 @@ function elementLinesFor(
 
 function renderMath(maths: readonly MathEntry[]): RenderedMath[] {
   return maths.map((entry) => {
-    try {
-      return {
-        body: entry.body,
-        display: entry.display,
-        html: katex.renderToString(entry.body, {
-          displayMode: entry.display,
-          throwOnError: false,
-          strict: false,
-          output: "html",
-        }),
-        error: null,
-      };
-    } catch (error) {
-      return { body: entry.body, display: entry.display, html: null, error: String(error) };
-    }
+    const cached = renderKatexCached(entry.body, entry.display);
+    return {
+      body: entry.body,
+      display: entry.display,
+      html: cached.html,
+      error: cached.error,
+    };
   });
 }
 
@@ -1105,17 +1106,29 @@ function renderMath(maths: readonly MathEntry[]): RenderedMath[] {
  */
 export function renderChunks(source: string, options: ChunkOptions = {}): PreviewChunks {
   const mathEnabled = options.math ?? true;
+  const mayHaveMath = mathEnabled && hasMathDelimiters(source);
 
   const codes: CodeEntry[] = [];
   const maths: MathEntry[] = [];
+  let codeSpans: ReturnType<typeof markdownCodeSpans>;
+  let mathRanges: ReturnType<typeof analyzeMath>["math"];
+  if (mayHaveMath) {
+    const scan = markdownScanProtectedAndCode(source, source.includes("`"));
+    codeSpans = scan.codeSpans;
+    mathRanges = analyzeMath(source, true, false, scan.protectedRanges).math;
+  } else {
+    codeSpans = markdownCodeSpans(source);
+    mathRanges = [];
+  }
+
   const ranges = [
-    ...markdownCodeSpans(source).map((range) => ({
+    ...codeSpans.map((range) => ({
       ...range,
       code: true,
       body: "",
       display: false,
     })),
-    ...(mathEnabled ? analyzeMath(source).math.map((range) => ({ ...range, code: false })) : []),
+    ...mathRanges.map((range) => ({ ...range, code: false })),
   ].sort((a, b) => a.from - b.from);
   let prepared = "";
   let last = 0;
@@ -1150,28 +1163,39 @@ export function renderChunks(source: string, options: ChunkOptions = {}): Previe
     return "\n";
   });
 
+  const substitutions =
+    options.map || codes.length > 0 || maths.length > 0
+      ? collectSubstitutions(preparedSegments, isCode, codes, maths)
+      : [];
+
   let chunks: string[];
+  let tokens: Token[];
   let fragments: Fragment[] | undefined;
   let hasRawHtml: boolean;
   let legacyImages: PreviewChunks["legacyImages"];
   if (options.map) {
-    const mapped = renderMappedChunks(
-      normalized,
-      collectSubstitutions(preparedSegments, isCode, codes, maths),
-      lineSubstitutions,
-    );
+    const mapped = renderMappedChunks(normalized, substitutions, lineSubstitutions);
     chunks = mapped.chunks;
+    tokens = mapped.tokens;
     fragments = mapped.fragments;
     hasRawHtml = mapped.hasRawHtml;
     legacyImages = mapped.legacyImages;
   } else {
     const plain = renderPlainChunks(normalized);
     chunks = plain.chunks;
+    tokens = plain.tokens;
     hasRawHtml = plain.hasRawHtml;
     legacyImages = plain.legacyImages;
   }
 
-  const lineInfo = blockLines(source, hasRawHtml);
+  let toOriginalOffset: ((normOffset: number) => number) | undefined;
+  if (substitutions.length > 0 || lineSubstitutions.length > 0) {
+    const mapPrepToOrig = indexOffsets(substitutions);
+    const mapNormToPrep = indexOffsets(lineSubstitutions);
+    toOriginalOffset = (normOffset: number) => mapPrepToOrig(mapNormToPrep(normOffset));
+  }
+
+  const lineInfo = blockLines(source, hasRawHtml, tokens, normalized, toOriginalOffset);
   const elementLines =
     hasRawHtml && lineInfo ? elementLinesFor(chunks, lineInfo.chunkLines) : undefined;
 

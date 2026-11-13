@@ -284,6 +284,14 @@ export interface EditorHandle {
   insertAtTop(text: string): void;
   wrapSelection(before: string, after: string, placeholder: string): void;
   onDocChanged(cb: (text: string) => void): void;
+  /**
+   * The changes of each transaction that edits the document, against the text
+   * before it: `[from, to, insert]` triples, the length before, the text after.
+   * The TeXpresso preview forwards them instead of diffing two strings.
+   */
+  onChanges(
+    cb: (changes: Array<[number, number, string]>, base: number, text: string) => void,
+  ): void;
   onCursor(cb: (info: CursorInfo) => void): void;
   onScroll(cb: (info: ScrollInfo) => void): void;
 }
@@ -772,6 +780,11 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
   };
 
   let onDocChanged: (text: string) => void = () => {};
+  let onChanges: (
+    changes: Array<[number, number, string]>,
+    base: number,
+    text: string,
+  ) => void = () => {};
   /** Live position trackers; mapped by the update listener, cleared on replacement. */
   const trackers = new Set<{ positions: (number | null)[] }>();
   const dropTrackedPositions = () => {
@@ -1038,7 +1051,13 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
           );
         }
         applyWordChanges(update);
-        onDocChanged(update.state.doc.toString());
+        const text = update.state.doc.toString();
+        const changes: Array<[number, number, string]> = [];
+        update.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+          changes.push([fromA, toA, inserted.toString()]);
+        });
+        onChanges(changes, update.startState.doc.length, text);
+        onDocChanged(text);
       }
       if (update.selectionSet || update.docChanged) onCursor(readCursor(update.view));
     }),
@@ -1923,6 +1942,9 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
 
     onDocChanged(cb) {
       onDocChanged = cb;
+    },
+    onChanges(cb) {
+      onChanges = cb;
     },
     onCursor(cb) {
       onCursor = cb;

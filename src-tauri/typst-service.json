@@ -1,0 +1,51 @@
+{
+  "note": "Pinned manifest for MDraft's optional standalone Incremental Typst Compiler Service (`mdraft-typst-service`). Downloaded ONLY upon explicit user action (Preferences > Export > Install Typst service) into app_data_dir/typst/service/<version>/ and verified against SHA-256 before probing. Zero startup network requests.",
+  "version": "0.1.0",
+  "typstVersion": "0.15.1",
+  "protocolVersion": 1,
+  "releaseUrl": "https://github.com/bgeneto/MDraft/releases/download/typst-service-v0.1.0/",
+  "assets": {
+    "x86_64-pc-windows-msvc": {
+      "assetName": "mdraft-typst-service-x86_64-pc-windows-msvc.zip",
+      "archiveType": "zip",
+      "binaryName": "mdraft-typst-service.exe",
+      "bytes": 0,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "aarch64-pc-windows-msvc": {
+      "assetName": "mdraft-typst-service-aarch64-pc-windows-msvc.zip",
+      "archiveType": "zip",
+      "binaryName": "mdraft-typst-service.exe",
+      "bytes": 0,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "x86_64-unknown-linux-musl": {
+      "assetName": "mdraft-typst-service-x86_64-unknown-linux-musl.tar.xz",
+      "archiveType": "tar.xz",
+      "binaryName": "mdraft-typst-service",
+      "bytes": 0,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "aarch64-unknown-linux-musl": {
+      "assetName": "mdraft-typst-service-aarch64-unknown-linux-musl.tar.xz",
+      "archiveType": "tar.xz",
+      "binaryName": "mdraft-typst-service",
+      "bytes": 0,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "x86_64-apple-darwin": {
+      "assetName": "mdraft-typst-service-x86_64-apple-darwin.zip",
+      "archiveType": "zip",
+      "binaryName": "mdraft-typst-service",
+      "bytes": 0,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "aarch64-apple-darwin": {
+      "assetName": "mdraft-typst-service-aarch64-apple-darwin.zip",
+      "archiveType": "zip",
+      "binaryName": "mdraft-typst-service",
+      "bytes": 0,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  }
+}

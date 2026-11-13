@@ -14,7 +14,13 @@
 //! processor. The preview's KaTeX decorations stay in `asciidoc-preview.ts`;
 //! an export must give pandoc the source delimiters, not rendered KaTeX spans.
 
+import { renderKatexCached } from "./katex-cache.ts";
+import type { RenderedMath } from "./preview-render.ts";
+
 type AsciidoctorModule = typeof import("@asciidoctor/core");
+
+const MAX_ASCIIMATH_LRU = 2000;
+const asciimathTexLru = new Map<string, string>();
 
 export interface AsciiMathParser {
   parse(input: string): string;
@@ -224,17 +230,252 @@ export interface AsciidocChunks {
   marks: AsciidocMark[];
   hasHeader: boolean;
   notitle: boolean;
+  /** Pre-rendered KaTeX formulas referenced via `<span data-mdraft-math="i">`. */
+  maths?: RenderedMath[];
+  /** True when the converter/worker already pre-rendered delimited TeX in text nodes. */
+  mathRendered?: boolean;
+}
+
+export interface AsciidocIncludeEntry {
+  content?: string;
+  error?: string;
+}
+
+export interface AsciidocIncludeCacheStats {
+  entries: number;
+  hits: number;
+  misses: number;
+  ipcCalls: number;
+}
+
+/**
+ * Bounded per-path cache for included AsciiDoc fragments (`include::path[]`).
+ *
+ * Eliminates repeated `readDocument` IPC calls on every parent-document keystroke
+ * while supporting explicit invalidation on save, dirty-buffer edit, reload, or
+ * directory clear.
+ */
+export class AsciidocIncludeCache {
+  entries = new Map<string, AsciidocIncludeEntry>();
+  hits = 0;
+  misses = 0;
+  ipcCalls = 0;
+  maxEntries: number;
+
+  constructor(maxEntries = 256) {
+    this.maxEntries = maxEntries;
+  }
+
+  get(path: string): AsciidocIncludeEntry | undefined {
+    const key = foldForCompare(normalizePath(path));
+    const hit = this.entries.get(key);
+    if (hit !== undefined) {
+      this.hits += 1;
+      // Refresh LRU insertion order.
+      this.entries.delete(key);
+      this.entries.set(key, hit);
+      return hit;
+    }
+    this.misses += 1;
+    return undefined;
+  }
+
+  set(path: string, entry: AsciidocIncludeEntry): void {
+    const key = foldForCompare(normalizePath(path));
+    if (this.entries.has(key)) this.entries.delete(key);
+    else if (this.entries.size >= this.maxEntries) {
+      const oldest = this.entries.keys().next().value;
+      if (oldest !== undefined) this.entries.delete(oldest);
+    }
+    this.entries.set(key, entry);
+  }
+
+  async readThrough(
+    path: string,
+    readFile: (target: string) => Promise<string>,
+    bypass = false,
+  ): Promise<string> {
+    if (!bypass) {
+      const hit = this.get(path);
+      if (hit !== undefined) {
+        if (hit.error !== undefined) throw hit.error;
+        return hit.content ?? "";
+      }
+    }
+    this.ipcCalls += 1;
+    try {
+      const content = await readFile(path);
+      this.set(path, { content });
+      return content;
+    } catch (error) {
+      this.set(path, { error: String(error) });
+      throw error;
+    }
+  }
+
+  invalidate(path?: string): void {
+    if (!path) {
+      this.entries.clear();
+      return;
+    }
+    const key = foldForCompare(normalizePath(path));
+    this.entries.delete(key);
+  }
+
+  invalidateDirectory(dir: string): void {
+    const base = foldForCompare(normalizePath(dir).replace(/\/+$/, ""));
+    if (!base) return;
+    for (const key of Array.from(this.entries.keys())) {
+      if (key === base || key.startsWith(`${base}/`)) this.entries.delete(key);
+    }
+  }
+
+  stats(): AsciidocIncludeCacheStats {
+    return {
+      entries: this.entries.size,
+      hits: this.hits,
+      misses: this.misses,
+      ipcCalls: this.ipcCalls,
+    };
+  }
+
+  resetStats(): void {
+    this.hits = 0;
+    this.misses = 0;
+    this.ipcCalls = 0;
+  }
 }
 
 const CHUNK_OPEN = "<!--mdraft-chunk-->";
 const CHUNK_CLOSE = "<!--/mdraft-chunk-->";
 const INCLUDE_DIRECTIVE = /^\s*include::([^[]+)\[[^\]]*\]\s*$/gm;
+const MATH_IN_HTML_TEXT = /\\\(([\s\S]*?)\\\)|\\\[([\s\S]*?)\\\]/g;
+const IGNORED_MATH_TAGS = new Set(["pre", "code", "script", "style", "textarea"]);
 
-/** A converter that wraps each top-level block in a split marker and keeps the
- * AsciiMath markers the preview's DOM pass consumes. */
+function decodeHtmlEntities(text: string): string {
+  if (!text.includes("&")) return text;
+  return text.replace(/&(#x[0-9a-f]+|#\d+|lt|gt|amp|quot|apos|#39);/gi, (full, entity) => {
+    const lower = String(entity).toLowerCase();
+    if (lower === "lt") return "<";
+    if (lower === "gt") return ">";
+    if (lower === "amp") return "&";
+    if (lower === "quot") return '"';
+    if (lower === "apos" || lower === "#39") return "'";
+    if (lower.startsWith("#x")) {
+      const code = Number.parseInt(lower.slice(2), 16);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : full;
+    }
+    if (lower.startsWith("#")) {
+      const code = Number.parseInt(lower.slice(1), 10);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : full;
+    }
+    return full;
+  });
+}
+
+function parseAsciiMathCached(parser: AsciiMathParser, raw: string): string {
+  const cached = asciimathTexLru.get(raw);
+  if (cached !== undefined) {
+    asciimathTexLru.delete(raw);
+    asciimathTexLru.set(raw, cached);
+    return cached;
+  }
+  const tex = parser.parse(raw);
+  if (asciimathTexLru.size >= MAX_ASCIIMATH_LRU) {
+    const oldest = asciimathTexLru.keys().next().value;
+    if (oldest !== undefined) asciimathTexLru.delete(oldest);
+  }
+  asciimathTexLru.set(raw, tex);
+  return tex;
+}
+
+/**
+ * Pre-render `\(…\)` and `\[…\]` text segments directly inside converted AsciiDoc HTML
+ * outside `<pre>` / `<code>` / `<script>` / `<style>` / `<textarea>`, replacing them with
+ * `<span data-mdraft-math="idx"></span>` backed by `maths`.
+ */
+function preRenderRawDelimitedMath(
+  raw: string,
+  pushMath: (body: string, display: boolean) => string,
+): string {
+  if (!/\\[([]/.test(raw)) return raw;
+
+  let out = "";
+  let cursor = 0;
+  let ignoredDepth = 0;
+  let changed = false;
+
+  const rewriteText = (text: string): string => {
+    if (!/\\[([]/.test(text)) return text;
+    MATH_IN_HTML_TEXT.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    let last = 0;
+    let buf = "";
+    let localChanged = false;
+    while ((match = MATH_IN_HTML_TEXT.exec(text)) !== null) {
+      localChanged = true;
+      if (match.index > last) buf += text.slice(last, match.index);
+      const display = match[2] !== undefined;
+      const body = decodeHtmlEntities((display ? match[2] : match[1]) ?? "");
+      buf += pushMath(body, display);
+      last = MATH_IN_HTML_TEXT.lastIndex;
+    }
+    if (!localChanged) return text;
+    changed = true;
+    if (last < text.length) buf += text.slice(last);
+    return buf;
+  };
+
+  while (cursor < raw.length) {
+    const tagStart = raw.indexOf("<", cursor);
+    if (tagStart < 0) {
+      const tail = raw.slice(cursor);
+      out += ignoredDepth === 0 ? rewriteText(tail) : tail;
+      break;
+    }
+    if (tagStart > cursor) {
+      const text = raw.slice(cursor, tagStart);
+      out += ignoredDepth === 0 ? rewriteText(text) : text;
+    }
+    // Preserve HTML comments verbatim without scanning `<`/`>` inside them as tags.
+    if (raw.startsWith("<!--", tagStart)) {
+      const commentEnd = raw.indexOf("-->", tagStart + 4);
+      const end = commentEnd < 0 ? raw.length : commentEnd + 3;
+      out += raw.slice(tagStart, end);
+      cursor = end;
+      continue;
+    }
+    const tagEnd = raw.indexOf(">", tagStart + 1);
+    if (tagEnd < 0) {
+      out += raw.slice(tagStart);
+      break;
+    }
+    const tag = raw.slice(tagStart, tagEnd + 1);
+    out += tag;
+    const tagMatch = /^<\s*(\/?)\s*([A-Za-z0-9]+)/.exec(tag);
+    if (tagMatch) {
+      const name = tagMatch[2].toLowerCase();
+      if (IGNORED_MATH_TAGS.has(name)) {
+        if (tagMatch[1]) {
+          if (ignoredDepth > 0) ignoredDepth -= 1;
+        } else if (!tag.endsWith("/>")) {
+          ignoredDepth += 1;
+        }
+      }
+    }
+    cursor = tagEnd + 1;
+  }
+
+  return changed ? out : raw;
+}
+
+/** A converter that wraps each top-level block in a split marker and pre-renders
+ * stems with KaTeX in the worker when `markStems` is enabled. */
 function createPreviewConverterFactory(
   Asciidoctor: AsciidoctorModule,
   markStems: boolean,
+  pushMath?: (body: string, display: boolean) => string,
+  getAsciimathParser?: () => Promise<AsciiMathParser | null>,
 ): unknown {
   class PreviewHtml5Converter extends Asciidoctor.Html5Converter {
     async convert(node: any, transform?: string): Promise<string> {
@@ -253,16 +494,54 @@ function createPreviewConverterFactory(
 
     async convert_inline_quoted(node: any): Promise<string> {
       if (markStems && node.type === "asciimath") {
+        const text = String(node.text ?? "");
+        if (pushMath && getAsciimathParser) {
+          const parser = await getAsciimathParser();
+          if (parser) {
+            try {
+              const tex = parseAsciiMathCached(parser, decodeHtmlEntities(text));
+              return pushMath(tex, false);
+            } catch {
+              // Fall back to main-thread marking so malformed stems match legacy behavior.
+            }
+          }
+        }
         return `<span data-stem="asciimath">${node.text ?? ""}</span>`;
       }
       return super.convert_inline_quoted(node);
     }
 
     async convert_stem(node: any): Promise<string> {
-      const html = await super.convert_stem(node);
-      return markStems && node.style === "asciimath"
-        ? html.replace(/^<div/, '<div data-stem="asciimath"')
-        : html;
+      const html = String(await super.convert_stem(node));
+      if (!markStems || node.style !== "asciimath") return html;
+      if (pushMath && getAsciimathParser) {
+        const parser = await getAsciimathParser();
+        if (parser) {
+          const rawLines: string[] = Array.isArray(node.lines)
+            ? node.lines.map((line: unknown) => String(line))
+            : String(node.source ?? "").split("\n");
+          const spans: string[] = [];
+          let failed = false;
+          for (const rawLine of rawLines) {
+            const clean = decodeHtmlEntities(rawLine.replace(/\\\$/g, "")).trim();
+            if (!clean) continue;
+            try {
+              spans.push(pushMath(parseAsciiMathCached(parser, clean), true));
+            } catch {
+              failed = true;
+              break;
+            }
+          }
+          if (!failed && spans.length > 0) {
+            const contentOpen = html.indexOf('<div class="content">');
+            const innerClose = contentOpen >= 0 ? html.indexOf("</div>", contentOpen) : -1;
+            if (contentOpen >= 0 && innerClose >= contentOpen) {
+              return `${html.slice(0, contentOpen)}<div class="content">\n${spans.join("<br>")}\n${html.slice(innerClose)}`;
+            }
+          }
+        }
+      }
+      return html.replace(/^<div/, '<div data-stem="asciimath"');
     }
   }
 
@@ -355,14 +634,42 @@ function includeDirectory(path: string): string {
  */
 export async function preloadAsciidocIncludes(
   source: string,
-  options: { baseDir: string | null; readFile: (path: string) => Promise<string> },
+  options: {
+    baseDir: string | null;
+    readFile: (path: string) => Promise<string>;
+    cache?: AsciidocIncludeCache;
+    bypassCache?: boolean;
+  },
 ): Promise<AsciidocIncludeMap | null> {
   if (!options.baseDir || !source.includes("include::")) return {};
   const map: AsciidocIncludeMap = {};
   const seen = new Set<string>();
+  const readCached = async (path: string): Promise<string> => {
+    if (options.cache) {
+      return options.cache.readThrough(path, options.readFile, Boolean(options.bypassCache));
+    }
+    return options.readFile(path);
+  };
+
+  // Strip `//// ... ////` block comments cleanly before matching `include::` lines.
+  const scanSource = (text: string): string => {
+    if (!text.includes("////")) return text;
+    let inComment = false;
+    return text
+      .split("\n")
+      .map((line) => {
+        if (/^\s*\/\/\/\/\s*$/.test(line.replace(/\r$/, ""))) {
+          inComment = !inComment;
+          return "";
+        }
+        return inComment ? "" : line;
+      })
+      .join("\n");
+  };
 
   const scan = async (text: string, currentDir: string | null): Promise<boolean> => {
-    for (const match of text.matchAll(INCLUDE_DIRECTIVE)) {
+    const cleanText = scanSource(text);
+    for (const match of cleanText.matchAll(INCLUDE_DIRECTIVE)) {
       const target = match[1].trim();
       if (target.includes("{")) return false;
       const resolved = resolveInclude(target, currentDir, options.baseDir);
@@ -371,7 +678,7 @@ export async function preloadAsciidocIncludes(
       if (seen.has(key)) continue;
       seen.add(key);
       try {
-        const content = await options.readFile(resolved);
+        const content = await readCached(resolved);
         map[resolved] = { content };
         if (!(await scan(content, includeDirectory(resolved)))) return false;
       } catch (error) {
@@ -424,6 +731,24 @@ export async function renderAsciidocChunks(
   );
   registry.treeProcessor(createPreviewMarkerProcessor(Asciidoctor, marks));
 
+  const maths: RenderedMath[] = [];
+  let parserPromise: Promise<AsciiMathParser | null> | null = null;
+  const getAsciimathParser = (): Promise<AsciiMathParser | null> => {
+    if (!parserPromise) parserPromise = asciimathParser();
+    return parserPromise;
+  };
+  const pushMath = (body: string, display: boolean): string => {
+    const rendered = renderKatexCached(body, display);
+    const idx = maths.length;
+    maths.push({
+      body,
+      display,
+      html: rendered.html,
+      error: rendered.error,
+    });
+    return `<span data-mdraft-math="${idx}"></span>`;
+  };
+
   const loadOptions = {
     standalone: false,
     safe: "secure",
@@ -435,7 +760,12 @@ export async function renderAsciidocChunks(
     attributes: { showtitle: "" },
   } as Record<string, unknown>;
   if (options.math) {
-    loadOptions.converter_factory = createPreviewConverterFactory(Asciidoctor, true);
+    loadOptions.converter_factory = createPreviewConverterFactory(
+      Asciidoctor,
+      true,
+      pushMath,
+      getAsciimathParser,
+    );
   } else {
     // The chunk wrapper is still needed, but stems must keep Asciidoctor's
     // delimiters when mathematics is off.
@@ -443,13 +773,16 @@ export async function renderAsciidocChunks(
   }
 
   const doc = await Asciidoctor.load(source, loadOptions);
-  const raw = String(await doc.convert());
+  const converted = String(await doc.convert());
   if (missingInclude) throw new Error(`Include was not preloaded: ${missingInclude}`);
+  const raw = options.math ? preRenderRawDelimitedMath(converted, pushMath) : converted;
   return {
     chunks: splitPreviewChunks(raw),
     marks,
     hasHeader: Boolean(doc.hasHeader()),
     notitle: Boolean(doc.isNotitle()),
+    maths,
+    mathRendered: options.math,
   };
 }
 

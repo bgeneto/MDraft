@@ -15,15 +15,22 @@
 // needs more than this should grow its own rather than a framework.
 
 /**
- * Connect to the page target and return a small CDP handle.
+ * Connect to a target and return a small CDP handle.
  *
  * `onConsole` and `onException` are registered before `Runtime.enable`, so events
  * emitted during start-up are not missed.
+ *
+ * `options.type` selects the target type (`page` by default); `options.match` is
+ * a regular expression over the target's URL, for suites that drive the LaTeX
+ * preview frame rather than the application page.
  */
-export async function openPage(port) {
+export async function openPage(port, options = {}) {
+  const type = options.type ?? "page";
   const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-  const target = list.find((entry) => entry.type === "page");
-  if (!target) throw new Error(`No page target on port ${port}`);
+  const target = list.find(
+    (entry) => entry.type === type && (!options.match || options.match.test(entry.url)),
+  );
+  if (!target) throw new Error(`No ${type} target on port ${port}`);
 
   const socket = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
@@ -109,7 +116,8 @@ export async function openPage(port) {
       awaitPromise: true,
     });
     if (result.result?.exceptionDetails) {
-      throw new Error(result.result.exceptionDetails.text ?? "evaluation failed");
+      const detail = result.result.exceptionDetails;
+      throw new Error(detail.exception?.description ?? detail.text ?? "evaluation failed");
     }
     return result.result?.result?.value;
   }

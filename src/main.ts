@@ -209,6 +209,19 @@ import {
 import { projectLatexOutline, type ProjectHeading } from "./latex-outline";
 import { LATEX_DOWNLOAD_MIB, LATEX_ENGINE_YEAR, optionalEngineBytes } from "./latex-engine";
 import { nativeToLatex } from "./latex-native";
+import {
+  latexPreviewBackend,
+  setLatexPreviewBackend,
+  texpressoEngineFor,
+  texpressoFallback,
+  texpressoFallbackText,
+  type LatexPreviewBackend,
+  type TexpressoFallback,
+} from "./latex-backend";
+import { normaliseText, prepareProject, TexpressoSession } from "./texpresso/session";
+import type { FrameMessage, TexpressoTheme } from "./texpresso/protocol";
+import { editorLineAt, editorScrollFor, type EditorScrollGeometry } from "./texpresso/scroll";
+import { projectRelativePath, rangeForPreviewGesture } from "./texpresso/selection";
 import { libraryNames } from "./latex-texmf";
 import { clearLatexPerf, perfMark, perfMeasure, perfPhase, resetLatexPhase } from "./perf";
 import { setLocalLatexNames } from "./completion/latex-source";
@@ -791,6 +804,7 @@ function applyTheme(): void {
   applyThemeButton();
   applyHighlightTheme(isDark);
   applySyntaxTheme();
+  if (texpresso) texpresso.post({ type: "theme", theme: texpressoTheme() });
 }
 
 /** The editor keeps its own palette, which may differ from the app theme. */
@@ -1184,6 +1198,8 @@ function applyLayout(): void {
   editor?.setTypewriter(settings.typewriterMode);
   editor?.setCursorBlink(settings.cursorBlink !== false);
   typstPdf?.setZoom(zoom);
+  texpresso?.post({ type: "zoom", factor: zoom });
+  texpressoFollowTab();
   applySpellcheck();
   applySyntaxTheme();
   applyTypography();
@@ -1376,6 +1392,8 @@ function applySettingsPatch(
   if (patch.emmet !== undefined) editor.setEmmet(settings.emmet !== false);
 
   if (patch.latexAutoCompile !== undefined) {
+    // Manual mode holds the edit stream too; Compile sends what was held.
+    texpresso?.hold(settings.latexAutoCompile === false);
     syncLatexAutoToggle();
     syncMenuState(false);
   }
@@ -1814,6 +1832,7 @@ function restorePreview(): boolean {
     // The project this tab belongs to, as of its own last build. Another
     // project compiled meanwhile moved both; the tab's own root comes back.
     latexPreview = slot.latex;
+    latexProject = latexProjectOf(slot.latex);
     latexNavigationRoot = slot.latex.rootId;
   }
   previewOwner = slot.owner;
@@ -2032,12 +2051,17 @@ let latexUnrenderedSince: number | null = null;
 /** When the last LaTeX compile started. */
 let latexLastStart: number | null = null;
 
+/** How long the buffer stays quiet before the shadow compile starts. */
+const LATEX_SHADOW_IDLE_MS = 1200;
+
 function renderDelay(): number {
   // LaTeX used a fixed 800 ms before the engine was kept warm and compiles
   // stopped being cancelled by typing. Now the compile starts on the first
   // pause longer than this reader's rhythm (60-200 ms), and continuous typing
   // still compiles once every 1.5 s (docs/plans/2026-11-12-latex-compile-cost.md,
   // stage 1.5). Latest-wins keeps at most one compile running.
+  // The frame follows every keystroke; the shadow compile waits for a pause.
+  if (doc.language === "latex" && texpressoShowing()) return LATEX_SHADOW_IDLE_MS;
   if (doc.language === "latex") {
     const now = performance.now();
     if (staleBeyondCap(latexLastStart, latexUnrenderedSince, now)) return 0;
@@ -2202,6 +2226,35 @@ interface LatexPreview {
   revisions: Array<{ id: string; revision: number; path: string | null }>;
 }
 let latexPreview: LatexPreview | null = null;
+
+/**
+ * The project the LaTeX preview is showing: its main document and the files
+ * the last build read, relative to its directory.
+ *
+ * Both preview backends write it. WasmTex writes it with every result it puts on
+ * screen; TeXpresso writes it from the snapshot it syncs, before any PDF exists.
+ * The navigation pin reads it, so a chapter tab finds its main document under
+ * either backend without waiting for a compile.
+ */
+interface LatexProjectRecord {
+  rootId: string;
+  rootDirectory: string;
+  files: ReadonlySet<string>;
+}
+let latexProject: LatexProjectRecord | null = null;
+
+function latexProjectOf(value: LatexPreview): LatexProjectRecord {
+  return { rootId: value.rootId, rootDirectory: value.rootDirectory, files: value.result.files };
+}
+
+/** `path` relative to the project, or null when the project did not read it. */
+function latexProjectFile(record: LatexProjectRecord, path: string | null): string | null {
+  if (!path) return null;
+  for (const file of record.files) {
+    if (pathKey(joinDir(record.rootDirectory, file)) === pathKey(path)) return file;
+  }
+  return null;
+}
 /** The last measured LaTeX package cache, or null before the first read. */
 let latexCacheInfo: api.LatexCacheInfo | null = null;
 let latexCacheError: string | null = null;
@@ -2374,6 +2427,7 @@ function setTypstStatus(message: string, saveable = false, state?: CompiledStatu
 
 function compileCurrentLatex(): void {
   if (doc.language !== "latex") return;
+  texpresso?.flush();
   // Compile always builds: the reader may be retrying a flaky engine or a
   // package fetch, and an unchanged key must not turn the button into a no-op.
   committedKey = null;
@@ -2466,9 +2520,13 @@ function syncLatexAutoToggle(): void {
 function setLatexStatus(message: string, state?: CompiledStatus): void {
   if (doc.language !== "latex") return;
   if (latexInFlight) perfPhase(message);
+  latexStatusLast = { message, state };
   configureCompiledUi();
+  // With TeXpresso drawing, the line says both halves: the live preview, then
+  // the PDF the shadow compile keeps for export.
+  const live = texpressoShowing() ? texpressoLiveStatus() : "";
   compiledUi.status(
-    message,
+    live ? `${live} · ${message}` : message,
     latexInFlight,
     latexCurrent(latexPreview) || latexPartialCurrent(),
     state,
@@ -2898,11 +2956,7 @@ function rebindLatexPreview(
 }
 
 function latexRelative(value: LatexPreview, path: string | null): string | null {
-  if (!path) return null;
-  for (const file of value.result.files) {
-    if (pathKey(joinDir(value.rootDirectory, file)) === pathKey(path)) return file;
-  }
-  return null;
+  return latexProjectFile(latexProjectOf(value), path);
 }
 
 /**
@@ -3175,7 +3229,8 @@ async function latexFailure(
   const revisions =
     attempt?.revisions ?? sessions.list().map(({ id, revision, path }) => ({ id, revision, path }));
   let shownPartial = false;
-  if (partial && new TextDecoder().decode(partial.subarray(0, 5)) === "%PDF-") {
+  const live = texpressoShowing();
+  if (!live && partial && new TextDecoder().decode(partial.subarray(0, 5)) === "%PDF-") {
     latexInFlight = true;
     setLatexStatus("Rendering PDF with errors…");
     const host = stagedPdfHost();
@@ -3225,7 +3280,11 @@ async function latexFailure(
   }
   if (token !== renderToken || activeId !== doc.id) return;
   latexInFlight = false;
-  if (!typstPdf) {
+  if (live) {
+    // The frame keeps drawing what TeXpresso typesets; only the export PDF
+    // failed, and Logs says why without covering the preview.
+    compiledUi.outputReady();
+  } else if (!typstPdf) {
     preview.replaceChildren();
     const empty = document.createElement("div");
     empty.className = "compiled-empty";
@@ -3261,11 +3320,13 @@ async function latexFailure(
     editor.clearDiagnostics();
   }
   setLatexStatus(
-    shownPartial
-      ? "PDF with errors · Compilation reported problems; see Logs."
-      : typstPdf
-        ? "Build failed · Showing previous PDF; see Logs."
-        : "No PDF produced · See Logs.",
+    live
+      ? "PDF for export failed · See Logs."
+      : shownPartial
+        ? "PDF with errors · Compilation reported problems; see Logs."
+        : typstPdf
+          ? "Build failed · Showing previous PDF; see Logs."
+          : "No PDF produced · See Logs.",
     {
       label: shownPartial ? "PDF with errors" : typstPdf ? "Build failed" : "No PDF produced",
       severity: "error",
@@ -3581,166 +3642,16 @@ async function renderLatexPreview(
     setLatexStatus("Preparing LaTeX compilation…");
   }
   previewPane.querySelector(":scope > .typst-viewbar")?.remove();
-  if (storeOnly && !doc.path) return;
-  if (!doc.path) {
-    latexInFlight = false;
-    setLatexStatus("Save the document before compiling.");
-    latexFailure("Save this .tex file before compiling.");
-    return;
-  }
-  let engineStatus: api.LatexEngineStatus;
-  const engineStatusStarted = perfMark("engine-status-start");
-  try {
-    engineStatus = await api.latexEngineStatus();
-  } catch (error) {
-    if (storeOnly) return;
-    if (token === renderToken && doc.id === activeId) {
-      latexInFlight = false;
-      setLatexStatus("Could not check the LaTeX engine.");
-      latexFailure(error);
-    }
-    return;
-  }
-  perfMeasure("engine-status", engineStatusStarted);
-  latexEngine = engineStatus;
-  if (token !== renderToken || doc.id !== activeId) return;
-  // Bundled TeX switched on is not bundled TeX ready: a manifest that adds a core
-  // file (the LuaLaTeX checkpoint build) under an unchanged release id leaves an
-  // older install incomplete. Compiling anyway fails inside the worker as "this
-  // document requires LuaLaTeX", and every optional engine reads as "not
-  // downloaded yet" because they all require the core set. The setup note's
-  // Retry downloads only the missing or mismatched files.
-  const bundledMissing = engineStatus.backend === "bundled" && !engineStatus.bundledInstalled;
-  if (storeOnly && (engineStatus.backend === "none" || bundledMissing || engineStatus.problem))
-    return;
-  if (engineStatus.backend === "none" || bundledMissing) {
-    latexInFlight = false;
-    setLatexStatus(
-      bundledMissing ? "The bundled TeX engine needs setup." : "LaTeX is not enabled.",
-    );
-    delete preview.dataset.latexCurrent;
-    disposeTypstPdf();
-    latexEnableNote(engineStatus);
-    commitPreview(documentOwner(doc));
-    latexProblems = [];
-    latexProblemRoot = null;
-    latexProblemFiles = new Set();
-
-    editor.clearDiagnostics();
-    return;
-  }
-  if (engineStatus.problem) {
-    latexInFlight = false;
-    setLatexStatus("The installed TeX distribution is unavailable.");
-    latexFailure(new Error(engineStatus.problem));
-    return;
-  }
-
-  let root = latexNavigationRoot ? sessions.byId(latexNavigationRoot) : undefined;
-  const pinnedContains = Boolean(
-    root?.path && root.directory && latexPreview && latexRelative(latexPreview, doc.path),
-  );
-  if (!pinnedContains) {
-    // A failed compile has no preview to ask, so the previous root is kept while
-    // the reader is looking at a file inside it. Without this, opening a problem
-    // in an included chapter silently compiled that chapter as the main file.
-    //
-    // "Inside it" means the failed snapshot contained the file — not that the
-    // file sits in the same folder. A directory test pinned every unrelated .tex
-    // tab beside a broken project to that project, so switching to a valid
-    // document recompiled the broken one and its problems never changed.
-    const pinned = inLatexProblemProject(doc.path)
-      ? sessions.findByPath(latexProblemRoot!.path)
-      : undefined;
-    root = pinned?.path ? pinned : undefined;
-  }
-  // The main document (GAP-034): a `% !TeX root` comment wins, then a file with
-  // its own \documentclass, then the pinned project; a lone chapter is told how
-  // to name its main file instead of failing deep inside the engine.
-  const main = resolveMainDocument({
-    directory: doc.directory ?? "",
-    source,
-    pinnedContains: Boolean(root),
-  });
-  // Rule 2: the reader's explicit choice for this workspace wins over the pin;
-  // rule 4: a chapter with no project yet asks the include graph.
-  if (main.kind === "pinned" || main.kind === "missing") {
-    const inWorkspace =
-      settings.workspaceFolder &&
-      doc.path &&
-      pathKey(doc.path).startsWith(pathKey(settings.workspaceFolder) + "/");
-    const chosen = inWorkspace ? workspaceMainDocument() : null;
-    let target: string | null =
-      chosen && pathKey(chosen) !== pathKey(doc.path ?? "") ? chosen : null;
-    if (!target && main.kind === "missing" && inWorkspace && doc.path) {
-      const candidates = await workspaceMainCandidates(doc.path);
-      if (token !== renderToken || doc.id !== activeId) return;
-      if (candidates.length === 1) target = candidates[0];
-      else if (candidates.length > 1) {
-        if (storeOnly) return;
-        latexInFlight = false;
-        await latexFailure(
-          `Several main documents include this file: ${candidates.map((c) => c.split(/[\\/]/).pop()).join(", ")}. Right-click the one to use in the Explorer and choose Set as Main Document, or add \`% !TeX root = …\` to this file.`,
-        );
-        if (token === renderToken && doc.id === activeId)
-          setLatexStatus("Choose this file's main document.");
-        return;
-      }
-    }
-    if (target) {
-      const named = await backgroundSession(target);
-      if (token !== renderToken || doc.id !== activeId) return;
-      if (named?.path) {
-        root = named;
-        latexNavigationRoot = root.id;
-      }
-    }
-  }
-  if (main.kind === "comment") {
-    const named = await backgroundSession(main.path);
-    if (token !== renderToken || doc.id !== activeId) return;
-    if (!named?.path) {
-      if (storeOnly) return;
-      latexInFlight = false;
-      setLatexStatus("The main document named by % !TeX root was not found.");
-      latexFailure(`% !TeX root names ${main.path}, which could not be opened.`);
-      return;
-    }
-    root = named;
-  } else if (main.kind === "self" || (main.kind === "pinned" && !root)) {
-    root = doc;
-  } else if (main.kind === "missing" && (!root || root.id === doc.id)) {
-    if (storeOnly) return;
-    latexInFlight = false;
-    await latexFailure(
-      "This file has no \\documentclass, so it is not a main document. Add a line such as `% !TeX root = ../main.tex` at the top, or open the main file and compile from there.",
-    );
-    // After the failure panel: it writes a generic status of its own, and this
-    // one says what to do.
-    if (token === renderToken && doc.id === activeId)
-      setLatexStatus("No main document for this file.");
-    return;
-  }
-  root ??= doc;
-  latexNavigationRoot = root.id;
-  if (storeOnly && (!root.path || !root.directory)) return;
-  if (!root.path || !root.directory) {
-    latexInFlight = false;
-    setLatexStatus("Save the main document before compiling.");
-    latexFailure("Save the main .tex file first.");
-    return;
-  }
-  const revisions = sessions.list().map(({ id, revision, path }) => ({ id, revision, path }));
-  const overlays = latexOverlays(root.directory);
+  const build = await resolveLatexBuild(source, token, activeId, storeOnly);
+  if (!build) return;
+  const { engineStatus, root, revisions, overlays, engineChoice } = build;
+  // With TeXpresso drawing, this build is the shadow compile: the PDF that
+  // export, print and the authoritative Problems list read, never drawn.
+  let shadow = texpressoPrepare(build, storeOnly);
   const owner = { rootId: root.id, rootDirectory: root.directory, activeId, token, revisions };
   // The snapshot's own file list is the definition of "this project", used when a
   // failure has to decide whether a later tab switch is still inside it.
   let snapshotFiles: string[] = [];
-  // The bundled engine for this project (stage 6.2): magic comment, then the
-  // project's choice, then the Preferences default. The chip always says which.
-  const engineChoice = engineStatus.backend === "native" ? null : latexEngineChoice(root);
-  if (engineChoice) showEngineChip(engineChoice, root.path);
-  else statusEngine.hidden = true;
   let buildEngine =
     engineStatus.backend === "native"
       ? engineStatus.nativeEngine === "auto"
@@ -3764,11 +3675,16 @@ async function renderLatexPreview(
     latexLibraryRevision = snapshot.texmf?.revision ?? null;
     // Completion follows the latest capture, in this editor state only.
     editor.view.dispatch({ effects: setLocalLatexNames.of(libraryNames(snapshot.texmf)) });
+    // The live preview takes the same capture: its project follows every
+    // render, so a file added to the project reaches it without an edit.
+    if (shadow) shadow = texpressoSyncSnapshot(build, snapshot);
     const key = latexKey(root, snapshot.generation, {
       ...latexEngineIdentity(engineStatus),
       bundledEngine: engineChoice?.engine ?? null,
     });
-    if (!force && rebindLatexPreview(key, root, source, token, activeId, revisions)) return;
+    if (!force && !shadow && rebindLatexPreview(key, root, source, token, activeId, revisions))
+      return;
+    if (!force && shadow && rebindLatexShadow(key, root, token, activeId, revisions)) return;
     // A PDF already built from exactly these inputs — typically the one this
     // tab showed before the reader switched away — is drawn instead of compiled.
     const stored = force ? undefined : latexStore.get(key);
@@ -3849,6 +3765,7 @@ async function renderLatexPreview(
       const shown = typstPdf;
       if (
         !force &&
+        !shadow &&
         shown &&
         // A reader following the end of the document gets new pages, which a
         // splice into existing slots cannot show; the exact result follows the tail.
@@ -3919,6 +3836,11 @@ async function renderLatexPreview(
     // made continuous typing show nothing at all.
     if (!latexDisplayable(value)) return;
     if (!stored) latexStore.set(key, result, latexResultBytes(result));
+    if (shadow) {
+      perfMeasure("post", postStarted, { sources: result.sources.length });
+      commitLatexShadow(value, key, { stored: Boolean(stored), started, backend: engineStatus });
+      return;
+    }
     // Narrowed once for the closure: the map callback is not where a mutable
     // `let root` keeps its non-null narrowing.
     const rootDirectory = root.directory;
@@ -3956,6 +3878,7 @@ async function renderLatexPreview(
     latexPartial = null;
     delete preview.dataset.latexPartial;
     latexPreview = value;
+    latexProject = latexProjectOf(value);
     latexShownToken = token;
     commitPdfHost(host, view, token);
     // Only a current result follows the editor: an out-of-date one describes
@@ -4063,6 +3986,858 @@ async function renderLatexPreview(
       );
     }
   }
+}
+
+/** What a LaTeX build compiles, decided before any backend runs. */
+interface LatexBuildRequest {
+  engineStatus: api.LatexEngineStatus;
+  root: Session & { path: string; directory: string };
+  activeId: string;
+  revisions: LatexPreview["revisions"];
+  overlays: Parameters<typeof api.latexProjectSnapshot>[1];
+  /** The bundled engine and why; null for an installed distribution. */
+  engineChoice: EngineChoice | null;
+}
+
+/**
+ * The shared prefix of every LaTeX build: engine status, main-document rules
+ * 1–5 with the navigation pin, and the engine choice (docs/plans/
+ * 2026-11-13-texpresso-backend.md, step 5). Both preview backends start here,
+ * so a chapter tab resolves to the same main document whichever one draws it.
+ *
+ * Returns null when the build ends here: a failure this function reported, or
+ * a store-only probe with nothing to show.
+ */
+async function resolveLatexBuild(
+  source: string,
+  token: number,
+  activeId: string,
+  storeOnly: boolean,
+): Promise<LatexBuildRequest | null> {
+  if (storeOnly && !doc.path) return null;
+  if (!doc.path) {
+    latexInFlight = false;
+    setLatexStatus("Save the document before compiling.");
+    latexFailure("Save this .tex file before compiling.");
+    return null;
+  }
+  let engineStatus: api.LatexEngineStatus;
+  const engineStatusStarted = perfMark("engine-status-start");
+  try {
+    engineStatus = await api.latexEngineStatus();
+  } catch (error) {
+    if (storeOnly) return null;
+    if (token === renderToken && doc.id === activeId) {
+      latexInFlight = false;
+      setLatexStatus("Could not check the LaTeX engine.");
+      latexFailure(error);
+    }
+    return null;
+  }
+  perfMeasure("engine-status", engineStatusStarted);
+  latexEngine = engineStatus;
+  if (token !== renderToken || doc.id !== activeId) return null;
+  // Bundled TeX switched on is not bundled TeX ready: a manifest that adds a core
+  // file (the LuaLaTeX checkpoint build) under an unchanged release id leaves an
+  // older install incomplete. Compiling anyway fails inside the worker as "this
+  // document requires LuaLaTeX", and every optional engine reads as "not
+  // downloaded yet" because they all require the core set. The setup note's
+  // Retry downloads only the missing or mismatched files.
+  const bundledMissing = engineStatus.backend === "bundled" && !engineStatus.bundledInstalled;
+  if (storeOnly && (engineStatus.backend === "none" || bundledMissing || engineStatus.problem))
+    return null;
+  if (engineStatus.backend === "none" || bundledMissing) {
+    latexInFlight = false;
+    setLatexStatus(
+      bundledMissing ? "The bundled TeX engine needs setup." : "LaTeX is not enabled.",
+    );
+    delete preview.dataset.latexCurrent;
+    disposeTypstPdf();
+    latexEnableNote(engineStatus);
+    commitPreview(documentOwner(doc));
+    latexProblems = [];
+    latexProblemRoot = null;
+    latexProblemFiles = new Set();
+
+    editor.clearDiagnostics();
+    return null;
+  }
+  if (engineStatus.problem) {
+    latexInFlight = false;
+    setLatexStatus("The installed TeX distribution is unavailable.");
+    latexFailure(new Error(engineStatus.problem));
+    return null;
+  }
+
+  let root = latexNavigationRoot ? sessions.byId(latexNavigationRoot) : undefined;
+  const pinnedContains = Boolean(
+    root?.path && root.directory && latexProject && latexProjectFile(latexProject, doc.path),
+  );
+  if (!pinnedContains) {
+    // A failed compile has no preview to ask, so the previous root is kept while
+    // the reader is looking at a file inside it. Without this, opening a problem
+    // in an included chapter silently compiled that chapter as the main file.
+    //
+    // "Inside it" means the failed snapshot contained the file — not that the
+    // file sits in the same folder. A directory test pinned every unrelated .tex
+    // tab beside a broken project to that project, so switching to a valid
+    // document recompiled the broken one and its problems never changed.
+    const pinned = inLatexProblemProject(doc.path)
+      ? sessions.findByPath(latexProblemRoot!.path)
+      : undefined;
+    root = pinned?.path ? pinned : undefined;
+  }
+  // The main document (GAP-034): a `% !TeX root` comment wins, then a file with
+  // its own \documentclass, then the pinned project; a lone chapter is told how
+  // to name its main file instead of failing deep inside the engine.
+  const main = resolveMainDocument({
+    directory: doc.directory ?? "",
+    source,
+    pinnedContains: Boolean(root),
+  });
+  // Rule 2: the reader's explicit choice for this workspace wins over the pin;
+  // rule 4: a chapter with no project yet asks the include graph.
+  if (main.kind === "pinned" || main.kind === "missing") {
+    const inWorkspace =
+      settings.workspaceFolder &&
+      doc.path &&
+      pathKey(doc.path).startsWith(pathKey(settings.workspaceFolder) + "/");
+    const chosen = inWorkspace ? workspaceMainDocument() : null;
+    let target: string | null =
+      chosen && pathKey(chosen) !== pathKey(doc.path ?? "") ? chosen : null;
+    if (!target && main.kind === "missing" && inWorkspace && doc.path) {
+      const candidates = await workspaceMainCandidates(doc.path);
+      if (token !== renderToken || doc.id !== activeId) return null;
+      if (candidates.length === 1) target = candidates[0];
+      else if (candidates.length > 1) {
+        if (storeOnly) return null;
+        latexInFlight = false;
+        await latexFailure(
+          `Several main documents include this file: ${candidates.map((c) => c.split(/[\\/]/).pop()).join(", ")}. Right-click the one to use in the Explorer and choose Set as Main Document, or add \`% !TeX root = …\` to this file.`,
+        );
+        if (token === renderToken && doc.id === activeId)
+          setLatexStatus("Choose this file's main document.");
+        return null;
+      }
+    }
+    if (target) {
+      const named = await backgroundSession(target);
+      if (token !== renderToken || doc.id !== activeId) return null;
+      if (named?.path) {
+        root = named;
+        latexNavigationRoot = root.id;
+      }
+    }
+  }
+  if (main.kind === "comment") {
+    const named = await backgroundSession(main.path);
+    if (token !== renderToken || doc.id !== activeId) return null;
+    if (!named?.path) {
+      if (storeOnly) return null;
+      latexInFlight = false;
+      setLatexStatus("The main document named by % !TeX root was not found.");
+      latexFailure(`% !TeX root names ${main.path}, which could not be opened.`);
+      return null;
+    }
+    root = named;
+  } else if (main.kind === "self" || (main.kind === "pinned" && !root)) {
+    root = doc;
+  } else if (main.kind === "missing" && (!root || root.id === doc.id)) {
+    if (storeOnly) return null;
+    latexInFlight = false;
+    await latexFailure(
+      "This file has no \\documentclass, so it is not a main document. Add a line such as `% !TeX root = ../main.tex` at the top, or open the main file and compile from there.",
+    );
+    // After the failure panel: it writes a generic status of its own, and this
+    // one says what to do.
+    if (token === renderToken && doc.id === activeId)
+      setLatexStatus("No main document for this file.");
+    return null;
+  }
+  root ??= doc;
+  latexNavigationRoot = root.id;
+  if (storeOnly && (!root.path || !root.directory)) return null;
+  if (!root.path || !root.directory) {
+    latexInFlight = false;
+    setLatexStatus("Save the main document before compiling.");
+    latexFailure("Save the main .tex file first.");
+    return null;
+  }
+  // The bundled engine for this project (stage 6.2): magic comment, then the
+  // project's choice, then the Preferences default. The chip always says which.
+  const engineChoice = engineStatus.backend === "native" ? null : latexEngineChoice(root);
+  if (engineChoice) showEngineChip(engineChoice, root.path);
+  else statusEngine.hidden = true;
+  return {
+    engineStatus,
+    root: root as Session & { path: string; directory: string },
+    activeId,
+    revisions: sessions.list().map(({ id, revision, path }) => ({ id, revision, path })),
+    overlays: latexOverlays(root.directory),
+    engineChoice,
+  };
+}
+
+/* ---------- TeXpresso preview (docs/plans/2026-11-13-texpresso-backend.md) ---------- */
+//
+// With the TeXpresso backend, the frame draws and WasmTex keeps compiling, at
+// idle and never drawn, the PDF that export, print, the menu state and the
+// authoritative Problems list read. Everything protocol-level lives in
+// src/texpresso/; this block only connects it to the shell's own state.
+
+/** The live preview; another project or engine replaces it. */
+let texpresso: TexpressoSession | null = null;
+/** Main documents whose frame failed twice: they preview with WasmTex until restart. */
+const texpressoFailed = new Set<string>();
+/** Why the last build did not use TeXpresso, for the chip. */
+let texpressoFallbackReason: { reason: TexpressoFallback; file?: string | null } | null = null;
+/** The frame is on screen for the active tab. */
+let texpressoShown = false;
+/** The frame's own scroll offset, as it last reported it. */
+let texpressoScrollTop = 0;
+/** The key of the shadow result, which never commits to the pane. */
+let latexShadowKey: string | null = null;
+/** The last status the WasmTex pipeline wrote, so a live update can redraw it. */
+let latexStatusLast: { message: string; state?: CompiledStatus } | null = null;
+let texpressoHost: HTMLElement | null = null;
+
+function texpressoHostElement(): HTMLElement {
+  if (!texpressoHost) {
+    // A sibling of #preview, like the HTML guest: never inside a preview slot,
+    // because moving an iframe in the DOM reloads it and restarts the engine.
+    texpressoHost = document.createElement("div");
+    texpressoHost.className = "texpresso-host";
+    texpressoHost.hidden = true;
+    previewPane.append(texpressoHost);
+  }
+  return texpressoHost;
+}
+
+/** True while the frame is what the reader sees for this LaTeX tab. */
+function texpressoShowing(): boolean {
+  return texpressoShown && texpresso !== null && doc.language === "latex";
+}
+
+function texpressoShow(visible: boolean): void {
+  texpressoShown = visible;
+  texpressoHostElement().hidden = !visible;
+  app.classList.toggle("latex-texpresso", visible);
+  if (visible) preview.dataset.latexBackend = "texpresso";
+  else delete preview.dataset.latexBackend;
+}
+
+/** Show the frame again for a tab of its project, or hide it for any other. */
+function texpressoFollowTab(): void {
+  const session = texpresso;
+  const member =
+    session !== null &&
+    doc.language === "latex" &&
+    latexPreviewBackend() === "texpresso" &&
+    projectRelativePath(session.rootDirectory, doc.path, pathKey) !== null;
+  texpressoShow(member && settings.viewMode !== "source");
+}
+
+function texpressoRelease(): void {
+  if (!texpresso) return;
+  void texpresso.dispose();
+  texpresso = null;
+  texpressoShow(false);
+}
+
+/** Give the build to WasmTex, and say why on the chip. */
+function texpressoFallbackTo(reason: TexpressoFallback, file: string | null = null): void {
+  texpressoRelease();
+  texpressoFallbackReason = { reason, file };
+  texpressoChip();
+  perfMark("texpresso-fallback", { reason, file });
+}
+
+/** The chip names the backend while TeXpresso is the chosen one. */
+function texpressoChip(): void {
+  if (latexPreviewBackend() !== "texpresso" || !engineChipChoice) {
+    delete statusEngine.dataset.previewBackend;
+    return;
+  }
+  const label = ENGINE_LABELS[engineChipChoice.engine];
+  const fallback = texpressoFallbackReason;
+  const base = statusEngine.dataset.baseTitle ?? statusEngine.title;
+  statusEngine.dataset.baseTitle = base;
+  if (fallback) {
+    const why = texpressoFallbackText(fallback.reason, fallback);
+    statusEngine.textContent = `${label} · WasmTex`;
+    statusEngine.title = `${base} Preview: WasmTex (${why}).`;
+    statusEngine.dataset.previewBackend = `wasmtex:${fallback.reason}`;
+  } else {
+    statusEngine.textContent = `${label} · TeXpresso`;
+    statusEngine.title = `${base} Preview: TeXpresso, typeset as you type; export uses WasmTex.`;
+    statusEngine.dataset.previewBackend = "texpresso";
+  }
+}
+
+/**
+ * Decide, before the snapshot, whether TeXpresso draws this build, and mount
+ * or reuse its frame. Returns true when it does: the build is then the shadow
+ * compile.
+ */
+function texpressoPrepare(build: LatexBuildRequest, storeOnly: boolean): boolean {
+  texpressoFallbackReason = null;
+  delete statusEngine.dataset.baseTitle;
+  if (latexPreviewBackend() !== "texpresso") {
+    texpressoRelease();
+    texpressoChip();
+    return false;
+  }
+  const engine = build.engineChoice?.engine ?? "lualatex";
+  const rootKey = pathKey(build.root.path);
+  const reason = texpressoFallback({
+    backend: build.engineStatus.backend,
+    engine,
+    year: LATEX_ENGINE_YEAR,
+    jspi: typeof (WebAssembly as { Suspending?: unknown }).Suspending === "function",
+    nonUtf8: null,
+    libraryConflict: null,
+    failed: texpressoFailed.has(rootKey),
+  });
+  const frameEngine = texpressoEngineFor(engine);
+  if (reason || !frameEngine) {
+    texpressoFallbackTo(reason ?? "pdflatex");
+    return false;
+  }
+  const session = texpresso;
+  if (!session || pathKey(session.key.rootPath) !== rootKey || session.key.engine !== frameEngine) {
+    // Manual mode returning to a tab never starts a frame: that is a compile.
+    if (storeOnly) {
+      texpressoShow(false);
+      return false;
+    }
+    // Another project or engine: XeLaTeX and LuaLaTeX are different workers,
+    // formats and font caches, so an engine change is a new frame.
+    texpressoRelease();
+    texpresso = new TexpressoSession(
+      texpressoHostElement(),
+      { rootPath: build.root.path, engine: frameEngine },
+      build.root.directory,
+      texpressoHandlers,
+    );
+    texpresso.hold(settings.latexAutoCompile === false);
+    perfMark("texpresso-mount", { engine: frameEngine });
+  }
+  texpresso!.open(projectRelativePath(build.root.directory, doc.path, pathKey));
+  texpressoShow(settings.viewMode !== "source");
+  texpressoChip();
+  return true;
+}
+
+/** An open tab's text for a project file, LF-normalised, or null. */
+function texpressoLiveText(directory: string, path: string): string | null {
+  const session = sessions.findByPath(joinDir(directory, path));
+  return session ? normaliseText(textOf(session)) : null;
+}
+
+/**
+ * Send the build's snapshot to the frame (only what changed). Returns false
+ * when the project cannot be typeset there: the build then draws with WasmTex.
+ */
+function texpressoSyncSnapshot(
+  build: LatexBuildRequest,
+  snapshot: api.LatexProjectSnapshot,
+): boolean {
+  const session = texpresso;
+  if (!session) return false;
+  const directory = build.root.directory;
+  const prepared = prepareProject(snapshot, (path) => texpressoLiveText(directory, path));
+  if (prepared.nonUtf8) {
+    texpressoFallbackTo("encoding", prepared.nonUtf8);
+    return false;
+  }
+  if (prepared.libraryConflict) {
+    texpressoFallbackTo("library", prepared.libraryConflict);
+    return false;
+  }
+  session.sync(prepared, projectRelativePath(directory, doc.path, pathKey));
+  // The project record, before any PDF exists: chapter tabs find their main
+  // document from it (step 5).
+  latexProject = {
+    rootId: build.root.id,
+    rootDirectory: directory,
+    files: new Set(snapshot.files.map((file) => file.path)),
+  };
+  // The frame is this project's content: the pane is owned, the wait is over.
+  commitPreview(
+    projectOwner(
+      build.root,
+      snapshot.files.map((file) => pathKey(joinDir(directory, file.path))),
+    ),
+    null,
+  );
+  previewSyncReady = true;
+  return true;
+}
+
+/** Hand the shadow result on screen to this render when its inputs are unchanged. */
+function rebindLatexShadow(
+  key: string,
+  root: Session,
+  token: number,
+  activeId: string,
+  revisions: LatexPreview["revisions"],
+): boolean {
+  const value = latexPreview;
+  if (key !== latexShadowKey || !value || value.rootId !== root.id) return false;
+  value.token = token;
+  value.activeId = activeId;
+  value.revisions = revisions;
+  commitLatexShadow(value, key, { stored: true, started: performance.now() });
+  return true;
+}
+
+/**
+ * The shadow compile finished: the authority for export, print, the menu state,
+ * the project outline and the Problems list, exactly as a drawn result is,
+ * without PDF.js.
+ */
+function commitLatexShadow(
+  value: LatexPreview,
+  key: string,
+  build: { stored: boolean; started: number; backend?: api.LatexEngineStatus },
+): void {
+  const result = value.result;
+  const root = sessions.byId(value.rootId);
+  latexPreview = value;
+  latexProject = latexProjectOf(value);
+  latexShownToken = value.token;
+  latexShadowKey = key;
+  latexPartial = null;
+  // Through a plain boolean: the type guard would narrow `value` to never below.
+  const authoritative: boolean = latexCurrent(value);
+  preview.dataset.latexShadow = String(value.token);
+  if (authoritative) preview.dataset.latexCurrent = String(value.token);
+  perfMeasure("shadow", build.started, {
+    token: value.token,
+    stored: build.stored,
+    warnings: result.warnings.length,
+  });
+  // A finished compile replaces TeXpresso's interim list.
+  latexProblems = result.warnings;
+  latexProblemRoot = null;
+  latexProblemFiles = new Set();
+  editor.clearDiagnostics();
+  if (root?.path && root.directory) {
+    const rootRef = { path: root.path, directory: root.directory };
+    const selected =
+      selectedLatexProblem?.path === pathKey(doc.path ?? "")
+        ? result.warnings.find(
+            (problem) => diagnosticSignature(problem) === selectedLatexProblem?.signature,
+          )
+        : null;
+    if (selected) applyLatexMarks([selected], rootRef, doc.path, false);
+    else selectedLatexProblem = null;
+    showLatexWarnings(result, rootRef);
+  }
+  if (!authoritative) {
+    previewStale = true;
+    setLatexStatus(
+      latexBusy() || renderToken !== value.token
+        ? "PDF for export: updating…"
+        : "PDF for export: waiting for a pause in typing",
+    );
+    syncMenuState(false);
+    return;
+  }
+  previewStale = false;
+  latexInFlight = false;
+  if (!build.stored && build.backend?.backend === "bundled") {
+    scheduleReanchor();
+    scheduleRecycle();
+  }
+  if (outlineScope === "project" && settings.sidebarTab === "outline") refreshOutline();
+  const seconds = ((result.elapsedMs ?? performance.now() - build.started) / 1000).toFixed(1);
+  const warnings = result.warnings.length
+    ? ` · ${result.warnings.length}${result.warningsTruncated ? "+" : ""} warning${result.warnings.length === 1 && !result.warningsTruncated ? "" : "s"}`
+    : "";
+  setLatexStatus(`PDF for export up to date · ${result.engine ?? "LaTeX"}${warnings}`, {
+    label: "PDF ready",
+    severity: result.warnings.length ? "warning" : "success",
+    detail: compiledUi.issueSummary,
+    engine: `${result.engine ?? "LaTeX"} · ${seconds} s`,
+  });
+  syncMenuState(false);
+}
+
+/** The live half of the status line while the frame draws. */
+function texpressoLiveStatus(): string {
+  const session = texpresso;
+  if (!session) return "";
+  if (!session.ready) return "TeXpresso starting…";
+  const errors = session.problems.filter((p) => p.severity === "error").length;
+  const state = session.held
+    ? "TeXpresso paused"
+    : session.busy
+      ? "Typesetting…"
+      : "TeXpresso live";
+  return errors ? `${state} · ${errors} error${errors === 1 ? "" : "s"}` : state;
+}
+
+/** Redraw the status line with the frame's latest state. */
+function texpressoRefreshStatus(): void {
+  if (!texpressoShowing() || !latexStatusLast) return;
+  setLatexStatus(latexStatusLast.message, latexStatusLast.state);
+}
+
+/**
+ * TeXpresso's problems, while typing: marks in the editor and the Problems
+ * panel, in the shape the WasmTex list uses. A finished shadow compile
+ * replaces them.
+ */
+function texpressoProblems(session: TexpressoSession): void {
+  if (session !== texpresso || !texpressoShowing()) return;
+  const root = sessions.findByPath(session.key.rootPath);
+  if (!root?.path || !root.directory) return;
+  const rootRef = { path: root.path, directory: root.directory };
+  const diagnostics: LatexDiagnostic[] = session.problems.map((problem) => {
+    const text = texpressoLiveText(root.directory!, problem.file);
+    const lineText =
+      text !== null && problem.line > 0 ? (text.split("\n")[problem.line - 1] ?? "") : "";
+    return {
+      file: problem.file,
+      line: problem.line,
+      column: problem.column,
+      endColumn: 0,
+      severity: problem.severity,
+      code: "texpresso",
+      message: problem.message,
+      text: "",
+      lineText: lineTextOf(lineText),
+      searched: [],
+    };
+  });
+  // Only while the shadow result is out of date: a current one is the authority.
+  if (latexCurrent(latexPreview)) return;
+  latexProblems = diagnostics;
+  applyLatexMarks(diagnostics, rootRef, doc.path, false);
+  if (diagnostics.length) {
+    const panel = latexProblemPanel(new LatexBuildError("", diagnostics), rootRef, [
+      ...(latexProject?.files ?? []),
+    ]);
+    panel.querySelector(".latex-log")?.remove();
+    compiledUi.details(panel, "", diagnostics.length, false);
+  }
+}
+
+const texpressoHandlers = {
+  onReady(session: TexpressoSession, info: { missing: string[]; jspi: boolean }): void {
+    if (session !== texpresso) return;
+    if (info.missing.length) {
+      // A member the bridge needs is gone: the pinned app changed. Its feature
+      // is off, and the reader is told rather than left with dead gestures.
+      toast(
+        `The TeXpresso preview lacks ${info.missing.join(", ")}; those features are off.`,
+        6200,
+      );
+    }
+    if (!info.jspi) {
+      texpressoFallbackTo("jspi");
+      scheduleRender(true);
+      return;
+    }
+    perfMark("texpresso-ready", { missing: info.missing });
+    preview.dataset.texpressoReady = "1";
+    texpressoRefreshStatus();
+  },
+  onMessage(session: TexpressoSession, message: FrameMessage): void {
+    if (session !== texpresso) return;
+    texpressoMessage(session, message);
+  },
+  onBroken(session: TexpressoSession, reason: string): void {
+    texpressoFailed.add(pathKey(session.key.rootPath));
+    if (session !== texpresso) return;
+    toast(`${reason} This project previews with WasmTex now.`, 6200);
+    texpressoFallbackTo("failed");
+    if (doc.language === "latex") {
+      invalidateLatexBuild("The TeXpresso preview stopped; WasmTex compiles this project.");
+      scheduleRender(true);
+    }
+  },
+  onRecovery(session: TexpressoSession, step: "resync" | "restart"): void {
+    perfMark("texpresso-recovery", { step });
+    if (step === "restart" && session === texpresso)
+      toast("The TeXpresso preview stopped answering; restarting it.", 4200);
+  },
+  currentText: texpressoLiveText,
+  theme: texpressoTheme,
+  zoom: () => zoomFactor(),
+  reference: () => texpressoReference(),
+};
+
+function texpressoMessage(session: TexpressoSession, message: FrameMessage): void {
+  switch (message.type) {
+    case "status":
+      if (message.problems) texpressoProblems(session);
+      texpressoRefreshStatus();
+      break;
+    case "painted": {
+      const sent = session.sentAt.get(message.seq);
+      for (const seq of session.sentAt.keys()) if (seq <= message.seq) session.sentAt.delete(seq);
+      if (sent !== undefined) {
+        const ms = performance.now() - sent;
+        perfMark("texpresso-painted", { seq: message.seq, ms, done: message.done });
+        preview.dataset.texpressoE2p = String(Math.round(ms));
+      }
+      preview.dataset.texpressoPainted = String(message.seq);
+      preview.dataset.texpressoPages = String(message.pages);
+      if (message.done) syncPreviewFromSource();
+      break;
+    }
+    case "viewport":
+      texpressoScrollTop = message.scrollTop;
+      if (message.gesture) texpressoAlignSource(message.line, message.file);
+      break;
+    case "scrolled":
+      if (message.scrollTop !== null) {
+        texpressoScrollTop = message.scrollTop;
+        scrollOwnership.wrote("preview", message.scrollTop, performance.now());
+      }
+      break;
+    case "input":
+      scrollOwnership.input();
+      suppressPreviewScrollUntil = 0;
+      suppressEditorScrollUntil = 0;
+      break;
+    case "source":
+      void texpressoSourceGesture(session, message.file, message.from, message.to, message.detail);
+      break;
+    case "key":
+      clearCorrespondence();
+      break;
+    case "zoom-wheel":
+      setZoom(zoomLevel() + (message.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP));
+      break;
+    case "error":
+      perfMark("texpresso-error", { message: message.message });
+      console.warn(`[texpresso] ${message.message}`);
+      break;
+    default:
+      break;
+  }
+}
+
+/** The editor's transactions, straight to the frame: no debounce, no snapshot. */
+function texpressoEdit(changes: Array<[number, number, string]>, base: number, text: string): void {
+  const session = texpresso;
+  if (!session || doc.language !== "latex" || latexPreviewBackend() !== "texpresso") {
+    delete preview.dataset.texpressoEdit;
+    return;
+  }
+  const file = projectRelativePath(session.rootDirectory, doc.path, pathKey);
+  if (file === null) {
+    preview.dataset.texpressoEdit = "outside-project";
+    return;
+  }
+  preview.dataset.texpressoEdit = session.edit(file, base, changes, text);
+  if (texpressoShowing()) texpressoRefreshStatus();
+}
+
+/** Source selection → preview boxes, in the frame. False when the frame is not on screen. */
+function texpressoSyncSelection(): boolean {
+  const session = texpresso;
+  if (!session || !texpressoShowing()) return false;
+  const file = projectRelativePath(session.rootDirectory, doc.path, pathKey);
+  if (file === null) return true;
+  const info = editor.cursorInfo();
+  const range =
+    !wordSyncDismissed && info.selectionLength && settings.viewMode === "split"
+      ? snapToWords(editor.getDoc(), info.from, info.to)
+      : null;
+  if (range) session.post({ type: "select", file, from: range.from, to: range.to, blink: false });
+  else session.post({ type: "clear" });
+  return true;
+}
+
+/** A click in the source: its paragraph blinks in the frame and nothing moves. */
+function texpressoBlinkSource(): boolean {
+  const session = texpresso;
+  if (!session || !texpressoShowing()) return false;
+  const file = projectRelativePath(session.rootDirectory, doc.path, pathKey);
+  if (file === null || settings.viewMode !== "split" || editor.cursorInfo().selectionLength)
+    return true;
+  const range = paragraphRangeAt(editor.getDoc(), editor.cursorInfo().from);
+  if (range.to > range.from)
+    session.post({ type: "select", file, from: range.from, to: range.to, blink: true });
+  return true;
+}
+
+/**
+ * A click or double-click in the frame: the word or paragraph is marked in the
+ * source, the caret does not move, and focus comes back to the editor. A
+ * double-click reveals it, opening its chapter when needed.
+ */
+async function texpressoSourceGesture(
+  session: TexpressoSession,
+  file: string | null,
+  from: number,
+  to: number,
+  detail: number,
+): Promise<void> {
+  // Evidence for the CDP layer and for a bug report: what the engine answered
+  // and what this side decided, without the document's text.
+  const record = (range: { from: number; to: number } | null) => {
+    preview.dataset.texpressoSource = JSON.stringify({ file, from, to, detail, range });
+  };
+  if (!file || settings.viewMode === "source") return record(null);
+  const path = joinDir(session.rootDirectory, file);
+  let reveal = detail >= 2;
+  if (!doc.path || pathKey(doc.path) !== pathKey(path)) {
+    // A single click marks inside the document already on screen; only a
+    // double-click is a "show me this" that may switch tabs. Opening a file on
+    // one click moved the caret to the top of another document.
+    if (detail < 2) return;
+    const existing = sessions.findByPath(path);
+    if (existing) await activateSession(existing.id);
+    else await openPath(path, { silent: true, rememberRecent: false });
+    if (!doc.path || pathKey(doc.path) !== pathKey(path) || session !== texpresso) return;
+    reveal = true;
+  }
+  const range = rangeForPreviewGesture(editor.getDoc(), from, to, detail);
+  record(range);
+  if (!range) return;
+  // `setSyncRange` blurs the editor so the PDF selection survives the
+  // decoration repaint, and `focus()` then re-reads a DOM selection that the
+  // blur cleared. Keep the caret the reader had: a click in the preview must
+  // mark, never move it.
+  const caret = editor.view.state.selection.main;
+  wordSyncDismissed = false;
+  syncedSource = range;
+  editor.setSyncRange(range.from, range.to);
+  if (reveal) {
+    suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+    editor.revealOffset(range.from);
+  }
+  editor.focus();
+  editor.view.dispatch({ selection: { anchor: caret.anchor, head: caret.head } });
+}
+
+/** Escape, from either pane: both marks go, nothing else changes. */
+function clearCorrespondence(): void {
+  window.clearTimeout(selectionTimer);
+  syncedSource = null;
+  editor.clearSyncRange();
+  clearPreviewWords();
+  texpresso?.post({ type: "clear" });
+}
+
+function texpressoGeometry(): EditorScrollGeometry {
+  const view = editor.view;
+  return {
+    offsetAtScreenY: (y) => editor.offsetAtScreenY(y),
+    lineOfOffset: (offset) => view.state.doc.lineAt(offset).number,
+    lineCount: () => view.state.doc.lines,
+    lineScrollTop: (line) => editor.lineScrollTop(line),
+    scrollTop: () => view.scrollDOM.scrollTop,
+    scrollerTop: () => view.scrollDOM.getBoundingClientRect().top,
+  };
+}
+
+/** The sync line in the frame's own coordinates. */
+function texpressoReference(): number {
+  const top = texpressoHostElement().getBoundingClientRect().top;
+  return Math.max(0, scrollReference() - top);
+}
+
+/** Source scrolled: bring the same line to the sync line in the frame. */
+function texpressoAlignPreview(): void {
+  const session = texpresso;
+  if (!session || !texpressoShowing() || !settings.syncScroll || settings.viewMode !== "split")
+    return;
+  const file = projectRelativePath(session.rootDirectory, doc.path, pathKey);
+  if (file === null) return;
+  const line = editorLineAt(texpressoGeometry(), scrollReference());
+  session.post({ type: "reveal", file, line, y: texpressoReference() });
+}
+
+/** The frame scrolled by a gesture: bring the same line to the sync line here. */
+function texpressoAlignSource(line: number | null, file: string | null): void {
+  const session = texpresso;
+  if (!session || !texpressoShowing() || line === null || !settings.syncScroll) return;
+  if (settings.viewMode !== "split" || syncDragging) return;
+  if (file !== projectRelativePath(session.rootDirectory, doc.path, pathKey)) return;
+  if (scrollOwnership.reflected("preview", texpressoScrollTop, performance.now())) return;
+  scrollOwnership.input();
+  const target = clampScroll(
+    editorScrollFor(texpressoGeometry(), line, scrollReference()),
+    editor.scrollMax(),
+  );
+  if (Math.abs(target - editor.view.scrollDOM.scrollTop) < 0.5) return;
+  suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+  editor.scrollToOffset(target);
+  scrollOwnership.wrote("source", editor.view.scrollDOM.scrollTop, performance.now());
+}
+
+function texpressoTheme(): TexpressoTheme {
+  const root = getComputedStyle(document.documentElement);
+  const value = (name: string, fallback: string): string =>
+    root.getPropertyValue(name).trim() || fallback;
+  const paper = value("--bg", isDark ? "#1e1e1e" : "#ffffff");
+  const pane = getComputedStyle(previewPane).backgroundColor;
+  return {
+    dark: isDark,
+    sync: value("--word-sync", "rgba(255, 193, 7, 0.3)"),
+    peak: value("--word-sync-peak", "rgba(255, 167, 0, 0.55)"),
+    paper,
+    pane: pane && pane !== "rgba(0, 0, 0, 0)" && pane !== "transparent" ? pane : paper,
+  };
+}
+
+/**
+ * Step 10's measurement: TeXpresso's own export (`xdvipdfmx` in the frame)
+ * against the shadow compile's PDF, page count and page text. Hidden command
+ * `view.latexTexpressoExport`; the result is a perf mark and
+ * `#preview[data-texpresso-export]`. Export itself always writes the WasmTex PDF.
+ */
+async function measureTexpressoExport(): Promise<void> {
+  const session = texpresso;
+  if (!session || !texpressoShowing()) return;
+  const reply = await session.request({ type: "export" }, 120_000);
+  if (!reply || reply.type !== "pdf") {
+    perfMark("texpresso-export", { ok: false });
+    preview.dataset.texpressoExport = JSON.stringify({ ok: false });
+    return;
+  }
+  const pdf = new Uint8Array(reply.pdf);
+  const reference = latexCurrent(latexPreview) ? latexPreview.result.pdf : null;
+  const [mine, theirs] = await Promise.all([
+    pdfPageTexts(pdf),
+    reference ? pdfPageTexts(reference) : Promise.resolve([] as string[]),
+  ]);
+  const first = theirs.findIndex((text, index) => text !== mine[index]);
+  const outcome = {
+    ok: true,
+    ms: Math.round(reply.ms),
+    bytes: pdf.length,
+    pages: [mine.length, theirs.length],
+    compared: reference !== null,
+    identicalText: reference !== null && mine.length === theirs.length && first < 0,
+    firstDifferentPage: first < 0 ? null : first + 1,
+  };
+  perfMark("texpresso-export", outcome);
+  preview.dataset.texpressoExport = JSON.stringify(outcome);
+}
+
+/**
+ * The hidden backend switch. Not a Preference: tests and the comparison use it
+ * (`view.latexBackend.texpresso`, `view.latexBackend.wasmtex`).
+ */
+function switchLatexBackend(next: LatexPreviewBackend): void {
+  if (!setLatexPreviewBackend(next)) return;
+  texpressoFailed.clear();
+  texpressoFallbackReason = null;
+  latexShadowKey = null;
+  texpressoRelease();
+  toast(next === "texpresso" ? "LaTeX preview: TeXpresso" : "LaTeX preview: WasmTex", 2600);
+  if (doc.language !== "latex") return;
+  // The pane's content belongs to the other backend: a PDF view, or nothing.
+  retirePreview();
+  invalidateLatexBuild("The preview backend changed; select Compile to update the preview.");
+  scheduleRender(true);
 }
 
 /** Decode the base64 PDF the Rust command returns. */
@@ -7984,6 +8759,10 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "view.latexReanchor": () => reanchorLatex("command"),
   // No menu item either: tests force a blue/green engine swap.
   "view.latexRecycle": () => recycleLatexEngine(),
+  // No menu items: the preview backend switch for tests and the comparison.
+  "view.latexBackend.texpresso": () => switchLatexBackend("texpresso"),
+  "view.latexBackend.wasmtex": () => switchLatexBackend("wasmtex"),
+  "view.latexTexpressoExport": () => measureTexpressoExport(),
   "view.preview": () => setViewMode("preview"),
   "view.sidebar": () => setSidebarVisible(!settings.sidebarVisible),
   "view.outline": () => setSidebarTab("outline"),
@@ -8840,6 +9619,7 @@ function syncPreviewFromSource(): void {
     }
     return;
   }
+  if (doc.language === "latex" && texpressoSyncSelection()) return;
   if ((doc.language === "typst" && settings.typstView === "pages") || doc.language === "latex") {
     if (wordSyncDismissed) {
       clearPreviewWords();
@@ -9337,7 +10117,9 @@ function queuePaneScroll(direction: SyncPane): void {
       ? editor.view.scrollDOM.scrollTop
       : doc.language === "html"
         ? (htmlPreview.layout()?.top ?? 0)
-        : previewPane.scrollTop;
+        : texpressoShowing()
+          ? texpressoScrollTop
+          : previewPane.scrollTop;
   if (scrollOwnership.reflected(direction, top, performance.now())) return;
   scrollOwnership.input();
   cancelAnimationFrame(paneSyncFrame);
@@ -9352,7 +10134,14 @@ function queuePaneScroll(direction: SyncPane): void {
     // A selection reveal owns the source for its short hand-off window; a
     // preview-scroll correction queued before the gesture must not move it away.
     if (direction === "preview" && performance.now() < suppressEditorScrollUntil) return;
-    if ((doc.language === "typst" && settings.typstView === "pages") || doc.language === "latex")
+    // The frame reports its own scrolling (`viewport`); only the source
+    // direction is queued here.
+    if (doc.language === "latex" && texpressoShowing()) {
+      if (direction === "source") texpressoAlignPreview();
+    } else if (
+      (doc.language === "typst" && settings.typstView === "pages") ||
+      doc.language === "latex"
+    )
       alignPagesScroll(direction);
     else if (doc.language === "html") {
       if (direction === "source") syncEditorToHtml();
@@ -9448,6 +10237,7 @@ function installPaneSync(): void {
   // keystroke, but a click is one discrete action.
   editorPane.addEventListener("click", () => {
     if (doc.language === "latex") {
+      if (texpressoBlinkSource()) return;
       if (
         settings.viewMode !== "split" ||
         editor.cursorInfo().selectionLength ||
@@ -9578,10 +10368,7 @@ function installPaneSync(): void {
       ) {
         event.preventDefault();
       }
-      window.clearTimeout(selectionTimer);
-      syncedSource = null;
-      editor.clearSyncRange();
-      clearPreviewWords();
+      clearCorrespondence();
     },
     true,
   );
@@ -11237,6 +12024,11 @@ async function boot(): Promise<void> {
     cursorBlink: settings.cursorBlink,
     linkAt: (pos) => linkAt(editor.getDoc(), pos, doc.language),
     linkClick: openLinkTarget,
+  });
+  // The TeXpresso edit stream: each transaction's own changes, before the
+  // render debounce and without a snapshot.
+  editor.onChanges((changes, base, text) => {
+    if (!preservingLatexHandoff) texpressoEdit(changes, base, text);
   });
   editor.onDocChanged((text) => {
     if (preservingLatexHandoff) return;

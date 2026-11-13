@@ -40,6 +40,7 @@
     "pdf:map:webview": "node scripts/pdf-webview-performance.mjs",
     "test:harness:unit": "node scripts/test-harness-ownership-unit.mjs",
     "latex:sdk:unit": "node scripts/latex-sdk-unit.mjs",
+    "texpresso:unit": "node scripts/texpresso-unit.mjs",
     "latex:texmf:unit": "node scripts/latex-texmf-unit.mjs",
     "latex:correspondence:unit": "node scripts/latex-correspondence-unit.mjs",
     "latex:preview": "node scripts/latex-preview-test.mjs",

@@ -14,11 +14,13 @@
 import DOMPurify from "dompurify";
 import * as api from "./api";
 import {
+  AsciidocIncludeCache,
   loadAsciiMath,
   preloadAsciidocIncludes,
   renderAsciidocChunks,
   renderAsciidocForPandoc,
   type AsciidocChunks,
+  type AsciidocIncludeCacheStats,
   type AsciidocIncludeMap,
 } from "./asciidoc-render";
 import {
@@ -29,6 +31,7 @@ import {
   renderMathIn,
   renderMermaidIn,
 } from "./markdown";
+import type { RenderedMath } from "./preview-render";
 import { batchesForChunks, settleMainThread } from "./preview-batches";
 import { renderAsciidocChunksAsync } from "./preview-worker-client";
 
@@ -139,6 +142,7 @@ function sanitizeAsciidoc(raw: string): string {
       "checked",
       "colspan",
       "data-lang",
+      "data-mdraft-math",
       "data-stem",
       "data-title",
       "data-value",
@@ -171,15 +175,52 @@ function insertAsciidocBatch(host: HTMLElement, batch: readonly string[]): void 
   while (holder.firstChild) host.appendChild(holder.firstChild);
 }
 
-/**
- * Everything after the HTML is inserted: line markers, source offsets, the two
- * mathematics passes, code highlighting, links and diagrams.
- *
- * The marker rewrite is deliberately on the whole host, not per chunk: the
- * line ranges of a block depend on the next marked block, which may live in the
- * following chunk.
- */
-async function finishAsciidoc(
+const previewIncludeCache = new AsciidocIncludeCache();
+
+/** Invalidate cached AsciiDoc includes (called on save, dirty buffer edits, or reload). */
+export function invalidateAsciidocIncludeCache(path?: string): void {
+  previewIncludeCache.invalidate(path);
+}
+
+/** Expose include cache telemetry (hits, misses, IPC reads) for benchmarks and diagnostics. */
+export function asciidocIncludeCacheStats(): AsciidocIncludeCacheStats {
+  return previewIncludeCache.stats();
+}
+
+function restoreAsciidocMath(host: HTMLElement, maths: readonly RenderedMath[] | undefined): void {
+  if (!maths || maths.length === 0) return;
+  const placeholders = Array.from(host.querySelectorAll<HTMLElement>("span[data-mdraft-math]"));
+  for (const placeholder of placeholders) {
+    const idx = Number(placeholder.getAttribute("data-mdraft-math"));
+    if (!Number.isInteger(idx) || idx < 0 || idx >= maths.length) {
+      placeholder.remove();
+      continue;
+    }
+    placeholder.replaceWith(mathNode(maths[idx]));
+  }
+}
+
+function scheduleDeferredMermaid(
+  host: HTMLElement,
+  isDark: boolean,
+  cancelled: () => boolean,
+): void {
+  if (!host.querySelector(".mermaid[data-mermaid]")) return;
+  const run = (): void => {
+    if (cancelled()) return;
+    void renderMermaidIn(host, isDark, cancelled);
+  };
+  if (typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(run);
+  } else {
+    setTimeout(run, 0);
+  }
+}
+
+/** Everything after the HTML is inserted EXCEPT Mermaid diagrams: line markers,
+ * source offsets, restoring pre-rendered KaTeX placeholders (with fallback for
+ * unrendered delimiters/stems), code highlighting, and links. */
+async function finalizeAsciidocDom(
   host: HTMLElement,
   chunks: AsciidocChunks,
   options: AsciidocRenderOptions,
@@ -221,9 +262,6 @@ async function finishAsciidoc(
     }
   }
 
-  // Turn the line ranges into source offsets once. The elements keep a `data-b`
-  // index so the bound map can find them after the HTML is inserted; nested
-  // blocks come later in document order, which is what lets the deepest one win.
   const lineOffsets: number[] = [0];
   for (let i = 0; i < source.length; i += 1) {
     if (source.charCodeAt(i) === 10) lineOffsets.push(i + 1);
@@ -240,14 +278,33 @@ async function finishAsciidoc(
   }
 
   if (options.math) {
-    renderMathIn(host);
-    await renderAsciiMathIn(host);
+    restoreAsciidocMath(host, chunks.maths);
+    if (!chunks.mathRendered && /\\[([]/.test(host.textContent ?? "")) {
+      renderMathIn(host);
+    }
+    if (host.querySelector('[data-stem="asciimath"]') !== null) {
+      await renderAsciiMathIn(host);
+    }
   }
   decorateCodeBlocks(host, options.mermaid);
   decorateLinks(host, options.baseDir);
-  await renderMermaidIn(host, options.isDark);
 
   return { linesMapped: host.querySelectorAll("[data-line]").length >= 2, blocks };
+}
+
+/**
+ * Synchronous DOM completion (including blocking Mermaid) for exports and
+ * headless tests.
+ */
+async function finishAsciidoc(
+  host: HTMLElement,
+  chunks: AsciidocChunks,
+  options: AsciidocRenderOptions,
+  source: string,
+): Promise<{ linesMapped: boolean; blocks: BlockRange[] }> {
+  const done = await finalizeAsciidocDom(host, chunks, options, source);
+  await renderMermaidIn(host, options.isDark);
+  return done;
 }
 
 /** Render AsciiDoc synchronously. Used by the export article and as the fallback. */
@@ -295,9 +352,14 @@ export async function renderAsciidocPreviewInto(
       return { linesMapped: false, blocks: [] };
     }
     const readFile = async (path: string) => (await api.readDocument(path)).content;
+    const cachedReadFile = (path: string) => previewIncludeCache.readThrough(path, readFile);
     let includes: AsciidocIncludeMap | null = null;
     try {
-      includes = await preloadAsciidocIncludes(source, { baseDir: options.baseDir, readFile });
+      includes = await preloadAsciidocIncludes(source, {
+        baseDir: options.baseDir,
+        readFile,
+        cache: previewIncludeCache,
+      });
     } catch {
       includes = null;
     }
@@ -316,7 +378,7 @@ export async function renderAsciidocPreviewInto(
         chunks = await renderAsciidocChunks(source, {
           baseDir: options.baseDir,
           math: options.math,
-          readFile,
+          readFile: cachedReadFile,
         });
       } else {
         chunks = outcome.data;
@@ -325,7 +387,7 @@ export async function renderAsciidocPreviewInto(
       chunks = await renderAsciidocChunks(source, {
         baseDir: options.baseDir,
         math: options.math,
-        readFile,
+        readFile: cachedReadFile,
       });
     }
     if (cancelled()) return null;
@@ -340,11 +402,12 @@ export async function renderAsciidocPreviewInto(
       lastYield = await settleMainThread(lastYield);
       if (cancelled()) return null;
     }
-    const done = await finishAsciidoc(staging, chunks, options, source);
+    const done = await finalizeAsciidocDom(staging, chunks, options, source);
     if (cancelled()) return null;
     const fragment = document.createDocumentFragment();
     while (staging.firstChild) fragment.appendChild(staging.firstChild);
     host.replaceChildren(fragment);
+    if (options.mermaid) scheduleDeferredMermaid(host, options.isDark, cancelled);
     return done;
   } catch (error) {
     if (cancelled()) return null;

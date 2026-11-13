@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>TeXpresso</title>
+<script src="./mdraft-pre.js"></script>
+<script src="./theme.js"></script>
+<link rel="stylesheet" href="./texpresso.css">
+<link rel="stylesheet" href="./mdraft-embedded.css">
+</head>
+<body>
+
+<header>
+  <button class="icon" id="drawer" title="Show or hide the files" aria-label="Files" aria-expanded="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M6 2.5v11"/><path class="fill" d="M2.2 3.2h3.1v9.6H2.2z" fill="currentColor" stroke="none"/></svg></button>
+  <span class="brand secondary">TeXpresso<span id="channel" hidden></span></span>
+  <span class="project"><button id="project" title="Projects in this browser: open another one, make a new one"
+    aria-haspopup="dialog"><span id="project-name"></span> <span class="caret" aria-hidden="true">▾</span></button>
+    <button class="icon secondary in-menu" id="new-project" title="New project">+</button>
+    <button class="icon secondary in-menu" id="rename-project" title="Rename this project">✎</button>
+    <button class="icon secondary in-menu" id="delete-project" title="Delete this project">🗑</button></span>
+  <nav id="menubar" aria-label="Main menu"></nav>
+  <label class="secondary in-menu">Main file <select id="main"></select></label>
+  <button id="run" class="secondary in-menu" disabled title="Compile again from scratch, with empty auxiliary files (.aux, .toc…). Edits are compiled as you type.">Rebuild</button>
+  <button id="export-pdf" class="in-menu" title="Download the PDF of the document (made with xdvipdfmx)">Export PDF</button>
+  <button id="share" title="Edit this project with others">Share</button>
+  <span id="engine-menu" class="secondary"></span>
+  <span id="status" role="status" title="Loading…" aria-label="Loading…">⋯</span>
+  <span id="downloads" hidden></span>
+  <span id="notice" aria-live="polite"></span>
+  <!-- (right of the notice, which takes the room left: at the right) -->
+  <span id="panes" role="group" aria-label="Panes"><button data-panes="edit" title="The editor only">Edit</button><button
+    data-panes="both" title="The editor and the preview">Both</button><button
+    data-panes="window" title="The preview in a window of its own (for another screen or a projector), the editor here">Window</button><button
+    data-panes="pdf" title="The preview only">PDF</button></span>
+  <button class="secondary" id="feedback-open" hidden>Feedback</button>
+  <button class="icon secondary in-menu" id="settings" title="Settings" aria-label="Settings">⚙</button>
+  <button id="install" class="secondary" title="Install TeXpresso as an app on this device" hidden>Install</button>
+  <a class="icon secondary" id="help" href="manual.html" target="_blank" title="Manual" aria-label="Manual">?</a>
+  <button class="icon" id="more" title="More" aria-label="More" aria-expanded="false">⋯</button>
+</header>
+<main>
+  <aside id="sidebar">
+    <div class="splitter cols" id="split-sidebar" role="separator" aria-orientation="vertical" tabindex="0"
+         title="Drag to resize (double-click: default size)"></div>
+    <div class="bar">
+      <span class="title side-tabs" role="tablist">
+        <button class="side-tab" role="tab" data-side="files" aria-selected="true">Files</button>
+        <button class="side-tab" role="tab" data-side="outline" aria-selected="false" title="The parts, chapters, sections and frames of the document, as TeX ran them">Outline</button></span>
+      <button class="icon" id="new-file" title="New file">+</button>
+      <button class="icon" id="upload" hidden title="Upload files, or a project as .zip or .tar.gz">⇪</button>
+      <button class="icon" id="upload-folder" title="Upload a folder"><span>📁</span></button>
+      <input type="file" id="upload-input" multiple hidden>
+      <input type="file" id="upload-folder-input" webkitdirectory hidden>
+      <button class="icon" id="download" title="Download the project (.zip)">⇩</button>
+      <button class="icon" id="link-folder" title="Sync the project with a folder on disk, both ways" aria-pressed="false" hidden>⇄</button>
+      <button class="icon" id="link-dropbox" title="Sync the project with a folder of your Dropbox, both ways" aria-pressed="false" hidden>☁</button>
+      <button class="icon" id="link-github" title="Commit the project to a GitHub repository, and pull from it" aria-pressed="false" aria-label="GitHub" hidden><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="4.5" cy="3.25" r="1.75"/><circle cx="4.5" cy="12.75" r="1.75"/><circle cx="11.5" cy="5.25" r="1.75"/><path d="M4.5 5v6M11.5 7c0 2.5-2.5 2.5-5.5 4.25"/></svg></button>
+    </div>
+    <ul id="files"></ul>
+    <ul id="outline" hidden></ul>
+    <div id="folder-box" hidden><span id="folder-status"></span>
+      <button id="folder-reconnect" hidden>Reconnect</button></div>
+    <div id="github-box" hidden><span id="github-status"></span>
+      <button id="github-pull" title="Bring the changes of the repository into the project">Pull</button>
+      <button id="github-commit" title="Send the changes of the project to the repository, as one commit">Commit…</button></div>
+    <details id="hidden-box" hidden>
+      <summary title="Files of the project not shown in the list above (TeX still reads them). Right-click a file in the list to hide it.">Hidden files</summary>
+      <ul id="hidden"></ul>
+      <label id="hide-aux-label" title="Files LaTeX and its tools write (.aux, .log, .toc, .bbl...), and the PDF of the main file"><input type="checkbox" id="hide-aux"> Hide auxiliary files</label></details>
+    <details id="outputs-box" hidden>
+      <summary title="Files written by TeX. ⚑: kept for the next visit (by default, those LaTeX reads back: .aux, .toc...). Right-click a file for more, or drag it onto the files to add it to the project.">Written by TeX</summary>
+      <ul id="outputs"></ul></details>
+    <div id="feedback-box" hidden>
+      <button id="feedback-sidebar" hidden>Feedback</button>
+    </div>
+    <div class="hint">Drop files, folders or a .zip (or arXiv's .tar.gz) anywhere to add them.
+      <button class="icon" id="reset" title="Remove all files and start again from the example">Reset…</button></div>
+  </aside>
+  <section id="editor">
+    <div class="splitter cols" id="split-editor" role="separator" aria-orientation="vertical" tabindex="0"
+         title="Drag to resize (double-click: default size)"></div>
+    <div class="bar" id="editor-bar"><span class="title" id="file-title"></span><span class="spacer"></span>
+      <select id="frames" aria-label="Frames" title="Frames of this file" hidden></select>
+      <button class="icon" id="new-frame" title="New frame after this one" hidden>+ Frame</button>
+      <button class="icon" id="authors" aria-pressed="true" hidden
+              title="Who wrote what: underline the text of the others with their color (since they opened the project)">A̲</button>
+      <button class="icon" id="to-preview" title="Show this line in the preview (Alt+Enter). Double-click the preview to come back.">⇥</button></div>
+    <div id="source"></div>
+    <div id="binary" hidden></div>
+    <div id="bottom">
+      <div class="splitter rows" id="split-bottom" role="separator" aria-orientation="horizontal" tabindex="0"
+           title="Drag to resize (double-click: default size)"></div>
+      <div class="bar">
+        <button class="tab active" data-tab="problems">Problems <span id="problem-count"></span></button>
+        <button class="tab" data-tab="stdout">Output</button>
+        <span class="spacer"></span>
+        <button class="icon" id="toggle-bottom" title="Collapse">▾</button>
+      </div>
+      <ul id="problems"></ul>
+      <pre id="stdout" hidden></pre>
+    </div>
+  </section>
+  <section id="preview">
+    <div class="bar" id="preview-bar">
+      <button class="icon" id="prev-page" title="Previous page">◀</button>
+      <input id="page-input" value="0" aria-label="Page"> <span>/ <span id="page-count">0</span></span>
+      <button class="icon" id="next-page" title="Next page">▶</button>
+      <span class="title"></span>
+      <button class="icon" id="slides" aria-pressed="false" title="Slides: one slide at a time, following the frame being edited (for beamer)">▭</button>
+      <button class="icon" id="present" title="Present: slides in full screen (arrows to move, Esc to leave)" hidden>⛶</button>
+      <button class="icon" id="detach" title="Put the preview back in the main window" aria-pressed="false">⧉</button>
+      <button class="icon" id="zoom-out" title="Zoom out">−</button>
+      <select id="zoom" aria-label="Zoom">
+        <option value="fit-width">Fit width</option>
+        <option value="fit-page">Fit page</option>
+        <option value="0.5">50%</option><option value="0.75">75%</option><option value="1">100%</option>
+        <option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option>
+        <option value="3">300%</option>
+        <option value="custom" hidden></option>
+      </select>
+      <button class="icon" id="zoom-in" title="Zoom in">+</button>
+    </div>
+    <div id="pages" tabindex="-1"></div>
+  </section>
+</main>
+<!-- Small screens: the panes shown -->
+<nav id="views" aria-label="Panes">
+  <button data-view="files">Files</button><button data-view="edit">Edit</button><button data-view="both">Both</button><button
+    data-view="window" title="The preview in a window of its own (for another screen or a projector)">Window</button><button data-view="pdf">PDF</button>
+</nav>
+<!-- Over the on-screen keyboard: what TeX needs and keyboards hide -->
+<div id="keys" aria-label="TeX keys"></div>
+<div id="author-tip" role="status" hidden></div>
+<div id="drop">Drop files to add them to the project</div>
+<div id="lock" hidden>
+  <div class="box" role="alertdialog" aria-labelledby="lock-message">
+    <p id="lock-message"></p>
+    <div class="buttons"><button class="primary" id="lock-claim">Edit here</button>
+      <button class="primary" id="lock-reload" hidden>Reload</button></div>
+    <div class="others" id="lock-others" hidden><label for="lock-project">Or open another project:</label>
+      <select id="lock-project"></select><button id="lock-open">Open</button>
+      <button class="secondary" id="lock-new">New project</button></div>
+  </div>
+</div>
+<div id="keep-offer" role="alertdialog" aria-labelledby="keep-offer-text" hidden>
+  <p id="keep-offer-text"></p>
+  <p><small>They get them when they open the project again, even if nobody else is online. Kept 7 days after
+    the last change, encrypted with the key of the link, without guarantee: the copy in each browser stays
+    the reference.</small></p>
+  <div class="buttons"><button id="keep-no">No, thanks</button><button class="primary" id="keep-yes">Keep the changes</button></div>
+</div>
+<dialog id="welcome-dialog" aria-labelledby="welcome-title">
+  <form method="dialog">
+    <div class="welcome-head"><img src="favicon.svg" alt="">
+      <div><p class="dlg-title" id="welcome-title">Welcome to TeXpresso</p>
+        <p class="lead">A LaTeX editor that compiles as you type, in your browser.</p></div></div>
+    <ul>
+      <li><b>The page follows your typing.</b> No compile button: each change shows at once,
+        and a click on the page takes you to its line.</li>
+      <li><b>Your documents stay with you.</b> They are kept in this browser and work offline;
+        they leave it only when you share or sync them.</li>
+      <li><b>Write together.</b> Share a link, and edit the same document with others, live.</li>
+    </ul>
+    <p class="welcome-start">How would you like to start?</p>
+    <div class="welcome-choices">
+      <button value="tour" class="primary" autofocus><b>Take the tour</b>
+        <span>An example document that shows what TeXpresso does</span></button>
+      <button value="blank"><b>A new document</b><span>An empty article, ready to write</span></button>
+      <button type="button" id="welcome-open"><b>Open my files</b>
+        <span>.tex files, a .zip, or the sources of an arXiv paper (.tar.gz); or drop them on the page</span></button>
+    </div>
+    <p class="dlg-note">TeXpresso is in beta: tell us what works and what does not with Send feedback.
+      The <a href="manual.html" target="_blank">manual</a> is behind the <b>?</b> at the top right.</p>
+  </form>
+</dialog>
+<dialog id="projects-dialog" aria-labelledby="projects-title">
+  <form method="dialog">
+    <div class="dlg-head"><p class="dlg-title" id="projects-title">Projects</p>
+      <button type="button" class="primary" id="projects-new">New project…</button></div>
+    <p class="dlg-note">Kept in this browser.</p>
+    <ul id="projects-list"></ul>
+    <div class="buttons"><button value="close">Close</button></div>
+  </form>
+</dialog>
+<dialog id="definition-dialog" aria-labelledby="definition-title">
+  <div class="dlg-head"><p class="dlg-title" id="definition-title"></p>
+    <button type="button" id="definition-close" aria-label="Close">✕</button></div>
+  <p class="dlg-note">A file of the TeX distribution, read only.</p>
+  <div id="definition-view"></div>
+</dialog>
+<dialog id="settings-dialog">
+  <form method="dialog">
+    <p class="dlg-title">Settings</p>
+    <p class="dlg-note">Kept in this browser.</p>
+    <details data-topic="project">
+      <summary>This project</summary>
+      <label class="row">Compiled with <select name="bundle"></select></label>
+      <p class="hint" id="bundle-hint"></p>
+      <label class="row">Engine <select name="engine"></select></label>
+      <p class="hint" id="engine-hint"></p>
+    </details>
+    <details data-topic="editor">
+      <summary>Editor and preview</summary>
+      <label><input type="checkbox" name="cursor"> Show the cursor in the preview</label>
+      <p class="hint">The preview scrolls to keep it in view.</p>
+      <div class="sub-option">
+        <label><input type="checkbox" name="predict"> Show typing immediately</label>
+        <p class="hint">Before the engine catches up, without kerning.</p>
+      </div>
+      <label><input type="checkbox" name="swap"> Preview on the left</label>
+      <label><input type="checkbox" name="vim"> Vim keys</label>
+      <p class="hint">In the editor: Esc for normal mode, <kbd>:w</kbd> saves.</p>
+    </details>
+    <details data-topic="theme">
+      <summary>Theme</summary>
+      <fieldset>
+        <label><input type="radio" name="theme" value="auto"> Auto</label>
+        <label><input type="radio" name="theme" value="light"> Light</label>
+        <label><input type="radio" name="theme" value="dark"> Dark</label>
+      </fieldset>
+      <label><input type="checkbox" name="darkPages"> Theme applies to the preview</label>
+      <p class="hint">Dark, the pages take the colors of the theme, their colors inverted (not those of
+        the images). The PDF keeps those of the document.</p>
+    </details>
+    <details data-topic="spelling">
+      <summary>Spelling</summary>
+      <label><input type="radio" name="spell" value="off"> Not checked</label>
+      <label><input type="radio" name="spell" value="browser"> By the browser</label>
+      <p class="hint">In the languages of the browser's settings.</p>
+      <label><input type="radio" name="spell" value="custom"> By TeXpresso</label>
+      <p class="hint">With its dictionaries, in the languages chosen below; right-click a word for suggestions.</p>
+      <div class="sub-option" id="spell-langs">
+        <label><input type="checkbox" name="spellAuto"> The languages of the document (babel, polyglossia)</label>
+        <div id="spell-dicts"></div>
+      </div>
+      <p class="hint">Only the text of the sources is checked: not commands, math, labels, references...</p>
+    </details>
+    <details data-topic="ai">
+      <summary>AI assistance</summary>
+      <label><input type="checkbox" name="aiEnabled"> Enable AI assistance</label>
+      <p class="hint">Answers in the AI tab of the conversation panel, from a model of the provider of
+        your choice, with your API key. What you ask, and the files it reads, go from this browser to that provider,
+        under its terms; never through TeXpresso.</p>
+      <div class="sub-option" id="ai-options">
+        <label class="row">Provider <select name="aiProvider"></select></label>
+        <div id="ai-custom">
+          <label class="row">URL <input type="url" name="aiUrl" placeholder="https://example.com/v1"
+            spellcheck="false" autocomplete="off"></label>
+          <label class="row">Format <select name="aiFormat"></select></label>
+          <p class="hint">The endpoint's base: requests go to …/messages, …/chat/completions, …/models.</p>
+        </div>
+        <label class="row">API key <input type="password" name="aiKey" spellcheck="false" autocomplete="off"></label>
+        <p class="hint" id="ai-key-hint"></p>
+        <label><input type="checkbox" name="aiRemember"> Remember the key on this device</label>
+        <p class="hint">Else it is forgotten when the tab closes.</p>
+        <label class="row">Model <input name="aiModel" list="ai-models" spellcheck="false" autocomplete="off"
+          placeholder="List them below"></label>
+        <datalist id="ai-models"></datalist>
+        <p class="ai-test"><button type="button" id="ai-test">List the models</button>
+          <span id="ai-status" role="status"></span></p>
+      </div>
+    </details>
+    <details data-topic="system">
+      <summary>Performance and privacy</summary>
+      <label><input type="checkbox" name="lowPower"> Low power</label>
+      <p class="hint">Only the pages on screen are compiled; the next ones as you scroll to them. Saves battery on
+        long documents.</p>
+      <label><input type="checkbox" name="crashes"> Send crash reports</label>
+      <p class="hint" id="crashes-hint">When the engine or the app fails: the error, the app's version and the browser,
+        never your documents. Repeats are sent once a day.</p>
+    </details>
+    <div class="buttons"><button value="close" class="primary">Close</button></div>
+  </form>
+</dialog>
+<dialog id="feedback-dialog" aria-label="Feedback and AI assistance">
+  <header title="Show or hide the conversation"><div><strong></strong><small></small></div>
+    <nav class="tabs" role="tablist" hidden>
+      <button type="button" role="tab" data-tab="chat" title="Write to the people editing this project">Chat</button>
+      <button type="button" role="tab" data-tab="feedback" title="Tell us what works and what does not">Feedback</button>
+      <button type="button" role="tab" data-tab="ai" title="Ask the model of your provider about the document">AI</button>
+    </nav>
+    <button class="close" title="Close (Esc)" aria-label="Close">×</button></header>
+  <section class="pane" data-tab="chat" data-title="Chat" data-subtitle="with the people editing this project" hidden>
+    <div class="log" role="log" aria-live="polite"></div>
+    <div class="attached" hidden><span title="Show this place in the editor"></span><button type="button" class="drop" title="Remove" aria-label="Remove">×</button></div>
+    <form class="compose">
+      <button type="button" class="attach" title="Point to the cursor or the selection of the editor (also in the menu of the editor and of the preview)" aria-label="Attach the place of the cursor">📍</button>
+      <textarea name="message" rows="1" maxlength="4000" placeholder="Write to the others…" aria-label="Message"></textarea>
+      <button class="send" title="Send (Enter; Shift+Enter: new line)" aria-label="Send" disabled>➤</button>
+    </form>
+  </section>
+  <section class="pane" data-tab="feedback" data-title="TeXpresso" data-subtitle="beta · we read every message" hidden>
+    <div class="log" role="log" aria-live="polite"></div>
+    <form class="compose">
+      <textarea name="message" rows="1" maxlength="10000" placeholder="Write a message…" aria-label="Message"></textarea>
+      <button class="send" title="Send (Enter; Shift+Enter: new line)" aria-label="Send" disabled>➤</button>
+      <label class="trap" aria-hidden="true">Website <input type="text" name="website" tabindex="-1" autocomplete="off"></label>
+    </form>
+    <p class="foot"></p>
+  </section>
+  <section class="pane" data-tab="ai" data-title="AI assistance" hidden>
+    <div class="log" role="log" aria-live="polite"></div>
+    <form class="compose">
+      <textarea name="message" rows="1" maxlength="20000" placeholder="Ask about the document…" aria-label="Question"></textarea>
+      <button class="send" title="Send (Enter; Shift+Enter: new line)" aria-label="Send" disabled>➤</button>
+    </form>
+    <p class="foot"></p>
+  </section>
+</dialog>
+<dialog id="share-dialog">
+  <form method="dialog">
+    <p class="dlg-title">Share this project</p>
+    <div class="share-off">
+      <p class="dlg-note">Anyone with the link can edit the project with you. The files go directly from
+        browser to browser, while the project is open in both. The server that connects them
+        sees neither the files nor the key of the link.</p>
+      <div class="buttons"><button value="cancel" formnovalidate>Cancel</button><button value="share" class="primary">Share</button></div>
+    </div>
+    <div class="share-on">
+      <p class="dlg-note">Anyone with this link can edit the project:</p>
+      <label><input type="text" id="share-link" readonly aria-label="Link" spellcheck="false">
+        <button type="button" id="share-copy">Copy</button><button type="button" id="share-send" hidden>Send…</button></label>
+      <label>Your name <input type="text" id="share-name" maxlength="40" spellcheck="false"></label>
+      <p class="dlg-note" id="share-users"></p>
+      <div id="share-keep" hidden>
+        <p class="dlg-note" id="share-keep-text"></p>
+        <div class="buttons"><button type="button" id="share-keep-button"></button></div>
+      </div>
+      <div class="buttons"><button value="stop" id="share-stop">Stop sharing</button><button value="close" class="primary">Close</button></div>
+    </div>
+  </form>
+</dialog>
+<dialog id="folder-dialog">
+  <form method="dialog">
+    <p class="dlg-title"></p>
+    <p class="dlg-note"></p>
+    <label><input type="radio" name="choice" value="replace"> <span data-text="replace"></span></label>
+    <label><input type="radio" name="choice" value="folder"> <span data-text="folder"></span></label>
+    <label><input type="radio" name="choice" value="project"> <span data-text="project"></span></label>
+    <p class="dlg-note" data-text="then"></p>
+    <div class="buttons"><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary" data-text="ok"></button></div>
+  </form>
+</dialog>
+
+<dialog id="engine-unsupported-dialog">
+  <form method="dialog">
+    <p class="dlg-title">Please update your browser</p>
+    <p class="dlg-note">This version cannot run TeX: the engine needs WebAssembly's JavaScript Promise
+      Integration, in Chrome, Edge, Opera and Brave from version 137, Firefox from 153 and Safari from 27
+      (on iPhone and iPad, with iOS 27). Update your browser, or open the app in another one, to
+      compile; meanwhile your projects can still be edited.</p>
+    <div class="buttons"><button value="ok" class="primary">OK</button></div>
+  </form>
+</dialog>
+
+<dialog id="folder-unavailable-dialog">
+  <form method="dialog">
+    <p class="dlg-title">Sync with a folder on disk</p>
+    <p class="dlg-note">Needs a desktop Chrome or a Chromium-based browser (Edge, Opera, Brave…), the only ones
+      with the File System Access API.</p>
+    <div class="buttons"><button value="ok" class="primary">OK</button></div>
+  </form>
+</dialog>
+
+<dialog id="dropbox-dialog">
+  <form method="dialog">
+    <p class="dlg-title account"><span id="dropbox-account">Dropbox</span>
+      <button type="button" id="dropbox-disconnect" class="icon" title="Log out of Dropbox in this browser">Disconnect</button></p>
+    <p class="dlg-note">The folder to sync the project with:</p>
+    <div class="where"><button type="button" id="dropbox-up" title="Up">↑</button><span id="dropbox-path">/</span>
+      <button type="button" id="dropbox-new">New folder…</button></div>
+    <ul id="dropbox-folders"></ul>
+    <div class="buttons"><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Sync with this folder</button></div>
+  </form>
+</dialog>
+
+<dialog id="github-token-dialog">
+  <form method="dialog">
+    <p class="dlg-title">Connect to GitHub</p>
+    <p class="dlg-note">TeXpresso reaches GitHub with a personal access token, kept in this browser only.
+      <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Make one on GitHub</a>
+      (a fine-grained token):</p>
+    <ol class="dlg-note github-steps">
+      <li><strong>Repository access</strong>: the repositories of your projects, or all of them.</li>
+      <li><strong>Permissions</strong>, for repositories: add <strong>Contents</strong>, set to
+        <strong>Read and write</strong>. It is the one TeXpresso needs, to read the files of a repository
+        (Pull) and to write them (Commit); a new token does not have it until you add it.</li>
+      <li><strong>Generate token</strong>, and paste it here.</li>
+    </ol>
+    <input id="github-token" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_…" required>
+    <p class="dlg-error"></p>
+    <div class="buttons"><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Connect</button></div>
+  </form>
+</dialog>
+
+<dialog id="github-dialog">
+  <form method="dialog">
+    <p class="dlg-title account"><span id="github-account">GitHub</span>
+      <button type="button" id="github-disconnect" class="icon" title="Forget the token in this browser">Disconnect</button></p>
+    <p class="dlg-note">The repository to commit the project to:</p>
+    <label><span>Repository</span><input id="github-repo" list="github-repos" placeholder="owner/name" autocomplete="off" spellcheck="false" required></label>
+    <datalist id="github-repos"></datalist>
+    <label><span>Branch</span><input id="github-branch" list="github-branches" placeholder="its default branch" autocomplete="off" spellcheck="false"></label>
+    <datalist id="github-branches"></datalist>
+    <label><span>Folder in it</span><input id="github-dir" placeholder="none: all of it" autocomplete="off" spellcheck="false"></label>
+    <p class="dlg-note">Nothing is sent before you commit: Pull brings the changes of the repository into the project, Commit sends those of the project.</p>
+    <p class="dlg-error"></p>
+    <div class="buttons"><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Link</button></div>
+  </form>
+</dialog>
+
+<dialog id="github-commit-dialog">
+  <form method="dialog">
+    <p class="dlg-title"></p>
+    <ul id="github-changes"></ul>
+    <textarea id="github-message" placeholder="What changed" required></textarea>
+    <div class="buttons"><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Commit and push</button></div>
+  </form>
+</dialog>
+
+<div id="file-menu" class="menu" role="menu" hidden></div>
+<div id="output-menu" class="menu" role="menu" hidden>
+  <button role="menuitem" data-act="show">Show</button>
+  <button role="menuitem" data-act="add">Add to the project</button>
+  <button role="menuitem" data-act="keep">Keep for the next visit</button>
+  <button role="menuitem" data-act="download">Download</button>
+  <hr>
+  <button role="menuitem" data-act="clean">Clean</button>
+  <button role="menuitem" data-act="clean-all">Clean all</button>
+</div>
+
+<dialog id="output-dialog">
+  <form method="dialog">
+    <p class="dlg-title"></p>
+    <p class="dlg-note">Written by TeX: read-only.</p>
+    <pre id="output-text"></pre>
+    <div class="buttons"><button value="add">Add to the project</button><button value="close" class="primary">Close</button></div>
+  </form>
+</dialog>
+
+<dialog id="zip-dialog">
+  <form method="dialog">
+    <p class="dlg-title"></p>
+    <p class="dlg-note"></p>
+    <label data-choice="project"><input type="radio" name="choice" value="project"> Open it as a new project</label>
+    <label data-choice="root"><input type="radio" name="choice" value="root"> Add its files to the project</label>
+    <label data-choice="folder"><input type="radio" name="choice" value="folder"> Extract into the folder
+      <input type="text" name="folder" aria-label="Folder" spellcheck="false"></label>
+    <label data-choice="keep"><input type="radio" name="choice" value="keep"> Keep the archive as it is</label>
+    <div class="buttons"><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">OK</button></div>
+  </form>
+</dialog>
+
+<script type="module" src="./mdraft-bridge.js"></script>
+<script type="module" src="./mdraft-boot.js"></script>
+</body>
+</html>

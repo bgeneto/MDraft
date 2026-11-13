@@ -182,7 +182,9 @@ function validAsciidocData(value: unknown): boolean {
     Array.isArray(data.chunks) &&
     Array.isArray(data.marks) &&
     typeof data.hasHeader === "boolean" &&
-    typeof data.notitle === "boolean"
+    typeof data.notitle === "boolean" &&
+    (data.maths === undefined || Array.isArray(data.maths)) &&
+    (data.mathRendered === undefined || typeof data.mathRendered === "boolean")
   );
 }
 

@@ -277,14 +277,22 @@ fn engine_assets(engine_name: &str) -> Option<&'static [EngineAsset]> {
     }
 }
 
-/// Whether an engine's files are all present (their digests are verified when served).
+/// Whether an engine's files are all present and match the active release.
+///
+/// When `latex-engine.json` switches years, `install_latex` updates the core
+/// set and overwrites `.release` while older optional engine files stay on
+/// disk; verifying the optional group's digests refuses stale files so the
+/// reader is offered the active release's download instead of failing on serve.
 fn engine_group_installed(assets: &Path, engine_name: &str) -> bool {
-    engine_assets(engine_name).is_some_and(|group| {
-        group.iter().all(|asset| {
-            fs::symlink_metadata(assets.join(&asset.name))
-                .is_ok_and(|meta| meta.file_type().is_file())
-        })
-    })
+    if engine_name == "lualatex" {
+        return engine_assets(engine_name).is_some_and(|group| {
+            group.iter().all(|asset| {
+                fs::symlink_metadata(assets.join(&asset.name))
+                    .is_ok_and(|meta| meta.file_type().is_file())
+            })
+        });
+    }
+    engine_assets(engine_name).is_some_and(|group| assets_match(assets, group))
 }
 
 /// Whether the bundled engine can compile with `engine` right now:
@@ -293,6 +301,10 @@ fn engine_group_installed(assets: &Path, engine_name: &str) -> bool {
 pub fn latex_engine_available(app: AppHandle, engine: String) -> Result<bool, String> {
     if !enabled() {
         return Ok(false);
+    }
+    // "texpresso" is the preview backend's own file set, not a TeX engine group.
+    if engine == "texpresso" {
+        return Ok(crate::latex_texpresso::available(&directory(&app)?));
     }
     let assets = directory(&app)?.join("assets");
     Ok(engine_installed(&assets) && engine_group_installed(&assets, &engine))
@@ -309,6 +321,14 @@ pub async fn install_latex_engine(app: AppHandle, engine: String) -> Result<(), 
         let _install = INSTALL_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if engine == "texpresso" {
+            // The same condition as every other LaTeX download: only after the
+            // reader has enabled bundled TeX.
+            if !enabled() {
+                return Err("Bundled TeX is not enabled.".into());
+            }
+            return crate::latex_texpresso::install(&directory(&app)?);
+        }
         let group = engine_assets(&engine)
             .ok_or_else(|| format!("This build does not offer the {engine} engine."))?;
         let assets = directory(&app)?.join("assets");
@@ -503,12 +523,25 @@ pub struct LatexStats {
     asset_requests: u64,
     cache_hits: u64,
     cache_misses: u64,
+    /// The TeXpresso backend's cache: files served from disk, files downloaded,
+    /// bytes that passed SHA-256 verification, and requests refused because a
+    /// file failed it or is not pinned.
+    texpresso_hits: u64,
+    texpresso_misses: u64,
+    texpresso_verified_bytes: u64,
+    texpresso_refusals: u64,
 }
 
 /// Aggregate transport counters, without document paths or content.
 #[tauri::command]
 pub fn latex_stats() -> LatexStats {
+    let (texpresso_hits, texpresso_misses, texpresso_verified_bytes, texpresso_refusals) =
+        crate::latex_texpresso::stats();
     LatexStats {
+        texpresso_hits,
+        texpresso_misses,
+        texpresso_verified_bytes,
+        texpresso_refusals,
         asset_requests: ASSET_REQUESTS.load(Ordering::Relaxed),
         cache_hits: CACHE_HITS.load(Ordering::Relaxed),
         cache_misses: CACHE_MISSES.load(Ordering::Relaxed),
@@ -535,7 +568,9 @@ pub fn latex_cache_info(app: AppHandle) -> Result<LatexCacheInfo, String> {
     let root = directory(&app)?;
     let limit_mb = CACHE_LIMIT_MB.load(Ordering::Relaxed).min(u32::MAX as u64) as u32;
     Ok(LatexCacheInfo {
-        bytes: cache_size(&root.join("mirror")).unwrap_or(0),
+        bytes: cache_size(&root.join("mirror"))
+            .unwrap_or(0)
+            .saturating_add(crate::latex_texpresso::cache_bytes(&root)),
         limit_mb,
         enabled: enabled(),
         installed: engine_installed(&root.join("assets")),
@@ -575,7 +610,7 @@ pub fn latex_clear_cache(app: AppHandle) -> Result<u64, String> {
     if mirror.exists() {
         fs::remove_dir_all(&mirror).map_err(|e| e.to_string())?;
     }
-    Ok(freed)
+    Ok(freed.saturating_add(crate::latex_texpresso::clear(&root)?))
 }
 
 fn download(url: &str) -> Result<Vec<u8>, String> {
@@ -697,7 +732,7 @@ fn safe_relative(path: &str) -> bool {
             .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
-fn cache_size(dir: &Path) -> Result<u64, String> {
+pub(crate) fn cache_size(dir: &Path) -> Result<u64, String> {
     if !dir.exists() {
         return Ok(0);
     }
@@ -729,7 +764,7 @@ fn cache_size(dir: &Path) -> Result<u64, String> {
 /// cache and then fails is worse than one that spends a moment making room. The
 /// modification time is the recency signal, which is what the filesystem already
 /// records and what a reader's own file manager would show.
-fn evict_to_limit(dir: &Path, limit: u64) -> Result<u64, String> {
+pub(crate) fn evict_to_limit(dir: &Path, limit: u64) -> Result<u64, String> {
     if !dir.exists() {
         return Ok(0);
     }
@@ -807,6 +842,9 @@ pub fn serve(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeResp
                 return Err("LuaLaTeX is not enabled.".into());
             }
             let path = request.uri().path();
+            if let Some(answer) = crate::latex_texpresso::serve(&root, path) {
+                return answer;
+            }
             if let Some(name) = path.strip_prefix(engine().asset_prefix.as_str()) {
                 let Some(asset) = pinned_asset(name) else {
                     return Err("Unknown asset".into());
@@ -881,6 +919,12 @@ pub fn serve(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeResp
             .header(header::CONTENT_TYPE, content_type)
             .header(header::CACHE_CONTROL, "no-store")
             .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff");
+        if content_type.starts_with("text/html") {
+            response = response.header(
+                header::CONTENT_SECURITY_POLICY,
+                crate::latex_texpresso::FRAME_CSP,
+            );
+        }
         if let Some(origin) = origin {
             response = response.header(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
         }
@@ -1884,6 +1928,22 @@ mod tests {
         assert!(super::engine_installed(&assets));
         fs::remove_file(assets.join(&super::engine().assets[3].name)).unwrap();
         assert!(!super::engine_installed(&assets), "a missing file");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn engine_group_installed_rejects_stale_release_files() {
+        let root = scratch("latex-group-installed");
+        let assets = root.join("assets");
+        fs::create_dir_all(&assets).unwrap();
+        for asset in super::engine_assets("pdflatex").unwrap() {
+            fs::write(assets.join(&asset.name), b"stale-2025-bytes").unwrap();
+        }
+        assert!(
+            !super::engine_group_installed(&assets, "pdflatex"),
+            "stale optional engine files must not pass as the active release"
+        );
+        assert!(!super::engine_group_installed(&assets, "unknown"));
         fs::remove_dir_all(root).unwrap();
     }
 

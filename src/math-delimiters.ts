@@ -82,9 +82,26 @@ function validBody(body: string, paddedNumeric: boolean): boolean {
   return INDICATOR.test(trimmed) || !/\s/.test(trimmed) || ARITHMETIC.test(trimmed);
 }
 
+/** Fast guard checking whether `source` contains any math delimiter. */
+export function hasMathDelimiters(source: string): boolean {
+  return source.includes("$") || source.includes("\\(") || source.includes("\\[");
+}
+
 /** HTML text is already decoded; Markdown alone owns code/URL syntax. */
-export function analyzeMath(source: string, markdown = true, paddedNumeric = false): MathAnalysis {
-  const protectedRanges = markdown ? markdownProtectedRanges(source) : [];
+export function analyzeMath(
+  source: string,
+  markdown = true,
+  paddedNumeric = false,
+  precomputedProtected?: readonly SourceRange[],
+): MathAnalysis {
+  const protectedRanges = precomputedProtected
+    ? [...precomputedProtected]
+    : markdown
+      ? markdownProtectedRanges(source)
+      : [];
+  if (!hasMathDelimiters(source)) {
+    return { math: [], currency: [], protected: protectedRanges, unfinished: [] };
+  }
   const blocked = new Uint8Array(source.length);
   for (const range of protectedRanges)
     blocked.fill(range.barrier === false ? 1 : 3, range.from, range.to);
@@ -96,14 +113,19 @@ export function analyzeMath(source: string, markdown = true, paddedNumeric = fal
   // Preserve explicit-form precedence. Each form consumes nonoverlapping
   // candidates; masks make overlap/boundary checks constant-time.
   const occupied = new Uint8Array(source.length);
+  let anyOccupied = false;
   const forms = [
     { open: "$$", close: "$$", display: true },
     { open: "\\[", close: "\\]", display: true },
     { open: "\\(", close: "\\)", display: false },
   ];
   for (const { open, close, display } of forms) {
-    const previous = new Uint32Array(source.length + 1);
-    for (let i = 0; i < source.length; i++) previous[i + 1] = previous[i] + occupied[i];
+    if (!source.includes(open)) continue;
+    let previous: Uint32Array | null = null;
+    if (anyOccupied) {
+      previous = new Uint32Array(source.length + 1);
+      for (let i = 0; i < source.length; i++) previous[i + 1] = previous[i] + occupied[i];
+    }
     let cursor = 0;
     while (cursor < source.length) {
       const from = source.indexOf(open, cursor);
@@ -115,6 +137,7 @@ export function analyzeMath(source: string, markdown = true, paddedNumeric = fal
       if (end < 0) {
         unfinished.push({ from, to: source.length });
         occupied.fill(1, from);
+        anyOccupied = true;
         break;
       }
       const to = end + 2;
@@ -122,58 +145,66 @@ export function analyzeMath(source: string, markdown = true, paddedNumeric = fal
       if (
         end === from + 2 ||
         prefixBlocked[to] !== prefixBlocked[from] ||
-        previous[to] !== previous[from]
+        (previous && previous[to] !== previous[from])
       )
         continue;
       math.push({ from, to, body: source.slice(from + 2, end).trim(), display });
       occupied.fill(1, from, to);
+      anyOccupied = true;
     }
   }
-  const dollars: number[] = [];
-  const known = new Map<number, number>();
-  const literalClose = new Set<number>();
-  for (let i = 0; i < source.length; i++) {
-    if (source[i] !== "$" || blocked[i] || occupied[i]) continue;
-    const end = prefixedAmountEnd(source, i);
-    if (end >= 0) {
-      known.set(i, end);
-      if (source[end] === "$") literalClose.add(end);
-    }
-    if (!isEscaped(source, i)) dollars.push(i);
-  }
-  // Math must precede markup tokenization: a URL-shaped substring in a
-  // formula's body is not a boundary, whereas code/tag/explicit math is.
-  const boundaries = new Uint32Array(source.length + 1);
-  for (let i = 0; i < source.length; i++)
-    boundaries[i + 1] = boundaries[i] + (blocked[i] & 2 || occupied[i] ? 1 : 0);
   const currency: number[] = [];
-  for (let n = 0; n < dollars.length; n++) {
-    const from = dollars[n];
-    if (literalClose.has(from)) continue;
-    const numeric = amountEnd(source, from + 1) >= 0;
-    if (known.has(from)) {
-      currency.push(from);
-      continue;
+  if (source.includes("$")) {
+    const dollars: number[] = [];
+    const known = new Map<number, number>();
+    const literalClose = new Set<number>();
+    for (let i = 0; i < source.length; i++) {
+      if (source[i] !== "$" || blocked[i] || occupied[i]) continue;
+      const end = prefixedAmountEnd(source, i);
+      if (end >= 0) {
+        known.set(i, end);
+        if (source[end] === "$") literalClose.add(end);
+      }
+      if (!isEscaped(source, i)) dollars.push(i);
     }
-    const end = dollars[n + 1];
-    const body = end === undefined ? "" : source.slice(from + 1, end);
-    const pair =
-      end !== undefined &&
-      !/[\r\n]/.test(body) &&
-      boundaries[end] === boundaries[from] &&
-      !literalClose.has(end) &&
-      !known.has(end) &&
-      !/^(?:\d|[.,+−-]\d)/.test(source.slice(end + 1, end + 3));
-    if (pair && validBody(body, paddedNumeric)) {
-      math.push({ from, to: end + 1, body: body.trim(), display: false });
-      n++;
-    } else if (numeric) {
-      currency.push(from);
-    } else if (pair) {
-      n++;
-    } else if (end === undefined || /[\r\n]/.test(body)) {
-      const newline = source.indexOf("\n", from);
-      unfinished.push({ from, to: newline < 0 ? source.length : newline });
+    // Math must precede markup tokenization: a URL-shaped substring in a
+    // formula's body is not a boundary, whereas code/tag/explicit math is.
+    let boundaries: Uint32Array;
+    if (anyOccupied) {
+      boundaries = new Uint32Array(source.length + 1);
+      for (let i = 0; i < source.length; i++)
+        boundaries[i + 1] = boundaries[i] + (blocked[i] & 2 || occupied[i] ? 1 : 0);
+    } else {
+      boundaries = prefixBlocked;
+    }
+    for (let n = 0; n < dollars.length; n++) {
+      const from = dollars[n];
+      if (literalClose.has(from)) continue;
+      const numeric = amountEnd(source, from + 1) >= 0;
+      if (known.has(from)) {
+        currency.push(from);
+        continue;
+      }
+      const end = dollars[n + 1];
+      const body = end === undefined ? "" : source.slice(from + 1, end);
+      const pair =
+        end !== undefined &&
+        !/[\r\n]/.test(body) &&
+        boundaries[end] === boundaries[from] &&
+        !literalClose.has(end) &&
+        !known.has(end) &&
+        !/^(?:\d|[.,+−-]\d)/.test(source.slice(end + 1, end + 3));
+      if (pair && validBody(body, paddedNumeric)) {
+        math.push({ from, to: end + 1, body: body.trim(), display: false });
+        n++;
+      } else if (numeric) {
+        currency.push(from);
+      } else if (pair) {
+        n++;
+      } else if (end === undefined || /[\r\n]/.test(body)) {
+        const newline = source.indexOf("\n", from);
+        unfinished.push({ from, to: newline < 0 ? source.length : newline });
+      }
     }
   }
   math.sort((a, b) => a.from - b.from);

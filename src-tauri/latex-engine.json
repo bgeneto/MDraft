@@ -1,6 +1,6 @@
 {
   "note": "Set \"active\" to the TeX Live year the bundled engine installs and serves. Read by src-tauri/src/latex.rs and src/latex-engine.ts. Docs: docs/adr/2026-11-12-engine-profile-config.md.",
-  "active": "2025",
+  "active": "2026",
   "profiles": {
     "2025": {
       "release": "2025-3a6c0df0b2b95005",

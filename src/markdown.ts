@@ -9,7 +9,7 @@
 
 import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/common";
-import katex from "katex";
+import { renderKatexCached } from "./katex-cache";
 import { escapeHtml, renderChunks, type PreviewChunks, type RenderedMath } from "./preview-render";
 import { batchesForChunks, settleMainThread } from "./preview-batches";
 import { renderChunksAsync } from "./preview-worker-client";
@@ -507,18 +507,14 @@ export function mathNode(
     span.title = entry.error;
     return span;
   }
-  try {
-    span.innerHTML = katex.renderToString(entry.body, {
-      displayMode: entry.display,
-      throwOnError: false,
-      strict: false,
-      output: "html",
-    });
-  } catch (error) {
-    span.className = "math-error";
-    span.textContent = `$${entry.body}$`;
-    span.title = String(error);
+  const rendered = renderKatexCached(entry.body, entry.display);
+  if (rendered.html !== null) {
+    span.innerHTML = rendered.html;
+    return span;
   }
+  span.className = "math-error";
+  span.textContent = `$${entry.body}$`;
+  span.title = rendered.error ?? "";
   return span;
 }
 
