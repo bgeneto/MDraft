@@ -364,6 +364,8 @@ pub struct MenuState {
     pub tab_index: usize,
     pub unchanged_other_tabs: usize,
     pub has_path: bool,
+    /// A workspace folder is open in the Explorer (Track W).
+    pub has_workspace: bool,
     pub is_favorite: bool,
     pub can_fold: bool,
     pub spellcheck: bool,
@@ -427,6 +429,7 @@ impl MenuState {
             tab_index: 0,
             unchanged_other_tabs: 0,
             has_path: false,
+            has_workspace: false,
             is_favorite: false,
             can_fold: true,
             spellcheck: settings.spellcheck,
@@ -483,6 +486,7 @@ const CHECK_IDS: &[&str] = &[
     "view.outline",
     "view.favorites",
     "view.recent",
+    "view.explorer",
     "view.statusBar",
     "view.focus",
     "view.typewriter",
@@ -538,6 +542,9 @@ fn is_checked(state: &MenuState, id: &str) -> bool {
         "view.recent" => {
             state.sidebar_visible && !state.focus_mode && state.sidebar_tab == "recent"
         }
+        "view.explorer" => {
+            state.sidebar_visible && !state.focus_mode && state.sidebar_tab == "explorer"
+        }
         "view.statusBar" => state.show_status_bar,
         "view.focus" => state.focus_mode,
         "view.typewriter" => state.typewriter_mode,
@@ -588,6 +595,7 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
     let task_language = !html && !typst;
     Some(match id {
         "file.reload" | "file.reveal" | "file.favorite" => state.has_path,
+        "file.closeFolder" => state.has_workspace,
         // `Export › PDF` writes the PDF the document's own compiler produced, so
         // it is available exactly while such a PDF exists: always for a compiled
         // LaTeX project, and for Typst only in the Pages view, which is where
@@ -681,7 +689,7 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
         | "para.hr" => writable,
         "view.zoomIn" | "view.zoomOut" | "view.zoomReset" | "view.editorTextSize" => true,
         "view.syncScroll" => state.view_mode == "split",
-        "view.sidebar" | "view.outline" | "view.favorites" | "view.recent"
+        "view.sidebar" | "view.outline" | "view.favorites" | "view.recent" | "view.explorer"
         | "view.sidebarPanel" => !state.focus_mode,
         "view.latexCompile" | "view.latexAutoCompile" => state.document_language == "latex",
         "view.typstPreview" | "view.typstDocument" | "view.typstPages" => {
@@ -704,6 +712,7 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
         | "file.nextTab"
         | "file.prevTab"
         | "file.openRecent"
+        | "file.openFolder"
         | "edit.find"
         | "edit.replace"
         | "edit.findNext"
@@ -991,7 +1000,13 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     let file = SubmenuBuilder::new(app, "File")
         .item(&item("file.new", "New Document", Some("CmdOrCtrl+N"))?)
         .item(&item("file.open", "Open…", Some("CmdOrCtrl+O"))?)
+        .item(&item(
+            "file.openFolder",
+            "Open Folder…",
+            Some("CmdOrCtrl+Shift+O"),
+        )?)
         .item(&recent)
+        .item(&item("file.closeFolder", "Close Folder", None)?)
         .separator()
         .item(&item("file.save", "Save", Some("CmdOrCtrl+S"))?)
         .item(&item("file.saveAs", "Save As…", Some("CmdOrCtrl+Shift+S"))?)
@@ -1260,6 +1275,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             "view.recent",
             "Recent Files",
             Some("CmdOrCtrl+Shift+3"),
+        )?)
+        .item(&check(
+            "view.explorer",
+            "Explorer",
+            Some("CmdOrCtrl+Shift+4"),
         )?)
         .build()?;
 

@@ -11,6 +11,8 @@ import config from "../src-tauri/latex-engine.json" with { type: "json" };
 
 interface EngineProfile {
   assets: Array<{ bytes: number }>;
+  /** Optional engines (stage 6.2), downloaded when a project chooses one. */
+  engines?: Record<string, Array<{ bytes: number }>>;
 }
 
 const profiles = config.profiles as Record<string, EngineProfile>;
@@ -28,3 +30,10 @@ export const LATEX_ENGINE_YEAR = config.active as "2025" | "2026";
 export const LATEX_DOWNLOAD_MIB = Math.round(
   profile.assets.reduce((total, asset) => total + asset.bytes, 0) / (1024 * 1024),
 );
+
+/** Bytes to download for an optional engine ("pdflatex", "xelatex"), or 0. */
+export function optionalEngineBytes(engine: string): number {
+  const group = { pdflatex: "pdftex", xelatex: "xetex" }[engine];
+  const assets = group ? profile.engines?.[group] : undefined;
+  return assets ? assets.reduce((total, asset) => total + asset.bytes, 0) : 0;
+}

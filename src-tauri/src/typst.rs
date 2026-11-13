@@ -616,6 +616,7 @@ pub async fn render_typst<R: Runtime>(
 fn run_typst(
     binary: &Path,
     root: &Path,
+    main_file: Option<&Path>,
     source: &str,
     extra: &[&str],
     output: &Path,
@@ -626,11 +627,88 @@ fn run_typst(
         .arg("compile")
         .args(extra)
         .arg("--root")
-        .arg(root)
-        .arg("-")
-        .arg(output)
-        .current_dir(root);
-    run_typst_command(command, source, cancel, RENDER_TIMEOUT)
+        .arg(root);
+    // Typst places a document read from stdin at the root, so its relative
+    // paths resolve from there. When the root is wider than the document's
+    // folder (a workspace, or a custom image folder elsewhere), a chapter's
+    // `#import "../template.typ"` or `#image("img/a.png")` would resolve from
+    // the wrong folder ("path would escape the project root"). Then the saved
+    // file itself is compiled when the buffer matches it, and only an unsaved
+    // buffer goes through a hidden sibling file, removed afterwards
+    // (docs/adr/2026-11-13-typst-widened-root.md).
+    let widened = main_file.filter(|file| file.parent().is_some_and(|dir| dir != root));
+    let mut sibling = None;
+    let mut stdin = source;
+    match widened {
+        Some(file) if std::fs::read(file).is_ok_and(|bytes| bytes == source.as_bytes()) => {
+            command.arg(file);
+            stdin = "";
+        }
+        Some(file) => {
+            let written = Sibling::write(file, source)?;
+            command.arg(&written.path);
+            sibling = Some(written);
+            stdin = "";
+        }
+        None => {
+            command.arg("-");
+        }
+    }
+    command.arg(output).current_dir(root);
+    let (ok, stderr) = run_typst_command(command, stdin, cancel, RENDER_TIMEOUT)?;
+    // Diagnostics name the document the reader edits, not the sibling.
+    let stderr = match &sibling {
+        Some(file) => stderr.replace(&file.name, &file.document_name),
+        None => stderr,
+    };
+    Ok((ok, stderr))
+}
+
+/// The unsaved buffer written beside the document for one compile; see `run_typst`.
+struct Sibling {
+    path: PathBuf,
+    name: String,
+    document_name: String,
+}
+
+impl Sibling {
+    fn write(document: &Path, source: &str) -> Result<Self, String> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = document.parent().ok_or("The document has no folder.")?;
+        let name = format!(
+            ".mdraft-preview-{}-{}.typ",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
+        let path = dir.join(&name);
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        // Hidden on Windows too, where a leading dot does not hide a file.
+        #[cfg(windows)]
+        std::os::windows::fs::OpenOptionsExt::attributes(&mut options, 0x2);
+        let written = options.open(&path).and_then(|mut file| {
+            use std::io::Write;
+            file.write_all(source.as_bytes())
+        });
+        let sibling = Self {
+            path,
+            name,
+            document_name: document
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        };
+        // Dropping `sibling` removes a partly written file.
+        written
+            .map_err(|e| format!("Could not write the preview file in {}: {e}", dir.display()))?;
+        Ok(sibling)
+    }
+}
+
+impl Drop for Sibling {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 /// Drain the child while stdin is written on a separate scoped thread. This
@@ -771,6 +849,7 @@ fn ignored_constructs(warnings: &[String]) -> Vec<String> {
 fn render_document(
     binary: &Path,
     root: &Path,
+    main_file: Option<&Path>,
     dir: &Path,
     source: &str,
     cancel: Option<&AtomicBool>,
@@ -781,6 +860,7 @@ fn render_document(
     let compiled = run_typst(
         binary,
         root,
+        main_file,
         source,
         &["--features", "html", "--format", "html"],
         &target,
@@ -846,6 +926,7 @@ pub(crate) fn between<'a>(haystack: &'a str, start: &str, end: &str) -> Option<&
 fn render_pages(
     binary: &Path,
     root: &Path,
+    main_file: Option<&Path>,
     dir: &Path,
     source: &str,
     cancel: Option<&AtomicBool>,
@@ -857,7 +938,15 @@ fn render_pages(
     // PDF.js can put a selectable text layer over the compiler's layout. The SVG
     // writer turns every glyph into an outline, which is why the old page view
     // could not be selected or clicked.
-    let compiled = run_typst(binary, root, source, &["--format", "pdf"], &target, cancel);
+    let compiled = run_typst(
+        binary,
+        root,
+        main_file,
+        source,
+        &["--format", "pdf"],
+        &target,
+        cancel,
+    );
     let (ok, stderr) = match compiled {
         Ok(result) => result,
         Err(error) => {
@@ -920,6 +1009,9 @@ pub fn compile_to<R: Runtime>(
         image_root,
         &fallback,
     );
+    let main_file = document_path
+        .map(Path::new)
+        .filter(|file| file.parent().is_some_and(Path::is_dir));
 
     let mut extra: Vec<&str> = Vec::new();
     if format == "html" {
@@ -928,7 +1020,7 @@ pub fn compile_to<R: Runtime>(
     }
     extra.extend(["--format", format]);
 
-    let (ok, stderr) = run_typst(&typst.path, &root, source, &extra, target, None)?;
+    let (ok, stderr) = run_typst(&typst.path, &root, main_file, source, &extra, target, None)?;
     if !ok {
         let message: Vec<&str> = stderr
             .lines()
@@ -974,12 +1066,15 @@ fn render<R: Runtime>(
         image_root,
         &dir,
     );
+    let main_file = document_path
+        .map(Path::new)
+        .filter(|file| file.parent().is_some_and(Path::is_dir));
 
     if mode == "pages" {
-        return render_pages(&typst.path, &root, &dir, source, cancel);
+        return render_pages(&typst.path, &root, main_file, &dir, source, cancel);
     }
 
-    match render_document(&typst.path, &root, &dir, source, cancel) {
+    match render_document(&typst.path, &root, main_file, &dir, source, cancel) {
         Ok(rendered) => Ok(rendered),
         Err(failure) => {
             // A cancelled compile must not start a second process just to be
@@ -989,7 +1084,7 @@ fn render<R: Runtime>(
             }
             // The document view is experimental and refuses some documents
             // outright. Falling back keeps the pane useful, and says why.
-            let mut fallback = render_pages(&typst.path, &root, &dir, source, cancel)?;
+            let mut fallback = render_pages(&typst.path, &root, main_file, &dir, source, cancel)?;
             fallback
                 .warnings
                 .insert(0, format!("The document view was unavailable ({failure})."));
@@ -1188,6 +1283,23 @@ mod tests {
         let result = run_typst_command(command, &source, None, Duration::from_millis(150));
         assert!(result.unwrap_err().contains("was stopped"));
         assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn a_widened_root_compiles_a_sibling_that_is_removed_afterwards() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("typst-sibling-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = {
+            let sibling = Sibling::write(&dir.join("chapter.typ"), "= Chapter").unwrap();
+            assert_eq!(sibling.document_name, "chapter.typ");
+            assert!(sibling.name.starts_with(".mdraft-preview-"));
+            assert_eq!(std::fs::read_to_string(&sibling.path).unwrap(), "= Chapter");
+            sibling.path.clone()
+        };
+        assert!(!path.exists(), "the sibling must not outlive its compile");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

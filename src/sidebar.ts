@@ -173,7 +173,7 @@ export function renderOutline(
   container: HTMLElement,
   headings: Heading[],
   activeLine: number,
-  onPick: (line: number) => void,
+  onPick: (line: number, index: number) => void,
   language: api.DocumentLanguage = "markdown",
 ): void {
   if (headings.length === 0) {
@@ -200,7 +200,7 @@ export function renderOutline(
     button.style.paddingLeft = `${10 + (heading.level - 1) * 12}px`;
     button.style.fontSize = `${Math.max(11.5, 13.5 - (heading.level - 1) * 0.5)}px`;
     if (index === activeIndex) button.classList.add("active");
-    button.addEventListener("click", () => onPick(heading.line));
+    button.addEventListener("click", () => onPick(heading.line, index));
     fragment.appendChild(button);
   });
   container.replaceChildren(fragment);

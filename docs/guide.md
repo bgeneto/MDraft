@@ -451,6 +451,35 @@ opens in a tab; an image or any other file goes to the OS. A relative target
 needs a saved document, and an untitled buffer says so instead of guessing. A
 path inside a fenced block or an inline code span is text, not a link.
 
+## The Explorer
+
+**File › Open Folder…** (`Ctrl+Shift+O`) shows a folder's documents in the
+sidebar's **Explorer** tab (`Ctrl+Shift+4`).
+- Folders open lazily, one level at a time, and the document on screen is
+  highlighted.
+- Click or press Enter to open a document. Other files (PDFs, images) open
+  with the system.
+- The tree is keyboard-operable: the arrow keys move, expand and collapse;
+  Home and End jump; a typed letter moves to the next name starting with it;
+  Shift+F10 or the context-menu key opens a row's menu.
+- Hidden entries, version-control and build folders, and TeX auxiliary files
+  (`.aux`, `.log`, `.synctex.gz`, …) are hidden until you choose **Show
+  all**.
+- MDraft has no file watcher. The tree re-reads its folders when the window
+  regains focus, after you save, and when you press **Refresh**.
+
+The folder is remembered until **File › Close Folder**. The Explorer only
+lists files: it never moves, renames, deletes or writes anything, and it never
+follows a symbolic link.
+
+**Main document.** In a LaTeX project, right-click a `.tex` file and choose
+**Set as Main Document** to compile chapters through it. The choice is
+remembered for that folder. Without one, a chapter opened on its own compiles
+through the single main file whose `input`/`include` chain reaches it.
+If several do, MDraft asks you to choose. A `% !TeX root = main.tex` line in
+the chapter takes precedence over both. See [LaTeX](latex.md) for the full
+order.
+
 ## Export
 
 The short version: **HTML**, **PDF** and **Print** need no extra tools;
@@ -515,7 +544,8 @@ built from source, use `Cmd` where the application registers `CmdOrCtrl`.
 | Paste without formatting | `Ctrl+Shift+V` |
 | Source code mode | `Ctrl+/` |
 | Toggle sidebar | `Ctrl+Shift+L` |
-| Outline / Favorites / Recent | `Ctrl+Shift+1` / `Ctrl+Shift+2` / `Ctrl+Shift+3` |
+| Outline / Favorites / Recent / Explorer | `Ctrl+Shift+1` / `Ctrl+Shift+2` / `Ctrl+Shift+3` / `Ctrl+Shift+4` |
+| Open Folder | `Ctrl+Shift+O` |
 | Bold / Italic / Strikethrough | `Ctrl+B` / `Ctrl+I` / `Alt+Shift+5` |
 | Inline code | `Ctrl+Shift+backtick` |
 | Link / Image | `Ctrl+K` / `Ctrl+Shift+I` |

@@ -85,7 +85,7 @@ export interface RecoveryEntry {
 
 export type ThemeMode = "system" | "light" | "dark";
 export type ViewMode = "source" | "split" | "preview";
-export type SidebarTab = "outline" | "favorites" | "recent";
+export type SidebarTab = "outline" | "favorites" | "recent" | "explorer";
 export type OnLaunch = "welcome" | "new" | "last" | "tabs";
 export type ImageRule = "assetsFolder" | "assetsDir" | "custom" | "keepOriginal";
 /** Spacing between source lines, as a named choice rather than a multiplier. */
@@ -340,6 +340,16 @@ export interface Settings {
    * by the backend, which refuses a new entry rather than evicting an old one.
    */
   favorites: string[];
+  /** The Explorer's folder (Track W); null when none is open. */
+  workspaceFolder?: string | null;
+  /** Show hidden, build and TeX auxiliary entries in the Explorer. */
+  explorerShowAll?: boolean;
+  /** Set as Main Document, per workspace folder (main-document rule 2). */
+  latexMainDocuments?: Array<{ folder: string; path: string }>;
+  /** Bundled engine default (stage 6.2): "lualatex", "pdflatex", "xelatex" or "auto". */
+  latexBundledEngine?: string;
+  /** Per-project bundled engine, keyed by main document; newest first. */
+  latexProjectEngines?: Array<{ main: string; engine: string }>;
   lastDirectory: string | null;
   /**
    * Paths of the tabs that were open when the window last closed, in order.
@@ -944,6 +954,12 @@ export const latexNativeWslValidate = (distro: string, bin: string) =>
   invoke<LatexNativeCapabilities>("latex_native_wsl_validate", { distro, bin });
 
 export const latexStatus = () => invoke<boolean>("latex_status");
+/** Whether the bundled engine can compile with `engine` now (stage 6.2). */
+export const latexEngineAvailable = (engine: string) =>
+  invoke<boolean>("latex_engine_available", { engine });
+/** Download one optional engine's verified files; the reader chose that engine. */
+export const installLatexEngine = (engine: string) =>
+  invoke<void>("install_latex_engine", { engine });
 export const installLatex = () => invoke<void>("install_latex");
 export const latexProjectSnapshot = (
   path: string,
@@ -1182,6 +1198,8 @@ export interface MenuState {
   tabIndex: number;
   unchangedOtherTabs: number;
   hasPath: boolean;
+  /** A workspace folder is open in the Explorer (Close Folder is enabled). */
+  hasWorkspace: boolean;
   isFavorite: boolean;
   canFold: boolean;
   spellcheck: boolean;
@@ -1527,3 +1545,34 @@ export function aiComplete(
     channel,
   };
 }
+
+// --- Workspace (Track W) --------------------------------------------------------
+
+export interface WorkspaceInfo {
+  root: string;
+  name: string;
+}
+
+export interface WorkspaceEntry {
+  name: string;
+  kind: "dir" | "document" | "asset" | "other";
+  symlink: boolean;
+  size: number;
+}
+
+export interface WorkspaceListing {
+  relative: string;
+  entries: WorkspaceEntry[];
+  truncated: number;
+}
+
+/** Check a folder the reader chose; refuses files, drive roots and the home folder. */
+export const workspaceOpen = (path: string) => invoke<WorkspaceInfo>("workspace_open", { path });
+
+/** One directory of the workspace, never outside it, never following a symlink. */
+export const workspaceList = (root: string, relative: string, showAll: boolean) =>
+  invoke<WorkspaceListing>("workspace_list", { root, relative, showAll });
+
+/** Main documents in the workspace whose \input/\include closure contains `path`. */
+export const workspaceMainCandidates = (root: string, path: string) =>
+  invoke<string[]>("workspace_main_candidates", { root, path });

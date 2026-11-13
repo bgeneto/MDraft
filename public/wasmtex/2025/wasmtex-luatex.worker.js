@@ -8,8 +8,26 @@ const __mdraftYear = /\/wasmtex\/(\d{4})\//.exec(self.location.pathname)?.[1];
 if (!__mdraftYear)
   throw new Error("The LaTeX worker cannot read its TeX Live year from " + self.location.href);
 const __mdraftRoot = new URL(`wasmtex/${__mdraftYear}/`, __mdraftBase).href;
+// The upstream worker imports the checkpoint glue when the SDK loads it with
+// `?engine=checkpoint` (heap checkpoints, docs/plans/2026-11-12-latex-compile-cost.md
+// stage 3.2). The preloaded binary must be the matching build: the plain wasm under
+// the checkpoint glue fails at instantiation. A missing binary stays a loud error.
+const __mdraftCheckpoint = (() => {
+  try {
+    return new URLSearchParams(self.location.search).get("engine") === "checkpoint";
+  } catch {
+    return false;
+  }
+})();
 const __mdraftXhr = new XMLHttpRequest();
-__mdraftXhr.open("GET", new URL("wasmtex-luatex.wasm", __mdraftRoot).href, false);
+__mdraftXhr.open(
+  "GET",
+  new URL(
+    __mdraftCheckpoint ? "wasmtex-luatex-checkpoint.wasm" : "wasmtex-luatex.wasm",
+    __mdraftRoot,
+  ).href,
+  false,
+);
 __mdraftXhr.responseType = "arraybuffer";
 __mdraftXhr.send();
 if (__mdraftXhr.status !== 200 || !__mdraftXhr.response)

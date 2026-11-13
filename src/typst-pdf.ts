@@ -22,6 +22,7 @@ import type {
 } from "pdfjs-dist";
 import type { TextItem } from "pdfjs-dist/types/src/display/api";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import { perfMark } from "./perf";
 import { selectionEndpoints } from "./source-map";
 import { PdfPageMap, type PdfSourceFile, type PdfWordAnchor } from "./pdf-page-map";
 import { ScrollIndex, chooseScrollRegion, type ScrollRegion } from "./scroll-sync";
@@ -54,6 +55,8 @@ const PAGE_BLEED = 4;
 const MAX_CANVAS_PIXELS = 32_000_000;
 /** Render pages this far outside the viewport, then free their canvas again. */
 const PRELOAD_MARGIN = "600px 0px";
+/** Pages either side of the reading position whose text is built before `render` resolves. */
+const FOCUS_RADIUS = 2;
 /** A selected phrase longer than this is not a word sync request. */
 const MAX_SELECTION = 120;
 
@@ -69,6 +72,14 @@ interface PdfPage {
   /** Incremented by every paint/unpaint so a cancelled task cannot win a race. */
   renderVersion: number;
   task: RenderTask | null;
+  /** The text layer has been built (or is being built); see `render`. */
+  textReady: boolean;
+  /**
+   * The page's slot in this view, 1-based. Equal to `page.pageNumber` until the
+   * interactive lane splices in a page from a preview PDF, whose own numbering
+   * starts at 1.
+   */
+  number: number;
 }
 
 /** A visual line in the PDF text layer, with its spans joined in reading order. */
@@ -132,12 +143,46 @@ async function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
   return pdfjsPromise;
 }
 
+/**
+ * The text of every page, whitespace-collapsed: the oracle that compares an
+ * incremental (resumed) LaTeX result with a fresh full compile of the same
+ * inputs. Byte comparison cannot be used; PDF IDs and timestamps differ.
+ */
+export async function pdfPageTexts(pdf: Uint8Array): Promise<string[]> {
+  const pdfjs = await loadPdfjs();
+  const task = pdfjs.getDocument({ data: pdf.slice() });
+  try {
+    const document = await task.promise;
+    const texts: string[] = [];
+    for (let number = 1; number <= document.numPages; number += 1) {
+      const page = await document.getPage(number);
+      const content = await page.getTextContent();
+      texts.push(
+        content.items
+          .map((item) => ("str" in item ? item.str : ""))
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim(),
+      );
+    }
+    return texts;
+  } finally {
+    void task.destroy();
+  }
+}
+
 export class TypstPdfPreview {
   private readonly host: HTMLElement;
   private readonly pane: HTMLElement;
   private readonly onContext: (context: TypstPageContext | null, reveal: boolean) => void;
 
   private loadingTask: PDFDocumentLoadingTask | null = null;
+  /** Preview documents spliced in by the interactive lane; destroyed with the view. */
+  private readonly spliceTasks: PDFDocumentLoadingTask[] = [];
+  /** Pages replaced by a display-only preview since the last full render. */
+  private readonly splicedSlots = new Set<number>();
+  /** Set by `splice`: the word map is withheld for the rest of this view's life. */
+  private mapWithheld = false;
   private pages: PdfPage[] = [];
   private readonly linesByPage = new Map<number, TextLine[]>();
   private observer: IntersectionObserver | null = null;
@@ -256,7 +301,19 @@ export class TypstPdfPreview {
     this.watchDevicePixelRatio();
   }
 
-  async render(pdf: Uint8Array): Promise<void> {
+  /**
+   * Show a PDF, the pages the reader is looking at first.
+   *
+   * Every page gets its sized shell at once, so layout, scroll restoration and
+   * painting can start; only the pages around `focusPage` (the reading
+   * position of the view this one replaces) get their text layer before the
+   * promise resolves. The rest are filled in idle-time batches, and the word
+   * map starts when every page has its lines. Building every text layer up
+   * front made the viewer's cost grow with the page count on every update:
+   * 0.55-0.63 s at 105 pages in the Phase 0 baseline of
+   * docs/plans/2026-11-12-latex-compile-cost.md.
+   */
+  async render(pdf: Uint8Array, options: { focusPage?: number } = {}): Promise<void> {
     const pdfjs = await loadPdfjs();
     if (this.disposed) return;
 
@@ -274,41 +331,154 @@ export class TypstPdfPreview {
       return;
     }
 
+    const total = pdfDocument.numPages;
+    const focus = Math.min(total, Math.max(1, Math.round(options.focusPage ?? 1)));
+    const first = new Set<number>();
+    for (let number = focus - FOCUS_RADIUS; number <= focus + FOCUS_RADIUS; number += 1) {
+      if (number >= 1 && number <= total) first.add(number);
+    }
     try {
-      for (let number = 1; number <= pdfDocument.numPages; number += 1) {
-        if (this.disposed) {
-          void loadingTask.destroy();
-          return;
-        }
-        const page = await pdfDocument.getPage(number);
-        if (this.disposed) {
-          void loadingTask.destroy();
-          return;
-        }
-        this.pages.push(await this.buildPage(pdfjs, page, number));
+      const proxies = await Promise.all(
+        Array.from({ length: total }, (_, index) => pdfDocument.getPage(index + 1)),
+      );
+      if (this.disposed) {
+        void loadingTask.destroy();
+        return;
       }
+      for (const [index, page] of proxies.entries())
+        this.pages.push(this.buildShell(page, index + 1));
+      await Promise.all([...first].map((number) => this.buildText(pdfjs, this.pages[number - 1])));
     } catch (error) {
       this.dispose();
       throw error;
     }
 
     if (this.disposed) return;
-    this.allLines = [...this.linesByPage.values()].flat();
-    this.allLines.forEach((line, id) => {
-      line.id = id;
-    });
     this.maxPageWidth = Math.max(
       1,
       this.pages.reduce((max, page) => Math.max(max, page.viewport.width), 0),
     );
     this.applyFit();
-    this.measureScrollRegions();
     this.observePages();
+    void this.completeText(pdfjs, first);
+  }
+
+  /**
+   * Put a span of preview pages into their slots (the interactive lane).
+   *
+   * `firstPage` is the 1-based page of the full document that the preview's
+   * first page replaces. Each replaced page keeps its old bitmap until the new
+   * one is drawn, gets its text layer back at once (selection and the probe
+   * read it), and is painted when it is on screen. The spliced pages are
+   * display only: the word map still describes the last full render, so
+   * correspondence on them is withheld until the next full render replaces
+   * this view. Returns how many slots were replaced.
+   */
+  async splice(pdf: Uint8Array, firstPage: number): Promise<number> {
+    const pdfjs = await loadPdfjs();
+    if (this.disposed) return 0;
+    const task = pdfjs.getDocument({ data: pdf });
+    this.spliceTasks.push(task);
+    const preview = await task.promise;
+    let replaced = 0;
+    const pane = this.pane.getBoundingClientRect();
+    // Replacing canvases and text layers must not move the reader: browser
+    // scroll anchoring can shift the pane when a slot's content is swapped.
+    const scrollTop = this.pane.scrollTop;
+    const epoch = this.inputEpoch;
+    for (let index = 1; index <= preview.numPages; index += 1) {
+      const slot = this.pages[firstPage - 2 + index];
+      if (!slot || this.disposed) break;
+      const proxy = await preview.getPage(index);
+      if (this.disposed) break;
+      const widthPt = proxy.view[2] - proxy.view[0];
+      const baseWidth = Math.min(MAX_PAGE_WIDTH, Math.max(200, Math.round((widthPt * 96) / 72)));
+      const scale = baseWidth / widthPt;
+      const viewport = proxy.getViewport({ scale });
+      slot.task?.cancel();
+      slot.task = null;
+      slot.page = proxy;
+      slot.viewport = viewport;
+      slot.shell.style.setProperty("--typst-page-width", String(baseWidth));
+      slot.shell.style.setProperty("--typst-page-height", String(Math.round(viewport.height)));
+      slot.pageEl.style.setProperty("--total-scale-factor", String(scale));
+      slot.textLayer.replaceChildren();
+      slot.textReady = false;
+      this.linesByPage.delete(slot.number);
+      slot.renderVersion += 1;
+      slot.rendering = false;
+      slot.rendered = false;
+      this.splicedSlots.add(slot.number);
+      await this.buildText(pdfjs, slot);
+      const box = slot.shell.getBoundingClientRect();
+      if (box.bottom > pane.top - 600 && box.top < pane.bottom + 600) void this.paint(slot, true);
+      replaced += 1;
+    }
+    if (epoch === this.inputEpoch && this.pane.scrollTop !== scrollTop)
+      this.pane.scrollTop = scrollTop;
+    // The map describes the previous text of these pages: withhold it until the
+    // next full render replaces this view. No correspondence beats a wrong one.
+    if (replaced > 0) {
+      this.cancelMap();
+      this.sourceMap = null;
+      this.mapWithheld = true;
+      this.host.dataset.wordMap = "unavailable";
+    }
+    return replaced;
+  }
+
+  /** The last page slot whose top is above the pane's bottom edge, or 0 when empty. */
+  lastVisiblePage(): number {
+    if (this.disposed || this.pages.length === 0) return 0;
+    const bottom = this.pane.getBoundingClientRect().bottom;
+    let last = 0;
+    for (const page of this.pages) {
+      if (page.shell.getBoundingClientRect().top < bottom) last = page.number;
+      else break;
+    }
+    return last;
+  }
+
+  /** Whether a display-only preview page is on screen in this view. */
+  hasSplicedPages(): boolean {
+    return this.splicedSlots.size > 0;
+  }
+
+  /** Build the remaining text layers in short batches, then index lines and start the map. */
+  private async completeText(
+    pdfjs: typeof import("pdfjs-dist"),
+    done: ReadonlySet<number>,
+  ): Promise<void> {
+    let sliceStart = performance.now();
+    for (const page of this.pages) {
+      if (this.disposed) return;
+      if (done.has(page.number)) continue;
+      try {
+        await this.buildText(pdfjs, page);
+      } catch {
+        // A page whose text cannot be extracted keeps its canvas; selection and
+        // correspondence on it are unavailable, as for an image-only page.
+      }
+      // Yield after about one frame's budget so typing and scrolling stay smooth.
+      if (performance.now() - sliceStart > 8) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        sliceStart = performance.now();
+      }
+    }
+    if (this.disposed) return;
+    this.allLines = [...this.linesByPage.entries()]
+      .sort(([a], [b]) => a - b)
+      .flatMap(([, lines]) => lines);
+    this.allLines.forEach((line, id) => {
+      line.id = id;
+    });
+    this.measureScrollRegions();
     if (this.mapOptions?.enabled !== false) this.startMap();
   }
 
   /** Pure matching runs off-thread; DOM range construction yields between batches. */
   private startMap(): void {
+    if (this.mapWithheld) return;
     this.host.dataset.wordMap = "pending";
     const started = performance.now();
     const files = this.mapOptions?.files ?? [{ path: "", source: this.source }];
@@ -426,6 +596,7 @@ export class TypstPdfPreview {
   }
 
   ensureMap(): void {
+    if (this.mapWithheld) return;
     if (!this.sourceMap && !this.mapWorker && !this.mapTimer && !this.disposed) this.startMap();
   }
 
@@ -543,6 +714,8 @@ export class TypstPdfPreview {
       this.loadingTask = null;
       void loadingTask.destroy();
     }
+    for (const task of this.spliceTasks.splice(0)) void task.destroy();
+    this.splicedSlots.clear();
     this.host.replaceChildren();
   }
 
@@ -558,11 +731,8 @@ export class TypstPdfPreview {
     this.dprQuery.addEventListener("change", this.dprChange);
   }
 
-  private async buildPage(
-    pdfjs: typeof import("pdfjs-dist"),
-    page: PDFPageProxy,
-    number: number,
-  ): Promise<PdfPage> {
+  /** The sized page frame: canvas and an empty text layer, in page order. */
+  private buildShell(page: PDFPageProxy, number: number): PdfPage {
     const widthPt = page.view[2] - page.view[0];
     const baseWidth = Math.min(MAX_PAGE_WIDTH, Math.max(200, Math.round((widthPt * 96) / 72)));
     const scale = baseWidth / widthPt;
@@ -595,27 +765,6 @@ export class TypstPdfPreview {
     shell.append(pageEl);
     this.host.append(shell);
 
-    const text = await page.getTextContent({
-      includeMarkedContent: true,
-      disableNormalization: true,
-    });
-    const layer: TextLayer = new pdfjs.TextLayer({
-      textContentSource: text,
-      container: textLayer,
-      viewport,
-    });
-    await layer.render();
-    // Rounding in PDF.js's CSS can leave the layer a fraction off the canvas;
-    // the explicit pixel size keeps the spans over the glyphs.
-    textLayer.style.width = `${viewport.width}px`;
-    textLayer.style.height = `${viewport.height}px`;
-    this.indexLines(
-      number,
-      text.items.filter((item): item is TextItem => "str" in item),
-      layer.textDivs,
-      viewport,
-    );
-
     return {
       page,
       shell,
@@ -627,7 +776,37 @@ export class TypstPdfPreview {
       rendering: false,
       renderVersion: 0,
       task: null,
+      textReady: false,
+      number,
     };
+  }
+
+  /** Extract a page's text, build its selectable layer and index its lines, once. */
+  private async buildText(pdfjs: typeof import("pdfjs-dist"), page: PdfPage): Promise<void> {
+    if (page.textReady || this.disposed) return;
+    page.textReady = true;
+    const text = await page.page.getTextContent({
+      includeMarkedContent: true,
+      disableNormalization: true,
+    });
+    if (this.disposed) return;
+    const layer: TextLayer = new pdfjs.TextLayer({
+      textContentSource: text,
+      container: page.textLayer,
+      viewport: page.viewport,
+    });
+    await layer.render();
+    if (this.disposed) return;
+    // Rounding in PDF.js's CSS can leave the layer a fraction off the canvas;
+    // the explicit pixel size keeps the spans over the glyphs.
+    page.textLayer.style.width = `${page.viewport.width}px`;
+    page.textLayer.style.height = `${page.viewport.height}px`;
+    this.indexLines(
+      page.number,
+      text.items.filter((item): item is TextItem => "str" in item),
+      layer.textDivs,
+      page.viewport,
+    );
   }
 
   private applyFit(): void {
@@ -783,7 +962,7 @@ export class TypstPdfPreview {
       const box = page.shell.getBoundingClientRect();
       if (box.bottom < y || box.top > y) continue;
       return {
-        page: page.page.pageNumber,
+        page: page.number,
         x: (x - box.left) / scale,
         y: (y - box.top) / scale,
       };
@@ -807,7 +986,7 @@ export class TypstPdfPreview {
       if (nearest === null || distance < nearest.distance) {
         const localY = Math.min(box.height, Math.max(0, y - box.top));
         nearest = {
-          page: page.page.pageNumber,
+          page: page.number,
           x: (x - box.left) / scale,
           y: localY / scale,
           distance,
@@ -837,7 +1016,7 @@ export class TypstPdfPreview {
    */
   scrollToPagePosition(page: number, y: number): void {
     if (this.disposed) return;
-    const target = this.pages.find((item) => item.page.pageNumber === page);
+    const target = this.pages.find((item) => item.number === page);
     if (!target) return;
     const scale = this.fit > 0 ? this.fit : 1;
     const box = target.shell.getBoundingClientRect();
@@ -999,6 +1178,9 @@ export class TypstPdfPreview {
           target.height = 0;
         }
         page.rendered = true;
+        // Edit-to-pixel is measured from here: the bitmap of this page is on
+        // the canvas. The probe matches the page by its text, not by number.
+        perfMark("paint", { page: page.number });
       }
     } catch (error) {
       // A cancelled render is the normal result of scrolling a page out while

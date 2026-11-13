@@ -57,7 +57,7 @@ projects easy to navigate.
 Typst preview and PDF compilation require the Typst compiler. MDraft can
 install it for you on Windows and Linux.
 
-LaTeX is opt-in: enabling bundled TeX downloads about 12 MiB of verified
+LaTeX is opt-in: enabling bundled TeX downloads about 20 MiB of verified
 engine files, and the TeX packages a document needs are fetched on demand and
 cached locally. Your own classes and packages can live in folders registered
 once under *Preferences › LaTeX › Local packages* and are found by

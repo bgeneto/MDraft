@@ -5,13 +5,23 @@ import { createContext, runInContext } from "node:vm";
 import { compileDiagnostics, latexBuildFailed, openFileAt } from "../src/latex.ts";
 const adapter = readFileSync("src/latex.ts", "utf8");
 const compile = adapter.slice(adapter.indexOf("export async function compileLatex"));
-assert.match(compile, /engine:\s*["']lualatex["']/);
+// LuaLaTeX stays the default; another engine is only ever an explicit choice
+// (stage 6.2), handed in by the caller and never picked here.
+assert.match(compile, /const texEngine = options\.engine \?\? "lualatex";/);
+assert.match(compile, /new WasmTexCompiler\(\{\s*engine: texEngine,/);
 assert.doesNotMatch(
   compile,
   /wasmtex\/synctex|SynctexParser|synctexData|postMessageWithResponse|\\synctex=1/i,
 );
 assert.match(compile, /sources:\s*\[\.\.\.decoded\.entries\(\)\]/);
-assert.match(compile, /encoding\.toUpperCase\(\) === "UTF-8" \? source : bytes/);
+// The decode lives in `prepareInputs`, shared with the interactive preview, and
+// the compile must go through it rather than decoding on its own.
+const prepare = adapter.slice(
+  adapter.indexOf("function prepareInputs"),
+  adapter.indexOf("export async function compileLatex"),
+);
+assert.match(prepare, /encoding\.toUpperCase\(\) === "UTF-8" \? source : bytes/);
+assert.match(compile, /prepareInputs\(snapshot\)/);
 assert.match(compile, /mainFile:\s*snapshot\.mainFile/);
 assert.match(readFileSync("samples/latex-project/main.tex", "utf8"), /\\usepackage\{fontspec\}/);
 
@@ -41,7 +51,13 @@ assert.deepEqual(
   [...years].sort(),
   "one shim folder per profile, and no other year's",
 );
-const shimNames = ["wasmtex-luatex.worker.js", "wasmtex-bibtex.worker.js"];
+const shimNames = [
+  "wasmtex-luatex.worker.js",
+  "wasmtex-bibtex.worker.js",
+  "wasmtex-pdftex.worker.js",
+  "wasmtex-xetex.worker.js",
+  "wasmtex-dvipdfm.worker.js",
+];
 const shims = {};
 for (const shim of shimNames) {
   const texts = years.map((year) => readFileSync(`public/wasmtex/${year}/${shim}`, "utf8"));
@@ -83,14 +99,21 @@ assert.equal(
 
 // Exercise the actual bootstrap against a classic-script worker: its function
 // binding is also used by unqualified calls inside the verified remote worker.
-function bootstrap(year, shim = "wasmtex-luatex.worker.js", folder = `wasmtex/${year}`) {
+function bootstrap(
+  year,
+  shim = "wasmtex-luatex.worker.js",
+  folder = `wasmtex/${year}`,
+  search = "",
+) {
   const urls = [];
   const runtime = createContext({
     URL,
+    URLSearchParams,
     location: {
       protocol: "https:",
       pathname: `/${folder}/${shim}`,
-      href: `https://mdraft.localhost/${folder}/${shim}`,
+      search,
+      href: `https://mdraft.localhost/${folder}/${shim}${search}`,
     },
     XMLHttpRequest: class {
       status = 200;
@@ -133,6 +156,21 @@ assert.throws(
   () => bootstrap("none", "wasmtex-luatex.worker.js", "elsewhere"),
   /cannot read its TeX Live year/,
 );
+// Heap checkpoints (stage 3.2): the SDK loads the worker with `?engine=checkpoint`
+// and the upstream worker then imports the checkpoint glue, so the preloaded
+// binary must be the checkpoint build too; the plain one would not instantiate.
+for (const year of years) {
+  assert.deepEqual(
+    bootstrap(year, "wasmtex-luatex.worker.js", `wasmtex/${year}`, "?engine=checkpoint").urls,
+    [`https://mdraft-tex.localhost/wasmtex/${year}/wasmtex-luatex-checkpoint.wasm`],
+    `the LuaTeX shim preloads ${year}'s checkpoint binary for ?engine=checkpoint`,
+  );
+  assert.deepEqual(
+    bootstrap(year, "wasmtex-luatex.worker.js", `wasmtex/${year}`, "?engine=plain").urls,
+    [`https://mdraft-tex.localhost/wasmtex/${year}/wasmtex-luatex.wasm`],
+    "any other engine query keeps the plain binary",
+  );
+}
 const { runtime } = bootstrap(engine.active);
 assert.equal(runtime.locate(26, "luavlna"), "/tex/luavlna.tex");
 assert.equal(runtime.locate(51, "luavlna"), "/tex/luavlna.lua");
@@ -195,6 +233,80 @@ assert.throws(
   /unexpected form/,
   "a changed upstream cnf fails loudly instead of ignoring the libraries",
 );
+// Optional engines (stage 6.2): the pdfLaTeX and XeLaTeX shims rewrite their own
+// workers' cnf lines, verbatim from the pinned 2025 workers, with their own TDS dirs.
+{
+  const pdftexCnf = [
+    "TEXINPUTS = .;/tex//",
+    "TFMFONTS = .;/tex//",
+    "T1FONTS = .;/tex//",
+    "AFMFONTS = .;/tex//",
+    "TEXFONTMAPS = .;/tex//",
+    "ENCFONTS = .;/tex//",
+    "VFFONTS = .;/tex//",
+    "TEXFORMATS = .;/tex//",
+    "TEXPOOL = .;/tex//",
+    "",
+  ].join("\n");
+  const pdftex = bootstrap(engine.active, "wasmtex-pdftex.worker.js").runtime;
+  const rewritten = pdftex.mdraftLibraryCnf(pdftexCnf, 1);
+  assert.match(
+    rewritten,
+    /^TEXINPUTS = \.;\/work\/\.mdraft-texmf\/0\/tex\/latex\/\/;\/work\/\.mdraft-texmf\/0\/tex\/generic\/\/;\/work\/\.mdraft-texmf\/0\/tex\/\/;\/tex\/\/$/m,
+    "pdfLaTeX searches the libraries' tex/latex, then tex/generic",
+  );
+  assert.match(rewritten, /^AFMFONTS = \.;\/work\/\.mdraft-texmf\/0\/fonts\/afm\/\/;/m);
+  assert.match(rewritten, /^TEXFORMATS = \.;\/tex\/\/$/m, "formats never come from a library");
+  const xetexCnf = [
+    "TEXMFCNF = .;/work",
+    "TEXINPUTS = .;/tex//",
+    "TEXFORMATS = .;/tex//",
+    "TEXFONTMAPS = .;/tex//",
+    "ENCFONTS = .;/tex//",
+    "OPENTYPEFONTS = .;/tex//",
+    "TTFONTS = .;/tex//",
+    "T1FONTS = .;/tex//",
+    "TFMFONTS = .;/tex//",
+    "VFFONTS = .;/tex//",
+    "TEXPSHEADERS = .;/tex//",
+    "",
+  ].join("\n");
+  const xetex = bootstrap(engine.active, "wasmtex-xetex.worker.js").runtime;
+  assert.match(
+    xetex.mdraftLibraryCnf(xetexCnf, 1),
+    /^TEXINPUTS = \.;\/work\/\.mdraft-texmf\/0\/tex\/xelatex\/\/;/m,
+    "XeLaTeX searches the libraries' tex/xelatex first",
+  );
+  // The Lua engine's table would throw on pdfTeX's cnf (it has no LUAINPUTS line).
+  assert.throws(() => runtime.mdraftLibraryCnf(pdftexCnf, 1), /unexpected form/);
+  // Every optional engine's files are pinned in every profile.
+  for (const year of years) {
+    const groups = engine.profiles[year].engines ?? {};
+    assert.deepEqual(
+      Object.keys(groups).sort(),
+      ["pdftex", "xetex"],
+      `${year} offers both engines`,
+    );
+    for (const [name, assets] of Object.entries(groups)) {
+      assert.ok(
+        assets.some((asset) => asset.name === `wasmtex-${name}.wasm`),
+        `${year} ${name} wasm`,
+      );
+      for (const asset of assets) assert.match(asset.sha256, /^[0-9a-f]{64}$/, asset.name);
+    }
+    assert.ok(
+      groups.pdftex.some((asset) => asset.name === "wasmtex-pdftex-checkpoint.wasm"),
+      "pdfLaTeX ships its checkpoint build",
+    );
+    // XeLaTeX writes XDV; its dvipdfmx worker turns that into the PDF, so the
+    // engine is unusable without it ("not available in this build").
+    for (const name of ["wasmtex-dvipdfm.js", "wasmtex-dvipdfm.wasm", "wasmtex-dvipdfm.worker.js"])
+      assert.ok(
+        groups.xetex.some((asset) => asset.name === name),
+        `${year} XeLaTeX ships ${name}`,
+      );
+  }
+}
 const message = "LaTeX Error: File `image' not found.";
 const sourceLines = Array.from({ length: 19 }, (_, index) =>
   index === 18 ? "\\header" : "content",

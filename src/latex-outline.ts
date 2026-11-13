@@ -187,3 +187,53 @@ function cleanHeadingText(raw: string): string {
     (_match, index: string) => literals[Number(index)] ?? "",
   );
 }
+
+/** A heading of a multi-file project, with the file it lives in. */
+export interface ProjectHeading extends Heading {
+  /** Project-relative path of the file, with `/` separators. */
+  file: string;
+}
+
+const INCLUDE = /\\(?:input|include|subfile)\s*\{([^}]+)\}/g;
+
+/**
+ * The headings of a whole LaTeX project in document order (Track W2).
+ *
+ * Starting at the main file, each file's headings are interleaved with the
+ * files its `\input`/`\include`/`\subfile` lines pull in, at the line where
+ * they do so, recursively. Names resolve as TeX does: against the main file's
+ * folder, with `.tex` implied. Comments, verbatim and other literal regions
+ * are ignored through the same masking the single-file outline uses. A file
+ * that is missing from `sources`, or one already on the include path (a
+ * cycle), contributes nothing.
+ */
+export function projectLatexOutline(
+  mainFile: string,
+  sources: ReadonlyMap<string, string>,
+): ProjectHeading[] {
+  const out: ProjectHeading[] = [];
+  const normalize = (name: string): string => {
+    const trimmed = name.trim().replace(/\\/g, "/").replace(/^\.\//, "");
+    return /\.[A-Za-z0-9]+$/.test(trimmed) ? trimmed : `${trimmed}.tex`;
+  };
+  const visit = (file: string, path: ReadonlySet<string>): void => {
+    const source = sources.get(file);
+    if (source === undefined || path.has(file)) return;
+    const next = new Set(path).add(file);
+    const headings = extractLatexHeadings(source);
+    const lines = maskLiteralRegions(source).split("\n");
+    let h = 0;
+    lines.forEach((line, index) => {
+      const lineNumber = index + 1;
+      while (h < headings.length && headings[h].line <= lineNumber) {
+        out.push({ ...headings[h], file });
+        h += 1;
+      }
+      const code = line.replace(/(^|[^\\])%.*$/, "$1");
+      for (const match of code.matchAll(INCLUDE)) visit(normalize(match[1]), next);
+    });
+    while (h < headings.length) out.push({ ...headings[h++], file });
+  };
+  visit(mainFile, new Set());
+  return out;
+}

@@ -24,6 +24,7 @@ mod tex_fmt;
 mod text_encoding;
 mod tokens;
 mod typst;
+mod workspace;
 
 use settings::{AppState, Settings};
 use tauri::Manager;
@@ -171,6 +172,11 @@ pub fn run() {
             documents::fingerprint_document,
             documents::stat_document,
             documents::path_exists,
+            workspace::workspace_open,
+            workspace::workspace_list,
+            workspace::workspace_main_candidates,
+            latex::latex_engine_available,
+            latex::install_latex_engine,
             documents::resolve_legacy_local_image,
             documents::open_external,
             documents::open_app_folder,

@@ -951,6 +951,19 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
       get: () => s().latexAutoCompile,
       set: (value) => host.update({ latexAutoCompile: value }),
     },
+    {
+      kind: "select",
+      label: "Default engine",
+      help: "Used when the main file has no % !TeX program line and the project has no engine of its own (the engine chip in the status bar). pdfLaTeX and XeLaTeX download on first use.",
+      options: [
+        ["lualatex", "LuaLaTeX"],
+        ["pdflatex", "pdfLaTeX"],
+        ["xelatex", "XeLaTeX"],
+        ["auto", "Auto (from the preamble)"],
+      ],
+      get: () => s().latexBundledEngine ?? "lualatex",
+      set: (value) => host.update({ latexBundledEngine: value }),
+    },
 
     ...texmfRows(host, refresh),
 
@@ -2193,6 +2206,7 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
             ["outline", "Outline"],
             ["favorites", "Favorites"],
             ["recent", "Recent files"],
+            ["explorer", "Explorer"],
           ],
           get: () => s().sidebarTab,
           set: (value) => host.update({ sidebarTab: value as api.SidebarTab }),

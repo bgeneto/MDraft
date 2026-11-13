@@ -799,12 +799,22 @@ const viewportStart = await page.evaluate(`(async () => {
  const pane=document.getElementById("preview-pane"), text=v.state.doc.toString();
  const at=text.lastIndexOf(String.fromCharCode(92)+"end{document}");
  v.dispatch({selection:{anchor:at},scrollIntoView:true});
- await new Promise(r=>setTimeout(r,400));
+ // Focus first and let the editor-to-preview alignment settle: focusing can
+ // scroll the editor, and the alignment it triggers once moved the parked
+ // preview off the end 2 ms before the insert, failing the check by chance.
+ content.focus();
+ await new Promise(r=>setTimeout(r,700));
  pane.scrollTop=pane.scrollHeight;
  await new Promise(r=>setTimeout(r,200));
  window.__pdfViewportProbe={min:pane.scrollTop,frames:0,active:true};
+ // Diagnostic for the follow-the-end check: record every scrollTop write (with
+ // its caller) and every scroll event, printed only when the check fails.
+ window.__scrollLog=[];
+ const d=Object.getOwnPropertyDescriptor(Element.prototype,"scrollTop");
+ Object.defineProperty(pane,"scrollTop",{configurable:true,get(){return d.get.call(this);},set(v){window.__scrollLog.push({set:Math.round(v),at:Math.round(performance.now()),by:(new Error().stack||"").split(String.fromCharCode(10)).slice(2,6).map(s=>s.trim()).join(" < ")});d.set.call(this,v);}});
+ pane.addEventListener("scroll",()=>window.__scrollLog.push({scroll:Math.round(d.get.call(pane)),at:Math.round(performance.now())}));
  const frame=()=>{const p=window.__pdfViewportProbe;if(!p.active)return;p.min=Math.min(p.min,pane.scrollTop);p.frames++;requestAnimationFrame(frame);};
- requestAnimationFrame(frame);content.focus();
+ requestAnimationFrame(frame);
  return JSON.stringify({top:pane.scrollTop,pages:document.querySelectorAll(".typst-page-shell").length});
 })()`);
 const viewportBefore = JSON.parse(viewportStart);
@@ -815,6 +825,7 @@ const added =
     (_, index) =>
       `Paragraph ${index}: A carefully typeset passage follows the end of the document.\n\n`,
   ).join("");
+await page.evaluate("window.__scrollLog?.push({ insert: Math.round(performance.now()) })");
 await page.send("Input.insertText", { text: added });
 let rebuilt = false;
 let rebuildError = "";
@@ -844,6 +855,12 @@ check(
   "the inserted text grows the PDF onto new pages",
   `${viewportBefore.pages} -> ${viewportAfter.pages}`,
 );
+if (viewportAfter.max - viewportAfter.top >= 100) {
+  console.log(
+    "  scroll log: " +
+      (await page.evaluate("JSON.stringify(window.__scrollLog?.slice(-40) ?? [])")),
+  );
+}
 check(
   viewportAfter.max - viewportAfter.top < 100,
   "the last page remains visible while following the end",
@@ -1297,16 +1314,33 @@ console.log("\n=== File › Export for a .tex document ===");
 // The gate is gone, and this drives the real menu event with only the native save
 // dialog stubbed — everything after the dialog runs for real.
 {
-  const exportDir = join(tmpdir(), "mdraft-latex-export");
-  rmSync(exportDir, { recursive: true, force: true });
-  mkdirSync(exportDir, { recursive: true });
-  const pdfTarget = join(exportDir, "compiled.pdf");
-  const mdTarget = join(exportDir, "converted.md");
+  // The after-export default opens the exported file with the OS viewer. In a
+  // test that launched the reader's real PDF viewer onto the desktop, and the
+  // viewer (PDF-XChange here) inherited the test TEMP and kept the export folder
+  // locked: every later cleanup failed with EPERM. Off for this section, as in
+  // export-test.mjs; restored in the finally below.
+  const settingsBefore = JSON.parse(
+    await page.evaluate(`window.__TAURI_INTERNALS__.invoke("get_settings").then(JSON.stringify)`),
+  );
+  await page.evaluate(
+    `window.__TAURI_INTERNALS__.invoke("save_settings", { settings: ${JSON.stringify({
+      ...settingsBefore,
+      afterOpenFile: false,
+      afterOpenLocation: false,
+      afterRunCommand: false,
+    })} })`,
+  );
+  try {
+    const exportDir = join(tmpdir(), "mdraft-latex-export");
+    rmSync(exportDir, { recursive: true, force: true });
+    mkdirSync(exportDir, { recursive: true });
+    const pdfTarget = join(exportDir, "compiled.pdf");
+    const mdTarget = join(exportDir, "converted.md");
 
-  // Only `plugin:dialog|save` is stubbed; `save_compiled_pdf` and the pandoc
-  // command run for real. `saveCompiledPdf`'s data is captured so the written
-  // file can be compared with the bytes the frontend handed over.
-  await page.evaluate(`(() => {
+    // Only `plugin:dialog|save` is stubbed; `save_compiled_pdf` and the pandoc
+    // command run for real. `saveCompiledPdf`'s data is captured so the written
+    // file can be compared with the bytes the frontend handed over.
+    await page.evaluate(`(() => {
     const state = window.__latexExportTest = {
       original: window.fetch,
       next: null,
@@ -1338,93 +1372,101 @@ console.log("\n=== File › Export for a .tex document ===");
     };
   })()`);
 
-  const before = await page.evaluate(
-    `JSON.stringify({ token: document.querySelector('[data-latex-current]')?.dataset.latexCurrent ?? null, ms: document.querySelector('[data-latex-ms]')?.dataset.latexMs ?? null })`,
-  );
+    const before = await page.evaluate(
+      `JSON.stringify({ token: document.querySelector('[data-latex-current]')?.dataset.latexCurrent ?? null, ms: document.querySelector('[data-latex-ms]')?.dataset.latexMs ?? null })`,
+    );
 
-  // File › Export › PDF writes the compiled bytes. The row is enabled because a
-  // current compile exists.
-  await page.evaluate(`window.__latexExportTest.next = ${JSON.stringify(pdfTarget)}`);
-  await emitMenu(page, "export.pdf");
-  await sleep(2500);
+    // File › Export › PDF writes the compiled bytes. The row is enabled because a
+    // current compile exists.
+    await page.evaluate(`window.__latexExportTest.next = ${JSON.stringify(pdfTarget)}`);
+    await emitMenu(page, "export.pdf");
+    await sleep(2500);
 
-  const compiled = await page.evaluate(`JSON.stringify(window.__latexExportTest.compiled)`);
-  const captured = JSON.parse(String(compiled));
-  check(
-    captured.length === 1,
-    "File › Export › PDF writes the compiled PDF",
-    captured.length === 0 ? "save_compiled_pdf was never called" : captured[0].path,
-  );
-  if (captured.length > 0) {
+    const compiled = await page.evaluate(`JSON.stringify(window.__latexExportTest.compiled)`);
+    const captured = JSON.parse(String(compiled));
     check(
-      captured[0].head.startsWith("%PDF-"),
-      "the bytes handed to the writer are a PDF",
-      captured[0].head,
+      captured.length === 1,
+      "File › Export › PDF writes the compiled PDF",
+      captured.length === 0 ? "save_compiled_pdf was never called" : captured[0].path,
+    );
+    if (captured.length > 0) {
+      check(
+        captured[0].head.startsWith("%PDF-"),
+        "the bytes handed to the writer are a PDF",
+        captured[0].head,
+      );
+      check(
+        captured[0].path === pdfTarget,
+        "the compiled PDF goes to the chosen path",
+        captured[0].path,
+      );
+    }
+    const written = existsSync(pdfTarget) ? readFileSync(pdfTarget) : null;
+    check(
+      written !== null && written.subarray(0, 5).toString() === "%PDF-",
+      "the exported PDF is on disk and starts with %PDF-",
+      written ? `${written.length} bytes` : "no file",
+    );
+    if (written && captured.length > 0) {
+      // The command writes exactly the bytes it was given, so this is the proof the
+      // file is the preview's PDF rather than a re-render.
+      check(
+        Math.ceil(captured[0].length / 4) * 3 - written.length < 4,
+        "the file holds the bytes the preview handed over",
+        `base64 ${captured[0].length} chars, file ${written.length} bytes`,
+      );
+    }
+    const after = await page.evaluate(
+      `JSON.stringify({ token: document.querySelector('[data-latex-current]')?.dataset.latexCurrent ?? null, ms: document.querySelector('[data-latex-ms]')?.dataset.latexMs ?? null })`,
     );
     check(
-      captured[0].path === pdfTarget,
-      "the compiled PDF goes to the chosen path",
-      captured[0].path,
+      String(before) === String(after),
+      "exporting the PDF does not start another compile",
+      `${before} -> ${after}`,
+    );
+    check(
+      !(await page.evaluate(`document.getElementById('toast').textContent`)).includes(
+        "export formats arrive with it",
+      ),
+      "the stale LaTeX export toast is gone",
+    );
+
+    // Export › Markdown is a real conversion through pandoc's LaTeX reader, and it
+    // reads the project snapshot rather than the file on disk.
+    await page.evaluate(`window.__latexExportTest.next = ${JSON.stringify(mdTarget)}`);
+    await emitMenu(page, "export.markdown");
+    await sleep(6000);
+    check(
+      existsSync(mdTarget),
+      "LaTeX exports Markdown through pandoc",
+      existsSync(mdTarget) ? `${readFileSync(mdTarget).length} bytes` : "no file",
+    );
+    if (existsSync(mdTarget)) {
+      const text = readFileSync(mdTarget, "utf8");
+      check(
+        /^#{1,3} /m.test(text),
+        "the Markdown carries the document's headings",
+        text.split("\n").find((line) => line.startsWith("#")) ?? "no heading",
+      );
+      check(
+        !text.includes("\\documentclass") && !text.includes("\\section"),
+        "the LaTeX commands are converted, not copied",
+        text.includes("\\section") ? "a raw command survived" : "clean",
+      );
+    }
+
+    await page.evaluate(
+      `window.fetch = window.__latexExportTest.original; delete window.__latexExportTest`,
+    );
+    // Windows can still hold a handle on the export folder for a moment (the
+    // pandoc child, an antivirus scan): EPERM here once ended the suite after all
+    // its export checks had passed. Node retries EPERM/EBUSY with maxRetries.
+    rmSync(exportDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  } finally {
+    await page.evaluate(
+      `window.__TAURI_INTERNALS__.invoke("save_settings", { settings: ${JSON.stringify(settingsBefore)} })`,
     );
   }
-  const written = existsSync(pdfTarget) ? readFileSync(pdfTarget) : null;
-  check(
-    written !== null && written.subarray(0, 5).toString() === "%PDF-",
-    "the exported PDF is on disk and starts with %PDF-",
-    written ? `${written.length} bytes` : "no file",
-  );
-  if (written && captured.length > 0) {
-    // The command writes exactly the bytes it was given, so this is the proof the
-    // file is the preview's PDF rather than a re-render.
-    check(
-      Math.ceil(captured[0].length / 4) * 3 - written.length < 4,
-      "the file holds the bytes the preview handed over",
-      `base64 ${captured[0].length} chars, file ${written.length} bytes`,
-    );
-  }
-  const after = await page.evaluate(
-    `JSON.stringify({ token: document.querySelector('[data-latex-current]')?.dataset.latexCurrent ?? null, ms: document.querySelector('[data-latex-ms]')?.dataset.latexMs ?? null })`,
-  );
-  check(
-    String(before) === String(after),
-    "exporting the PDF does not start another compile",
-    `${before} -> ${after}`,
-  );
-  check(
-    !(await page.evaluate(`document.getElementById('toast').textContent`)).includes(
-      "export formats arrive with it",
-    ),
-    "the stale LaTeX export toast is gone",
-  );
-
-  // Export › Markdown is a real conversion through pandoc's LaTeX reader, and it
-  // reads the project snapshot rather than the file on disk.
-  await page.evaluate(`window.__latexExportTest.next = ${JSON.stringify(mdTarget)}`);
-  await emitMenu(page, "export.markdown");
-  await sleep(6000);
-  check(
-    existsSync(mdTarget),
-    "LaTeX exports Markdown through pandoc",
-    existsSync(mdTarget) ? `${readFileSync(mdTarget).length} bytes` : "no file",
-  );
-  if (existsSync(mdTarget)) {
-    const text = readFileSync(mdTarget, "utf8");
-    check(
-      /^#{1,3} /m.test(text),
-      "the Markdown carries the document's headings",
-      text.split("\n").find((line) => line.startsWith("#")) ?? "no heading",
-    );
-    check(
-      !text.includes("\\documentclass") && !text.includes("\\section"),
-      "the LaTeX commands are converted, not copied",
-      text.includes("\\section") ? "a raw command survived" : "clean",
-    );
-  }
-
-  await page.evaluate(
-    `window.fetch = window.__latexExportTest.original; delete window.__latexExportTest`,
-  );
-  rmSync(exportDir, { recursive: true, force: true });
 }
 
 // File › Print for a `.tex` document hands the compiled bytes to the PDF viewer,

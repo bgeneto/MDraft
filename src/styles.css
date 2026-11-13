@@ -5440,3 +5440,120 @@ body {
 .latex-manage-libraries {
   margin: 0 0 8px;
 }
+
+/* Explorer (Track W): the workspace folder as a lazy tree. */
+.explorer-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 6px 12px;
+}
+
+.explorer-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.explorer-action,
+.explorer-link {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 3px;
+}
+
+.explorer-link {
+  font-size: inherit;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.explorer-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  padding-right: 10px;
+  color: var(--fg);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.explorer-item .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.explorer-item .icon {
+  flex: 0 0 auto;
+  width: 12px;
+  text-align: center;
+  opacity: 0.7;
+}
+
+.explorer-item:hover {
+  background: var(--active-line);
+}
+
+.explorer-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.explorer-item.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.explorer-other,
+.explorer-asset {
+  color: var(--muted);
+}
+
+.explorer-more {
+  padding: 3px 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* Outline scope for multi-file LaTeX projects (Track W2). */
+.outline-scope {
+  display: flex;
+  gap: 4px;
+  padding: 0 10px 6px;
+}
+
+.outline-scope button {
+  flex: 1;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 4px;
+}
+
+.outline-scope button[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.outline-item.outline-current-file {
+  font-style: normal;
+}
+
+.outline-item[title] {
+  color: var(--muted);
+}

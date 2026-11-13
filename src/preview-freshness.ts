@@ -120,6 +120,8 @@ export interface LatexEngineIdentity {
   nativeDistribution: string | null;
   nativeEngine: string;
   nativeWsl: string | null;
+  /** The bundled TeX engine (stage 6.2): a pdfLaTeX PDF is not a LuaLaTeX one. */
+  bundledEngine?: string | null;
 }
 
 /**
@@ -146,5 +148,6 @@ export function latexKey(
     engine.nativeDistribution,
     engine.nativeEngine,
     engine.nativeWsl,
+    engine.bundledEngine ?? null,
   ]);
 }

@@ -158,6 +158,7 @@ import {
 import * as sidebarPanel from "./sidebar";
 import { resolvePalette } from "./syntax-themes";
 import { createTabsUi, type TabsUi } from "./tabs";
+import { invalidateExplorer, openRowMenu, renderExplorer } from "./explorer";
 import {
   TYPST_DISPLAY_MATH,
   TYPST_OUTLINE,
@@ -179,17 +180,37 @@ import {
 } from "./latex-commands";
 import { annotateTypstLines } from "./typst-map";
 import { paragraphRangeAt } from "./typst-page-map";
-import { TypstPdfPreview, type TypstPageContext } from "./typst-pdf";
+import { pdfPageTexts, TypstPdfPreview, type TypstPageContext } from "./typst-pdf";
 import {
   cancelLatex as cancelBundledLatex,
+  compileFresh,
   compileLatex,
+  distrustWarmEngine,
+  interactiveLaneWorthwhile,
   LatexBuildError,
+  latexEngineInfo,
+  previewLatexPages,
+  RECYCLE_AFTER_COMPILES,
+  recycleWarmEngine,
+  SupersededError,
   type LatexDiagnostic,
   type LatexResult,
 } from "./latex";
-import { LATEX_DOWNLOAD_MIB, LATEX_ENGINE_YEAR } from "./latex-engine";
+import { KeyRhythm, LatestWinsGate, adaptiveDelay, staleBeyondCap } from "./latex-scheduler";
+import { resolveMainDocument } from "./latex-root";
+import {
+  ENGINE_LABELS,
+  engineMismatch,
+  isTexEngine,
+  resolveTexEngine,
+  type EngineChoice,
+  type TexEngine,
+} from "./latex-engine-choice";
+import { projectLatexOutline, type ProjectHeading } from "./latex-outline";
+import { LATEX_DOWNLOAD_MIB, LATEX_ENGINE_YEAR, optionalEngineBytes } from "./latex-engine";
 import { nativeToLatex } from "./latex-native";
 import { libraryNames } from "./latex-texmf";
+import { clearLatexPerf, perfMark, perfMeasure, perfPhase, resetLatexPhase } from "./perf";
 import { setLocalLatexNames } from "./completion/latex-source";
 import {
   diagnosticPlace,
@@ -248,6 +269,7 @@ const statusFile = el<HTMLSpanElement>("status-file");
 const statusTokens = el<HTMLButtonElement>("status-tokens");
 const statusWords = el<HTMLButtonElement>("status-words");
 const statusCursor = el<HTMLSpanElement>("status-cursor");
+const statusEngine = el<HTMLButtonElement>("status-latex-engine");
 const statusEncoding = el<HTMLButtonElement>("status-encoding");
 const statusZoom = el<HTMLButtonElement>("status-zoom");
 const statusReading = el<HTMLButtonElement>("status-reading");
@@ -394,6 +416,7 @@ const lifecycle = createDocumentLifecycle({
           recentFiles: next.recentFiles,
           lastDirectory: next.lastDirectory,
         };
+        invalidateExplorer();
         renderSidebar();
       }).catch(() => {});
     }
@@ -935,6 +958,7 @@ function menuStateSnapshot(): api.MenuState {
     viewMode: settings.viewMode,
     sidebarVisible: settings.sidebarVisible,
     sidebarTab: settings.sidebarTab,
+    hasWorkspace: Boolean(settings.workspaceFolder),
     showStatusBar: settings.showStatusBar,
     focusMode: settings.focusMode,
     typewriterMode: settings.typewriterMode,
@@ -1174,7 +1198,7 @@ function applyLayout(): void {
     );
   }
 
-  for (const tab of ["outline", "favorites", "recent"] as const) {
+  for (const tab of ["outline", "favorites", "recent", "explorer"] as const) {
     el<HTMLButtonElement>(`tab-${tab}`).setAttribute(
       "aria-selected",
       String(settings.sidebarTab === tab),
@@ -1319,7 +1343,10 @@ function applySettingsPatch(
   const affectsRendering =
     patch.enableMath !== undefined ||
     patch.enableMermaid !== undefined ||
-    patch.htmlPreviewScripts !== undefined;
+    patch.htmlPreviewScripts !== undefined ||
+    // The bundled engine of a project (stage 6.2): another engine, another PDF.
+    patch.latexBundledEngine !== undefined ||
+    patch.latexProjectEngines !== undefined;
   // `syntaxTheme` is the editor's palette and `editorMaxWidth` a CSS length
   // that `applyLayout` below applies, like zoom: neither is an input of any
   // preview. Listing them as rendering inputs recompiled a LaTeX project for a
@@ -1485,6 +1512,8 @@ function refreshStatus(): void {
   statusWords.title =
     `${wordsText} words · ${formatCount(chars)} characters · ${formatCount(lines)} lines` +
     " · Click for document statistics";
+  // The engine chip belongs to LaTeX documents compiled by the bundled engine.
+  if (doc.language !== "latex" || !engineChipChoice) statusEngine.hidden = true;
   statusCursor.textContent = `Ln ${cursor.line}, Col ${cursor.column}${
     cursor.selectionLength > 0
       ? ` (${cursor.selectionLength} selected${
@@ -1984,10 +2013,11 @@ function scheduleRender(immediate = false): void {
     // The pane is not on screen. A queued or in-flight render would only take
     // the main thread away from typing, and its answer must not claim the
     // buffer is current when the reader asks for the preview again.
+    // The warm LaTeX engine survives Source mode; its in-flight result is
+    // dropped by the token, and returning to Split compiles the newest text.
     renderToken += 1;
     previewStale = true;
     previewSyncReady = false;
-    cancelLatex();
     clearPending();
     return;
   }
@@ -1995,8 +2025,24 @@ function scheduleRender(immediate = false): void {
 }
 
 /** How long the preview may lag behind the buffer before it is rebuilt. */
+/** The reader's recent typing rhythm, for the LaTeX interactive delay. */
+const latexRhythm = new KeyRhythm();
+/** When the first edit not yet covered by a started LaTeX compile happened. */
+let latexUnrenderedSince: number | null = null;
+/** When the last LaTeX compile started. */
+let latexLastStart: number | null = null;
+
 function renderDelay(): number {
-  if (doc.language === "latex") return 800;
+  // LaTeX used a fixed 800 ms before the engine was kept warm and compiles
+  // stopped being cancelled by typing. Now the compile starts on the first
+  // pause longer than this reader's rhythm (60-200 ms), and continuous typing
+  // still compiles once every 1.5 s (docs/plans/2026-11-12-latex-compile-cost.md,
+  // stage 1.5). Latest-wins keeps at most one compile running.
+  if (doc.language === "latex") {
+    const now = performance.now();
+    if (staleBeyondCap(latexLastStart, latexUnrenderedSince, now)) return 0;
+    return adaptiveDelay(latexRhythm.intervals());
+  }
   if (doc.language === "html") return 300;
   if (doc.language === "asciidoc") return 250;
   if (doc.language === "typst") return 450;
@@ -2338,7 +2384,9 @@ function compileCurrentLatex(): void {
   }
   window.clearTimeout(renderTimer);
   renderToken += 1;
-  cancelLatex();
+  // Not cancelLatex(): disposing would cold-boot the engine on every manual
+  // Compile. `forceNextBuild` bypasses the result store; a crashed or hung
+  // engine is replaced by the watchdog and the circuit breaker in latex.ts.
   discardStagedPdf();
   if (settings.viewMode === "source") setViewMode("split");
   window.clearTimeout(renderTimer);
@@ -2417,6 +2465,7 @@ function syncLatexAutoToggle(): void {
 
 function setLatexStatus(message: string, state?: CompiledStatus): void {
   if (doc.language !== "latex") return;
+  if (latexInFlight) perfPhase(message);
   configureCompiledUi();
   compiledUi.status(
     message,
@@ -2445,6 +2494,296 @@ function showLatexWarnings(result: LatexResult, root: { path: string; directory:
   panel.querySelector(".latex-log")?.remove();
   compiledUi.details(panel, result.log, result.warnings.length, false);
   compiledUi.outputReady();
+}
+
+/**
+ * The caret as a project-relative path and UTF-16 offset, for checkpoint
+ * placement; undefined when the active file is not a .tex inside the project.
+ */
+function latexEditPoint(directory: string): { path: string; offset: number } | undefined {
+  if (!doc.path || !/\.tex$/i.test(doc.path)) return undefined;
+  const prefix = pathKey(directory) + "/";
+  if (!pathKey(doc.path).startsWith(prefix)) return undefined;
+  const path = doc.path.slice(directory.length + 1).replace(/\\/g, "/");
+  return { path, offset: editor.view.state.selection.main.head };
+}
+
+/** Every open project text file, so a compile sees unsaved edits. */
+function latexOverlays(directory: string): Parameters<typeof api.latexProjectSnapshot>[1] {
+  const rootPrefix = pathKey(directory) + "/";
+  return sessions
+    .list()
+    .filter(
+      (session): session is Session & { path: string } =>
+        session.path !== null &&
+        pathKey(session.path).startsWith(rootPrefix) &&
+        /\.(?:tex|bib|sty|cls|bst)$/i.test(session.path),
+    )
+    .map((session) => ({
+      path: session.path,
+      text: textOf(session),
+      encoding: session.encoding,
+      hadBom: session.hadBom,
+      lineEnding: session.lineEnding,
+    }));
+}
+
+/** The warm engine's identity: the project, the engine year and its local libraries. */
+function latexProjectKey(
+  rootPath: string,
+  snapshot: api.LatexProjectSnapshot,
+  engine: TexEngine = "lualatex",
+): string {
+  return JSON.stringify([
+    pathKey(rootPath),
+    LATEX_ENGINE_YEAR,
+    snapshot.texmf?.revision ?? null,
+    engine,
+  ]);
+}
+
+/* ---------- Per-project TeX engine (stage 6.2) ---------- */
+
+/** The engine the chip shows, for the main document it was resolved for. */
+let engineChipChoice: (EngineChoice & { main: string }) | null = null;
+
+/** The project's own engine choice, by main document. */
+function projectEngine(mainPath: string | null): TexEngine | null {
+  if (!mainPath) return null;
+  const key = pathKey(mainPath);
+  const entry = settings.latexProjectEngines?.find((item) => pathKey(item.main) === key);
+  return entry && isTexEngine(entry.engine) ? entry.engine : null;
+}
+
+/** Magic comment, then the project's choice, then the Preferences default. */
+function latexEngineChoice(root: Session): EngineChoice {
+  return resolveTexEngine(textOf(root), projectEngine(root.path), settings.latexBundledEngine);
+}
+
+function showEngineChip(choice: EngineChoice, main: string): void {
+  engineChipChoice = { ...choice, main };
+  const label = ENGINE_LABELS[choice.engine];
+  statusEngine.textContent = label;
+  statusEngine.title =
+    choice.source === "magic"
+      ? `TeX engine: ${label} (magic comment). Set by % !TeX program in the main file.`
+      : `TeX engine: ${label} (${choice.reason}). Click to choose this project's engine.`;
+  statusEngine.setAttribute("aria-label", `TeX engine: ${label}, ${choice.reason}`);
+  statusEngine.hidden = doc.language !== "latex";
+}
+
+/** Remember (or forget, with null) the project's engine and compile again. */
+/** Download an optional engine the reader asked for; false when it failed. */
+async function ensureEngine(engine: TexEngine): Promise<boolean> {
+  if (engine === "lualatex" || (await api.latexEngineAvailable(engine))) return true;
+  const label = ENGINE_LABELS[engine];
+  setLatexStatus(`Downloading ${label}…`);
+  try {
+    await api.installLatexEngine(engine);
+    return true;
+  } catch (error) {
+    setLatexStatus(`${label} could not be downloaded.`);
+    toast(`${label} could not be downloaded: ${String(error)}`, 6000);
+    return false;
+  }
+}
+
+async function setProjectEngine(main: string, engine: TexEngine | null): Promise<void> {
+  if (engine && !(await ensureEngine(engine))) return;
+  const key = pathKey(main);
+  const others = (settings.latexProjectEngines ?? []).filter((item) => pathKey(item.main) !== key);
+  const next = engine ? [{ main, engine }, ...others].slice(0, 50) : others;
+  // A rendering input: the patch compiles the project again.
+  await applySettingsPatch({ latexProjectEngines: next });
+}
+
+/** The chip's menu: the three engines, with the download size of a missing one. */
+async function openEngineMenu(): Promise<void> {
+  const choice = engineChipChoice;
+  if (!choice) return;
+  const entries: Array<[string, () => void]> = [];
+  if (choice.source === "magic") {
+    // The magic comment decides, so there is nothing to choose; but an engine
+    // it names that is not downloaded yet must be obtainable from here, or the
+    // preview's "download it from the chip" would point at a dead control.
+    const label = ENGINE_LABELS[choice.engine];
+    const available =
+      choice.engine === "lualatex" || (await api.latexEngineAvailable(choice.engine));
+    const size = (optionalEngineBytes(choice.engine) / 1048576).toFixed(1);
+    entries.push(
+      available
+        ? [`Set by % !TeX program in the main file (${label})`, () => {}]
+        : [
+            `Download ${label} (${size} MB), named by % !TeX program`,
+            () =>
+              void ensureEngine(choice.engine).then((ok) => {
+                if (ok && doc.language === "latex") scheduleRender(true);
+              }),
+          ],
+    );
+  } else {
+    for (const engine of ["lualatex", "pdflatex", "xelatex"] as const) {
+      const mark = engine === choice.engine ? "✓ " : "";
+      const available = engine === "lualatex" || (await api.latexEngineAvailable(engine));
+      const size = optionalEngineBytes(engine);
+      const note = available || !size ? "" : ` — download ${(size / 1048576).toFixed(1)} MB`;
+      entries.push([
+        `${mark}${ENGINE_LABELS[engine]}${note}`,
+        () => void setProjectEngine(choice.main, engine),
+      ]);
+    }
+    if (projectEngine(choice.main))
+      entries.push(["Use the Preferences default", () => void setProjectEngine(choice.main, null)]);
+  }
+  const bounds = statusEngine.getBoundingClientRect();
+  openRowMenu(entries, bounds.left, bounds.top - 4 - entries.length * 30, statusEngine);
+}
+
+/** Current bundled compiles since the last re-anchoring compare. */
+let commitsSinceAnchor = 0;
+let reanchorTimer = 0;
+let reanchoring = false;
+/** Compare after this many compiles, once the reader has been idle for a moment. */
+const REANCHOR_EVERY = 25;
+const REANCHOR_IDLE_MS = 3000;
+
+let recycleTimer = 0;
+const RECYCLE_IDLE_MS = 5000;
+
+/** Recycle the warm engine at idle once it has done enough compiles (Phase 4.1). */
+function scheduleRecycle(): void {
+  if (latexEngineInfo().compiles < RECYCLE_AFTER_COMPILES) return;
+  window.clearTimeout(recycleTimer);
+  recycleTimer = window.setTimeout(() => void recycleLatexEngine(), RECYCLE_IDLE_MS);
+}
+
+async function recycleLatexEngine(): Promise<void> {
+  const value = latexPreview;
+  if (doc.language !== "latex" || !value || !latexCurrent(value)) return;
+  const root = sessions.byId(value.rootId);
+  if (!root?.path || !root.directory) return;
+  try {
+    const snapshot = await api.latexProjectSnapshot(root.path, latexOverlays(root.directory));
+    if (!latexCurrent(value)) return;
+    await recycleWarmEngine(
+      snapshot,
+      latexProjectKey(root.path, snapshot, latexEngineInfo().engine ?? "lualatex"),
+      renderToken,
+    );
+  } catch {
+    // The old engine keeps working; the next idle moment tries again.
+  }
+}
+
+function scheduleReanchor(): void {
+  commitsSinceAnchor += 1;
+  if (commitsSinceAnchor < REANCHOR_EVERY) return;
+  window.clearTimeout(reanchorTimer);
+  reanchorTimer = window.setTimeout(() => void reanchorLatex("idle"), REANCHOR_IDLE_MS);
+}
+
+/**
+ * Re-anchoring (stage 3.4 of docs/plans/2026-11-12-latex-compile-cost.md).
+ *
+ * The warm engine resumes from heap checkpoints and keeps auxiliary files, so
+ * its output is periodically compared, page text by page text, with a fresh
+ * full compile of the same inputs. A difference stops incremental builds for
+ * the project (the circuit breaker) and recompiles from scratch: speed never
+ * buys a wrong preview. Runs at idle, or on the hidden `view.latexReanchor`
+ * command the differential test uses; the outcome is a `reanchor` measure.
+ */
+async function reanchorLatex(reason: "idle" | "command"): Promise<void> {
+  window.clearTimeout(reanchorTimer);
+  const value = latexPreview;
+  if (reanchoring || doc.language !== "latex" || !value || !latexCurrent(value)) {
+    perfMark("reanchor-skipped", { reason, why: reanchoring ? "busy" : "no current result" });
+    return;
+  }
+  if (latexEngine?.backend !== "bundled") {
+    perfMark("reanchor-skipped", { reason, why: "not the bundled engine" });
+    return;
+  }
+  const root = sessions.byId(value.rootId);
+  if (!root?.path || !root.directory) return;
+  reanchoring = true;
+  const started = perfMark("reanchor-start", { reason });
+  try {
+    const snapshot = await api.latexProjectSnapshot(root.path, latexOverlays(root.directory));
+    const fresh = latexCurrent(value)
+      ? await compileFresh(snapshot, renderToken, latexEngineInfo().engine ?? "lualatex")
+      : null;
+    if (!fresh || !latexCurrent(value)) {
+      perfMark("reanchor-skipped", {
+        reason,
+        why: fresh ? "edited meanwhile" : "fresh build failed",
+      });
+      return;
+    }
+    const [warmText, freshText] = await Promise.all([
+      pdfPageTexts(value.result.pdf),
+      pdfPageTexts(fresh),
+    ]);
+    const firstDifference = freshText.findIndex((text, index) => text !== warmText[index]);
+    const equal = warmText.length === freshText.length && firstDifference < 0;
+    perfMeasure("reanchor", started, {
+      reason,
+      equal,
+      pages: [warmText.length, freshText.length],
+      firstDifferentPage: equal
+        ? null
+        : firstDifference < 0
+          ? freshText.length + 1
+          : firstDifference + 1,
+    });
+    commitsSinceAnchor = 0;
+    if (!equal) {
+      distrustWarmEngine(
+        latexProjectKey(root.path, snapshot, latexEngineInfo().engine ?? "lualatex"),
+      );
+      toast(
+        "An incremental LaTeX build differed from a full build. This project now compiles from scratch.",
+        6500,
+      );
+      forceNextBuild = true;
+      scheduleRender(true);
+    }
+  } catch (error) {
+    perfMark("reanchor-skipped", { reason, why: String(error) });
+  } finally {
+    reanchoring = false;
+  }
+}
+
+/** The render token of the LaTeX PDF on screen, current or out of date. */
+let latexShownToken = 0;
+/** One installed-TeX process at a time; the newest waiting revision runs next. */
+const nativeGate = new LatestWinsGate();
+
+/** True while a LaTeX compile holds the engine (bundled or installed). */
+function latexBusy(): boolean {
+  return latexEngineInfo().busy || nativeGate.holder !== null;
+}
+
+/**
+ * Whether a finished result may be put on screen: it is current, or it is
+ * newer than what is shown and still describes this document's project
+ * (the same tab, an open root, no session rewound or renamed). See the result
+ * router in docs/plans/2026-11-12-latex-compile-cost.md.
+ */
+function latexDisplayable(value: LatexPreview): boolean {
+  // Through a plain boolean: the type guard would narrow `value` to never below.
+  const current: boolean = latexCurrent(value);
+  if (current) return true;
+  return (
+    settings.viewMode !== "source" &&
+    value.activeId === doc.id &&
+    value.token > latexShownToken &&
+    sessions.byId(value.rootId) !== undefined &&
+    value.revisions.every((item) => {
+      const session = sessions.byId(item.id);
+      return !session || (session.path === item.path && session.revision >= item.revision);
+    })
+  );
 }
 
 function latexCurrent(value: LatexPreview | null): value is LatexPreview {
@@ -2856,7 +3195,7 @@ async function latexFailure(
     stagedPdf = { view, host };
     view.setZoom(zoomFactor());
     try {
-      await view.render(partial.slice());
+      await view.render(partial.slice(), { focusPage: typstPdf?.topPosition()?.page });
       if (token !== renderToken || activeId !== doc.id) {
         view.dispose();
         host.remove();
@@ -3223,6 +3562,19 @@ async function renderLatexPreview(
   const force = !storeOnly && forceNextBuild;
   if (!storeOnly) forceNextBuild = false;
   const started = performance.now();
+  if (!storeOnly) {
+    latexLastStart = started;
+    latexUnrenderedSince = null;
+  }
+  clearLatexPerf();
+  resetLatexPhase();
+  perfMark("render-start", {
+    token,
+    path: doc.path ?? null,
+    storeOnly,
+    force,
+    viewMode: settings.viewMode,
+  });
   const activeId = doc.id;
   if (!storeOnly) {
     latexInFlight = true;
@@ -3237,6 +3589,7 @@ async function renderLatexPreview(
     return;
   }
   let engineStatus: api.LatexEngineStatus;
+  const engineStatusStarted = perfMark("engine-status-start");
   try {
     engineStatus = await api.latexEngineStatus();
   } catch (error) {
@@ -3248,12 +3601,23 @@ async function renderLatexPreview(
     }
     return;
   }
+  perfMeasure("engine-status", engineStatusStarted);
   latexEngine = engineStatus;
   if (token !== renderToken || doc.id !== activeId) return;
-  if (storeOnly && (engineStatus.backend === "none" || engineStatus.problem)) return;
-  if (engineStatus.backend === "none") {
+  // Bundled TeX switched on is not bundled TeX ready: a manifest that adds a core
+  // file (the LuaLaTeX checkpoint build) under an unchanged release id leaves an
+  // older install incomplete. Compiling anyway fails inside the worker as "this
+  // document requires LuaLaTeX", and every optional engine reads as "not
+  // downloaded yet" because they all require the core set. The setup note's
+  // Retry downloads only the missing or mismatched files.
+  const bundledMissing = engineStatus.backend === "bundled" && !engineStatus.bundledInstalled;
+  if (storeOnly && (engineStatus.backend === "none" || bundledMissing || engineStatus.problem))
+    return;
+  if (engineStatus.backend === "none" || bundledMissing) {
     latexInFlight = false;
-    setLatexStatus("LaTeX is not enabled.");
+    setLatexStatus(
+      bundledMissing ? "The bundled TeX engine needs setup." : "LaTeX is not enabled.",
+    );
     delete preview.dataset.latexCurrent;
     disposeTypstPdf();
     latexEnableNote(engineStatus);
@@ -3273,7 +3637,10 @@ async function renderLatexPreview(
   }
 
   let root = latexNavigationRoot ? sessions.byId(latexNavigationRoot) : undefined;
-  if (!root?.path || !root.directory || !latexPreview || !latexRelative(latexPreview, doc.path)) {
+  const pinnedContains = Boolean(
+    root?.path && root.directory && latexPreview && latexRelative(latexPreview, doc.path),
+  );
+  if (!pinnedContains) {
     // A failed compile has no preview to ask, so the previous root is kept while
     // the reader is looking at a file inside it. Without this, opening a problem
     // in an included chapter silently compiled that chapter as the main file.
@@ -3285,9 +3652,77 @@ async function renderLatexPreview(
     const pinned = inLatexProblemProject(doc.path)
       ? sessions.findByPath(latexProblemRoot!.path)
       : undefined;
-    root = pinned?.path ? pinned : doc;
-    latexNavigationRoot = root.id;
+    root = pinned?.path ? pinned : undefined;
   }
+  // The main document (GAP-034): a `% !TeX root` comment wins, then a file with
+  // its own \documentclass, then the pinned project; a lone chapter is told how
+  // to name its main file instead of failing deep inside the engine.
+  const main = resolveMainDocument({
+    directory: doc.directory ?? "",
+    source,
+    pinnedContains: Boolean(root),
+  });
+  // Rule 2: the reader's explicit choice for this workspace wins over the pin;
+  // rule 4: a chapter with no project yet asks the include graph.
+  if (main.kind === "pinned" || main.kind === "missing") {
+    const inWorkspace =
+      settings.workspaceFolder &&
+      doc.path &&
+      pathKey(doc.path).startsWith(pathKey(settings.workspaceFolder) + "/");
+    const chosen = inWorkspace ? workspaceMainDocument() : null;
+    let target: string | null =
+      chosen && pathKey(chosen) !== pathKey(doc.path ?? "") ? chosen : null;
+    if (!target && main.kind === "missing" && inWorkspace && doc.path) {
+      const candidates = await workspaceMainCandidates(doc.path);
+      if (token !== renderToken || doc.id !== activeId) return;
+      if (candidates.length === 1) target = candidates[0];
+      else if (candidates.length > 1) {
+        if (storeOnly) return;
+        latexInFlight = false;
+        await latexFailure(
+          `Several main documents include this file: ${candidates.map((c) => c.split(/[\\/]/).pop()).join(", ")}. Right-click the one to use in the Explorer and choose Set as Main Document, or add \`% !TeX root = …\` to this file.`,
+        );
+        if (token === renderToken && doc.id === activeId)
+          setLatexStatus("Choose this file's main document.");
+        return;
+      }
+    }
+    if (target) {
+      const named = await backgroundSession(target);
+      if (token !== renderToken || doc.id !== activeId) return;
+      if (named?.path) {
+        root = named;
+        latexNavigationRoot = root.id;
+      }
+    }
+  }
+  if (main.kind === "comment") {
+    const named = await backgroundSession(main.path);
+    if (token !== renderToken || doc.id !== activeId) return;
+    if (!named?.path) {
+      if (storeOnly) return;
+      latexInFlight = false;
+      setLatexStatus("The main document named by % !TeX root was not found.");
+      latexFailure(`% !TeX root names ${main.path}, which could not be opened.`);
+      return;
+    }
+    root = named;
+  } else if (main.kind === "self" || (main.kind === "pinned" && !root)) {
+    root = doc;
+  } else if (main.kind === "missing" && (!root || root.id === doc.id)) {
+    if (storeOnly) return;
+    latexInFlight = false;
+    await latexFailure(
+      "This file has no \\documentclass, so it is not a main document. Add a line such as `% !TeX root = ../main.tex` at the top, or open the main file and compile from there.",
+    );
+    // After the failure panel: it writes a generic status of its own, and this
+    // one says what to do.
+    if (token === renderToken && doc.id === activeId)
+      setLatexStatus("No main document for this file.");
+    return;
+  }
+  root ??= doc;
+  latexNavigationRoot = root.id;
   if (storeOnly && (!root.path || !root.directory)) return;
   if (!root.path || !root.directory) {
     latexInFlight = false;
@@ -3296,34 +3731,32 @@ async function renderLatexPreview(
     return;
   }
   const revisions = sessions.list().map(({ id, revision, path }) => ({ id, revision, path }));
-  const rootPrefix = pathKey(root.directory) + "/";
-  const overlays = sessions
-    .list()
-    .filter(
-      (session): session is Session & { path: string } =>
-        session.path !== null &&
-        pathKey(session.path).startsWith(rootPrefix) &&
-        /\.(?:tex|bib|sty|cls|bst)$/i.test(session.path),
-    )
-    .map((session) => ({
-      path: session.path,
-      text: textOf(session),
-      encoding: session.encoding,
-      hadBom: session.hadBom,
-      lineEnding: session.lineEnding,
-    }));
+  const overlays = latexOverlays(root.directory);
   const owner = { rootId: root.id, rootDirectory: root.directory, activeId, token, revisions };
   // The snapshot's own file list is the definition of "this project", used when a
   // failure has to decide whether a later tab switch is still inside it.
   let snapshotFiles: string[] = [];
+  // The bundled engine for this project (stage 6.2): magic comment, then the
+  // project's choice, then the Preferences default. The chip always says which.
+  const engineChoice = engineStatus.backend === "native" ? null : latexEngineChoice(root);
+  if (engineChoice) showEngineChip(engineChoice, root.path);
+  else statusEngine.hidden = true;
   let buildEngine =
     engineStatus.backend === "native"
       ? engineStatus.nativeEngine === "auto"
         ? "Installed TeX"
         : engineStatus.nativeEngine
-      : "LuaLaTeX";
+      : ENGINE_LABELS[engineChoice?.engine ?? "lualatex"];
   try {
+    const snapshotStarted = perfMark("snapshot-ipc-start", {
+      path: root.path,
+      overlays: overlays.length,
+    });
     const snapshot = await api.latexProjectSnapshot(root.path, overlays);
+    perfMeasure("snapshot-ipc", snapshotStarted, {
+      files: snapshot.files.length,
+      libraries: snapshot.texmf?.files.length ?? 0,
+    });
     if (token !== renderToken || doc.id !== activeId) return;
     snapshotFiles = snapshot.files.map((file) => file.path);
     // The library revision is part of what this compile read. A later focus
@@ -3331,7 +3764,10 @@ async function renderLatexPreview(
     latexLibraryRevision = snapshot.texmf?.revision ?? null;
     // Completion follows the latest capture, in this editor state only.
     editor.view.dispatch({ effects: setLocalLatexNames.of(libraryNames(snapshot.texmf)) });
-    const key = latexKey(root, snapshot.generation, latexEngineIdentity(engineStatus));
+    const key = latexKey(root, snapshot.generation, {
+      ...latexEngineIdentity(engineStatus),
+      bundledEngine: engineChoice?.engine ?? null,
+    });
     if (!force && rebindLatexPreview(key, root, source, token, activeId, revisions)) return;
     // A PDF already built from exactly these inputs — typically the one this
     // tab showed before the reader switched away — is drawn instead of compiled.
@@ -3348,47 +3784,140 @@ async function renderLatexPreview(
       );
     }
     let result: LatexResult;
+    const compileCallStarted = perfMark("compile-call-start", {
+      engine: engineStatus.backend,
+      mainFile: snapshot.mainFile,
+    });
     if (stored) {
       result = stored;
     } else if (engineStatus.backend === "native") {
       const label =
         engineStatus.nativeEngine === "auto" ? "the installed engine" : engineStatus.nativeEngine;
-      setLatexStatus(`Compiling with ${label}…`);
-      // The preview's render token is the native job's owner too, so a Cancel
-      // or an edit can reach the process tree before its result arrives.
-      const job = `job-${token}-${Date.now()}`;
-      latexJob = job;
-      countCompile();
+      // One installed-TeX process at a time, newest waiting revision first: an
+      // edit no longer kills the running process (that starved the preview
+      // exactly as it did the bundled engine). A Cancel still does.
+      const release = await nativeGate.acquire(token);
       try {
-        const native = await api.latexNativeCompile({
-          job,
-          mainFile: snapshot.mainFile,
-          files: snapshot.files,
-          texmf: snapshot.texmf,
-        });
-        if (token !== renderToken || doc.id !== activeId) return;
-        buildEngine = native.engine;
-        result = nativeToLatex(native, snapshot);
+        setLatexStatus(`Compiling with ${label}…`);
+        if (doc.id !== activeId) return;
+        // The preview's render token is the native job's owner too, so a Cancel
+        // can reach the process tree before its result arrives.
+        const job = `job-${token}-${Date.now()}`;
+        latexJob = job;
+        countCompile();
+        try {
+          const native = await api.latexNativeCompile({
+            job,
+            mainFile: snapshot.mainFile,
+            files: snapshot.files,
+            texmf: snapshot.texmf,
+          });
+          if (doc.id !== activeId) return;
+          buildEngine = native.engine;
+          result = nativeToLatex(native, snapshot);
+        } finally {
+          if (latexJob === job) latexJob = null;
+        }
       } finally {
-        if (latexJob === job) latexJob = null;
+        release();
       }
     } else {
-      setLatexStatus("Compiling LaTeX…");
-      countCompile();
-      result = await compileLatex(snapshot, (phase) => {
-        if (token === renderToken && doc.id === activeId) {
-          setLatexStatus(
-            phase === "downloading"
-              ? "Downloading LaTeX packages…"
-              : phase === "resolving"
-                ? "Resolving LaTeX packages…"
-                : "Compiling LaTeX…",
-          );
+      // The project, not the revision: the warm engine is reused across edits
+      // and chapter tabs and replaced when the project or the engine's inputs
+      // (year, local libraries) change.
+      const texEngine = engineChoice?.engine ?? "lualatex";
+      const projectKey = latexProjectKey(root.path, snapshot, texEngine);
+      // A missing optional engine is never replaced by another one silently:
+      // the reader is told how to get it, or to pick another.
+      if (texEngine !== "lualatex" && !(await api.latexEngineAvailable(texEngine))) {
+        if (token !== renderToken || doc.id !== activeId) return;
+        const label = ENGINE_LABELS[texEngine];
+        const megabytes = (optionalEngineBytes(texEngine) / 1048576).toFixed(1);
+        latexInFlight = false;
+        await latexFailure(
+          `${label} is chosen for this project (${engineChoice?.reason}) but is not downloaded yet. Click the ${label} engine chip in the status bar to download it (${megabytes} MB), or choose another engine there.`,
+        );
+        if (token === renderToken && doc.id === activeId)
+          setLatexStatus(`${label} is not downloaded yet.`);
+        return;
+      }
+      const mismatch = engineMismatch(textOf(root), texEngine);
+      // The interactive lane (stage 2.2): when a full result of this project is
+      // on screen, typeset only up to the last visible page first and splice it
+      // in, then run the exact compile. Display only; skipped when previews have
+      // not been clearly cheaper than full compiles for this project.
+      const shown = typstPdf;
+      if (
+        !force &&
+        shown &&
+        // A reader following the end of the document gets new pages, which a
+        // splice into existing slots cannot show; the exact result follows the tail.
+        !shown.atEnd() &&
+        latexPreview?.rootId === root.id &&
+        latexPreview.activeId === activeId &&
+        interactiveLaneWorthwhile(projectKey)
+      ) {
+        const pageLimit = shown.lastVisiblePage() + 1;
+        const span =
+          pageLimit > 1
+            ? await previewLatexPages(snapshot, { key: projectKey, token, pageLimit })
+            : null;
+        if (span && typstPdf === shown && doc.id === activeId && token > latexShownToken) {
+          const replaced = await shown.splice(span.pdf, span.firstPage);
+          if (replaced > 0) {
+            perfMark("interactive", { firstPage: span.firstPage, pages: replaced, token });
+            if (token === renderToken)
+              setLatexStatus("Preview updated · finishing the exact build…");
+          }
         }
-      });
+      }
+      setLatexStatus(
+        latexBusy()
+          ? "Waiting for the previous LaTeX compile…"
+          : mismatch
+            ? `Compiling with ${ENGINE_LABELS[texEngine]} · ${mismatch}`
+            : "Compiling LaTeX…",
+      );
+      countCompile();
+      result = await compileLatex(
+        snapshot,
+        (phase, count) => {
+          if (token === renderToken && doc.id === activeId) {
+            setLatexStatus(
+              phase === "downloading"
+                ? `Downloading LaTeX packages${count ? ` (${count})` : ""}…`
+                : phase === "loading"
+                  ? "Loading the TeX engine…"
+                  : "Compiling LaTeX…",
+            );
+          }
+        },
+        {
+          // The project, not the revision: the warm engine is reused across
+          // edits and chapter tabs and replaced when the project or the
+          // engine's inputs (year, local libraries) change.
+          key: projectKey,
+          token,
+          // Where the reader is working, project-relative: the engine places a
+          // heap checkpoint before that paragraph during this pass (stage 3.3).
+          edit: latexEditPoint(root.directory),
+          engine: texEngine,
+        },
+      );
     }
+    perfMeasure("compile-call", compileCallStarted, {
+      stored: Boolean(stored),
+      engine: buildEngine,
+      warnings: result.warnings.length,
+    });
+    const postStarted = perfMark("post-start");
     const value = { ...owner, result };
-    if (!latexCurrent(value)) return;
+    // Display versus authority: a result newer than the one on screen is shown
+    // even when the reader has typed since, labelled out of date. Only a
+    // result whose revisions match the buffer is authoritative for export,
+    // print and SyncTeX (`latexCurrent`). Dropping every stale result is what
+    // made continuous typing show nothing at all.
+    if (!latexDisplayable(value)) return;
     if (!stored) latexStore.set(key, result, latexResultBytes(result));
     // Narrowed once for the closure: the map callback is not where a mutable
     // `let root` keeps its non-null narrowing.
@@ -3410,19 +3939,45 @@ async function renderLatexPreview(
     stagedPdf = { view, host };
     view.setZoom(zoomFactor());
     setLatexStatus("Rendering PDF…");
-    await view.render(result.pdf.slice());
-    if (!latexCurrent(value)) {
+    perfMeasure("post", postStarted, { sources: result.sources.length });
+    const pdfStarted = perfMark("pdf-start");
+    // The reading position of the view being replaced: its pages get their
+    // text first, so selection and the first paint do not wait for the rest.
+    await view.render(result.pdf.slice(), { focusPage: typstPdf?.topPosition()?.page });
+    perfMeasure("pdf", pdfStarted, { pdfBytes: result.pdf.length });
+    if (stagedPdf?.view !== view || !latexDisplayable(value)) {
+      // Discarded (tab switch, view mode, a newer staged build) or overtaken.
+      if (stagedPdf?.view === view) stagedPdf = null;
       view.dispose();
       host.remove();
       return;
     }
+    const authoritative = latexCurrent(value);
     latexPartial = null;
     delete preview.dataset.latexPartial;
     latexPreview = value;
+    latexShownToken = token;
     commitPdfHost(host, view, token);
-    syncPreviewFromSource();
-    preview.dataset.latexCurrent = String(token);
+    // Only a current result follows the editor: an out-of-date one describes
+    // older text, its map is not built yet, and scrolling it from the caret
+    // moved a reader who was following the end of the document away from it
+    // before the current result arrived.
+    if (authoritative) syncPreviewFromSource();
+    preview.dataset.latexShown = String(token);
+    if (authoritative) preview.dataset.latexCurrent = String(token);
     preview.dataset.latexMs = String(Math.round(performance.now() - started));
+    perfMeasure("render", started, {
+      token,
+      files: result.files.size,
+      warnings: result.warnings.length,
+      stored: Boolean(stored),
+    });
+    perfMark("commit", {
+      token,
+      ms: Math.round(performance.now() - started),
+      files: result.files.size,
+      warnings: result.warnings.length,
+    });
     previewLinesMapped = false;
     commitPreview(
       projectOwner(
@@ -3448,9 +4003,28 @@ async function renderLatexPreview(
       applyLatexMarks([selected], { path: root.path, directory: root.directory }, doc.path, false);
     else selectedLatexProblem = null;
     showLatexWarnings(result, { path: root.path, directory: root.directory });
-    latexInFlight = false;
     if (stored) preview.dataset.latexFromStore = String(token);
     else delete preview.dataset.latexFromStore;
+    if (!authoritative) {
+      // Shown, but the buffer has moved on: the newest revision is compiling
+      // or about to. Export, print and SyncTeX still wait for that result.
+      previewStale = true;
+      previewSyncReady = false;
+      setLatexStatus(
+        latexBusy() || renderToken !== token
+          ? "Out of date · Updating…"
+          : "Out of date · Waiting to compile…",
+      );
+      syncMenuState(false);
+      return;
+    }
+    latexInFlight = false;
+    if (!stored && engineStatus.backend === "bundled") {
+      scheduleReanchor();
+      scheduleRecycle();
+    }
+    // A project outline is built from this result's sources.
+    if (outlineScope === "project" && settings.sidebarTab === "outline") refreshOutline();
     setLatexStatus(
       `${stored ? "Up to date" : `Compiled in ${((result.elapsedMs ?? performance.now() - started) / 1000).toFixed(1)} s`} · ${result.engine ?? "LaTeX"}${result.warnings.length ? ` · ${result.warnings.length}${result.warningsTruncated ? "+" : ""} warning${result.warnings.length === 1 && !result.warningsTruncated ? "" : "s"}` : ""}`,
       {
@@ -3465,6 +4039,9 @@ async function renderLatexPreview(
     // "available after the preview compiles" until the next caret move.
     syncMenuState(false);
   } catch (error) {
+    // A newer revision took this one's place in the engine queue; it will
+    // report for itself.
+    if (error instanceof SupersededError) return;
     if (storeOnly) {
       // A probe that could not read the project leaves manual mode as it was.
       if (token === renderToken && doc.id === activeId) {
@@ -3596,7 +4173,7 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
   // The compile is awaited; a mode switch during it must not make this render
   // claim a word map it never built.
   const wantsMap = settings.viewMode === "split";
-  const imageRoot = customImageFolder();
+  const imageRoot = typstExtraRoot();
   const key = typstKey(doc, source, { mode: wanted, imageRoot });
   const force = forceNextBuild;
   forceNextBuild = false;
@@ -3742,7 +4319,7 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
   stagedPdf = { view, host };
   view.setZoom(zoomFactor());
   try {
-    await view.render(decodePdf(rendered.pdf));
+    await view.render(decodePdf(rendered.pdf), { focusPage: typstPdf?.topPosition()?.page });
   } catch (error) {
     if (token !== renderToken) return;
     discardStagedPdf();
@@ -3800,9 +4377,7 @@ function typstStoreHit(): boolean {
   const source = editor.getDoc();
   if (!typstStorable(source)) return false;
   const mode = settings.typstView === "pages" ? "pages" : "document";
-  return (
-    typstStore.get(typstKey(doc, source, { mode, imageRoot: customImageFolder() })) !== undefined
-  );
+  return typstStore.get(typstKey(doc, source, { mode, imageRoot: typstExtraRoot() })) !== undefined;
 }
 
 function typstStorable(source: string): boolean {
@@ -4192,11 +4767,114 @@ function renderDocTabs(): void {
   scheduleMenuStateSync();
 }
 
+/**
+ * Choose the Explorer's folder (File › Open Folder…).
+ *
+ * The folder is checked in Rust (a folder, not a drive root or the home
+ * folder) and remembered in settings; the sidebar switches to the Explorer.
+ */
+/** Main-document rule 2: the explicit choice for the open workspace folder. */
+function workspaceMainDocument(): string | null {
+  const folder = settings.workspaceFolder;
+  if (!folder) return null;
+  const key = pathKey(folder);
+  return settings.latexMainDocuments?.find((entry) => pathKey(entry.folder) === key)?.path ?? null;
+}
+
+function setWorkspaceMainDocument(path: string | null): void {
+  const folder = settings.workspaceFolder;
+  if (!folder) return;
+  const key = pathKey(folder);
+  const others = (settings.latexMainDocuments ?? []).filter(
+    (entry) => pathKey(entry.folder) !== key,
+  );
+  // Newest first; the cap mirrors MAX_MAIN_DOCUMENTS in settings.rs.
+  settings.latexMainDocuments = path ? [{ folder, path }, ...others].slice(0, 50) : others;
+  mainCandidateCache.clear();
+  persist();
+  renderSidebar();
+  toast(path ? `Main document: ${path.split(/[\\/]/).pop()}` : "Main document cleared");
+  if (doc.language === "latex") scheduleRender(true);
+}
+
+/** Rule 4 answers per file, so a compile does not re-read the workspace each time. */
+const mainCandidateCache = new Map<string, string[]>();
+
+async function workspaceMainCandidates(path: string): Promise<string[]> {
+  const folder = settings.workspaceFolder;
+  if (!folder || !pathKey(path).startsWith(pathKey(folder) + "/")) return [];
+  const key = `${pathKey(folder)}\u0000${pathKey(path)}`;
+  const cached = mainCandidateCache.get(key);
+  if (cached) return cached;
+  const found = await api.workspaceMainCandidates(folder, path).catch(() => [] as string[]);
+  mainCandidateCache.set(key, found);
+  return found;
+}
+
+async function chooseWorkspaceFolder(): Promise<void> {
+  const picked = await openDialog({ directory: true, multiple: false, title: "Open Folder" });
+  if (typeof picked !== "string") return;
+  await openWorkspaceFolder(picked);
+}
+
+async function openWorkspaceFolder(path: string): Promise<void> {
+  try {
+    const info = await api.workspaceOpen(path);
+    settings.workspaceFolder = info.root;
+    settings.sidebarTab = "explorer";
+    settings.sidebarVisible = true;
+    invalidateExplorer();
+    applyLayout();
+    persist();
+    renderSidebar();
+    syncMenuState(false);
+  } catch (error) {
+    toast(String(error).replace(/^Error: /, ""), 6000);
+  }
+}
+
+function closeWorkspaceFolder(): void {
+  settings.workspaceFolder = null;
+  invalidateExplorer();
+  persist();
+  renderSidebar();
+  syncMenuState(false);
+}
+
 function renderSidebar(): void {
   if (!settings.sidebarVisible) return;
 
   if (settings.sidebarTab === "outline") {
     refreshOutline();
+    return;
+  }
+
+  if (settings.sidebarTab === "explorer") {
+    void renderExplorer(
+      sidebarBody,
+      settings.workspaceFolder ?? null,
+      {
+        showAll: settings.explorerShowAll === true,
+        activePath: doc.path,
+        pathKey,
+        mainDocument: workspaceMainDocument(),
+      },
+      {
+        openFile: (path) => void openPath(path),
+        openExternal: (path) =>
+          void api.openExternal(path).catch((error: unknown) => toast(String(error))),
+        chooseFolder: () => void chooseWorkspaceFolder(),
+        closeFolder: closeWorkspaceFolder,
+        setShowAll: (on) => {
+          settings.explorerShowAll = on;
+          persist();
+          renderSidebar();
+        },
+        setMainDocument: setWorkspaceMainDocument,
+        reveal: (path) =>
+          void revealItemInDir(path).catch((error: unknown) => toast(String(error))),
+      },
+    );
     return;
   }
 
@@ -4298,6 +4976,30 @@ function openFavorite(path: string): void {
 }
 
 /** Rebuild the outline list from the current buffer. */
+/** "file": this document's headings; "project": the whole LaTeX project's (Track W2). */
+let outlineScope: "file" | "project" = "file";
+/** The project headings on screen, for the click handler. */
+let projectHeadings: ProjectHeading[] = [];
+
+/** The current LaTeX result covers more than one file: a project outline exists. */
+function latexProjectOutlineAvailable(): boolean {
+  return (
+    doc.language === "latex" &&
+    latexPreview !== null &&
+    latexPreview.activeId === doc.id &&
+    latexPreview.result.sources.length > 1
+  );
+}
+
+/** Jump to a project heading: scroll here, or open its file first. */
+async function pickProjectHeading(heading: ProjectHeading): Promise<void> {
+  const value = latexPreview;
+  if (!value) return;
+  const path = joinDir(value.rootDirectory, heading.file);
+  if (doc.path && pathKey(doc.path) !== pathKey(path)) await openPath(path);
+  if (doc.path && pathKey(doc.path) === pathKey(path)) editor.scrollToLine(heading.line);
+}
+
 function refreshOutline(text = editor.getDoc()): void {
   if (settings.sidebarTab !== "outline" || !settings.sidebarVisible) return;
   // A document load schedules a refresh and then calls renderSidebar(); this
@@ -4319,15 +5021,58 @@ function refreshOutline(text = editor.getDoc()): void {
   outlineLanguage = language;
   outlineReady = true;
 
-  sidebarPanel.renderOutline(
-    sidebarBody,
-    outlineHeadings,
-    editor.cursorInfo().line,
-    (line) => {
-      editor.scrollToLine(line);
-    },
-    language,
-  );
+  const project = latexProjectOutlineAvailable() && outlineScope === "project";
+  if (project && latexPreview) {
+    projectHeadings = projectLatexOutline(
+      latexPreview.result.mainFile,
+      new Map(latexPreview.result.sources.map((file) => [file.path, file.source])),
+    );
+    sidebarPanel.renderOutline(
+      sidebarBody,
+      projectHeadings,
+      -1,
+      (_line, index) => void pickProjectHeading(projectHeadings[index]),
+      language,
+    );
+    // Each row names its file when it is not the one on screen.
+    const current = latexPreview ? latexRelative(latexPreview, doc.path) : null;
+    sidebarBody.querySelectorAll<HTMLElement>(".outline-item").forEach((button, index) => {
+      const file = projectHeadings[index]?.file;
+      if (file && file !== current) button.title = file;
+      if (file === current) button.classList.add("outline-current-file");
+    });
+  } else {
+    sidebarPanel.renderOutline(
+      sidebarBody,
+      outlineHeadings,
+      editor.cursorInfo().line,
+      (line) => {
+        editor.scrollToLine(line);
+      },
+      language,
+    );
+  }
+  if (latexProjectOutlineAvailable()) {
+    const scope = document.createElement("div");
+    scope.className = "outline-scope";
+    scope.setAttribute("role", "group");
+    scope.setAttribute("aria-label", "Outline scope");
+    for (const [value, label] of [
+      ["file", "This file"],
+      ["project", "Whole project"],
+    ] as const) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.setAttribute("aria-pressed", String(outlineScope === value));
+      button.addEventListener("click", () => {
+        outlineScope = value;
+        refreshOutline();
+      });
+      scope.append(button);
+    }
+    sidebarBody.prepend(scope);
+  }
 }
 
 /** Headings change with the document, not with every keystroke. */
@@ -4349,6 +5094,8 @@ function updateActiveOutline(): void {
     refreshOutline();
     return;
   }
+  // The project scope marks rows by file, not by this document's line numbers.
+  if (outlineScope === "project" && latexProjectOutlineAvailable()) return;
   sidebarPanel.highlightOutline(sidebarBody, outlineHeadings, editor.cursorInfo().line);
 }
 
@@ -4546,6 +5293,34 @@ function describe(session: Session, payload: api.DocumentPayload): void {
 }
 
 /** Text of a session: the live view when it is on screen, otherwise its snapshot. */
+/**
+ * Open `path` as a tab without switching to it.
+ *
+ * For a main document named by `% !TeX root`: the project root must be a
+ * session (export, print and SyncTeX resolve it by id), but the reader asked
+ * to stay in the chapter they are editing.
+ */
+async function backgroundSession(path: string): Promise<Session | null> {
+  const existing = sessions.findByPath(path);
+  if (existing) return existing;
+  try {
+    return await lifecycle.exclusivePath(path, async () => {
+      const raced = sessions.findByPath(path);
+      if (raced) return raced;
+      const payload = await api.readDocument(path);
+      const session = sessions.create();
+      describe(session, payload);
+      sessions.add(session);
+      // The store does not redraw the strip; without this the main file was
+      // open but invisible until the next tab change.
+      renderDocTabs();
+      return session;
+    });
+  } catch {
+    return null;
+  }
+}
+
 function textOf(session: Session): string {
   if (session.id === doc.id && editor) return editor.getDoc();
   return session.draft ?? session.editorState?.doc.toString() ?? session.savedContent;
@@ -4615,7 +5390,9 @@ function invalidatePreview(): void {
   cancelPreviewWorkers();
   typstPdf?.cancelMap();
   cancelTypstRender();
-  cancelLatex();
+  // The warm LaTeX engine is kept across tab switches: a chapter of the same
+  // project reuses it, and another project's first compile replaces it. The
+  // outgoing render's result is dropped by its token and activeId.
   window.clearTimeout(renderTimer);
   window.clearTimeout(selectionTimer);
   wordMap = null;
@@ -5304,7 +6081,7 @@ function exportSource() {
     language: doc.language,
     lineEnding: doc.lineEnding,
     hadBom: doc.hadBom,
-    imageRoot: customImageFolder(),
+    imageRoot: doc.language === "typst" ? typstExtraRoot() : customImageFolder(),
   };
 }
 
@@ -7203,11 +7980,18 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "view.source": () => setViewMode("source"),
   "view.split": () => setViewMode("split"),
   "view.latexCompile": compileCurrentLatex,
+  // No menu item: the differential test triggers a re-anchoring compare.
+  "view.latexReanchor": () => reanchorLatex("command"),
+  // No menu item either: tests force a blue/green engine swap.
+  "view.latexRecycle": () => recycleLatexEngine(),
   "view.preview": () => setViewMode("preview"),
   "view.sidebar": () => setSidebarVisible(!settings.sidebarVisible),
   "view.outline": () => setSidebarTab("outline"),
   "view.favorites": () => setSidebarTab("favorites"),
   "view.recent": () => setSidebarTab("recent"),
+  "view.explorer": () => setSidebarTab("explorer"),
+  "file.openFolder": () => chooseWorkspaceFolder(),
+  "file.closeFolder": closeWorkspaceFolder,
   "view.statusBar": () => {
     settings.showStatusBar = !settings.showStatusBar;
     applyLayout();
@@ -7325,7 +8109,8 @@ function setViewMode(mode: api.ViewMode): void {
     cancelPreviewWorkers();
     typstPdf?.cancelMap();
     cancelTypstRender();
-    cancelLatex();
+    // A view-mode change makes the in-flight LaTeX result stale (token), not
+    // the engine: disposing it would cold-boot the next compile.
     latexInFlight = false;
     if (!wordMap) previewSyncReady = false;
   }
@@ -9942,6 +10727,19 @@ function richImageOptions(language: api.DocumentLanguage): api.ImageOptions {
 const KEEP_ORIGINAL_RICH = "The image keeps its original address (Preferences › Image).";
 
 /** The configured custom image folder, made absolute, or null. */
+/**
+ * The extra folder Typst's `--root` must reach: the custom image folder when
+ * one is set, otherwise the open workspace when the document is inside it, so
+ * a chapter can `#import "../template.typ"` (Track W2). Rust widens the root to
+ * the common ancestor of the document's folder and this one.
+ */
+function typstExtraRoot(path: string | null = doc.path): string | null {
+  const custom = customImageFolder();
+  if (custom) return custom;
+  const folder = settings.workspaceFolder;
+  return folder && path && pathKey(path).startsWith(pathKey(folder) + "/") ? folder : null;
+}
+
 function customImageFolder(directory: string | null = doc.directory): string | null {
   if (settings.imageRule !== "custom") return null;
   const dir = settings.imageCustomDir?.trim();
@@ -10169,6 +10967,15 @@ function installChrome(): void {
     setSidebarTab("favorites"),
   );
   el<HTMLButtonElement>("tab-recent").addEventListener("click", () => setSidebarTab("recent"));
+  el<HTMLButtonElement>("tab-explorer").addEventListener("click", () => setSidebarTab("explorer"));
+  // Files change outside MDraft; returning to the window re-reads the
+  // expanded folders (there is no file watcher in this slice).
+  window.addEventListener("focus", () => {
+    if (settings.sidebarTab !== "explorer" || !settings.workspaceFolder) return;
+    invalidateExplorer();
+    mainCandidateCache.clear();
+    renderSidebar();
+  });
   el<HTMLButtonElement>("btn-sidebar").addEventListener("click", () =>
     setSidebarVisible(!settings.sidebarVisible),
   );
@@ -10186,6 +10993,7 @@ function installChrome(): void {
   statusWords.addEventListener("click", () => runMenuAction("tools.statistics"));
   statusTokens.addEventListener("click", () => runMenuAction("tools.statistics"));
   statusEncoding.addEventListener("click", () => runMenuAction("tools.encoding"));
+  statusEngine.addEventListener("click", () => void openEngineMenu());
 
   // The flags take the same route as the native menu items, so the two can never
   // disagree and the 250 ms double-run guard lives in one place.
@@ -10450,12 +11258,25 @@ async function boot(): Promise<void> {
     // Invalidate before the debounce: the visible DOM still describes old text.
     renderToken += 1;
     wordMapGeneration += 1;
-    discardStagedPdf();
+    // A LaTeX PDF being staged belongs to a compile that is no longer
+    // cancelled by typing: it is committed as out of date when it is newer than
+    // what is on screen, so its view must survive the keystroke.
+    if (doc.language !== "latex") discardStagedPdf();
     cancelPreviewWorkers();
     typstPdf?.cancelMap();
     cancelTypstRender();
-    cancelLatex();
+    // A LaTeX compile in flight is NOT cancelled: cancelling disposed the engine
+    // on every keystroke, so under ordinary typing the preview could starve
+    // (docs/adr/2026-11-12-latex-engine-lifetime.md). It finishes; its result is
+    // shown as out of date if nothing newer is on screen, and the newest
+    // revision compiles next.
     lastEditAt = performance.now();
+    if (doc.language === "latex") {
+      window.clearTimeout(reanchorTimer);
+      window.clearTimeout(recycleTimer);
+      latexRhythm.record(lastEditAt);
+      latexUnrenderedSince ??= lastEditAt;
+    }
     wordMap = null;
     previewStale = true;
     previewSyncReady = false;

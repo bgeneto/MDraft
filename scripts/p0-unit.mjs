@@ -870,6 +870,8 @@ function exportHarness(language, delay) {
     textOf: (s) => s.text,
     editor: { getDoc: () => context.doc.text },
     customImageFolder: () => `${context.doc.directory}/images`,
+    // Track W: Typst's extra root is the custom image folder when one is set.
+    typstExtraRoot: () => context.customImageFolder(),
     saveDialog: async () => {
       await pause("picker");
       return "/output/result";
@@ -1341,6 +1343,7 @@ function latexExportHarness() {
       pandocCache: null,
       typstCache: { found: true },
       customImageFolder: () => null,
+      typstExtraRoot: () => null,
       toast: () => ({ dismiss() {} }),
       saveDialog: async () => "/out/result",
       message: async (text) => errors.push(String(text)),

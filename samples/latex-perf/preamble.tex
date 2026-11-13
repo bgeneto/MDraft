@@ -1,0 +1,18 @@
+% Decomposition fixture for docs/plans/2026-11-12-latex-compile-cost.md.
+% The preamble is identical to huge/main.tex and the body is one paragraph, so
+% its compile time is the engine's fixed cost plus the preamble plus one page.
+% Subtracting it from small/huge/book isolates the per-page cost.
+\documentclass[11pt]{article}
+\usepackage{fontspec}
+\setmainfont{Latin Modern Roman}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{microtype}
+\usepackage{hyperref}
+
+\begin{document}
+Performance probe paragraph P1. This document has the large benchmark's
+preamble and a one-paragraph body.
+\end{document}

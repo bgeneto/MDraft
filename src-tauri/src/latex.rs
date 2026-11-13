@@ -86,6 +86,11 @@ struct EngineProfile {
     /// bytes in another revision, so a flat cache would mix years.
     mirror_revision: String,
     assets: Vec<EngineAsset>,
+    /// Optional engines (stage 6.2 of docs/plans/2026-11-12-latex-compile-cost.md):
+    /// "pdftex" and "xetex" asset groups, downloaded only when a project chooses
+    /// that engine. They never decide whether the default engine is installed.
+    #[serde(default)]
+    engines: BTreeMap<String, Vec<EngineAsset>>,
 }
 
 #[derive(Deserialize)]
@@ -99,6 +104,7 @@ struct ActiveEngine {
     release: &'static str,
     mirror_revision: &'static str,
     assets: &'static [EngineAsset],
+    engines: &'static BTreeMap<String, Vec<EngineAsset>>,
     /// `https://corca-ai.github.io/wasmtex/wasmtex/<year>/`
     asset_root: String,
     /// `/wasmtex/<year>/`: where the worker shims and the SDK request assets.
@@ -133,6 +139,19 @@ fn validate_engine_config(config: &EngineConfig) -> Result<(), String> {
             .collect()
     };
     let expected = names(config.profiles.values().next().ok_or("no profiles")?);
+    let groups = |profile: &EngineProfile| -> Vec<(String, Vec<String>)> {
+        profile
+            .engines
+            .iter()
+            .map(|(engine, assets)| {
+                (
+                    engine.clone(),
+                    assets.iter().map(|asset| asset.name.clone()).collect(),
+                )
+            })
+            .collect()
+    };
+    let expected_groups = groups(config.profiles.values().next().ok_or("no profiles")?);
     for (year, profile) in &config.profiles {
         if year.len() != 4 || !year.bytes().all(|byte| byte.is_ascii_digit()) {
             return Err(format!("profile \"{year}\" is not a four-digit year"));
@@ -157,7 +176,21 @@ fn validate_engine_config(config: &EngineConfig) -> Result<(), String> {
                 "{year}: the asset names differ from the other profiles"
             ));
         }
-        for asset in &profile.assets {
+        if groups(profile) != expected_groups {
+            return Err(format!(
+                "{year}: the optional engines differ from the other profiles"
+            ));
+        }
+        for engine in profile.engines.keys() {
+            if !matches!(engine.as_str(), "pdftex" | "xetex") {
+                return Err(format!("{year}: unknown optional engine \"{engine}\""));
+            }
+        }
+        for asset in profile
+            .assets
+            .iter()
+            .chain(profile.engines.values().flatten())
+        {
             if !segment(&asset.name) {
                 return Err(format!(
                     "{year}: asset name \"{}\" is not a file name",
@@ -199,6 +232,7 @@ fn engine_for(year: &str) -> Option<ActiveEngine> {
         release: &profile.release,
         mirror_revision: &profile.mirror_revision,
         assets: &profile.assets,
+        engines: &profile.engines,
         asset_root: format!("https://corca-ai.github.io/wasmtex/wasmtex/{year}/"),
         asset_prefix: format!("/wasmtex/{year}/"),
         mirror: format!(
@@ -221,6 +255,83 @@ fn assets_match(assets: &Path, set: &[EngineAsset]) -> bool {
         fs::symlink_metadata(&asset).is_ok_and(|meta| meta.file_type().is_file())
             && fs::read(&asset).is_ok_and(|bytes| digest(&bytes) == expected.sha256)
     })
+}
+
+/// The pinned asset named `name`: a core file or one of an optional engine's.
+fn pinned_asset(name: &str) -> Option<&'static EngineAsset> {
+    engine()
+        .assets
+        .iter()
+        .chain(engine().engines.values().flatten())
+        .find(|asset| asset.name == name)
+}
+
+/// The asset group of a TeX engine: the core set for LuaLaTeX, else the
+/// optional group. None for an engine this build does not offer.
+fn engine_assets(engine_name: &str) -> Option<&'static [EngineAsset]> {
+    match engine_name {
+        "lualatex" => Some(engine().assets),
+        "pdflatex" => engine().engines.get("pdftex").map(Vec::as_slice),
+        "xelatex" => engine().engines.get("xetex").map(Vec::as_slice),
+        _ => None,
+    }
+}
+
+/// Whether an engine's files are all present (their digests are verified when served).
+fn engine_group_installed(assets: &Path, engine_name: &str) -> bool {
+    engine_assets(engine_name).is_some_and(|group| {
+        group.iter().all(|asset| {
+            fs::symlink_metadata(assets.join(&asset.name))
+                .is_ok_and(|meta| meta.file_type().is_file())
+        })
+    })
+}
+
+/// Whether the bundled engine can compile with `engine` right now:
+/// "lualatex" (the default set) or an optional "pdflatex"/"xelatex" group.
+#[tauri::command]
+pub fn latex_engine_available(app: AppHandle, engine: String) -> Result<bool, String> {
+    if !enabled() {
+        return Ok(false);
+    }
+    let assets = directory(&app)?.join("assets");
+    Ok(engine_installed(&assets) && engine_group_installed(&assets, &engine))
+}
+
+/// Download one optional engine's verified files (pdfLaTeX or XeLaTeX).
+///
+/// The reader asked for it by choosing that engine for a project; nothing is
+/// fetched otherwise. Same rules as the default engine's install: every file
+/// verified against its pinned SHA-256 before it is written.
+#[tauri::command]
+pub async fn install_latex_engine(app: AppHandle, engine: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _install = INSTALL_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let group = engine_assets(&engine)
+            .ok_or_else(|| format!("This build does not offer the {engine} engine."))?;
+        let assets = directory(&app)?.join("assets");
+        fs::create_dir_all(&assets).map_err(|e| e.to_string())?;
+        for asset in group {
+            let path = assets.join(&asset.name);
+            if fs::read(&path).is_ok_and(|bytes| digest(&bytes) == asset.sha256) {
+                continue;
+            }
+            let bytes = download(&format!("{}{}", self::engine().asset_root, asset.name))?;
+            if digest(&bytes) != asset.sha256 {
+                return Err(format!(
+                    "The downloaded {} failed SHA-256 verification.",
+                    asset.name
+                ));
+            }
+            remove_if_present(&path)?;
+            write_atomic(&path, &bytes)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Whether `assets` holds the pinned engine release.
@@ -697,7 +808,7 @@ pub fn serve(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeResp
             }
             let path = request.uri().path();
             if let Some(name) = path.strip_prefix(engine().asset_prefix.as_str()) {
-                let Some(asset) = engine().assets.iter().find(|asset| asset.name == name) else {
+                let Some(asset) = pinned_asset(name) else {
                     return Err("Unknown asset".into());
                 };
                 ASSET_REQUESTS.fetch_add(1, Ordering::Relaxed);
@@ -1073,7 +1184,7 @@ fn comment_start(line: &str) -> Option<usize> {
 }
 
 /// The literal references one source declares, as `(kind, name)`.
-fn declared_references(text: &str) -> Vec<(String, String)> {
+pub(crate) fn declared_references(text: &str) -> Vec<(String, String)> {
     let masked = mask_literal_regions(text);
     let mut out = Vec::new();
     for line in masked.split('\n') {

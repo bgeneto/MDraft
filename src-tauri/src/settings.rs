@@ -355,6 +355,57 @@ pub struct PresetOverride {
     pub slashed_zero: Option<bool>,
 }
 
+/// One folder's explicit main LaTeX document.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderMainDocument {
+    pub folder: String,
+    pub path: String,
+}
+
+/// Folders whose main document is remembered; the oldest choice is dropped.
+pub const MAX_MAIN_DOCUMENTS: usize = 50;
+
+/// One LaTeX project's bundled engine, chosen from the status-bar engine chip
+/// (stage 6.2 of docs/plans/2026-11-12-latex-compile-cost.md). Keyed by the
+/// main document, so two projects in one workspace keep their own engines.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectEngine {
+    pub main: String,
+    pub engine: String,
+}
+
+/// Projects whose engine is remembered; newest first, the oldest is dropped.
+pub const MAX_PROJECT_ENGINES: usize = 50;
+
+fn default_bundled_engine() -> String {
+    "lualatex".into()
+}
+
+/// An engine name the bundled compiler knows, or None.
+fn bundled_engine_name(value: &str) -> Option<&'static str> {
+    match value {
+        "lualatex" => Some("lualatex"),
+        "pdflatex" => Some("pdflatex"),
+        "xelatex" => Some("xelatex"),
+        _ => None,
+    }
+}
+
+/// Unknown engine names are dropped rather than handed to the compiler.
+fn normalize_engines(settings: &mut Settings) {
+    if settings.latex_bundled_engine != "auto"
+        && bundled_engine_name(&settings.latex_bundled_engine).is_none()
+    {
+        settings.latex_bundled_engine = default_bundled_engine();
+    }
+    settings
+        .latex_project_engines
+        .retain(|entry| bundled_engine_name(&entry.engine).is_some() && !entry.main.is_empty());
+    settings.latex_project_engines.truncate(MAX_PROJECT_ENGINES);
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpellDocumentLanguage {
@@ -369,7 +420,7 @@ pub struct Settings {
     pub theme: String,
     /// "source" | "split" | "preview"
     pub view_mode: String,
-    /// "outline" | "favorites" | "recent"
+    /// "outline" | "favorites" | "recent" | "explorer"
     pub sidebar_tab: String,
     pub sidebar_visible: bool,
     pub sync_scroll: bool,
@@ -479,6 +530,26 @@ pub struct Settings {
     /// point: a favorite is a deliberate choice.
     #[serde(default)]
     pub favorites: Vec<String>,
+    /// The folder the Explorer lists (Track W). A view and a default, never a
+    /// permission: see docs/adr/2026-11-12-workspace-boundary.md. A missing
+    /// folder is reported by the Explorer, not cleared silently.
+    #[serde(default)]
+    pub workspace_folder: Option<String>,
+    /// Show hidden entries, build folders and TeX auxiliary files in the Explorer.
+    #[serde(default)]
+    pub explorer_show_all: bool,
+    /// The reader's **Set as Main Document** choice per workspace folder
+    /// (main-document rule 2). At most [`MAX_MAIN_DOCUMENTS`] folders.
+    #[serde(default)]
+    pub latex_main_documents: Vec<FolderMainDocument>,
+    /// The bundled engine when neither a magic comment nor the project names
+    /// one: "lualatex" (the default, so existing documents do not change),
+    /// "pdflatex", "xelatex" or "auto" (the SDK's detector).
+    #[serde(default = "default_bundled_engine")]
+    pub latex_bundled_engine: String,
+    /// Per-project engine choices; at most [`MAX_PROJECT_ENGINES`].
+    #[serde(default)]
+    pub latex_project_engines: Vec<ProjectEngine>,
     pub last_directory: Option<String>,
     /// Paths of the tabs that were open when the window last closed.
     ///
@@ -786,6 +857,11 @@ impl Default for Settings {
             syntax_theme: "auto".into(),
             recent_files: Vec::new(),
             favorites: Vec::new(),
+            workspace_folder: None,
+            explorer_show_all: false,
+            latex_main_documents: Vec::new(),
+            latex_bundled_engine: default_bundled_engine(),
+            latex_project_engines: Vec::new(),
             last_directory: None,
             last_tabs: Vec::new(),
             last_active_tab: None,
@@ -1059,6 +1135,9 @@ fn parse_settings(raw: &str) -> Option<Settings> {
     settings.recent_files.truncate(MAX_RECENT);
     normalize_favorites(&mut settings.favorites);
     settings.last_tabs.truncate(MAX_LAST_TABS);
+    // Newest first, so a hand-edited list keeps its most recent folders.
+    settings.latex_main_documents.truncate(MAX_MAIN_DOCUMENTS);
+    normalize_engines(&mut settings);
     normalize_spell_document_languages(&mut settings.spellcheck_document_languages);
     if !matches!(
         settings.spellcheck_string_mode.as_str(),
@@ -1162,6 +1241,8 @@ impl AppState {
         next.recent_files.truncate(MAX_RECENT);
         normalize_favorites(&mut next.favorites);
         next.last_tabs.truncate(MAX_LAST_TABS);
+        next.latex_main_documents.truncate(MAX_MAIN_DOCUMENTS);
+        normalize_engines(&mut next);
         normalize_spell_document_languages(&mut next.spellcheck_document_languages);
         if !matches!(
             next.spellcheck_string_mode.as_str(),
@@ -2091,6 +2172,46 @@ mod tests {
         assert_eq!(parsed.sidebar_tab, "recent");
         let parsed = parse_settings(r#"{"sidebarTab":"favorites"}"#).expect("new settings load");
         assert_eq!(parsed.sidebar_tab, "favorites");
+    }
+
+    #[test]
+    fn the_explorer_tab_and_workspace_load_and_old_files_get_no_workspace() {
+        // "explorer" is a new value, not the retired "files": it must survive.
+        let parsed = parse_settings(
+            r#"{"sidebarTab":"explorer","workspaceFolder":"C:\\thesis","explorerShowAll":true}"#,
+        )
+        .expect("workspace settings load");
+        assert_eq!(parsed.sidebar_tab, "explorer");
+        assert_eq!(parsed.workspace_folder.as_deref(), Some("C:\\thesis"));
+        assert!(parsed.explorer_show_all);
+        let old = parse_settings(r#"{"theme":"dark"}"#).expect("old settings load");
+        assert_eq!(old.workspace_folder, None);
+        assert!(!old.explorer_show_all);
+    }
+
+    #[test]
+    fn engine_choices_load_old_files_keep_lualatex_and_unknown_names_are_dropped() {
+        let old = parse_settings(r#"{"theme":"dark"}"#).expect("old settings load");
+        assert_eq!(old.latex_bundled_engine, "lualatex");
+        assert!(old.latex_project_engines.is_empty());
+        let parsed = parse_settings(
+            r#"{"latexBundledEngine":"auto","latexProjectEngines":[
+                {"main":"C:\\a\\main.tex","engine":"pdflatex"},
+                {"main":"C:\\b\\main.tex","engine":"context"},
+                {"main":"","engine":"xelatex"}]}"#,
+        )
+        .expect("engine settings load");
+        assert_eq!(parsed.latex_bundled_engine, "auto");
+        assert_eq!(
+            parsed.latex_project_engines,
+            vec![ProjectEngine {
+                main: "C:\\a\\main.tex".into(),
+                engine: "pdflatex".into()
+            }]
+        );
+        let unknown =
+            parse_settings(r#"{"latexBundledEngine":"tectonic"}"#).expect("settings load");
+        assert_eq!(unknown.latex_bundled_engine, "lualatex");
     }
 
     #[test]

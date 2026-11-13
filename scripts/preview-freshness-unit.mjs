@@ -142,6 +142,7 @@ distinct(
     () => latexKey(doc, "g1", { ...engine, nativeDistribution: "MiKTeX" }),
     () => latexKey(doc, "g1", { ...engine, nativeEngine: "lualatex" }),
     () => latexKey(doc, "g1", { ...engine, nativeWsl: "Ubuntu:/usr/bin" }),
+    () => latexKey(doc, "g1", { ...engine, bundledEngine: "xelatex" }),
   ],
 );
 

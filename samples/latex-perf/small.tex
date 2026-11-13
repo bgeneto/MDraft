@@ -1,0 +1,59 @@
+\documentclass[11pt]{article}
+\usepackage{fontspec}
+\setmainfont{Latin Modern Roman}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{hyperref}
+
+\title{MDraft LaTeX performance: small}
+\author{MDraft benchmarks}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{A short section}
+\label{sec:small}
+
+Performance probe paragraph S1. This single-file document is the small case in
+MDraft's LuaLaTeX benchmark. It contains prose, one equation and one table, so
+a successful compile proves the engine rendered real content rather than an
+empty page.
+
+\begin{equation}
+  \label{eq:small:sum}
+  \sum_{k=1}^{n} k = \frac{n(n+1)}{2}.
+\end{equation}
+
+Equation~\ref{eq:small:sum} is valid for every positive integer $n$. The same
+identity appears in many introductions to induction, and it is short enough to
+check by hand for small values.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lrr}
+    \toprule
+    Item & Count & Cost \\
+    \midrule
+    Alpha & 3 & 12.50 \\
+    Beta  & 5 & 21.00 \\
+    Gamma & 8 & 33.75 \\
+    \bottomrule
+  \end{tabular}
+  \caption{A small table with valid content.}
+  \label{tab:small:costs}
+\end{table}
+
+Table~\ref{tab:small:costs} is rendered from the same source. The totals are
+not used by the benchmark; the table exists so the compile has a real float.
+
+\section{A second short section}
+Performance probe paragraph S2. The benchmark edits a letter in this paragraph
+and waits for the preview to commit the new PDF. Nothing here depends on the
+machine's fonts beyond Latin Modern, so the result is reproducible.
+
+A second paragraph gives the editor a stable offset and keeps the document from
+being a single screen. The section is intentionally short: the small fixture
+measures the engine's fixed cost, not a long typeset.
+\end{document}

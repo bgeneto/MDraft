@@ -3,13 +3,13 @@
 MDraft edits `.tex` documents as a first-class language: syntax colouring, `%`
 comments, an outline read from the sectioning commands, LaTeX-aware spelling
 skips, `\includegraphics` on image paste, and the compiled PDF in the preview.
-Compilation runs either in the **bundled TeX distribution** (LuaLaTeX compiled to
-WebAssembly), which needs no TeX installation, or in a TeX distribution the reader has already installed and
+Compilation runs either in the **bundled TeX distribution** (LuaLaTeX, or pdfLaTeX
+and XeLaTeX on request, compiled to WebAssembly), which needs no TeX installation, or in a TeX distribution the reader has already installed and
 explicitly selected.
 
 LaTeX is **opt-in**. Open a saved `.tex` file and choose **Enable bundled TeX** in
 the preview, or tick the switch in *Preferences › LaTeX*. That action downloads
-about 12 MiB of TeX Live 2026 engine files, each verified against a pinned SHA-256
+about 20 MiB of TeX Live 2026 engine files, each verified against a pinned SHA-256
 digest. The TeX packages and fonts a document needs are fetched on demand from a
 pinned TeX Live 2026 package snapshot and cached locally, in a folder named for
 that snapshot. Nothing about your document or bibliography leaves this device.
@@ -36,7 +36,7 @@ add a profile and a `public/wasmtex/<year>/` folder with copies of the two shims
 `cargo test --lib latex::` and `node scripts/latex-sdk-unit.mjs` fail if either is
 missing, if a profile ships a different set of files, or if a derived value disagrees
 with its year. The README, the site and this page describe the shipped default
-(2026, about 12 MiB).
+(2026, about 20 MiB).
 
 An installed distribution is a second, independent choice. It is off by default
 and never chosen automatically, because it runs a program outside the bundled
@@ -64,6 +64,40 @@ temporary virtual filesystem; MDraft ignores it.
 The main file is the compilation root, and it stays the root while an included
 chapter is open. Changes in any open project file are compiled without saving
 first.
+
+**How the live preview keeps up.** The bundled engine stays loaded between
+compiles of the same project, so an edit pays only for the files that changed
+and the typesetting:
+- After you pause typing (60–200 ms, following your own rhythm), the newest
+  text compiles.
+- A compile that is already running is never thrown away because you typed; the
+  newest revision runs as soon as it finishes.
+- During a long stretch of typing, the preview still updates at least every
+  1.5 s.
+- A result that is older than what you have typed is shown as "Out of date ·
+  Updating…". Export, print and source navigation wait for the current
+  result.
+- The engine also keeps snapshots ("checkpoints") just before the paragraph
+  you are editing. A later edit there resumes from the snapshot instead of
+  re-reading the preamble and every page above.
+
+These are the reasons the engine download includes a second, checkpoint-capable
+engine build. In a fixture with 15 pages, a chapter edit appears in under 0.6 s;
+in one with 105 pages, in about 1.5 s. The measurements and their method are in
+[the live-preview plan](plans/2026-11-12-latex-compile-cost.md).
+
+**The main document of a chapter.** A chapter opened on its own compiles through
+its main file when MDraft can tell which one that is. The first rule that
+applies wins:
+1. A `% !TeX root = ../main.tex` line in its first 20 lines (the convention
+   TeXstudio and LaTeX Workshop use). The main file opens as a background tab,
+   and the chapter stays active.
+2. A file with its own `\documentclass` or `\begin{document}` is a main file.
+3. A chapter of the project already being previewed stays in that project.
+
+Otherwise the preview says "No main document for this file." and Logs explains
+how to add the comment; it does not compile the chapter alone into a cryptic
+error.
 
 MDraft also recognizes literal image filenames such as
 `\qrcode{qrcode.png}` and file-like class defaults such as `{ school_logo }`.
@@ -107,6 +141,47 @@ libraries before each build; when the fingerprint, the main file and the engine
 match the PDF on screen, the preview says **Up to date** instead of compiling.
 That covers saving a file the preview already showed, undoing an edit, and moving
 between chapters of the same project. **Compile** always builds.
+
+## Choosing the engine
+
+The bundled distribution compiles with **LuaLaTeX** unless a project asks for
+another engine. It can also compile with **pdfLaTeX** and **XeLaTeX**. The
+first rule that applies decides:
+
+1. A magic comment in the main file, such as `% !TeX program = pdflatex`.
+   TeXstudio and LaTeX Workshop read the same line.
+2. The project's own choice. Click the engine name in the status bar (it
+   shows while a LaTeX document is open) and pick an engine. The choice is
+   remembered for that main document. **Use the Preferences default**
+   forgets it.
+3. *Preferences › LaTeX › Default engine*: LuaLaTeX (the default), pdfLaTeX,
+   XeLaTeX, or Auto. Auto reads the preamble:
+   - Lua code → LuaLaTeX;
+   - `fontspec`, `unicode-math` or XeTeX-only packages → XeLaTeX;
+   - anything else → pdfLaTeX.
+
+The status-bar chip always names the engine in use and, in its tooltip, why.
+When a magic comment decided, the chip offers no choice; if the engine it
+names has not been downloaded yet, the chip offers that download.
+
+pdfLaTeX (about 8 MB) and XeLaTeX (about 9 MB, with its dvipdfmx converter) download the first time a
+project chooses them. They come from the same pinned release as LuaLaTeX and
+are verified against SHA-256 digests in the same way. MDraft never compiles
+with an engine other than the one shown. If the chosen engine has not been
+downloaded, the preview says so, and the chip downloads it. If the document
+needs something the chosen engine lacks, such as Lua code under pdfLaTeX, the
+status line says so.
+
+LuaLaTeX alone resumes from heap checkpoints, so it has the fastest live
+preview on long documents. pdfLaTeX and XeLaTeX use the engine's own
+incremental compile.
+
+**TikZ figures.** A document that calls `\tikzexternalize` has its figures
+rendered once and reused while you edit the text. To get the same for a
+document that loads TikZ without calling it, add
+`% !WASMTEX tikz-externalization = auto` near the top. Each text edit is then
+about 0.1 s faster. The cost is a slower first compile and several hundred MB
+more memory, which is why this is not the default.
 
 ## Installed TeX distributions
 

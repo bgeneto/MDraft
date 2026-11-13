@@ -283,6 +283,28 @@ const SUITES = [
     script: "latex-sdk-unit.mjs",
   },
   {
+    // The live-preview scheduler (latest-wins, adaptive delay) and the
+    // main-document rules of GAP-034.
+    id: "latex-scheduler-unit",
+    title: "LaTeX scheduler and main document (unit)",
+    kind: "node",
+    script: "latex-scheduler-unit.mjs",
+  },
+  {
+    // Stage 6.2: magic comment, project, default; detection and mismatches.
+    id: "latex-engine-choice-unit",
+    title: "Per-project TeX engine resolution (unit)",
+    kind: "node",
+    script: "latex-engine-choice-unit.mjs",
+  },
+  {
+    // Track W2: headings across \input/\include in document order.
+    id: "latex-outline-project-unit",
+    title: "LaTeX project outline (unit)",
+    kind: "node",
+    script: "latex-outline-project-unit.mjs",
+  },
+  {
     // Local TEXMF libraries: namespaced bundled inputs, the bibliography
     // handoff, library-aware reference checks and editor-scoped completion.
     id: "latex-texmf-unit",
@@ -337,6 +359,37 @@ const SUITES = [
     safeWithInstalledApp: true,
   },
   {
+    // Track W / GAP-006 slice 1: Open Folder (picker stubbed at the IPC
+    // transport), lazy keyboard tree, open from the tree, confinement, Close
+    // Folder. Read-only fixture; no LaTeX engine needed.
+    id: "workspace-explorer",
+    title: "Workspace Explorer",
+    kind: "cdp",
+    script: "workspace-explorer-test.mjs",
+    doc: "samples/latex-perf/huge/main.tex",
+    safeWithInstalledApp: true,
+  },
+  {
+    // Stage 6.2: the per-project bundled engine — the chip, the download of
+    // pdfLaTeX on first choice, the remembered choice and the magic comment.
+    id: "latex-engine-choice",
+    title: "Per-project TeX engine",
+    kind: "cdp",
+    script: "latex-engine-choice-test.mjs",
+    doc: "samples/latex-engines/plain.tex",
+    safeWithInstalledApp: true,
+  },
+  {
+    // GAP-034: a chapter launched alone compiles through its `% !TeX root`, and
+    // an orphan chapter explains itself. Read-only fixture.
+    id: "latex-root",
+    title: "LaTeX main-document resolution",
+    kind: "cdp",
+    script: "latex-root-test.mjs",
+    doc: "samples/latex-root/chapters/body.tex",
+    safeWithInstalledApp: true,
+  },
+  {
     // Registers a private two-root library outside the project and proves,
     // through compiled PDF text, that the bundled engine resolved the class,
     // a transitive package, a .def and a Lua module from it in order. With
@@ -360,6 +413,72 @@ const SUITES = [
     script: "latex-native-test.mjs",
     doc: "samples/latex-project/main.tex",
     safeWithInstalledApp: true,
+  },
+  // The LaTeX live-preview probe of docs/plans/2026-11-12-latex-compile-cost.md:
+  // one fixture per launch, selected by MDRAFT_LATEX_PERF_FIXTURE. Opt-in: they
+  // take minutes, and a host without the engine has nothing to measure. Set
+  // MDRAFT_LATEX_PERF_OUT to keep the run JSON outside the staging directory.
+  ...[
+    ["latex-perf", "small", "samples/latex-perf/small.tex", "small single file"],
+    ["latex-perf-preamble", "preamble", "samples/latex-perf/preamble.tex", "preamble only"],
+    ["latex-perf-huge", "huge", "samples/latex-perf/huge/main.tex", "12 included chapters"],
+    ["latex-perf-book", "book", "samples/latex-perf/book/main.tex", "book, included chapters"],
+    [
+      "latex-perf-book-flat",
+      "book-flat",
+      "samples/latex-perf/book-flat/main.tex",
+      "book, one file",
+    ],
+    ["latex-perf-tikz", "tikz", "samples/latex-perf/tikz.tex", "twelve TikZ figures"],
+    [
+      "latex-perf-tikz-auto",
+      "tikz-auto",
+      "samples/latex-perf/tikz-auto.tex",
+      "twelve TikZ figures, externalization auto",
+    ],
+  ].map(([id, fixture, doc, label]) => ({
+    id,
+    title: `LaTeX live-preview probe (${label})`,
+    kind: "cdp",
+    script: "latex-performance-test.mjs",
+    doc,
+    env: { MDRAFT_LATEX_PERF_FIXTURE: fixture },
+    safeWithInstalledApp: true,
+    optIn: true,
+  })),
+  {
+    // Stage 3.4: seeded edits on the 12-chapter project, each compared page
+    // by page with a fresh full compile through the re-anchoring command.
+    id: "latex-perf-differential",
+    title: "LaTeX incremental builds equal full builds (huge)",
+    kind: "cdp",
+    script: "latex-performance-test.mjs",
+    doc: "samples/latex-perf/huge/main.tex",
+    env: { MDRAFT_LATEX_PERF_FIXTURE: "huge", MDRAFT_LATEX_PERF_MODE: "differential" },
+    safeWithInstalledApp: true,
+    optIn: true,
+  },
+  {
+    // Gate 4.3: sustained editing on the 105-page book. 60 minutes unless
+    // MDRAFT_LATEX_SOAK_MINUTES says otherwise.
+    id: "latex-perf-soak",
+    title: "LaTeX live preview under sustained editing (book)",
+    kind: "cdp",
+    script: "latex-performance-test.mjs",
+    doc: "samples/latex-perf/book/main.tex",
+    env: { MDRAFT_LATEX_PERF_FIXTURE: "book", MDRAFT_LATEX_PERF_MODE: "soak" },
+    safeWithInstalledApp: true,
+    optIn: true,
+  },
+  {
+    id: "latex-perf-starvation",
+    title: "LaTeX live preview under scripted typing (huge)",
+    kind: "cdp",
+    script: "latex-performance-test.mjs",
+    doc: "samples/latex-perf/huge/main.tex",
+    env: { MDRAFT_LATEX_PERF_FIXTURE: "huge", MDRAFT_LATEX_PERF_MODE: "starvation" },
+    safeWithInstalledApp: true,
+    optIn: true,
   },
   {
     // The encoding catalogue matches Rust's OFFERED list, and inputenc/meta/XML
@@ -1354,6 +1473,10 @@ function describeChecks(output, code) {
   if (counts) {
     return { checks: counts, detail: `crashed after ${counts.passed} checks (exit ${code})` };
   }
+  // A suite that exits 0 after printing only a SKIP line ran nothing: report
+  // it as skipped, never as a pass ("exit 0, no check line" hid exactly that).
+  const skip = code === 0 ? /^SKIP:?s+(.+)$/m.exec(output) : null;
+  if (skip) return { checks: null, skipped: true, detail: `skipped — ${skip[1].trim()}` };
   return { checks: null, detail: `exit ${code}, no check line` };
 }
 
@@ -1702,7 +1825,7 @@ async function runNodeSuite(suite, options) {
   const described = describeChecks(output, result.code);
   const ok =
     result.code === 0 && (!described.checks || described.checks.passed === described.checks.total);
-  return { ok, detail: described.detail, output };
+  return { ok, skipped: described.skipped, detail: described.detail, output };
 }
 
 async function runCdpSuite(suite, port, options, context) {
@@ -1742,6 +1865,7 @@ async function runCdpSuite(suite, port, options, context) {
     }
   }
   const { child, outFd, errFd } = launched;
+  env.MDRAFT_TEST_PID = String(child.pid);
   try {
     const args = [path.join("scripts", suite.script), String(port)];
     if (suite.docArg) args.push(path.join(repoRoot, suite.doc));
@@ -1751,7 +1875,7 @@ async function runCdpSuite(suite, port, options, context) {
     const ok =
       result.code === 0 &&
       (!described.checks || described.checks.passed === described.checks.total);
-    return { ok, detail: described.detail, output };
+    return { ok, skipped: described.skipped, detail: described.detail, output };
   } finally {
     await stopApp(child);
     activeApp = null;
