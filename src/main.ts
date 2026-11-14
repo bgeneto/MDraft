@@ -6567,9 +6567,8 @@ function documentFilters(
   language: api.DocumentLanguage = defaultDocumentLanguage(),
   allFilesFirst = false,
 ): { name: string; extensions: string[] }[] {
-  // The extension lists come from `LANGUAGE_EXTENSIONS`, the same table
-  // `languageForExtension` classifies with, so a filter can never offer a name
-  // the opener would then read as Markdown.
+  // Most extension lists come from the table used by `languageForExtension`.
+  // LaTeX package and class files use LaTeX highlighting when opened, too.
   const filter = (name: string, kind: api.DocumentLanguage) => ({
     name,
     extensions: [...LANGUAGE_EXTENSIONS[kind]],
@@ -6578,6 +6577,7 @@ function documentFilters(
   const typst = filter("Typst", "typst");
   const html = filter("HTML", "html");
   const latex = filter("LaTeX", "latex");
+  if (allFilesFirst) latex.extensions.push("sty", "cls");
   const asciidoc = filter("AsciiDoc", "asciidoc");
   const javascript = filter("JavaScript", "javascript");
   const css = filter("CSS", "css");
