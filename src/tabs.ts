@@ -16,6 +16,8 @@ export interface TabsCallbacks {
   save: (id: string) => void | Promise<void>;
   saveAs: (id: string) => void | Promise<void>;
   reveal: (id: string) => void | Promise<void>;
+  /** Copy the clicked document's full path to the clipboard. */
+  copyPath: (id: string) => void | Promise<void>;
   newTab: () => void | Promise<void>;
   /** Format the clicked document, active or in the background. */
   format: (id: string) => void | Promise<void>;
@@ -335,7 +337,6 @@ export function createTabsUi(options: TabsOptions): TabsUi {
         shortcut: shortcutLabel("S", true),
         action: () => callbacks.saveAs(id),
       },
-      { kind: "separator" },
       {
         kind: "item",
         id: "format",
@@ -360,6 +361,13 @@ export function createTabsUi(options: TabsOptions): TabsUi {
         label: "Show in Folder",
         disabled: !session.path,
         action: () => callbacks.reveal(id),
+      },
+      {
+        kind: "item",
+        id: "copyPath",
+        label: "Copy File Path",
+        disabled: !session.path,
+        action: () => callbacks.copyPath(id),
       },
     ];
   }

@@ -27,7 +27,7 @@ import {
 import { installEditorContextMenu, titleCase, type ReadingMenuState } from "./context-menu";
 import { createReadAloud, type ReadAloudHandle, type ReadingState } from "./read-aloud";
 import { createSystemSpeech, needsSystemSpeech } from "./system-speech";
-import { readClipboardData } from "./clipboard";
+import { readClipboardData, writeClipboardText } from "./clipboard";
 import { CompiledPreviewUi, type CompiledStatus } from "./compiled-preview-ui";
 import { createDocumentLifecycle } from "./document-lifecycle";
 import { showDocumentStatistics, type DocumentStatistics } from "./statistics-dialog";
@@ -58,6 +58,7 @@ import {
   buildHtmlPrintDocument,
   createHtmlPreview,
   type HtmlAccelerator,
+  type HtmlGesture,
   type HtmlLayout,
   type HtmlPreviewHandle,
   type HtmlSelection,
@@ -252,11 +253,15 @@ import { lineTextOf } from "./latex-references";
 import {
   clampScroll,
   mapScrollOffset,
-  interpolate,
   rowCentre,
   scrollCorrection,
   ScrollIndex,
   ScrollOwnership,
+  SyncReference,
+  blockCorrection,
+  solveGesture,
+  type BlockTop,
+  type GesturePair,
   type ScrollPair,
   type SyncPane,
 } from "./scroll-sync";
@@ -503,6 +508,7 @@ function installTabs(): void {
         if (session) await saveAs(undefined, session);
       },
       reveal: (id) => revealSession(id),
+      copyPath: (id) => copySessionPath(id),
       newTab: () => loadUntitled("", defaultDocumentLanguage()),
       format: (id) => {
         void formatSession(id).catch((error) => {
@@ -622,6 +628,50 @@ const SYNC_SUPPRESS_MS = 150;
  * anchor returns to the same source position instead of accumulating a drift.
  */
 const SYNC_MARGIN = 12;
+/**
+ * The sync line as a pair of heights: content at `source` in the editor
+ * corresponds to content at `preview` in the preview. Level at SYNC_MARGIN until
+ * a pointer gesture calibrates it; see
+ * docs/adr/2026-11-13-pointer-gesture-alignment.md. Any code that needs "the
+ * sync height" reads it through scrollReference(), never SYNC_MARGIN: a fixed
+ * margin in the sync path is what makes the panes jump after a click.
+ */
+const syncReference = new SyncReference(SYNC_MARGIN);
+
+/** A pointer gesture: a place in the source and the height of its row. */
+interface GesturePoint {
+  pane: SyncPane;
+  /** Null when no verified text is under the gesture; the block answers. */
+  offset: number | null;
+  /** Row centre in screen pixels, in the pane the gesture happened in. */
+  y: number;
+}
+/** Measure, write, measure again: a target that was not laid out is an estimate. */
+const GESTURE_PASSES = 3;
+/**
+ * The last gesture, kept until the next input. A layout change after the
+ * alignment (an image decodes, the deferred word map arrives) solves it again.
+ */
+let gesturePin: {
+  point: GesturePoint;
+  epoch: number;
+  source: string;
+  ownTop: number;
+  left: number;
+} | null = null;
+/** Each pane's offset after the last follow correction: what levelling measures from. */
+const followTop: Record<SyncPane, number | null> = { source: null, preview: null };
+
+/** Back to the default sync line: the layout the last gesture measured is gone. */
+function resetSyncReference(): void {
+  const moved = syncReference.source !== SYNC_MARGIN || syncReference.preview !== SYNC_MARGIN;
+  syncReference.reset();
+  gesturePin = null;
+  followTop.source = followTop.preview = null;
+  // Only a pair that had moved was ever published; this also runs before the
+  // sync section of the module exists.
+  if (moved) publishSyncReference();
+}
 /** How long the preview block matching the caret stays lit. */
 const BLINK_MS = 620;
 /** How long a preview selection settles before it paints the source. */
@@ -1189,6 +1239,7 @@ function applySpellcheck(): void {
 }
 
 function applyLayout(): void {
+  resetSyncReference();
   app.classList.toggle("sidebar-hidden", !settings.sidebarVisible);
   app.classList.toggle("statusbar-hidden", !settings.showStatusBar);
   app.classList.remove("mode-source", "mode-split", "mode-preview");
@@ -4783,7 +4834,14 @@ function texpressoMessage(session: TexpressoSession, message: FrameMessage): voi
       suppressEditorScrollUntil = 0;
       break;
     case "source":
-      void texpressoSourceGesture(session, message.file, message.from, message.to, message.detail);
+      void texpressoSourceGesture(
+        session,
+        message.file,
+        message.from,
+        message.to,
+        message.detail,
+        message.y,
+      );
       break;
     case "key":
       clearCorrespondence();
@@ -4856,6 +4914,7 @@ async function texpressoSourceGesture(
   from: number,
   to: number,
   detail: number,
+  y: number | null = null,
 ): Promise<void> {
   // Evidence for the CDP layer and for a bug report: what the engine answered
   // and what this side decided, without the document's text.
@@ -4887,7 +4946,9 @@ async function texpressoSourceGesture(
   wordSyncDismissed = false;
   syncedSource = range;
   editor.setSyncRange(range.from, range.to);
-  if (reveal) {
+  // With Sync on, a click levels the source line with the clicked height; a
+  // double-click that could not be levelled still brings it into view.
+  if (!texpressoLevelFromFrame(from, y) && reveal) {
     suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
     editor.revealOffset(range.from);
   }
@@ -4919,7 +4980,7 @@ function texpressoGeometry(): EditorScrollGeometry {
 /** The sync line in the frame's own coordinates. */
 function texpressoReference(): number {
   const top = texpressoHostElement().getBoundingClientRect().top;
-  return Math.max(0, scrollReference() - top);
+  return Math.max(0, scrollReference("preview") - top);
 }
 
 /** Source scrolled: bring the same line to the sync line in the frame. */
@@ -4929,8 +4990,49 @@ function texpressoAlignPreview(): void {
     return;
   const file = projectRelativePath(session.rootDirectory, doc.path, pathKey);
   if (file === null) return;
-  const line = editorLineAt(texpressoGeometry(), scrollReference());
+  const line = editorLineAt(texpressoGeometry(), scrollReference("source"));
   session.post({ type: "reveal", file, line, y: texpressoReference() });
+}
+
+/**
+ * A click in the source: bring its line to the same height in the frame. The
+ * engine's map is by line, so this levels within a source line, not a word.
+ * The frame answers asynchronously and does not say where the line ended up;
+ * the pair is set to the height that was asked for.
+ */
+function texpressoLevelFromSource(): void {
+  const session = texpresso;
+  const point = sourceGesturePoint();
+  if (!session || !point || !gestureSyncAvailable()) return;
+  const file = projectRelativePath(session.rootDirectory, doc.path, pathKey);
+  if (file === null) return;
+  const top = texpressoHostElement().getBoundingClientRect().top;
+  if (point.y < top) return;
+  session.post({
+    type: "reveal",
+    file,
+    line: editorLineAt(texpressoGeometry(), point.y),
+    y: point.y - top,
+  });
+  calibrateGesture(point, 0);
+}
+
+/**
+ * A click in the frame: bring its source line to the clicked height. Returns
+ * false when the click carries no height or Sync is off, and the caller keeps
+ * the older "bring it into view" reveal.
+ */
+function texpressoLevelFromFrame(offset: number, y: number | null, pass = 0): boolean {
+  if (y === null || !gestureSyncAvailable() || !texpressoShowing()) return false;
+  const screenY = texpressoHostElement().getBoundingClientRect().top + y;
+  const row = editor.scrollPoint(Math.max(0, Math.min(offset, editor.getDoc().length)));
+  const delta = rowCentre(row) - screenY;
+  const moved = writeGesture("source", delta);
+  calibrateGesture({ pane: "preview", offset, y: screenY }, delta - moved);
+  // A line CodeMirror had not drawn was placed from an estimate.
+  if (Math.abs(moved) >= 0.5 && pass + 1 < GESTURE_PASSES)
+    afterGestureLayout(() => void texpressoLevelFromFrame(offset, y, pass + 1));
+  return true;
 }
 
 /** The frame scrolled by a gesture: bring the same line to the sync line here. */
@@ -4942,7 +5044,7 @@ function texpressoAlignSource(line: number | null, file: string | null): void {
   if (scrollOwnership.reflected("preview", texpressoScrollTop, performance.now())) return;
   scrollOwnership.input();
   const target = clampScroll(
-    editorScrollFor(texpressoGeometry(), line, scrollReference()),
+    editorScrollFor(texpressoGeometry(), line, scrollReference("source")),
     editor.scrollMax(),
   );
   if (Math.abs(target - editor.view.scrollDOM.scrollTop) < 0.5) return;
@@ -6617,6 +6719,7 @@ async function displayDoc(preservePdf = false): Promise<void> {
   stopReadAloud();
   if (!preservePdf) invalidatePreview();
   pendingPreviewScroll = preservePdf ? null : doc.previewScroll;
+  resetSyncReference();
   // A kept preview comes back at the tab's remembered offset. The offset also
   // stays pending: the render that follows applies it right before it syncs
   // the panes, in the same order a full rebuild does, so the sync cannot move
@@ -7211,6 +7314,22 @@ async function revealSession(id: string): Promise<void> {
   } catch (error) {
     toast(String(error));
   }
+}
+
+/** Copy the full path of a tab's file, whether or not that tab is on screen. */
+async function copySessionPath(id: string): Promise<void> {
+  const session = sessions.byId(id);
+  if (!session?.path) {
+    toast("Save the document first.");
+    return;
+  }
+  const copied = await writeClipboardText(session.path);
+  toast(
+    copied
+      ? "Copied the file path to the clipboard."
+      : "Could not copy the file path to the clipboard.",
+    4200,
+  );
 }
 
 async function reloadFromDisk(): Promise<void> {
@@ -9391,15 +9510,6 @@ function previewScrollFor(el: HTMLElement): number {
   return Math.max(0, previewTop(el) - SYNC_MARGIN);
 }
 
-/** One pair of corresponding positions: a block top in both panes. */
-interface SyncSegment {
-  editor0: number;
-  preview0: number;
-  editor1: number;
-  preview1: number;
-}
-
-/** Map `value` from one interval to the other, clamped to its ends. */
 /** Where the preview should stop once the last block has been read through. */
 function previewEndFor(el: HTMLElement): number {
   const pane = previewPane.getBoundingClientRect();
@@ -9408,49 +9518,6 @@ function previewEndFor(el: HTMLElement): number {
   // The 45vh bottom padding is for reading the last block at the top, not part
   // of the document. Mapping into it would scroll the text off screen.
   return Math.max(previewScrollFor(el), Math.min(max, blockBottom - previewPane.clientHeight));
-}
-
-/**
- * The two adjacent sync positions around an anchor index.
- *
- * The last anchor uses the editor's scroll end and the bottom of its block as
- * the second position, so a long final block keeps following instead of
- * pinning at its first line.
- */
-function syncSegmentFor(index: number): SyncSegment | null {
-  if (index < 0 || index >= previewAnchors.length) return null;
-  const anchor = previewAnchors[index];
-  const editor0 = Math.max(0, editor.lineScrollTop(anchor.line) - SYNC_MARGIN);
-  const preview0 = previewScrollFor(anchor.el);
-
-  if (index + 1 < previewAnchors.length) {
-    const next = previewAnchors[index + 1];
-    return {
-      editor0,
-      preview0,
-      editor1: Math.max(editor0, editor.lineScrollTop(next.line) - SYNC_MARGIN),
-      preview1: Math.max(preview0, previewScrollFor(next.el)),
-    };
-  }
-
-  return {
-    editor0,
-    preview0,
-    editor1: Math.max(editor0, editor.scrollMax()),
-    preview1: previewEndFor(anchor.el),
-  };
-}
-
-/** Source line of the block at the preview's sync line. */
-function lineAtPreviewTop(): number | null {
-  if (previewAnchors.length === 0) return null;
-  const top = previewPane.getBoundingClientRect().top + SYNC_MARGIN;
-  let current: number | null = null;
-  for (const anchor of previewAnchors) {
-    if (anchor.el.getBoundingClientRect().top <= top) current = anchor.line;
-    else break;
-  }
-  return current ?? previewAnchors[0].line;
 }
 
 /** Move the preview so a block sits just under its top edge. */
@@ -9476,12 +9543,13 @@ function alignPreviewToLine(line: number): void {
 function alignPreviewToScroll(): void {
   if (alignDomTextScroll("source")) return;
   const reference = scrollReference("source");
-  const delta = blockCorrection(
+  const measured = blockCorrection(
     domBlockTops("source", reference),
     reference,
     scrollReference("preview"),
   );
-  if (delta === null) return;
+  if (measured === null) return;
+  const delta = levelFollow("source", measured);
   suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
   previewPane.scrollTop = clampScroll(
     previewPane.scrollTop + delta,
@@ -9500,12 +9568,13 @@ function alignPreviewToScroll(): void {
 function alignEditorToScroll(): void {
   if (alignDomTextScroll("preview")) return;
   const reference = scrollReference("preview");
-  const delta = blockCorrection(
+  const measured = blockCorrection(
     domBlockTops("preview", reference),
     reference,
     scrollReference("source"),
   );
-  if (delta === null) return;
+  if (measured === null) return;
+  const delta = levelFollow("preview", measured);
   suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
   editor.scrollToOffset(clampScroll(editor.view.scrollDOM.scrollTop + delta, editor.scrollMax()));
 }
@@ -9530,7 +9599,11 @@ function revealPreviewLine(line: number): void {
   const pane = previewPane.getBoundingClientRect();
   const box = el.getBoundingClientRect();
   if (box.bottom > pane.top && box.top < pane.bottom) return;
-  alignPreviewToLine(line);
+  // Level with the caret where the caret's row can be measured; the top of the
+  // pane is the fallback, and what happens with Sync off.
+  const point = gestureSyncAvailable() ? sourceGesturePoint() : null;
+  if (point) levelDomGesture(point);
+  else alignPreviewToLine(line);
 }
 
 /**
@@ -9710,6 +9783,8 @@ interface ProseDebugWindow {
   __mdraftDebug?: {
     wordMapReadyMs?: number | null;
     wordMapDoneAt?: number | null;
+    /** The sync line and the last gesture, for the CDP suites. */
+    syncState?: () => Record<string, unknown>;
   };
 }
 
@@ -9765,6 +9840,7 @@ function bindPreviewWords(
     if (!index || cancelled()) return;
     wordMap = map;
     domScrollIndex = new ScrollIndex(index.anchors, index.sorted);
+    resolvePinnedGesture();
     prosePerfMeasure("wordMap", mapStart, { incrementalApplied });
     const doneAt = performance.now();
     const debugWindow = window as unknown as ProseDebugWindow;
@@ -9869,6 +9945,10 @@ function sourceFromPreviewSelection(): { from: number; to: number } | null {
  * never move the pane out from under the pointer.
  */
 function syncSourceFromPreview(reveal: boolean): void {
+  // `reveal` brings the source range into view with CodeMirror's "nearest". With
+  // Sync on the release has already levelled the source with the clicked row,
+  // and "nearest" would then push a row near the pane's edge 80 px inward:
+  // measured, a double-click left the source word 33 px off level.
   if (compiledUi.logsOpen) return;
   if (!wordSyncAvailable()) return;
   clearPreviewWords();
@@ -9880,13 +9960,13 @@ function syncSourceFromPreview(reveal: boolean): void {
   }
   if (syncedSource && syncedSource.from === range.from && syncedSource.to === range.to) {
     editor.setSyncRange(range.from, range.to);
-    if (reveal) editor.revealOffset(range.from);
+    if (reveal && !gestureSyncAvailable()) editor.revealOffset(range.from);
     editor.pulseSyncRange();
     return;
   }
   syncedSource = range;
   editor.setSyncRange(range.from, range.to);
-  if (reveal) editor.revealOffset(range.from);
+  if (reveal && !gestureSyncAvailable()) editor.revealOffset(range.from);
 }
 
 /**
@@ -9963,6 +10043,20 @@ async function handoffLatexSelection(
   syncSourceFromPageSelection(context, reveal);
 }
 
+/**
+ * A page gesture reveals its source. With Sync on the source row is levelled
+ * with the pointed row; otherwise it is only brought into view, as before.
+ */
+function revealPageGesture(context: TypstPageContext | null, from: number): void {
+  if (context?.row && context.sourceRange && gestureSyncAvailable() && pagesScrollAvailable())
+    levelPagesGesture({
+      pane: "preview",
+      offset: context.sourceRange.from,
+      y: rowCentre(context.row),
+    });
+  else editor.revealOffset(from);
+}
+
 function syncSourceFromPageSelection(context: TypstPageContext | null, reveal: boolean): void {
   if (compiledUi.logsOpen) return;
   const gesture = ++latexGesture;
@@ -10003,7 +10097,7 @@ function syncSourceFromPageSelection(context: TypstPageContext | null, reveal: b
     if (doc.language === "latex" && !context?.paragraph && context?.sourceRange?.segments?.length)
       editor.setSyncRanges(context.sourceRange.segments);
     else editor.setSyncRange(range.from, range.to);
-    if (reveal) editor.revealOffset(range.from);
+    if (reveal) revealPageGesture(context, range.from);
     editor.pulseSyncRange();
     return;
   }
@@ -10011,7 +10105,7 @@ function syncSourceFromPageSelection(context: TypstPageContext | null, reveal: b
   if (doc.language === "latex" && !context?.paragraph && context?.sourceRange?.segments?.length)
     editor.setSyncRanges(context.sourceRange.segments);
   else editor.setSyncRange(range.from, range.to);
-  if (reveal) editor.revealOffset(range.from);
+  if (reveal) revealPageGesture(context, range.from);
 }
 
 /**
@@ -10101,14 +10195,6 @@ function revealCursorInPreview(): void {
   revealPreviewLine(editor.cursorInfo().line);
 }
 
-/** The guest's anchors are layout positions, not DOM elements in this frame. */
-interface HtmlSyncSegment {
-  editor0: number;
-  editor1: number;
-  preview0: number;
-  preview1: number;
-}
-
 function htmlIndexForLine(anchors: HtmlLayout["anchors"], line: number): number {
   let index = -1;
   for (let i = 0; i < anchors.length; i += 1) {
@@ -10116,40 +10202,6 @@ function htmlIndexForLine(anchors: HtmlLayout["anchors"], line: number): number 
     else break;
   }
   return index;
-}
-
-function htmlSegmentFor(layout: HtmlLayout, index: number): HtmlSyncSegment | null {
-  if (index < 0 || index >= layout.anchors.length) return null;
-  const anchor = layout.anchors[index];
-  const editor0 = Math.max(0, editor.lineScrollTop(anchor.line) - SYNC_MARGIN);
-  const preview0 = Math.max(0, anchor.top - SYNC_MARGIN);
-
-  if (index + 1 < layout.anchors.length) {
-    const next = layout.anchors[index + 1];
-    return {
-      editor0,
-      preview0,
-      editor1: Math.max(editor0, editor.lineScrollTop(next.line) - SYNC_MARGIN),
-      preview1: Math.max(preview0, next.top - SYNC_MARGIN),
-    };
-  }
-  return {
-    editor0,
-    preview0,
-    editor1: Math.max(editor0, editor.scrollMax()),
-    preview1: Math.max(preview0, layout.height - layout.client),
-  };
-}
-
-function htmlLineAtTop(layout: HtmlLayout): number {
-  if (layout.anchors.length === 0) return 1;
-  const y = layout.top + SYNC_MARGIN;
-  let line = layout.anchors[0].line;
-  for (const anchor of layout.anchors) {
-    if (anchor.top <= y) line = anchor.line;
-    else break;
-  }
-  return line;
 }
 
 function syncEditorToHtml(): void {
@@ -10162,21 +10214,17 @@ function syncEditorToHtmlCoarse(): void {
   if (!settings.syncScroll || settings.viewMode !== "split") return;
   const layout = htmlPreview.layout();
   if (!layout || layout.anchors.length < 2) return;
-  const index = Math.max(0, htmlIndexForLine(layout.anchors, editor.topVisibleLine()));
-  const segment = htmlSegmentFor(layout, index);
-  if (!segment) return;
-
-  const target = interpolate(
-    editor.view.scrollDOM.scrollTop,
-    segment.editor0,
-    segment.editor1,
-    segment.preview0 * (layout.scale > 0 ? layout.scale : 1),
-    segment.preview1 * (layout.scale > 0 ? layout.scale : 1),
+  const reference = scrollReference("source");
+  const measured = blockCorrection(
+    htmlBlockTops(layout, "source", reference),
+    reference,
+    scrollReference("preview"),
   );
-  const max = Math.max(0, layout.height - layout.client);
+  if (measured === null) return;
+  const delta = levelFollow("source", measured);
   const scale = layout.scale > 0 ? layout.scale : 1;
   suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
-  htmlPreview.scrollTo(Math.min(max, Math.max(0, target / scale)));
+  htmlPreview.scrollTo(clampScroll(layout.top + delta / scale, layout.height - layout.client));
 }
 
 function syncHtmlToEditor(layout: HtmlLayout): void {
@@ -10189,20 +10237,16 @@ function syncHtmlToEditorCoarse(layout: HtmlLayout): void {
   if (!settings.syncScroll || settings.viewMode !== "split") return;
   if (layout.anchors.length < 2) return;
   if (performance.now() < suppressPreviewScrollUntil) return;
-
-  const index = Math.max(0, htmlIndexForLine(layout.anchors, htmlLineAtTop(layout)));
-  const segment = htmlSegmentFor(layout, index);
-  if (!segment) return;
-
-  const target = interpolate(
-    layout.top,
-    segment.preview0,
-    segment.preview1,
-    segment.editor0,
-    segment.editor1,
+  const reference = scrollReference("preview");
+  const measured = blockCorrection(
+    htmlBlockTops(layout, "preview", reference),
+    reference,
+    scrollReference("source"),
   );
+  if (measured === null) return;
+  const delta = levelFollow("preview", measured);
   suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
-  editor.scrollToOffset(target);
+  editor.scrollToOffset(clampScroll(editor.view.scrollDOM.scrollTop + delta, editor.scrollMax()));
 }
 
 /** Reveal the caret's block only when it is not already in the guest viewport. */
@@ -10216,6 +10260,13 @@ function revealHtmlCursor(line: number): void {
   const viewTop = layout.top;
   const viewBottom = layout.top + layout.client;
   if (top >= viewTop && top <= viewBottom - 40) return;
+  // Level with the caret where its row can be measured; otherwise, and with
+  // Sync off, the block goes to the top of the guest.
+  const point = gestureSyncAvailable() ? sourceGesturePoint() : null;
+  if (point) {
+    void levelHtmlGesture(point);
+    return;
+  }
   suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
   htmlPreview.scrollToLine(line);
 }
@@ -10274,7 +10325,7 @@ async function alignHtmlTextScroll(
   )
     return true;
   if (!layout) return false;
-  const reference = scrollReference();
+  const reference = scrollReference(direction);
   const offset = direction === "source" ? editor.offsetAtScreenY(reference) : layout.probe?.from;
   if (offset === undefined) return false;
   const near = htmlPreview.scrollAnchorsNear(offset);
@@ -10318,8 +10369,9 @@ async function alignHtmlTextScroll(
       target: direction === "source" ? previewY : sourceY,
     });
   }
-  const delta = scrollCorrection(pairs, reference);
-  if (delta === null) return false;
+  const measured = scrollCorrection(pairs, reference, scrollReference(otherPane(direction)));
+  if (measured === null) return false;
+  const delta = refined ? measured : levelFollow(direction, measured);
   if (Math.abs(delta) < 0.5) return true;
   if (direction === "source") {
     const target = clampScroll(geometry.top + delta / scale, layout.height - layout.client);
@@ -10370,7 +10422,7 @@ function previewScrollOffset(reference: number): number | null {
 function alignDomTextScroll(direction: SyncPane, refined = false): boolean {
   if (compiledUi.logsOpen) return true;
   if (syncDragging || !wordMap || wordMap.source !== editor.getDoc()) return false;
-  const reference = scrollReference();
+  const reference = scrollReference(direction);
   const offset =
     direction === "source" ? editor.offsetAtScreenY(reference) : previewScrollOffset(reference);
   if (offset === null) return false;
@@ -10400,8 +10452,9 @@ function alignDomTextScroll(direction: SyncPane, refined = false): boolean {
       target: direction === "source" ? previewY : sourceY,
     });
   }
-  const delta = scrollCorrection(pairs, reference);
-  if (delta === null) return false;
+  const measured = scrollCorrection(pairs, reference, scrollReference(otherPane(direction)));
+  if (measured === null) return false;
+  const delta = refined ? measured : levelFollow(direction, measured);
   if (Math.abs(delta) < 0.5) return true;
   if (direction === "source") {
     suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
@@ -10448,16 +10501,6 @@ function pagesScrollAvailable(): boolean {
   );
 }
 
-/**
- * The sync line as a pair of heights: content at `source` in the editor
- * corresponds to content at `preview` in the preview. Level at SYNC_MARGIN until
- * a pointer gesture calibrates it; see
- * docs/adr/2026-11-13-pointer-gesture-alignment.md. Any code that needs "the
- * sync height" reads it through scrollReference(), never SYNC_MARGIN: a fixed
- * margin in the sync path is what makes the panes jump after a click.
- */
-const syncReference = new SyncReference(SYNC_MARGIN);
-
 function scrollCommonTop(): number {
   return Math.max(
     editor.view.scrollDOM.getBoundingClientRect().top,
@@ -10478,48 +10521,77 @@ const otherPane = (pane: SyncPane): SyncPane => (pane === "source" ? "preview" :
  * tables, formulas, diagrams, or a word map that has not arrived.
  *
  * The last block ends where the editor's scroll range ends, paired with the
- * bottom of the block in the preview, so a long final block keeps following
- * instead of pinning at its first line.
+ * preview's own end, so a long final block keeps following instead of pinning
+ * at its first line.
  */
-function domBlockTops(direction: SyncPane, reference: number): BlockTop[] {
+function blockTopsAround(
+  direction: SyncPane,
+  reference: number,
+  count: number,
+  lineAt: (index: number) => number,
+  previewYAt: (index: number) => number,
+  previewEndY: () => number,
+): BlockTop[] {
   const scroller = editor.view.scrollDOM;
   const sourceTop = scroller.getBoundingClientRect().top - scroller.scrollTop;
-  const sourceY = (anchor: Anchor): number => sourceTop + editor.lineScrollTop(anchor.line);
-  const previewY = (anchor: Anchor): number => anchor.el.getBoundingClientRect().top;
-  const originY = direction === "source" ? sourceY : previewY;
+  const sourceYAt = (index: number): number => sourceTop + editor.lineScrollTop(lineAt(index));
+  const originYAt = direction === "source" ? sourceYAt : previewYAt;
+  const pair = (source: number, rendered: number): BlockTop =>
+    direction === "source"
+      ? { origin: source, target: rendered }
+      : { origin: rendered, target: source };
   let lo = 0,
-    hi = previewAnchors.length;
+    hi = count;
   while (lo < hi) {
     const mid = (lo + hi) >>> 1;
-    if (originY(previewAnchors[mid]) <= reference) lo = mid + 1;
+    if (originYAt(mid) <= reference) lo = mid + 1;
     else hi = mid;
   }
   // `lo - 1` is the block holding the reference; its neighbours bound it.
-  const last = Math.min(previewAnchors.length, lo + 1);
+  const last = Math.min(count, lo + 1);
   const tops: BlockTop[] = [];
-  for (let i = Math.max(0, lo - 2); i < last; i++) {
-    const source = sourceY(previewAnchors[i]),
-      rendered = previewY(previewAnchors[i]);
-    tops.push(
-      direction === "source"
-        ? { origin: source, target: rendered }
-        : { origin: rendered, target: source },
+  for (let i = Math.max(0, lo - 2); i < last; i++) tops.push(pair(sourceYAt(i), previewYAt(i)));
+  if (last === count && tops.length) {
+    const end = pair(
+      scrollCommonTop() + SYNC_MARGIN + editor.scrollMax() - scroller.scrollTop,
+      previewEndY(),
     );
-  }
-  if (last === previewAnchors.length && tops.length) {
-    const el = previewAnchors[last - 1].el;
-    const common = scrollCommonTop() + SYNC_MARGIN;
-    const source = common + editor.scrollMax() - scroller.scrollTop;
-    const rendered = common + previewEndFor(el) - previewPane.scrollTop;
-    const end =
-      direction === "source"
-        ? { origin: source, target: rendered }
-        : { origin: rendered, target: source };
     const tail = tops[tops.length - 1];
     // A document shorter than the pane has no scroll range to pair.
     if (end.origin > tail.origin && end.target >= tail.target) tops.push(end);
   }
   return tops;
+}
+
+function domBlockTops(direction: SyncPane, reference: number): BlockTop[] {
+  return blockTopsAround(
+    direction,
+    reference,
+    previewAnchors.length,
+    (index) => previewAnchors[index].line,
+    (index) => previewAnchors[index].el.getBoundingClientRect().top,
+    () =>
+      scrollCommonTop() +
+      SYNC_MARGIN +
+      previewEndFor(previewAnchors[previewAnchors.length - 1].el) -
+      previewPane.scrollTop,
+  );
+}
+
+/** The guest's block anchors are layout positions; place them on this screen. */
+function htmlBlockTops(layout: HtmlLayout, direction: SyncPane, reference: number): BlockTop[] {
+  const frame = document.querySelector<HTMLElement>(".html-preview-frame.active");
+  if (!frame) return [];
+  const scale = layout.scale > 0 ? layout.scale : 1;
+  const frameTop = frame.getBoundingClientRect().top;
+  return blockTopsAround(
+    direction,
+    reference,
+    layout.anchors.length,
+    (index) => layout.anchors[index].line,
+    (index) => frameTop + (layout.anchors[index].top - layout.top) * scale,
+    () => scrollCommonTop() + SYNC_MARGIN + (layout.height - layout.client - layout.top) * scale,
+  );
 }
 
 let latexLastSourceScroll: number | null = null;
@@ -10530,7 +10602,7 @@ function alignPagesScroll(direction: SyncPane, refined = false): void {
     latexLastSourceScroll === null ? 0 : Math.sign(sourceScroll - latexLastSourceScroll);
   if (direction === "source" && doc.language === "latex") latexLastSourceScroll = sourceScroll;
   const pdf = typstPdf!;
-  const reference = scrollReference();
+  const reference = scrollReference(direction);
   const anchors =
     direction === "source"
       ? pdf.scrollAnchorsNear(editor.offsetAtScreenY(reference))
@@ -10551,8 +10623,10 @@ function alignPagesScroll(direction: SyncPane, refined = false): void {
       target: direction === "source" ? previewY : sourceY,
     });
   }
-  const delta = scrollCorrection(pairs, reference);
-  if (delta === null || Math.abs(delta) < 0.5) return;
+  const measured = scrollCorrection(pairs, reference, scrollReference(otherPane(direction)));
+  if (measured === null) return;
+  const delta = refined ? measured : levelFollow(direction, measured);
+  if (Math.abs(delta) < 0.5) return;
   if (
     direction === "source" &&
     doc.language === "latex" &&
@@ -10589,6 +10663,412 @@ function alignPagesScroll(direction: SyncPane, refined = false): void {
       });
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Gesture alignment
+//
+// A click, a double-click or a settled drag in one pane brings its counterpart
+// in the other pane to the same height, and then tells scroll sync where the two
+// rows ended up, so the next wheel tick continues from there. The pane the
+// gesture happened in is never scrolled. Two earlier attempts at moving a pane on
+// a click were reverted; docs/adr/2026-11-13-pointer-gesture-alignment.md records
+// why this one is different, and the rule a new call site has to keep.
+// ---------------------------------------------------------------------------
+
+function gestureSyncAvailable(): boolean {
+  return (
+    settings.syncScroll && settings.viewMode === "split" && !compiledUi.logsOpen && !syncDragging
+  );
+}
+
+/** Markdown, AsciiDoc and Typst Document: rendered text in this document. */
+function flowingPreviewShowing(): boolean {
+  return (
+    previewLinesMapped &&
+    doc.language !== "html" &&
+    doc.language !== "latex" &&
+    !(doc.language === "typst" && settings.typstView === "pages")
+  );
+}
+
+function paneScrollTop(pane: SyncPane): number {
+  if (pane === "source") return editor.view.scrollDOM.scrollTop;
+  if (doc.language === "html") return htmlPreview.layout()?.top ?? 0;
+  return previewPane.scrollTop;
+}
+
+function recordFollowTops(): void {
+  followTop.source = paneScrollTop("source");
+  followTop.preview = paneScrollTop("preview");
+}
+
+/**
+ * One follow correction's share of levelling a skewed pair. The follower's
+ * height moves toward the leader's by a bounded fraction of what the reader just
+ * scrolled, so the panes become level again through the reader's own motion.
+ */
+function levelFollow(direction: SyncPane, delta: number): number {
+  const last = followTop[direction];
+  if (last === null || !syncReference.skewed) return delta;
+  const step = syncReference.level(direction, paneScrollTop(direction) - last, delta);
+  if (step) publishSyncReference();
+  return delta - step;
+}
+
+/** The HTML guest probes its own viewport; tell it where the sync line is now. */
+function publishSyncReference(): void {
+  if (doc.language === "html") htmlPreview?.setProbeHeight(scrollReference("preview"));
+  else if (texpressoShowing()) texpresso?.post({ type: "reference", y: texpressoReference() });
+}
+
+/** The caret's own row, when CodeMirror has drawn it. */
+function sourceGesturePoint(): GesturePoint | null {
+  const head = editor.view.state.selection.main.head;
+  const row = editor.scrollPoint(head);
+  return row.exact ? { pane: "source", offset: head, y: rowCentre(row) } : null;
+}
+
+/** The rendered text under the pointer, or only its height when none maps. */
+function previewGesturePoint(x: number, y: number): GesturePoint {
+  const held: GesturePoint = { pane: "preview", offset: null, y };
+  if (!wordMap || wordMap.source !== editor.getDoc()) return held;
+  const dom = document as Document & {
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  };
+  const caret = dom.caretRangeFromPoint?.(x, y);
+  if (
+    !caret ||
+    caret.startContainer.nodeType !== Node.TEXT_NODE ||
+    !preview.contains(caret.startContainer)
+  )
+    return held;
+  const node = caret.startContainer as Text;
+  // The caret sits between two characters; either may be the one clicked, and a
+  // space maps to nothing.
+  for (const at of [caret.startOffset, caret.startOffset - 1, caret.startOffset + 1]) {
+    if (at < 0 || at >= node.length) continue;
+    const range = scrollSourceRange(wordMap, node, at, at + 1);
+    if (!range) continue;
+    const glyph = document.createRange();
+    glyph.setStart(node, at);
+    glyph.setEnd(node, at + 1);
+    const rect = glyph.getBoundingClientRect();
+    // Text found for a click in a margin or below a block is not the row that
+    // was clicked; the pointer's own height then goes to the block fallback.
+    if (!rect.height || y < rect.top - rect.height || y > rect.bottom + rect.height) continue;
+    return { pane: "preview", offset: range.from, y: rowCentre(rect) };
+  }
+  return held;
+}
+
+/** How far below level the counterpart of a gesture is, in a flowing preview. */
+function solveDomGesture(point: GesturePoint): number | null {
+  // A map that describes an older text must not move anything.
+  if (domScrollSource !== editor.getDoc()) return null;
+  const offset = point.offset;
+  if (offset !== null && wordMap && wordMap.source === editor.getDoc()) {
+    const near = domScrollIndex.near(offset);
+    if (near.length) {
+      const region = near.reduce((a, b) =>
+        Math.abs(a.from - offset) <= Math.abs(b.from - offset) ? a : b,
+      ).region;
+      const pairs: GesturePair[] = [];
+      for (const anchor of near) {
+        if (anchor.region !== region || !anchor.node.isConnected) continue;
+        // The word under the gesture is measured at the clicked character, not
+        // at its first one: a long word can break across two rows.
+        const inside = anchor.from <= offset && offset <= anchor.to;
+        const at = inside ? Math.min(offset, anchor.to - 1) : anchor.from;
+        const source = editor.scrollPoint(at);
+        if (point.pane === "source" && !source.exact) continue;
+        const range = document.createRange();
+        const start = anchor.start + (at - anchor.from);
+        range.setStart(anchor.node, start);
+        range.setEnd(anchor.node, inside ? start + 1 : anchor.end);
+        const rect = range.getBoundingClientRect();
+        if (!rect.width || !rect.height) continue;
+        const sourceY = rowCentre(source),
+          previewY = rowCentre(rect);
+        pairs.push({
+          from: anchor.from,
+          to: anchor.to,
+          region,
+          origin: point.pane === "source" ? sourceY : previewY,
+          target: point.pane === "source" ? previewY : sourceY,
+        });
+      }
+      const solved = solveGesture(pairs, offset, point.y);
+      if (solved) return solved.delta;
+    }
+  }
+  return blockCorrection(domBlockTops(point.pane, point.y), point.y);
+}
+
+/** Tell scroll sync where the gesture's two rows are, so it continues from there. */
+function calibrateGesture(point: GesturePoint, residual: number): void {
+  const top = scrollCommonTop();
+  const extent =
+    Math.min(
+      editor.view.scrollDOM.getBoundingClientRect().bottom,
+      previewPane.getBoundingClientRect().bottom,
+    ) - top;
+  const own = point.y - top,
+    counterpart = point.y + residual - top;
+  if (point.pane === "source") syncReference.calibrate(own, counterpart, extent);
+  else syncReference.calibrate(counterpart, own, extent);
+  recordFollowTops();
+  publishSyncReference();
+}
+
+/** Run `task` once both panes have laid out what the last write exposed. */
+function afterGestureLayout(task: () => void): void {
+  const token = renderToken,
+    epoch = scrollOwnership.epoch;
+  editor.view.requestMeasure({
+    read: () => null,
+    write: () =>
+      requestAnimationFrame(() => {
+        if (token === renderToken && epoch === scrollOwnership.epoch) task();
+      }),
+  });
+}
+
+/**
+ * Level the other pane with a gesture in a flowing preview. It never touches
+ * the gesture's own pane; when no content answers, both panes hold.
+ */
+function levelDomGesture(point: GesturePoint, pass = 0): void {
+  if (!gestureSyncAvailable()) return;
+  // Pinned before it is solved: a click that lands while the preview is still
+  // rendering the last edit has no map to answer it, and must be answered when
+  // the map arrives instead of being dropped. Measured: the first click after
+  // an edit moved nothing and the second, 400 ms later, moved 12 px.
+  if (pass === 0)
+    gesturePin = {
+      point,
+      epoch: scrollOwnership.epoch,
+      source: editor.getDoc(),
+      ownTop: paneScrollTop(point.pane),
+      left: 2,
+    };
+  if (!flowingPreviewShowing()) return;
+  const delta = solveDomGesture(point);
+  if (delta === null) return;
+  const other = otherPane(point.pane);
+  const moved = writeGesture(other, delta);
+  // What is left is where the counterpart really is: the pair is true at once,
+  // even when the pane stopped at the end of its range.
+  calibrateGesture(point, delta - moved);
+  if (Math.abs(moved) >= 0.5 && pass + 1 < GESTURE_PASSES)
+    afterGestureLayout(() => levelDomGesture(point, pass + 1));
+}
+
+/** Scroll one pane of this document by `delta`; returns how far it really went. */
+function writeGesture(pane: SyncPane, delta: number): number {
+  const before = paneScrollTop(pane);
+  if (Math.abs(delta) < 0.5) return 0;
+  if (pane === "preview") {
+    suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+    previewPane.scrollTop = clampScroll(
+      before + delta,
+      previewPane.scrollHeight - previewPane.clientHeight,
+    );
+  } else {
+    suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+    editor.scrollToOffset(clampScroll(before + delta, editor.scrollMax()));
+  }
+  scrollOwnership.wrote(pane, paneScrollTop(pane), performance.now());
+  return paneScrollTop(pane) - before;
+}
+
+/**
+ * The same alignment on PDF pages (Typst Pages, the LaTeX PDF). Only accepted
+ * links answer: there is no block fallback on a page, so generated text holds.
+ * A page that is not painted has no text layer; its row is first placed from
+ * the page map and measured once the page has painted.
+ */
+function levelPagesGesture(point: GesturePoint, pass = 0): void {
+  const offset = point.offset;
+  if (!gestureSyncAvailable() || !pagesScrollAvailable() || offset === null) return;
+  const pdf = typstPdf!;
+  const pairs: GesturePair[] = [];
+  let estimated = false;
+  for (const anchor of pdf.scrollAnchorsNear(offset)) {
+    const inside = anchor.from <= offset && offset <= anchor.to;
+    const source = editor.scrollPoint(inside ? Math.min(offset, anchor.to - 1) : anchor.from);
+    if (point.pane === "source" && !source.exact) continue;
+    let row = pdf.scrollRowFor(anchor);
+    if (!row && point.pane === "source") {
+      row = pdf.scrollRowEstimate(anchor);
+      estimated ||= row !== null;
+    }
+    if (!row) continue;
+    const sourceY = rowCentre(source),
+      previewY = rowCentre(row);
+    pairs.push({
+      from: anchor.from,
+      to: anchor.to,
+      region: anchor.region,
+      origin: point.pane === "source" ? sourceY : previewY,
+      target: point.pane === "source" ? previewY : sourceY,
+    });
+  }
+  const solved = solveGesture(pairs, offset, point.y);
+  if (!solved) return;
+  if (pass === 0)
+    gesturePin = {
+      point,
+      epoch: scrollOwnership.epoch,
+      source: editor.getDoc(),
+      ownTop: paneScrollTop(point.pane),
+      left: 2,
+    };
+  const moved = writeGesture(otherPane(point.pane), solved.delta);
+  calibrateGesture(point, solved.delta - moved);
+  if (pass + 1 >= GESTURE_PASSES || (Math.abs(moved) < 0.5 && !estimated)) return;
+  if (!estimated) {
+    afterGestureLayout(() => levelPagesGesture(point, pass + 1));
+    return;
+  }
+  // Painting a page is asynchronous and reports nothing here; give it a moment.
+  const token = renderToken,
+    epoch = scrollOwnership.epoch;
+  window.setTimeout(() => {
+    if (token === renderToken && epoch === scrollOwnership.epoch)
+      levelPagesGesture(point, pass + 1);
+  }, 160);
+}
+
+/** A click or a settled selection in the source text: level the preview with it. */
+function levelFromSourceClick(event: MouseEvent): void {
+  // The gutter and the scrollbar are not a place in the text.
+  if (!(event.target instanceof Element) || !event.target.closest(".cm-content")) return;
+  if (texpressoShowing()) {
+    texpressoLevelFromSource();
+    return;
+  }
+  const point = sourceGesturePoint();
+  if (point) levelGesture(point);
+}
+
+/**
+ * The same alignment through the HTML guest. Its geometry arrives by message,
+ * so every step re-checks that the reader has not done something else since.
+ */
+async function levelHtmlGesture(point: GesturePoint, pass = 0): Promise<void> {
+  const usable = (): boolean =>
+    gestureSyncAvailable() &&
+    !htmlScrollDragging &&
+    doc.language === "html" &&
+    htmlPreview.source() === editor.getDoc();
+  if (!gestureSyncAvailable() || doc.language !== "html") return;
+  const token = renderToken,
+    epoch = scrollOwnership.epoch;
+  // Pinned before it is solved, for the same reason as in levelDomGesture: the
+  // guest may still be rebuilding for the last edit, and handleHtmlReady then
+  // answers the gesture.
+  if (pass === 0)
+    gesturePin = {
+      point,
+      epoch,
+      source: editor.getDoc(),
+      ownTop: paneScrollTop(point.pane),
+      left: 2,
+    };
+  if (!usable()) return;
+  const layout = htmlPreview.layout();
+  const frame = htmlPreview.frameBox();
+  if (!layout || !frame) return;
+  let delta: number | null = null;
+  let guestTop = layout.top;
+  let input: number | undefined;
+  const offset = point.offset;
+  if (offset !== null) {
+    const near = htmlPreview.scrollAnchorsNear(offset);
+    if (near.length) {
+      const region = near.reduce((a, b) =>
+        Math.abs(a.from - offset) <= Math.abs(b.from - offset) ? a : b,
+      ).region;
+      const anchors = near.filter((a) => a.region === region);
+      const geometry = await htmlPreview.measureScroll(editor.getDoc(), anchors);
+      if (token !== renderToken || epoch !== scrollOwnership.epoch || !usable()) return;
+      if (geometry) {
+        const scale = geometry.scale > 0 ? geometry.scale : 1;
+        guestTop = geometry.top;
+        input = geometry.input;
+        const pairs: GesturePair[] = [];
+        for (const measured of geometry.points) {
+          const anchor = anchors[measured.at];
+          const inside = anchor.from <= offset && offset <= anchor.to;
+          const source = editor.scrollPoint(inside ? Math.min(offset, anchor.to - 1) : anchor.from);
+          if (point.pane === "source" && !source.exact) continue;
+          const previewY =
+            geometry.frameTop + (measured.top + measured.height / 2 - geometry.top) * scale;
+          const sourceY = rowCentre(source);
+          pairs.push({
+            from: anchor.from,
+            to: anchor.to,
+            region,
+            origin: point.pane === "source" ? sourceY : previewY,
+            target: point.pane === "source" ? previewY : sourceY,
+          });
+        }
+        delta = solveGesture(pairs, offset, point.y)?.delta ?? null;
+      }
+    }
+  }
+  if (delta === null && layout.anchors.length >= 2)
+    delta = blockCorrection(htmlBlockTops(layout, point.pane, point.y), point.y);
+  if (delta === null) return;
+  let moved = 0;
+  if (Math.abs(delta) >= 0.5) {
+    if (point.pane === "source") {
+      // The guest scrolls asynchronously; what it will do is known from its
+      // scroll range, which is what the residual needs.
+      const scale = frame.scale > 0 ? frame.scale : 1;
+      const target = clampScroll(guestTop + delta / scale, layout.height - layout.client);
+      moved = (target - guestTop) * scale;
+      suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+      scrollOwnership.wrote("preview", target, performance.now());
+      htmlPreview.scrollTo(target, input);
+    } else {
+      const before = editor.view.scrollDOM.scrollTop;
+      suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+      editor.scrollToOffset(clampScroll(before + delta, editor.scrollMax()));
+      scrollOwnership.wrote("source", editor.view.scrollDOM.scrollTop, performance.now());
+      moved = editor.view.scrollDOM.scrollTop - before;
+    }
+  }
+  calibrateGesture(point, delta - moved);
+  if (Math.abs(moved) >= 0.5 && pass + 1 < GESTURE_PASSES)
+    afterGestureLayout(() => void levelHtmlGesture(point, pass + 1));
+}
+
+/** Level the other pane with a gesture, through whichever preview is showing. */
+function levelGesture(point: GesturePoint, pass = 0): void {
+  if (doc.language === "html") void levelHtmlGesture(point, pass);
+  else if (pagesScrollAvailable()) levelPagesGesture(point, pass);
+  else levelDomGesture(point, pass);
+}
+
+/** The layout changed under a gesture the reader has not followed up: solve it again. */
+function resolvePinnedGesture(): void {
+  const pin = gesturePin;
+  if (!pin) return;
+  if (
+    pin.epoch !== scrollOwnership.epoch ||
+    pin.source !== editor.getDoc() ||
+    Math.abs(paneScrollTop(pin.point.pane) - pin.ownTop) >= 1 ||
+    pin.left <= 0
+  ) {
+    gesturePin = null;
+    return;
+  }
+  pin.left -= 1;
+  // The gesture keeps its height only while its own pane has not shifted, which
+  // the offset check above established.
+  levelGesture(pin.point, 1);
 }
 
 function queuePaneScroll(direction: SyncPane): void {
@@ -10636,6 +11116,7 @@ function queuePaneScroll(direction: SyncPane): void {
       if (direction === "source") alignPreviewToScroll();
       else alignEditorToScroll();
     }
+    recordFollowTops();
   });
 }
 
@@ -10742,11 +11223,22 @@ function installPaneSync(): void {
       return;
     }
     if (doc.language === "html") {
-      if (settings.viewMode === "split") htmlPreview.blink(editor.cursorInfo().line);
+      if (settings.viewMode !== "split") return;
+      htmlPreview.blink(editor.cursorInfo().line);
       return;
     }
     if (settings.viewMode !== "split" || !previewLinesMapped) return;
     blinkAnchor(editor.cursorInfo().line);
+  });
+
+  // The release levels the preview with the caret's row. Not `click`: measured
+  // with real pointer input, a press and release in the editor can arrive with
+  // no click event at all (pointerdown, mousedown, pointerup, mouseup and
+  // nothing more), and the gesture was then silently dropped. The selection is
+  // already final here, and the capturing `pointerup` above has cleared
+  // `syncDragging`.
+  editorPane.addEventListener("mouseup", (event) => {
+    if (event.button === 0) levelFromSourceClick(event);
   });
 
   // Scrolling the source -> the preview follows the same fraction of the block
@@ -10782,12 +11274,48 @@ function installPaneSync(): void {
     suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
     caretCameFromPreview = true;
     try {
-      editor.revealLine(line, true, false);
+      // With Sync on the release levels the source with the clicked row, so the
+      // press only places the caret. With Sync off the block's first line is
+      // revealed near the top, as before.
+      if (settings.syncScroll && settings.viewMode === "split") editor.caretToLine(line);
+      else editor.revealLine(line, true, false);
     } finally {
       caretCameFromPreview = false;
     }
     blinkAnchor(line);
   });
+
+  // The release, not the press: nothing may scroll while a drag is in progress,
+  // and for a drag the row that matters is the one where it ended. The capturing
+  // `pointerup` above has already cleared `syncDragging`.
+  preview.addEventListener("mouseup", (event) => {
+    if (event.button !== 0 || !flowingPreviewShowing() || !gestureSyncAvailable()) return;
+    levelDomGesture(previewGesturePoint(event.clientX, event.clientY));
+  });
+  window.addEventListener("resize", resetSyncReference);
+  const debugWindow = window as unknown as ProseDebugWindow;
+  debugWindow.__mdraftDebug ??= {};
+  debugWindow.__mdraftDebug.syncState = () => ({
+    source: syncReference.source,
+    preview: syncReference.preview,
+    pinned: gesturePin !== null,
+    epoch: scrollOwnership.epoch,
+    pages: pagesScrollAvailable(),
+    // How many PDF anchors near the caret have a row on screen right now. The
+    // lookup selects that anchor's column, as a source scroll would.
+    rows: pagesScrollAvailable()
+      ? typstPdf!
+          .scrollAnchorsNear(editor.view.state.selection.main.head)
+          .filter((anchor) => typstPdf!.scrollRowFor(anchor) !== null).length
+      : null,
+    wordMap: preview.querySelector<HTMLElement>("[data-word-map]")?.dataset.wordMap ?? null,
+    dragging: syncDragging,
+    suppressEditor: Math.round(suppressEditorScrollUntil - performance.now()),
+    suppressPreview: Math.round(suppressPreviewScrollUntil - performance.now()),
+  });
+  // An image that decodes or a diagram that draws after the gesture changes the
+  // preview's height without any input from the reader.
+  new ResizeObserver(resolvePinnedGesture).observe(preview);
 
   // A double-click selects a word and is a deliberate "show me this" gesture, so
   // it may reveal the source. A drag only paints: moving the pane under the
@@ -11410,11 +11938,31 @@ function handleHtmlLine(line: number): void {
   suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
   caretCameFromPreview = true;
   try {
-    editor.revealLine(line, true, false);
+    // With Sync on the release levels the source (handleHtmlGesture); the press
+    // only places the caret.
+    if (settings.syncScroll && settings.viewMode === "split") editor.caretToLine(line);
+    else editor.revealLine(line, true, false);
   } finally {
     caretCameFromPreview = false;
   }
   htmlPreview.blink(line);
+}
+
+/** A pointer released in the guest: level the source with the clicked row. */
+function handleHtmlGesture(gesture: HtmlGesture): void {
+  if (doc.language !== "html" || !htmlPreview) return;
+  // The guest reports its own pointer; this window's drag flag never saw it.
+  if (htmlScrollDragging || htmlPreview.source() !== editor.getDoc()) return;
+  const range = gesture.word ? htmlPreview.wordRange(gesture.word) : null;
+  const point: GesturePoint =
+    range && gesture.row
+      ? {
+          pane: "preview",
+          offset: Math.min(range.from + gesture.at, Math.max(range.from, range.to - 1)),
+          y: rowCentre(gesture.row),
+        }
+      : { pane: "preview", offset: null, y: gesture.y };
+  void levelHtmlGesture(point);
 }
 
 /**
@@ -11438,12 +11986,12 @@ function handleHtmlSelection(selection: HtmlSelection): void {
   if (syncedSource && syncedSource.from === range.from && syncedSource.to === range.to) {
     editor.setSyncRange(range.from, range.to);
     editor.pulseSyncRange();
-    if (selection.reveal) editor.revealOffset(range.from);
+    if (selection.reveal && !gestureSyncAvailable()) editor.revealOffset(range.from);
     return;
   }
   syncedSource = range;
   editor.setSyncRange(range.from, range.to);
-  if (selection.reveal) editor.revealOffset(range.from);
+  if (selection.reveal && !gestureSyncAvailable()) editor.revealOffset(range.from);
 }
 
 /** Map a resolved guest URL back to the document folder, or null. */
@@ -11516,6 +12064,9 @@ function handleHtmlAction(id: string): void {
 
 function handleHtmlReady(layout: HtmlLayout): void {
   if (doc.language !== "html") return;
+  // A new guest starts at the default probe height.
+  if (syncReference.preview !== SYNC_MARGIN) publishSyncReference();
+  resolvePinnedGesture();
   syncedSource = null;
   editor.clearSyncRange();
   syncPreviewFromSource();
@@ -12626,6 +13177,7 @@ async function boot(): Promise<void> {
 
   htmlPreview = createHtmlPreview(previewPane, {
     onLine: handleHtmlLine,
+    onGesture: handleHtmlGesture,
     onSelection: handleHtmlSelection,
     onClear: () => {
       syncedSource = null;

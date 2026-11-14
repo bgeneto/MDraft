@@ -584,7 +584,11 @@ console.log("\n=== word-level sync ===");
     `${admonitionWord} -> ${admonitionPainted}`,
   );
 
-  const beforePreview = await evaluate(`document.getElementById("preview-pane").scrollTop`);
+  // A source double-click is a gesture: its own pane holds still, and the
+  // preview may move to bring the word level
+  // (docs/adr/2026-11-13-pointer-gesture-alignment.md). Until that ADR this
+  // asserted that the preview did not scroll; `npm run sync` measures how level.
+  const beforeSource = await evaluate(`document.querySelector(".cm-scroller").scrollTop`);
   const point = await evaluate(`(() => {
     const walker = document.createTreeWalker(document.querySelector(".cm-content"), NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
@@ -624,20 +628,24 @@ console.log("\n=== word-level sync ===");
         CSS.highlights?.get("mdraft-sync-peak");
       return highlight ? [...highlight].map((range) => range.toString()) : null;
     })()`);
-    const afterPreview = await evaluate(`document.getElementById("preview-pane").scrollTop`);
+    const afterSource = await evaluate(`document.querySelector(".cm-scroller").scrollTop`);
     check(
       Array.isArray(ranges) && ranges.join(" ").includes("AsciiDoc"),
       "a source word paints the preview",
       JSON.stringify(ranges),
     );
     check(
-      beforePreview === afterPreview,
-      "painting the preview does not scroll it",
-      `${beforePreview} -> ${afterPreview}`,
+      beforeSource === afterSource,
+      "a source double-click never scrolls the source",
+      `${beforeSource} -> ${afterSource}`,
     );
   } else {
     check(false, "a source word paints the preview", "the title word is not on screen");
-    check(false, "painting the preview does not scroll it", "the title word is not on screen");
+    check(
+      false,
+      "a source double-click never scrolls the source",
+      "the title word is not on screen",
+    );
   }
 
   const strongDrag = await evaluate(`(() => {

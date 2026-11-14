@@ -183,6 +183,8 @@ export interface EditorHandle {
   scrollToLine(line: number): void;
   /** Scroll `line` to the top of the editor; optionally move the caret. */
   revealLine(line: number, moveCaret?: boolean, focus?: boolean): void;
+  /** Put the caret on a line and scroll nothing: gesture alignment owns the scroll. */
+  caretToLine(line: number): void;
   /** Scroll a source position into view with the least movement; never moves the caret. */
   revealOffset(pos: number): void;
   /** Source line currently at the top of the visible editor area. */
@@ -1563,6 +1565,11 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
       view.scrollDOM.scrollTop = Math.max(0, block.top - view.scrollDOM.clientHeight * 0.12);
       if (moveCaret) view.dispatch({ selection: { anchor: pos } });
       if (focus) view.focus();
+    },
+
+    caretToLine(line) {
+      const target = Math.min(Math.max(Math.round(line), 1), view.state.doc.lines);
+      view.dispatch({ selection: { anchor: view.state.doc.line(target).from } });
     },
 
     revealOffset(pos) {

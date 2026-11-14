@@ -1496,7 +1496,7 @@ fn render<R: Runtime>(
     let typst = find_typst(app).ok_or_else(|| {
         format!(
             "Typst is not installed, so .typ documents cannot be previewed. \
-             Install it via Help › Install Typst... or manually from {DOWNLOAD_PAGE}."
+             Install it via Tools › Check or Install Typst... or manually from {DOWNLOAD_PAGE}."
         )
     })?;
 

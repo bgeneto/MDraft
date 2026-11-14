@@ -550,6 +550,28 @@ try {
       "a click in the preview does not move the caret",
       `${caretBefore.head} -> ${afterClick.head}`,
     );
+    // Gesture alignment (docs/adr/2026-11-13-pointer-gesture-alignment.md): the
+    // clicked line's source comes to the clicked height. The engine's map is by
+    // line, so the bound is one source row, not a pixel; at the start or end of
+    // the editor's range the row only has to be in view.
+    const answered = JSON.parse((await dataset("texpressoSource")) ?? "null");
+    const level = await editor(
+      `const from = Math.min(${Number(answered?.from) || 0}, view.state.doc.length);
+       const r = view.coordsAtPos(from);
+       const s = view.scrollDOM;
+       return r ? { y:(r.top+r.bottom)/2, row:r.bottom-r.top, top:s.scrollTop, max:s.scrollHeight-s.clientHeight } : null;`,
+    );
+    const clickedY =
+      (await evaluate(`document.querySelector(".texpresso-frame").getBoundingClientRect().top`)) +
+      box.y;
+    check(
+      level !== null &&
+        (Math.abs(level.y - clickedY) <= level.row + 2 ||
+          level.top <= 1 ||
+          level.top >= level.max - 1),
+      "a click in the preview brings its source line level, within one row",
+      JSON.stringify({ clickedY, level }),
+    );
   }
 
   console.log("=== scroll correspondence, both directions ===");

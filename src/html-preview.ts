@@ -55,8 +55,22 @@ export interface HtmlAccelerator {
   keys: string[];
 }
 
+/** A pointer gesture in the guest, in this window's screen pixels. */
+export interface HtmlGesture {
+  /** The pointer's height. */
+  y: number;
+  /** The clicked character's row, when verified text is under the pointer. */
+  row: { top: number; bottom: number } | null;
+  /** That text's identity; the host maps it through the preview's own table. */
+  word: HtmlSelection | null;
+  /** The clicked character's index inside `word`. */
+  at: number;
+}
+
 export interface HtmlPreviewCallbacks {
   onLine(line: number): void;
+  /** A click, double-click or settled drag was released in the guest. */
+  onGesture?(gesture: HtmlGesture): void;
   onSelection(selection: HtmlSelection): void;
   onClear(): void;
   onLink(href: string, raw: string): void;
@@ -105,6 +119,10 @@ export interface HtmlPreviewHandle {
   anchors(): Anchor[];
   baseUrl(): string | null;
   scrollAnchorsNear(offset: number): readonly HtmlScrollAnchor[];
+  /** Where the sync line crosses the guest viewport, in this window's pixels. */
+  setProbeHeight(screenY: number): void;
+  /** The active frame's top edge and zoom, to place guest geometry on screen. */
+  frameBox(): { top: number; scale: number } | null;
   measureScroll(
     source: string,
     anchors: readonly HtmlScrollAnchor[],
@@ -628,6 +646,45 @@ export function createHtmlPreview(
       callbacks.onLine(data.line);
       return;
     }
+    if (data.type === "gesture") {
+      const finite = (value: unknown): value is number =>
+        typeof value === "number" && Number.isFinite(value) && Math.abs(value) < 1e7;
+      if (!finite(data.y)) return;
+      const top = frame.frame.getBoundingClientRect().top;
+      const scale = frameScale(frame.frame);
+      const worded =
+        Number.isSafeInteger(data.n) &&
+        Number.isSafeInteger(data.index) &&
+        Number.isSafeInteger(data.start) &&
+        Number.isSafeInteger(data.end) &&
+        Number.isSafeInteger(data.at) &&
+        typeof data.sample === "string" &&
+        data.sample.length <= 120 &&
+        finite(data.top) &&
+        finite(data.bottom) &&
+        data.bottom > data.top;
+      callbacks.onGesture?.({
+        y: top + data.y * scale,
+        row: worded
+          ? {
+              top: top + (data.top as number) * scale,
+              bottom: top + (data.bottom as number) * scale,
+            }
+          : null,
+        word: worded
+          ? {
+              n: data.n as number,
+              index: data.index as number,
+              start: data.start as number,
+              end: data.end as number,
+              sample: data.sample as string,
+              reveal: false,
+            }
+          : null,
+        at: worded ? Math.max(0, data.at as number) : 0,
+      });
+      return;
+    }
     if (data.type === "select") {
       if (document.activeElement !== frame.frame) return;
       const n = Number(data.n);
@@ -852,6 +909,18 @@ export function createHtmlPreview(
 
     scrollAnchorsNear(offset) {
       return scrollIndex.near(offset);
+    },
+
+    setProbeHeight(screenY) {
+      if (!active) return;
+      const top = active.frame.getBoundingClientRect().top;
+      postTo(active, { type: "probeAt", y: (screenY - top) / frameScale(active.frame) });
+    },
+
+    frameBox() {
+      return active
+        ? { top: active.frame.getBoundingClientRect().top, scale: frameScale(active.frame) }
+        : null;
     },
 
     measureScroll(source, anchors) {

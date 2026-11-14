@@ -582,9 +582,13 @@
   // lookup. The selection that follows a pointer press on the pages is the
   // answer; any other selection change is the app's own bookkeeping.
   let pendingClick = 0;
+  let clickY = null;
   const installClicks = () => {
     const box = pagesBox();
     const arm = (event) => {
+      // The height that was clicked, below the pages' top edge: the same
+      // coordinate `reveal` takes, so the host can level the source with it.
+      clickY = event.clientY - box.getBoundingClientRect().top;
       clickDetail = event.type === "dblclick" ? 2 : event.detail || 1;
       pendingClick = performance.now();
       note(`click armed detail=${clickDetail} target=${event.target?.className ?? "?"}`);
@@ -605,6 +609,7 @@
           from: range.from,
           to: range.to,
           detail: clickDetail,
+          y: clickY,
         });
       }
       return result;
@@ -642,6 +647,11 @@
       select(message.file, message.from, message.to, message.blink === true);
     },
     clear: clearMarks,
+    // The host's sync line moved without anything scrolling: a click levelled
+    // the panes at another height, and `viewport` must report the line there.
+    reference(message) {
+      reference = Number(message.y) || reference;
+    },
     reveal(message) {
       if (!ensureOpen(message.file)) return;
       reference = Number(message.y) || reference;

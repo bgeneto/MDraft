@@ -363,6 +363,11 @@ try {
     menuAction("reveal") && !menuAction("reveal").disabled,
     "Reveal is offered for a saved file",
   );
+  check(
+    menuAction("copyPath")?.label === "Copy File Path" && !menuAction("copyPath").disabled,
+    "Copy File Path is offered for a saved file",
+    JSON.stringify(menuAction("copyPath") ?? null),
+  );
   const menuClosed = await evaluate(
     `(() => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
@@ -370,6 +375,44 @@ try {
     })()`,
   );
   check(menuClosed, "Escape closes the menu");
+
+  // The agent session cannot own the operating system clipboard, so a fake
+  // proves the action writes the tab's full path and nothing else.
+  const copiedPath = await evaluate(`(async () => {
+    const real = navigator.clipboard;
+    let copied = "";
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (text) => { copied = text; } },
+    });
+    try {
+      const tab = [...document.querySelectorAll(".doc-tab")].find(
+        (entry) => entry.querySelector(".doc-tab-name")?.textContent === "feature-tour.md",
+      );
+      if (!tab) return { error: "missing tab" };
+      const expected = tab.title;
+      const bounds = tab.getBoundingClientRect();
+      tab.dispatchEvent(new MouseEvent("contextmenu", {
+        bubbles: true, cancelable: true, button: 2,
+        clientX: bounds.left + 12, clientY: bounds.top + 12,
+      }));
+      const button = document.querySelector('.tab-menu-item[data-action="copyPath"]');
+      if (!button || button.disabled) return { error: "missing or disabled item" };
+      button.click();
+      for (let i = 0; i < 40 && copied === ""; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      return { copied, expected };
+    } finally {
+      if (real === undefined) delete navigator.clipboard;
+      else Object.defineProperty(navigator, "clipboard", { configurable: true, value: real });
+    }
+  })()`);
+  check(
+    copiedPath.copied === copiedPath.expected && copiedPath.copied.endsWith("feature-tour.md"),
+    "Copy File Path writes the tab's full path to the clipboard",
+    JSON.stringify(copiedPath),
+  );
 
   const tabOrder = () =>
     evaluate(

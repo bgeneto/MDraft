@@ -173,7 +173,10 @@ try {
     const r=v.coordsAtPos(v.state.doc.line(9).from+1);
     return r ? {x:r.left,y:(r.top+r.bottom)/2} : null;
   })()`);
-  const previewScroll = await evaluate('document.getElementById("preview-pane").scrollTop');
+  // A source click marks its counterpart and may bring it level; what it never
+  // does is scroll the source (docs/adr/2026-11-13-pointer-gesture-alignment.md).
+  // Until that ADR this asserted that the preview did not scroll.
+  const sourceScroll = await evaluate('document.querySelector(".cm-scroller").scrollTop');
   if (sourcePoint) {
     for (const type of ["mousePressed", "mouseReleased"])
       await send("Input.dispatchMouseEvent", {
@@ -186,12 +189,12 @@ try {
   }
   await delay(300);
   check(
-    "Source click blinks the preview without scrolling",
+    "Source click blinks the preview and never scrolls the source",
     (await evaluate(
       '!!(CSS.highlights.get("mdraft-sync") || CSS.highlights.get("mdraft-sync-peak"))',
     )) &&
       Math.abs(
-        (await evaluate('document.getElementById("preview-pane").scrollTop')) - previewScroll,
+        (await evaluate('document.querySelector(".cm-scroller").scrollTop')) - sourceScroll,
       ) < 2,
   );
 

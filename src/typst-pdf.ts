@@ -114,6 +114,8 @@ interface TextLine {
  * and neighbouring lines describe the gesture; they are not source offsets.
  */
 export interface TypstPageContext {
+  /** The pointed text row on screen, so the source can be levelled with it. */
+  row?: { top: number; bottom: number };
   sourceRange: {
     from: number;
     to: number;
@@ -1492,9 +1494,32 @@ export class TypstPdfPreview {
     return this.scrollRowFor(anchor)?.top ?? null;
   }
 
+  /**
+   * Where the anchor's row will be once its page is painted, from the page map.
+   * Good enough to scroll the page into view; the text layer then gives the row.
+   */
+  scrollRowEstimate(anchor: PdfScrollAnchor): { top: number; bottom: number } | null {
+    const page = this.pages[anchor.line.page - 1];
+    if (this.disposed || !page) return null;
+    const top = page.shell.getBoundingClientRect().top + anchor.line.top * this.fit;
+    return { top, bottom: top + 12 * this.fit };
+  }
+
   /** The anchor's text row on screen; null while its page is not painted. */
   scrollRowFor(anchor: PdfScrollAnchor): { top: number; bottom: number } | null {
-    if (this.disposed || !anchor.range.startContainer.isConnected) return null;
+    const node = anchor.range.startContainer;
+    if (this.disposed || !node.isConnected) return null;
+    // One glyph, not the anchor's whole range. A range that runs from one
+    // text-layer span to another takes in whatever lies between them in DOM
+    // order, so its box is not guaranteed to be one row. This is a precaution:
+    // on the sync fixture both measurements gave the same figures.
+    if (node.nodeType === Node.TEXT_NODE && anchor.range.startOffset < (node as Text).length) {
+      const glyph = document.createRange();
+      glyph.setStart(node, anchor.range.startOffset);
+      glyph.setEnd(node, anchor.range.startOffset + 1);
+      const box = glyph.getBoundingClientRect();
+      if (box.width && box.height) return { top: box.top, bottom: box.bottom };
+    }
     const rect = anchor.range.getBoundingClientRect();
     return rect.width && rect.height ? { top: rect.top, bottom: rect.bottom } : null;
   }
@@ -1878,6 +1903,12 @@ export class TypstPdfPreview {
     }
     const range = selection.getRangeAt(0);
     const context = this.contextForRange(range);
+    if (context) {
+      // The row where the selection ends: for a drag, where it was released.
+      const rects = Array.from(range.getClientRects()).filter((r) => r.width && r.height);
+      const last = rects[rects.length - 1];
+      if (last) context.row = { top: last.top, bottom: last.bottom };
+    }
     this.onContext(context, reveal);
   }
 
@@ -1907,8 +1938,18 @@ export class TypstPdfPreview {
     if (!start) return;
     const neighbours = this.neighbours(start.line);
     const word = this.sourceMap?.wordAt(start.line.id, start.offset) ?? null;
+    let row: { top: number; bottom: number } | undefined;
+    if (node instanceof Text && node.length) {
+      const glyph = document.createRange();
+      const at = Math.min(offset, node.length - 1);
+      glyph.setStart(node, at);
+      glyph.setEnd(node, at + 1);
+      const box = glyph.getBoundingClientRect();
+      if (box.height) row = { top: box.top, bottom: box.bottom };
+    }
     this.onContext(
       {
+        ...(row ? { row } : {}),
         sourceRange: word
           ? {
               from: word.from,

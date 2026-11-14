@@ -1185,13 +1185,6 @@ const sync = await evaluate(`(async () => {
   // document rather than as a pointer.
   const blinkLeftBehind = () => preview.querySelectorAll('.sync-blink').length;
   // Which preview block currently leads the pane, for the alignment assertion.
-  const topVisibleLine = () => {
-    const paneTop = previewPane.getBoundingClientRect().top;
-    for (const a of anchors) {
-      if (a.getBoundingClientRect().bottom > paneTop) return Number(a.dataset.line);
-    }
-    return -1;
-  };
   const contentBox = content.getBoundingClientRect();
 
   // At the default 16 px the whole visible source column can map to blocks that
@@ -1250,45 +1243,66 @@ const sync = await evaluate(`(async () => {
   const scrollAfterClick = previewPane.scrollTop;
   const caretAfterClick = cursorText();
 
-  // (4) click a column of source lines -> none of them may move the preview.
+  // (4) click a column of source lines -> each leaves the source where it was
+  //     and brings its block beside the clicked line
+  //     (docs/adr/2026-11-13-pointer-gesture-alignment.md). Until that ADR a
+  //     source click moved nothing; before that it pulled the block to the top
+  //     of the preview, which is the regression the "beside" half guards.
   //     The rendered preview is much taller than its markdown and the ratio
   //     varies by section, so which lines have their block below the preview
   //     fold is not predictable. Exercise the whole column instead of one
-  //     hand-picked line: revealing any of them is what used to throw the
-  //     alignment away.
+  //     hand-picked line. Pixel precision belongs to the sync suite; this phase
+  //     checks the rule.
   const visibleLines = [...document.querySelectorAll('.cm-line')].filter((el) => {
     const r = el.getBoundingClientRect();
     return r.top > contentBox.top + 8 && r.bottom < contentBox.bottom - 8;
   });
   const baseline = previewPane.scrollTop;
-  const topLineBeforeSourceClick = topVisibleLine();
+  const sourceBeforeSourceClick = scroller.scrollTop;
   const samples = [];
   for (const fraction of [0.2, 0.4, 0.6, 0.8, 0.95]) {
     const el = visibleLines[Math.min(visibleLines.length - 1, Math.floor(visibleLines.length * fraction))];
     if (!el) continue;
     const r = el.getBoundingClientRect();
     const at = { bubbles: true, clientX: r.left + 40, clientY: r.top + r.height / 2 };
+    const previewBeforeThisClick = previewPane.scrollTop;
     content.dispatchEvent(new MouseEvent('mousedown', at));
+    // The release is what levels the preview; the click is what blinks.
+    content.dispatchEvent(new MouseEvent('mouseup', at));
     content.dispatchEvent(new MouseEvent('click', at));
     await sleep(samples.length === 0 ? 120 : 400);
     const blinkNow = blinkLeftBehind();
     const line = Number(/Ln (\\d+)/.exec(cursorText())?.[1] ?? -1);
     const block = anchors.filter((a) => Number(a.dataset.line) <= line).pop() ?? null;
+    const box = block ? block.getBoundingClientRect() : null;
+    // Where the block was before the click answered: the case this phase needs.
+    const blockBelowFold = box
+      ? box.top + (previewPane.scrollTop - previewBeforeThisClick) > paneBox.bottom
+      : null;
+    // The caret's own row after the click; the source must not have moved.
+    const row = document.querySelector('.cm-activeLine')?.getBoundingClientRect() ?? r;
+    const rowY = row.top + row.height / 2;
     samples.push({
       fraction,
       line,
       scroll: Math.round(previewPane.scrollTop),
-      blockBelowFold: block ? block.getBoundingClientRect().top > paneBox.bottom : null,
+      blockBelowFold,
+      // The block spans the clicked height, give or take one row.
+      beside: box ? box.top - 30 <= rowY && rowY <= box.bottom + 30 : null,
       blink: blinkNow,
     });
   }
   await sleep(900);
   const blinkAfterClick = blinkLeftBehind();
   const scrollAfterSourceClick = previewPane.scrollTop;
-  const topLineAfterSourceClick = topVisibleLine();
+  const sourceAfterSourceClick = scroller.scrollTop;
   const maxDrift = samples.length
     ? Math.max(...samples.map((s) => Math.abs(s.scroll - baseline)))
     : -1;
+  const besideCases = samples.filter((s) => s.beside === true).length;
+  // The clicks leave the sync line at the last clicked height; later phases
+  // measure at the default line, and a resize is one of its reset points.
+  window.dispatchEvent(new Event('resize'));
   const offScreenCases = samples.filter((s) => s.blockBelowFold === true).length;
   const blinkedCases = samples.filter((s) => s.blink === 1).length;
   const clicked = samples.length ? samples[samples.length - 1].line : -1;
@@ -1315,8 +1329,10 @@ const sync = await evaluate(`(async () => {
     blinkedCases,
     scrollBeforeSourceClick: Math.round(baseline),
     scrollAfterSourceClick: Math.round(scrollAfterSourceClick),
-    topLineBeforeSourceClick,
-    topLineAfterSourceClick,
+    sourceBeforeSourceClick: Math.round(sourceBeforeSourceClick),
+    sourceAfterSourceClick: Math.round(sourceAfterSourceClick),
+    besideCases,
+    sampleCount: samples.length,
     clickedLine: clicked,
     foundMiddleBlock: Boolean(middle),
     scrollBeforeClick: Math.round(scrollBeforeClick),
@@ -1346,11 +1362,17 @@ check("scrolling never blinks", sync.blinkAfterScroll === 0);
 check("clicking the source blinks the matching block", sync.blinkedCases >= 1);
 check("the blink clears itself", sync.blinkAfterClick === 0);
 check("at least one clicked line had its block below the preview fold", sync.offScreenCases >= 1);
-check("no source click moves the preview", sync.maxDrift >= 0 && sync.maxDrift < 4);
 check(
-  "clicking the source keeps the panes aligned",
-  sync.topLineAfterSourceClick === sync.topLineBeforeSourceClick,
+  "a source click never scrolls the source",
+  Math.abs(sync.sourceAfterSourceClick - sync.sourceBeforeSourceClick) < 1,
+  `${sync.sourceBeforeSourceClick} -> ${sync.sourceAfterSourceClick}`,
 );
+check(
+  "every source click brings its block beside the clicked line",
+  sync.sampleCount >= 4 && sync.besideCases === sync.sampleCount,
+  `${sync.besideCases}/${sync.sampleCount}`,
+);
+check("a source click on an off-screen block moves the preview", sync.maxDrift >= 4);
 check("source click lands lower in the document", sync.clickedLine > 20);
 
 // ---------------------------------------------------------------------------
@@ -1416,10 +1438,16 @@ const interpolation = await evaluate(`(async () => {
     if (!setFonts(editorPx, previewPx)) return { ok: false, editorPx, previewPx };
     await sleep(500);
 
-    // Put the block in the editor, then move it from 12% down to the top so the
-    // top visible line is inside it rather than in the block before.
-    anchors[bestIndex].dispatchEvent(
-      new MouseEvent('mousedown', { bubbles: true, clientX: 0, clientY: 0 }));
+    // Put the block in the editor, 12% down, then move it to the top so the top
+    // visible line is inside it rather than in the block before. The scroll is
+    // written directly: a preview press used to reveal the block there, and with
+    // Sync on it now only places the caret (the release levels the panes).
+    const view = document.querySelector('.cm-content').cmTile.root.view;
+    const blockLine = Math.min(view.state.doc.lines, Number(anchors[bestIndex].dataset.line));
+    scroller.scrollTop = Math.max(
+      0,
+      view.lineBlockAt(view.state.doc.line(blockLine).from).top - scroller.clientHeight * 0.12,
+    );
     await sleep(500);
     const start = Math.max(0, scroller.scrollTop + scroller.clientHeight * 0.12 + 2);
     const samples = [];

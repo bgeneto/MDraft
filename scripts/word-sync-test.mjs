@@ -418,9 +418,22 @@ console.log("\n=== real input ===");
       painted === "sanciona",
       `${painted} in ${elapsed} ms`,
     );
+    // docs/adr/2026-11-13-pointer-gesture-alignment.md: the gesture's own pane
+    // holds still, and the other pane brings the same word to the same height.
+    // Until that ADR this check was "does not scroll when the word is visible".
+    check("a double-click never scrolls the preview", before.preview === after.preview);
+    await sleep(150);
+    const levelled = await rectOf("sanciona", ".cm-content");
+    // The word is on the document's third line and the view starts at the top:
+    // when the preview row is lower than the source row, the source would have
+    // to scroll above its start. It then stays at its limit with the word in
+    // view, which is the clamped case; `npm run sync` measures the level one.
     check(
-      "a double-click does not scroll when the word is visible",
-      before.source === after.source,
+      "a double-click levels the source word, or holds it in view at the scroll limit",
+      levelled !== null && (Math.abs(levelled.y - word.y) <= 1.5 || after.source === 0),
+      levelled
+        ? `${(levelled.y - word.y).toFixed(2)} px, source at ${after.source}`
+        : "the source word is not drawn",
     );
     check("the highlight arrives within a frame budget", elapsed < 250, `${elapsed} ms`);
 
@@ -493,7 +506,16 @@ console.log("\n=== source to preview ===");
       Array.isArray(ranges) && ranges.length > 0 && ranges.join(" ").includes("sanciona"),
       JSON.stringify(ranges),
     );
-    check("painting the preview does not scroll it", before.preview === after.preview);
+    // The source double-click is a gesture too: its own pane holds still and
+    // the preview brings the word level. This check used to be "painting the
+    // preview does not scroll it".
+    check("a source double-click never scrolls the source", before.source === after.source);
+    const levelled = await rectOf("sanciona", "#preview");
+    check(
+      "a source double-click levels the preview word with it",
+      levelled !== null && Math.abs(levelled.y - word.y) <= 1.5,
+      levelled ? `${(levelled.y - word.y).toFixed(2)} px` : "the preview word is not drawn",
+    );
 
     await send("Input.insertText", { text: "X" });
     await sleep(300);

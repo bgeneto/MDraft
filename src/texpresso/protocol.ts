@@ -50,6 +50,8 @@ export type HostMessage =
   | { type: "clear" }
   /** Bring fractional `line` of `file` to `y` pixels below the frame's top. */
   | { type: "reveal"; file: string; line: number; y: number }
+  /** The sync line is now `y` pixels below the frame's top; nothing scrolls. */
+  | { type: "reference"; y: number }
   | { type: "zoom"; factor: number }
   | { type: "theme"; theme: TexpressoTheme }
   | { type: "export" }
@@ -77,7 +79,15 @@ export type FrameMessage =
       gesture: boolean;
     }
   | { type: "scrolled"; seq: number; scrollTop: number | null }
-  | { type: "source"; file: string | null; from: number; to: number; detail: number }
+  /** `y`: the clicked height below the frame's top, when the frame knows it. */
+  | {
+      type: "source";
+      file: string | null;
+      from: number;
+      to: number;
+      detail: number;
+      y: number | null;
+    }
   | { type: "input" }
   | { type: "key"; key: "Escape" }
   | { type: "zoom-wheel"; deltaY: number }
@@ -163,7 +173,14 @@ export function parseFrameMessage(data: unknown): FrameMessage | null {
         : null;
     case "source":
       return nullable(m.file, str) && int(m.from) && int(m.to) && m.to >= m.from && int(m.detail)
-        ? { type: "source", file: m.file, from: m.from, to: m.to, detail: m.detail }
+        ? {
+            type: "source",
+            file: m.file,
+            from: m.from,
+            to: m.to,
+            detail: m.detail,
+            y: num(m.y) ? m.y : null,
+          }
         : null;
     case "input":
       return { type: "input" };

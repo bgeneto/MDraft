@@ -6,6 +6,9 @@ import path from "node:path";
 
 const port = process.argv[2] ?? "9222";
 const baseline = process.env.MDRAFT_SYNC_BASELINE === "1";
+// MDRAFT_SYNC_MODES=pages,html narrows the run to those adapters and prints
+// every sample: the loop for working on one adapter without the other four.
+const onlyModes = (process.env.MDRAFT_SYNC_MODES ?? "").split(",").filter(Boolean);
 const repo = process.env.MDRAFT_REPO ?? process.cwd();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -21,6 +24,18 @@ class Client {
       try {
         reply = JSON.parse(data);
       } catch {
+        return;
+      }
+      // An exception in a page handler is otherwise silent here: the click that
+      // caused it simply appears to do nothing.
+      if (reply.method === "Runtime.exceptionThrown") {
+        const thrown = reply.params?.exceptionDetails;
+        console.log(
+          `  EXCEPTION ${thrown?.exception?.description ?? thrown?.text ?? "unknown"}`.slice(
+            0,
+            600,
+          ),
+        );
         return;
       }
       const entry = this.pending.get(reply.id);
@@ -119,7 +134,7 @@ const installProbe = `window.__scrollProbe = (word, root = document.body) => {
     const range = document.createRange();
     range.setStart(node, at); range.setEnd(node, at + word.length);
     const r = range.getBoundingClientRect();
-    if (r.width && r.height) return { top:r.top, left:r.left, height:r.height };
+    if (r.width && r.height) return { top:r.top, left:r.left, height:r.height, centre:(r.top+r.bottom)/2 };
   }
   return null;
 }; 'ok'`;
@@ -227,12 +242,18 @@ async function measureWord(word, mode) {
     frameTop = frame.top;
     scale = frame.scale;
   }
-  const previewTopAt = mode === "html" ? frameTop + b.top * scale : b.top;
+  // Row centres: the solver levels the rows, and two rows of different font
+  // sizes that are level do not share a top.
+  const previewTopAt =
+    (mode === "html" ? frameTop + (b.top + b.height / 2) * scale : b.top + b.height / 2) -
+    a.height / 2;
   return {
     error: Math.abs(a.top - previewTopAt),
     height: Math.max(a.height, b.height * (mode === "html" ? scale : 1)),
     sourceTop: a.top,
+    sourceHeight: a.height,
     previewTop: previewTopAt,
+    previewHeight: b.height * (mode === "html" ? scale : 1),
     scale,
   };
 }
@@ -277,7 +298,7 @@ async function scrollSourceTo(word) {
       // necessarily visible in both panes. Probe the same shared reference as
       // the solver rather than demanding a word behind the toolbar align.
       const commonTop=Math.max(v.scrollDOM.getBoundingClientRect().top,document.getElementById('preview-pane').getBoundingClientRect().top);
-      return r ? { top:r.top, paneTop:commonTop } : null;
+      return r ? { top:(r.top+r.bottom)/2, paneTop:commonTop } : null;
     })()`);
     if (point) {
       const delta = point.top - point.paneTop - 12;
@@ -297,12 +318,12 @@ async function scrollPreviewTo(word, mode) {
   );
   if (!target) return false;
   if (mode === "html") {
-    await preview.evaluate(`window.scrollTo(0, window.scrollY + ${target.top} - 12)`);
+    await preview.evaluate(`window.scrollTo(0, window.scrollY + ${target.centre} - 12)`);
   } else {
     await page.evaluate(`(() => {
       const p=document.getElementById('preview-pane');
       p.dispatchEvent(new WheelEvent('wheel',{clientX:${target.left + 2},clientY:p.getBoundingClientRect().top+12,bubbles:true}));
-      p.scrollTop += ${target.top} - p.getBoundingClientRect().top - 12;
+      p.scrollTop += ${target.centre} - p.getBoundingClientRect().top - 12;
     })()`);
   }
   return true;
@@ -334,9 +355,15 @@ async function paneState() {
     const v=${view};
     const s=v.scrollDOM.getBoundingClientRect();
     const p=document.getElementById('preview-pane').getBoundingClientRect();
-    return { top:Math.max(s.top,p.top), bottom:Math.min(s.bottom,p.bottom), source:v.scrollDOM.scrollTop };
+    const pane=document.getElementById('preview-pane');
+    return { top:Math.max(s.top,p.top), bottom:Math.min(s.bottom,p.bottom), source:v.scrollDOM.scrollTop,
+      sourceMax:v.scrollDOM.scrollHeight-v.scrollDOM.clientHeight, previewMax:pane.scrollHeight-pane.clientHeight };
   })()`);
   state.preview = await previewTop();
+  if (currentMode === "html")
+    state.previewMax = await guest.evaluate(
+      "Math.max(document.documentElement.scrollHeight, document.body.scrollHeight) - window.innerHeight",
+    );
   return state;
 }
 
@@ -389,7 +416,12 @@ async function placeWord(direction, word, mode, y) {
     if (!box) return false;
     const delta = centre(box) - y;
     if (Math.abs(delta) < 1 && box.exact !== false) return true;
-    if (direction === "source") await page.evaluate(`${view}.scrollDOM.scrollTop += ${delta}`);
+    if (direction === "source")
+      await page.evaluate(`(() => {
+        const v=${view};
+        document.getElementById('editor-pane').dispatchEvent(new WheelEvent('wheel',{bubbles:true}));
+        v.scrollDOM.scrollTop += ${delta};
+      })()`);
     else if (mode === "html")
       await guest.evaluate(`window.scrollTo(0, window.scrollY + ${delta / (box.scale ?? 1)})`);
     else
@@ -413,10 +445,25 @@ async function clickAt(x, y) {
   await page.send("Input.dispatchMouseEvent", { ...at, type: "mouseReleased", buttons: 0 });
 }
 
+/** Adapters whose gestures level the other pane; the rest are only recorded. */
+const LEVEL_MODES = new Set(["markdown", "asciidoc", "document", "pages", "html"]);
+
 async function probeGestures(mode) {
   if (mode === "html") await guest.evaluate(installBoxProbe);
   else await page.evaluate(installBoxProbe);
   const result = { mode, gestures: {} };
+  if (mode === "pages") {
+    // The PDF's anchors are rebuilt after a re-render; a click before that has
+    // nothing to measure. Wait for them, and say how long it took.
+    const started = Date.now();
+    let state = null;
+    while (Date.now() - started < 10_000) {
+      state = await page.evaluate(`window.__mdraftDebug?.syncState?.() ?? null`);
+      if (state?.rows > 0) break;
+      await sleep(250);
+    }
+    console.log(`  PAGES-ANCHORS after ${Date.now() - started} ms: ${JSON.stringify(state)}`);
+  }
   for (const direction of ["source", "preview"]) {
     const samples = [];
     let unplaced = 0;
@@ -446,36 +493,148 @@ async function probeGestures(mode) {
       await clickAt(Math.min(own.left + 6, (own.left + own.right) / 2), centre(own));
       await sleep(400);
       const after = await paneState();
+      const state = onlyModes.length
+        ? await page.evaluate(`window.__mdraftDebug?.syncState?.() ?? null`)
+        : undefined;
       const a = await sourceBox(word);
       const b = await previewBox(word, mode);
       const other = direction === "source" ? b : a;
+      const otherPane = direction === "source" ? "preview" : "source";
+      // A second identical click has nothing left to do.
+      let repeatMoved = null;
+      // One wheel tick in the clicked pane: the other pane may follow by the
+      // local slope, and must not jump back to an older alignment.
+      let tick = null;
+      if (i % 4 === 0) {
+        await clickAt(Math.min(own.left + 6, (own.left + own.right) / 2), centre(own));
+        await sleep(300);
+        const again = await paneState();
+        repeatMoved = Math.abs(again[otherPane] - after[otherPane]);
+        const wheelX = Math.min(own.left + 6, (own.left + own.right) / 2);
+        await page.send("Input.dispatchMouseEvent", {
+          type: "mouseWheel",
+          x: wheelX,
+          y: centre(own),
+          deltaX: 0,
+          deltaY: 60,
+        });
+        await sleep(450);
+        const ticked = await paneState();
+        // A second tick is the reference: it shows what one tick does here when
+        // nothing is left over from the click.
+        await page.send("Input.dispatchMouseEvent", {
+          type: "mouseWheel",
+          x: wheelX,
+          y: centre(own),
+          deltaX: 0,
+          deltaY: 60,
+        });
+        await sleep(450);
+        const twice = await paneState();
+        tick = {
+          own: ticked[direction] - again[direction],
+          other: ticked[otherPane] - again[otherPane],
+          nextOwn: twice[direction] - ticked[direction],
+          nextOther: twice[otherPane] - ticked[otherPane],
+        };
+      }
       samples.push({
+        state,
+        repeatMoved,
+        tick,
         word,
         height: Math.round(centre(own) - band.top),
         // Null when the counterpart is not laid out at all (an unpainted page).
         error: a && b ? Math.abs(centre(a) - centre(b)) : null,
+        // The other pane is at the start or end of its range: the exact height
+        // may be out of reach, and the counterpart only has to be on screen.
+        clamped: after[otherPane] <= 1 || after[otherPane] >= after[`${otherPane}Max`] - 1,
         visible: !!other && centre(other) >= after.top && centre(other) <= after.bottom,
         ownMoved: Math.abs(after[direction] - before[direction]),
-        otherMoved: Math.abs(
-          after[direction === "source" ? "preview" : "source"] -
-            before[direction === "source" ? "preview" : "source"],
-        ),
+        otherMoved: Math.abs(after[otherPane] - before[otherPane]),
       });
     }
-    const errors = samples.map((sample) => sample.error).filter((error) => error !== null);
+    const reachable = samples.filter((sample) => !sample.clamped);
+    const errors = reachable.map((sample) => sample.error).filter((error) => error !== null);
     const summary = {
       count: samples.length,
       unplaced,
-      unmeasured: samples.length - errors.length,
+      unmeasured: reachable.length - errors.length,
+      clamped: samples.length - reachable.length,
+      clampedHidden: samples.filter((sample) => sample.clamped && !sample.visible).length,
       median: percentile(errors, 0.5),
       p95: percentile(errors, 0.95),
       max: errors.length ? Math.max(...errors) : null,
       counterpartVisible: samples.filter((sample) => sample.visible).length,
       ownPaneMoved: samples.filter((sample) => sample.ownMoved > 0.5).length,
       otherPaneMoved: samples.filter((sample) => sample.otherMoved > 0.5).length,
+      repeatMoved: samples.filter((sample) => sample.repeatMoved > 0.5).length,
+      // The first tick after a click must do what the next tick does: the
+      // local slope, which is 3.5 source pixels per preview pixel in the
+      // two-column PDF and under 1 in prose. A first tick that does much more,
+      // or moves the other pane backwards, is the snap back to an older
+      // alignment. The allowance covers the bounded levelling of a clamped click.
+      tickJumps: samples.filter(
+        (sample) =>
+          sample.tick &&
+          Math.abs(sample.tick.own) > 1 &&
+          (Math.abs(sample.tick.other - sample.tick.nextOther) >
+            0.5 * Math.abs(sample.tick.nextOther) + 20 ||
+            sample.tick.other * sample.tick.own < -2),
+      ).length,
+      ticks: samples.filter((sample) => sample.tick && Math.abs(sample.tick.own) > 1).length,
     };
     console.log(`  GESTURE ${mode} ${direction}: ${JSON.stringify(summary)}`);
+    if (onlyModes.length)
+      console.log(
+        `  SYNC-STATE ${mode} ${direction}: ${JSON.stringify(
+          await page.evaluate(`window.__mdraftDebug?.syncState?.() ?? null`),
+        )}`,
+      );
+    for (const sample of samples)
+      if (onlyModes.length || sample.error === null || sample.error > 1 || sample.repeatMoved > 0.5)
+        console.log(`  GESTURE-SAMPLE ${mode} ${direction}: ${JSON.stringify(sample)}`);
     result.gestures[direction] = { ...summary, samples };
+    if (baseline || !LEVEL_MODES.has(mode)) continue;
+    const label = `${mode}: a click in the ${direction}`;
+    check(
+      summary.count >= 36 && summary.unmeasured === 0 && errors.length >= 30,
+      `${label} is measurable at every probe`,
+      JSON.stringify({
+        count: summary.count,
+        unplaced,
+        unmeasured: summary.unmeasured,
+        clamped: summary.clamped,
+      }),
+    );
+    check(
+      summary.clampedHidden === 0,
+      `${label} whose exact height is out of reach still shows its counterpart`,
+      JSON.stringify({ clamped: summary.clamped, hidden: summary.clampedHidden }),
+    );
+    check(
+      summary.median !== null && summary.median <= 0.5 && summary.p95 <= 1,
+      `${label} puts its counterpart level (median <= 0.5px, p95 <= 1px)`,
+      JSON.stringify({ median: summary.median, p95: summary.p95, max: summary.max }),
+    );
+    check(
+      summary.ownPaneMoved === 0,
+      `${label} never scrolls that pane`,
+      `${summary.ownPaneMoved}`,
+    );
+    check(
+      summary.repeatMoved === 0,
+      `${label}, repeated, writes nothing`,
+      `${summary.repeatMoved}`,
+    );
+    // Two columns: a tick that carries the sync line across a column or page
+    // boundary moves the other pane by a column, click or no click. One such
+    // crossing in ten ticks is the fixture, not a regression.
+    check(
+      summary.ticks >= 5 && summary.tickJumps <= (mode === "pages" ? 1 : 0),
+      `${label} leaves scrolling continuous: the next wheel tick does not jump`,
+      JSON.stringify({ ticks: summary.ticks, jumps: summary.tickJumps }),
+    );
   }
   return result;
 }
@@ -576,6 +735,7 @@ try {
     ["two-columns.typ", "pages"],
     ["prose.html", "html"],
   ]) {
+    if (onlyModes.length && !onlyModes.includes(mode)) continue;
     currentMode = mode;
     await invoke("plugin:event|emit", {
       event: "open-files",
@@ -625,6 +785,8 @@ try {
           error: measured.error,
           height: measured.height,
         });
+        if (onlyModes.length)
+          console.log(`  SAMPLE ${mode} ${direction} ${word}: ${JSON.stringify(measured)}`);
       }
     }
     const after = await page.evaluate(
@@ -674,6 +836,15 @@ try {
     }
     evidence.push(metrics);
 
+    // The gesture probe runs on the preview the precision loop just measured,
+    // before the lifecycle checks below re-render it. The baseline records what
+    // a click did before gesture alignment; otherwise the result is asserted.
+    // A click leaves the sync line at the clicked height, and the checks that
+    // follow measure at the default line: a resize is one of its reset points.
+    metrics.gestures = (await probeGestures(mode)).gestures;
+    await page.evaluate(`window.dispatchEvent(new Event('resize'))`);
+    await sleep(200);
+
     if (!baseline && (mode === "markdown" || mode === "html")) {
       for (const level of [50, 150, 300]) await checkZoom(mode, level);
     }
@@ -695,6 +866,20 @@ try {
       check(
         Math.abs((await previewTop()) - disabled) < 1,
         `${mode}: disabled sync does not move the preview`,
+      );
+      // The Sync toggle is the off switch for gesture alignment too.
+      const offBefore = await paneState();
+      const editorBox = await page.evaluate(
+        `(() => { const r=${view}.contentDOM.getBoundingClientRect(); return { x:r.left+60, y:(Math.max(r.top,${offBefore.top})+${offBefore.bottom})/2 }; })()`,
+      );
+      await clickAt(editorBox.x, editorBox.y);
+      await sleep(350);
+      const offAfter = await paneState();
+      check(
+        Math.abs(offAfter.preview - offBefore.preview) < 1 &&
+          Math.abs(offAfter.source - offBefore.source) < 1,
+        `${mode}: with sync off a source click moves neither pane`,
+        JSON.stringify({ preview: offAfter.preview - offBefore.preview }),
       );
       await menu("view.syncScroll");
       await menu("view.source");
@@ -757,10 +942,6 @@ try {
         JSON.stringify({ before, after }),
       );
     }
-
-    // Recorded, not asserted, until the gesture handlers exist: the baseline is
-    // what a click does today. Last in the mode, because it moves the caret.
-    if (baseline) metrics.gestures = (await probeGestures(mode)).gestures;
 
     guest?.ws.close();
     guest = null;
