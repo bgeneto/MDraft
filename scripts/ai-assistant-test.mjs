@@ -3809,7 +3809,7 @@ try {
     );
     check(
       "the note counts the customised prompt",
-      String(counted ?? "").includes("1 of 16"),
+      String(counted ?? "").includes("1 of 17"),
       String(counted),
     );
     check("Reset is enabled for a clean file", (await resetDisabled()) === false);
