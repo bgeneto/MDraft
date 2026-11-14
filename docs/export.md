@@ -182,29 +182,36 @@ for the format currently selected in the panel. The direct PDF, pandoc formats,
 Typst PDF and HTML export know their output path. **PDF (opens browser)** does
 not, because the browser owns the save path.
 
-## Installing pandoc and Typst
+## Installing pandoc, Typst and the LaTeX engine
 
-Both are optional and neither is bundled.
+All three are optional and none is bundled. The first launch of a profile shows
+**Optional tools** once when something is missing; **Tools › Optional Tools…**
+reopens it. Each row names what the tool unlocks, its approximate download and
+whether it is already present. Pandoc is selected by default; Typst and the
+bundled TeX engine are opt-in.
 
-- **Tools › Check or Install Pandoc…** downloads the official release, checks
-  the archive against the SHA-256 GitHub publishes, and unpacks it into MDraft's
-  own data folder on Windows, Linux and macOS. It does not install system-wide
-  and needs no administrator rights.
-- **Tools › Check or Install Typst…** downloads the official compiler, checks
-  the archive against the SHA-256 GitHub publishes, and unpacks it into the same
-  application data area on Windows and Linux. On macOS the command opens the
-  official download page instead; install it with your package manager or from
-  that page. Typst is used for `.typ` previews and for PDF export, and is a
-  single executable with no runtime dependencies.
+Pandoc and Typst are downloaded from their official releases, checked against
+the SHA-256 GitHub publishes, and unpacked into MDraft's own data folder. The
+bundled TeX engine is downloaded from its pinned origin, verified file by file,
+and its packages follow on demand. Nothing is installed system-wide and no
+administrator rights are needed. Typst on macOS is the exception: automatic
+installation is unavailable there, so the row opens the official download page
+instead.
 
-A copy on `PATH` is also found. A copy MDraft installed itself takes precedence
-over the one on `PATH`. Typst can be installed with a package manager
-(`cargo install typst-cli`, `apt install typst`, `brew install typst`) or from
-the [Typst download page](https://typst.app/open-source/#download).
+A copy on `PATH` is also found, and a copy MDraft installed itself takes
+precedence over the one on `PATH`. Typst can also be installed with a package
+manager (`cargo install typst-cli`, `apt install typst`, `brew install typst`)
+or from the [Typst download page](https://typst.app/open-source/#download).
+
+Downloads continue in the background when the dialog closes, and the status bar
+shows the active tool. Each install is bounded to ten minutes and stops with the
+application: there is no Cancel control and nothing resumes after a restart. A
+partial TeX install keeps only verified files, and the next attempt fetches the
+rest.
 
 **Preferences › Export** shows whether each is installed and offers the same
-install or update action, plus one button per tool that opens its folder in the
-system file manager. The install path is not printed there.
+setup action, plus one button per tool that opens its folder in the system file
+manager. The install path is not printed there.
 
 ## Fidelity and known gaps
 

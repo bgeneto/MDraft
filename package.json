@@ -58,6 +58,7 @@
     "html": "node scripts/html-preview-test.mjs",
     "export": "node scripts/export-test.mjs",
     "export:paths:unit": "node scripts/export-paths-unit.mjs",
+    "optional-tools:unit": "node scripts/optional-tools-unit.mjs",
     "export:browser": "node scripts/export-browser-test.mjs",
     "pdf:visual": "node scripts/pdf-visual-check.mjs",
     "pdf:native": "node scripts/pdf-native-test.mjs",

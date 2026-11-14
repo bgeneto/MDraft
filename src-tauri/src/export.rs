@@ -14,6 +14,7 @@
 //!   the application's own data directory; nothing is written to `/usr`, to
 //!   `Program Files`, or to the registry, and no elevation is ever requested.
 
+use crate::optional_tools::{self, Phase, Progress, Tool};
 use crate::settings::{AppState, ExportFormat};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
@@ -22,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Runtime};
 
 /// The API endpoint that lists the current pandoc release and its assets.
@@ -57,7 +58,7 @@ fn exit_hint(code: Option<i32>) -> Option<&'static str> {
     match code {
         Some(PANDOC_PDF_PROGRAM_NOT_FOUND) => Some(
             "PDF export needs Typst, and it was not found.\n\
-             Use Help › Install Typst, or install it yourself from \
+             Use Tools › Optional Tools…, or install it yourself from \
              https://typst.app/open-source/#download — it is a single executable with no \
              dependencies, and it will be picked up from PATH.",
         ),
@@ -1096,7 +1097,7 @@ fn run_pandoc(
         // user an empty document.
         return Err(format!(
             "Pandoc reported success but wrote nothing to {}.\n\nFor PDF this normally means Typst \
-             is not installed; use Help › Install Typst.",
+             is not installed; use Tools › Optional Tools….",
             target.display()
         ));
     }
@@ -1657,6 +1658,8 @@ struct Asset {
     browser_download_url: String,
     /// `sha256:<hex>`, published by GitHub for every release asset.
     digest: Option<String>,
+    /// The compressed size GitHub reports, used for the progress total.
+    size: Option<u64>,
 }
 
 /// Lowercase hex SHA-256, written out byte by byte so no formatting trait of the
@@ -1799,8 +1802,15 @@ fn extract_binary(archive: &[u8]) -> Result<Vec<u8>, String> {
 /// Kept separate from [`install`] so the whole download-verify-unpack contract
 /// can be exercised without an `AppHandle` — see the ignored test at the bottom
 /// of this file.
-fn download_binary(agent: &ureq::Agent) -> Result<(String, Vec<u8>), String> {
+fn download_binary(
+    agent: &ureq::Agent,
+    mut progress: impl FnMut(Progress),
+) -> Result<(String, Vec<u8>), String> {
+    let deadline = optional_tools::deadline();
     let release = fetch_release(agent)?;
+    // The release lookup is one request too. If it used most of the window, the
+    // archive read must not start a second one.
+    optional_tools::check_deadline(deadline)?;
     let suffix = asset_suffix()?;
 
     let asset = release
@@ -1828,16 +1838,42 @@ fn download_binary(agent: &ureq::Agent) -> Result<(String, Vec<u8>), String> {
         })?
         .to_lowercase();
 
-    let bytes = agent
+    let total = asset.size;
+    progress(Progress {
+        tool: Tool::Pandoc,
+        phase: Phase::Downloading,
+        received: 0,
+        total,
+    });
+    let mut response = agent
         .get(&asset.browser_download_url)
         .call()
-        .map_err(|e| format!("Downloading {} failed: {e}", asset.name))?
-        .body_mut()
-        .with_config()
-        .limit(MAX_ARCHIVE_BYTES)
-        .read_to_vec()
-        .map_err(|e| format!("Could not read {}: {e}", asset.name))?;
+        .map_err(|e| format!("Downloading {} failed: {e}", asset.name))?;
+    let mut last = Instant::now();
+    let bytes = {
+        let mut reader = response.body_mut().as_reader();
+        optional_tools::read_to_vec_bounded(&mut reader, MAX_ARCHIVE_BYTES, deadline, |received| {
+            // 64 KB chunks would flood the webview; ten updates per second is
+            // enough for a progress bar and keeps the event loop free.
+            if last.elapsed() >= Duration::from_millis(100) {
+                last = Instant::now();
+                progress(Progress {
+                    tool: Tool::Pandoc,
+                    phase: Phase::Downloading,
+                    received,
+                    total,
+                });
+            }
+        })
+        .map_err(|error| format!("Could not read {}: {error}", asset.name))?
+    };
 
+    progress(Progress {
+        tool: Tool::Pandoc,
+        phase: Phase::Verifying,
+        received: bytes.len() as u64,
+        total,
+    });
     let actual = sha256_hex(&bytes);
     if actual != expected {
         return Err(format!(
@@ -1847,6 +1883,12 @@ fn download_binary(agent: &ureq::Agent) -> Result<(String, Vec<u8>), String> {
         ));
     }
 
+    progress(Progress {
+        tool: Tool::Pandoc,
+        phase: Phase::Unpacking,
+        received: bytes.len() as u64,
+        total,
+    });
     Ok((release.tag_name, extract_binary(&bytes)?))
 }
 
@@ -1861,7 +1903,9 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> Result<PandocStatus, String> {
     let _install = PANDOC_INSTALL
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let (tag, binary) = download_binary(&http_agent())?;
+    let (tag, binary) = download_binary(&http_agent(), |progress| {
+        optional_tools::emit(app, progress);
+    })?;
 
     let root =
         managed_root(app).ok_or_else(|| "No writable application data directory.".to_string())?;
@@ -1890,6 +1934,15 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> Result<PandocStatus, String> {
         );
     }
 
+    optional_tools::emit(
+        app,
+        Progress {
+            tool: Tool::Pandoc,
+            phase: Phase::Ready,
+            received: 0,
+            total: None,
+        },
+    );
     Ok(status(app))
 }
 
@@ -2763,7 +2816,8 @@ mod tests {
     #[ignore = "downloads ~40 MB from GitHub"]
     fn downloading_pandoc_yields_a_runnable_binary() {
         let agent = http_agent();
-        let (tag, binary) = download_binary(&agent).expect("the installer contract still holds");
+        let (tag, binary) =
+            download_binary(&agent, |_| {}).expect("the installer contract still holds");
         assert!(!tag.is_empty(), "the release has no tag");
 
         assert!(

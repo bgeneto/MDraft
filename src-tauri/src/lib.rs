@@ -16,6 +16,7 @@ mod launch;
 #[cfg(target_os = "linux")]
 mod linux_webkit_env;
 mod menu;
+mod optional_tools;
 mod print;
 mod recovery;
 mod settings;

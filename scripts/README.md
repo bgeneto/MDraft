@@ -14,7 +14,7 @@ already-built isolated binary. On Windows invoke every cargo/Tauri command throu
 | `npm run repo:hygiene:history` | Also inspect all reachable HEAD trees and commit identities |
 | `npm run repo:hygiene:test` | Real temporary-Git regressions, including forced additions and historical exposure |
 | `npm run security:scan` | Scan staged blob contents with SHA-256-pinned Gitleaks; source lines/secrets are not printed |
-| `npm run security:history` | Scan the staged snapshot, HEAD diffs and commit/tag metadata |
+| `npm run security:history` | Scan the staged snapshot, complete reachable text blobs, diffs and commit/tag metadata |
 | `npm run security:self-test` | Confirm that a temporary synthetic credential is rejected |
 | `npm run security:hooks` | Install pre-commit/pre-push without replacing a custom hook configuration |
 
@@ -44,6 +44,7 @@ license files. Private records and source captures must remain outside this tree
 | `fetch-fonts.ps1` | Refresh pinned font assets; requires Python/fonttools/brotli and is not needed for ordinary builds |
 | `build-linux.sh` | Linux-only build/staging; runs in WSL/container/Linux, not cross-compilation from Windows |
 | `with-msvc.cmd`, `cargo-vcvars.cmd` | Load the Windows C++ toolchain before cargo or Tauri |
+| `optional-tools-test.mjs` | `npm test -- --only optional-tools`; isolated first-run offer, context setup and background progress checks |
 
 GUI/CDP tests require an isolated test app and the fixture the harness selects.
 They must not reset a user's settings/profile. Node's WebSocket CDP scripts enable
@@ -109,6 +110,7 @@ here with its public purpose and, for owner sessions, to the private catalog.
 | `npm run html` | `node scripts/html-preview-test.mjs` |
 | `npm run export` | `node scripts/export-test.mjs` |
 | `npm run export:paths:unit` | `node scripts/export-paths-unit.mjs` |
+| `npm run optional-tools:unit` | `node scripts/optional-tools-unit.mjs` |
 | `npm run export:browser` | `node scripts/export-browser-test.mjs` |
 | `npm run pdf:visual` | `node scripts/pdf-visual-check.mjs` |
 | `npm run pdf:native` | `node scripts/pdf-native-test.mjs` |

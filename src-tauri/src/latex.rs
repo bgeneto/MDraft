@@ -531,7 +531,17 @@ pub async fn install_texpresso(app: AppHandle) -> Result<(), String> {
         let _install = INSTALL_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        crate::latex_texpresso::install(&directory(&app)?)
+        crate::latex_texpresso::install_with_progress(&directory(&app)?, |received, total| {
+            crate::optional_tools::emit(
+                &app,
+                crate::optional_tools::Progress {
+                    tool: crate::optional_tools::Tool::Latex,
+                    phase: crate::optional_tools::Phase::Downloading,
+                    received,
+                    total: Some(total),
+                },
+            );
+        })
     })
     .await
     .map_err(|error| error.to_string())?

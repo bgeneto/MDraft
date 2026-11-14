@@ -121,9 +121,9 @@ fn export_label(format: &ExportFormat, availability: ExportAvailability, languag
         return format!("{base} — use Export › PDF (compiled)");
     }
     match availability.pandoc {
-        Some(false) => format!("{base} — needs Pandoc"),
+        Some(false) => format!("{base} — set up Pandoc"),
         Some(true) if is_pandoc_pdf(format) && availability.typst == Some(false) => {
-            format!("{base} — needs Typst")
+            format!("{base} — set up Typst")
         }
         _ => base,
     }
@@ -139,30 +139,26 @@ fn is_pandoc_pdf(format: &ExportFormat) -> bool {
     format.id.eq_ignore_ascii_case("pdf")
 }
 
-/// Whether this format can run, for this document language and these tools.
+/// Whether this format can reach a result for this document language.
 ///
 /// **One rule, used by the initial build, every menu-state sync and every tool
-/// report.** Two independent gates — a Rust one that disabled every pandoc row
-/// for LaTeX and a frontend one that refused every `export.*` — produced the
-/// defect this rule replaces: a working LaTeX reader behind a menu that said it
-/// did not exist.
+/// report.** Enabled means the click can lead to a result, not that every tool
+/// is already installed: a missing Pandoc or Typst row stays clickable, says
+/// “— set up …”, and opens the shared Optional tools dialog in context mode.
+/// Only the language gates disable a row, because no install can change what a
+/// `.css` or `.js` buffer can become.
 ///
-/// The only language-specific answer is the built-in pandoc PDF: converting
+/// The built-in pandoc PDF is the one tool-independent exception: converting
 /// LaTeX to Typst would change the layout, and the preview already holds the
 /// compiled PDF, so that row points at `Export › PDF` instead.
-fn export_enabled_for(
-    format: &ExportFormat,
-    availability: ExportAvailability,
-    language: &str,
-) -> bool {
+fn export_enabled_for(format: &ExportFormat, language: &str) -> bool {
     if matches!(language, "javascript" | "css" | "json") {
         return false;
     }
     if is_pandoc_pdf(format) && language == "latex" {
         return false;
     }
-    availability.pandoc.unwrap_or(true)
-        && (!is_pandoc_pdf(format) || availability.typst.unwrap_or(true))
+    true
 }
 
 /// A menu label safe to hand to the platform backends.
@@ -733,9 +729,7 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
         | "tools.statistics"
         | "tools.encoding"
         | "tools.exportConfig"
-        | "tools.pandoc"
-        | "tools.typst"
-        | "tools.latex"
+        | "tools.optionalTools"
         | "tools.ai" => true,
         _ if id.starts_with("view.syntax.")
             || id.starts_with("themes.")
@@ -950,7 +944,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             &export_label(format, availability, &state.document_language),
             None,
         )?;
-        if !export_enabled_for(format, availability, &state.document_language) {
+        if !export_enabled_for(format, &state.document_language) {
             built.set_enabled(false)?;
         }
         Ok(built)
@@ -1358,9 +1352,10 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&item("tools.encoding", "Encoding and Line Endings…", None)?)
         .separator()
         .item(&item("tools.exportConfig", "Configure Export…", None)?)
-        .item(&item("tools.pandoc", "Check or Install Pandoc…", None)?)
-        .item(&item("tools.typst", "Check or Install Typst…", None)?)
-        .item(&item("tools.latex", "Check or Install LaTeX…", None)?)
+        // One setup surface. The export rows themselves are the contextual
+        // routes; a second “Install Pandoc” item here would be the duplication
+        // the menu information-architecture ADR removed.
+        .item(&item("tools.optionalTools", "Optional Tools…", None)?)
         // The compile pair belongs beside the LaTeX toolchain row: every one of
         // these is LaTeX-only, and the install row says which engine will run
         // the compile the reader starts here.
@@ -1714,7 +1709,7 @@ fn apply_export_rows<R: Runtime>(
             if let Err(error) = menu_item.set_text(export_label(format, availability, language)) {
                 eprintln!("[menu] could not set the label of {id}: {error}");
             }
-            let enabled = export_enabled_for(format, availability, language);
+            let enabled = export_enabled_for(format, language);
             if let Err(error) = menu_item.set_enabled(enabled) {
                 eprintln!("[menu] could not set the enabled state of {id}: {error}");
             }
@@ -2333,7 +2328,7 @@ mod tests {
     }
 
     #[test]
-    fn export_availability_disables_and_annotates() {
+    fn export_availability_labels_but_does_not_disable_a_missing_tool() {
         let docx = ExportFormat {
             id: "docx".into(),
             label: "Word (.docx)".into(),
@@ -2347,7 +2342,7 @@ mod tests {
         };
 
         let unknown = ExportAvailability::default();
-        assert!(export_enabled_for(&docx, unknown, "markdown"));
+        assert!(export_enabled_for(&docx, "markdown"));
         assert_eq!(export_label(&docx, unknown, "markdown"), "Word (.docx)…");
 
         let custom = ExportFormat {
@@ -2357,31 +2352,38 @@ mod tests {
         };
         assert_eq!(export_label(&custom, unknown, "markdown"), "My Word Target");
 
+        // The row stays clickable so its click can open the shared setup dialog;
+        // the suffix tells the reader what the click will ask for.
         let pandoc_missing = ExportAvailability {
             pandoc: Some(false),
             typst: Some(false),
         };
-        assert!(!export_enabled_for(&docx, pandoc_missing, "markdown"));
-        assert!(export_label(&docx, pandoc_missing, "markdown").ends_with("— needs Pandoc"));
+        assert!(export_enabled_for(&docx, "markdown"));
+        assert!(export_label(&docx, pandoc_missing, "markdown").ends_with("— set up Pandoc"));
 
-        // Pandoc alone is enough for every target but PDF.
+        // Pandoc alone is enough for every target but PDF; Typst is the second
+        // step in that one chain, not a second disabled row.
         let typst_missing = ExportAvailability {
             pandoc: Some(true),
             typst: Some(false),
         };
-        assert!(export_enabled_for(&docx, typst_missing, "markdown"));
-        assert!(!export_enabled_for(&pdf, typst_missing, "markdown"));
-        assert!(export_label(&pdf, typst_missing, "markdown").ends_with("— needs Typst"));
+        assert!(export_enabled_for(&docx, "markdown"));
+        assert!(export_enabled_for(&pdf, "markdown"));
+        assert!(export_label(&pdf, typst_missing, "markdown").ends_with("— set up Typst"));
 
         let installed = ExportAvailability {
             pandoc: Some(true),
             typst: Some(true),
         };
-        assert!(export_enabled_for(&pdf, installed, "markdown"));
+        assert!(export_enabled_for(&pdf, "markdown"));
         assert_eq!(
             export_label(&pdf, installed, "markdown"),
             "PDF (via Typst)…"
         );
+
+        // A source language the editor cannot convert is still disabled: no
+        // install would make `.css` a document format.
+        assert!(!export_enabled_for(&docx, "css"));
     }
 
     #[test]
@@ -2405,7 +2407,7 @@ mod tests {
         };
         for format in [&docx, &epub] {
             assert!(
-                export_enabled_for(format, installed, "latex"),
+                export_enabled_for(format, "latex"),
                 "{} must run for LaTeX",
                 format.id
             );
@@ -2423,7 +2425,7 @@ mod tests {
             label: "PDF (via Typst)".into(),
             ..ExportFormat::default()
         };
-        assert!(!export_enabled_for(&pdf, installed, "latex"));
+        assert!(!export_enabled_for(&pdf, "latex"));
         assert!(
             export_label(&pdf, installed, "latex").ends_with("— use Export › PDF (compiled)"),
             "{}",
@@ -2436,9 +2438,9 @@ mod tests {
             typst: Some(false),
         };
         assert!(export_label(&pdf, missing, "latex").ends_with("— use Export › PDF (compiled)"));
-        // Every other language keeps the Typst rule.
-        assert!(!export_enabled_for(&pdf, missing, "markdown"));
-        assert!(export_label(&pdf, missing, "markdown").ends_with("— needs Pandoc"));
+        // Every other language keeps the row live and labels the missing step.
+        assert!(export_enabled_for(&pdf, "markdown"));
+        assert!(export_label(&pdf, missing, "markdown").ends_with("— set up Pandoc"));
     }
 
     #[test]

@@ -88,6 +88,9 @@ jobs:
       - name: AsciiDoc export source
         run: npm run asciidoc:export:unit
 
+      - name: Optional tools state and queue
+        run: npm run optional-tools:unit
+
   rust:
     name: Rust
     runs-on: windows-latest

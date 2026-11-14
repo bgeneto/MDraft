@@ -32,6 +32,13 @@ import { CompiledPreviewUi, type CompiledStatus } from "./compiled-preview-ui";
 import { createDocumentLifecycle } from "./document-lifecycle";
 import { showDocumentStatistics, type DocumentStatistics } from "./statistics-dialog";
 import { showEncodingDialog, type DeclarationEdit } from "./encoding-dialog";
+import {
+  createOptionalTools,
+  type OptionalToolProgress,
+  type OptionalToolsController,
+  type OptionalToolsIndicator,
+} from "./optional-tools";
+import { OPTIONAL_TOOL_NAME, type OptionalTool } from "./optional-tools-state";
 import { displayEncoding } from "./encodings";
 import type { SaveFormat } from "./document-lifecycle";
 import { askUnsaved } from "./unsaved-dialog";
@@ -309,6 +316,10 @@ const statusEngine = el<HTMLButtonElement>("status-latex-engine");
 const statusEncoding = el<HTMLButtonElement>("status-encoding");
 const statusZoom = el<HTMLButtonElement>("status-zoom");
 const statusReading = el<HTMLButtonElement>("status-reading");
+const statusDownload = el<HTMLButtonElement>("status-download");
+const statusDownloadLabel =
+  statusDownload.querySelector<HTMLSpanElement>(".status-download-label")!;
+const statusDownloadFill = statusDownload.querySelector<HTMLSpanElement>(".status-download-fill")!;
 const noticeBar = el<HTMLDivElement>("notice-bar");
 const noticeText = el<HTMLSpanElement>("notice-text");
 const noticeActions = el<HTMLSpanElement>("notice-actions");
@@ -325,6 +336,7 @@ let editor: EditorHandle;
 let assistant: AssistantHandle | null = null;
 let htmlPreview: HtmlPreviewHandle;
 let preferences: PreferencesHandle;
+let optionalTools: OptionalToolsController;
 let settings: api.Settings;
 const sessions = createSessionStore();
 /** The session on screen. Inactive tabs keep their own EditorState. */
@@ -718,6 +730,49 @@ function toast(text: string, ms = 2600): { dismiss: () => void } {
   return { dismiss };
 }
 let toastTimer = 0;
+
+/**
+ * The status bar's only optional-tool surface after the dialog closes.
+ *
+ * The dialog hides this while it is open, so there is never a second progress
+ * display for the same install. A closed window or a hidden status bar simply
+ * leaves the completion toast, which is why this is additive rather than the
+ * only feedback.
+ */
+function showOptionalToolsIndicator(state: OptionalToolsIndicator | null): void {
+  statusDownload.hidden = !state;
+  if (!state) {
+    statusDownloadLabel.textContent = "";
+    statusDownloadFill.style.width = "0";
+    statusDownloadFill.classList.remove("is-indeterminate");
+    statusDownload.removeAttribute("title");
+    statusDownload.removeAttribute("aria-label");
+    return;
+  }
+  const percent =
+    state.total && state.total > 0
+      ? Math.max(0, Math.min(100, Math.round((state.received / state.total) * 100)))
+      : null;
+  const tool = OPTIONAL_TOOL_NAME[state.tool];
+  const phase =
+    state.phase === "verifying"
+      ? `Verifying ${tool}…`
+      : state.phase === "unpacking"
+        ? `Unpacking ${tool}…`
+        : state.phase === "ready"
+          ? `${tool} ready`
+          : percent === null
+            ? `${tool} ${Math.round(state.received / (1024 * 1024))} MB`
+            : `${tool} ${percent}%`;
+  const queue =
+    state.count > 1 && state.phase === "downloading" ? ` · ${state.index}/${state.count}` : "";
+  const label = `${phase}${queue}`;
+  statusDownloadLabel.textContent = label;
+  statusDownload.title = `${label} — click to show the optional tools`;
+  statusDownload.setAttribute("aria-label", statusDownload.title);
+  statusDownloadFill.classList.toggle("is-indeterminate", percent === null);
+  statusDownloadFill.style.width = percent === null ? "" : `${percent}%`;
+}
 
 interface NoticeAction {
   label: string;
@@ -2493,6 +2548,12 @@ async function installLatexProgressListener(): Promise<void> {
   });
 }
 
+async function installOptionalToolsProgressListener(): Promise<void> {
+  await listen<OptionalToolProgress>("optional-tools-progress", (event) => {
+    optionalTools.progress(event.payload);
+  });
+}
+
 function configureCompiledUi(): void {
   const fileName = doc.path ? basename(doc.path) : "Untitled";
   if (doc.language === "latex")
@@ -3681,22 +3742,23 @@ function latexEnableNote(status?: api.LatexEngineStatus | null): void {
   button.type = "button";
   button.className = "typst-notebutton";
   button.textContent = status?.bundledEnabled ? "Retry setup" : "Enable bundled TeX…";
+  const idleLabel = button.textContent;
   button.addEventListener("click", () => {
     button.disabled = true;
     button.textContent = "Downloading…";
-    void api
-      .installTexpresso()
-      .then(() => {
-        // The switch is settings-backed, so the in-memory copy has to follow it
-        // before the next render; otherwise the note would come back.
-        settings.latexEnabled = true;
-        persist();
-        void refreshLatexCacheInfo().then(() => preferences?.refresh());
-        scheduleRender(true);
+    void optionalTools
+      .installFor(["latex"], "Bundled TeX is needed to preview and compile this document.")
+      .then((outcome) => {
+        if (outcome === "ready") {
+          scheduleRender(true);
+          return;
+        }
+        button.disabled = false;
+        button.textContent = idleLabel;
       })
       .catch((error: unknown) => {
         button.disabled = false;
-        button.textContent = "Retry setup";
+        button.textContent = idleLabel;
         toast(`Could not enable bundled TeX: ${String(error)}`, 6200);
       });
   });
@@ -5148,8 +5210,20 @@ function typstMissingNote(message: string): HTMLElement {
   install.textContent = "Install Typst…";
   install.title = "Download the official Typst build into MDraft's own folder";
   install.addEventListener("click", () => {
-    // Installing from this note should revive the pane without an edit.
-    void typstSetup().then(() => scheduleRender(true));
+    // Installing from this note should revive the pane without an edit. The
+    // same context dialog also handles the platform where automatic install is
+    // unavailable: its row names the download page instead of pretending.
+    install.disabled = true;
+    void optionalTools
+      .installFor(["typst"], "Typst is needed to preview this document.")
+      .then((outcome) => {
+        if (outcome === "ready") scheduleRender(true);
+        else install.disabled = false;
+      })
+      .catch((error: unknown) => {
+        install.disabled = false;
+        toast(String(error), 5200);
+      });
   });
   note.append(text, install);
   return note;
@@ -8144,23 +8218,18 @@ async function exportWithPandoc(format: api.ExportFormat): Promise<void> {
     return;
   }
   // A `.tex` project converts from a snapshot of the project this export was
-  // started for. It is captured before the first await — the tool lookup
-  // included — so a tab switch cannot pair this source with another project.
+  // started for. It is captured before the first await — the optional-tools
+  // dialog included — so a tab switch cannot pair this source with another
+  // project.
   const latexCapture = snapshot.language === "latex" ? latexExportSnapshot() : null;
-  if (!pandocCache) await refreshPandocStatus();
-  if (pandocCache && !pandocCache.found) {
-    toast("Pandoc is not installed — install it before exporting.");
-    await pandocSetup();
-    return;
-  }
-  if (format.id === "pdf") {
-    if (!typstCache) await refreshTypstStatus();
-    if (typstCache && !typstCache.found) {
-      toast("PDF (via Typst) needs Typst — install it first.");
-      await typstSetup();
-      return;
-    }
-  }
+  const required: OptionalTool[] = format.id === "pdf" ? ["pandoc", "typst"] : ["pandoc"];
+  const outcome = await optionalTools.installFor(
+    required,
+    format.id === "pdf"
+      ? "PDF via Typst needs Pandoc and Typst. The missing pieces are downloaded once, then the export continues."
+      : `Export as ${format.label} needs Pandoc. Download it once and the export will continue.`,
+  );
+  if (outcome !== "ready") return;
 
   let latexProject: { snapshot: api.ExportSnapshot; root: Session } | null = null;
   if (latexCapture) {
@@ -8256,15 +8325,14 @@ async function exportLatexWithWriter(
   source: ReturnType<typeof exportSource>,
   capturedProject?: { snapshot: api.ExportSnapshot; root: Session },
 ): Promise<void> {
-  // Started before the tool lookup can yield: the project is the one this
-  // export was started for, whatever tab is active when the lookup returns.
+  // Started before the optional-tools dialog can yield: the project is the one
+  // this export was started for, whatever tab is active when it returns.
   const capture = capturedProject ?? latexExportSnapshot();
-  if (!pandocCache) await refreshPandocStatus();
-  if (pandocCache && !pandocCache.found) {
-    toast("Pandoc is not installed — install it before exporting.");
-    await pandocSetup();
-    return;
-  }
+  const outcome = await optionalTools.installFor(
+    ["pandoc"],
+    `Export as ${label} needs Pandoc. Download it once and the export will continue.`,
+  );
+  if (outcome !== "ready") return;
   const captured = await capture;
   if ("error" in captured) {
     await message(captured.error, { title: "Could not read the LaTeX project", kind: "error" });
@@ -8348,15 +8416,15 @@ async function openWriterChooser(): Promise<void> {
     toast("More Pandoc formats are available for LaTeX documents.");
     return;
   }
-  // The source and project are captured before the tool lookup and before the
-  // list is fetched, so a tab switch meanwhile cannot change what is exported.
+  // The source and project are captured before the optional-tools dialog and
+  // before the list is fetched, so a tab switch meanwhile cannot change what is
+  // exported.
   const capture = latexExportSnapshot();
-  if (!pandocCache) await refreshPandocStatus();
-  if (pandocCache && !pandocCache.found) {
-    toast("Pandoc is not installed — install it before exporting.");
-    await pandocSetup();
-    return;
-  }
+  const outcome = await optionalTools.installFor(
+    ["pandoc"],
+    "The Pandoc format chooser needs Pandoc. Download it once and the chooser will open.",
+  );
+  if (outcome !== "ready") return;
   const captured = await capture;
   if ("error" in captured) {
     await message(captured.error, { title: "Could not read the LaTeX project", kind: "error" });
@@ -8426,224 +8494,6 @@ async function openWriterChooser(): Promise<void> {
   } catch (error) {
     notice.dismiss();
     await message(String(error), { title: "Could not export", kind: "error" });
-  }
-}
-
-/**
- * Tools › Check or Install Pandoc….
- *
- * Reports what was found before offering to download anything, so a user who
- * already has pandoc on PATH is told that rather than being pushed into a 40 MB
- * download. Nothing is installed without an explicit confirmation.
- */
-/**
- * Tools › Check or Install LaTeX…
- *
- * The same three-state dialog Pandoc and Typst use. The engine is a single
- * boolean to the frontend — it is either enabled and verified, or it is not —
- * so this reports which, and offers the download when it is missing.
- *
- * The switch lives in `settings.json` (decision D2), so enabling writes it and
- * the next render picks it up without reopening the document.
- */
-async function latexSetup(): Promise<void> {
-  let enabled: boolean;
-  try {
-    enabled = await api.texpressoStatus();
-  } catch (error) {
-    await message(String(error), { title: "Could not look for bundled TeX", kind: "error" });
-    return;
-  }
-
-  if (enabled) {
-    let cache: api.LatexCacheInfo | null = null;
-    try {
-      cache = await api.latexCacheInfo();
-    } catch {
-      // A cache that cannot be measured is reported as absent rather than as an
-      // error dialog: the engine itself is working, which is the answer here.
-    }
-    const size =
-      cache && cache.bytes > 0
-        ? `\nDownloaded packages and fonts: ${(cache.bytes / 1048576).toFixed(1)} MiB, under a ${cache.limitMb} MiB ceiling.`
-        : "\nNo TeX packages have been downloaded yet; they arrive on demand.";
-    await message(
-      "Bundled TeX is ready.\n\n" +
-        "It compiles .tex documents locally. Your document never leaves this device." +
-        size +
-        "\n\nExport › PDF writes the PDF the preview is showing.",
-      { title: "Bundled TeX", kind: "info" },
-    );
-    return;
-  }
-
-  const agreed = await ask(
-    "Bundled TeX is not installed, so .tex documents have no preview.\n\n" +
-      `MDraft can download the verified TeX Live ${TEXPRESSO_TEXLIVE_YEAR} preview engine — about ${TEXPRESSO_ENGINE_MIB} MiB — into its own data folder. ` +
-      "TeX packages and fonts are fetched on demand and cached locally. " +
-      "Nothing is installed system-wide, no administrator rights are needed, and turning it off " +
-      "in Preferences leaves the downloaded files on disk.\n\n" +
-      "Your document stays on this device.",
-    { title: "Install bundled TeX", kind: "info", okLabel: "Download", cancelLabel: "Cancel" },
-  );
-  if (!agreed) return;
-
-  const notice = toast("Downloading bundled TeX…", 0);
-  try {
-    await api.installTexpresso();
-    settings.latexEnabled = true;
-    persist();
-    notice.dismiss();
-    await refreshLatexCacheInfo();
-    preferences?.refresh();
-    scheduleRender(true);
-    await message(
-      "Bundled TeX is ready.\n\nOpen or save a .tex file and its preview will appear beside it.",
-      { title: "Bundled TeX installed", kind: "info" },
-    );
-  } catch (error) {
-    notice.dismiss();
-    await message(String(error), { title: "Could not install bundled TeX", kind: "error" });
-  }
-}
-
-async function pandocSetup(): Promise<void> {
-  let status: api.PandocStatus;
-  try {
-    status = await api.pandocStatus();
-  } catch (error) {
-    await message(String(error), { title: "Could not look for pandoc", kind: "error" });
-    return;
-  }
-
-  const engine = status.pdfEngine
-    ? `\nPDF engine: ${basename(status.pdfEngine)}`
-    : "\nPDF engine: none — PDF (via Typst) needs Typst. Native PDF and browser printing remain available. Use Tools › Check or Install Typst….";
-
-  pandocCache = status;
-  preferences?.refresh();
-
-  if (status.found) {
-    await refreshTypstStatus();
-    await syncExportAvailability();
-    await message(
-      `Pandoc ${status.version ?? "(unknown version)"} is ready.\n\n` +
-        `Location: ${status.path}\n` +
-        `Installed by: ${status.source === "managed" ? "MDraft" : "you (found on PATH)"}` +
-        engine +
-        `\n\nExporting again will download and replace MDraft's own copy.`,
-      { title: "Pandoc", kind: "info" },
-    );
-    return;
-  }
-
-  const agreed = await ask(
-    "Pandoc was not found, so Word, EPUB, PDF (via Typst) conversion and the other Pandoc formats are unavailable. Native PDF and browser printing remain available.\n\n" +
-      "MDraft can download the official pandoc build and unpack it into its own data folder. " +
-      "Nothing is installed system-wide, no administrator rights are needed, and removing the " +
-      "folder undoes it.\n\n" +
-      "The download is about 40 MB and is verified against the checksum GitHub publishes." +
-      engine,
-    { title: "Install Pandoc", kind: "info", okLabel: "Download", cancelLabel: "Cancel" },
-  );
-  if (!agreed) return;
-
-  const notice = toast("Downloading pandoc…", 0);
-  try {
-    const installed = await api.installPandoc();
-    notice.dismiss();
-    pandocCache = installed;
-    await refreshTypstStatus();
-    await syncExportAvailability();
-    await message(
-      `Pandoc ${installed.version ?? ""} is ready.\n\n${installed.path ?? ""}\n\n` +
-        (installed.pdfEngine
-          ? `PDF (via Typst) will use ${basename(installed.pdfEngine)}.`
-          : "PDF (via Typst) still needs Typst — use Tools › Check or Install Typst…. Native PDF and browser printing remain available."),
-      { title: "Pandoc installed", kind: "info" },
-    );
-  } catch (error) {
-    notice.dismiss();
-    await message(String(error), { title: "Could not install pandoc", kind: "error" });
-  }
-}
-
-/**
- * Look for Typst, and offer to fetch it when it is missing.
- *
- * Typst supplies .typ preview/compilation and the typeset PDF conversion. It is
- * a single executable — no TeX distribution, no
- * package manager, no administrator rights — which is why downloading it is a
- * reasonable offer rather than an imposition.
- */
-async function typstSetup(): Promise<void> {
-  // A new compiler may render the same source differently.
-  typstStore.clear();
-  let status: api.TypstStatus;
-  try {
-    status = await api.typstStatus();
-  } catch (error) {
-    await message(String(error), { title: "Could not look for Typst", kind: "error" });
-    return;
-  }
-
-  if (status.found) {
-    typstCache = status;
-    syncMenuState();
-    preferences?.refresh();
-    await refreshPandocStatus();
-    await syncExportAvailability();
-    await message(
-      `Typst ${status.version ?? "(unknown version)"} is ready.\n\n` +
-        `Location: ${status.path}\n` +
-        `Installed by: ${status.source === "managed" ? "MDraft" : "you (found on PATH)"}\n\n` +
-        "PDF (via Typst) uses it, and .typ documents are previewed with it.",
-      { title: "Typst", kind: "info" },
-    );
-    return;
-  }
-
-  if (!status.canInstall) {
-    const open = await ask(
-      `Typst was not found.\n\n${status.hint}\n\n` + "Open the official download page?",
-      { title: "Install Typst", kind: "info", okLabel: "Open page", cancelLabel: "Cancel" },
-    );
-    if (open) {
-      try {
-        await api.openTypstDownloadPage();
-      } catch (error) {
-        await message(String(error), { title: "Could not open the browser", kind: "error" });
-      }
-    }
-    return;
-  }
-
-  const agreed = await ask(
-    "Typst was not found, so .typ preview and PDF (via Typst) are unavailable. Native PDF and browser printing remain available for other documents.\n\n" +
-      "MDraft can download the official Typst build and put it in its own data folder. " +
-      "Nothing is installed system-wide, no administrator rights are needed, and removing the " +
-      "folder undoes it.\n\n" +
-      "The download is about 20 MB and unpacks to a single executable.",
-    { title: "Install Typst", kind: "info", okLabel: "Download", cancelLabel: "Cancel" },
-  );
-  if (!agreed) return;
-
-  const notice = toast("Downloading Typst…", 0);
-  try {
-    const installed = await api.installTypst();
-    notice.dismiss();
-    typstCache = installed;
-    syncMenuState();
-    await refreshPandocStatus();
-    await syncExportAvailability();
-    await message(
-      `Typst ${installed.version ?? ""} is ready.\n\n${installed.path ?? ""}\n\n` +
-        "PDF (via Typst) will use it, and .typ documents can now be previewed.",
-      { title: "Typst installed", kind: "info" },
-    );
-  } catch (error) {
-    notice.dismiss();
-    await message(String(error), { title: "Could not install Typst", kind: "error" });
   }
 }
 
@@ -9178,8 +9028,6 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "export.html": () => void exportHtml(),
   "export.pdf": () => void exportPdf(),
   "export.pdf.browser": () => void exportPdfBrowser(),
-  "export.installPandoc": () => void pandocSetup(),
-  "export.installTypst": () => void typstSetup(),
   "file.reveal": () => revealSession(doc.id),
   "file.favorite": () => {
     if (doc.path) void toggleFavoritePath(doc.path);
@@ -9335,9 +9183,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
   },
   "tools.encoding": () => openEncodingDialog(),
   "tools.exportConfig": () => preferences.openAt("export"),
-  "tools.pandoc": () => void pandocSetup(),
-  "tools.typst": () => void typstSetup(),
-  "tools.latex": () => void latexSetup(),
+  "tools.optionalTools": () => void optionalTools.open("manage"),
   "tools.ai": () => applySettingsPatch({ aiEnabled: settings.aiEnabled === false }),
 
   "file.preferences": () => preferences.open(),
@@ -9350,8 +9196,6 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "help.licences": () => void showBuiltin(FONT_LICENCES),
   "help.latexLicenses": showLatexLicenses,
   "help.welcome": () => void showBuiltin(WELCOME),
-  "help.installTypst": () => void typstSetup(),
-  "help.pandoc": () => void pandocSetup(),
   "help.about": async () => {
     await message(
       [
@@ -11685,7 +11529,8 @@ function runMenuAction(id: string): void {
     document.querySelector(".unsaved-dialog[open]") ||
     document.querySelector(".stats-dialog[open]") ||
     document.querySelector(".encoding-dialog[open]") ||
-    document.querySelector(".export-dialog[open]")
+    document.querySelector(".export-dialog[open]") ||
+    document.querySelector(".optional-tools-dialog[open]")
   )
     return;
   const refused = commandRefusedReason(id);
@@ -13046,6 +12891,10 @@ async function boot(): Promise<void> {
   installBundledFonts();
 
   settings = await queueSettings(() => api.getSettings());
+  // Captured before the startup branch records `welcomeSeen`. This is the only
+  // gate: a new default-false setting would re-prompt every existing profile
+  // after an upgrade.
+  const firstRun = !settings.welcomeSeen;
   migrateLegacySystemPreset();
   applyTheme();
 
@@ -13215,7 +13064,7 @@ async function boot(): Promise<void> {
     },
     exportHtml: () => void exportHtml(),
     exportPdf: () => void exportPdf(),
-    setupTypst: () => typstSetup(),
+    setupTypst: () => optionalTools.open("manage"),
     typstServiceStatus: () => typstServiceCache,
     setupTypstService: async () => {
       const current = await api.typstServiceStatus();
@@ -13477,11 +13326,7 @@ async function boot(): Promise<void> {
     },
     pandocStatus: () => pandocCache,
     typstStatus: () => typstCache,
-    setupPandoc: async () => {
-      await pandocSetup();
-      await refreshPandocStatus();
-      await syncExportAvailability();
-    },
+    setupPandoc: () => optionalTools.open("manage"),
     chooseStyleReference: async (current) => {
       const chosen = await openDialog({
         title: "Choose a Style Reference",
@@ -13497,6 +13342,63 @@ async function boot(): Promise<void> {
       return Array.isArray(chosen) ? chosen[0] : chosen;
     },
   });
+
+  optionalTools = createOptionalTools({
+    loadStatuses: async () => {
+      const [pandoc, typst, latex] = await Promise.all([
+        api.pandocStatus(),
+        api.typstStatus(),
+        api.latexEngineStatus(),
+      ]);
+      // The menu labels and the Preferences rows read these caches. Opening the
+      // dialog is also a good moment to repair a stale answer from startup.
+      pandocCache = pandoc;
+      typstCache = typst;
+      await syncExportAvailability();
+      return { pandoc, typst, latex };
+    },
+    install: async (tool) => {
+      if (tool === "pandoc") {
+        pandocCache = await api.installPandoc();
+        if (!typstCache) await refreshTypstStatus();
+        await syncExportAvailability();
+        preferences?.refresh();
+        return;
+      }
+      if (tool === "typst") {
+        // A new compiler may render the same source differently.
+        typstStore.clear();
+        typstCache = await api.installTypst();
+        syncMenuState();
+        await refreshPandocStatus();
+        await syncExportAvailability();
+        preferences?.refresh();
+        if (doc.language === "typst") scheduleRender(true);
+        return;
+      }
+      await api.installTexpresso();
+      settings.latexEnabled = true;
+      persist();
+      await refreshLatexCacheInfo();
+      preferences?.refresh();
+      scheduleRender(true);
+    },
+    showIndicator: showOptionalToolsIndicator,
+    toast: (text, ms) => toast(text, ms),
+    openDownloadPage: () => {
+      void api.openTypstDownloadPage().catch((error: unknown) => toast(String(error), 5200));
+    },
+    openLatexPreferences: () => preferences.openAt("latex"),
+    enableLatex: async () => {
+      settings.latexEnabled = true;
+      persist();
+      await refreshLatexCacheInfo();
+      preferences?.refresh();
+      scheduleRender(true);
+    },
+    focusEditor: () => editor.focus(),
+  });
+  statusDownload.addEventListener("click", () => void optionalTools.open("manage"));
 
   // A saved document's extension is authoritative. An unsaved buffer follows
   // the same classifier the paste path uses, because its default extension is
@@ -13593,6 +13495,7 @@ async function boot(): Promise<void> {
 
   await installMenuListener();
   await installLatexProgressListener();
+  await installOptionalToolsProgressListener();
   // The accelerators the menu registered, bound to the keyboard. Tauri 2 never
   // translates them on Windows, so without this the menu advertises shortcuts
   // that do nothing — see installShortcuts for the whole story.
@@ -13619,6 +13522,7 @@ async function boot(): Promise<void> {
   });
 
   const startup = await api.startupFiles().catch(() => [] as string[]);
+  let showedWelcome = false;
   if (startup.length > 0) {
     // The first path that is read fills the window's blank session; the slot is
     // consumed once, so every later path becomes a tab.
@@ -13629,13 +13533,17 @@ async function boot(): Promise<void> {
     // `restoreLastTabs` stays a blank tab on purpose, so that Close All Tabs is
     // not undone at the next start; `welcomeSeen` is what tells the two apart.
     if (settings.welcomeSeen) await restoreLastTabs();
-    else await loadUntitled(WELCOME);
+    else {
+      await loadUntitled(WELCOME);
+      showedWelcome = true;
+    }
   } else if (settings.onLaunch === "new") {
     await loadUntitled("", defaultDocumentLanguage());
   } else if (settings.onLaunch === "last" && settings.recentFiles.length > 0) {
     await openPath(settings.recentFiles[0], { silent: true });
   } else {
     await loadUntitled(WELCOME);
+    showedWelcome = true;
   }
   startupSlot = null;
   // The profile has now been introduced, however that happened: the welcome
@@ -13648,6 +13556,12 @@ async function boot(): Promise<void> {
     persist();
   }
   await restoreRecovery();
+
+  // The first-run offer belongs after the Welcome document has rendered and any
+  // recovery notice has settled. `open` probes the tools locally and stays
+  // silent when everything is already present; opening a user's file at startup
+  // must not interrupt them with it.
+  if (firstRun && showedWelcome) void optionalTools.open("first-run");
 
   readyForPaths = true;
   const forwarded = [

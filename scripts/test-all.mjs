@@ -114,6 +114,14 @@ const SUITES = [
     script: "export-paths-unit.mjs",
   },
   {
+    // The selection, totals and status classification behind the Optional tools
+    // dialog: pure, so no application and no build.
+    id: "optional-tools-unit",
+    title: "Optional tools (unit)",
+    kind: "node",
+    script: "optional-tools-unit.mjs",
+  },
+  {
     // Recovery scheduling, disk-change classification and the Typst command
     // strings: pure logic, no application and no build.
     id: "p0-unit",
@@ -338,13 +346,24 @@ const SUITES = [
     script: "latex-texmf-unit.mjs",
   },
   {
-    // Tools › Check or Install LaTeX… must open a dialog about the engine, not
-    // merely be present in the menu.
+    // Tools › Optional Tools… must open the shared dialog, not merely be
+    // present in the menu.
     id: "latex-tools",
-    title: "Tools › Check or Install LaTeX",
+    title: "Tools › Optional Tools",
     kind: "cdp",
     script: "latex-tools-test.mjs",
     doc: "samples/feature-tour.md",
+  },
+  {
+    // A fresh profile with no startup file shows the Welcome document and the
+    // one-time Optional tools offer. The fixture is only the harness's path
+    // check; `noDocument` keeps the app from opening it.
+    id: "optional-tools",
+    title: "Optional tools first run",
+    kind: "cdp",
+    script: "optional-tools-test.mjs",
+    doc: "samples/feature-tour.md",
+    noDocument: true,
   },
   {
     // Scroll correspondence in both directions, and the fail-closed rule that
@@ -2068,7 +2087,11 @@ async function runCdpSuiteBody(suite, port, options, context) {
   let launched = null;
   for (let attempt = 1; attempt <= 2 && !launched; attempt += 1) {
     try {
-      launched = await launchApp(suite, port, context, { temp, userData });
+      launched = await launchApp(suite, port, context, {
+        temp,
+        userData,
+        noDocument: suite.noDocument === true,
+      });
     } catch (error) {
       if (attempt === 2) throw error;
       console.log(`(retrying ${suite.id}: ${error.message})`);

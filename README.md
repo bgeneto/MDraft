@@ -73,6 +73,12 @@ native compile. Nothing about your document leaves this device unless the
 installed distribution downloads a package, and the same section reports the
 bundled cache size and clears it.
 
+On a profile's first launch, **Optional tools** offers Pandoc, Typst and the
+bundled TeX engine once. Nothing is downloaded until you press Download; closing
+the dialog lets an install finish in the background, and **Tools › Optional
+Tools…** reopens the same choices later. The tools go into MDraft's own data
+folder, need no administrator rights and stop with the application.
+
 ## An AI assistant you can configure
 
 MDraft's AI Assistant is **off by default**. If you enable it, you can use a

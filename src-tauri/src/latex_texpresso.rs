@@ -25,8 +25,10 @@ use std::{
         Arc, LazyLock, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
+
+use crate::optional_tools;
 
 const CONFIG: &str = include_str!("../texpresso.json");
 
@@ -349,7 +351,7 @@ impl Check<'_> {
 /// One keep-alive agent for the origin. `ureq::get` builds a use-once agent,
 /// which is a new connection, and for `https` a new handshake, per file; a
 /// cold compile asks for a few hundred.
-fn download(url: &str) -> Result<Vec<u8>, String> {
+fn download(url: &str, deadline: Option<Instant>) -> Result<Vec<u8>, String> {
     if std::env::var_os("MDRAFT_WASMTEX_OFFLINE").is_some() {
         return Err("The LaTeX network is disabled.".into());
     }
@@ -365,12 +367,9 @@ fn download(url: &str) -> Result<Vec<u8>, String> {
         .get(url)
         .call()
         .map_err(|e| format!("Download failed: {e}"))?;
-    response
-        .body_mut()
-        .with_config()
-        .limit(MAX_DOWNLOAD)
-        .read_to_vec()
-        .map_err(|e| format!("Cannot read download: {e}"))
+    let limit = deadline.unwrap_or_else(|| Instant::now() + Duration::from_secs(120));
+    let mut reader = response.body_mut().as_reader();
+    optional_tools::read_to_vec_bounded(&mut reader, MAX_DOWNLOAD, limit, |_| {})
 }
 
 /// The cached file, if it is a regular file that still verifies.
@@ -556,18 +555,18 @@ impl Table {
     }
 }
 
-fn list_bytes(root: &Path) -> Result<Vec<u8>, String> {
+fn list_bytes(root: &Path, deadline: Option<Instant>) -> Result<Vec<u8>, String> {
     let list = &config().bundle.list;
     obtain(
         &data_dir(root).join(&list.path),
         &Check::Full(list),
         &list.path,
         None,
-        &|| download(&data_url(&list.path)),
+        &|| download(&data_url(&list.path), deadline),
     )
 }
 
-fn digest_bytes(root: &Path) -> Result<Vec<u8>, String> {
+fn digest_bytes(root: &Path, deadline: Option<Instant>) -> Result<Vec<u8>, String> {
     let digests = &config().digests;
     let pin = Pin {
         path: digests.path.clone(),
@@ -579,7 +578,7 @@ fn digest_bytes(root: &Path) -> Result<Vec<u8>, String> {
         &Check::Full(&pin),
         "The TeXpresso digest table",
         None,
-        &|| download(&data_url(&digests.path)),
+        &|| download(&data_url(&digests.path), deadline),
     )
 }
 
@@ -594,7 +593,10 @@ fn table(root: &Path) -> Result<Arc<Table>, String> {
     if let Some(table) = slot.as_ref() {
         return Ok(table.clone());
     }
-    let table = Arc::new(Table::build(&list_bytes(root)?, digest_bytes(root)?)?);
+    let table = Arc::new(Table::build(
+        &list_bytes(root, None)?,
+        digest_bytes(root, None)?,
+    )?);
     *slot = Some(table.clone());
     Ok(table)
 }
@@ -613,7 +615,7 @@ fn serve_frame(root: &Path, name: &str) -> Answer {
         &Check::Full(pin),
         &pin.path,
         None,
-        &|| download(&engine_url(&pin.path)),
+        &|| download(&engine_url(&pin.path), None),
     )?;
     Ok((bytes, kind(name)))
 }
@@ -629,7 +631,7 @@ fn serve_data(root: &Path, relative: &str) -> Answer {
             &Check::Full(pin),
             &pin.path,
             None,
-            &|| download(&data_url(&pin.path)),
+            &|| download(&data_url(&pin.path), None),
         )?;
         return Ok((bytes, kind(relative)));
     }
@@ -646,7 +648,7 @@ fn serve_data(root: &Path, relative: &str) -> Answer {
         &Check::Prefix(digest),
         relative,
         Some(&data.join("files")),
-        &|| download(&data_url(relative)),
+        &|| download(&data_url(relative), None),
     )?;
     Ok((bytes, kind(relative)))
 }
@@ -667,18 +669,96 @@ pub fn serve(root: &Path, path: &str) -> Option<Answer> {
 /// A file already present and intact is not downloaded again, so this is also
 /// the repair. The formats and bundle files follow on demand, through `serve`.
 pub fn install(root: &Path) -> Result<(), String> {
-    for pin in &config().assets {
+    install_with_progress(root, |_, _| {})
+}
+
+/// The same install, reporting cumulative bytes before and after each asset.
+///
+/// The overall deadline is threaded into the per-file reader, so a stalled
+/// connection cannot keep the install alive past ten minutes. Progress is
+/// coarse — one step per pinned asset — because the small files are not worth a
+/// second event contract.
+pub fn install_with_progress(
+    root: &Path,
+    mut progress: impl FnMut(u64, u64),
+) -> Result<(), String> {
+    let deadline = optional_tools::deadline();
+    cleanup_temp_files(&engine_dir(root), true);
+    cleanup_temp_files(&data_dir(root), false);
+
+    let config = config();
+    let total = config
+        .assets
+        .iter()
+        .map(|pin| pin.bytes)
+        .sum::<u64>()
+        + config.digests.bytes
+        + config.bundle.list.bytes;
+    let mut done = 0u64;
+    progress(0, total);
+
+    for pin in &config.assets {
+        optional_tools::check_deadline(deadline)?;
         obtain(
             &engine_dir(root).join(&pin.path),
             &Check::Full(pin),
             &pin.path,
             None,
-            &|| download(&engine_url(&pin.path)),
+            &|| download(&engine_url(&pin.path), Some(deadline)),
         )?;
+        done += pin.bytes;
+        progress(done, total);
     }
-    digest_bytes(root)?;
-    list_bytes(root)?;
+
+    optional_tools::check_deadline(deadline)?;
+    digest_bytes(root, Some(deadline))?;
+    done += config.digests.bytes;
+    progress(done, total);
+
+    optional_tools::check_deadline(deadline)?;
+    list_bytes(root, Some(deadline))?;
+    done += config.bundle.list.bytes;
+    progress(done, total);
     Ok(())
+}
+
+/// Remove temporary files a killed process left behind. Verified assets are
+/// never touched; only `.mdraft-*.tmp` names are candidates. The engine folder
+/// is small, so it is walked; the TeX Live data folder can hold 100k+ files, so
+/// only its top level (the list and digest table) is walked.
+fn cleanup_temp_files(dir: &Path, recursive: bool) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.file_type().is_dir() {
+            if recursive {
+                cleanup_temp_files(&path, true);
+            }
+            continue;
+        }
+        let is_temp = entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".mdraft-")
+            && path.extension().is_some_and(|extension| extension == "tmp");
+        // Only a file older than the install budget is certainly stale. A
+        // preview compiling while the install starts may legitimately be
+        // writing a fresh temporary sibling; deleting that would make its
+        // verified download fail for no reason.
+        let stale = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.elapsed().ok())
+            .is_some_and(|age| age > Duration::from_secs(15 * 60));
+        if is_temp && stale {
+            let _ = fs::remove_file(&path);
+        }
+    }
 }
 
 /// Whether the engine files and the digest table are all present. Sizes only:

@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::export::{quiet, sha256_hex, which};
+use crate::optional_tools::{self, Phase, Progress, Tool};
 
 /// Where the official downloads live. Shown whenever something has to be done by
 /// hand, because it is the page that stays correct across releases.
@@ -364,6 +365,8 @@ struct Asset {
     browser_download_url: String,
     /// `sha256:<hex>`, published by GitHub for every release asset.
     digest: Option<String>,
+    /// The compressed size GitHub reports, used for the progress total.
+    size: Option<u64>,
 }
 
 fn http_agent() -> ureq::Agent {
@@ -381,7 +384,11 @@ fn http_agent() -> ureq::Agent {
 /// Kept separate from [`install`] so the whole download-verify-unpack contract
 /// can be exercised without an `AppHandle`; see the ignored test at the bottom
 /// of this file.
-fn download_binary(agent: &ureq::Agent) -> Result<(String, Vec<u8>), String> {
+fn download_binary(
+    agent: &ureq::Agent,
+    mut progress: impl FnMut(Progress),
+) -> Result<(String, Vec<u8>), String> {
+    let deadline = optional_tools::deadline();
     let asset = release_asset().ok_or_else(|| {
         format!(
             "Typst cannot be installed automatically on this platform. Download it from \
@@ -404,6 +411,7 @@ fn download_binary(agent: &ureq::Agent) -> Result<(String, Vec<u8>), String> {
         serde_json::from_slice(&body)
             .map_err(|e| format!("Unexpected release list from GitHub: {e}"))?
     };
+    optional_tools::check_deadline(deadline)?;
 
     let chosen = release
         .assets
@@ -430,16 +438,45 @@ fn download_binary(agent: &ureq::Agent) -> Result<(String, Vec<u8>), String> {
         })?
         .to_lowercase();
 
-    let archive = agent
+    let total = chosen.size;
+    progress(Progress {
+        tool: Tool::Typst,
+        phase: Phase::Downloading,
+        received: 0,
+        total,
+    });
+    let mut response = agent
         .get(&chosen.browser_download_url)
         .call()
-        .map_err(|e| format!("Could not download Typst: {e}"))?
-        .body_mut()
-        .with_config()
-        .limit(256 * 1024 * 1024)
-        .read_to_vec()
-        .map_err(|e| format!("Could not read the download: {e}"))?;
+        .map_err(|e| format!("Could not download Typst: {e}"))?;
+    let mut last = Instant::now();
+    let archive = {
+        let mut reader = response.body_mut().as_reader();
+        optional_tools::read_to_vec_bounded(
+            &mut reader,
+            256 * 1024 * 1024,
+            deadline,
+            |received| {
+                if last.elapsed() >= Duration::from_millis(100) {
+                    last = Instant::now();
+                    progress(Progress {
+                        tool: Tool::Typst,
+                        phase: Phase::Downloading,
+                        received,
+                        total,
+                    });
+                }
+            },
+        )
+        .map_err(|error| format!("Could not read the download: {error}"))?
+    };
 
+    progress(Progress {
+        tool: Tool::Typst,
+        phase: Phase::Verifying,
+        received: archive.len() as u64,
+        total,
+    });
     let actual = sha256_hex(&archive);
     if actual != expected {
         return Err(format!(
@@ -448,6 +485,12 @@ fn download_binary(agent: &ureq::Agent) -> Result<(String, Vec<u8>), String> {
         ));
     }
 
+    progress(Progress {
+        tool: Tool::Typst,
+        phase: Phase::Unpacking,
+        received: archive.len() as u64,
+        total,
+    });
     Ok((release.tag_name, extract_named_binary(&archive, typst_exe())?))
 }
 
@@ -466,7 +509,9 @@ fn install<R: Runtime>(app: &AppHandle<R>) -> Result<TypstStatus, String> {
     let _install = TYPST_INSTALL
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let (tag, binary) = download_binary(&http_agent())?;
+    let (tag, binary) = download_binary(&http_agent(), |progress| {
+        optional_tools::emit(app, progress);
+    })?;
 
     let root = managed_root(app).ok_or_else(|| {
         "The application could not work out where to put Typst, so it was not installed."
@@ -495,6 +540,15 @@ fn install<R: Runtime>(app: &AppHandle<R>) -> Result<TypstStatus, String> {
         );
     }
 
+    optional_tools::emit(
+        app,
+        Progress {
+            tool: Tool::Typst,
+            phase: Phase::Ready,
+            received: 0,
+            total: None,
+        },
+    );
     Ok(status(app))
 }
 
@@ -1416,7 +1470,7 @@ pub fn compile_to<R: Runtime>(
     image_root: Option<&str>,
 ) -> Result<(), String> {
     let typst = find_typst(app).ok_or_else(|| {
-        "Typst is not installed, so this cannot be exported as PDF. Use Help › Install Typst."
+        "Typst is not installed, so this cannot be exported as PDF. Use Tools › Optional Tools…."
             .to_string()
     })?;
 
@@ -1496,7 +1550,7 @@ fn render<R: Runtime>(
     let typst = find_typst(app).ok_or_else(|| {
         format!(
             "Typst is not installed, so .typ documents cannot be previewed. \
-             Install it via Tools › Check or Install Typst... or manually from {DOWNLOAD_PAGE}."
+             Install it via Tools › Optional Tools… or manually from {DOWNLOAD_PAGE}."
         )
     })?;
 
@@ -1887,7 +1941,7 @@ mod tests {
     #[ignore = "downloads ~18 MB from GitHub"]
     fn downloading_typst_yields_a_runnable_binary() {
         let (tag, binary) =
-            download_binary(&http_agent()).expect("the installer contract still holds");
+            download_binary(&http_agent(), |_| {}).expect("the installer contract still holds");
         assert!(!tag.is_empty(), "the release has no tag");
         assert!(
             binary.len() > 1_000_000,
