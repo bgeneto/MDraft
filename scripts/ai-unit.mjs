@@ -127,8 +127,8 @@ equal("the cold-start shortcuts are the three the palette used to pin", DEFAULT_
 equal("Continue writing belongs to Write", actionById("continue")?.group, "write");
 equal("Improve writing belongs to Refine", actionById("improve")?.group, "refine");
 equal("Ask AI belongs to Understand", actionById("ask")?.group, "understand");
-equal("Fix syntax belongs to Transform", actionById("fixSyntax")?.group, "transform");
-equal("Fix syntax replaces the passage", actionById("fixSyntax")?.apply, "replace");
+equal("Fix errors belongs to Transform", actionById("fixSyntax")?.group, "transform");
+equal("Fix errors replaces the passage", actionById("fixSyntax")?.apply, "replace");
 equal(
   "rewrite actions can replace",
   ACTIONS.filter((action) => action.apply === "replace").map((action) => action.id),
@@ -182,7 +182,7 @@ equal(
   ["table"],
 );
 equal(
-  "latex finds Fix syntax and Convert",
+  "latex finds Fix errors and Convert",
   searchActions("latex").map((a) => a.id),
   ["convert", "fixSyntax"],
 );

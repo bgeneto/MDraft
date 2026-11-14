@@ -223,9 +223,9 @@ export const ACTIONS: AiActionSpec[] = [
   },
   {
     id: "fixSyntax",
-    label: "Fix syntax",
+    label: "Fix errors",
     group: "transform",
-    description: "Repair markup errors without touching the wording",
+    description: "Repair markup syntax without touching the wording",
     keywords: [
       "fix",
       "syntax",
