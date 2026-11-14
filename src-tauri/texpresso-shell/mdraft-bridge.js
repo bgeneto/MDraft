@@ -469,6 +469,7 @@
     // The status does not wait for a paint: a hidden frame gets no animation
     // frames, and its problems are still the reader's.
     if (done) busy(false);
+    if (zoomPending && api()) applyZoom(zoom);
     // Two animation frames promise the pixels are in the canvas. A window that
     // is hidden, minimised or occluded gets no frames at all, so the report
     // would never arrive and the status would say "typesetting" forever; the
@@ -491,15 +492,59 @@
   // ---------------------------------------------------------------------
   // Zoom and theme.
   let zoom = 1;
+  // The zoom was applied before any page had a size, so its fit-width base was
+  // unknown; the first paint applies it again.
+  let zoomPending = false;
+  let zoomWidth = -1;
+  /**
+   * Set the app's zoom mode and lay the pages out.
+   *
+   * `preview.mode` only stores the mode in the pinned release: nothing is laid
+   * out until a compile changes a page size. The layout runs from the app's own
+   * zoom control, so the mode goes through it, as a reader's choice would. A
+   * custom scale is not among its options and gets one for the moment.
+   */
+  const setMode = (value) => {
+    const select = document.getElementById("zoom");
+    if (!select) {
+      api().preview.mode = value;
+      return false;
+    }
+    let added = null;
+    if (![...select.options].some((option) => option.value === value)) {
+      added = new Option(value, value);
+      added.hidden = true;
+      select.add(added);
+    }
+    select.value = value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    added?.remove();
+    return true;
+  };
   const applyZoom = (factor) => {
     zoom = factor;
     const preview = api().preview;
     const box = pagesBox();
     const ratio = box ? scrollTopOf.get.call(box) / Math.max(1, box.scrollHeight) : 0;
-    preview.mode = "fit-width";
-    if (Math.abs(factor - 1) > 0.001) {
+    const sized = (document.querySelector("#pages .page")?.offsetWidth ?? 0) > 0;
+    const custom = Math.abs(factor - 1) > 0.001;
+    zoomPending = custom && !sized;
+    zoomWidth = box ? box.clientWidth : -1;
+    // Fit-width first: the layout it runs makes `preview.scale` the real fit,
+    // the base the document zoom multiplies.
+    const laidOut = setMode("fit-width");
+    if (custom && sized) {
       const fit = Number(preview.scale);
-      if (fit > 0) preview.mode = String(fit * factor);
+      if (fit > 0) {
+        const target = Math.min(8, Math.max(0.1, fit * factor));
+        setMode(String(target));
+        const now = Number(preview.scale);
+        if (!laidOut || !(Math.abs(now - target) <= target * 0.01)) {
+          // The pinned app changed: say so instead of leaving a dead zoom.
+          note(`zoom not applied scale=${now} target=${target}`);
+          post({ type: "error", message: "The preview did not apply the document zoom." });
+        }
+      }
     }
     positions.clear();
     if (box) requestAnimationFrame(() => writeScroll(ratio * box.scrollHeight));
@@ -575,7 +620,12 @@
       },
       { passive: true },
     );
-    new ResizeObserver(() => positions.clear()).observe(box);
+    new ResizeObserver(() => {
+      positions.clear();
+      // A custom scale is absolute, and the app refits only in a fit mode: the
+      // document zoom is relative to the pane, so a new width applies it again.
+      if (Math.abs(zoom - 1) > 0.001 && box.clientWidth !== zoomWidth && api()) applyZoom(zoom);
+    }).observe(box);
   };
   // A click on a page makes the app resolve the point through the engine's
   // source map and select it in the hidden editor, after an asynchronous page
@@ -583,34 +633,186 @@
   // answer; any other selection change is the app's own bookkeeping.
   let pendingClick = 0;
   let clickY = null;
+  // The pressed point in the viewport, for `resolveClick`.
+  let clickPoint = null;
+  // The primary button is down on the pages, and the app has selected a range
+  // since: a drag, which the app turns into a source selection as it moves.
+  let down = false;
+  let dragged = false;
+
+  /** The app's caret box for a source offset, in viewport pixels, or null. */
+  const caretBox = (offset) => {
+    const view = api().editor;
+    quietly(() => view.dispatch({ selection: { anchor: offset } }));
+    const mark = document.querySelector("#pages .cursor-mark.caret");
+    const page = mark?.closest(".page");
+    if (!page) return null;
+    const rect = page.getBoundingClientRect();
+    const part = (value) => Number.parseFloat(value) / 100;
+    const left = part(mark.style.left);
+    const top = part(mark.style.top);
+    const height = part(mark.style.height);
+    if (!Number.isFinite(left) || !Number.isFinite(top)) return null;
+    const y = rect.top + top * rect.height;
+    const h = Number.isFinite(height) ? height * rect.height : 0;
+    return { x: rect.left + left * rect.width, top: y, bottom: y + h, height: h };
+  };
+  const CLICK_PROBES = 96;
+  const WORD = /[\p{L}\p{N}]+/gu;
+  /**
+   * The source offset under a clicked point, verified against the page.
+   *
+   * The app answers a click with a line and a column. For text that TeX set as
+   * written the column is the clicked character; for text a macro produced, or
+   * a paragraph the engine attributes to its first line, it is only nearby. So
+   * the answer is mapped forward again (`caretBox`, about half a millisecond)
+   * and compared with the pixel that was clicked:
+   *
+   * 1. the answer's own box, walked along its row towards the pointer;
+   * 2. failing that, the word boundaries of the answered line and its two
+   *    neighbours on each side: the one on the clicked row nearest the pointer,
+   *    walked the same way.
+   *
+   * "exact" needs a box on the clicked row within one row height of the
+   * pointer. "line" is the answered line when it is typeset at all; "none" is
+   * a position nothing confirms. The probes are capped, so a hostile document
+   * costs a bounded time (a correct answer costs a handful).
+   */
+  const resolveClick = (answer, point) => {
+    const view = api().editor;
+    const doc = view.state.doc;
+    if (!point || answer < 0 || answer > doc.length)
+      return { offset: answer, precision: "none", probes: 0 };
+    return withProbes(() => {
+      const seen = new Map();
+      const boxAt = (offset) => {
+        if (seen.has(offset)) return seen.get(offset);
+        if (seen.size >= CLICK_PROBES) return null;
+        const box = caretBox(offset);
+        seen.set(offset, box);
+        return box;
+      };
+      // The horizontal miss of a box on the clicked row; Infinity off the row.
+      const miss = (box) => {
+        if (!box) return Infinity;
+        const slack = Math.max(3, box.height * 0.35);
+        if (point.y < box.top - slack || point.y > box.bottom + slack) return Infinity;
+        return Math.abs(box.x - point.x);
+      };
+      /** Walk from `start` along its source line while the miss shrinks. */
+      const walk = (start) => {
+        const line = doc.lineAt(start);
+        let at = start;
+        let best = miss(boxAt(at));
+        if (best === Infinity) return { at, best };
+        const step = boxAt(at).x < point.x ? 1 : -1;
+        for (let next = at + step; next >= line.from && next <= line.to; next += step) {
+          const m = miss(boxAt(next));
+          // A macro argument can have no box of its own: look past a short gap.
+          if (m === Infinity && Math.abs(next - at) < 4) continue;
+          if (m >= best) break;
+          at = next;
+          best = m;
+        }
+        return { at, best };
+      };
+      const accept = (hit) => hit.best <= Math.max(6, seen.get(hit.at)?.height ?? 0);
+      let hit = walk(answer);
+      if (!accept(hit)) {
+        const home = doc.lineAt(answer).number;
+        let nearest = { at: answer, best: Infinity };
+        for (const delta of [0, -1, 1, -2, 2]) {
+          const number = home + delta;
+          if (number < 1 || number > doc.lines) continue;
+          const line = doc.line(number);
+          for (const match of line.text.matchAll(WORD)) {
+            for (const at of [line.from + match.index, line.from + match.index + match[0].length]) {
+              const m = miss(boxAt(at));
+              if (m < nearest.best) nearest = { at, best: m };
+            }
+          }
+        }
+        if (nearest.best < hit.best) hit = walk(nearest.at);
+      }
+      if (accept(hit)) return { offset: hit.at, precision: "exact", probes: seen.size };
+      const line = doc.lineAt(answer);
+      const typeset =
+        [...seen].some(([offset, box]) => box && offset >= line.from && offset <= line.to) ||
+        caretBox(line.from) !== null;
+      return { offset: answer, precision: typeset ? "line" : "none", probes: seen.size };
+    });
+  };
+
   const installClicks = () => {
     const box = pagesBox();
     const arm = (event) => {
       // The height that was clicked, below the pages' top edge: the same
       // coordinate `reveal` takes, so the host can level the source with it.
       clickY = event.clientY - box.getBoundingClientRect().top;
+      clickPoint = { x: event.clientX, y: event.clientY };
       clickDetail = event.type === "dblclick" ? 2 : event.detail || 1;
       pendingClick = performance.now();
+      if (event.type === "mousedown") {
+        down = event.button === 0;
+        dragged = false;
+      }
       note(`click armed detail=${clickDetail} target=${event.target?.className ?? "?"}`);
     };
     box.addEventListener("mousedown", arm, true);
     box.addEventListener("dblclick", arm, true);
     const view = api().editor;
+    const send = (from, to, extra) =>
+      post({
+        type: "source",
+        file: openName(),
+        from,
+        to,
+        detail: clickDetail,
+        y: clickY,
+        drag: false,
+        precision: "none",
+        ...extra,
+      });
+    // The release ends a drag: the range it left is sent once more as the final
+    // one, without a height, because the pressed row is not where it ended.
+    addEventListener(
+      "mouseup",
+      () => {
+        const range = view.state.selection.main;
+        if (down && dragged && range.to > range.from) {
+          note(`source ${openName()} ${range.from}-${range.to} drag end`);
+          send(range.from, range.to, { y: null });
+        }
+        down = false;
+        dragged = false;
+      },
+      true,
+    );
     const dispatch = view.dispatch.bind(view);
     view.dispatch = (...args) => {
       const result = dispatch(...args);
-      if (internal === 0 && pendingClick && performance.now() - pendingClick < 1500) {
-        const range = view.state.selection.main;
+      if (internal !== 0) return result;
+      const range = view.state.selection.main;
+      if (down && clickDetail < 2 && range.to > range.from) {
+        // Every step of a drag, however long it lasts.
+        dragged = true;
+        pendingClick = 0;
+        send(range.from, range.to, { drag: true, y: null });
+        return result;
+      }
+      if (pendingClick && performance.now() - pendingClick < 1500) {
         if (clickDetail < 2 || range.to > range.from) pendingClick = 0;
-        note(`source ${openName()} ${range.from}-${range.to} detail=${clickDetail}`);
-        post({
-          type: "source",
-          file: openName(),
-          from: range.from,
-          to: range.to,
-          detail: clickDetail,
-          y: clickY,
-        });
+        if (clickDetail < 2 && range.to === range.from) {
+          const started = performance.now();
+          const hit = resolveClick(range.head, clickPoint);
+          note(
+            `source ${openName()} ${range.head}->${hit.offset} ${hit.precision} probes=${hit.probes} ms=${Math.round(performance.now() - started)}`,
+          );
+          send(hit.offset, hit.offset, { precision: hit.precision });
+        } else {
+          note(`source ${openName()} ${range.from}-${range.to} detail=${clickDetail}`);
+          send(range.from, range.to, {});
+        }
       }
       return result;
     };

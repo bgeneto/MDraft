@@ -57,6 +57,12 @@ export type HostMessage =
   | { type: "export" }
   | { type: "dispose" };
 
+/**
+ * "exact": `from` maps back to the clicked point. "line": only its source line
+ * is typeset there. "none": nothing was verified.
+ */
+export type ClickPrecision = "exact" | "line" | "none";
+
 export interface TexpressoProblem {
   file: string;
   line: number;
@@ -79,7 +85,12 @@ export type FrameMessage =
       gesture: boolean;
     }
   | { type: "scrolled"; seq: number; scrollTop: number | null }
-  /** `y`: the clicked height below the frame's top, when the frame knows it. */
+  /**
+   * `y`: the clicked height below the frame's top, when the frame knows it.
+   * `drag`: an update while the button is still down; nothing may scroll.
+   * `precision`: how far the frame verified a single click against the pixel
+   * that was clicked (see `resolveClick` in mdraft-bridge.js).
+   */
   | {
       type: "source";
       file: string | null;
@@ -87,6 +98,8 @@ export type FrameMessage =
       to: number;
       detail: number;
       y: number | null;
+      drag: boolean;
+      precision: ClickPrecision;
     }
   | { type: "input" }
   | { type: "key"; key: "Escape" }
@@ -180,6 +193,8 @@ export function parseFrameMessage(data: unknown): FrameMessage | null {
             to: m.to,
             detail: m.detail,
             y: num(m.y) ? m.y : null,
+            drag: m.drag === true,
+            precision: m.precision === "exact" || m.precision === "line" ? m.precision : "none",
           }
         : null;
     case "input":

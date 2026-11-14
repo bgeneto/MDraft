@@ -881,6 +881,48 @@ try {
         `${mode}: with sync off a source click moves neither pane`,
         JSON.stringify({ preview: offAfter.preview - offBefore.preview }),
       );
+      // The mirror image: a preview click places the source caret and moves
+      // neither pane. Pages is left out, because a page click reveals a source
+      // match that is off screen.
+      if (mode !== "pages") {
+        await previewClient().evaluate(installBoxProbe);
+        const band = await paneState();
+        // Well below the top of the pane, where the source used to be sent.
+        const aim = band.top + (band.bottom - band.top) * 0.65;
+        let target = null;
+        for (let i = 0; i < 40; i += 1) {
+          const box = await previewBox(`syncprobe${String(8 + i * 2).padStart(3, "0")}`, mode);
+          if (!box || centre(box) < band.top + 40 || centre(box) > band.bottom - 40) continue;
+          if (!target || Math.abs(centre(box) - aim) < Math.abs(centre(target) - aim)) target = box;
+        }
+        check(target !== null, `${mode}: a probe word is on screen for the sync-off preview click`);
+        if (target) {
+          await page.evaluate(`${view}.dispatch({ selection: { anchor: 0 } })`);
+          await sleep(200);
+          const clickBefore = await paneState();
+          await clickAt(
+            Math.min(target.left + 6, (target.left + target.right) / 2),
+            centre(target),
+          );
+          await sleep(350);
+          const clickAfter = await paneState();
+          const head = await page.evaluate(`${view}.state.selection.main.head`);
+          check(
+            head > 0,
+            `${mode}: with sync off a preview click places the source caret`,
+            String(head),
+          );
+          check(
+            Math.abs(clickAfter.source - clickBefore.source) < 1 &&
+              Math.abs(clickAfter.preview - clickBefore.preview) < 1,
+            `${mode}: with sync off a preview click moves neither pane`,
+            JSON.stringify({
+              source: clickAfter.source - clickBefore.source,
+              preview: clickAfter.preview - clickBefore.preview,
+            }),
+          );
+        }
+      }
       await menu("view.syncScroll");
       await menu("view.source");
       await sleep(250);

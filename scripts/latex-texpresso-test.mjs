@@ -545,10 +545,37 @@ try {
         `document.documentElement.dataset.mdraftTrace ?? ""`,
       )}`,
     );
+    // The click was aimed at the centre of the mark of the selected source
+    // text, so a verified answer is a caret inside that text, and the mark is
+    // the caret's own source line.
+    const answer = JSON.parse((await dataset("texpressoSource")) ?? "null");
+    const expected = await editor(
+      `const line = view.state.doc.line(${clickable.line});
+       const at = view.state.doc.lineAt(view.state.selection.main.head);
+       return { from: line.from + ${clickable.at}, to: line.from + ${clickable.at} + ${clickable.length},
+         lineFrom: at.from, lineTo: at.to };`,
+    );
     check(
-      afterClick.head === caretBefore.head,
-      "a click in the preview does not move the caret",
-      `${caretBefore.head} -> ${afterClick.head}`,
+      answer?.precision === "exact" && answer.unit === "line",
+      "the frame verifies the click against the clicked point",
+      `${JSON.stringify(answer)} trace ${await frameEval(
+        `document.documentElement.dataset.mdraftTrace ?? ""`,
+      )}`,
+    );
+    check(
+      afterClick.anchor === afterClick.head &&
+        afterClick.head >= expected.from &&
+        afterClick.head <= expected.to,
+      "a click in the preview puts the caret in the clicked text",
+      `${JSON.stringify(afterClick)} expected ${JSON.stringify(expected)}`,
+    );
+    check(
+      answer?.range &&
+        answer.range.from >= expected.lineFrom &&
+        answer.range.to <= expected.lineTo &&
+        answer.range.to > answer.range.from,
+      "a click in the preview marks the caret's source line, not the paragraph",
+      `${JSON.stringify(answer?.range)} line ${JSON.stringify(expected)}`,
     );
     // Gesture alignment (docs/architecture.md): the
     // clicked line's source comes to the clicked height. The engine's map is by
@@ -624,21 +651,31 @@ try {
   );
 
   console.log("=== zoom, themes and manual mode ===");
-  const scaleBefore = await frameEval(
-    `JSON.stringify({ mode: globalThis.texpresso?.preview?.mode, scale: globalThis.texpresso?.preview?.scale, w: document.querySelector("#pages .page")?.offsetWidth, h: document.querySelector("#pages .page")?.offsetHeight })`,
-  );
+  // The page's own width, not `preview.mode`: the app stores a mode without
+  // laying anything out, and a comparison that included it passed while the
+  // pages never changed.
+  const pageBox = () =>
+    frameEval(
+      `JSON.stringify({ mode: globalThis.texpresso?.preview?.mode, scale: globalThis.texpresso?.preview?.scale, w: document.querySelector("#pages .page")?.offsetWidth ?? 0 })`,
+    ).then(JSON.parse);
+  const scaleBefore = await pageBox();
   await emitMenu(page, "view.zoomIn");
   await sleep(1200);
-  const scaleAfter = await frameEval(
-    `JSON.stringify({ mode: globalThis.texpresso?.preview?.mode, scale: globalThis.texpresso?.preview?.scale, w: document.querySelector("#pages .page")?.offsetWidth, h: document.querySelector("#pages .page")?.offsetHeight })`,
-  );
+  const scaleAfter = await pageBox();
+  const grown = scaleBefore.w > 0 ? scaleAfter.w / scaleBefore.w : 0;
   check(
-    scaleAfter !== scaleBefore,
-    "document zoom reaches the frame",
-    `${scaleBefore} -> ${scaleAfter}`,
+    Math.abs(grown - 1.1) <= 0.022,
+    "document zoom at 110% makes the page 1.1 times as wide",
+    `${JSON.stringify(scaleBefore)} -> ${JSON.stringify(scaleAfter)}`,
   );
   await emitMenu(page, "view.zoomReset");
-  await sleep(600);
+  await sleep(1200);
+  const scaleReset = await pageBox();
+  check(
+    Math.abs(scaleReset.w - scaleBefore.w) <= Math.max(2, scaleBefore.w * 0.01),
+    "zoom reset returns the page to its fit width",
+    `${JSON.stringify(scaleBefore)} -> ${JSON.stringify(scaleReset)}`,
+  );
 
   await emitMenu(page, "themes.dark");
   await sleep(800);

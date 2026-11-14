@@ -57,6 +57,14 @@ one atomic region when its safe literal tokens identify one unique PDF
 occurrence. Macro-expanded math, figures, generated text and ambiguous or
 unsupported LaTeX may not have a match.
 
+In the bundled preview the engine's own source map answers a gesture on the
+page. A click puts the source caret on the clicked character and marks its
+source line; a double-click marks the word; dragging marks the dragged words.
+Each click is checked against the point that was clicked: when the engine can
+only name the line (text a macro produced, for example), the line is marked and
+the caret goes to its start, and when it cannot name even that, the paragraph is
+marked and the caret stays. A click in the source blinks that line on the page.
+
 MDraft does not request or consume SyncTeX for this correspondence. If the
 document explicitly enables SyncTeX, LuaLaTeX may still create it in its
 temporary virtual filesystem; MDraft ignores it.

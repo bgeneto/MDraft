@@ -32,7 +32,11 @@ import {
 import { parseFrameMessage, PROTOCOL_VERSION, textHash } from "../src/texpresso/protocol.ts";
 import { normaliseText, prepareProject } from "../src/texpresso/project.ts";
 import { editorLineAt, editorScrollFor } from "../src/texpresso/scroll.ts";
-import { projectRelativePath, rangeForPreviewGesture } from "../src/texpresso/selection.ts";
+import {
+  lineRangeAt,
+  markForPreviewGesture,
+  projectRelativePath,
+} from "../src/texpresso/selection.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const read = (path) => readFileSync(join(root, path), "utf8");
@@ -164,6 +168,16 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     { v: 1, type: "viewport", scrollTop: 12.5, file: "main.tex", line: 3.25, gesture: false },
     { v: 1, type: "scrolled", seq: 5, scrollTop: null },
     { v: 1, type: "source", file: null, from: 0, to: 0, detail: 1 },
+    {
+      v: 1,
+      type: "source",
+      file: "a.tex",
+      from: 4,
+      to: 4,
+      detail: 1,
+      drag: false,
+      precision: "exact",
+    },
     { v: 1, type: "input" },
     { v: 1, type: "key", key: "Escape" },
     { v: 1, type: "zoom-wheel", deltaY: -120 },
@@ -383,24 +397,69 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     "a degenerate layout still yields a line",
   );
 
-  const source = "First paragraph here.\n\nSecond paragraph.\n";
-  const word = rangeForPreviewGesture(source, 0, 5, 2);
+  // 0         1         2         3         4         5         6
+  // 0123456789012345678901234567890123456789012345678901234567890123
+  const source = "First paragraph here,\n  wrapped onto two lines.\n\nSecond paragraph.\n";
+  const word = markForPreviewGesture(source, 0, 5, 2);
   check(
-    word?.from === 0 && word?.to === 5,
-    "a double-click marks the word it names",
+    word?.range.from === 0 && word?.range.to === 5 && word?.caret === null,
+    "a double-click marks the word it names and leaves the caret",
     JSON.stringify(word),
   );
-  const paragraph = rangeForPreviewGesture(source, 3, 3, 1);
+  const exact = markForPreviewGesture(source, 31, 31, 1, "exact");
   check(
-    paragraph !== null && paragraph.from <= 3 && paragraph.to >= 20,
-    "a click marks the paragraph around the caret",
+    exact?.unit === "line" &&
+      source.slice(exact.range.from, exact.range.to) === "wrapped onto two lines." &&
+      exact.caret === 31,
+    "a verified click marks its source line and puts the caret on the character",
+    JSON.stringify(exact),
+  );
+  const indent = markForPreviewGesture(source, 22, 22, 1, "exact");
+  check(
+    indent?.caret === 24,
+    "a caret answered in the indentation moves to the line's first character",
+    JSON.stringify(indent),
+  );
+  const byLine = markForPreviewGesture(source, 31, 31, 1, "line");
+  check(
+    byLine?.unit === "line" && byLine.caret === byLine.range.from && byLine.range.from === 24,
+    "a click verified only by line puts the caret at the line's start",
+    JSON.stringify(byLine),
+  );
+  const paragraph = markForPreviewGesture(source, 3, 3, 1, "none");
+  check(
+    paragraph?.unit === "paragraph" &&
+      paragraph.range.from === 0 &&
+      paragraph.range.to === 47 &&
+      paragraph.caret === null,
+    "an unverified click marks the paragraph and leaves the caret",
     JSON.stringify(paragraph),
   );
+  const blank = markForPreviewGesture("One.\n   \nTwo.\n", 6, 6, 1, "exact");
   check(
-    rangeForPreviewGesture(source, 9999, 9999, 1) === null,
+    blank === null || blank.unit === "paragraph",
+    "a click answered on a blank line never marks a line",
+    JSON.stringify(blank),
+  );
+  const drag = markForPreviewGesture(source, 8, 18, 1);
+  check(
+    drag?.unit === "range" &&
+      source.slice(drag.range.from, drag.range.to) === "paragraph here" &&
+      drag.caret === null,
+    "a drag marks the dragged range, widened to whole words",
+    JSON.stringify(drag),
+  );
+  check(
+    markForPreviewGesture(source, 9999, 9999, 1, "exact") === null,
     "a position past the end marks nothing",
   );
-  check(rangeForPreviewGesture("", 0, 0, 1) === null, "an empty document marks nothing");
+  check(markForPreviewGesture("", 0, 0, 1, "exact") === null, "an empty document marks nothing");
+  const trimmed = lineRangeAt("a\n  bc  \nd", 5);
+  check(
+    trimmed.from === 4 && trimmed.to === 6,
+    "a line range drops its blanks",
+    JSON.stringify(trimmed),
+  );
 
   const key = (path) => path.replace(/\\/g, "/").toLowerCase();
   check(

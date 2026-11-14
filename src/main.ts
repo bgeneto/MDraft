@@ -230,9 +230,14 @@ import {
   type TexpressoFallback,
 } from "./latex-backend";
 import { normaliseText, prepareProject, TexpressoSession } from "./texpresso/session";
-import type { FrameMessage, TexpressoTheme } from "./texpresso/protocol";
+import type { ClickPrecision, FrameMessage, TexpressoTheme } from "./texpresso/protocol";
 import { editorLineAt, editorScrollFor, type EditorScrollGeometry } from "./texpresso/scroll";
-import { projectRelativePath, rangeForPreviewGesture } from "./texpresso/selection";
+import {
+  lineRangeAt,
+  markForPreviewGesture,
+  projectRelativePath,
+  type PreviewMark,
+} from "./texpresso/selection";
 import { libraryNames } from "./latex-texmf";
 import {
   clearLatexPerf,
@@ -4902,6 +4907,8 @@ function texpressoMessage(session: TexpressoSession, message: FrameMessage): voi
         message.to,
         message.detail,
         message.y,
+        message.drag,
+        message.precision,
       );
       break;
     case "key":
@@ -4951,23 +4958,29 @@ function texpressoSyncSelection(): boolean {
   return true;
 }
 
-/** A click in the source: its paragraph blinks in the frame and nothing moves. */
+/** A click in the source: its line blinks in the frame and nothing moves. */
 function texpressoBlinkSource(): boolean {
   const session = texpresso;
   if (!session || !texpressoShowing()) return false;
   const file = projectRelativePath(session.rootDirectory, doc.path, pathKey);
   if (file === null || settings.viewMode !== "split" || editor.cursorInfo().selectionLength)
     return true;
-  const range = paragraphRangeAt(editor.getDoc(), editor.cursorInfo().from);
+  // The same unit a click in the frame marks here; a blank line has only its
+  // paragraph to show.
+  const source = editor.getDoc();
+  const offset = editor.cursorInfo().from;
+  const line = lineRangeAt(source, offset);
+  const range = line.to > line.from ? line : paragraphRangeAt(source, offset);
   if (range.to > range.from)
     session.post({ type: "select", file, from: range.from, to: range.to, blink: true });
   return true;
 }
 
 /**
- * A click or double-click in the frame: the word or paragraph is marked in the
- * source, the caret does not move, and focus comes back to the editor. A
- * double-click reveals it, opening its chapter when needed.
+ * A gesture in the frame, on the rule of `markForPreviewGesture`: a click the
+ * frame verified puts the caret on the clicked character and marks its line; a
+ * drag or a double-click marks its words and leaves the caret. Focus comes back
+ * to the editor. A double-click reveals, opening its chapter when needed.
  */
 async function texpressoSourceGesture(
   session: TexpressoSession,
@@ -4976,11 +4989,23 @@ async function texpressoSourceGesture(
   to: number,
   detail: number,
   y: number | null = null,
+  drag = false,
+  precision: ClickPrecision = "none",
 ): Promise<void> {
   // Evidence for the CDP layer and for a bug report: what the engine answered
   // and what this side decided, without the document's text.
-  const record = (range: { from: number; to: number } | null) => {
-    preview.dataset.texpressoSource = JSON.stringify({ file, from, to, detail, range });
+  const record = (mark: PreviewMark | null) => {
+    preview.dataset.texpressoSource = JSON.stringify({
+      file,
+      from,
+      to,
+      detail,
+      drag,
+      precision,
+      range: mark?.range ?? null,
+      caret: mark?.caret ?? null,
+      unit: mark?.unit ?? null,
+    });
   };
   if (!file || settings.viewMode === "source") return record(null);
   const path = joinDir(session.rootDirectory, file);
@@ -4996,25 +5021,38 @@ async function texpressoSourceGesture(
     if (!doc.path || pathKey(doc.path) !== pathKey(path) || session !== texpresso) return;
     reveal = true;
   }
-  const range = rangeForPreviewGesture(editor.getDoc(), from, to, detail);
-  record(range);
-  if (!range) return;
+  const mark = markForPreviewGesture(editor.getDoc(), from, to, detail, precision);
+  record(mark);
+  if (!mark) return;
+  const range = mark.range;
   // `setSyncRange` blurs the editor so the PDF selection survives the
   // decoration repaint, and `focus()` then re-reads a DOM selection that the
-  // blur cleared. Keep the caret the reader had: a click in the preview must
-  // mark, never move it.
-  const caret = editor.view.state.selection.main;
+  // blur cleared. The selection is therefore written back afterwards: the
+  // verified caret of a click, else the one the reader had.
+  const held = editor.view.state.selection.main;
   wordSyncDismissed = false;
   syncedSource = range;
   editor.setSyncRange(range.from, range.to);
+  // A drag only paints: moving the pane under the pointer, or the focus out of
+  // the frame, would break the gesture it belongs to.
+  if (drag) return;
   // With Sync on, a click levels the source line with the clicked height; a
   // double-click that could not be levelled still brings it into view.
-  if (!texpressoLevelFromFrame(from, y) && reveal) {
+  if (!texpressoLevelFromFrame(mark.caret ?? from, y) && reveal) {
     suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
     editor.revealOffset(range.from);
   }
   editor.focus();
-  editor.view.dispatch({ selection: { anchor: caret.anchor, head: caret.head } });
+  // A caret placed from the preview must not move the preview.
+  caretCameFromPreview = true;
+  try {
+    editor.view.dispatch({
+      selection:
+        mark.caret === null ? { anchor: held.anchor, head: held.head } : { anchor: mark.caret },
+    });
+  } finally {
+    caretCameFromPreview = false;
+  }
 }
 
 /** Escape, from either pane: both marks go, nothing else changes. */
@@ -11117,10 +11155,11 @@ function installPaneSync(): void {
     suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
     caretCameFromPreview = true;
     try {
-      // With Sync on the release levels the source with the clicked row, so the
-      // press only places the caret. With Sync off the block's first line is
-      // revealed near the top, as before.
-      if (settings.syncScroll && settings.viewMode === "split") editor.caretToLine(line);
+      // In Split the press only places the caret. With Sync on the release then
+      // levels the source with the clicked row; with Sync off nothing scrolls,
+      // the same as a click in the source. Outside Split the source is hidden,
+      // so it is positioned for the next switch to it.
+      if (settings.viewMode === "split") editor.caretToLine(line);
       else editor.revealLine(line, true, false);
     } finally {
       caretCameFromPreview = false;
@@ -11782,9 +11821,9 @@ function handleHtmlLine(line: number): void {
   suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
   caretCameFromPreview = true;
   try {
-    // With Sync on the release levels the source (handleHtmlGesture); the press
-    // only places the caret.
-    if (settings.syncScroll && settings.viewMode === "split") editor.caretToLine(line);
+    // In Split the press only places the caret. With Sync on the release then
+    // levels the source (handleHtmlGesture); with Sync off nothing scrolls.
+    if (settings.viewMode === "split") editor.caretToLine(line);
     else editor.revealLine(line, true, false);
   } finally {
     caretCameFromPreview = false;
