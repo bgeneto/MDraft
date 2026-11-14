@@ -859,7 +859,9 @@ function exportHarness(language, delay) {
       await release.promise;
     }
   };
-  const legacyPaths = [];
+  const legacyPaths = [],
+    toolRequests = [],
+    pickers = [];
   const context = {
     doc: first,
     settings: { lastDirectory: null, enableMath: true, enableMermaid: true },
@@ -867,12 +869,21 @@ function exportHarness(language, delay) {
     KATEX_STYLESHEET_URL: "katex.css",
     pandocCache: null,
     typstCache: { found: true },
+    installOutcome: "ready",
+    optionalTools: {
+      installFor: async (required) => {
+        toolRequests.push([...required]);
+        await pause("tools");
+        return context.installOutcome;
+      },
+    },
     textOf: (s) => s.text,
     editor: { getDoc: () => context.doc.text },
     customImageFolder: () => `${context.doc.directory}/images`,
     // Track W: Typst's extra root is the custom image folder when one is set.
     typstExtraRoot: () => context.customImageFolder(),
     saveDialog: async () => {
+      pickers.push(true);
       await pause("picker");
       return "/output/result";
     },
@@ -903,8 +914,6 @@ function exportHarness(language, delay) {
       context.pandocCache = { found: true };
     },
     refreshTypstStatus: async () => {},
-    pandocSetup: async () => {},
-    typstSetup: async () => {},
     renderAsciidocForExport: async (text, opts) => {
       calls.push({ converted: text, base: opts.baseDir });
       await pause("convert");
@@ -939,6 +948,8 @@ function exportHarness(language, delay) {
     calls,
     errors,
     legacyPaths,
+    toolRequests,
+    pickers,
     routes: context.routes,
   };
 }
@@ -1022,6 +1033,23 @@ for (const delay of ["tools", "picker", "convert"]) {
     `Pandoc retains source/path/language/image root during delayed ${delay}`,
   );
 }
+for (const outcome of ["declined", "failed"]) {
+  const h = exportHarness("markdown", null);
+  h.context.installOutcome = outcome;
+  await h.routes.exportWithPandoc({ id: "docx", label: "Word", extension: "docx" });
+  check(
+    h.pickers.length === 0 && h.calls.length === 0,
+    `${outcome} optional-tool setup cannot open a picker or start an export`,
+  );
+}
+{
+  const h = exportHarness("markdown", null);
+  await h.routes.exportWithPandoc({ id: "pdf", label: "PDF via Typst", extension: "pdf" });
+  check(
+    h.toolRequests[0]?.join(",") === "pandoc,typst" && h.calls[0]?.formatId === "pdf",
+    "PDF via Typst requires both tools before continuing the captured export",
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Shell ownership: the real `src/main.ts` bodies, selected by name, run against
@@ -1079,6 +1107,7 @@ const shellNoops = [
   "stopReadAloud",
   "invalidatePreview",
   "restorePreview",
+  "resetSyncReference",
   "applyLatexMarks",
   "syncGuest",
   "resetOutline",
@@ -1314,7 +1343,7 @@ const consistent = (h) =>
 
 // ---------------------------------------------------------------------------
 // LaTeX export ownership (F14): the project snapshot belongs to the tab the
-// export started on, even when the Pandoc lookup yields to a tab switch.
+// export started on, even when optional-tool setup yields to a tab switch.
 // ---------------------------------------------------------------------------
 
 function latexExportHarness() {
@@ -1347,8 +1376,12 @@ function latexExportHarness() {
       toast: () => ({ dismiss() {} }),
       saveDialog: async () => "/out/result",
       message: async (text) => errors.push(String(text)),
-      pandocSetup: async () => {},
-      typstSetup: async () => {},
+      optionalTools: {
+        installFor: async () => {
+          await release.promise;
+          return "ready";
+        },
+      },
       refreshTypstStatus: async () => {},
       renderAsciidocForExport: async (text) => text,
       showWriterChooser: async () => ({ writer: "html", label: "HTML", extension: "html" }),
