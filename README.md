@@ -55,7 +55,10 @@ projects easy to navigate.
 *Typst Pages view shows the compiled page while you edit its source.*
 
 Typst preview and PDF compilation require the Typst compiler. MDraft can
-install it for you on Windows and Linux.
+install it for you on Windows and Linux. An optional companion service
+(`mdraft-typst-service`) can also be enabled in *Preferences › Export* and
+verified/downloaded on demand from the pinned release manifest for warm
+incremental previews; stock Typst CLI remains the automatic fallback.
 
 LaTeX is opt-in: enabling bundled TeX downloads about 20 MiB of verified
 engine files, and the TeX packages a document needs are fetched on demand and
@@ -164,8 +167,9 @@ you select is your own program: it may download its own packages, and MDraft
 neither controls nor monitors that traffic.
 
 The [LaTeX engine](docs/latex.md) downloads its files only after explicit
-enablement and then retrieves missing TeX packages and fonts on demand. The
-document and bibliography contents stay local. The first time you format a
+enablement and then retrieves missing TeX packages and fonts on demand from
+MDraft's pinned public origin (`https://mdraft.webonly.app/`). The document and
+bibliography contents stay local. The first time you format a
 `.tex` document, MDraft downloads the LaTeX formatter (about 1.7 MB, verified
 against its pinned checksum and cached); later formats work offline.
 

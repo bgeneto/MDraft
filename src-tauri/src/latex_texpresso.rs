@@ -13,7 +13,7 @@
 //! Everything downloaded comes from one base URL, `origin` in `texpresso.json`.
 //! A byte is verified before it is cached and again when it is served; a file
 //! that does not verify is refused by name, never passed through.
-//! Decision: docs/adr/2026-11-13-latex-preview-backends.md.
+//! Decision: docs/adr/2026-11-13-texpresso-production.md.
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -36,8 +36,17 @@ const DATA_PREFIX: &str = "/texpresso-data/";
 const MAX_DOWNLOAD: u64 = 64 * 1024 * 1024;
 /// Ceiling of the evictable part of the cache: the bundle files under `files/`.
 /// The list, the formats and the font-cache archive are needed by every
-/// compile and are never evicted.
-const CACHE_LIMIT: u64 = 512 * 1024 * 1024;
+/// compile and are never evicted. Preferences sets it; 512 MiB is the fallback
+/// before settings are loaded.
+static CACHE_LIMIT: AtomicU64 = AtomicU64::new(512 * 1024 * 1024);
+/// The smallest ceiling the settings row allows, repeated here so a direct
+/// caller cannot configure a cache that thrashes on the format files.
+const CACHE_FLOOR: u64 = 32 * 1024 * 1024;
+
+/// Mirror the reader's cache ceiling into the generator that serves the frame.
+pub fn set_cache_limit(bytes: u64) {
+    CACHE_LIMIT.store(bytes.max(CACHE_FLOOR), Ordering::Relaxed);
+}
 /// A cache hit refreshes the file's modification time, the eviction order, at
 /// most this often: a compile reads hundreds of files and must not write
 /// hundreds of timestamps.
@@ -464,7 +473,7 @@ fn obtain(
         VERIFIED_BYTES.fetch_add(bytes.len() as u64, Ordering::Relaxed);
         crate::latex::write_atomic(cache, &bytes)?;
         if let Some(dir) = evictable {
-            account(dir, bytes.len() as u64, CACHE_LIMIT);
+            account(dir, bytes.len() as u64, CACHE_LIMIT.load(Ordering::Relaxed));
         }
         Ok(bytes)
     })();

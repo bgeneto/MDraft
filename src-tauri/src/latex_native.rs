@@ -1,6 +1,6 @@
 //! Installed TeX distributions: discovery, validation and direct builds.
 //!
-//! The bundled engine stays the default. This module serves a reader who
+//! The bundled preview stays the default. This module serves a reader who
 //! explicitly chose an installation already on the computer: it finds one,
 //! compiles a probe with it, and only then offers the switch. Every real job
 //! stages the project into an app-owned directory, runs the engine as a
@@ -83,7 +83,10 @@ pub struct EngineStatus {
     /// `native`, `bundled` or `none`.
     pub backend: String,
     pub bundled_enabled: bool,
+    /// The hidden WasmTex backend's assets, kept for its regression layer.
     pub bundled_installed: bool,
+    /// The production preview engine and digest table are present.
+    pub preview_installed: bool,
     pub native_enabled: bool,
     pub native_root: Option<String>,
     pub native_distribution: Option<String>,
@@ -181,6 +184,8 @@ pub fn latex_engine_status(app: AppHandle) -> Result<EngineStatus, String> {
         .ok_or("The settings store is unavailable.")?;
     let settings = state.snapshot()?;
     let bundled_installed = crate::latex::latex_status(app.clone()).unwrap_or(false);
+    let preview_installed =
+        crate::latex::directory(&app).is_ok_and(|root| crate::latex_texpresso::available(&root));
     let native_root = settings.latex_native_root.clone();
     let native_wsl = settings.latex_native_wsl.clone();
     let mut native_engines = native_root
@@ -231,6 +236,7 @@ pub fn latex_engine_status(app: AppHandle) -> Result<EngineStatus, String> {
         backend: backend.into(),
         bundled_enabled: settings.latex_enabled,
         bundled_installed,
+        preview_installed,
         native_enabled: settings.latex_native_enabled,
         native_distribution: match &native_wsl {
             Some(selected) => Some(wsl_distribution_name(&selected.distro)),

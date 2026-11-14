@@ -151,6 +151,7 @@ await page.send("Fetch.enable", {
   patterns: [
     { urlPattern: "http://ipc.localhost/latex_engine_status", requestStage: "Request" },
     { urlPattern: "http://ipc.localhost/render_typst", requestStage: "Request" },
+    { urlPattern: "http://ipc.localhost/render_typst_binary", requestStage: "Request" },
   ],
 });
 
@@ -608,11 +609,13 @@ try {
     10000,
   );
   hold("render_typst");
+  hold("render_typst_binary");
   const typstSwitch = await clickTab("a.typ", MARKERS);
   check(!typstSwitch.staleAfter, "the Markdown preview is retired before the Typst document");
   await sampleStart(MARKERS, "OWNER-MARKER-TYPST");
   check(Boolean(await waitForPending(2500)), "the Typst wait shows the surface");
   await release("render_typst");
+  await release("render_typst_binary");
   check(await waitForCommit(30000), "the Typst document commits and the surface clears");
   const typstSample = await sampleStop();
   check(
@@ -629,11 +632,13 @@ try {
     10000,
   );
   hold("render_typst");
+  hold("render_typst_binary");
   const pagesSwitch = await clickTab("a.typ", MARKERS);
   check(!pagesSwitch.staleAfter, "the Markdown preview is retired before Typst Pages");
   await sampleStart(MARKERS, "OWNER-MARKER-TYPST");
   check(Boolean(await waitForPending(2500)), "the Typst Pages wait shows the surface");
   await release("render_typst");
+  await release("render_typst_binary");
   check(await waitForCommit(30000), "Typst Pages commits and the surface clears");
   const pagesSample = await sampleStop();
   check(
@@ -763,6 +768,7 @@ try {
   );
   hold("latex_engine_status");
   hold("render_typst");
+  hold("render_typst_binary");
   await sampleStart(MARKERS);
   for (const [name, markers] of [
     ["doc.tex", TEX],

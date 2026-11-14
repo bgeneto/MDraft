@@ -16,6 +16,13 @@ import { markdownCodeSpans, markdownScanProtectedAndCode } from "./markdown-cont
 import { indexOffsets, type Fragment, type Substitution } from "./source-map.ts";
 import { legacyImageCandidate } from "./legacy-image-paths.ts";
 import { renderKatexCached } from "./katex-cache.ts";
+import {
+  DEFAULT_MAX_DIRTY_RATIO,
+  diffBlocks,
+  fnv1aHash,
+  type BlockPatchOp,
+  type DiffableBlock,
+} from "./block-diff.ts";
 
 export interface ChunkOptions {
   /** Render `$…$` with KaTeX. */
@@ -47,6 +54,29 @@ export interface RenderedMath {
   error: string | null;
 }
 
+/** Per-block keyed payload using block-local `@@CODE`/`@@MATH`/`data-f` indices. */
+export interface MarkdownBlockChunk extends DiffableBlock {
+  tokenType: string;
+  silent: boolean;
+  html: string;
+  origStart: number;
+  origEnd: number;
+  newlineCount: number;
+  codes: CodeEntry[];
+  maths: RenderedMath[];
+  fragments?: Fragment[];
+}
+
+export interface MarkdownIncrementalInfo {
+  mode: "window" | "lex-diff" | "full";
+  reason?: string;
+  dirtyRatio: number;
+  dirtyBlocks: number;
+  ops: BlockPatchOp<MarkdownBlockChunk>[];
+  headingsChanged: boolean;
+  hasToc: boolean;
+}
+
 export interface PreviewChunks {
   /** One HTML fragment per top-level `marked` token, in order. */
   chunks: string[];
@@ -68,6 +98,16 @@ export interface PreviewChunks {
    */
   elementLines?: number[] | null;
   legacyImages?: Record<string, { candidate: string; parsed: string }>;
+  /** Keyed top-level block payloads with block-local placeholder/fragment indices. */
+  blocks?: MarkdownBlockChunk[];
+  /** Number of link reference definitions (`def` tokens). */
+  defCount?: number;
+  /** Signature of all Markdown link reference definitions (`def` tokens). */
+  defSignature?: string;
+  mathEnabled?: boolean;
+  mapEnabled?: boolean;
+  /** Patch metadata populated when produced via `renderChunksIncremental`. */
+  incremental?: MarkdownIncrementalInfo;
 }
 
 const PLACEHOLDER_PIECE = /@@(CODE|MATH)(\d+)@@/g;
@@ -764,156 +804,156 @@ function collectSubstitutions(
  * sanitise and insert a batch without ever holding the whole document's DOM
  * work in one task. `marked` keeps no state between top-level tokens.
  */
-function renderMappedChunks(
-  prepared: string,
-  substitutions: readonly Substitution[],
-  lineSubstitutions: readonly Substitution[] = [],
-): {
-  chunks: string[];
+interface MarkedSetupResult {
+  instance: Marked;
   tokens: Token[];
-  fragments: Fragment[];
   hasRawHtml: boolean;
-  legacyImages: NonNullable<PreviewChunks["legacyImages"]>;
-} {
-  const fragments: Fragment[] = [];
-  const legacy = legacyImagesForRender();
-  const sourceOffset = indexOffsets(substitutions);
-  const lineOffset = indexOffsets(lineSubstitutions);
-  const sourceOf = (preparedOffset: number) => sourceOffset(lineOffset(preparedOffset));
-  const push = (fragment: Fragment): number => {
-    fragments.push(fragment);
-    return fragments.length - 1;
-  };
-  const escape = escapeHtml;
-
-  const renderer: RendererObject = {
-    text(token) {
-      const positioned = token as unknown as Positioned;
-      const raw = token.raw ?? "";
-      const escaped = "escaped" in token && token.escaped === true;
-      const children = "tokens" in token ? token.tokens : undefined;
-      const body =
-        children && children.length > 0
-          ? this.parser.parseInline(children)
-          : escaped
-            ? token.text
-            : escape(token.text);
-
-      if (positioned.srcStart === undefined || raw.length === 0) return body;
-      // Children carry their own offsets; wrapping the parent would overlap them.
-      if (children && children.length > 0) return body;
-
-      const pieces = textPieces(positioned);
-      if (
-        pieces.length === 1 &&
-        pieces[0].start === 0 &&
-        pieces[0].end === raw.length &&
-        pieces[0].src !== null
-      ) {
-        // One contiguous run: keep the renderer's own body, so backslash escapes,
-        // entities and raw HTML blocks render exactly as they do without a map.
-        const index = push({
-          src0: sourceOf(pieces[0].src),
-          src1: sourceOf(pieces[0].src + raw.length),
-          raw,
-          kind: "text",
-        });
-        return `<span data-f="${index}">${body}</span>`;
-      }
-
-      let out = "";
-      for (const piece of pieces) {
-        const html =
-          piece.kind === "raw" ? (escaped ? piece.text : escape(piece.text)) : piece.text;
-        if (piece.src === null) {
-          out += html;
-          continue;
-        }
-        const index = push({
-          src0: sourceOf(piece.src),
-          src1: sourceOf(piece.src + piece.text.length),
-          raw: piece.text,
-          kind: piece.kind === "raw" ? "text" : piece.kind,
-        });
-        out += `<span data-f="${index}">${html}</span>`;
-      }
-      return out;
-    },
-
-    code(token) {
-      // Through the prototype, not a detached `new Renderer()`: the built-in
-      // `image` below needs `this.parser` to render alt text, and a detached
-      // renderer never receives one.
-      const html = Renderer.prototype.code.call(this, token);
-      const positioned = token as unknown as Positioned;
-      if (positioned.srcStart === undefined) return html;
-      const index = push({
-        src0: sourceOf(positioned.srcStart),
-        src1: sourceOf(positioned.srcEnd ?? positioned.srcStart + (token.raw?.length ?? 0)),
-        raw: "",
-        kind: "pre",
-      });
-      return injectAttribute(html, "pre", `data-f="${index}"`);
-    },
-
-    image(token) {
-      const html = legacy.stamp(Renderer.prototype.image.call(this, token), token);
-      const positioned = token as unknown as Positioned;
-      if (positioned.srcStart === undefined) return html;
-      const index = push({
-        src0: sourceOf(positioned.srcStart),
-        src1: sourceOf(positioned.srcEnd ?? positioned.srcStart + (token.raw?.length ?? 0)),
-        raw: "",
-        kind: "image",
-      });
-      return injectAttribute(html, "img", `data-f="${index}"`);
-    },
-
-    html(token) {
-      const positioned = token as unknown as Positioned;
-      const raw = token.raw ?? token.text ?? "";
-      // An inline HTML token is a tag without text; its surrounding text tokens
-      // already carry fragments. Only a block token can own a text run.
-      if (positioned.block !== true || positioned.srcStart === undefined || raw.length === 0)
-        return raw;
-      return renderRawHtmlText(raw, positioned.srcStart, sourceOf, push);
-    },
-  };
-
-  const instance = new Marked({ gfm: true, breaks: false, pedantic: false });
-  instance.use({ renderer });
-  const tokens = instance.lexer(prepared);
-  if (prepared.includes("\\")) legacy.definitions(tokens);
-  assignOffsets(tokens, prepared);
-  const hasRawHtml = prepared.includes("<") && containsRawHtml(instance, tokens);
-  const chunks = tokens.map((token) => instance.parser([token]) as string);
-  return { chunks, tokens, fragments, hasRawHtml, legacyImages: legacy.images };
+  legacy: ReturnType<typeof legacyImagesForRender>;
+  allFragments: Fragment[];
+  setFragmentSink: (sink: Fragment[] | null) => void;
 }
 
-/** Render the prepared markdown without a fragment table. */
-function renderPlainChunks(prepared: string): {
-  chunks: string[];
-  tokens: Token[];
-  hasRawHtml: boolean;
-  legacyImages: NonNullable<PreviewChunks["legacyImages"]>;
-} {
+function setupMarkedTokens(
+  normalized: string,
+  mapEnabled: boolean,
+  substitutions: readonly Substitution[],
+  lineSubstitutions: readonly Substitution[],
+): MarkedSetupResult {
+  const allFragments: Fragment[] = [];
+  let activeSink: Fragment[] | null = null;
   const legacy = legacyImagesForRender();
   const instance = new Marked({ gfm: true, breaks: false, pedantic: false });
-  instance.use({
-    renderer: {
-      image(token) {
-        return legacy.stamp(Renderer.prototype.image.call(this, token), token);
+
+  if (mapEnabled) {
+    const sourceOffset = indexOffsets(substitutions);
+    const lineOffset = indexOffsets(lineSubstitutions);
+    const sourceOf = (preparedOffset: number) => sourceOffset(lineOffset(preparedOffset));
+    const push = (fragment: Fragment): number => {
+      allFragments.push(fragment);
+      if (activeSink) {
+        return activeSink.push(fragment) - 1;
+      }
+      return allFragments.length - 1;
+    };
+    const escape = escapeHtml;
+
+    const renderer: RendererObject = {
+      text(token) {
+        const positioned = token as unknown as Positioned;
+        const raw = token.raw ?? "";
+        const escaped = "escaped" in token && token.escaped === true;
+        const children = "tokens" in token ? token.tokens : undefined;
+        const body =
+          children && children.length > 0
+            ? this.parser.parseInline(children)
+            : escaped
+              ? token.text
+              : escape(token.text);
+
+        if (positioned.srcStart === undefined || raw.length === 0) return body;
+        // Children carry their own offsets; wrapping the parent would overlap them.
+        if (children && children.length > 0) return body;
+
+        const pieces = textPieces(positioned);
+        if (
+          pieces.length === 1 &&
+          pieces[0].start === 0 &&
+          pieces[0].end === raw.length &&
+          pieces[0].src !== null
+        ) {
+          // One contiguous run: keep the renderer's own body, so backslash escapes,
+          // entities and raw HTML blocks render exactly as they do without a map.
+          const index = push({
+            src0: sourceOf(pieces[0].src),
+            src1: sourceOf(pieces[0].src + raw.length),
+            raw,
+            kind: "text",
+          });
+          return `<span data-f="${index}">${body}</span>`;
+        }
+
+        let out = "";
+        for (const piece of pieces) {
+          const html =
+            piece.kind === "raw" ? (escaped ? piece.text : escape(piece.text)) : piece.text;
+          if (piece.src === null) {
+            out += html;
+            continue;
+          }
+          const index = push({
+            src0: sourceOf(piece.src),
+            src1: sourceOf(piece.src + piece.text.length),
+            raw: piece.text,
+            kind: piece.kind === "raw" ? "text" : piece.kind,
+          });
+          out += `<span data-f="${index}">${html}</span>`;
+        }
+        return out;
       },
-    },
-  });
-  const tokens = instance.lexer(prepared);
-  if (prepared.includes("\\")) legacy.definitions(tokens);
-  const hasRawHtml = prepared.includes("<") && containsRawHtml(instance, tokens);
+
+      code(token) {
+        // Through the prototype, not a detached `new Renderer()`: the built-in
+        // `image` below needs `this.parser` to render alt text, and a detached
+        // renderer never receives one.
+        const html = Renderer.prototype.code.call(this, token);
+        const positioned = token as unknown as Positioned;
+        if (positioned.srcStart === undefined) return html;
+        const index = push({
+          src0: sourceOf(positioned.srcStart),
+          src1: sourceOf(positioned.srcEnd ?? positioned.srcStart + (token.raw?.length ?? 0)),
+          raw: "",
+          kind: "pre",
+        });
+        return injectAttribute(html, "pre", `data-f="${index}"`);
+      },
+
+      image(token) {
+        const html = legacy.stamp(Renderer.prototype.image.call(this, token), token);
+        const positioned = token as unknown as Positioned;
+        if (positioned.srcStart === undefined) return html;
+        const index = push({
+          src0: sourceOf(positioned.srcStart),
+          src1: sourceOf(positioned.srcEnd ?? positioned.srcStart + (token.raw?.length ?? 0)),
+          raw: "",
+          kind: "image",
+        });
+        return injectAttribute(html, "img", `data-f="${index}"`);
+      },
+
+      html(token) {
+        const positioned = token as unknown as Positioned;
+        const raw = token.raw ?? token.text ?? "";
+        // An inline HTML token is a tag without text; its surrounding text tokens
+        // already carry fragments. Only a block token can own a text run.
+        if (positioned.block !== true || positioned.srcStart === undefined || raw.length === 0)
+          return raw;
+        return renderRawHtmlText(raw, positioned.srcStart, sourceOf, push);
+      },
+    };
+    instance.use({ renderer });
+  } else {
+    instance.use({
+      renderer: {
+        image(token) {
+          return legacy.stamp(Renderer.prototype.image.call(this, token), token);
+        },
+      },
+    });
+  }
+
+  const tokens = instance.lexer(normalized);
+  if (normalized.includes("\\")) legacy.definitions(tokens);
+  if (mapEnabled) assignOffsets(tokens, normalized);
+  const hasRawHtml = normalized.includes("<") && containsRawHtml(instance, tokens);
   return {
-    chunks: tokens.map((token) => instance.parser([token]) as string),
+    instance,
     tokens,
     hasRawHtml,
-    legacyImages: legacy.images,
+    legacy,
+    allFragments,
+    setFragmentSink: (sink) => {
+      activeSink = sink;
+    },
   };
 }
 
@@ -1096,16 +1136,81 @@ function renderMath(maths: readonly MathEntry[]): RenderedMath[] {
   });
 }
 
-/**
- * Prepare a Markdown document for the preview.
- *
- * The result is everything the main thread needs to paint: top-level HTML
- * chunks, the code/math tables the placeholders refer to, the fragment table for
- * word sync, and the block line list. No DOM is touched, so this can run in a
- * worker and the synchronous export path can share it.
- */
-export function renderChunks(source: string, options: ChunkOptions = {}): PreviewChunks {
+function countNewlines(text: string): number {
+  let count = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    if (text.charCodeAt(i) === 10) count += 1;
+  }
+  return count;
+}
+
+function localizePlaceholders(
+  html: string,
+  codeFrom: number,
+  codeTo: number,
+  mathFrom: number,
+  mathTo: number,
+): string {
+  if (codeFrom === codeTo && mathFrom === mathTo) return html;
+  return html.replace(PLACEHOLDER_PIECE, (full, kind: string, num: string) => {
+    const idx = Number(num);
+    if (kind === "CODE") {
+      return idx >= codeFrom && idx < codeTo ? `@@CODE${idx - codeFrom}@@` : full;
+    }
+    return idx >= mathFrom && idx < mathTo ? `@@MATH${idx - mathFrom}@@` : full;
+  });
+}
+
+function shiftCodeEntries(entries: readonly CodeEntry[], delta: number): CodeEntry[] {
+  if (delta === 0 || entries.length === 0) return entries.slice();
+  return entries.map((c) => ({ text: c.text, src0: c.src0 + delta, src1: c.src1 + delta }));
+}
+
+function shiftFragments(entries: readonly Fragment[], delta: number): Fragment[] {
+  if (delta === 0 || entries.length === 0) return entries.slice();
+  return entries.map((f) => ({
+    src0: f.src0 + delta,
+    src1: f.src1 + delta,
+    raw: f.raw,
+    kind: f.kind,
+  }));
+}
+
+function shiftBlock(
+  block: MarkdownBlockChunk,
+  charDelta: number,
+  lineDelta: number,
+): MarkdownBlockChunk {
+  if (charDelta === 0 && lineDelta === 0) return block;
+  return {
+    ...block,
+    origStart: block.origStart + charDelta,
+    origEnd: block.origEnd + charDelta,
+    lineStart: block.lineStart + lineDelta,
+    codes: shiftCodeEntries(block.codes, charDelta),
+    fragments: block.fragments ? shiftFragments(block.fragments, charDelta) : undefined,
+  };
+}
+
+function isTocParagraphText(rawSlice: string): boolean {
+  return /^\s*\[TOC\]\s*$/i.test(rawSlice);
+}
+
+interface CompiledMarkdownResult extends PreviewChunks {
+  defCount: number;
+  defSignature: string;
+}
+
+function compileMarkdownSource(
+  source: string,
+  baseOrigOffset: number,
+  baseLineStart: number,
+  options: ChunkOptions,
+  reuseMap?: Map<string, MarkdownBlockChunk[]>,
+  prevDefSignature?: string,
+): CompiledMarkdownResult {
   const mathEnabled = options.math ?? true;
+  const mapEnabled = options.map ?? false;
   const mayHaveMath = mathEnabled && hasMathDelimiters(source);
 
   const codes: CodeEntry[] = [];
@@ -1164,49 +1269,667 @@ export function renderChunks(source: string, options: ChunkOptions = {}): Previe
   });
 
   const substitutions =
-    options.map || codes.length > 0 || maths.length > 0
+    mapEnabled || codes.length > 0 || maths.length > 0
       ? collectSubstitutions(preparedSegments, isCode, codes, maths)
       : [];
 
-  let chunks: string[];
-  let tokens: Token[];
-  let fragments: Fragment[] | undefined;
-  let hasRawHtml: boolean;
-  let legacyImages: PreviewChunks["legacyImages"];
-  if (options.map) {
-    const mapped = renderMappedChunks(normalized, substitutions, lineSubstitutions);
-    chunks = mapped.chunks;
-    tokens = mapped.tokens;
-    fragments = mapped.fragments;
-    hasRawHtml = mapped.hasRawHtml;
-    legacyImages = mapped.legacyImages;
-  } else {
-    const plain = renderPlainChunks(normalized);
-    chunks = plain.chunks;
-    tokens = plain.tokens;
-    hasRawHtml = plain.hasRawHtml;
-    legacyImages = plain.legacyImages;
-  }
+  const setup = setupMarkedTokens(normalized, mapEnabled, substitutions, lineSubstitutions);
+  const tokens = setup.tokens;
+  const hasRawHtml = setup.hasRawHtml;
 
-  let toOriginalOffset: ((normOffset: number) => number) | undefined;
+  let toLocalOrig: ((normOffset: number) => number) | undefined;
   if (substitutions.length > 0 || lineSubstitutions.length > 0) {
     const mapPrepToOrig = indexOffsets(substitutions);
     const mapNormToPrep = indexOffsets(lineSubstitutions);
-    toOriginalOffset = (normOffset: number) => mapPrepToOrig(mapNormToPrep(normOffset));
+    toLocalOrig = (normOffset: number) => mapPrepToOrig(mapNormToPrep(normOffset));
   }
 
-  const lineInfo = blockLines(source, hasRawHtml, tokens, normalized, toOriginalOffset);
-  const elementLines =
-    hasRawHtml && lineInfo ? elementLinesFor(chunks, lineInfo.chunkLines) : undefined;
+  // Raw HTML may open/close across blocks and stays on the global single-parse path.
+  if (hasRawHtml) {
+    setup.setFragmentSink(null);
+    const chunks = tokens.map((token) => setup.instance.parser([token]) as string);
+    const lineInfo = blockLines(source, true, tokens, normalized, toLocalOrig);
+    const elementLines = lineInfo ? elementLinesFor(chunks, lineInfo.chunkLines) : undefined;
+    const shiftedCodes = baseOrigOffset !== 0 ? shiftCodeEntries(codes, baseOrigOffset) : codes;
+    const shiftedFrags = mapEnabled
+      ? baseOrigOffset !== 0
+        ? shiftFragments(setup.allFragments, baseOrigOffset)
+        : setup.allFragments
+      : undefined;
+    const defRaw = tokens
+      .filter((t) => t.type === "def")
+      .map((t) => t.raw ?? "")
+      .join("\n");
+    return {
+      chunks,
+      hasRawHtml: true,
+      codes: shiftedCodes,
+      maths: renderMath(maths),
+      fragments: shiftedFrags,
+      lines: lineInfo?.lines ?? null,
+      elementLines,
+      legacyImages: setup.legacy.images,
+      defCount: tokens.filter((t) => t.type === "def").length,
+      defSignature: defRaw ? fnv1aHash(defRaw) : "",
+      mathEnabled,
+      mapEnabled,
+    };
+  }
+
+  const defRawParts: string[] = [];
+  for (const token of tokens) {
+    if (token.type === "def") defRawParts.push(token.raw ?? "");
+  }
+  const defSignature = defRawParts.length > 0 ? fnv1aHash(defRawParts.join("\n")) : "";
+  const canReuse = Boolean(
+    reuseMap && prevDefSignature !== undefined && defSignature === prevDefSignature,
+  );
+
+  const starts = lineStarts(source);
+  const chunks: string[] = new Array(tokens.length);
+  const blocks: MarkdownBlockChunk[] = new Array(tokens.length);
+  const lines: number[] = [];
+  const flatCodes: CodeEntry[] = [];
+  const flatMaths: RenderedMath[] = [];
+  const flatFragments: Fragment[] = [];
+
+  let cursor = 0;
+  let linesFailed = false;
+  let codeCursor = 0;
+  let mathCursor = 0;
+  const optPrefix = `${mathEnabled ? "1" : "0"}\0${mapEnabled ? "1" : "0"}\0`;
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    const raw = token.raw ?? "";
+    let normStart: number;
+    let normEnd: number;
+    if (raw.length === 0) {
+      normStart = cursor;
+      normEnd = cursor;
+    } else {
+      const at = normalized.indexOf(raw, cursor);
+      if (at < 0) {
+        linesFailed = true;
+        normStart = cursor;
+        normEnd = cursor;
+      } else {
+        normStart = at;
+        normEnd = at + raw.length;
+        cursor = normEnd;
+      }
+    }
+
+    const localOrigStart = toLocalOrig ? toLocalOrig(normStart) : normStart;
+    const localOrigEnd = toLocalOrig ? toLocalOrig(normEnd) : normEnd;
+    const origStart = baseOrigOffset + localOrigStart;
+    const origEnd = baseOrigOffset + localOrigEnd;
+    const lineStart = baseLineStart - 1 + lineOf(starts, localOrigStart);
+    const silent = rendersNothing(token);
+
+    if (!linesFailed && !silent) {
+      lines.push(lineStart);
+    }
+
+    const codeFrom = codeCursor;
+    while (codeCursor < codes.length && codes[codeCursor].src0 < localOrigEnd) {
+      codeCursor += 1;
+    }
+    const codeTo = codeCursor;
+
+    const mathFrom = mathCursor;
+    while (mathCursor < maths.length && maths[mathCursor].src0 < localOrigEnd) {
+      mathCursor += 1;
+    }
+    const mathTo = mathCursor;
+
+    const origSlice = source.slice(localOrigStart, localOrigEnd);
+    const key =
+      token.type === "heading" ? `h${(token as { depth?: number }).depth ?? 1}` : token.type;
+    const digest = fnv1aHash(`${token.type}\0${optPrefix}${origSlice}`);
+    const cacheKey = `${key}\0${digest}`;
+    const reuseQueue = canReuse ? reuseMap!.get(cacheKey) : undefined;
+    const reused = reuseQueue && reuseQueue.length > 0 ? reuseQueue.shift() : undefined;
+
+    if (reused) {
+      const charDelta = origStart - reused.origStart;
+      const lineDeltaBlock = lineStart - reused.lineStart;
+      const shifted = shiftBlock(reused, charDelta, lineDeltaBlock);
+      chunks[i] = shifted.html;
+      blocks[i] = shifted;
+      for (const c of shifted.codes) flatCodes.push(c);
+      for (const m of shifted.maths) flatMaths.push(m);
+      if (mapEnabled && shifted.fragments) {
+        for (const f of shifted.fragments) flatFragments.push(f);
+      }
+      continue;
+    }
+
+    const perBlockFragments: Fragment[] = [];
+    setup.setFragmentSink(mapEnabled ? perBlockFragments : null);
+    const tokenLinks =
+      (
+        tokens as Token[] & {
+          links?: Record<string, { href: string | null; title: string | null }>;
+        }
+      ).links ?? {};
+    const rawHtml = setup.instance.parser(Object.assign([token], { links: tokenLinks })) as string;
+    const blockHtml = localizePlaceholders(rawHtml, codeFrom, codeTo, mathFrom, mathTo);
+    const localCodes =
+      baseOrigOffset !== 0
+        ? shiftCodeEntries(codes.slice(codeFrom, codeTo), baseOrigOffset)
+        : codes.slice(codeFrom, codeTo);
+    const localMaths = renderMath(maths.slice(mathFrom, mathTo));
+    const mappedBlockFragments = perBlockFragments.map((f) => ({
+      src0: f.src0 + baseOrigOffset,
+      src1: f.src1 + baseOrigOffset,
+      raw:
+        f.kind === "code" || f.kind === "math"
+          ? localizePlaceholders(f.raw, codeFrom, codeTo, mathFrom, mathTo)
+          : f.raw,
+      kind: f.kind,
+    }));
+    const localFragments = mapEnabled ? mappedBlockFragments : undefined;
+
+    for (const c of localCodes) flatCodes.push(c);
+    for (const m of localMaths) flatMaths.push(m);
+    if (localFragments) {
+      for (const f of localFragments) flatFragments.push(f);
+    }
+
+    const block: MarkdownBlockChunk = {
+      key,
+      digest,
+      tokenType: token.type,
+      silent,
+      html: blockHtml,
+      origStart,
+      origEnd,
+      lineStart,
+      newlineCount: countNewlines(origSlice),
+      codes: localCodes,
+      maths: localMaths,
+      fragments: localFragments,
+    };
+    chunks[i] = blockHtml;
+    blocks[i] = block;
+  }
 
   return {
     chunks,
-    hasRawHtml,
+    hasRawHtml: false,
+    codes: flatCodes,
+    maths: flatMaths,
+    fragments: mapEnabled ? flatFragments : undefined,
+    lines: linesFailed ? null : lines,
+    elementLines: undefined,
+    legacyImages: setup.legacy.images,
+    blocks,
+    defCount: defRawParts.length,
+    defSignature,
+    mathEnabled,
+    mapEnabled,
+  };
+}
+
+/**
+ * Prepare a Markdown document for the preview.
+ *
+ * The result is everything the main thread needs to paint: top-level HTML
+ * chunks, the code/math tables the placeholders refer to, the fragment table for
+ * word sync, and the block line list. No DOM is touched, so this can run in a
+ * worker and the synchronous export path can share it.
+ */
+export function renderChunks(source: string, options: ChunkOptions = {}): PreviewChunks {
+  return compileMarkdownSource(source, 0, 1, options);
+}
+
+function isCompoundTokenType(tokenType: string): boolean {
+  return (
+    tokenType === "list" ||
+    tokenType === "blockquote" ||
+    tokenType === "code" ||
+    tokenType === "table" ||
+    tokenType === "def"
+  );
+}
+
+function countDisplayMathDelims(text: string): number {
+  let count = 0;
+  let pos = 0;
+  while ((pos = text.indexOf("$$", pos)) >= 0) {
+    let bs = 0;
+    for (let k = pos - 1; k >= 0 && text.charCodeAt(k) === 92; k -= 1) bs += 1;
+    if ((bs & 1) === 0) count += 1;
+    pos += 2;
+  }
+  return count;
+}
+
+function extractLineWindow(text: string, from: number, to: number): string {
+  const startNl = text.lastIndexOf("\n", Math.max(0, from - 1));
+  const lineStart = startNl < 0 ? 0 : startNl + 1;
+  const endNl = text.indexOf("\n", to);
+  const lineEnd = endNl < 0 ? text.length : endNl;
+  return text.slice(lineStart, lineEnd);
+}
+
+function assembleFromBlocks(
+  blocks: MarkdownBlockChunk[],
+  mapEnabled: boolean,
+  mathEnabled: boolean,
+  defSignature: string,
+  defCount: number,
+  incremental: MarkdownIncrementalInfo,
+): PreviewChunks {
+  const chunks: string[] = new Array(blocks.length);
+  const codes: CodeEntry[] = [];
+  const maths: RenderedMath[] = [];
+  const fragments: Fragment[] | undefined = mapEnabled ? [] : undefined;
+  const lines: number[] = [];
+
+  for (let i = 0; i < blocks.length; i += 1) {
+    const b = blocks[i];
+    chunks[i] = b.html;
+    if (!b.silent) lines.push(b.lineStart);
+    for (const c of b.codes) codes.push(c);
+    for (const m of b.maths) maths.push(m);
+    if (fragments && b.fragments) {
+      for (const f of b.fragments) fragments.push(f);
+    }
+  }
+
+  return {
+    chunks,
+    hasRawHtml: false,
     codes,
-    maths: renderMath(maths),
+    maths,
     fragments,
-    lines: lineInfo?.lines ?? null,
-    elementLines,
-    legacyImages,
+    lines,
+    elementLines: undefined,
+    legacyImages: {},
+    blocks,
+    defCount,
+    defSignature,
+    mathEnabled,
+    mapEnabled,
+    incremental,
+  };
+}
+
+function detectHeadingsAndToc(
+  blocks: readonly MarkdownBlockChunk[],
+  ops: readonly BlockPatchOp<MarkdownBlockChunk>[],
+  source: string,
+  forceHeadingsChanged = false,
+): { headingsChanged: boolean; hasToc: boolean } {
+  let hasToc = false;
+  for (const b of blocks) {
+    if (b.tokenType === "paragraph" && isTocParagraphText(source.slice(b.origStart, b.origEnd))) {
+      hasToc = true;
+      break;
+    }
+  }
+  if (forceHeadingsChanged) {
+    return { headingsChanged: true, hasToc };
+  }
+  for (const op of ops) {
+    if (op.kind === "retain") continue;
+    if (op.kind !== "remove" && op.block.tokenType === "heading") {
+      return { headingsChanged: true, hasToc };
+    }
+    if (op.kind === "replace" && op.block.tokenType === "paragraph") {
+      if (isTocParagraphText(source.slice(op.block.origStart, op.block.origEnd))) {
+        return { headingsChanged: true, hasToc: true };
+      }
+    }
+  }
+  // If any block was removed we cannot inspect prevBlock type from `op`, so mark changed safely.
+  if (ops.some((op) => op.kind === "remove")) {
+    return { headingsChanged: true, hasToc };
+  }
+  return { headingsChanged: false, hasToc };
+}
+
+function tryWindowedIncremental(
+  prevSource: string,
+  prevChunks: CompiledMarkdownResult,
+  nextSource: string,
+  options: ChunkOptions,
+  prefix: number,
+  suffix: number,
+): PreviewChunks | null {
+  const prevBlocks = prevChunks.blocks;
+  if (!prevBlocks || prevBlocks.length === 0) return null;
+
+  const prevEditStart = prefix;
+  const prevEditEnd = prevSource.length - suffix;
+  const nextEditStart = prefix;
+  const nextEditEnd = nextSource.length - suffix;
+
+  const prevExpanded = prevSource.slice(
+    Math.max(0, prevEditStart - 4),
+    Math.min(prevSource.length, prevEditEnd + 4),
+  );
+  const nextExpanded = nextSource.slice(
+    Math.max(0, nextEditStart - 4),
+    Math.min(nextSource.length, nextEditEnd + 4),
+  );
+  if (
+    prevExpanded.includes("<") ||
+    prevExpanded.includes(">") ||
+    nextExpanded.includes("<") ||
+    nextExpanded.includes(">") ||
+    /\r(?!\n)/.test(prevExpanded) ||
+    /\r(?!\n)/.test(nextExpanded)
+  ) {
+    return null;
+  }
+
+  const prevLinesSlice = extractLineWindow(prevSource, prevEditStart, prevEditEnd);
+  const nextLinesSlice = extractLineWindow(nextSource, nextEditStart, nextEditEnd);
+  if (
+    /(?:`{3,}|~{3,})/.test(prevLinesSlice) ||
+    /(?:`{3,}|~{3,})/.test(nextLinesSlice) ||
+    /^\s{0,3}\[[^\]]+\]:/m.test(prevLinesSlice) ||
+    /^\s{0,3}\[[^\]]+\]:/m.test(nextLinesSlice)
+  ) {
+    return null;
+  }
+
+  // Locate block range overlapping [prevEditStart, prevEditEnd] cleanly at paragraph boundaries.
+  let startBlock = prevBlocks.length - 1;
+  let low = 0;
+  let high = prevBlocks.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    if (prevBlocks[mid].origStart <= prevEditStart) {
+      startBlock = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  startBlock = Math.max(0, startBlock - 1);
+  while (
+    startBlock > 0 &&
+    (prevBlocks[startBlock].silent ||
+      isCompoundTokenType(prevBlocks[startBlock - 1].tokenType) ||
+      isCompoundTokenType(prevBlocks[startBlock].tokenType) ||
+      (prevBlocks[startBlock].origStart > 0 &&
+        prevSource.slice(
+          Math.max(0, prevBlocks[startBlock].origStart - 2),
+          prevBlocks[startBlock].origStart,
+        ) !== "\n\n"))
+  ) {
+    startBlock -= 1;
+  }
+
+  let endBlock = startBlock + 1;
+  while (endBlock < prevBlocks.length && prevBlocks[endBlock].origStart <= prevEditEnd) {
+    endBlock += 1;
+  }
+  if (endBlock < prevBlocks.length) endBlock += 1;
+  while (
+    endBlock < prevBlocks.length &&
+    (prevBlocks[endBlock].silent ||
+      isCompoundTokenType(prevBlocks[endBlock - 1].tokenType) ||
+      isCompoundTokenType(prevBlocks[endBlock].tokenType))
+  ) {
+    endBlock += 1;
+  }
+
+  const maxWin = Math.max(8, Math.floor(prevBlocks.length * DEFAULT_MAX_DIRTY_RATIO));
+  if (endBlock - startBlock > maxWin) return null;
+
+  const charDelta = nextSource.length - prevSource.length;
+  const winPrevStart = prevBlocks[startBlock].origStart;
+  const winPrevEnd =
+    endBlock < prevBlocks.length ? prevBlocks[endBlock].origStart : prevSource.length;
+  const winNextEnd = winPrevEnd + charDelta;
+  if (winNextEnd < winPrevStart) return null;
+
+  const slicePrev = prevSource.slice(winPrevStart, winPrevEnd);
+  const sliceNext = nextSource.slice(winPrevStart, winNextEnd);
+  if (
+    sliceNext.includes("<") ||
+    sliceNext.includes(">") ||
+    ((slicePrev.includes("$$") || sliceNext.includes("$$")) &&
+      ((countDisplayMathDelims(slicePrev) & 1) !== 0 ||
+        (countDisplayMathDelims(sliceNext) & 1) !== 0))
+  ) {
+    return null;
+  }
+  if ((prevChunks.defCount ?? 0) > 0 && (slicePrev.includes("[") || sliceNext.includes("["))) {
+    return null;
+  }
+
+  const winCompiled = compileMarkdownSource(
+    sliceNext,
+    winPrevStart,
+    prevBlocks[startBlock].lineStart,
+    options,
+  );
+  if (
+    winCompiled.hasRawHtml ||
+    winCompiled.lines === null ||
+    !winCompiled.blocks ||
+    winCompiled.defCount > 0 ||
+    (winCompiled.legacyImages && Object.keys(winCompiled.legacyImages).length > 0)
+  ) {
+    return null;
+  }
+
+  const winLineDelta = countNewlines(sliceNext) - countNewlines(slicePrev);
+  const nextBlocks: MarkdownBlockChunk[] = new Array(
+    startBlock + winCompiled.blocks.length + (prevBlocks.length - endBlock),
+  );
+  let writeIdx = 0;
+  for (let i = 0; i < startBlock; i += 1) {
+    nextBlocks[writeIdx++] = prevBlocks[i];
+  }
+  for (let i = 0; i < winCompiled.blocks.length; i += 1) {
+    nextBlocks[writeIdx++] = winCompiled.blocks[i];
+  }
+  for (let i = endBlock; i < prevBlocks.length; i += 1) {
+    nextBlocks[writeIdx++] = shiftBlock(prevBlocks[i], charDelta, winLineDelta);
+  }
+
+  const diff = diffBlocks(prevBlocks, nextBlocks);
+  if (!diff.incremental) return null;
+
+  const mathEnabled = options.math ?? true;
+  const mapEnabled = options.map ?? false;
+  const headingInfo = detectHeadingsAndToc(nextBlocks, diff.ops, nextSource);
+  return assembleFromBlocks(
+    nextBlocks,
+    mapEnabled,
+    mathEnabled,
+    prevChunks.defSignature ?? "",
+    prevChunks.defCount ?? 0,
+    {
+      mode: "window",
+      dirtyRatio: diff.dirtyRatio,
+      dirtyBlocks: diff.dirtyBlocks,
+      ops: diff.ops,
+      headingsChanged: headingInfo.headingsChanged,
+      hasToc: headingInfo.hasToc,
+    },
+  );
+}
+
+/**
+ * Incrementally update Markdown chunks from a prior render snapshot.
+ * Uses bounded source-window re-lexing first, falls back to full lex + cached block
+ * reuse on fences/definitions, and falls back to full rebuild on structural triggers.
+ */
+export function renderChunksIncremental(
+  prevSource: string,
+  prevChunks: PreviewChunks | null | undefined,
+  nextSource: string,
+  options: ChunkOptions = {},
+): PreviewChunks {
+  const mathEnabled = options.math ?? true;
+  const mapEnabled = options.map ?? false;
+  const fullWithReason = (reason: string): PreviewChunks => {
+    const full = compileMarkdownSource(nextSource, 0, 1, options);
+    const hasToc = full.blocks
+      ? full.blocks.some(
+          (b) =>
+            b.tokenType === "paragraph" &&
+            isTocParagraphText(nextSource.slice(b.origStart, b.origEnd)),
+        )
+      : /\[TOC\]/i.test(nextSource);
+    return {
+      ...full,
+      incremental: {
+        mode: "full",
+        reason,
+        dirtyRatio: 1,
+        dirtyBlocks: full.blocks?.length ?? full.chunks.length,
+        ops: [],
+        headingsChanged: true,
+        hasToc,
+      },
+    };
+  };
+
+  if (
+    !prevChunks ||
+    !prevChunks.blocks ||
+    prevChunks.hasRawHtml ||
+    prevChunks.lines === null ||
+    (prevChunks.mathEnabled ?? true) !== mathEnabled ||
+    (prevChunks.mapEnabled ?? false) !== mapEnabled ||
+    (prevChunks.legacyImages && Object.keys(prevChunks.legacyImages).length > 0)
+  ) {
+    return fullWithReason("prev-ineligible");
+  }
+
+  const prevCompiled = prevChunks as CompiledMarkdownResult;
+  const minLen = Math.min(prevSource.length, nextSource.length);
+  let prefix = 0;
+  while (prefix < minLen && prevSource.charCodeAt(prefix) === nextSource.charCodeAt(prefix)) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  const maxSuffix = minLen - prefix;
+  while (
+    suffix < maxSuffix &&
+    prevSource.charCodeAt(prevSource.length - 1 - suffix) ===
+      nextSource.charCodeAt(nextSource.length - 1 - suffix)
+  ) {
+    suffix += 1;
+  }
+
+  if (prefix === prevSource.length && prevSource.length === nextSource.length) {
+    const ops: BlockPatchOp<MarkdownBlockChunk>[] = prevChunks.blocks.map((block, index) => ({
+      kind: "retain",
+      prevIndex: index,
+      nextIndex: index,
+      lineDelta: 0,
+      block,
+    }));
+    const hasToc = prevChunks.blocks.some(
+      (b) =>
+        b.tokenType === "paragraph" && isTocParagraphText(nextSource.slice(b.origStart, b.origEnd)),
+    );
+    return {
+      ...prevChunks,
+      incremental: {
+        mode: "window",
+        dirtyRatio: 0,
+        dirtyBlocks: 0,
+        ops,
+        headingsChanged: false,
+        hasToc,
+      },
+    };
+  }
+
+  const windowed = tryWindowedIncremental(
+    prevSource,
+    prevCompiled,
+    nextSource,
+    options,
+    prefix,
+    suffix,
+  );
+  if (windowed) return windowed;
+
+  // Tier 2: Full lex + cached block reuse (fences, ref link uses, cross-block edits).
+  const reuseMap = new Map<string, MarkdownBlockChunk[]>();
+  for (const b of prevChunks.blocks) {
+    const key = `${b.key}\0${b.digest}`;
+    const queue = reuseMap.get(key);
+    if (queue) queue.push(b);
+    else reuseMap.set(key, [b]);
+  }
+
+  const compiled = compileMarkdownSource(
+    nextSource,
+    0,
+    1,
+    options,
+    reuseMap,
+    prevCompiled.defSignature ?? "",
+  );
+  if (
+    compiled.hasRawHtml ||
+    compiled.lines === null ||
+    !compiled.blocks ||
+    (compiled.defSignature ?? "") !== (prevCompiled.defSignature ?? "") ||
+    (compiled.legacyImages && Object.keys(compiled.legacyImages).length > 0)
+  ) {
+    const reason = compiled.hasRawHtml
+      ? "raw-html"
+      : (compiled.defSignature ?? "") !== (prevCompiled.defSignature ?? "")
+        ? "def-changed"
+        : "lex-ineligible";
+    return {
+      ...compiled,
+      incremental: {
+        mode: "full",
+        reason,
+        dirtyRatio: 1,
+        dirtyBlocks: compiled.blocks?.length ?? compiled.chunks.length,
+        ops: [],
+        headingsChanged: true,
+        hasToc: /\[TOC\]/i.test(nextSource),
+      },
+    };
+  }
+
+  const diff = diffBlocks(prevChunks.blocks, compiled.blocks);
+  if (!diff.incremental) {
+    const hasToc = compiled.blocks.some(
+      (b) =>
+        b.tokenType === "paragraph" && isTocParagraphText(nextSource.slice(b.origStart, b.origEnd)),
+    );
+    return {
+      ...compiled,
+      incremental: {
+        mode: "full",
+        reason: diff.reason,
+        dirtyRatio: diff.dirtyRatio,
+        dirtyBlocks: diff.dirtyBlocks,
+        ops: [],
+        headingsChanged: true,
+        hasToc,
+      },
+    };
+  }
+
+  const headingInfo = detectHeadingsAndToc(compiled.blocks, diff.ops, nextSource);
+  return {
+    ...compiled,
+    incremental: {
+      mode: "lex-diff",
+      dirtyRatio: diff.dirtyRatio,
+      dirtyBlocks: diff.dirtyBlocks,
+      ops: diff.ops,
+      headingsChanged: headingInfo.headingsChanged,
+      hasToc: headingInfo.hasToc,
+    },
   };
 }

@@ -1,46 +1,109 @@
-//! In-page performance marks for the LaTeX compile benchmark.
+//! In-page performance marks for the LaTeX, Typst, and prose compile/render benchmarks.
 //!
 //! These stay in the shipping build on purpose: `performance.mark` and
 //! `performance.measure` cost microseconds, and a flag that disabled them would
 //! measure a different code path. Nothing here changes a decision, a DOM node or
-//! an await; the CDP probe in `scripts/latex-performance-test.mjs` reads the
-//! entries and clears them before the next edit.
+//! an await; the CDP probes in `scripts/*-performance-test.mjs` read the
+//! entries and clear them before the next edit.
 
-const PREFIX = "mdraft:latex:";
+export type PerfDomain = "latex" | "typst" | "prose";
 
-/** Mark `name` at the current instant and return that instant. */
-export function perfMark(name: string, detail?: Record<string, unknown>): number {
+const PREFIX_BY_DOMAIN: Record<PerfDomain, string> = {
+  latex: "mdraft:latex:",
+  typst: "mdraft:typst:",
+  prose: "mdraft:prose:",
+};
+
+const PREFIX = PREFIX_BY_DOMAIN.latex;
+
+function markWithPrefix(prefix: string, name: string, detail?: Record<string, unknown>): number {
   const at = performance.now();
   try {
-    if (detail === undefined) performance.mark(`${PREFIX}${name}`);
-    else performance.mark(`${PREFIX}${name}`, { detail });
+    if (detail === undefined) performance.mark(`${prefix}${name}`);
+    else performance.mark(`${prefix}${name}`, { detail });
   } catch {
     // User timing is diagnostic. A host that refuses it must not fail a compile.
   }
   return at;
 }
 
-/** Measure from `start` (a `performance.now()` value) to now. */
-export function perfMeasure(name: string, start: number, detail?: Record<string, unknown>): void {
+function measureWithPrefix(
+  prefix: string,
+  name: string,
+  start: number,
+  detail?: Record<string, unknown>,
+): void {
   try {
-    performance.measure(`${PREFIX}${name}`, {
+    performance.measure(`${prefix}${name}`, {
       start,
       end: performance.now(),
       ...(detail === undefined ? {} : { detail }),
     });
   } catch {
-    // See perfMark.
+    // See markWithPrefix.
   }
 }
 
-/** Drop every entry this module produced, so a long session keeps a bounded buffer. */
-export function clearLatexPerf(): void {
+function clearWithPrefix(prefix: string): void {
   for (const entry of performance.getEntriesByType("measure")) {
-    if (entry.name.startsWith(PREFIX)) performance.clearMeasures(entry.name);
+    if (entry.name.startsWith(prefix)) performance.clearMeasures(entry.name);
   }
   for (const entry of performance.getEntriesByType("mark")) {
-    if (entry.name.startsWith(PREFIX)) performance.clearMarks(entry.name);
+    if (entry.name.startsWith(prefix)) performance.clearMarks(entry.name);
   }
+}
+
+/** Mark `name` under `mdraft:latex:` at the current instant and return that instant. */
+export function perfMark(name: string, detail?: Record<string, unknown>): number {
+  return markWithPrefix(PREFIX, name, detail);
+}
+
+/** Measure from `start` under `mdraft:latex:` to now. */
+export function perfMeasure(name: string, start: number, detail?: Record<string, unknown>): void {
+  measureWithPrefix(PREFIX, name, start, detail);
+}
+
+/** Drop every `mdraft:latex:` entry so a long session keeps a bounded buffer. */
+export function clearLatexPerf(): void {
+  clearWithPrefix(PREFIX);
+}
+
+/** Mark `name` under `mdraft:typst:` at the current instant and return that instant. */
+export function typstPerfMark(name: string, detail?: Record<string, unknown>): number {
+  return markWithPrefix(PREFIX_BY_DOMAIN.typst, name, detail);
+}
+
+/** Measure from `start` under `mdraft:typst:` to now. */
+export function typstPerfMeasure(
+  name: string,
+  start: number,
+  detail?: Record<string, unknown>,
+): void {
+  measureWithPrefix(PREFIX_BY_DOMAIN.typst, name, start, detail);
+}
+
+/** Drop every `mdraft:typst:` entry so a long session keeps a bounded buffer. */
+export function clearTypstPerf(): void {
+  clearWithPrefix(PREFIX_BY_DOMAIN.typst);
+}
+
+/** Mark `name` under `mdraft:prose:` at the current instant and return that instant. */
+export function prosePerfMark(name: string, detail?: Record<string, unknown>): number {
+  return markWithPrefix(PREFIX_BY_DOMAIN.prose, name, detail);
+}
+
+/** Measure from `start` under `mdraft:prose:` to now. */
+export function prosePerfMeasure(
+  name: string,
+  start: number,
+  detail?: Record<string, unknown>,
+): void {
+  measureWithPrefix(PREFIX_BY_DOMAIN.prose, name, start, detail);
+}
+
+/** Drop every `mdraft:prose:` entry so a long session keeps a bounded buffer. */
+export function clearProsePerf(): void {
+  clearWithPrefix(PREFIX_BY_DOMAIN.prose);
 }
 
 let lastPhase = "";

@@ -33,7 +33,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { emitMenu, openPage, sleep } from "./cdp-page.mjs";
+import { emitMenu, openPage, sleep, useWasmTex } from "./cdp-page.mjs";
 
 const port = process.argv[2] ?? "9222";
 const page = await openPage(port);
@@ -51,8 +51,9 @@ for (let attempt = 0; attempt < 240; attempt += 1) {
   if (await page.evaluate(`Boolean(document.querySelector(".cm-content"))`)) break;
   await sleep(250);
 }
+await useWasmTex(page);
 
-const COUNTED = ["latex_engine_status", "render_typst", "set_html_preview"];
+const COUNTED = ["latex_engine_status", "render_typst", "render_typst_binary", "set_html_preview"];
 const counts = Object.fromEntries(COUNTED.map((command) => [command, 0]));
 let lastRequestAt = Date.now();
 // Which action a request followed. Printed with every request, so a failure

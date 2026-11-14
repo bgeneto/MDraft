@@ -35,10 +35,9 @@ const mode = process.env.MDRAFT_LATEX_PERF_MODE ?? "matrix";
 /**
  * Which preview backend is measured.
  *
- * `wasmtex` (the default) measures a full compile to PDF.js. `texpresso` keeps
- * the frame on screen and measures the frame's own edit-to-paint, while the
- * WasmTex compile still runs, at idle, as the shadow that export reads. The
- * comparison the plan requires runs both against the same fixtures.
+ * `wasmtex` measures the hidden backend's full compile to PDF.js. `texpresso`
+ * measures the production frame's own edit-to-paint and its `xdvipdfmx` export.
+ * The comparison the plan requires runs both against the same fixtures.
  */
 const backend = process.env.MDRAFT_LATEX_PERF_BACKEND === "texpresso" ? "texpresso" : "wasmtex";
 const runs = Math.max(1, Number.parseInt(process.env.MDRAFT_LATEX_PERF_RUNS ?? "5", 10) || 5);
@@ -290,6 +289,14 @@ async function main() {
     }
 
     stage = "engine";
+    if (backend === "wasmtex") {
+      // The production default is the incremental preview; this layer measures
+      // the hidden WasmTex backend on purpose.
+      await evaluate(
+        `window.__TAURI_INTERNALS__.invoke("plugin:event|emit",{event:"menu",payload:"view.latexBackend.wasmtex"})`,
+      );
+      await sleep(200);
+    }
     if ((await invoke("latex_status")) !== true) {
       log("enabling the bundled engine in Preferences");
       await evaluate(`(async () => {
@@ -643,8 +650,8 @@ async function measuredEdit(scenario, tag) {
  *
  * WasmTex's E2P is the page paint after a full compile; TeXpresso's is its own
  * `data-texpresso-e2p`, which the host starts when the edit leaves the editor
- * and stops at the frame's paint. No compile is waited for: the shadow compile
- * runs separately, at idle, and is measured by `texpressoFidelity`.
+ * and stops at the frame's paint. The authoritative PDF is produced separately,
+ * at idle, and is measured by `texpressoFidelity`.
  */
 async function texpressoMatrix() {
   const rows = [];

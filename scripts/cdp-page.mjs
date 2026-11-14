@@ -132,4 +132,22 @@ export function emitMenu(page, id) {
   );
 }
 
+/**
+ * Select the hidden WasmTex backend for a layer that predates the incremental
+ * default. WasmTex is disabled, not deleted: its tests still need the code they
+ * cover, and the hook is the only writer that selects it.
+ */
+export async function useWasmTex(page) {
+  await emitMenu(page, "view.latexBackend.wasmtex");
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const backend = await page.evaluate(
+      `document.querySelector("#preview")?.dataset.latexBackend ?? ""`,
+    );
+    if (!backend) return;
+    await sleep(100);
+  }
+  throw new Error("the WasmTex backend did not become active");
+}
+
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

@@ -22,10 +22,15 @@ import type {
 } from "pdfjs-dist";
 import type { TextItem } from "pdfjs-dist/types/src/display/api";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { perfMark } from "./perf";
+import type { TypstSpanAnchor } from "./api";
+import { perfMark, typstPerfMark } from "./perf";
 import { selectionEndpoints } from "./source-map";
 import { PdfPageMap, type PdfSourceFile, type PdfWordAnchor } from "./pdf-page-map";
 import { ScrollIndex, chooseScrollRegion, type ScrollRegion } from "./scroll-sync";
+
+function toPdfBytes(pdf: Uint8Array | ArrayBuffer): Uint8Array {
+  return pdf instanceof Uint8Array ? pdf : new Uint8Array(pdf);
+}
 
 interface PdfScrollAnchor {
   from: number;
@@ -62,6 +67,7 @@ const MAX_SELECTION = 120;
 
 interface PdfPage {
   page: PDFPageProxy;
+  ownerTask: PDFDocumentLoadingTask;
   shell: HTMLDivElement;
   pageEl: HTMLDivElement;
   canvas: HTMLCanvasElement;
@@ -91,6 +97,11 @@ interface TextLine {
   top: number;
   left: number;
   right: number;
+  /** Line baseline Y & horizontal span in top-down PDF points (72 dpi). */
+  yPt: number;
+  leftPt: number;
+  rightPt: number;
+  heightPt: number;
   /** Column cluster; -1 when the page did not resolve to columns. */
   column: number;
   spans: Array<{ span: HTMLSpanElement; start: number }>;
@@ -148,9 +159,10 @@ async function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
  * incremental (resumed) LaTeX result with a fresh full compile of the same
  * inputs. Byte comparison cannot be used; PDF IDs and timestamps differ.
  */
-export async function pdfPageTexts(pdf: Uint8Array): Promise<string[]> {
+export async function pdfPageTexts(pdf: Uint8Array | ArrayBuffer): Promise<string[]> {
+  const bytes = toPdfBytes(pdf);
   const pdfjs = await loadPdfjs();
-  const task = pdfjs.getDocument({ data: pdf.slice() });
+  const task = pdfjs.getDocument({ data: bytes.slice() });
   try {
     const document = await task.promise;
     const texts: string[] = [];
@@ -179,6 +191,15 @@ export class TypstPdfPreview {
   private loadingTask: PDFDocumentLoadingTask | null = null;
   /** Preview documents spliced in by the interactive lane; destroyed with the view. */
   private readonly spliceTasks: PDFDocumentLoadingTask[] = [];
+  /** Reference counts per live PDF.js document handle so superseded tasks free cleanly. */
+  private readonly taskRefs = new Map<PDFDocumentLoadingTask, number>();
+  /** Per-page SHA-256 visual hashes backing incremental page splicing. */
+  private pageHashes: string[] = [];
+  private textGeneration = 0;
+  private textCompleted = false;
+  private mapFiles: PdfSourceFile[];
+  private spanMap?: readonly TypstSpanAnchor[];
+  private onReadyCallback?: () => void;
   /** Pages replaced by a display-only preview since the last full render. */
   private readonly splicedSlots = new Set<number>();
   /** Set by `splice`: the word map is withheld for the rest of this view's life. */
@@ -270,6 +291,10 @@ export class TypstPdfPreview {
     this.emitSelection(true);
   };
 
+  get isDisposed(): boolean {
+    return this.disposed;
+  }
+
   constructor(
     host: HTMLElement,
     pane: HTMLElement,
@@ -281,11 +306,15 @@ export class TypstPdfPreview {
       activeFile: string;
       enabled: boolean;
       detached?: boolean;
+      spanMap?: readonly TypstSpanAnchor[];
       onReady?: () => void;
     },
   ) {
     this.activeFile = mapOptions?.activeFile ?? "";
     this.detached = mapOptions?.detached ?? false;
+    this.mapFiles = mapOptions?.files ?? [];
+    this.spanMap = mapOptions?.spanMap;
+    this.onReadyCallback = mapOptions?.onReady;
     this.host = host;
     this.pane = pane;
     this.onContext = onContext;
@@ -313,12 +342,92 @@ export class TypstPdfPreview {
    * 0.55-0.63 s at 105 pages in the Phase 0 baseline of
    * docs/plans/2026-11-12-latex-compile-cost.md.
    */
-  async render(pdf: Uint8Array, options: { focusPage?: number } = {}): Promise<void> {
+  private retainTask(task: PDFDocumentLoadingTask): void {
+    this.taskRefs.set(task, (this.taskRefs.get(task) ?? 0) + 1);
+  }
+
+  private releaseTask(task: PDFDocumentLoadingTask | null | undefined): void {
+    if (!task) return;
+    const count = this.taskRefs.get(task) ?? 0;
+    if (count > 1) {
+      this.taskRefs.set(task, count - 1);
+      return;
+    }
+    this.taskRefs.delete(task);
+    if (this.loadingTask === task) this.loadingTask = null;
+    const idx = this.spliceTasks.indexOf(task);
+    if (idx >= 0) this.spliceTasks.splice(idx, 1);
+    void task.destroy();
+  }
+
+  private resetPages(): void {
+    this.textGeneration += 1;
+    this.textCompleted = false;
+    this.cancelMap();
+    this.observer?.disconnect();
+    this.observer = null;
+    for (const page of this.pages) {
+      page.renderVersion += 1;
+      page.task?.cancel();
+      page.task = null;
+      page.canvas.width = 0;
+      page.canvas.height = 0;
+    }
+    this.pages = [];
+    this.pageHashes = [];
+    this.linesByPage.clear();
+    this.allLines = [];
+    this.sourceMap = null;
+    this.mapWithheld = false;
+    this.splicedSlots.clear();
+    if (this.loadingTask) {
+      const loadingTask = this.loadingTask;
+      this.loadingTask = null;
+      void loadingTask.destroy();
+    }
+    for (const task of this.spliceTasks.splice(0)) void task.destroy();
+    this.taskRefs.clear();
+    this.host.replaceChildren();
+  }
+
+  private refreshAllLinesAndMap(): void {
+    if (this.disposed) return;
+    this.textCompleted = true;
+    this.allLines = [...this.linesByPage.entries()]
+      .sort(([a], [b]) => a - b)
+      .flatMap(([, lines]) => lines);
+    this.allLines.forEach((line, id) => {
+      line.id = id;
+    });
+    this.measureScrollRegions();
+    if (this.mapOptions?.enabled !== false && !this.detached) this.startMap();
+  }
+
+  async render(
+    pdf: Uint8Array | ArrayBuffer,
+    options: {
+      focusPage?: number;
+      pageHashes?: readonly string[];
+      spanMap?: readonly TypstSpanAnchor[];
+      files?: PdfSourceFile[];
+      activeFile?: string;
+      source?: string;
+    } = {},
+  ): Promise<void> {
     const pdfjs = await loadPdfjs();
     if (this.disposed) return;
 
-    const loadingTask = pdfjs.getDocument({ data: pdf });
+    const generation = ++this.textGeneration;
+    this.textCompleted = false;
+    if (options.source !== undefined) this.source = options.source;
+    if (options.files !== undefined) this.mapFiles = options.files;
+    if (options.activeFile !== undefined) this.activeFile = options.activeFile;
+    if (options.spanMap !== undefined) this.spanMap = options.spanMap;
+    this.pageHashes = options.pageHashes ? [...options.pageHashes] : [];
+
+    const loadingTask = pdfjs.getDocument({ data: toPdfBytes(pdf) });
     this.loadingTask = loadingTask;
+    this.retainTask(loadingTask);
     let pdfDocument: PDFDocumentProxy;
     try {
       pdfDocument = await loadingTask.promise;
@@ -326,8 +435,8 @@ export class TypstPdfPreview {
       this.dispose();
       throw error;
     }
-    if (this.disposed) {
-      void loadingTask.destroy();
+    if (this.disposed || generation !== this.textGeneration) {
+      this.releaseTask(loadingTask);
       return;
     }
 
@@ -341,26 +450,31 @@ export class TypstPdfPreview {
       const proxies = await Promise.all(
         Array.from({ length: total }, (_, index) => pdfDocument.getPage(index + 1)),
       );
-      if (this.disposed) {
-        void loadingTask.destroy();
+      if (this.disposed || generation !== this.textGeneration) {
+        this.releaseTask(loadingTask);
         return;
       }
       for (const [index, page] of proxies.entries())
-        this.pages.push(this.buildShell(page, index + 1));
+        this.pages.push(this.buildShell(page, index + 1, loadingTask));
+      this.releaseTask(loadingTask);
       await Promise.all([...first].map((number) => this.buildText(pdfjs, this.pages[number - 1])));
     } catch (error) {
       this.dispose();
       throw error;
     }
 
-    if (this.disposed) return;
+    if (this.disposed || generation !== this.textGeneration) return;
+    if (this.pageHashes.length) {
+      this.host.dataset.lastRepaintedPages = String(total);
+      this.host.dataset.lastReusedPages = "0";
+    }
     this.maxPageWidth = Math.max(
       1,
       this.pages.reduce((max, page) => Math.max(max, page.viewport.width), 0),
     );
     this.applyFit();
     this.observePages();
-    void this.completeText(pdfjs, first);
+    void this.completeText(pdfjs, first, generation);
   }
 
   /**
@@ -374,57 +488,308 @@ export class TypstPdfPreview {
    * correspondence on them is withheld until the next full render replaces
    * this view. Returns how many slots were replaced.
    */
-  async splice(pdf: Uint8Array, firstPage: number): Promise<number> {
+  async splice(pdf: Uint8Array | ArrayBuffer, firstPage: number): Promise<number> {
     const pdfjs = await loadPdfjs();
     if (this.disposed) return 0;
-    const task = pdfjs.getDocument({ data: pdf });
+    const task = pdfjs.getDocument({ data: toPdfBytes(pdf) });
+    this.retainTask(task);
     this.spliceTasks.push(task);
-    const preview = await task.promise;
     let replaced = 0;
-    const pane = this.pane.getBoundingClientRect();
-    // Replacing canvases and text layers must not move the reader: browser
-    // scroll anchoring can shift the pane when a slot's content is swapped.
-    const scrollTop = this.pane.scrollTop;
-    const epoch = this.inputEpoch;
-    for (let index = 1; index <= preview.numPages; index += 1) {
-      const slot = this.pages[firstPage - 2 + index];
-      if (!slot || this.disposed) break;
-      const proxy = await preview.getPage(index);
-      if (this.disposed) break;
-      const widthPt = proxy.view[2] - proxy.view[0];
-      const baseWidth = Math.min(MAX_PAGE_WIDTH, Math.max(200, Math.round((widthPt * 96) / 72)));
-      const scale = baseWidth / widthPt;
-      const viewport = proxy.getViewport({ scale });
-      slot.task?.cancel();
-      slot.task = null;
-      slot.page = proxy;
-      slot.viewport = viewport;
-      slot.shell.style.setProperty("--typst-page-width", String(baseWidth));
-      slot.shell.style.setProperty("--typst-page-height", String(Math.round(viewport.height)));
-      slot.pageEl.style.setProperty("--total-scale-factor", String(scale));
-      slot.textLayer.replaceChildren();
-      slot.textReady = false;
-      this.linesByPage.delete(slot.number);
-      slot.renderVersion += 1;
-      slot.rendering = false;
-      slot.rendered = false;
-      this.splicedSlots.add(slot.number);
-      await this.buildText(pdfjs, slot);
-      const box = slot.shell.getBoundingClientRect();
-      if (box.bottom > pane.top - 600 && box.top < pane.bottom + 600) void this.paint(slot, true);
-      replaced += 1;
+    try {
+      const preview = await task.promise;
+      if (this.disposed) return 0;
+      const pane = this.pane.getBoundingClientRect();
+      // Replacing canvases and text layers must not move the reader: browser
+      // scroll anchoring can shift the pane when a slot's content is swapped.
+      const scrollTop = this.pane.scrollTop;
+      const epoch = this.inputEpoch;
+      for (let index = 1; index <= preview.numPages; index += 1) {
+        const slot = this.pages[firstPage - 2 + index];
+        if (!slot || this.disposed) break;
+        const proxy = await preview.getPage(index);
+        if (this.disposed) break;
+        const widthPt = proxy.view[2] - proxy.view[0];
+        const baseWidth = Math.min(MAX_PAGE_WIDTH, Math.max(200, Math.round((widthPt * 96) / 72)));
+        const scale = baseWidth / widthPt;
+        const viewport = proxy.getViewport({ scale });
+        slot.task?.cancel();
+        slot.task = null;
+        const prevTask = slot.ownerTask;
+        slot.ownerTask = task;
+        this.retainTask(task);
+        this.releaseTask(prevTask);
+        slot.page = proxy;
+        slot.viewport = viewport;
+        slot.shell.style.setProperty("--typst-page-width", String(baseWidth));
+        slot.shell.style.setProperty("--typst-page-height", String(Math.round(viewport.height)));
+        slot.pageEl.style.setProperty("--total-scale-factor", String(scale));
+        slot.textLayer.replaceChildren();
+        slot.textReady = false;
+        this.linesByPage.delete(slot.number);
+        slot.renderVersion += 1;
+        slot.rendering = false;
+        slot.rendered = false;
+        this.splicedSlots.add(slot.number);
+        await this.buildText(pdfjs, slot);
+        const box = slot.shell.getBoundingClientRect();
+        if (box.bottom > pane.top - 600 && box.top < pane.bottom + 600) void this.paint(slot, true);
+        replaced += 1;
+      }
+      if (epoch === this.inputEpoch && this.pane.scrollTop !== scrollTop)
+        this.pane.scrollTop = scrollTop;
+      // The map describes the previous text of these pages: withhold it until the
+      // next full render replaces this view. No correspondence beats a wrong one.
+      if (replaced > 0) {
+        this.cancelMap();
+        this.sourceMap = null;
+        this.mapWithheld = true;
+        this.host.dataset.wordMap = "unavailable";
+      }
+      return replaced;
+    } finally {
+      this.releaseTask(task);
     }
-    if (epoch === this.inputEpoch && this.pane.scrollTop !== scrollTop)
-      this.pane.scrollTop = scrollTop;
-    // The map describes the previous text of these pages: withhold it until the
-    // next full render replaces this view. No correspondence beats a wrong one.
-    if (replaced > 0) {
+  }
+
+  /**
+   * Incrementally splice changed pages in place by comparing `pageHashes`.
+   *
+   * Unchanged leading and trailing pages preserve their existing canvases,
+   * viewports, text layers, and line indexes intact. Changed or newly added
+   * slots swap cleanly with off-screen double-buffered painting, excess
+   * trailing pages are removed, and all superseded PDF.js document handles are
+   * reference-counted and destroyed as soon as zero slots point to them.
+   */
+  async updateWithPageHashes(
+    pdf: Uint8Array | ArrayBuffer,
+    nextHashes: readonly string[],
+    options: {
+      focusPage?: number;
+      source?: string;
+      files?: PdfSourceFile[];
+      activeFile?: string;
+      spanMap?: readonly TypstSpanAnchor[];
+      onReady?: () => void;
+    } = {},
+  ): Promise<{
+    repaintedPages: number;
+    reusedPages: number;
+    totalPages: number;
+    fullRebuild: boolean;
+  }> {
+    if (this.disposed) {
+      return { repaintedPages: 0, reusedPages: 0, totalPages: 0, fullRebuild: false };
+    }
+    if (options.onReady !== undefined) this.onReadyCallback = options.onReady;
+    if (this.pages.length === 0 || nextHashes.length === 0) {
+      if (this.pages.length > 0) this.resetPages();
+      await this.render(pdf, { ...options, pageHashes: nextHashes });
+      const totalPages = this.pages.length;
+      return { repaintedPages: totalPages, reusedPages: 0, totalPages, fullRebuild: true };
+    }
+
+    const pdfjs = await loadPdfjs();
+    if (this.disposed) {
+      return {
+        repaintedPages: 0,
+        reusedPages: 0,
+        totalPages: this.pages.length,
+        fullRebuild: false,
+      };
+    }
+
+    const generation = ++this.textGeneration;
+    this.textCompleted = false;
+    if (options.source !== undefined) this.source = options.source;
+    if (options.files !== undefined) this.mapFiles = options.files;
+    if (options.activeFile !== undefined) this.activeFile = options.activeFile;
+    if (options.spanMap !== undefined) this.spanMap = options.spanMap;
+
+    const nextTask = pdfjs.getDocument({ data: toPdfBytes(pdf) });
+    this.retainTask(nextTask);
+    this.spliceTasks.push(nextTask);
+
+    try {
+      const nextDoc = await nextTask.promise;
+      if (this.disposed || generation !== this.textGeneration) {
+        return {
+          repaintedPages: 0,
+          reusedPages: 0,
+          totalPages: this.pages.length,
+          fullRebuild: false,
+        };
+      }
+
+      const prevHashes = this.pageHashes;
+      const prevCount = this.pages.length;
+      const nextCount = nextDoc.numPages;
+      const paneBox = this.pane.getBoundingClientRect();
+      const scrollTop = this.pane.scrollTop;
+      const epoch = this.inputEpoch;
+
+      while (this.pages.length > nextCount) {
+        const removed = this.pages.pop();
+        if (!removed) break;
+        removed.renderVersion += 1;
+        removed.task?.cancel();
+        removed.task = null;
+        removed.canvas.width = 0;
+        removed.canvas.height = 0;
+        this.linesByPage.delete(removed.number);
+        this.splicedSlots.delete(removed.number);
+        this.observer?.unobserve(removed.shell);
+        removed.shell.remove();
+        this.releaseTask(removed.ownerTask);
+      }
+
+      let repainted = 0;
+      let reused = 0;
+      const readyPages = new Set<number>();
+      const dirtySlots: PdfPage[] = [];
+
+      for (let pageNum = 1; pageNum <= nextCount; pageNum += 1) {
+        if (this.disposed || generation !== this.textGeneration) {
+          return {
+            repaintedPages: repainted,
+            reusedPages: reused,
+            totalPages: this.pages.length,
+            fullRebuild: false,
+          };
+        }
+        const prevHash = prevHashes[pageNum - 1];
+        const nextHash = nextHashes[pageNum - 1];
+        const hashChanged =
+          pageNum > prevCount ||
+          !prevHash ||
+          !nextHash ||
+          prevHash !== nextHash ||
+          this.splicedSlots.has(pageNum);
+
+        if (!hashChanged) {
+          reused += 1;
+          if (this.pages[pageNum - 1]?.textReady) readyPages.add(pageNum);
+          continue;
+        }
+
+        const proxy = await nextDoc.getPage(pageNum);
+        if (this.disposed || generation !== this.textGeneration) {
+          return {
+            repaintedPages: repainted,
+            reusedPages: reused,
+            totalPages: this.pages.length,
+            fullRebuild: false,
+          };
+        }
+
+        let slot: PdfPage;
+        if (pageNum <= this.pages.length) {
+          slot = this.pages[pageNum - 1];
+          const widthPt = proxy.view[2] - proxy.view[0];
+          const baseWidth = Math.min(
+            MAX_PAGE_WIDTH,
+            Math.max(200, Math.round((widthPt * 96) / 72)),
+          );
+          const scale = baseWidth / widthPt;
+          const viewport = proxy.getViewport({ scale });
+          slot.renderVersion += 1;
+          slot.task?.cancel();
+          slot.task = null;
+          slot.rendering = false;
+          slot.rendered = false;
+          const prevTask = slot.ownerTask;
+          slot.ownerTask = nextTask;
+          this.retainTask(nextTask);
+          this.releaseTask(prevTask);
+          slot.page = proxy;
+          slot.viewport = viewport;
+          slot.shell.style.setProperty("--typst-page-width", String(baseWidth));
+          slot.shell.style.setProperty("--typst-page-height", String(Math.round(viewport.height)));
+          slot.pageEl.style.setProperty("--total-scale-factor", String(scale));
+          slot.textLayer.replaceChildren();
+          slot.textReady = false;
+          this.linesByPage.delete(slot.number);
+          this.splicedSlots.delete(slot.number);
+        } else {
+          slot = this.buildShell(proxy, pageNum, nextTask);
+          this.pages.push(slot);
+          this.observer?.observe(slot.shell);
+        }
+        dirtySlots.push(slot);
+        repainted += 1;
+      }
+
+      if (this.disposed || generation !== this.textGeneration) {
+        return {
+          repaintedPages: repainted,
+          reusedPages: reused,
+          totalPages: this.pages.length,
+          fullRebuild: false,
+        };
+      }
+
+      const focus = Math.min(nextCount, Math.max(1, Math.round(options.focusPage ?? 1)));
+      const immediate =
+        dirtySlots.length <= 4
+          ? dirtySlots
+          : dirtySlots.filter((slot) => Math.abs(slot.number - focus) <= FOCUS_RADIUS);
+
+      await Promise.all(
+        immediate.map(async (slot) => {
+          if (this.disposed || generation !== this.textGeneration) return;
+          await this.buildText(pdfjs, slot);
+          readyPages.add(slot.number);
+        }),
+      );
+
+      if (this.disposed || generation !== this.textGeneration) {
+        return {
+          repaintedPages: repainted,
+          reusedPages: reused,
+          totalPages: this.pages.length,
+          fullRebuild: false,
+        };
+      }
+
+      for (const slot of dirtySlots) {
+        const box = slot.shell.getBoundingClientRect();
+        if (box.bottom > paneBox.top - 600 && box.top < paneBox.bottom + 600) {
+          void this.paint(slot, true);
+        }
+      }
+
+      this.pageHashes = [...nextHashes];
+      this.splicedSlots.clear();
+      this.maxPageWidth = Math.max(
+        1,
+        this.pages.reduce((max, page) => Math.max(max, page.viewport.width), 0),
+      );
+      this.applyFit();
+      if (epoch === this.inputEpoch && this.pane.scrollTop !== scrollTop) {
+        this.pane.scrollTop = scrollTop;
+      }
+
       this.cancelMap();
       this.sourceMap = null;
-      this.mapWithheld = true;
-      this.host.dataset.wordMap = "unavailable";
+      this.mapWithheld = false;
+      this.host.dataset.lastRepaintedPages = String(repainted);
+      this.host.dataset.lastReusedPages = String(reused);
+      this.emitPerfMark("splice-hashes", { repainted, reused, total: nextCount });
+
+      if (readyPages.size === this.pages.length) {
+        this.refreshAllLinesAndMap();
+      } else {
+        void this.completeText(pdfjs, readyPages, generation);
+      }
+
+      return {
+        repaintedPages: repainted,
+        reusedPages: reused,
+        totalPages: nextCount,
+        fullRebuild: false,
+      };
+    } finally {
+      this.releaseTask(nextTask);
     }
-    return replaced;
   }
 
   /** The last page slot whose top is above the pane's bottom edge, or 0 when empty. */
@@ -448,10 +813,11 @@ export class TypstPdfPreview {
   private async completeText(
     pdfjs: typeof import("pdfjs-dist"),
     done: ReadonlySet<number>,
+    generation = this.textGeneration,
   ): Promise<void> {
     let sliceStart = performance.now();
     for (const page of this.pages) {
-      if (this.disposed) return;
+      if (this.disposed || generation !== this.textGeneration) return;
       if (done.has(page.number)) continue;
       try {
         await this.buildText(pdfjs, page);
@@ -465,15 +831,16 @@ export class TypstPdfPreview {
         sliceStart = performance.now();
       }
     }
-    if (this.disposed) return;
-    this.allLines = [...this.linesByPage.entries()]
-      .sort(([a], [b]) => a - b)
-      .flatMap(([, lines]) => lines);
-    this.allLines.forEach((line, id) => {
-      line.id = id;
-    });
-    this.measureScrollRegions();
-    if (this.mapOptions?.enabled !== false) this.startMap();
+    if (this.disposed || generation !== this.textGeneration) return;
+    this.refreshAllLinesAndMap();
+  }
+
+  private emitPerfMark(name: string, detail?: Record<string, unknown>): void {
+    if (this.mapOptions?.language === "latex") {
+      perfMark(name, detail);
+    } else {
+      typstPerfMark(name, detail);
+    }
   }
 
   /** Pure matching runs off-thread; DOM range construction yields between batches. */
@@ -481,7 +848,8 @@ export class TypstPdfPreview {
     if (this.mapWithheld) return;
     this.host.dataset.wordMap = "pending";
     const started = performance.now();
-    const files = this.mapOptions?.files ?? [{ path: "", source: this.source }];
+    if (this.mapOptions?.language !== "latex") typstPerfMark("map:start");
+    const files = this.mapFiles.length ? this.mapFiles : [{ path: "", source: this.source }];
     if (
       files.reduce((size, file) => size + file.source.length, 0) > 2_000_000 ||
       this.allLines.length > 50_000
@@ -556,10 +924,13 @@ export class TypstPdfPreview {
             this.host.dataset.wordMapBatchMs = longestBatch.toFixed(1);
             this.host.dataset.wordMapAnchors = String(totalParts);
             this.host.dataset.wordMapAtomicAnchors = String(totalAtomic);
+            if (this.mapOptions?.language !== "latex") {
+              typstPerfMark("map:end", { anchors: totalParts, atomicAnchors: totalAtomic });
+            }
             this.scrollIndex = new ScrollIndex(anchors, true);
             this.measureScrollRegions();
             this.mapTimer = 0;
-            this.mapOptions?.onReady?.();
+            this.onReadyCallback?.();
             if (!this.selectionDismissed && !this.detached) this.emitSelection(false);
           }
         };
@@ -579,7 +950,16 @@ export class TypstPdfPreview {
       worker.postMessage({
         language: this.mapOptions?.language ?? "typst",
         files,
-        lines: this.allLines.map(({ text, region }) => ({ text, region })),
+        lines: this.allLines.map(({ text, region, page, yPt, leftPt, rightPt, heightPt }) => ({
+          text,
+          region,
+          page,
+          yPt,
+          leftPt,
+          rightPt,
+          heightPt,
+        })),
+        ...(this.spanMap?.length ? { spanMap: this.spanMap } : {}),
       });
     } catch (error) {
       this.host.dataset.wordMap = "unavailable";
@@ -623,6 +1003,9 @@ export class TypstPdfPreview {
     // one initial callback, which refits the pages if the pane changed width.
     if (!this.disposed) this.resizeObserver?.observe(this.pane);
     this.measureScrollRegions();
+    if (!this.disposed && this.textCompleted && this.mapOptions?.enabled !== false) {
+      this.ensureMap();
+    }
   }
 
   /**
@@ -706,6 +1089,7 @@ export class TypstPdfPreview {
       page.task = null;
     }
     this.pages = [];
+    this.pageHashes = [];
     this.linesByPage.clear();
     this.allLines = [];
     this.sourceMap = null;
@@ -715,6 +1099,7 @@ export class TypstPdfPreview {
       void loadingTask.destroy();
     }
     for (const task of this.spliceTasks.splice(0)) void task.destroy();
+    this.taskRefs.clear();
     this.splicedSlots.clear();
     this.host.replaceChildren();
   }
@@ -732,7 +1117,12 @@ export class TypstPdfPreview {
   }
 
   /** The sized page frame: canvas and an empty text layer, in page order. */
-  private buildShell(page: PDFPageProxy, number: number): PdfPage {
+  private buildShell(
+    page: PDFPageProxy,
+    number: number,
+    ownerTask: PDFDocumentLoadingTask,
+  ): PdfPage {
+    this.retainTask(ownerTask);
     const widthPt = page.view[2] - page.view[0];
     const baseWidth = Math.min(MAX_PAGE_WIDTH, Math.max(200, Math.round((widthPt * 96) / 72)));
     const scale = baseWidth / widthPt;
@@ -767,6 +1157,7 @@ export class TypstPdfPreview {
 
     return {
       page,
+      ownerTask,
       shell,
       pageEl,
       canvas,
@@ -1098,9 +1489,14 @@ export class TypstPdfPreview {
   }
 
   scrollTopFor(anchor: PdfScrollAnchor): number | null {
+    return this.scrollRowFor(anchor)?.top ?? null;
+  }
+
+  /** The anchor's text row on screen; null while its page is not painted. */
+  scrollRowFor(anchor: PdfScrollAnchor): { top: number; bottom: number } | null {
     if (this.disposed || !anchor.range.startContainer.isConnected) return null;
     const rect = anchor.range.getBoundingClientRect();
-    return rect.width && rect.height ? rect.top : null;
+    return rect.width && rect.height ? { top: rect.top, bottom: rect.bottom } : null;
   }
 
   /** Redraw the pages that are already on screen at the fit's pixel scale. */
@@ -1180,7 +1576,7 @@ export class TypstPdfPreview {
         page.rendered = true;
         // Edit-to-pixel is measured from here: the bitmap of this page is on
         // the canvas. The probe matches the page by its text, not by number.
-        perfMark("paint", { page: page.number });
+        this.emitPerfMark("paint", { page: page.number });
       }
     } catch (error) {
       // A cancelled render is the normal result of scrolling a page out while
@@ -1231,6 +1627,7 @@ export class TypstPdfPreview {
   ): void {
     // PDF coordinates are independent of CSS fit, zoom, scroll and font ascent.
     // TextLayer.textDivs follows the text items, including whitespace items.
+    const scale = viewport.scale || 1;
     const records = items
       .map((item, index) => {
         const [left, top] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
@@ -1242,6 +1639,12 @@ export class TypstPdfPreview {
             top,
             right: left + Math.abs(item.width * viewport.scale),
             height: Math.max(1, item.height * viewport.scale),
+          },
+          pdfRect: {
+            yPt: top / scale,
+            leftPt: left / scale,
+            rightPt: left / scale + Math.abs(item.width),
+            heightPt: Math.max(1, item.height),
           },
         };
       })
@@ -1293,6 +1696,10 @@ export class TypstPdfPreview {
           top: record.rect.top,
           left: record.rect.left,
           right: record.rect.right,
+          yPt: record.pdfRect.yPt,
+          leftPt: record.pdfRect.leftPt,
+          rightPt: record.pdfRect.rightPt,
+          heightPt: record.pdfRect.heightPt,
           column,
           spans: [],
         };
@@ -1302,6 +1709,9 @@ export class TypstPdfPreview {
       grouped.get(line)!.push(record);
       line.left = Math.min(line.left, record.rect.left);
       line.right = Math.max(line.right, record.rect.right);
+      line.leftPt = Math.min(line.leftPt, record.pdfRect.leftPt);
+      line.rightPt = Math.max(line.rightPt, record.pdfRect.rightPt);
+      line.heightPt = Math.max(line.heightPt, record.pdfRect.heightPt);
     }
     for (const line of lines) {
       let right = -Infinity;
@@ -1424,8 +1834,7 @@ export class TypstPdfPreview {
     const sourceRange = end
       ? (this.sourceMap?.sourceRange(start.line.id, start.offset, end.line.id, end.offset) ?? null)
       : null;
-    const sourceFile =
-      sourceRange && this.mapOptions?.files.find((file) => file.path === sourceRange.file);
+    const sourceFile = sourceRange && this.mapFiles.find((file) => file.path === sourceRange.file);
     if (sourceRange && sourceFile && this.mapOptions?.language === "latex") {
       const segments =
         this.sourceMap?.sourceSegments(

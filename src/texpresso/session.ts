@@ -1,10 +1,10 @@
 //! One TeXpresso preview for one LaTeX project and engine.
 //!
-//! MDraft's project, never TeXpresso's: the files come from the same snapshot
-//! WasmTex compiles, the edits come from the editor's own change sets, and the
-//! frame acknowledges each with the length and hash of the text it now holds.
-//! A divergence resends the file; a frame that stops answering is resynced,
-//! then restarted once, then given up for WasmTex, and each step is reported.
+//! MDraft's project, never TeXpresso's: the files come from the same project
+//! snapshot the native backend reads, the edits come from the editor's own
+//! change sets, and the frame acknowledges each with the length and hash of the
+//! text it now holds. A divergence resends the file; a frame that stops
+//! answering is resynced, then restarted once, then reported.
 
 import { TexpressoFrame, type ReadyInfo } from "./frame";
 import { textPrint, type Held, type PreparedProject } from "./project";
@@ -31,7 +31,7 @@ export interface TexpressoProjectKey {
 export interface TexpressoHandlers {
   onReady(session: TexpressoSession, info: ReadyInfo): void;
   onMessage(session: TexpressoSession, message: FrameMessage): void;
-  /** The frame failed and its restart failed too: fall back to WasmTex. */
+  /** The frame failed and its restart failed too: report it, do not retry silently. */
   onBroken(session: TexpressoSession, reason: string): void;
   /** A recovery step, for the status line and the measurements. */
   onRecovery(session: TexpressoSession, step: "resync" | "restart"): void;
@@ -108,8 +108,26 @@ export class TexpressoSession {
     return this.info !== null && !this.broken;
   }
 
+  /** Wait for the frame's boot, bounded; false when it failed or timed out. */
+  async whenReady(ms = 45_000): Promise<boolean> {
+    const deadline = performance.now() + ms;
+    while (!this.ready && !this.broken && performance.now() < deadline) {
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+    }
+    return this.ready;
+  }
+
+  /** Wait until every project sync and edit has been acknowledged. */
+  async whenSettled(ms = 45_000): Promise<boolean> {
+    const deadline = performance.now() + ms;
+    while (this.outstanding.size > 0 && !this.broken && performance.now() < deadline) {
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+    }
+    return this.outstanding.size === 0;
+  }
+
   /** Run `work` now when the frame is up, else once it is; only the latest of a kind is kept. */
-  private whenReady(work: () => void): void {
+  private onceReady(work: () => void): void {
     if (this.ready) work();
     else this.queued.push(work);
   }
@@ -181,7 +199,7 @@ export class TexpressoSession {
   /** The file the reader is editing; the frame opens it for the source map. */
   open(path: string | null): void {
     this.active = path;
-    if (path) this.whenReady(() => this.frame.post({ type: "open", file: path }));
+    if (path) this.onceReady(() => this.frame.post({ type: "open", file: path }));
   }
 
   /**
@@ -247,6 +265,19 @@ export class TexpressoSession {
     return this.ready ? this.frame.request(message, ms) : Promise.resolve(null);
   }
 
+  /**
+   * The frame's own `xdvipdfmx` conversion, the authority for Export, Save PDF
+   * and Print. Null when the frame is not ready or the request timed out.
+   */
+  async exportPdf(ms = 120_000): Promise<{ pdf: Uint8Array; ms: number } | null> {
+    // The first build reaches here while the frame is still booting; the
+    // project sync must also be applied before an export can see it.
+    if (!(await this.whenReady()) || !(await this.whenSettled())) return null;
+    const reply = await this.request({ type: "export" }, ms);
+    if (!reply || reply.type !== "pdf") return null;
+    return { pdf: new Uint8Array(reply.pdf), ms: reply.ms };
+  }
+
   private receive(frame: TexpressoFrame, message: FrameMessage): void {
     if (frame !== this.frame || this.broken) return;
     switch (message.type) {
@@ -299,7 +330,7 @@ export class TexpressoSession {
       this.restart();
       return;
     }
-    this.fail("The TeXpresso preview stopped responding.");
+    this.fail("The LaTeX preview stopped responding.");
   }
 
   private restart(): void {

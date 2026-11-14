@@ -187,19 +187,20 @@ function resolveFixtures(scratchDir) {
       id: "typ-small",
       path: path.resolve(REPO_ROOT, "samples", "typst-pages.typ"),
       generated: false,
-      expectedSnippet: "Typst",
+      expectedSnippet: "A Two-Column Pendulum Paper",
       docFriendly: true,
     },
     "typ-tour": {
       id: "typ-tour",
       path: path.resolve(REPO_ROOT, "samples", "typst-tour.typ"),
       generated: false,
-      expectedSnippet: "Typst",
+      expectedSnippet: "MDraft — Typst tour",
       docFriendly: true,
     },
     "typ-workspace": {
       id: "typ-workspace",
       path: path.resolve(REPO_ROOT, "samples", "workspace-typst", "chapters", "one.typ"),
+      workspaceRoot: path.resolve(REPO_ROOT, "samples", "workspace-typst"),
       generated: false,
       expectedSnippet: "Chapter one",
       docFriendly: false,
@@ -419,6 +420,8 @@ async function installPerfProbe(page) {
       invokes: [],
       marks: [],
       seenCanvases: new WeakSet(),
+      openFolder: null,
+      activeWorkspaceRoot: null,
     };
     window.__mdraftTypstPerfState = state;
 
@@ -447,90 +450,193 @@ async function installPerfProbe(page) {
       }
     }
 
-    const origInvoke = window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
-    window.__TAURI_INTERNALS__.invoke = async function (cmd, args, options) {
-      if (cmd === "render_typst" || cmd === "cancel_typst_preview") {
-        const startMs = performance.now();
-        let reqBytes = 0;
-        try {
-          reqBytes = new TextEncoder().encode(JSON.stringify(args ?? {})).length;
-        } catch {
-          reqBytes = 0;
+    const origFetch = window.fetch.bind(window);
+    window.fetch = async function (input, options) {
+      let cmd = null;
+      try {
+        const rawUrl = typeof input === "string" ? input : input?.url;
+        if (rawUrl) {
+          const url = new URL(rawUrl, location.href);
+          if (url.hostname === "ipc.localhost" || url.protocol === "ipc:") {
+            cmd = decodeURIComponent(url.pathname.slice(1));
+          }
         }
-        try {
-          const res = await origInvoke(cmd, args, options);
-          const endMs = performance.now();
-          let resBytes = 0;
-          if (cmd === "render_typst" && res && typeof res === "object") {
-            if (typeof res.pdf === "string") resBytes = res.pdf.length;
-            else if (res.pdf instanceof Uint8Array || Array.isArray(res.pdf)) resBytes = res.pdf.length;
-            else if (typeof res.html === "string") resBytes = res.html.length;
-            state.compileSeq += 1;
-          }
-          state.invokes.push({
-            seq: state.compileSeq,
-            cmd,
-            startMs,
-            endMs,
-            wallMs: endMs - startMs,
-            reqBytes,
-            resBytes,
-            totalBytes: reqBytes + resBytes,
-            kind: res?.kind ?? null,
-            ignoredCount: Array.isArray(res?.ignored) ? res.ignored.length : 0,
-            hasOutput: Boolean(res?.pdf || res?.html),
-            cancelled: false,
-            error: null,
-          });
-          if (state.invokes.length > 500) {
-            state.invokes.splice(0, state.invokes.length - 500);
-          }
-          return res;
-        } catch (err) {
-          const endMs = performance.now();
-          const msg = String(err?.message ?? err ?? "unknown");
-          if (cmd === "render_typst") {
-            state.compileSeq += 1;
-          }
-          state.invokes.push({
-            seq: state.compileSeq,
-            cmd,
-            startMs,
-            endMs,
-            wallMs: endMs - startMs,
-            reqBytes,
-            resBytes: 0,
-            totalBytes: reqBytes,
-            kind: null,
-            ignoredCount: 0,
-            hasOutput: false,
-            cancelled: msg.toLowerCase().includes("cancel"),
-            error: msg,
-          });
-          throw err;
-        }
+      } catch {
+        cmd = null;
       }
-      return origInvoke(cmd, args, options);
+      if (cmd === "plugin:dialog|open" && state.openFolder !== null) {
+        return new Response(JSON.stringify(state.openFolder), {
+          headers: { "Content-Type": "application/json", "Tauri-Response": "ok" },
+        });
+      }
+      const isRender = cmd === "render_typst" || cmd === "render_typst_binary";
+      if (!isRender && cmd !== "cancel_typst_preview") {
+        return origFetch(input, options);
+      }
+      const startMs = performance.now();
+      let reqBytes = 0;
+      const body = options?.body;
+      if (typeof body === "string") {
+        reqBytes = new TextEncoder().encode(body).length;
+      } else if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) {
+        reqBytes = body.byteLength;
+      }
+      try {
+        const response = await origFetch(input, options);
+        const clone = response.clone();
+        const buf = await clone.arrayBuffer();
+        const endMs = performance.now();
+        const resBytes = buf.byteLength;
+        const tauriStatus = response.headers.get("Tauri-Response") ?? (response.ok ? "ok" : "error");
+        let kind = null;
+        let backendKind = null;
+        let ignoredCount = 0;
+        let hasOutput = false;
+        let errorMsg = null;
+        let cancelled = false;
+        if (tauriStatus !== "ok") {
+          const text = new TextDecoder().decode(new Uint8Array(buf));
+          try {
+            const parsed = JSON.parse(text);
+            errorMsg = typeof parsed === "string" ? parsed : JSON.stringify(parsed);
+          } catch {
+            errorMsg = text || ("IPC error status " + response.status);
+          }
+          cancelled = errorMsg.toLowerCase().includes("cancel");
+        } else if (cmd === "render_typst_binary") {
+          const bytes = new Uint8Array(buf);
+          if (bytes.byteLength >= 4) {
+            const metaLen = new DataView(
+              bytes.buffer,
+              bytes.byteOffset,
+              bytes.byteLength,
+            ).getUint32(0, false);
+            const metaEnd = Math.min(bytes.byteLength, 4 + metaLen);
+            const metaJson = new TextDecoder().decode(bytes.subarray(4, metaEnd));
+            const meta = JSON.parse(metaJson);
+            kind = meta?.kind ?? null;
+            backendKind = meta?.backendKind ?? null;
+            ignoredCount = Array.isArray(meta?.ignored) ? meta.ignored.length : 0;
+            hasOutput = bytes.byteLength > metaEnd || Boolean(meta?.pdf || meta?.html);
+          }
+        } else if (cmd === "render_typst") {
+          const parsed = JSON.parse(new TextDecoder().decode(new Uint8Array(buf)));
+          kind = parsed?.kind ?? null;
+          backendKind = parsed?.backendKind ?? null;
+          ignoredCount = Array.isArray(parsed?.ignored) ? parsed.ignored.length : 0;
+          hasOutput = Boolean(parsed?.pdf || parsed?.html);
+        }
+        if (isRender) {
+          state.compileSeq += 1;
+        }
+        state.invokes.push({
+          seq: state.compileSeq,
+          cmd,
+          startMs,
+          endMs,
+          wallMs: endMs - startMs,
+          reqBytes,
+          resBytes,
+          totalBytes: reqBytes + resBytes,
+          kind,
+          backendKind,
+          ignoredCount,
+          hasOutput,
+          cancelled,
+          error: errorMsg,
+        });
+        if (state.invokes.length > 500) {
+          state.invokes.splice(0, state.invokes.length - 500);
+        }
+        return response;
+      } catch (err) {
+        const endMs = performance.now();
+        const msg = String(err?.message ?? err ?? "unknown");
+        if (isRender) {
+          state.compileSeq += 1;
+        }
+        state.invokes.push({
+          seq: state.compileSeq,
+          cmd,
+          startMs,
+          endMs,
+          wallMs: endMs - startMs,
+          reqBytes,
+          resBytes: 0,
+          totalBytes: reqBytes,
+          kind: null,
+          backendKind: null,
+          ignoredCount: 0,
+          hasOutput: false,
+          cancelled: msg.toLowerCase().includes("cancel"),
+          error: msg,
+        });
+        throw err;
+      }
     };
     return true;
   })()`);
 }
 
 async function openFixtureAndConfigure(page, fixture, mode) {
+  const targetRoot = fixture.workspaceRoot ?? null;
   await page.evaluate(
     `(async () => {
       const invoke = window.__TAURI_INTERNALS__.invoke;
+      const state = window.__mdraftTypstPerfState;
+      const targetRoot = ${JSON.stringify(targetRoot)};
+      const norm = (value) =>
+        value
+          ? value.split(String.fromCharCode(92)).join("/").replace(new RegExp("/+$"), "").toLowerCase()
+          : null;
+      const before = await invoke("get_settings");
+      const currentRoot = before?.workspaceFolder ?? null;
+      const waitWorkspace = async (wantOpen) => {
+        const deadline = Date.now() + 8000;
+        while (Date.now() < deadline) {
+          const settings = await invoke("get_settings");
+          if (wantOpen ? Boolean(settings?.workspaceFolder) : !settings?.workspaceFolder) {
+            return settings;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 40));
+        }
+        throw new Error(wantOpen ? "Timed out opening Typst workspace folder" : "Timed out closing Typst workspace folder");
+      };
+      if (targetRoot && norm(currentRoot) !== norm(targetRoot)) {
+        state.openFolder = targetRoot;
+        try {
+          await invoke("plugin:event|emit", { event: "menu", payload: "file.openFolder" });
+          const after = await waitWorkspace(true);
+          if (after?.sidebarVisible && !before?.sidebarVisible) {
+            await invoke("plugin:event|emit", { event: "menu", payload: "view.sidebar" });
+            const sidebarDeadline = Date.now() + 2000;
+            while (Date.now() < sidebarDeadline) {
+              const latest = await invoke("get_settings");
+              if (!latest?.sidebarVisible) break;
+              await new Promise((resolve) => setTimeout(resolve, 40));
+            }
+          }
+        } finally {
+          state.openFolder = null;
+        }
+      } else if (!targetRoot && currentRoot) {
+        await invoke("plugin:event|emit", { event: "menu", payload: "file.closeFolder" });
+        await waitWorkspace(false);
+      }
+      state.activeWorkspaceRoot = targetRoot;
       await invoke("plugin:event|emit", { event: "open-files", payload: [${JSON.stringify(fixture.path)}] });
       await invoke("plugin:event|emit", { event: "menu", payload: "view.split" });
     })()`,
   );
 
-  // Wait until CodeMirror displays the opened fixture content.
+  // Wait until CodeMirror displays the opened fixture content and tab title.
+  const expectedFileName = path.basename(fixture.path);
   const deadline = Date.now() + 12000;
   let loaded = false;
   while (Date.now() < deadline) {
     loaded = await page.evaluate(
       `(() => {
+        if (!document.title.includes(${JSON.stringify(expectedFileName)})) return false;
         const cm = document.querySelector(".cm-content");
         const view = cm?.cmTile?.root?.view ?? cm?.closest(".cm-editor")?.cmView?.view;
         if (!view) return false;
@@ -549,17 +655,20 @@ async function openFixtureAndConfigure(page, fixture, mode) {
   await page.evaluate(
     `(async () => {
       const invoke = window.__TAURI_INTERNALS__.invoke;
-      const auto = document.querySelector("input.compiled-auto");
+      const auto = document.querySelector(".compiled-auto input");
       if (auto && !auto.checked) {
         auto.click();
       }
       await invoke("plugin:event|emit", { event: "menu", payload: ${JSON.stringify(menuMode)} });
     })()`,
   );
+  // Allow mode switch / initial compile state transition to enter `busy` before polling.
+  await sleep(120);
 
-  // Wait for initial preview settle cleanly.
+  // Wait for initial preview settle cleanly (allows startup pre-warmed / cached initial views).
   const settled = await waitForPreviewSettled(page, {
     minCompileSeq: 0,
+    requireInvoke: false,
     timeoutMs: 30000,
     expectedMode: mode === "document" ? "document" : "pages",
   });
@@ -568,9 +677,16 @@ async function openFixtureAndConfigure(page, fixture, mode) {
 
 async function waitForPreviewSettled(
   page,
-  { minCompileSeq, timeoutMs = 25000, expectedMode = "pages" },
+  {
+    minCompileSeq,
+    minStartMs = 0,
+    requireInvoke = minCompileSeq > 0,
+    timeoutMs = 25000,
+    expectedMode = "pages",
+  },
 ) {
   const start = Date.now();
+  let lastState = null;
   while (Date.now() - start < timeoutMs) {
     const res = await page.evaluate(
       `(async () => {
@@ -579,13 +695,21 @@ async function waitForPreviewSettled(
         const compileBtn = document.querySelector(".compiled-compile");
         const busy = Boolean(compileBtn?.textContent?.trim() === "Stop" || compileBtn?.getAttribute("aria-busy") === "true");
         const seq = state?.compileSeq ?? 0;
-        const lastInvoke = [...(state?.invokes ?? [])].reverse().find((x) => x.cmd === "render_typst" && x.seq >= ${minCompileSeq});
+        const lastInvoke = [...(state?.invokes ?? [])]
+          .reverse()
+          .find(
+            (x) =>
+              (x.cmd === "render_typst" || x.cmd === "render_typst_binary") &&
+              x.seq >= ${minCompileSeq} &&
+              x.startMs >= ${minStartMs} &&
+              (!${JSON.stringify(requireInvoke)} || !x.cancelled),
+          );
 
-        if (seq < ${minCompileSeq} || !lastInvoke || busy) {
-          return { ready: false, seq, label, busy };
+        if (seq < ${minCompileSeq} || (${JSON.stringify(requireInvoke)} && !lastInvoke) || busy) {
+          return { ready: false, seq, label, busy, invokesLen: state?.invokes?.length ?? 0 };
         }
         if (label !== "PDF ready" && label !== "Document ready" && label !== "Failed") {
-          return { ready: false, seq, label, busy };
+          return { ready: false, seq, label, busy, invokesLen: state?.invokes?.length ?? 0 };
         }
 
         const docPane = document.querySelector("#preview .typst-document");
@@ -593,12 +717,24 @@ async function waitForPreviewSettled(
         const canvases = pagesRoot ? [...pagesRoot.querySelectorAll(".typst-page canvas")] : [];
         const pageShells = pagesRoot ? pagesRoot.querySelectorAll(".typst-page-shell").length : 0;
 
-        if (${JSON.stringify(expectedMode)} === "pages" || label === "PDF ready") {
-          if (label === "PDF ready" && canvases.length > 0 && canvases.every((c) => c.width === 0 || c.height === 0)) {
-            return { ready: false, seq, label, busy, reason: "canvas-zero" };
+        if (${JSON.stringify(expectedMode)} === "pages") {
+          if (label !== "PDF ready" && label !== "Failed") {
+            return { ready: false, seq, label, busy, reason: "awaiting-pages-mode" };
           }
-        } else if (label === "Document ready" && !docPane) {
-          return { ready: false, seq, label, busy, reason: "missing-doc-pane" };
+          if (label === "PDF ready") {
+            if (!pagesRoot || (canvases.length === 0 && pageShells === 0)) {
+              return { ready: false, seq, label, busy, reason: "missing-pages-root" };
+            }
+            if (canvases.length > 0 && canvases.every((c) => c.width === 0 || c.height === 0)) {
+              return { ready: false, seq, label, busy, reason: "canvas-zero" };
+            }
+          }
+        } else if (label === "Document ready") {
+          if (!docPane) {
+            return { ready: false, seq, label, busy, reason: "missing-doc-pane" };
+          }
+        } else if (label === "PDF ready" && !lastInvoke) {
+          return { ready: false, seq, label, busy, reason: "awaiting-doc-mode" };
         }
 
         await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -616,22 +752,23 @@ async function waitForPreviewSettled(
           ready: true,
           seq,
           label,
-          failed: label === "Failed" || Boolean(lastInvoke.error),
-          effectiveKind: docPane && label === "Document ready" ? "document" : (lastInvoke.kind ?? "pages"),
+          failed: label === "Failed" || Boolean(lastInvoke?.error),
+          effectiveKind: docPane && label === "Document ready" ? "document" : (lastInvoke?.kind ?? "pages"),
           paintNowMs,
           pageShells,
           canvasCount: canvases.length,
           newCanvasCount,
-          lastInvoke,
+          lastInvoke: lastInvoke ?? null,
           docTextLen: docPane ? (docPane.textContent?.length ?? 0) : 0,
         };
       })()`,
     );
     if (res?.ready) return res;
+    lastState = res;
     await sleep(20);
   }
   throw new Error(
-    `Timed out waiting for Typst preview settle (>${timeoutMs} ms, seq >= ${minCompileSeq})`,
+    `Timed out waiting for Typst preview settle (>${timeoutMs} ms, seq >= ${minCompileSeq}, mode=${expectedMode}, lastState=${JSON.stringify(lastState)})`,
   );
 }
 
@@ -733,6 +870,7 @@ function extractMarksSlice(marks) {
   };
   return {
     paintedPagesCount: paintedPages.size,
+    spliceRepainted: numericDetail("mdraft:typst:splice-hashes", "repainted"),
     spawnOrRpcMs:
       numericDetail("mdraft:typst:compile:end", "spawnOrRpcMs") ??
       spanBetween("mdraft:typst:rpc:start", "mdraft:typst:rpc:end"),
@@ -771,6 +909,7 @@ async function runSequentialScenario(page, fixture, mode, opts) {
   let totalIterations = opts.warmup + opts.runs;
   let lastPageCount = 0;
   let lastEffectiveKind = mode;
+  let lastBackendKind = null;
   let editErrors = 0;
 
   dirMonitor.start();
@@ -804,18 +943,26 @@ async function runSequentialScenario(page, fixture, mode, opts) {
         e2pSamples.push(e2p);
         const lastRender = [...slice.invokes]
           .reverse()
-          .find((inv) => inv.cmd === "render_typst" && !inv.cancelled);
+          .find(
+            (inv) =>
+              (inv.cmd === "render_typst" || inv.cmd === "render_typst_binary") && !inv.cancelled,
+          );
         if (lastRender) {
           schedulerWaitSamples.push(Math.max(0, lastRender.startMs - editInfo.editDispatchMs));
           compileWallSamples.push(lastRender.wallMs);
           ipcBytesSamples.push(lastRender.totalBytes);
+          if (lastRender.backendKind) lastBackendKind = lastRender.backendKind;
         }
         const marks = extractMarksSlice(slice.marks);
         const totalPages = settled.pageShells || settled.canvasCount || 0;
         if (totalPages > 0) {
           lastPageCount = totalPages;
           const paintedCount =
-            marks.paintedPagesCount > 0 ? marks.paintedPagesCount : settled.newCanvasCount;
+            marks.spliceRepainted != null
+              ? marks.spliceRepainted
+              : marks.paintedPagesCount > 0
+                ? marks.paintedPagesCount
+                : settled.newCanvasCount;
           repaintRatios.push(Math.min(1, paintedCount / totalPages));
         }
         lastEffectiveKind = settled.effectiveKind;
@@ -843,6 +990,7 @@ async function runSequentialScenario(page, fixture, mode, opts) {
     fixture: fixture.id,
     mode,
     effectiveKind: lastEffectiveKind,
+    backendKind: lastBackendKind,
     warmupRuns: opts.warmup,
     measuredRuns: opts.runs,
     editErrors,
@@ -896,6 +1044,7 @@ async function runStarvationScenario(page, fixture, opts) {
     // Wait for final burst render to finish painting.
     const settled = await waitForPreviewSettled(page, {
       minCompileSeq: baseline.compileSeq + 1,
+      minStartMs: keystrokes[keystrokes.length - 1].tsMs - 2,
       timeoutMs: 35000,
       expectedMode: "pages",
     });
@@ -914,7 +1063,9 @@ async function runStarvationScenario(page, fixture, opts) {
     const diskTempWritesCount = dirMonitor.stop();
     await restoreEditorText(page, originalText);
 
-    const renderInvokes = post.invokes.filter((inv) => inv.cmd === "render_typst");
+    const renderInvokes = post.invokes.filter(
+      (inv) => inv.cmd === "render_typst" || inv.cmd === "render_typst_binary",
+    );
     const completedPaints = renderInvokes
       .filter((inv) => !inv.cancelled && inv.hasOutput)
       .map((inv) => inv.endMs);
@@ -1059,7 +1210,11 @@ async function main() {
     }
   } finally {
     if (page) {
-      await page.close().catch(() => {});
+      try {
+        await page.close();
+      } catch {
+        // Ignore teardown close errors so original failures surface.
+      }
     }
     if (!opts.noCleanup) {
       fs.rmSync(scratchDir, { recursive: true, force: true });

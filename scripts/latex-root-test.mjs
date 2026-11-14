@@ -11,7 +11,7 @@
 // Read-only: no fixture is saved. Skips cleanly without the bundled engine.
 
 import { join } from "node:path";
-import { openPage, sleep } from "./cdp-page.mjs";
+import { openPage, sleep, useWasmTex } from "./cdp-page.mjs";
 
 const port = process.argv[2] ?? "9222";
 const page = await openPage(port);
@@ -41,6 +41,7 @@ async function waitFor(expression, timeout, label) {
 
 try {
   await waitFor('!!document.querySelector(".cm-content")', 30_000, "the editor");
+  await useWasmTex(page);
   if ((await invoke("latex_status")) !== true) {
     await evaluate(`(async () => {
       const open = document.getElementById("btn-prefs");

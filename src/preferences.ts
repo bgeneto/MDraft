@@ -10,7 +10,7 @@
 //! be dragged and resized without leaving the webview.
 
 import * as api from "./api";
-import { LATEX_DOWNLOAD_MIB, LATEX_ENGINE_YEAR } from "./latex-engine";
+import { TEXPRESSO_ENGINE_MIB, TEXPRESSO_TEXLIVE_YEAR } from "./latex-backend";
 import {
   renderTexmfControl,
   texmfRows,
@@ -63,10 +63,16 @@ export interface PreferencesHost extends TexmfPreferencesHost {
   pandocStatus(): api.PandocStatus | null;
   /** Last known Typst status, or null before the first check. */
   typstStatus(): api.TypstStatus | null;
+  /** Optional host-cached companion Typst service status. */
+  typstServiceStatus?(): api.TypstServiceStatus | null;
   /** Check for pandoc and offer to install it if it is missing. */
   setupPandoc(): Promise<void>;
   /** Check for Typst and offer to install it if it is missing. */
   setupTypst(): Promise<void>;
+  /** Optional host override to install/check the companion Typst service. */
+  setupTypstService?(): Promise<void>;
+  /** Optional host override to clear Typst caches. */
+  clearTypstCache?(): Promise<void>;
   /**
    * The downloaded LuaLaTeX package cache, or null before the first read.
    *
@@ -241,6 +247,18 @@ interface Section {
   id: string;
   title: string;
   rows: Row[];
+}
+
+interface TypstServiceUiState {
+  status: api.TypstServiceStatus | null;
+  note: string | null;
+  busy: boolean;
+}
+
+function formatCacheBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 /**
@@ -954,10 +972,9 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
     {
       kind: "select",
       label: "Default engine",
-      help: "Used when the main file has no % !TeX program line and the project has no engine of its own (the engine chip in the status bar). pdfLaTeX and XeLaTeX download on first use.",
+      help: "Used when the main file has no % !TeX program line and the project has no engine of its own (the engine chip in the status bar). The bundled preview typesets with LuaLaTeX or XeLaTeX; pdfLaTeX is available only through an installed TeX distribution.",
       options: [
         ["lualatex", "LuaLaTeX"],
-        ["pdflatex", "pdfLaTeX"],
         ["xelatex", "XeLaTeX"],
         ["auto", "Auto (from the preamble)"],
       ],
@@ -1062,13 +1079,13 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
       text:
         host.latexCacheError() ??
         (latex
-          ? latex.installed
+          ? latex.previewInstalled
             ? latex.enabled
               ? "Installed and enabled."
               : "Installed, but the switch is off."
             : latex.enabled
-              ? `Enabled, but the engine files are missing or out of date. Toggle the switch off and on to download the TeX Live ${LATEX_ENGINE_YEAR} engine (about ${LATEX_DOWNLOAD_MIB} MiB).`
-              : `Not installed. Turn the switch on to download about ${LATEX_DOWNLOAD_MIB} MiB of verified engine files.`
+              ? `Enabled, but the preview files are missing or out of date. Toggle the switch off and on to download the TeX Live ${TEXPRESSO_TEXLIVE_YEAR} preview engine (about ${TEXPRESSO_ENGINE_MIB} MiB).`
+              : `Not installed. Turn the switch on to download about ${TEXPRESSO_ENGINE_MIB} MiB of verified engine files; packages and fonts follow on demand.`
           : "Checking…"),
     },
     {
@@ -1120,7 +1137,11 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
   return rows;
 }
 
-function exportRows(host: PreferencesHost): Row[] {
+function exportRows(
+  host: PreferencesHost,
+  typstSvc: TypstServiceUiState,
+  refresh: () => void,
+): Row[] {
   const formats = host.settings().exportFormats;
   const status = host.pandocStatus();
   // One status line and one folder button per tool. The install path is not
@@ -1157,6 +1178,92 @@ function exportRows(host: PreferencesHost): Row[] {
       help: "Update the preview after edits. Turn off to compile with the preview toolbar.",
       get: () => host.settings().typstAutoCompile !== false,
       set: (value) => host.update({ typstAutoCompile: value }),
+    },
+    {
+      kind: "checkbox",
+      label: "Incremental Typst compiler service",
+      help: "Keeps a companion Typst compiler daemon warm in memory for interactive previews without writing temporary .mdraft-preview files to disk. Falls back automatically to stock Typst CLI when not installed.",
+      get: () => host.settings().typstIncrementalService === true,
+      set: (value) => host.update({ typstIncrementalService: value }),
+    },
+    {
+      kind: "note",
+      label: "Typst service",
+      text: (() => {
+        const svc = host.typstServiceStatus?.() ?? typstSvc.status;
+        if (typstSvc.note) {
+          return svc ? `${svc.version ? `v${svc.version} — ` : ""}${typstSvc.note}` : typstSvc.note;
+        }
+        if (!svc) return "Not checked yet.";
+        if (!svc.installed) return svc.hint;
+        const rss = svc.rssBytes !== null ? `, ${formatCacheBytes(svc.rssBytes)} RSS` : "";
+        return `Installed v${svc.version ?? svc.manifestVersion} (Typst ${svc.typstVersion ?? "0.15.1"}${svc.active ? `, ${svc.runningWorkers} active${rss}` : ""}). ${svc.hint}`;
+      })(),
+    },
+    {
+      kind: "button",
+      label: "",
+      text: "Install or check Typst service",
+      help: "Verifies a local companion daemon under Typst's app data folder or downloads it when a pinned SHA-256 release checksum is published.",
+      disabled: () => typstSvc.busy,
+      action: async () => {
+        typstSvc.busy = true;
+        typstSvc.note = "Checking Typst service…";
+        refresh();
+        try {
+          if (host.setupTypstService) {
+            await host.setupTypstService();
+            typstSvc.status = host.typstServiceStatus?.() ?? (await api.typstServiceStatus());
+            typstSvc.note = null;
+          } else {
+            const current = await api.typstServiceStatus();
+            if (current.installed) {
+              typstSvc.status = current;
+              typstSvc.note = null;
+            } else if (current.canInstall) {
+              typstSvc.note = "Downloading verified Typst service…";
+              refresh();
+              typstSvc.status = await api.installTypstService();
+              typstSvc.note = null;
+            } else {
+              typstSvc.status = current;
+              typstSvc.note = current.hint;
+            }
+          }
+        } catch (error) {
+          typstSvc.note = error instanceof Error ? error.message : String(error);
+        } finally {
+          typstSvc.busy = false;
+          refresh();
+        }
+      },
+    },
+    {
+      kind: "button",
+      label: "",
+      text: "Clear Typst cache",
+      help: "Evicts in-memory incremental memoization caches inside running Typst service workers and clears temporary Typst render files.",
+      disabled: () => typstSvc.busy,
+      action: async () => {
+        typstSvc.busy = true;
+        refresh();
+        try {
+          if (host.clearTypstCache) {
+            await host.clearTypstCache();
+            typstSvc.status = await api.typstServiceStatus();
+            typstSvc.note = "Typst caches cleared.";
+          } else {
+            const freed = await api.typstClearCache();
+            typstSvc.status = await api.typstServiceStatus();
+            typstSvc.note = `Cleared ${formatCacheBytes(freed)} of Typst cache.`;
+          }
+        } catch (error) {
+          typstSvc.note = error instanceof Error ? error.message : String(error);
+        } finally {
+          typstSvc.busy = false;
+          refresh();
+        }
+      },
     },
     {
       kind: "note",
@@ -1806,7 +1913,12 @@ function readAloudRows(host: PreferencesHost): Row[] {
   ];
 }
 
-function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void): Section[] {
+function buildSections(
+  host: PreferencesHost,
+  ai: AiUiState,
+  typstSvc: TypstServiceUiState,
+  refresh: () => void,
+): Section[] {
   const s = () => host.settings();
 
   return [
@@ -2167,7 +2279,7 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
           help: "Writes a PDF directly through the system webview. File › Export › PDF (opens browser) provides browser printing and the fallback for scripted HTML. Typst documents use PDF (via Typst).",
           action: () => host.exportPdf(),
         },
-        ...exportRows(host),
+        ...exportRows(host, typstSvc, refresh),
       ],
     },
     {
@@ -2275,7 +2387,12 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
     prompts: null,
     promptsLoading: false,
   };
-  let activeId = buildSections(host, ai, () => render())[0].id;
+  const typstSvc: TypstServiceUiState = {
+    status: null,
+    note: null,
+    busy: false,
+  };
+  let activeId = buildSections(host, ai, typstSvc, () => render())[0].id;
   let query = "";
   let placed = false;
 
@@ -2474,7 +2591,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
   });
 
   function visibleSections(): Section[] {
-    const all = buildSections(host, ai, () => render());
+    const all = buildSections(host, ai, typstSvc, () => render());
     if (query.length === 0) return all;
     const terms = query.split(/\s+/).filter((term) => term.length > 0);
     if (terms.length === 0) return all;
@@ -2878,6 +2995,18 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
         render();
       }
     });
+    if (!host.typstServiceStatus) {
+      const svcBefore = JSON.stringify(typstSvc.status);
+      void api
+        .typstServiceStatus()
+        .then((next) => {
+          typstSvc.status = next;
+          if (!overlay.hidden && JSON.stringify(next) !== svcBefore) {
+            render();
+          }
+        })
+        .catch(() => {});
+    }
     query = "";
     searchEl.value = "";
     // A failed scan is retried only when the panel is reopened, never from the
@@ -2905,7 +3034,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
   }
 
   function openAt(sectionId: string): void {
-    const target = buildSections(host, ai, () => render()).find(
+    const target = buildSections(host, ai, typstSvc, () => render()).find(
       (section) => section.id === sectionId,
     );
     if (target) activeId = target.id;

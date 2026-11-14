@@ -308,6 +308,178 @@ async function scrollPreviewTo(word, mode) {
   return true;
 }
 
+// --- Gesture probe (docs/plans/2026-11-13-level-click-alignment.md) ----------
+// A real click on a word in one pane, then the vertical distance between that
+// word's row centre and its counterpart's row centre in the other pane. Row
+// centres, in screen pixels, because that is what "side by side" means when
+// the two panes use different font sizes.
+
+const installBoxProbe = `window.__scrollBox = (word, root = document.body) => {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node.parentElement?.closest('script,style')) continue;
+    const at = node.data.indexOf(word);
+    if (at < 0) continue;
+    const range = document.createRange();
+    range.setStart(node, at); range.setEnd(node, at + word.length);
+    const r = range.getBoundingClientRect();
+    if (r.width && r.height) return { top:r.top, bottom:r.bottom, left:r.left, right:r.right };
+  }
+  return null;
+}; 'ok'`;
+
+/** The band both panes show, and each pane's own scroll offset. */
+async function paneState() {
+  const state = await page.evaluate(`(() => {
+    const v=${view};
+    const s=v.scrollDOM.getBoundingClientRect();
+    const p=document.getElementById('preview-pane').getBoundingClientRect();
+    return { top:Math.max(s.top,p.top), bottom:Math.min(s.bottom,p.bottom), source:v.scrollDOM.scrollTop };
+  })()`);
+  state.preview = await previewTop();
+  return state;
+}
+
+/**
+ * The word's row in the editor. A line outside CodeMirror's rendered range has
+ * no coordinates; its block gives an estimate, flagged so a caller can tell a
+ * measured row from a guessed one.
+ */
+async function sourceBox(word) {
+  return page.evaluate(`(() => {
+    const v=${view};
+    const pos=v.state.doc.toString().indexOf(${JSON.stringify(word)});
+    if (pos < 0) return null;
+    const a=v.coordsAtPos(pos), b=v.coordsAtPos(pos+${word.length},-1);
+    if (a) return { top:a.top, bottom:a.bottom, left:a.left, right:b && b.top===a.top ? b.right : a.left+8, exact:true };
+    const block=v.lineBlockAt(pos);
+    return { top:v.documentTop+block.top, bottom:v.documentTop+block.bottom, left:0, right:0, exact:false };
+  })()`);
+}
+
+/** The word's row in the preview, in the host's screen pixels. */
+async function previewBox(word, mode) {
+  const box = await previewClient().evaluate(
+    `window.__scrollBox(${JSON.stringify(word)}, ${probeRoot(mode)})`,
+  );
+  if (!box || mode !== "html") return box;
+  const frame = await page.evaluate(`(() => {
+    const frame = document.querySelector('.html-preview-frame.active');
+    if (!frame) return null;
+    const rect = frame.getBoundingClientRect();
+    const zoom = parseFloat(getComputedStyle(frame).zoom || '1');
+    return { top: rect.top, left: rect.left, scale: Number.isFinite(zoom) && zoom > 0 ? zoom : 1 };
+  })()`);
+  if (!frame) return null;
+  return {
+    top: frame.top + box.top * frame.scale,
+    bottom: frame.top + box.bottom * frame.scale,
+    left: frame.left + box.left * frame.scale,
+    right: frame.left + box.right * frame.scale,
+    scale: frame.scale,
+  };
+}
+
+const centre = (box) => (box.top + box.bottom) / 2;
+
+/** Scroll one pane, as a reader would, until the word's row centre is at `y`. */
+async function placeWord(direction, word, mode, y) {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const box = direction === "source" ? await sourceBox(word) : await previewBox(word, mode);
+    if (!box) return false;
+    const delta = centre(box) - y;
+    if (Math.abs(delta) < 1 && box.exact !== false) return true;
+    if (direction === "source") await page.evaluate(`${view}.scrollDOM.scrollTop += ${delta}`);
+    else if (mode === "html")
+      await guest.evaluate(`window.scrollTo(0, window.scrollY + ${delta / (box.scale ?? 1)})`);
+    else
+      await page.evaluate(`(() => {
+        const p=document.getElementById('preview-pane');
+        p.dispatchEvent(new WheelEvent('wheel',{clientX:${box.left + 2},clientY:${y},bubbles:true}));
+        p.scrollTop += ${delta};
+      })()`);
+    await sleep(80);
+  }
+  // A word near either end of the document cannot reach every height; the
+  // probe then clicks it wherever the pane stopped.
+  return true;
+}
+
+/** A trusted click: handlers that read the pointer position need a real one. */
+async function clickAt(x, y) {
+  const at = { x, y, button: "left", clickCount: 1 };
+  await page.send("Input.dispatchMouseEvent", { ...at, type: "mouseMoved", button: "none" });
+  await page.send("Input.dispatchMouseEvent", { ...at, type: "mousePressed", buttons: 1 });
+  await page.send("Input.dispatchMouseEvent", { ...at, type: "mouseReleased", buttons: 0 });
+}
+
+async function probeGestures(mode) {
+  if (mode === "html") await guest.evaluate(installBoxProbe);
+  else await page.evaluate(installBoxProbe);
+  const result = { mode, gestures: {} };
+  for (const direction of ["source", "preview"]) {
+    const samples = [];
+    let unplaced = 0;
+    for (let i = 0; i < 40; i += 1) {
+      const word = `syncprobe${String(8 + i * 2).padStart(3, "0")}`;
+      const band = await paneState();
+      // Three heights, so the probe is not a measurement of one lucky line.
+      const y = band.top + (band.bottom - band.top) * [0.3, 0.55, 0.8][i % 3];
+      await sleep(200);
+      if (!(await placeWord(direction, word, mode, y))) {
+        unplaced += 1;
+        continue;
+      }
+      // Follow-scrolling answers the placement; measure the click on its own.
+      await sleep(350);
+      const own = direction === "source" ? await sourceBox(word) : await previewBox(word, mode);
+      if (
+        !own ||
+        own.exact === false ||
+        centre(own) < band.top + 4 ||
+        centre(own) > band.bottom - 4
+      ) {
+        unplaced += 1;
+        continue;
+      }
+      const before = await paneState();
+      await clickAt(Math.min(own.left + 6, (own.left + own.right) / 2), centre(own));
+      await sleep(400);
+      const after = await paneState();
+      const a = await sourceBox(word);
+      const b = await previewBox(word, mode);
+      const other = direction === "source" ? b : a;
+      samples.push({
+        word,
+        height: Math.round(centre(own) - band.top),
+        // Null when the counterpart is not laid out at all (an unpainted page).
+        error: a && b ? Math.abs(centre(a) - centre(b)) : null,
+        visible: !!other && centre(other) >= after.top && centre(other) <= after.bottom,
+        ownMoved: Math.abs(after[direction] - before[direction]),
+        otherMoved: Math.abs(
+          after[direction === "source" ? "preview" : "source"] -
+            before[direction === "source" ? "preview" : "source"],
+        ),
+      });
+    }
+    const errors = samples.map((sample) => sample.error).filter((error) => error !== null);
+    const summary = {
+      count: samples.length,
+      unplaced,
+      unmeasured: samples.length - errors.length,
+      median: percentile(errors, 0.5),
+      p95: percentile(errors, 0.95),
+      max: errors.length ? Math.max(...errors) : null,
+      counterpartVisible: samples.filter((sample) => sample.visible).length,
+      ownPaneMoved: samples.filter((sample) => sample.ownMoved > 0.5).length,
+      otherPaneMoved: samples.filter((sample) => sample.otherMoved > 0.5).length,
+    };
+    console.log(`  GESTURE ${mode} ${direction}: ${JSON.stringify(summary)}`);
+    result.gestures[direction] = { ...summary, samples };
+  }
+  return result;
+}
+
 async function zoomTo(level) {
   await menu("view.zoomReset");
   if (level > 100) for (let value = 100; value < level; value += 10) await menu("view.zoomIn");
@@ -585,6 +757,10 @@ try {
         JSON.stringify({ before, after }),
       );
     }
+
+    // Recorded, not asserted, until the gesture handlers exist: the baseline is
+    // what a click does today. Last in the mode, because it moves the caret.
+    if (baseline) metrics.gestures = (await probeGestures(mode)).gestures;
 
     guest?.ws.close();
     guest = null;

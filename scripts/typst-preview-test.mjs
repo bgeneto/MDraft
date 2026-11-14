@@ -320,25 +320,38 @@ ws.addEventListener("message", (event) => {
   void (async () => {
     const bodyResponse = await send("Fetch.getResponseBody", { requestId: params.requestId });
     if (bodyResponse.error) throw new Error(JSON.stringify(bodyResponse.error));
-    const body = bodyResponse.result.base64Encoded
-      ? Buffer.from(bodyResponse.result.body, "base64").toString("utf8")
-      : bodyResponse.result.body;
-    const result = JSON.parse(body);
-    compiledBuildCalls++;
-    const value = {
-      ...result,
+    const pathname = new URL(params.request.url).pathname;
+    const rawBuf = bodyResponse.result.base64Encoded
+      ? Buffer.from(bodyResponse.result.body, "base64")
+      : Buffer.from(bodyResponse.result.body, "utf8");
+    const patch = {
       warnings: ["warning: shared Typst warning probe"],
       compilerOutput:
         "warning: shared Typst warning probe\nFull diagnostic context beyond the headline.",
       compilerOutputTruncated: false,
     };
+    let nextBodyBuf;
+    if (pathname.endsWith("/render_typst_binary")) {
+      const metaLen = rawBuf.readUInt32BE(0);
+      const result = JSON.parse(rawBuf.subarray(4, 4 + metaLen).toString("utf8"));
+      const rest = rawBuf.subarray(4 + metaLen);
+      compiledBuildCalls++;
+      const nextMetaBuf = Buffer.from(JSON.stringify({ ...result, ...patch }), "utf8");
+      const lenBuf = Buffer.allocUnsafe(4);
+      lenBuf.writeUInt32BE(nextMetaBuf.length, 0);
+      nextBodyBuf = Buffer.concat([lenBuf, nextMetaBuf, rest]);
+    } else {
+      const result = JSON.parse(rawBuf.toString("utf8"));
+      compiledBuildCalls++;
+      nextBodyBuf = Buffer.from(JSON.stringify({ ...result, ...patch }), "utf8");
+    }
     await send("Fetch.fulfillRequest", {
       requestId: params.requestId,
       responseCode: params.responseStatusCode,
       responseHeaders: params.responseHeaders.filter(
         (header) => !["content-length", "content-encoding"].includes(header.name.toLowerCase()),
       ),
-      body: Buffer.from(JSON.stringify(value)).toString("base64"),
+      body: nextBodyBuf.toString("base64"),
     });
   })().catch((error) => {
     console.error(error);
@@ -346,7 +359,7 @@ ws.addEventListener("message", (event) => {
   });
 });
 await send("Fetch.enable", {
-  patterns: [{ urlPattern: "http://ipc.localhost/render_typst", requestStage: "Response" }],
+  patterns: [{ urlPattern: "http://ipc.localhost/render_typst*", requestStage: "Response" }],
 });
 await evaluate(`document.querySelector('.compiled-compile').click()`);
 check(

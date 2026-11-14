@@ -15,12 +15,14 @@
 //     --data ~/github/texpresso/texpresso-mirror-2026 \
 //     [--engine <dir with ocaml.js, *.wasm, vendor/…>] \
 //     [--snapshot tt2026-2026-11] [--release release-0-133-g454f1bc] \
-//     [--concurrency 32] [--dry-run] [--verify] [--force]
+//     [--concurrency 32] [--dry-run] [--verify] [--force] [--digests-only]
 //
-//   --dry-run   list what would be uploaded; needs no credentials
-//   --verify    upload nothing; compare the bucket with the local files
-//   --force     upload even when the bucket already has the key at that size
-//   --self-test check the request signer against AWS's published example
+//   --dry-run      list what would be uploaded; needs no credentials
+//   --verify       upload nothing; compare the bucket with the local files
+//   --force        upload even when the bucket already has the key at that size
+//   --digests-only upload just texlive/<snapshot>/digests.bin (the one object a
+//                  bucket built before the table existed is missing)
+//   --self-test    check the request signer against AWS's published example
 //
 // Resumable: it lists the bucket first and skips keys already there with the
 // right size, so an interrupted run is simply started again. Every file is
@@ -119,7 +121,7 @@ const flags = new Set();
 const args = process.argv.slice(2);
 for (let i = 0; i < args.length; i += 1) {
   const name = args[i].replace(/^--/, "");
-  if (["dry-run", "verify", "force", "self-test"].includes(name)) flags.add(name);
+  if (["dry-run", "verify", "force", "self-test", "digests-only"].includes(name)) flags.add(name);
   else if (name in options) options[name] = args[++i];
   else throw new Error(`Unknown option ${args[i]}`);
 }
@@ -165,6 +167,23 @@ async function walk(root, relative = "") {
 /** What to upload: { key, file, sha256? } for every object. */
 async function plan() {
   const items = [];
+  if (flags.has("digests-only")) {
+    if (!dataRoot) throw new Error("--digests-only needs --data <mirror>.");
+    const table = path.join(dataRoot, "digests.bin");
+    if (!existsSync(table))
+      throw new Error(`${table} is missing; run scripts/texpresso-digest-table.mjs first.`);
+    const pins = JSON.parse(
+      await readFile(new URL("../src-tauri/texpresso.json", import.meta.url), "utf8"),
+    );
+    return [
+      {
+        key: `texlive/${options.snapshot}/${pins.digests.path}`,
+        file: table,
+        sha256: pins.digests.sha256,
+        mutable: false,
+      },
+    ];
+  }
   if (dataRoot) {
     const prefix = `texlive/${options.snapshot}/`;
     const sumsPath = path.join(dataRoot, "SHA256SUMS");
@@ -308,7 +327,10 @@ if (flags.has("verify")) {
     (item) => remote.has(item.key) && remote.get(item.key) !== sizes.get(item.key),
   );
   const wanted = new Set(items.map((item) => item.key));
-  const extra = [...remote.keys()].filter((key) => !wanted.has(key));
+  // A digests-only run touches one key; the rest of the prefix is expected.
+  const extra = flags.has("digests-only")
+    ? []
+    : [...remote.keys()].filter((key) => !wanted.has(key));
   console.log(`bucket: ${remote.size} objects under these prefixes`);
   console.log(
     `${missing.length === 0 ? "PASS" : "FAIL"} every local object is in the bucket (${missing.length} missing)`,

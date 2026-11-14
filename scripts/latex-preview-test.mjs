@@ -17,7 +17,7 @@
 // Skips cleanly when the engine is not installed, because a host without it has
 // nothing to measure and a failure would be misleading.
 
-import { openPage, emitMenu, sleep } from "./cdp-page.mjs";
+import { openPage, emitMenu, sleep, useWasmTex } from "./cdp-page.mjs";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,6 +52,10 @@ for (let attempt = 0; attempt < 60; attempt += 1) {
   await sleep(250);
 }
 
+// This layer covers the hidden WasmTex backend; the production default is the
+// incremental preview.
+await useWasmTex(page);
+
 console.log("=== the engine is reachable ===");
 
 // **Enable before checking status.** A fresh test profile has the switch off, so
@@ -63,10 +67,17 @@ console.log("=== the engine is reachable ===");
 // updates the frontend's module-local settings copy as well as the backend.
 // Calling `save_settings` directly leaves that copy stale, and the next `persist()`
 // — opening a file, changing the view mode — writes false back over it.
-const enabled = await page.evaluate(`
+// The harness turns the switch on after its per-suite reset; this is the same
+// fact the frontend's settings copy holds, so a false answer means the reader
+// route has to run.
+const latexEnabled = await page.evaluate(
+  `window.__TAURI_INTERNALS__.invoke("get_settings").then((s) => String(s.latexEnabled)).catch((error) => "error: " + String(error))`,
+);
+const enabled =
+  latexEnabled === "true"
+    ? "already on"
+    : await page.evaluate(`
   (async () => {
-    const current = await window.__TAURI_INTERNALS__.invoke("get_settings");
-    if (current.latexEnabled) return "already on";
     const open = document.getElementById("btn-prefs");
     open?.click();
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -94,6 +105,7 @@ const enabled = await page.evaluate(`
     return /Installed and enabled/.test(note) ? "enabled" : "stale engine note: " + note;
   })().catch((error) => "error: " + String(error))
 `);
+console.log(`  switch: ${enabled}`);
 
 const status = await page.evaluate(`
   window.__TAURI_INTERNALS__.invoke("latex_status")

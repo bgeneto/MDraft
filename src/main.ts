@@ -10,6 +10,7 @@ import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import * as api from "./api";
 import {
+  invalidateAsciidocIncludeCache,
   renderAsciidocForExport,
   renderAsciidocPreview,
   renderAsciidocPreviewInto,
@@ -207,11 +208,13 @@ import {
   type TexEngine,
 } from "./latex-engine-choice";
 import { projectLatexOutline, type ProjectHeading } from "./latex-outline";
-import { LATEX_DOWNLOAD_MIB, LATEX_ENGINE_YEAR, optionalEngineBytes } from "./latex-engine";
-import { nativeToLatex } from "./latex-native";
+import { LATEX_ENGINE_YEAR, optionalEngineBytes } from "./latex-engine";
+import { nativeSources, nativeToLatex } from "./latex-native";
 import {
   latexPreviewBackend,
   setLatexPreviewBackend,
+  TEXPRESSO_ENGINE_MIB,
+  TEXPRESSO_TEXLIVE_YEAR,
   texpressoEngineFor,
   texpressoFallback,
   texpressoFallbackText,
@@ -223,7 +226,21 @@ import type { FrameMessage, TexpressoTheme } from "./texpresso/protocol";
 import { editorLineAt, editorScrollFor, type EditorScrollGeometry } from "./texpresso/scroll";
 import { projectRelativePath, rangeForPreviewGesture } from "./texpresso/selection";
 import { libraryNames } from "./latex-texmf";
-import { clearLatexPerf, perfMark, perfMeasure, perfPhase, resetLatexPhase } from "./perf";
+import {
+  clearLatexPerf,
+  clearProsePerf,
+  clearTypstPerf,
+  perfMark,
+  perfMeasure,
+  perfPhase,
+  prosePerfMark,
+  prosePerfMeasure,
+  resetLatexPhase,
+  typstPerfMark,
+  typstPerfMeasure,
+} from "./perf";
+import { ProseDelayTracker } from "./prose-scheduler";
+import { SupersededError as TypstSupersededError, TypstCompileScheduler } from "./typst-scheduler";
 import { setLocalLatexNames } from "./completion/latex-source";
 import {
   diagnosticPlace,
@@ -236,6 +253,7 @@ import {
   clampScroll,
   mapScrollOffset,
   interpolate,
+  rowCentre,
   scrollCorrection,
   ScrollIndex,
   ScrollOwnership,
@@ -336,7 +354,18 @@ const lifecycle = createDocumentLifecycle({
   text: textOf,
   read: api.readDocument,
   stat: api.statDocument,
-  write: api.writeDocumentChecked,
+  write: async (path, content, lineEnding, hadBom, expectedSha256, encoding) => {
+    const result = await api.writeDocumentChecked(
+      path,
+      content,
+      lineEnding,
+      hadBom,
+      expectedSha256,
+      encoding,
+    );
+    invalidateAsciidocIncludeCache(path);
+    return result;
+  },
   recovery,
   decide: askUnsaved,
   choosePath: async (session, suggested) => {
@@ -1362,7 +1391,8 @@ function applySettingsPatch(
     patch.htmlPreviewScripts !== undefined ||
     // The bundled engine of a project (stage 6.2): another engine, another PDF.
     patch.latexBundledEngine !== undefined ||
-    patch.latexProjectEngines !== undefined;
+    patch.latexProjectEngines !== undefined ||
+    patch.typstIncrementalService !== undefined;
   // `syntaxTheme` is the editor's palette and `editorMaxWidth` a CSS length
   // that `applyLayout` below applies, like zoom: neither is an input of any
   // preview. Listing them as rendering inputs recompiled a LaTeX project for a
@@ -1415,6 +1445,10 @@ function applySettingsPatch(
       else setTypstStatus("Out of date · Select Compile to update the preview.");
     }
     preferences?.refresh();
+  }
+  if (patch.typstIncrementalService !== undefined) {
+    typstStore.clear();
+    void refreshTypstServiceStatus();
   }
   if (affectsRendering) scheduleRender(true);
   else if (affectsLayoutOnly) requestAnimationFrame(() => syncPreviewFromSource());
@@ -1600,6 +1634,7 @@ let renderToken = 0;
 let typstInFlight: number | null = null;
 
 function cancelTypstRender(): void {
+  typstScheduler.dropWaiting(new TypstSupersededError(typstEditSeq, renderToken));
   if (typstInFlight === null) return;
   typstInFlight = null;
   void api.cancelTypstPreview(renderToken).catch((error) => {
@@ -1640,6 +1675,7 @@ interface ProseMap {
   key: string;
   fragments: Parameters<typeof bindPreviewWords>[1];
   blocks: Parameters<typeof bindPreviewWords>[2];
+  blockFragmentCounts?: number[];
   linesMapped: boolean;
 }
 let proseMap: ProseMap | null = null;
@@ -1648,8 +1684,21 @@ let proseMap: ProseMap | null = null;
  * an unchanged document draws its output instead of building it. In memory
  * only; see `src/preview-store.ts` for the budget and eviction.
  */
+interface CachedTypstDep {
+  path: string;
+  modifiedMs: number;
+  size: number;
+  sha256: string | null;
+}
+
+interface CachedTypstEntry {
+  rendered: api.RenderedTypst;
+  pdfBytes?: Uint8Array;
+  deps: CachedTypstDep[];
+}
+
 const latexStore = createPreviewStore<LatexResult>();
-const typstStore = createPreviewStore<api.RenderedTypst>();
+const typstStore = createPreviewStore<CachedTypstEntry>();
 
 /** What a stored LaTeX result costs: the PDF, plus the log and sources as UTF-16. */
 function latexResultBytes(result: LatexResult): number {
@@ -1720,7 +1769,7 @@ interface PreviewSlot {
   holder: HTMLElement;
   pdf: TypstPdfPreview | null;
   pdfToken: number;
-  pdfBase64: string | null;
+  pdfBytes: Uint8Array | null;
   proseMap: ProseMap | null;
   typst: TypstRenderKey | null;
   linesMapped: boolean;
@@ -1775,7 +1824,7 @@ function parkPreview(): void {
     holder,
     pdf: view,
     pdfToken: typstPdfToken,
-    pdfBase64: typstPdfBase64,
+    pdfBytes: typstPdfBytes,
     proseMap,
     typst: lastTypstRender,
     linesMapped: previewLinesMapped,
@@ -1785,7 +1834,7 @@ function parkPreview(): void {
   };
   // The retirement that follows must not dispose what the slot now owns.
   typstPdf = null;
-  typstPdfBase64 = null;
+  typstPdfBytes = null;
   const previous = previewSlots.get(from.id);
   if (previous) {
     previewSlots.delete(from.id);
@@ -1821,7 +1870,7 @@ function restorePreview(): boolean {
   if (slot.pdf) {
     typstPdf = slot.pdf;
     typstPdfToken = slot.pdfToken;
-    typstPdfBase64 = slot.pdfBase64;
+    typstPdfBytes = slot.pdfBytes;
     slot.pdf.setZoom(zoomFactor());
     slot.pdf.activate();
   }
@@ -2035,17 +2084,32 @@ function scheduleRender(immediate = false): void {
     // The warm LaTeX engine survives Source mode; its in-flight result is
     // dropped by the token, and returning to Split compiles the newest text.
     renderToken += 1;
+    proseScheduledAt = null;
     previewStale = true;
     previewSyncReady = false;
     clearPending();
     return;
   }
-  renderTimer = window.setTimeout(() => void doRender(), immediate ? 0 : renderDelay());
+  const delayMs = immediate ? 0 : renderDelay();
+  if (doc.language === "markdown" || doc.language === "asciidoc") {
+    proseScheduledAt = immediate ? null : performance.now();
+  } else {
+    proseScheduledAt = null;
+  }
+  renderTimer = window.setTimeout(() => void doRender(), delayMs);
 }
 
 /** How long the preview may lag behind the buffer before it is rebuilt. */
 /** The reader's recent typing rhythm, for the LaTeX interactive delay. */
 const latexRhythm = new KeyRhythm();
+/** Adaptive quiet delays for Markdown and AsciiDoc previews. */
+const proseDelays = new ProseDelayTracker();
+let proseScheduledAt: number | null = null;
+/** Adaptive scheduler and latest-wins gate for Typst previews. */
+const typstScheduler = new TypstCompileScheduler();
+let typstLastCompileMs: number | null = null;
+let typstEditSeq = 0;
+let typstGateSeq = 0;
 /** When the first edit not yet covered by a started LaTeX compile happened. */
 let latexUnrenderedSince: number | null = null;
 /** When the last LaTeX compile started. */
@@ -2068,8 +2132,12 @@ function renderDelay(): number {
     return adaptiveDelay(latexRhythm.intervals());
   }
   if (doc.language === "html") return 300;
-  if (doc.language === "asciidoc") return 250;
-  if (doc.language === "typst") return 450;
+  if (doc.language === "asciidoc" || doc.language === "markdown") {
+    return proseDelays.delay(doc.language);
+  }
+  if (doc.language === "typst") {
+    return typstScheduler.delayFor(performance.now(), typstLastCompileMs);
+  }
   return 200;
 }
 
@@ -2078,7 +2146,7 @@ function renderDelay(): number {
 // destroy it or a long session keeps every page it ever drew alive.
 let typstPdf: TypstPdfPreview | null = null;
 let typstPdfToken = -1;
-let typstPdfBase64: string | null = null;
+let typstPdfBytes: Uint8Array | null = null;
 /**
  * What the last successful Typst compile was for. A mode switch or a view
  * switch must reuse it instead of starting another compiler process. `key` is
@@ -2103,7 +2171,16 @@ let lastTypstRender: TypstRenderKey | null = null;
 function disposeTypstPdf(): void {
   typstPdf?.dispose();
   typstPdf = null;
-  typstPdfBase64 = null;
+  typstPdfBytes = null;
+}
+
+function encodePdfBase64(bytes: Uint8Array): string {
+  const chunk = 0x8000;
+  const parts: string[] = [];
+  for (let i = 0; i < bytes.length; i += chunk) {
+    parts.push(String.fromCharCode(...bytes.subarray(i, i + chunk)));
+  }
+  return btoa(parts.join(""));
 }
 
 let stagedPdf: { view: TypstPdfPreview; host: HTMLElement } | null = null;
@@ -2428,6 +2505,8 @@ function setTypstStatus(message: string, saveable = false, state?: CompiledStatu
 function compileCurrentLatex(): void {
   if (doc.language !== "latex") return;
   texpresso?.flush();
+  // Compile is also the reader's retry after a frame failure.
+  texpressoFailed.clear();
   // Compile always builds: the reader may be retrying a flaky engine or a
   // package fetch, and an unchanged key must not turn the button into a no-op.
   committedKey = null;
@@ -2624,16 +2703,26 @@ function showEngineChip(choice: EngineChoice, main: string): void {
   statusEngine.textContent = label;
   statusEngine.title =
     choice.source === "magic"
-      ? `TeX engine: ${label} (magic comment). Set by % !TeX program in the main file.`
+      ? `TeX engine: ${label} (${choice.reason}). Set by % !TeX program in the main file.`
       : `TeX engine: ${label} (${choice.reason}). Click to choose this project's engine.`;
   statusEngine.setAttribute("aria-label", `TeX engine: ${label}, ${choice.reason}`);
   statusEngine.hidden = doc.language !== "latex";
 }
 
+/**
+ * Whether the current backend can typeset with `engine`. The production
+ * preview ships LuaTeX and XeTeX together; the hidden WasmTex backend still
+ * downloads its optional engines on first use.
+ */
+async function engineAvailable(engine: TexEngine): Promise<boolean> {
+  if (latexPreviewBackend() === "texpresso") return engine === "lualatex" || engine === "xelatex";
+  return engine === "lualatex" || (await api.latexEngineAvailable(engine));
+}
+
 /** Remember (or forget, with null) the project's engine and compile again. */
 /** Download an optional engine the reader asked for; false when it failed. */
 async function ensureEngine(engine: TexEngine): Promise<boolean> {
-  if (engine === "lualatex" || (await api.latexEngineAvailable(engine))) return true;
+  if (await engineAvailable(engine)) return true;
   const label = ENGINE_LABELS[engine];
   setLatexStatus(`Downloading ${label}…`);
   try {
@@ -2665,12 +2754,12 @@ async function openEngineMenu(): Promise<void> {
     // it names that is not downloaded yet must be obtainable from here, or the
     // preview's "download it from the chip" would point at a dead control.
     const label = ENGINE_LABELS[choice.engine];
-    const available =
-      choice.engine === "lualatex" || (await api.latexEngineAvailable(choice.engine));
+    const available = await engineAvailable(choice.engine);
     const size = (optionalEngineBytes(choice.engine) / 1048576).toFixed(1);
+    const why = choice.reason === "magic comment" ? "" : `; ${choice.reason}`;
     entries.push(
       available
-        ? [`Set by % !TeX program in the main file (${label})`, () => {}]
+        ? [`Set by % !TeX program in the main file (${label}${why})`, () => {}]
         : [
             `Download ${label} (${size} MB), named by % !TeX program`,
             () =>
@@ -2680,9 +2769,9 @@ async function openEngineMenu(): Promise<void> {
           ],
     );
   } else {
-    for (const engine of ["lualatex", "pdflatex", "xelatex"] as const) {
+    for (const engine of ["lualatex", "xelatex"] as const) {
       const mark = engine === choice.engine ? "✓ " : "";
-      const available = engine === "lualatex" || (await api.latexEngineAvailable(engine));
+      const available = await engineAvailable(engine);
       const size = optionalEngineBytes(engine);
       const note = available || !size ? "" : ` — download ${(size / 1048576).toFixed(1)} MB`;
       entries.push([
@@ -3535,7 +3624,7 @@ function latexEnableNote(status?: api.LatexEngineStatus | null): void {
   const text = document.createElement("span");
   text.className = "typst-note-text";
   text.textContent = status?.bundledEnabled
-    ? `Bundled TeX is on, but its files are missing or out of date. Press Retry setup, or turn it off and on in Preferences › LaTeX, to download the TeX Live ${LATEX_ENGINE_YEAR} engine (about ${LATEX_DOWNLOAD_MIB} MiB).`
+    ? `Bundled TeX is on, but its preview files are missing or out of date. Press Retry setup to download the TeX Live ${TEXPRESSO_TEXLIVE_YEAR} preview engine (about ${TEXPRESSO_ENGINE_MIB} MiB); packages and fonts follow on demand.`
     : "LaTeX compiles .tex documents locally. Enable bundled TeX, or choose a TeX distribution already on this computer in Preferences › LaTeX. Your document stays on this device.";
   const button = document.createElement("button");
   button.type = "button";
@@ -3545,7 +3634,7 @@ function latexEnableNote(status?: api.LatexEngineStatus | null): void {
     button.disabled = true;
     button.textContent = "Downloading…";
     void api
-      .installLatex()
+      .installTexpresso()
       .then(() => {
         // The switch is settings-backed, so the in-memory copy has to follow it
         // before the next render; otherwise the note would come back.
@@ -3645,9 +3734,13 @@ async function renderLatexPreview(
   const build = await resolveLatexBuild(source, token, activeId, storeOnly);
   if (!build) return;
   const { engineStatus, root, revisions, overlays, engineChoice } = build;
-  // With TeXpresso drawing, this build is the shadow compile: the PDF that
-  // export, print and the authoritative Problems list read, never drawn.
-  let shadow = texpressoPrepare(build, storeOnly);
+  // TeXpresso is the only bundled preview. WasmTex is disabled: its code and
+  // hidden test backend remain, but no build falls back to it.
+  const shadow = texpressoPrepare(build, storeOnly);
+  if (latexPreviewBackend() === "texpresso" && engineStatus.backend === "bundled" && !shadow) {
+    if (storeOnly) latexInFlight = false;
+    return;
+  }
   const owner = { rootId: root.id, rootDirectory: root.directory, activeId, token, revisions };
   // The snapshot's own file list is the definition of "this project", used when a
   // failure has to decide whether a later tab switch is still inside it.
@@ -3677,14 +3770,31 @@ async function renderLatexPreview(
     editor.view.dispatch({ effects: setLocalLatexNames.of(libraryNames(snapshot.texmf)) });
     // The live preview takes the same capture: its project follows every
     // render, so a file added to the project reaches it without an edit.
-    if (shadow) shadow = texpressoSyncSnapshot(build, snapshot);
+    if (shadow && !texpressoSyncSnapshot(build, snapshot)) {
+      if (!storeOnly) latexInFlight = false;
+      return;
+    }
     const key = latexKey(root, snapshot.generation, {
       ...latexEngineIdentity(engineStatus),
       bundledEngine: engineChoice?.engine ?? null,
     });
-    if (!force && !shadow && rebindLatexPreview(key, root, source, token, activeId, revisions))
+    if (shadow) {
+      // The frame's own exporter is the authority for export, print, the menu
+      // state and the Problems list; nothing is drawn from it.
+      if (storeOnly) return;
+      if (!force && rebindLatexShadow(key, root, token, activeId, revisions)) return;
+      const cached = force ? undefined : latexStore.get(key);
+      if (cached) {
+        commitLatexShadow({ ...owner, result: cached }, key, {
+          stored: true,
+          started,
+        });
+        return;
+      }
+      await texpressoExportPdf(build, snapshot, owner, key, started);
       return;
-    if (!force && shadow && rebindLatexShadow(key, root, token, activeId, revisions)) return;
+    }
+    if (!force && rebindLatexPreview(key, root, source, token, activeId, revisions)) return;
     // A PDF already built from exactly these inputs — typically the one this
     // tab showed before the reader switched away — is drawn instead of compiled.
     const stored = force ? undefined : latexStore.get(key);
@@ -4043,7 +4153,11 @@ async function resolveLatexBuild(
   // document requires LuaLaTeX", and every optional engine reads as "not
   // downloaded yet" because they all require the core set. The setup note's
   // Retry downloads only the missing or mismatched files.
-  const bundledMissing = engineStatus.backend === "bundled" && !engineStatus.bundledInstalled;
+  const bundledMissing =
+    engineStatus.backend === "bundled" &&
+    !(latexPreviewBackend() === "texpresso"
+      ? engineStatus.previewInstalled
+      : engineStatus.bundledInstalled);
   if (storeOnly && (engineStatus.backend === "none" || bundledMissing || engineStatus.problem))
     return null;
   if (engineStatus.backend === "none" || bundledMissing) {
@@ -4178,26 +4292,26 @@ async function resolveLatexBuild(
   };
 }
 
-/* ---------- TeXpresso preview (docs/plans/2026-11-13-texpresso-backend.md) ---------- */
+/* ---------- Incremental preview (docs/plans/2026-11-13-texpresso-backend.md) ---------- */
 //
-// With the TeXpresso backend, the frame draws and WasmTex keeps compiling, at
-// idle and never drawn, the PDF that export, print, the menu state and the
-// authoritative Problems list read. Everything protocol-level lives in
-// src/texpresso/; this block only connects it to the shell's own state.
+// The frame draws the document and its own `xdvipdfmx` export produces the PDF
+// that export, print, the menu state and the authoritative Problems list read.
+// Everything protocol-level lives in src/texpresso/; this block only connects
+// it to the shell's own state.
 
 /** The live preview; another project or engine replaces it. */
 let texpresso: TexpressoSession | null = null;
-/** Main documents whose frame failed twice: they preview with WasmTex until restart. */
+/** Main documents whose frame failed twice: Compile retries them. */
 const texpressoFailed = new Set<string>();
-/** Why the last build did not use TeXpresso, for the chip. */
+/** Why the last build did not draw, for the chip. */
 let texpressoFallbackReason: { reason: TexpressoFallback; file?: string | null } | null = null;
 /** The frame is on screen for the active tab. */
 let texpressoShown = false;
 /** The frame's own scroll offset, as it last reported it. */
 let texpressoScrollTop = 0;
-/** The key of the shadow result, which never commits to the pane. */
+/** The key of the exported result, which never commits to the pane. */
 let latexShadowKey: string | null = null;
-/** The last status the WasmTex pipeline wrote, so a live update can redraw it. */
+/** The last status the preview wrote, so a live update can redraw it. */
 let latexStatusLast: { message: string; state?: CompiledStatus } | null = null;
 let texpressoHost: HTMLElement | null = null;
 
@@ -4244,15 +4358,22 @@ function texpressoRelease(): void {
   texpressoShow(false);
 }
 
-/** Give the build to WasmTex, and say why on the chip. */
+/**
+ * Stop the frame and say why. There is no second bundled engine: the pane keeps
+ * the reader's document and the status line names the reason.
+ */
 function texpressoFallbackTo(reason: TexpressoFallback, file: string | null = null): void {
   texpressoRelease();
   texpressoFallbackReason = { reason, file };
   texpressoChip();
+  latexInFlight = false;
+  const why = texpressoFallbackText(reason, { file });
+  setLatexStatus(`Preview unavailable: ${why}`, { label: "Preview", severity: "warning" });
+  syncMenuState(false);
   perfMark("texpresso-fallback", { reason, file });
 }
 
-/** The chip names the backend while TeXpresso is the chosen one. */
+/** The chip names the engine, never the backend's product name. */
 function texpressoChip(): void {
   if (latexPreviewBackend() !== "texpresso" || !engineChipChoice) {
     delete statusEngine.dataset.previewBackend;
@@ -4264,20 +4385,20 @@ function texpressoChip(): void {
   statusEngine.dataset.baseTitle = base;
   if (fallback) {
     const why = texpressoFallbackText(fallback.reason, fallback);
-    statusEngine.textContent = `${label} · WasmTex`;
-    statusEngine.title = `${base} Preview: WasmTex (${why}).`;
-    statusEngine.dataset.previewBackend = `wasmtex:${fallback.reason}`;
+    statusEngine.textContent = label;
+    statusEngine.title = `${base} Preview unavailable: ${why}.`;
+    statusEngine.dataset.previewBackend = `texpresso:${fallback.reason}`;
   } else {
-    statusEngine.textContent = `${label} · TeXpresso`;
-    statusEngine.title = `${base} Preview: TeXpresso, typeset as you type; export uses WasmTex.`;
+    statusEngine.textContent = label;
+    statusEngine.title = `${base} Preview: typeset as you type; export uses the same PDF.`;
     statusEngine.dataset.previewBackend = "texpresso";
   }
 }
 
 /**
- * Decide, before the snapshot, whether TeXpresso draws this build, and mount
- * or reuse its frame. Returns true when it does: the build is then the shadow
- * compile.
+ * Decide, before the snapshot, whether the frame draws this build, and mount
+ * or reuse it. Returns true when it does: the build is then the frame's own
+ * export for the PDF, print and Problems.
  */
 function texpressoPrepare(build: LatexBuildRequest, storeOnly: boolean): boolean {
   texpressoFallbackReason = null;
@@ -4292,7 +4413,7 @@ function texpressoPrepare(build: LatexBuildRequest, storeOnly: boolean): boolean
   const reason = texpressoFallback({
     backend: build.engineStatus.backend,
     engine,
-    year: LATEX_ENGINE_YEAR,
+    year: TEXPRESSO_TEXLIVE_YEAR,
     jspi: typeof (WebAssembly as { Suspending?: unknown }).Suspending === "function",
     nonUtf8: null,
     libraryConflict: null,
@@ -4300,7 +4421,7 @@ function texpressoPrepare(build: LatexBuildRequest, storeOnly: boolean): boolean
   });
   const frameEngine = texpressoEngineFor(engine);
   if (reason || !frameEngine) {
-    texpressoFallbackTo(reason ?? "pdflatex");
+    texpressoFallbackTo(reason ?? "failed");
     return false;
   }
   const session = texpresso;
@@ -4336,7 +4457,7 @@ function texpressoLiveText(directory: string, path: string): string | null {
 
 /**
  * Send the build's snapshot to the frame (only what changed). Returns false
- * when the project cannot be typeset there: the build then draws with WasmTex.
+ * when the project cannot be typeset there; the status line then names why.
  */
 function texpressoSyncSnapshot(
   build: LatexBuildRequest,
@@ -4374,7 +4495,66 @@ function texpressoSyncSnapshot(
   return true;
 }
 
-/** Hand the shadow result on screen to this render when its inputs are unchanged. */
+/**
+ * The frame's own `xdvipdfmx` conversion, stored as the PDF that Export,
+ * Save PDF, Print, the menu state and the Problems list read. Nothing is
+ * drawn from it: the frame is already the preview.
+ */
+async function texpressoExportPdf(
+  build: LatexBuildRequest,
+  snapshot: api.LatexProjectSnapshot,
+  owner: {
+    rootId: string;
+    rootDirectory: string;
+    activeId: string;
+    token: number;
+    revisions: LatexPreview["revisions"];
+  },
+  key: string,
+  started: number,
+): Promise<void> {
+  const session = texpresso;
+  if (!session) return;
+  const mark = perfMark("typeset-start", {
+    token: owner.token,
+    files: snapshot.files.length,
+  });
+  setLatexStatus("Typesetting the PDF…");
+  const reply = await session.exportPdf();
+  if (owner.token !== renderToken || doc.id !== owner.activeId || session !== texpresso) return;
+  if (!reply) {
+    latexInFlight = false;
+    setLatexStatus("The PDF for export could not be produced.");
+    toast("The preview could not produce a PDF. Compile again to retry.", 6200);
+    syncMenuState(false);
+    return;
+  }
+  const warnings = texpressoDiagnostics(session, build.root.directory);
+  const result: LatexResult = {
+    pdf: reply.pdf,
+    sources: nativeSources(snapshot),
+    files: new Set(snapshot.files.map((file) => file.path)),
+    mainFile: snapshot.mainFile,
+    log: "",
+    warnings,
+    warningsTruncated: false,
+    engine: ENGINE_LABELS[build.engineChoice?.engine ?? "lualatex"],
+    elapsedMs: reply.ms,
+  };
+  perfMeasure("typeset", mark, {
+    bytes: reply.pdf.length,
+    ms: Math.round(reply.ms),
+    warnings: warnings.length,
+  });
+  latexStore.set(key, result, latexResultBytes(result));
+  commitLatexShadow({ ...owner, result }, key, {
+    stored: false,
+    started,
+    backend: build.engineStatus,
+  });
+}
+
+/** Hand the exported result on screen to this render when its inputs are unchanged. */
 function rebindLatexShadow(
   key: string,
   root: Session,
@@ -4392,9 +4572,9 @@ function rebindLatexShadow(
 }
 
 /**
- * The shadow compile finished: the authority for export, print, the menu state,
- * the project outline and the Problems list, exactly as a drawn result is,
- * without PDF.js.
+ * The exported result is ready: the authority for export, print, the menu
+ * state, the project outline and the Problems list, exactly as a drawn result
+ * is, without PDF.js.
  */
 function commitLatexShadow(
   value: LatexPreview,
@@ -4417,7 +4597,7 @@ function commitLatexShadow(
     stored: build.stored,
     warnings: result.warnings.length,
   });
-  // A finished compile replaces TeXpresso's interim list.
+  // A finished export replaces the frame's interim list.
   latexProblems = result.warnings;
   latexProblemRoot = null;
   latexProblemFiles = new Set();
@@ -4446,7 +4626,12 @@ function commitLatexShadow(
   }
   previewStale = false;
   latexInFlight = false;
-  if (!build.stored && build.backend?.backend === "bundled") {
+  // The warm-engine checks compare WasmTex builds; TeXpresso has no such engine.
+  if (
+    !build.stored &&
+    build.backend?.backend === "bundled" &&
+    latexPreviewBackend() === "wasmtex"
+  ) {
     scheduleReanchor();
     scheduleRecycle();
   }
@@ -4468,13 +4653,9 @@ function commitLatexShadow(
 function texpressoLiveStatus(): string {
   const session = texpresso;
   if (!session) return "";
-  if (!session.ready) return "TeXpresso starting…";
+  if (!session.ready) return "Preview starting…";
   const errors = session.problems.filter((p) => p.severity === "error").length;
-  const state = session.held
-    ? "TeXpresso paused"
-    : session.busy
-      ? "Typesetting…"
-      : "TeXpresso live";
+  const state = session.held ? "Preview paused" : session.busy ? "Typesetting…" : "Preview live";
   return errors ? `${state} · ${errors} error${errors === 1 ? "" : "s"}` : state;
 }
 
@@ -4484,18 +4665,10 @@ function texpressoRefreshStatus(): void {
   setLatexStatus(latexStatusLast.message, latexStatusLast.state);
 }
 
-/**
- * TeXpresso's problems, while typing: marks in the editor and the Problems
- * panel, in the shape the WasmTex list uses. A finished shadow compile
- * replaces them.
- */
-function texpressoProblems(session: TexpressoSession): void {
-  if (session !== texpresso || !texpressoShowing()) return;
-  const root = sessions.findByPath(session.key.rootPath);
-  if (!root?.path || !root.directory) return;
-  const rootRef = { path: root.path, directory: root.directory };
-  const diagnostics: LatexDiagnostic[] = session.problems.map((problem) => {
-    const text = texpressoLiveText(root.directory!, problem.file);
+/** The frame's problem list in the shape the editor and the panel use. */
+function texpressoDiagnostics(session: TexpressoSession, directory: string): LatexDiagnostic[] {
+  return session.problems.map((problem) => {
+    const text = texpressoLiveText(directory, problem.file);
     const lineText =
       text !== null && problem.line > 0 ? (text.split("\n")[problem.line - 1] ?? "") : "";
     return {
@@ -4504,14 +4677,27 @@ function texpressoProblems(session: TexpressoSession): void {
       column: problem.column,
       endColumn: 0,
       severity: problem.severity,
-      code: "texpresso",
+      code: "typeset",
       message: problem.message,
       text: "",
       lineText: lineTextOf(lineText),
       searched: [],
     };
   });
-  // Only while the shadow result is out of date: a current one is the authority.
+}
+
+/**
+ * The frame's problems, while typing: marks in the editor and the Problems
+ * panel in the same shape as a compiled result. A finished export replaces
+ * them with the authoritative list.
+ */
+function texpressoProblems(session: TexpressoSession): void {
+  if (session !== texpresso || !texpressoShowing()) return;
+  const root = sessions.findByPath(session.key.rootPath);
+  if (!root?.path || !root.directory) return;
+  const rootRef = { path: root.path, directory: root.directory };
+  const diagnostics = texpressoDiagnostics(session, root.directory);
+  // Only while the exported result is out of date: a current one is the authority.
   if (latexCurrent(latexPreview)) return;
   latexProblems = diagnostics;
   applyLatexMarks(diagnostics, rootRef, doc.path, false);
@@ -4530,10 +4716,7 @@ const texpressoHandlers = {
     if (info.missing.length) {
       // A member the bridge needs is gone: the pinned app changed. Its feature
       // is off, and the reader is told rather than left with dead gestures.
-      toast(
-        `The TeXpresso preview lacks ${info.missing.join(", ")}; those features are off.`,
-        6200,
-      );
+      toast(`The preview lacks ${info.missing.join(", ")}; those features are off.`, 6200);
     }
     if (!info.jspi) {
       texpressoFallbackTo("jspi");
@@ -4551,17 +4734,13 @@ const texpressoHandlers = {
   onBroken(session: TexpressoSession, reason: string): void {
     texpressoFailed.add(pathKey(session.key.rootPath));
     if (session !== texpresso) return;
-    toast(`${reason} This project previews with WasmTex now.`, 6200);
+    toast(`${reason} Compile again to retry.`, 6200);
     texpressoFallbackTo("failed");
-    if (doc.language === "latex") {
-      invalidateLatexBuild("The TeXpresso preview stopped; WasmTex compiles this project.");
-      scheduleRender(true);
-    }
   },
   onRecovery(session: TexpressoSession, step: "resync" | "restart"): void {
     perfMark("texpresso-recovery", { step });
     if (step === "restart" && session === texpresso)
-      toast("The TeXpresso preview stopped answering; restarting it.", 4200);
+      toast("The preview stopped answering; restarting it.", 4200);
   },
   currentText: texpressoLiveText,
   theme: texpressoTheme,
@@ -4614,7 +4793,7 @@ function texpressoMessage(session: TexpressoSession, message: FrameMessage): voi
       break;
     case "error":
       perfMark("texpresso-error", { message: message.message });
-      console.warn(`[texpresso] ${message.message}`);
+      console.warn(`[latex] ${message.message}`);
       break;
     default:
       break;
@@ -4788,10 +4967,10 @@ function texpressoTheme(): TexpressoTheme {
 }
 
 /**
- * Step 10's measurement: TeXpresso's own export (`xdvipdfmx` in the frame)
- * against the shadow compile's PDF, page count and page text. Hidden command
- * `view.latexTexpressoExport`; the result is a perf mark and
- * `#preview[data-texpresso-export]`. Export itself always writes the WasmTex PDF.
+ * The frame's export (`xdvipdfmx`) against the authoritative PDF, page count
+ * and page text. Hidden command `view.latexTexpressoExport`; the result is a
+ * perf mark and `#preview[data-texpresso-export]`. Export, Save PDF and Print
+ * write the same path's bytes.
  */
 async function measureTexpressoExport(): Promise<void> {
   const session = texpresso;
@@ -4832,7 +5011,7 @@ function switchLatexBackend(next: LatexPreviewBackend): void {
   texpressoFallbackReason = null;
   latexShadowKey = null;
   texpressoRelease();
-  toast(next === "texpresso" ? "LaTeX preview: TeXpresso" : "LaTeX preview: WasmTex", 2600);
+  toast(next === "texpresso" ? "LaTeX preview: incremental" : "LaTeX preview: PDF", 2600);
   if (doc.language !== "latex") return;
   // The pane's content belongs to the other backend: a PDF view, or nothing.
   retirePreview();
@@ -4942,7 +5121,70 @@ function showTypstFailure(error: unknown, wanted: string): void {
  * The default is the document view: a preview is for reading. The page view is one
  * click away, and the pane says so when the document view had to drop something.
  */
+async function fingerprintTypstDeps(
+  deps: readonly api.TypstDependency[],
+): Promise<CachedTypstDep[]> {
+  const checked = await Promise.all(
+    deps.map(async (dep): Promise<CachedTypstDep | null> => {
+      try {
+        const stat = await api.fingerprintDocument(dep.path);
+        if (!stat.exists) return null;
+        return {
+          path: dep.path,
+          modifiedMs: stat.modifiedMs,
+          size: stat.size,
+          sha256: stat.sha256,
+        };
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return checked.filter((item): item is CachedTypstDep => item !== null);
+}
+
+async function typstDepsCurrent(deps: readonly CachedTypstDep[]): Promise<boolean> {
+  if (deps.length === 0) return true;
+  const stats = await Promise.all(
+    deps.map(async (dep) => {
+      try {
+        const current = await api.fingerprintDocument(dep.path);
+        return (
+          current.exists &&
+          current.modifiedMs === dep.modifiedMs &&
+          current.size === dep.size &&
+          current.sha256 === dep.sha256
+        );
+      } catch {
+        return false;
+      }
+    }),
+  );
+  return stats.every(Boolean);
+}
+
+function typstEntryBytes(entry: CachedTypstEntry): number {
+  return (
+    (entry.pdfBytes?.byteLength ?? 0) +
+    ((entry.rendered.pdf?.length ?? 0) +
+      (entry.rendered.html?.length ?? 0) +
+      (entry.rendered.css?.length ?? 0) +
+      entry.rendered.compilerOutput.length) *
+      2
+  );
+}
+
+function typstCompiledBytes(
+  rendered: api.RenderedTypst,
+  binaryPdf?: Uint8Array,
+): Uint8Array | null {
+  if (binaryPdf && binaryPdf.byteLength > 0) return binaryPdf;
+  if (rendered.pdf) return decodePdf(rendered.pdf);
+  return null;
+}
+
 async function renderTypstPreview(source: string, token: number): Promise<void> {
+  clearTypstPerf();
   const started = performance.now();
   const wanted = settings.typstView === "pages" ? "pages" : "document";
   // The compile is awaited; a mode switch during it must not make this render
@@ -4983,21 +5225,68 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
     return;
   }
 
-  // A result kept from before a tab switch, for exactly these inputs. Only a
-  // document that reads nothing else from disk is kept: the key cannot see an
-  // imported file or an image change (freshness plan, open question 1).
-  const storable = typstStorable(source);
-  const stored = storable && !force ? typstStore.get(key) : undefined;
+  // A result kept from before a tab switch, reusing `--deps` fingerprints so
+  // multi-file Typst documents remain cached when none of their inputs changed.
+  const storableWithoutDeps = typstStorable(source);
+  const candidate = !force ? typstStore.get(key) : undefined;
+  let stored: CachedTypstEntry | undefined;
+  if (
+    candidate &&
+    (candidate.deps.length > 0 ? await typstDepsCurrent(candidate.deps) : storableWithoutDeps)
+  ) {
+    if (token !== renderToken) return;
+    stored = candidate;
+  }
+
   let rendered: api.RenderedTypst;
+  let pdfBytes: Uint8Array | null;
   if (stored) {
-    rendered = stored;
+    rendered = stored.rendered;
+    pdfBytes = typstCompiledBytes(rendered, stored.pdfBytes);
   } else {
+    const editRev = typstEditSeq;
+    const gateSeq = ++typstGateSeq;
+    let releaseGate: () => void;
+    try {
+      releaseGate = await typstScheduler.acquire(gateSeq);
+    } catch (error) {
+      if (error instanceof TypstSupersededError || token !== renderToken) return;
+      throw error;
+    }
+    if (token !== renderToken) {
+      releaseGate();
+      return;
+    }
+
     typstInFlight = token;
     countCompile();
     setTypstStatus("Compiling Typst…");
+    const compileStarted = performance.now();
+    typstPerfMark("rpc:start");
+    typstPerfMark("compile:start");
     try {
-      rendered = await api.renderTypst(doc.path, source, wanted, imageRoot, token);
+      const binary = await api.renderTypstBinary(doc.path, source, wanted, imageRoot, token);
+      const rpcElapsedMs = performance.now() - compileStarted;
+      rendered = binary.meta;
+      const timings = rendered.timings;
+      typstLastCompileMs = timings?.totalMs ?? rpcElapsedMs;
+      const perfDetail = {
+        spawnOrRpcMs: timings ? Math.max(0, rpcElapsedMs - timings.totalMs) : undefined,
+        vfsSyncMs: timings?.vfsSyncMs ?? undefined,
+        typstCompileMs: timings?.typstCompileMs ?? undefined,
+        pdfEncodeMs: timings?.exportMs ?? undefined,
+        pageHashMs: timings?.pageHashMs ?? undefined,
+        backendKind: rendered.backendKind ?? "cli",
+      };
+      typstPerfMeasure("compile", compileStarted, perfDetail);
+      typstPerfMark("compile:end", perfDetail);
+      typstPerfMark("rpc:end");
+      typstPerfMark("decode:start");
+      pdfBytes = typstCompiledBytes(rendered, binary.pdfBytes);
+      typstPerfMark("decode:end");
+      typstScheduler.markCompiled(editRev);
     } catch (error) {
+      typstScheduler.markCompiled(editRev);
       if (token !== renderToken) return;
       // Shown in place of the preview, not as a toast: a Typst error is about a
       // line of this document, and the pane is where the document is looked at.
@@ -5005,21 +5294,29 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
       return;
     } finally {
       if (typstInFlight === token) typstInFlight = null;
+      releaseGate();
     }
     if (token !== renderToken) return;
-    if (storable) {
-      typstStore.set(
-        key,
-        rendered,
-        ((rendered.pdf?.length ?? 0) + (rendered.html?.length ?? 0) + (rendered.css?.length ?? 0)) *
-          2 +
-          rendered.compilerOutput.length * 2,
-      );
+    const rawDeps = rendered.deps ?? [];
+    if (rawDeps.length > 0 || storableWithoutDeps) {
+      const fingerprintedDeps = rawDeps.length > 0 ? await fingerprintTypstDeps(rawDeps) : [];
+      if (token !== renderToken) return;
+      if (
+        rawDeps.length === fingerprintedDeps.length &&
+        (rawDeps.length > 0 || storableWithoutDeps)
+      ) {
+        const entry: CachedTypstEntry = {
+          rendered,
+          pdfBytes: pdfBytes ?? undefined,
+          deps: fingerprintedDeps,
+        };
+        typstStore.set(key, entry, typstEntryBytes(entry));
+      }
     }
   }
 
   // A cache hit above keeps the current controls and word map intact. Only a
-  // result that will replace the DOM may discard them.
+  // result that will replace or patch the DOM may discard stale overlays.
   previewPane.querySelector(":scope > .typst-viewbar")?.remove();
   wordMap = null;
   clearPreviewWords();
@@ -5040,11 +5337,9 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
     host.className = "markdown-body typst-document";
     host.innerHTML = rendered.html ?? "";
     preview.appendChild(host);
-    // Typst's HTML export carries no source positions, so the blocks are matched
-    // back to the source by their text — see typst-map.ts. The returned ranges
-    // feed the same block-record word map AsciiDoc uses; generated text simply
-    // does not map, and the block click remains.
-    const mapped = annotateTypstLines(host, source);
+    // Feed compiler AST spans when available so text-normalized fallback keeps
+    // blocks aligned when dynamic content diverges from literal source text.
+    const mapped = annotateTypstLines(host, source, rendered.spanMap);
     previewLinesMapped = mapped.mapped >= 2;
     bindPreviewWords(source, undefined, mapped.blocks, wantsMap);
     rebuildAnchors();
@@ -5077,37 +5372,68 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
     return;
   }
 
-  if (!rendered.pdf) {
+  if (!pdfBytes || pdfBytes.byteLength === 0) {
     showTypstFailure("The page render produced no PDF.", rendered.kind);
     return;
   }
 
-  const host = stagedPdfHost();
-  const view = new TypstPdfPreview(host, previewPane, syncSourceFromPageSelection, source, {
-    language: "typst",
-    files: [{ path: "", source }],
-    activeFile: "",
-    enabled: wantsMap,
-    detached: true,
-    onReady: () => pdfMapReady(view, token),
-  });
-  stagedPdf = { view, host };
-  view.setZoom(zoomFactor());
-  try {
-    await view.render(decodePdf(rendered.pdf), { focusPage: typstPdf?.topPosition()?.page });
-  } catch (error) {
-    if (token !== renderToken) return;
+  typstPerfMark("paint:start");
+  if (typstPdf && !typstPdf.isDisposed && rendered.pageHashes && rendered.pageHashes.length > 0) {
+    const targetView = typstPdf;
     discardStagedPdf();
-    showTypstFailure(error, rendered.kind);
-    return;
+    targetView.setZoom(zoomFactor());
+    try {
+      await targetView.updateWithPageHashes(pdfBytes, rendered.pageHashes, {
+        focusPage: targetView.topPosition()?.page,
+        source,
+        files: [{ path: "", source }],
+        activeFile: "",
+        spanMap: rendered.spanMap,
+        onReady: () => pdfMapReady(targetView, token),
+      });
+    } catch (error) {
+      if (token !== renderToken) return;
+      showTypstFailure(error, rendered.kind);
+      return;
+    }
+    if (token !== renderToken) return;
+    typstPdfToken = token;
+    latexLastSourceScroll = null;
+    typstPdfBytes = pdfBytes;
+    if (targetView.mapReady()) pdfMapReady(targetView, token);
+  } else {
+    const host = stagedPdfHost();
+    const view = new TypstPdfPreview(host, previewPane, syncSourceFromPageSelection, source, {
+      language: "typst",
+      files: [{ path: "", source }],
+      activeFile: "",
+      enabled: wantsMap,
+      detached: true,
+      spanMap: rendered.spanMap,
+      onReady: () => pdfMapReady(view, token),
+    });
+    stagedPdf = { view, host };
+    view.setZoom(zoomFactor());
+    try {
+      await view.render(pdfBytes, {
+        focusPage: typstPdf?.topPosition()?.page,
+        pageHashes: rendered.pageHashes,
+      });
+    } catch (error) {
+      if (token !== renderToken) return;
+      discardStagedPdf();
+      showTypstFailure(error, rendered.kind);
+      return;
+    }
+    if (token !== renderToken) {
+      view.dispose();
+      host.remove();
+      return;
+    }
+    commitPdfHost(host, view, token);
+    typstPdfBytes = pdfBytes;
   }
-  if (token !== renderToken) {
-    view.dispose();
-    host.remove();
-    return;
-  }
-  commitPdfHost(host, view, token);
-  typstPdfBase64 = rendered.pdf;
+  typstPerfMark("paint:end");
   // PDF correspondence has its own region adapter, not DOM block anchors.
   previewLinesMapped = false;
   syncPreviewFromSource();
@@ -5140,9 +5466,7 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
  *
  * Deliberately broad: any import, include, or function that reads a file
  * (images, data files, bibliographies, plugins) makes the document ineligible
- * for the cross-tab store, because nothing tells the key that such a file
- * changed. A false "ineligible" costs one compile on return; a false
- * "eligible" would show an outdated preview as current.
+ * for synchronous store hits without verified `--deps` fingerprints.
  */
 const TYPST_READS_FILES =
   /#\s*(?:import|include)\b|\b(?:image|read|json|csv|yaml|toml|xml|cbor|plugin|bibliography)\s*\(/;
@@ -5152,7 +5476,8 @@ function typstStoreHit(): boolean {
   const source = editor.getDoc();
   if (!typstStorable(source)) return false;
   const mode = settings.typstView === "pages" ? "pages" : "document";
-  return typstStore.get(typstKey(doc, source, { mode, imageRoot: typstExtraRoot() })) !== undefined;
+  const entry = typstStore.get(typstKey(doc, source, { mode, imageRoot: typstExtraRoot() }));
+  return Boolean(entry && entry.deps.length === 0);
 }
 
 function typstStorable(source: string): boolean {
@@ -5161,7 +5486,7 @@ function typstStorable(source: string): boolean {
 
 function typstPdfCurrent(): boolean {
   return Boolean(
-    typstPdfBase64 &&
+    typstPdfBytes &&
     typstPdfToken === renderToken &&
     lastTypstRender &&
     lastTypstRender.docId === doc.id &&
@@ -5172,13 +5497,13 @@ function typstPdfCurrent(): boolean {
 }
 
 async function saveTypstPagesPdf(): Promise<void> {
-  const data = typstPdfBase64;
-  if (!data || !typstPdfCurrent()) {
+  const bytes = typstPdfBytes;
+  if (!bytes || !typstPdfCurrent()) {
     toast("Wait for the current Typst page preview before saving.");
     return;
   }
   await saveCompiledPdf({
-    data,
+    data: encodePdfBase64(bytes),
     token: typstPdfToken,
     sessionId: doc.id,
     revision: doc.revision,
@@ -5403,6 +5728,9 @@ async function doRender(force = false): Promise<void> {
   }
 
   const language = doc.language === "asciidoc" ? "asciidoc" : "markdown";
+  const scheduledAt = proseScheduledAt;
+  proseScheduledAt = null;
+  if (scheduledAt !== null) prosePerfMeasure("quietWait", scheduledAt, { language });
   const key = proseKey(language, doc, source, {
     baseDir: doc.directory ?? null,
     documentPath: language === "markdown" ? doc.path : null,
@@ -5418,7 +5746,15 @@ async function doRender(force = false): Promise<void> {
     // The DOM on screen was built from this exact text and these options —
     // typically an edit undone before the debounce ran. Rebind what the edit
     // dropped instead of converting the document again.
-    if (!wordMap) bindPreviewWords(source, proseMap.fragments, proseMap.blocks, wantsMap);
+    if (!wordMap)
+      bindPreviewWords(
+        source,
+        proseMap.fragments,
+        proseMap.blocks,
+        wantsMap,
+        false,
+        proseMap.blockFragmentCounts,
+      );
     previewLinesMapped = proseMap.linesMapped;
     drawDiagrams(token);
     rebuildAnchors();
@@ -5430,11 +5766,12 @@ async function doRender(force = false): Promise<void> {
   }
   wordMap = null;
   clearPreviewWords();
+  clearProsePerf();
 
+  const proseRenderStart = performance.now();
   if (doc.language === "asciidoc") {
-    // AsciiDoc draws its diagrams before the commit, with the theme of the
-    // moment it started; a theme change during the build re-themes afterwards.
     const epoch = themeEpoch;
+    const workerStart = prosePerfMark("workerRoundTrip:start");
     const result = await renderAsciidocPreviewInto(
       preview,
       source,
@@ -5443,12 +5780,26 @@ async function doRender(force = false): Promise<void> {
         math: settings.enableMath,
         mermaid: settings.enableMermaid,
         isDark,
+        onMermaidSettled: () => {
+          if (token !== renderToken || epoch !== themeEpoch) return;
+          prosePerfMark("mermaid:end");
+          rebuildAnchors();
+          if (pendingPreviewScroll === null && !caretByPointer) revealCursorInPreview();
+        },
       },
       () => token !== renderToken,
     );
     if (!result) return;
+    const incrementalApplied = Boolean(result.incremental?.applied);
+    prosePerfMeasure("workerRoundTrip", workerStart, {
+      language: "asciidoc",
+      incrementalApplied,
+      dirtyBlocks: result.incremental?.dirtyBlocks ?? 0,
+      totalBlocks: result.incremental?.totalBlocks ?? 0,
+    });
+    const finishStart = performance.now();
     previewLinesMapped = result.linesMapped;
-    bindPreviewWords(source, undefined, result.blocks, wantsMap);
+    bindPreviewWords(source, undefined, result.blocks, wantsMap, incrementalApplied);
     rebuildAnchors();
     if (pendingPreviewScroll === null) revealCursorInPreview();
     else applyPendingPreviewScroll();
@@ -5462,12 +5813,15 @@ async function doRender(force = false): Promise<void> {
       linesMapped: result.linesMapped,
     };
     previewSyncReady = wantsMap;
+    prosePerfMeasure("finish", finishStart, { language: "asciidoc", incrementalApplied });
+    proseDelays.record("asciidoc", performance.now() - proseRenderStart);
     if (epoch !== themeEpoch) retheme();
     return;
   }
 
   // Word-level correspondence is only consumed in Split; building it for a
   // hidden or single-pane preview is a second pass over the whole document.
+  const workerStart = prosePerfMark("workerRoundTrip:start");
   const result = await renderPreviewInto(
     preview,
     source,
@@ -5481,8 +5835,23 @@ async function doRender(force = false): Promise<void> {
     () => token !== renderToken,
   );
   if (!result) return;
+  const incrementalApplied = Boolean(result.incremental?.applied);
+  prosePerfMeasure("workerRoundTrip", workerStart, {
+    language: "markdown",
+    incrementalApplied,
+    dirtyBlocks: result.incremental?.dirtyBlocks ?? 0,
+    totalBlocks: result.incremental?.totalBlocks ?? 0,
+  });
+  const finishStart = performance.now();
   previewLinesMapped = result.linesMapped;
-  bindPreviewWords(source, result.fragments, undefined, wantsMap);
+  bindPreviewWords(
+    source,
+    result.fragments,
+    undefined,
+    wantsMap,
+    incrementalApplied,
+    result.blockFragmentCounts,
+  );
 
   if (result.linesMapped !== lastMappedState) {
     lastMappedState = result.linesMapped;
@@ -5506,9 +5875,12 @@ async function doRender(force = false): Promise<void> {
     key,
     fragments: wantsMap ? result.fragments : undefined,
     blocks: undefined,
+    blockFragmentCounts: wantsMap ? result.blockFragmentCounts : undefined,
     linesMapped: result.linesMapped,
   };
   previewSyncReady = wantsMap;
+  prosePerfMeasure("finish", finishStart, { language: "markdown", incrementalApplied });
+  proseDelays.record("markdown", performance.now() - proseRenderStart);
 }
 
 /**
@@ -5524,8 +5896,10 @@ function drawDiagrams(token: number): void {
   if (!preview.querySelector(".mermaid[data-mermaid]")) return;
   const epoch = themeEpoch;
   const cancelled = () => token !== renderToken || epoch !== themeEpoch;
+  const mermaidStart = prosePerfMark("mermaid:start");
   void renderMermaidIn(preview, isDark, cancelled).then(() => {
     if (cancelled()) return;
+    prosePerfMeasure("mermaid", mermaidStart);
     rebuildAnchors();
     if (pendingPreviewScroll === null && !caretByPointer) revealCursorInPreview();
   });
@@ -6164,6 +6538,7 @@ function invalidatePreview(): void {
   discardStagedPdf();
   cancelPreviewWorkers();
   typstPdf?.cancelMap();
+  typstScheduler.reset();
   cancelTypstRender();
   // The warm LaTeX engine is kept across tab switches: a chapter of the same
   // project reuses it, and another project's first compile replaces it. The
@@ -6708,6 +7083,7 @@ async function reopenWithEncoding(session: Session, encoding: string): Promise<v
 /** Replace a conflicted buffer with the file, keeping one undo step. */
 async function reloadConflict(session: Session): Promise<void> {
   try {
+    invalidateAsciidocIncludeCache(session.path ?? undefined);
     if (await lifecycle.reload(session)) toast("Reloaded from disk");
   } catch (error) {
     await message(String(error), { title: "Could not reload", kind: "error" });
@@ -7356,12 +7732,12 @@ async function exportPdf(): Promise<void> {
     return;
   }
   if (source.language === "typst") {
-    if (settings.typstView !== "pages" || !typstPdfBase64 || !typstPdfCurrent()) {
+    if (settings.typstView !== "pages" || !typstPdfBytes || !typstPdfCurrent()) {
       toast("Switch to the Pages view and wait for the compile before exporting the PDF.");
       return;
     }
     await saveCompiledPdf({
-      data: typstPdfBase64,
+      data: encodePdfBase64(typstPdfBytes),
       token: typstPdfToken,
       sessionId: doc.id,
       revision: doc.revision,
@@ -7567,6 +7943,17 @@ let pandocCache: api.PandocStatus | null = null;
 
 /** Typst is needed by the typeset PDF target and by `.typ` previews. */
 let typstCache: api.TypstStatus | null = null;
+/** Optional companion Typst incremental service status, cached for Preferences. */
+let typstServiceCache: api.TypstServiceStatus | null = null;
+
+async function refreshTypstServiceStatus(): Promise<void> {
+  try {
+    typstServiceCache = await api.typstServiceStatus();
+  } catch {
+    return;
+  }
+  preferences?.refresh();
+}
 
 async function refreshPandocStatus(): Promise<void> {
   try {
@@ -7944,7 +8331,7 @@ async function openWriterChooser(): Promise<void> {
 async function latexSetup(): Promise<void> {
   let enabled: boolean;
   try {
-    enabled = await api.latexStatus();
+    enabled = await api.texpressoStatus();
   } catch (error) {
     await message(String(error), { title: "Could not look for bundled TeX", kind: "error" });
     return;
@@ -7974,8 +8361,8 @@ async function latexSetup(): Promise<void> {
 
   const agreed = await ask(
     "Bundled TeX is not installed, so .tex documents have no preview.\n\n" +
-      `MDraft can download the verified TeX Live ${LATEX_ENGINE_YEAR} engine files — about ${LATEX_DOWNLOAD_MIB} MiB — into its own data folder. ` +
-      "Additional TeX packages and fonts are fetched on demand and cached locally. " +
+      `MDraft can download the verified TeX Live ${TEXPRESSO_TEXLIVE_YEAR} preview engine — about ${TEXPRESSO_ENGINE_MIB} MiB — into its own data folder. ` +
+      "TeX packages and fonts are fetched on demand and cached locally. " +
       "Nothing is installed system-wide, no administrator rights are needed, and turning it off " +
       "in Preferences leaves the downloaded files on disk.\n\n" +
       "Your document stays on this device.",
@@ -7985,7 +8372,7 @@ async function latexSetup(): Promise<void> {
 
   const notice = toast("Downloading bundled TeX…", 0);
   try {
-    await api.installLatex();
+    await api.installTexpresso();
     settings.latexEnabled = true;
     persist();
     notice.dismiss();
@@ -9088,21 +9475,18 @@ function alignPreviewToLine(line: number): void {
  */
 function alignPreviewToScroll(): void {
   if (alignDomTextScroll("source")) return;
-  const line = editor.topVisibleLine();
-  const index = Math.max(0, anchorIndexForLine(line));
-  const segment = syncSegmentFor(index);
-  if (!segment) return;
-
-  const target = interpolate(
-    editor.view.scrollDOM.scrollTop,
-    segment.editor0,
-    segment.editor1,
-    segment.preview0,
-    segment.preview1,
+  const reference = scrollReference("source");
+  const delta = blockCorrection(
+    domBlockTops("source", reference),
+    reference,
+    scrollReference("preview"),
   );
-  const max = Math.max(0, previewPane.scrollHeight - previewPane.clientHeight);
+  if (delta === null) return;
   suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
-  previewPane.scrollTop = Math.min(max, Math.max(0, target));
+  previewPane.scrollTop = clampScroll(
+    previewPane.scrollTop + delta,
+    previewPane.scrollHeight - previewPane.clientHeight,
+  );
 }
 
 /**
@@ -9115,21 +9499,15 @@ function alignPreviewToScroll(): void {
  */
 function alignEditorToScroll(): void {
   if (alignDomTextScroll("preview")) return;
-  const line = lineAtPreviewTop();
-  if (line === null) return;
-  const index = Math.max(0, anchorIndexForLine(line));
-  const segment = syncSegmentFor(index);
-  if (!segment) return;
-
-  const target = interpolate(
-    previewPane.scrollTop,
-    segment.preview0,
-    segment.preview1,
-    segment.editor0,
-    segment.editor1,
+  const reference = scrollReference("preview");
+  const delta = blockCorrection(
+    domBlockTops("preview", reference),
+    reference,
+    scrollReference("source"),
   );
+  if (delta === null) return;
   suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
-  editor.scrollToOffset(target);
+  editor.scrollToOffset(clampScroll(editor.view.scrollDOM.scrollTop + delta, editor.scrollMax()));
 }
 
 /**
@@ -9328,16 +9706,33 @@ function scheduleIdle(task: () => void): void {
   else window.setTimeout(task, 0);
 }
 
+interface ProseDebugWindow {
+  __mdraftDebug?: {
+    wordMapReadyMs?: number | null;
+    wordMapDoneAt?: number | null;
+  };
+}
+
+function resetWordMapDebugTiming(): void {
+  const dbg = (window as unknown as ProseDebugWindow).__mdraftDebug;
+  if (!dbg) return;
+  dbg.wordMapReadyMs = null;
+  dbg.wordMapDoneAt = null;
+}
+
 /** Rebuild the map against the DOM a render just produced. */
 function bindPreviewWords(
   source: string,
   fragments?: Fragment[],
   blocks?: BlockRange[],
   wantsMap = settings.viewMode === "split",
+  incrementalApplied = false,
+  blockFragmentCounts?: number[],
 ): void {
   // A render replaces the nodes the old Range pointed at, so drop both the
   // highlight and the pulse before binding the new map.
   clearPreviewWords();
+  resetWordMapDebugTiming();
   const generation = ++wordMapGeneration;
   // Word correspondence is only read in Split. A hidden or single-pane preview
   // must not pay for walking every word and measuring nothing.
@@ -9349,22 +9744,34 @@ function bindPreviewWords(
   syncedSource = null;
   if (!wantsMap || (!hasFragments && !hasBlocks)) return;
 
-  // The walk is O(every word). Running it in the same task as the paint put it
-  // between a keystroke and the next frame; build it after paint instead, and
-  // only once the typing has gone quiet. A newer render bumps the generation.
+  // The walk is O(every word). Full rebuilds defer until typing pauses;
+  // incremental DOM patches shift retained entries and touch only the dirty
+  // subtree, so they run right after paint without waiting 600 ms.
   const build = async (): Promise<void> => {
     if (generation !== wordMapGeneration) return;
-    if (performance.now() - lastEditAt < WORD_MAP_QUIET_MS) {
+    if (!incrementalApplied && performance.now() - lastEditAt < WORD_MAP_QUIET_MS) {
       window.setTimeout(build, WORD_MAP_RETRY_MS);
       return;
     }
+    const mapStart = prosePerfMark("wordMap:start");
     const cancelled = () => generation !== wordMapGeneration;
-    const map = await bindWordMapAsync(preview, { source, fragments, blocks }, cancelled);
+    const map = await bindWordMapAsync(
+      preview,
+      { source, fragments, blocks, blockFragmentCounts },
+      cancelled,
+    );
     if (!map || cancelled()) return;
     const index = await scrollTextAnchorsAsync(map, cancelled);
     if (!index || cancelled()) return;
     wordMap = map;
     domScrollIndex = new ScrollIndex(index.anchors, index.sorted);
+    prosePerfMeasure("wordMap", mapStart, { incrementalApplied });
+    const doneAt = performance.now();
+    const debugWindow = window as unknown as ProseDebugWindow;
+    debugWindow.__mdraftDebug ??= {};
+    debugWindow.__mdraftDebug.wordMapDoneAt = doneAt;
+    debugWindow.__mdraftDebug.wordMapReadyMs =
+      lastEditAt > 0 ? Math.max(0, doneAt - lastEditAt) : null;
     if (currentSelectionWasDismissed()) return;
     wordSyncDismissed = false;
     dismissedWordSelection = null;
@@ -9382,7 +9789,13 @@ function bindPreviewWords(
       syncPreviewFromSource();
     }
   };
-  // Do not build immediately after a render: the reader often resumes typing,
+  if (incrementalApplied) {
+    queueMicrotask(() => {
+      if (generation === wordMapGeneration) void build();
+    });
+    return;
+  }
+  // Do not build immediately after a full rebuild: the reader often resumes typing,
   // and the walk can take ~100 ms on a megabyte. A newer edit cancels it.
   window.setTimeout(() => scheduleIdle(() => void build()), WORD_MAP_DELAY_MS);
 }
@@ -9896,12 +10309,13 @@ async function alignHtmlTextScroll(
     if (direction === "source" && !source.exact) continue;
     estimated ||= !source.exact;
     // Guest CSS pixels are scaled by the iframe's own document zoom.
-    const previewY = geometry.frameTop + (point.top - geometry.top) * scale;
+    const previewY = geometry.frameTop + (point.top + point.height / 2 - geometry.top) * scale;
+    const sourceY = rowCentre(source);
     pairs.push({
       from: anchor.from,
       region,
-      origin: direction === "source" ? source.top : previewY,
-      target: direction === "source" ? previewY : source.top,
+      origin: direction === "source" ? sourceY : previewY,
+      target: direction === "source" ? previewY : sourceY,
     });
   }
   const delta = scrollCorrection(pairs, reference);
@@ -9977,11 +10391,13 @@ function alignDomTextScroll(direction: SyncPane, refined = false): boolean {
     const rect = range.getBoundingClientRect();
     if (!rect.width || !rect.height) continue;
     estimated ||= !source.exact;
+    const sourceY = rowCentre(source),
+      previewY = rowCentre(rect);
     pairs.push({
       from: anchor.from,
       region,
-      origin: direction === "source" ? source.top : rect.top,
-      target: direction === "source" ? rect.top : source.top,
+      origin: direction === "source" ? sourceY : previewY,
+      target: direction === "source" ? previewY : sourceY,
     });
   }
   const delta = scrollCorrection(pairs, reference);
@@ -10032,13 +10448,78 @@ function pagesScrollAvailable(): boolean {
   );
 }
 
-function scrollReference(): number {
-  return (
-    Math.max(
-      editor.view.scrollDOM.getBoundingClientRect().top,
-      previewPane.getBoundingClientRect().top,
-    ) + SYNC_MARGIN
+/**
+ * The sync line as a pair of heights: content at `source` in the editor
+ * corresponds to content at `preview` in the preview. Level at SYNC_MARGIN until
+ * a pointer gesture calibrates it; see
+ * docs/adr/2026-11-13-pointer-gesture-alignment.md. Any code that needs "the
+ * sync height" reads it through scrollReference(), never SYNC_MARGIN: a fixed
+ * margin in the sync path is what makes the panes jump after a click.
+ */
+const syncReference = new SyncReference(SYNC_MARGIN);
+
+function scrollCommonTop(): number {
+  return Math.max(
+    editor.view.scrollDOM.getBoundingClientRect().top,
+    previewPane.getBoundingClientRect().top,
   );
+}
+
+/** One pane's sync height in screen pixels. */
+function scrollReference(pane: SyncPane = "source"): number {
+  return scrollCommonTop() + syncReference[pane];
+}
+
+const otherPane = (pane: SyncPane): SyncPane => (pane === "source" ? "preview" : "source");
+
+/**
+ * Block boundaries around a height, measured in both panes, for
+ * blockCorrection(). This is the fallback where no verified word answers: code,
+ * tables, formulas, diagrams, or a word map that has not arrived.
+ *
+ * The last block ends where the editor's scroll range ends, paired with the
+ * bottom of the block in the preview, so a long final block keeps following
+ * instead of pinning at its first line.
+ */
+function domBlockTops(direction: SyncPane, reference: number): BlockTop[] {
+  const scroller = editor.view.scrollDOM;
+  const sourceTop = scroller.getBoundingClientRect().top - scroller.scrollTop;
+  const sourceY = (anchor: Anchor): number => sourceTop + editor.lineScrollTop(anchor.line);
+  const previewY = (anchor: Anchor): number => anchor.el.getBoundingClientRect().top;
+  const originY = direction === "source" ? sourceY : previewY;
+  let lo = 0,
+    hi = previewAnchors.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (originY(previewAnchors[mid]) <= reference) lo = mid + 1;
+    else hi = mid;
+  }
+  // `lo - 1` is the block holding the reference; its neighbours bound it.
+  const last = Math.min(previewAnchors.length, lo + 1);
+  const tops: BlockTop[] = [];
+  for (let i = Math.max(0, lo - 2); i < last; i++) {
+    const source = sourceY(previewAnchors[i]),
+      rendered = previewY(previewAnchors[i]);
+    tops.push(
+      direction === "source"
+        ? { origin: source, target: rendered }
+        : { origin: rendered, target: source },
+    );
+  }
+  if (last === previewAnchors.length && tops.length) {
+    const el = previewAnchors[last - 1].el;
+    const common = scrollCommonTop() + SYNC_MARGIN;
+    const source = common + editor.scrollMax() - scroller.scrollTop;
+    const rendered = common + previewEndFor(el) - previewPane.scrollTop;
+    const end =
+      direction === "source"
+        ? { origin: source, target: rendered }
+        : { origin: rendered, target: source };
+    const tail = tops[tops.length - 1];
+    // A document shorter than the pane has no scroll range to pair.
+    if (end.origin > tail.origin && end.target >= tail.target) tops.push(end);
+  }
+  return tops;
 }
 
 let latexLastSourceScroll: number | null = null;
@@ -10057,15 +10538,17 @@ function alignPagesScroll(direction: SyncPane, refined = false): void {
   let estimated = false;
   const pairs: ScrollPair[] = [];
   for (const anchor of anchors) {
-    const previewY = pdf.scrollTopFor(anchor);
+    const row = pdf.scrollRowFor(anchor);
     const source = editor.scrollPoint(anchor.from);
-    if (previewY === null || (direction === "source" && !source.exact)) continue;
+    if (row === null || (direction === "source" && !source.exact)) continue;
     estimated ||= !source.exact;
+    const sourceY = rowCentre(source),
+      previewY = rowCentre(row);
     pairs.push({
       from: anchor.from,
       region: anchor.region,
-      origin: direction === "source" ? source.top : previewY,
-      target: direction === "source" ? previewY : source.top,
+      origin: direction === "source" ? sourceY : previewY,
+      target: direction === "source" ? previewY : sourceY,
     });
   }
   const delta = scrollCorrection(pairs, reference);
@@ -12056,13 +12539,15 @@ async function boot(): Promise<void> {
     if (doc.language !== "latex") discardStagedPdf();
     cancelPreviewWorkers();
     typstPdf?.cancelMap();
-    cancelTypstRender();
-    // A LaTeX compile in flight is NOT cancelled: cancelling disposed the engine
-    // on every keystroke, so under ordinary typing the preview could starve
-    // (docs/adr/2026-11-12-latex-engine-lifetime.md). It finishes; its result is
-    // shown as out of date if nothing newer is on screen, and the newest
-    // revision compiles next.
+    if (doc.language !== "typst") cancelTypstRender();
+    // A LaTeX or Typst compile in flight is NOT cancelled on typing: killing the
+    // warm compiler on every keystroke starves typing bursts; LatestWinsGate lets
+    // the active compile finish and runs the newest revision next.
     lastEditAt = performance.now();
+    resetWordMapDebugTiming();
+    if (doc.language === "typst") {
+      typstEditSeq = typstScheduler.recordEdit(lastEditAt);
+    }
     if (doc.language === "latex") {
       window.clearTimeout(reanchorTimer);
       window.clearTimeout(recycleTimer);
@@ -12180,13 +12665,35 @@ async function boot(): Promise<void> {
     exportHtml: () => void exportHtml(),
     exportPdf: () => void exportPdf(),
     setupTypst: () => typstSetup(),
+    typstServiceStatus: () => typstServiceCache,
+    setupTypstService: async () => {
+      const current = await api.typstServiceStatus();
+      if (current.installed) {
+        typstServiceCache = current;
+      } else if (current.canInstall) {
+        typstServiceCache = await api.installTypstService();
+        if (doc.language === "typst") {
+          typstStore.clear();
+          scheduleRender(true);
+        }
+      } else {
+        typstServiceCache = current;
+      }
+      preferences?.refresh();
+    },
+    clearTypstCache: async () => {
+      await api.typstClearCache();
+      typstStore.clear();
+      await refreshTypstServiceStatus();
+      if (doc.language === "typst") scheduleRender(true);
+    },
     latexCache: () => latexCacheInfo,
     latexCacheError: () => latexCacheError,
     refreshLatexCache: refreshLatexCacheInfo,
     installLatex: async () => {
       const notice = toast("Downloading bundled TeX…", 0);
       try {
-        await api.installLatex();
+        await api.installTexpresso();
         settings.latexEnabled = true;
         persist();
         notice.dismiss();
@@ -12546,6 +13053,7 @@ async function boot(): Promise<void> {
   // is used. The menu labels follow as soon as both answers are in.
   void refreshPandocStatus().then(syncExportAvailability);
   void refreshTypstStatus().then(syncExportAvailability);
+  void refreshTypstServiceStatus();
   // A second launch may arrive before the startup choice has finished. Hold
   // those paths here; the Rust queue covers the window before this listener
   // exists, and `openPath` makes a duplicate delivery focus the same tab.

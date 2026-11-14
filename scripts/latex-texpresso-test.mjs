@@ -12,7 +12,7 @@
 //   1. the backend switch mounts a frame of its own origin, and it boots;
 //   2. the frame holds MDraft's project, not an example;
 //   3. an edit repaints on the frame's own path, and the engine's copy agrees;
-//   4. the idle shadow compile fills the PDF export, print and menu read;
+//   4. the frame's own `xdvipdfmx` export fills the PDF Export, Print and the menu read;
 //   5. selection, caret, click and double-click follow the PDF conventions;
 //   6. scroll correspondence works in both directions;
 //   7. zoom, both themes and manual mode reach the frame;
@@ -145,6 +145,14 @@ try {
       `window.__TAURI_INTERNALS__.invoke("latex_texmf_configure", { action: { type: "remove", id: ${JSON.stringify(root.id)} } })`,
     );
   }
+  if (!(await invoke("latex_engine_status")).previewInstalled) {
+    console.log("installing the preview engine from the local origin…");
+    await evaluate("window.__TAURI_INTERNALS__.invoke('install_texpresso')");
+  }
+  check(
+    (await invoke("latex_engine_status")).previewInstalled === true,
+    "the preview engine and digest table are installed",
+  );
   await enableAndCompile();
   if ((await invoke("latex_status")) !== true) {
     console.log("SKIP: the bundled LaTeX engine is not available.");
@@ -206,8 +214,8 @@ try {
     `JSON.stringify((() => { const c = document.getElementById("status-latex-engine"); return { text: c.textContent, title: c.title, backend: c.dataset.previewBackend }; })())`,
   ).then(JSON.parse);
   check(
-    chip.text === "LuaLaTeX · TeXpresso" && chip.backend === "texpresso",
-    "the engine chip names the backend",
+    chip.text === "LuaLaTeX" && chip.backend === "texpresso",
+    "the engine chip names the engine, not the backend",
     JSON.stringify(chip),
   );
 
@@ -669,14 +677,14 @@ try {
   await emitMenu(page, "view.latexAutoCompile");
   await sleep(400);
 
-  console.log("=== export uses the shadow PDF ===");
+  console.log("=== export uses the frame's own PDF ===");
   await waitFor(
     `(() => {
       const source = document.querySelector(".cm-content").cmTile.root.view;
       return source && document.querySelector("#preview")?.dataset.latexCurrent;
     })()`,
     300_000,
-    "a current shadow result",
+    "a current exported result",
   );
   await emitMenu(page, "view.latexTexpressoExport");
   const comparison = await waitFor(
@@ -752,10 +760,10 @@ try {
       const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
       const hit = list.find((entry) => /mdraft-tex\.localhost\/texpresso\//.test(entry.url));
       if (hit && /engine=xetex/.test(hit.url)) return hit;
-      const chipText = await evaluate(
-        `document.getElementById("status-latex-engine")?.textContent ?? ""`,
+      const chipTitle = await evaluate(
+        `document.getElementById("status-latex-engine")?.title ?? ""`,
       );
-      if (/WasmTex/.test(chipText)) return null;
+      if (/Preview unavailable/.test(chipTitle)) return null;
       await sleep(500);
     }
     return null;
@@ -777,7 +785,7 @@ try {
     );
   }
 
-  // pdfLaTeX has no TeXpresso engine: the chip must say so, by name.
+  // The bundled preview has no pdfTeX, so the menu must not offer it.
   await evaluate(
     `window.__TAURI_INTERNALS__.invoke("plugin:event|emit", { event: "open-files", payload: [${JSON.stringify(
       `${process.env.MDRAFT_REPO}\\samples\\latex-engines\\plain.tex`,
@@ -789,24 +797,11 @@ try {
   const labels = await evaluate(
     `JSON.stringify([...document.querySelectorAll(".explorer-menu .favorite-menu-item")].map((b) => b.textContent))`,
   ).then(JSON.parse);
-  if (labels.some((label) => /^pdfLaTeX/.test(label))) {
-    await evaluate(
-      `[...document.querySelectorAll(".explorer-menu .favorite-menu-item")].find((b) => /^pdfLaTeX/.test(b.textContent))?.click()`,
-    );
-    const fallbackChip = await waitFor(
-      `(document.getElementById("status-latex-engine")?.title ?? "").includes("no pdfTeX") ||
-       (document.getElementById("status-latex-engine")?.title ?? "").includes("has no pdfTeX")`,
-      120_000,
-      "the pdfLaTeX fallback chip",
-    );
-    check(
-      fallbackChip,
-      "pdfLaTeX falls back with a chip that says why",
-      await evaluate(`document.getElementById("status-latex-engine")?.title ?? ""`),
-    );
-  } else {
-    console.log("SKIP: the engine menu offered no pdfLaTeX entry on this download.");
-  }
+  check(
+    !labels.some((label) => /pdfLaTeX/.test(label)),
+    "the bundled engine menu offers no pdfLaTeX",
+    JSON.stringify(labels),
+  );
 
   console.log("=== the switch back restores WasmTex ===");
   await emitMenu(page, "view.latexBackend.wasmtex");

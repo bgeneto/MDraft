@@ -481,27 +481,33 @@ cache inert. It deletes nothing.
 opens a live document that explains the syntax this application supports, and
 compiles with the same engine the preview uses.
 
-## Two preview backends (developer note)
+## The incremental preview (developer note)
 
-The preview can be drawn by WasmTex, which compiles the whole document to a PDF
-that PDF.js renders, or by **TeXpresso**, an incremental engine that typesets to
-its own canvases and reports a source map. WasmTex is the default; the choice is
-the constant `DEFAULT_LATEX_PREVIEW_BACKEND` in `src/latex-backend.ts` and the
-hidden `view.latexBackend.texpresso` / `.wasmtex` menu events, not a
-Preference. The decision is recorded in
-[the ADR](adr/2026-11-13-latex-preview-backends.md) and the work in
-[the plan](plans/2026-11-13-texpresso-backend.md).
+The bundled preview is **TeXpresso**, an incremental engine that typesets to
+its own canvases in a frame of its own on the `mdraft-tex` scheme and reports a
+source map. Its own `xdvipdfmx` export is the authoritative PDF for Export ›
+PDF, Save PDF, Print, the menu state and the Problems list. The default is the
+constant `DEFAULT_LATEX_PREVIEW_BACKEND` in `src/latex-backend.ts` and the
+hidden `view.latexBackend.texpresso` / `.wasmtex` menu events, not a Preference.
+WasmTex is disabled, not deleted: its code and hidden tests remain, but no
+reader-facing path installs or selects it. The decisions are recorded in
+[the production ADR](adr/2026-11-13-texpresso-production.md) and
+[the earlier two-backend ADR](adr/2026-11-13-latex-preview-backends.md); the work
+is in [the plan](plans/2026-11-13-texpresso-backend.md).
 
-With TeXpresso selected, MDraft draws the preview in a frame of its own on the
-`mdraft-tex` scheme, holding the project in the frame's IndexedDB, and keeps
-WasmTex compiling at idle so Export, Print, Save PDF, the menu state and the
-Problems list keep their authoritative source. Every engine file and every TeX
-Live byte is pinned in `src-tauri/texpresso.json` and verified on download and
-on every serve; `src-tauri/src/latex_texpresso.rs` is the handler and cache.
+Every engine file and every TeX Live byte is pinned in
+`src-tauri/texpresso.json` and verified on download and on every serve;
+`src-tauri/src/latex_texpresso.rs` is the handler and cache. The production
+origin is `https://mdraft.webonly.app/`; `scripts/texpresso-origin-server.mjs`
+serves the reader's mirror during development, and the test runner points a
+launch at it with `MDRAFT_TEXPRESSO_ORIGIN`.
 
-Visible fallbacks, each named on the engine chip: pdfLaTeX (TeXpresso has no
-pdfTeX), a WebView without JSPI, a project with a non-UTF-8 text file, a project
-that uses a registered local TEXMF library, and a frame that stops responding.
+The preview has no second bundled engine to fall back to. A WebView without
+JSPI, a project with a non-UTF-8 text file, a project that uses a registered
+local TEXMF library, and a frame that stops responding each stop the frame and
+name the reason in the status line; pdfLaTeX is not offered for the bundled
+preview at all. An installed TeX distribution keeps its own compiler and keeps
+pdfLaTeX.
 
 To exercise it:
 
@@ -521,9 +527,8 @@ node scripts/test-all.mjs --only latex-perf-texpresso-book --allow-installed
 ```
 
 **Linux.** WebKitGTK 2.54 has been run on Debian 13 under WSLg: the application
-starts, opens a project and renders the WasmTex PDF (12 warnings, LuaLaTeX,
-about 9 s for `book/main.tex`). With TeXpresso selected, the frame also boots
-and typesets there — the status bar reads `LuaLaTeX · TeXpresso` and the shadow
-PDF is current — so `mdraft-tex://localhost` works as a secure frame origin on
-WebKitGTK. The CDP layer and the pointer/scroll correspondence are WebView2
-only; the Linux result is a visual check, recorded in the handoff.
+starts, opens a project and the frame typesets there — the status bar reads
+`LuaLaTeX` and the exported PDF is current — so `mdraft-tex://localhost` works
+as a secure frame origin on WebKitGTK. The CDP layer and the pointer/scroll
+correspondence are WebView2 only; the Linux result is a visual check, recorded
+in the handoff.

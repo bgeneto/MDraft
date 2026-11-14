@@ -48,20 +48,20 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
 // --- the backend and its fallback rules ---------------------------------------
 {
   check(
-    DEFAULT_LATEX_PREVIEW_BACKEND === "wasmtex",
-    "the default backend is WasmTex — the comparison is not decided",
+    DEFAULT_LATEX_PREVIEW_BACKEND === "texpresso",
+    "the default backend is the incremental preview",
     DEFAULT_LATEX_PREVIEW_BACKEND,
   );
   check(
-    DEFAULT_LATEX_PREVIEW_BACKEND === "wasmtex" || config.origin.startsWith("https://"),
-    "a release whose default is TeXpresso serves over https, never loopback",
+    DEFAULT_LATEX_PREVIEW_BACKEND !== "texpresso" || config.origin.startsWith("https://"),
+    "a release whose default is incremental serves over https, never loopback",
     config.origin,
   );
 
   const before = latexPreviewBackend();
-  check(setLatexPreviewBackend("texpresso") === true, "the hidden hook switches");
-  check(setLatexPreviewBackend("texpresso") === false, "switching to the same backend is a no-op");
-  check(latexPreviewBackend() === "texpresso", "the switch is remembered");
+  check(setLatexPreviewBackend("wasmtex") === true, "the hidden hook switches");
+  check(setLatexPreviewBackend("wasmtex") === false, "switching to the same backend is a no-op");
+  check(latexPreviewBackend() === "wasmtex", "the switch is remembered");
   setLatexPreviewBackend(before);
 
   check(texpressoEngineFor("lualatex") === "luatex", "LuaLaTeX maps to TeXpresso's luatex");
@@ -89,28 +89,21 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     "no engine backend means no frame",
   );
   check(
-    texpressoFallback({ ...base, engine: "pdflatex" }) === "pdflatex",
-    "pdfLaTeX falls back by name",
-  );
-  check(
     texpressoFallback({ ...base, year: "2025" }) === "year",
-    "an older TeX Live profile falls back",
+    "an older TeX Live profile is reported",
   );
   check(
     texpressoFallback({ ...base, jspi: false }) === "jspi",
-    "a webview without JSPI falls back",
+    "a webview without JSPI is reported",
   );
-  check(
-    texpressoFallback({ ...base, failed: true }) === "failed",
-    "a failed frame stays on WasmTex",
-  );
+  check(texpressoFallback({ ...base, failed: true }) === "failed", "a failed frame is reported");
   check(
     texpressoFallback({ ...base, nonUtf8: "chapters/legacy.tex" }) === "encoding",
-    "a non-UTF-8 text file falls back",
+    "a non-UTF-8 text file is reported",
   );
   check(
     texpressoFallback({ ...base, libraryConflict: "mystyle.sty" }) === "library",
-    "a local library that cannot be placed falls back",
+    "a local library that cannot be placed is reported",
   );
   // The order between the two project-level reasons: failed is reported first.
   check(
@@ -118,7 +111,7 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     "a broken frame outranks a project-level reason",
   );
 
-  const reasons = ["native", "pdflatex", "year", "jspi", "encoding", "library", "failed"];
+  const reasons = ["native", "year", "jspi", "encoding", "library", "failed"];
   const sentences = reasons.map((reason) =>
     texpressoFallbackText(reason, { file: "chapters/one.tex" }),
   );

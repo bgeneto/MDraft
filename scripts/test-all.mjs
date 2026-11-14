@@ -163,6 +163,14 @@ const SUITES = [
     script: "preview-worker-unit.mjs",
   },
   {
+    // Phase 1 prose optimization primitives: adaptive delay, math scan,
+    // KaTeX LRU, AsciiDoc include cache and worker-side math pre-render.
+    id: "prose-phase-unit",
+    title: "Prose pipeline optimization (unit)",
+    kind: "node",
+    script: "prose-phase-unit.mjs",
+  },
+  {
     // What the pane's content was built from. Pure logic: an owner covers its
     // own document incarnation, or a LaTeX project's member files.
     id: "preview-owner-unit",
@@ -301,6 +309,13 @@ const SUITES = [
     script: "latex-scheduler-unit.mjs",
   },
   {
+    // Typst adaptive scheduling (80..350 ms delay, stale cap) and gate.
+    id: "typst-scheduler-unit",
+    title: "Typst scheduler (unit)",
+    kind: "node",
+    script: "typst-scheduler-unit.mjs",
+  },
+  {
     // Stage 6.2: magic comment, project, default; detection and mismatches.
     id: "latex-engine-choice-unit",
     title: "Per-project TeX engine resolution (unit)",
@@ -400,8 +415,8 @@ const SUITES = [
     safeWithInstalledApp: true,
   },
   {
-    // The TeXpresso backend (docs/plans/2026-11-13-texpresso-backend.md): its
-    // own frame on `mdraft-tex`, correspondence, the idle shadow compile, zoom,
+    // The production preview (docs/plans/2026-11-13-texpresso-backend.md): its
+    // own frame on `mdraft-tex`, correspondence, its own PDF export, zoom,
     // themes, manual mode, privacy and the switch back. Opt-in because it needs
     // the local origin: `startTexpressoOrigin` serves `MDRAFT_TEXPRESSO_MIRROR`
     // and `MDRAFT_TEXPRESSO_ENGINE` on the pinned loopback address, and the
@@ -850,6 +865,15 @@ const SUITES = [
     // The fixture is edited only in memory; its extra multipage fixture is
     // created temporarily and removed by the suite.
     safeWithInstalledApp: true,
+  },
+  {
+    id: "typst-perf",
+    title: "Typst live-preview performance benchmark",
+    kind: "cdp",
+    script: "typst-performance-test.mjs",
+    doc: "samples/typst-pages.typ",
+    safeWithInstalledApp: true,
+    optIn: true,
   },
   {
     id: "math",
@@ -1658,30 +1682,34 @@ function linkLatexEngine() {
     source = path.join(dataRoot, candidates[0].name);
   }
   const target = path.join(appConfigDir(), "latex");
-  if (fs.existsSync(target)) return;
-  fs.mkdirSync(appConfigDir(), { recursive: true });
-  try {
-    fs.symlinkSync(source, target, process.platform === "win32" ? "junction" : "dir");
-    latexEngineLink = target;
-    console.log(`engine   linked from ${source}\n`);
-  } catch (error) {
-    // A host that forbids links (or a target already present) is not a failure:
-    // the suites that need the engine report their own skip. Say so, because a
-    // silent skip is what made the first attempt look like it worked.
-    console.log(`engine   could not be linked (${String(error).split("\n")[0]})\n`);
-    return;
+  if (!fs.existsSync(target)) {
+    fs.mkdirSync(appConfigDir(), { recursive: true });
+    try {
+      fs.symlinkSync(source, target, process.platform === "win32" ? "junction" : "dir");
+      latexEngineLink = target;
+      console.log(`engine   linked from ${source}\n`);
+    } catch (error) {
+      // A host that forbids links (or a target already present) is not a failure:
+      // the suites that need the engine report their own skip. Say so, because a
+      // silent skip is what made the first attempt look like it worked.
+      console.log(`engine   could not be linked (${String(error).split("\n")[0]})\n`);
+      return;
+    }
   }
-  // The assets alone are not enough: `latex_status` is true only when the switch
-  // is on *and* the assets are present, because a switch that promises an engine
-  // it cannot run is the dead UI this project refuses. The test profile starts
-  // with the switch off, so it is turned on here — and `restoreUserState` puts
-  // the developer's own settings back afterwards, so nothing persists.
-  //
-  // `app_config_dir`, not `app_data_dir`: `AppState::load` reads the settings from
-  // the config directory, and on Windows the two are the same path only because
-  // Tauri maps both to `%APPDATA%\<identifier>`. Writing to the wrong one would
-  // leave the switch off while the assets were found, which is exactly the
-  // `installed: true, enabled: false` this produced the first time.
+  enableLatexEngineInSettings();
+}
+
+/**
+ * Turn the bundled engine on in the test profile's settings.
+ *
+ * `resetAppState` deletes `settings.json` before every suite, so this has to run
+ * again after that reset, not only when the junction is created. `app_config_dir`,
+ * not `app_data_dir`: `AppState::load` reads the settings from the config
+ * directory, and on Windows the two are the same path only because Tauri maps
+ * both to `%APPDATA%\<identifier>`. Writing to the wrong one leaves the switch
+ * off while the assets are found — `installed: true, enabled: false`.
+ */
+function enableLatexEngineInSettings() {
   const settingsPath = path.join(appConfigDir(), "settings.json");
   try {
     const settings = fs.existsSync(settingsPath)
@@ -1839,6 +1867,9 @@ async function launchApp(
     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,
     WEBVIEW2_USER_DATA_FOLDER: userData,
   };
+  // A layer with a local origin keeps the production URL in texpresso.json and
+  // points this launch at the loopback server instead.
+  if (suite.origin) env.MDRAFT_TEXPRESSO_ORIGIN = `http://127.0.0.1:${ORIGIN_PORT}/`;
   // A layer that measures incremental typesetting can ask for a visible window
   // (`visible: true`) when the engine needs a compositor. The TeXpresso layer
   // does not: it reports paints from the app's own `idle()`, which works in a
@@ -1973,6 +2004,11 @@ async function runNodeSuite(suite, options) {
 
 async function runCdpSuite(suite, port, options, context) {
   resetAppState();
+  // `resetAppState` removed the switch with the settings file; put it back for
+  // the layers that compile. The hidden WasmTex backend still needs its assets,
+  // which `linkLatexEngine` exposed before the suites started.
+  if (suite.id.startsWith("latex-") || suite.id === "preview-freshness")
+    enableLatexEngineInSettings();
   // The TeXpresso layer fetches its engine and TeX Live data from the pinned
   // loopback origin, so the runner serves it for exactly that layer.
   if (suite.origin) {

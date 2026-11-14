@@ -6,19 +6,21 @@
 // Launched with samples/latex-engines/plain.tex. Proves, through the compiled
 // PDF and the compile's own perf record, that:
 //   - the chip names the default engine (LuaLaTeX) and why;
-//   - choosing pdfLaTeX from the chip downloads it (verified files, ~8 MB, the
-//     first time in this profile), remembers it for this main document and
-//     compiles with pdfTeX;
+//   - the menu offers LuaLaTeX and XeLaTeX and no pdfLaTeX (the bundled preview
+//     has no pdfTeX), remembers XeLaTeX for this main document and compiles
+//     with XeTeX;
 //   - "Use the Preferences default" forgets it and LuaLaTeX compiles again;
 //   - a `% !TeX program = xelatex` file compiles with XeTeX and its chip says
 //     the magic comment decided, with no engine to choose.
 //
-// Network: the optional engines come from the pinned mirror, like the default
-// engine. Skips cleanly without the bundled engine.
+// WasmTex is disabled, not deleted: the layer selects the hidden backend
+// explicitly because it tests that engine's per-project choice. Network: the
+// optional engines come from the pinned origin, like the default engine. Skips
+// cleanly without the bundled engine.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { openPage, sleep } from "./cdp-page.mjs";
+import { openPage, sleep, useWasmTex } from "./cdp-page.mjs";
 
 const port = process.argv[2] ?? "9222";
 const engineYear = JSON.parse(readFileSync("src-tauri/latex-engine.json", "utf8")).active;
@@ -125,6 +127,10 @@ async function compiledWith(since, engine, pattern, label) {
 
 try {
   await waitFor('!!document.querySelector(".cm-content")', 30_000, "the editor");
+  // This layer covers the hidden WasmTex engine's per-project choice. The
+  // production default is the incremental preview; pdfLaTeX is not offered
+  // there, and the menu below proves it left the bundled choices.
+  await useWasmTex(page);
   // Every layer starts from first-run state, where the bundled engine is off:
   // turn it on the way a reader does (as latex-root-test.mjs does).
   if ((await invoke("latex_status")) !== true) {
@@ -168,68 +174,35 @@ try {
     JSON.stringify(shown),
   );
 
-  // 2. Choose pdfLaTeX for this project from the chip.
+  // 2. Choose XeLaTeX for this project from the chip.
   let since = await now();
-  const labels = await pickFromChip("/^pdfLaTeX/");
+  const labels = await pickFromChip("/^XeLaTeX/");
   check(
-    "the menu offers the three engines, the current one marked",
-    labels.length >= 3 &&
+    "the menu offers LuaLaTeX and XeLaTeX, the current one marked",
+    labels.length >= 2 &&
       /^✓ LuaLaTeX/.test(labels[0]) &&
-      labels.some((label) => /^pdfLaTeX/.test(label)) &&
-      labels.some((label) => /^XeLaTeX/.test(label)),
+      labels.some((label) => /^XeLaTeX/.test(label)) &&
+      !labels.some((label) => /pdfLaTeX/.test(label)),
     JSON.stringify(labels),
   );
-  const pdf = await compiledWith(since, "pdflatex", "/Engine marker sentence/", "the pdfLaTeX PDF");
+  const xeRun = await compiledWith(since, "xelatex", "/Engine marker sentence/", "the XeLaTeX PDF");
   check(
-    "the project compiles with pdfTeX",
-    pdf?.engine === "pdflatex" && pdf.success === true,
-    JSON.stringify(pdf),
-  );
-  // Fidelity against the native engine of the same name (opt-in: needs WSL
-  // with TeX Live and Poppler): same page count, same words in the same order.
-  if (process.env.MDRAFT_TEST_NATIVE === "wsl") {
-    const { execFileSync } = await import("node:child_process");
-    const wslPath = join(process.cwd(), "samples", "latex-engines", "plain.tex")
-      .replace(/^([A-Za-z]):/, (_, drive) => `/mnt/${drive.toLowerCase()}`)
-      .replaceAll("\\", "/");
-    const native = execFileSync(
-      "wsl",
-      [
-        "-e",
-        "bash",
-        "-lc",
-        `d=$(mktemp -d) && cp '${wslPath}' $d/ && cd $d && pdflatex -interaction=nonstopmode plain.tex >/dev/null 2>&1; echo PAGES=$(pdfinfo plain.pdf | sed -n 's/^Pages: *//p'); echo TEXT=$(pdftotext plain.pdf - | tr -s ' \\n' ' '); rm -rf $d`,
-      ],
-      { encoding: "utf8" },
-    );
-    const pages = /^PAGES=(\d+)/m.exec(native)?.[1];
-    const words = (text) => text.replace(/\s+/g, "").replace(/\d+$/, "");
-    const nativeText = /^TEXT=(.*)$/m.exec(native)?.[1] ?? "";
-    const bundled = await evaluate(
-      `JSON.stringify({ pages: document.querySelectorAll(".typst-page").length, text: [...document.querySelectorAll(".typst-page .textLayer")].map((t) => t.textContent).join(" ") })`,
-    ).then(JSON.parse);
-    check(
-      "bundled pdfLaTeX matches native pdflatex (pages and words)",
-      String(bundled.pages) === pages && words(bundled.text) === words(nativeText),
-      `native ${pages} page(s), bundled ${bundled.pages}`,
-    );
-  }
-  check(
-    "the pdfLaTeX files are installed and verified",
-    (await invoke("latex_engine_available", { engine: "pdflatex" })) === true,
+    "the project compiles with XeTeX",
+    xeRun?.engine === "xelatex" && xeRun.success === true,
+    JSON.stringify(xeRun),
   );
   const settings = await invoke("get_settings");
   const main = join(process.cwd(), "samples", "latex-engines", "plain.tex");
   check(
     "the choice is remembered for this main document",
-    settings.latexProjectEngines?.[0]?.engine === "pdflatex" &&
+    settings.latexProjectEngines?.[0]?.engine === "xelatex" &&
       settings.latexProjectEngines[0].main.toLowerCase() === main.toLowerCase(),
     JSON.stringify(settings.latexProjectEngines),
   );
   const after = await chip();
   check(
     "the chip says the project decided",
-    after.text === "pdfLaTeX" && /\(project\)/.test(after.title),
+    after.text === "XeLaTeX" && /\(project\)/.test(after.title),
     JSON.stringify(after),
   );
 

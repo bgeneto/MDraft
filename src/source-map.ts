@@ -55,6 +55,8 @@ export interface MapSpec {
   source: string;
   fragments?: readonly Fragment[];
   blocks?: readonly BlockRange[];
+  /** Non-silent block fragment counts when `data-f` attributes are block-local. */
+  blockFragmentCounts?: readonly number[];
 }
 
 /** Where a text node sits inside its fragment and its block. */
@@ -159,6 +161,66 @@ function walkTextNodes(root: Element, visit: (node: Text, start: number) => void
   }
 }
 
+export interface WordMapRetainRange {
+  prevStart: number;
+  prevEnd: number;
+  nextStart: number;
+  charDelta: number;
+  lineDelta: number;
+}
+
+export interface WordMapDirtySlot {
+  nextStart: number;
+  nextEnd: number;
+  elements: readonly HTMLElement[];
+}
+
+export interface WordMapIncrementalPatch {
+  kind: "markdown" | "asciidoc";
+  prevSource: string;
+  nextSource: string;
+  retained: readonly WordMapRetainRange[];
+  dirty: readonly WordMapDirtySlot[];
+  removedPrevIndices: readonly number[];
+}
+
+interface RetainedNodeDelta {
+  charDelta: number;
+  lineDelta: number;
+}
+
+interface AnchorShiftContext {
+  prevAnchors: { anchors: ScrollTextAnchor[]; sorted: boolean };
+  retainedMeta: WeakMap<Text, RetainedNodeDelta>;
+  droppedNodes: Set<Text>;
+  dirtyTexts: Text[];
+}
+
+const pendingHostPatches = new WeakMap<HTMLElement, WordMapIncrementalPatch>();
+const hostMapCache = new WeakMap<
+  HTMLElement,
+  {
+    source: string;
+    map: WordMap;
+    anchors?: { anchors: ScrollTextAnchor[]; sorted: boolean };
+  }
+>();
+const mapHostLookup = new WeakMap<WordMap, HTMLElement>();
+const mapAnchorContext = new WeakMap<WordMap, AnchorShiftContext>();
+
+/**
+ * Register a block-level DOM patch for `container` so the subsequent `bindWordMapAsync`
+ * and `scrollTextAnchorsAsync` passes shift retained entries in O(dirty).
+ */
+export function registerWordMapPatch(container: HTMLElement, patch: WordMapIncrementalPatch): void {
+  pendingHostPatches.set(container, patch);
+}
+
+export function clearWordMapPatch(container: HTMLElement): void {
+  pendingHostPatches.delete(container);
+  hostMapCache.delete(container);
+}
+
 /**
  * Attach a render result to the DOM it produced.
  *
@@ -180,17 +242,77 @@ function* bindWordMapSteps(container: HTMLElement, spec: MapSpec): Generator<voi
     blockLayouts: new Array(blocks.length),
   };
 
-  for (const element of container.querySelectorAll<HTMLElement>("[data-f]")) {
-    const index = Number(element.dataset.f);
-    if (!Number.isInteger(index) || index < 0 || index >= fragments.length) continue;
-    walkTextNodes(element, (node, start) => {
-      map.fragNodes[index].push(node);
-      const record = map.text.get(node) ?? { fragment: -1, fragStart: 0, block: -1, blockStart: 0 };
-      record.fragment = index;
-      record.fragStart = start;
-      map.text.set(node, record);
-    });
-    yield;
+  const sequentialF = container.dataset?.mdraftLocalFragments === "1";
+  let blockScopedDone = false;
+  if (sequentialF && spec.blockFragmentCounts) {
+    const blockElements: HTMLElement[] = [];
+    for (const child of Array.from(container.children)) {
+      if (!(child instanceof HTMLElement)) continue;
+      if (child.classList.contains("md-preview-group")) {
+        for (const inner of Array.from(child.children)) {
+          if (inner instanceof HTMLElement) blockElements.push(inner);
+        }
+      } else {
+        blockElements.push(child);
+      }
+    }
+    if (blockElements.length === spec.blockFragmentCounts.length) {
+      let base = 0;
+      for (let i = 0; i < blockElements.length; i += 1) {
+        const count = spec.blockFragmentCounts[i];
+        if (count > 0) {
+          for (const element of collectMatchingElements(blockElements[i], "[data-f]")) {
+            const rawLocal = element.dataset.f;
+            const local = rawLocal === undefined ? NaN : Number(rawLocal);
+            const index = base + local;
+            if (
+              !Number.isInteger(local) ||
+              local < 0 ||
+              local >= count ||
+              index < 0 ||
+              index >= fragments.length
+            ) {
+              continue;
+            }
+            walkTextNodes(element, (node, start) => {
+              map.fragNodes[index].push(node);
+              const record = map.text.get(node) ?? {
+                fragment: -1,
+                fragStart: 0,
+                block: -1,
+                blockStart: 0,
+              };
+              record.fragment = index;
+              record.fragStart = start;
+              map.text.set(node, record);
+            });
+          }
+        }
+        base += count;
+        yield;
+      }
+      blockScopedDone = true;
+    }
+  }
+  if (!blockScopedDone) {
+    let seqFrag = 0;
+    for (const element of container.querySelectorAll<HTMLElement>("[data-f]")) {
+      const index = sequentialF ? seqFrag++ : Number(element.dataset.f);
+      if (!Number.isInteger(index) || index < 0 || index >= fragments.length) continue;
+      walkTextNodes(element, (node, start) => {
+        map.fragNodes[index].push(node);
+        const record = map.text.get(node) ?? {
+          fragment: -1,
+          fragStart: 0,
+          block: -1,
+          blockStart: 0,
+        };
+        record.fragment = index;
+        record.fragStart = start;
+        map.text.set(node, record);
+      });
+      yield;
+    }
   }
 
   for (const element of container.querySelectorAll<HTMLElement>("[data-b]")) {
@@ -215,6 +337,173 @@ function* bindWordMapSteps(container: HTMLElement, spec: MapSpec): Generator<voi
   return map;
 }
 
+function collectMatchingElements(root: HTMLElement, selector: string): HTMLElement[] {
+  const out: HTMLElement[] = [];
+  if (root.matches(selector)) out.push(root);
+  for (const nested of Array.from(root.querySelectorAll<HTMLElement>(selector))) {
+    out.push(nested);
+  }
+  return out;
+}
+
+/**
+ * Incrementally shift retained fragment/block nodes and bind only dirty DOM subtrees.
+ */
+export function shiftAndPatchWordMap(
+  prevMap: WordMap,
+  container: HTMLElement,
+  nextSpec: MapSpec,
+  patch: WordMapIncrementalPatch,
+): {
+  map: WordMap;
+  retainedMeta: WeakMap<Text, RetainedNodeDelta>;
+  droppedNodes: Set<Text>;
+  dirtyTexts: Text[];
+} {
+  const fragments = nextSpec.fragments ?? [];
+  const blocks = nextSpec.blocks ?? [];
+  const nextMap: WordMap = {
+    source: nextSpec.source,
+    fragments,
+    blocks,
+    text: new WeakMap(),
+    fragNodes: Array.from({ length: fragments.length }, () => []),
+    blockNodes: Array.from({ length: blocks.length }, () => []),
+    blockAllNodes: Array.from({ length: blocks.length }, () => []),
+    blockLayouts: new Array(blocks.length),
+  };
+
+  const retainedMeta = new WeakMap<Text, RetainedNodeDelta>();
+  const droppedNodes = new Set<Text>();
+  const dirtyTexts: Text[] = [];
+
+  if (patch.kind === "markdown") {
+    for (const pf of patch.removedPrevIndices) {
+      const prevList = prevMap.fragNodes[pf];
+      if (!prevList) continue;
+      for (const node of prevList) droppedNodes.add(node);
+    }
+
+    for (const seg of patch.retained) {
+      const count = seg.prevEnd - seg.prevStart;
+      for (let k = 0; k < count; k += 1) {
+        const pf = seg.prevStart + k;
+        const nf = seg.nextStart + k;
+        const nodes = prevMap.fragNodes[pf];
+        if (!nodes || nf < 0 || nf >= fragments.length) continue;
+        nextMap.fragNodes[nf] = nodes;
+        for (const node of nodes) {
+          const prevRec = prevMap.text.get(node);
+          nextMap.text.set(node, {
+            fragment: nf,
+            fragStart: prevRec?.fragStart ?? 0,
+            block: prevRec?.block ?? -1,
+            blockStart: prevRec?.blockStart ?? 0,
+          });
+          if (seg.charDelta !== 0 || seg.lineDelta !== 0) {
+            retainedMeta.set(node, { charDelta: seg.charDelta, lineDelta: seg.lineDelta });
+          }
+        }
+      }
+    }
+
+    const sequentialF = container.dataset?.mdraftLocalFragments === "1";
+    for (const slot of patch.dirty) {
+      let seq = slot.nextStart;
+      for (const rootEl of slot.elements) {
+        for (const el of collectMatchingElements(rootEl, "[data-f]")) {
+          const rawLocal = el.dataset.f;
+          const local = rawLocal === undefined ? NaN : Number(rawLocal);
+          const index = sequentialF
+            ? Number.isInteger(local)
+              ? slot.nextStart + local
+              : seq++
+            : local;
+          if (!Number.isInteger(index) || index < slot.nextStart || index >= slot.nextEnd) {
+            continue;
+          }
+          const list: Text[] = [];
+          walkTextNodes(el, (node, start) => {
+            list.push(node);
+            dirtyTexts.push(node);
+            nextMap.text.set(node, {
+              fragment: index,
+              fragStart: start,
+              block: -1,
+              blockStart: 0,
+            });
+          });
+          nextMap.fragNodes[index] = list;
+        }
+      }
+    }
+  } else {
+    for (const pb of patch.removedPrevIndices) {
+      const prevAll = prevMap.blockAllNodes[pb];
+      if (!prevAll) continue;
+      for (const node of prevAll) droppedNodes.add(node);
+    }
+
+    for (const seg of patch.retained) {
+      const count = seg.prevEnd - seg.prevStart;
+      for (let k = 0; k < count; k += 1) {
+        const pb = seg.prevStart + k;
+        const nb = seg.nextStart + k;
+        const nodes = prevMap.blockNodes[pb];
+        const allNodes = prevMap.blockAllNodes[pb];
+        if (!allNodes || nb < 0 || nb >= blocks.length) continue;
+        nextMap.blockNodes[nb] = nodes ?? [];
+        nextMap.blockAllNodes[nb] = allNodes;
+        for (const node of allNodes) {
+          const prevRec = prevMap.text.get(node);
+          nextMap.text.set(node, {
+            fragment: prevRec?.fragment ?? -1,
+            fragStart: prevRec?.fragStart ?? 0,
+            block: nb,
+            blockStart: prevRec?.blockStart ?? 0,
+          });
+          if (seg.charDelta !== 0 || seg.lineDelta !== 0) {
+            retainedMeta.set(node, { charDelta: seg.charDelta, lineDelta: seg.lineDelta });
+          }
+        }
+      }
+    }
+
+    const seenDirty = new Set<Text>();
+    for (const slot of patch.dirty) {
+      for (const rootEl of slot.elements) {
+        for (const el of collectMatchingElements(rootEl, "[data-b]")) {
+          const index = Number(el.dataset.b);
+          if (!Number.isInteger(index) || index < 0 || index >= blocks.length) continue;
+          const allList: Text[] = [];
+          const proseList: Text[] = [];
+          walkTextNodes(el, (node, start) => {
+            if (node.parentElement?.closest("[data-b]") !== el) return;
+            allList.push(node);
+            nextMap.text.set(node, {
+              fragment: -1,
+              fragStart: 0,
+              block: index,
+              blockStart: start,
+            });
+            const nonProse = node.parentElement?.closest(NON_PROSE_SELECTOR);
+            if (nonProse && el.contains(nonProse)) return;
+            proseList.push(node);
+            if (!seenDirty.has(node)) {
+              seenDirty.add(node);
+              dirtyTexts.push(node);
+            }
+          });
+          nextMap.blockAllNodes[index] = allList;
+          nextMap.blockNodes[index] = proseList;
+        }
+      }
+    }
+  }
+
+  return { map: nextMap, retainedMeta, droppedNodes, dirtyTexts };
+}
+
 /** Run a traversal in bounded tasks and abandon it when its preview is stale. */
 async function runMapSteps<T>(
   steps: Generator<void, T>,
@@ -234,12 +523,41 @@ async function runMapSteps<T>(
 }
 
 /** Bind in the background without publishing a partial map. */
-export function bindWordMapAsync(
+export async function bindWordMapAsync(
   container: HTMLElement,
   spec: MapSpec,
   cancelled: () => boolean,
 ): Promise<WordMap | null> {
-  return runMapSteps(bindWordMapSteps(container, spec), cancelled);
+  const pendingPatch = pendingHostPatches.get(container);
+  pendingHostPatches.delete(container);
+  const cached = hostMapCache.get(container);
+  if (
+    pendingPatch &&
+    cached &&
+    cached.source === pendingPatch.prevSource &&
+    pendingPatch.nextSource === spec.source
+  ) {
+    const shifted = shiftAndPatchWordMap(cached.map, container, spec, pendingPatch);
+    if (cancelled()) return null;
+    if (cached.anchors) {
+      mapAnchorContext.set(shifted.map, {
+        prevAnchors: cached.anchors,
+        retainedMeta: shifted.retainedMeta,
+        droppedNodes: shifted.droppedNodes,
+        dirtyTexts: shifted.dirtyTexts,
+      });
+    }
+    hostMapCache.set(container, { source: spec.source, map: shifted.map });
+    mapHostLookup.set(shifted.map, container);
+    return shifted.map;
+  }
+
+  const map = await runMapSteps(bindWordMapSteps(container, spec), cancelled);
+  if (map) {
+    hostMapCache.set(container, { source: spec.source, map });
+    mapHostLookup.set(map, container);
+  }
+  return map;
 }
 
 // ---------------------------------------------------------------------------
@@ -1078,6 +1396,121 @@ export function scrollSourceRange(
   return range && normal(map.source.slice(range.from, range.to)) === normal(text) ? range : null;
 }
 
+const WORD_ANCHOR_RE = /[\p{L}\p{M}\p{N}_]+/gu;
+
+function appendTextNodeAnchors(
+  map: WordMap,
+  node: Text,
+  anchors: ScrollTextAnchor[],
+  checkSorted?: { sorted: boolean },
+): void {
+  const record = map.text.get(node);
+  if (!record || (record.fragment >= 0 && map.fragments[record.fragment].kind !== "text")) {
+    return;
+  }
+  // Large escaped exact fragments retain the coarse path. Re-scanning their
+  // raw prefix for every word would make a pathological paragraph quadratic.
+  if (
+    record.fragment >= 0 &&
+    node.data.length > 2000 &&
+    map.fragments[record.fragment].raw !== node.data
+  ) {
+    return;
+  }
+  const region =
+    node.parentElement?.closest<HTMLElement>("[data-line]")?.dataset.line ??
+    `b${record.block}:f${record.fragment}`;
+  for (const match of node.data.matchAll(WORD_ANCHOR_RE)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    const range = scrollSourceRange(map, node, start, end);
+    if (!range) continue;
+    if (checkSorted) {
+      const previous = anchors[anchors.length - 1];
+      if (
+        previous &&
+        (previous.from > range.from || (previous.from === range.from && previous.to > range.to))
+      ) {
+        checkSorted.sorted = false;
+      }
+    }
+    anchors.push({ ...range, node, start, end, region });
+  }
+}
+
+/**
+ * Incrementally shift retained scroll anchors and recompute word anchors only on
+ * dirty DOM text nodes.
+ */
+export function shiftAndPatchScrollAnchors(
+  prev: { anchors: readonly ScrollTextAnchor[]; sorted: boolean },
+  nextMap: WordMap,
+  retainedMeta: WeakMap<Text, RetainedNodeDelta>,
+  droppedNodes: ReadonlySet<Text>,
+  dirtyTexts: readonly Text[],
+): { anchors: ScrollTextAnchor[]; sorted: boolean } {
+  const retained: ScrollTextAnchor[] = [];
+  for (const anchor of prev.anchors) {
+    if (droppedNodes.has(anchor.node)) continue;
+    const delta = retainedMeta.get(anchor.node);
+    if (!delta) {
+      retained.push(anchor);
+      continue;
+    }
+    const region =
+      delta.lineDelta !== 0 && /^\d+$/.test(anchor.region)
+        ? String(Number(anchor.region) + delta.lineDelta)
+        : anchor.region;
+    retained.push({
+      from: anchor.from + delta.charDelta,
+      to: anchor.to + delta.charDelta,
+      node: anchor.node,
+      start: anchor.start,
+      end: anchor.end,
+      region,
+    });
+  }
+
+  const dirtyAnchors: ScrollTextAnchor[] = [];
+  const seenDirty = new Set<Text>();
+  for (const node of dirtyTexts) {
+    if (seenDirty.has(node)) continue;
+    seenDirty.add(node);
+    appendTextNodeAnchors(nextMap, node, dirtyAnchors);
+  }
+  if (dirtyAnchors.length === 0) {
+    return { anchors: retained, sorted: prev.sorted };
+  }
+
+  dirtyAnchors.sort((a, b) => a.from - b.from || a.to - b.to);
+
+  if (!prev.sorted) {
+    return { anchors: [...retained, ...dirtyAnchors], sorted: false };
+  }
+
+  const merged: ScrollTextAnchor[] = new Array(retained.length + dirtyAnchors.length);
+  let i = 0;
+  let j = 0;
+  let k = 0;
+  let sorted = true;
+  while (i < retained.length && j < dirtyAnchors.length) {
+    const a = retained[i];
+    const b = dirtyAnchors[j];
+    const pick =
+      a.from < b.from || (a.from === b.from && a.to <= b.to) ? retained[i++] : dirtyAnchors[j++];
+    if (k > 0) {
+      const prevOut = merged[k - 1];
+      if (prevOut.from > pick.from || (prevOut.from === pick.from && prevOut.to > pick.to)) {
+        sorted = false;
+      }
+    }
+    merged[k++] = pick;
+  }
+  while (i < retained.length) merged[k++] = retained[i++];
+  while (j < dirtyAnchors.length) merged[k++] = dirtyAnchors[j++];
+  return { anchors: merged, sorted };
+}
+
 /** Built once per DOM snapshot, independent of font/width/zoom measurements. */
 function* scrollTextAnchorSteps(
   map: WordMap,
@@ -1085,45 +1518,19 @@ function* scrollTextAnchorSteps(
   const anchors: ScrollTextAnchor[] = [];
   const seen = new Set<Text>();
   let steps = 0;
-  let sorted = true;
+  const order = { sorted: true };
   for (const lists of [map.fragNodes, map.blockNodes])
     for (const list of lists)
       for (const node of list) {
         if (seen.has(node)) continue;
         seen.add(node);
-        const record = map.text.get(node);
-        if (!record || (record.fragment >= 0 && map.fragments[record.fragment].kind !== "text"))
-          continue;
-        // Large escaped exact fragments retain the coarse path. Re-scanning their
-        // raw prefix for every word would make a pathological paragraph quadratic.
-        if (
-          record.fragment >= 0 &&
-          node.data.length > 2000 &&
-          map.fragments[record.fragment].raw !== node.data
-        )
-          continue;
-        const region =
-          node.parentElement?.closest<HTMLElement>("[data-line]")?.dataset.line ??
-          `b${record.block}:f${record.fragment}`;
-        for (const match of node.data.matchAll(/[\p{L}\p{M}\p{N}_]+/gu)) {
-          const start = match.index,
-            end = start + match[0].length;
-          const range = scrollSourceRange(map, node, start, end);
-          if (range) {
-            const previous = anchors[anchors.length - 1];
-            if (
-              previous &&
-              (previous.from > range.from ||
-                (previous.from === range.from && previous.to > range.to))
-            )
-              sorted = false;
-            anchors.push({ ...range, node, start, end, region });
-          }
-          if (++steps % 128 === 0) yield;
-        }
+        const beforeLen = anchors.length;
+        appendTextNodeAnchors(map, node, anchors, order);
+        const added = anchors.length - beforeLen;
+        if (added > 0 && ((steps += added), steps % 128 < added)) yield;
         yield;
       }
-  return { anchors, sorted };
+  return { anchors, sorted: order.sorted };
 }
 
 export function scrollTextAnchors(map: WordMap): ScrollTextAnchor[] {
@@ -1135,11 +1542,38 @@ export function scrollTextAnchors(map: WordMap): ScrollTextAnchor[] {
 }
 
 /** Build the potentially large scroll index input without blocking edits. */
-export function scrollTextAnchorsAsync(
+export async function scrollTextAnchorsAsync(
   map: WordMap,
   cancelled: () => boolean,
 ): Promise<{ anchors: ScrollTextAnchor[]; sorted: boolean } | null> {
-  return runMapSteps(scrollTextAnchorSteps(map), cancelled);
+  const anchorCtx = mapAnchorContext.get(map);
+  if (anchorCtx) {
+    mapAnchorContext.delete(map);
+    const patched = shiftAndPatchScrollAnchors(
+      anchorCtx.prevAnchors,
+      map,
+      anchorCtx.retainedMeta,
+      anchorCtx.droppedNodes,
+      anchorCtx.dirtyTexts,
+    );
+    if (cancelled()) return null;
+    const host = mapHostLookup.get(map);
+    if (host) {
+      const entry = hostMapCache.get(host);
+      if (entry && entry.map === map) entry.anchors = patched;
+    }
+    return patched;
+  }
+
+  const result = await runMapSteps(scrollTextAnchorSteps(map), cancelled);
+  if (result) {
+    const host = mapHostLookup.get(map);
+    if (host) {
+      const entry = hostMapCache.get(host);
+      if (entry && entry.map === map) entry.anchors = result;
+    }
+  }
+  return result;
 }
 
 /** The kind of the exact fragment a text node belongs to, if any. */

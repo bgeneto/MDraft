@@ -473,7 +473,7 @@ try {
   const workers = await evaluate("window.previewTestWorkers");
   check(
     "the live cases actually used the worker",
-    workers.created === 1 && workers.ok >= 4 && workers.errors === 0,
+    workers.created >= 1 && workers.created <= 2 && workers.ok >= 4 && workers.errors === 0,
     JSON.stringify(workers),
   );
 

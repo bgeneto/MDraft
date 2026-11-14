@@ -32,7 +32,14 @@ check("magic comment, then project, then default", () => {
     source: "magic",
     reason: "magic comment",
   });
-  assert.equal(resolveTexEngine(doc(""), "pdflatex", "lualatex").source, "project");
+  assert.deepEqual(resolveTexEngine(doc(""), "pdflatex", "lualatex"), {
+    engine: "lualatex",
+    source: "project",
+    reason: "project (pdfLaTeX is not available; LuaLaTeX used)",
+  });
+  const pdfMagic = resolveTexEngine(`% !TeX program = pdflatex\n${doc("")}`, null, null);
+  assert.equal(pdfMagic.engine, "lualatex");
+  assert.match(pdfMagic.reason, /pdfLaTeX is not available/);
   assert.equal(resolveTexEngine(doc(""), null, "lualatex").engine, "lualatex");
   assert.equal(resolveTexEngine(doc(""), null, undefined).source, "auto", "an old file: detect");
 });
@@ -42,13 +49,13 @@ check("auto follows the SDK's precedence", () => {
   assert.equal(detectTexEngine(doc(`${B}usepackage{xeCJK}`)).engine, "xelatex");
   assert.equal(detectTexEngine(doc(`${B}usepackage[no-math]{fontspec}`)).engine, "xelatex");
   assert.equal(detectTexEngine(doc(`${B}setmainfont{Libertinus Serif}`)).engine, "xelatex");
-  assert.equal(detectTexEngine(doc(`${B}usepackage{amsmath,graphicx}`)).engine, "pdflatex");
+  assert.equal(detectTexEngine(doc(`${B}usepackage{amsmath,graphicx}`)).engine, "lualatex");
   assert.equal(
     detectTexEngine(doc(`% ${B}usepackage{fontspec}`)).engine,
-    "pdflatex",
+    "lualatex",
     "a commented-out package is not a requirement",
   );
-  assert.equal(detectTexEngine(doc("", `fontspec is mentioned in the body`)).engine, "pdflatex");
+  assert.equal(detectTexEngine(doc("", `fontspec is mentioned in the body`)).engine, "lualatex");
 });
 check("only certain incompatibilities are reported", () => {
   assert.match(engineMismatch(doc(`${B}usepackage{luacode}`), "pdflatex"), /only LuaLaTeX/);

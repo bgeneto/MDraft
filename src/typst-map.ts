@@ -15,6 +15,7 @@
 //! the inside of a table call) keeps the previous block's line rather than
 //! inventing one.
 
+import type { TypstSpanAnchor } from "./api";
 import type { BlockRange } from "./source-map";
 
 /**
@@ -260,12 +261,46 @@ function trimBlockEndLine(lines: readonly string[], startLine: number, rawEndLin
  * text is searched forward inside its line range, so prose is found and generated
  * text is not. `data-b` is the index the word map binds after `innerHTML`.
  */
+function buildSpanLineHints(
+  source: string,
+  lines: readonly string[],
+  spanMap?: readonly TypstSpanAnchor[],
+): Array<{ line: number; folded: string }> {
+  if (!spanMap?.length) return [];
+  const ordered = [...spanMap].sort((a, b) => a.page - b.page || a.yPt - b.yPt || a.xPt - b.xPt);
+  const byLine = new Map<number, string>();
+  for (const anchor of ordered) {
+    if (anchor.line < 1 || anchor.line > lines.length) continue;
+    const rawLine = lines[anchor.line - 1] ?? "";
+    const trimmed = rawLine.trim();
+    if (
+      !trimmed ||
+      trimmed.startsWith("//") ||
+      /^#(?:set|show|import|include|let|lorem)\b/.test(trimmed)
+    ) {
+      continue;
+    }
+    const slice =
+      anchor.utf16End > anchor.utf16Start && anchor.utf16End <= source.length
+        ? source.slice(anchor.utf16Start, anchor.utf16End)
+        : rawLine;
+    const folded = fold(stripSourceLineMarkup(slice));
+    if (folded.length < 2) continue;
+    const prev = byLine.get(anchor.line);
+    byLine.set(anchor.line, prev ? `${prev} ${folded}` : folded);
+  }
+  return [...byLine.entries()].map(([line, folded]) => ({ line, folded }));
+}
+
 export function annotateTypstLines(
   host: HTMLElement,
   source: string,
+  spanMap?: readonly TypstSpanAnchor[],
 ): { mapped: number; blocks: BlockRange[] } {
   const elements = Array.from(host.children) as HTMLElement[];
   const { plain, starts, lines, headings, mathLines } = foldSource(source);
+  const spanHints = buildSpanLineHints(source, lines, spanMap);
+  let spanHintIndex = 0;
   const found: Array<{ element: HTMLElement; line: number }> = [];
   let cursor = 0;
   let lastLine = 1;
@@ -300,6 +335,35 @@ export function annotateTypstLines(
         found.push({ element: block, line: heading.line });
         lastLine = heading.line;
         cursor = heading.offset + heading.text.length;
+        continue;
+      }
+    }
+
+    while (spanHintIndex < spanHints.length && spanHints[spanHintIndex].line < lastLine) {
+      spanHintIndex += 1;
+    }
+    if (spanHints.length) {
+      const prefix = text.slice(0, 24);
+      let matchedHint = -1;
+      for (let i = spanHintIndex; i < spanHints.length; i += 1) {
+        const hint = spanHints[i];
+        if (
+          hint.folded === text ||
+          (prefix.length >= 6 && hint.folded.includes(prefix)) ||
+          (hint.folded.length >= 6 && text.startsWith(hint.folded.slice(0, 16)))
+        ) {
+          matchedHint = i;
+          break;
+        }
+      }
+      if (matchedHint >= 0) {
+        const hintLine = spanHints[matchedHint].line;
+        const line = adjustBlockStartLine(lines, hintLine, lastLine, tag);
+        block.setAttribute("data-line", String(line));
+        found.push({ element: block, line });
+        lastLine = hintLine;
+        cursor = Math.max(cursor, starts[hintLine - 1] ?? cursor);
+        spanHintIndex = matchedHint + 1;
         continue;
       }
     }

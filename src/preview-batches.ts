@@ -38,6 +38,31 @@ export function batchesForChunks(chunks: readonly string[]): string[][] {
   return batchesOf(chunks, total <= SMALL_DOCUMENT_BYTES ? total + 1 : PREVIEW_BATCH_BYTES);
 }
 
+/** Group items into `[from, to)` index slices matching `batchesForChunks` byte thresholds. */
+export function batchRangesFor<T>(
+  items: readonly T[],
+  sizeOf: (item: T) => number,
+): Array<{ from: number; to: number }> {
+  let total = 0;
+  for (const item of items) total += sizeOf(item);
+  const maxBytes = total <= SMALL_DOCUMENT_BYTES ? total + 1 : PREVIEW_BATCH_BYTES;
+
+  const ranges: Array<{ from: number; to: number }> = [];
+  let from = 0;
+  let size = 0;
+  for (let i = 0; i < items.length; i += 1) {
+    const itemSize = sizeOf(items[i]);
+    if (i > from && size + itemSize > maxBytes) {
+      ranges.push({ from, to: i });
+      from = i;
+      size = 0;
+    }
+    size += itemSize;
+  }
+  if (from < items.length) ranges.push({ from, to: items.length });
+  return ranges;
+}
+
 /**
  * Let input events run when the current task has held the main thread long
  * enough. Returns the timestamp the next call should measure from.

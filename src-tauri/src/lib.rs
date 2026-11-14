@@ -124,6 +124,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             latex::latex_status,
+            latex::texpresso_status,
+            latex::install_texpresso,
             latex::latex_stats,
             latex::install_latex,
             latex::latex_project_snapshot,
@@ -221,7 +223,11 @@ pub fn run() {
             typst::install_typst,
             typst::typst_download_page,
             typst::render_typst,
+            typst::render_typst_binary,
             typst::cancel_typst_preview,
+            typst::service::typst_service_status,
+            typst::service::install_typst_service,
+            typst::service::typst_clear_cache,
             html_preview::set_html_preview,
             html_preview::clear_html_preview,
         ])
@@ -231,7 +237,9 @@ pub fn run() {
     app.run(|app_handle, event| {
         // The platform clipboard handle must be released while the process is
         // still alive; on X11/Wayland it is the owner of the data.
+        // Shut down warm Typst service daemons gracefully on exit as well.
         if let tauri::RunEvent::Exit = event {
+            typst::service::shutdown_all_services();
             app_handle.state::<clipboard::ClipboardStore>().release();
         }
 

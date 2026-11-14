@@ -1,11 +1,10 @@
-//! Which LaTeX preview backend draws a document, and why it falls back.
+//! Which LaTeX preview backend draws a document, and why it cannot.
 //!
-//! Two backends exist (docs/adr/2026-11-13-latex-preview-backends.md): WasmTex
-//! compiles a PDF that PDF.js draws, and TeXpresso typesets incrementally into
-//! a frame of its own while WasmTex keeps compiling, at idle, the PDF that
-//! export and print use. The default is one constant. The only other writer is
-//! the hidden `view.latexBackend` command the tests use; there is no reader
-//! facing switch until the comparison is decided.
+//! TeXpresso is the production backend: it typesets incrementally into a frame
+//! of its own and its own exporter writes the PDF that export and print use.
+//! WasmTex is disabled, not deleted (docs/adr/2026-11-13-texpresso-production.md):
+//! its code and the hidden `view.latexBackend.wasmtex` test hook remain, but no
+//! install flow, default or reader-facing control selects it.
 //!
 //! Pure: no DOM, no IPC, so `scripts/texpresso-unit.mjs` can import it.
 
@@ -14,7 +13,12 @@ import type { TexpressoEngine } from "./texpresso/protocol";
 
 export type LatexPreviewBackend = "wasmtex" | "texpresso";
 
-export const DEFAULT_LATEX_PREVIEW_BACKEND: LatexPreviewBackend = "wasmtex";
+export const DEFAULT_LATEX_PREVIEW_BACKEND: LatexPreviewBackend = "texpresso";
+
+/** The engine download, for the reader's message (the twelve pinned assets). */
+export const TEXPRESSO_ENGINE_MIB = 15;
+/** The only TeX Live snapshot the pinned app has. */
+export const TEXPRESSO_TEXLIVE_YEAR = "2026";
 
 let backend: LatexPreviewBackend = DEFAULT_LATEX_PREVIEW_BACKEND;
 
@@ -37,11 +41,11 @@ export function texpressoEngineFor(engine: TexEngine): TexpressoEngine | null {
 }
 
 /**
- * Why TeXpresso does not draw this build. Every one is named on the engine
- * chip: nothing switches engines quietly.
+ * Why the preview cannot draw this build. Every one is named on the engine
+ * chip or in the pane: nothing switches engines quietly, and there is no
+ * second bundled engine to fall back to.
  */
-export type TexpressoFallback =
-  "native" | "pdflatex" | "year" | "jspi" | "encoding" | "library" | "failed";
+export type TexpressoFallback = "native" | "year" | "jspi" | "encoding" | "library" | "failed";
 
 export interface TexpressoInputs {
   /** The engine backend: an installed distribution keeps its own compiler. */
@@ -60,7 +64,6 @@ export interface TexpressoInputs {
 
 export function texpressoFallback(input: TexpressoInputs): TexpressoFallback | null {
   if (input.backend !== "bundled") return "native";
-  if (texpressoEngineFor(input.engine) === null) return "pdflatex";
   if (input.year !== "2026") return "year";
   if (!input.jspi) return "jspi";
   if (input.failed) return "failed";
@@ -69,7 +72,7 @@ export function texpressoFallback(input: TexpressoInputs): TexpressoFallback | n
   return null;
 }
 
-/** The chip's sentence for a fallback, completing "<engine> · WasmTex (…)". */
+/** The reader's sentence for a build the incremental preview cannot draw. */
 export function texpressoFallbackText(
   reason: TexpressoFallback,
   detail: { file?: string | null } = {},
@@ -77,17 +80,15 @@ export function texpressoFallbackText(
   switch (reason) {
     case "native":
       return "an installed TeX distribution compiles this project";
-    case "pdflatex":
-      return "TeXpresso has no pdfTeX";
     case "year":
-      return "TeXpresso needs the TeX Live 2026 engine profile";
+      return "the incremental preview needs the TeX Live 2026 data";
     case "jspi":
-      return "this webview lacks WebAssembly JSPI, which TeXpresso needs";
+      return "this webview lacks WebAssembly JSPI, which the preview needs";
     case "encoding":
-      return `TeXpresso reads UTF-8 only; ${detail.file ?? "a project file"} is not`;
+      return `the preview reads UTF-8 only; ${detail.file ?? "a project file"} is not`;
     case "library":
-      return `a local library file cannot be placed in TeXpresso's project${detail.file ? ` (${detail.file})` : ""}`;
+      return `a local library file cannot be placed in the preview's project${detail.file ? ` (${detail.file})` : ""}`;
     case "failed":
-      return "the TeXpresso preview stopped responding and its restart failed";
+      return "the preview stopped responding and its restart failed";
   }
 }

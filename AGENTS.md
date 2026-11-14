@@ -48,11 +48,12 @@ Two rules that are not negotiable, both documented in the README:
    request, not the application's. The LaTeX engine is one additional
    user-initiated exception: after the reader explicitly enables it, MDraft
    downloads verified engine assets and fetches missing TeX Live packages and
-   fonts from its pinned mirror. It does not send document or bibliography
-   contents. An installed TeX distribution, when the reader selects one, is a
-   separate external program: it runs with the reader's permissions and may use
-   the network to install its own packages. MDraft does not control or monitor
-   that traffic; shell escape and project executables remain disabled. The LaTeX
+   fonts from its pinned public origin (`https://mdraft.webonly.app/`). It does
+   not send document or bibliography contents. An installed TeX distribution,
+   when the reader selects one, is a separate external program: it runs with the
+   reader's permissions and may use the network to install its own packages.
+   MDraft does not control or monitor that traffic; shell escape and project
+   executables remain disabled. The LaTeX
    formatter is the same kind of exception at a smaller scale: the first Format
    Document on a `.tex` file downloads the pinned tex-fmt WebAssembly module
    (about 1.7 MB, SHA-256 verified, cached under the app data directory), and

@@ -1,10 +1,12 @@
 //! Pure, file-aware PDF word matching; the viewer calls it in a worker.
 import {
   createTypstPageMap,
+  tokenizeWords,
   TypstPageMap,
   type PageMapLine,
   type SourceWord,
 } from "./typst-page-map.ts";
+import type { TypstSpanAnchor } from "./api";
 import type { PdfSourceFile, PdfWordAnchor } from "./pdf-page-map";
 
 const MATH_TOKENS = /[\p{L}\p{M}]+|[\p{N}]+/gu;
@@ -18,15 +20,11 @@ export async function buildPdfWordAnchors(
   language: "typst" | "latex",
   files: readonly PdfSourceFile[],
   lines: readonly PageMapLine[],
+  spanMap?: readonly TypstSpanAnchor[],
 ): Promise<PdfWordAnchor[]> {
   if (!files.length) return [];
   if (language === "typst") {
-    const file = files[0];
-    const map = await createTypstPageMap(file.source, lines);
-    return map
-      .scrollAnchors()
-      .map((part) => ({ ...part, file: file.path }))
-      .sort((a, b) => a.from - b.from || a.to - b.to);
+    return buildTypstAnchors(files, lines, spanMap);
   }
   const { latexSourceContent, maskLatexConditionals } = await import("./latex-word-map.ts");
   const { maskLiteralRegions, referencesIn } = await import("./latex-references.ts");
@@ -326,4 +324,246 @@ export async function buildPdfWordAnchors(
     return lo === intervals.length || intervals[lo].start >= word.end;
   });
   return [...prose, ...math].sort(compareSource);
+}
+
+function normalizeTypstPath(raw: string): string {
+  return raw
+    .replace(/\\/g, "/")
+    .replace(/^(?:\.\/)+/, "")
+    .replace(/^\/+/, "");
+}
+
+function resolveSpanFile(
+  rawFile: string,
+  files: readonly PdfSourceFile[],
+  byNorm: ReadonlyMap<string, PdfSourceFile>,
+): PdfSourceFile | null {
+  const norm = normalizeTypstPath(rawFile);
+  const direct = byNorm.get(norm);
+  if (direct) return direct;
+  let suffixMatch: PdfSourceFile | null = null;
+  for (const file of files) {
+    const fileNorm = normalizeTypstPath(file.path);
+    if (!fileNorm) continue;
+    if (fileNorm.endsWith(`/${norm}`) || norm.endsWith(`/${fileNorm}`)) {
+      if (suffixMatch) return null;
+      suffixMatch = file;
+    }
+  }
+  if (suffixMatch) return suffixMatch;
+  // Single-file untitled/default preview uses `path: ""`.
+  if (files.length === 1 && files[0].path === "") return files[0];
+  return null;
+}
+
+async function extractTypstProseWords(source: string): Promise<SourceWord[]> {
+  const { typstParser } = await import("codemirror-lang-typst/lezer");
+  const words: SourceWord[] = [];
+  typstParser.parse(source).iterate({
+    enter(node) {
+      if (
+        [
+          "LetBinding",
+          "SetRule",
+          "ShowRule",
+          "LineComment",
+          "BlockComment",
+          "Equation",
+          "Raw",
+          "Import",
+          "Include",
+        ].includes(node.name)
+      ) {
+        return false;
+      }
+      if (node.name === "Text") {
+        for (const word of tokenizeWords(source.slice(node.from, node.to))) {
+          words.push({ ...word, from: node.from + word.from, to: node.from + word.to });
+        }
+        return false;
+      }
+    },
+  });
+  return words;
+}
+
+function spanMatchesLine(anchor: TypstSpanAnchor, line: PageMapLine): boolean {
+  if (line.yPt === undefined) return false;
+  const lineHeight = Math.max(1, line.heightPt ?? 12);
+  const lineTopPt = line.yPt - lineHeight;
+  const lineBottomPt = line.yPt + lineHeight * 0.45;
+  const anchorBaselinePt = anchor.yPt + anchor.heightPt * 0.85;
+  const tolY = Math.max(lineHeight, anchor.heightPt) * 0.65;
+  const verticalOk =
+    Math.abs(line.yPt - anchorBaselinePt) <= tolY ||
+    (anchor.yPt <= lineBottomPt + 2 && anchor.yPt + anchor.heightPt >= lineTopPt - 2);
+  if (!verticalOk) return false;
+  if (line.leftPt !== undefined && line.rightPt !== undefined) {
+    return anchor.xPt <= line.rightPt + 6 && anchor.xPt + anchor.widthPt >= line.leftPt - 6;
+  }
+  return true;
+}
+
+function collectWordsInRanges(
+  sortedWords: readonly SourceWord[],
+  ranges: ReadonlyArray<{ start: number; end: number }>,
+): SourceWord[] {
+  const collected: SourceWord[] = [];
+  const seenFrom = new Set<number>();
+  for (const { start, end } of ranges) {
+    let lo = 0;
+    let hi = sortedWords.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (sortedWords[mid].to <= start) lo = mid + 1;
+      else hi = mid;
+    }
+    for (let i = lo; i < sortedWords.length && sortedWords[i].from < end; i += 1) {
+      const word = sortedWords[i];
+      if (!seenFrom.has(word.from)) {
+        seenFrom.add(word.from);
+        collected.push(word);
+      }
+    }
+  }
+  return collected.sort((a, b) => a.from - b.from);
+}
+
+function alignLineWordsWithSource(
+  pdfWords: readonly SourceWord[],
+  srcWords: readonly SourceWord[],
+  minSpanStart: number,
+  filePath: string,
+  lineIdx: number,
+  region: string,
+): PdfWordAnchor[] {
+  if (!pdfWords.length || !srcWords.length) return [];
+  const matched: PdfWordAnchor[] = [];
+  let srcCursor = 0;
+  for (const pdfWord of pdfWords) {
+    // Bounded lookahead tolerates inline markup/unmatched symbols inside a line
+    // without skipping across unrelated paragraphs.
+    const limit = Math.min(srcWords.length, srcCursor + 12);
+    for (let j = srcCursor; j < limit; j += 1) {
+      if (srcWords[j].norm === pdfWord.norm) {
+        matched.push({
+          file: filePath,
+          from: srcWords[j].from,
+          to: srcWords[j].to,
+          line: lineIdx,
+          start: pdfWord.from,
+          end: pdfWord.to,
+          region,
+        });
+        srcCursor = j + 1;
+        break;
+      }
+    }
+  }
+  if (!matched.length) return [];
+  // Single-word lines must anchor near the compiler's span start; longer lines
+  // require at least two literally verified prose tokens.
+  if (pdfWords.length === 1) {
+    return Math.abs(matched[0].from - minSpanStart) <= 16 ? matched : [];
+  }
+  return matched.length >= 2 ? matched : [];
+}
+
+async function buildTypstAnchors(
+  files: readonly PdfSourceFile[],
+  lines: readonly PageMapLine[],
+  spanMap?: readonly TypstSpanAnchor[],
+): Promise<PdfWordAnchor[]> {
+  if (!spanMap?.length) {
+    const file = files[0];
+    const map = await createTypstPageMap(file.source, lines);
+    return map
+      .scrollAnchors()
+      .map((part) => ({ ...part, file: file.path }))
+      .sort((a, b) => a.from - b.from || a.to - b.to);
+  }
+
+  const byNorm = new Map<string, PdfSourceFile>();
+  for (const file of files) {
+    const norm = normalizeTypstPath(file.path);
+    if (norm) byNorm.set(norm, file);
+  }
+  const wordsByFile = new Map<PdfSourceFile, SourceWord[]>();
+  const getFileWords = async (file: PdfSourceFile): Promise<SourceWord[]> => {
+    const cached = wordsByFile.get(file);
+    if (cached) return cached;
+    const parsed = await extractTypstProseWords(file.source);
+    wordsByFile.set(file, parsed);
+    return parsed;
+  };
+
+  const spansByPage = new Map<number, TypstSpanAnchor[]>();
+  for (const anchor of spanMap) {
+    const bucket = spansByPage.get(anchor.page) ?? [];
+    bucket.push(anchor);
+    spansByPage.set(anchor.page, bucket);
+  }
+  for (const bucket of spansByPage.values()) {
+    bucket.sort((a, b) => a.yPt - b.yPt || a.xPt - b.xPt);
+  }
+
+  const anchoredLines = new Set<number>();
+  const spanAnchors: PdfWordAnchor[] = [];
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx += 1) {
+    const line = lines[lineIdx];
+    if (line.page === undefined || line.yPt === undefined) continue;
+    const pageSpans = spansByPage.get(line.page);
+    if (!pageSpans?.length) continue;
+
+    const matchingSpans = pageSpans.filter((anchor) => spanMatchesLine(anchor, line));
+    if (!matchingSpans.length) continue;
+
+    const byFile = new Map<PdfSourceFile, Array<{ start: number; end: number }>>();
+    for (const anchor of matchingSpans) {
+      const file = resolveSpanFile(anchor.file, files, byNorm);
+      if (!file) continue;
+      if (anchor.utf16End > file.source.length || anchor.utf16Start >= anchor.utf16End) continue;
+      const list = byFile.get(file) ?? [];
+      list.push({ start: anchor.utf16Start, end: anchor.utf16End });
+      byFile.set(file, list);
+    }
+    if (!byFile.size) continue;
+
+    const pdfWords = tokenizeWords(line.text);
+    if (!pdfWords.length) continue;
+
+    let best: PdfWordAnchor[] = [];
+    for (const [file, ranges] of byFile) {
+      const fileWords = await getFileWords(file);
+      const srcWords = collectWordsInRanges(fileWords, ranges);
+      const minStart = ranges.reduce((m, r) => Math.min(m, r.start), Number.POSITIVE_INFINITY);
+      const aligned = alignLineWordsWithSource(
+        pdfWords,
+        srcWords,
+        minStart,
+        file.path,
+        lineIdx,
+        line.region,
+      );
+      if (aligned.length > best.length) best = aligned;
+    }
+    if (best.length) {
+      anchoredLines.add(lineIdx);
+      spanAnchors.push(...best);
+    }
+  }
+
+  if (anchoredLines.size < lines.length) {
+    const primary = files[0];
+    const fallbackMap = await createTypstPageMap(primary.source, lines);
+    for (const part of fallbackMap.scrollAnchors()) {
+      if (!anchoredLines.has(part.line)) {
+        spanAnchors.push({ ...part, file: primary.path });
+      }
+    }
+  }
+
+  return spanAnchors.sort((a, b) =>
+    a.file === b.file ? a.from - b.from || a.to - b.to : a.file.localeCompare(b.file),
+  );
 }

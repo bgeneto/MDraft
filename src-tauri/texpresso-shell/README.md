@@ -3,7 +3,7 @@
 The page MDraft loads in the preview frame of the TeXpresso backend. Everything
 here is embedded in the executable and served by
 `src-tauri/src/latex_texpresso.rs` at `mdraft-tex://…/texpresso/`. Decision:
-[the ADR](../../docs/adr/2026-11-13-latex-preview-backends.md).
+[the production ADR](../../docs/adr/2026-11-13-texpresso-production.md).
 
 ## What is ours and what is not
 
@@ -25,21 +25,16 @@ on 2026-11-12 and compared, byte for byte, with the files the release serves
 `vendor/pdfjs/pdf.min.mjs` are not pinned: the embedded preview never asked
 for them.
 
-## Licence: what is known and what is not
+## Licence
 
-- `let-def/texpresso`, the native tool, is MIT licensed (Frédéric Bour); the
-  notice is `src/assets/wasmtex-licenses/LICENSES/TeXpresso-MIT.txt`.
-- **No published licence was found for the web application** these files and
-  the pinned application come from, nor a source offer for its engine binaries.
-  The MIT notice above is not known to cover it.
+- `let-def/texpresso`, the native tool, is MIT licensed (Frédéric Bour). The
+  author confirmed that the web build is MIT as well, under the same terms.
+  The notice is `src/assets/wasmtex-licenses/LICENSES/TeXpresso-MIT.txt`.
 - The engines are modified XeTeX and LuaTeX. Upstream LuaTeX and `xdvipdfmx`
   are GPL (version 2 or later) and upstream XeTeX carries an MIT-style licence;
-  which libraries this build links was not established. A distributor of GPL
-  binaries owes the corresponding source.
+  the GPL source offer and the component notices stay with the distribution.
 - The TeX Live files of the bundle keep their own licences, as they do for the
   WasmTex engine.
 
-Until the author confirms the terms, this backend is a proof of concept on a
-branch: it is not the default, and nothing is released with it. That gate is
-recorded in the ADR and in
-[the plan](../../docs/plans/2026-11-13-texpresso-backend.md).
+The licence gate is answered; the decision is recorded in
+[the production ADR](../../docs/adr/2026-11-13-texpresso-production.md).

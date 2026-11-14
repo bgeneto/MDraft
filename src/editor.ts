@@ -190,7 +190,8 @@ export interface EditorHandle {
   /** Content offset of the top of `line`, in pixels. */
   lineTop(line: number): number;
   /** A source character's screen Y; estimates are refined after virtualisation. */
-  scrollPoint(pos: number): { top: number; exact: boolean };
+  /** The visual row holding `pos`, in screen pixels; estimated when not drawn. */
+  scrollPoint(pos: number): { top: number; bottom: number; exact: boolean };
   /** Source offset at a visible screen row without changing selection. */
   offsetAtScreenY(y: number): number;
   /** Source line in scroll-container CSS pixels, including padding and scale. */
@@ -1584,20 +1585,13 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     scrollPoint(pos) {
       const target = Math.max(0, Math.min(pos, view.state.doc.length));
       const rect = view.coordsAtPos(target);
-      return rect
-        ? { top: rect.top, exact: true }
-        : {
-            top:
-              view.documentTop +
-              (() => {
-                const block = view.lineBlockAt(target);
-                const fraction =
-                  block.to > block.from ? (target - block.from) / (block.to - block.from) : 0;
-                return block.top + Math.max(0, block.height - view.defaultLineHeight) * fraction;
-              })() *
-                view.scaleY,
-            exact: false,
-          };
+      if (rect) return { top: rect.top, bottom: rect.bottom, exact: true };
+      const block = view.lineBlockAt(target);
+      const fraction = block.to > block.from ? (target - block.from) / (block.to - block.from) : 0;
+      const top =
+        view.documentTop +
+        (block.top + Math.max(0, block.height - view.defaultLineHeight) * fraction) * view.scaleY;
+      return { top, bottom: top + view.defaultLineHeight * view.scaleY, exact: false };
     },
 
     offsetAtScreenY(y) {

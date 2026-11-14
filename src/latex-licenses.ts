@@ -1,4 +1,5 @@
-//! Notices distributed with the pinned WasmTex SDK and separately loaded engines.
+//! Notices distributed with the pinned preview engine, the TeX Live data it
+//! reads, and the hidden WasmTex backend that remains in the source.
 import sdkLicense from "./assets/wasmtex-licenses/WasmTex-MIT.txt?raw";
 import thirdParty from "./assets/wasmtex-licenses/THIRD_PARTY_NOTICES.md?raw";
 
@@ -9,9 +10,15 @@ const notices = import.meta.glob("./assets/wasmtex-licenses/LICENSES/*.txt", {
 }) as Record<string, string>;
 
 export const LATEX_LICENSES = [
-  "# Experimental LuaLaTeX: licences and source",
+  "# LaTeX preview: licences and source",
   "",
-  "The WasmTex SDK is MIT licensed. The separately downloaded LuaHBTeX engine is GPL-2.0-only, with component notices; BibTeX and individual TeX Live files have their own terms.",
+  "The incremental preview engine (TeXpresso) is MIT licensed; the author confirmed that the web build carries the same licence as the native tool. Its LuaTeX and XeTeX engines and `xdvipdfmx` are GPL (version 2 or later), and the TeX Live files keep their own terms.",
+  "",
+  "The hidden WasmTex backend remains in the source for its regression layer; its SDK and engine notices are included below.",
+  "",
+  "[TeXpresso source](https://github.com/let-def/texpresso)",
+  "",
+  "## WasmTex manifest (hidden backend)",
   "",
   "[Engine manifest (2026-f5d94438a7c75a23)](https://corca-ai.github.io/wasmtex/wasmtex/2026/manifest.json)",
   "",

@@ -57,7 +57,7 @@ export class TexpressoFrame {
     });
     // A frame that never reports is a frame that failed; the caller falls back.
     const timer = window.setTimeout(
-      () => rejectReady(new Error("The TeXpresso preview did not start.")),
+      () => rejectReady(new Error("The LaTeX preview did not start.")),
       bootTimeoutMs,
     );
     this.readyHooks = {
@@ -144,7 +144,7 @@ export class TexpressoFrame {
         ? String((data as { type: unknown }).type)
         : "?";
     document.documentElement.dataset.texpressoDrop = `${reason}:${type}`;
-    console.warn(`[texpresso] dropped a frame message (${reason}:${type})`);
+    console.warn(`[latex] dropped a preview message (${reason}:${type})`);
   }
 
   /**

@@ -1,4 +1,9 @@
-//! Experimental, explicitly enabled WasmTex assets and bounded project reads.
+//! The hidden WasmTex assets, the bounded project snapshot, and the PDF/print
+//! commands shared with the production preview.
+//!
+//! WasmTex is disabled as a reader-facing backend; its install and serve paths
+//! stay because its hidden regression layer still exercises them. TeXpresso's
+//! own handler and cache live in `latex_texpresso.rs`.
 //!
 //! The WebView never talks to the TeX mirror directly. Its synchronous worker
 //! requests use this fixed-origin scheme; source files never enter the URL.
@@ -50,6 +55,9 @@ static CACHE_LIMIT_MB: AtomicU64 = AtomicU64::new(256);
 pub fn apply_settings(settings: &crate::settings::Settings) {
     ENABLED.store(settings.latex_enabled, Ordering::Relaxed);
     CACHE_LIMIT_MB.store(settings.latex_cache_limit_mb as u64, Ordering::Relaxed);
+    crate::latex_texpresso::set_cache_limit(
+        u64::from(settings.latex_cache_limit_mb).saturating_mul(1024 * 1024),
+    );
 }
 
 fn enabled() -> bool {
@@ -503,6 +511,32 @@ pub fn latex_status(app: AppHandle) -> Result<bool, String> {
     Ok(engine_installed(&directory(&app)?.join("assets")))
 }
 
+/// Whether the production preview's engine assets and digest table are on disk.
+///
+/// WasmTex's `latex_status` stays as the hidden backend's own check; this is
+/// what the install note and the default TeXpresso build read.
+#[tauri::command]
+pub fn texpresso_status(app: AppHandle) -> Result<bool, String> {
+    if !enabled() {
+        return Ok(false);
+    }
+    Ok(crate::latex_texpresso::available(&directory(&app)?))
+}
+
+/// Download and verify the TeXpresso app and its digest table.
+#[tauri::command]
+pub async fn install_texpresso(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        // A second download waits, then finds the verified files in place.
+        let _install = INSTALL_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        crate::latex_texpresso::install(&directory(&app)?)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// Whether the pre-settings marker file exists, for the one-time migration.
 ///
 /// The old engine stored enablement beside its verified assets. Settings load
@@ -558,8 +592,10 @@ pub struct LatexCacheInfo {
     limit_mb: u32,
     /// Whether the engine switch is on.
     enabled: bool,
-    /// Whether the verified engine assets are present.
+    /// Whether the hidden WasmTex assets or the production preview are present.
     installed: bool,
+    /// Whether the production preview engine and digest table are present.
+    preview_installed: bool,
 }
 
 /// Report the cache size and the switch, for the Preferences row.
@@ -573,7 +609,9 @@ pub fn latex_cache_info(app: AppHandle) -> Result<LatexCacheInfo, String> {
             .saturating_add(crate::latex_texpresso::cache_bytes(&root)),
         limit_mb,
         enabled: enabled(),
-        installed: engine_installed(&root.join("assets")),
+        installed: engine_installed(&root.join("assets"))
+            || crate::latex_texpresso::available(&root),
+        preview_installed: crate::latex_texpresso::available(&root),
     })
 }
 

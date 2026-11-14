@@ -301,6 +301,8 @@ export interface Settings {
    */
   typstView: TypstView;
   typstAutoCompile: boolean;
+  /** Whether `.typ` previews use the optional incremental compiler daemon when installed. */
+  typstIncrementalService: boolean;
   /**
    * Whether the reader has enabled the experimental LuaLaTeX engine.
    *
@@ -954,6 +956,10 @@ export const latexNativeWslValidate = (distro: string, bin: string) =>
   invoke<LatexNativeCapabilities>("latex_native_wsl_validate", { distro, bin });
 
 export const latexStatus = () => invoke<boolean>("latex_status");
+/** Whether the production preview's engine and digest table are installed. */
+export const texpressoStatus = () => invoke<boolean>("texpresso_status");
+/** Download and verify the production preview engine. */
+export const installTexpresso = () => invoke<void>("install_texpresso");
 /** Whether the bundled engine can compile with `engine` now (stage 6.2). */
 export const latexEngineAvailable = (engine: string) =>
   invoke<boolean>("latex_engine_available", { engine });
@@ -978,7 +984,10 @@ export interface LatexCacheInfo {
   bytes: number;
   limitMb: number;
   enabled: boolean;
+  /** The hidden WasmTex assets or the production preview are present. */
   installed: boolean;
+  /** The production preview engine and digest table are present. */
+  previewInstalled: boolean;
 }
 
 export const latexCacheInfo = () => invoke<LatexCacheInfo>("latex_cache_info");
@@ -991,7 +1000,10 @@ export const latexClearCache = () => invoke<number>("latex_clear_cache");
 export interface LatexEngineStatus {
   backend: "native" | "bundled" | "none";
   bundledEnabled: boolean;
+  /** The hidden WasmTex backend's assets (legacy; tests only). */
   bundledInstalled: boolean;
+  /** The production preview engine and digest table are present. */
+  previewInstalled: boolean;
   nativeEnabled: boolean;
   nativeRoot: string | null;
   nativeDistribution: string | null;
@@ -1114,6 +1126,55 @@ export const typstStatus = () => invoke<TypstStatus>("typst_status");
 export const installTypst = () => invoke<TypstStatus>("install_typst");
 export const openTypstDownloadPage = () => invoke<void>("typst_download_page");
 
+/** Companion incremental Typst service status, as reported by the backend. */
+export interface TypstServiceStatus {
+  installed: boolean;
+  enabled: boolean;
+  active: boolean;
+  runningWorkers: number;
+  version: string | null;
+  typstVersion: string | null;
+  protocolVersion: number | null;
+  path: string | null;
+  canInstall: boolean;
+  manifestVersion: string;
+  hint: string;
+  rssBytes: number | null;
+  compileCount: number;
+}
+
+export const typstServiceStatus = () => invoke<TypstServiceStatus>("typst_service_status");
+export const installTypstService = () => invoke<TypstServiceStatus>("install_typst_service");
+export const typstClearCache = () => invoke<number>("typst_clear_cache");
+
+export interface TypstDependency {
+  path: string;
+  mtimeMs: number;
+  size: number;
+}
+
+export interface TypstSpanAnchor {
+  file: string;
+  line: number;
+  column: number;
+  byteOffset: number;
+  utf16Start: number;
+  utf16End: number;
+  page: number;
+  xPt: number;
+  yPt: number;
+  widthPt: number;
+  heightPt: number;
+}
+
+export interface TypstRenderTimings {
+  vfsSyncMs: number;
+  typstCompileMs: number;
+  exportMs: number;
+  pageHashMs: number;
+  totalMs: number;
+}
+
 /** How a Typst document is drawn in the preview. */
 export type TypstView = "document" | "pages";
 
@@ -1130,10 +1191,39 @@ export interface RenderedTypst {
   kind: TypstView;
   html: string | null;
   css: string | null;
-  /** Base64 PDF, when `kind` is `"pages"`. */
+  /** Base64 PDF, when `kind` is `"pages"` (legacy JSON path). */
   pdf: string | null;
   warnings: string[];
   ignored: string[];
+  deps?: TypstDependency[];
+  pageHashes?: string[];
+  firstChangedPage?: number | null;
+  changedPages?: number[];
+  spanMap?: TypstSpanAnchor[];
+  timings?: TypstRenderTimings | null;
+  fellBackFromDocument?: boolean;
+  backendKind?: "cli" | "service" | string | null;
+}
+
+export interface RenderedTypstBinary {
+  meta: RenderedTypst;
+  pdfBytes?: Uint8Array;
+}
+
+const typstMetaDecoder = new TextDecoder();
+
+/**
+ * Unpack `[u32 BE metaLen][metaJson][rawPdfBytes]` emitted by `render_typst_binary`
+ * without Base64 encoding or copying the PDF buffer.
+ */
+export function decodeRenderedTypstBinary(frame: ArrayBuffer): RenderedTypstBinary {
+  const view = new DataView(frame);
+  const metaLen = view.getUint32(0, false);
+  const metaJson = typstMetaDecoder.decode(new Uint8Array(frame, 4, metaLen));
+  const meta = JSON.parse(metaJson) as RenderedTypst;
+  const bodyOffset = 4 + metaLen;
+  const pdfBytes = bodyOffset < frame.byteLength ? new Uint8Array(frame, bodyOffset) : undefined;
+  return { meta, pdfBytes };
 }
 
 /**
@@ -1150,6 +1240,24 @@ export const renderTypst = (
   imageRoot: string | null = null,
   token?: number,
 ) => invoke<RenderedTypst>("render_typst", { path, source, mode, imageRoot, token: token ?? null });
+
+/** Compile a Typst preview via zero-copy raw binary IPC framing. */
+export async function renderTypstBinary(
+  path: string | null,
+  source: string,
+  mode: TypstView = "document",
+  imageRoot: string | null = null,
+  token?: number,
+): Promise<RenderedTypstBinary> {
+  const frame = await invoke<ArrayBuffer>("render_typst_binary", {
+    path,
+    source,
+    mode,
+    imageRoot,
+    token: token ?? null,
+  });
+  return decodeRenderedTypstBinary(frame);
+}
 
 /** Stop Typst preview jobs through this generation; exports remain independent. */
 export const cancelTypstPreview = (token: number) =>

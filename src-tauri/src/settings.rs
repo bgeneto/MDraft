@@ -1670,6 +1670,7 @@ mod tests {
         assert!(!loaded.latex_enabled);
         assert!(loaded.latex_auto_compile);
         assert!(loaded.typst_auto_compile);
+        assert!(!loaded.typst_incremental_service);
         assert_eq!(loaded.latex_cache_limit_mb, 256);
         // A file from before installed distributions existed must not opt the
         // reader into one, and must not break loading.
@@ -1683,6 +1684,9 @@ mod tests {
         assert_eq!(loaded.latex_cache_limit_mb, 512);
         let manual = parse_settings(r#"{"latexAutoCompile":false}"#).unwrap();
         assert!(!manual.latex_auto_compile);
+
+        let typst_svc = parse_settings(r#"{"typstIncrementalService":true}"#).unwrap();
+        assert!(typst_svc.typst_incremental_service);
 
         let native = parse_settings(
             r#"{"latexNativeEnabled":true,"latexNativeRoot":"C:/tex/bin","latexNativeEngine":"xelatex"}"#,

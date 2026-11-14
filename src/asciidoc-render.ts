@@ -16,6 +16,7 @@
 
 import { renderKatexCached } from "./katex-cache.ts";
 import type { RenderedMath } from "./preview-render.ts";
+import { diffBlocks, fnv1aHash, type BlockPatchOp, type DiffableBlock } from "./block-diff.ts";
 
 type AsciidoctorModule = typeof import("@asciidoctor/core");
 
@@ -221,10 +222,31 @@ export interface AsciidocChunkOptions {
 export interface AsciidocMark {
   marker: string;
   line: number;
+  endLine?: number;
+}
+
+export type AsciidocBlockKind = "top" | "sect-open" | "sect-child" | "sect-close";
+
+export interface AsciidocBlockChunk extends DiffableBlock {
+  kind: AsciidocBlockKind;
+  /** Section heading slug for `sect-open`, `sect-child`, and `sect-close` blocks. */
+  sectionId: string | null;
+  html: string;
+  marks: AsciidocMark[];
+  maths: RenderedMath[];
+}
+
+export interface AsciidocIncrementalInfo {
+  mode: "diff" | "full";
+  reason?: string;
+  dirtyRatio: number;
+  dirtyBlocks: number;
+  ops: BlockPatchOp<AsciidocBlockChunk>[];
+  totalLines: number;
 }
 
 export interface AsciidocChunks {
-  /** Top-level HTML segments in document order, without the chunk comments. */
+  /** Top-level and sub-section HTML segments in document order, without chunk comments. */
   chunks: string[];
   /** The role marker each block carries and its source line. */
   marks: AsciidocMark[];
@@ -234,6 +256,12 @@ export interface AsciidocChunks {
   maths?: RenderedMath[];
   /** True when the converter/worker already pre-rendered delimited TeX in text nodes. */
   mathRendered?: boolean;
+  /** Keyed sub-section block payloads with block-local `mdraft-line-*` and math indices. */
+  blocks?: AsciidocBlockChunk[];
+  /** Total source line count used when resolving final block end lines. */
+  totalLines?: number;
+  /** Patch metadata populated when produced via `renderAsciidocChunksIncremental`. */
+  incremental?: AsciidocIncrementalInfo;
 }
 
 export interface AsciidocIncludeEntry {
@@ -348,6 +376,8 @@ export class AsciidocIncludeCache {
 
 const CHUNK_OPEN = "<!--mdraft-chunk-->";
 const CHUNK_CLOSE = "<!--/mdraft-chunk-->";
+const SUBCHUNK_OPEN = "<!--mdraft-subchunk-->";
+const SUBCHUNK_CLOSE = "<!--/mdraft-subchunk-->";
 const INCLUDE_DIRECTIVE = /^\s*include::([^[]+)\[[^\]]*\]\s*$/gm;
 const MATH_IN_HTML_TEXT = /\\\(([\s\S]*?)\\\)|\\\[([\s\S]*?)\\\]/g;
 const IGNORED_MATH_TAGS = new Set(["pre", "code", "script", "style", "textarea"]);
@@ -480,14 +510,16 @@ function createPreviewConverterFactory(
   class PreviewHtml5Converter extends Asciidoctor.Html5Converter {
     async convert(node: any, transform?: string): Promise<string> {
       const html = String(await super.convert(node, transform));
-      if (
-        node &&
-        node.context &&
-        node.context !== "document" &&
-        node.parent &&
-        node.parent.context === "document"
-      ) {
+      if (!node || !node.context || node.context === "document") return html;
+      if (node.parent?.context === "document") {
         return `${CHUNK_OPEN}${html}${CHUNK_CLOSE}`;
+      }
+      if (
+        node.parent?.context === "section" &&
+        node.parent?.level === 1 &&
+        node.parent?.parent?.context === "document"
+      ) {
+        return `${SUBCHUNK_OPEN}${html}${SUBCHUNK_CLOSE}`;
       }
       return html;
     }
@@ -592,28 +624,201 @@ function createPreviewMarkerProcessor(Asciidoctor: AsciidoctorModule, marks: Asc
   };
 }
 
-/** Split the converter output at its top-level markers, preserving every other
- * byte; the marker comments are removed by this pass. */
-function splitPreviewChunks(raw: string): string[] {
-  const chunks: string[] = [];
+interface RawAsciidocSegment {
+  kind: AsciidocBlockKind;
+  sectionId: string | null;
+  html: string;
+}
+
+function extractSectionId(sectOpenHtml: string): string {
+  const match = /<h[1-6]\b[^>]*\bid="([^"]+)"/i.exec(sectOpenHtml);
+  if (match) return match[1];
+  const normalized = sectOpenHtml.replace(/\bmdraft-line-\d+\b/g, "");
+  return `sect_${fnv1aHash(normalized)}`;
+}
+
+function inferAsciidocElementTag(html: string): string {
+  const trimmed = html.trimStart();
+  const idMatch = /^<\s*[A-Za-z0-9]+\b[^>]*\bid="([^"]+)"/.exec(trimmed);
+  if (
+    idMatch &&
+    (idMatch[1] === "preamble" || idMatch[1] === "toc" || idMatch[1] === "footnotes")
+  ) {
+    return idMatch[1];
+  }
+  const classMatch = /^<\s*[A-Za-z0-9]+\b[^>]*\bclass="([^"]+)"/.exec(trimmed);
+  if (classMatch) {
+    const cls = classMatch[1].split(/\s+/).find((c) => c && !c.startsWith("mdraft-line-"));
+    if (cls) return cls;
+  }
+  const tagMatch = /^<\s*([A-Za-z0-9]+)/.exec(trimmed);
+  return tagMatch ? tagMatch[1].toLowerCase() : "fragment";
+}
+
+function splitRawAsciidocSegments(raw: string): RawAsciidocSegment[] {
+  const segments: RawAsciidocSegment[] = [];
+  const pushTop = (html: string): void => {
+    if (html.trim().length === 0) return;
+    // Document headers with `:toc:` emit `<h1>...</h1>` and `<div id="toc">...</div>`
+    // together before the first section; splitting them preserves 1:1 section-group
+    // mapping against `#preview` children during incremental DOM reconciliation.
+    const tocIdx = html.indexOf('<div id="toc"');
+    if (tocIdx > 0 && /^<\s*h1\b/i.test(html.trimStart())) {
+      const head = html.slice(0, tocIdx);
+      const tail = html.slice(tocIdx);
+      if (head.trim().length > 0) segments.push({ kind: "top", sectionId: null, html: head });
+      if (tail.trim().length > 0) segments.push({ kind: "top", sectionId: null, html: tail });
+      return;
+    }
+    segments.push({ kind: "top", sectionId: null, html });
+  };
+
   let cursor = 0;
   for (;;) {
     const open = raw.indexOf(CHUNK_OPEN, cursor);
     if (open < 0) {
-      if (cursor < raw.length) chunks.push(raw.slice(cursor));
+      if (cursor < raw.length) pushTop(raw.slice(cursor));
       break;
     }
-    if (open > cursor) chunks.push(raw.slice(cursor, open));
+    if (open > cursor) pushTop(raw.slice(cursor, open));
     const start = open + CHUNK_OPEN.length;
     const close = raw.indexOf(CHUNK_CLOSE, start);
-    if (close < 0) {
-      chunks.push(raw.slice(start));
-      break;
+    const inner = close < 0 ? raw.slice(start) : raw.slice(start, close);
+    cursor = close < 0 ? raw.length : close + CHUNK_CLOSE.length;
+
+    const firstSub = inner.indexOf(SUBCHUNK_OPEN);
+    if (firstSub < 0) {
+      pushTop(inner);
+      if (close < 0) break;
+      continue;
     }
-    chunks.push(raw.slice(start, close));
-    cursor = close + CHUNK_CLOSE.length;
+
+    const sectOpenHtml = inner.slice(0, firstSub);
+    const sectionId = extractSectionId(sectOpenHtml);
+    segments.push({ kind: "sect-open", sectionId, html: sectOpenHtml });
+
+    let subCursor = firstSub;
+    while (subCursor < inner.length) {
+      const subOpen = inner.indexOf(SUBCHUNK_OPEN, subCursor);
+      if (subOpen < 0) {
+        const tail = inner.slice(subCursor);
+        segments.push({ kind: "sect-close", sectionId, html: tail });
+        break;
+      }
+      const subStart = subOpen + SUBCHUNK_OPEN.length;
+      const subClose = inner.indexOf(SUBCHUNK_CLOSE, subStart);
+      if (subClose < 0) {
+        const rest = inner.slice(subStart).replace(/<!--\/?mdraft-(?:sub)?chunk-->/g, "");
+        if (rest.trim().length > 0) {
+          segments.push({ kind: "sect-child", sectionId, html: rest });
+        }
+        segments.push({ kind: "sect-close", sectionId, html: "</div>\n</div>" });
+        break;
+      }
+      const subBody = inner.slice(subStart, subClose);
+      if (subBody.trim().length > 0) {
+        segments.push({ kind: "sect-child", sectionId, html: subBody });
+      }
+      subCursor = subClose + SUBCHUNK_CLOSE.length;
+    }
+
+    if (close < 0) break;
   }
-  return chunks.filter((chunk) => chunk.length > 0);
+
+  return segments;
+}
+
+const ASCIIDOC_LINE_MARKER_RE = /\bmdraft-line-(\d+)\b/g;
+const ASCIIDOC_MATH_SLOT_RE = /<span data-mdraft-math="(\d+)"><\/span>/g;
+
+function buildLocalizedAsciidocBlocks(
+  raw: string,
+  rawMarks: readonly AsciidocMark[],
+  rawMaths: readonly RenderedMath[],
+  totalLines: number,
+): { chunks: string[]; blocks: AsciidocBlockChunk[] } {
+  const sorted = rawMarks.slice().sort((a, b) => a.line - b.line);
+  const markRangeByName = new Map<string, { line: number; endLine: number }>();
+  for (let i = 0; i < sorted.length; i += 1) {
+    const cur = sorted[i];
+    const next = sorted[i + 1];
+    markRangeByName.set(cur.marker, {
+      line: cur.line,
+      endLine: next ? Math.max(cur.line, next.line - 1) : Math.max(cur.line, totalLines),
+    });
+  }
+
+  const rawByIndex = new Map<string, AsciidocMark>();
+  for (const m of rawMarks) rawByIndex.set(m.marker, m);
+
+  const segments = splitRawAsciidocSegments(raw);
+  const chunks: string[] = new Array(segments.length);
+  const blocks: AsciidocBlockChunk[] = new Array(segments.length);
+  let runningLine = 1;
+
+  for (let i = 0; i < segments.length; i += 1) {
+    const seg = segments[i];
+    const seenMarks = new Map<string, number>();
+    const localMarks: AsciidocMark[] = [];
+
+    let localized = seg.html.replace(ASCIIDOC_LINE_MARKER_RE, (full) => {
+      let localIdx = seenMarks.get(full);
+      if (localIdx === undefined) {
+        const range = markRangeByName.get(full);
+        const origMark = rawByIndex.get(full);
+        localIdx = localMarks.length;
+        const localMarker = `mdraft-line-${localIdx}`;
+        if (range) {
+          localMarks.push({ marker: localMarker, line: range.line, endLine: range.endLine });
+        } else if (origMark) {
+          localMarks.push({ marker: localMarker, line: origMark.line, endLine: origMark.line });
+        }
+        seenMarks.set(full, localIdx);
+      }
+      return `mdraft-line-${localIdx}`;
+    });
+
+    const seenMaths = new Map<number, number>();
+    const localMaths: RenderedMath[] = [];
+    localized = localized.replace(ASCIIDOC_MATH_SLOT_RE, (_, gIdxRaw: string) => {
+      const gIdx = Number(gIdxRaw);
+      let localIdx = seenMaths.get(gIdx);
+      if (localIdx === undefined) {
+        localIdx = localMaths.length;
+        seenMaths.set(gIdx, localIdx);
+        localMaths.push(
+          rawMaths[gIdx] ?? { body: "", display: false, html: null, error: "missing math slot" },
+        );
+      }
+      return `<span data-mdraft-math="${localIdx}"></span>`;
+    });
+
+    const lineStart = localMarks.length > 0 ? localMarks[0].line : runningLine;
+    runningLine = lineStart;
+    let key: string;
+    if (seg.kind === "sect-open") key = `sect-open:${seg.sectionId}`;
+    else if (seg.kind === "sect-close") key = `sect-close:${seg.sectionId}`;
+    else if (seg.kind === "sect-child") {
+      key = `sect-child:${seg.sectionId}:${inferAsciidocElementTag(localized)}`;
+    } else {
+      key = `top:${inferAsciidocElementTag(localized)}`;
+    }
+
+    chunks[i] = localized;
+    blocks[i] = {
+      kind: seg.kind,
+      sectionId: seg.sectionId,
+      key,
+      digest: fnv1aHash(`${seg.kind}\0${localized}`),
+      lineStart,
+      lineEnd: localMarks.length > 0 ? localMarks[0].endLine : lineStart,
+      html: localized,
+      marks: localMarks,
+      maths: localMaths,
+    };
+  }
+
+  return { chunks, blocks };
 }
 
 /** The directory Asciidoctor would use for an included file's own includes. */
@@ -776,13 +981,206 @@ export async function renderAsciidocChunks(
   const converted = String(await doc.convert());
   if (missingInclude) throw new Error(`Include was not preloaded: ${missingInclude}`);
   const raw = options.math ? preRenderRawDelimitedMath(converted, pushMath) : converted;
+  const totalLines = countTotalLines(source);
+  const built = buildLocalizedAsciidocBlocks(raw, marks, maths, totalLines);
   return {
-    chunks: splitPreviewChunks(raw),
+    chunks: built.chunks,
     marks,
     hasHeader: Boolean(doc.hasHeader()),
     notitle: Boolean(doc.isNotitle()),
     maths,
     mathRendered: options.math,
+    blocks: built.blocks,
+    totalLines,
+  };
+}
+
+function countTotalLines(text: string): number {
+  if (!text) return 0;
+  let lines = 1;
+  for (let i = 0; i < text.length; i += 1) {
+    if (text.charCodeAt(i) === 10) lines += 1;
+  }
+  return lines;
+}
+
+function extractTouchedLines(text: string, from: number, to: number): string {
+  const start = text.lastIndexOf("\n", Math.max(0, from - 1)) + 1;
+  const endIdx = text.indexOf("\n", Math.max(from, to));
+  const end = endIdx < 0 ? text.length : endIdx;
+  return text.slice(start, end);
+}
+
+function asciidocHeaderEndOffset(source: string): number {
+  const firstLineEnd = source.indexOf("\n");
+  const firstLine = (firstLineEnd < 0 ? source : source.slice(0, firstLineEnd)).trim();
+  if (!firstLine.startsWith("= ") && !firstLine.startsWith(":")) return 0;
+  const match = /\r?\n\s*\r?\n/.exec(source);
+  return match ? match.index : source.length;
+}
+
+function checkAsciidocStructuralTrigger(
+  prevSource: string,
+  nextSource: string,
+  prefix: number,
+  suffix: number,
+): string | null {
+  const prevEnd = prevSource.length - suffix;
+  const nextEnd = nextSource.length - suffix;
+  const headerEnd = Math.max(
+    asciidocHeaderEndOffset(prevSource),
+    asciidocHeaderEndOffset(nextSource),
+  );
+  if (headerEnd > 0 && prefix <= headerEnd) {
+    return "header-or-attrs";
+  }
+  const prevTouched = extractTouchedLines(prevSource, prefix, prevEnd);
+  const nextTouched = extractTouchedLines(nextSource, prefix, nextEnd);
+  const directiveRe = /^\s*(?::!?[A-Za-z0-9_-]+!?:|(?:ifdef|ifndef|endif|ifeval)::|include::)/m;
+  if (directiveRe.test(prevTouched) || directiveRe.test(nextTouched)) {
+    return "directive-or-include";
+  }
+  const hasTocOrSectnums =
+    /^\s*:(?:toc|sectnums)!?:/m.test(prevSource) || /^\s*:(?:toc|sectnums)!?:/m.test(nextSource);
+  if (hasTocOrSectnums && (/^={1,6}\s/m.test(prevTouched) || /^={1,6}\s/m.test(nextTouched))) {
+    return "toc-or-sectnums-heading";
+  }
+  return null;
+}
+
+/**
+ * Compute an incremental AsciiDoc render result with block diffing and fail-safe
+ * full rebuilds on header/attribute/conditional/include or >35% block edits.
+ */
+export async function renderAsciidocChunksIncremental(
+  prevSource: string,
+  prevChunks: AsciidocChunks | null | undefined,
+  nextSource: string,
+  options: AsciidocChunkOptions,
+): Promise<AsciidocChunks> {
+  const totalLines = countTotalLines(nextSource);
+
+  if (!nextSource.trim()) {
+    return {
+      chunks: [],
+      marks: [],
+      hasHeader: false,
+      notitle: false,
+      maths: [],
+      mathRendered: options.math,
+      blocks: [],
+      totalLines,
+      incremental: {
+        mode: "full",
+        reason: "empty",
+        dirtyRatio: 1,
+        dirtyBlocks: 0,
+        ops: [],
+        totalLines,
+      },
+    };
+  }
+
+  if (
+    !prevChunks ||
+    !prevChunks.blocks ||
+    Boolean(prevChunks.mathRendered) !== Boolean(options.math)
+  ) {
+    const fresh = await renderAsciidocChunks(nextSource, options);
+    return {
+      ...fresh,
+      incremental: {
+        mode: "full",
+        reason: "prev-ineligible",
+        dirtyRatio: 1,
+        dirtyBlocks: fresh.blocks?.length ?? fresh.chunks.length,
+        ops: [],
+        totalLines,
+      },
+    };
+  }
+
+  if (prevSource === nextSource) {
+    const ops: BlockPatchOp<AsciidocBlockChunk>[] = prevChunks.blocks.map((block, index) => ({
+      kind: "retain",
+      prevIndex: index,
+      nextIndex: index,
+      lineDelta: 0,
+      block,
+    }));
+    return {
+      ...prevChunks,
+      totalLines,
+      incremental: {
+        mode: "diff",
+        dirtyRatio: 0,
+        dirtyBlocks: 0,
+        ops,
+        totalLines,
+      },
+    };
+  }
+
+  const minLen = Math.min(prevSource.length, nextSource.length);
+  let prefix = 0;
+  while (prefix < minLen && prevSource.charCodeAt(prefix) === nextSource.charCodeAt(prefix)) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  const maxSuffix = minLen - prefix;
+  while (
+    suffix < maxSuffix &&
+    prevSource.charCodeAt(prevSource.length - 1 - suffix) ===
+      nextSource.charCodeAt(nextSource.length - 1 - suffix)
+  ) {
+    suffix += 1;
+  }
+
+  const structuralReason = checkAsciidocStructuralTrigger(prevSource, nextSource, prefix, suffix);
+  const next = await renderAsciidocChunks(nextSource, options);
+  if (
+    structuralReason ||
+    next.hasHeader !== prevChunks.hasHeader ||
+    next.notitle !== prevChunks.notitle ||
+    !next.blocks
+  ) {
+    return {
+      ...next,
+      incremental: {
+        mode: "full",
+        reason: structuralReason ?? "header-changed",
+        dirtyRatio: 1,
+        dirtyBlocks: next.blocks?.length ?? next.chunks.length,
+        ops: [],
+        totalLines,
+      },
+    };
+  }
+
+  const diff = diffBlocks(prevChunks.blocks, next.blocks);
+  if (!diff.incremental) {
+    return {
+      ...next,
+      incremental: {
+        mode: "full",
+        reason: diff.reason,
+        dirtyRatio: diff.dirtyRatio,
+        dirtyBlocks: diff.dirtyBlocks,
+        ops: [],
+        totalLines,
+      },
+    };
+  }
+
+  return {
+    ...next,
+    incremental: {
+      mode: "diff",
+      dirtyRatio: diff.dirtyRatio,
+      dirtyBlocks: diff.dirtyBlocks,
+      ops: diff.ops,
+      totalLines,
+    },
   };
 }
 

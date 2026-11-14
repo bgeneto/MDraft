@@ -104,6 +104,11 @@ try {
   await send("Runtime.enable");
   if (!(await waitFor('!!document.querySelector(".cm-content")', 30000)))
     throw new Error("Editor did not open.");
+  // This layer covers the hidden WasmTex project/PDF correspondence.
+  await evaluate(
+    `window.__TAURI_INTERNALS__.invoke("plugin:event|emit",{event:"menu",payload:"view.latexBackend.wasmtex"})`,
+  );
+  await delay(200);
   if (
     !(await waitFor(
       '!!document.querySelector(".typst-note button, .typst-page .textLayer")',

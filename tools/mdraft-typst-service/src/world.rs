@@ -386,16 +386,77 @@ impl Hasher for Sha256Hasher {
     }
 }
 
-/// Hash each laid-out [`Page`] deterministically with SHA-256 so untouched pages
-/// across incremental compiles keep identical digests.
+/// Hash each laid-out [`Page`] deterministically by visual content so untouched
+/// pages keep identical digests across incremental `Source::replace` edits and
+/// fresh process restarts (where `Span` numbering or `Tag` nodes would differ).
 pub fn compute_page_hashes(doc: &PagedDocument) -> Vec<String> {
     doc.pages().iter().map(hash_page).collect()
 }
 
 fn hash_page(page: &Page) -> String {
     let mut h = Sha256Hasher::new();
-    page.hash(&mut h);
+    page.bleed.hash(&mut h);
+    page.fill.hash(&mut h);
+    page.number.hash(&mut h);
+    hash_frame(&page.frame, &mut h);
     h.finish_hex()
+}
+
+fn hash_frame(frame: &Frame, h: &mut impl Hasher) {
+    u8::hash(&match frame.kind() {
+        typst::layout::FrameKind::Soft => 0,
+        typst::layout::FrameKind::Hard => 1,
+    }, h);
+    frame.size().hash(h);
+    frame.baseline().hash(h);
+    let items = frame.items();
+    for (point, item) in items {
+        point.hash(h);
+        match item {
+            FrameItem::Group(group) => {
+                0u8.hash(h);
+                group.transform.hash(h);
+                group.clip.hash(h);
+                group.label.hash(h);
+                hash_frame(&group.frame, h);
+            }
+            FrameItem::Text(text) => {
+                1u8.hash(h);
+                text.font.hash(h);
+                text.size.hash(h);
+                text.fill.hash(h);
+                text.stroke.hash(h);
+                text.lang.hash(h);
+                text.region.hash(h);
+                text.text.hash(h);
+                text.glyphs.len().hash(h);
+                for g in &text.glyphs {
+                    g.id.hash(h);
+                    g.x_advance.hash(h);
+                    g.x_offset.hash(h);
+                    g.y_advance.hash(h);
+                    g.y_offset.hash(h);
+                    g.range.hash(h);
+                }
+            }
+            FrameItem::Shape(shape, _span) => {
+                2u8.hash(h);
+                shape.hash(h);
+            }
+            FrameItem::Image(image, size, _span) => {
+                3u8.hash(h);
+                image.hash(h);
+                size.hash(h);
+            }
+            FrameItem::Link(dest, size) => {
+                4u8.hash(h);
+                dest.hash(h);
+                size.hash(h);
+            }
+            // Tags hold source AST `Span`/`Content` metadata rather than rendered pixels.
+            FrameItem::Tag(_) => {}
+        }
+    }
 }
 
 /// Diff `prev` and `next` page hashes returning 1-based changed page indices and

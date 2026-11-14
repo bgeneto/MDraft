@@ -675,6 +675,16 @@ async function benchmarkCorpus(corpus, proxies) {
       const afterSplit = renderChunks(edits.newlineSplit, { math: true, map: true });
       const afterCodeInsert = renderChunks(edits.codeInsert, { math: true, map: true });
 
+      const renderIncRes =
+        typeof previewRender.renderChunksIncremental === "function"
+          ? measureSync(() =>
+              previewRender.renderChunksIncremental(doc.source, full, edits.singleChar, {
+                math: true,
+                map: true,
+              }),
+            )
+          : null;
+
       const renderedChunkCount = full.chunks.filter((c) => c.trim().length > 0).length;
       const mathCount = analyzeMathRes.lastResult.math.length;
       results.push({
@@ -688,8 +698,16 @@ async function benchmarkCorpus(corpus, proxies) {
         rawChunkCount: full.chunks.length,
         chunkCount: renderedChunkCount,
         fragmentCount: full.fragments ? full.fragments.length : 0,
+        incrementalMeta: renderIncRes
+          ? {
+              mode: renderIncRes.lastResult.incremental?.mode ?? null,
+              dirtyRatio: renderIncRes.lastResult.incremental?.dirtyRatio ?? null,
+              dirtyBlocks: renderIncRes.lastResult.incremental?.dirtyBlocks ?? null,
+            }
+          : null,
         timings: {
           renderFull: renderFullRes.stats,
+          renderIncremental: renderIncRes ? renderIncRes.stats : null,
           renderMathOnly: renderMathRes.stats,
           renderBase: renderBaseRes.stats,
           analyzeMath: analyzeMathRes.stats,
@@ -745,6 +763,17 @@ async function benchmarkCorpus(corpus, proxies) {
       const edits = makeAsciidocEdits(doc.source);
       const afterSingle = await renderAsciidocChunks(edits.singleChar, renderOpts);
       const afterSplit = await renderAsciidocChunks(edits.newlineSplit, renderOpts);
+      const renderIncRes =
+        typeof asciidocRender.renderAsciidocChunksIncremental === "function"
+          ? await measureAsync(() =>
+              asciidocRender.renderAsciidocChunksIncremental(
+                doc.source,
+                full,
+                edits.singleChar,
+                renderOpts,
+              ),
+            )
+          : null;
 
       results.push({
         id: doc.id,
@@ -759,8 +788,16 @@ async function benchmarkCorpus(corpus, proxies) {
         chunkCount: full.chunks.filter((c) => c.trim().length > 0).length,
         markCount: full.marks.length,
         hasHeader: full.hasHeader,
+        incrementalMeta: renderIncRes
+          ? {
+              mode: renderIncRes.lastResult.incremental?.mode ?? null,
+              dirtyRatio: renderIncRes.lastResult.incremental?.dirtyRatio ?? null,
+              dirtyBlocks: renderIncRes.lastResult.incremental?.dirtyBlocks ?? null,
+            }
+          : null,
         timings: {
           renderFull: renderFullRes.stats,
+          renderIncremental: renderIncRes ? renderIncRes.stats : null,
           renderBase: renderBaseRes.stats,
           preloadIncludes: doc.baseDir ? preloadRes.stats : null,
         },
@@ -780,18 +817,22 @@ async function benchmarkCorpus(corpus, proxies) {
 // ---------------------------------------------------------------------------
 
 function resolveChunkPlaceholders(chunksResult) {
-  return chunksResult.chunks.map((chunk) =>
-    chunk
+  const blocks =
+    Array.isArray(chunksResult.blocks) && !chunksResult.hasRawHtml ? chunksResult.blocks : null;
+  return chunksResult.chunks.map((chunk, chunkIdx) => {
+    const localCodes = blocks?.[chunkIdx]?.codes ?? chunksResult.codes;
+    const localMaths = blocks?.[chunkIdx]?.maths ?? chunksResult.maths;
+    return chunk
       .replace(/@@CODE(\d+)@@/g, (_, idx) => {
-        const entry = chunksResult.codes[Number(idx)];
+        const entry = localCodes[Number(idx)];
         return entry ? previewRender.escapeHtml(entry.text) : `@@MISSING_CODE_${idx}@@`;
       })
       .replace(/@@MATH(\d+)@@/g, (_, idx) => {
-        const entry = chunksResult.maths[Number(idx)];
+        const entry = localMaths[Number(idx)];
         if (!entry) return `@@MISSING_MATH_${idx}@@`;
         return entry.html ?? previewRender.escapeHtml(entry.body);
-      }),
-  );
+      });
+  });
 }
 
 function assertValidMarkdownResult(result, label) {
@@ -996,7 +1037,17 @@ async function runEquivalenceSuite() {
         "Enabled feature branch.",
         "endif::[]",
         "",
+        "Paragraph A.",
+        "",
+        "Paragraph B.",
+        "",
+        "Paragraph C.",
+        "",
         "== Two",
+        "",
+        "Paragraph D.",
+        "",
+        "Paragraph E.",
         "",
         "Final line.",
       ].join("\n");
@@ -1012,7 +1063,17 @@ async function runEquivalenceSuite() {
         "Enabled feature branch.",
         "endif::[]",
         "",
+        "Paragraph A.",
+        "",
+        "Paragraph B.",
+        "",
+        "Paragraph C.",
+        "",
         "== Two",
+        "",
+        "Paragraph D.",
+        "",
+        "Paragraph E.",
         "",
         "Final line.",
       ].join("\n");
@@ -1025,6 +1086,30 @@ async function runEquivalenceSuite() {
       assert.ok(!htmlToggled.includes("Enabled feature branch."));
       assert.ok(htmlToggled.includes("1. One"), "sectnums numbering applied");
       assert.ok(htmlToggled.includes("toc"), "toc generated");
+
+      if (typeof asciidocRender.renderAsciidocChunksIncremental === "function") {
+        const incToggled = await asciidocRender.renderAsciidocChunksIncremental(
+          adocBase,
+          rBase,
+          adocToggled,
+          { baseDir: null, math: true },
+        );
+        assert.equal(incToggled.incremental?.mode, "full");
+        assert.equal(incToggled.chunks.join("\n"), htmlToggled);
+
+        const adocEdited = adocBase.replace("Final line.", "Final edited line.");
+        const freshEdited = await renderAsciidocChunks(adocEdited, { baseDir: null, math: true });
+        const incEdited = await asciidocRender.renderAsciidocChunksIncremental(
+          adocBase,
+          rBase,
+          adocEdited,
+          { baseDir: null, math: true },
+        );
+        assert.equal(incEdited.incremental?.mode, "diff");
+        assert.ok((incEdited.incremental?.dirtyRatio ?? 1) < 0.25);
+        assert.equal(incEdited.chunks.join("\n"), freshEdited.chunks.join("\n"));
+        assert.equal(incEdited.blocks?.length, freshEdited.blocks?.length);
+      }
     },
   );
 
@@ -1033,6 +1118,8 @@ async function runEquivalenceSuite() {
     failed,
     total: checks.length,
     incrementalHooksDetected: Boolean(incrementalMd),
+    incrementalAsciidocDetected:
+      typeof asciidocRender.renderAsciidocChunksIncremental === "function",
     checks,
   };
 }
@@ -1048,9 +1135,9 @@ function pad(value, width, alignRight = false) {
 
 function printSummaryTable(results) {
   console.log("");
-  console.log("Phase 0 Prose Rendering Pure-Node Baseline");
+  console.log("Prose Rendering Pure-Node Benchmark");
   console.log(`Node ${process.version} | warmup=${WARMUP_RUNS} | runs=${BENCH_RUNS}`);
-  console.log("-".repeat(118));
+  console.log("-".repeat(129));
   console.log(
     [
       pad("Corpus", 16),
@@ -1058,6 +1145,7 @@ function printSummaryTable(results) {
       pad("Chunks", 7, true),
       pad("Cold(ms)", 9, true),
       pad("p50(ms)", 9, true),
+      pad("Inc(ms)", 9, true),
       pad("p95(ms)", 9, true),
       pad("MAD(ms)", 9, true),
       pad("1ch Dirty", 11, true),
@@ -1065,10 +1153,11 @@ function printSummaryTable(results) {
       pad("Split Dirty", 11, true),
     ].join("  "),
   );
-  console.log("-".repeat(118));
+  console.log("-".repeat(129));
 
   for (const r of results) {
     const full = r.timings.renderFull;
+    const inc = r.timings.renderIncremental;
     const sc = r.invariance.singleChar;
     const sp = r.invariance.newlineSplit;
     console.log(
@@ -1078,6 +1167,7 @@ function printSummaryTable(results) {
         pad(r.chunkCount, 7, true),
         pad(full.coldMs.toFixed(2), 9, true),
         pad(full.p50Ms.toFixed(2), 9, true),
+        pad(inc ? inc.p50Ms.toFixed(2) : "-", 9, true),
         pad(full.p95Ms.toFixed(2), 9, true),
         pad(full.madMs.toFixed(2), 9, true),
         pad(`${sc.dirtyChunks}/${sc.afterChunks}`, 11, true),
@@ -1086,7 +1176,7 @@ function printSummaryTable(results) {
       ].join("  "),
     );
   }
-  console.log("-".repeat(118));
+  console.log("-".repeat(129));
   console.log("");
 }
 

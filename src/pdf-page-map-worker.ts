@@ -1,5 +1,6 @@
 //! Pure PDF text alignment; terminated when its render is superseded.
 import { buildPdfWordAnchors } from "./pdf-page-build.ts";
+import type { TypstSpanAnchor } from "./api";
 import type { PageMapLine } from "./typst-page-map";
 import type { PdfSourceFile, PdfWordAnchor } from "./pdf-page-map";
 
@@ -16,7 +17,13 @@ function sendChunk(): void {
 
 self.onmessage = async (
   event: MessageEvent<
-    { language: "typst" | "latex"; files: PdfSourceFile[]; lines: PageMapLine[] } | { next: true }
+    | {
+        language: "typst" | "latex";
+        files: PdfSourceFile[];
+        lines: PageMapLine[];
+        spanMap?: TypstSpanAnchor[];
+      }
+    | { next: true }
   >,
 ) => {
   try {
@@ -24,8 +31,8 @@ self.onmessage = async (
       sendChunk();
       return;
     }
-    const { language, files, lines } = event.data;
-    result = await buildPdfWordAnchors(language, files, lines);
+    const { language, files, lines, spanMap } = event.data;
+    result = await buildPdfWordAnchors(language, files, lines, spanMap);
     offset = 0;
     sendChunk();
   } catch (error) {

@@ -19,10 +19,13 @@ import {
   preloadAsciidocIncludes,
   renderAsciidocChunks,
   renderAsciidocForPandoc,
+  type AsciidocBlockChunk,
   type AsciidocChunks,
   type AsciidocIncludeCacheStats,
   type AsciidocIncludeMap,
+  type AsciidocMark,
 } from "./asciidoc-render";
+import { applyAsciidocBlockMarks, patchAsciidocDom } from "./keyed-dom-patch";
 import {
   decorateCodeBlocks,
   decorateLinks,
@@ -32,16 +35,17 @@ import {
   renderMermaidIn,
 } from "./markdown";
 import type { RenderedMath } from "./preview-render";
-import { batchesForChunks, settleMainThread } from "./preview-batches";
+import { PREVIEW_BATCH_BYTES, batchesForChunks, settleMainThread } from "./preview-batches";
 import { renderAsciidocChunksAsync } from "./preview-worker-client";
 
-import type { BlockRange } from "./source-map";
+import { clearWordMapPatch, type BlockRange } from "./source-map";
 
 export interface AsciidocRenderOptions {
   baseDir: string | null;
   math: boolean;
   mermaid: boolean;
   isDark: boolean;
+  onMermaidSettled?: () => void;
 }
 
 export interface AsciidocRenderResult {
@@ -54,6 +58,24 @@ export interface AsciidocRenderResult {
    * search rather than from exact fragments.
    */
   blocks: BlockRange[];
+  incremental?: {
+    applied: boolean;
+    dirtyBlocks: number;
+    totalBlocks: number;
+  };
+}
+
+interface AsciidocHostState {
+  source: string;
+  chunks: AsciidocChunks;
+  optionsKey: string;
+  blocks: BlockRange[];
+}
+
+const asciidocHostState = new WeakMap<HTMLElement, AsciidocHostState>();
+
+function asciidocOptionsKey(options: AsciidocRenderOptions): string {
+  return JSON.stringify([options.baseDir ?? "", options.math, options.mermaid, options.isDark]);
 }
 
 /** Asciidoctor separates AsciiMath lines with `<br>` inside the block. */
@@ -175,6 +197,180 @@ function insertAsciidocBatch(host: HTMLElement, batch: readonly string[]): void 
   while (holder.firstChild) host.appendChild(holder.firstChild);
 }
 
+/** Group sub-section blocks into batches without splitting open `<div class="sect1">` shells. */
+function asciidocBatchRanges(
+  blocks: readonly AsciidocBlockChunk[],
+): Array<{ from: number; to: number }> {
+  let totalBytes = 0;
+  for (const b of blocks) totalBytes += b.html.length;
+  const maxBytes = totalBytes <= 300 * 1024 ? totalBytes + 1 : PREVIEW_BATCH_BYTES;
+
+  const ranges: Array<{ from: number; to: number }> = [];
+  let from = 0;
+  let size = 0;
+  let depth = 0;
+  for (let i = 0; i < blocks.length; i += 1) {
+    const b = blocks[i];
+    if (b.kind === "sect-open") depth += 1;
+    size += b.html.length;
+    if (b.kind === "sect-close" && depth > 0) depth -= 1;
+    if (depth === 0 && i + 1 < blocks.length && size >= maxBytes) {
+      ranges.push({ from, to: i + 1 });
+      from = i + 1;
+      size = 0;
+    }
+  }
+  if (from < blocks.length) ranges.push({ from, to: blocks.length });
+  return ranges;
+}
+
+const ASCIIDOC_LINE_MARKER_RE = /\bmdraft-line-(\d+)\b/g;
+const ASCIIDOC_MATH_SLOT_RE = /<span data-mdraft-math="(\d+)"><\/span>/g;
+
+/**
+ * Re-index block-local markers/maths cleanly across one balanced batch so one
+ * `DOMPurify.sanitize` call resolves the entire batch without index collisions.
+ */
+function insertAsciidocBlockBatch(
+  host: HTMLElement,
+  blocks: readonly AsciidocBlockChunk[],
+  options?: { math: boolean },
+): void {
+  const batchMarks: AsciidocMark[] = [];
+  const batchMaths: RenderedMath[] = [];
+  const htmlParts: string[] = new Array(blocks.length);
+
+  for (let i = 0; i < blocks.length; i += 1) {
+    const b = blocks[i];
+    if (b.marks.length === 0 && b.maths.length === 0) {
+      htmlParts[i] = b.html;
+      continue;
+    }
+    const markBase = batchMarks.length;
+    for (const m of b.marks) {
+      batchMarks.push({
+        marker: `mdraft-line-${batchMarks.length}`,
+        line: m.line,
+        endLine: m.endLine,
+      });
+    }
+    const mathBase = batchMaths.length;
+    for (const rm of b.maths) batchMaths.push(rm);
+
+    let rebased = b.html;
+    if (b.marks.length > 0) {
+      rebased = rebased.replace(ASCIIDOC_LINE_MARKER_RE, (full, idxRaw: string) => {
+        const idx = Number(idxRaw);
+        return idx >= 0 && idx < b.marks.length ? `mdraft-line-${markBase + idx}` : full;
+      });
+    }
+    if (b.maths.length > 0) {
+      rebased = rebased.replace(ASCIIDOC_MATH_SLOT_RE, (full, idxRaw: string) => {
+        const idx = Number(idxRaw);
+        return idx >= 0 && idx < b.maths.length
+          ? `<span data-mdraft-math="${mathBase + idx}"></span>`
+          : full;
+      });
+    }
+    htmlParts[i] = rebased;
+  }
+
+  const holder = document.createElement("div");
+  holder.innerHTML = sanitizeAsciidoc(htmlParts.join(""));
+  applyAsciidocBlockMarks(holder, batchMarks);
+  if (options?.math ?? true) {
+    restoreAsciidocMath(holder, batchMaths);
+  }
+  while (holder.firstChild) host.appendChild(holder.firstChild);
+}
+
+function decorateAsciidocSubtree(
+  root: HTMLElement,
+  options: AsciidocRenderOptions,
+  mathRendered: boolean,
+): void {
+  if (options.math) {
+    if (!mathRendered && /\\[([]/.test(root.textContent ?? "")) {
+      renderMathIn(root);
+    }
+  }
+  decorateCodeBlocks(root, options.mermaid);
+  decorateLinks(root, options.baseDir);
+}
+
+function buildSingleAsciidocBlockElement(
+  block: AsciidocBlockChunk,
+  options: AsciidocRenderOptions,
+  mathRendered: boolean,
+): HTMLElement | null {
+  const holder = document.createElement("div");
+  holder.innerHTML = sanitizeAsciidoc(block.html);
+  applyAsciidocBlockMarks(holder, block.marks);
+  if (options.math) restoreAsciidocMath(holder, block.maths);
+  decorateAsciidocSubtree(holder, options, mathRendered);
+  return holder.children.length === 1 ? (holder.firstElementChild as HTMLElement) : null;
+}
+
+function buildFullAsciidocSectionElement(
+  group: {
+    openBlock?: AsciidocBlockChunk;
+    closeBlock?: AsciidocBlockChunk;
+    blocks: AsciidocBlockChunk[];
+  },
+  options: AsciidocRenderOptions,
+  mathRendered: boolean,
+): HTMLElement | null {
+  const slice: AsciidocBlockChunk[] = [];
+  if (group.openBlock) slice.push(group.openBlock);
+  for (const child of group.blocks) slice.push(child);
+  if (group.closeBlock) slice.push(group.closeBlock);
+  const holder = document.createElement("div");
+  insertAsciidocBlockBatch(holder, slice, { math: options.math });
+  decorateAsciidocSubtree(holder, options, mathRendered);
+  return holder.children.length === 1 ? (holder.firstElementChild as HTMLElement) : null;
+}
+
+function hasAsciidocStructuralDiff(prevSource: string, nextSource: string): boolean {
+  const minLen = Math.min(prevSource.length, nextSource.length);
+  let prefix = 0;
+  while (prefix < minLen && prevSource.charCodeAt(prefix) === nextSource.charCodeAt(prefix)) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  const maxSuffix = minLen - prefix;
+  while (
+    suffix < maxSuffix &&
+    prevSource.charCodeAt(prevSource.length - 1 - suffix) ===
+      nextSource.charCodeAt(nextSource.length - 1 - suffix)
+  ) {
+    suffix += 1;
+  }
+
+  const headerEnd = (src: string): number => {
+    const nl = src.indexOf("\n");
+    const first = (nl < 0 ? src : src.slice(0, nl)).trim();
+    if (!first.startsWith("= ") && !first.startsWith(":")) return 0;
+    const blank = /\r?\n\s*\r?\n/.exec(src);
+    return blank ? blank.index : src.length;
+  };
+  const hEnd = Math.max(headerEnd(prevSource), headerEnd(nextSource));
+  if (hEnd > 0 && prefix <= hEnd) return true;
+
+  const lineSpan = (src: string, from: number, to: number): string => {
+    const s = src.lastIndexOf("\n", Math.max(0, from - 1)) + 1;
+    const e = src.indexOf("\n", Math.max(from, to));
+    return src.slice(s, e < 0 ? src.length : e);
+  };
+  const prevTouched = lineSpan(prevSource, prefix, prevSource.length - suffix);
+  const nextTouched = lineSpan(nextSource, prefix, nextSource.length - suffix);
+  const directiveRe = /^\s*(?::!?[A-Za-z0-9_-]+!?:|(?:ifdef|ifndef|endif|ifeval)::|include::)/m;
+  if (directiveRe.test(prevTouched) || directiveRe.test(nextTouched)) return true;
+
+  const tocOrNums =
+    /^\s*:(?:toc|sectnums)!?:/m.test(prevSource) || /^\s*:(?:toc|sectnums)!?:/m.test(nextSource);
+  return tocOrNums && (/^={1,6}\s/m.test(prevTouched) || /^={1,6}\s/m.test(nextTouched));
+}
+
 const previewIncludeCache = new AsciidocIncludeCache();
 
 /** Invalidate cached AsciiDoc includes (called on save, dirty buffer edits, or reload). */
@@ -204,11 +400,14 @@ function scheduleDeferredMermaid(
   host: HTMLElement,
   isDark: boolean,
   cancelled: () => boolean,
+  onSettled?: () => void,
 ): void {
   if (!host.querySelector(".mermaid[data-mermaid]")) return;
   const run = (): void => {
     if (cancelled()) return;
-    void renderMermaidIn(host, isDark, cancelled);
+    void renderMermaidIn(host, isDark, cancelled).then(() => {
+      if (!cancelled()) onSettled?.();
+    });
   };
   if (typeof requestAnimationFrame === "function") {
     requestAnimationFrame(run);
@@ -225,32 +424,35 @@ async function finalizeAsciidocDom(
   chunks: AsciidocChunks,
   options: AsciidocRenderOptions,
   source: string,
+  alreadyAppliedMarksAndMath = false,
 ): Promise<{ linesMapped: boolean; blocks: BlockRange[] }> {
-  const lines = source.split("\n").length;
-  const sorted = chunks.marks.slice().sort((a, b) => a.line - b.line);
-  const ranges = new Map<string, { line: number; end: number }>();
-  sorted.forEach((mark, index) => {
-    const next = sorted[index + 1];
-    ranges.set(mark.marker, {
-      line: mark.line,
-      end: next ? Math.max(mark.line, next.line - 1) : Math.max(mark.line, lines),
+  if (!alreadyAppliedMarksAndMath) {
+    const lines = source.split("\n").length;
+    const sorted = chunks.marks.slice().sort((a, b) => a.line - b.line);
+    const ranges = new Map<string, { line: number; end: number }>();
+    sorted.forEach((mark, index) => {
+      const next = sorted[index + 1];
+      ranges.set(mark.marker, {
+        line: mark.line,
+        end: next ? Math.max(mark.line, next.line - 1) : Math.max(mark.line, lines),
+      });
     });
-  });
 
-  for (const element of Array.from(host.querySelectorAll("[class]"))) {
-    const marker = Array.from(element.classList).find((name) => name.startsWith("mdraft-line-"));
-    if (!marker) continue;
-    const range = ranges.get(marker);
-    element.classList.remove(marker);
-    if (element.classList.length === 0) element.removeAttribute("class");
-    if (range) {
-      const target = element.matches(".sect1, .sect2, .sect3, .sect4, .sect5")
-        ? (element.querySelector<HTMLElement>(
-            ":scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6",
-          ) ?? element)
-        : element;
-      target.setAttribute("data-line", String(range.line));
-      target.setAttribute("data-line-end", String(range.end));
+    for (const element of Array.from(host.querySelectorAll("[class]"))) {
+      const marker = Array.from(element.classList).find((name) => name.startsWith("mdraft-line-"));
+      if (!marker) continue;
+      const range = ranges.get(marker);
+      element.classList.remove(marker);
+      if (element.classList.length === 0) element.removeAttribute("class");
+      if (range) {
+        const target = element.matches(".sect1, .sect2, .sect3, .sect4, .sect5")
+          ? (element.querySelector<HTMLElement>(
+              ":scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6",
+            ) ?? element)
+          : element;
+        target.setAttribute("data-line", String(range.line));
+        target.setAttribute("data-line-end", String(range.end));
+      }
     }
   }
 
@@ -278,7 +480,7 @@ async function finalizeAsciidocDom(
   }
 
   if (options.math) {
-    restoreAsciidocMath(host, chunks.maths);
+    if (!alreadyAppliedMarksAndMath) restoreAsciidocMath(host, chunks.maths);
     if (!chunks.mathRendered && /\\[([]/.test(host.textContent ?? "")) {
       renderMathIn(host);
     }
@@ -301,8 +503,9 @@ async function finishAsciidoc(
   chunks: AsciidocChunks,
   options: AsciidocRenderOptions,
   source: string,
+  alreadyAppliedMarksAndMath = false,
 ): Promise<{ linesMapped: boolean; blocks: BlockRange[] }> {
-  const done = await finalizeAsciidocDom(host, chunks, options, source);
+  const done = await finalizeAsciidocDom(host, chunks, options, source, alreadyAppliedMarksAndMath);
   await renderMermaidIn(host, options.isDark);
   return done;
 }
@@ -320,8 +523,17 @@ export async function renderAsciidocPreview(
       readFile: async (path) => (await api.readDocument(path)).content,
     });
     const host = document.createElement("div");
-    for (const batch of batchesForChunks(chunks.chunks)) insertAsciidocBatch(host, batch);
-    const done = await finishAsciidoc(host, chunks, options, source);
+    const useBlocks = Boolean(chunks.blocks && chunks.blocks.length > 0);
+    if (useBlocks && chunks.blocks) {
+      for (const range of asciidocBatchRanges(chunks.blocks)) {
+        insertAsciidocBlockBatch(host, chunks.blocks.slice(range.from, range.to), {
+          math: options.math,
+        });
+      }
+    } else {
+      for (const batch of batchesForChunks(chunks.chunks)) insertAsciidocBatch(host, batch);
+    }
+    const done = await finishAsciidoc(host, chunks, options, source, useBlocks);
     return { html: host.innerHTML, ...done };
   } catch (error) {
     return {
@@ -345,9 +557,11 @@ export async function renderAsciidocPreviewInto(
   source: string,
   options: AsciidocRenderOptions,
   cancelled: () => boolean,
-): Promise<{ linesMapped: boolean; blocks: BlockRange[] } | null> {
+): Promise<Omit<AsciidocRenderResult, "html"> | null> {
   try {
     if (!source.trim()) {
+      asciidocHostState.delete(host);
+      clearWordMapPatch(host);
       host.replaceChildren();
       return { linesMapped: false, blocks: [] };
     }
@@ -392,25 +606,90 @@ export async function renderAsciidocPreviewInto(
     }
     if (cancelled()) return null;
 
+    const prevState = asciidocHostState.get(host);
+    const optionsKey = asciidocOptionsKey(options);
+    if (
+      prevState &&
+      prevState.optionsKey === optionsKey &&
+      !hasAsciidocStructuralDiff(prevState.source, source) &&
+      prevState.chunks.hasHeader === chunks.hasHeader &&
+      prevState.chunks.notitle === chunks.notitle
+    ) {
+      const patch = patchAsciidocDom(
+        host,
+        prevState.source,
+        prevState.chunks,
+        source,
+        chunks,
+        prevState.blocks,
+        (block) => buildSingleAsciidocBlockElement(block, options, Boolean(chunks.mathRendered)),
+        (group) => buildFullAsciidocSectionElement(group, options, Boolean(chunks.mathRendered)),
+      );
+      if (patch?.applied) {
+        if (options.math && host.querySelector('[data-stem="asciimath"]') !== null) {
+          await renderAsciiMathIn(host);
+          if (cancelled()) return null;
+        }
+        asciidocHostState.set(host, { source, chunks, optionsKey, blocks: patch.blocks });
+        if (options.mermaid && patch.mermaidDirty) {
+          scheduleDeferredMermaid(host, options.isDark, cancelled, options.onMermaidSettled);
+        }
+        return {
+          linesMapped: patch.linesMapped,
+          blocks: patch.blocks,
+          incremental: {
+            applied: true,
+            dirtyBlocks: patch.dirtyBlocks,
+            totalBlocks: chunks.blocks?.length ?? chunks.chunks.length,
+          },
+        };
+      }
+    }
+
     // Build in a detached container and swap once; appending batches to the
     // live pane forced a layout of the growing document per batch.
     const staging = document.createElement("div");
     let lastYield = performance.now();
-    for (const batch of batchesForChunks(chunks.chunks)) {
-      if (cancelled()) return null;
-      insertAsciidocBatch(staging, batch);
-      lastYield = await settleMainThread(lastYield);
-      if (cancelled()) return null;
+    const useBlocks = Boolean(chunks.blocks && chunks.blocks.length > 0);
+    if (useBlocks && chunks.blocks) {
+      for (const range of asciidocBatchRanges(chunks.blocks)) {
+        if (cancelled()) return null;
+        insertAsciidocBlockBatch(staging, chunks.blocks.slice(range.from, range.to), {
+          math: options.math,
+        });
+        lastYield = await settleMainThread(lastYield);
+        if (cancelled()) return null;
+      }
+    } else {
+      for (const batch of batchesForChunks(chunks.chunks)) {
+        if (cancelled()) return null;
+        insertAsciidocBatch(staging, batch);
+        lastYield = await settleMainThread(lastYield);
+        if (cancelled()) return null;
+      }
     }
-    const done = await finalizeAsciidocDom(staging, chunks, options, source);
+    const done = await finalizeAsciidocDom(staging, chunks, options, source, useBlocks);
     if (cancelled()) return null;
+    clearWordMapPatch(host);
     const fragment = document.createDocumentFragment();
     while (staging.firstChild) fragment.appendChild(staging.firstChild);
     host.replaceChildren(fragment);
-    if (options.mermaid) scheduleDeferredMermaid(host, options.isDark, cancelled);
-    return done;
+    asciidocHostState.set(host, { source, chunks, optionsKey, blocks: done.blocks });
+    if (options.mermaid) {
+      scheduleDeferredMermaid(host, options.isDark, cancelled, options.onMermaidSettled);
+    }
+    return {
+      ...done,
+      incremental: {
+        applied: false,
+        dirtyBlocks: chunks.blocks?.length ?? chunks.chunks.length,
+        totalBlocks: chunks.blocks?.length ?? chunks.chunks.length,
+      },
+    };
   } catch (error) {
     if (cancelled()) return null;
+    asciidocHostState.delete(host);
+    clearWordMapPatch(host);
     host.innerHTML = `<pre class="asciidoc-error">${escapeHtml(String(error))}</pre>`;
     return { linesMapped: false, blocks: [] };
   }

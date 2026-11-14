@@ -10,6 +10,13 @@ export interface CachedKatexResult {
   error: string | null;
 }
 
+export interface PrimeKatexEntry {
+  body: string;
+  display: boolean;
+  html: string | null;
+  error: string | null;
+}
+
 const katexLru = new Map<string, CachedKatexResult>();
 
 function cacheKey(body: string, display: boolean): string {
@@ -51,6 +58,24 @@ export function renderKatexCached(body: string, display: boolean): CachedKatexRe
   }
   katexLru.set(key, result);
   return result;
+}
+
+/**
+ * Populate the bounded LRU directly from pre-rendered entries (used when
+ * hydrating a pre-warmed standby worker without re-running `katex`).
+ */
+export function primeKatexCache(entries: readonly PrimeKatexEntry[]): void {
+  for (const entry of entries) {
+    if (entry.html === null && entry.error === null) continue;
+    const key = cacheKey(entry.body, entry.display);
+    if (katexLru.has(key)) {
+      katexLru.delete(key);
+    } else if (katexLru.size >= MAX_KATEX_LRU) {
+      const oldest = katexLru.keys().next().value;
+      if (oldest !== undefined) katexLru.delete(oldest);
+    }
+    katexLru.set(key, { html: entry.html, error: entry.error });
+  }
 }
 
 /** Clear all memoized KaTeX entries (intended for tests or theme/config resets). */

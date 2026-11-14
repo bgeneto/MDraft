@@ -9,9 +9,10 @@
  *    TeXstudio and LaTeX Workshop.
  * 2. The project's own choice, made from the status-bar engine chip and stored
  *    per main document.
- * 3. The Preferences default. "auto" detects from the preamble with the SDK's
- *    documented precedence (its detector is not exported): Lua intent →
- *    LuaLaTeX, XeTeX-only or Unicode packages → XeLaTeX, otherwise pdfLaTeX.
+ * 3. The Preferences default. "auto" detects from the preamble: Lua intent →
+ *    LuaLaTeX, XeTeX-only or Unicode packages → XeLaTeX, otherwise LuaLaTeX.
+ *    pdfLaTeX is not offered: the bundled preview engine has no pdfTeX. An
+ *    installed TeX distribution keeps its own engine choice in Preferences.
  *
  * Pure and cheap: called on every compile.
  */
@@ -49,6 +50,18 @@ export function magicProgram(source: string): TexEngine | null {
   return null;
 }
 
+/**
+ * The bundled engine actually used. A magic comment, a project choice written
+ * before pdfLaTeX left the menu, or an old Preferences default may still name
+ * it; the incremental preview has no pdfTeX, so LuaLaTeX draws it and the chip
+ * says why.
+ */
+function bundledEngine(engine: TexEngine): { engine: TexEngine; reason: string | null } {
+  return engine === "pdflatex"
+    ? { engine: "lualatex", reason: "pdfLaTeX is not available; LuaLaTeX used" }
+    : { engine, reason: null };
+}
+
 /** Resolve the engine for a main file's source under the three rules above. */
 export function resolveTexEngine(
   mainSource: string,
@@ -56,9 +69,30 @@ export function resolveTexEngine(
   fallback: string | null | undefined,
 ): EngineChoice {
   const magic = magicProgram(mainSource);
-  if (magic) return { engine: magic, source: "magic", reason: "magic comment" };
-  if (isTexEngine(project)) return { engine: project, source: "project", reason: "project" };
-  if (isTexEngine(fallback)) return { engine: fallback, source: "default", reason: "default" };
+  if (magic) {
+    const fixed = bundledEngine(magic);
+    return {
+      engine: fixed.engine,
+      source: "magic",
+      reason: fixed.reason ? `magic comment (${fixed.reason})` : "magic comment",
+    };
+  }
+  if (isTexEngine(project)) {
+    const fixed = bundledEngine(project);
+    return {
+      engine: fixed.engine,
+      source: "project",
+      reason: fixed.reason ? `project (${fixed.reason})` : "project",
+    };
+  }
+  if (isTexEngine(fallback)) {
+    const fixed = bundledEngine(fallback);
+    return {
+      engine: fixed.engine,
+      source: "default",
+      reason: fixed.reason ? `default (${fixed.reason})` : "default",
+    };
+  }
   // "auto", or an unreadable setting: detect from the preamble.
   const detected = detectTexEngine(mainSource);
   return { engine: detected.engine, source: "auto", reason: `auto: ${detected.reason}` };
@@ -94,7 +128,8 @@ export function detectTexEngine(source: string): { engine: TexEngine; reason: st
     return { engine: "lualatex", reason: "Lua code" };
   if (XETEX_ONLY.test(head)) return { engine: "xelatex", reason: "XeTeX-only package" };
   if (UNICODE_ENGINE.test(head)) return { engine: "xelatex", reason: "fontspec" };
-  return { engine: "pdflatex", reason: "no Unicode packages" };
+  // The bundled preview is LuaTeX-only besides XeTeX; there is no pdfTeX.
+  return { engine: "lualatex", reason: "no Unicode packages" };
 }
 
 /**

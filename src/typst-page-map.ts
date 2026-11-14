@@ -126,6 +126,12 @@ function trimRange(source: string, from: number, to: number): { from: number; to
 export interface PageMapLine {
   text: string;
   region: string;
+  /** Optional 1-based page & top-down PDF point coordinates for AST span matching. */
+  page?: number;
+  yPt?: number;
+  leftPt?: number;
+  rightPt?: number;
+  heightPt?: number;
 }
 
 interface PageWordPart {
