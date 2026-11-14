@@ -5,6 +5,8 @@
 //! open, like the unsaved-changes dialog, and removed when it closes.
 
 export interface SelectionStatistics {
+  /** Whitespace-separated words in every non-empty range. */
+  words: number;
   /** UTF-16 code units, the same unit as the status bar's character count. */
   characters: number;
   /** UTF-8 bytes of the selected text. */
@@ -80,9 +82,10 @@ export function showDocumentStatistics(
   const selection = document.createElement("p");
   selection.className = "stats-selection";
   if (statistics.selection) {
-    const { characters, bytes, ranges } = statistics.selection;
+    const { words, characters, bytes, ranges } = statistics.selection;
     selection.textContent =
-      `${formatCount(characters)} selected ${characters === 1 ? "character" : "characters"} ` +
+      `${formatCount(words)} selected ${words === 1 ? "word" : "words"}, ` +
+      `${formatCount(characters)} ${characters === 1 ? "character" : "characters"} ` +
       `(${formatCount(bytes)} ${bytes === 1 ? "byte" : "bytes"}) in ` +
       `${formatCount(ranges)} ${ranges === 1 ? "range" : "ranges"}`;
   } else {

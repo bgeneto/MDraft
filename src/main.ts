@@ -46,6 +46,20 @@ import { rewriteExportReferences } from "./export-article";
 import { showWriterChooser } from "./export-chooser";
 import { createEditor, pasteInsertionSpec, type EditorHandle, type PasteInsertion } from "./editor";
 import {
+  countWords,
+  dedupeLines,
+  eolToSpace,
+  sortLines,
+  spacesToTabsAll,
+  spacesToTabsLeading,
+  tabsToSpaces,
+  trimBothAndEolToSpace,
+  trimBothSpace,
+  trimLeadingSpace,
+  trimTrailingSpace,
+} from "./editor-tools";
+import { showHeadingPicker } from "./heading-picker";
+import {
   formatDocument,
   formatEditor,
   formatErrorMessage,
@@ -346,6 +360,16 @@ let settings: api.Settings;
 const sessions = createSessionStore();
 /** The session on screen. Inactive tabs keep their own EditorState. */
 let doc: Session = sessions.active();
+/**
+ * Most recently closed tabs, newest last.
+ *
+ * Runtime only: a closed buffer's text belongs to the session that still owns
+ * it, not to `settings.json`. The crash journal (GAP-001) is the durable store;
+ * this stack exists so an accidental close can be undone without writing a
+ * preference file or a second journal.
+ */
+const MAX_CLOSED_TABS = 10;
+const closedTabs: Session[] = [];
 /**
  * The tab strip owns its own DOM and gestures. It is created once the editor
  * exists, so a gesture that arrives before the first document cannot reach an
@@ -1717,11 +1741,14 @@ function documentStatistics(text: string): DocumentStatistics {
         (doc.lineEnding === "\r\n" ? Math.max(0, metrics.lines - 1) : 0) +
         (doc.hadBom ? 3 : 0);
   const ranges = editor.view.state.selection.ranges.filter((range) => !range.empty);
+  let selectedWords = 0;
   let selectedCharacters = 0;
   let selectedBytes = 0;
   for (const range of ranges) {
+    const selected = text.slice(range.from, range.to);
+    selectedWords += countWords(selected);
     selectedCharacters += range.to - range.from;
-    selectedBytes += utf8Length(text.slice(range.from, range.to));
+    selectedBytes += utf8Length(selected);
   }
   return {
     characters: metrics.chars,
@@ -1730,7 +1757,12 @@ function documentStatistics(text: string): DocumentStatistics {
     bytes,
     selection:
       ranges.length > 0
-        ? { characters: selectedCharacters, bytes: selectedBytes, ranges: ranges.length }
+        ? {
+            words: selectedWords,
+            characters: selectedCharacters,
+            bytes: selectedBytes,
+            ranges: ranges.length,
+          }
         : null,
   };
 }
@@ -6362,6 +6394,28 @@ async function pickProjectHeading(heading: ProjectHeading): Promise<void> {
   if (doc.path && pathKey(doc.path) === pathKey(path)) editor.scrollToLine(heading.line);
 }
 
+/**
+ * The headings in `text` for `language`.
+ *
+ * One language switch feeds both the sidebar outline and Go to Heading, so a
+ * language that grows a scanner cannot leave one surface behind.
+ */
+function headingsForDocument(text: string, language: api.DocumentLanguage): sidebarPanel.Heading[] {
+  if (api.isWebSource(language)) return [];
+  switch (language) {
+    case "typst":
+      return sidebarPanel.extractTypstHeadings(text);
+    case "html":
+      return sidebarPanel.extractHtmlHeadings(text);
+    case "asciidoc":
+      return sidebarPanel.extractAsciidocHeadings(text);
+    case "latex":
+      return sidebarPanel.extractLatexHeadings(text);
+    default:
+      return sidebarPanel.extractHeadings(text);
+  }
+}
+
 function refreshOutline(text = editor.getDoc()): void {
   if (settings.sidebarTab !== "outline" || !settings.sidebarVisible) return;
   // A document load schedules a refresh and then calls renderSidebar(); this
@@ -6369,17 +6423,7 @@ function refreshOutline(text = editor.getDoc()): void {
   window.clearTimeout(outlineTimer);
 
   const language = doc.language;
-  outlineHeadings = api.isWebSource(language)
-    ? []
-    : language === "typst"
-      ? sidebarPanel.extractTypstHeadings(text)
-      : language === "html"
-        ? sidebarPanel.extractHtmlHeadings(text)
-        : language === "asciidoc"
-          ? sidebarPanel.extractAsciidocHeadings(text)
-          : language === "latex"
-            ? sidebarPanel.extractLatexHeadings(text)
-            : sidebarPanel.extractHeadings(text);
+  outlineHeadings = headingsForDocument(text, language);
   outlineLanguage = language;
   outlineReady = true;
 
@@ -6459,6 +6503,14 @@ function updateActiveOutline(): void {
   // The project scope marks rows by file, not by this document's line numbers.
   if (outlineScope === "project" && latexProjectOutlineAvailable()) return;
   sidebarPanel.highlightOutline(sidebarBody, outlineHeadings, editor.cursorInfo().line);
+}
+
+/** Navigate › Go to Heading, over the document on screen. */
+function openHeadingPicker(): void {
+  showHeadingPicker(headingsForDocument(editor.getDoc(), doc.language), {
+    onPick: (heading) => editor.revealLine(heading.line, true, true),
+    fallbackFocus: () => editor.focus(),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -7394,9 +7446,21 @@ async function closeSessions(ids: readonly string[]): Promise<void> {
   const wanted = new Set(ids),
     targets = sessions.list().filter((session) => wanted.has(session.id));
   if (!targets.length) return;
+  // Capture the live view before a close prompt can switch tabs. The state is
+  // harmless if the close is cancelled: the next tab switch overwrites it.
+  if (targets.some((session) => session === doc)) snapshotDoc();
   try {
     await lifecycle.close(targets, async (ready) => {
       if (!ready()) return false;
+      // The tab is about to disappear, but its buffer is not: keep the session
+      // object so Reopen Closed Tab can restore text, caret and undo history.
+      for (const target of targets) {
+        if (target.editorState === null && target.draft === null) {
+          target.draft = target.savedContent;
+        }
+        closedTabs.push(target);
+      }
+      while (closedTabs.length > MAX_CLOSED_TABS) closedTabs.shift();
       const activeRemoved = targets.some((session) => session === doc);
       const next = sessions.removeMany(targets.map((session) => session.id));
       if (!sessions.list().length) await loadUntitled("", defaultDocumentLanguage());
@@ -7411,6 +7475,75 @@ async function closeSessions(ids: readonly string[]): Promise<void> {
   } catch (error) {
     await message(String(error), { title: "Could not close", kind: "error" });
   }
+}
+
+/**
+ * Reopen the most recently closed tab.
+ *
+ * A clean saved file is read from disk again, so an external change is not
+ * hidden behind a stale snapshot. A dirty or untitled buffer comes back as it
+ * was closed, with recovery re-armed because the close path removed the old
+ * journal entry.
+ */
+async function reopenClosedTab(): Promise<void> {
+  const session = closedTabs.pop();
+  if (!session) {
+    toast("No closed tab to reopen.");
+    return;
+  }
+
+  if (session.path) {
+    const existing = sessions.findByPath(session.path);
+    if (existing) {
+      await activateSession(existing.id);
+      return;
+    }
+    if (!session.dirty) {
+      try {
+        if (!(await api.pathExists(session.path))) {
+          toast(`${session.name} no longer exists on disk.`);
+          return;
+        }
+      } catch (error) {
+        toast(`Could not reopen ${session.name}: ${String(error)}`);
+        return;
+      }
+      await openPath(session.path);
+      return;
+    }
+  }
+
+  sessions.add(session);
+  doc = sessions.setActive(session.id);
+  await displayDoc();
+  if (session.dirty) recovery.schedule(session, textOf(session));
+}
+
+/** File › Save All: write every dirty buffer, stop safely on a refusal. */
+async function saveAll(): Promise<void> {
+  let saved = 0;
+  let stopped: string | null = null;
+  for (const session of sessions.list()) {
+    if (!session.dirty) continue;
+    if (session.readOnly) {
+      stopped = `"${session.name}" is read-only.`;
+      break;
+    }
+    if (session.conflict) {
+      stopped = `"${session.name}" has an unresolved disk change.`;
+      break;
+    }
+    const ok = session.path ? await saveSession(session) : await saveAs(undefined, session);
+    if (!ok) {
+      stopped = `"${session.name}" was not saved.`;
+      break;
+    }
+    saved += 1;
+  }
+
+  if (stopped) toast(`Save All stopped: ${stopped}`, 5200);
+  else if (saved > 0) toast(`Saved ${saved} ${saved === 1 ? "document" : "documents"}.`);
+  else toast("Nothing to save.");
 }
 
 /** Reveal the file behind a tab, whether or not that tab is on screen. */
@@ -8687,6 +8820,68 @@ function taskCommand(state: "insert" | "done" | "todo" | "plain"): void {
   else editor.setTaskState(state);
 }
 
+function lineCommand(kind: "sortAsc" | "sortDesc" | "removeDuplicates" | "deleteLine"): void {
+  switch (kind) {
+    case "sortAsc":
+      if (!editor.transformLines((lines) => sortLines(lines, "asc"), true)) {
+        toast("Select the lines to sort.");
+      }
+      return;
+    case "sortDesc":
+      if (!editor.transformLines((lines) => sortLines(lines, "desc"), true)) {
+        toast("Select the lines to sort.");
+      }
+      return;
+    case "removeDuplicates":
+      if (!editor.transformLines(dedupeLines, true)) {
+        toast("Select the lines to clean.");
+      }
+      return;
+    case "deleteLine":
+      editor.deleteCurrentLine();
+      return;
+  }
+}
+
+function blankCommand(
+  kind:
+    | "trimTrailing"
+    | "trimLeading"
+    | "trimBoth"
+    | "eolToSpace"
+    | "trimBothEolToSpace"
+    | "tabsToSpaces"
+    | "spacesToTabsAll"
+    | "spacesToTabsLeading",
+): void {
+  switch (kind) {
+    case "trimTrailing":
+      editor.transformLines(trimTrailingSpace);
+      return;
+    case "trimLeading":
+      editor.transformLines(trimLeadingSpace);
+      return;
+    case "trimBoth":
+      editor.transformLines(trimBothSpace);
+      return;
+    case "eolToSpace":
+      editor.transformLines(eolToSpace);
+      return;
+    case "trimBothEolToSpace":
+      editor.transformLines(trimBothAndEolToSpace);
+      return;
+    case "tabsToSpaces":
+      editor.transformLines(tabsToSpaces);
+      return;
+    case "spacesToTabsAll":
+      editor.transformLines(spacesToTabsAll);
+      return;
+    case "spacesToTabsLeading":
+      editor.transformLines(spacesToTabsLeading);
+      return;
+  }
+}
+
 function tableCommand(): void {
   if (doc.language === "html") {
     editor.insertBlock(
@@ -9047,6 +9242,8 @@ const handlers: Record<string, () => void | Promise<void>> = {
   },
   "file.save": () => void save(),
   "file.saveAs": () => void saveAs(),
+  "file.saveAll": () => void saveAll(),
+  "file.reopenClosed": () => void reopenClosedTab(),
   "file.close": () => void closeSession(doc.id),
   "file.closeAll": () => void closeSessions(sessions.list().map((session) => session.id)),
   "file.closeOthers": () => closeRelative("others"),
@@ -9086,6 +9283,20 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "edit.duplicateLine": () => editor.duplicateLine(),
   "edit.moveLineUp": () => editor.moveLineUp(),
   "edit.moveLineDown": () => editor.moveLineDown(),
+  "edit.sortAsc": () => lineCommand("sortAsc"),
+  "edit.sortDesc": () => lineCommand("sortDesc"),
+  "edit.removeDuplicates": () => lineCommand("removeDuplicates"),
+  "edit.deleteLine": () => lineCommand("deleteLine"),
+  "edit.trimTrailing": () => blankCommand("trimTrailing"),
+  "edit.trimLeading": () => blankCommand("trimLeading"),
+  "edit.trimBoth": () => blankCommand("trimBoth"),
+  "edit.eolToSpace": () => blankCommand("eolToSpace"),
+  "edit.trimBothEolToSpace": () => blankCommand("trimBothEolToSpace"),
+  "edit.tabsToSpaces": () => blankCommand("tabsToSpaces"),
+  "edit.spacesToTabsAll": () => blankCommand("spacesToTabsAll"),
+  "edit.spacesToTabsLeading": () => blankCommand("spacesToTabsLeading"),
+  "edit.addCursorAbove": () => editor.addCursorAbove(),
+  "edit.addCursorBelow": () => editor.addCursorBelow(),
   "edit.comment": () => editor.toggleComment(),
 
   "para.h1": () => setHeadingCommand(1),
@@ -9205,6 +9416,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "view.zoomReset": () => setZoom(DEFAULT_ZOOM),
 
   "navigate.gotoLine": () => editor.gotoLine(),
+  "navigate.gotoHeading": () => openHeadingPicker(),
   "navigate.moveTabLeft": () => moveActiveTab(-1),
   "navigate.moveTabRight": () => moveActiveTab(1),
   "navigate.openTarget": () => openLinkUnderCursor(),
@@ -11567,6 +11779,7 @@ function runMenuAction(id: string): void {
     lifecycle.committing ||
     document.querySelector(".unsaved-dialog[open]") ||
     document.querySelector(".stats-dialog[open]") ||
+    document.querySelector(".heading-picker-dialog[open]") ||
     document.querySelector(".encoding-dialog[open]") ||
     document.querySelector(".export-dialog[open]") ||
     document.querySelector(".optional-tools-dialog[open]")

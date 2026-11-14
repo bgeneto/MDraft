@@ -160,6 +160,15 @@ async function emitOpenFiles(paths) {
   );
 }
 
+/** Run a native menu command by id, as the menu event does. */
+async function emitMenu(id) {
+  return evaluate(
+    `window.__TAURI_INTERNALS__
+      .invoke("plugin:event|emit", { event: "menu", payload: ${JSON.stringify(id)} })
+      .then(() => "ok", (error) => { throw new Error(String(error)); })`,
+  );
+}
+
 const workDir = mkdtempSync(path.join(tmpdir(), "mdraft-tabs-"));
 const tmp = (name) => path.join(workDir, name);
 
@@ -932,6 +941,111 @@ try {
   );
 
   // -------------------------------------------------------------------------
+  // Save All writes every dirty tab without closing any
+  // -------------------------------------------------------------------------
+  console.log("\n=== Save All ===");
+  await evaluate(
+    `(() => {
+      const flag = document.getElementById("flag-auto-save");
+      if (!flag) return "missing";
+      if (flag.dataset.on === "true") flag.click();
+      return flag.dataset.on;
+    })()`,
+  );
+  await sleep(300);
+  await clickTab("a.md");
+  await sleep(600);
+  await evaluate(`document.querySelector(".cm-content").focus()`);
+  await send("Input.insertText", { text: "SAVEALL-A" });
+  await sleep(300);
+  await clickTab("b.md");
+  await sleep(600);
+  await evaluate(`document.querySelector(".cm-content").focus()`);
+  await send("Input.insertText", { text: "SAVEALL-B" });
+  await sleep(300);
+  check(
+    (await dirtyCount()) === 2,
+    "two tabs are dirty before Save All",
+    String(await dirtyCount()),
+  );
+  const beforeSaveAll = await tabCount();
+  await emitMenu("file.saveAll");
+  await sleep(1400);
+  check(
+    readFileSync(docA, "utf8").includes("SAVEALL-A") &&
+      readFileSync(docB, "utf8").includes("SAVEALL-B"),
+    "Save All wrote both dirty files",
+    "a.md and b.md",
+  );
+  check(
+    (await tabCount()) === beforeSaveAll && (await dirtyCount()) === 0,
+    "Save All closed nothing and cleared both dots",
+    `${await tabCount()} tabs, ${await dirtyCount()} dirty`,
+  );
+
+  // -------------------------------------------------------------------------
+  // Reopen Closed Tab: a clean path is re-read, discarded text comes back
+  // -------------------------------------------------------------------------
+  console.log("\n=== Reopen Closed Tab ===");
+  const beforeCleanClose = await tabCount();
+  check((await clickClose("b.md")) === "clicked", "a clean tab closes without a prompt");
+  await sleep(700);
+  check(
+    (await tabCount()) === beforeCleanClose - 1,
+    "the clean tab is gone",
+    String(await tabCount()),
+  );
+  await emitMenu("file.reopenClosed");
+  await sleep(1600);
+  check(
+    (await tabCount()) === beforeCleanClose && (await activeTab()) === "b.md",
+    "Reopen Closed Tab brings the clean file back from disk",
+    await activeTab(),
+  );
+  check(
+    (await editorText()).includes("SAVEALL-B"),
+    "the reopened clean tab shows the saved bytes",
+    (await editorText()).slice(0, 60),
+  );
+
+  await clickTab("a.md");
+  await sleep(600);
+  await evaluate(`document.querySelector(".cm-content").focus()`);
+  await send("Input.insertText", { text: "REOPEN-DIRTY" });
+  await sleep(400);
+  check(await isDirty("a.md"), "the tab is dirty before the destructive close");
+  check((await clickClose("a.md")) === "clicked", "closing the dirty tab opens the decision");
+  const decision = await pollFor(`Boolean(document.querySelector(".unsaved-dialog[open]"))`);
+  check(decision, "the unsaved dialog is open");
+  await evaluate(
+    `document.querySelector('.unsaved-dialog[open] button[data-decision="discard"]')?.click()`,
+  );
+  await sleep(900);
+  const afterDiscard = await tabCount();
+  await emitMenu("file.reopenClosed");
+  await sleep(1400);
+  const reopenedDirty = await evaluate(
+    `[...document.querySelectorAll(".doc-tab")].some(
+      (tab) => tab.classList.contains("is-dirty") &&
+        tab.querySelector(".doc-tab-name")?.textContent === "a.md"
+    )`,
+  );
+  check(
+    (await tabCount()) === afterDiscard + 1 && (await activeTab()) === "a.md",
+    "Reopen Closed Tab restores a discarded tab",
+    await activeTab(),
+  );
+  check(
+    (await editorText()).includes("REOPEN-DIRTY") && reopenedDirty,
+    "the restored tab keeps the discarded text and its dirty state",
+    (await editorText()).slice(0, 60),
+  );
+  await press({ code: "KeyZ", key: "z", ctrl: true });
+  await sleep(400);
+  await emitMenu("file.saveAll");
+  await sleep(900);
+
+  // -------------------------------------------------------------------------
   // A strip wider than the window
   // -------------------------------------------------------------------------
   console.log("\n=== a strip wider than the window ===");
@@ -941,6 +1055,10 @@ try {
   for (const [index, file] of overflowFiles.entries()) {
     writeFileSync(file, `# Overflow ${index + 1}\n\nbody\n`);
   }
+  // Park the active tab at the left of the strip: the checks below need tabs on
+  // both sides, and the reopen probe above deliberately leaves a later tab active.
+  await clickTab("feature-tour.md");
+  await sleep(700);
   await emitOpenFiles(overflowFiles);
   const overflowed = await pollFor(
     `document.querySelectorAll(".doc-tab").length === ${4 + overflowFiles.length}`,
