@@ -33,8 +33,11 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import {
+  addCursorAbove as addCursorAboveCommand,
+  addCursorBelow as addCursorBelowCommand,
   copyLineDown,
   defaultKeymap,
+  deleteLine as deleteLineCommand,
   history,
   historyKeymap,
   indentWithTab,
@@ -176,6 +179,21 @@ export interface EditorHandle {
   deleteSelection(): void;
   /** Replace the current selection with the result of `transform`. */
   transformSelection(transform: (text: string) => string): void;
+  /**
+   * Transform the selected line block, or the whole document when there is no
+   * selection. Returns false when `requireSelection` is set and nothing is
+   * selected, so a keyboard route cannot sort an entire document by accident.
+   */
+  transformLines(
+    transform: (lines: readonly string[]) => readonly string[],
+    requireSelection?: boolean,
+  ): boolean;
+  /** Delete the line under every selection with one undo step. */
+  deleteCurrentLine(): void;
+  /** Add a cursor on the line above, matching CodeMirror's default keymap. */
+  addCursorAbove(): void;
+  /** Add a cursor on the line below, matching CodeMirror's default keymap. */
+  addCursorBelow(): void;
   foldCurrent(): void;
   unfoldCurrent(): void;
   foldAll(): void;
@@ -1524,6 +1542,59 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
         scrollIntoView: false,
         userEvent: "input.transform",
       });
+      view.focus();
+    },
+
+    transformLines(transform, requireSelection = false) {
+      const { state } = view;
+      const selection = state.selection.main;
+      const hasSelection = !selection.empty;
+      if (requireSelection && !hasSelection) return false;
+
+      // A line block starts at the first selected line and ends at the last.
+      // `lineAt` on an endpoint that sits at a line start belongs to the next
+      // line, which is why a selection that ends exactly on a line boundary
+      // includes that line; the reader sees the same boundary the outline and
+      // the line commands use.
+      const from = hasSelection ? state.doc.lineAt(selection.from).from : 0;
+      const to = hasSelection ? state.doc.lineAt(selection.to).to : state.doc.length;
+      const before = state.sliceDoc(from, to);
+      const after = transform(before.split("\n")).join("\n");
+      if (after === before) {
+        view.focus();
+        return true;
+      }
+
+      const changes = { from, to, insert: after };
+      if (hasSelection) {
+        view.dispatch({
+          changes,
+          selection: { anchor: from, head: from + after.length },
+          scrollIntoView: false,
+          userEvent: "input.transform",
+        });
+      } else {
+        // A whole-document whitespace cleanup must not select the document:
+        // leaving the selection unset lets CodeMirror map the caret through the
+        // change, which is what the reader expects after a menu command.
+        view.dispatch({ changes, scrollIntoView: false, userEvent: "input.transform" });
+      }
+      view.focus();
+      return true;
+    },
+
+    deleteCurrentLine() {
+      deleteLineCommand(view);
+      view.focus();
+    },
+
+    addCursorAbove() {
+      addCursorAboveCommand(view);
+      view.focus();
+    },
+
+    addCursorBelow() {
+      addCursorBelowCommand(view);
       view.focus();
     },
 

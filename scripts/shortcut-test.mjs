@@ -119,10 +119,13 @@ for (const [id, expected] of [
   ["file.open", "CmdOrCtrl+O"],
   ["file.save", "CmdOrCtrl+S"],
   ["file.saveAs", "CmdOrCtrl+Shift+S"],
+  ["file.saveAll", "CmdOrCtrl+Alt+S"],
+  ["file.reopenClosed", "CmdOrCtrl+Shift+T"],
   ["file.close", "CmdOrCtrl+W"],
   ["file.nextTab", "CmdOrCtrl+Tab"],
   ["file.prevTab", "CmdOrCtrl+Shift+Tab"],
   ["edit.find", "CmdOrCtrl+F"],
+  ["navigate.gotoHeading", "CmdOrCtrl+Alt+H"],
   ["file.print", "CmdOrCtrl+P"],
   ["view.source", "CmdOrCtrl+/"],
   ["view.latexCompile", "CmdOrCtrl+Shift+Enter"],
@@ -164,6 +167,19 @@ check(
   "Ctrl+Shift+/ does not run the Ctrl+/ command",
   `${beforeNearMiss} -> ${await modeOf()}`,
 );
+
+const headingHandled = await press({ code: "KeyH", key: "h", ctrl: true, alt: true });
+await sleep(350);
+const headingOpen = await evaluate(
+  `Boolean(document.querySelector(".heading-picker-dialog[open]"))`,
+);
+check(
+  headingHandled === "handled" && headingOpen === true,
+  "Ctrl+Alt+H opens Go to Heading",
+  `${headingHandled}, open=${headingOpen}`,
+);
+await evaluate(`document.querySelector(".heading-picker-close")?.click()`);
+await sleep(250);
 
 // Back to split through the toolbar, so the checks below start from a known
 // mode rather than whatever the previous one left behind.

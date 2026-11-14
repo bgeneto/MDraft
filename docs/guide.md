@@ -307,6 +307,29 @@ Other editor features:
 - **Save As** stays attached to the initiating tab even if another tab becomes
   active. It preserves typing and undo history. A destination already open in
   another tab is refused; choose another name or close that tab first.
+- **Save All** (`Ctrl+Alt+S`) writes every dirty buffer that has a path and asks
+  for a path for each untitled one. It stops on Cancel, a read-only buffer, an
+  unresolved disk change or a failed save, leaves the remaining tabs dirty, and
+  never closes a tab.
+- **Reopen Closed Tab** (`Ctrl+Shift+T`) restores the most recently closed tab,
+  with its caret and undo history. A clean saved file is read from disk again;
+  an untitled or discarded buffer comes back as dirty, so no text is lost.
+- **Go to Heading** (**Navigate › Go to Heading…**, `Ctrl+Alt+H`) opens a
+  keyboard-first list of the active document's headings. Type to filter by title,
+  level or line; Enter jumps and Escape returns to the editor.
+- **Blank Operations** (**Edit › Blank Operations**) cleans pasted or exported
+  text. With a selection it acts on the selected lines; with no selection it
+  acts on the whole document. *Trim Trailing Space*, *Trim Leading Space* and
+  *Trim Leading and Trailing Space* remove spaces and tabs at the line edges.
+  *EOL to Space* replaces each line break with a space; *Trim Both and EOL to
+  Space* also drops lines that become empty. *TAB to Space* expands each tab to
+  the editor's two-space indent. *Space to TAB (All)* turns every run of two
+  spaces into a tab and leaves a remainder; *Space to TAB (Leading)* does that
+  only at the start of a line. Every operation is one undo step.
+- **Lines** (**Edit › Lines**) sorts the selected lines in stable codepoint
+  order, removes duplicate lines, or deletes the current line. The same submenu
+  keeps Duplicate Line and Move Line Up/Down. **Edit › Multiple Cursors** adds
+  Select Next/All Occurrences and Add Cursor Above/Below.
 - **Auto-close** inserts `)`, `]`, `}`, `'`, `"` and `` ` `` after the opening
   character, steps over the closer, deletes both with Backspace and wraps a
   selection. HTML tags close in HTML documents and in the inline HTML that
@@ -332,7 +355,7 @@ Other editor features:
 - **Document statistics** are under **Tools › Document Statistics…**: characters
   without line endings, words, estimated tokens, lines and the UTF-8 byte length
   a save would write. With text selected, the same dialog reports the
-  selection's characters, bytes and range count. The same dialog opens when you
+  selection's words, characters, bytes and range count. The same dialog opens when you
   click the word or token count in the status bar. The numbers come from the
   status bar's incremental counts; the dialog is a snapshot and does not update
   while it is open.
@@ -532,8 +555,9 @@ built from source, use `Cmd` where the application registers `CmdOrCtrl`.
 | --- | --- |
 | New / Open / Save | `Ctrl+N` / `Ctrl+O` / `Ctrl+S` |
 | Save As | `Ctrl+Shift+S` |
+| Save All | `Ctrl+Alt+S` |
 | Print | `Ctrl+P` |
-| Close tab | `Ctrl+W` |
+| Close tab / reopen closed tab | `Ctrl+W` / `Ctrl+Shift+T` |
 | Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
 | Move focused tab left / right | `Alt+Shift+Left` / `Alt+Shift+Right` |
 | Tab context menu | `Shift+F10` (or the Menu key) |
@@ -541,7 +565,7 @@ built from source, use `Cmd` where the application registers `CmdOrCtrl`.
 | Find / Find and Replace | `Ctrl+F` / `Ctrl+H` |
 | Find next / previous | `F3` / `Shift+F3` |
 | Select next occurrence | `Ctrl+D` |
-| Go to line | `Ctrl+Alt+G` |
+| Go to line / heading | `Ctrl+Alt+G` / `Ctrl+Alt+H` |
 | Paste without formatting | `Ctrl+Shift+V` |
 | Source code mode | `Ctrl+/` |
 | Toggle sidebar | `Ctrl+Shift+L` |

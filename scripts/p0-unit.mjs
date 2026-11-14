@@ -1257,6 +1257,8 @@ function recoveryHarness(entries, files = {}) {
       },
     },
     lifecycle: { close: async (_targets, finalize) => finalize(() => true) },
+    closedTabs: [],
+    MAX_CLOSED_TABS: 10,
     loadUntitled: async () => {},
     defaultDocumentLanguage: () => "markdown",
     recoveryNotice: null,

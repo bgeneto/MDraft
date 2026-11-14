@@ -18,10 +18,18 @@ import {
   type TexpressoProblem,
   type TexpressoTheme,
 } from "./protocol";
+import { waitUntil } from "./wait";
 
 /** An edit or a project sync not acknowledged in this long starts the recovery. */
 const ACK_BUDGET_MS = 4000;
 const WATCHDOG_TICK_MS = 1000;
+/**
+ * How long an export waits for the frame's reading state. The first run
+ * on a fresh profile downloads the bundle and rebuilds the font cache, which is
+ * minutes; the bridge reports on its own after about 315 s (15 s for the app's
+ * first canvas, then 75 attempts of 4 s), so this never gives up before it.
+ */
+const TYPESET_BUDGET_MS = 360_000;
 
 export interface TexpressoProjectKey {
   rootPath: string;
@@ -49,7 +57,7 @@ export type { PreparedProject } from "./project";
 export class TexpressoSession {
   frame: TexpressoFrame;
   info: ReadyInfo | null = null;
-  /** The engine is typesetting; false once the whole document is done. */
+  /** The bridge's reading state; its paint signal can precede the final page. */
   busy = true;
   problems: TexpressoProblem[] = [];
   /** The edit sequence the last paint reflects, and when it was sent. */
@@ -66,6 +74,8 @@ export class TexpressoSession {
   private restarted = false;
   private watchdog = 0;
   private queued: Array<() => void> = [];
+  /** The latest export asked for; an older one still waiting gives way to it. */
+  private exports = 0;
   broken = false;
 
   constructor(
@@ -117,13 +127,22 @@ export class TexpressoSession {
     return this.ready;
   }
 
-  /** Wait until every project sync and edit has been acknowledged. */
-  async whenSettled(ms = 45_000): Promise<boolean> {
-    const deadline = performance.now() + ms;
-    while (this.outstanding.size > 0 && !this.broken && performance.now() < deadline) {
-      await new Promise((resolve) => window.setTimeout(resolve, 50));
-    }
-    return this.outstanding.size === 0;
+  /**
+   * Wait for the frame's reading state after every change it was sent. An
+   * acknowledgement only says a change arrived; the bridge reports `busy`
+   * before it acknowledges and clears it at its canvas-based paint signal.
+   * That signal can precede the final page, so the frame's own PDF export still
+   * has to finish the compile before returning the PDF.
+   * False when it broke, `superseded` holds, or the budget ran out.
+   */
+  whenTypeset(ms = TYPESET_BUDGET_MS, superseded: () => boolean = () => false): Promise<boolean> {
+    return waitUntil(
+      () => this.outstanding.size === 0 && !this.busy,
+      ms,
+      () => this.broken || superseded(),
+      () => performance.now(),
+      (tick) => new Promise((resolve) => window.setTimeout(resolve, tick)),
+    );
   }
 
   /** Run `work` now when the frame is up, else once it is; only the latest of a kind is kept. */
@@ -254,6 +273,7 @@ export class TexpressoSession {
     this.sentAt.set(seq, performance.now());
     this.outstanding.set(seq, { at: performance.now(), file: path, expect: textHash(text) });
     this.files.set(path, { fingerprint: textPrint(text) });
+    this.busy = true;
   }
 
   post(message: HostMessage): number | null {
@@ -267,12 +287,17 @@ export class TexpressoSession {
 
   /**
    * The frame's own `xdvipdfmx` conversion, the authority for Export, Save PDF
-   * and Print. Null when the frame is not ready or the request timed out.
+   * and Print. Null when the frame is not ready, produced nothing in its
+   * budget, or a later call replaced this one.
    */
   async exportPdf(ms = 120_000): Promise<{ pdf: Uint8Array; ms: number } | null> {
-    // The first build reaches here while the frame is still booting; the
-    // project sync must also be applied before an export can see it.
-    if (!(await this.whenReady()) || !(await this.whenSettled())) return null;
+    // The first build reaches here while the frame is still booting, and before
+    // it has typeset a page: an export asked then finds nothing and nothing
+    // asks again. Every render during a long first compile waits here too, so
+    // only the latest goes on to run the conversion.
+    const mine = ++this.exports;
+    if (!(await this.whenReady())) return null;
+    if (!(await this.whenTypeset(TYPESET_BUDGET_MS, () => mine !== this.exports))) return null;
     const reply = await this.request({ type: "export" }, ms);
     if (!reply || reply.type !== "pdf") return null;
     return { pdf: new Uint8Array(reply.pdf), ms: reply.ms };

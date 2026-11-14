@@ -503,6 +503,14 @@ reader-facing path installs or selects it. The decisions are recorded in
 [the earlier two-backend ADR](architecture.md); the work
 is in [the plan](architecture.md).
 
+An acknowledgement from the frame says a change arrived, not that it was
+typeset. The bridge reports `busy` before it acknowledges and clears it at its
+canvas-based paint signal, so `TexpressoSession.exportPdf()` waits until nothing
+is unacknowledged and the frame reports idle (`whenTypeset`, bounded above the
+bridge's own compile budget). That signal can precede the final page; the
+frame's own export waits for the ongoing compile. Renders that arrive while the
+frame is busy wait in the same place, and only the latest waiter requests a PDF.
+
 Every engine file and every TeX Live byte is pinned in
 `src-tauri/texpresso.json` and verified on download and on every serve;
 `src-tauri/src/latex_texpresso.rs` is the handler and cache. The production

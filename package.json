@@ -23,6 +23,7 @@
     "sync:unit": "node scripts/scroll-sync-unit.mjs",
     "encoding:unit": "node scripts/encoding-unit.mjs",
     "encoding:dialog": "node scripts/encoding-dialog-test.mjs",
+    "editor:tools:unit": "node scripts/editor-tools-unit.mjs",
     "word-sync": "node scripts/word-sync-test.mjs",
     "autoclose": "node scripts/autoclose-test.mjs",
     "emmet": "node scripts/emmet-test.mjs",

@@ -644,10 +644,27 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
         "edit.delete" | "edit.selectAllOccurrences" => writable && state.has_selection,
         "edit.selectNext" => writable,
         "edit.uppercase" | "edit.lowercase" | "edit.titleCase" => writable && state.has_selection,
-        "edit.duplicateLine" | "edit.moveLineUp" | "edit.moveLineDown" => writable,
+        "edit.duplicateLine" | "edit.moveLineUp" | "edit.moveLineDown" | "edit.deleteLine" => {
+            writable
+        }
+        "edit.sortAsc" | "edit.sortDesc" | "edit.removeDuplicates" => {
+            writable && state.has_selection
+        }
+        "edit.addCursorAbove" | "edit.addCursorBelow" => writable,
+        "edit.trimTrailing"
+        | "edit.trimLeading"
+        | "edit.trimBoth"
+        | "edit.eolToSpace"
+        | "edit.trimBothEolToSpace"
+        | "edit.tabsToSpaces"
+        | "edit.spacesToTabsAll"
+        | "edit.spacesToTabsLeading" => writable,
         "edit.comment" => writable && state.has_comment_syntax,
         "edit.pastePlain" => true,
-        "edit.selectOccurrences" | "edit.convertSelection" | "edit.lines" => writable,
+        "edit.selectOccurrences"
+        | "edit.convertSelection"
+        | "edit.lines"
+        | "edit.blankOperations" => writable,
         // LaTeX has a formatter now (tex-fmt, behind `hasFormatter`), so the row
         // follows the same rule as the other three: enabled when a formatter is
         // available and the document is writable.
@@ -701,6 +718,8 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
         | "file.open"
         | "file.save"
         | "file.saveAs"
+        | "file.saveAll"
+        | "file.reopenClosed"
         | "file.autoSave"
         | "file.export"
         | "file.closeTabs"
@@ -724,6 +743,7 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
         | "view.codeColors"
         | "view.typography"
         | "navigate.gotoLine"
+        | "navigate.gotoHeading"
         | "navigate.openTabs"
         | "tools.spellLanguage"
         | "tools.statistics"
@@ -1004,6 +1024,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .separator()
         .item(&item("file.save", "Save", Some("CmdOrCtrl+S"))?)
         .item(&item("file.saveAs", "Save As…", Some("CmdOrCtrl+Shift+S"))?)
+        .item(&item("file.saveAll", "Save All", Some("CmdOrCtrl+Alt+S"))?)
         .item(&check("file.autoSave", "Auto Save", None)?)
         .item(&item("file.reload", "Reload from Disk", None)?)
         .separator()
@@ -1013,6 +1034,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&item("file.reveal", "Show in Folder", None)?)
         .item(&item("file.favorite", "Add to Favorites", None)?)
         .separator()
+        .item(&item(
+            "file.reopenClosed",
+            "Reopen Closed Tab",
+            Some("CmdOrCtrl+Shift+T"),
+        )?)
         .item(&item("file.close", "Close Tab", Some("CmdOrCtrl+W"))?)
         .item(&close_tabs)
         .separator()
@@ -1036,13 +1062,16 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     // Undo/redo/cut/copy/paste/select-all are predefined so the webview handles
     // them natively; the rest are custom because the editor owns them.
     let select_occurrences =
-        SubmenuBuilder::with_id(app, "edit.selectOccurrences", "Select Occurrences")
+        SubmenuBuilder::with_id(app, "edit.selectOccurrences", "Multiple Cursors")
             .item(&item("edit.selectNext", "Select Next Occurrence", None)?)
             .item(&item(
                 "edit.selectAllOccurrences",
                 "Select All Occurrences",
                 None,
             )?)
+            .separator()
+            .item(&item("edit.addCursorAbove", "Add Cursor Above", None)?)
+            .item(&item("edit.addCursorBelow", "Add Cursor Below", None)?)
             .build()?;
 
     let convert_selection =
@@ -1056,6 +1085,42 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&item("edit.duplicateLine", "Duplicate Line", None)?)
         .item(&item("edit.moveLineUp", "Move Line Up", None)?)
         .item(&item("edit.moveLineDown", "Move Line Down", None)?)
+        .separator()
+        .item(&item("edit.sortAsc", "Sort Ascending", None)?)
+        .item(&item("edit.sortDesc", "Sort Descending", None)?)
+        .item(&item(
+            "edit.removeDuplicates",
+            "Remove Duplicate Lines",
+            None,
+        )?)
+        .item(&item("edit.deleteLine", "Delete Line", None)?)
+        .build()?;
+
+    // Whitespace and indentation cleanup. The labels match the reviewed
+    // Notepad++-style menu; the guide states that "Space" means the two-space
+    // indent and that "All" also converts spaces between words.
+    let blank_operations = SubmenuBuilder::with_id(app, "edit.blankOperations", "Blank Operations")
+        .item(&item("edit.trimTrailing", "Trim Trailing Space", None)?)
+        .item(&item("edit.trimLeading", "Trim Leading Space", None)?)
+        .item(&item(
+            "edit.trimBoth",
+            "Trim Leading and Trailing Space",
+            None,
+        )?)
+        .item(&item("edit.eolToSpace", "EOL to Space", None)?)
+        .item(&item(
+            "edit.trimBothEolToSpace",
+            "Trim Both and EOL to Space",
+            None,
+        )?)
+        .separator()
+        .item(&item("edit.tabsToSpaces", "TAB to Space", None)?)
+        .item(&item("edit.spacesToTabsAll", "Space to TAB (All)", None)?)
+        .item(&item(
+            "edit.spacesToTabsLeading",
+            "Space to TAB (Leading)",
+            None,
+        )?)
         .build()?;
 
     let edit = SubmenuBuilder::new(app, "Edit")
@@ -1081,6 +1146,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .separator()
         .item(&convert_selection)
         .item(&lines)
+        .item(&blank_operations)
         .item(&item("edit.comment", "Toggle Comment", None)?)
         .build()?;
 
@@ -1213,6 +1279,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
 
     let navigate = SubmenuBuilder::new(app, "Navigate")
         .item(&item("navigate.gotoLine", "Go to Line…", None)?)
+        .item(&item(
+            "navigate.gotoHeading",
+            "Go to Heading…",
+            Some("CmdOrCtrl+Alt+H"),
+        )?)
         .separator()
         .item(&item("file.nextTab", "Next Tab", Some("CmdOrCtrl+Tab"))?)
         .item(&item(

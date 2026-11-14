@@ -85,11 +85,19 @@ async function key(keyValue, code, modifiers = 0) {
       ? code.charCodeAt(5)
       : keyValue === "ArrowRight"
         ? 39
-        : keyValue === "Home"
-          ? 36
-          : keyValue === "Escape"
-            ? 27
-            : keyValue.toUpperCase().charCodeAt(0);
+        : keyValue === "ArrowDown"
+          ? 40
+          : keyValue === "ArrowUp"
+            ? 38
+            : keyValue === "Home"
+              ? 36
+              : keyValue === "End"
+                ? 35
+                : keyValue === "Enter"
+                  ? 13
+                  : keyValue === "Escape"
+                    ? 27
+                    : keyValue.toUpperCase().charCodeAt(0);
   await send("Input.dispatchKeyEvent", {
     type: "rawKeyDown",
     key: keyValue,
@@ -257,6 +265,24 @@ try {
     ["edit.pastePlain", "Paste without Formatting"],
     ["edit.find", "Find"],
     ["navigate.gotoLine", "Go to Line…"],
+    ["navigate.gotoHeading", "Go to Heading…"],
+    ["file.saveAll", "Save All"],
+    ["file.reopenClosed", "Reopen Closed Tab"],
+    ["edit.selectOccurrences", "Multiple Cursors"],
+    ["edit.addCursorAbove", "Add Cursor Above"],
+    ["edit.addCursorBelow", "Add Cursor Below"],
+    ["edit.sortAsc", "Sort Ascending"],
+    ["edit.sortDesc", "Sort Descending"],
+    ["edit.removeDuplicates", "Remove Duplicate Lines"],
+    ["edit.deleteLine", "Delete Line"],
+    ["edit.trimTrailing", "Trim Trailing Space"],
+    ["edit.trimLeading", "Trim Leading Space"],
+    ["edit.trimBoth", "Trim Leading and Trailing Space"],
+    ["edit.eolToSpace", "EOL to Space"],
+    ["edit.trimBothEolToSpace", "Trim Both and EOL to Space"],
+    ["edit.tabsToSpaces", "TAB to Space"],
+    ["edit.spacesToTabsAll", "Space to TAB (All)"],
+    ["edit.spacesToTabsLeading", "Space to TAB (Leading)"],
     ["view.zoomIn", "Zoom In"],
   ]) {
     check(textOf(id) === expected, `${id} is labelled ${JSON.stringify(expected)}`, textOf(id));
@@ -334,6 +360,29 @@ try {
   );
   check((await itemById("edit.delete"))?.enabled === false, "Delete Selection starts disabled");
   check((await itemById("navigate.openTarget"))?.enabled === false, "Open Target starts disabled");
+  check(
+    (await itemById("edit.sortAsc"))?.enabled === false &&
+      (await itemById("edit.removeDuplicates"))?.enabled === false,
+    "line reordering starts disabled without a selection",
+  );
+  check(
+    (await itemById("edit.deleteLine"))?.enabled === true,
+    "Delete Line works on the current line without a selection",
+  );
+  check(
+    (await itemById("edit.trimTrailing"))?.enabled === true &&
+      (await itemById("edit.eolToSpace"))?.enabled === true,
+    "Blank Operations are available without a selection",
+  );
+  check(
+    (await itemById("file.saveAll"))?.enabled === true &&
+      (await itemById("file.reopenClosed"))?.enabled === true,
+    "Save All and Reopen Closed Tab are always available",
+  );
+  check(
+    (await itemById("navigate.gotoHeading"))?.enabled === true,
+    "Go to Heading is always available",
+  );
 
   // A selection enables the commands that need one.
   await evaluate(`document.querySelector(".cm-content").focus()`);
@@ -344,6 +393,12 @@ try {
       (await itemById("edit.uppercase"))?.enabled === true &&
       (await itemById("edit.selectAllOccurrences"))?.enabled === true,
     "a selection enables Delete, conversion and Select All Occurrences",
+  );
+  check(
+    (await itemById("edit.sortAsc"))?.enabled === true &&
+      (await itemById("edit.sortDesc"))?.enabled === true &&
+      (await itemById("edit.removeDuplicates"))?.enabled === true,
+    "a selection enables the line reordering commands",
   );
   await key("Home", "Home", 2);
   check(
@@ -385,6 +440,61 @@ try {
     target?.enabled === true && target.text === "Open Link Under Cursor",
     "the caret on a link enables Open Link Under Cursor",
     JSON.stringify(target ?? null),
+  );
+
+  // Go to Heading is a modal, keyboard-first list over the outline with no
+  // file writes and no editor command behind it.
+  console.log("\n=== Navigate > Go to Heading ===");
+  await emitMenu("navigate.gotoHeading");
+  await sleep(350);
+  const picker = await evaluate(`(() => {
+    const dialog = document.querySelector(".heading-picker-dialog[open]");
+    const input = dialog?.querySelector(".heading-picker-filter");
+    return {
+      open: Boolean(dialog),
+      focused: document.activeElement === input,
+      rows: dialog?.querySelectorAll(".heading-picker-row").length ?? 0,
+    };
+  })()`);
+  check(
+    picker.open === true && picker.focused === true && picker.rows > 0,
+    "Go to Heading opens a focused list of headings",
+    JSON.stringify(picker),
+  );
+  await evaluate(`(() => {
+    const input = document.querySelector(".heading-picker-filter");
+    input.value = "Diagrams";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  })()`);
+  await sleep(150);
+  const filtered = await evaluate(`(() => {
+    const rows = [...document.querySelectorAll(".heading-picker-row")];
+    return { count: rows.length, text: rows[0]?.textContent ?? "" };
+  })()`);
+  check(
+    filtered.count === 1 && filtered.text.includes("Diagrams"),
+    "typing filters the heading list",
+    JSON.stringify(filtered),
+  );
+  await key("Enter", "Enter");
+  await sleep(350);
+  const jumped = await evaluate(`(() => ({
+    closed: !document.querySelector(".heading-picker-dialog[open]"),
+    line: document.querySelector(".cm-activeLineGutter")?.textContent ?? "",
+    focused: Boolean(document.activeElement?.closest?.(".cm-editor")),
+  }))()`);
+  check(
+    jumped.closed === true && jumped.line === "76" && jumped.focused === true,
+    "Enter jumps to the heading line and returns focus to the editor",
+    JSON.stringify(jumped),
+  );
+  await emitMenu("navigate.gotoHeading");
+  await sleep(300);
+  await key("Escape", "Escape");
+  await sleep(250);
+  check(
+    (await evaluate(`!document.querySelector(".heading-picker-dialog[open]")`)) === true,
+    "Escape closes the heading picker",
   );
 
   // Mode-dependent view commands.
@@ -540,8 +650,10 @@ try {
     return line && !line.hidden ? line.textContent ?? "" : "";
   })()`);
   check(
-    /^\d[\d.,]* selected characters? \(\d[\d.,]* bytes?\) in 1 range$/.test(selectionText),
-    "a selection adds one line with its character, byte and range counts",
+    /^\d[\d.,]* selected words?, \d[\d.,]* characters? \(\d[\d.,]* bytes?\) in 1 range$/.test(
+      selectionText,
+    ),
+    "a selection adds one line with its word, character, byte and range counts",
     selectionText,
   );
   await key("Escape", "Escape");
@@ -673,6 +785,87 @@ try {
     (await itemById("file.favorite"))?.text === "Add to Favorites",
     "removing it restores the label",
     (await itemById("file.favorite"))?.text ?? "MISSING",
+  );
+
+  // -------------------------------------------------------------------------
+  // Edit › Lines and Edit › Blank Operations on the blank tab
+  // -------------------------------------------------------------------------
+  console.log("\n=== Edit › Lines and Blank Operations ===");
+  await evaluate(`(() => {
+    const tab = [...document.querySelectorAll(".doc-tab")].find((entry) =>
+      (entry.querySelector(".doc-tab-name")?.textContent ?? "").startsWith("Untitled"),
+    );
+    tab?.click();
+  })()`);
+  await sleep(500);
+  const setBuffer = async (text) => {
+    await evaluate(`document.querySelector(".cm-content").focus()`);
+    await key("a", "KeyA", 2);
+    await send("Input.insertText", { text });
+    await sleep(300);
+    await key("a", "KeyA", 2);
+  };
+  await setBuffer("  b  \n a \n  b  ");
+  await emitMenu("edit.trimBoth");
+  await sleep(400);
+  check(
+    (await bufferText()) === "b\na\nb",
+    "Trim Leading and Trailing Space trims every selected line",
+    JSON.stringify(await bufferText()),
+  );
+  await key("z", "KeyZ", 2);
+  await sleep(300);
+  check(
+    (await bufferText()).includes("  b  "),
+    "the blank operation is one undo step",
+    JSON.stringify(await bufferText()),
+  );
+
+  await setBuffer("b\na\nc");
+  await emitMenu("edit.sortAsc");
+  await sleep(400);
+  check(
+    (await bufferText()) === "a\nb\nc",
+    "Sort Ascending reorders the selected lines",
+    JSON.stringify(await bufferText()),
+  );
+
+  await setBuffer("a\nb");
+  await emitMenu("edit.eolToSpace");
+  await sleep(400);
+  check(
+    (await bufferText()) === "a b",
+    "EOL to Space joins the selected lines",
+    JSON.stringify(await bufferText()),
+  );
+
+  await setBuffer("one\ntwo");
+  await key("Home", "Home", 2);
+  await emitMenu("edit.deleteLine");
+  await sleep(400);
+  check(
+    (await bufferText()) === "two",
+    "Delete Line removes the line under the caret",
+    JSON.stringify(await bufferText()),
+  );
+
+  await setBuffer("x\ny");
+  await key("Home", "Home", 2);
+  await emitMenu("edit.addCursorBelow");
+  await sleep(300);
+  const cursorCount = await evaluate(`document.querySelectorAll(".cm-cursor").length`);
+  check(cursorCount >= 2, "Add Cursor Below adds a second caret", String(cursorCount));
+  await key("Escape", "Escape");
+
+  // Undo every editing command so the existing clean-tab close below still
+  // takes its no-prompt path.
+  for (let index = 0; index < 12; index += 1) {
+    await key("z", "KeyZ", 2);
+  }
+  await sleep(400);
+  check(
+    (await evaluate(`document.querySelectorAll(".doc-tab.is-dirty").length`)) === 0,
+    "the command probes undo back to a clean blank tab",
   );
 
   // -------------------------------------------------------------------------

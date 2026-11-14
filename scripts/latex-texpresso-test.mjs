@@ -145,6 +145,28 @@ try {
       `window.__TAURI_INTERNALS__.invoke("latex_texmf_configure", { action: { type: "remove", id: ${JSON.stringify(root.id)} } })`,
     );
   }
+  // Every text the compiled status line shows from here on, with its time. The
+  // first export used to be asked before the frame had typeset a page; the
+  // failure it left is only visible as a status the line once held.
+  await evaluate(`(() => {
+    const label = document.querySelector(".compiled-state-label");
+    const box = label?.parentElement?.parentElement;
+    window.__mdraftStatusLog = [];
+    if (!box) return false;
+    const read = () => {
+      const text = [...box.querySelectorAll(".compiled-state-label, .compiled-state-detail")]
+        .map((node) => node.textContent).filter(Boolean).join(" · ");
+      const log = window.__mdraftStatusLog;
+      if (log.length < 400 && log.at(-1)?.text !== text)
+        log.push({ at: Math.round(performance.now()), text });
+    };
+    new MutationObserver(read).observe(box, { childList: true, characterData: true, subtree: true });
+    read();
+    return true;
+  })()`);
+  const statusLog = () =>
+    evaluate(`JSON.stringify(window.__mdraftStatusLog ?? [])`).then(JSON.parse);
+
   if (!(await invoke("latex_engine_status")).previewInstalled) {
     console.log("installing the preview engine from the local origin…");
     await evaluate("window.__TAURI_INTERNALS__.invoke('install_texpresso')");
@@ -154,56 +176,14 @@ try {
     "the preview engine and digest table are installed",
   );
   await enableAndCompile();
-  if ((await invoke("latex_status")) !== true) {
-    console.log("SKIP: the bundled LaTeX engine is not available.");
-    page.close();
-    process.exit(0);
-  }
-  if ((await dataset("latexCurrent")) === null) await emitMenu(page, "view.latexCompile");
-  const firstPdf = await waitFor(
-    `document.querySelector("#preview")?.dataset.latexCurrent ?? ""`,
-    300_000,
-    "the WasmTex PDF",
+  const booted = await waitFor(
+    `document.querySelector("#preview")?.dataset.texpressoReady === "1"`,
+    120_000,
+    "the TeXpresso frame",
   );
-  if (!firstPdf) {
-    console.log("SKIP: the bundled LaTeX engine did not produce a PDF.");
-    page.close();
-    process.exit(0);
-  }
-
-  // The vendored app sometimes never finishes its own boot run (no canvas, and
-  // every later compile is accepted and produces nothing). A reader's fix is
-  // the same as ours: switch away and back, which mounts a fresh frame. Three
-  // attempts is enough to tell a stuck boot from a broken backend.
-  let booted = false;
-  let target = null;
-  for (let attempt = 1; attempt <= 3 && !booted; attempt += 1) {
-    if (attempt > 1) {
-      console.log(`  (remounting the frame, attempt ${attempt})`);
-      await emitMenu(page, "view.latexBackend.wasmtex");
-      await sleep(1500);
-    }
-    await emitMenu(page, "view.latexBackend.texpresso");
-    booted = await waitFor(
-      `document.querySelector("#preview")?.dataset.texpressoReady === "1"`,
-      120_000,
-      "the TeXpresso frame",
-    );
-    if (!booted) continue;
-    const painted = await waitFor(
-      `document.querySelector("#preview")?.dataset.texpressoPainted ?? ""`,
-      45_000,
-      "the first paint",
-    );
-    if (!painted) booted = false;
-    if (!booted) {
-      frame?.close();
-      frame = null;
-      continue;
-    }
-    target = await attachFrame();
-  }
+  const target = booted ? await attachFrame() : null;
   check(booted, "the frame boots under the mdraft-tex origin");
+  if (!target) throw new Error("the first TeXpresso frame did not boot");
   check(
     Boolean(target) && target.type === "iframe",
     "the frame is its own target on its own origin",
@@ -222,7 +202,7 @@ try {
   check(
     await waitFor(
       `document.querySelector("#preview")?.dataset.texpressoPainted ?? ""`,
-      120_000,
+      360_000,
       "the first paint",
     ),
     "the project typesets and reports a paint",
@@ -253,6 +233,43 @@ try {
     "the shadow compile",
   );
   check(shadow, "the idle shadow compile fills the PDF export reads");
+  // No Compile was pressed: the first export must
+  // have waited for the frame instead of failing and staying failed.
+  const statuses = await statusLog();
+  const failedExport = statuses.filter((entry) => /could not be produced/.test(entry.text));
+  const frameErrors = await evaluate(
+    `JSON.stringify(performance.getEntriesByName("mdraft:latex:texpresso-error").map((entry) => entry.detail))`,
+  ).then(JSON.parse);
+  check(
+    statuses.length > 0 && failedExport.length === 0 && frameErrors.length === 0,
+    "the first export waits for the frame instead of reporting a failure",
+    `${statuses.map((entry) => `${entry.at} ${entry.text}`).join(" | ")} || errors: ${JSON.stringify(frameErrors)} || frame: ${await frameEval(
+      `document.documentElement.dataset.mdraftTrace ?? "(no trace)"`,
+    ).catch(() => "(no trace)")}`,
+  );
+  // The stored PDF is the reader's document: a fresh export of the idle frame
+  // has the same pages and the same text.
+  await emitMenu(page, "view.latexTexpressoExport");
+  const firstExport = await waitFor(
+    `Boolean(document.querySelector("#preview")?.dataset.texpressoExport)`,
+    120_000,
+    "the first export comparison",
+  ).then(async (done) => (done ? JSON.parse(await dataset("texpressoExport")) : null));
+  await evaluate(`delete document.querySelector("#preview").dataset.texpressoExport`);
+  check(
+    firstExport?.compared === true &&
+      firstExport.identicalText === true &&
+      firstExport.pages?.[0] >= 10,
+    "the first stored PDF is the document the frame typeset",
+    JSON.stringify(firstExport),
+  );
+  const menu = await invoke("menu_items");
+  check(
+    ["export.pdf", "file.print"].every(
+      (id) => menu.find((item) => item.id === id)?.enabled === true,
+    ) && (await evaluate(`document.querySelector(".compiled-save-pdf")?.disabled`)) === false,
+    "the first shadow enables PDF export, Save PDF and Print",
+  );
   check(
     (await evaluate(`document.querySelectorAll(".typst-page").length`)) === 0,
     "the shadow PDF is never drawn over the frame",
@@ -868,14 +885,16 @@ try {
     await waitFor(`!document.querySelector(".texpresso-frame")`, 15_000, "the frame's removal"),
     "switching back disposes the frame",
   );
-  check(
-    await waitFor(
-      `document.querySelectorAll(".typst-page").length > 0`,
-      300_000,
-      "the WasmTex preview",
-    ),
-    "the WasmTex preview returns",
-  );
+  if (await invoke("latex_status")) {
+    check(
+      await waitFor(
+        `document.querySelectorAll(".typst-page").length > 0`,
+        300_000,
+        "the WasmTex preview",
+      ),
+      "the WasmTex preview returns",
+    );
+  } else console.log("  SKIP  the WasmTex preview is not installed");
 } catch (error) {
   check(false, `uncaught: ${error.message}`);
 } finally {

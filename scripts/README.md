@@ -75,6 +75,7 @@ here with its public purpose and, for owner sessions, to the private catalog.
 | `npm run sync:unit` | `node scripts/scroll-sync-unit.mjs` |
 | `npm run encoding:unit` | `node scripts/encoding-unit.mjs` |
 | `npm run encoding:dialog` | `node scripts/encoding-dialog-test.mjs` |
+| `npm run editor:tools:unit` | `node scripts/editor-tools-unit.mjs` |
 | `npm run word-sync` | `node scripts/word-sync-test.mjs` |
 | `npm run autoclose` | `node scripts/autoclose-test.mjs` |
 | `npm run emmet` | `node scripts/emmet-test.mjs` |

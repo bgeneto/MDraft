@@ -15,11 +15,13 @@
 //     service host in shipped bytes;
 //   - project preparation: LF normalisation, non-UTF-8 detection and the
 //     local-library name rule;
-//   - the scroll and selection mapping.
+//   - the scroll and selection mapping;
+//   - the bounded wait an export uses before it asks the frame for a PDF.
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 import {
   DEFAULT_LATEX_PREVIEW_BACKEND,
@@ -37,6 +39,7 @@ import {
   markForPreviewGesture,
   projectRelativePath,
 } from "../src/texpresso/selection.ts";
+import { waitUntil } from "../src/texpresso/wait.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const read = (path) => readFileSync(join(root, path), "utf8");
@@ -472,6 +475,124 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     "a file outside the project has no relative path",
   );
   check(projectRelativePath("C:\\project", null, key) === null, "no path, no relative path");
+}
+
+// --- the wait before an export -------------------------------------------------
+{
+  // A clock that only moves when the wait sleeps: no real time, no DOM.
+  const clock = () => {
+    const state = { now: 0, sleeps: 0 };
+    return {
+      state,
+      now: () => state.now,
+      sleep: async (ms) => {
+        state.now += ms;
+        state.sleeps += 1;
+      },
+    };
+  };
+  const never = () => false;
+
+  let c = clock();
+  check(
+    (await waitUntil(() => true, 1000, never, c.now, c.sleep)) === true && c.state.sleeps === 0,
+    "a frame that is already idle adds no wait",
+    `${c.state.sleeps} sleeps`,
+  );
+
+  c = clock();
+  check(
+    (await waitUntil(() => c.state.sleeps >= 3, 1000, never, c.now, c.sleep)) === true &&
+      c.state.sleeps === 3,
+    "the wait ends when the frame finishes typesetting",
+    `${c.state.sleeps} sleeps`,
+  );
+
+  c = clock();
+  check(
+    (await waitUntil(never, 1000, () => c.state.sleeps >= 2, c.now, c.sleep)) === false &&
+      c.state.sleeps === 2,
+    "a broken or superseded wait ends without a result",
+    `${c.state.sleeps} sleeps`,
+  );
+
+  c = clock();
+  check(
+    (await waitUntil(
+      () => true,
+      1000,
+      () => true,
+      c.now,
+      c.sleep,
+    )) === false,
+    "a superseded wait does not export even when the frame is idle",
+  );
+
+  c = clock();
+  check(
+    (await waitUntil(never, 1000, never, c.now, c.sleep, 50)) === false && c.state.now === 1000,
+    "the wait is bounded",
+    `gave up at ${c.state.now} ms after ${c.state.sleeps} sleeps`,
+  );
+}
+
+// Exercise the session's real export method with a fake frame, without a DOM.
+// Node cannot strip the session's parameter properties, so transpile it using
+// the project's existing TypeScript compiler and substitute only its frame.
+{
+  const moduleUrl = (name) => new URL(`../src/texpresso/${name}.ts`, import.meta.url).href;
+  let source = ts.transpileModule(read("src/texpresso/session.ts"), {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  for (const [name, url] of [
+    ["frame", "data:text/javascript,export class TexpressoFrame {}"],
+    ["project", moduleUrl("project")],
+    ["protocol", moduleUrl("protocol")],
+    ["wait", moduleUrl("wait")],
+  ]) {
+    source = source.replaceAll(`from "./${name}"`, `from "${url}"`);
+  }
+  const { TexpressoSession } = await import(
+    `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`
+  );
+  const previousWindow = globalThis.window;
+  globalThis.window = { setTimeout };
+  try {
+    const session = Object.assign(Object.create(TexpressoSession.prototype), {
+      exports: 0,
+      busy: true,
+      broken: false,
+      outstanding: new Map([[1, {}]]),
+      whenReady: async () => true,
+    });
+    let requests = 0;
+    session.request = async () => {
+      requests += 1;
+      return { type: "pdf", pdf: new Uint8Array([1]).buffer, ms: 1 };
+    };
+    const results = [session.exportPdf(), session.exportPdf(), session.exportPdf()];
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    check(requests === 0, "no export is requested while the frame is busy");
+    session.busy = false;
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    check(requests === 0, "an unacknowledged change still blocks export after idle");
+    session.outstanding.clear();
+    const replies = await Promise.all(results);
+    check(
+      requests === 1 && replies[0] === null && replies[1] === null && replies[2]?.pdf[0] === 1,
+      "only the latest waiting export requests a PDF",
+      `${requests} request(s)`,
+    );
+    session.request = async () => ({ type: "error", message: "no page" });
+    check((await session.exportPdf()) === null, "a frame that produces no PDF reports failure");
+    session.busy = true;
+    const interrupted = session.exportPdf();
+    session.broken = true;
+    check((await interrupted) === null, "a broken session releases its waiting export");
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+  }
 }
 
 const failed = checks.filter((ok) => !ok).length;
