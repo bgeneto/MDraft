@@ -417,7 +417,8 @@ The assistant is off by default. To set it up:
 The blue button in the source pane opens a searchable palette. Select text,
 choose an action and press **Generate**. Once an answer arrives, you can copy
 it, replace the selection, insert it or open it in a new tab. Available actions
-include improving, continuing, translating, summarizing and converting text.
+include improving, continuing, translating, summarizing, fixing markup syntax and
+converting between Markdown, Typst, HTML, AsciiDoc and LaTeX.
 The palette's **History** keeps the ten most recent successful answers for the
 current session; it is not saved to disk.
 
@@ -620,8 +621,8 @@ built from source, use `Cmd` where the application registers `CmdOrCtrl`.
 | Blockquote / code block / table | `Ctrl+Shift+Q` / `Ctrl+Shift+K` / `Ctrl+T` |
 | Bulleted / numbered / task list | `Ctrl+Shift+]` / `Ctrl+Shift+[` / `Ctrl+Shift+X` |
 | Indent / outdent | `Tab` / `Shift+Tab` |
-| Focus / typewriter mode | `F8` / `F9` |
 | Wrap / unwrap paragraph | `Alt+Q` / `Alt+Shift+Q` (none on macOS) |
+| Focus / typewriter mode | `F8` / `F9` |
 | Zoom in / out / reset | `Ctrl+Shift+=` / `Ctrl+Shift+-` / `Ctrl+Alt+0` |
 | Full screen | `F11` |
 

@@ -77,6 +77,7 @@ export const MARKUPS: { id: DocumentLanguage; label: string }[] = [
   { id: "typst", label: "Typst" },
   { id: "html", label: "HTML" },
   { id: "asciidoc", label: "AsciiDoc" },
+  { id: "latex", label: "LaTeX" },
 ];
 
 export const ACTIONS: AiActionSpec[] = [
@@ -215,9 +216,31 @@ export const ACTIONS: AiActionSpec[] = [
     label: "Convert markup…",
     group: "transform",
     description: "Convert the passage to another markup",
-    keywords: ["convert", "markup", "markdown", "typst", "html", "asciidoc", "converter"],
+    keywords: ["convert", "markup", "markdown", "typst", "html", "asciidoc", "latex", "converter"],
     icon: '<path d="M4 8h13l-3-3M20 16H7l3 3"/>',
     parameter: "markup",
+    apply: "replace",
+  },
+  {
+    id: "fixSyntax",
+    label: "Fix syntax",
+    group: "transform",
+    description: "Repair markup errors without touching the wording",
+    keywords: [
+      "fix",
+      "syntax",
+      "markup",
+      "error",
+      "errors",
+      "broken",
+      "latex",
+      "typst",
+      "asciidoc",
+      "html",
+      "corrigir",
+    ],
+    icon: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M9 15l2 2 4-4"/>',
+    parameter: "none",
     apply: "replace",
   },
 ];
@@ -305,7 +328,7 @@ export function parameterIsValid(
   }
 }
 
-/** The three markup choices a document can be converted to. */
+/** The four markup choices a document can be converted to. */
 export function convertTargets(
   language: DocumentLanguage,
 ): { id: DocumentLanguage; label: string }[] {

@@ -1484,7 +1484,8 @@ export type AiActionId =
   | "keyPoints"
   | "critique"
   | "table"
-  | "convert";
+  | "convert"
+  | "fixSyntax";
 
 /**
  * One palette action's usage weight, as persisted in `aiActionUsage`.

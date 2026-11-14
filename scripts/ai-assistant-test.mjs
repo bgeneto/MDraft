@@ -42,6 +42,7 @@ const TAGS = {
   "mdraft-critique": "critique",
   "mdraft-table": "table",
   "mdraft-converted": "convert",
+  "mdraft-fixed": "fixSyntax",
 };
 
 // A model that ignores the wrapper protocol: the preamble and the change
@@ -64,6 +65,7 @@ const ANSWERS = {
   critique: "The mock finds the argument clear but the ending abrupt.",
   table: "| A | B |\n| --- | --- |\n| one | two |",
   convert: "# Converted by the mock",
+  fixSyntax: "Syntax repaired by the mock.",
 };
 
 const control = {
@@ -1274,8 +1276,8 @@ try {
     JSON.stringify(palette.sections[0]?.labels),
   );
   check(
-    "the catalog renders fourteen actions plus three shortcuts",
-    palette.rows.length === 17,
+    "the catalog renders fifteen actions plus three shortcuts",
+    palette.rows.length === 18,
     String(palette.rows.length),
   );
   check(

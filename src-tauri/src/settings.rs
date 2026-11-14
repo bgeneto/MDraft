@@ -35,7 +35,7 @@ pub(crate) const MAX_LAST_TABS: usize = 20;
 
 /// Maximum number of palette actions whose usage is remembered.
 ///
-/// The catalog has fourteen actions today and the palette shows three; this is
+/// The catalog has fifteen actions today and the palette shows three; this is
 /// a storage guard for a hand-edited or older file, not a reader-facing limit.
 /// The frontend drops ids this build does not know and prunes what has decayed
 /// to nothing; this side only refuses to grow the list without bound.

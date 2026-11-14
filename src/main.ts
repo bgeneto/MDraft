@@ -9477,7 +9477,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
         "MDraft",
         `Version ${APP_VERSION}`,
         "",
-        "Live-preview editor for Markdown,\nAsciidoc, Typst and HTML",
+        "Live-preview editor for Markdown,\nAsciidoc, Typst, LaTeX and HTML",
         "",
         "Conceived by Bernhard Enders",
         "Coded by DeepSeek Flash v4.1",
