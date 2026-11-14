@@ -32,6 +32,10 @@ export interface EditorMenuOptions {
   format: () => void | Promise<void>;
   /** Why Format Document cannot run, or null when it can. */
   formatBlocked: () => string | null;
+  /** Unwrap or wrap the paragraphs at the selection. */
+  reflow: (mode: "unwrap" | "wrap") => void;
+  /** Why the reflow commands cannot run, or null when they can. */
+  reflowBlocked: () => string | null;
   /** Why the document cannot be favorited, or null when it can. */
   favoriteBlocked: () => string | null;
   /** Whether the document is already in Favorites. */
@@ -214,6 +218,7 @@ export function installEditorContextMenu(options: EditorMenuOptions): () => void
     const hasSelection = !selection.empty;
     const hasComments = state.languageDataAt("commentTokens", selection.from, 1).length > 0;
     const formatBlocked = options.formatBlocked();
+    const reflowBlocked = options.reflowBlocked();
     const favoriteBlocked = options.favoriteBlocked();
     const favorite = options.isFavorite();
     const reading = options.reading();
@@ -390,6 +395,31 @@ export function installEditorContextMenu(options: EditorMenuOptions): () => void
         },
       },
       { kind: "separator" },
+      // macOS has no shortcut for these: Option+Q types a character there.
+      {
+        kind: "item",
+        id: "unwrapParagraph",
+        label: "Unwrap Paragraph",
+        shortcut: IS_MAC ? undefined : altShortcut("Q", true),
+        enabled: reflowBlocked === null,
+        title: reflowBlocked ?? undefined,
+        run: () => {
+          options.reflow("unwrap");
+          view.focus();
+        },
+      },
+      {
+        kind: "item",
+        id: "wrapParagraph",
+        label: "Wrap Paragraph",
+        shortcut: IS_MAC ? undefined : altShortcut("Q"),
+        enabled: reflowBlocked === null,
+        title: reflowBlocked ?? undefined,
+        run: () => {
+          options.reflow("wrap");
+          view.focus();
+        },
+      },
       {
         kind: "item",
         id: "format",

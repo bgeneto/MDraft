@@ -88,6 +88,8 @@ here with its public purpose and, for owner sessions, to the private catalog.
 | `npm run latex:native:unit` | `node scripts/latex-native-unit.mjs` |
 | `npm run latex:outline:unit` | `node scripts/latex-outline-unit.mjs` |
 | `npm run latex:word-map:unit` | `node scripts/latex-word-map-unit.mjs` |
+| `npm run reflow:unit` | `node scripts/reflow-unit.mjs` |
+| `npm run reflow` | `node scripts/reflow-test.mjs` |
 | `npm run pdf:map-worker:unit` | `node scripts/pdf-page-worker-unit.mjs` |
 | `npm run pdf:map:perf` | `node scripts/pdf-map-performance.mjs` |
 | `npm run pdf:map:webview` | `node scripts/pdf-webview-performance.mjs` |

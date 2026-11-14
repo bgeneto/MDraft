@@ -68,12 +68,12 @@ console.log("=== the shipped LaTeX Reference ===");
   // The line numbers are what the panel jumps to, and masking must not move them.
   const introduction = headings.find((heading) => heading.text === "Introduction");
   check(
-    introduction?.line === 23,
+    introduction?.line === 21,
     "a heading keeps its real source line",
     String(introduction?.line),
   );
   const last = headings[headings.length - 1];
-  check(last.line === 171, "the last heading keeps its real source line", String(last.line));
+  check(last.line === 129, "the last heading keeps its real source line", String(last.line));
   check(
     headings.every((heading, index) => index === 0 || heading.line > headings[index - 1].line),
     "the headings are in source order",

@@ -669,6 +669,10 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
         // follows the same rule as the other three: enabled when a formatter is
         // available and the document is writable.
         "format.document" => state.can_format,
+        // The four languages with a paragraph classifier; HTML and code have none.
+        "para.unwrap" | "para.wrap" => {
+            writable && matches!(state.document_language.as_str(), "markdown" | "latex" | "typst" | "asciidoc")
+        }
         "format.bold" | "format.italic" | "format.strike" | "format.code" | "format.link"
         | "format.image" => writable,
         "format.math" | "para.mathBlock" => writable && !html,
@@ -1253,6 +1257,18 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&item("para.indent", "Increase Indent", None)?)
         .item(&item("para.outdent", "Decrease Indent", None)?)
         .separator()
+        // Unwrap/Wrap Paragraph rewrite line breaks only on request. macOS gets
+        // no accelerator: Option+Q types "œ" there.
+        .item(&item(
+            "para.unwrap",
+            "Unwrap Paragraph",
+            (!cfg!(target_os = "macos")).then_some("Alt+Shift+Q"),
+        )?)
+        .item(&item(
+            "para.wrap",
+            "Wrap Paragraph",
+            (!cfg!(target_os = "macos")).then_some("Alt+Q"),
+        )?)
         .item(&item("format.document", "Format Document", None)?)
         .build()?;
 
@@ -2123,6 +2139,23 @@ mod tests {
         // one that is disabled for a Markdown document and live for LaTeX.
         assert_eq!(enabled_for(&state, "export.markdown"), Some(false));
         assert_eq!(enabled_for(&state, "export.pandoc.more"), Some(false));
+
+        // Unwrap/Wrap Paragraph follow the languages that have a paragraph
+        // classifier, and never a read-only document.
+        for language in ["markdown", "latex", "typst", "asciidoc"] {
+            state.document_language = language.into();
+            for id in ["para.unwrap", "para.wrap"] {
+                assert_eq!(enabled_for(&state, id), Some(true), "{id} in {language}");
+            }
+        }
+        for language in ["html", "javascript", "css", "json"] {
+            state.document_language = language.into();
+            assert_eq!(enabled_for(&state, "para.wrap"), Some(false), "para.wrap in {language}");
+        }
+        state.document_language = "markdown".into();
+        state.read_only = true;
+        assert_eq!(enabled_for(&state, "para.unwrap"), Some(false));
+        state.read_only = false;
     }
 
     #[test]

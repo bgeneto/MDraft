@@ -161,6 +161,46 @@ a new tab. The active tab's name is shown in Semibold and carries an accent edge
 **File › Close Tabs › All Tabs** closes the whole strip, with the usual save
 prompt for each dirty tab.
 
+### Unwrap and wrap paragraphs
+
+The editor soft-wraps long lines to the pane, but it cannot undo line breaks
+that are in the file. A paragraph hard-wrapped at 80 columns, shown in a pane
+narrower than that, leaves a one- or two-word row at the end of every source
+line. **Paragraph › Unwrap Paragraph** (`Alt+Shift+Q`) joins each paragraph's
+lines into one, so the editor can lay it out at any width. **Paragraph › Wrap
+Paragraph** (`Alt+Q`) does the reverse: it fills each paragraph to the **Wrap
+column** set under **Preferences › Editor** (80 by default). Both are also in
+the editor's right-click menu, above **Format Document**. On macOS they have no
+shortcut, because `Option+Q` types a character there.
+
+Both act on the paragraph at the caret, or on every paragraph a selection
+touches; select everything to reflow the whole document. One **Undo** restores
+the original text. Neither runs on its own: resizing the window never changes
+the file.
+
+They work in Markdown, LaTeX, Typst and AsciiDoc, where a single line break
+inside a paragraph is a space, and they change only those line breaks. The
+rendered document is the same afterwards. Anything that is not running prose
+is left exactly as it is: headings, lists' markers, code and verbatim blocks,
+math, tables, comments, front matter and the LaTeX preamble. Some line breaks
+mean something and are always kept:
+
+- Markdown hard breaks (two trailing spaces or a trailing `\`) and the
+  `[!NOTE]` line of an alert;
+- LaTeX `\\` breaks, and any line with a `%` comment — joining it would turn
+  the next line into part of the comment;
+- Typst `\` line breaks and `//` comments;
+- AsciiDoc ` +` hard breaks. A paragraph with the `hardbreaks` option, a
+  `[verse]` or `[source]` paragraph, an indented (literal) paragraph, or a
+  document that sets `:hardbreaks-option:` is not changed at all.
+
+Wrap never puts a word at the start of a line where it would read as markup,
+such as `1.` or `-` (a list item) in Markdown, or `term::` in AsciiDoc; such a
+line runs past the column instead. When a paragraph is left alone, the status
+message names its line and the reason.
+
+### Views and Split
+
 The view can be **Source**, **Split** or **Preview**; Split is the default.
 In Split view:
 
@@ -581,6 +621,7 @@ built from source, use `Cmd` where the application registers `CmdOrCtrl`.
 | Bulleted / numbered / task list | `Ctrl+Shift+]` / `Ctrl+Shift+[` / `Ctrl+Shift+X` |
 | Indent / outdent | `Tab` / `Shift+Tab` |
 | Focus / typewriter mode | `F8` / `F9` |
+| Wrap / unwrap paragraph | `Alt+Q` / `Alt+Shift+Q` (none on macOS) |
 | Zoom in / out / reset | `Ctrl+Shift+=` / `Ctrl+Shift+-` / `Ctrl+Alt+0` |
 | Full screen | `F11` |
 

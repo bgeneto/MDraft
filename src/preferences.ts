@@ -2043,6 +2043,15 @@ function buildSections(
           },
         },
         {
+          kind: "number",
+          label: "Wrap column",
+          help: "Wrap Paragraph fills prose up to this column. Unwrap Paragraph ignores it: it joins a paragraph into one line and lets the editor wrap it to the window. Neither runs on its own when the window is resized.",
+          min: 20,
+          max: 200,
+          get: () => s().wrapColumn ?? 80,
+          set: (value) => host.update({ wrapColumn: Math.round(value) }),
+        },
+        {
           kind: "checkbox",
           label: "Focus Mode",
           help: "Dims every line except the one holding the caret.",

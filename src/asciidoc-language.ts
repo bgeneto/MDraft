@@ -11,7 +11,7 @@
 
 import { StreamLanguage } from "@codemirror/language";
 
-type BlockKind =
+export type BlockKind =
   | "listing"
   | "literal"
   | "passthrough"
@@ -27,7 +27,7 @@ interface AsciiDocState {
   delimiter: string;
 }
 
-const DELIMITERS: Array<[RegExp, BlockKind]> = [
+export const DELIMITERS: Array<[RegExp, BlockKind]> = [
   [/^-{4,}$/, "listing"],
   [/^\.{4,}$/, "literal"],
   [/^\+{4,}$/, "passthrough"],
@@ -48,7 +48,7 @@ function openerFor(line: string): { kind: BlockKind; delimiter: string } | null 
   return null;
 }
 
-function isContentBlock(kind: BlockKind): boolean {
+export function isContentBlock(kind: BlockKind): boolean {
   return (
     kind === "listing" ||
     kind === "literal" ||

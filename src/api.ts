@@ -333,6 +333,8 @@ export interface Settings {
   editorMaxWidth: number;
   /** Line spacing in the source pane. The preview keeps its own reading height. */
   editorLineHeight: EditorLineHeight;
+  /** Column Wrap Paragraph fills to (20–200; the backend clamps it). */
+  wrapColumn: number;
   syntaxTheme: string;
   recentFiles: string[];
   /**

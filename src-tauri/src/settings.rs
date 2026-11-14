@@ -181,6 +181,21 @@ fn clamp_latex_cache_limit(mb: u32) -> u32 {
 /// Wide are opt-in adjustments chosen in Preferences. The names, not a
 /// multiplier, are what a settings file stores, so a hand-edited value cannot
 /// produce an invalid CSS line height.
+/// The column Wrap Paragraph fills to. Additive, so an older settings file loads
+/// with the conventional 80.
+fn default_wrap_column() -> u32 {
+    80
+}
+
+/// The range Wrap Paragraph accepts; a hand-edited value is clamped on load and
+/// save so the editor never fills to a column it cannot honour.
+const WRAP_COLUMN_MIN: u32 = 20;
+const WRAP_COLUMN_MAX: u32 = 200;
+
+fn clamp_wrap_column(column: u32) -> u32 {
+    column.clamp(WRAP_COLUMN_MIN, WRAP_COLUMN_MAX)
+}
+
 fn default_editor_line_height() -> String {
     "normal".to_string()
 }
@@ -441,6 +456,9 @@ pub struct Settings {
     /// "compact" | "normal" | "wide"; line spacing in the source pane.
     #[serde(default = "default_editor_line_height")]
     pub editor_line_height: String,
+    /// Wrap Paragraph fills prose to this column (20–200).
+    #[serde(default = "default_wrap_column")]
+    pub wrap_column: u32,
 
     // ---- Preferences: Typography -----------------------------------------
     //
@@ -843,6 +861,7 @@ impl Default for Settings {
             zoom_level: default_zoom_level(),
             editor_max_width: 980,
             editor_line_height: default_editor_line_height(),
+            wrap_column: default_wrap_column(),
             // Empty means "the built-in default for that role"; see src/fonts.ts.
             source_font: String::new(),
             body_font: String::new(),
@@ -1153,6 +1172,7 @@ fn parse_settings(raw: &str) -> Option<Settings> {
     }
     settings.ai_context_tokens = clamp_context_tokens(settings.ai_context_tokens);
     settings.latex_cache_limit_mb = clamp_latex_cache_limit(settings.latex_cache_limit_mb);
+    settings.wrap_column = clamp_wrap_column(settings.wrap_column);
     // The Files panel was replaced by Favorites. An older file that was last
     // showing it must open on the panel that took its place, not fall through
     // the renderer's `else` branch into Recent.
@@ -1258,6 +1278,7 @@ impl AppState {
         }
         next.ai_context_tokens = clamp_context_tokens(next.ai_context_tokens);
         next.latex_cache_limit_mb = clamp_latex_cache_limit(next.latex_cache_limit_mb);
+        next.wrap_column = clamp_wrap_column(next.wrap_column);
         sort_ai_usage(&mut next.ai_action_usage);
         next.ai_action_usage.truncate(MAX_AI_USAGE_ENTRIES);
         write_json(&self.config_file, &next)?;
@@ -1569,6 +1590,7 @@ mod tests {
         assert_eq!(s.editor_font_size, 15);
         assert_eq!(s.editor_max_width, 980);
         assert_eq!(s.editor_line_height, "normal");
+        assert_eq!(s.wrap_column, 80);
         assert_eq!(s.syntax_theme, "auto");
         assert!(s.recent_files.is_empty());
         assert!(s.spellcheck);
@@ -1631,6 +1653,17 @@ mod tests {
         assert_eq!(clamp_latex_cache_limit(1), LATEX_CACHE_MIN_MB);
         assert_eq!(clamp_latex_cache_limit(256), 256);
         assert_eq!(clamp_latex_cache_limit(u32::MAX), LATEX_CACHE_MAX_MB);
+    }
+
+    #[test]
+    fn wrap_column_defaults_to_80_and_is_clamped() {
+        // An older file has no `wrapColumn`; it loads at 80. A hand-edited
+        // value outside 20–200 is pulled back into range.
+        let legacy = parse_settings(r#"{"viewMode":"split"}"#).expect("a legacy file loads");
+        assert_eq!(legacy.wrap_column, 80);
+        assert_eq!(parse_settings(r#"{"wrapColumn":3}"#).unwrap().wrap_column, WRAP_COLUMN_MIN);
+        assert_eq!(parse_settings(r#"{"wrapColumn":9999}"#).unwrap().wrap_column, WRAP_COLUMN_MAX);
+        assert_eq!(parse_settings(r#"{"wrapColumn":72}"#).unwrap().wrap_column, 72);
     }
 
     #[test]
