@@ -9,11 +9,20 @@
 
 import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/common";
-import katex from "katex";
-import { escapeHtml, renderChunks, type PreviewChunks, type RenderedMath } from "./preview-render";
-import { batchesForChunks, settleMainThread } from "./preview-batches";
+import { renderKatexCached } from "./katex-cache";
+import { patchMarkdownDom } from "./keyed-dom-patch";
+import {
+  escapeHtml,
+  renderChunks,
+  renderChunksIncremental,
+  type CodeEntry,
+  type MarkdownBlockChunk,
+  type PreviewChunks,
+  type RenderedMath,
+} from "./preview-render";
+import { batchRangesFor, batchesForChunks, settleMainThread } from "./preview-batches";
 import { renderChunksAsync } from "./preview-worker-client";
-import type { Fragment } from "./source-map";
+import { clearWordMapPatch, type Fragment } from "./source-map";
 // The stylesheet carries the Computer Modern faces AND the layout rules. Without
 // it KaTeX still emits its DOM, but fractions collapse and radicals, integrals
 // and large delimiters vanish, because those are drawn with the KaTeX_Size
@@ -123,11 +132,86 @@ export interface PreviewDescription {
   anchors: number;
   /** Word-level source fragments, present only when `map` was requested. */
   fragments?: Fragment[];
+  /** Non-silent block fragment counts matching block-local `data-f` spans. */
+  blockFragmentCounts?: number[];
   legacyImages?: PreviewChunks["legacyImages"];
+  /** Patch telemetry populated by incremental live renders. */
+  incremental?: {
+    applied: boolean;
+    dirtyBlocks: number;
+    totalBlocks: number;
+    mode?: string;
+  };
 }
 
 export interface RenderResult extends PreviewDescription {
   html: string;
+}
+
+interface MarkdownHostState {
+  source: string;
+  chunks: PreviewChunks;
+  optionsKey: string;
+  grouped: boolean;
+}
+
+const markdownHostState = new WeakMap<HTMLElement, MarkdownHostState>();
+
+function markdownOptionsKey(options: RenderOptions): string {
+  return JSON.stringify([
+    options.baseDir ?? "",
+    options.documentPath ?? "",
+    options.math ?? true,
+    options.mermaid ?? true,
+    options.map ?? false,
+  ]);
+}
+
+function blockFragmentCountsFor(blocks: readonly MarkdownBlockChunk[]): number[] {
+  const counts: number[] = [];
+  let carry = 0;
+  for (const block of blocks) {
+    carry += block.fragments?.length ?? 0;
+    if (!block.silent) {
+      counts.push(carry);
+      carry = 0;
+    }
+  }
+  return counts;
+}
+
+function resequenceFragmentAttributes(
+  host: HTMLElement,
+  blocks?: readonly MarkdownBlockChunk[],
+): void {
+  if (blocks) {
+    const counts = blockFragmentCountsFor(blocks);
+    const children = Array.from(host.children) as HTMLElement[];
+    if (children.length === counts.length) {
+      let base = 0;
+      for (let i = 0; i < children.length; i += 1) {
+        const count = counts[i];
+        if (count > 0) {
+          const blockEl = children[i];
+          const targets = blockEl.matches("[data-f]")
+            ? [blockEl, ...Array.from(blockEl.querySelectorAll<HTMLElement>("[data-f]"))]
+            : Array.from(blockEl.querySelectorAll<HTMLElement>("[data-f]"));
+          for (const el of targets) {
+            const local = Number(el.dataset.f);
+            if (Number.isInteger(local) && local >= 0 && local < count) {
+              el.setAttribute("data-f", String(base + local));
+            }
+          }
+        }
+        base += count;
+      }
+      return;
+    }
+  }
+  let index = 0;
+  for (const el of Array.from(host.querySelectorAll<HTMLElement>("[data-f]"))) {
+    el.setAttribute("data-f", String(index++));
+  }
 }
 
 /**
@@ -142,6 +226,9 @@ export function renderPreview(source: string, options: RenderOptions): RenderRes
   const data = renderChunks(source, options);
   const host = document.createElement("div");
   insertChunks(host, data, options);
+  if (!data.hasRawHtml && data.blocks) {
+    resequenceFragmentAttributes(host, data.blocks);
+  }
   return { ...describePreview(host, data), html: host.innerHTML };
 }
 
@@ -154,10 +241,30 @@ function previewBatches(data: PreviewChunks): readonly (readonly string[])[] {
 /** Insert every batch synchronously; used by exports and by the fallback. */
 function insertChunks(host: HTMLElement, data: PreviewChunks, options: RenderOptions): void {
   host.replaceChildren();
-  for (const batch of previewBatches(data)) {
-    insertBatch(host, batch, data, options);
+  if (!data.hasRawHtml && data.blocks) {
+    for (const range of batchRangesFor(data.blocks, (b) => b.html.length)) {
+      insertBlockBatch(host, data.blocks.slice(range.from, range.to), options);
+    }
+  } else {
+    for (const batch of previewBatches(data)) {
+      insertBatch(host, batch, data, options);
+    }
   }
   finishPreview(host, data, options, true);
+}
+
+function buildSingleMarkdownBlockElements(
+  block: MarkdownBlockChunk,
+  options: RenderOptions,
+): HTMLElement[] {
+  const holder = document.createElement("div");
+  holder.innerHTML = DOMPurify.sanitize(block.html, SANITIZE_OPTIONS);
+  normalizeInputs(holder);
+  restorePlaceholders(holder, block.codes, block.maths);
+  decorateCodeBlocks(holder, options.mermaid ?? true);
+  decorateLinks(holder, options.baseDir, undefined, options.documentPath ?? null, false);
+  decorateAlerts(holder);
+  return Array.from(holder.children) as HTMLElement[];
 }
 
 /**
@@ -172,34 +279,94 @@ export async function renderPreviewInto(
   options: RenderOptions,
   cancelled: () => boolean,
 ): Promise<PreviewDescription | null> {
+  const optionsKey = markdownOptionsKey(options);
+  const prevState = markdownHostState.get(host);
   const outcome = await renderChunksAsync(source, options);
   // A superseded request must not run a second, synchronous render: the newer
   // render owns the pane. Only a worker that cannot run falls back.
   if (outcome.kind === "superseded") return null;
   if (outcome.kind === "fallback" && cancelled()) return null;
-  const data = outcome.kind === "ok" ? outcome.data : renderChunks(source, options);
+  const data =
+    outcome.kind === "ok"
+      ? outcome.data
+      : prevState && prevState.optionsKey === optionsKey
+        ? renderChunksIncremental(prevState.source, prevState.chunks, source, options)
+        : renderChunks(source, options);
   if (cancelled()) return null;
+
+  const shouldGroup = canGroupParagraphs(data);
+  if (prevState && prevState.optionsKey === optionsKey) {
+    const patch = patchMarkdownDom(
+      host,
+      prevState.source,
+      prevState.chunks,
+      source,
+      data,
+      prevState.grouped,
+      shouldGroup,
+      (block) => buildSingleMarkdownBlockElements(block, options),
+    );
+    if (patch?.applied) {
+      if (patch.headingsChanged || patch.hasToc) {
+        addHeadingIds(host);
+        buildTableOfContents(host);
+      }
+      markdownHostState.set(host, {
+        source,
+        chunks: data,
+        optionsKey,
+        grouped: prevState.grouped,
+      });
+      return describePreview(host, data, prevState.grouped, {
+        applied: true,
+        dirtyBlocks: patch.dirtyBlocks,
+        totalBlocks: data.blocks?.length ?? data.chunks.length,
+        mode: data.incremental?.mode ?? "diff",
+      });
+    }
+  }
 
   // Build the new preview in a detached container. Appending each batch to the
   // live pane forced a layout of a growing document per batch; one swap at the
   // end is a single layout and leaves the old preview visible while the worker
   // and the batches run.
   const staging = document.createElement("div");
-  const grouping = canGroupParagraphs(data) ? new ParagraphGroups(staging, data.lines!) : null;
+  const grouping = shouldGroup ? new ParagraphGroups(staging, data.lines!) : null;
   let lastYield = performance.now();
-  for (const batch of previewBatches(data)) {
-    if (cancelled()) return null;
-    insertBatch(staging, batch, data, options, grouping);
-    lastYield = await settleMainThread(lastYield);
-    if (cancelled()) return null;
+  if (!data.hasRawHtml && data.blocks) {
+    for (const range of batchRangesFor(data.blocks, (b) => b.html.length)) {
+      if (cancelled()) return null;
+      insertBlockBatch(staging, data.blocks.slice(range.from, range.to), options, grouping);
+      lastYield = await settleMainThread(lastYield);
+      if (cancelled()) return null;
+    }
+  } else {
+    for (const batch of previewBatches(data)) {
+      if (cancelled()) return null;
+      insertBatch(staging, batch, data, options, grouping);
+      lastYield = await settleMainThread(lastYield);
+      if (cancelled()) return null;
+    }
   }
   const grouped = grouping?.finish() ?? false;
   finishPreview(staging, data, options, false, grouped);
   if (cancelled()) return null;
+  clearWordMapPatch(host);
+  if (!data.hasRawHtml && data.blocks) {
+    host.dataset.mdraftLocalFragments = "1";
+  } else {
+    delete host.dataset.mdraftLocalFragments;
+  }
   const fragment = document.createDocumentFragment();
   while (staging.firstChild) fragment.appendChild(staging.firstChild);
   host.replaceChildren(fragment);
-  return describePreview(host, data, grouped);
+  markdownHostState.set(host, { source, chunks: data, optionsKey, grouped });
+  return describePreview(host, data, grouped, {
+    applied: false,
+    dirtyBlocks: data.blocks?.length ?? data.chunks.length,
+    totalBlocks: data.blocks?.length ?? data.chunks.length,
+    mode: "full",
+  });
 }
 
 // Restrict grouping to independently parsed paragraphs with an exact line map.
@@ -327,6 +494,44 @@ const SANITIZE_OPTIONS = {
   USE_PROFILES: { html: true },
 };
 
+function insertBlockBatch(
+  host: HTMLElement,
+  blocks: readonly MarkdownBlockChunk[],
+  options: RenderOptions,
+  grouping: ParagraphGroups | null = null,
+): void {
+  const batchCodes: CodeEntry[] = [];
+  const batchMaths: RenderedMath[] = [];
+  const htmlParts: string[] = new Array(blocks.length);
+
+  for (let i = 0; i < blocks.length; i += 1) {
+    const block = blocks[i];
+    if (block.codes.length === 0 && block.maths.length === 0) {
+      htmlParts[i] = block.html;
+      continue;
+    }
+    const codeBase = batchCodes.length;
+    const mathBase = batchMaths.length;
+    for (const c of block.codes) batchCodes.push(c);
+    for (const m of block.maths) batchMaths.push(m);
+    htmlParts[i] = block.html.replace(PLACEHOLDER, (full, kind: string, idxRaw: string) => {
+      const idx = Number(idxRaw);
+      if (kind === "CODE") {
+        return idx >= 0 && idx < block.codes.length ? `@@CODE${codeBase + idx}@@` : full;
+      }
+      return idx >= 0 && idx < block.maths.length ? `@@MATH${mathBase + idx}@@` : full;
+    });
+  }
+
+  const holder = document.createElement("div");
+  holder.innerHTML = DOMPurify.sanitize(htmlParts.join(""), SANITIZE_OPTIONS);
+  normalizeInputs(holder);
+  restorePlaceholders(holder, batchCodes, batchMaths);
+  decorateCodeBlocks(holder, options.mermaid ?? true);
+  if (grouping) grouping.append(holder);
+  else while (holder.firstChild) host.appendChild(holder.firstChild);
+}
+
 function insertBatch(
   host: HTMLElement,
   batch: readonly string[],
@@ -362,9 +567,11 @@ function finishPreview(
   addHeadingIds(host);
   buildTableOfContents(host);
   // The line list belongs to the original source and is already in document
-  // order; if a sanitised chunk produced a different number of top-level
-  // elements, the annotation is dropped rather than pointing at a wrong line.
-  const lines = data.lines;
+  // order. Raw HTML can merge several Markdown tokens into one element, so the
+  // element list, not the token list, is authoritative whenever it is present.
+  // If neither list matches the sanitised element count, the annotation is
+  // dropped rather than pointing at a wrong line.
+  const lines = data.elementLines ?? data.lines;
   const blocks = Array.from(host.children) as HTMLElement[];
   if (!grouped && lines && lines.length === blocks.length) {
     for (let i = 0; i < blocks.length; i += 1) {
@@ -377,15 +584,25 @@ function describePreview(
   host: HTMLElement,
   data: PreviewChunks,
   grouped = false,
+  incremental?: PreviewDescription["incremental"],
 ): PreviewDescription {
-  const lines = data.lines;
+  const lines = data.elementLines ?? data.lines;
+  const elements = Array.from(host.children) as HTMLElement[];
+  const anchored = grouped
+    ? (lines?.length ?? 0)
+    : elements.filter((el) => el.hasAttribute("data-line")).length;
   const mapped =
-    lines !== null && lines.length > 0 && (grouped || lines.length === host.children.length);
+    !!lines && lines.length > 0 && (grouped || (anchored > 0 && anchored === elements.length));
   return {
     linesMapped: mapped,
-    anchors: mapped && lines ? lines.length : 0,
+    anchors: mapped ? anchored : 0,
     fragments: data.fragments,
+    blockFragmentCounts:
+      data.fragments && !data.hasRawHtml && data.blocks
+        ? blockFragmentCountsFor(data.blocks)
+        : undefined,
     legacyImages: data.legacyImages,
+    incremental,
   };
 }
 
@@ -501,18 +718,14 @@ export function mathNode(
     span.title = entry.error;
     return span;
   }
-  try {
-    span.innerHTML = katex.renderToString(entry.body, {
-      displayMode: entry.display,
-      throwOnError: false,
-      strict: false,
-      output: "html",
-    });
-  } catch (error) {
-    span.className = "math-error";
-    span.textContent = `$${entry.body}$`;
-    span.title = String(error);
+  const rendered = renderKatexCached(entry.body, entry.display);
+  if (rendered.html !== null) {
+    span.innerHTML = rendered.html;
+    return span;
   }
+  span.className = "math-error";
+  span.textContent = `$${entry.body}$`;
+  span.title = rendered.error ?? "";
   return span;
 }
 
@@ -840,11 +1053,14 @@ export function extractHeadings(markdown: string): Heading[] {
   return headings;
 }
 
-/** Replace a literal `[TOC]` paragraph with links to the rendered headings. */
+/** Replace a literal `[TOC]` paragraph (or existing TOC nav) with links to headings. */
 function buildTableOfContents(host: HTMLElement): void {
-  const markers = Array.from(host.querySelectorAll("p")).filter(
-    (p) => (p.textContent ?? "").trim() === "[TOC]",
-  );
+  const markers: HTMLElement[] = [
+    ...Array.from(host.querySelectorAll("p")).filter(
+      (p) => (p.textContent ?? "").trim() === "[TOC]",
+    ),
+    ...Array.from(host.querySelectorAll<HTMLElement>("nav.md-toc")),
+  ];
   if (markers.length === 0) return;
 
   const headings = Array.from(host.querySelectorAll("h1,h2,h3,h4,h5,h6"));
@@ -872,7 +1088,12 @@ function buildTableOfContents(host: HTMLElement): void {
     nav.appendChild(list);
   }
 
-  for (const marker of markers) marker.replaceWith(nav.cloneNode(true));
+  for (const marker of markers) {
+    const clone = nav.cloneNode(true) as HTMLElement;
+    const lineAttr = marker.getAttribute("data-line");
+    if (lineAttr !== null) clone.setAttribute("data-line", lineAttr);
+    marker.replaceWith(clone);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -914,8 +1135,21 @@ export function renderMermaidError(container: HTMLElement, error: unknown): void
   container.replaceChildren(box);
 }
 
-/** Fill every `.mermaid[data-mermaid]` element inside `root`. */
-export async function renderMermaidIn(root: HTMLElement, isDark: boolean): Promise<void> {
+/**
+ * Fill every `.mermaid[data-mermaid]` element inside `root`.
+ *
+ * `cancelled` is checked before every write. A theme change re-runs this over
+ * the committed preview while an earlier pass may still be awaiting
+ * `mermaid.render`; without the check the older pass would paint diagrams in
+ * the theme the reader just left. A cancelled result is not cached either:
+ * `initialize` is global, so a render that straddled the newer pass's
+ * `initialize` may carry the other theme's colours.
+ */
+export async function renderMermaidIn(
+  root: HTMLElement,
+  isDark: boolean,
+  cancelled: () => boolean = () => false,
+): Promise<void> {
   const blocks = Array.from(root.querySelectorAll<HTMLElement>(".mermaid[data-mermaid]"));
   if (blocks.length === 0) return;
 
@@ -931,6 +1165,7 @@ export async function renderMermaidIn(root: HTMLElement, isDark: boolean): Promi
     const code = block.getAttribute("data-mermaid") ?? "";
     const key = `${isDark ? "dark" : "light"}\u0000${code}`;
 
+    if (cancelled()) return;
     const cached = mermaidCache.get(key);
     if (cached) {
       block.innerHTML = cached;
@@ -939,6 +1174,7 @@ export async function renderMermaidIn(root: HTMLElement, isDark: boolean): Promi
 
     try {
       const { svg } = await mermaid.render(`mmd-${++mermaidSequence}`, code);
+      if (cancelled()) return;
       mermaidCache.set(key, svg);
       block.innerHTML = svg;
     } catch (error) {

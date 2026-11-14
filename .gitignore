@@ -1,57 +1,199 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
+# Dependencies and reproducible build/release output
+node_modules/
+dist/
+dist-ssr/
+_site/
+bin/
+target/
+coverage/
+playwright-report/
+test-results/
+.ruff_cache/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.tsbuildinfo
 
-node_modules
-dist
-dist-ssr
-_site
+# Credentials and machine/profile state. Safe templates also need inventory review.
+.env
+.env.*
+!.env.example
+!.env.template
+.envrc
+.netrc
+.pypirc
+credentials
+credentials.*
+secrets
+secrets.*
+id_rsa*
+id_ed25519*
+id_ecdsa*
+id_dsa*
+*.pem
+*.key
+*.pfx
+*.p12
+*.jks
+*.keystore
+*.kdbx
+.aws/
+.ssh/
+.azure/
+.kube/
+/settings.json
+/ai-prompts.md
+/.window-state.json
+/.mdraft.json
+/.mdraft/
 *.local
 
-# Staged release output, bin/<os>/<arch>/. Reproducible with `npm run dist`.
-bin
+# Owner records and raw source captures live outside the public checkout.
+/docs/adr/
+/docs/audits/
+/docs/plans/
+/docs/handoffs/
+/docs/agent-guide/
+/docs/texpresso/
+/docs/screenshots/
+/docs/samples/
+/docs/sample-files/
+/docs/backlog*.md
+/docs/og-source.html
+/docs/ícones/
+/MDraft-owner/
+/MDraft-live/
+/mdraft-audit/
+/.local/
+/.playwright-mcp/
 
-# Only the screenshots the README embeds and the captures the landing page
-# optimizer reads are part of the repository. The rest of this folder holds
-# captures taken while comparing layouts and themes, which are working files.
-#
-# `docs/screenshots/*` rather than `docs/screenshots/` on purpose - excluding the
-# directory itself makes git stop descending into it, and a `!` rule inside it
-# would then have nothing to re-include.
-docs/screenshots/*
-!docs/screenshots/readme-markdown-light-renaissance.png
-!docs/screenshots/readme-markdown-dark-system.png
-# Sources for scripts/optimize-site-images.py -> site/assets/img/*.webp.
-!docs/screenshots/auto-highlighting.webp
-!docs/screenshots/builtin-ai-assistant.webp
-!docs/screenshots/typst-ieee-conference-paper.webp
-!docs/screenshots/typography-presets-implemented.png
-!docs/screenshots/typography-presets-proposal.png
-!docs/screenshots/math-light.png
-!docs/screenshots/math-dark.png
-!docs/screenshots/statusbar-p2.png
+# Test/report outputs are never publication inputs.
+logs/
+*.log
+*.cpuprofile
+*.heapsnapshot
+*.dmp
+*.har
+*.etl
+*.prof
+*.bak
+*.backup
+*.db
+*.db-wal
+*.db-shm
+*.sqlite*
+*.pdf
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.zip
+*.7z
+*.tar
+*.gz
+*.exe
+*.dll
+*.msi
+*.so
+*.dylib
+*.AppImage
+*.deb
+*.rpm
 
-# Remove samples 
-docs/samples/*
-
-# Editor directories and files
+# Editor state; explicitly shared configuration may be reviewed and tracked.
 .vscode/*
 !.vscode/extensions.json
-# Shared on purpose: without it rust-analyzer holds a cargo lock on
-# src-tauri/target and `npm run dist` stalls on "Blocking waiting for file lock".
 !.vscode/settings.json
-.VSCodeCounter/*
-.idea
+.VSCodeCounter/
+.idea/
 .DS_Store
+Thumbs.db
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
-# Local browser automation artifacts from the MCP tooling; not part of the app.
-.playwright-mcp/
+
+# Only inventoried synthetic fixtures may be added. Reopen directories so exact
+# allowed files can be reached; unknown files stay ignored at every depth.
+/samples/**
+!/samples/**/
+!/samples/asciidoc-include.adoc
+!/samples/asciidoc-reference.adoc
+!/samples/asciidoc-tour.adoc
+!/samples/export-tour.adoc
+!/samples/export-tour.md
+!/samples/feature-tour.md
+!/samples/format-document.tex
+!/samples/html-tour/app.js
+!/samples/html-tour/data.json
+!/samples/html-tour/image.png
+!/samples/html-tour/index.html
+!/samples/html-tour/module.js
+!/samples/html-tour/style.css
+!/samples/latex-engines/magic-xe.tex
+!/samples/latex-engines/plain.tex
+!/samples/latex-perf/book-flat/figures/diagram.png
+!/samples/latex-perf/book-flat/main.tex
+!/samples/latex-perf/book-flat/references.bib
+!/samples/latex-perf/book/chapters/ch01.tex
+!/samples/latex-perf/book/chapters/ch02.tex
+!/samples/latex-perf/book/chapters/ch03.tex
+!/samples/latex-perf/book/chapters/ch04.tex
+!/samples/latex-perf/book/chapters/ch05.tex
+!/samples/latex-perf/book/chapters/ch06.tex
+!/samples/latex-perf/book/chapters/ch07.tex
+!/samples/latex-perf/book/chapters/ch08.tex
+!/samples/latex-perf/book/chapters/ch09.tex
+!/samples/latex-perf/book/chapters/ch10.tex
+!/samples/latex-perf/book/chapters/ch11.tex
+!/samples/latex-perf/book/chapters/ch12.tex
+!/samples/latex-perf/book/figures/diagram.png
+!/samples/latex-perf/book/main.tex
+!/samples/latex-perf/book/references.bib
+!/samples/latex-perf/huge/chapters/ch01.tex
+!/samples/latex-perf/huge/chapters/ch02.tex
+!/samples/latex-perf/huge/chapters/ch03.tex
+!/samples/latex-perf/huge/chapters/ch04.tex
+!/samples/latex-perf/huge/chapters/ch05.tex
+!/samples/latex-perf/huge/chapters/ch06.tex
+!/samples/latex-perf/huge/chapters/ch07.tex
+!/samples/latex-perf/huge/chapters/ch08.tex
+!/samples/latex-perf/huge/chapters/ch09.tex
+!/samples/latex-perf/huge/chapters/ch10.tex
+!/samples/latex-perf/huge/chapters/ch11.tex
+!/samples/latex-perf/huge/chapters/ch12.tex
+!/samples/latex-perf/huge/figures/diagram.png
+!/samples/latex-perf/huge/main.tex
+!/samples/latex-perf/huge/references.bib
+!/samples/latex-perf/preamble.tex
+!/samples/latex-perf/small.tex
+!/samples/latex-perf/tikz-auto.tex
+!/samples/latex-perf/tikz.tex
+!/samples/latex-project/chapters/intro.tex
+!/samples/latex-project/figures/diagram.png
+!/samples/latex-project/main.tex
+!/samples/latex-project/references.bib
+!/samples/latex-reference.tex
+!/samples/latex-root/chapters/body.tex
+!/samples/latex-root/chapters/orphan.tex
+!/samples/latex-root/main.tex
+!/samples/latex-texmf/main.tex
+!/samples/latex-texmf/second/main.tex
+!/samples/latex-two-column.tex
+!/samples/math-render.md
+!/samples/pdf-quality-blocks.png
+!/samples/pdf-quality.md
+!/samples/physics-sync.typ
+!/samples/raw-html-sync.md
+!/samples/scroll-sync/prose.adoc
+!/samples/scroll-sync/prose.html
+!/samples/scroll-sync/prose.md
+!/samples/scroll-sync/single-column.typ
+!/samples/scroll-sync/two-columns.typ
+!/samples/typst-pages.typ
+!/samples/typst-reference.typ
+!/samples/typst-tour.typ
+!/samples/word-sync.md
+!/samples/workspace-typst/chapters/one.typ
+!/samples/workspace-typst/template.typ

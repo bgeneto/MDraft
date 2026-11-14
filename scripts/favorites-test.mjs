@@ -617,8 +617,8 @@ try {
     };
   })()`);
   check(
-    filesRows.showHidden === false && filesRows.labels.includes("Managing Favorites"),
-    "the dead Show Hidden row is gone and a Favorites note explains management",
+    filesRows.showHidden === false && !filesRows.labels.includes("Managing Favorites"),
+    "the dead Show Hidden row is gone and the how-to note stays gone",
     filesRows.labels.join(", "),
   );
 

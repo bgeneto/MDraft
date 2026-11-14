@@ -3,10 +3,14 @@
 import * as api from "./api";
 import { extractHeadings } from "./markdown";
 import type { Heading } from "./markdown";
+import { extractLatexHeadings } from "./latex-outline";
 
 // Single implementation of heading scanning, shared with the `[TOC]` renderer.
 export { extractHeadings };
 export type { Heading };
+// The LaTeX scan lives in its own pure module so the whole rule set is a unit
+// test with no DOM; the sidebar re-exports it for the outline's language switch.
+export { extractLatexHeadings };
 
 /**
  * The headings in a Typst document.
@@ -169,7 +173,7 @@ export function renderOutline(
   container: HTMLElement,
   headings: Heading[],
   activeLine: number,
-  onPick: (line: number) => void,
+  onPick: (line: number, index: number) => void,
   language: api.DocumentLanguage = "markdown",
 ): void {
   if (headings.length === 0) {
@@ -180,7 +184,9 @@ export function renderOutline(
           ? "No headings yet. Add an <h1>–<h6> element to build an outline."
           : language === "asciidoc"
             ? "No headings yet. Start a line with == to build an outline."
-            : "No headings yet. Start a line with # to build an outline.";
+            : language === "latex"
+              ? "No headings yet. Add a \\section{…} command to build an outline."
+              : "No headings yet. Start a line with # to build an outline.";
     emptyState(container, message);
     return;
   }
@@ -194,7 +200,7 @@ export function renderOutline(
     button.style.paddingLeft = `${10 + (heading.level - 1) * 12}px`;
     button.style.fontSize = `${Math.max(11.5, 13.5 - (heading.level - 1) * 0.5)}px`;
     if (index === activeIndex) button.classList.add("active");
-    button.addEventListener("click", () => onPick(heading.line));
+    button.addEventListener("click", () => onPick(heading.line, index));
     fragment.appendChild(button);
   });
   container.replaceChildren(fragment);

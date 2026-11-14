@@ -8,6 +8,18 @@ import { classifyDiskChange } from "./disk-change.ts";
 
 export type UnsavedDecision = "save" | "discard" | "cancel";
 
+/**
+ * What a save writes when the reader chose it explicitly (the encoding
+ * dialog). The session keeps its old format until the write succeeds, so a
+ * conflict, an I/O error or an unmappable character leaves both the file and
+ * the status bar as they were.
+ */
+export interface SaveFormat {
+  encoding: string;
+  hadBom: boolean;
+  lineEnding: "\n" | "\r\n";
+}
+
 export interface DocumentLifecycleDeps {
   sessions: SessionStore;
   text(session: Session): string;
@@ -19,6 +31,7 @@ export interface DocumentLifecycleDeps {
     eol: string,
     bom: boolean,
     expected: string | null,
+    encoding: string,
   ): Promise<CheckedWrite>;
   recovery: Pick<RecoveryScheduler, "schedule" | "forget" | "flush">;
   choosePath(session: Session, suggested?: string): Promise<string | null>;
@@ -109,11 +122,22 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
     }
   }
 
-  async function saveJob(s: Session, as: boolean, automatic: boolean, suggested?: string) {
-    if (s.lossy && automatic) {
+  async function saveJob(
+    s: Session,
+    as: boolean,
+    automatic: boolean,
+    suggested?: string,
+    encodingOverride?: string,
+    format?: SaveFormat,
+  ) {
+    if ((s.lossy || s.encodingBlocked) && automatic) {
       if (!warned.has(s.id)) {
         warned.add(s.id);
-        deps.notify(`Auto Save paused for "${s.name}": save its recovered text as a UTF-8 copy.`);
+        deps.notify(
+          s.encodingBlocked
+            ? `Auto Save paused for "${s.name}": its ${s.encoding} text contains characters that encoding cannot store.`
+            : `Auto Save paused for "${s.name}": save its recovered text as a UTF-8 copy.`,
+        );
       }
       return false;
     }
@@ -122,7 +146,9 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
     const target = copy ? await deps.choosePath(s, suggested) : sourcePath;
     if (!target || !exists(s) || s.path !== sourcePath) return false;
     const samePath = s.path !== null && pathKey(s.path) === pathKey(target);
-    if (s.lossy && samePath) {
+    // An explicit conversion is the reader's consent to change the encoding in
+    // place; only recovered lossy text keeps its original protected.
+    if ((s.lossy || (s.encodingBlocked && !format)) && samePath) {
       deps.notify("Choose a different filename for the UTF-8 copy; the original is protected.");
       return false;
     }
@@ -165,15 +191,35 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
       // during write remains newer than this exact disk snapshot. The expected
       // hash belongs to the same-path revision; Save As has no baseline.
       const text = deps.text(s);
+      const targetEncoding = format?.encoding ?? encodingOverride ?? s.encoding;
+      const targetEol = format?.lineEnding ?? (s.lineEnding || "\n");
+      const targetBom = format?.hadBom ?? s.hadBom;
       const info = await deps.write(
         target,
         text,
-        s.lineEnding || "\n",
-        s.hadBom,
+        targetEol,
+        targetBom,
         samePath ? s.sha256 : null,
+        targetEncoding,
       );
       if (!exists(s) || s.path !== sourcePath) return false;
       if (!info.written) {
+        if (info.change === "encoding" && format) {
+          // Text typed after the dialog's fit check. The document's own
+          // encoding is unchanged, so this is not an Auto Save block.
+          deps.notify(
+            `"${s.name}" now contains characters ${targetEncoding} cannot store. The file was not changed.`,
+          );
+          return false;
+        }
+        if (info.change === "encoding") {
+          s.encodingBlocked = true;
+          deps.notify(
+            `"${s.name}" contains characters ${s.encoding} cannot store. The file was not changed; save a UTF-8 copy instead.`,
+          );
+          deps.changed(s);
+          return false;
+        }
         deps.conflict(s, info.change === "deleted" ? "deleted" : "modified");
         return false;
       }
@@ -191,11 +237,16 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
         s.lossy = false;
         s.readOnly = false;
       }
+      s.encoding = targetEncoding;
+      s.lineEnding = targetEol;
+      s.hadBom = targetBom;
       s.savedContent = text;
       s.modifiedMs = info.modifiedMs;
       s.size = info.size;
       s.sha256 = info.sha256;
       s.conflict = null;
+      s.encodingBlocked = false;
+      warned.delete(s.id);
       await journal(s);
       deps.changed(s, !samePath);
       return true;
@@ -203,10 +254,26 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
   }
 
   const save = (s: Session, automatic = false) => run(s, () => saveJob(s, false, automatic));
-  const saveAs = (s: Session, suggested?: string) =>
-    run(s, () => saveJob(s, true, false, suggested));
+  const saveAs = (s: Session, suggested?: string, encodingOverride?: string) =>
+    run(s, () =>
+      saveJob(
+        s,
+        true,
+        false,
+        suggested,
+        encodingOverride ?? (s.lossy || s.encodingBlocked ? "UTF-8" : undefined),
+      ),
+    );
 
-  async function reload(s: Session): Promise<boolean> {
+  /**
+   * Write the document in a reader-chosen format, in place or as a copy.
+   * Unsaved edits are written too; the encoding dialog says so.
+   */
+  const convert = (s: Session, format: SaveFormat, copy: boolean) =>
+    run(s, () => saveJob(s, copy, false, undefined, undefined, format));
+
+  /** `read` is the decoder: detection by default, a chosen encoding for Reinterpret. */
+  async function reload(s: Session, read = deps.read): Promise<boolean> {
     return run(s, async () => {
       if (!s.path) return false;
       const decisionSnapshot = snapshot(s);
@@ -216,7 +283,7 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
         if (decision === "save" && (!(await saveJob(s, false, false)) || s.dirty)) return false;
       }
       const before = snapshot(s);
-      const payload = await deps.read(s.path!);
+      const payload = await read(s.path!);
       if (!current(before)) {
         deps.notify("The document changed while reloading; your edits were kept.");
         return false;
@@ -263,6 +330,8 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
             s.sha256 = payload.sha256;
             s.lineEnding = payload.lineEnding;
             s.hadBom = payload.hadBom;
+            s.encoding = payload.encoding;
+            s.encodingBlocked = false;
             s.readOnly = payload.readOnly;
             s.conflict = null;
           } else if (!s.dirty) deps.replace(s, payload);
@@ -333,17 +402,34 @@ export function createDocumentLifecycle(deps: DocumentLifecycleDeps) {
     }
   }
 
+  /**
+   * Run `task` under the same per-path key Save As uses for its target.
+   *
+   * An open reads a path and adopts it into the store; a Save As writes a path
+   * and adopts it. Ordering both on one key is what keeps them from each
+   * concluding "not open yet" and leaving two tabs for one file. The task must
+   * not wait on a dialog: it holds the key.
+   */
+  const exclusivePath = <T>(path: string, task: () => Promise<T>) =>
+    queue(`path:${pathKey(path)}`, task);
+
   return {
     save,
     saveAs,
+    convert,
     reload,
     poll,
     close,
     idle,
     snapshot,
     current,
+    exclusivePath,
     get committing() {
       return committing;
+    },
+    /** True while a close is waiting for decisions or committing. */
+    get closing() {
+      return closing;
     },
   };
 }

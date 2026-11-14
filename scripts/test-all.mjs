@@ -44,21 +44,28 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { otherTestHarnesses, ownsStagedExecutable } from "./test-harness-ownership.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
 const isWindows = process.platform === "win32";
+// Tests never activate the developer's desktop. Some native-focus layers may
+// need an explicitly separate interactive environment.
+process.env.MDRAFT_TEST_HIDDEN = "1";
 
 const tauriConfig = JSON.parse(
   fs.readFileSync(path.join(repoRoot, "src-tauri", "tauri.conf.json"), "utf8"),
 );
-const identifier = tauriConfig.identifier;
+const identifier = `${tauriConfig.identifier}.test-automation`;
+process.env.MDRAFT_TEST_IDENTIFIER = identifier;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // The instance this run started, so an interrupt can still close it. Leaving one
 // behind is what makes the next build fail on a locked executable.
 let activeApp = null;
+let interrupted = false;
+const runningCommands = new Set();
 
 // ---------------------------------------------------------------------------
 // The layers, in the order they should run: cheap and independent first, UI
@@ -67,10 +74,22 @@ let activeApp = null;
 // ---------------------------------------------------------------------------
 const SUITES = [
   {
+    id: "test-harness-ownership-unit",
+    title: "Test harness process ownership (unit)",
+    kind: "node",
+    script: "test-harness-ownership-unit.mjs",
+  },
+  {
     id: "sync-unit",
     title: "Scroll geometry (unit)",
     kind: "node",
     script: "scroll-sync-unit.mjs",
+  },
+  {
+    id: "spellcheck-unit",
+    title: "Spelling corpus (unit)",
+    kind: "node",
+    script: "spellcheck-unit.mjs",
   },
   {
     id: "rust",
@@ -93,6 +112,14 @@ const SUITES = [
     title: "Export paths (unit)",
     kind: "node",
     script: "export-paths-unit.mjs",
+  },
+  {
+    // The selection, totals and status classification behind the Optional tools
+    // dialog: pure, so no application and no build.
+    id: "optional-tools-unit",
+    title: "Optional tools (unit)",
+    kind: "node",
+    script: "optional-tools-unit.mjs",
   },
   {
     // Recovery scheduling, disk-change classification and the Typst command
@@ -144,6 +171,37 @@ const SUITES = [
     script: "preview-worker-unit.mjs",
   },
   {
+    // Phase 1 prose optimization primitives: adaptive delay, math scan,
+    // KaTeX LRU, AsciiDoc include cache and worker-side math pre-render.
+    id: "prose-phase-unit",
+    title: "Prose pipeline optimization (unit)",
+    kind: "node",
+    script: "prose-phase-unit.mjs",
+  },
+  {
+    // What the pane's content was built from. Pure logic: an owner covers its
+    // own document incarnation, or a LaTeX project's member files.
+    id: "preview-owner-unit",
+    title: "Preview ownership (unit)",
+    kind: "node",
+    script: "preview-owner-unit.mjs",
+  },
+  {
+    // What a preview depends on, as one key. Pure logic: every input changes
+    // the key, and an edit undone before the render keeps it.
+    id: "preview-freshness-unit",
+    title: "Preview freshness keys (unit)",
+    kind: "node",
+    script: "preview-freshness-unit.mjs",
+  },
+  {
+    // The compiled-output store kept across tab switches: byte-bounded LRU.
+    id: "preview-store-unit",
+    title: "Preview output store (unit)",
+    kind: "node",
+    script: "preview-store-unit.mjs",
+  },
+  {
     id: "preview-dom",
     title: "Preview DOM and sanitizer",
     kind: "node",
@@ -154,6 +212,379 @@ const SUITES = [
     title: "Auto-close matching (unit)",
     kind: "node",
     script: "autoclose-unit.mjs",
+  },
+  {
+    // Where an Emmet abbreviation may expand, what it becomes, how the snippet
+    // indents it and that the engine stays out of the main bundle. No application.
+    id: "emmet-unit",
+    title: "Emmet abbreviations (unit)",
+    kind: "node",
+    script: "emmet-unit.mjs",
+  },
+  {
+    // The completion layer's configuration, its Tab precedence and the rule that
+    // a language with no catalog offers nothing. No application.
+    id: "completion-unit",
+    title: "Completion layer (unit)",
+    kind: "node",
+    script: "completion-unit.mjs",
+  },
+  {
+    // The LaTeX catalog and the context decision table: what the popup offers,
+    // and the positions where it must offer nothing at all.
+    id: "completion-latex-unit",
+    title: "LaTeX completion catalog and context (unit)",
+    kind: "node",
+    script: "completion-latex-unit.mjs",
+  },
+  {
+    // The validator that decides whether a project's references are literal
+    // paths the snapshot can resolve. It rejected the shipped LaTeX Reference
+    // before this suite existed, so the regression is pinned here.
+    id: "latex-references-unit",
+    title: "LaTeX reference validation (unit)",
+    kind: "node",
+    script: "latex-references-unit.mjs",
+  },
+  {
+    // The mapper from a diagnostic's line and column to a CodeMirror range. Its
+    // staleness rule is what keeps a mark off the wrong word after an edit.
+    id: "latex-diagnostics-unit",
+    title: "LaTeX diagnostics (unit)",
+    kind: "node",
+    script: "latex-diagnostics-unit.mjs",
+  },
+  {
+    // The native backend's result adapter. The Rust runner owns the process and
+    // the log; this module decides what the pane may call current, so the
+    // warning-versus-error, partial-PDF and cancellation rules are pinned here.
+    id: "latex-native-unit",
+    title: "Installed TeX result handling (unit)",
+    kind: "node",
+    script: "latex-native-unit.mjs",
+  },
+  {
+    // The Outline panel's LaTeX scan. A `\section` shown inside `\verb` or a
+    // verbatim block is sample text, not structure; the shipped LaTeX Reference
+    // demonstrates every command it documents, so the regression is pinned
+    // against that fixture and then exercised on its own.
+    id: "latex-outline-unit",
+    title: "LaTeX outline (unit)",
+    kind: "node",
+    script: "latex-outline-unit.mjs",
+  },
+  {
+    id: "latex-word-map-unit",
+    title: "LaTeX prose candidates (unit)",
+    kind: "node",
+    script: "latex-word-map-unit.mjs",
+  },
+  {
+    id: "pdf-map-worker-unit",
+    title: "PDF map worker batches (unit)",
+    kind: "node",
+    script: "pdf-page-worker-unit.mjs",
+  },
+  {
+    id: "latex-project-unit",
+    title: "LaTeX project validation (unit)",
+    kind: "node",
+    script: "latex-sync-unit.mjs",
+  },
+  {
+    // The adapter pins LuaLaTeX and does not request or consume SyncTeX.
+    id: "latex-sdk-unit",
+    title: "LaTeX SDK and no-SyncTeX route (unit)",
+    kind: "node",
+    script: "latex-sdk-unit.mjs",
+  },
+  {
+    // The TeXpresso backend's pure half: the default constant and the loopback
+    // rule, engine mapping, every fallback's precedence and sentence, message
+    // validation, the pins in texpresso.json, the absence of a TeXpresso
+    // service host, project preparation, and the scroll/selection mapping.
+    id: "texpresso-unit",
+    title: "TeXpresso backend (unit)",
+    kind: "node",
+    script: "texpresso-unit.mjs",
+  },
+  {
+    // The live-preview scheduler (latest-wins, adaptive delay) and the
+    // main-document rules of GAP-034.
+    id: "latex-scheduler-unit",
+    title: "LaTeX scheduler and main document (unit)",
+    kind: "node",
+    script: "latex-scheduler-unit.mjs",
+  },
+  {
+    // Typst adaptive scheduling (80..350 ms delay, stale cap) and gate.
+    id: "typst-scheduler-unit",
+    title: "Typst scheduler (unit)",
+    kind: "node",
+    script: "typst-scheduler-unit.mjs",
+  },
+  {
+    // Stage 6.2: magic comment, project, default; detection and mismatches.
+    id: "latex-engine-choice-unit",
+    title: "Per-project TeX engine resolution (unit)",
+    kind: "node",
+    script: "latex-engine-choice-unit.mjs",
+  },
+  {
+    // Track W2: headings across \input/\include in document order.
+    id: "latex-outline-project-unit",
+    title: "LaTeX project outline (unit)",
+    kind: "node",
+    script: "latex-outline-project-unit.mjs",
+  },
+  {
+    // Local TEXMF libraries: namespaced bundled inputs, the bibliography
+    // handoff, library-aware reference checks and editor-scoped completion.
+    id: "latex-texmf-unit",
+    title: "Local TEXMF libraries (unit)",
+    kind: "node",
+    script: "latex-texmf-unit.mjs",
+  },
+  {
+    // Tools › Optional Tools… must open the shared dialog, not merely be
+    // present in the menu.
+    id: "latex-tools",
+    title: "Tools › Optional Tools",
+    kind: "cdp",
+    script: "latex-tools-test.mjs",
+    doc: "samples/feature-tour.md",
+  },
+  {
+    // A fresh profile with no startup file shows the Welcome document and the
+    // one-time Optional tools offer. The fixture is only the harness's path
+    // check; `noDocument` keeps the app from opening it.
+    id: "optional-tools",
+    title: "Optional tools first run",
+    kind: "cdp",
+    script: "optional-tools-test.mjs",
+    doc: "samples/feature-tour.md",
+    noDocument: true,
+  },
+  {
+    // Scroll correspondence in both directions, and the fail-closed rule that
+    // makes a wrong jump impossible.
+    id: "latex-correspondence-unit",
+    title: "LaTeX scroll correspondence (unit)",
+    kind: "node",
+    script: "latex-correspondence-unit.mjs",
+  },
+  {
+    // tex-fmt as the LaTeX formatter: verbatim byte-exact, math untouched, prose
+    // not reflowed, idempotent, and the shipped reference surviving intact.
+    id: "latex-format-unit",
+    title: "LaTeX formatting (unit)",
+    kind: "node",
+    script: "latex-format-unit.mjs",
+  },
+  {
+    // Real PDF selection, zoom, page growth and two-column scrolling.
+    id: "latex-preview",
+    title: "LaTeX preview, zoom, word correspondence and scroll",
+    kind: "cdp",
+    script: "latex-preview-test.mjs",
+    doc: "samples/feature-tour.md",
+    // Uses an unsaved buffer and a hidden app with the `.test-automation`
+    // identifier; it never writes the repository fixture or developer state.
+    safeWithInstalledApp: true,
+  },
+  {
+    id: "latex-project",
+    title: "LaTeX included-file PDF correspondence",
+    kind: "cdp",
+    script: "latex-project-test.mjs",
+    doc: "samples/latex-project/main.tex",
+    // All document changes are in-memory CodeMirror edits in the isolated
+    // `.test-automation` instance; the project fixture is never saved.
+    safeWithInstalledApp: true,
+  },
+  {
+    // Track W / GAP-006 slice 1: Open Folder (picker stubbed at the IPC
+    // transport), lazy keyboard tree, open from the tree, confinement, Close
+    // Folder. Read-only fixture; no LaTeX engine needed.
+    id: "workspace-explorer",
+    title: "Workspace Explorer",
+    kind: "cdp",
+    script: "workspace-explorer-test.mjs",
+    doc: "samples/latex-perf/huge/main.tex",
+    safeWithInstalledApp: true,
+  },
+  {
+    // Stage 6.2: the per-project bundled engine — the chip, the download of
+    // pdfLaTeX on first choice, the remembered choice and the magic comment.
+    id: "latex-engine-choice",
+    title: "Per-project TeX engine",
+    kind: "cdp",
+    script: "latex-engine-choice-test.mjs",
+    doc: "samples/latex-engines/plain.tex",
+    safeWithInstalledApp: true,
+  },
+  {
+    // GAP-034: a chapter launched alone compiles through its `% !TeX root`, and
+    // an orphan chapter explains itself. Read-only fixture.
+    id: "latex-root",
+    title: "LaTeX main-document resolution",
+    kind: "cdp",
+    script: "latex-root-test.mjs",
+    doc: "samples/latex-root/chapters/body.tex",
+    safeWithInstalledApp: true,
+  },
+  {
+    // The production preview (docs/architecture.md): its
+    // own frame on `mdraft-tex`, correspondence, its own PDF export, zoom,
+    // themes, manual mode, privacy and the switch back. Opt-in because it needs
+    // the local origin: `startTexpressoOrigin` serves `MDRAFT_TEXPRESSO_MIRROR`
+    // and `MDRAFT_TEXPRESSO_ENGINE` on the pinned loopback address, and the
+    // layer is skipped with one line when either is missing.
+    id: "latex-texpresso",
+    title: "TeXpresso preview backend",
+    kind: "cdp",
+    script: "latex-texpresso-test.mjs",
+    doc: "samples/latex-perf/book/main.tex",
+    safeWithInstalledApp: true,
+    optIn: true,
+    origin: true,
+    reuseProfile: true,
+    // The layer types into the real editor, and the application saves those
+    // buffers on close; the harness puts both fixtures back afterwards.
+    writesDoc: true,
+    fixtures: [
+      "samples/latex-perf/book/main.tex",
+      "samples/latex-perf/book/chapters/ch06.tex",
+      "samples/latex-perf/book/chapters/ch01.tex",
+    ],
+  },
+  {
+    // Registers a private two-root library outside the project and proves,
+    // through compiled PDF text, that the bundled engine resolved the class,
+    // a transitive package, a .def and a Lua module from it in order. With
+    // MDRAFT_TEST_TEX_BIN it compiles the same library natively too.
+    id: "latex-texmf",
+    title: "Local TEXMF libraries through the application",
+    kind: "cdp",
+    script: "latex-texmf-test.mjs",
+    doc: "samples/latex-texmf/main.tex",
+    // Library folders live in a temporary directory; registration is in the
+    // isolated `.test-automation` profile and is removed at the end.
+    safeWithInstalledApp: true,
+  },
+  {
+    // Drives a real installed distribution through validate, enable, compile
+    // and the preview pane. It skips unless MDRAFT_TEST_TEX_BIN names the engine
+    // directory, so the default suite does not need TeX.
+    id: "latex-native",
+    title: "Installed TeX through the application",
+    kind: "cdp",
+    script: "latex-native-test.mjs",
+    doc: "samples/latex-project/main.tex",
+    safeWithInstalledApp: true,
+  },
+  // The LaTeX live-preview probe of docs/architecture.md:
+  // one fixture per launch, selected by MDRAFT_LATEX_PERF_FIXTURE. Opt-in: they
+  // take minutes, and a host without the engine has nothing to measure. Set
+  // MDRAFT_LATEX_PERF_OUT to keep the run JSON outside the staging directory.
+  ...[
+    ["latex-perf", "small", "samples/latex-perf/small.tex", "small single file"],
+    ["latex-perf-preamble", "preamble", "samples/latex-perf/preamble.tex", "preamble only"],
+    ["latex-perf-huge", "huge", "samples/latex-perf/huge/main.tex", "12 included chapters"],
+    ["latex-perf-book", "book", "samples/latex-perf/book/main.tex", "book, included chapters"],
+    [
+      "latex-perf-book-flat",
+      "book-flat",
+      "samples/latex-perf/book-flat/main.tex",
+      "book, one file",
+    ],
+    ["latex-perf-tikz", "tikz", "samples/latex-perf/tikz.tex", "twelve TikZ figures"],
+    ["latex-perf-plain", "plain", "samples/latex-engines/plain.tex", "plain.tex, three engines"],
+    [
+      "latex-perf-tikz-auto",
+      "tikz-auto",
+      "samples/latex-perf/tikz-auto.tex",
+      "twelve TikZ figures, externalization auto",
+    ],
+  ].map(([id, fixture, doc, label]) => ({
+    id,
+    title: `LaTeX live-preview probe (${label})`,
+    kind: "cdp",
+    script: "latex-performance-test.mjs",
+    doc,
+    env: { MDRAFT_LATEX_PERF_FIXTURE: fixture },
+    safeWithInstalledApp: true,
+    optIn: true,
+  })),
+  // The same fixtures on the TeXpresso backend, for the comparison the plan
+  // requires: E2P and p95 from the frame's own paint, the shadow compile's
+  // export against the frame's `xdvipdfmx` output, and the process tree's RSS.
+  // Each layer needs the local origin and keeps its WebView2 profile, because a
+  // cold profile rebuilds the engine's font cache first.
+  ...[
+    ["small", "samples/latex-perf/small.tex", "small single file"],
+    ["huge", "samples/latex-perf/huge/main.tex", "12 included chapters"],
+    ["book", "samples/latex-perf/book/main.tex", "book, included chapters"],
+    ["book-flat", "samples/latex-perf/book-flat/main.tex", "book, one file"],
+    ["tikz", "samples/latex-perf/tikz.tex", "twelve TikZ figures"],
+    ["bibliography", "samples/latex-perf/book/main.tex", "book with its bibliography"],
+    ["plain", "samples/latex-engines/plain.tex", "plain.tex, three engines"],
+  ].map(([fixture, doc, label]) => ({
+    id: `latex-perf-texpresso-${fixture}`,
+    title: `TeXpresso live-preview probe (${label})`,
+    kind: "cdp",
+    script: "latex-performance-test.mjs",
+    doc,
+    env: {
+      MDRAFT_LATEX_PERF_FIXTURE: fixture === "bibliography" ? "book" : fixture,
+      MDRAFT_LATEX_PERF_BACKEND: "texpresso",
+    },
+    safeWithInstalledApp: true,
+    optIn: true,
+    origin: true,
+    reuseProfile: true,
+  })),
+  {
+    // Stage 3.4: seeded edits on the 12-chapter project, each compared page
+    // by page with a fresh full compile through the re-anchoring command.
+    id: "latex-perf-differential",
+    title: "LaTeX incremental builds equal full builds (huge)",
+    kind: "cdp",
+    script: "latex-performance-test.mjs",
+    doc: "samples/latex-perf/huge/main.tex",
+    env: { MDRAFT_LATEX_PERF_FIXTURE: "huge", MDRAFT_LATEX_PERF_MODE: "differential" },
+    safeWithInstalledApp: true,
+    optIn: true,
+  },
+  {
+    // Gate 4.3: sustained editing on the 105-page book. 60 minutes unless
+    // MDRAFT_LATEX_SOAK_MINUTES says otherwise.
+    id: "latex-perf-soak",
+    title: "LaTeX live preview under sustained editing (book)",
+    kind: "cdp",
+    script: "latex-performance-test.mjs",
+    doc: "samples/latex-perf/book/main.tex",
+    env: { MDRAFT_LATEX_PERF_FIXTURE: "book", MDRAFT_LATEX_PERF_MODE: "soak" },
+    safeWithInstalledApp: true,
+    optIn: true,
+  },
+  {
+    id: "latex-perf-starvation",
+    title: "LaTeX live preview under scripted typing (huge)",
+    kind: "cdp",
+    script: "latex-performance-test.mjs",
+    doc: "samples/latex-perf/huge/main.tex",
+    env: { MDRAFT_LATEX_PERF_FIXTURE: "huge", MDRAFT_LATEX_PERF_MODE: "starvation" },
+    safeWithInstalledApp: true,
+    optIn: true,
+  },
+  {
+    // The encoding catalogue matches Rust's OFFERED list, and inputenc/meta/XML
+    // declarations are found at exact offsets: pure, no application.
+    id: "encoding-unit",
+    title: "Encoding catalogue and declarations (unit)",
+    kind: "node",
+    script: "encoding-unit.mjs",
   },
   {
     // What to remember when the tabs change, and what to open at boot: pure
@@ -225,12 +656,36 @@ const SUITES = [
     kind: "cdp",
     script: "scroll-sync-test.mjs",
     doc: "samples/scroll-sync/prose.md",
+    // Edits are unsaved in a hidden `.test-automation` instance; the only
+    // filesystem output is the ignored scroll evidence under node_modules.
+    safeWithInstalledApp: true,
   },
   {
     id: "p0-lifecycle",
     title: "P0 document lifecycle",
     kind: "cdp",
     script: "p0-lifecycle-test.mjs",
+    doc: "samples/feature-tour.md",
+  },
+  {
+    // Tools › Encoding and Line Endings and the status-bar button: reinterpret
+    // with preview, Convert and Save with the inputenc update, the fit check,
+    // mixed line endings, a disk conflict and an untitled buffer. Fixtures live
+    // in the suite's own temp folder.
+    id: "encoding-dialog",
+    title: "Encoding and line-ending conversion",
+    kind: "cdp",
+    script: "encoding-dialog-test.mjs",
+    doc: "samples/feature-tour.md",
+  },
+  {
+    // Gated IPC in the page: duplicate opens, image and clipboard paste owners,
+    // Auto Save during a close dialog (one 20 s interval) and a failed HTML
+    // render. Fixtures live in the suite's own temp folder.
+    id: "ownership",
+    title: "Asynchronous operation ownership",
+    kind: "cdp",
+    script: "ownership-test.mjs",
     doc: "samples/feature-tour.md",
   },
   {
@@ -261,6 +716,27 @@ const SUITES = [
     doc: "samples/export-tour.md",
   },
   {
+    // The pane belongs to the active document. Holds `latex_engine_status` and
+    // `render_typst` in the page to sample a slow switch, so it runs with no
+    // engine installed; PDF-only checks skip. Temp fixtures and memory only.
+    id: "preview-ownership",
+    title: "Preview pane ownership across tabs",
+    kind: "cdp",
+    script: "preview-ownership-test.mjs",
+    doc: "samples/feature-tour.md",
+    safeWithInstalledApp: true,
+  },
+  {
+    // Theme, palette and width are not preview inputs. Counts the render
+    // commands at the IPC boundary (latex_engine_status, render_typst,
+    // set_html_preview), so it runs with no engine installed. Temp fixtures.
+    id: "preview-freshness",
+    title: "No rebuild for a change that is not a preview input",
+    kind: "cdp",
+    script: "preview-freshness-test.mjs",
+    doc: "samples/feature-tour.md",
+  },
+  {
     id: "preview-perf",
     title: "Preview typing performance",
     kind: "cdp",
@@ -280,7 +756,7 @@ const SUITES = [
     id: "preview-compare",
     title: "Preview latency before/after comparison",
     kind: "cdp",
-    script: "../docs/audits/preview-native-compare.mjs",
+    script: "preview-native-compare.mjs",
     doc: "samples/feature-tour.md",
     optIn: true,
   },
@@ -297,6 +773,16 @@ const SUITES = [
     title: "Auto-close pairs and tags",
     kind: "cdp",
     script: "autoclose-test.mjs",
+    doc: "samples/feature-tour.md",
+  },
+  {
+    // Tab on HTML and CSS through the real editor: expansion, tab stops, undo,
+    // the popup winning, the preference, and the lazily fetched engine. It opens
+    // its own empty temporary files, so the fixture is only the first tab.
+    id: "emmet",
+    title: "Emmet on Tab",
+    kind: "cdp",
+    script: "emmet-test.mjs",
     doc: "samples/feature-tour.md",
   },
   {
@@ -395,13 +881,25 @@ const SUITES = [
     kind: "cdp",
     script: "typst-preview-test.mjs",
     doc: "samples/typst-pages.typ",
+    // The fixture is edited only in memory; its extra multipage fixture is
+    // created temporarily and removed by the suite.
+    safeWithInstalledApp: true,
+  },
+  {
+    id: "typst-perf",
+    title: "Typst live-preview performance benchmark",
+    kind: "cdp",
+    script: "typst-performance-test.mjs",
+    doc: "samples/typst-pages.typ",
+    safeWithInstalledApp: true,
+    optIn: true,
   },
   {
     id: "math",
     title: "Math rendering",
     kind: "cdp",
     script: "math-render-check.mjs",
-    doc: "docs/samples/physrevb_70_035307.md",
+    doc: "samples/math-render.md",
   },
   {
     id: "syntax",
@@ -510,6 +1008,16 @@ const SUITES = [
     phases: ["phase1", "phase2", "phase3"],
   },
   {
+    // Phase 1 leaves two journal entries and a remembered set whose first file
+    // can no longer be read; phase 2 is the restart that restores both.
+    id: "recovery-restore",
+    title: "Crash recovery across a restart",
+    kind: "restart",
+    script: "recovery-restore-test.mjs",
+    doc: "samples/feature-tour.md",
+    phases: ["phase1", "phase2"],
+  },
+  {
     // The list has to survive the close flush, which saves the whole settings
     // object. Phase 1 adds one favorite from the editor menu and one from an
     // inactive tab's menu, leaves the panel selected, and closes a tab as its
@@ -587,6 +1095,7 @@ function parseArgs(argv) {
     verbose: false,
     keep: false,
     kill: false,
+    allowInstalled: false,
     port: 9222,
     list: false,
   };
@@ -617,6 +1126,9 @@ function parseArgs(argv) {
         break;
       case "--kill":
         options.kill = true;
+        break;
+      case "--allow-installed":
+        options.allowInstalled = true;
         break;
       case "--port":
         options.port = Number(next());
@@ -653,6 +1165,8 @@ Usage: node scripts/test-all.mjs [options]
   --verbose       stream each layer's output instead of capturing it
   --keep          keep the staging directory and the per-suite logs
   --kill          legacy option; never bypasses a running user-instance guard
+  --allow-installed
+                  only allow suites explicitly marked read-only with the isolated test id
   --list          print the suites and exit
 `.trim();
 
@@ -712,6 +1226,7 @@ function run(
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    runningCommands.add(child);
     let out = "";
     let err = "";
     child.stdout.on("data", (chunk) => {
@@ -722,8 +1237,14 @@ function run(
       err += chunk;
       if (stream) process.stderr.write(chunk);
     });
-    child.on("error", (error) => resolve({ code: -1, out, err: `${err}\n${error.message}` }));
-    child.on("close", (code) => resolve({ code: code ?? -1, out, err }));
+    child.on("error", (error) => {
+      runningCommands.delete(child);
+      resolve({ code: -1, out, err: `${err}\n${error.message}` });
+    });
+    child.on("close", (code) => {
+      runningCommands.delete(child);
+      resolve({ code: code ?? -1, out, err });
+    });
   });
 }
 
@@ -770,22 +1291,25 @@ function appConfigDir() {
 // CloseMainWindow (WM_CLOSE) is the same path the title-bar X takes and leaves
 // the WebView2 profile intact; force-killing it can corrupt the profile.
 //
-// Only instances this script started are closed without being asked: they live
-// in a `mdraft-test-*` staging directory. A copy the developer opened is left
-// alone — closing it would discard unsaved work — and the run stops with the
-// PID list instead, the same contract `dist.mjs` uses.
+// Another run's staged window and a copy the developer opened are both left
+// alone: a shared identifier and settings directory make concurrent UI runs
+// unsafe even when their executable paths and WebView folders differ.
 async function listRunningInstances() {
   if (!isWindows) {
     const result = await run("pgrep", ["-af", "mdraf[t]"]);
     return result.out
       .split(/\r?\n/)
       .filter(Boolean)
-      .map((line) => ({ pid: Number(line.split(/\s+/)[0]), path: line }));
+      .map((line) => {
+        const match = line.match(/^\s*(\d+)\s+(.+)$/);
+        return { pid: Number(match?.[1]), path: match?.[2] ?? "" };
+      });
   }
   const query =
     "Get-CimInstance Win32_Process -ErrorAction Stop -Filter \"Name='mdraft.exe'\" | Select-Object ProcessId,ExecutablePath | ConvertTo-Json -Compress";
   const result = await run("pwsh", ["-NoProfile", "-Command", query]);
-  if (result.code !== 0) fail(`Could not inspect running MDraft instances: ${result.err}`);
+  if (result.code !== 0)
+    throw new Error(`Could not inspect running MDraft instances: ${result.err}`);
   const text = result.out.trim();
   if (!text) return [];
   const parsed = JSON.parse(text);
@@ -795,43 +1319,103 @@ async function listRunningInstances() {
   }));
 }
 
+async function listOtherHarnesses() {
+  if (isWindows) {
+    const query =
+      "Get-CimInstance Win32_Process -ErrorAction Stop -Filter \"Name='node.exe'\" | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress";
+    const result = await run("pwsh", ["-NoProfile", "-Command", query]);
+    if (result.code !== 0) fail(`Could not inspect running test harnesses: ${result.err}`);
+    const text = result.out.trim();
+    if (!text) return [];
+    const parsed = JSON.parse(text);
+    const processes = (Array.isArray(parsed) ? parsed : [parsed]).map((entry) => ({
+      pid: entry.ProcessId,
+      command: entry.CommandLine ?? "",
+    }));
+    return otherTestHarnesses(processes, process.pid);
+  }
+  const result = await run("ps", ["-e", "-o", "pid=,comm=,args="]);
+  if (result.code !== 0) fail(`Could not inspect running test harnesses: ${result.err}`);
+  const processes = result.out.split(/\r?\n/).flatMap((line) => {
+    const match = line.match(/^\s*(\d+)\s+(\S+)\s+(.*)$/);
+    if (!match || !/^node(?:\.exe)?$/i.test(path.basename(match[2]))) return [];
+    return [{ pid: Number(match[1]), command: match[3] }];
+  });
+  return otherTestHarnesses(processes, process.pid);
+}
+
 async function closeInstances(instances) {
   for (const { pid } of instances) {
-    if (isWindows) await run("taskkill", ["/PID", String(pid)]);
+    if (isWindows) await closeTestWindow(pid);
     else await run("kill", [String(pid)]);
   }
   const deadline = Date.now() + 10000;
+  let remaining = instances;
   while (Date.now() < deadline) {
     const still = await listRunningInstances();
-    const left = still.filter((instance) => instances.some((gone) => gone.pid === instance.pid));
-    if (!left.length) return;
+    remaining = still.filter((instance) =>
+      instances.some(
+        (owned) =>
+          owned.pid === instance.pid &&
+          (isWindows
+            ? ownsStagedExecutable(instance.path, owned.path, "win32")
+            : instance.path === owned.path),
+      ),
+    );
+    if (!remaining.length) return;
     await sleep(500);
   }
-  for (const { pid } of instances) {
+  for (const { pid } of remaining) {
     if (isWindows) await run("taskkill", ["/PID", String(pid), "/F"]);
     else await run("kill", ["-9", String(pid)]);
   }
   await sleep(500);
 }
 
-async function prepareForRun(_options) {
+async function closeTestWindow(pid) {
+  await run("pwsh", [
+    "-NoProfile",
+    "-File",
+    path.join(repoRoot, "scripts", "close-test-window.ps1"),
+    "-ProcessId",
+    String(pid),
+  ]);
+}
+
+async function prepareForRun(options, suites) {
+  const harnesses = await listOtherHarnesses();
+  if (harnesses.length)
+    fail(
+      `Another MDraft test harness is running (pid ${harnesses.map((entry) => entry.pid).join(", ")}).\n` +
+        "No test state was changed. Wait for that run to finish before starting a UI suite.",
+    );
   const instances = await listRunningInstances();
   if (!instances.length) return;
   const ours = instances.filter((instance) => /mdraft-test-/.test(instance.path));
   // A private browser folder does not isolate single-instance handoff or the
   // settings/recovery identifier from an installed or portable user instance.
   const userInstances = instances.filter((instance) => !ours.includes(instance));
-  if (userInstances.length)
+  const isolatedReadOnlyRun =
+    options.allowInstalled &&
+    identifier === `${tauriConfig.identifier}.test-automation` &&
+    suites.length > 0 &&
+    suites.every((suite) => suite.safeWithInstalledApp && !suite.writesDoc);
+  if (userInstances.length && !isolatedReadOnlyRun)
     fail(
       `MDraft is already running (pid ${userInstances.map((i) => i.pid).join(", ")}).\n` +
         `No test state was changed. Close it yourself or use a build/harness with a separate test identifier. ` +
         `--no-build and --kill cannot bypass single-instance/state isolation.`,
     );
-  if (ours.length) {
+  if (userInstances.length)
     console.log(
-      `closing ${ours.length} leftover test instance(s): ${ours.map((i) => i.pid).join(", ")}`,
+      `keeping installed MDraft running (${userInstances.map((i) => i.pid).join(", ")}); ` +
+        `the selected hidden test uses the separate ${identifier} identifier and read-only fixtures.`,
     );
-    await closeInstances(ours);
+  if (ours.length) {
+    fail(
+      `A staged MDraft test instance is already running (pid ${ours.map((i) => i.pid).join(", ")}).\n` +
+        "No test state was changed. Let its owner finish, or close a confirmed stale test instance explicitly.",
+    );
   }
 }
 
@@ -847,9 +1431,9 @@ async function waitForExit(child, timeoutMs) {
 async function stopApp(child) {
   if (!child || child.exitCode !== null) return;
   if (isWindows) {
-    // Without /F, taskkill posts WM_CLOSE, which is what a user clicking the X
-    // sends — the graceful path the close test exists to protect.
-    await run("taskkill", ["/PID", String(child.pid)]);
+    // Hidden windows have no MainWindowHandle; enumerate this staged process's
+    // Tauri window and post WM_CLOSE without bringing it to the foreground.
+    await closeTestWindow(child.pid);
   } else {
     child.kill("SIGTERM");
   }
@@ -996,6 +1580,10 @@ function describeChecks(output, code) {
   if (counts) {
     return { checks: counts, detail: `crashed after ${counts.passed} checks (exit ${code})` };
   }
+  // A suite that exits 0 after printing only a SKIP line ran nothing: report
+  // it as skipped, never as a pass ("exit 0, no check line" hid exactly that).
+  const skip = code === 0 ? /^SKIP:?s+(.+)$/m.exec(output) : null;
+  if (skip) return { checks: null, skipped: true, detail: `skipped — ${skip[1].trim()}` };
   return { checks: null, detail: `exit ${code}, no check line` };
 }
 
@@ -1065,6 +1653,107 @@ const USER_STATE = [
   "ai-keys.json",
 ];
 
+/** The engine junction this run created, so it can be removed afterwards. */
+let latexEngineLink = null;
+
+/**
+ * Make the developer's installed LaTeX engine visible to the test instance.
+ *
+ * The harness runs under `<identifier>.test-automation`, so the engine the
+ * developer installed under `<identifier>` is invisible to it: a `.tex` document
+ * shows the "Enable bundled TeX" note instead of a PDF, and every LaTeX preview
+ * assertion has nothing to measure. That is why the scroll-correspondence, blink
+ * and two-column steps could not be tested through the UI.
+ *
+ * A **junction** (Windows) or **symlink** (elsewhere) is the answer: it costs no
+ * copying of the 12 MiB of assets, and `linkLatexEngineCleanup` removes it before
+ * the developer's own settings are restored, so nothing outside the test instance
+ * is touched. When the engine is not installed the function does nothing and the
+ * LaTeX suites that need it skip rather than fail.
+ */
+function linkLatexEngine() {
+  const dataRoot = appConfigDir().replace(`${identifier}`, tauriConfig.identifier);
+  let source = path.join(dataRoot, "latex");
+  if (!fs.existsSync(path.join(source, "assets"))) {
+    // `wasmtex-luatex.js` of any engine profile in `src-tauri/latex-engine.json`, the
+    // same rule the backend uses to migrate a directory from before `latex/` existed.
+    // The release marker, not this digest, decides whether the files are the active year.
+    const engineConfig = JSON.parse(
+      fs.readFileSync(path.join(repoRoot, "src-tauri", "latex-engine.json"), "utf8"),
+    );
+    const digests = new Set(
+      Object.values(engineConfig.profiles).map(
+        (profile) => profile.assets.find((asset) => asset.name === "wasmtex-luatex.js").sha256,
+      ),
+    );
+    const candidates = fs.existsSync(dataRoot)
+      ? fs.readdirSync(dataRoot, { withFileTypes: true }).filter((entry) => {
+          if (!entry.isDirectory() || entry.name === "latex") return false;
+          const asset = path.join(dataRoot, entry.name, "assets", "wasmtex-luatex.js");
+          try {
+            return digests.has(createHash("sha256").update(fs.readFileSync(asset)).digest("hex"));
+          } catch {
+            return false;
+          }
+        })
+      : [];
+    if (candidates.length !== 1) return;
+    source = path.join(dataRoot, candidates[0].name);
+  }
+  const target = path.join(appConfigDir(), "latex");
+  if (!fs.existsSync(target)) {
+    fs.mkdirSync(appConfigDir(), { recursive: true });
+    try {
+      fs.symlinkSync(source, target, process.platform === "win32" ? "junction" : "dir");
+      latexEngineLink = target;
+      console.log(`engine   linked from ${source}\n`);
+    } catch (error) {
+      // A host that forbids links (or a target already present) is not a failure:
+      // the suites that need the engine report their own skip. Say so, because a
+      // silent skip is what made the first attempt look like it worked.
+      console.log(`engine   could not be linked (${String(error).split("\n")[0]})\n`);
+      return;
+    }
+  }
+  enableLatexEngineInSettings();
+}
+
+/**
+ * Turn the bundled engine on in the test profile's settings.
+ *
+ * `resetAppState` deletes `settings.json` before every suite, so this has to run
+ * again after that reset, not only when the junction is created. `app_config_dir`,
+ * not `app_data_dir`: `AppState::load` reads the settings from the config
+ * directory, and on Windows the two are the same path only because Tauri maps
+ * both to `%APPDATA%\<identifier>`. Writing to the wrong one leaves the switch
+ * off while the assets are found — `installed: true, enabled: false`.
+ */
+function enableLatexEngineInSettings() {
+  const settingsPath = path.join(appConfigDir(), "settings.json");
+  try {
+    const settings = fs.existsSync(settingsPath)
+      ? JSON.parse(fs.readFileSync(settingsPath, "utf8"))
+      : {};
+    settings.latexEnabled = true;
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    console.log(`engine   latexEnabled written to ${settingsPath}\n`);
+  } catch (error) {
+    // A settings file this run cannot write is the suite's own problem to report.
+    console.log(`engine   could not enable LaTeX (${String(error).split("\n")[0]})\n`);
+  }
+}
+
+/** Remove the engine link, leaving the developer's own directory untouched. */
+function linkLatexEngineCleanup() {
+  if (!latexEngineLink) return;
+  try {
+    fs.unlinkSync(latexEngineLink);
+  } catch {
+    // Already gone.
+  }
+  latexEngineLink = null;
+}
+
 function takeUserState(destination) {
   const saved = [];
   fs.mkdirSync(destination, { recursive: true });
@@ -1114,8 +1803,11 @@ function snapshotFixtures(suites) {
   const snapshots = new Map();
   for (const suite of suites) {
     if (!suite.writesDoc || !suite.doc) continue;
-    const file = path.join(repoRoot, suite.doc);
-    if (fs.existsSync(file)) snapshots.set(file, fs.readFileSync(file));
+    const files = suite.fixtures ?? [suite.doc];
+    for (const relative of files) {
+      const file = path.join(repoRoot, relative);
+      if (fs.existsSync(file)) snapshots.set(file, fs.readFileSync(file));
+    }
   }
   return snapshots;
 }
@@ -1187,22 +1879,47 @@ async function launchApp(
 
   const outFd = fs.openSync(path.join(context.logDir, `${label}.app.out.log`), "w");
   const errFd = fs.openSync(path.join(context.logDir, `${label}.app.err.log`), "w");
+  const env = {
+    ...process.env,
+    TEMP: temp,
+    TMP: temp,
+    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,
+    WEBVIEW2_USER_DATA_FOLDER: userData,
+  };
+  // A layer with a local origin keeps the production URL in texpresso.json and
+  // points this launch at the loopback server instead.
+  if (suite.origin) env.MDRAFT_TEXPRESSO_ORIGIN = `http://127.0.0.1:${ORIGIN_PORT}/`;
+  // A layer that measures incremental typesetting can ask for a visible window
+  // (`visible: true`) when the engine needs a compositor. The TeXpresso layer
+  // does not: it reports paints from the app's own `idle()`, which works in a
+  // hidden window and draws the same pages.
+  if (suite.visible) delete env.MDRAFT_TEST_HIDDEN;
+  // The isolated profile cannot see MDraft's managed Typst. Reuse the existing
+  // binary through this child process's PATH, without modifying either profile.
+  if (process.platform === "win32" && process.env.APPDATA) {
+    const root = path.join(process.env.APPDATA, tauriConfig.identifier, "typst");
+    let versions = [];
+    try {
+      versions = fs.readdirSync(root).sort().reverse();
+    } catch {
+      /* Typst is optional. */
+    }
+    const managed = versions
+      .map((version) => path.join(root, version))
+      .find((dir) => fs.existsSync(path.join(dir, "typst.exe")));
+    if (managed) {
+      const key = Object.keys(env).find((name) => name.toLowerCase() === "path") ?? "PATH";
+      env[key] = `${managed}${path.delimiter}${env[key] ?? ""}`;
+    }
+  }
   const child = spawn(context.staged, noDocument ? [] : docs, {
     cwd: context.stage,
-    env: {
-      ...process.env,
-      TEMP: temp,
-      TMP: temp,
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,
-      // One browser process per user-data folder, so a private folder per suite
-      // is what lets suites run back to back (and keeps a bad run away from the
-      // developer's real profile).
-      WEBVIEW2_USER_DATA_FOLDER: userData,
-    },
+    // One browser process per user-data folder keeps runs isolated.
+    env,
     // The window owns no console, but a pipe on stdout would still be held open
     // by the child and stall anything reading our output.
     stdio: ["ignore", outFd, errFd],
-    windowsHide: false,
+    windowsHide: true,
   });
   // Whether the step prints its own line is a human concern, not a reason to
   // give up the captured copy that the summary is built from.
@@ -1221,6 +1938,77 @@ async function launchApp(
   return { child, outFd, errFd };
 }
 
+/**
+ * The local TeXpresso origin (docs/architecture.md).
+ *
+ * `scripts/texpresso-origin-server.mjs` serves `MDRAFT_TEXPRESSO_MIRROR` at the
+ * pinned snapshot prefix and `MDRAFT_TEXPRESSO_ENGINE` at `/engine/`, exactly
+ * where `src-tauri/texpresso.json` looks. The runner starts it for the
+ * `latex-texpresso` layer only, so no default layer depends on a server.
+ */
+let texpressoOrigin = null;
+
+const ORIGIN_PORT = 8717;
+
+/** The pins: the snapshot's prefix and the release folder inside `/engine/`. */
+function texpressoPins() {
+  return JSON.parse(fs.readFileSync(path.join(repoRoot, "src-tauri", "texpresso.json"), "utf8"));
+}
+
+async function originAnswers() {
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${ORIGIN_PORT}/engine/${texpressoPins().appRelease}/ocaml.js`,
+      { method: "HEAD", signal: AbortSignal.timeout(2000) },
+    );
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function startTexpressoOrigin() {
+  const mirror = process.env.MDRAFT_TEXPRESSO_MIRROR;
+  const engine = process.env.MDRAFT_TEXPRESSO_ENGINE;
+  if (!mirror || !engine) return;
+  // A server the reader started by hand is used as it is: two processes cannot
+  // hold one port, and its mounts are the same pinned ones.
+  if (await originAnswers()) return;
+  const prefix = `/texlive/${texpressoPins().snapshot}/`;
+  // The case-collision overlay: `Cherokee.tfm` and `cherokee.tfm` are two files
+  // on the bucket and one on NTFS, so the mirror may need a second folder.
+  const mounts = [`${prefix}=${mirror}`];
+  const overlay = process.env.MDRAFT_TEXPRESSO_CASE;
+  if (overlay) mounts.push(`${prefix}=${overlay}`);
+  mounts.push(`/engine/=${engine}`);
+  const args = ["scripts/texpresso-origin-server.mjs"];
+  for (const mount of mounts) args.push("--mount", mount);
+  args.push("--port", String(ORIGIN_PORT));
+  texpressoOrigin = spawn(process.execPath, args, {
+    cwd: repoRoot,
+    stdio: ["ignore", "ignore", "pipe"],
+    windowsHide: true,
+  });
+  texpressoOrigin.stderr.on("data", (chunk) => process.stderr.write(chunk));
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (await originAnswers()) return;
+    await sleep(200);
+  }
+  throw new Error("the local TeXpresso origin did not start");
+}
+
+async function stopTexpressoOrigin() {
+  if (!texpressoOrigin) return;
+  texpressoOrigin.kill();
+  texpressoOrigin = null;
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (!(await originAnswers())) return;
+    await sleep(150);
+  }
+}
+
 /** A layer that runs without the application: plain Node against the sources. */
 async function runNodeSuite(suite, options) {
   const result = await run(process.execPath, [path.join("scripts", suite.script)], {
@@ -1230,18 +2018,55 @@ async function runNodeSuite(suite, options) {
   const described = describeChecks(output, result.code);
   const ok =
     result.code === 0 && (!described.checks || described.checks.passed === described.checks.total);
-  return { ok, detail: described.detail, output };
+  return { ok, skipped: described.skipped, detail: described.detail, output };
 }
 
 async function runCdpSuite(suite, port, options, context) {
   resetAppState();
+  // `resetAppState` removed the switch with the settings file; put it back for
+  // the layers that compile. The hidden WasmTex backend still needs its assets,
+  // which `linkLatexEngine` exposed before the suites started.
+  if (suite.id.startsWith("latex-") || suite.id === "preview-freshness")
+    enableLatexEngineInSettings();
+  // The TeXpresso layer fetches its engine and TeX Live data from the pinned
+  // loopback origin, so the runner serves it for exactly that layer.
+  if (suite.origin) {
+    await startTexpressoOrigin();
+    resetTexmf();
+  }
+  try {
+    return await runCdpSuiteBody(suite, port, options, context);
+  } finally {
+    if (suite.origin) await stopTexpressoOrigin();
+  }
+}
+
+/**
+ * Empty the test profile's own TEXMF root.
+ *
+ * A local library is reader state that outlives a run; the TeXpresso layer
+ * asserts the no-library path, and its `library` fallback has its own check.
+ * Leftovers from an earlier `latex-texmf` run would make every project fall
+ * back before the frame is ever mounted.
+ */
+function resetTexmf() {
+  fs.rmSync(path.join(appConfigDir(), "texmf"), { recursive: true, force: true });
+}
+
+async function runCdpSuiteBody(suite, port, options, context) {
   // The application and the suite must agree on the temporary directory: the
   // export layer looks for the print document the application wrote, under
   // `os.tmpdir()` on one side and `std::env::temp_dir()` on the other. Giving
   // both the same one also keeps everything they write inside the staging
   // directory, which is removed afterwards.
   const temp = path.join(context.stage, "tmp", suite.id);
-  const userData = path.join(context.stage, "webview", suite.id);
+  // A layer whose engine keeps a multi-minute cache may keep its WebView2
+  // profile between runs (`reuseProfile`): a cold profile rebuilds TeXpresso's
+  // font cache from the bundle on every run, which is longer than a test may
+  // wait. The folder is outside the staging directory so it survives the run.
+  const userData = suite.reuseProfile
+    ? path.join(os.tmpdir(), "mdraft-profile", suite.id)
+    : path.join(context.stage, "webview", suite.id);
   fs.mkdirSync(temp, { recursive: true });
   fs.mkdirSync(userData, { recursive: true });
   const env = {
@@ -1262,7 +2087,11 @@ async function runCdpSuite(suite, port, options, context) {
   let launched = null;
   for (let attempt = 1; attempt <= 2 && !launched; attempt += 1) {
     try {
-      launched = await launchApp(suite, port, context, { temp, userData });
+      launched = await launchApp(suite, port, context, {
+        temp,
+        userData,
+        noDocument: suite.noDocument === true,
+      });
     } catch (error) {
       if (attempt === 2) throw error;
       console.log(`(retrying ${suite.id}: ${error.message})`);
@@ -1270,6 +2099,7 @@ async function runCdpSuite(suite, port, options, context) {
     }
   }
   const { child, outFd, errFd } = launched;
+  env.MDRAFT_TEST_PID = String(child.pid);
   try {
     const args = [path.join("scripts", suite.script), String(port)];
     if (suite.docArg) args.push(path.join(repoRoot, suite.doc));
@@ -1279,7 +2109,7 @@ async function runCdpSuite(suite, port, options, context) {
     const ok =
       result.code === 0 &&
       (!described.checks || described.checks.passed === described.checks.total);
-    return { ok, detail: described.detail, output };
+    return { ok, skipped: described.skipped, detail: described.detail, output };
   } finally {
     await stopApp(child);
     activeApp = null;
@@ -1440,7 +2270,7 @@ async function main() {
   try {
     // Before anything else: a leftover window locks the release binary (so the
     // build cannot replace it) and would hold a CDP port the suites need.
-    if (touchesApp) await prepareForRun(options);
+    if (touchesApp) await prepareForRun(options, suites);
 
     if (options.build) {
       process.stdout.write("building  ... ");
@@ -1463,6 +2293,12 @@ async function main() {
         "no release binary in src-tauri/target/release — run without --no-build, or: npm run dist",
       );
     }
+    if (
+      touchesApp &&
+      !fs.readFileSync(binary).includes(Buffer.from("MDRAFT_TEST_HIDDEN_ISOLATED_WINDOW_V2"))
+    ) {
+      fail("This binary does not support hidden test windows. Rebuild before running UI tests.");
+    }
 
     context = { stage: fs.mkdtempSync(path.join(os.tmpdir(), "mdraft-test-")), logDir: "" };
     context.logDir = path.join(context.stage, "logs");
@@ -1479,11 +2315,13 @@ async function main() {
       );
 
       savedUserState = takeUserState(path.join(context.stage, "user-state"));
+      linkLatexEngine();
       fixtures = snapshotFixtures(suites);
     }
 
     let portCursor = options.port;
     for (const suite of suites) {
+      if (interrupted) break;
       const started = Date.now();
       process.stdout.write(`${suite.id.padEnd(10)} ... `);
       let result;
@@ -1492,7 +2330,13 @@ async function main() {
       const missingFixture = suite.doc && !fs.existsSync(path.join(repoRoot, suite.doc));
       const missingTool =
         suite.requires === "pandoc" && (await run("pandoc", ["--version"])).code !== 0;
-      if (missingFixture || missingTool) {
+      if (suite.kind === "close") {
+        result = {
+          ok: true,
+          skipped: true,
+          detail: "skipped — window-state close verification requires a visible window",
+        };
+      } else if (missingFixture || missingTool) {
         result = {
           ok: true,
           skipped: true,
@@ -1531,13 +2375,25 @@ async function main() {
       results.push({ suite, ...result });
     }
   } finally {
-    // Every exit path has to clean up: a leftover window breaks the next build,
-    // and the developer's own settings have to come back. Only instances this
-    // run started are swept — never one the developer opened.
-    const leftovers = (await listRunningInstances()).filter((instance) =>
-      /mdraft-test-/.test(instance.path),
-    );
-    if (leftovers.length) await closeInstances(leftovers);
+    // Never sweep another harness's app. App-free runs have no staged binary
+    // and must not inspect or close any MDraft process at all.
+    if (context?.staged) {
+      try {
+        if (activeApp) await stopApp(activeApp);
+        const leftovers = (await listRunningInstances()).filter((instance) =>
+          ownsStagedExecutable(instance.path, context.staged),
+        );
+        if (leftovers.length) await closeInstances(leftovers);
+      } catch (error) {
+        const detail = `Could not clean up this run's staged app: ${error.message}`;
+        console.error(detail);
+        results.push({ suite: { id: "cleanup" }, ok: false, detail });
+      }
+    }
+    // The engine link is removed before the developer's own state is restored:
+    // it lives inside the test instance's directory, so leaving it would make the
+    // next run skip the link and the one after that inherit a stale one.
+    linkLatexEngineCleanup();
     if (savedUserState.length) restoreUserState(savedUserState);
     if (fixtures.size) restoreFixtures(fixtures);
     if (context) {
@@ -1565,7 +2421,7 @@ async function main() {
   }
 
   printSummary(results);
-  return results.every((result) => result.ok) ? 0 : 1;
+  return interrupted ? 130 : results.every((result) => result.ok) ? 0 : 1;
 }
 
 function printSummary(results) {
@@ -1583,11 +2439,11 @@ function printSummary(results) {
 }
 
 process.on("SIGINT", async () => {
-  console.log("\ninterrupted — closing the instance this run started");
-  // The finally in main() does not run once the process exits from here, and a
-  // window left open locks the executable the next build has to replace.
+  if (interrupted) return;
+  interrupted = true;
+  console.log("\ninterrupted — restoring the developer's state");
+  for (const child of runningCommands) child.kill();
   if (activeApp) await stopApp(activeApp);
-  process.exit(130);
 });
 
 const code = await main();

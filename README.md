@@ -8,13 +8,13 @@
 
 **Write in markup. See the page take shape.**
 
-MDraft is a free, open-source desktop editor for **Markdown, AsciiDoc, Typst
-and HTML**. Write notes, documentation or papers with your source and a live
-preview side by side, then export a document ready to share.
+MDraft is a free, open-source desktop editor for **Markdown, AsciiDoc, Typst,
+LaTeX and HTML**. Write notes, documentation or papers with your source and a
+live preview side by side, then export a document ready to share.
 
 **[Website](https://bgeneto.github.io/MDraft/) · [Download the latest release →](https://github.com/bgeneto/MDraft/releases/latest)**
 
-![MDraft in split view, with Markdown source on the left and a typeset preview on the right. The same phrase is highlighted in both panes.](docs/screenshots/auto-highlighting.webp)
+![MDraft in split view, with Markdown source on the left and a typeset preview on the right. The same phrase is highlighted in both panes.](site/assets/img/scroll-sync.webp)
 
 *Select text in either pane to find its match in the other.*
 
@@ -29,7 +29,7 @@ Use **Split** to see both views, or switch to **Source** or **Preview** when
 you want more room. The outline, favorites and recent files keep longer
 projects easy to navigate.
 
-## Four formats, one editor
+## Five formats, one editor
 
 - **Markdown** — GitHub-flavored tables, task lists and alerts, plus math,
   Mermaid diagrams, syntax-highlighted code and a table of contents.
@@ -37,15 +37,47 @@ projects easy to navigate.
   for manuals and technical documentation.
 - **Typst** — a flowing Document view or a Pages view of the compiled PDF,
   with selectable text and source matching. Export directly to PDF with Typst.
+  Typst and LaTeX share Compile/Cancel, Auto-compile, Save PDF and a Logs toggle;
+  compiler messages stay separate from the rendered document.
+- **LaTeX** — syntax colouring, `%` comments, an outline read from `\section`
+  commands, and the compiled PDF in the preview. The bundled TeX distribution
+  needs no separate installation; a TeX distribution already on the computer can be
+  selected instead, as a separate program that may install its own packages.
 - **HTML** — preview a page with its own CSS, images and scripts in a sandboxed
-  view alongside its source.
+  view alongside its source. In HTML and CSS documents, Tab expands an Emmet
+  abbreviation: `ul>li*3` becomes a list and `m10` becomes `margin: 10px;`,
+  also inside `<style>` and `style="…"`. It is on by default, never acts in a
+  tag, attribute, comment, script or selector, and can be turned off in
+  *Preferences › HTML*.
 
-![A Typst conference paper in MDraft, showing source on the left and its compiled two-column PDF in Pages view on the right.](docs/screenshots/typst-ieee-conference-paper.webp)
+![A Typst conference paper in MDraft, showing source on the left and its compiled two-column PDF in Pages view on the right.](site/assets/img/typst-pages.webp)
 
 *Typst Pages view shows the compiled page while you edit its source.*
 
 Typst preview and PDF compilation require the Typst compiler. MDraft can
-install it for you on Windows and Linux.
+install it for you on Windows and Linux. An optional companion service
+(`mdraft-typst-service`) can also be enabled in *Preferences › Export* and
+verified/downloaded on demand from the pinned release manifest for warm
+incremental previews; stock Typst CLI remains the automatic fallback.
+
+LaTeX is opt-in: enabling bundled TeX downloads about 20 MiB of verified
+engine files, and the TeX packages a document needs are fetched on demand and
+cached locally. Your own classes and packages can live in folders registered
+once under *Preferences › LaTeX › Local packages* and are found by
+every project, with either engine. *Preferences › LaTeX* can instead use a TeX
+distribution already on the computer — including TeX Live inside a WSL
+distribution on Windows — after MDraft has validated it; that engine runs with the
+reader's permissions; it may use the network to install its own packages, while
+shell escape remains disabled. MDraft itself makes no network request to run a
+native compile. Nothing about your document leaves this device unless the
+installed distribution downloads a package, and the same section reports the
+bundled cache size and clears it.
+
+On a profile's first launch, **Optional tools** offers Pandoc, Typst and the
+bundled TeX engine once. Nothing is downloaded until you press Done; closing
+the dialog lets an install finish in the background, and **Tools › Optional
+Tools…** reopens the same choices later. The tools go into MDraft's own data
+folder, need no administrator rights and stop with the application.
 
 ## An AI assistant you can configure
 
@@ -59,7 +91,7 @@ replace a selection, insert it, or open it in a new tab. You can also edit the
 prompts behind the actions.
 
 <p align="center">
-  <img src="docs/screenshots/builtin-ai-assistant.webp" width="340" alt="The AI Assistant palette, with a search field and actions for translating, converting, expanding and refining text.">
+  <img src="site/assets/img/ai-palette.webp" width="340" alt="The AI Assistant palette, with a search field and actions for translating, converting, expanding and refining text.">
 </p>
 
 Enable and configure it under **Preferences › AI Assistant**. Requests send
@@ -74,7 +106,7 @@ presets or your own combination of fonts. MDraft includes 13 typefaces and lets
 you choose installed fonts for the editor, body, headings and code. Math and
 code can be scaled independently of the surrounding text.
 
-![MDraft in dark mode, with the source and rendered equations of a physics paper shown side by side.](docs/screenshots/math-dark.png)
+![MDraft in dark mode, with the source and rendered equations of a physics paper shown side by side.](site/assets/img/math-dark.webp)
 
 *Dark theme, with mathematics rendered alongside the source.*
 
@@ -123,6 +155,10 @@ To work with Typst files, choose **Tools › Check or Install Typst…**. For
 Pandoc exports, choose **Tools › Check or Install Pandoc…**. Neither is needed
 to edit or preview Markdown, AsciiDoc or HTML.
 
+JavaScript (`.js`, `.mjs`, `.cjs`), CSS and JSON files can also be opened and
+edited with syntax highlighting. These source files do not have a live preview;
+open an HTML document to preview a page.
+
 ## Privacy
 
 MDraft requires no account or activation. It has no telemetry, update checks
@@ -132,11 +168,21 @@ Network access is used for actions you initiate, such as installing an
 optional tool, downloading a pasted image, fetching AI models or generating
 an AI response. If you enable AI filename suggestions, saving an untitled
 document can also send text to your chosen endpoint. HTML documents may load
-remote resources referenced by their own markup.
+remote resources referenced by their own markup. An installed TeX distribution
+you select is your own program: it may download its own packages, and MDraft
+neither controls nor monitors that traffic.
+
+The [LaTeX engine](docs/latex.md) downloads its files only after explicit
+enablement and then retrieves missing TeX packages and fonts on demand from
+MDraft's pinned public origin (`https://mdraft.webonly.app/`). The document and
+bibliography contents stay local. The first time you format a
+`.tex` document, MDraft downloads the LaTeX formatter (about 1.7 MB, verified
+against its pinned checksum and cached); later formats work offline.
 
 ## Learn more
 
 - [User guide](docs/guide.md) — editing, previews, shortcuts and troubleshooting.
+- [LaTeX](docs/latex.md) — the bundled TeX distribution, the project snapshot and PDF export.
 - [Export and conversion](docs/export.md) — supported formats and dependencies.
 - [Typography](docs/typography.md) — fonts, presets and OpenType options.
 - [Contributing](CONTRIBUTING.md) — report a problem, build MDraft or contribute.

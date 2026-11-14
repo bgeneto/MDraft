@@ -29,6 +29,11 @@
   /* The pulse's lighter beat. Kept beside the resting wash so the preview's two
      registered highlight names cannot drift from the source mark. */
   --word-sync-peak: rgba(255, 167, 0, 0.55);
+  /* A failed LaTeX compile. Rose, deliberately not the amber the word sync owns:
+     the two marks mean different things and must not read as the same state. */
+  --diagnostic-error: rgba(229, 72, 111, 0.16);
+  --diagnostic-error-peak: rgba(229, 72, 111, 0.4);
+  --diagnostic-rule: #d93661;
   --quote-bar: rgba(127, 127, 127, 0.4);
   --sidebar-w: 244px;
   --editor-max-width: 860px;
@@ -78,6 +83,24 @@
      in light mode, lighter than the panel in dark mode. */
   --scrollbar-thumb: rgba(0, 0, 0, 0.16);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.3);
+
+  /* Document tabs. An inactive tab used to be a transparent box with a
+     transparent border, so it was not a tab at all: only the file name and its
+     × were visible, and the strip read as a list of loose names. A tab now
+     carries a fill and a hairline edge of its own, and `.doc-tabs` puts a gap
+     between two tabs — three separate signals for the same boundary, because
+     each of them alone disappears at some zoom, theme or accent. The active tab
+     is the one surface that matches the editor below, which is what makes it
+     the active one without needing the strongest border. The inactive fill is
+     a near-neutral gray rather than the blue-cast one it used to be: at this
+     lightness a blue tint reads as a second accent, and the dark border made
+     the step to the white active tab harsher than the state is worth. */
+  --tab-bg: #eef0f2;
+  --tab-bg-hover: #f5f6f8;
+  --tab-border: #dfe2e6;
+  --tab-border-hover: #cfd3d8;
+  --tab-fg: #585d65;
+  --tab-active-bg: var(--bg);
 }
 
 [data-theme="dark"] {
@@ -101,11 +124,25 @@
      not share this value, because it sits on the syntax palette's surface. */
   --word-sync: rgba(255, 196, 0, 0.42);
   --word-sync-peak: rgba(255, 214, 80, 0.62);
+  /* Rose reads on the light and dark palettes alike; the wash is translucent so
+     it blends with Nord/Ink/Solarized surfaces instead of fighting them. */
+  --diagnostic-error: rgba(255, 105, 145, 0.2);
+  --diagnostic-error-peak: rgba(255, 105, 145, 0.46);
+  --diagnostic-rule: #ff8fab;
   --quote-bar: rgba(200, 200, 200, 0.35);
   --spell-error: #f07178;
   --scroll-shadow: rgba(0, 0, 0, 0.55);
   --scrollbar-thumb: rgba(255, 255, 255, 0.15);
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.28);
+  /* The dark strip is lighter than the editor, so the direction flips: an
+     inactive tab is raised away from the strip and the active one is the hole
+     that matches the page. Same rule, inverted luminance. */
+  --tab-bg: #2e3033;
+  --tab-bg-hover: #36383c;
+  --tab-border: #474a50;
+  --tab-border-hover: #565961;
+  --tab-fg: #adb1b9;
+  --tab-active-bg: var(--bg);
 }
 
 * {
@@ -154,7 +191,7 @@ body {
   display: none;
 }
 
-.app.mode-source .preview-pane,
+.app.mode-source .preview-shell,
 .app.mode-source .splitter,
 .app.mode-preview .editor-pane,
 .app.mode-preview .splitter {
@@ -180,7 +217,11 @@ body {
 .doc-tabs {
   display: flex;
   align-items: stretch;
-  gap: 2px;
+  /* The gap is what separates two tabs whose borders would otherwise meet in
+     one continuous line. It has to be wide enough to show the strip between
+     them, which is why it is 3px and not the 2px that a transparent tab
+     allowed. */
+  gap: 3px;
   flex: 1 1 auto;
   min-width: 0;
   height: 100%;
@@ -275,22 +316,26 @@ body {
   max-width: 200px;
   height: 30px;
   padding: 0 4px 0 10px;
-  border: 1px solid transparent;
+  border: 1px solid var(--tab-border);
+  /* The strip's own bottom rule closes the shape; a bottom border here would
+     double it and cut the tab off from the rule it stands on. */
   border-bottom: none;
   border-radius: 6px 6px 0 0;
-  background: transparent;
-  color: var(--muted);
+  background: var(--tab-bg);
+  color: var(--tab-fg);
   font-family: var(--font-ui);
   font-size: 12.5px;
   cursor: pointer;
   transition:
     background-color 0.12s ease,
+    border-color 0.12s ease,
     color 0.12s ease;
 }
 
 .doc-tab:hover {
   color: var(--fg);
-  background: var(--active-line);
+  background: var(--tab-bg-hover);
+  border-color: var(--tab-border-hover);
 }
 
 .doc-tab:focus-visible {
@@ -299,12 +344,12 @@ body {
 }
 
 .doc-tab[aria-selected="true"] {
-  background: var(--bg);
+  background: var(--tab-active-bg);
   color: var(--fg);
-  border-color: var(--border);
-  /* The accent edge is the second signal after the bold name: it survives at a
-     glance when the strip is crowded and the background difference is subtle. */
-  box-shadow: inset 0 2px 0 var(--accent);
+  /* The accent edge is the first signal after the surface change: it survives
+     at a glance when the strip is crowded. It is a border rather than an inset
+     shadow so it follows the rounded corners instead of crossing them. */
+  border-top: 2px solid var(--accent);
 }
 
 .doc-tab-name {
@@ -947,6 +992,31 @@ body {
   margin: 0 auto;
 }
 
+/* Soft wrapping fills the pane, and `text-wrap: pretty` stops a hard-wrapped
+   Markdown line from leaving one word alone on its last row — the
+   "…debug it, / which" break in a file wrapped at 80 columns and shown in a
+   narrower pane. `pretty` moves the break back a word so the row ends with two.
+
+   Chromium ignores `pretty` while `white-space` is `break-spaces`, which
+   CodeMirror's own `lineWrapping` sets to keep whitespace at a wrap point from
+   hanging outside the content (codemirror.next#606), so the content goes back to
+   `pre-wrap` — the value CodeMirror used before that fix. The cost is that
+   trailing whitespace at a wrap point hangs rather than wrapping; measured, it
+   reaches at most 7px, stays inside the scroller at every pane width from 360 to
+   700px, and never adds a horizontal scrollbar.
+
+   The `@supports` guard is what keeps that cost from being paid for nothing:
+   WebKitGTK, which the Linux build runs on, does not implement `pretty` yet, so
+   without the guard the editor would drop `break-spaces` and gain the hang while
+   getting no better breaks. There the rule does not apply and CodeMirror's own
+   `break-spaces` stays. */
+@supports (text-wrap: pretty) {
+  .editor-host .cm-content.cm-lineWrapping {
+    white-space: pre-wrap;
+    text-wrap: pretty;
+  }
+}
+
 /* The dictionary's underline. A wavy line, not a tint: a persistent background
    reads as markup applied to the document. */
 .cm-spell-error {
@@ -1150,6 +1220,72 @@ body {
 .status-reading {
   font-variant-numeric: tabular-nums;
   color: var(--accent);
+}
+
+/* Only present while an optional tool downloads after the dialog was closed.
+   It is the one visible proof that closing the dialog did not cancel the work,
+   and it is also the way back to the progress view. */
+.status-download {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.status-download[hidden] {
+  display: none;
+}
+
+.status-download-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-download-track {
+  flex: none;
+  width: 42px;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.status-download-fill {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 120ms ease;
+}
+
+.status-download-fill.is-indeterminate {
+  width: 35%;
+  animation: status-download-pulse 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes status-download-pulse {
+  from {
+    transform: translateX(-60%);
+  }
+  to {
+    transform: translateX(180%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-download-fill {
+    transition: none;
+  }
+  .status-download-fill.is-indeterminate {
+    width: 100%;
+    animation: none;
+    opacity: 0.5;
+  }
 }
 
 /* --------------------------------------------------------------------------
@@ -1760,8 +1896,16 @@ body {
   background: rgba(30, 30, 30, 0.92);
   color: #f2f2f2;
   font-size: 12.5px;
+  /* A warning toast carries one sentence per line; keep those breaks and let a
+     long resource path wrap rather than widen the row past the window. A
+     single-line toast is unchanged: it has no newline and shrinks to its text. */
+  white-space: pre-line;
+  overflow-wrap: anywhere;
   box-shadow: 0 6px 22px rgba(0, 0, 0, 0.28);
-  z-index: 50;
+  /* Above the Preferences overlay (100) and its popups (120/121). Actions
+     started from a Preferences row report progress and results only through a
+     toast, so a lower layer made them look like clicks that did nothing. */
+  z-index: 130;
   pointer-events: none;
 }
 
@@ -1871,6 +2015,897 @@ body {
   display: flex;
   justify-content: flex-end;
   margin-top: 24px;
+}
+
+/* --------------------------------------------------------------------------
+   Encoding and line endings
+   -------------------------------------------------------------------------- */
+
+.encoding-dialog {
+  --encoding-ok: #2f8a4c;
+  --encoding-error: var(--diagnostic-rule);
+  --encoding-warning: #a86a00;
+  display: flex;
+  flex-direction: column;
+  width: min(640px, calc(100vw - 48px));
+  max-height: min(720px, calc(100vh - 48px));
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.3);
+}
+.encoding-dialog:not([open]) {
+  display: none;
+}
+[data-theme="dark"] .encoding-dialog {
+  --encoding-ok: #5cc27e;
+  --encoding-warning: #e0a53c;
+}
+.encoding-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.35);
+}
+.encoding-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 24px 0;
+}
+.encoding-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+.encoding-file {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.encoding-current {
+  padding: 12px 24px 0;
+}
+.encoding-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.encoding-chip {
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--sidebar-bg);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.encoding-disk {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.encoding-disk.is-warning {
+  color: var(--encoding-warning);
+}
+.encoding-notice {
+  margin: 12px 24px 0;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  line-height: 1.45;
+}
+.encoding-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 16px 24px 0;
+  border-bottom: 1px solid var(--border);
+}
+.encoding-tab {
+  margin-bottom: -1px;
+  padding: 7px 12px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.encoding-tab[aria-selected="true"] {
+  border-bottom-color: var(--accent);
+  color: var(--fg);
+}
+.encoding-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+.encoding-panel {
+  min-height: 0;
+  padding: 16px 24px 4px;
+  overflow: auto;
+}
+.encoding-panel[hidden] {
+  display: none;
+}
+.encoding-panel fieldset {
+  margin: 0 0 16px;
+  padding: 0;
+  border: none;
+}
+.encoding-panel legend {
+  margin-bottom: 8px;
+  padding: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.encoding-targets {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.encoding-targets legend {
+  grid-column: 1 / -1;
+}
+.encoding-target {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+.encoding-target:hover {
+  border-color: var(--rule);
+}
+.encoding-target:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.encoding-target:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.encoding-target input {
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+.encoding-target-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.encoding-target-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+.encoding-target-hint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.encoding-badge {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+.encoding-select {
+  width: 100%;
+  margin-top: 4px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+.encoding-select:disabled {
+  opacity: 0.6;
+}
+.encoding-eol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.encoding-eol legend {
+  width: 100%;
+}
+.encoding-segment {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.encoding-segment:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.encoding-segment:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.encoding-segment input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+.encoding-segment-name {
+  font-weight: 600;
+}
+.encoding-segment-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+.encoding-checks {
+  display: grid;
+  gap: 8px;
+}
+.encoding-fit {
+  margin: 0;
+  line-height: 1.45;
+}
+.encoding-fit:empty {
+  display: none;
+}
+.encoding-fit.is-ok {
+  color: var(--encoding-ok);
+}
+.encoding-fit.is-error {
+  color: var(--encoding-error);
+}
+.encoding-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.encoding-declaration {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  line-height: 1.45;
+  cursor: pointer;
+}
+.encoding-declaration[hidden] {
+  display: none;
+}
+.encoding-declaration input {
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+}
+.encoding-warnings {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.encoding-warnings[hidden] {
+  display: none;
+}
+.encoding-warnings li {
+  padding: 7px 10px;
+  border-left: 3px solid var(--encoding-warning);
+  border-radius: 4px;
+  background: var(--code-bg);
+  line-height: 1.45;
+}
+.encoding-summary {
+  margin: 14px 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+.encoding-help {
+  margin: 0 0 12px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+.encoding-reinterpret {
+  display: grid;
+  grid-template-columns: minmax(170px, 0.8fr) minmax(0, 1.4fr);
+  gap: 12px;
+  height: 300px;
+}
+.encoding-list {
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.encoding-list:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.encoding-group-name {
+  padding: 8px 8px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.encoding-option {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.encoding-option:hover {
+  background: var(--active-line);
+}
+.encoding-option.is-selected {
+  background: var(--accent-soft);
+  color: var(--fg);
+}
+.encoding-option.is-invalid {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+.encoding-option[hidden] {
+  display: none;
+}
+.encoding-preview {
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--sidebar-bg);
+}
+.encoding-preview h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+.encoding-muted {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+.encoding-samples {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.encoding-sample {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 8px;
+}
+.encoding-sample-line {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.6;
+}
+.encoding-sample-texts {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.encoding-sample-texts span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.encoding-sample-now {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+.encoding-show-invalid {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.encoding-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 24px 20px;
+  border-top: 1px solid var(--border);
+  margin-top: 12px;
+}
+.encoding-actions button {
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--sidebar-bg);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+.encoding-actions button[hidden] {
+  display: none;
+}
+.encoding-actions button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.encoding-actions button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.encoding-actions .encoding-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+@media (max-width: 560px) {
+  .encoding-targets,
+  .encoding-reinterpret {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .encoding-reinterpret {
+    height: auto;
+  }
+  .encoding-list {
+    max-height: 180px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .encoding-target {
+    transition: none;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Optional tools
+
+   The same dialog serves the first run, a blocked export and the Tools manage
+   view. It deliberately borrows the encoding dialog's chrome: one border, one
+   radius, one accent, a footer separated by a rule. The rows are selection
+   rows, not settings switches: a download is a one-time action.
+   -------------------------------------------------------------------------- */
+
+.optional-tools-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(620px, calc(100vw - 48px));
+  max-height: min(760px, calc(100vh - 48px));
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.3);
+}
+
+.optional-tools-dialog:not([open]) {
+  display: none;
+}
+
+.optional-tools-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.optional-tools-header {
+  padding: 22px 24px 0;
+}
+
+.optional-tools-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.optional-tools-subtitle {
+  max-width: 62ch;
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.optional-tools-context {
+  margin: 14px 24px 0;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  line-height: 1.45;
+}
+
+.optional-tools-context[hidden] {
+  display: none;
+}
+
+.optional-tools-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin: 16px 24px 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+.optional-tools-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.optional-tools-row + .optional-tools-row {
+  border-top: 1px solid var(--border);
+}
+
+label.optional-tools-row {
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+label.optional-tools-row:hover {
+  background: var(--active-line);
+}
+
+.optional-tools-row:has(input:checked) {
+  background: var(--accent-soft);
+}
+
+.optional-tools-row:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.optional-tools-row input[type="checkbox"] {
+  flex: none;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.optional-tools-row input:disabled {
+  cursor: default;
+}
+
+.optional-tools-row-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.optional-tools-row-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  font-weight: 600;
+}
+
+.optional-tools-row-hint {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.optional-tools-row-hint.is-extra {
+  font-size: 12px;
+}
+
+.optional-tools-chip {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.optional-tools-chip.is-required {
+  background: var(--code-bg);
+  color: var(--muted);
+}
+
+.optional-tools-check {
+  flex: none;
+  width: 20px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.optional-tools-check.is-ready {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.optional-tools-check.is-active {
+  color: var(--accent);
+}
+
+.optional-tools-check.is-failed,
+.optional-tools-state.is-error {
+  color: var(--diagnostic-rule);
+}
+
+.optional-tools-state {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.optional-tools-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.optional-tools-state.is-ready {
+  color: var(--accent);
+}
+
+.optional-tools-progress {
+  width: 100%;
+  height: 4px;
+  margin: 2px 0 0;
+  overflow: hidden;
+  border: none;
+  border-radius: 999px;
+  background: var(--border);
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.optional-tools-progress::-webkit-progress-bar {
+  background: var(--border);
+  border-radius: 999px;
+}
+
+.optional-tools-progress::-webkit-progress-value {
+  background: var(--accent);
+  border-radius: 999px;
+}
+
+.optional-tools-progress::-moz-progress-bar {
+  background: var(--accent);
+  border-radius: 999px;
+}
+
+.optional-tools-progress:not([value]) {
+  opacity: 0.55;
+}
+
+.optional-tools-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.optional-tools-link:disabled {
+  color: var(--muted);
+  cursor: default;
+  text-decoration: none;
+}
+
+.optional-tools-footer {
+  padding: 16px 24px 20px;
+  border-top: 1px solid var(--border);
+  margin-top: 16px;
+}
+
+.optional-tools-note,
+.optional-tools-trust {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.optional-tools-trust {
+  margin-top: 6px;
+}
+
+.optional-tools-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.optional-tools-actions button {
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--sidebar-bg);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.optional-tools-actions button[hidden] {
+  display: none;
+}
+
+.optional-tools-actions button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.optional-tools-actions button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.optional-tools-actions .optional-tools-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  label.optional-tools-row {
+    transition: none;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Export format chooser
+   -------------------------------------------------------------------------- */
+
+.export-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, calc(100vw - 48px));
+  max-height: min(620px, calc(100vh - 64px));
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.3);
+}
+.export-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.35);
+}
+.export-dialog h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+.export-dialog-caption {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 0.92em;
+  line-height: 1.45;
+}
+.export-dialog-search {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--sidebar-bg);
+  color: var(--fg);
+  font: inherit;
+}
+.export-dialog-search:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* The list is the scrolling part: the field and the buttons stay put while a
+   77-row catalogue is searched. */
+.export-dialog-list {
+  flex: 1 1 auto;
+  min-height: 120px;
+  margin: 12px 0 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.export-dialog-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 16px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.export-dialog-row + .export-dialog-row {
+  border-top: 1px solid var(--border);
+}
+.export-dialog-row.is-active,
+.export-dialog-row:hover {
+  background: var(--active-line);
+}
+.export-dialog-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.export-dialog-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.export-dialog-detail {
+  color: var(--muted);
+  font-size: 0.86em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.export-dialog-note {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 0.82em;
+  font-style: italic;
+}
+.export-dialog-empty {
+  padding: 16px 12px;
+  color: var(--muted);
+}
+.export-dialog-status {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.86em;
+  font-variant-numeric: tabular-nums;
+}
+.export-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+.export-dialog-actions button {
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--sidebar-bg);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+.export-dialog-actions button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .prefs-overlay {
@@ -2105,6 +3140,89 @@ body {
   min-width: 0;
 }
 
+.prefs-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.prefs-local-packages {
+  min-width: 0;
+}
+
+.prefs-folder-path {
+  display: block;
+  overflow-wrap: anywhere;
+  user-select: text;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 4px 0 8px;
+}
+
+.prefs-folder-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 8px 196px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.prefs-folder-status.has-error {
+  color: var(--fg);
+}
+
+.prefs-additional-folders {
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.prefs-additional-folders > summary {
+  cursor: pointer;
+  color: var(--muted);
+  padding: 6px 0;
+}
+
+.prefs-additional-folders .prefs-package-folder {
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+  padding-top: 8px;
+}
+
+.prefs-folder-menu {
+  position: relative;
+}
+
+.prefs-folder-menu > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 2px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 18px;
+}
+
+.prefs-folder-menu-items {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 130px;
+  padding: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px #0002;
+}
+
+.prefs-panel.is-narrow .prefs-folder-status {
+  margin-left: 0;
+}
+
 .prefs-control select,
 .prefs-number input,
 .prefs-row-text input,
@@ -2126,6 +3244,78 @@ body {
 .prefs-secret input:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+/* The pane is padded and scrolls; while the surface is shown it is neither, so
+   the surface can fill it without changing the sticky strip's width. */
+.preview-pane:has(> .preview-pending) {
+  position: relative;
+  overflow: hidden;
+}
+
+.preview-pending {
+  position: absolute;
+  inset: 0;
+  z-index: 1; /* below .latex-build-status (z-index 4) */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+  pointer-events: none;
+}
+
+.preview-pending-spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2.5px solid var(--border);
+  border-top-color: var(--accent);
+  animation: preview-spin 0.9s linear infinite;
+}
+
+.source-preview-icon {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.preview-pending[data-state="idle"] .preview-pending-spinner {
+  display: none;
+}
+
+.preview-pending-title {
+  max-width: 70%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.preview-pending-phase,
+.preview-pending-elapsed {
+  font-size: 12px;
+}
+
+.preview-pending-elapsed {
+  min-height: 1.2em; /* the counter appearing must not move the column */
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes preview-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .preview-pending-spinner {
+    animation: none; /* a static arc; the counter carries liveness */
+  }
 }
 
 /* The Document / Pages switch above a Typst preview. */
@@ -2159,6 +3349,10 @@ body {
 .typst-viewbutton.active {
   border-color: var(--accent, #4a8cff);
   color: var(--fg, #ddd);
+}
+
+.latex-save-pdf {
+  color: var(--fg);
 }
 
 /* What the document view had to drop. Typst's HTML export cannot represent
@@ -2215,13 +3409,15 @@ body {
   margin-top: 0;
 }
 
-/* Typst preview: the compiler's own pages, one below the other. */
+/* Typst preview: the compiler's own pages, one below the other, flush.
+   No gap, no rule, no shadow: the reader is reading a document, not a stack of
+   cards. What separates one page from the next is the paper's own margin, which
+   is part of the page and therefore part of what a PDF export contains. */
 .typst-preview {
   --typst-fit: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 18px;
   padding: 22px 0 40px;
 }
 
@@ -2255,20 +3451,14 @@ body {
   align-items: flex-start;
 }
 
-/* The shell owns the fitted size and the shadow; the page inside keeps the
-   fixed 96 dpi coordinate system PDF.js laid the text layer out in. */
+/* The shell owns the fitted size; the page inside keeps the fixed 96 dpi
+   coordinate system PDF.js laid the text layer out in. */
 .typst-page-shell {
   position: relative;
   flex: none;
   width: calc(var(--typst-page-width) * 1px * var(--typst-fit));
   height: calc(var(--typst-page-height) * 1px * var(--typst-fit));
   background: var(--bg);
-  /* The page is as wide as the pane, so its side shadow is clipped away. What
-     is left is a rule above each page and a soft shadow below it: the page
-     break reads vertically, which is the only place a page edge should show. */
-  box-shadow:
-    0 -1px 0 var(--border),
-    0 1px 4px rgb(0 0 0 / 22%);
 }
 
 .typst-page {
@@ -2378,14 +3568,109 @@ body {
   overflow-wrap: anywhere;
 }
 
-/* The page stands slightly off the pane, so a rule and the shadow above are
-   what separate one page from the next. The shell is dark too: it is visible
-   for the instant between appending a page and PDF.js filling its canvas. */
+/* The navigable form of a LaTeX failure. The raw log stays available below it,
+   but the list is what the reader acts on: one row per occurrence, with the line
+   the compiler actually read. */
+.latex-problems {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+}
+
+.latex-problems-head {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.latex-problems-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.latex-problem {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--code-bg);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.latex-problem:not(button) {
+  cursor: default;
+}
+
+.latex-problem:hover,
+.latex-problem:focus-visible {
+  border-color: var(--diagnostic-rule);
+  background: color-mix(in srgb, var(--diagnostic-error) 45%, var(--code-bg));
+}
+
+.latex-problem-place {
+  font-family: var(--font-code);
+  font-size: 11.5px;
+  color: var(--diagnostic-rule);
+}
+
+.latex-problem-message {
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+/* The compiled line, not the buffer's: when the two differ, the reader sees
+   exactly which text the build used. */
+.latex-problem-source {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: var(--bg);
+  font-family: var(--font-code);
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.latex-problems-more {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.latex-log {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.latex-log summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.latex-log .typst-error {
+  padding: 8px 0 0;
+}
+
+/* The shell is dark too: it is visible for the instant between appending a page
+   and PDF.js filling its canvas. */
 [data-theme="dark"] .typst-page-shell {
   background: var(--bg);
-  box-shadow:
-    0 -1px 0 var(--border),
-    0 1px 6px rgb(0 0 0 / 55%);
 }
 
 /* A set of alternatives as buttons, used where picking one redraws the panel. */
@@ -2670,6 +3955,41 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .cm-sync-word {
+    animation: none;
+  }
+}
+
+/* A LaTeX problem from the last compile. Three beats, then the resting wash:
+   the mark must remain after the blink, because it is the only pointer to the
+   offending command. Shape (the wavy underline) carries the meaning as well as
+   colour, so it survives a reader who cannot separate rose from amber. */
+@keyframes latex-error-pulse {
+  0%,
+  100% {
+    background-color: var(--diagnostic-error);
+  }
+  40% {
+    background-color: var(--diagnostic-error-peak);
+  }
+}
+
+.cm-latex-error {
+  background-color: var(--diagnostic-error);
+  text-decoration: underline wavy var(--diagnostic-rule);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  border-radius: 2px;
+  animation: latex-error-pulse 520ms ease-in-out 3;
+}
+
+/* A diagnostic click also makes this CodeMirror's active line. Its pink wash
+   must outrank the editor theme's active-line background. */
+.cm-editor .cm-line.cm-latex-error-line {
+  background-color: color-mix(in srgb, var(--diagnostic-error) 55%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cm-latex-error {
     animation: none;
   }
 }
@@ -4132,4 +5452,503 @@ body {
   .ai-fab {
     transition: none;
   }
+}
+
+/* The scroll owner retains its ID and geometry; chrome owns a separate row.
+   Both viewports stay laid out so toggling Logs cannot refit or reset a PDF. */
+.preview-shell {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  container-type: inline-size;
+  container-name: compiled-workspace;
+}
+.compiled-preview {
+  --compiled-bg: light-dark(#ffffff, #22252a);
+  --compiled-fg: light-dark(#2b3038, #e8eaf0);
+  --compiled-muted: light-dark(#656d78, #b0b7c3);
+  --compiled-line: light-dark(#e2e5e9, #414650);
+  --compiled-soft: light-dark(#f4f5f7, #2d3138);
+  --compiled-accent: light-dark(#286cc4, #8bbaff);
+  /* The primary action's hover fill: a step darker in the light theme, a step
+     lighter in the dark one, so the button stays the most saturated control. */
+  --compiled-accent-hover: light-dark(#225da9, #a6c9ff);
+  --compiled-selected: light-dark(#eaf2ff, #303f56);
+  --compiled-error: light-dark(#b32949, #ff9ab1);
+  --compiled-warning: light-dark(#886014, #efc46f);
+}
+.preview-stage {
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.preview-stage > .preview-pane,
+.compiler-logs {
+  grid-area: 1 / 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+.compiler-logs {
+  visibility: hidden;
+  pointer-events: none;
+  overflow-y: auto;
+  padding: 16px 18px 24px;
+  color: var(--compiled-fg);
+  background: var(--compiled-bg);
+  font: 13px/1.45 var(--font-ui);
+}
+.logs-open .compiler-logs {
+  visibility: visible;
+  pointer-events: auto;
+}
+.logs-open .preview-pane {
+  visibility: hidden;
+  pointer-events: none;
+}
+.compiled-preview .preview-pane {
+  padding-top: 0;
+}
+.compiled-toolbar {
+  flex: none;
+  padding: 8px 12px;
+  color: var(--compiled-fg);
+  background: var(--compiled-bg);
+  border-bottom: 1px solid var(--compiled-line);
+  font: 13px/1.45 var(--font-ui);
+}
+.compiled-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.compiled-toolbar button,
+.compiler-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  font: inherit;
+  padding: 5px 10px;
+  border: 1px solid var(--compiled-line);
+  border-radius: 5px;
+  background: var(--compiled-bg);
+  color: var(--compiled-fg);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.compiled-toolbar button:hover,
+.compiler-tabs button:hover {
+  background: var(--compiled-soft);
+}
+.compiled-toolbar button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.compiled-toolbar .compiled-compile {
+  min-width: 92px;
+  background: var(--compiled-accent);
+  border-color: var(--compiled-accent);
+  color: light-dark(#ffffff, #152338);
+}
+/* The generic toolbar hover above is more specific than `.compiled-compile`
+   (two class-level selectors and a pseudo-class against two), so without a
+   hover fill of its own the accent button turns into the neutral soft surface
+   and its label loses all contrast — near-black on near-black in the dark
+   theme, white on near-white in the light one. Keep the accent instead. */
+.compiled-toolbar .compiled-compile:hover {
+  background: var(--compiled-accent-hover);
+  border-color: var(--compiled-accent-hover);
+}
+.compiled-icon {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+}
+.compiled-auto {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.compiled-auto input {
+  margin: 0;
+  width: 14px;
+  height: 14px;
+  accent-color: var(--compiled-accent);
+}
+.compiled-modes {
+  display: flex;
+  gap: 2px;
+}
+.compiled-toolbar .compiled-mode {
+  border-color: transparent;
+  padding: 6px 8px;
+}
+.compiled-toolbar .compiled-logs-toggle {
+  border-color: transparent;
+  background: transparent;
+  padding: 6px 9px;
+}
+.compiled-toolbar .compiled-logs-toggle[aria-pressed="true"] {
+  background: var(--compiled-selected);
+  border-color: var(--compiled-accent);
+  color: var(--compiled-accent);
+}
+.compiled-toolbar .compiled-mode[aria-pressed="true"] {
+  background: var(--compiled-soft);
+  color: var(--compiled-accent);
+}
+.compiled-issue-count {
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--compiled-warning);
+  background: light-dark(#fbf0d7, #493b22);
+}
+.compiled-issue-count[data-severity="error"] {
+  color: var(--compiled-error);
+  background: light-dark(#fbe8ed, #4b2a35);
+}
+.compiled-message {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 9px;
+  /* Pushes the status, Logs and Save to the right edge of the action row. It
+     can shrink (and wrap its own words) only when it is alone on a line. */
+  margin-left: auto;
+  min-width: 0;
+  color: var(--compiled-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.compiled-condition {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--compiled-fg);
+}
+.compiled-condition[data-severity="error"] {
+  color: var(--compiled-error);
+}
+.compiled-condition[data-severity="warning"] {
+  color: var(--compiled-warning);
+}
+.compiled-state-detail,
+.compiled-engine {
+  font-variant-numeric: tabular-nums;
+}
+.compiled-notice {
+  margin-top: 6px;
+}
+.compiled-notice .typst-note {
+  margin: 0;
+  padding: 6px 0;
+  font: inherit;
+}
+.compiler-logs h2 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.compiler-log-caption {
+  margin: 0 0 12px;
+  color: var(--compiled-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.compiler-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--compiled-line);
+}
+.compiler-tabs .compiler-tab {
+  border: 0;
+  background: transparent;
+  padding: 5px 9px;
+  border-radius: 4px;
+}
+.compiler-tabs .compiler-tab[aria-selected="true"] {
+  color: var(--compiled-accent);
+  background: var(--compiled-selected);
+}
+.compiled-copy-log {
+  margin-left: auto;
+}
+.compiler-logs .compiler-output {
+  margin: 16px 0 0;
+  padding: 0;
+  color: var(--compiled-fg);
+  max-height: none;
+  overflow: visible;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 12px/1.65 var(--font-mono);
+}
+.compiler-logs .latex-problems {
+  padding: 0;
+  font-family: var(--font-ui);
+}
+.compiler-logs .latex-problems-head {
+  display: none;
+}
+.compiler-logs .latex-problems-list {
+  gap: 0;
+}
+.compiler-logs .latex-problem,
+.compiled-issue {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 13px 0;
+  border: 0;
+  border-bottom: 1px solid var(--compiled-line);
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  overflow-wrap: anywhere;
+}
+.compiler-logs button.latex-problem:hover {
+  background: var(--compiled-soft);
+}
+.compiler-logs button.latex-problem:disabled {
+  cursor: default;
+}
+.compiler-logs .latex-problem > .compiled-icon,
+.compiled-issue > .compiled-icon {
+  margin-top: 2px;
+  color: var(--compiled-error);
+}
+.compiler-logs .latex-problem[data-severity="warning"] > .compiled-icon,
+.compiled-issue[data-severity="warning"] > .compiled-icon {
+  color: var(--compiled-warning);
+}
+.compiled-issue-body {
+  flex: 1;
+  min-width: 0;
+}
+.compiled-empty {
+  font: 14px/1.6 var(--font-ui);
+  color: var(--muted);
+  padding: 36px 24px;
+  text-align: center;
+}
+.compiler-logs .latex-problem-place {
+  color: var(--compiled-accent);
+  font: 12px var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.compiler-logs .latex-problem-message {
+  display: block;
+  margin-top: 3px;
+  font: inherit;
+}
+.latex-problem-severity {
+  margin-left: 7px;
+  color: var(--compiled-muted);
+  font-size: 12px;
+}
+.compiler-logs .latex-problem-source {
+  display: block;
+  margin-top: 6px;
+  padding: 5px 7px;
+  border-radius: 3px;
+  background: var(--compiled-soft);
+  font: 12px/1.5 var(--font-mono);
+}
+
+/* The pane can be narrow inside a wide window, so use its own width. */
+@container compiled-workspace (max-width: 480px) {
+  .compiled-toolbar {
+    padding: 8px;
+  }
+  .compiled-actions {
+    gap: 7px 9px;
+  }
+  .compiled-toolbar .compiled-save-pdf {
+    margin-left: auto;
+  }
+  /* Too narrow to share a line with the buttons: take the last row, full width,
+     read from the left, as the status did before it joined the action row. */
+  .compiled-message {
+    order: 1;
+    flex: 1 0 100%;
+    margin-left: 0;
+  }
+  .compiler-logs {
+    padding: 13px;
+  }
+}
+
+#compiled-controls[hidden],
+.compiled-toolbar [hidden],
+.compiler-logs [hidden] {
+  display: none !important;
+}
+
+.compiler-tabs [role="tablist"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Preferences › LaTeX › Local packages: the Logs action that leads there. */
+.latex-manage-libraries {
+  margin: 0 0 8px;
+}
+
+/* Explorer (Track W): the workspace folder as a lazy tree. */
+.explorer-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 6px 12px;
+}
+
+.explorer-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.explorer-action,
+.explorer-link {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 3px;
+}
+
+.explorer-link {
+  font-size: inherit;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.explorer-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  padding-right: 10px;
+  color: var(--fg);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.explorer-item .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.explorer-item .icon {
+  flex: 0 0 auto;
+  width: 12px;
+  text-align: center;
+  opacity: 0.7;
+}
+
+.explorer-item:hover {
+  background: var(--active-line);
+}
+
+.explorer-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.explorer-item.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.explorer-other,
+.explorer-asset {
+  color: var(--muted);
+}
+
+.explorer-more {
+  padding: 3px 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* Outline scope for multi-file LaTeX projects (Track W2). */
+.outline-scope {
+  display: flex;
+  gap: 4px;
+  padding: 0 10px 6px;
+}
+
+.outline-scope button {
+  flex: 1;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 4px;
+}
+
+.outline-scope button[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.outline-item.outline-current-file {
+  font-style: normal;
+}
+
+.outline-item[title] {
+  color: var(--muted);
+}
+
+/* The TeXpresso preview (docs/architecture.md). Like the
+   HTML guest, the frame is a sibling of `#preview`: it fills the pane, which
+   stops scrolling, and the shadow compile's #preview is never shown. */
+.texpresso-host {
+  position: absolute;
+  inset: 0;
+}
+.texpresso-host[hidden] {
+  display: none;
+}
+.texpresso-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--bg);
+}
+.app.latex-texpresso .preview-pane {
+  position: relative;
+  overflow: hidden;
+  padding: 0;
+}
+.app.latex-texpresso #preview,
+.app.latex-texpresso .preview-pane > .preview-pending {
+  display: none;
 }

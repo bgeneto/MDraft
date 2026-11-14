@@ -165,7 +165,11 @@ fn markdown_path(target: &Path, document_path: Option<&str>, options: &ImageOpti
         target_str
     };
 
-    if options.dot_slash && !value.starts_with("./") && !value.starts_with("../") && !Path::new(&value).is_absolute() {
+    if options.dot_slash
+        && !value.starts_with("./")
+        && !value.starts_with("../")
+        && !Path::new(&value).is_absolute()
+    {
         value = format!("./{value}");
     }
     if options.escape {
@@ -319,11 +323,7 @@ fn isobmff_ext(bytes: &[u8]) -> Option<&'static str> {
             _ => {}
         }
     }
-    if heic {
-        Some("heic")
-    } else {
-        None
-    }
+    if heic { Some("heic") } else { None }
 }
 
 // ---------------------------------------------------------------------------
@@ -334,8 +334,7 @@ fn isobmff_ext(bytes: &[u8]) -> Option<&'static str> {
 /// none. The process working directory is never a substitute: in an installed
 /// build it is the application folder, which the user did not choose and
 /// cannot necessarily write.
-const NO_DOCUMENT_FOLDER: &str =
-    "This document has no file yet. Save it first, or choose an absolute folder in Preferences › Image.";
+const NO_DOCUMENT_FOLDER: &str = "This document has no file yet. Save it first, or choose an absolute folder in Preferences › Image.";
 
 fn document_dir(document_path: Option<&str>) -> Result<PathBuf, String> {
     let path = document_path.ok_or_else(|| NO_DOCUMENT_FOLDER.to_string())?;
@@ -450,8 +449,8 @@ pub fn save_clipboard_image(
     if bytes.is_empty() {
         return Err("The clipboard image was empty.".to_string());
     }
-    let ext = sniff_ext(&bytes)
-        .ok_or("The clipboard contents are not a recognised image format.")?;
+    let ext =
+        sniff_ext(&bytes).ok_or("The clipboard contents are not a recognised image format.")?;
     if options.rule == "keepOriginal" {
         return Err(
             "Preferences ask images to keep their original location, but a clipboard image has none. Choose a folder rule in Preferences › Image."
@@ -508,9 +507,8 @@ pub fn import_image(
     }
 
     let bytes = fs::read(&source).map_err(|e| format!("Could not read {source_path}: {e}"))?;
-    let ext = sniff_ext(&bytes).ok_or_else(|| {
-        format!("{source_path} is not a recognised image format.")
-    })?;
+    let ext = sniff_ext(&bytes)
+        .ok_or_else(|| format!("{source_path} is not a recognised image format."))?;
 
     let stem = sanitize_stem(
         &source
@@ -668,7 +666,10 @@ mod tests {
 
     #[test]
     fn sniffs_common_formats() {
-        assert_eq!(sniff_ext(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]), Some("png"));
+        assert_eq!(
+            sniff_ext(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]),
+            Some("png")
+        );
         assert_eq!(sniff_ext(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("jpg"));
         assert_eq!(sniff_ext(b"GIF89a...."), Some("gif"));
         assert_eq!(sniff_ext(b"RIFF\0\0\0\0WEBPVP8 "), Some("webp"));
@@ -706,7 +707,10 @@ mod tests {
     #[test]
     fn an_avif_is_recognised_from_its_compatible_brands() {
         // The sample from aviftools.net declares `avif` as the major brand.
-        assert_eq!(sniff_ext(&ftyp(b"avif", &[b"mif1", b"avif", b"miaf"])), Some("avif"));
+        assert_eq!(
+            sniff_ext(&ftyp(b"avif", &[b"mif1", b"avif", b"miaf"])),
+            Some("avif")
+        );
         // Other AVIF writers declare `mif1` and only list `avif` as compatible.
         assert_eq!(sniff_ext(&ftyp(b"mif1", &[b"avif", b"mif1"])), Some("avif"));
         assert_eq!(sniff_ext(&ftyp(b"heic", &[b"mif1", b"heic"])), Some("heic"));
@@ -736,7 +740,11 @@ mod tests {
         );
         assert_eq!(sanitize_stem(""), "image");
         assert_eq!(sanitize_stem("..."), "image");
-        assert_eq!(sanitize_stem(".."), "image", "a bare traversal segment cannot survive");
+        assert_eq!(
+            sanitize_stem(".."),
+            "image",
+            "a bare traversal segment cannot survive"
+        );
         assert_eq!(
             sanitize_stem("..hidden"),
             "hidden",
@@ -845,17 +853,16 @@ mod tests {
         assert_eq!(markdown_path(image, doc, &o), "doc.assets/a.png");
 
         o.relative = false;
-        assert_eq!(markdown_path(image, doc, &o), "C:\\notes\\doc.assets\\a.png");
+        assert_eq!(
+            markdown_path(image, doc, &o),
+            "C:\\notes\\doc.assets\\a.png"
+        );
 
         o.relative = true;
         o.dot_slash = true;
         o.escape = true;
         assert_eq!(
-            markdown_path(
-                Path::new("C:\\notes\\doc.assets\\my shot (1).png"),
-                doc,
-                &o
-            ),
+            markdown_path(Path::new("C:\\notes\\doc.assets\\my shot (1).png"), doc, &o),
             "./doc.assets/my%20shot%20%281%29.png"
         );
     }
@@ -982,15 +989,16 @@ mod tests {
         // build it is the application folder.
         for rule in ["assetsFolder", "assetsDir"] {
             let error = target_dir(&opts(rule), None).unwrap_err();
-            assert!(
-                error.contains("Save it first"),
-                "{rule} produced: {error}"
-            );
+            assert!(error.contains("Save it first"), "{rule} produced: {error}");
         }
 
         let mut relative = opts("custom");
         relative.custom_dir = Some("media".to_string());
-        assert!(target_dir(&relative, None).unwrap_err().contains("Save it first"));
+        assert!(
+            target_dir(&relative, None)
+                .unwrap_err()
+                .contains("Save it first")
+        );
 
         let mut token = opts("custom");
         token.custom_dir = Some(format!(
@@ -999,7 +1007,9 @@ mod tests {
             "${filename}"
         ));
         assert!(
-            target_dir(&token, None).unwrap_err().contains("Save it first"),
+            target_dir(&token, None)
+                .unwrap_err()
+                .contains("Save it first"),
             "a token needs the document name even inside an absolute folder"
         );
 
@@ -1248,7 +1258,11 @@ mod tests {
 
     #[test]
     fn downloads_refuse_non_http_schemes() {
-        for url in ["file:///etc/passwd", "ftp://host/x.png", "data:image/png;base64,AAAA"] {
+        for url in [
+            "file:///etc/passwd",
+            "ftp://host/x.png",
+            "data:image/png;base64,AAAA",
+        ] {
             let err = download_image(url.to_string(), None, opts("assetsDir"), None).unwrap_err();
             assert!(err.contains("non-HTTP"), "{url} produced: {err}");
         }

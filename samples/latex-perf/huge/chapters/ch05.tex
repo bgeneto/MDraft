@@ -1,0 +1,57 @@
+\section{Chapter 5: Snapshots}
+\label{sec:ch05}
+
+Performance probe paragraph C05. This is included chapter 5 of twelve in
+the large MDraft LuaLaTeX benchmark. Ordinary prose keeps the page count
+realistic and gives the probe a stable word to edit. Equation~\ref{eq:ch04:integral} and
+Table~\ref{tab:ch04:runs} are valid cross-chapter references.
+
+\subsection{An integral}
+The integral in Equation~\ref{eq:ch05:integral} is valid for every integer
+$n \ge 0$. It is deliberately simple; the benchmark measures the engine, not
+the mathematics.
+
+\begin{equation}
+  \label{eq:ch05:integral}
+  \int_{0}^{1} x^{n}\,dx = \frac{1}{n+1}.
+\end{equation}
+
+The geometric series in Equation~\ref{eq:ch05:series} converges for
+$|r| < 1$ and gives a second display to render in this chapter.
+
+\begin{equation}
+  \label{eq:ch05:series}
+  \sum_{k=0}^{m} r^{k} = \frac{1-r^{m+1}}{1-r}.
+\end{equation}
+
+\subsection{A table}
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lrr}
+    \toprule
+    Run & Time & Pages \\
+    \midrule
+    One   & 1.20 & 3 \\
+    Two   & 1.15 & 3 \\
+    Three & 1.18 & 3 \\
+    \bottomrule
+  \end{tabular}
+  \caption{A timing sample for chapter 5.}
+  \label{tab:ch05:runs}
+\end{table}
+
+Table~\ref{tab:ch05:runs} is a valid float with a caption and a label. It
+exists so the page builder has a boxed object that cannot be split across a
+page break. The chapter deliberately avoids a citation so the bibliography is a single pass.
+
+\subsection{More prose}
+A benchmark chapter needs enough text that the type\-set is visible above the
+engine boot. This paragraph, the next one and the table above add up to a few
+pages per chapter.
+
+The content is intentionally repetitive across chapters. The point is not the
+prose; it is that the include graph, the equation numbering and the table
+labels all have to stay consistent while the probe edits one letter.
+
+The final paragraph of chapter 5 gives the probe a second stable offset. A
+change here must not invalidate the labels in any other chapter.

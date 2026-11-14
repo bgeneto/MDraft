@@ -225,8 +225,12 @@ export interface ImageContext {
    * an edit of the selected text (usually an image URL), not an insertion.
    */
   hasSelection: boolean;
-  /** Put markdown at the caret. */
-  insert(markdown: string): void;
+  /**
+   * Put markdown at the caret of the document the paste was made in. `assets`
+   * are the files written for it, named to the reader if the insertion is
+   * refused. Returns false when nothing was inserted.
+   */
+  insert(markdown: string, assets?: readonly string[]): boolean;
   /**
    * Turn an imported image into the document's syntax.
    *
@@ -268,8 +272,12 @@ function insertSaved(ctx: ImageContext, saved: api.SavedImage, message: string):
     ctx.notify(`${problem} Saved to ${saved.markdownPath}.`, true);
     return;
   }
-  ctx.insert(imageMarkup(ctx, altTextFrom(saved.markdownPath), saved.markdownPath));
-  ctx.notify(message);
+  if (
+    ctx.insert(imageMarkup(ctx, altTextFrom(saved.markdownPath), saved.markdownPath), [
+      saved.absolutePath,
+    ])
+  )
+    ctx.notify(message);
 }
 
 async function saveClipboardBase64(data: string, hint: string, ctx: ImageContext): Promise<void> {
@@ -428,6 +436,7 @@ export async function handleImageDrop(paths: string[], ctx: ImageContext): Promi
   }
 
   const parts: string[] = [];
+  const assets: string[] = [];
   for (const path of images) {
     try {
       const saved = await api.importImage(path, ctx.documentPath, imageOptions(ctx.settings));
@@ -446,12 +455,12 @@ export async function handleImageDrop(paths: string[], ctx: ImageContext): Promi
         continue;
       }
       parts.push(imageMarkup(ctx, altTextFrom(saved.markdownPath), saved.markdownPath));
+      assets.push(saved.absolutePath);
     } catch (error) {
       ctx.notify(String(error), true);
     }
   }
-  if (parts.length > 0) {
-    ctx.insert(parts.join("\n"));
+  if (parts.length > 0 && ctx.insert(parts.join("\n"), assets)) {
     ctx.notify(`${parts.length} image${parts.length === 1 ? "" : "s"} imported`);
   }
   return paths.filter((p) => !isImagePath(p));

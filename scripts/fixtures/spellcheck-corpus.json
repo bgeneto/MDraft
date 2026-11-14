@@ -1,0 +1,50 @@
+[
+  {
+    "language": "markdown",
+    "source": "# Welcomm\n\nA misspeling here.\n\n`codeerro` and https://example.invalid/path\n",
+    "check": ["Welcomm", "misspeling"],
+    "skip": ["codeerro", "example.invalid"]
+  },
+  {
+    "language": "typst",
+    "source": "= Welcomm\nA misspeling here.\n`codeerro`\n",
+    "check": ["Welcomm", "misspeling"],
+    "skip": ["codeerro"]
+  },
+  {
+    "language": "asciidoc",
+    "source": "= Welcomm\n\nA misspeling here.\n\n----\ncodeerro\n----\n",
+    "check": ["Welcomm", "misspeling"],
+    "skip": ["codeerro"]
+  },
+  {
+    "language": "latex",
+    "source": "\\section{Welcomm}\nA misspeling here.\n\\begin{verbatim}\ncodeerro\n\\end{verbatim}\n",
+    "check": ["Welcomm", "misspeling"],
+    "skip": ["codeerro", "verbatim"]
+  },
+  {
+    "language": "html",
+    "source": "<p title=\"Welcomm\">A misspeling here.</p><code>codeerro</code><a href=\"/badpath\">Link</a>",
+    "check": ["Welcomm", "misspeling"],
+    "skip": ["codeerro", "badpath"]
+  },
+  {
+    "language": "javascript",
+    "source": "// A misspeling here\nconst label = 'Welcomm';\nconst endpoint = '/badpath';\n",
+    "check": ["Welcomm", "misspeling"],
+    "skip": ["endpoint", "badpath"]
+  },
+  {
+    "language": "json",
+    "source": "{\"title\":\"Welcomm\",\"description\":\"A misspeling here\",\"url\":\"/badpath\"}",
+    "check": ["Welcomm", "misspeling"],
+    "skip": ["description", "badpath"]
+  },
+  {
+    "language": "css",
+    "source": "/* A misspeling here */ .badclass::before { content: 'Welcomm'; }",
+    "check": ["Welcomm", "misspeling"],
+    "skip": ["badclass"]
+  }
+]

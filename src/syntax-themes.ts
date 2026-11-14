@@ -424,6 +424,68 @@ export function buildChromeTheme(palette: SyntaxPalette) {
       },
       ".cm-cursor, .cm-dropCursor": { borderLeftColor: palette.text, borderLeftWidth: "2px" },
       ".cm-selectionMatch": { backgroundColor: palette.activeLine },
+
+      // The completion popup, and any other tooltip the editor raises.
+      //
+      // CodeMirror ships a light default, so without these a dark palette would
+      // open a white box in the middle of a dark page — the same bug `.combo-popup`
+      // needed a `[data-theme="dark"]` block to fix. Everything here is derived
+      // from the palette, so all nine themes are legible by construction rather
+      // than by a per-theme override list.
+      //
+      // Selectors are written out in full rather than nested under a parent with
+      // `&`: `style-mod` substitutes `&` only at the *start* of a selector
+      // (`part.replace(/&/, sel)`), so `"& > ul"` under a parent yields an
+      // invalid rule and the theme fails to mount — which takes the whole editor
+      // down with it, not just the popup.
+      ".cm-tooltip": {
+        backgroundColor: palette.surface,
+        color: palette.text,
+        border: `1px solid ${palette.separator}`,
+        borderRadius: "6px",
+        boxShadow: palette.dark
+          ? "0 6px 20px rgba(0, 0, 0, 0.55)"
+          : "0 6px 20px rgba(15, 23, 42, 0.16)",
+        zIndex: "60",
+      },
+      ".cm-tooltip .cm-tooltip-arrow:before": {
+        borderTopColor: palette.separator,
+        borderBottomColor: palette.separator,
+      },
+      ".cm-tooltip .cm-tooltip-arrow:after": {
+        borderTopColor: palette.surface,
+        borderBottomColor: palette.surface,
+      },
+      ".cm-tooltip-autocomplete > ul": {
+        fontFamily: "inherit",
+        fontSize: "12.5px",
+        // The list scrolls rather than growing past the viewport; this is the
+        // only thing that keeps a 50-row popup usable in a short window.
+        maxHeight: "14em",
+      },
+      ".cm-tooltip-autocomplete > ul > li": { padding: "3px 8px", lineHeight: "1.5" },
+      // The selected row must be unmistakable: it is what Tab and Enter act on.
+      ".cm-tooltip-autocomplete > ul > li[aria-selected]": {
+        backgroundColor: palette.selection,
+        color: palette.text,
+      },
+      // The matched prefix is what the reader typed; bolding it makes the list
+      // easier to scan without changing the row's meaning.
+      ".cm-completionMatchedText": {
+        textDecoration: "none",
+        fontWeight: "600",
+        color: palette.link,
+      },
+      ".cm-completionDetail": { marginLeft: "0.6em", fontStyle: "normal", color: palette.muted },
+      ".cm-completionIcon": { display: "none" },
+      ".cm-completionLabel": { color: palette.text },
+      ".cm-tooltip.cm-completionInfo": {
+        backgroundColor: palette.surface,
+        border: `1px solid ${palette.separator}`,
+        color: palette.text,
+        padding: "6px 8px",
+        maxWidth: "32em",
+      },
     },
     { dark: palette.dark },
   );

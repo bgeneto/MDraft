@@ -328,6 +328,43 @@ check(
 );
 
 // ---------------------------------------------------------------------------
+// HTML completion, which this project gets for free.
+//
+// `@codemirror/lang-html` registers `htmlCompletionSourceWith` inside `html()`,
+// so installing the completion layer is all it takes — no catalog, no bytes.
+// That claim is worth proving rather than assuming: the popup is the only
+// evidence that the source is reached through the real editor.
+// ---------------------------------------------------------------------------
+console.log("\n=== HTML completion comes from the language, not from a catalog ===");
+await scenario(async () => {
+  await type("<di");
+  await sleep(400);
+  const popup = await evaluate(`
+    (() => {
+      const list = document.querySelector(".cm-tooltip-autocomplete");
+      if (!list) return null;
+      return [...list.querySelectorAll("li")].map((li) => li.textContent.trim()).slice(0, 10);
+    })()
+  `);
+  check(
+    Array.isArray(popup) && popup.length > 0,
+    "typing a partial tag opens a completion popup",
+    popup ? popup.join(", ") : "no popup",
+  );
+  check(
+    Array.isArray(popup) && popup.some((row) => /div/i.test(row)),
+    "the popup offers the div tag",
+    popup ? popup.join(", ") : "no popup",
+  );
+  // The popup must be dismissable without editing the buffer, or it would trap
+  // the reader in a list they cannot leave.
+  await press("Escape", "Escape");
+  await sleep(200);
+  const closed = await evaluate(`!document.querySelector(".cm-tooltip-autocomplete")`);
+  check(closed === true, "Escape dismisses the popup");
+});
+
+// ---------------------------------------------------------------------------
 // Typst gets pairs but no tags; AsciiDoc gets both.
 // ---------------------------------------------------------------------------
 console.log("\n=== other document types ===");
@@ -351,6 +388,104 @@ await scenario(async () => {
 await scenario(async () => {
   await type("<p>");
   check((await text()) === "<p></p>", "AsciiDoc closes tags", await text());
+});
+
+// ---------------------------------------------------------------------------
+// LaTeX completion, through the real editor.
+//
+// The catalog and the context table are unit-tested (`completion-latex:unit`,
+// 64 checks). What only this suite can prove is that the popup actually renders
+// for a LaTeX document — the wiring between the language's `autocomplete` data,
+// the completion extension and a real editor view.
+//
+// `Ctrl-Space` is used rather than typing. CodeMirror binds it to
+// `startCompletion`, so it asks the source directly and does not depend on the
+// per-keystroke `input.type` transaction that `activateOnTyping` watches. That
+// removes the fixture problem the earlier attempt hit: in this suite's fresh tab
+// the LaTeX grammar resolves asynchronously, and synthetic `char` events raced
+// it. `Ctrl-Space` after the wait tests the same wiring without the race.
+// ---------------------------------------------------------------------------
+console.log("\n=== LaTeX completion ===");
+await setExtension("tex");
+await sleep(600);
+await newTab();
+// The grammar and its completion source resolve asynchronously, like Typst's.
+await sleep(1200);
+await scenario(async () => {
+  // A backslash makes the context a command, so the source has something to
+  // offer. Typed through the suite's own helper, which is the input path the
+  // rest of these checks already rely on.
+  await type("\\");
+  await sleep(200);
+  await press(" ", "Space", 2); // Ctrl-Space
+  await sleep(600);
+
+  const rows = await evaluate(`
+    (() => {
+      const list = document.querySelector(".cm-tooltip-autocomplete");
+      if (!list) return null;
+      return [...list.querySelectorAll("li")].map((li) => li.textContent.trim()).slice(0, 12);
+    })()
+  `);
+  check(Array.isArray(rows), "Ctrl-Space opens the LaTeX popup", rows ? "open" : "none");
+  // A bare backslash has no prefix, so the popup shows the catalog from the top
+  // and `section` is not in the first slice. What matters is that the rows are
+  // LaTeX command names rather than buffer words — and that they are *names*,
+  // not the raw snippet templates (`section{${1}}`) the catalog stores.
+  check(
+    // A row is a command name, optionally followed by its readable signature
+    // (`frac{num}{den}`, `sqrt[n]{x}`); raw templates are rejected below.
+    Array.isArray(rows) && rows.some((row) => /^\\?[a-zA-Z]+(?:\[[^\]]*\]|\{[^}]*\})*$/.test(row)),
+    "the popup offers LaTeX commands",
+    rows ? rows.join(", ") : "none",
+  );
+  check(
+    Array.isArray(rows) && !rows.some((row) => row.includes("${")),
+    "the popup paints command names, not snippet templates",
+    rows ? rows.filter((row) => row.includes("${")).join(", ") || "clean" : "none",
+  );
+  // Typing a prefix must narrow it to the command the reader is spelling.
+  await type("sec");
+  await sleep(600);
+  const narrowed = await evaluate(`
+    (() => {
+      const list = document.querySelector(".cm-tooltip-autocomplete");
+      if (!list) return null;
+      return [...list.querySelectorAll("li")].map((li) => li.textContent.trim()).slice(0, 12);
+    })()
+  `);
+  check(
+    Array.isArray(narrowed) && narrowed.some((row) => /section/i.test(row)),
+    "typing a prefix narrows the popup to section",
+    narrowed ? narrowed.join(", ") : "none",
+  );
+  // Accepting the row must insert the braces with the caret inside them, which
+  // is the whole point of the catalog carrying an argument shape.
+  await press("Enter", "Enter");
+  await sleep(400);
+  const accepted = await text();
+  check(
+    typeof accepted === "string" && /\\section\{\}/.test(accepted),
+    "accepting \\section inserts its braces",
+    JSON.stringify(accepted),
+  );
+  // The popup must be dismissable without editing the buffer.
+  await press("Escape", "Escape");
+  await sleep(250);
+  check(
+    (await evaluate(`!document.querySelector(".cm-tooltip-autocomplete")`)) === true,
+    "Escape dismisses the LaTeX popup",
+  );
+});
+await scenario(async () => {
+  // Prose offers nothing: a popup mid-sentence is worse than none, and this is
+  // the rule the context table exists to enforce.
+  await type("just some ordinary prose");
+  await sleep(200);
+  await press(" ", "Space", 2);
+  await sleep(500);
+  const popup = await evaluate(`Boolean(document.querySelector(".cm-tooltip-autocomplete"))`);
+  check(popup === false, "LaTeX prose opens no popup", popup ? "open" : "none");
 });
 
 // Put the suite's settings back where the next layer expects them.

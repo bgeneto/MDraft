@@ -14,7 +14,7 @@
  * Environment (all optional outside CI):
  *   SITE_ORIGIN     https://bgeneto.github.io
  *   SITE_BASE_PATH  /MDraft (or empty for a custom-domain root)
- *   SITE_VERSION    0.7.8 (the workflow resolves the latest release tag)
+ *   SITE_VERSION    0.9.0 (required in CI; local builds fall back to package.json)
  */
 
 import { createServer } from "node:http";
@@ -34,7 +34,7 @@ const BASE_PATH = normalizeBase(process.env.SITE_BASE_PATH ?? "/MDraft");
 const SITE_URL = `${ORIGIN}${BASE_PATH}/`;
 // Bump the version when the image changes so sharing services fetch the new card.
 const OG_IMAGE_URL = `${SITE_URL}assets/og.png?v=2`;
-const RELEASE_URL = "https://github.com/bgeneto/MDraft/releases/latest";
+const RELEASE_ROOT = "https://github.com/bgeneto/MDraft/releases";
 const YEAR = String(new Date().getFullYear());
 
 const PAGES = [
@@ -66,6 +66,7 @@ const CONTENT_IMAGES = new Set([
   "ai-palette.webp",
   "statusbar-tokens.webp",
   "typst-pages.webp",
+  "html-editor.webp",
   "typography-presets.webp",
   "typography-settings.webp",
   "math-light.webp",
@@ -132,29 +133,42 @@ async function copyDirectory(source, destination) {
 
 async function resolveVersion() {
   const fromEnvironment = (process.env.SITE_VERSION || "").trim().replace(/^v/, "");
-  if (fromEnvironment) return fromEnvironment;
-  try {
+  let version = fromEnvironment;
+  if (!version) {
+    if (process.env.CI && process.env.CI !== "false") {
+      throw new Error("SITE_VERSION must contain the latest published stable release in CI");
+    }
     const pkg = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
-    return String(pkg.version || "");
-  } catch {
-    return "";
+    version = String(pkg.version || "");
   }
+  if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
+    throw new Error(`Invalid stable SITE_VERSION: ${JSON.stringify(version)}`);
+  }
+  return version;
+}
+
+function artifacts(version) {
+  return [
+    `mdraft_${version}_x64-setup.exe`,
+    `mdraft_${version}_x64_en-us.msi`,
+    `mdraft_${version}_x64-portable.exe`,
+    `mdraft_${version}_amd64.deb`,
+    `mdraft_${version}_amd64.AppImage`,
+    "mdraft",
+  ];
 }
 
 function render(html, page, version) {
-  const chip = version ? `<span class="version">v${version}</span>` : "";
-  let output = html
+  const chip = `<span class="version">v${version}</span>`;
+  return html
     .replaceAll("{{SITE_URL}}", SITE_URL)
     .replaceAll("{{CANONICAL}}", page.canonical)
     .replaceAll("{{OG_IMAGE}}", OG_IMAGE_URL)
-    .replaceAll("{{RELEASE_URL}}", RELEASE_URL)
+    .replaceAll("{{TAG_URL}}", `${RELEASE_ROOT}/tag/v${version}`)
+    .replaceAll("{{DOWNLOAD_URL}}", `${RELEASE_ROOT}/download/v${version}`)
     .replaceAll("{{VERSION_CHIP}}", chip)
     .replaceAll("{{VERSION}}", version)
     .replaceAll("{{YEAR}}", YEAR);
-  if (!version) {
-    output = output.replace(/[ \t]*"softwareVersion":\s*"",\r?\n/, "");
-  }
-  return output;
 }
 
 function decodeEntities(value) {
@@ -267,6 +281,7 @@ async function validatePage(file, page, options) {
   const baseHref = baseTag ? (baseTag[2] ?? baseTag[3] ?? "") : null;
 
   check(!html.includes("{{") && !html.includes("}}"), `${label}: no unresolved placeholders`);
+  check(!/<version>/i.test(decodeEntities(html)), `${label}: no filename version placeholders`);
   check(/<!doctype html>/i.test(html), `${label}: has a doctype`);
   check(
     new RegExp(`<html\\s[^>]*lang\\s*=\\s*"${page.lang}"`, "i").test(html),
@@ -336,7 +351,53 @@ async function validatePage(file, page, options) {
         app?.offers?.price === "0" && app?.offers?.priceCurrency === "USD",
         `${label}: price is 0 USD`,
       );
-      check(app?.downloadUrl === RELEASE_URL, `${label}: downloadUrl points at the latest release`);
+      check(
+        app?.downloadUrl === `${RELEASE_ROOT}/tag/v${options.version}`,
+        `${label}: downloadUrl matches the displayed release`,
+      );
+      check(
+        app?.description?.includes("LaTeX") &&
+          /LaTeX/.test(app?.featureList?.join(" ") || "") &&
+          /Emmet/.test(app?.featureList?.join(" ") || ""),
+        `${label}: metadata includes LaTeX and Emmet`,
+      );
+
+      const lists = [...html.matchAll(/<ul class="artifact-list">([\s\S]*?)<\/ul>/g)];
+      const entries = lists.flatMap((list) => [...list[1].matchAll(/<li>([\s\S]*?)<\/li>/g)]);
+      const expected = artifacts(options.version);
+      check(
+        entries.length === expected.length &&
+          entries.every((entry, index) => {
+            const link = entry[1].match(/<a\b[^>]*>[\s\S]*?<\/a\s*>/)?.[0] || "";
+            return (
+              attribute(link, "href") ===
+                `${RELEASE_ROOT}/download/v${options.version}/${expected[index]}` &&
+              visibleText(link) === expected[index]
+            );
+          }),
+        `${label}: all six artifact names and links match v${options.version}`,
+      );
+      const downloads = [
+        ...html.matchAll(
+          /href="(https:\/\/github\.com\/bgeneto\/MDraft\/releases\/download\/[^"]+)"/g,
+        ),
+      ];
+      const available = [...expected, "SHA256SUMS-windows-amd64.txt", "SHA256SUMS-linux-amd64.txt"];
+      check(
+        downloads.length === 10 &&
+          downloads.every(([, url]) =>
+            available.some(
+              (name) => url === `${RELEASE_ROOT}/download/v${options.version}/${name}`,
+            ),
+          ),
+        `${label}: platform buttons and checksum links match the same release`,
+      );
+      check(
+        html.includes('id="html"') &&
+          html.includes('id="latex"') &&
+          html.includes("/img/html-editor.webp"),
+        `${label}: dedicated HTML and LaTeX sections and HTML screenshot`,
+      );
 
       const questions = faq?.mainEntity || [];
       const details = (html.match(/<details\b/gi) || []).length;

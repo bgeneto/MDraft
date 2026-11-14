@@ -222,6 +222,109 @@ for (const map of [false, true]) {
   );
 }
 
+// Raw HTML text nodes have no marked tokens of their own. They must become
+// ordinary fragments so the word map can reach table cells and one-line divs.
+{
+  const source =
+    "<table border=1><tr><td>Modalidade</td><td>Providencia</td></tr>" +
+    "<tr><td>30/11/2026</td><td>31/12/2026</td></tr></table>\n\nafter the table";
+  const mapped = renderChunks(source, { map: true });
+  const slices = (mapped.fragments ?? []).map((fragment) =>
+    source.slice(fragment.src0, fragment.src1),
+  );
+  check(
+    "raw HTML table: every cell word becomes an exact fragment",
+    ["Modalidade", "Providencia", "30/11/2026", "31/12/2026"].every((word) =>
+      slices.includes(word),
+    ),
+    slices.join(" | "),
+  );
+  check(
+    "raw HTML table: the mapped chunk carries fragment spans",
+    (mapped.chunks.join("").match(/data-f=/g) ?? []).length >= 4,
+  );
+  check(
+    "raw HTML table: plain rendering is unchanged",
+    !renderChunks(source, { map: false }).chunks.join("").includes("data-f="),
+  );
+  check(
+    "raw HTML table: element lines match the two top-level elements",
+    JSON.stringify(mapped.elementLines) === JSON.stringify([1, 3]),
+    JSON.stringify(mapped.elementLines),
+  );
+}
+
+for (const [label, newline] of [
+  ["CRLF", "\r\n"],
+  ["CR", "\r"],
+]) {
+  const source = `<table><tr><td>word</td></tr></table>${newline}${newline}after`;
+  const fragment = renderChunks(source, { map: true }).fragments?.find(
+    (entry) => entry.raw === "word",
+  );
+  check(
+    `raw HTML table: a ${label} source keeps exact fragment offsets`,
+    !!fragment && source.slice(fragment.src0, fragment.src1) === "word",
+    fragment ? JSON.stringify(source.slice(fragment.src0, fragment.src1)) : "missing",
+  );
+}
+
+{
+  const source = '<div style="text-align:center;">\n\ninside the box\n\n</div>\n\nafter';
+  const mapped = renderChunks(source, { map: true });
+  check(
+    "cross-token raw HTML keeps one line per rendered element",
+    JSON.stringify(mapped.elementLines) === JSON.stringify([1, 7]),
+    JSON.stringify(mapped.elementLines),
+  );
+  check(
+    "cross-token raw HTML keeps the token line list separately",
+    JSON.stringify(mapped.lines) === JSON.stringify([1, 3, 5, 7]),
+    JSON.stringify(mapped.lines),
+  );
+  const slices = (mapped.fragments ?? []).map((fragment) =>
+    source.slice(fragment.src0, fragment.src1),
+  );
+  check(
+    "cross-token raw HTML still maps the Markdown paragraph inside it",
+    slices.includes("inside the box") && slices.includes("after"),
+    slices.join(" | "),
+  );
+}
+
+{
+  const source = '<div class="x"><svg><text>label</text></svg><script>bad()</script> visible</div>';
+  const mapped = renderChunks(source, { map: true });
+  const html = mapped.chunks.join("");
+  check(
+    "raw HTML skips foreign and script text but maps the visible run",
+    !html.includes("<text><span data-f") &&
+      !html.includes("<script><span data-f") &&
+      html.includes('<span data-f="0"> visible</span>'),
+    html,
+  );
+  check(
+    "raw HTML foreign/script text emits no fragments",
+    (mapped.fragments ?? []).length === 1 &&
+      source.slice(mapped.fragments[0].src0, mapped.fragments[0].src1) === " visible",
+  );
+}
+
+check(
+  "a document without raw HTML has no element-line fallback",
+  renderChunks("one\n\ntwo", { map: true }).elementLines === undefined,
+);
+
+{
+  const source = '<div class="x">$x^2$ visible</div>';
+  const fragment = renderChunks(source, { map: true }).fragments?.[0];
+  check(
+    "raw HTML text keeps its source offset across a math placeholder",
+    !!fragment && source.slice(fragment.src0, fragment.src1) === " visible",
+    fragment ? JSON.stringify(source.slice(fragment.src0, fragment.src1)) : "missing",
+  );
+}
+
 // An indexed translator must exactly preserve the original mapping contract at
 // substitution boundaries, including adjacent substitutions and negative deltas.
 check("indexed offset translator is available", typeof sourceMap.indexOffsets === "function");

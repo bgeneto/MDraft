@@ -274,17 +274,33 @@ try {
   // -------------------------------------------------------------------------
   console.log("\n=== the active tab is unmistakable ===");
   const tabStyles = await json(
-    `[...document.querySelectorAll(".doc-tab")].map((tab) => ({
-      selected: tab.getAttribute("aria-selected") === "true",
-      weight: Number(getComputedStyle(tab.querySelector(".doc-tab-name")).fontWeight),
-      edge: getComputedStyle(tab).boxShadow,
-    }))`,
+    `[...document.querySelectorAll(".doc-tab")].map((tab) => {
+      const style = getComputedStyle(tab);
+      return {
+        selected: tab.getAttribute("aria-selected") === "true",
+        weight: Number(getComputedStyle(tab.querySelector(".doc-tab-name")).fontWeight),
+        edge: style.borderTopColor,
+        edgeWidth: style.borderTopWidth,
+        pixelRatio: window.devicePixelRatio,
+      };
+    })`,
   );
   const activeStyle = tabStyles.find((tab) => tab.selected) ?? { weight: 0, edge: "none" };
   const inactiveStyle = tabStyles.find((tab) => !tab.selected) ?? { weight: 0, edge: "none" };
   check(activeStyle.weight >= 600, "the active tab's name is bold", String(activeStyle.weight));
   check(inactiveStyle.weight < 600, "an inactive tab's name is not", String(inactiveStyle.weight));
-  check(activeStyle.edge !== "none", "the active tab carries its accent edge", activeStyle.edge);
+  // The accent is a thicker top border, not an inset shadow, so it follows the
+  // rounded corners. Asserting the thickness and the colour against an inactive
+  // tab keeps the check independent of which accent colour the theme picked.
+  // Used border widths snap to device pixels: a 2px rule can be 1.81818px at
+  // fractional scaling. It must still be thicker and within one device pixel.
+  check(
+    Number.parseFloat(activeStyle.edgeWidth) > Number.parseFloat(inactiveStyle.edgeWidth) &&
+      Math.abs(Number.parseFloat(activeStyle.edgeWidth) - 2) < 1 / activeStyle.pixelRatio &&
+      activeStyle.edge !== inactiveStyle.edge,
+    "the active tab carries its accent edge",
+    `${activeStyle.edgeWidth} ${activeStyle.edge} vs ${inactiveStyle.edge}`,
+  );
 
   // -------------------------------------------------------------------------
   // The context menu on a tab
@@ -332,10 +348,25 @@ try {
     "Close All Tabs is present in the tab context",
     JSON.stringify(menuAction("closeAll") ?? null),
   );
+  check(
+    menuAction("moveLeft")?.label === "Move Tab Left" && menuAction("moveLeft").disabled,
+    "Move Tab Left is present and disabled on the first tab",
+    JSON.stringify(menuAction("moveLeft") ?? null),
+  );
+  check(
+    menuAction("moveRight")?.label === "Move Tab Right" && !menuAction("moveRight").disabled,
+    "Move Tab Right is present and available",
+    JSON.stringify(menuAction("moveRight") ?? null),
+  );
   check(menuAction("save") && menuAction("save").disabled, "Save is disabled on a clean tab");
   check(
     menuAction("reveal") && !menuAction("reveal").disabled,
     "Reveal is offered for a saved file",
+  );
+  check(
+    menuAction("copyPath")?.label === "Copy File Path" && !menuAction("copyPath").disabled,
+    "Copy File Path is offered for a saved file",
+    JSON.stringify(menuAction("copyPath") ?? null),
   );
   const menuClosed = await evaluate(
     `(() => {
@@ -344,6 +375,78 @@ try {
     })()`,
   );
   check(menuClosed, "Escape closes the menu");
+
+  // The agent session cannot own the operating system clipboard, so a fake
+  // proves the action writes the tab's full path and nothing else.
+  const copiedPath = await evaluate(`(async () => {
+    const real = navigator.clipboard;
+    let copied = "";
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (text) => { copied = text; } },
+    });
+    try {
+      const tab = [...document.querySelectorAll(".doc-tab")].find(
+        (entry) => entry.querySelector(".doc-tab-name")?.textContent === "feature-tour.md",
+      );
+      if (!tab) return { error: "missing tab" };
+      const expected = tab.title;
+      const bounds = tab.getBoundingClientRect();
+      tab.dispatchEvent(new MouseEvent("contextmenu", {
+        bubbles: true, cancelable: true, button: 2,
+        clientX: bounds.left + 12, clientY: bounds.top + 12,
+      }));
+      const button = document.querySelector('.tab-menu-item[data-action="copyPath"]');
+      if (!button || button.disabled) return { error: "missing or disabled item" };
+      button.click();
+      for (let i = 0; i < 40 && copied === ""; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      return { copied, expected };
+    } finally {
+      if (real === undefined) delete navigator.clipboard;
+      else Object.defineProperty(navigator, "clipboard", { configurable: true, value: real });
+    }
+  })()`);
+  check(
+    copiedPath.copied === copiedPath.expected && copiedPath.copied.endsWith("feature-tour.md"),
+    "Copy File Path writes the tab's full path to the clipboard",
+    JSON.stringify(copiedPath),
+  );
+
+  const tabOrder = () =>
+    evaluate(
+      `[...document.querySelectorAll(".doc-tab .doc-tab-name")].map((entry) => entry.textContent)`,
+    );
+  const clickMenuAction = (action) =>
+    evaluate(
+      `(() => {
+        const tab = [...document.querySelectorAll(".doc-tab")].find(
+          (entry) => entry.querySelector(".doc-tab-name")?.textContent === "feature-tour.md",
+        );
+        const bounds = tab.getBoundingClientRect();
+        tab.dispatchEvent(new MouseEvent("contextmenu", {
+          bubbles: true, cancelable: true, button: 2,
+          clientX: bounds.left + 12, clientY: bounds.top + 12,
+        }));
+        const button = document.querySelector('.tab-menu-item[data-action="${action}"]');
+        if (!button) return "missing";
+        if (button.disabled) return "disabled";
+        button.click();
+        return "clicked";
+      })()`,
+    );
+
+  check((await clickMenuAction("moveRight")) === "clicked", "Move Tab Right was clicked");
+  const moved = await tabOrder();
+  check(moved[1] === "feature-tour.md", "the tab moved one place right", moved.join(", "));
+  check((await clickMenuAction("moveLeft")) === "clicked", "Move Tab Left was clicked");
+  const backAtLeft = await tabOrder();
+  check(
+    backAtLeft[0] === "feature-tour.md",
+    "the tab moved back to the left edge",
+    backAtLeft.join(", "),
+  );
 
   // -------------------------------------------------------------------------
   // Keyboard navigation between tabs

@@ -55,8 +55,22 @@ export interface HtmlAccelerator {
   keys: string[];
 }
 
+/** A pointer gesture in the guest, in this window's screen pixels. */
+export interface HtmlGesture {
+  /** The pointer's height. */
+  y: number;
+  /** The clicked character's row, when verified text is under the pointer. */
+  row: { top: number; bottom: number } | null;
+  /** That text's identity; the host maps it through the preview's own table. */
+  word: HtmlSelection | null;
+  /** The clicked character's index inside `word`. */
+  at: number;
+}
+
 export interface HtmlPreviewCallbacks {
   onLine(line: number): void;
+  /** A click, double-click or settled drag was released in the guest. */
+  onGesture?(gesture: HtmlGesture): void;
   onSelection(selection: HtmlSelection): void;
   onClear(): void;
   onLink(href: string, raw: string): void;
@@ -67,16 +81,28 @@ export interface HtmlPreviewCallbacks {
   onScrollInput?(dragging: boolean): void;
 }
 
+/**
+ * How one render ended. Only `current` means the frame for this source was
+ * promoted on its bridge's `ready`; a failed build or IPC call, a load that
+ * timed out, and a render replaced by a newer one or by a reset are not.
+ */
+export type HtmlRenderOutcome = "current" | "failed" | "superseded";
+
 export interface HtmlPreviewHandle {
   /** Start a new document: new nonce, new origin, no stale state. */
   reset(): void;
+  /**
+   * Build and load a frame for `source`. Resolves when that frame is promoted
+   * or can no longer be, so the shell marks the preview current only for a
+   * frame that is actually on screen.
+   */
   render(
     source: string,
     root: string | null,
     filename: string,
     scripts: boolean,
     imageRoots?: string[],
-  ): Promise<void>;
+  ): Promise<HtmlRenderOutcome>;
   dispose(): void;
   setAccelerators(list: HtmlAccelerator[]): void;
   scrollTo(top: number, input?: number): void;
@@ -93,6 +119,10 @@ export interface HtmlPreviewHandle {
   anchors(): Anchor[];
   baseUrl(): string | null;
   scrollAnchorsNear(offset: number): readonly HtmlScrollAnchor[];
+  /** Where the sync line crosses the guest viewport, in this window's pixels. */
+  setProbeHeight(screenY: number): void;
+  /** The active frame's top edge and zoom, to place guest geometry on screen. */
+  frameBox(): { top: number; scale: number } | null;
   measureScroll(
     source: string,
     anchors: readonly HtmlScrollAnchor[],
@@ -108,6 +138,8 @@ interface FrameState {
   timer: number;
   /** The word table this frame's copy was built with. */
   fragments: HtmlTextFragment[];
+  /** Resolves the render that created this frame; a no-op once settled. */
+  settle: (outcome: HtmlRenderOutcome) => void;
 }
 
 const BLOCK_TAGS = new Set([
@@ -568,6 +600,7 @@ export function createHtmlPreview(
       }
       postTo(frame, { type: "keys", list: accelerators });
       callbacks.onReady(layout);
+      frame.settle("current");
       return;
     }
 
@@ -611,6 +644,45 @@ export function createHtmlPreview(
     }
     if (data.type === "line" && typeof data.line === "number") {
       callbacks.onLine(data.line);
+      return;
+    }
+    if (data.type === "gesture") {
+      const finite = (value: unknown): value is number =>
+        typeof value === "number" && Number.isFinite(value) && Math.abs(value) < 1e7;
+      if (!finite(data.y)) return;
+      const top = frame.frame.getBoundingClientRect().top;
+      const scale = frameScale(frame.frame);
+      const worded =
+        Number.isSafeInteger(data.n) &&
+        Number.isSafeInteger(data.index) &&
+        Number.isSafeInteger(data.start) &&
+        Number.isSafeInteger(data.end) &&
+        Number.isSafeInteger(data.at) &&
+        typeof data.sample === "string" &&
+        data.sample.length <= 120 &&
+        finite(data.top) &&
+        finite(data.bottom) &&
+        data.bottom > data.top;
+      callbacks.onGesture?.({
+        y: top + data.y * scale,
+        row: worded
+          ? {
+              top: top + (data.top as number) * scale,
+              bottom: top + (data.bottom as number) * scale,
+            }
+          : null,
+        word: worded
+          ? {
+              n: data.n as number,
+              index: data.index as number,
+              start: data.start as number,
+              end: data.end as number,
+              sample: data.sample as string,
+              reveal: false,
+            }
+          : null,
+        at: worded ? Math.max(0, data.at as number) : 0,
+      });
       return;
     }
     if (data.type === "select") {
@@ -713,7 +785,16 @@ export function createHtmlPreview(
     frame.setAttribute("referrerpolicy", "no-referrer");
     frame.src = `${url}?v=${generation}`;
     host.appendChild(frame);
-    return { frame, token, generation, ready: false, timer: 0, fragments, source: "" };
+    return {
+      frame,
+      token,
+      generation,
+      ready: false,
+      timer: 0,
+      fragments,
+      source: "",
+      settle: () => {},
+    };
   }
 
   function dropFrames(): void {
@@ -721,6 +802,8 @@ export function createHtmlPreview(
     scrollIndex = new ScrollIndex([]);
     window.clearTimeout(pending?.timer ?? 0);
     window.clearTimeout(active?.timer ?? 0);
+    // A render still waiting for its frame must not be left pending forever.
+    pending?.settle("superseded");
     pending?.frame.remove();
     active?.frame.remove();
     pending = null;
@@ -754,11 +837,11 @@ export function createHtmlPreview(
       try {
         built = await buildHtmlPreview(source, token, bridgeNonce);
       } catch (error) {
-        if (mine !== generation) return;
+        if (mine !== generation) return "superseded";
         callbacks.onError(`Could not prepare the HTML preview: ${String(error)}`);
-        return;
+        return "failed";
       }
-      if (mine !== generation) return;
+      if (mine !== generation) return "superseded";
 
       let url: string;
       try {
@@ -774,11 +857,11 @@ export function createHtmlPreview(
           })
         ).url;
       } catch (error) {
-        if (mine !== generation) return;
+        if (mine !== generation) return "superseded";
         callbacks.onError(`Could not start the HTML preview: ${String(error)}`);
-        return;
+        return "failed";
       }
-      if (mine !== generation) return;
+      if (mine !== generation) return "superseded";
 
       const next = makeFrame(url, token, built.fragments);
       next.source = source;
@@ -787,14 +870,23 @@ export function createHtmlPreview(
       if (pending) {
         window.clearTimeout(pending.timer);
         pending.frame.remove();
+        pending.settle("superseded");
       }
+      const outcome = new Promise<HtmlRenderOutcome>((resolve) => {
+        next.settle = (value) => {
+          next.settle = () => {};
+          resolve(value);
+        };
+      });
       next.timer = window.setTimeout(() => {
         if (pending !== next) return;
         pending = null;
         next.frame.remove();
+        next.settle("failed");
         callbacks.onError("The HTML preview did not finish loading.");
       }, 12_000);
       pending = next;
+      return outcome;
     },
 
     dispose() {
@@ -817,6 +909,18 @@ export function createHtmlPreview(
 
     scrollAnchorsNear(offset) {
       return scrollIndex.near(offset);
+    },
+
+    setProbeHeight(screenY) {
+      if (!active) return;
+      const top = active.frame.getBoundingClientRect().top;
+      postTo(active, { type: "probeAt", y: (screenY - top) / frameScale(active.frame) });
+    },
+
+    frameBox() {
+      return active
+        ? { top: active.frame.getBoundingClientRect().top, scale: frameScale(active.frame) }
+        : null;
     },
 
     measureScroll(source, anchors) {

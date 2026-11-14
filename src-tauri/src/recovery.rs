@@ -33,6 +33,11 @@ pub struct RecoveryEntry {
     pub content: String,
     pub line_ending: String,
     pub had_bom: bool,
+    /// Canonical label the buffer was decoded from. Older journals have no
+    /// encoding key; their content was valid UTF-8 and the caller supplies the
+    /// fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<String>,
     pub lossy: bool,
     pub read_only: bool,
     pub base_modified_ms: u64,
@@ -226,10 +231,7 @@ mod tests {
 
     fn temp_dir(tag: &str) -> PathBuf {
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
-            "mdraft-recovery-{tag}-{}-{id}",
-            std::process::id()
-        ))
+        std::env::temp_dir().join(format!("mdraft-recovery-{tag}-{}-{id}", std::process::id()))
     }
 
     fn entry(id: &str) -> RecoveryEntry {
@@ -241,6 +243,7 @@ mod tests {
             content: "unsaved text\n".into(),
             line_ending: "\r\n".into(),
             had_bom: false,
+            encoding: Some("UTF-8".into()),
             lossy: false,
             read_only: false,
             base_modified_ms: 1_760_000_000_000,
@@ -299,19 +302,19 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
 
         // A journal written before GAP-032 has no baseSha256 key. It must load
-        // with None, not be treated as corrupt and silently skipped.
+        // with None, not be treated as corrupt and silently skipped. Journals
+        // from before legacy encoding support also lack `encoding`.
         let mut value = serde_json::to_value(entry("legacy")).unwrap();
-        value.as_object_mut().unwrap().remove("baseSha256");
-        fs::write(
-            dir.join("legacy.json"),
-            serde_json::to_vec(&value).unwrap(),
-        )
-        .unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("baseSha256");
+        object.remove("encoding");
+        fs::write(dir.join("legacy.json"), serde_json::to_vec(&value).unwrap()).unwrap();
 
         let listed = list_entries(&dir).unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, "legacy");
         assert_eq!(listed[0].base_sha256, None);
+        assert_eq!(listed[0].encoding, None);
         // A new write of the same entry carries a hash again.
         let mut rewritten = listed[0].clone();
         rewritten.base_sha256 = Some("b".repeat(64));

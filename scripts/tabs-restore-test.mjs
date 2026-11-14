@@ -203,6 +203,23 @@ async function setOnLaunch(value) {
   return selected;
 }
 
+async function documentDictionary(value) {
+  await evaluate(`document.getElementById('btn-prefs').click()`);
+  await sleep(200);
+  const selected = await evaluate(`(() => {
+    [...document.querySelectorAll('.prefs-section')].find(node => node.textContent.trim() === 'Editor')?.click();
+    const row = [...document.querySelectorAll('.prefs-row')].find(node =>
+      node.querySelector('.prefs-label')?.textContent?.replace(/\\?$/, '').trim() === 'Dictionary for this document');
+    const select = row?.querySelector('select');
+    if (!select) throw new Error('missing document dictionary preference');
+    const value = ${JSON.stringify(value ?? null)};
+    if (value !== null) { select.value = value; select.dispatchEvent(new Event('change', {bubbles:true})); }
+    return select.value;
+  })()`);
+  await evaluate(`document.querySelector('.prefs-close').click()`);
+  return selected;
+}
+
 try {
   if (phase === "phase1") {
     // -----------------------------------------------------------------------
@@ -277,6 +294,14 @@ try {
       8000,
     );
     check(savedPreference, "the preference reached the settings file");
+    check(
+      (await documentDictionary("auto")) === "auto",
+      "the active document chooses Automatic spelling",
+    );
+    const savedDictionary =
+      await pollFor(`(async () => (await window.__TAURI_INTERNALS__.invoke('get_settings'))
+      .spellcheckDocumentLanguages.some(entry => entry.path === ${JSON.stringify(extras[0])} && entry.language === 'auto'))()`);
+    check(savedDictionary, "the document dictionary reached the settings file");
 
     const remembered = await pollFor(
       `(async () => {
@@ -345,6 +370,18 @@ try {
       settings.lastActiveTab ?? "null",
     );
     check((await toastText()) === "", "no file was reported missing", await toastText());
+    check(
+      (await documentDictionary()) === "auto",
+      "the restored document retains its dictionary choice",
+    );
+    await clickTab(basename(process.argv[4]));
+    await sleep(300);
+    check(
+      (await documentDictionary()) === "follow",
+      "another restored tab keeps its own dictionary choice",
+    );
+    await clickTab(basename(extras[0]));
+    await sleep(300);
 
     // -----------------------------------------------------------------------
     // Leave the next launch with no saved document. Close All Tabs keeps one

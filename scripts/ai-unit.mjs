@@ -5,6 +5,7 @@
 // the imported modules must stay free of Tauri, CodeMirror and CSS imports.
 
 import assert from "node:assert/strict";
+import { EditorState, MapMode } from "@codemirror/state";
 
 import {
   ACTIONS,
@@ -884,6 +885,53 @@ equal(
 );
 
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Stale insertion anchors (F15). The editor maps captured positions with
+// `mapPos(pos, 1, MapMode.TrackDel)`; these checks pin that contract and the
+// placement Insert below then makes.
+// ---------------------------------------------------------------------------
+
+{
+  const original = "First paragraph.\n\nTarget paragraph.\n\nLast.";
+  const paragraphTo = original.indexOf("Target paragraph.") + "Target paragraph.".length;
+  const map = (changes, pos) => changes.mapPos(pos, 1, MapMode.TrackDel);
+  const after = (state, spec) => state.update(spec);
+
+  const start = EditorState.create({ doc: original });
+  const prefixed = after(start, { changes: { from: 0, insert: "New intro.\n\n" } });
+  const mapped = map(prefixed.changes, paragraphTo);
+  const text = prefixed.state.doc.toString();
+  const insertion = blockInsertion(text, mapped, "Answer.");
+  const placed = text.slice(0, mapped) + insertion + text.slice(mapped);
+  check(
+    "an edit above the passage moves the Insert below anchor with it",
+    placed.includes("Target paragraph.\n\nAnswer.") && placed.startsWith("New intro.\n\nFirst"),
+  );
+  check(
+    "the stale clamped offset would have split unrelated text",
+    !text.slice(0, paragraphTo).endsWith("Target paragraph."),
+  );
+
+  const typed = after(start, { changes: { from: paragraphTo, insert: " more" } });
+  check(
+    "text typed exactly at the anchor stays before the insertion point",
+    map(typed.changes, paragraphTo) === paragraphTo + " more".length,
+  );
+
+  const targetFrom = original.indexOf("Target");
+  const deleted = after(start, { changes: { from: targetFrom - 2, to: paragraphTo + 1 } });
+  check(
+    "deleting the paragraph makes the anchor unplaceable instead of guessing",
+    map(deleted.changes, paragraphTo) === null,
+  );
+
+  const below = after(start, { changes: { from: original.length, insert: "\n\nTail." } });
+  check(
+    "an edit after the passage leaves the anchor where it was",
+    map(below.changes, paragraphTo) === paragraphTo,
+  );
+}
 
 console.log(`\n${passed}/${passed + failed} checks passed`);
 process.exit(failed === 0 ? 0 : 1);

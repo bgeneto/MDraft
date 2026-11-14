@@ -64,11 +64,12 @@ sheet of the syntax above. `.asc` and `.ad` are not recognised as AsciiDoc.
 ## Typst
 
 `.typ` files are edited as source and previewed by the Typst compiler. Typst is
-not bundled. On Windows and Linux, **Tools › Check or Install Typst…** downloads
-it into MDraft's own data folder. On macOS, install it with your package manager
-or from the [Typst download page](https://typst.app/open-source/#download), or
-put `typst` on your `PATH`; MDraft picks it up. Without it, the preview shows the
-compiler's absence rather than an empty pane.
+not bundled. **Tools › Optional Tools…** downloads it into MDraft's own data
+folder on Windows and Linux; the first launch also offers it once. On macOS,
+automatic installation is unavailable, so the row opens the
+[Typst download page](https://typst.app/open-source/#download); a `typst` on your
+`PATH` is picked up too. Without it, the preview shows the compiler's absence
+rather than an empty pane.
 
 The preview has two views:
 
@@ -93,9 +94,10 @@ The preview has two views:
   source mapping.
   In the dark theme the pages follow the application: the PDF's white paper and
   black text become the app's dark surface and white. In both themes a page
-  fills the pane's width — its side edges are clipped, and only the rule between
-  pages shows where one ends — so the preview reads as a continuous document
-  rather than a sheet floating in the middle. The page is rendered at the
+  fills the pane's width — its side edges are clipped, and the pages sit flush
+  against each other, so the preview reads as one continuous document rather
+  than a stack of sheets; the only space between two pages is the paper's own
+  margin. The page is rendered at the
   display's pixel density, so text stays crisp on 4K and 5K screens. Because
   PDF.js hands the page over as one raster, figures inside it are inverted with
   the text in the dark theme.
@@ -141,9 +143,9 @@ the window keeps independent panes.
 ## Editing
 
 Documents open in tabs. Each tab keeps its text, caret, scroll position and
-undo history while another tab is in front. The tab list is remembered when
-**Reopen the last tabs** is selected under **On Launch**; the recovery journal
-covers unsaved text separately.
+undo history while another tab is in front. The tab list is remembered and
+restored at the next launch, because **Reopen the last tabs** is the default
+under **On Launch**; the recovery journal covers unsaved text separately.
 
 When more tabs are open than fit, the strip scrolls horizontally: the arrow
 buttons at its right edge move it, a vertical wheel over the strip does the
@@ -151,9 +153,10 @@ same, and the active tab is always scrolled back into view. Tabs can be dragged
 to a new position (or moved one place with `Alt+Shift+Left` / `Alt+Shift+Right`
 while a tab has focus). Right-click a tab for **Close Tab**, **Close Other
 Tabs**, **Close Tabs to the Left**, **Close Tabs to the Right**, **Close Other
-Unchanged Tabs**, **Close All Tabs**, **Save**, **Save As…** and **Show in
-Folder**; right-click the empty part of the strip for **New Tab**, **Close All
-Tabs** and **Close Other Unchanged Tabs**. Double-clicking the empty part starts
+Unchanged Tabs**, **Close All Tabs**, **Move Tab Left**, **Move Tab Right**,
+**Save**, **Save As…** and **Show in Folder**; right-click the empty part of the
+strip for **New Tab**, **Close All Tabs** and **Close Other Unchanged Tabs**.
+Double-clicking the empty part starts
 a new tab. The active tab's name is shown in Semibold and carries an accent edge.
 **File › Close Tabs › All Tabs** closes the whole strip, with the usual save
 prompt for each dirty tab.
@@ -221,12 +224,15 @@ and Preferences. Sidebar width and the editor/preview split are not persisted.
 **On Launch** (Preferences › Files) chooses what a new window opens with: the
 welcome document, a new file, the most recent file, or **Reopen the last tabs** —
 every saved document that was open when MDraft last closed, in the same order
-with the same tab active. The list remembers paths; untitled or unsaved text is
-restored by the recovery journal described below, not by the tab list. A file
-that has since been deleted is skipped and reported. When no saved document was
-open — including after **Close All Tabs** — the window starts with one blank
-**Untitled** tab; the welcome document remains its own On Launch choice and is
-always available from **Help › Welcome**. A document named on the
+with the same tab active. **Reopen the last tabs** is the default. The list
+remembers paths; untitled or unsaved text is restored by the recovery journal
+described below, not by the tab list. A file that has since been deleted is
+skipped and reported. The **first** launch of a new profile shows the welcome
+document once, so a fresh install is introduced before there is anything to
+reopen; every launch after that goes straight to the remembered set. When no
+saved document was open — including after **Close All Tabs** — the window starts
+with one blank **Untitled** tab; the welcome document remains its own On Launch
+choice and is always available from **Help › Welcome**. A document named on the
 command line still wins over the remembered set. Several paths on one command
 line open as tabs, in order, with the last one active.
 
@@ -265,11 +271,39 @@ Other editor features:
   refused. Checking and replacing a file are still separate operations from
   other programs' point of view: the window is narrow and the answer is safe
   (it refuses), but it is not an atomic compare-and-swap.
-- **Safe text opening.** Binary files and invalid UTF-8 are refused rather than
-  opened with replacement characters. UTF-16/32 receives an encoding explanation;
-  convert a copy to UTF-8 until those encodings are supported. UTF-8 BOM and line
-  endings are preserved. A legacy recovered lossy buffer keeps its text, pauses
-  Auto Save and offers **Save a UTF-8 copy…**; the original is protected.
+- **Safe text opening.** Binary files and UTF-32 are refused rather than opened
+  with replacement characters. UTF-8, BOM-marked UTF-16LE/BE and round-trippable
+  legacy encodings such as Windows-1252 open with their real characters, and the
+  status bar names the encoding. Saving writes the same encoding, BOM and line
+  endings; a file is decoded only when re-encoding reproduces its bytes exactly.
+  If new text contains a character that encoding cannot store, nothing is
+  written and MDraft offers **Save a UTF-8 copy…**. A legacy recovered lossy
+  buffer keeps its text, pauses Auto Save and offers the same copy route; the
+  original is protected.
+- **Encoding and line endings.** Click the encoding in the status bar (for
+  example `Windows-1252 · CRLF`) or choose **Tools › Encoding and Line
+  Endings…**.
+  - **Convert** keeps the text and changes what is written: UTF-8 (recommended),
+    UTF-8 with BOM, UTF-16 LE/BE, the current encoding, or any legacy encoding,
+    with LF or CRLF line endings. A live check names the first character the
+    target cannot store, with a **Go to** link, and blocks the save until it
+    fits. **Convert and Save** writes the file at once (unsaved edits included);
+    **Save Converted Copy…** writes a copy instead. A disk change since the file
+    was opened is a conflict, never an overwrite.
+  - When the document declares its encoding — `\usepackage[latin1]{inputenc}`,
+    `<meta charset>` or an XML `encoding` — the dialog offers to update the
+    declaration in the same step; Ctrl+Z undoes it. For a legacy LaTeX file
+    without its own declaration, it reminds you that the preamble and the
+    project's other files must match.
+  - The dialog reports mixed line endings on disk; saving normalises them.
+  - **Reinterpret** reads the file on disk again as another encoding, for when
+    automatic detection picked the wrong one. Each encoding shows a preview of
+    the lines with accented or non-Latin characters, and encodings that cannot
+    read the bytes are hidden. Reinterpreting writes nothing; MDraft detects
+    the encoding again the next time it opens the file, so convert afterwards
+    to keep the new reading.
+  - An untitled document chooses the encoding and line ending of its first
+    save.
 - **Save As** stays attached to the initiating tab even if another tab becomes
   active. It preserves typing and undo history. A destination already open in
   another tab is refused; choose another name or close that tab first.
@@ -281,9 +315,15 @@ Other editor features:
 - **Themes** follow the system, or are fixed to light or dark.
 - The source pane has eight syntax palettes, each with its own surface rather
   than a single set of token colours.
-- **Spellchecking** uses the operating system's dictionaries. Code, URLs and
-  mathematics are not sent to the checker. HTML documents are not spellchecked.
-  A language the system does not have underlines nothing rather than guessing.
+- **Spellchecking** uses installed operating-system dictionaries and checks
+  source prose in Markdown, Typst, AsciiDoc, LaTeX, HTML, JavaScript, JSON and
+  CSS. It excludes code, URLs, mathematics and machine-oriented values; code
+  and JSON string selection uses conservative heuristics. Preferences let you
+  change string checking and optionally check identifier components. A document
+  can follow the global language, choose Automatic, or use an installed language;
+  HTML language declarations also apply in Automatic mode. Missing dictionaries
+  are reported rather than replaced with an unrelated language. Linux supports
+  installed UTF-8 Hunspell dictionaries. No dictionary is downloaded.
 - Unsaved changes produce **Save / Discard / Cancel**. Escape and dismissal
   cancel, as do Save As cancellation, save failure or unresolved conflicts.
   Cancelling a bulk close keeps every tab; earlier successful saves are retained,
@@ -412,6 +452,35 @@ opens in a tab; an image or any other file goes to the OS. A relative target
 needs a saved document, and an untitled buffer says so instead of guessing. A
 path inside a fenced block or an inline code span is text, not a link.
 
+## The Explorer
+
+**File › Open Folder…** (`Ctrl+Shift+O`) shows a folder's documents in the
+sidebar's **Explorer** tab (`Ctrl+Shift+4`).
+- Folders open lazily, one level at a time, and the document on screen is
+  highlighted.
+- Click or press Enter to open a document. Other files (PDFs, images) open
+  with the system.
+- The tree is keyboard-operable: the arrow keys move, expand and collapse;
+  Home and End jump; a typed letter moves to the next name starting with it;
+  Shift+F10 or the context-menu key opens a row's menu.
+- Hidden entries, version-control and build folders, and TeX auxiliary files
+  (`.aux`, `.log`, `.synctex.gz`, …) are hidden until you choose **Show
+  all**.
+- MDraft has no file watcher. The tree re-reads its folders when the window
+  regains focus, after you save, and when you press **Refresh**.
+
+The folder is remembered until **File › Close Folder**. The Explorer only
+lists files: it never moves, renames, deletes or writes anything, and it never
+follows a symbolic link.
+
+**Main document.** In a LaTeX project, right-click a `.tex` file and choose
+**Set as Main Document** to compile chapters through it. The choice is
+remembered for that folder. Without one, a chapter opened on its own compiles
+through the single main file whose `input`/`include` chain reaches it.
+If several do, MDraft asks you to choose. A `% !TeX root = main.tex` line in
+the chapter takes precedence over both. See [LaTeX](latex.md) for the full
+order.
+
 ## Export
 
 The short version: **HTML**, **PDF** and **Print** need no extra tools;
@@ -419,6 +488,14 @@ The short version: **HTML**, **PDF** and **Print** need no extra tools;
 LaTeX, reStructuredText, AsciiDoc, RTF, Textile, MediaWiki and OPML use pandoc;
 **PDF (via Typst)** uses pandoc with the Typst compiler for Markdown, AsciiDoc
 and HTML, and Typst directly for a `.typ` document.
+
+A `.tex` document is the exception to that summary in one place: **File ›
+Export › PDF** writes the PDF its own LaTeX preview compiled — with the bundled
+engine or the installed distribution — so it needs neither pandoc nor Typst. Every other format for LaTeX goes through pandoc's
+LaTeX reader, and **File › Export › More Pandoc Formats…** offers the rest of the
+installed pandoc's writers — around 77 of them — in a searchable list. A
+conversion reads the project snapshot the preview compiled, so unsaved edits in
+the root and in included chapters reach the export.
 
 Exports use the document text and identity captured when the command begins.
 Switching tabs while a picker or renderer is working does not change which
@@ -428,6 +505,20 @@ writer can follow, and the print document waits for its fonts and figures before
 printing. **File › Export › PDF…** writes the file directly through WebView2 or
 WebKitGTK; **File › Print…** (`Ctrl+P`) opens the platform print dialog. The
 browser handoff remains for scripted HTML and hosts without a print API.
+
+A warning — an image that could not be fetched, a resource a printout lost, a
+pandoc complaint — appears in the same brief toast a save uses and clears itself.
+There is nothing to acknowledge: the file was written. Only a failure that stops
+the export opens a dialog.
+
+**Preferences › Export** shows whether pandoc and Typst are installed, offers to
+install or update either, and has one button per tool that opens its folder in
+the system file manager — the install path itself is not printed. **Preferences
+› LaTeX** holds the bundled engine's cache size, its ceiling and Clear cache,
+and the separate **Installed TeX distribution** group: Find or Browse, Validate,
+the engine choice and the explicit switch. The installed backend is off by
+default. It is a separate program: it runs with your permissions and may use the
+network to install its own packages, while shell escape stays disabled.
 
 See [Export and conversion](export.md) for the exact directions, dependencies,
 configuration and fidelity notes.
@@ -454,7 +545,8 @@ built from source, use `Cmd` where the application registers `CmdOrCtrl`.
 | Paste without formatting | `Ctrl+Shift+V` |
 | Source code mode | `Ctrl+/` |
 | Toggle sidebar | `Ctrl+Shift+L` |
-| Outline / Favorites / Recent | `Ctrl+Shift+1` / `Ctrl+Shift+2` / `Ctrl+Shift+3` |
+| Outline / Favorites / Recent / Explorer | `Ctrl+Shift+1` / `Ctrl+Shift+2` / `Ctrl+Shift+3` / `Ctrl+Shift+4` |
+| Open Folder | `Ctrl+Shift+O` |
 | Bold / Italic / Strikethrough | `Ctrl+B` / `Ctrl+I` / `Alt+Shift+5` |
 | Inline code | `Ctrl+Shift+backtick` |
 | Link / Image | `Ctrl+K` / `Ctrl+Shift+I` |
@@ -477,12 +569,13 @@ the status bar while it differs from 100%.
 ## Limitations and troubleshooting
 
 - **No typst?** `.typ` previews and PDF through Typst need the compiler. On
-  Windows and Linux, **Tools › Check or Install Typst…** installs it into
-  MDraft's own data folder. On macOS, use your package manager or the official
-  download page; MDraft finds `typst` on `PATH`.
+  Windows and Linux, **Tools › Optional Tools…** installs it into MDraft's own
+  data folder. On macOS, automatic installation is unavailable; use your package
+  manager or the official download page, and MDraft finds `typst` on `PATH`.
 - **No pandoc?** DOCX, ODT, EPUB and the other pandoc formats need it. Use
-  **Tools › Check or Install Pandoc…**, which installs into MDraft's own data
-  folder; a copy on `PATH` is also found.
+  **Tools › Optional Tools…**, which installs into MDraft's own data folder; a
+  copy on `PATH` is also found. A missing format row is still clickable and opens
+  the same setup dialog, then continues the export.
 - **PDF and Print are in-app; the browser route is the fallback.** WebView2 and
   WebKitGTK provide the print APIs; MDraft renders the light article into a
   hidden, script-free surface and writes the PDF there. **PDF (opens browser)**

@@ -499,8 +499,17 @@ console.log("\n=== word-level sync ===");
   const painted = () =>
     evaluate(`(() => {
       const marks = [...document.querySelectorAll(".cm-sync-word")];
-      return marks.length === 0 ? null : marks.map((mark) => mark.textContent).join("\\n");
+      return marks.length === 0 ? null : marks.map((mark) => mark.textContent).join("");
     })()`);
+  const waitForPaint = async (accept) => {
+    let value = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      value = await painted();
+      if (accept(value)) break;
+      await sleep(100);
+    }
+    return value;
+  };
 
   for (const [word, label] of [
     ["atravessa", "a word on a hard-wrapped line"],
@@ -508,9 +517,13 @@ console.log("\n=== word-level sync ===");
     ["Analista", "a table cell"],
     ["localizado", "a word after an attribute substitution"],
   ]) {
-    const selected = await selectWord(word);
-    await sleep(160);
-    const result = await painted();
+    let selected = null;
+    let result = null;
+    for (let attempt = 0; attempt < 20 && result !== word; attempt += 1) {
+      selected = await selectWord(word);
+      await sleep(100);
+      result = await painted();
+    }
     check(selected === word && result === word, label, `${selected} -> ${result}`);
   }
 
@@ -531,8 +544,7 @@ console.log("\n=== word-level sync ===");
     selection.addRange(range);
     return selection.toString();
   })()`);
-  await sleep(160);
-  const beforeSubPainted = await painted();
+  const beforeSubPainted = await waitForPaint((value) => value === "parágrafo");
   check(
     beforeSubSelected === "parágrafo" && beforeSubPainted === "parágrafo",
     "a word before an attribute substitution in the same paragraph",
@@ -540,8 +552,7 @@ console.log("\n=== word-level sync ===");
   );
 
   await selectWord("substituído");
-  await sleep(160);
-  const subFallback = await painted();
+  const subFallback = await waitForPaint((value) => value?.includes("Um parágrafo com {atributo}"));
   check(
     typeof subFallback === "string" &&
       subFallback.includes("Um parágrafo com {atributo}") &&
@@ -573,7 +584,11 @@ console.log("\n=== word-level sync ===");
     `${admonitionWord} -> ${admonitionPainted}`,
   );
 
-  const beforePreview = await evaluate(`document.getElementById("preview-pane").scrollTop`);
+  // A source double-click is a gesture: its own pane holds still, and the
+  // preview may move to bring the word level
+  // (docs/architecture.md). Until that ADR this
+  // asserted that the preview did not scroll; `npm run sync` measures how level.
+  const beforeSource = await evaluate(`document.querySelector(".cm-scroller").scrollTop`);
   const point = await evaluate(`(() => {
     const walker = document.createTreeWalker(document.querySelector(".cm-content"), NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
@@ -613,20 +628,24 @@ console.log("\n=== word-level sync ===");
         CSS.highlights?.get("mdraft-sync-peak");
       return highlight ? [...highlight].map((range) => range.toString()) : null;
     })()`);
-    const afterPreview = await evaluate(`document.getElementById("preview-pane").scrollTop`);
+    const afterSource = await evaluate(`document.querySelector(".cm-scroller").scrollTop`);
     check(
       Array.isArray(ranges) && ranges.join(" ").includes("AsciiDoc"),
       "a source word paints the preview",
       JSON.stringify(ranges),
     );
     check(
-      beforePreview === afterPreview,
-      "painting the preview does not scroll it",
-      `${beforePreview} -> ${afterPreview}`,
+      beforeSource === afterSource,
+      "a source double-click never scrolls the source",
+      `${beforeSource} -> ${afterSource}`,
     );
   } else {
     check(false, "a source word paints the preview", "the title word is not on screen");
-    check(false, "painting the preview does not scroll it", "the title word is not on screen");
+    check(
+      false,
+      "a source double-click never scrolls the source",
+      "the title word is not on screen",
+    );
   }
 
   const strongDrag = await evaluate(`(() => {

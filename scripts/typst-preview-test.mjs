@@ -275,7 +275,7 @@ async function markedLine() {
 }
 
 async function switchView(label) {
-  await evaluate(`[...document.querySelectorAll(".typst-viewbutton")]
+  await evaluate(`[...document.querySelectorAll(".compiled-mode")]
     .find((button) => button.textContent === ${JSON.stringify(label)})?.click()`);
   await sleep(200);
 }
@@ -311,13 +311,108 @@ await switchView("Document");
 const documentReady = await waitFor(`Boolean(document.querySelector(".typst-document"))`);
 check("Document view is available", documentReady);
 
+console.log("=== shared compiler controls and Typst messages ===");
+let compiledBuildCalls = 0;
+ws.addEventListener("message", (event) => {
+  const response = JSON.parse(event.data);
+  if (response.method !== "Fetch.requestPaused") return;
+  const params = response.params;
+  void (async () => {
+    const bodyResponse = await send("Fetch.getResponseBody", { requestId: params.requestId });
+    if (bodyResponse.error) throw new Error(JSON.stringify(bodyResponse.error));
+    const pathname = new URL(params.request.url).pathname;
+    const rawBuf = bodyResponse.result.base64Encoded
+      ? Buffer.from(bodyResponse.result.body, "base64")
+      : Buffer.from(bodyResponse.result.body, "utf8");
+    const patch = {
+      warnings: ["warning: shared Typst warning probe"],
+      compilerOutput:
+        "warning: shared Typst warning probe\nFull diagnostic context beyond the headline.",
+      compilerOutputTruncated: false,
+    };
+    let nextBodyBuf;
+    if (pathname.endsWith("/render_typst_binary")) {
+      const metaLen = rawBuf.readUInt32BE(0);
+      const result = JSON.parse(rawBuf.subarray(4, 4 + metaLen).toString("utf8"));
+      const rest = rawBuf.subarray(4 + metaLen);
+      compiledBuildCalls++;
+      const nextMetaBuf = Buffer.from(JSON.stringify({ ...result, ...patch }), "utf8");
+      const lenBuf = Buffer.allocUnsafe(4);
+      lenBuf.writeUInt32BE(nextMetaBuf.length, 0);
+      nextBodyBuf = Buffer.concat([lenBuf, nextMetaBuf, rest]);
+    } else {
+      const result = JSON.parse(rawBuf.toString("utf8"));
+      compiledBuildCalls++;
+      nextBodyBuf = Buffer.from(JSON.stringify({ ...result, ...patch }), "utf8");
+    }
+    await send("Fetch.fulfillRequest", {
+      requestId: params.requestId,
+      responseCode: params.responseStatusCode,
+      responseHeaders: params.responseHeaders.filter(
+        (header) => !["content-length", "content-encoding"].includes(header.name.toLowerCase()),
+      ),
+      body: nextBodyBuf.toString("base64"),
+    });
+  })().catch((error) => {
+    console.error(error);
+    void send("Fetch.continueRequest", { requestId: params.requestId });
+  });
+});
+await send("Fetch.enable", {
+  patterns: [{ urlPattern: "http://ipc.localhost/render_typst*", requestStage: "Response" }],
+});
+await evaluate(`document.querySelector('.compiled-compile').click()`);
+check(
+  "successful Typst warnings reach the shared Logs count",
+  await waitFor(`document.querySelector('.compiled-issue-count')?.textContent.trim()==='1'`),
+);
+const warningUi = await evaluate(`(() => {
+  document.querySelector('.compiled-logs-toggle').click();
+  document.querySelector('#compiler-output-tab').click();
+  const result={separate:!document.querySelector('#preview').textContent.includes('warning probe'),raw:document.querySelector('#compiler-output').textContent.includes('Full diagnostic context'),open:document.querySelector('.compiled-logs-toggle').getAttribute('aria-pressed')==='true'};
+  document.querySelector('.compiled-logs-toggle').click();
+  document.querySelector('.compiled-auto input').click();
+  const view=document.querySelector('.cm-content').cmTile.root.view;
+  view.dispatch({changes:{from:view.state.doc.length,insert:'\\n// manual compile UI probe\\n'}});
+  return result;
+})()`);
+check(
+  "Typst raw output is separate from generated content",
+  warningUi.separate && warningUi.raw && warningUi.open,
+);
+await sleep(900);
+check(
+  "manual Typst mode does not compile after edits",
+  compiledBuildCalls === 1 &&
+    (await evaluate(
+      `document.querySelector('.compiled-message').textContent.includes('Out of date')`,
+    )),
+);
+await evaluate(`document.querySelector('.compiled-compile').click()`);
+check(
+  "Compile works in manual Typst mode",
+  (await waitFor(`document.querySelector('.compiled-compile').textContent==='Compile'`)) &&
+    compiledBuildCalls === 2,
+);
+await send("Fetch.disable");
+await evaluate(`(() => {
+
+  document.querySelector('.compiled-auto input').click();
+  const view=document.querySelector('.cm-content').cmTile.root.view;
+  const marker='\\n// manual compile UI probe\\n',at=view.state.doc.toString().indexOf(marker);
+  if(at>=0)view.dispatch({changes:{from:at,to:at+marker.length}});
+})()`);
+await waitFor(
+  `!document.querySelector('#compiler-output')?.textContent.includes('Full diagnostic context')`,
+);
+
 // A theme change requests a fresh paint of the same revision. The cached Typst
 // result must keep its view controls and word mapping instead of clearing them.
 await evaluate(`document.getElementById("btn-theme")?.click()`);
 await sleep(1000);
 check(
   "a theme change keeps the Typst view controls",
-  (await evaluate(`document.querySelectorAll(".typst-viewbutton").length`)) === 2,
+  (await evaluate(`document.querySelectorAll(".compiled-mode").length`)) === 2,
 );
 
 // Hold the map's idle callback across a Source -> Split round trip. The cached
@@ -326,12 +421,12 @@ await evaluate(`(() => {
   window.__typstIdleOriginal=window.requestIdleCallback;
   window.__typstIdleHeld=[];
   window.requestIdleCallback=(callback)=>{window.__typstIdleHeld.push(callback);return 0;};
-  window.__typstBarBefore=document.querySelector('.typst-viewbar');
+  window.__typstBarBefore=document.querySelector('.typst-document');
   const view=document.querySelector('.cm-content').cmTile.root.view;
   view.dispatch({changes:{from:view.state.doc.length,insert:'\\n// deferred map test\\n'}});
 })()`);
 const newDocumentRender = await waitFor(
-  `document.querySelector('.typst-viewbar') !== window.__typstBarBefore`,
+  `document.querySelector('.typst-document') !== window.__typstBarBefore`,
   20000,
 );
 const oldMapHeld = await waitFor(`window.__typstIdleHeld.length > 0`, 6000);
@@ -528,22 +623,140 @@ check(
   pagesShape.ratio.toFixed(4),
 );
 check("Pages shows no error box", pagesShape.errors === 0);
+const compiledChrome = await evaluate(`(() => {
+  const toolbar=document.querySelector('.compiled-toolbar'), compile=document.querySelector('.compiled-compile');
+  return {
+    icons:['.compiled-compile','.compiled-logs-toggle','.compiled-save-pdf'].every(selector=>document.querySelector(selector+' svg[aria-hidden="true"]')),
+    primary:getComputedStyle(compile).backgroundColor!==getComputedStyle(toolbar).backgroundColor,
+    label:document.querySelector('.compiled-state-label').textContent,
+    engine:document.querySelector('.compiled-engine').textContent,
+  };
+})()`);
+check(
+  "Typst shares the prototype's primary action, outline icons and structured status",
+  compiledChrome.icons &&
+    compiledChrome.primary &&
+    compiledChrome.label === "PDF ready" &&
+    /Typst.*s/.test(compiledChrome.engine),
+  JSON.stringify(compiledChrome),
+);
+
+// The pages are flush: the second shell starts exactly where the first ends, and
+// neither draws a rule or a shadow. A gap here is the band of pane background the
+// reader sees between two pages, which reads as a divider rather than a document.
+const pageGap = await evaluate(`(() => {
+  const shells = [...document.querySelectorAll(".typst-page-shell")];
+  if (shells.length < 2) return null;
+  const first = shells[0].getBoundingClientRect();
+  const second = shells[1].getBoundingClientRect();
+  const style = getComputedStyle(shells[0]);
+  const host = getComputedStyle(document.querySelector(".typst-preview"));
+  return {
+    gap: second.top - first.bottom,
+    rowGap: host.rowGap,
+    shadow: style.boxShadow,
+  };
+})()`);
+check(
+  "consecutive pages sit flush with no gap",
+  pageGap !== null && Math.abs(pageGap.gap) < 1 && pageGap.rowGap === "normal",
+  pageGap ? `gap ${pageGap.gap.toFixed(1)}px, row-gap ${pageGap.rowGap}` : "no second page",
+);
+check(
+  "a page draws no rule or shadow at its edge",
+  pageGap !== null && pageGap.shadow === "none",
+  pageGap ? pageGap.shadow : "no page",
+);
+
+const logsToggleProbe = await evaluate(`(() => {
+ const pane=document.getElementById('preview-pane'), button=document.querySelector('.compiled-logs-toggle');
+ const canvas=document.querySelector('#preview canvas'), before=pane.scrollTop;
+ button.click();
+ const opened=button.getAttribute('aria-pressed')==='true' && pane.inert && getComputedStyle(pane).visibility==='hidden';
+ button.click();
+ return opened && !pane.inert && Math.abs(pane.scrollTop-before)<1 && document.querySelector('#preview canvas')===canvas;
+})()`);
+check("Typst uses the same reversible Logs toggle without rerendering its PDF", logsToggleProbe);
+
+await evaluate(`(() => {
+  const pane=document.getElementById('preview-pane'), source=document.querySelector('.cm-content').cmTile.root.view.scrollDOM;
+  window.__compiledLogsScroll={pdf:pane.scrollTop,source:source.scrollTop};
+  document.querySelector('.compiled-logs-toggle').click();
+  source.scrollTop += 120;
+})()`);
+await sleep(350);
+const hiddenPdfStayed = await evaluate(`(() => {
+  const stayed=Math.abs(document.getElementById('preview-pane').scrollTop-window.__compiledLogsScroll.pdf)<1;
+  document.querySelector('.cm-content').cmTile.root.view.scrollDOM.scrollTop=window.__compiledLogsScroll.source;
+  return stayed;
+})()`);
+await sleep(150);
+await evaluate(`document.querySelector('.compiled-logs-toggle').click()`);
+check("source scrolling while reading Logs leaves the hidden PDF position intact", hiddenPdfStayed);
+
+// Toolbar geometry is a user-visible contract at each supported pane width.
+const originalPreviewFlex = await evaluate(`document.getElementById('preview-shell').style.flex`);
+await send("Emulation.setDeviceMetricsOverride", {
+  width: 1440,
+  height: 1000,
+  deviceScaleFactor: 1,
+  mobile: false,
+});
+for (const width of [320, 480, 900]) {
+  await evaluate(`document.getElementById('preview-shell').style.flex='0 0 ${width}px'`);
+  await sleep(500);
+  const geometry = await evaluate(`(() => {
+    const bar=document.querySelector('.compiled-toolbar'), pane=document.getElementById('preview-pane');
+    const toolbar=bar.getBoundingClientRect(), viewport=pane.getBoundingClientRect();
+    const controls=[...bar.querySelectorAll('button,label')].filter(node=>node.getClientRects().length);
+    return {reserved:viewport.top>=toolbar.bottom-1,reachable:controls.every(node=>{const box=node.getBoundingClientRect();return box.left>=toolbar.left-1 && box.right<=toolbar.right+1 && box.bottom<=toolbar.bottom+1;}),width:viewport.width};
+  })()`);
+  check(
+    `shared toolbar reserves content space at ${width}px`,
+    geometry.reserved && geometry.reachable,
+    JSON.stringify(geometry),
+  );
+  if (process.env.MDRAFT_COMPILED_UI_SCREENSHOTS) {
+    fs.mkdirSync(process.env.MDRAFT_COMPILED_UI_SCREENSHOTS, { recursive: true });
+    const clip = await evaluate(
+      `(() => { const r=document.getElementById('preview-shell').getBoundingClientRect(); return {x:r.left,y:r.top,width:r.width,height:Math.min(r.height,innerHeight-r.top),scale:1}; })()`,
+    );
+    const shot = await send("Page.captureScreenshot", { format: "png", clip });
+    fs.writeFileSync(
+      path.join(process.env.MDRAFT_COMPILED_UI_SCREENSHOTS, `typst-pdf-${width}.png`),
+      Buffer.from(shot.result.data, "base64"),
+    );
+    await evaluate(`document.querySelector('.compiled-logs-toggle').click()`);
+    const logsShot = await send("Page.captureScreenshot", { format: "png", clip });
+    fs.writeFileSync(
+      path.join(process.env.MDRAFT_COMPILED_UI_SCREENSHOTS, `typst-logs-${width}.png`),
+      Buffer.from(logsShot.result.data, "base64"),
+    );
+    await evaluate(`document.querySelector('.compiled-logs-toggle').click()`);
+  }
+}
+await evaluate(
+  `document.getElementById('preview-shell').style.flex=${JSON.stringify(originalPreviewFlex)}`,
+);
+await send("Emulation.clearDeviceMetricsOverride");
+await sleep(700);
 
 const viewBarStyle = await evaluate(`(() => {
-  const bar = document.querySelector(".typst-viewbar");
-  const button = document.querySelector(".typst-viewbutton");
+  const bar = document.querySelector(".compiled-toolbar");
+  const button = document.querySelector(".compiled-mode");
   if (!bar || !button) return null;
   const barStyle = getComputedStyle(bar);
   const buttonStyle = getComputedStyle(button);
   return {
+    reserved: bar.getBoundingClientRect().bottom <= document.getElementById("preview-pane").getBoundingClientRect().top + 1,
     blur: barStyle.backdropFilter,
     barBackground: barStyle.backgroundColor,
     buttonBackground: buttonStyle.backgroundColor,
   };
 })()`);
 check(
-  "the view bar does not blur the page",
-  viewBarStyle?.blur === "none" && viewBarStyle?.barBackground === "rgba(0, 0, 0, 0)",
+  "the shared toolbar reserves space above the page",
+  viewBarStyle?.blur === "none" && viewBarStyle?.reserved === true,
   viewBarStyle ? `${viewBarStyle.blur}/${viewBarStyle.barBackground}` : "missing",
 );
 check(
@@ -963,13 +1176,13 @@ if (process.env.MDRAFT_TEST_SCREENSHOT) {
   fs.writeFileSync(process.env.MDRAFT_TEST_SCREENSHOT, Buffer.from(shot.result.data, "base64"));
 }
 
-// The ignored local exam is optional; the tracked fixture above always runs.
-const exam = path.resolve("docs/samples/prova-fisica.typ");
-if (fs.existsSync(exam)) {
+// The accented-word fixture is synthetic and required in every public checkout.
+const exam = path.resolve("samples/physics-sync.typ");
+{
   await evaluate(
     `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'open-files',payload:[${JSON.stringify(exam)}]})`,
   );
-  await waitFor(`document.title.includes('prova-fisica.typ')`);
+  await waitFor(`document.title.includes('physics-sync.typ')`);
   await switchView("Pages");
   await waitFor(`document.querySelector('.textLayer')?.textContent.includes('instante')`, 30000);
   await sleep(1200);
@@ -979,7 +1192,7 @@ if (fs.existsSync(exam)) {
       await roundTrip(["instante", "velocidade", "partícula", "coordenadas", "centrípeta"][n % 5]),
     );
   check(
-    "physics exam survives fifty alternating gestures with exact words",
+    "synthetic accented fixture survives fifty alternating gestures with exact words",
     examCycles.every((r) => r.ok),
     JSON.stringify(examCycles.filter((r) => !r.ok)),
   );
@@ -1015,7 +1228,7 @@ const reference = JSON.parse(
       table: host?.querySelector('table') !== null,
       contents: host?.querySelector('nav[role="doc-toc"]') !== null,
       error: document.querySelector('.typst-error')?.textContent ?? null,
-      viewbar: document.querySelectorAll('.typst-viewbutton').length,
+      viewbar: document.querySelectorAll('.compiled-mode').length,
     });
   })()`),
 );
@@ -1217,6 +1430,66 @@ console.log("\n=== Typst Pages list word sync ===");
   } else {
     check("the Pages list word is reachable", false);
   }
+
+  console.log("\n=== Typst rebuilding at the end ===");
+  await evaluate(`(() => {
+    const v=document.querySelector(".cm-content").cmTile.root.view;
+    v.dispatch({selection:{anchor:v.state.doc.length},scrollIntoView:true});
+    v.contentDOM.focus();
+  })()`);
+  const seed =
+    "\n\n= Tail fixture\n\n" +
+    "A typeset paragraph keeps the text flowing across the page.\n\n".repeat(100);
+  await send("Input.insertText", { text: seed });
+  const seeded = await waitFor(
+    `(() => {
+    const host=document.querySelector('.typst-preview:not([style*="hidden"])');
+    return host && host.querySelectorAll('.typst-page-shell').length >= 3 && host.textContent.includes('Tail fixture');
+  })()`,
+    40000,
+  );
+  check("the Typst tail fixture spans several pages", seeded);
+  const start = await evaluate(`(async () => {
+    const v=document.querySelector(".cm-content").cmTile.root.view, pane=document.getElementById("preview-pane");
+    v.dispatch({selection:{anchor:v.state.doc.length},scrollIntoView:true});
+    await new Promise(r=>setTimeout(r,300)); pane.scrollTop=pane.scrollHeight;
+    await new Promise(r=>setTimeout(r,150));
+    window.__typstViewport={min:pane.scrollTop,frames:0,active:true};
+    const frame=()=>{const p=window.__typstViewport;if(!p.active)return;p.min=Math.min(p.min,pane.scrollTop);p.frames++;requestAnimationFrame(frame)};
+    requestAnimationFrame(frame);v.contentDOM.focus();
+    return {top:pane.scrollTop,pages:document.querySelectorAll('.typst-page-shell').length};
+  })()`);
+  const growth =
+    "\n\n= Typst growth marker\n\n" +
+    "More text follows the reader onto another page.\n\n".repeat(100);
+  await send("Input.insertText", { text: growth });
+  const rebuilt = await waitFor(
+    `(() => {
+    const host=document.querySelector('.typst-preview:not([style*="hidden"])');
+    return host && host.textContent.includes('Typst growth marker');
+  })()`,
+    40000,
+  );
+  const after = await evaluate(`(() => {
+    const pane=document.getElementById("preview-pane"), p=window.__typstViewport;p.active=false;
+    return {top:pane.scrollTop,min:p.min,frames:p.frames,max:pane.scrollHeight-pane.clientHeight,pages:document.querySelectorAll('.typst-page-shell').length};
+  })()`);
+  check("typing rebuilds the Typst PDF", rebuilt);
+  check(
+    "Typst keeps the previous pages visible throughout rebuilding",
+    start.top > 50 && after.frames > 0 && after.min > 50,
+    JSON.stringify({ start, after }),
+  );
+  check(
+    "Typst grows onto new pages",
+    after.pages > start.pages,
+    `${start.pages} -> ${after.pages}`,
+  );
+  check(
+    "Typst follows the new last page",
+    after.max - after.top < 100,
+    `${after.top}/${after.max}`,
+  );
   fs.rmSync(directory, { recursive: true, force: true });
 }
 

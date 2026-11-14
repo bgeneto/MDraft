@@ -16,6 +16,8 @@ export interface TabsCallbacks {
   save: (id: string) => void | Promise<void>;
   saveAs: (id: string) => void | Promise<void>;
   reveal: (id: string) => void | Promise<void>;
+  /** Copy the clicked document's full path to the clipboard. */
+  copyPath: (id: string) => void | Promise<void>;
   newTab: () => void | Promise<void>;
   /** Format the clicked document, active or in the background. */
   format: (id: string) => void | Promise<void>;
@@ -307,6 +309,21 @@ export function createTabsUi(options: TabsOptions): TabsUi {
       { kind: "separator" },
       {
         kind: "item",
+        id: "moveLeft",
+        label: "Move Tab Left",
+        disabled: index === 0,
+        action: () => moveById(id, -1),
+      },
+      {
+        kind: "item",
+        id: "moveRight",
+        label: "Move Tab Right",
+        disabled: index === list.length - 1,
+        action: () => moveById(id, 1),
+      },
+      { kind: "separator" },
+      {
+        kind: "item",
         id: "save",
         label: "Save",
         shortcut: shortcutLabel("S"),
@@ -320,7 +337,6 @@ export function createTabsUi(options: TabsOptions): TabsUi {
         shortcut: shortcutLabel("S", true),
         action: () => callbacks.saveAs(id),
       },
-      { kind: "separator" },
       {
         kind: "item",
         id: "format",
@@ -345,6 +361,13 @@ export function createTabsUi(options: TabsOptions): TabsUi {
         label: "Show in Folder",
         disabled: !session.path,
         action: () => callbacks.reveal(id),
+      },
+      {
+        kind: "item",
+        id: "copyPath",
+        label: "Copy File Path",
+        disabled: !session.path,
+        action: () => callbacks.copyPath(id),
       },
     ];
   }
@@ -706,17 +729,20 @@ export function createTabsUi(options: TabsOptions): TabsUi {
     );
   }
 
+  function moveById(id: string, delta: number): boolean {
+    const list = store.list();
+    const index = list.findIndex((session) => session.id === id);
+    const target = index + delta;
+    if (index < 0 || target < 0 || target >= list.length) return false;
+    store.move(id, target);
+    render();
+    return true;
+  }
+
   function reorder(tab: HTMLElement, delta: number): void {
     const id = tab.dataset.id;
     if (!id) return;
-    const list = store.list();
-    const index = list.findIndex((session) => session.id === id);
-    if (index < 0) return;
-    const target = Math.max(0, Math.min(list.length - 1, index + delta));
-    if (target === index) return;
-    store.move(id, target);
-    render();
-    focusTab(id);
+    if (moveById(id, delta)) focusTab(id);
   }
 
   bar.addEventListener("keydown", (event) => {

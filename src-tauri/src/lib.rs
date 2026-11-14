@@ -1,22 +1,32 @@
 //! MDraft — a Tauri 2 markdown editor.
 
+mod ai;
+mod cancel_registry;
+mod clipboard;
 mod documents;
 mod export;
 mod fonts;
 mod html_preview;
-mod ai;
 mod images;
+mod latex;
+mod latex_native;
+mod latex_texmf;
+mod latex_texpresso;
 mod launch;
 #[cfg(target_os = "linux")]
 mod linux_webkit_env;
 mod menu;
+mod optional_tools;
 mod print;
 mod recovery;
 mod settings;
 mod speech;
 mod spellcheck;
+mod tex_fmt;
+mod text_encoding;
 mod tokens;
 mod typst;
+mod workspace;
 
 use settings::{AppState, Settings};
 use tauri::Manager;
@@ -29,7 +39,23 @@ pub fn run() {
     #[cfg(target_os = "linux")]
     linux_webkit_env::apply_before_gtk_init();
 
-    let context = tauri::generate_context!();
+    let mut context = tauri::generate_context!();
+    let hidden_test = std::env::var_os("MDRAFT_TEST_HIDDEN").is_some();
+    // Automated UI runs must not interrupt the user's active desktop.
+    if hidden_test {
+        // The test runner checks this embedded marker before starting a binary
+        // with --no-build, so an older executable cannot unexpectedly appear.
+        eprintln!("MDRAFT_TEST_HIDDEN_ISOLATED_WINDOW_V2");
+        if let Ok(identifier) = std::env::var("MDRAFT_TEST_IDENTIFIER")
+            && identifier == "io.github.bgeneto.mdraft.test-automation"
+        {
+            context.config_mut().identifier = identifier;
+        }
+        for window in &mut context.config_mut().app.windows {
+            window.visible = false;
+            window.focus = false;
+        }
+    }
 
     // Wayland has no window-icon property for GTK3 applications: the
     // compositor resolves the icon by matching the window's app id to a
@@ -48,9 +74,13 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         .manage(html_preview::PreviewStore::default())
+        .manage(clipboard::ClipboardStore::new())
         .manage(fonts::FontCatalog::default())
         .manage(launch::LaunchState::default())
         .manage(speech::SpeechState::default())
+        .register_asynchronous_uri_scheme_protocol(latex::SCHEME, |context, request, responder| {
+            latex::serve(context.app_handle().clone(), request, responder);
+        })
         .register_asynchronous_uri_scheme_protocol(
             html_preview::SCHEME,
             |context, request, responder| {
@@ -62,7 +92,6 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(
             launch::on_second_instance,
         ))
-        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(
@@ -70,7 +99,11 @@ pub fn run() {
                 // The print surface exists only for one operation and is not a
                 // document window; remembering its geometry would add a stale
                 // entry to the reader's window state.
-                .with_denylist(&[print::PRINT_WINDOW])
+                .with_denylist(if hidden_test {
+                    &[print::PRINT_WINDOW, "main"]
+                } else {
+                    &[print::PRINT_WINDOW]
+                })
                 .build(),
         )
         .on_menu_event(menu::on_event)
@@ -91,6 +124,32 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            latex::latex_status,
+            latex::texpresso_status,
+            latex::install_texpresso,
+            latex::latex_stats,
+            latex::install_latex,
+            latex::latex_project_snapshot,
+            latex::save_compiled_pdf,
+            latex::print_compiled_pdf,
+            latex::latex_cache_info,
+            latex::latex_disable,
+            latex::latex_clear_cache,
+            latex_native::latex_engine_status,
+            latex_native::latex_native_discover,
+            latex_native::latex_native_validate,
+            latex_native::latex_native_set_enabled,
+            latex_native::latex_native_set_engine,
+            latex_native::latex_native_wsl_distributions,
+            latex_native::latex_native_wsl_look,
+            latex_native::latex_native_wsl_validate,
+            latex_texmf::latex_texmf_list,
+            latex_texmf::latex_texmf_configure,
+            latex_texmf::latex_texmf_inspect,
+            latex_texmf::latex_texmf_open,
+            latex_texmf::latex_texmf_revision,
+            latex_native::latex_native_compile,
+            latex_native::latex_native_cancel,
             settings::get_settings,
             settings::save_settings,
             settings::add_recent,
@@ -109,13 +168,22 @@ pub fn run() {
             ai::ai_cancel,
             ai::ai_cancel_all,
             documents::read_document,
+            documents::read_document_as,
+            documents::inspect_document_encoding,
+            documents::check_encoding_fit,
             documents::write_document,
             documents::write_document_checked,
             documents::fingerprint_document,
             documents::stat_document,
             documents::path_exists,
+            workspace::workspace_open,
+            workspace::workspace_list,
+            workspace::workspace_main_candidates,
+            latex::latex_engine_available,
+            latex::install_latex_engine,
             documents::resolve_legacy_local_image,
             documents::open_external,
+            documents::open_app_folder,
             documents::startup_file,
             launch::startup_files,
             launch::take_forwarded_paths,
@@ -124,6 +192,9 @@ pub fn run() {
             recovery::remove_recovery,
             tokens::count_tokens,
             fonts::system_fonts,
+            clipboard::clipboard_read_text,
+            clipboard::clipboard_write_text,
+            tex_fmt::tex_fmt_wasm,
             speech::speech_status,
             speech::speech_speak,
             speech::speech_stop,
@@ -135,6 +206,8 @@ pub fn run() {
             images::download_image,
             export::pandoc_status,
             export::run_export,
+            export::pandoc_list_writers,
+            export::run_pandoc_writer,
             export::run_after_export,
             export::install_pandoc,
             export::print_document,
@@ -151,7 +224,11 @@ pub fn run() {
             typst::install_typst,
             typst::typst_download_page,
             typst::render_typst,
+            typst::render_typst_binary,
             typst::cancel_typst_preview,
+            typst::service::typst_service_status,
+            typst::service::install_typst_service,
+            typst::service::typst_clear_cache,
             html_preview::set_html_preview,
             html_preview::clear_html_preview,
         ])
@@ -159,6 +236,14 @@ pub fn run() {
         .expect("error while building the tauri application");
 
     app.run(|app_handle, event| {
+        // The platform clipboard handle must be released while the process is
+        // still alive; on X11/Wayland it is the owner of the data.
+        // Shut down warm Typst service daemons gracefully on exit as well.
+        if let tauri::RunEvent::Exit = event {
+            typst::service::shutdown_all_services();
+            app_handle.state::<clipboard::ClipboardStore>().release();
+        }
+
         // macOS/Linux desktop environments deliver "open this file" through the
         // platform event loop rather than argv.
         #[cfg(any(target_os = "macos", target_os = "ios"))]

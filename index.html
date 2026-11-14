@@ -78,6 +78,9 @@
           <button id="tab-recent" class="sidebar-tab" role="tab" aria-selected="false">
             Recent
           </button>
+          <button id="tab-explorer" class="sidebar-tab" role="tab" aria-selected="false">
+            Explorer
+          </button>
         </div>
         <div id="sidebar-body" class="sidebar-body"></div>
       </aside>
@@ -89,8 +92,20 @@
           <div id="editor-host" class="editor-host"></div>
         </section>
         <div id="splitter" class="splitter" role="separator" aria-orientation="vertical"></div>
-        <section id="preview-pane" class="pane preview-pane">
-          <article id="preview" class="markdown-body"></article>
+        <section id="preview-shell" class="pane preview-shell">
+          <div id="compiled-controls" hidden></div>
+          <div class="preview-stage">
+            <section id="preview-pane" class="preview-pane">
+              <article id="preview" class="markdown-body"></article>
+            </section>
+            <section
+              id="compiler-logs"
+              class="compiler-logs"
+              aria-label="Compiler logs"
+              aria-hidden="true"
+              inert
+            ></section>
+          </div>
         </section>
       </main>
 
@@ -108,9 +123,11 @@
               stroke="currentColor"
               stroke-width="1.9"
               stroke-linecap="round"
+              stroke-linejoin="round"
               aria-hidden="true"
             >
-              <path d="M3.5 6.5h17M3.5 12h17M3.5 17.5h17" />
+              <rect x="3.5" y="4.5" width="17" height="15" rx="3" />
+              <path d="M9.5 4.5v15" />
             </svg>
           </button>
           <span class="status-modes" role="group" aria-label="View mode">
@@ -242,6 +259,18 @@
         </div>
         <div class="status-right">
           <button
+            type="button"
+            id="status-download"
+            class="status-btn status-download"
+            hidden
+            title="Optional tool download"
+          >
+            <span class="status-download-label"></span>
+            <span class="status-download-track" aria-hidden="true">
+              <span class="status-download-fill"></span>
+            </span>
+          </button>
+          <button
             id="status-reading"
             class="status-btn status-reading"
             hidden
@@ -253,8 +282,20 @@
             hidden
             title="Reset zoom"
           ></button>
+          <button
+            type="button"
+            id="status-latex-engine"
+            class="status-item status-stats status-engine"
+            aria-haspopup="menu"
+            hidden
+          ></button>
           <span id="status-cursor" class="status-item"></span>
-          <span id="status-encoding" class="status-item"></span>
+          <button
+            type="button"
+            id="status-encoding"
+            class="status-item status-stats"
+            aria-haspopup="dialog"
+          ></button>
           <button
             id="btn-prefs"
             class="status-btn icon-btn"

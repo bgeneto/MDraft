@@ -1,0 +1,78 @@
+/* The embedded preview. MDraft owns the editor, the toolbar and every dialog;
+   the app shows only its pages and the boxes its source map paints. */
+main {
+  grid-template-columns: 1fr !important;
+  grid-template-areas: none !important;
+}
+body > header,
+#sidebar,
+#editor,
+#bottom,
+#preview-bar,
+#menubar,
+#status,
+#notice,
+#views,
+#drawer,
+#channel,
+#drop,
+#keys,
+#author-tip,
+#lock,
+#keep-offer,
+#to-preview,
+dialog {
+  display: none !important;
+}
+#preview {
+  grid-column: 1 !important;
+  border: 0 !important;
+  min-width: 0;
+}
+body {
+  overflow: hidden;
+}
+
+/* The pane and the paper of MDraft's PDF viewer (src/styles.css, .typst-page):
+   in the dark theme the page is inverted and screen-blended over the theme
+   surface, so paper takes the surface colour and ink turns white. */
+#pages {
+  background: var(--mdraft-pane, #f3f3f3);
+}
+#pages .page {
+  background: var(--mdraft-paper, #fff);
+  isolation: isolate;
+}
+@media not (forced-colors: active) {
+  [data-theme="dark"] #pages .page canvas {
+    filter: invert(1) hue-rotate(180deg);
+    mix-blend-mode: screen;
+  }
+}
+
+/* Correspondence in MDraft's colours (--word-sync, --word-sync-peak). The
+   caret box is the bridge's probe and the current-line bar is the app's caret
+   follow; MDraft shows neither. */
+#pages .cursor-mark {
+  display: none;
+}
+#pages .cursor-mark.selection {
+  display: block;
+  box-shadow: none;
+  border-radius: 2px;
+  background: var(--mdraft-sync, rgba(255, 193, 7, 0.3));
+}
+[data-mdraft-blink] #pages .cursor-mark.selection {
+  animation: mdraft-pulse 500ms ease-in-out 4;
+}
+@keyframes mdraft-pulse {
+  50% {
+    background: var(--mdraft-sync-peak, rgba(255, 167, 0, 0.55));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-mdraft-blink] #pages .cursor-mark.selection {
+    animation: none;
+    background: var(--mdraft-sync-peak, rgba(255, 167, 0, 0.55));
+  }
+}

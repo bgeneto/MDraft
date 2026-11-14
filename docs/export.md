@@ -8,15 +8,17 @@ explicit about which of them need an extra program.
 
 | Source | Preview | Native export | Pandoc export | Tools |
 | --- | --- | --- | --- | --- |
-| Markdown | Markdown pipeline | HTML, PDF, Print | DOCX, ODT, EPUB, LaTeX, reStructuredText, AsciiDoc, RTF, Textile, MediaWiki, OPML, PDF (via Typst) | browser for the explicit fallback; pandoc for pandoc formats; Typst for PDF (via Typst) |
+| Markdown | Markdown pipeline | HTML, PDF, Print | DOCX, ODT, EPUB, LaTeX, reStructuredText, AsciiDoc, RTF, Textile, MediaWiki, OPML, PDF (via Typst), plus any other writer in the chooser | browser for the explicit fallback; pandoc for pandoc formats; Typst for PDF (via Typst) |
 | AsciiDoc | Asciidoctor.js | HTML, PDF, Print | same list | browser for the explicit fallback; pandoc; Typst for PDF (via Typst) |
 | HTML | Sandboxed guest | HTML copy, PDF, Print (static documents) | same list | browser for scripted HTML and the explicit fallback; pandoc; Typst for PDF (via Typst) |
 | Typst | Typst compiler | PDF (direct, via Typst) | DOCX, ODT, EPUB, LaTeX, reStructuredText, AsciiDoc, RTF, Textile, MediaWiki, OPML | Typst for preview and PDF; pandoc for the other formats |
+| LaTeX | LuaLaTeX compiler | PDF (direct, compiled), Print | HTML, Markdown, DOCX, ODT, EPUB, RTF, LaTeX, reStructuredText, AsciiDoc, and every other writer the installed pandoc advertises | the optional bundled TeX for the preview and PDF; pandoc for the other formats |
 
 The native **PDF** and **Print** commands cover Markdown, AsciiDoc and static
 HTML. They do not cover Typst documents; use **PDF (via Typst)** for a `.typ`
-file, which compiles it directly to PDF. The pandoc list is available for all
-four source languages.
+file, which compiles it directly to PDF. A `.tex` document writes the PDF its own
+compiler produced, so it needs neither pandoc nor Typst for that row. The pandoc
+list is available for all five source languages.
 
 ## Native exports
 
@@ -68,7 +70,10 @@ meta refresh, child frame or active embed is not printed natively; MDraft offers
 because its printed result may depend on code the safe surface will not run.
 
 The native writer waits up to ten seconds for images and web fonts, then reports
-any resource that failed to load. The direct PDF runs the global **After Export**
+any resource that failed to load. That report, and pandoc's own warnings, appear
+in the same transient toast a save uses — no dialog and nothing to dismiss, since
+the file was written and there is no decision to make. A failure that stops the
+export is still an error dialog. The direct PDF runs the global **After Export**
 options because MDraft knows the file it wrote. The **Print** dialog does not
 claim a path, so it does not run them.
 
@@ -120,6 +125,36 @@ add and remove formats.
 - HTML is read with pandoc's HTML reader.
 - Typst is compiled by Typst to HTML first and that HTML is handed to pandoc.
   A `.typ` document exported to PDF is instead written by Typst directly.
+- LaTeX is read with pandoc's own LaTeX reader. The project is converted from
+  the **snapshot the preview compiled**, not from the file on disk: unsaved edits
+  in the root and in any open `\input` chapter reach the export, and a reference
+  outside the project root is refused rather than silently read. The snapshot is
+  copied into a temporary directory, so nothing is written back into the project.
+  `--citeproc` runs when the project declares a bibliography.
+
+### The writer chooser
+
+**File › Export › More Pandoc Formats…** lists every writer the **installed**
+pandoc advertises (around 77 with pandoc 3.12), searchable by name or id. The
+list is asked for on demand and cached against the resolved binary and version,
+so a pandoc update adds rows without a settings migration. It is offered for
+LaTeX documents, where the raw writer list is a real gain; the other languages
+keep their configured rows.
+
+Two rows behave differently:
+
+- **PDF** is the compiled-PDF route, not a conversion. Converting LaTeX to Typst
+  for PDF would change the layout and need a second engine the preview does not
+  use.
+- **bibtex**, **biblatex** and **csljson** emit citation data, and pandoc's LaTeX
+  reader does not carry the entries a `.bib` file holds, so they produce an empty
+  result. The row is labelled *citation data only — empty for LaTeX* rather than
+  handing you a zero-byte file.
+
+A writer the installed pandoc does not advertise is refused by name, and an id
+that is not a safe identifier is refused before any process starts. The
+conversion runs through the same argument-vector path as a configured format, so
+no shell string and no executable path comes from the interface.
 
 ### Format arguments
 
@@ -147,25 +182,36 @@ for the format currently selected in the panel. The direct PDF, pandoc formats,
 Typst PDF and HTML export know their output path. **PDF (opens browser)** does
 not, because the browser owns the save path.
 
-## Installing pandoc and Typst
+## Installing pandoc, Typst and the LaTeX engine
 
-Both are optional and neither is bundled.
+All three are optional and none is bundled. The first launch of a profile shows
+**Optional tools** once when something is missing; **Tools › Optional Tools…**
+reopens it. Each row names what the tool unlocks, its approximate download and
+whether it is already present. Pandoc is selected by default; Typst and the
+bundled TeX engine are opt-in.
 
-- **Tools › Check or Install Pandoc…** downloads the official release, checks
-  the archive against the SHA-256 GitHub publishes, and unpacks it into MDraft's
-  own data folder on Windows, Linux and macOS. It does not install system-wide
-  and needs no administrator rights.
-- **Tools › Check or Install Typst…** downloads the official compiler, checks
-  the archive against the SHA-256 GitHub publishes, and unpacks it into the same
-  application data area on Windows and Linux. On macOS the command opens the
-  official download page instead; install it with your package manager or from
-  that page. Typst is used for `.typ` previews and for PDF export, and is a
-  single executable with no runtime dependencies.
+Pandoc and Typst are downloaded from their official releases, checked against
+the SHA-256 GitHub publishes, and unpacked into MDraft's own data folder. The
+bundled TeX engine is downloaded from its pinned origin, verified file by file,
+and its packages follow on demand. Nothing is installed system-wide and no
+administrator rights are needed. Typst on macOS is the exception: automatic
+installation is unavailable there, so the row opens the official download page
+instead.
 
-A copy on `PATH` is also found. A copy MDraft installed itself takes precedence
-over the one on `PATH`. Typst can be installed with a package manager
-(`cargo install typst-cli`, `apt install typst`, `brew install typst`) or from
-the [Typst download page](https://typst.app/open-source/#download).
+A copy on `PATH` is also found, and a copy MDraft installed itself takes
+precedence over the one on `PATH`. Typst can also be installed with a package
+manager (`cargo install typst-cli`, `apt install typst`, `brew install typst`)
+or from the [Typst download page](https://typst.app/open-source/#download).
+
+Downloads continue in the background when the dialog closes, and the status bar
+shows the active tool. Each install is bounded to ten minutes and stops with the
+application: there is no Cancel control and nothing resumes after a restart. A
+partial TeX install keeps only verified files, and the next attempt fetches the
+rest.
+
+**Preferences › Export** shows whether each is installed and offers the same
+setup action, plus one button per tool that opens its folder in the system file
+manager. The install path is not printed there.
 
 ## Fidelity and known gaps
 
@@ -198,6 +244,17 @@ the [Typst download page](https://typst.app/open-source/#download).
 - **PDF through a user-added engine is possible.** A format can name its own
   `--pdf-engine`; that wins over Typst because extra arguments come last. MDraft
   does not install a TeX distribution for you.
+- **A LaTeX conversion is a conversion, not typesetting.** Pandoc reads the
+  source and writes another format; macros it does not understand, package-driven
+  layout and complex tables are dropped or approximated. The compiled PDF remains
+  the authoritative layout, and the two can differ. A pandoc conversion needs no
+  TeX distribution and no Typst.
+- **A LaTeX project's local images are handled per writer.** The HTML writers
+  embed them (`--embed-resources`), a Markdown target's links are rewritten to
+  your own files, and DOCX/ODT/EPUB embed what they support. The slide writers
+  (reveal.js, S5, Slidy, Slideous, DZSlides) keep their template's CDN links
+  instead: embedding them would make **pandoc** fetch them, which is a network
+  request the application must not start on its own.
 - **Native printing needs a runtime API.** A host without WebView2's print
   interfaces or WebKitGTK's print operation falls back to the browser route with
   an explanation. It never silently does nothing.
@@ -213,3 +270,5 @@ the [Typst download page](https://typst.app/open-source/#download).
 | DOCX, ODT, EPUB, LaTeX, reStructuredText, AsciiDoc, RTF, Textile, MediaWiki or OPML | pandoc |
 | PDF (via Typst) from Markdown, AsciiDoc or HTML | pandoc and Typst |
 | PDF from a Typst document | Typst |
+| PDF from a LaTeX document | the optional bundled TeX (no pandoc, no Typst) |
+| HTML, Markdown, DOCX, ODT, EPUB, RTF or any other pandoc writer from LaTeX | pandoc |

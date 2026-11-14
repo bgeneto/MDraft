@@ -13,9 +13,11 @@ import { readHtml, htmlToText } from "./read-html.ts";
 import { readMarkdown } from "./read-markdown.ts";
 import { readTypst } from "./read-typst.ts";
 import { readAsciidoc } from "./read-asciidoc.ts";
+import { readLatex } from "./read-latex.ts";
 import { renderMarkdown } from "./render-markdown.ts";
 import { renderTypst } from "./render-typst.ts";
 import { renderAsciidoc } from "./render-asciidoc.ts";
+import { renderLatex } from "./render-latex.ts";
 import { renderHtmlFragment } from "./render-html.ts";
 import { sanitizeHtmlFragment } from "./html-fragment.ts";
 import { escapeMarkdownCurrency } from "../math-delimiters.ts";
@@ -203,6 +205,9 @@ function literalFor(destination: DocumentLanguage, text: string): string {
   if (destination === "markdown") return renderMarkdown(blocks);
   if (destination === "typst") return renderTypst(blocks);
   if (destination === "asciidoc") return renderAsciidoc(blocks);
+  // A converted fragment's literal fallback still needs LaTeX syntax instead
+  // of falling through to `renderHtmlFragment`.
+  if (destination === "latex") return renderLatex(blocks);
   return renderHtmlFragment(blocks);
 }
 
@@ -296,6 +301,7 @@ export async function planPaste(
     if (source === "html") blocks = await readHtml(raw);
     else if (source === "markdown") blocks = await readMarkdown(raw);
     else if (source === "asciidoc") blocks = await readAsciidoc(raw);
+    else if (source === "latex") blocks = readLatex(raw);
     else blocks = await readTypst(raw);
 
     if (countNodes(blocks) > MAX_NODES) {
@@ -316,6 +322,7 @@ export async function planPaste(
     if (destination === "markdown") text = renderMarkdown(blocks);
     else if (destination === "typst") text = renderTypst(blocks);
     else if (destination === "asciidoc") text = renderAsciidoc(blocks);
+    else if (destination === "latex") text = renderLatex(blocks);
     else text = renderHtmlFragment(blocks);
 
     if (!text.trim()) {

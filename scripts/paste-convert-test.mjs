@@ -10,8 +10,20 @@
 // cheaply cover every reader/writer pair. This suite pins the matrix, the
 // destination resolution and the escaping before the UI layer sees it.
 
-import { chooseSource, isHtmlSource, detectTextSyntax, scoreTypst } from "../src/paste/detect.ts";
-import { resolvePasteDestination, suggestSave } from "../src/paste/detect-document.ts";
+import {
+  chooseSource,
+  isHtmlSource,
+  detectTextSyntax,
+  scoreLatex,
+  scoreTypst,
+} from "../src/paste/detect.ts";
+import {
+  CANONICAL_EXTENSION,
+  LANGUAGE_EXTENSIONS,
+  languageForExtension,
+  resolvePasteDestination,
+  suggestSave,
+} from "../src/paste/detect-document.ts";
 import { planPaste } from "../src/paste/index.ts";
 import { imageSyntaxFor } from "../src/image-syntax.ts";
 import {
@@ -21,13 +33,17 @@ import {
 } from "../src/math-delimiters.ts";
 import { readMarkdown } from "../src/paste/read-markdown.ts";
 import { readHtml } from "../src/paste/read-html.ts";
+import { readLatex } from "../src/paste/read-latex.ts";
 import { renderMarkdown } from "../src/paste/render-markdown.ts";
 import { renderTypst } from "../src/paste/render-typst.ts";
 import { renderAsciidoc } from "../src/paste/render-asciidoc.ts";
+import { escapeLatex, renderLatex } from "../src/paste/render-latex.ts";
 import { renderHtmlFragment } from "../src/paste/render-html.ts";
 import { readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { runInNewContext } from "node:vm";
 import { marked } from "marked";
+import ts from "typescript";
 
 let passed = 0;
 let total = 0;
@@ -224,6 +240,154 @@ console.log("\n=== save suggestion ===");
     restored.language === "typst" && restored.extension === "typ",
     "an untitled Typst buffer keeps Typst over a Markdown preference",
     `${restored.language}/${restored.extension}`,
+  );
+}
+
+console.log("\n=== LaTeX detection ===");
+{
+  const DOCUMENT = [
+    "\\documentclass[11pt]{article}",
+    "\\usepackage{amsmath}",
+    "\\usepackage[english]{babel}",
+    "",
+    "\\title{A Study of Things}",
+    "\\author{A. Reader}",
+    "",
+    "\\begin{document}",
+    "\\maketitle",
+    "",
+    "\\section{Introduction}",
+    "The first paragraph of the paper.",
+    "",
+    "\\end{document}",
+  ].join("\n");
+
+  // A real document leads by a wide margin, so it is recognised.
+  check(
+    detectTextSyntax(DOCUMENT, "document")?.language === "latex",
+    "a LaTeX document is recognised",
+    String(detectTextSyntax(DOCUMENT, "document")?.score),
+  );
+
+  // The gate the plan promised: prose that mentions a command once is not
+  // reclassified. This is the case that would re-parse a reader's Markdown.
+  const PROSE = [
+    "# Typesetting with LaTeX",
+    "",
+    "We used \\LaTeX{} to set the paper, and the result was good.",
+    "",
+    "- one point",
+    "- another point",
+  ].join("\n");
+  check(
+    detectTextSyntax(PROSE, "document")?.language !== "latex",
+    "a Markdown document mentioning a LaTeX command is not reclassified",
+    String(detectTextSyntax(PROSE, "document")?.language),
+  );
+  check(
+    scoreLatex(PROSE) < 4,
+    "a prose mention does not reach the threshold",
+    String(scoreLatex(PROSE)),
+  );
+
+  // The boundary the plan names: score >= 4 and a lead >= 2.
+  check(
+    scoreLatex(DOCUMENT) >= 4,
+    "a document clears the score gate",
+    String(scoreLatex(DOCUMENT)),
+  );
+  check(
+    scoreLatex("\\documentclass{article}") === 5 &&
+      scoreLatex("\\begin{document}\nx\n\\end{document}") === 8,
+    "the preamble and the document body score separately",
+    `${scoreLatex("\\documentclass{article}")}/${scoreLatex("\\begin{document}\nx\n\\end{document}")}`,
+  );
+  check(
+    scoreLatex("A sentence about \\section{prose} in the middle of a line.") === 0,
+    "an inline command in prose scores nothing",
+    String(scoreLatex("A sentence about \\section{prose} in the middle of a line.")),
+  );
+
+  // Save As recommends `.tex` for an untitled LaTeX buffer.
+  const suggestion = suggestSave({
+    path: null,
+    language: "markdown",
+    buffer: DOCUMENT,
+    defaultExtension: "md",
+    defaultLanguage: "markdown",
+  });
+  check(
+    suggestion.language === "latex" && suggestion.extension === "tex",
+    "an untitled LaTeX buffer suggests .tex",
+    `${suggestion.language}/${suggestion.extension}`,
+  );
+
+  // The reader's own default spelling survives when the content agrees.
+  const preferred = suggestSave({
+    path: null,
+    language: "latex",
+    buffer: DOCUMENT,
+    defaultExtension: "tex",
+    defaultLanguage: "latex",
+  });
+  check(
+    preferred.language === "latex" && preferred.extension === "tex",
+    "a LaTeX default keeps its own extension",
+    `${preferred.language}/${preferred.extension}`,
+  );
+
+  // A LaTeX clipboard pasted into Markdown has no reader, so it stays literal.
+  // (This was true of every LaTeX destination before `read-latex.ts` existed;
+  // the destination case below is the one that changed.)
+  const clipboard = chooseSource(payload(null, DOCUMENT), "markdown");
+  check(
+    clipboard.source === "plain" && clipboard.native,
+    "a LaTeX clipboard is pasted as plain text",
+    `${clipboard.source}/${clipboard.native}`,
+  );
+  // **Into LaTeX, rich text is now converted.** This assertion used to read
+  // `source === "plain"`, because `chooseSource` short-circuited every LaTeX
+  // destination to the literal path — which is exactly why "Convert Rich Text on
+  // Paste" did nothing for a `.tex` buffer. HTML is detected and converted now.
+  const intoLatex = chooseSource(payload("<p>Hello</p>", "Hello"), "latex");
+  check(
+    intoLatex.source === "html" && !intoLatex.native,
+    "rich text into LaTeX is converted, not pasted literally",
+    `${intoLatex.source}/${intoLatex.native}`,
+  );
+
+  // The extension table is the one classifier, so a filter cannot offer a name
+  // the opener would read as Markdown.
+  check(
+    languageForExtension("C:/docs/paper.tex") === "latex" &&
+      languageForExtension("paper.TEX") === "latex" &&
+      languageForExtension("tex") === "latex",
+    "a .tex path and a bare tex extension are both LaTeX",
+  );
+  check(
+    languageForExtension("notes.md") === "markdown" &&
+      languageForExtension("notes.markdown") === "markdown" &&
+      languageForExtension("notes.txt") === "markdown" &&
+      languageForExtension("paper.typ") === "typst" &&
+      languageForExtension("page.htm") === "html" &&
+      languageForExtension("doc.asciidoc") === "asciidoc",
+    "every alias resolves to its language",
+  );
+  check(
+    languageForExtension(null) === "markdown" && languageForExtension("noextension") === "markdown",
+    "an absent or unknown extension is Markdown",
+  );
+  check(
+    ["app.js", "app.mjs", "app.CJS"].every((name) => languageForExtension(name) === "javascript") &&
+      languageForExtension("style.CSS") === "css" &&
+      languageForExtension("package.json") === "json",
+    "web source extensions resolve to their syntax languages",
+  );
+  check(
+    CANONICAL_EXTENSION.latex === "tex" &&
+      LANGUAGE_EXTENSIONS.latex.includes("tex") &&
+      LANGUAGE_EXTENSIONS.markdown.includes("md"),
+    "the canonical extension is the first entry of its language",
   );
 }
 
@@ -1092,39 +1256,20 @@ for (const [file, baseline] of Object.entries(
   JSON.parse(readFileSync(new URL("./fixtures/math-inventory.json", import.meta.url), "utf8")),
 )) {
   const sourceUrl = new URL("../" + file, import.meta.url);
-  const optional = file.startsWith("docs/samples/");
-  const source =
-    existsSync(sourceUrl) && !(optional && process.argv.includes("--without-optional-corpus"))
-      ? readFileSync(sourceUrl, "utf8")
-      : null;
+  const source = readFileSync(sourceUrl, "utf8").replace(/\r\n/g, "\n");
   check(
-    source !== null
-      ? createHash("sha256").update(source).digest("hex") === baseline.sha256
-      : optional && baseline.entries.length === 292 && /^[a-f\d]{64}$/.test(baseline.sha256),
-    source !== null
-      ? "independent baseline source hash: " + file
-      : "optional local corpus absent; 292 pinned formula cases remain available",
+    createHash("sha256").update(source).digest("hex") === baseline.sha256,
+    "independent synthetic baseline source hash: " + file,
   );
-  const actual =
-    source !== null
-      ? analyzeMath(source).math.map(({ body, display, from, to }) => ({
-          body,
-          display,
-          src0: from,
-          src1: to,
-        }))
-      : null;
+  const actual = analyzeMath(source).math.map(({ body, display, from, to }) => ({
+    body,
+    display,
+    src0: from,
+    src1: to,
+  }));
   check(
-    actual !== null
-      ? JSON.stringify(actual) === JSON.stringify(baseline.entries)
-      : baseline.entries.every(({ body, display }) => {
-          const marker = display ? "$$" : "$";
-          const parsed = analyzeMath(marker + body + marker).math;
-          return parsed.length === 1 && parsed[0].body === body && parsed[0].display === display;
-        }),
-    actual !== null
-      ? "every baseline body/range/display kind: " + file
-      : "all recorded physics bodies/display kinds parse without the ignored source file",
+    JSON.stringify(actual) === JSON.stringify(baseline.entries),
+    "every baseline body/range/display kind: " + file,
   );
 }
 const malformed = "\\( ".repeat(20_000) + "$5 and ".repeat(15_000);
@@ -1179,5 +1324,325 @@ check(
   escapeMarkdownCurrency("Cr$ and Cz$") === "Cr$ and Cz$",
   "numberless currency prefixes remain ordinary text",
 );
+
+// ---------------------------------------------------------------------------
+// LaTeX as a paste destination and source.
+//
+// Rich text and explicitly represented Markdown can be converted to LaTeX;
+// text-only and recognizable LaTeX source must stay exactly as copied.
+// ---------------------------------------------------------------------------
+console.log("\n=== LaTeX: escaping ===");
+{
+  // The ten characters LaTeX treats as markup. Every one of them in pasted prose
+  // is a compile error if it reaches the output unescaped.
+  check(escapeLatex("50%") === "50\\%", "a percent is escaped", escapeLatex("50%"));
+  check(escapeLatex("a_b") === "a\\_b", "an underscore is escaped", escapeLatex("a_b"));
+  check(escapeLatex("$5") === "\\$5", "a dollar is escaped", escapeLatex("$5"));
+  check(escapeLatex("A&B") === "A\\&B", "an ampersand is escaped", escapeLatex("A&B"));
+  check(escapeLatex("#1") === "\\#1", "a hash is escaped", escapeLatex("#1"));
+  check(escapeLatex("{x}") === "\\{x\\}", "braces are escaped", escapeLatex("{x}"));
+  check(escapeLatex("~") === "\\textasciitilde{}", "a tilde becomes its command");
+  check(escapeLatex("^") === "\\textasciicircum{}", "a caret becomes its command");
+  check(
+    escapeLatex("a\\b") === "a\\textbackslash{}b",
+    "a backslash becomes its command",
+    escapeLatex("a\\b"),
+  );
+  // The order matters: the backslash replacement introduces braces, and a later
+  // pass would escape those if the order were wrong.
+  check(
+    !escapeLatex("a\\b").includes("\\{\\}"),
+    "the backslash replacement is not escaped again",
+    escapeLatex("a\\b"),
+  );
+  check(escapeLatex("plain prose") === "plain prose", "ordinary prose is untouched");
+}
+
+console.log("\n=== LaTeX: source pastes unchanged ===");
+{
+  const command = String.raw`\usepackage[a4paper,margin=0.1in]{geometry}`;
+  const fragments = [
+    ["the reported command", command],
+    ["a partial subscript and percent comment", "x_1 % comment"],
+    ["a custom command and math", String.raw`\myCustomCommand{a_b} $\alpha^2$`],
+    ["control symbols", String.raw`\{x\} \% \\`],
+    ["surrounding blank lines", `\n\n${command}\n\n`],
+    ["Markdown-shaped source", "## Heading\n\n- one\n- two"],
+  ];
+  for (const [label, text] of fragments) {
+    const data = payload(null, text);
+    const choice = chooseSource(data, "latex");
+    const result = await planPaste(data, "latex");
+    check(choice.native, `${label}: native paste`, JSON.stringify(choice));
+    check(result?.text === text && !result.converted, `${label}: exact source`, result?.text);
+  }
+
+  for (const [label, text, html] of [
+    ["highlighted command", command, `<span style="color:blue">${command}</span>`],
+    ["highlighted partial math", "x_1", '<div style="white-space: pre"><span>x_1</span></div>'],
+    ["inline highlighted subscript", "x_1", '<span style="color:blue">x_1</span>'],
+    ["inline highlighted braces", "{geometry}", "<span>{geometry}</span>"],
+    ["inline highlighted comment", "% a comment", "<span>% a comment</span>"],
+    ["code fragment", "a_b % note", "<pre><code>a_b % note</code></pre>"],
+    ["inline math", "$x_1$", "<span>$x_1$</span>"],
+  ]) {
+    const data = payload(html, text);
+    const choice = chooseSource(data, "latex");
+    const result = await planPaste(data, "latex");
+    check(choice.native && result?.text === text, `${label}: exact source`, JSON.stringify(choice));
+  }
+
+  for (const [label, input] of [
+    ["saved", { saved: true, language: "latex", buffer: "" }],
+    ["detected", { saved: false, language: "markdown", buffer: "\\documentclass{article}\n" }],
+  ]) {
+    const destination = resolvePasteDestination(input);
+    const result = await planPaste(payload(null, command), destination.language);
+    check(
+      destination.language === "latex" && result?.text === command && !result.converted,
+      `${label} LaTeX destination keeps the command`,
+      JSON.stringify(destination),
+    );
+  }
+}
+
+console.log("\n=== LaTeX: rich text and Markdown are converted ===");
+{
+  // The `chooseSource` short-circuit. Before the fix these took the plain path
+  // and arrived as raw markup.
+  const rich = await planPaste(
+    {
+      text: "Title\n\nSome strong text",
+      html: "<h1>Title</h1><p>Some <strong>strong</strong> text</p>",
+      markdown: null,
+    },
+    "latex",
+    {},
+  );
+  check(
+    rich.text.includes("\\section{Title}"),
+    "a rich heading becomes \\section",
+    rich.text.slice(0, 80),
+  );
+  check(
+    rich.text.includes("\\textbf{strong}"),
+    "rich emphasis becomes \\textbf",
+    rich.text.slice(0, 80),
+  );
+  const richSpecial = await planPaste(
+    payload("<p>50% of a_b is <strong>important</strong></p>", "50% of a_b is important"),
+    "latex",
+  );
+  check(
+    richSpecial.text.includes("50\\%") &&
+      richSpecial.text.includes("a\\_b") &&
+      richSpecial.text.includes("\\textbf{important}"),
+    "formatted prose still escapes its LaTeX special characters",
+    richSpecial.text,
+  );
+  const richPre = await planPaste(
+    payload('<p style="white-space: pre-wrap">Hello <strong>bold</strong></p>', "Hello bold"),
+    "latex",
+  );
+  check(
+    richPre.text.includes("\\textbf{bold}"),
+    "rich formatting converts even with preformatted spacing",
+    richPre.text,
+  );
+
+  const markdown = await planPaste(
+    { text: "## Heading\n\n- one\n- two", html: null, markdown: "## Heading\n\n- one\n- two" },
+    "latex",
+    {},
+  );
+  check(
+    markdown.text.includes("\\subsection{Heading}"),
+    "a Markdown heading becomes \\subsection",
+    markdown.text.slice(0, 80),
+  );
+  check(
+    markdown.text.includes("\\begin{itemize}") && markdown.text.includes("\\item one"),
+    "a Markdown list becomes itemize",
+    markdown.text.slice(0, 120),
+  );
+}
+
+console.log("\n=== LaTeX: real paste-handler routing ===");
+{
+  // Run the actual shell handler with the browser and image boundaries stubbed.
+  // This checks whether CodeMirror receives the event, which the pure planner
+  // cannot prove and the UI suite otherwise needs a running application for.
+  const shell = ts.createSourceFile(
+    "main.ts",
+    readFileSync(new URL("../src/main.ts", import.meta.url), "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const declaration = shell.statements.find(
+    (node) => ts.isFunctionDeclaration(node) && node.name?.text === "installPasteHandlers",
+  );
+  if (!declaration) throw new Error("main.ts no longer declares installPasteHandlers");
+  const code = ts.transpileModule(declaration.getText(shell), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+  }).outputText;
+
+  function handlerFor(doc, buffer) {
+    let handler;
+    const conversions = [];
+    const target = { closest: () => null };
+    const contentDOM = {
+      contains: (node) => node === target,
+      addEventListener: (name, listener) => {
+        if (name === "paste") handler = listener;
+      },
+    };
+    const context = {
+      window: { addEventListener() {}, setTimeout() {} },
+      editor: {
+        view: { contentDOM },
+        cursorInfo: () => ({ selectionLength: 0 }),
+        getDoc: () => buffer,
+        inCodeContext: () => false,
+        prepareNativePaste() {},
+      },
+      previewPane: { contains: () => false, addEventListener() {} },
+      api: { isWebSource: () => false },
+      doc,
+      settings: { richPaste: true },
+      plainPastePending: false,
+      handleImagePaste: () => false,
+      imageContext: () => ({}),
+      resolvePasteDestination,
+      chooseSource,
+      capturePasteOwner: () => ({}),
+      applyRichPaste: (data, destination) => {
+        conversions.push({ data, destination });
+        return Promise.resolve();
+      },
+      escapeMarkdownCurrency,
+      console,
+    };
+    runInNewContext(`${code}\ninstallPasteHandlers();`, context);
+    if (!handler) throw new Error("paste handler was not installed");
+    return {
+      dispatch(data) {
+        const event = {
+          target,
+          clipboardData: {
+            getData: (type) =>
+              ({ "text/plain": data.text, "text/html": data.html, "text/markdown": data.markdown })[
+                type
+              ] ?? "",
+          },
+          prevented: false,
+          stopped: false,
+          preventDefault() {
+            this.prevented = true;
+          },
+          stopPropagation() {
+            this.stopped = true;
+          },
+        };
+        handler(event);
+        return event;
+      },
+      conversions,
+    };
+  }
+
+  const command = String.raw`\usepackage[a4paper,margin=0.1in]{geometry}`;
+  for (const [label, doc, buffer] of [
+    ["saved", { path: "C:/paper.tex", language: "latex" }, ""],
+    ["detected", { path: null, language: "markdown" }, "\\documentclass{article}\n"],
+    ["default", { path: null, language: "latex" }, ""],
+  ]) {
+    const h = handlerFor(doc, buffer);
+    for (const data of [
+      payload(null, command),
+      payload("<pre><span>highlighted</span></pre>", command),
+      payload(null, "\n\nx_1 % note\n\n"),
+    ]) {
+      const event = h.dispatch(data);
+      check(
+        !event.prevented && !event.stopped && h.conversions.length === 0,
+        `${label} LaTeX source reaches native paste`,
+        JSON.stringify(data),
+      );
+    }
+  }
+
+  const h = handlerFor({ path: "C:/paper.tex", language: "latex" }, "");
+  const rich = h.dispatch(payload("<h1>Intro</h1><p><strong>bold</strong></p>", "Intro\nbold"));
+  check(rich.prevented && h.conversions.length === 1, "rich HTML still reaches conversion");
+  const markdown = h.dispatch(payload(null, "## Heading", "## Heading"));
+  check(
+    markdown.prevented && h.conversions.length === 2,
+    "explicit Markdown still reaches conversion",
+  );
+}
+
+console.log("\n=== LaTeX: the block constructs ===");
+{
+  const blocks = await readMarkdown(
+    "| A | B |\n| --- | --- |\n| 1 | 2 |\n\n```\ncode\n```\n\n> quoted\n",
+  );
+  const latex = renderLatex(blocks);
+  check(latex.includes("\\begin{tabular}{ll}"), "a table becomes tabular", latex.slice(0, 90));
+  check(latex.includes("A & B"), "table cells are separated with &");
+  check(latex.includes("\\begin{verbatim}"), "code becomes verbatim");
+  check(latex.includes("\\begin{quote}"), "a quote becomes the quote environment");
+}
+
+console.log("\n=== LaTeX: math is passed through, not escaped ===");
+{
+  // Escaping math would turn `\alpha` into `\textbackslash{}alpha`, which is the
+  // single worst outcome for a reader pasting a formula.
+  const blocks = await readMarkdown(
+    "Inline $\\alpha + \\beta$ and display:\n\n$$\\int_0^1 x\\,dx$$\n",
+  );
+  const latex = renderLatex(blocks);
+  check(latex.includes("\\alpha + \\beta"), "inline math keeps its commands", latex.slice(0, 90));
+  check(!latex.includes("\\textbackslash{}alpha"), "math is not escaped");
+  check(latex.includes("\\int_0^1"), "display math keeps its commands");
+}
+
+console.log("\n=== LaTeX: reading LaTeX source back ===");
+{
+  // The inverse direction, so `.tex` pastes into the other four.
+  const blocks = readLatex(
+    "\\section{Intro}\n\nSome \\textbf{bold} and \\emph{italic} text.\n\n\\begin{itemize}\n\\item one\n\\item two\n\\end{itemize}\n",
+  );
+  check(
+    blocks.some((block) => block.kind === "heading"),
+    "a section is read as a heading",
+  );
+  const markdown = renderMarkdown(blocks);
+  check(markdown.includes("# Intro"), "a section becomes an H1", markdown.slice(0, 60));
+  check(markdown.includes("**bold**"), "textbf becomes strong", markdown.slice(0, 120));
+  check(markdown.includes("*italic*"), "emph becomes emphasis");
+  check(markdown.includes("- one"), "itemize becomes a list");
+}
+
+console.log("\n=== LaTeX: a whole document reads only its body ===");
+{
+  const blocks = readLatex(
+    "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\nThe body text.\n\\end{document}\n",
+  );
+  const markdown = renderMarkdown(blocks);
+  check(markdown.includes("The body text."), "the body is kept", markdown.slice(0, 60));
+  check(!markdown.includes("documentclass"), "the preamble is dropped");
+  check(!markdown.includes("usepackage"), "the packages are dropped");
+}
+
+console.log("\n=== LaTeX: unknown markup survives as text ===");
+{
+  // A paste that silently deletes half the reader's document is worse than one
+  // that leaves it as source.
+  const blocks = readLatex("The value is \\alpha and \\cite{knuth}.");
+  const markdown = renderMarkdown(blocks);
+  check(markdown.includes("\\alpha"), "an unknown command survives", markdown.slice(0, 80));
+  check(markdown.includes("knuth"), "a citation key survives");
+}
+
 console.log(`\n${passed}/${total} checks passed`);
 process.exit(passed === total ? 0 : 1);

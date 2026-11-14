@@ -1,0 +1,55 @@
+%! A two-column LaTeX fixture for scroll correspondence.
+%!
+%! The case that matters: one source line can own regions in *both* columns, so a
+%! correspondence rule that picks the first region snaps to the left column while
+%! the reader is scrolling down the right one. `multicols` is used rather than the
+%! `twocolumn` class option because it keeps the source linear — the reader's
+%! document is one column of text that happens to be typeset in two.
+%!
+%! **No `lipsum`.** It needs a package fetch, and the test profile's cache does not
+%! have it, so the fixture failed to compile with `File 'lipsum.ltd' not found`.
+%! Plain repeated prose fills two columns just as well and needs nothing beyond
+%! `multicol`, which every TeX Live scheme carries.
+\documentclass[11pt]{article}
+\usepackage{multicol}
+\title{Two Columns}
+\author{MDraft}
+\begin{document}
+\maketitle
+
+\section{Left and right}\label{sec:columns}
+
+\begin{multicols}{2}
+The first paragraph begins in the left column and, if it is long enough, will
+continue into the right one. That is exactly the case the correspondence has to
+get right: the same source line owns regions on both sides of the page, and a
+rule that always takes the first region would jump back to the left column on
+every scroll event.
+
+A second paragraph continues the argument. The reader scrolling through this
+document expects the preview to move downward continuously, not to oscillate
+between the columns. Each of these paragraphs is long enough to wrap several
+times, so the column break falls somewhere inside one of them rather than neatly
+between two.
+
+A third paragraph, so there is enough text to fill both columns and to scroll
+past the first page. The correspondence is only interesting when there is more
+content than fits on one screen, and a two-column layout reaches that point
+sooner than a single-column one.
+
+A fourth paragraph adds more lines. Without it the environment would end before
+the right column filled, and the case this fixture exists for would not arise.
+
+A fifth paragraph, to be certain. The preview should keep moving down as the
+editor scrolls, whichever column the visible line happens to be typeset in.
+
+A sixth paragraph closes the environment. Text after it maps to a single-column
+region, which is the contrast the rule has to handle.
+\end{multicols}
+
+\section{After the columns}
+
+Text after the environment, which must map back to a single-column region. It
+exists so the fixture covers both layouts in one document.
+
+\end{document}

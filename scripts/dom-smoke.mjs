@@ -318,7 +318,7 @@ check("eleven sections", prefs.sectionNames.split(",").length === 11);
 check(
   "sections named and ordered",
   prefs.sectionNames ===
-    "Files,Editor,Image,Markdown,HTML,Export,Appearance,General,Typography,AI Assistant,Read Aloud",
+    "Files,Editor,Image,Markdown,HTML,LaTeX,Export,Appearance,Typography,AI Assistant,Read Aloud",
 );
 check(
   "first section selected",
@@ -327,14 +327,117 @@ check(
 check("every section has rows", prefs.emptySections === "");
 check("rows rendered", prefs.totalRows >= 24);
 check("controls present", prefs.selects >= 2 && prefs.checkboxes >= 2 && prefs.buttons >= 1);
+check(
+  "Typst offers an auto-compile preference",
+  prefs.perSection.some((section) => section.labels.includes("Auto-compile Typst")),
+);
 check("default extension offers Typst", prefs.defaultExtensionOptions.includes("typ"));
 check("search box present", prefs.hasSearch);
+const typstAutoPreference = await evaluate(`(async () => {
+  const before=await window.__TAURI_INTERNALS__.invoke('get_settings');
+  [...document.querySelectorAll('.prefs-section')].find(button=>button.textContent==='Export').click();
+  const row=[...document.querySelectorAll('.prefs-row')].find(row=>row.querySelector('.prefs-label')?.textContent.includes('Auto-compile Typst'));
+  const input=row?.querySelector('input[type=checkbox]');
+  if(!input)return false;
+  input.click();
+  await new Promise(resolve=>setTimeout(resolve,550));
+  const after=await window.__TAURI_INTERNALS__.invoke('get_settings');
+  input.click();
+  [...document.querySelectorAll('.prefs-section')].find(button=>button.textContent==='Files').click();
+  return after.typstAutoCompile===!before.typstAutoCompile && after.latexAutoCompile===before.latexAutoCompile;
+})()`);
+check("Typst auto-compile preference works independently of LaTeX", typstAutoPreference);
 const editorSection = prefs.perSection.find((section) => section.name === "Editor");
 check(
   "spelling preference",
   Boolean(editorSection) &&
     editorSection.labels.includes("Check spelling while typing") &&
     editorSection.labels.includes("Dictionary"),
+);
+// Emmet on Tab: on for a reader who never chose, persisted when changed, and put
+// back so the suites after this one still start from the default.
+const htmlSection = prefs.perSection.find((section) => section.name === "HTML");
+check(
+  "HTML offers the Emmet preference",
+  Boolean(htmlSection) && htmlSection.labels.includes("Expand Emmet abbreviations with Tab"),
+);
+check(
+  "the Editor section no longer carries it",
+  Boolean(editorSection) && !editorSection.labels.includes("Expand Emmet abbreviations with Tab"),
+);
+const emmetPreference = await evaluate(`(async () => {
+  const before=await window.__TAURI_INTERNALS__.invoke('get_settings');
+  [...document.querySelectorAll('.prefs-section')].find(button=>button.textContent==='HTML').click();
+  // The panel re-renders after every change, so the checkbox that was clicked is
+  // a detached node by the time of the second click. Look it up again.
+  const emmetBox=()=>[...document.querySelectorAll('.prefs-row')].find(row=>row.querySelector('.prefs-label')?.textContent.includes('Expand Emmet abbreviations with Tab'))?.querySelector('input[type=checkbox]');
+  const input=emmetBox();
+  if(!input)return {found:false};
+  const shownOn=input.checked;
+  input.click();
+  await new Promise(resolve=>setTimeout(resolve,550));
+  const after=await window.__TAURI_INTERNALS__.invoke('get_settings');
+  emmetBox()?.click();
+  await new Promise(resolve=>setTimeout(resolve,550));
+  const restored=await window.__TAURI_INTERNALS__.invoke('get_settings');
+  [...document.querySelectorAll('.prefs-section')].find(button=>button.textContent==='Files').click();
+  return {found:true,defaultOn:before.emmet===true&&shownOn,flipped:after.emmet===!before.emmet,restored:restored.emmet===before.emmet};
+})()`);
+check(
+  "Emmet preference is on by default, persists a change and is restored",
+  emmetPreference.found &&
+    emmetPreference.defaultOn &&
+    emmetPreference.flipped &&
+    emmetPreference.restored,
+  JSON.stringify(emmetPreference),
+);
+const latexSection = prefs.perSection.find((section) => section.name === "LaTeX");
+check(
+  "local packages use one folder control without explanatory paragraphs",
+  Boolean(latexSection) &&
+    latexSection.labels.includes("Use local packages") &&
+    latexSection.labels.includes("Folder") &&
+    latexSection.labels.includes("Layout") &&
+    !latexSection.labels.some((label) =>
+      ["Search order", "Getting started", "Trust and network"].includes(label),
+    ),
+);
+check(
+  "installed TeX controls",
+  Boolean(latexSection) &&
+    latexSection.labels.includes("Use my installed TeX distribution") &&
+    latexSection.labels.includes("Installed engine") &&
+    latexSection.labels.includes("Auto-compile"),
+  latexSection?.labels.join(", "),
+);
+
+// A heading that only repeats the row beneath it is noise. These three named
+// the setting sitting under them and nothing else, so they are gone; the check
+// is what stops them drifting back in a later edit.
+const headings = await evaluate(`(() => {
+  const groups = [];
+  for (const button of document.querySelectorAll('.prefs-section')) {
+    button.click();
+    groups.push(...[...document.querySelectorAll('.prefs-group')].map((g) => g.textContent));
+  }
+  [...document.querySelectorAll('.prefs-section')].find((s) => s.textContent === 'Files').click();
+  const filesLabels = [...document.querySelectorAll('.prefs-row .prefs-label')]
+    .map((l) => l.textContent.replace('?', '').trim());
+  return JSON.stringify({ groups, filesLabels });
+})()`);
+check(
+  "no heading repeats the setting beneath it",
+  !headings.groups.includes("Auto-close") &&
+    !headings.groups.includes("Completion") &&
+    !headings.groups.includes("Spelling") &&
+    !headings.groups.includes("Recent Locations") &&
+    !headings.groups.includes("Favorites"),
+  headings.groups.join(", "),
+);
+check(
+  "the Favorites how-to note is gone",
+  !headings.filesLabels.includes("Managing Favorites"),
+  headings.filesLabels.join(", "),
 );
 const readAloudSection = prefs.perSection.find((section) => section.name === "Read Aloud");
 check(
@@ -394,8 +497,10 @@ check("the choice reaches the settings file", onLaunch.stored === "tabs");
 check("the preference is left as it was found", onLaunch.restored === onLaunch.initial);
 
 // Search filters the navigation down to matching sections. A group heading is
-// a searchable category too: "Recent Locations" is a heading, not a row, and
-// used to leave the section with nothing the reader could see.
+// a searchable category too: "Preferred Image Syntax" is a heading, not a row,
+// and matching it must bring its whole group with it. The terms are chosen to
+// occur in exactly one section — "latex", for instance, also appears in the
+// completion help under Editor.
 const search = await evaluate(`(() => {
   const input = document.querySelector('.prefs-search');
   const run = (value) => {
@@ -409,35 +514,35 @@ const search = await evaluate(`(() => {
     };
   };
   const mermaid = run('mermaid');
-  const locations = run('locations');
-  const managing = run('managing');
+  const syntax = run('preferred image syntax');
+  const autosave = run('auto save');
   const clear = run('clear recent');
   input.value = '';
   input.dispatchEvent(new Event('input', { bubbles: true }));
-  return JSON.stringify({ mermaid, locations, managing, clear });
+  return JSON.stringify({ mermaid, syntax, autosave, clear });
 })()`);
 
 console.log("\n=== preferences search ===");
 console.log(`  mermaid    ${search.mermaid.sections} / ${search.mermaid.labels}`);
 console.log(
-  `  locations  ${search.locations.sections} / ${search.locations.groups} / ${search.locations.labels}`,
+  `  syntax     ${search.syntax.sections} / ${search.syntax.groups} / ${search.syntax.labels}`,
 );
 console.log(
-  `  managing   ${search.managing.sections} / ${search.managing.groups} / ${search.managing.labels}`,
+  `  auto save  ${search.autosave.sections} / ${search.autosave.groups} / ${search.autosave.labels}`,
 );
 console.log(`  clear      ${search.clear.sections} / ${search.clear.buttons}`);
 check(
   "search narrows sections",
   search.mermaid.sections === "Markdown" &&
-    search.locations.sections === "Files" &&
-    search.managing.sections === "Files" &&
+    search.syntax.sections === "Image" &&
+    search.autosave.sections === "Files,Editor" &&
     search.clear.sections === "Files",
 );
 check(
   "search keeps the matching row or heading",
   /Enable Diagrams/.test(search.mermaid.labels) &&
-    /Recent Locations/.test(search.locations.groups) &&
-    /Managing Favorites/.test(search.managing.labels) &&
+    /Preferred Image Syntax/.test(search.syntax.groups) &&
+    /Auto Save/.test(search.autosave.labels) &&
     /Clear Recent Files/.test(search.clear.buttons),
 );
 
@@ -1080,13 +1185,6 @@ const sync = await evaluate(`(async () => {
   // document rather than as a pointer.
   const blinkLeftBehind = () => preview.querySelectorAll('.sync-blink').length;
   // Which preview block currently leads the pane, for the alignment assertion.
-  const topVisibleLine = () => {
-    const paneTop = previewPane.getBoundingClientRect().top;
-    for (const a of anchors) {
-      if (a.getBoundingClientRect().bottom > paneTop) return Number(a.dataset.line);
-    }
-    return -1;
-  };
   const contentBox = content.getBoundingClientRect();
 
   // At the default 16 px the whole visible source column can map to blocks that
@@ -1145,45 +1243,66 @@ const sync = await evaluate(`(async () => {
   const scrollAfterClick = previewPane.scrollTop;
   const caretAfterClick = cursorText();
 
-  // (4) click a column of source lines -> none of them may move the preview.
+  // (4) click a column of source lines -> each leaves the source where it was
+  //     and brings its block beside the clicked line
+  //     (docs/architecture.md). Until that ADR a
+  //     source click moved nothing; before that it pulled the block to the top
+  //     of the preview, which is the regression the "beside" half guards.
   //     The rendered preview is much taller than its markdown and the ratio
   //     varies by section, so which lines have their block below the preview
   //     fold is not predictable. Exercise the whole column instead of one
-  //     hand-picked line: revealing any of them is what used to throw the
-  //     alignment away.
+  //     hand-picked line. Pixel precision belongs to the sync suite; this phase
+  //     checks the rule.
   const visibleLines = [...document.querySelectorAll('.cm-line')].filter((el) => {
     const r = el.getBoundingClientRect();
     return r.top > contentBox.top + 8 && r.bottom < contentBox.bottom - 8;
   });
   const baseline = previewPane.scrollTop;
-  const topLineBeforeSourceClick = topVisibleLine();
+  const sourceBeforeSourceClick = scroller.scrollTop;
   const samples = [];
   for (const fraction of [0.2, 0.4, 0.6, 0.8, 0.95]) {
     const el = visibleLines[Math.min(visibleLines.length - 1, Math.floor(visibleLines.length * fraction))];
     if (!el) continue;
     const r = el.getBoundingClientRect();
     const at = { bubbles: true, clientX: r.left + 40, clientY: r.top + r.height / 2 };
+    const previewBeforeThisClick = previewPane.scrollTop;
     content.dispatchEvent(new MouseEvent('mousedown', at));
+    // The release is what levels the preview; the click is what blinks.
+    content.dispatchEvent(new MouseEvent('mouseup', at));
     content.dispatchEvent(new MouseEvent('click', at));
     await sleep(samples.length === 0 ? 120 : 400);
     const blinkNow = blinkLeftBehind();
     const line = Number(/Ln (\\d+)/.exec(cursorText())?.[1] ?? -1);
     const block = anchors.filter((a) => Number(a.dataset.line) <= line).pop() ?? null;
+    const box = block ? block.getBoundingClientRect() : null;
+    // Where the block was before the click answered: the case this phase needs.
+    const blockBelowFold = box
+      ? box.top + (previewPane.scrollTop - previewBeforeThisClick) > paneBox.bottom
+      : null;
+    // The caret's own row after the click; the source must not have moved.
+    const row = document.querySelector('.cm-activeLine')?.getBoundingClientRect() ?? r;
+    const rowY = row.top + row.height / 2;
     samples.push({
       fraction,
       line,
       scroll: Math.round(previewPane.scrollTop),
-      blockBelowFold: block ? block.getBoundingClientRect().top > paneBox.bottom : null,
+      blockBelowFold,
+      // The block spans the clicked height, give or take one row.
+      beside: box ? box.top - 30 <= rowY && rowY <= box.bottom + 30 : null,
       blink: blinkNow,
     });
   }
   await sleep(900);
   const blinkAfterClick = blinkLeftBehind();
   const scrollAfterSourceClick = previewPane.scrollTop;
-  const topLineAfterSourceClick = topVisibleLine();
+  const sourceAfterSourceClick = scroller.scrollTop;
   const maxDrift = samples.length
     ? Math.max(...samples.map((s) => Math.abs(s.scroll - baseline)))
     : -1;
+  const besideCases = samples.filter((s) => s.beside === true).length;
+  // The clicks leave the sync line at the last clicked height; later phases
+  // measure at the default line, and a resize is one of its reset points.
+  window.dispatchEvent(new Event('resize'));
   const offScreenCases = samples.filter((s) => s.blockBelowFold === true).length;
   const blinkedCases = samples.filter((s) => s.blink === 1).length;
   const clicked = samples.length ? samples[samples.length - 1].line : -1;
@@ -1210,8 +1329,10 @@ const sync = await evaluate(`(async () => {
     blinkedCases,
     scrollBeforeSourceClick: Math.round(baseline),
     scrollAfterSourceClick: Math.round(scrollAfterSourceClick),
-    topLineBeforeSourceClick,
-    topLineAfterSourceClick,
+    sourceBeforeSourceClick: Math.round(sourceBeforeSourceClick),
+    sourceAfterSourceClick: Math.round(sourceAfterSourceClick),
+    besideCases,
+    sampleCount: samples.length,
     clickedLine: clicked,
     foundMiddleBlock: Boolean(middle),
     scrollBeforeClick: Math.round(scrollBeforeClick),
@@ -1241,11 +1362,17 @@ check("scrolling never blinks", sync.blinkAfterScroll === 0);
 check("clicking the source blinks the matching block", sync.blinkedCases >= 1);
 check("the blink clears itself", sync.blinkAfterClick === 0);
 check("at least one clicked line had its block below the preview fold", sync.offScreenCases >= 1);
-check("no source click moves the preview", sync.maxDrift >= 0 && sync.maxDrift < 4);
 check(
-  "clicking the source keeps the panes aligned",
-  sync.topLineAfterSourceClick === sync.topLineBeforeSourceClick,
+  "a source click never scrolls the source",
+  Math.abs(sync.sourceAfterSourceClick - sync.sourceBeforeSourceClick) < 1,
+  `${sync.sourceBeforeSourceClick} -> ${sync.sourceAfterSourceClick}`,
 );
+check(
+  "every source click brings its block beside the clicked line",
+  sync.sampleCount >= 4 && sync.besideCases === sync.sampleCount,
+  `${sync.besideCases}/${sync.sampleCount}`,
+);
+check("a source click on an off-screen block moves the preview", sync.maxDrift >= 4);
 check("source click lands lower in the document", sync.clickedLine > 20);
 
 // ---------------------------------------------------------------------------
@@ -1311,10 +1438,16 @@ const interpolation = await evaluate(`(async () => {
     if (!setFonts(editorPx, previewPx)) return { ok: false, editorPx, previewPx };
     await sleep(500);
 
-    // Put the block in the editor, then move it from 12% down to the top so the
-    // top visible line is inside it rather than in the block before.
-    anchors[bestIndex].dispatchEvent(
-      new MouseEvent('mousedown', { bubbles: true, clientX: 0, clientY: 0 }));
+    // Put the block in the editor, 12% down, then move it to the top so the top
+    // visible line is inside it rather than in the block before. The scroll is
+    // written directly: a preview press used to reveal the block there, and with
+    // Sync on it now only places the caret (the release levels the panes).
+    const view = document.querySelector('.cm-content').cmTile.root.view;
+    const blockLine = Math.min(view.state.doc.lines, Number(anchors[bestIndex].dataset.line));
+    scroller.scrollTop = Math.max(
+      0,
+      view.lineBlockAt(view.state.doc.line(blockLine).from).top - scroller.clientHeight * 0.12,
+    );
     await sleep(500);
     const start = Math.max(0, scroller.scrollTop + scroller.clientHeight * 0.12 + 2);
     const samples = [];

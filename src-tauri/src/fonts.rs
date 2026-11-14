@@ -67,9 +67,7 @@ impl FontCatalog {
 /// call can take most of a second cold, and it must never hold up the editor.
 /// The frontend calls this only when the Typography section is first shown.
 #[tauri::command]
-pub async fn system_fonts(
-    state: tauri::State<'_, FontCatalog>,
-) -> Result<Vec<String>, String> {
+pub async fn system_fonts(state: tauri::State<'_, FontCatalog>) -> Result<Vec<String>, String> {
     if let Some(families) = state.cached() {
         return Ok(families);
     }

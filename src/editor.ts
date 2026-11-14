@@ -10,8 +10,11 @@ import {
   RangeSetBuilder,
   StateEffect,
   StateField,
+  MapMode,
   type Extension,
+  type Range,
   type Text,
+  type TransactionSpec,
 } from "@codemirror/state";
 import {
   Decoration,
@@ -40,6 +43,8 @@ import {
   toggleComment,
 } from "@codemirror/commands";
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
+import { completionSupport } from "./completion/layer";
+import { markdownCompletionSource } from "./completion/markdown-source";
 import { html } from "@codemirror/lang-html";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
@@ -50,7 +55,11 @@ import { isCodeContext } from "./code-context";
 import { markdownProseSelection } from "./math-delimiters";
 import type { LinkTarget } from "./links";
 import { DEFAULT_EDITOR_FONT_SIZE } from "./fonts";
+import { emmetSupport } from "./emmet";
+import { emmetEngine } from "./emmet-language";
 import { htmlLanguage } from "./html-language";
+import { latexHeadingLine, latexShiftHeadingLine } from "./latex-commands";
+import { latexLanguage } from "./latex-language";
 import { autoCloseTag } from "./tag-close";
 import { typstHeadingLine, typstShiftHeadingLine } from "./typst-commands";
 import { typstLanguage } from "./typst-language";
@@ -62,6 +71,7 @@ import {
   foldKeymap,
   indentOnInput,
   indentUnit,
+  LanguageSupport,
   syntaxHighlighting,
   unfoldAll as unfoldAllCommand,
   unfoldCode,
@@ -102,6 +112,14 @@ export interface ScrollInfo {
   top: number;
   height: number;
   client: number;
+}
+
+/** A LaTeX problem the editor should paint, in CodeMirror offsets. */
+export interface DiagnosticRange {
+  from: number;
+  to: number;
+  /** Start of the line, when the whole line should carry the wash too. */
+  lineFrom?: number;
 }
 
 export interface EditorHandle {
@@ -165,6 +183,8 @@ export interface EditorHandle {
   scrollToLine(line: number): void;
   /** Scroll `line` to the top of the editor; optionally move the caret. */
   revealLine(line: number, moveCaret?: boolean, focus?: boolean): void;
+  /** Put the caret on a line and scroll nothing: gesture alignment owns the scroll. */
+  caretToLine(line: number): void;
   /** Scroll a source position into view with the least movement; never moves the caret. */
   revealOffset(pos: number): void;
   /** Source line currently at the top of the visible editor area. */
@@ -172,7 +192,8 @@ export interface EditorHandle {
   /** Content offset of the top of `line`, in pixels. */
   lineTop(line: number): number;
   /** A source character's screen Y; estimates are refined after virtualisation. */
-  scrollPoint(pos: number): { top: number; exact: boolean };
+  /** The visual row holding `pos`, in screen pixels; estimated when not drawn. */
+  scrollPoint(pos: number): { top: number; bottom: number; exact: boolean };
   /** Source offset at a visible screen row without changing selection. */
   offsetAtScreenY(y: number): number;
   /** Source line in scroll-container CSS pixels, including padding and scale. */
@@ -184,10 +205,22 @@ export interface EditorHandle {
   cursorInfo(): CursorInfo;
   /** Paint the source range that corresponds to a preview selection. */
   setSyncRange(from: number, to: number): void;
+  setSyncRanges(ranges: readonly { from: number; to: number }[]): void;
   /** Remove that decoration, leaving the caret and the selection alone. */
   clearSyncRange(): void;
   /** Replay the pulse on the current decoration without changing its range. */
   pulseSyncRange(): void;
+  /**
+   * Paint the ranges a failed LaTeX compile points at.
+   *
+   * `pulse` replays the pink beat; a tab restore passes false so switching
+   * tabs does not blink an error that was already on screen.
+   */
+  setDiagnostics(ranges: readonly DiagnosticRange[], pulse?: boolean): void;
+  /** Remove every diagnostic mark. */
+  clearDiagnostics(): void;
+  /** Replay the pulse on the current diagnostic marks. */
+  pulseDiagnostics(): void;
   setHeading(level: number): void;
   shiftHeading(delta: number): void;
   /** Typst headings are `=` markers, not `#`; level 0 removes the marker. */
@@ -196,6 +229,9 @@ export interface EditorHandle {
   /** The AsciiDoc heading commands; `=` is the title, `==` the first section. */
   setAsciiDocHeading(level: number): void;
   shiftAsciiDocHeading(delta: number): void;
+  /** The LaTeX heading commands; level 1 is `\section`, level 0 removes it. */
+  setLatexHeading(level: number): void;
+  shiftLatexHeading(delta: number): void;
   toggleLinePrefix(prefix: string): void;
   setTaskState(state: "done" | "todo" | "plain"): void;
   setAsciiDocTaskState(state: "done" | "todo" | "plain"): void;
@@ -206,6 +242,14 @@ export interface EditorHandle {
   insertAsciiDocAttributes(): void;
   insertToc(): void;
   insertAsciiDocToc(): void;
+  /**
+   * Follow source positions through every later edit of this view.
+   *
+   * A position whose surroundings are deleted becomes null, and every position
+   * becomes null when the buffer is replaced (`setDoc`, `restoreState`): an
+   * offset captured for one text must not be applied to another.
+   */
+  trackPositions(positions: readonly number[]): TrackedPositions;
   insertBlock(text: string): void;
   insertBlockWithCaret(text: string, caretOffset: number): void;
   /** Replace a source range in one transaction; returns false if the range is invalid. */
@@ -233,9 +277,24 @@ export interface EditorHandle {
    * both are reconfigured through compartments, never by rebuilding the state.
    */
   setAutoClose(options: { pairs: boolean; tags: boolean }): void;
+  /** Turn completion on or off. Off removes the keymap with the extension. */
+  setCompletion(enabled: boolean): void;
+  /**
+   * Turn Emmet abbreviation expansion on Tab on or off. It only ever applies to
+   * HTML and CSS documents; the language decides, the preference allows.
+   */
+  setEmmet(enabled: boolean): void;
   insertAtTop(text: string): void;
   wrapSelection(before: string, after: string, placeholder: string): void;
   onDocChanged(cb: (text: string) => void): void;
+  /**
+   * The changes of each transaction that edits the document, against the text
+   * before it: `[from, to, insert]` triples, the length before, the text after.
+   * The TeXpresso preview forwards them instead of diffing two strings.
+   */
+  onChanges(
+    cb: (changes: Array<[number, number, string]>, base: number, text: string) => void,
+  ): void;
   onCursor(cb: (info: CursorInfo) => void): void;
   onScroll(cb: (info: ScrollInfo) => void): void;
 }
@@ -251,7 +310,7 @@ const dimLine = Decoration.line({ class: "cm-dim-line" });
  * change and whenever a tab is restored — an `EditorState` is captured per tab,
  * so a decoration that survived capture would come back in the wrong document.
  */
-const syncRangeEffect = StateEffect.define<{ from: number; to: number } | null>();
+const syncRangeEffect = StateEffect.define<readonly { from: number; to: number }[] | null>();
 
 const syncMark = Decoration.mark({ class: "cm-sync-word" });
 
@@ -263,11 +322,50 @@ const syncRangeField = StateField.define<DecorationSet>({
     for (const effect of transaction.effects) {
       if (!effect.is(syncRangeEffect)) continue;
       explicit = true;
-      const range = effect.value;
-      next =
-        range && range.to > range.from
-          ? Decoration.set([syncMark.range(range.from, range.to)])
-          : Decoration.none;
+      const ranges = effect.value ?? [];
+      next = ranges.length
+        ? Decoration.set(
+            ranges.map((range) => syncMark.range(range.from, range.to)),
+            true,
+          )
+        : Decoration.none;
+    }
+    if (transaction.docChanged && !explicit) return Decoration.none;
+    return next;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+/**
+ * The LaTeX problems from the last compile, painted in the source pane.
+ *
+ * Cleared on every document change, like the sync mark: a mark on a line the
+ * reader just edited would claim the compile still points there. It comes back
+ * from the next compile result, which is the only authority on the problem.
+ */
+const diagnosticsEffect = StateEffect.define<readonly DiagnosticRange[] | null>();
+const diagnosticMark = Decoration.mark({ class: "cm-latex-error" });
+const diagnosticLine = Decoration.line({ class: "cm-latex-error-line" });
+
+const diagnosticsField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, transaction) {
+    let next = value.map(transaction.changes);
+    let explicit = false;
+    for (const effect of transaction.effects) {
+      if (!effect.is(diagnosticsEffect)) continue;
+      explicit = true;
+      const ranges = effect.value ?? [];
+      const decorations: Range<Decoration>[] = [];
+      const washed = new Set<number>();
+      for (const range of ranges) {
+        if (range.lineFrom !== undefined && !washed.has(range.lineFrom)) {
+          washed.add(range.lineFrom);
+          decorations.push(diagnosticLine.range(range.lineFrom));
+        }
+        if (range.to > range.from) decorations.push(diagnosticMark.range(range.from, range.to));
+      }
+      next = decorations.length ? Decoration.set(decorations, true) : Decoration.none;
     }
     if (transaction.docChanged && !explicit) return Decoration.none;
     return next;
@@ -355,6 +453,10 @@ const baseTheme = EditorView.theme({
 export interface EditorOptions {
   autoClosePairs?: boolean;
   autoCloseTags?: boolean;
+  /** Offer completions. Off installs nothing, so the keymap goes with it. */
+  completion?: boolean;
+  /** Expand Emmet abbreviations with Tab in HTML and CSS documents. */
+  emmet?: boolean;
   /** Blink the caret. Off leaves a solid caret and stops a continuous repaint. */
   cursorBlink?: boolean;
   /** Resolve the link or image at a document offset. */
@@ -434,6 +536,125 @@ function linkSupport(options: EditorOptions): Extension {
   });
 }
 
+/**
+ * One paste insertion, described independently of the view that receives it.
+ *
+ * A paste can finish after its tab was hidden. The same insertion is then
+ * applied to that tab's stored `EditorState`, so it lands where the reader
+ * pasted, with the same separation rules and as one undo step.
+ */
+export type PasteInsertion =
+  | { kind: "block"; text: string }
+  | { kind: "pasted"; text: string; block: boolean }
+  | { kind: "native"; text: string };
+
+/** Append a block after the selection's line, separated by a blank line if needed. */
+function blockInsertSpec(state: EditorState, text: string): TransactionSpec {
+  const range = state.selection.main;
+  const line = state.doc.lineAt(range.to);
+  const needsLead = line.text.trim().length > 0;
+  const insert = `${needsLead ? "\n\n" : ""}${text}\n`;
+  const at = needsLead ? line.to : range.to;
+  return {
+    changes: { from: at, insert },
+    selection: { anchor: at + insert.length },
+    scrollIntoView: true,
+  };
+}
+
+/** Native text semantics: one line per cursor when the counts match. */
+function nativeTextSpec(state: EditorState, text: string): TransactionSpec {
+  const input = state.toText(text);
+  let line = 1;
+  const changes =
+    input.lines === state.selection.ranges.length
+      ? state.changeByRange((range) => {
+          const insert = input.line(line++).text;
+          return {
+            changes: { from: range.from, to: range.to, insert },
+            range: EditorSelection.cursor(range.from + insert.length),
+          };
+        })
+      : state.replaceSelection(input);
+  return { ...changes, userEvent: "input.paste", scrollIntoView: true };
+}
+
+/**
+ * Pasted text at the selection. A block fragment gets blank lines around it and
+ * reuses the current indentation; inline text replaces the selection as-is.
+ */
+function pastedInsertSpec(
+  state: EditorState,
+  text: string,
+  block: boolean,
+): TransactionSpec | null {
+  const normalized = text.replace(/\r\n?/g, "\n").replace(/^\n+|\n+$/g, "");
+  if (!normalized) return null;
+
+  const range = state.selection.main;
+  const doc = state.doc;
+  if (!block) {
+    return {
+      changes: { from: range.from, to: range.to, insert: normalized },
+      selection: { anchor: range.from + normalized.length },
+      scrollIntoView: true,
+      userEvent: "input.paste",
+    };
+  }
+
+  const startLine = doc.lineAt(range.from);
+  const endLine = doc.lineAt(range.to);
+  const before = doc.sliceString(startLine.from, range.from);
+  const after = doc.sliceString(range.to, endLine.to);
+  const indent = /^\s*$/.test(before) ? before : "";
+  let insertion = normalized;
+  if (indent) {
+    insertion = insertion
+      .split("\n")
+      .map((line, index) => (index === 0 ? line : `${indent}${line}`))
+      .join("\n");
+  }
+
+  let prefix = "";
+  if (before.trim() !== "") prefix = "\n\n";
+  else if (startLine.from > 0) {
+    const previous = doc.line(startLine.number - 1);
+    if (previous.text.trim() !== "") prefix = "\n";
+  }
+
+  // A block must not swallow the rest of the line. When there is content
+  // after the paste it starts a fresh paragraph; when there is only
+  // whitespace it is discarded.
+  let suffix = "";
+  let to = range.to;
+  if (after.trim() !== "") suffix = "\n\n";
+  else to = endLine.to;
+
+  const insert = `${prefix}${insertion}${suffix}`;
+  return {
+    changes: { from: range.from, to, insert },
+    selection: { anchor: range.from + prefix.length + insertion.length },
+    scrollIntoView: true,
+    userEvent: "input.paste",
+  };
+}
+
+/** The transaction a paste insertion makes against `state`, or null for nothing. */
+export function pasteInsertionSpec(
+  state: EditorState,
+  insertion: PasteInsertion,
+): TransactionSpec | null {
+  if (insertion.kind === "block") return blockInsertSpec(state, insertion.text);
+  if (insertion.kind === "native") return nativeTextSpec(state, insertion.text);
+  return pastedInsertSpec(state, insertion.text, insertion.block);
+}
+
+/** Positions captured from the view and mapped through its later edits. */
+export interface TrackedPositions {
+  current(): readonly (number | null)[];
+  dispose(): void;
+}
+
 export function createEditor(host: HTMLElement, options: EditorOptions = {}): EditorHandle {
   let nativeTransform: ((text: string) => string) | null = null;
   let nativeInput: { before: string; after: string } | null = null;
@@ -445,9 +666,20 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
   const spellCompartment = new Compartment();
   const pairCompartment = new Compartment();
   const tagCompartment = new Compartment();
+  /// Completion is switched at runtime, so it cannot be a static extension: the
+  /// preference turns it off and a language with no catalog must offer nothing.
+  const completionCompartment = new Compartment();
+  /// Emmet follows the document type *and* the preference, and its engine arrives
+  /// asynchronously, so like completion it cannot be a static extension.
+  const emmetCompartment = new Compartment();
+  let emmetEnabled = options.emmet !== false;
+  /// The engine is a dynamic import. Only the newest request may install it, or a
+  /// tab switched away from HTML while it loads would still receive the Tab key.
+  let emmetGeneration = 0;
   let spellKey = "";
   let autoPairs = options.autoClosePairs ?? true;
   let autoTags = options.autoCloseTags ?? true;
+  let completionEnabled = options.completion !== false;
   let cursorBlink = options.cursorBlink !== false;
   let currentLanguage: DocumentLanguage = "markdown";
   /// Which language the buffer is parsed as. A markdown editor that also edits
@@ -455,7 +687,11 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
   const languageCompartment = new Compartment();
   /// The markdown parser and its keymap. Kept as a value because switching back
   /// from Typst has to reinstall exactly what start-up installed.
-  const markdownSupport = markdown({
+  // `markdown()` returns a `LanguageSupport`; its `extension` is the full set it
+  // built, and `language` is the parser the completion source hangs off. Adding
+  // the source here keeps the layer language-agnostic: it reads `autocomplete`
+  // from whatever language is active, exactly as it does for LaTeX and HTML.
+  const markdownBase = markdown({
     base: markdownLanguage,
     codeLanguages: languages,
     addKeymap: true,
@@ -464,6 +700,10 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     // owns tag closing for Markdown (see tag-close.ts), so the nested one is off.
     htmlTagLanguage: html({ matchClosingTags: false, autoCloseTags: false }),
   });
+  const markdownSupport = new LanguageSupport(markdownBase.language, [
+    markdownBase,
+    markdownBase.language.data.of({ autocomplete: markdownCompletionSource }),
+  ]);
 
   const buildHistory = () => history({ minDepth: 400 });
 
@@ -521,7 +761,38 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
       });
   };
 
+  /**
+   * Install Emmet's Tab binding for an HTML or CSS document, and remove it for
+   * every other kind. Called with the document type on every language change, so
+   * a restored tab never keeps the binding of the one it replaced.
+   */
+  const syncEmmet = (kind: DocumentLanguage): void => {
+    const generation = ++emmetGeneration;
+    if (!emmetEnabled || (kind !== "html" && kind !== "css")) {
+      view.dispatch({ effects: emmetCompartment.reconfigure([]) });
+      return;
+    }
+    void emmetEngine()
+      .then((engine) => {
+        if (generation !== emmetGeneration) return;
+        view.dispatch({ effects: emmetCompartment.reconfigure(emmetSupport(engine)) });
+      })
+      .catch((error) => {
+        console.warn(`[editor] the Emmet engine could not be loaded: ${error}`);
+      });
+  };
+
   let onDocChanged: (text: string) => void = () => {};
+  let onChanges: (
+    changes: Array<[number, number, string]>,
+    base: number,
+    text: string,
+  ) => void = () => {};
+  /** Live position trackers; mapped by the update listener, cleared on replacement. */
+  const trackers = new Set<{ positions: (number | null)[] }>();
+  const dropTrackedPositions = () => {
+    for (const tracker of trackers) tracker.positions = tracker.positions.map(() => null);
+  };
   let onCursor: (info: CursorInfo) => void = () => {};
   let onScroll: (info: ScrollInfo) => void = () => {};
   let typewriter = false;
@@ -754,11 +1025,15 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     highlightActiveLine(),
     highlightSelectionMatches(),
     syncRangeField,
+    diagnosticsField,
     search({ top: true }),
     EditorView.lineWrapping,
     languageCompartment.of(markdownSupport),
     pairCompartment.of(autoPairs ? pairSupport() : []),
     tagCompartment.of(tagSupport("markdown")),
+    completionCompartment.of(options.completion === false ? [] : completionSupport()),
+    // After completion, so an open popup accepts Tab before Emmet reads it.
+    emmetCompartment.of([]),
     linkSupport(options),
     keymap.of([...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, indentWithTab]),
     fontSizeCompartment.of(
@@ -771,8 +1046,21 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     typewriterPlugin,
     EditorView.updateListener.of((update) => {
       if (update.docChanged) {
+        // Associate forward: text typed exactly at an anchor stays before the
+        // insertion point, so an answer lands after what the reader added.
+        for (const tracker of trackers) {
+          tracker.positions = tracker.positions.map((pos) =>
+            pos === null ? null : update.changes.mapPos(pos, 1, MapMode.TrackDel),
+          );
+        }
         applyWordChanges(update);
-        onDocChanged(update.state.doc.toString());
+        const text = update.state.doc.toString();
+        const changes: Array<[number, number, string]> = [];
+        update.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+          changes.push([fromA, toA, inserted.toString()]);
+        });
+        onChanges(changes, update.startState.doc.length, text);
+        onDocChanged(text);
       }
       if (update.selectionSet || update.docChanged) onCursor(readCursor(update.view));
     }),
@@ -818,16 +1106,7 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
 
   /** Append a block after the current line, separated by a blank line if needed. */
   function insertBlockText(text: string): void {
-    const range = view.state.selection.main;
-    const line = view.state.doc.lineAt(range.to);
-    const needsLead = line.text.trim().length > 0;
-    const insert = `${needsLead ? "\n\n" : ""}${text}\n`;
-    const at = needsLead ? line.to : range.to;
-    view.dispatch({
-      changes: { from: at, insert },
-      selection: { anchor: at + insert.length },
-      scrollIntoView: true,
-    });
+    view.dispatch(blockInsertSpec(view.state, text));
     view.focus();
   }
 
@@ -888,6 +1167,24 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     }
   }
 
+  /**
+   * Replay the pink beat on the diagnostic marks.
+   *
+   * Same reason as {@link pulseSyncRange}: a new failure with the same ranges
+   * reuses the DOM element, and the animation only runs when it is inserted.
+   * The resting wash stays; reduced motion keeps it without the beat.
+   */
+  function pulseDiagnostics(): void {
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    for (const mark of view.dom.querySelectorAll<HTMLElement>(
+      ".cm-latex-error, .cm-latex-error-line",
+    )) {
+      mark.style.animation = "none";
+      void mark.offsetWidth;
+      mark.style.animation = "";
+    }
+  }
+
   return {
     view,
 
@@ -900,7 +1197,19 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
       view.requestMeasure();
     },
 
+    trackPositions(positions) {
+      const tracker = { positions: [...positions] as (number | null)[] };
+      trackers.add(tracker);
+      return {
+        current: () => tracker.positions,
+        dispose: () => {
+          trackers.delete(tracker);
+        },
+      };
+    },
+
     setDoc(text, resetHistory = false) {
+      dropTrackedPositions();
       resetSpellLanguage();
       // The parse state in this state was built for the text being replaced. If
       // it was carried over from another document, its ranges lie outside this
@@ -977,6 +1286,29 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
       // The tag closer follows the document type, not the grammar's promise:
       // switching to Typst must drop a handler that would insert `</a>`.
       view.dispatch({ effects: tagCompartment.reconfigure(tagSupport(kind)) });
+      syncEmmet(kind);
+      if (kind === "javascript" || kind === "css" || kind === "json") {
+        const name = kind === "javascript" ? "JavaScript" : kind === "css" ? "CSS" : "JSON";
+        const description = languages.find((entry) => entry.name === name);
+        if (description)
+          void description
+            .load()
+            .then(install)
+            .catch((error) => {
+              console.warn(`[editor] the ${name} grammar could not be loaded: ${error}`);
+            });
+        return;
+      }
+      if (kind === "latex") {
+        // The stream grammar arrives asynchronously like Typst's; until it does
+        // the buffer keeps the parser it had rather than losing colouring.
+        void latexLanguage()
+          .then(install)
+          .catch((error) => {
+            console.warn(`[editor] the LaTeX grammar could not be loaded: ${error}`);
+          });
+        return;
+      }
       if (kind === "markdown") {
         install(markdownSupport);
         return;
@@ -998,6 +1330,20 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
         .catch((error) => {
           console.warn(`[editor] the Typst grammar could not be loaded: ${error}`);
         });
+    },
+
+    setCompletion(enabled) {
+      if (enabled === completionEnabled) return;
+      completionEnabled = enabled;
+      view.dispatch({
+        effects: completionCompartment.reconfigure(enabled ? completionSupport() : []),
+      });
+    },
+
+    setEmmet(enabled) {
+      if (enabled === emmetEnabled) return;
+      emmetEnabled = enabled;
+      syncEmmet(currentLanguage);
     },
 
     setAutoClose(next) {
@@ -1023,6 +1369,7 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     },
 
     restoreState(state, scrollTop) {
+      dropTrackedPositions();
       // Drop a grammar promise that belongs to the buffer we just left.
       languageGeneration += 1;
       resetSpellLanguage();
@@ -1082,7 +1429,10 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
      * call this on every sidebar toggle.
      */
     setSpellcheck(options: SpellOptions, force = false) {
-      const key = `${options.enabled}\0${options.language}\0${options.words.join("\n")}`;
+      // The language is part of the key: switching a tab from Markdown to LaTeX
+      // changes which ranges are prose, so the plugin must be rebuilt even when
+      // the dictionary and the word list are unchanged.
+      const key = `${options.enabled}\0${options.language}\0${options.documentLanguage ?? ""}\0${options.stringMode ?? "human"}\0${options.identifiers ?? false}\0${options.readOnly ?? false}\0${options.sessionKey ?? ""}\0${options.words.join("\n")}`;
       if (!force && key === spellKey) return;
       spellKey = key;
       view.dispatch({
@@ -1217,6 +1567,11 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
       if (focus) view.focus();
     },
 
+    caretToLine(line) {
+      const target = Math.min(Math.max(Math.round(line), 1), view.state.doc.lines);
+      view.dispatch({ selection: { anchor: view.state.doc.line(target).from } });
+    },
+
     revealOffset(pos) {
       const target = Math.max(0, Math.min(pos, view.state.doc.length));
       // "nearest" moves only when the position is outside the viewport, which is
@@ -1237,20 +1592,13 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     scrollPoint(pos) {
       const target = Math.max(0, Math.min(pos, view.state.doc.length));
       const rect = view.coordsAtPos(target);
-      return rect
-        ? { top: rect.top, exact: true }
-        : {
-            top:
-              view.documentTop +
-              (() => {
-                const block = view.lineBlockAt(target);
-                const fraction =
-                  block.to > block.from ? (target - block.from) / (block.to - block.from) : 0;
-                return block.top + Math.max(0, block.height - view.defaultLineHeight) * fraction;
-              })() *
-                view.scaleY,
-            exact: false,
-          };
+      if (rect) return { top: rect.top, bottom: rect.bottom, exact: true };
+      const block = view.lineBlockAt(target);
+      const fraction = block.to > block.from ? (target - block.from) / (block.to - block.from) : 0;
+      const top =
+        view.documentTop +
+        (block.top + Math.max(0, block.height - view.defaultLineHeight) * fraction) * view.scaleY;
+      return { top, bottom: top + view.defaultLineHeight * view.scaleY, exact: false };
     },
 
     offsetAtScreenY(y) {
@@ -1281,16 +1629,20 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     },
 
     setSyncRange(from, to) {
-      // The range belongs to the other pane. A focused editor writes its own
-      // selection back into the DOM on its next update, which collapses the
-      // preview selection the reader just made — measured at about 100 ms. A
-      // real mousedown in the preview blurs the editor anyway; do the same for a
-      // selection that arrives by script or by keyboard.
+      this.setSyncRanges([{ from, to }]);
+    },
+
+    setSyncRanges(ranges) {
+      // Preserve the PDF selection when CodeMirror repaints its decorations.
       if (view.hasFocus) view.contentDOM.blur();
       const max = view.state.doc.length;
-      const start = Math.max(0, Math.min(from, max));
-      const end = Math.max(start, Math.min(to, max));
-      view.dispatch({ effects: syncRangeEffect.of(end > start ? { from: start, to: end } : null) });
+      const clean = ranges
+        .map(({ from, to }) => ({
+          from: Math.max(0, Math.min(from, max)),
+          to: Math.max(0, Math.min(to, max)),
+        }))
+        .filter(({ from, to }) => to > from);
+      view.dispatch({ effects: syncRangeEffect.of(clean.length ? clean : null) });
       pulseSyncRange();
     },
 
@@ -1300,6 +1652,26 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     },
 
     pulseSyncRange,
+
+    setDiagnostics(ranges, pulse = false) {
+      const max = view.state.doc.length;
+      const clean = ranges
+        .map(({ from, to, lineFrom }) => ({
+          from: Math.max(0, Math.min(from, max)),
+          to: Math.max(0, Math.min(to, max)),
+          lineFrom: lineFrom === undefined ? undefined : Math.max(0, Math.min(lineFrom, max)),
+        }))
+        .filter(({ from, to, lineFrom }) => to > from || lineFrom !== undefined);
+      view.dispatch({ effects: diagnosticsEffect.of(clean.length ? clean : null) });
+      if (pulse) pulseDiagnostics();
+    },
+
+    clearDiagnostics() {
+      if (view.state.field(diagnosticsField).size === 0) return;
+      view.dispatch({ effects: diagnosticsEffect.of(null) });
+    },
+
+    pulseDiagnostics,
 
     setHeading(level) {
       transformSelectedLines((line) => {
@@ -1353,6 +1725,14 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
         const next = Math.min(6, Math.max(2, match[1].length + delta));
         return `${indent}${"=".repeat(next)} ${match[2]}`;
       });
+    },
+
+    setLatexHeading(level) {
+      transformSelectedLines((line) => latexHeadingLine(line, level));
+    },
+
+    shiftLatexHeading(delta) {
+      transformSelectedLines((line) => latexShiftHeadingLine(line, delta));
     },
 
     toggleLinePrefix(prefix) {
@@ -1524,76 +1904,14 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
     },
 
     insertNativeText(text) {
-      const state = view.state;
-      const input = state.toText(text);
-      let line = 1;
-      const changes =
-        input.lines === state.selection.ranges.length
-          ? state.changeByRange((range) => {
-              const insert = input.line(line++).text;
-              return {
-                changes: { from: range.from, to: range.to, insert },
-                range: EditorSelection.cursor(range.from + insert.length),
-              };
-            })
-          : state.replaceSelection(input);
-      view.dispatch(changes, { userEvent: "input.paste", scrollIntoView: true });
+      view.dispatch(nativeTextSpec(view.state, text));
       view.focus();
     },
 
     insertPasted(text, block) {
-      const normalized = text.replace(/\r\n?/g, "\n").replace(/^\n+|\n+$/g, "");
-      if (!normalized) return;
-
-      const state = view.state;
-      const range = state.selection.main;
-      const doc = state.doc;
-      if (!block) {
-        view.dispatch({
-          changes: { from: range.from, to: range.to, insert: normalized },
-          selection: { anchor: range.from + normalized.length },
-          scrollIntoView: true,
-          userEvent: "input.paste",
-        });
-        view.focus();
-        return;
-      }
-
-      const startLine = doc.lineAt(range.from);
-      const endLine = doc.lineAt(range.to);
-      const before = doc.sliceString(startLine.from, range.from);
-      const after = doc.sliceString(range.to, endLine.to);
-      const indent = /^\s*$/.test(before) ? before : "";
-      let insertion = normalized;
-      if (indent) {
-        insertion = insertion
-          .split("\n")
-          .map((line, index) => (index === 0 ? line : `${indent}${line}`))
-          .join("\n");
-      }
-
-      let prefix = "";
-      if (before.trim() !== "") prefix = "\n\n";
-      else if (startLine.from > 0) {
-        const previous = doc.line(startLine.number - 1);
-        if (previous.text.trim() !== "") prefix = "\n";
-      }
-
-      // A block must not swallow the rest of the line. When there is content
-      // after the paste it starts a fresh paragraph; when there is only
-      // whitespace it is discarded.
-      let suffix = "";
-      let to = range.to;
-      if (after.trim() !== "") suffix = "\n\n";
-      else to = endLine.to;
-
-      const insert = `${prefix}${insertion}${suffix}`;
-      view.dispatch({
-        changes: { from: range.from, to, insert },
-        selection: { anchor: range.from + prefix.length + insertion.length },
-        scrollIntoView: true,
-        userEvent: "input.paste",
-      });
+      const spec = pastedInsertSpec(view.state, text, block);
+      if (!spec) return;
+      view.dispatch(spec);
       view.focus();
     },
 
@@ -1625,6 +1943,9 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
 
     onDocChanged(cb) {
       onDocChanged = cb;
+    },
+    onChanges(cb) {
+      onChanges = cb;
     },
     onCursor(cb) {
       onCursor = cb;

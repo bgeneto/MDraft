@@ -10,6 +10,12 @@
 //! be dragged and resized without leaving the webview.
 
 import * as api from "./api";
+import { TEXPRESSO_ENGINE_MIB, TEXPRESSO_TEXLIVE_YEAR } from "./latex-backend";
+import {
+  renderTexmfControl,
+  texmfRows,
+  type TexmfPreferencesHost,
+} from "./latex-texmf-preferences.ts";
 import {
   BUNDLED_FAMILIES,
   CUSTOM_PRESET,
@@ -34,9 +40,11 @@ import { dictionaryOptions, spellcheckAvailabilityNote } from "./spellcheck";
 import { MAX_RATE, MIN_RATE, voiceAvailabilityNote, type VoiceOption } from "./read-aloud";
 import { attachModelCombo, closeModelCombo } from "./model-combo";
 
-export interface PreferencesHost {
+export interface PreferencesHost extends TexmfPreferencesHost {
   settings(): api.Settings;
   update(patch: Partial<api.Settings>): void;
+  documentSpellLanguage(): string;
+  setDocumentSpellLanguage(value: string): void;
   clearRecent(): void;
   /** Return the AI Assistant's floating button and panel to their defaults. */
   resetAssistantPosition(): void;
@@ -44,14 +52,64 @@ export interface PreferencesHost {
   exportHtml(): void;
   /** Save the document to PDF through the native writer. */
   exportPdf(): void;
-  openDocumentation(which: "reference" | "shortcuts" | "licences"): void;
-  version(): string;
+  /**
+   * Open one of the application's own tool folders in the OS file manager.
+   *
+   * The panel shows a button instead of printing the install path, so the reader
+   * can look at what was downloaded without reading a `C:\…` line.
+   */
+  openAppFolder(folder: api.AppFolder): Promise<void>;
   /** Last known pandoc status, or null before the first check. */
   pandocStatus(): api.PandocStatus | null;
+  /** Last known Typst status, or null before the first check. */
+  typstStatus(): api.TypstStatus | null;
+  /** Optional host-cached companion Typst service status. */
+  typstServiceStatus?(): api.TypstServiceStatus | null;
   /** Check for pandoc and offer to install it if it is missing. */
   setupPandoc(): Promise<void>;
   /** Check for Typst and offer to install it if it is missing. */
   setupTypst(): Promise<void>;
+  /** Optional host override to install/check the companion Typst service. */
+  setupTypstService?(): Promise<void>;
+  /** Optional host override to clear Typst caches. */
+  clearTypstCache?(): Promise<void>;
+  /**
+   * The downloaded LuaLaTeX package cache, or null before the first read.
+   *
+   * Read on demand rather than held in settings: the size is a measurement, not
+   * a preference, and it changes whenever a compile downloads a package.
+   */
+  latexCache(): api.LatexCacheInfo | null;
+  latexCacheError(): string | null;
+  /** Re-read the cache size; called when the LaTeX section is drawn. */
+  refreshLatexCache(): Promise<void>;
+  /** Download and verify the LuaLaTeX engine, then turn the switch on. */
+  installLatex(): Promise<void>;
+  /** Turn the engine off. Deletes nothing. */
+  disableLatex(): Promise<void>;
+  /** Delete the downloaded package cache; the only destructive LaTeX action. */
+  clearLatexCache(): Promise<void>;
+  /** The last engine status, or null before the LaTeX section has asked. */
+  nativeStatus(): api.LatexEngineStatus | null;
+  /** What validation proved for the committed directory, if this session did. */
+  nativeCapabilities(): api.LatexNativeCapabilities | null;
+  /** Metadata-only installation candidates, or null before Find ran. */
+  nativeCandidates(): api.LatexNativeCandidate[] | null;
+  refreshNativeStatus(): Promise<void>;
+  /** Search PATH and the standard locations, then validate a single result. */
+  findNative(): Promise<void>;
+  /** Open the folder picker and validate the chosen binary directory. */
+  browseNative(): Promise<void>;
+  validateNative(directory: string): Promise<void>;
+  /** Registered WSL distributions (registry only), or null before Find ran. */
+  nativeWslDistributions(): api.LatexWslDistribution[] | null;
+  /** Engines found inside WSL distributions this session, or null. */
+  nativeWslCandidates(): api.LatexWslCandidate[] | null;
+  /** Look inside one distribution; this starts its VM. */
+  lookInsideWsl(distro: string): Promise<void>;
+  validateWsl(distro: string, bin: string): Promise<void>;
+  setNativeEnabled(value: boolean): Promise<void>;
+  setNativeEngine(value: string): Promise<void>;
   /** Ask the user for a reference/style file. Empty string when cancelled. */
   chooseStyleReference(current: string): Promise<string>;
   /** Installed speech-synthesis voices; empty until the list has loaded. */
@@ -80,9 +138,15 @@ export interface PreferencesHandle {
   refresh(): void;
 }
 
-type Row =
+export type Row =
   | { kind: "heading"; label: string }
   | { kind: "note"; label: string; text: string }
+  | { kind: "localPackages"; label: string; host: TexmfPreferencesHost; refresh: () => void }
+  | {
+      kind: "actions";
+      label: string;
+      actions: { text: string; action: () => void | Promise<void> }[];
+    }
   | {
       kind: "checkbox";
       label: string;
@@ -185,6 +249,18 @@ interface Section {
   rows: Row[];
 }
 
+interface TypstServiceUiState {
+  status: api.TypstServiceStatus | null;
+  note: string | null;
+  busy: boolean;
+}
+
+function formatCacheBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
 /**
  * Live state of the AI section.
  *
@@ -221,6 +297,13 @@ interface AiUiState {
 /** Everything a row can be found by, lower-cased once. */
 function rowSearchText(row: Row): string {
   const parts: string[] = [row.label];
+  if (row.kind === "actions") parts.push(...row.actions.map((action) => action.text));
+  if (row.kind === "localPackages") {
+    parts.push(
+      "TEXMF local packages classes folder layout",
+      ...(row.host.texmfConfig()?.roots ?? []).map((root) => root.resolved),
+    );
+  }
   if ("help" in row && row.help) parts.push(row.help);
   if (row.kind === "note" || row.kind === "button") parts.push(row.text);
   if (row.kind === "select" || row.kind === "choices") {
@@ -252,10 +335,10 @@ function rowMatches(row: Row, terms: string[]): boolean {
 /**
  * Keep the rows a query names, with a group heading for context.
  *
- * A heading is a searchable category. When "Recent Locations" matches, its
- * whole group comes with it — the settings underneath are not expected to
- * repeat the group's word. A matching setting stays under its heading, and a
- * heading with neither a matching name nor a matching row disappears.
+ * A heading is a searchable category. When "LaTeX" matches, its whole group
+ * comes with it — the settings underneath are not expected to repeat the
+ * group's word. A matching setting stays under its heading, and a heading with
+ * neither a matching name nor a matching row disappears.
  */
 function filterSection(section: Section, terms: string[]): Section | null {
   // A section's own name stands for all of it.
@@ -845,24 +928,236 @@ function removeFormat(host: PreferencesHost, id: string): void {
   host.update({ exportFormats: next });
 }
 
-function exportRows(host: PreferencesHost): Row[] {
+function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
+  const s = () => host.settings();
+  if (host.latexCache() === null && host.latexCacheError() === null) {
+    void host.refreshLatexCache().then(refresh);
+  }
+  if (host.nativeStatus() === null) void host.refreshNativeStatus().then(refresh);
+  const latex = host.latexCache();
+  const native = host.nativeStatus();
+  const capabilities = host.nativeCapabilities();
+  const candidates = host.nativeCandidates();
+  const mb = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  const engineNames: Record<string, string> = {
+    auto: "Auto (% !TEX program, then LuaLaTeX)",
+    lualatex: "LuaLaTeX",
+    pdflatex: "pdfLaTeX",
+    xelatex: "XeLaTeX",
+  };
+  const available = native?.nativeEngines ?? [];
+  const engineOptions: [string, string][] = [
+    ["auto", engineNames.auto],
+    ...available.map((id): [string, string] => [id, engineNames[id] ?? id]),
+  ];
+  const installation = native?.problem
+    ? native.problem
+    : capabilities
+      ? `${capabilities.distribution} · ${capabilities.bin}`
+      : native?.nativeWsl
+        ? `${native.nativeDistribution ?? "TeX Live (WSL)"} · ${native.nativeWsl.bin}`
+        : native?.nativeRoot
+          ? `${native.nativeDistribution ?? "TeX"} · ${native.nativeRoot}`
+          : "No installation selected.";
+  const wslDistributions = host.nativeWslDistributions() ?? [];
+  const wslCandidates = host.nativeWslCandidates() ?? [];
+  const rows: Row[] = [
+    {
+      kind: "checkbox",
+      label: "Auto-compile",
+      help: "Compile after editing. When off, use Compile in the preview.",
+      get: () => s().latexAutoCompile,
+      set: (value) => host.update({ latexAutoCompile: value }),
+    },
+    {
+      kind: "select",
+      label: "Default engine",
+      help: "Used when the main file has no % !TeX program line and the project has no engine of its own (the engine chip in the status bar). The bundled preview typesets with LuaLaTeX or XeLaTeX; pdfLaTeX is available only through an installed TeX distribution.",
+      options: [
+        ["lualatex", "LuaLaTeX"],
+        ["xelatex", "XeLaTeX"],
+        ["auto", "Auto (from the preamble)"],
+      ],
+      get: () => s().latexBundledEngine ?? "lualatex",
+      set: (value) => host.update({ latexBundledEngine: value }),
+    },
+
+    ...texmfRows(host, refresh),
+
+    { kind: "heading", label: "Installed TeX distribution" },
+    {
+      kind: "checkbox",
+      label: "Use my installed TeX distribution",
+      help: "Choose and validate a TeX installation first.",
+      disabled: () => !s().latexNativeRoot && !s().latexNativeWsl,
+      get: () => s().latexNativeEnabled,
+      set: (value) => void host.setNativeEnabled(value),
+    },
+    { kind: "note", label: "Installation", text: installation },
+    {
+      kind: "select",
+      label: "Installed engine",
+      help: "Auto recognises only % !TEX program values LuaLaTeX, pdfLaTeX and XeLaTeX. An explicit choice always wins.",
+      options: engineOptions,
+      get: () => s().latexNativeEngine,
+      set: (value) => void host.setNativeEngine(value),
+    },
+    {
+      kind: "actions",
+      label: "",
+      actions: [
+        { text: "Find installation…", action: () => host.findNative() },
+        { text: "Browse…", action: () => host.browseNative() },
+        ...(s().latexNativeRoot
+          ? [{ text: "Validate", action: () => host.validateNative(s().latexNativeRoot!) }]
+          : s().latexNativeWsl
+            ? [
+                {
+                  text: "Validate",
+                  action: () =>
+                    host.validateWsl(s().latexNativeWsl!.distro, s().latexNativeWsl!.bin),
+                },
+              ]
+            : []),
+      ],
+    },
+    ...(candidates && candidates.length > 1
+      ? [
+          {
+            kind: "choices" as const,
+            label: "Found installations",
+            options: candidates.map((candidate): [string, string] => [
+              candidate.directory,
+              `${candidate.distribution} — ${candidate.engines.join(", ")}`,
+            ]),
+            get: () => "",
+            set: (directory: string) => void host.validateNative(directory),
+          },
+        ]
+      : []),
+
+    ...wslDistributions.map((distribution): Row => ({
+      kind: "button",
+      label: "",
+      text: `Look for TeX in WSL: ${distribution.name}…`,
+      help: `Starts the ${distribution.name} WSL distribution if it is stopped, then looks for lualatex, pdflatex and xelatex on its PATH and in the TeX Live and TinyTeX folders. Nothing is installed or changed.`,
+      action: () => host.lookInsideWsl(distribution.name),
+    })),
+    ...(wslCandidates.length > 0
+      ? [
+          {
+            kind: "choices" as const,
+            label: "Found in WSL",
+            help: "Validating compiles a one-page probe inside the distribution before it is used.",
+            options: wslCandidates.map((candidate): [string, string] => [
+              `${candidate.distro}\u0000${candidate.bin}`,
+              `${candidate.distro}: ${candidate.bin} — ${candidate.engines.join(", ")}`,
+            ]),
+            get: () => "",
+            set: (value: string) => {
+              const [distro, bin] = value.split("\u0000");
+              void host.validateWsl(distro, bin);
+            },
+          },
+        ]
+      : []),
+
+    { kind: "heading", label: "Bundled TeX distribution" },
+    {
+      kind: "checkbox",
+      label: "Enable bundled TeX",
+      help: "Downloads the engine on first use. Compiles .tex files in the preview.",
+      get: () => s().latexEnabled,
+      set: (value) => {
+        if (value) void host.installLatex();
+        else void host.disableLatex();
+      },
+    },
+    {
+      kind: "note",
+      label: "Engine",
+      text:
+        host.latexCacheError() ??
+        (latex
+          ? latex.previewInstalled
+            ? latex.enabled
+              ? "Installed and enabled."
+              : "Installed, but the switch is off."
+            : latex.enabled
+              ? `Enabled, but the preview files are missing or out of date. Toggle the switch off and on to download the TeX Live ${TEXPRESSO_TEXLIVE_YEAR} preview engine (about ${TEXPRESSO_ENGINE_MIB} MiB).`
+              : `Not installed. Turn the switch on to download about ${TEXPRESSO_ENGINE_MIB} MiB of verified engine files; packages and fonts follow on demand.`
+          : "Checking…"),
+    },
+    {
+      kind: "note",
+      label: "Package cache",
+      text: latex
+        ? `${mb(latex.bytes)} of ${latex.limitMb} MiB used.`
+        : host.latexCacheError()
+          ? "Unavailable."
+          : "Checking…",
+    },
+    ...(host.latexCacheError()
+      ? [
+          {
+            kind: "button" as const,
+            label: "",
+            text: "Check LaTeX again",
+            action: async () => {
+              await host.refreshLatexCache();
+              refresh();
+            },
+          },
+        ]
+      : []),
+    {
+      kind: "number",
+      label: "Cache limit (MiB)",
+      help: "The most disk the downloaded TeX packages may use. When a compile needs a new package and the cache is full, the least recently used files are deleted first. 32 to 4096 MiB.",
+      min: 32,
+      max: 4096,
+      suffix: "MiB",
+      get: () => s().latexCacheLimitMb,
+      set: (value) => host.update({ latexCacheLimitMb: value }),
+    },
+    {
+      kind: "button",
+      label: "",
+      text: "Clear package cache",
+      help: "Deletes the downloaded TeX packages and fonts. The engine itself is kept, so the next compile re-downloads only what it needs. Your documents are not touched.",
+      action: () => void host.clearLatexCache(),
+    },
+    {
+      kind: "button",
+      label: "",
+      text: "Open engine folder",
+      action: () => host.openAppFolder("latex"),
+    },
+  ];
+  return rows;
+}
+
+function exportRows(
+  host: PreferencesHost,
+  typstSvc: TypstServiceUiState,
+  refresh: () => void,
+): Row[] {
   const formats = host.settings().exportFormats;
   const status = host.pandocStatus();
-
+  // One status line and one folder button per tool. The install path is not
+  // printed: it is long, it is not a setting, and the reader who wants to look
+  // at the files has the button. The explanation of what each tool is lives in
+  // the guide and in docs/export.md, not in a preferences panel.
   const rows: Row[] = [
     {
       kind: "note",
       label: "Pandoc",
       text: status
         ? status.found
-          ? `${status.version ?? "Found"} at ${status.path}${
+          ? `${status.version ?? "Found"}${
               status.source === "managed" ? " (installed by MDraft)" : ""
-            }.${
-              status.pdfEngine
-                ? ` PDF (via Typst) will use ${status.pdfEngine}.`
-                : " PDF (via Typst) needs Typst — use Tools › Check or Install Typst…. Native PDF and browser printing remain available."
             }`
-          : "Not found. Word, EPUB, PDF (via Typst) conversion and the other Pandoc formats need it; native HTML/PDF do not."
+          : "Not installed. Word, EPUB and the other Pandoc formats need it."
         : "Checking…",
     },
     {
@@ -872,9 +1167,115 @@ function exportRows(host: PreferencesHost): Row[] {
       action: () => host.setupPandoc(),
     },
     {
+      kind: "button",
+      label: "",
+      text: "Open the pandoc folder",
+      action: () => host.openAppFolder("pandoc"),
+    },
+    {
+      kind: "checkbox",
+      label: "Auto-compile Typst",
+      help: "Update the preview after edits. Turn off to compile with the preview toolbar.",
+      get: () => host.settings().typstAutoCompile !== false,
+      set: (value) => host.update({ typstAutoCompile: value }),
+    },
+    {
+      kind: "checkbox",
+      label: "Incremental Typst compiler service",
+      help: "Keeps a companion Typst compiler daemon warm in memory for interactive previews without writing temporary .mdraft-preview files to disk. Falls back automatically to stock Typst CLI when not installed.",
+      get: () => host.settings().typstIncrementalService === true,
+      set: (value) => host.update({ typstIncrementalService: value }),
+    },
+    {
+      kind: "note",
+      label: "Typst service",
+      text: (() => {
+        const svc = host.typstServiceStatus?.() ?? typstSvc.status;
+        if (typstSvc.note) {
+          return svc ? `${svc.version ? `v${svc.version} — ` : ""}${typstSvc.note}` : typstSvc.note;
+        }
+        if (!svc) return "Not checked yet.";
+        if (!svc.installed) return svc.hint;
+        const rss = svc.rssBytes !== null ? `, ${formatCacheBytes(svc.rssBytes)} RSS` : "";
+        return `Installed v${svc.version ?? svc.manifestVersion} (Typst ${svc.typstVersion ?? "0.15.1"}${svc.active ? `, ${svc.runningWorkers} active${rss}` : ""}). ${svc.hint}`;
+      })(),
+    },
+    {
+      kind: "button",
+      label: "",
+      text: "Install or check Typst service",
+      help: "Verifies a local companion daemon under Typst's app data folder or downloads it when a pinned SHA-256 release checksum is published.",
+      disabled: () => typstSvc.busy,
+      action: async () => {
+        typstSvc.busy = true;
+        typstSvc.note = "Checking Typst service…";
+        refresh();
+        try {
+          if (host.setupTypstService) {
+            await host.setupTypstService();
+            typstSvc.status = host.typstServiceStatus?.() ?? (await api.typstServiceStatus());
+            typstSvc.note = null;
+          } else {
+            const current = await api.typstServiceStatus();
+            if (current.installed) {
+              typstSvc.status = current;
+              typstSvc.note = null;
+            } else if (current.canInstall) {
+              typstSvc.note = "Downloading verified Typst service…";
+              refresh();
+              typstSvc.status = await api.installTypstService();
+              typstSvc.note = null;
+            } else {
+              typstSvc.status = current;
+              typstSvc.note = current.hint;
+            }
+          }
+        } catch (error) {
+          typstSvc.note = error instanceof Error ? error.message : String(error);
+        } finally {
+          typstSvc.busy = false;
+          refresh();
+        }
+      },
+    },
+    {
+      kind: "button",
+      label: "",
+      text: "Clear Typst cache",
+      help: "Evicts in-memory incremental memoization caches inside running Typst service workers and clears temporary Typst render files.",
+      disabled: () => typstSvc.busy,
+      action: async () => {
+        typstSvc.busy = true;
+        refresh();
+        try {
+          if (host.clearTypstCache) {
+            await host.clearTypstCache();
+            typstSvc.status = await api.typstServiceStatus();
+            typstSvc.note = "Typst caches cleared.";
+          } else {
+            const freed = await api.typstClearCache();
+            typstSvc.status = await api.typstServiceStatus();
+            typstSvc.note = `Cleared ${formatCacheBytes(freed)} of Typst cache.`;
+          }
+        } catch (error) {
+          typstSvc.note = error instanceof Error ? error.message : String(error);
+        } finally {
+          typstSvc.busy = false;
+          refresh();
+        }
+      },
+    },
+    {
       kind: "note",
       label: "Typst",
-      text: "Typst is a typesetting program: text and markup go in, a laid-out document comes out. In MDraft it draws both previews of .typ documents and compiles them to PDF; for the other languages, pandoc uses it as the PDF engine.",
+      text: (() => {
+        const typst = host.typstStatus();
+        if (!typst) return "Checking…";
+        if (!typst.found) return "Not installed. .typ previews and PDF (via Typst) need it.";
+        return `${typst.version ?? "Found"}${
+          typst.source === "managed" ? " (installed by MDraft)" : ""
+        }`;
+      })(),
     },
     {
       kind: "button",
@@ -884,9 +1285,10 @@ function exportRows(host: PreferencesHost): Row[] {
       action: () => host.setupTypst(),
     },
     {
-      kind: "note",
-      label: "HTML and PDF",
-      text: "Both use the preview pipeline and need no pandoc. PDF saves directly through the system webview. File › Export › PDF (opens browser) keeps browser printing available; PDF (via Typst) uses the compiler, with pandoc for conversion from other languages.",
+      kind: "button",
+      label: "",
+      text: "Open the Typst folder",
+      action: () => host.openAppFolder("typst"),
     },
   ];
 
@@ -939,7 +1341,7 @@ function exportRows(host: PreferencesHost): Row[] {
       // does know its path and runs these options normally.
       kind: "note",
       label: "PDF (opens browser)",
-      text: "The browser PDF route asks you where to save, so MDraft never learns that path and these options do not run for it. They do run for the direct PDF, HTML, Typst and every pandoc format.",
+      text: "These options do not run for it: the browser owns the save path.",
     },
     { kind: "heading", label: "Formats" },
   );
@@ -1283,11 +1685,6 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
 
   const rows: Row[] = [
     {
-      kind: "note",
-      label: "Privacy",
-      text: "The assistant contacts only the endpoint you configure, and only when you press Generate or fetch the model list. The selection and your instruction are the only document text that leaves this machine — unless Suggest file names when saving is on, which sends the opening of an untitled document when you save it. The API key is stored in the operating system's credential store; where that store is unavailable, it is saved in a private file beside the settings instead, and the line under the field says which.",
-    },
-    {
       kind: "checkbox",
       label: "Enable AI Assistant",
       help: "Shows the floating button in the source pane; the Tools › AI Assistant check and this box turn it on or off. Off by default: no request and no credential read until you enable it and choose an endpoint and model.",
@@ -1341,7 +1738,7 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
     {
       kind: "text",
       label: "Base URL",
-      help: "Include the version segment; the assistant appends /chat/completions or /v1/messages. A public gateway usually requires https:// — an http:// address outside your machine is unencrypted and may answer an empty 200.",
+      help: "Include the version segment; the assistant appends /chat/completions or /v1/messages.",
       placeholder: "https://api.openai.com/v1",
       rerender: false,
       get: () => s().aiBaseUrl,
@@ -1358,7 +1755,7 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
     {
       kind: "secret",
       label: "API Key",
-      help: "Optional. Local inference servers usually need no key; when none is saved the request goes out without an auth header. A hosted endpoint that needs one answers 401, and the error names it. Saving a key also requests the model list and fills the model suggestions. Stored in the OS credential store, keyed by provider and endpoint; after changing the scheme or host, save it again. Where the store is unavailable the key is saved in a private file beside the settings (not encrypted); the line under the field says which.",
+      help: "Optional: local inference servers usually need no key. Stored in the OS credential store, or in a private file beside the settings where that store is unavailable; the line under the field says which.",
       placeholder: ai.status?.hasKey
         ? "A key is saved — type to replace it"
         : "No key — optional for local servers",
@@ -1408,7 +1805,7 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
     {
       kind: "checkbox",
       label: "Disable reasoning (thinking)",
-      help: 'Ask the endpoint to answer without thinking first, so the first word can arrive much sooner. Sends reasoning_effort: "none" to an OpenAI-compatible server and thinking: {type: "disabled"} to Anthropic. Support is model-specific: many GPT-5 models accept it, GPT-4o and GPT-4.1 refuse the field, and Anthropic\'s always-reasoning models refuse it too. A refusal makes Generate fail, so test with the configured model before relying on it.',
+      help: "Asks the endpoint to answer without thinking first. Support is model-specific: a refusal makes Generate fail, so test with the configured model before relying on it.",
       get: () => s().aiDisableReasoning ?? false,
       set: (value) => {
         if (ai.note?.where === "reasoning") ai.note = null;
@@ -1431,7 +1828,7 @@ function aiRows(host: PreferencesHost, ai: AiUiState, refresh: () => void): Row[
     {
       kind: "number",
       label: "Context limit",
-      help: "The most context one request may send, measured in approximate tokens. The status bar's token count uses the same estimator. A rewrite over the limit is refused; Ask's selection, question and history, and Continue's text, trim to fit. The model also needs room for its own instructions and answer, so keep this below its context window. Default 8,192; maximum 32,768.",
+      help: "The most context one request may send, in approximate tokens. Keep it below the model's context window, which must also hold the instructions and the answer.",
       min: 1_024,
       max: 32_768,
       step: 256,
@@ -1516,7 +1913,12 @@ function readAloudRows(host: PreferencesHost): Row[] {
   ];
 }
 
-function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void): Section[] {
+function buildSections(
+  host: PreferencesHost,
+  ai: AiUiState,
+  typstSvc: TypstServiceUiState,
+  refresh: () => void,
+): Section[] {
   const s = () => host.settings();
 
   return [
@@ -1540,7 +1942,7 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
         {
           kind: "select",
           label: "Default File Extension",
-          help: "Used for a new document, and for Save As when the buffer is not clearly another markup. Typst starts the editor in Typst mode, HTML in HTML mode, AsciiDoc in AsciiDoc mode; the other choices start in Markdown.",
+          help: "Used for a new document, and for Save As when the buffer is not clearly another markup. Typst starts the editor in Typst mode, HTML in HTML mode, AsciiDoc in AsciiDoc mode, LaTeX in LaTeX mode; the other choices start in Markdown.",
           options: [
             ["md", "Markdown (.md)"],
             ["markdown", "Markdown (.markdown)"],
@@ -1549,6 +1951,7 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
             ["html", "HTML (.html)"],
             ["adoc", "AsciiDoc (.adoc)"],
             ["asciidoc", "AsciiDoc (.asciidoc)"],
+            ["tex", "LaTeX (.tex)"],
           ],
           get: () => s().defaultExtension,
           set: (value) => host.update({ defaultExtension: value }),
@@ -1560,7 +1963,6 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
           get: () => s().autoSave,
           set: (value) => host.update({ autoSave: value }),
         },
-        { kind: "heading", label: "Recent Locations" },
         {
           kind: "checkbox",
           label: "Record Recent Files",
@@ -1572,12 +1974,6 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
           label: "",
           text: "Clear Recent Files",
           action: () => host.clearRecent(),
-        },
-        { kind: "heading", label: "Favorites" },
-        {
-          kind: "note",
-          label: "Managing Favorites",
-          text: "Right-click a document or any tab and choose Add to Favorites. The Favorites panel keeps them in the order you added them; each row's × removes one entry, and opening a favorite never reorders the list.",
         },
       ],
     },
@@ -1592,7 +1988,6 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
           get: () => s().richPaste,
           set: (value) => host.update({ richPaste: value }),
         },
-        { kind: "heading", label: "Auto-close" },
         {
           kind: "checkbox",
           label: "Auto-close brackets and quotes",
@@ -1606,6 +2001,13 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
           help: "Typing the > of an opening tag in an HTML, Markdown or AsciiDoc document inserts the matching closing tag. Void elements, self-closing tags, autolinks and code are left alone.",
           get: () => s().autoCloseTags,
           set: (value) => host.update({ autoCloseTags: value }),
+        },
+        {
+          kind: "checkbox",
+          label: "Suggest completions while typing",
+          help: "Opens a list of the commands, environments and project references that fit the position. In LaTeX it appears after a backslash or inside a brace argument; in Markdown after the character that starts a construct; in HTML after a tag. It never opens in ordinary prose and never makes a network request. Tab accepts the highlighted row, and Tab still indents when no list is open.",
+          get: () => s().completion,
+          set: (value) => host.update({ completion: value }),
         },
         {
           kind: "select",
@@ -1674,7 +2076,6 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
           get: () => s().showStatusBar,
           set: (value) => host.update({ showStatusBar: value }),
         },
-        { kind: "heading", label: "Spelling" },
         {
           kind: "checkbox",
           label: "Check spelling while typing",
@@ -1689,6 +2090,39 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
           options: dictionaryOptions(s().spellcheckLanguage),
           get: () => s().spellcheckLanguage,
           set: (value) => host.update({ spellcheckLanguage: value }),
+        },
+        {
+          kind: "select",
+          label: "Dictionary for this document",
+          help: "Overrides the global dictionary for this document. Saved files remember their choice.",
+          options: [
+            ["follow", "Follow global"],
+            ...dictionaryOptions(
+              host.documentSpellLanguage() === "follow" ? "auto" : host.documentSpellLanguage(),
+            ),
+          ],
+          get: () => host.documentSpellLanguage(),
+          set: (value) => host.setDocumentSpellLanguage(value),
+        },
+        {
+          kind: "select",
+          label: "Code and JSON strings",
+          help: "Choose which strings are checked. Paths, URLs and machine values are skipped.",
+          options: [
+            ["human", "Human-readable"],
+            ["all", "All eligible strings"],
+            ["off", "Off"],
+          ],
+          get: () => s().spellcheckStringMode,
+          set: (value) =>
+            host.update({ spellcheckStringMode: value as api.Settings["spellcheckStringMode"] }),
+        },
+        {
+          kind: "checkbox",
+          label: "Check code identifiers",
+          help: "Checks parts of JavaScript identifiers and JSON keys. Corrections do not rename symbols.",
+          get: () => s().spellcheckIdentifiers,
+          set: (value) => host.update({ spellcheckIdentifiers: value }),
         },
         ...(spellcheckAvailabilityNote()
           ? [{ kind: "note" as const, label: "", text: spellcheckAvailabilityNote() ?? "" }]
@@ -1810,7 +2244,23 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
           label: "Sandbox",
           text: "An HTML preview behaves like a local page: it may read and run files in its own folder and load the network resources it references. It cannot reach the editor, its files outside that folder, or MDraft's commands. Math and diagram settings above apply to Markdown and Typst; an HTML document uses its own libraries.",
         },
+        {
+          kind: "checkbox",
+          label: "Expand Emmet abbreviations with Tab",
+          get: () => s().emmet,
+          set: (value) => host.update({ emmet: value }),
+        },
+        {
+          kind: "note",
+          label: "Emmet",
+          text: "A shorthand for writing HTML and CSS. Press Tab after an abbreviation to expand it: ul>li*3 becomes a list of three items, and m10 in a CSS rule becomes margin: 10px. Tab still indents when there is nothing to expand, and an open completion list takes Tab first.",
+        },
       ],
+    },
+    {
+      id: "latex",
+      title: "LaTeX",
+      rows: latexRows(host, refresh),
     },
     {
       id: "export",
@@ -1829,7 +2279,7 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
           help: "Writes a PDF directly through the system webview. File › Export › PDF (opens browser) provides browser printing and the fallback for scripted HTML. Typst documents use PDF (via Typst).",
           action: () => host.exportPdf(),
         },
-        ...exportRows(host),
+        ...exportRows(host, typstSvc, refresh),
       ],
     },
     {
@@ -1868,45 +2318,10 @@ function buildSections(host: PreferencesHost, ai: AiUiState, refresh: () => void
             ["outline", "Outline"],
             ["favorites", "Favorites"],
             ["recent", "Recent files"],
+            ["explorer", "Explorer"],
           ],
           get: () => s().sidebarTab,
           set: (value) => host.update({ sidebarTab: value as api.SidebarTab }),
-        },
-      ],
-    },
-    {
-      id: "general",
-      title: "General",
-      rows: [
-        { kind: "note", label: "Version", text: `MDraft ${host.version()}` },
-        {
-          kind: "note",
-          label: "Formatting",
-          text: "Format Document uses Prettier (MIT) for Markdown and HTML and Typstyle (Apache-2.0) for Typst.",
-        },
-        {
-          kind: "button",
-          label: "",
-          text: "Open the Markdown Reference",
-          action: () => host.openDocumentation("reference"),
-        },
-        {
-          kind: "button",
-          label: "",
-          text: "Open the Keyboard Shortcuts",
-          action: () => host.openDocumentation("shortcuts"),
-        },
-        {
-          kind: "button",
-          label: "",
-          text: "Font licences…",
-          help: "The thirteen bundled typefaces are under the SIL Open Font License 1.1, which requires their copyright notices and licence texts to travel with them wherever they are redistributed. All are compiled into the application and shown here.",
-          action: () => host.openDocumentation("licences"),
-        },
-        {
-          kind: "note",
-          label: "Settings file",
-          text: "Preferences are stored as settings.json in the application config directory and are safe to edit by hand.",
         },
       ],
     },
@@ -1972,7 +2387,12 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
     prompts: null,
     promptsLoading: false,
   };
-  let activeId = buildSections(host, ai, () => render())[0].id;
+  const typstSvc: TypstServiceUiState = {
+    status: null,
+    note: null,
+    busy: false,
+  };
+  let activeId = buildSections(host, ai, typstSvc, () => render())[0].id;
   let query = "";
   let placed = false;
 
@@ -2171,7 +2591,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
   });
 
   function visibleSections(): Section[] {
-    const all = buildSections(host, ai, () => render());
+    const all = buildSections(host, ai, typstSvc, () => render());
     if (query.length === 0) return all;
     const terms = query.split(/\s+/).filter((term) => term.length > 0);
     if (terms.length === 0) return all;
@@ -2190,6 +2610,9 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
         button.setAttribute("role", "tab");
         button.setAttribute("aria-selected", String(section.id === activeId));
         button.addEventListener("click", () => {
+          if (section.id === "latex" && activeId !== "latex" && host.texmfBusy() === null) {
+            void host.refreshTexmf().then(render);
+          }
           activeId = section.id;
           render();
         });
@@ -2199,6 +2622,22 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
   }
 
   function control(row: Row): HTMLElement | null {
+    if (row.kind === "actions") {
+      const group = document.createElement("div");
+      group.className = "prefs-actions";
+      for (const action of row.actions) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "prefs-button";
+        button.textContent = action.text;
+        button.addEventListener("click", () => {
+          button.disabled = true;
+          void Promise.resolve(action.action()).finally(render);
+        });
+        group.append(button);
+      }
+      return group;
+    }
     if (row.kind === "checkbox") {
       const input = document.createElement("input");
       input.type = "checkbox";
@@ -2399,6 +2838,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       button.type = "button";
       button.className = "prefs-button";
       button.textContent = row.text;
+      if (row.help) button.title = row.help;
       if (row.disabled?.()) {
         button.disabled = true;
         button.title = row.disabledTitle ?? "This preset is already at its defaults.";
@@ -2406,6 +2846,11 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       // Redraw once the action settles: adding, removing or reconfiguring an
       // export format all change which rows this panel should be showing.
       button.addEventListener("click", () => {
+        // Starting a WSL look twice used to queue two sessions, a second
+        // validation and a second probe compile. The button stays inert until
+        // this action settles and the panel is rebuilt from the new state.
+        button.disabled = true;
+        button.setAttribute("aria-busy", "true");
         void Promise.resolve(row.action()).finally(() => render());
       });
       return button;
@@ -2442,6 +2887,10 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
     fragment.appendChild(title);
 
     for (const row of section.rows) {
+      if (row.kind === "localPackages") {
+        fragment.append(renderTexmfControl(row.host, row.refresh));
+        continue;
+      }
       if (row.kind === "heading") {
         const heading = document.createElement("div");
         heading.className = "prefs-group";
@@ -2467,7 +2916,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
         continue;
       }
 
-      if ("help" in row && row.help) {
+      if (row.label && "help" in row && row.help) {
         const help = document.createElement("span");
         help.className = "prefs-help";
         help.textContent = "?";
@@ -2488,7 +2937,14 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
     contentEl.replaceChildren(fragment);
   }
 
+  let pendingControlFocus: string | undefined;
   function render(): void {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.dataset.prefsFocus) {
+      pendingControlFocus = active.dataset.prefsFocus;
+    } else if (active && active !== document.body) {
+      pendingControlFocus = undefined;
+    }
     // The rows are about to be replaced; a fixed popup would otherwise keep
     // pointing at an input that no longer exists.
     closeModelCombo();
@@ -2499,6 +2955,15 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
     }
     renderNav(sections);
     renderContent(sections);
+    if (pendingControlFocus) {
+      const target = [...contentEl.querySelectorAll<HTMLElement>("[data-prefs-focus]")].find(
+        (element) => element.dataset.prefsFocus === pendingControlFocus,
+      );
+      if (target && !target.matches(":disabled")) {
+        target.focus({ preventScroll: true });
+        pendingControlFocus = undefined;
+      }
+    }
     if (focusFontLabel !== null) {
       // A chosen family rebuilds the row; return focus to the new trigger so a
       // keyboard reader can continue from the control they just used.
@@ -2515,6 +2980,33 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
 
   function open(): void {
     overlay.hidden = false;
+    if (activeId === "latex" && host.texmfBusy() === null) {
+      void host.refreshTexmf().then(render);
+    }
+    // The package cache grows during compiles, and the engine can be installed
+    // from Tools or the preview without this panel open. Re-read it on every
+    // open and redraw only when the answer changed, like the voices below.
+    const latexBefore = JSON.stringify([host.latexCache(), host.latexCacheError()]);
+    void host.refreshLatexCache().then(() => {
+      if (
+        !overlay.hidden &&
+        JSON.stringify([host.latexCache(), host.latexCacheError()]) !== latexBefore
+      ) {
+        render();
+      }
+    });
+    if (!host.typstServiceStatus) {
+      const svcBefore = JSON.stringify(typstSvc.status);
+      void api
+        .typstServiceStatus()
+        .then((next) => {
+          typstSvc.status = next;
+          if (!overlay.hidden && JSON.stringify(next) !== svcBefore) {
+            render();
+          }
+        })
+        .catch(() => {});
+    }
     query = "";
     searchEl.value = "";
     // A failed scan is retried only when the panel is reopened, never from the
@@ -2542,7 +3034,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
   }
 
   function openAt(sectionId: string): void {
-    const target = buildSections(host, ai, () => render()).find(
+    const target = buildSections(host, ai, typstSvc, () => render()).find(
       (section) => section.id === sectionId,
     );
     if (target) activeId = target.id;
@@ -2550,6 +3042,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
   }
 
   function close(): void {
+    pendingControlFocus = undefined;
     closeModelCombo();
     closeFontPicker();
     clearPendingReset();

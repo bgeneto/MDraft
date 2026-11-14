@@ -145,6 +145,36 @@ fn default_typst_view() -> String {
     "document".to_string()
 }
 
+/// The LaTeX package cache ceiling, in MiB.
+///
+/// 256 MiB is what the experiment used as a hard limit and is enough for a paper
+/// with a handful of packages and fonts; the reader can lower or raise it in
+/// Preferences.
+fn default_latex_cache_limit() -> u32 {
+    256
+}
+
+/// The installed backend's default engine choice.
+///
+/// `auto` reads only the `% !TEX program` allowlist and otherwise prefers
+/// LuaLaTeX, which is the engine the bundled backend uses too.
+fn default_native_engine() -> String {
+    "auto".into()
+}
+
+/// The range the cache ceiling is clamped to.
+pub const LATEX_CACHE_MIN_MB: u32 = 32;
+pub const LATEX_CACHE_MAX_MB: u32 = 4096;
+
+/// Keep a hand-edited or stale cache ceiling inside the supported range.
+///
+/// A zero would make every compile re-download and fail as soon as one package
+/// exceeded the limit; an enormous value would turn the cache into a second
+/// document folder. Clamping is friendlier than refusing to load the file.
+fn clamp_latex_cache_limit(mb: u32) -> u32 {
+    mb.clamp(LATEX_CACHE_MIN_MB, LATEX_CACHE_MAX_MB)
+}
+
 /// The source pane's line spacing.
 ///
 /// `normal` is the 1.5 established when the default was tightened; Compact and
@@ -210,6 +240,10 @@ fn default_spellcheck_language() -> String {
     "auto".to_string()
 }
 
+fn default_spellcheck_string_mode() -> String {
+    "human".into()
+}
+
 /// KaTeX draws every formula at 1.21em. The default scales that down to sit
 /// with the prose; 100 is KaTeX's own ratio, kept as the upper bound's anchor.
 fn default_math_font_scale() -> u32 {
@@ -223,7 +257,8 @@ fn default_code_font_scale() -> u32 {
     100
 }
 
-pub fn default_export_formats() -> Vec<ExportFormat> {    let args = |rest: &str| format!("{PANDOC_INPUT} {rest}");
+pub fn default_export_formats() -> Vec<ExportFormat> {
+    let args = |rest: &str| format!("{PANDOC_INPUT} {rest}");
     vec![
         ExportFormat::new(
             "pdf",
@@ -243,15 +278,30 @@ pub fn default_export_formats() -> Vec<ExportFormat> {    let args = |rest: &str
             "odt",
             &args("-s -o ${outputPath} --reference-doc=${styleReference}"),
         ),
-        ExportFormat::new("latex", "LaTeX", "tex", &args("-s -t latex -o ${outputPath} --wrap=none")),
-        ExportFormat::new("rst", "reStructuredText", "rst", &args("-s -t rst -o ${outputPath} --wrap=none")),
+        ExportFormat::new(
+            "latex",
+            "LaTeX",
+            "tex",
+            &args("-s -t latex -o ${outputPath} --wrap=none"),
+        ),
+        ExportFormat::new(
+            "rst",
+            "reStructuredText",
+            "rst",
+            &args("-s -t rst -o ${outputPath} --wrap=none"),
+        ),
         ExportFormat::new(
             "asciidoc",
             "AsciiDoc",
             "adoc",
             &args("-s -t asciidoc -o ${outputPath} --wrap=none"),
         ),
-        ExportFormat::new("epub", "EPUB", "epub", &args("-s -o ${outputPath} --css=${styleReference}")),
+        ExportFormat::new(
+            "epub",
+            "EPUB",
+            "epub",
+            &args("-s -o ${outputPath} --css=${styleReference}"),
+        ),
         ExportFormat::new("rtf", "RTF", "rtf", &args("-s -o ${outputPath}")),
         ExportFormat::new(
             "textile",
@@ -305,6 +355,64 @@ pub struct PresetOverride {
     pub slashed_zero: Option<bool>,
 }
 
+/// One folder's explicit main LaTeX document.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderMainDocument {
+    pub folder: String,
+    pub path: String,
+}
+
+/// Folders whose main document is remembered; the oldest choice is dropped.
+pub const MAX_MAIN_DOCUMENTS: usize = 50;
+
+/// One LaTeX project's bundled engine, chosen from the status-bar engine chip
+/// (stage 6.2 of docs/architecture.md). Keyed by the
+/// main document, so two projects in one workspace keep their own engines.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectEngine {
+    pub main: String,
+    pub engine: String,
+}
+
+/// Projects whose engine is remembered; newest first, the oldest is dropped.
+pub const MAX_PROJECT_ENGINES: usize = 50;
+
+fn default_bundled_engine() -> String {
+    "lualatex".into()
+}
+
+/// An engine name the bundled compiler knows, or None.
+fn bundled_engine_name(value: &str) -> Option<&'static str> {
+    match value {
+        "lualatex" => Some("lualatex"),
+        "pdflatex" => Some("pdflatex"),
+        "xelatex" => Some("xelatex"),
+        _ => None,
+    }
+}
+
+/// Unknown engine names are dropped rather than handed to the compiler.
+fn normalize_engines(settings: &mut Settings) {
+    if settings.latex_bundled_engine != "auto"
+        && bundled_engine_name(&settings.latex_bundled_engine).is_none()
+    {
+        settings.latex_bundled_engine = default_bundled_engine();
+    }
+    settings
+        .latex_project_engines
+        .retain(|entry| bundled_engine_name(&entry.engine).is_some() && !entry.main.is_empty());
+    settings.latex_project_engines.truncate(MAX_PROJECT_ENGINES);
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpellDocumentLanguage {
+    pub path: String,
+    pub language: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -312,7 +420,7 @@ pub struct Settings {
     pub theme: String,
     /// "source" | "split" | "preview"
     pub view_mode: String,
-    /// "outline" | "favorites" | "recent"
+    /// "outline" | "favorites" | "recent" | "explorer"
     pub sidebar_tab: String,
     pub sidebar_visible: bool,
     pub sync_scroll: bool,
@@ -406,6 +514,13 @@ pub struct Settings {
     /// text. Defaults to `document` because reading is what a preview is for.
     #[serde(default = "default_typst_view")]
     pub typst_view: String,
+    #[serde(default = "default_true")]
+    pub typst_auto_compile: bool,
+    /// Opt-in persistent in-memory Typst incremental service in `app_data_dir`.
+    /// Defaults to false and falls back cleanly to stock CLI `typst` when
+    /// disabled, missing, or unresponsive.
+    #[serde(default)]
+    pub typst_incremental_service: bool,
     #[serde(default)]
     pub slashed_zero: bool,
     /// Editor syntax palette id, or "auto" to follow the application theme.
@@ -420,6 +535,26 @@ pub struct Settings {
     /// point: a favorite is a deliberate choice.
     #[serde(default)]
     pub favorites: Vec<String>,
+    /// The folder the Explorer lists (Track W). A view and a default, never a
+    /// permission: see docs/architecture.md. A missing
+    /// folder is reported by the Explorer, not cleared silently.
+    #[serde(default)]
+    pub workspace_folder: Option<String>,
+    /// Show hidden entries, build folders and TeX auxiliary files in the Explorer.
+    #[serde(default)]
+    pub explorer_show_all: bool,
+    /// The reader's **Set as Main Document** choice per workspace folder
+    /// (main-document rule 2). At most [`MAX_MAIN_DOCUMENTS`] folders.
+    #[serde(default)]
+    pub latex_main_documents: Vec<FolderMainDocument>,
+    /// The bundled engine when neither a magic comment nor the project names
+    /// one: "lualatex" (the default, so existing documents do not change),
+    /// "pdflatex", "xelatex" or "auto" (the SDK's detector).
+    #[serde(default = "default_bundled_engine")]
+    pub latex_bundled_engine: String,
+    /// Per-project engine choices; at most [`MAX_PROJECT_ENGINES`].
+    #[serde(default)]
+    pub latex_project_engines: Vec<ProjectEngine>,
     pub last_directory: Option<String>,
     /// Paths of the tabs that were open when the window last closed.
     ///
@@ -432,12 +567,81 @@ pub struct Settings {
     #[serde(default)]
     pub last_active_tab: Option<String>,
 
+    // ---- Preferences: LaTeX ----------------------------------------------
+    /// Whether the reader has enabled the experimental LuaLaTeX engine.
+    ///
+    /// This lives in `settings.json` rather than in a marker file beside the
+    /// cache, so a portable build and a settings backup carry it. The cache
+    /// directory holds only downloaded bytes; turning the switch off leaves it
+    /// inert and stops the `mdraft-tex` scheme from serving anything.
+    #[serde(default)]
+    pub latex_enabled: bool,
+    #[serde(default = "default_true")]
+    pub latex_auto_compile: bool,
+    /// The ceiling for the downloaded TeX package cache, in MiB.
+    ///
+    /// Least-recently-used entries are evicted to stay under it. Clamped to a
+    /// range a reader cannot set to something that would make a compile fail
+    /// opaquely: too small and every compile re-downloads, too large and the
+    /// cache stops being a cache.
+    #[serde(default = "default_latex_cache_limit")]
+    pub latex_cache_limit_mb: u32,
+
+    /// Whether the reader chose an installed TeX distribution.
+    ///
+    /// Separate from [`Self::latex_enabled`] on purpose: the bundled engine and a
+    /// local installation are different trust boundaries, and a reader who turned
+    /// one off must not lose the other. Off by default.
+    #[serde(default)]
+    pub latex_native_enabled: bool,
+    /// The validated binary directory of the installed distribution.
+    ///
+    /// `None` until a validation committed one. Only a directory that compiled a
+    /// probe document is written here.
+    #[serde(default)]
+    pub latex_native_root: Option<String>,
+    /// `"auto"`, `"lualatex"`, `"pdflatex"` or `"xelatex"`.
+    ///
+    /// Auto recognises only the `% !TEX program` allowlist; an explicit choice
+    /// always wins and is verified again when a job starts.
+    #[serde(default = "default_native_engine")]
+    pub latex_native_engine: String,
+    /// A TeX Live installation inside a WSL distribution, when that is the
+    /// selected native engine (Windows only). Exclusive with
+    /// [`Self::latex_native_root`]: a validation of one clears the other.
+    #[serde(default)]
+    pub latex_native_wsl: Option<crate::latex_native::wsl::WslInstallation>,
+    /// Registered local TEXMF libraries, in search order. Owned by the
+    /// `latex_texmf_*` commands; a whole-object save keeps the stored value.
+    #[serde(default)]
+    pub latex_texmf_roots: Vec<crate::latex_texmf::TexmfRoot>,
+
     // ---- Preferences: Files ----------------------------------------------
     /// "welcome" | "new" | "last" | "tabs"
+    ///
+    /// Defaults to `"tabs"`: a reader who closes the window and opens it again
+    /// gets the documents they were working on, not a welcome page they have
+    /// already read. A profile with nothing remembered falls back to one blank
+    /// tab, which is what `restoreLastTabs` does for an empty set.
     pub on_launch: String,
     pub default_extension: String,
     pub record_recent: bool,
+    /// Write dirty files in place every 20 seconds.
+    ///
+    /// Off by default: a background write is a change to the reader's file that
+    /// they did not ask for, so it stays a deliberate choice. Untitled buffers
+    /// have no path and are never written either way.
     pub auto_save: bool,
+    /// Whether the welcome document has been shown once already.
+    ///
+    /// Only the **first** launch of a profile shows it. `on_launch` defaults to
+    /// `"tabs"`, and its empty-set fallback is deliberately a blank tab so that
+    /// **Close All Tabs** is not undone at the next start; that would otherwise
+    /// make a brand-new install open on an empty buffer with no introduction.
+    /// This flag is what tells the two apart. It is set the first time the
+    /// welcome document is shown at boot, and never cleared.
+    #[serde(default)]
+    pub welcome_seen: bool,
 
     // ---- Preferences: Markdown -------------------------------------------
     pub enable_math: bool,
@@ -470,6 +674,15 @@ pub struct Settings {
     /// user dictionary and would change spelling in every other program.
     #[serde(default)]
     pub spellcheck_words: Vec<String>,
+    /// Scope of JavaScript and JSON string checking.
+    #[serde(default = "default_spellcheck_string_mode")]
+    pub spellcheck_string_mode: String,
+    /// Check components of code identifiers without offering a rename.
+    #[serde(default)]
+    pub spellcheck_identifiers: bool,
+    /// Least-recently-set first; bounded and validated on load and save.
+    #[serde(default)]
+    pub spellcheck_document_languages: Vec<SpellDocumentLanguage>,
 
     // ---- Preferences: Image ----------------------------------------------
     /// "assetsFolder" | "assetsDir" | "custom" | "keepOriginal"
@@ -499,6 +712,21 @@ pub struct Settings {
     /// in an HTML, Markdown or AsciiDoc document.
     #[serde(default = "default_true")]
     pub auto_close_tags: bool,
+    /// Offer completions while typing.
+    ///
+    /// On by default: the popup only opens on a construct (a backslash, a
+    /// backtick, a brace argument), never on ordinary prose, so it does not
+    /// interrupt writing. Turning it off removes the extension and its Tab
+    /// binding together, so Tab goes back to being only indentation.
+    #[serde(default = "default_true")]
+    pub completion: bool,
+    /// Expand Emmet abbreviations with Tab in HTML and CSS documents.
+    ///
+    /// On by default because that is the feature; it only ever acts where an
+    /// abbreviation is allowed, and Tab still indents everywhere else. Turning it
+    /// off removes the Tab binding, so Tab is only indentation again.
+    #[serde(default = "default_true")]
+    pub emmet: bool,
 
     // ---- Preferences: Export ---------------------------------------------
     /// Pandoc export targets, in the order the menu shows them.
@@ -512,9 +740,16 @@ pub struct Settings {
     /// three paths that write a file — pandoc, Typst and HTML — all run them.
     /// PDF (Print) is the one exception: the browser chooses where the PDF
     /// goes, so MDraft has no path to open.
+    ///
+    /// Opening the exported file is on by default; revealing its folder and
+    /// running a command are not. A file the reader just asked to export is the
+    /// one thing they are most likely to want to look at, while a second window
+    /// in the file manager and an arbitrary shell command are choices to opt
+    /// into. An older profile that actually chose one of these keeps that
+    /// choice; see `parse_settings`.
     #[serde(default)]
     pub after_open_location: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub after_open_file: bool,
     #[serde(default)]
     pub after_run_command: bool,
@@ -622,18 +857,35 @@ impl Default for Settings {
             tabular_figures: true,
             oldstyle_figures: false,
             typst_view: default_typst_view(),
+            typst_auto_compile: true,
+            typst_incremental_service: false,
             slashed_zero: false,
             syntax_theme: "auto".into(),
             recent_files: Vec::new(),
             favorites: Vec::new(),
+            workspace_folder: None,
+            explorer_show_all: false,
+            latex_main_documents: Vec::new(),
+            latex_bundled_engine: default_bundled_engine(),
+            latex_project_engines: Vec::new(),
             last_directory: None,
             last_tabs: Vec::new(),
             last_active_tab: None,
 
-            on_launch: "welcome".into(),
+            latex_enabled: false,
+            latex_auto_compile: true,
+            latex_cache_limit_mb: default_latex_cache_limit(),
+            latex_native_enabled: false,
+            latex_native_root: None,
+            latex_native_engine: default_native_engine(),
+            latex_native_wsl: None,
+            latex_texmf_roots: Vec::new(),
+
+            on_launch: "tabs".into(),
             default_extension: "md".into(),
             record_recent: true,
             auto_save: false,
+            welcome_seen: false,
 
             enable_math: true,
             enable_mermaid: true,
@@ -642,6 +894,9 @@ impl Default for Settings {
             spellcheck: true,
             spellcheck_language: default_spellcheck_language(),
             spellcheck_words: Vec::new(),
+            spellcheck_string_mode: default_spellcheck_string_mode(),
+            spellcheck_identifiers: false,
+            spellcheck_document_languages: Vec::new(),
 
             image_rule: "assetsFolder".into(),
             image_custom_dir: String::new(),
@@ -654,10 +909,12 @@ impl Default for Settings {
             rich_paste_images: default_rich_paste_images(),
             auto_close_pairs: true,
             auto_close_tags: true,
+            completion: true,
+            emmet: true,
 
             export_formats: default_export_formats(),
             after_open_location: false,
-            after_open_file: false,
+            after_open_file: true,
             after_run_command: false,
             after_command: String::new(),
 
@@ -794,11 +1051,22 @@ fn normalize_ai_usage(object: &mut serde_json::Map<String, serde_json::Value>) {
 ///
 /// The flags used to live on each `ExportFormat`, which meant a box ticked for
 /// Word did nothing when the user exported HTML or PDF. They are global now.
+///
 /// A file written before that change has no `afterOpenLocation` key at the top
 /// level, so its per-format values are OR-ed together and the old keys are
-/// removed. Once a top-level key exists the file belongs to the new shape and
-/// is left alone: otherwise unchecking a global box would be undone on the next
+/// removed. Once a top-level key exists the file belongs to the new shape and is
+/// left alone: otherwise unchecking a global box would be undone on the next
 /// start by the obsolete per-format value.
+///
+/// The one subtlety is what "carrying forward" means for a reader who never
+/// touched the option. Every release that had the per-format flags **wrote all
+/// four of them on every format**, so the presence of the keys proves nothing:
+/// a default profile has them, all `false`. Writing `false` forward would pin
+/// that reader to the old answer forever and deny them the shipped default
+/// (opening the exported file). So only an actual **choice** is carried forward —
+/// any flag set to `true`, or a non-empty command. A profile with every flag
+/// `false` gets no top-level keys at all and falls through to the serde
+/// defaults, which is the same answer the reader would get from a fresh install.
 fn parse_settings(raw: &str) -> Option<Settings> {
     let mut value: serde_json::Value = serde_json::from_str(raw).ok()?;
     let object = value.as_object_mut()?;
@@ -855,7 +1123,9 @@ fn parse_settings(raw: &str) -> Option<Settings> {
         }
     }
 
-    if legacy {
+    // Only a deliberate choice is carried forward; see the doc comment above.
+    let chose_something = open_location || open_file || run_command || !command.trim().is_empty();
+    if legacy && chose_something {
         object.insert("afterOpenLocation".into(), open_location.into());
         object.insert("afterOpenFile".into(), open_file.into());
         object.insert("afterRunCommand".into(), run_command.into());
@@ -871,7 +1141,18 @@ fn parse_settings(raw: &str) -> Option<Settings> {
     settings.recent_files.truncate(MAX_RECENT);
     normalize_favorites(&mut settings.favorites);
     settings.last_tabs.truncate(MAX_LAST_TABS);
+    // Newest first, so a hand-edited list keeps its most recent folders.
+    settings.latex_main_documents.truncate(MAX_MAIN_DOCUMENTS);
+    normalize_engines(&mut settings);
+    normalize_spell_document_languages(&mut settings.spellcheck_document_languages);
+    if !matches!(
+        settings.spellcheck_string_mode.as_str(),
+        "human" | "all" | "off"
+    ) {
+        settings.spellcheck_string_mode = default_spellcheck_string_mode();
+    }
     settings.ai_context_tokens = clamp_context_tokens(settings.ai_context_tokens);
+    settings.latex_cache_limit_mb = clamp_latex_cache_limit(settings.latex_cache_limit_mb);
     // The Files panel was replaced by Favorites. An older file that was last
     // showing it must open on the panel that took its place, not fall through
     // the renderer's `else` branch into Recent.
@@ -879,6 +1160,24 @@ fn parse_settings(raw: &str) -> Option<Settings> {
         settings.sidebar_tab = "favorites".to_string();
     }
     Some(settings)
+}
+
+fn adopt_latex_marker(raw: Option<&str>, marker: bool) -> bool {
+    marker
+        && raw
+            .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+            .is_none_or(|value| value.get("latexEnabled").is_none())
+}
+
+fn initialize_local_packages(raw: Option<&str>, config_exists: bool) -> bool {
+    !config_exists
+        || raw.is_some_and(|raw| {
+            serde_json::from_str::<serde_json::Value>(raw).is_ok_and(|value| {
+                value
+                    .as_object()
+                    .is_some_and(|fields| !fields.contains_key("latexTexmfRoots"))
+            })
+        })
 }
 
 impl AppState {
@@ -893,10 +1192,37 @@ impl AppState {
         let _ = std::fs::create_dir_all(&dir);
         let config_file = dir.join("settings.json");
 
-        let settings = std::fs::read_to_string(&config_file)
-            .ok()
-            .and_then(|raw| parse_settings(&raw))
+        let raw_settings = std::fs::read_to_string(&config_file).ok();
+        let mut settings = raw_settings
+            .as_deref()
+            .and_then(parse_settings)
             .unwrap_or_default();
+
+        // Profiles from before local libraries have no key yet. An explicit
+        // empty list is a deliberate choice and must survive every startup.
+        let fresh = initialize_local_packages(raw_settings.as_deref(), config_file.exists());
+        let _ = crate::latex_texmf::initialize(&dir, &mut settings.latex_texmf_roots, fresh);
+
+        // The LuaLaTeX experiment kept its switch in a marker file beside the
+        // cache; the product keeps it here. A reader who enabled the experiment
+        // has the marker and no `latexEnabled` key, so without this they would
+        // silently lose the engine they had already downloaded — the preview
+        // would offer "Enable LuaLaTeX…" again and re-download it. Adopt the
+        // marker once, then leave it alone: the switch is the source of truth
+        // from here on, and turning it off must not be undone by a stale file.
+        if adopt_latex_marker(
+            raw_settings.as_deref(),
+            crate::latex::legacy_marker_present(app),
+        ) {
+            settings.latex_enabled = true;
+        }
+        if fresh {
+            let _ = write_json(&config_file, &settings);
+        }
+
+        // The `mdraft-tex` scheme handler is synchronous and cannot parse this
+        // file per request, so the two fields it needs are mirrored in memory.
+        crate::latex::apply_settings(&settings);
 
         Self {
             settings: Mutex::new(settings),
@@ -906,6 +1232,14 @@ impl AppState {
         }
     }
 
+    /// A copy of the current settings, for a command that changes one field.
+    pub fn snapshot(&self) -> Result<Settings, String> {
+        self.settings
+            .lock()
+            .map(|guard| guard.clone())
+            .map_err(|e| e.to_string())
+    }
+
     pub fn save(&self, mut next: Settings) -> Result<Settings, String> {
         // Every route that writes settings goes through here, including the
         // frontend's whole-object save. Keeping the cap here means a stale or
@@ -913,10 +1247,23 @@ impl AppState {
         next.recent_files.truncate(MAX_RECENT);
         normalize_favorites(&mut next.favorites);
         next.last_tabs.truncate(MAX_LAST_TABS);
+        next.latex_main_documents.truncate(MAX_MAIN_DOCUMENTS);
+        normalize_engines(&mut next);
+        normalize_spell_document_languages(&mut next.spellcheck_document_languages);
+        if !matches!(
+            next.spellcheck_string_mode.as_str(),
+            "human" | "all" | "off"
+        ) {
+            next.spellcheck_string_mode = default_spellcheck_string_mode();
+        }
         next.ai_context_tokens = clamp_context_tokens(next.ai_context_tokens);
+        next.latex_cache_limit_mb = clamp_latex_cache_limit(next.latex_cache_limit_mb);
         sort_ai_usage(&mut next.ai_action_usage);
         next.ai_action_usage.truncate(MAX_AI_USAGE_ENTRIES);
         write_json(&self.config_file, &next)?;
+        // The scheme handler reads the mirror, not the file, so it must follow
+        // every save — including the one that turns the engine off.
+        crate::latex::apply_settings(&next);
         let mut guard = self.settings.lock().map_err(|e| e.to_string())?;
         *guard = next.clone();
         Ok(next)
@@ -938,11 +1285,7 @@ pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
 
 #[tauri::command]
 pub fn get_settings(state: tauri::State<'_, AppState>) -> Settings {
-    state
-        .settings
-        .lock()
-        .map(|s| s.clone())
-        .unwrap_or_default()
+    state.settings.lock().map(|s| s.clone()).unwrap_or_default()
 }
 
 /// Save settings, rebuilding the native menu when the export targets changed.
@@ -965,6 +1308,15 @@ pub fn save_settings<R: Runtime>(
         )
     };
 
+    // Backend-owned: these change only through their validated commands, so a
+    // stale or hand-built frontend payload cannot register a library folder or
+    // point the native engine at an unvalidated distribution.
+    let mut settings = settings;
+    {
+        let current = state.settings.lock().map_err(|e| e.to_string())?;
+        settings.latex_texmf_roots = current.latex_texmf_roots.clone();
+        settings.latex_native_wsl = current.latex_native_wsl.clone();
+    }
     let saved = state.save(settings)?;
 
     // Two parts of the native menu are generated from settings: the Export
@@ -1049,11 +1401,7 @@ pub fn add_recent<R: Runtime>(
     state: tauri::State<'_, AppState>,
     path: String,
 ) -> Result<Settings, String> {
-    let mut next = state
-        .settings
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone();
+    let mut next = state.settings.lock().map_err(|e| e.to_string())?.clone();
 
     let previous = next.recent_files.clone();
     record_recent(&mut next, &path);
@@ -1074,11 +1422,7 @@ pub fn clear_recent<R: Runtime>(
     app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Settings, String> {
-    let mut next = state
-        .settings
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone();
+    let mut next = state.settings.lock().map_err(|e| e.to_string())?.clone();
     let had_recent = !next.recent_files.is_empty();
     next.recent_files.clear();
     let saved = state.save(next)?;
@@ -1094,15 +1438,8 @@ pub fn clear_recent<R: Runtime>(
 /// A duplicate is a successful no-op: clicking Add twice cannot create two rows.
 /// The native menu does not show favorites, so no menu rebuild is needed.
 #[tauri::command]
-pub fn add_favorite(
-    state: tauri::State<'_, AppState>,
-    path: String,
-) -> Result<Settings, String> {
-    let mut next = state
-        .settings
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone();
+pub fn add_favorite(state: tauri::State<'_, AppState>, path: String) -> Result<Settings, String> {
+    let mut next = state.settings.lock().map_err(|e| e.to_string())?.clone();
     if !add_favorite_path(&mut next, &path)? {
         return Ok(next);
     }
@@ -1115,11 +1452,7 @@ pub fn remove_favorite(
     state: tauri::State<'_, AppState>,
     path: String,
 ) -> Result<Settings, String> {
-    let mut next = state
-        .settings
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone();
+    let mut next = state.settings.lock().map_err(|e| e.to_string())?.clone();
     if !remove_favorite_path(&mut next, &path) {
         return Ok(next);
     }
@@ -1141,9 +1474,81 @@ pub fn same_path(a: &str, b: &str) -> bool {
     normalize(a) == normalize(b)
 }
 
+fn normalize_spell_document_languages(entries: &mut Vec<SpellDocumentLanguage>) {
+    let mut kept: Vec<SpellDocumentLanguage> = Vec::new();
+    for mut entry in entries.drain(..).rev().take(2_000) {
+        if entry.path.trim().is_empty() || entry.path.len() > 8_192 || entry.path.contains('\0') {
+            continue;
+        }
+        if entry.language != "auto" {
+            let Some(language) = crate::spellcheck::normalize_tag(&entry.language) else {
+                continue;
+            };
+            entry.language = language;
+        }
+        if kept.iter().any(|other| same_path(&other.path, &entry.path)) {
+            continue;
+        }
+        kept.push(entry);
+        if kept.len() == 100 {
+            break;
+        }
+    }
+    kept.reverse();
+    *entries = kept;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spelling_document_choices_keep_newest_valid_entries() {
+        let mut entries = (0..101)
+            .map(|index| SpellDocumentLanguage {
+                path: format!("/docs/{index}.md"),
+                language: "pt_br".into(),
+            })
+            .collect::<Vec<_>>();
+        entries.push(SpellDocumentLanguage {
+            path: "/docs/100.md".into(),
+            language: "auto".into(),
+        });
+        entries.push(SpellDocumentLanguage {
+            path: "../invalid".into(),
+            language: "../fr".into(),
+        });
+        normalize_spell_document_languages(&mut entries);
+        assert_eq!(entries.len(), 100);
+        assert_eq!(
+            entries.last().map(|entry| entry.language.as_str()),
+            Some("auto")
+        );
+        assert_eq!(entries[0].language, "pt-BR");
+        assert!(!entries.iter().any(|entry| entry.path == "/docs/0.md"));
+    }
+
+    #[test]
+    fn local_packages_initialize_once_without_resurrecting_removed_roots() {
+        assert!(initialize_local_packages(None, false));
+        assert!(initialize_local_packages(
+            Some(r#"{"latexEnabled":true}"#),
+            true
+        ));
+        assert!(!initialize_local_packages(
+            Some(r#"{"latexTexmfRoots":[]}"#),
+            true
+        ));
+        assert!(!initialize_local_packages(
+            Some(r#"{"latexTexmfRoots":[{"enabled":false}]}"#),
+            true
+        ));
+        assert!(!initialize_local_packages(Some("corrupt"), true));
+        assert!(
+            !initialize_local_packages(None, true),
+            "an unreadable existing file is not a new profile"
+        );
+    }
 
     #[test]
     fn cursor_blink_defaults_by_platform_and_round_trips() {
@@ -1193,8 +1598,8 @@ mod tests {
             .expect("an overgrown budget is still settings");
         assert_eq!(too_high.ai_context_tokens, 32_768);
 
-        let too_low = parse_settings(r#"{"aiContextTokens": 1}"#)
-            .expect("a tiny budget is still settings");
+        let too_low =
+            parse_settings(r#"{"aiContextTokens": 1}"#).expect("a tiny budget is still settings");
         assert_eq!(too_low.ai_context_tokens, 1_024);
     }
 
@@ -1215,6 +1620,97 @@ mod tests {
         let saved = state.save(next).expect("save settings");
         assert_eq!(saved.ai_context_tokens, 32_768);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_latex_cache_ceiling_is_clamped_and_defaults_to_256() {
+        // A zero ceiling would make every compile re-download, and an enormous
+        // one would turn the cache into a second document folder.
+        assert_eq!(Settings::default().latex_cache_limit_mb, 256);
+        assert_eq!(clamp_latex_cache_limit(0), LATEX_CACHE_MIN_MB);
+        assert_eq!(clamp_latex_cache_limit(1), LATEX_CACHE_MIN_MB);
+        assert_eq!(clamp_latex_cache_limit(256), 256);
+        assert_eq!(clamp_latex_cache_limit(u32::MAX), LATEX_CACHE_MAX_MB);
+    }
+
+    #[test]
+    fn completion_defaults_on_and_an_older_file_keeps_loading() {
+        // A settings file written before completion existed has no `completion`
+        // key. It must load, and the feature must be on: a reader who never chose
+        // anything gets the default, and an absent key is not an opt-out.
+        let legacy = r#"{"viewMode":"split","theme":"light"}"#;
+        let loaded = parse_settings(legacy).expect("a legacy file loads");
+        assert!(loaded.completion);
+
+        // An explicit off survives a round trip.
+        let off = r#"{"completion":false}"#;
+        let loaded = parse_settings(off).expect("the key loads");
+        assert!(!loaded.completion);
+    }
+
+    #[test]
+    fn emmet_defaults_on_and_an_older_file_keeps_loading() {
+        // A file written before Emmet existed has no `emmet` key. It must load
+        // with the feature on, and an explicit off must survive.
+        let legacy = r#"{"viewMode":"split","theme":"light"}"#;
+        let loaded = parse_settings(legacy).expect("a legacy file loads");
+        assert!(loaded.emmet);
+
+        let off = r#"{"emmet":false}"#;
+        let loaded = parse_settings(off).expect("the key loads");
+        assert!(!loaded.emmet);
+    }
+
+    #[test]
+    fn the_latex_switch_defaults_off_and_loads_from_a_legacy_file() {
+        // An older settings file has neither key; it must keep loading, with the
+        // engine off and the documented ceiling.
+        let legacy = r#"{"viewMode":"split","theme":"light"}"#;
+        let loaded = parse_settings(legacy).expect("a legacy file loads");
+        assert!(!loaded.latex_enabled);
+        assert!(loaded.latex_auto_compile);
+        assert!(loaded.typst_auto_compile);
+        assert!(!loaded.typst_incremental_service);
+        assert_eq!(loaded.latex_cache_limit_mb, 256);
+        // A file from before installed distributions existed must not opt the
+        // reader into one, and must not break loading.
+        assert!(!loaded.latex_native_enabled);
+        assert!(loaded.latex_native_root.is_none());
+        assert_eq!(loaded.latex_native_engine, "auto");
+
+        let enabled = r#"{"latexEnabled":true,"latexCacheLimitMb":512}"#;
+        let loaded = parse_settings(enabled).expect("the new keys load");
+        assert!(loaded.latex_enabled);
+        assert_eq!(loaded.latex_cache_limit_mb, 512);
+        let manual = parse_settings(r#"{"latexAutoCompile":false}"#).unwrap();
+        assert!(!manual.latex_auto_compile);
+
+        let typst_svc = parse_settings(r#"{"typstIncrementalService":true}"#).unwrap();
+        assert!(typst_svc.typst_incremental_service);
+
+        let native = parse_settings(
+            r#"{"latexNativeEnabled":true,"latexNativeRoot":"C:/tex/bin","latexNativeEngine":"xelatex"}"#,
+        )
+        .expect("native keys load");
+        assert!(native.latex_native_enabled);
+        assert_eq!(native.latex_native_root.as_deref(), Some("C:/tex/bin"));
+        assert_eq!(native.latex_native_engine, "xelatex");
+        // The two backends are independent switches.
+        assert!(!native.latex_enabled);
+    }
+
+    #[test]
+    fn the_legacy_marker_is_adopted_only_when_the_switch_was_never_set() {
+        assert!(super::adopt_latex_marker(Some("{}"), true));
+        assert!(!super::adopt_latex_marker(Some("{}"), false));
+        assert!(!super::adopt_latex_marker(
+            Some(r#"{"latexEnabled":false}"#),
+            true
+        ));
+        assert!(!super::adopt_latex_marker(
+            Some(r#"{"latexEnabled":true}"#),
+            true
+        ));
     }
 
     #[test]
@@ -1328,6 +1824,9 @@ mod tests {
         assert!(settings.spellcheck);
         assert_eq!(settings.spellcheck_language, "auto");
         assert!(settings.spellcheck_words.is_empty());
+        assert_eq!(settings.spellcheck_string_mode, "human");
+        assert!(!settings.spellcheck_identifiers);
+        assert!(settings.spellcheck_document_languages.is_empty());
     }
 
     #[test]
@@ -1422,8 +1921,9 @@ mod tests {
         assert_eq!(parsed.theme, "dark");
         assert_eq!(parsed.view_mode, "split");
         assert!(parsed.sidebar_visible);
-        // Settings written by an older build must still load.
-        assert_eq!(parsed.on_launch, "welcome");
+        // Settings written by an older build must still load, and the fields it
+        // never wrote come back with the current defaults.
+        assert_eq!(parsed.on_launch, "tabs");
         assert_eq!(parsed.editor_line_height, "normal");
         assert!(parsed.enable_math);
         assert!(!parsed.auto_save);
@@ -1500,15 +2000,21 @@ mod tests {
         assert_eq!(json["presetOverrides"]["superfamily"]["mathFontScale"], 83);
         assert_eq!(json["presetOverrides"]["superfamily"]["codeFontScale"], 116);
         assert!(
-            json["presetOverrides"]["system"].get("editorFontSize").is_none(),
+            json["presetOverrides"]["system"]
+                .get("editorFontSize")
+                .is_none(),
             "a missing size must stay absent rather than serialising as null"
         );
         assert!(
-            json["presetOverrides"]["system"].get("mathFontScale").is_none(),
+            json["presetOverrides"]["system"]
+                .get("mathFontScale")
+                .is_none(),
             "a missing size must stay absent rather than serialising as null"
         );
         assert!(
-            json["presetOverrides"]["system"].get("codeFontScale").is_none(),
+            json["presetOverrides"]["system"]
+                .get("codeFontScale")
+                .is_none(),
             "a missing size must stay absent rather than serialising as null"
         );
     }
@@ -1554,7 +2060,9 @@ mod tests {
         );
         assert_eq!(json["presetOverrides"]["custom"]["tabularFigures"], false);
         assert!(
-            json["presetOverrides"]["custom"].get("editorFontSize").is_none(),
+            json["presetOverrides"]["custom"]
+                .get("editorFontSize")
+                .is_none(),
             "an unadjusted size must stay absent, not serialise as null"
         );
     }
@@ -1599,9 +2107,7 @@ mod tests {
     fn adding_at_the_cap_is_refused_without_evicting() {
         let mut settings = Settings::default();
         for index in 0..MAX_FAVORITES {
-            assert!(
-                add_favorite_path(&mut settings, &format!("C:/Docs/file{index}.md")).unwrap()
-            );
+            assert!(add_favorite_path(&mut settings, &format!("C:/Docs/file{index}.md")).unwrap());
         }
         let first = settings.favorites[0].clone();
         let error = add_favorite_path(&mut settings, "C:/Docs/one-too-many.md").unwrap_err();
@@ -1676,6 +2182,46 @@ mod tests {
         assert_eq!(parsed.sidebar_tab, "recent");
         let parsed = parse_settings(r#"{"sidebarTab":"favorites"}"#).expect("new settings load");
         assert_eq!(parsed.sidebar_tab, "favorites");
+    }
+
+    #[test]
+    fn the_explorer_tab_and_workspace_load_and_old_files_get_no_workspace() {
+        // "explorer" is a new value, not the retired "files": it must survive.
+        let parsed = parse_settings(
+            r#"{"sidebarTab":"explorer","workspaceFolder":"C:\\thesis","explorerShowAll":true}"#,
+        )
+        .expect("workspace settings load");
+        assert_eq!(parsed.sidebar_tab, "explorer");
+        assert_eq!(parsed.workspace_folder.as_deref(), Some("C:\\thesis"));
+        assert!(parsed.explorer_show_all);
+        let old = parse_settings(r#"{"theme":"dark"}"#).expect("old settings load");
+        assert_eq!(old.workspace_folder, None);
+        assert!(!old.explorer_show_all);
+    }
+
+    #[test]
+    fn engine_choices_load_old_files_keep_lualatex_and_unknown_names_are_dropped() {
+        let old = parse_settings(r#"{"theme":"dark"}"#).expect("old settings load");
+        assert_eq!(old.latex_bundled_engine, "lualatex");
+        assert!(old.latex_project_engines.is_empty());
+        let parsed = parse_settings(
+            r#"{"latexBundledEngine":"auto","latexProjectEngines":[
+                {"main":"C:\\a\\main.tex","engine":"pdflatex"},
+                {"main":"C:\\b\\main.tex","engine":"context"},
+                {"main":"","engine":"xelatex"}]}"#,
+        )
+        .expect("engine settings load");
+        assert_eq!(parsed.latex_bundled_engine, "auto");
+        assert_eq!(
+            parsed.latex_project_engines,
+            vec![ProjectEngine {
+                main: "C:\\a\\main.tex".into(),
+                engine: "pdflatex".into()
+            }]
+        );
+        let unknown =
+            parse_settings(r#"{"latexBundledEngine":"tectonic"}"#).expect("settings load");
+        assert_eq!(unknown.latex_bundled_engine, "lualatex");
     }
 
     #[test]
@@ -1894,12 +2440,97 @@ mod tests {
     }
 
     #[test]
-    fn after_export_defaults_are_off() {
+    fn after_export_defaults_open_the_file_only() {
+        // Opening the file the reader just exported is the useful default;
+        // a second file-manager window and an arbitrary command are opt-ins.
         let settings = Settings::default();
         assert!(!settings.after_open_location);
-        assert!(!settings.after_open_file);
+        assert!(settings.after_open_file);
         assert!(!settings.after_run_command);
         assert!(settings.after_command.is_empty());
+        // An older file that has no after-export keys at all gets the same
+        // answers, not the struct's serde defaults by accident.
+        let parsed = parse_settings(r#"{"theme":"dark"}"#).expect("old settings load");
+        assert!(!parsed.after_open_location);
+        assert!(parsed.after_open_file);
+        assert!(!parsed.after_run_command);
+    }
+
+    #[test]
+    fn a_default_profile_from_the_old_shape_gets_the_new_after_export_default() {
+        // This is the shape every release before the options became global
+        // actually wrote: the flags are on each format, and a reader who never
+        // touched them has all of them `false`. The presence of the keys must
+        // not be read as a choice, or upgrading would silently keep the file
+        // closed and deny the new default to every existing install.
+        let untouched = r#"{
+            "theme": "dark",
+            "exportFormats": [
+                {
+                    "id": "docx", "label": "Word (.docx)", "extension": "docx",
+                    "arguments": "-s -o ${outputPath}", "extraArguments": "",
+                    "styleReference": "",
+                    "afterOpenLocation": false, "afterOpenFile": false,
+                    "afterRunCommand": false, "afterCommand": ""
+                }
+            ]
+        }"#;
+        let parsed = parse_settings(untouched).expect("an untouched old profile loads");
+        assert!(!parsed.after_open_location);
+        assert!(
+            parsed.after_open_file,
+            "an untouched old profile must get the shipped default, not a false nobody chose"
+        );
+        assert!(!parsed.after_run_command);
+        assert_eq!(parsed.after_command, "");
+
+        // A reader who did choose something keeps exactly that choice.
+        let chose = r#"{
+            "exportFormats": [
+                {
+                    "id": "docx", "label": "Word (.docx)", "extension": "docx",
+                    "arguments": "-s -o ${outputPath}", "extraArguments": "",
+                    "styleReference": "",
+                    "afterOpenLocation": true, "afterOpenFile": false,
+                    "afterRunCommand": false, "afterCommand": ""
+                }
+            ]
+        }"#;
+        let parsed = parse_settings(chose).expect("a profile with a choice loads");
+        assert!(parsed.after_open_location);
+        assert!(
+            !parsed.after_open_file,
+            "an explicit choice is carried forward, not replaced by the new default"
+        );
+    }
+
+    #[test]
+    fn launch_defaults_to_the_working_set_and_autosave_stays_opt_in() {
+        // A fresh profile reopens the documents that were open. Auto Save is
+        // deliberately still off: it writes the reader's file in the background,
+        // which is a change they have to ask for.
+        let settings = Settings::default();
+        assert_eq!(settings.on_launch, "tabs");
+        assert!(!settings.auto_save);
+        // Nothing has been shown yet, so the first launch still introduces the
+        // application before "tabs" has anything to restore.
+        assert!(!settings.welcome_seen);
+
+        let parsed = parse_settings(r#"{"theme":"dark"}"#).expect("old settings load");
+        assert_eq!(parsed.on_launch, "tabs");
+        assert!(!parsed.auto_save);
+        // An existing profile has already been introduced: it must not be shown
+        // the welcome document again just because this field is new.
+        assert!(!parsed.welcome_seen);
+
+        // An explicit choice still wins over the default.
+        let chosen = parse_settings(r#"{"onLaunch":"welcome","autoSave":true}"#)
+            .expect("an explicit choice loads");
+        assert_eq!(chosen.on_launch, "welcome");
+        assert!(chosen.auto_save);
+
+        // The flag round-trips, so the second launch takes the "tabs" path.
+        let seen = parse_settings(r#"{"welcomeSeen":true}"#).expect("the flag loads");
+        assert!(seen.welcome_seen);
     }
 }
-

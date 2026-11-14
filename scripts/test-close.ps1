@@ -22,7 +22,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $exePath = if ([IO.Path]::IsPathRooted($Exe)) { $Exe } else { Join-Path $root $Exe }
 $docPath = if ([IO.Path]::IsPathRooted($Doc)) { $Doc } else { Join-Path $root $Doc }
-$configDir = Join-Path $env:APPDATA "io.github.bernh.mdraft"
+$configDir = Join-Path $env:APPDATA "io.github.bgeneto.mdraft"
 $stateFile = Join-Path $configDir ".window-state.json"
 
 if (-not (Test-Path $exePath)) {

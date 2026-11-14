@@ -7,7 +7,7 @@
 //! its label therefore does not rename its command or its accelerator.
 
 use crate::settings::{
-    default_export_formats, AppState, ExportAvailability, ExportFormat, Settings,
+    AppState, ExportAvailability, ExportFormat, Settings, default_export_formats,
 };
 use tauri::menu::{
     CheckMenuItem, IsMenuItem, Menu, MenuBuilder, MenuEvent, MenuItem, MenuItemBuilder,
@@ -39,7 +39,7 @@ pub const OPEN_TAB_PREFIX: &str = "navigate.tab:";
 const OPEN_TABS_SUBMENU_ID: &str = "navigate.openTabs";
 const OPEN_TABS_EMPTY_ID: &str = "navigate.openTabs.empty";
 
-/// The editor palettes offered under View › Code Colors.
+/// The editor palettes offered under View › Code Themes.
 ///
 /// Kept in step with `src/syntax-themes.ts`; the preference resolves unknown or
 /// legacy ids to a concrete palette, so an added palette here is a menu entry and
@@ -101,7 +101,7 @@ fn export_availability<R: Runtime>(app: &AppHandle<R>) -> ExportAvailability {
 /// The suffix is part of the label rather than a tooltip because a native menu
 /// item does not show a tooltip reliably. It is deliberately short: the submenu
 /// still has to fit the format's own name and its accelerator column.
-fn export_label(format: &ExportFormat, availability: ExportAvailability) -> String {
+fn export_label(format: &ExportFormat, availability: ExportAvailability, language: &str) -> String {
     let base = plain_label(&format.label);
     // A default label gets the ellipsis the save dialog earns; a label the reader
     // wrote is left exactly as written. Appending punctuation to a custom name
@@ -114,10 +114,16 @@ fn export_label(format: &ExportFormat, availability: ExportAvailability) -> Stri
     } else {
         base
     };
+    // The LaTeX reason comes first: it is true whatever the tools say, and a
+    // "needs Typst" suffix on a row that would refuse anyway would be a second
+    // explanation for a decision the reader cannot act on.
+    if is_pandoc_pdf(format) && language == "latex" {
+        return format!("{base} — use Export › PDF (compiled)");
+    }
     match availability.pandoc {
-        Some(false) => format!("{base} — needs Pandoc"),
+        Some(false) => format!("{base} — set up Pandoc"),
         Some(true) if is_pandoc_pdf(format) && availability.typst == Some(false) => {
-            format!("{base} — needs Typst")
+            format!("{base} — set up Typst")
         }
         _ => base,
     }
@@ -133,13 +139,26 @@ fn is_pandoc_pdf(format: &ExportFormat) -> bool {
     format.id.eq_ignore_ascii_case("pdf")
 }
 
-/// Whether this format can run with the tools that are installed.
+/// Whether this format can reach a result for this document language.
 ///
-/// PDF is the one format that also needs Typst; every other pandoc target reads
-/// Markdown and writes a file, so Pandoc alone is enough.
-fn export_enabled(format: &ExportFormat, availability: ExportAvailability) -> bool {
-    availability.pandoc.unwrap_or(true)
-        && (!is_pandoc_pdf(format) || availability.typst.unwrap_or(true))
+/// **One rule, used by the initial build, every menu-state sync and every tool
+/// report.** Enabled means the click can lead to a result, not that every tool
+/// is already installed: a missing Pandoc or Typst row stays clickable, says
+/// “— set up …”, and opens the shared Optional tools dialog in context mode.
+/// Only the language gates disable a row, because no install can change what a
+/// `.css` or `.js` buffer can become.
+///
+/// The built-in pandoc PDF is the one tool-independent exception: converting
+/// LaTeX to Typst would change the layout, and the preview already holds the
+/// compiled PDF, so that row points at `Export › PDF` instead.
+fn export_enabled_for(format: &ExportFormat, language: &str) -> bool {
+    if matches!(language, "javascript" | "css" | "json") {
+        return false;
+    }
+    if is_pandoc_pdf(format) && language == "latex" {
+        return false;
+    }
+    true
 }
 
 /// A menu label safe to hand to the platform backends.
@@ -341,6 +360,8 @@ pub struct MenuState {
     pub tab_index: usize,
     pub unchanged_other_tabs: usize,
     pub has_path: bool,
+    /// A workspace folder is open in the Explorer (Track W).
+    pub has_workspace: bool,
     pub is_favorite: bool,
     pub can_fold: bool,
     pub spellcheck: bool,
@@ -351,6 +372,21 @@ pub struct MenuState {
     pub syntax_theme: String,
     pub typst_view: String,
     pub typst_available: bool,
+    /// Whether the preview holds a PDF the document's own compiler produced.
+    ///
+    /// `Export › PDF` writes exactly those bytes, so the row is enabled only
+    /// while they exist and are current; it never starts a compile, because a
+    /// multi-second engine run behind a menu item is indistinguishable from a
+    /// hang. Always true for a compiled LaTeX document; for Typst it is true only
+    /// in the Pages view, which is where that language compiles a PDF.
+    pub pdf_preview_available: bool,
+    /// The engine that produced those bytes, as the reader knows it (`LuaLaTeX`,
+    /// `pdfLaTeX`, `XeLaTeX`). Empty when the frontend does not know it; the row
+    /// then names no engine rather than guessing one.
+    pub pdf_engine: String,
+    /// Whether a `.tex` preview recompiles after edits. Settings-backed: the View
+    /// menu check item and the preview's own toggle report the same value.
+    pub latex_auto_compile: bool,
 }
 
 impl Default for MenuState {
@@ -389,6 +425,7 @@ impl MenuState {
             tab_index: 0,
             unchanged_other_tabs: 0,
             has_path: false,
+            has_workspace: false,
             is_favorite: false,
             can_fold: true,
             spellcheck: settings.spellcheck,
@@ -397,6 +434,9 @@ impl MenuState {
             syntax_theme: settings.syntax_theme.clone(),
             typst_view: settings.typst_view.clone(),
             typst_available: true,
+            pdf_preview_available: false,
+            pdf_engine: String::new(),
+            latex_auto_compile: settings.latex_auto_compile,
         }
     }
 
@@ -422,6 +462,7 @@ impl MenuState {
         self.ai_enabled = fresh.ai_enabled;
         self.syntax_theme = fresh.syntax_theme;
         self.typst_view = fresh.typst_view;
+        self.latex_auto_compile = fresh.latex_auto_compile;
         self
     }
 }
@@ -441,6 +482,7 @@ const CHECK_IDS: &[&str] = &[
     "view.outline",
     "view.favorites",
     "view.recent",
+    "view.explorer",
     "view.statusBar",
     "view.focus",
     "view.typewriter",
@@ -460,6 +502,7 @@ const CHECK_IDS: &[&str] = &[
     "themes.dark",
     "tools.spellcheck",
     "tools.ai",
+    "view.latexAutoCompile",
 ];
 
 /// A legacy palette id some `settings.json` files still carry.
@@ -481,7 +524,9 @@ fn is_checked(state: &MenuState, id: &str) -> bool {
         "view.source" => state.view_mode == "source",
         "view.split" => state.view_mode == "split",
         "view.preview" => state.view_mode == "preview",
-        "view.typstDocument" => state.document_language == "typst" && state.typst_view == "document",
+        "view.typstDocument" => {
+            state.document_language == "typst" && state.typst_view == "document"
+        }
         "view.typstPages" => state.document_language == "typst" && state.typst_view == "pages",
         "view.sidebar" => state.sidebar_visible && !state.focus_mode,
         "view.outline" => {
@@ -493,10 +538,14 @@ fn is_checked(state: &MenuState, id: &str) -> bool {
         "view.recent" => {
             state.sidebar_visible && !state.focus_mode && state.sidebar_tab == "recent"
         }
+        "view.explorer" => {
+            state.sidebar_visible && !state.focus_mode && state.sidebar_tab == "explorer"
+        }
         "view.statusBar" => state.show_status_bar,
         "view.focus" => state.focus_mode,
         "view.typewriter" => state.typewriter_mode,
         "view.syncScroll" => state.sync_scroll,
+        "view.latexAutoCompile" => state.latex_auto_compile,
         "view.fullscreen" => state.fullscreen,
         "tools.spellcheck" => state.spellcheck,
         "tools.ai" => state.ai_enabled,
@@ -520,19 +569,73 @@ fn is_checked(state: &MenuState, id: &str) -> bool {
 /// accident. The handler still validates the context, because a stale menu or a
 /// keyboard route can outlive the state that disabled it.
 fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
+    let source = matches!(
+        state.document_language.as_str(),
+        "javascript" | "css" | "json"
+    );
+    if source
+        && (id.starts_with("format.")
+            || id.starts_with("para.")
+            || id.starts_with("insert.")
+            || id.starts_with("export.")
+            || id == "file.print")
+    {
+        return Some(false);
+    }
     let writable = !state.read_only;
     let html = state.document_language == "html";
     let typst = state.document_language == "typst";
     let markdown = state.document_language == "markdown";
     let asciidoc = state.document_language == "asciidoc";
+    let latex = state.document_language == "latex";
     let task_language = !html && !typst;
     Some(match id {
         "file.reload" | "file.reveal" | "file.favorite" => state.has_path,
-        // Native printing and the direct PDF writer have no article for Typst:
-        // that language already compiles a PDF through Export › PDF (via
-        // Typst). The browser route stays available for every language.
-        "file.print" | "export.pdf" => !typst,
-        "export.pdf.browser" => true,
+        "file.closeFolder" => state.has_workspace,
+        // `Export › PDF` writes the PDF the document's own compiler produced, so
+        // it is available exactly while such a PDF exists: always for a compiled
+        // LaTeX project, and for Typst only in the Pages view, which is where
+        // that language compiles one. It never starts a compile. Native printing
+        // stays disabled for both (decision D11): the PDF already exists, so
+        // printing it is the reader's own action on a file they own.
+        // `export.pdf` writes the PDF the document's own compiler produced, so
+        // it is available exactly while such a PDF exists. Both compiled
+        // languages answer the same way; every other language keeps the native
+        // article writer.
+        "export.pdf" => {
+            if typst || latex {
+                state.pdf_preview_available
+            } else {
+                true
+            }
+        }
+        // LaTeX prints the PDF its own compiler produced (ADR
+        // 2026-11-06-print-the-compiled-pdf), so it needs a compiled PDF to
+        // exist — the same condition `export.pdf` uses. Typst keeps its own rule.
+        "file.print" => {
+            if latex {
+                state.pdf_preview_available
+            } else {
+                !typst
+            }
+        }
+        // `Export › HTML` goes through pandoc, which reads LaTeX with its own
+        // reader, so it is available for every language. The **browser** PDF
+        // route stays disabled for LaTeX: it re-renders the document to HTML and
+        // prints that, which would produce a second layout contradicting the
+        // compiled PDF the preview is showing.
+        "export.html" => true,
+        // Markdown is the editor's own dialect, so writing it back through pandoc
+        // would be a round trip for a Markdown document. The direct row exists for
+        // LaTeX, which the plan names explicitly: a `.tex` author should not need
+        // a custom format recipe to reach Markdown.
+        "export.markdown" => latex,
+        // The chooser lists what the installed pandoc advertises and converts a
+        // LaTeX project from its snapshot. Every other language already has its
+        // own configured rows, so the row is disabled there with a reason rather
+        // than offering a control that would only explain itself.
+        "export.pandoc.more" => latex,
+        "export.pdf.browser" => !latex,
         "file.close" | "file.closeAll" => true,
         "file.closeOthers" => state.tab_count > 1,
         "file.closeLeft" => state.tab_index > 0,
@@ -545,29 +648,46 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
         "edit.comment" => writable && state.has_comment_syntax,
         "edit.pastePlain" => true,
         "edit.selectOccurrences" | "edit.convertSelection" | "edit.lines" => writable,
+        // LaTeX has a formatter now (tex-fmt, behind `hasFormatter`), so the row
+        // follows the same rule as the other three: enabled when a formatter is
+        // available and the document is writable.
         "format.document" => state.can_format,
         "format.bold" | "format.italic" | "format.strike" | "format.code" | "format.link"
         | "format.image" => writable,
         "format.math" | "para.mathBlock" => writable && !html,
         "format.paragraphStyle" => writable && !html,
         "format.lists" => writable,
-        "format.tasks" | "insert.alerts" => writable && task_language,
+        // LaTeX has no task-list and no alert syntax; the command explains that
+        // rather than inserting markup that does not compile, so the row is
+        // disabled instead of offering a control that only shows a toast.
+        "format.tasks" | "insert.alerts" => writable && task_language && !latex,
         "para.task" | "para.taskDone" | "para.taskTodo" | "para.taskPlain" => {
-            writable && task_language
+            writable && task_language && !latex
         }
-        "para.alertNote" | "para.alertTip" | "para.alertImportant" | "para.alertWarning"
-        | "para.alertCaution" => writable && task_language,
+        "para.alertNote"
+        | "para.alertTip"
+        | "para.alertImportant"
+        | "para.alertWarning"
+        | "para.alertCaution" => writable && task_language && !latex,
         "para.yaml" => writable && (markdown || asciidoc),
         "para.toc" => writable && !html,
-        "para.h1" | "para.h2" | "para.h3" | "para.h4" | "para.h5" | "para.h6"
-        | "para.paragraph" | "para.increaseHeading" | "para.decreaseHeading" => writable && !html,
+        "para.h1"
+        | "para.h2"
+        | "para.h3"
+        | "para.h4"
+        | "para.h5"
+        | "para.h6"
+        | "para.paragraph"
+        | "para.increaseHeading"
+        | "para.decreaseHeading" => writable && !html,
         "para.quote" | "para.ol" | "para.ul" | "para.indent" | "para.outdent"
         | "para.insertBefore" | "para.insertAfter" | "para.table" | "para.codeBlock"
         | "para.hr" => writable,
         "view.zoomIn" | "view.zoomOut" | "view.zoomReset" | "view.editorTextSize" => true,
         "view.syncScroll" => state.view_mode == "split",
-        "view.sidebar" | "view.outline" | "view.favorites" | "view.recent"
+        "view.sidebar" | "view.outline" | "view.favorites" | "view.recent" | "view.explorer"
         | "view.sidebarPanel" => !state.focus_mode,
+        "view.latexCompile" | "view.latexAutoCompile" => state.document_language == "latex",
         "view.typstPreview" | "view.typstDocument" | "view.typstPages" => {
             typst && state.typst_available
         }
@@ -576,16 +696,41 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
         "navigate.moveTabLeft" => state.tab_index > 0,
         "navigate.moveTabRight" => state.tab_index + 1 < state.tab_count,
         "navigate.openTarget" => !state.link_kind.is_empty(),
-        "tools.spellcheck" => !html && state.spellcheck_available,
-        "file.new" | "file.open" | "file.save" | "file.saveAs" | "file.autoSave"
-        | "file.export" | "file.closeTabs" | "file.preferences" | "file.nextTab"
-        | "file.prevTab" | "file.openRecent" | "edit.find" | "edit.replace"
-        | "edit.findNext" | "edit.findPrevious" | "view.source" | "view.split"
-        | "view.preview" | "view.statusBar" | "view.focus" | "view.typewriter"
-        | "view.fullscreen" | "view.interfaceTheme" | "view.codeColors"
-        | "view.typography" | "navigate.gotoLine" | "navigate.openTabs"
-        | "tools.spellLanguage" | "tools.statistics" | "tools.exportConfig"
-        | "tools.pandoc" | "tools.typst" | "tools.ai" => true,
+        "tools.spellcheck" => state.spellcheck_available,
+        "file.new"
+        | "file.open"
+        | "file.save"
+        | "file.saveAs"
+        | "file.autoSave"
+        | "file.export"
+        | "file.closeTabs"
+        | "file.preferences"
+        | "file.nextTab"
+        | "file.prevTab"
+        | "file.openRecent"
+        | "file.openFolder"
+        | "edit.find"
+        | "edit.replace"
+        | "edit.findNext"
+        | "edit.findPrevious"
+        | "view.source"
+        | "view.split"
+        | "view.preview"
+        | "view.statusBar"
+        | "view.focus"
+        | "view.typewriter"
+        | "view.fullscreen"
+        | "view.interfaceTheme"
+        | "view.codeColors"
+        | "view.typography"
+        | "navigate.gotoLine"
+        | "navigate.openTabs"
+        | "tools.spellLanguage"
+        | "tools.statistics"
+        | "tools.encoding"
+        | "tools.exportConfig"
+        | "tools.optionalTools"
+        | "tools.ai" => true,
         _ if id.starts_with("view.syntax.")
             || id.starts_with("themes.")
             || id.starts_with("help.") =>
@@ -602,6 +747,14 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
 /// A label that depends on the document or on the reader's state.
 ///
 /// Ordinary items keep the label they were built with; `None` means "leave it".
+///
+/// **An id whose label varies with the document must never return `None`.** The
+/// sync only writes the labels this function states, so "leave it" is not a
+/// neutral answer: it keeps whatever the previous document wrote. A `.tex` file
+/// followed by a `.adoc` one therefore showed "PDF… (available after the preview
+/// compiles)" on a document that has no compile at all. Every language-varying
+/// id below ends in a catch-all arm that restates the label the menu was built
+/// with, which is what clears the previous document's.
 fn label_for(state: &MenuState, id: &str) -> Option<String> {
     let text = match id {
         "file.favorite" => {
@@ -622,17 +775,58 @@ fn label_for(state: &MenuState, id: &str) -> Option<String> {
             "anchor" => "Go to Heading Under Cursor",
             _ => "Open Link Under Cursor",
         },
-        "file.print" if state.document_language == "typst" => {
-            "Print… (use PDF via Typst)"
+        // The PDF row names the engine that produced the bytes it writes, because
+        // a reader comparing two documents deserves to know which compiler laid
+        // them out. Nothing is stored, so there is no migration and no
+        // reader-facing rename of a format they own.
+        //
+        // A disabled row says why instead of leaving a live one that refuses, so
+        // the "not available" arms come first: the match is ordered, and a
+        // "compiled by" arm would otherwise win for a row that cannot run. The
+        // Typst Document view compiles HTML and holds no PDF bytes, and the row
+        // never starts a compile on its own.
+        "export.pdf" if state.document_language == "typst" && !state.pdf_preview_available => {
+            "PDF… (available in Pages view)"
         }
-        "export.pdf" if state.document_language == "typst" => {
-            "PDF… (use PDF via Typst)"
+        "export.pdf" if state.document_language == "latex" && !state.pdf_preview_available => {
+            "PDF… (available after the preview compiles)"
         }
-        "view.typstPreview"
-            if state.document_language == "typst" && !state.typst_available =>
-        {
+        "export.pdf" if state.document_language == "typst" => "PDF… (compiled by Typst)",
+        // The installed distribution may run pdfLaTeX or XeLaTeX, and "auto"
+        // chooses per document, so the engine comes from the compile itself.
+        "export.pdf" if state.document_language == "latex" && !state.pdf_engine.is_empty() => {
+            return Some(format!("PDF… (compiled by {})", state.pdf_engine));
+        }
+        "export.pdf" if state.document_language == "latex" => "PDF… (compiled PDF)",
+        // The built label, restated. An AsciiDoc, Markdown or HTML document has
+        // no compiled PDF of its own, so the row keeps the plain name — but it
+        // must *say* so, because returning `None` would leave the LaTeX document's
+        // "available after the preview compiles" behind on the next tab.
+        "export.pdf" => "PDF…",
+        // Typst still points at its PDF route. LaTeX no longer does: it prints
+        // the compiled PDF, so the row is a real Print row with its own label.
+        "file.print" if state.document_language == "typst" => "Print… (use Export › PDF)",
+        "file.print" if state.document_language == "latex" && !state.pdf_preview_available => {
+            "Print… (available after the preview compiles)"
+        }
+        // As above: the plain label, restated so a `.tex` tab's reason cannot
+        // outlive the tab it described.
+        "file.print" => "Print…",
+        "view.typstPreview" if state.document_language == "typst" && !state.typst_available => {
             "Typst Preview — needs Typst"
         }
+        "view.typstPreview" => "Typst Preview",
+        // The chooser converts a LaTeX project from its snapshot; every other
+        // language already has its own configured rows.
+        "export.pandoc.more" if state.document_language != "latex" => {
+            "More Pandoc Formats… (LaTeX documents)"
+        }
+        "export.pandoc.more" => "More Pandoc Formats…",
+        // Markdown is the editor's own dialect, so writing it back through pandoc
+        // would be a round trip for a Markdown document. The row is a LaTeX
+        // conversion, and says so where it cannot run.
+        "export.markdown" if state.document_language != "latex" => "Markdown… (LaTeX documents)",
+        "export.markdown" => "Markdown…",
         _ => return None,
     };
     Some(text.to_string())
@@ -745,8 +939,12 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     // still has a working print route.
     let export_item = |format: &ExportFormat| -> tauri::Result<MenuItem<R>> {
         let id = format!("{EXPORT_PREFIX}{}", format.id);
-        let built = item(&id, &export_label(format, availability), None)?;
-        if !export_enabled(format, availability) {
+        let built = item(
+            &id,
+            &export_label(format, availability, &state.document_language),
+            None,
+        )?;
+        if !export_enabled_for(format, &state.document_language) {
             built.set_enabled(false)?;
         }
         Ok(built)
@@ -757,30 +955,37 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     // keeps the order arranged in Preferences.
     let (pandoc_pdf, other_formats): (Vec<ExportFormat>, Vec<ExportFormat>) =
         export_formats(app).into_iter().partition(is_pandoc_pdf);
-    let mut export = SubmenuBuilder::with_id(app, "file.export", "Export")
-        .item(&item("export.html", "HTML…", None)?);
+    let export = SubmenuBuilder::with_id(app, "file.export", "Export").item(&item(
+        "export.html",
+        "HTML…",
+        None,
+    )?);
+    // Markdown is the one target a `.tex` author is most likely to want, and it
+    // is not in the stored list because the editor's own dialect is Markdown:
+    // writing it back through pandoc would be a round trip for a Markdown
+    // document. For LaTeX it is a real conversion, so it gets a direct row.
+    let mut export = export.item(&item("export.markdown", "Markdown…", None)?);
     for format in &other_formats {
         export = export.item(&export_item(format)?);
     }
-    let mut export = export
-        .separator()
-        .item(&item("export.pdf", "PDF…", None)?);
+    let mut export = export.separator().item(&item("export.pdf", "PDF…", None)?);
     for format in &pandoc_pdf {
         export = export.item(&export_item(format)?);
     }
     let export = export
         .item(&item("export.pdf.browser", "PDF (opens browser)…", None)?)
+        .separator()
+        // Every other writer the installed pandoc advertises, on demand: a row
+        // per writer in Preferences would crowd the menu, change the reader's
+        // settings and miss whatever a pandoc update adds.
+        .item(&item("export.pandoc.more", "More Pandoc Formats…", None)?)
         .build()?;
 
     let close_tabs = SubmenuBuilder::with_id(app, "file.closeTabs", "Close Tabs")
         .item(&item("file.closeOthers", "Other Tabs", None)?)
         .item(&item("file.closeLeft", "Tabs to the Left", None)?)
         .item(&item("file.closeRight", "Tabs to the Right", None)?)
-        .item(&item(
-            "file.closeUnchanged",
-            "Other Unchanged Tabs",
-            None,
-        )?)
+        .item(&item("file.closeUnchanged", "Other Unchanged Tabs", None)?)
         .separator()
         .item(&item("file.closeAll", "All Tabs", None)?)
         .build()?;
@@ -789,18 +994,20 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     let file = SubmenuBuilder::new(app, "File")
         .item(&item("file.new", "New Document", Some("CmdOrCtrl+N"))?)
         .item(&item("file.open", "Open…", Some("CmdOrCtrl+O"))?)
+        .item(&item(
+            "file.openFolder",
+            "Open Folder…",
+            Some("CmdOrCtrl+Shift+O"),
+        )?)
         .item(&recent)
+        .item(&item("file.closeFolder", "Close Folder", None)?)
         .separator()
         .item(&item("file.save", "Save", Some("CmdOrCtrl+S"))?)
         .item(&item("file.saveAs", "Save As…", Some("CmdOrCtrl+Shift+S"))?)
         .item(&check("file.autoSave", "Auto Save", None)?)
         .item(&item("file.reload", "Reload from Disk", None)?)
         .separator()
-        .item(&item(
-            "file.print",
-            "Print…",
-            Some("CmdOrCtrl+P"),
-        )?)
+        .item(&item("file.print", "Print…", Some("CmdOrCtrl+P"))?)
         .item(&export)
         .separator()
         .item(&item("file.reveal", "Show in Folder", None)?)
@@ -830,11 +1037,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     // them natively; the rest are custom because the editor owns them.
     let select_occurrences =
         SubmenuBuilder::with_id(app, "edit.selectOccurrences", "Select Occurrences")
-            .item(&item(
-                "edit.selectNext",
-                "Select Next Occurrence",
-                None,
-            )?)
+            .item(&item("edit.selectNext", "Select Next Occurrence", None)?)
             .item(&item(
                 "edit.selectAllOccurrences",
                 "Select All Occurrences",
@@ -867,7 +1070,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&PredefinedMenuItem::select_all(app, None)?)
         .separator()
         .item(&item("edit.find", "Find", Some("CmdOrCtrl+F"))?)
-        .item(&item("edit.replace", "Find and Replace", Some("CmdOrCtrl+H"))?)
+        .item(&item(
+            "edit.replace",
+            "Find and Replace",
+            Some("CmdOrCtrl+H"),
+        )?)
         .item(&item("edit.findNext", "Find Next", None)?)
         .item(&item("edit.findPrevious", "Find Previous", None)?)
         .item(&select_occurrences)
@@ -913,21 +1120,16 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .build()?;
 
     // ---- Format -----------------------------------------------------------
-    let paragraph_style =
-        SubmenuBuilder::with_id(app, "format.paragraphStyle", "Paragraph Style")
-            .item(&item(
-                "para.paragraph",
-                "Normal",
-                Some("CmdOrCtrl+0"),
-            )?)
-            .separator()
-            .item(&item("para.h1", "Heading 1", Some("CmdOrCtrl+1"))?)
-            .item(&item("para.h2", "Heading 2", Some("CmdOrCtrl+2"))?)
-            .item(&item("para.h3", "Heading 3", Some("CmdOrCtrl+3"))?)
-            .item(&item("para.h4", "Heading 4", Some("CmdOrCtrl+4"))?)
-            .item(&item("para.h5", "Heading 5", Some("CmdOrCtrl+5"))?)
-            .item(&item("para.h6", "Heading 6", Some("CmdOrCtrl+6"))?)
-            .build()?;
+    let paragraph_style = SubmenuBuilder::with_id(app, "format.paragraphStyle", "Paragraph Style")
+        .item(&item("para.paragraph", "Normal", Some("CmdOrCtrl+0"))?)
+        .separator()
+        .item(&item("para.h1", "Heading 1", Some("CmdOrCtrl+1"))?)
+        .item(&item("para.h2", "Heading 2", Some("CmdOrCtrl+2"))?)
+        .item(&item("para.h3", "Heading 3", Some("CmdOrCtrl+3"))?)
+        .item(&item("para.h4", "Heading 4", Some("CmdOrCtrl+4"))?)
+        .item(&item("para.h5", "Heading 5", Some("CmdOrCtrl+5"))?)
+        .item(&item("para.h6", "Heading 6", Some("CmdOrCtrl+6"))?)
+        .build()?;
 
     let lists = SubmenuBuilder::with_id(app, "format.lists", "Lists")
         .item(&item(
@@ -940,21 +1142,13 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             "Numbered List",
             Some("CmdOrCtrl+Shift+["),
         )?)
-        .item(&item(
-            "para.task",
-            "Task List",
-            Some("CmdOrCtrl+Shift+X"),
-        )?)
+        .item(&item("para.task", "Task List", Some("CmdOrCtrl+Shift+X"))?)
         .build()?;
 
     let tasks = SubmenuBuilder::with_id(app, "format.tasks", "Tasks")
         .item(&item("para.taskDone", "Mark as Done", None)?)
         .item(&item("para.taskTodo", "Mark as Pending", None)?)
-        .item(&item(
-            "para.taskPlain",
-            "Convert to Plain Text",
-            None,
-        )?)
+        .item(&item("para.taskPlain", "Convert to Plain Text", None)?)
         .build()?;
 
     let format = SubmenuBuilder::new(app, "Format")
@@ -965,7 +1159,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             "Strikethrough",
             Some("Alt+Shift+5"),
         )?)
-        .item(&item("format.code", "Inline Code", Some("CmdOrCtrl+Shift+`"))?)
+        .item(&item(
+            "format.code",
+            "Inline Code",
+            Some("CmdOrCtrl+Shift+`"),
+        )?)
         .separator()
         .item(&paragraph_style)
         .item(&item(
@@ -994,7 +1192,10 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
 
     // ---- Navigate ---------------------------------------------------------
     let open_tabs = {
-        let tabs = OPEN_TABS.lock().map(|list| list.clone()).unwrap_or_default();
+        let tabs = OPEN_TABS
+            .lock()
+            .map(|list| list.clone())
+            .unwrap_or_default();
         let mut builder = SubmenuBuilder::with_id(app, OPEN_TABS_SUBMENU_ID, "Open Tabs");
         if tabs.is_empty() {
             let empty = item(OPEN_TABS_EMPTY_ID, "No Open Tabs", None)?;
@@ -1041,14 +1242,12 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     // green button. A custom CheckMenuItem would lose that, and the platform
     // draws its own state, so keep the predefined one there.
     #[cfg(target_os = "macos")]
-    let fullscreen: Box<dyn IsMenuItem<R>> =
-        Box::new(PredefinedMenuItem::fullscreen(app, None)?);
+    let fullscreen: Box<dyn IsMenuItem<R>> = Box::new(PredefinedMenuItem::fullscreen(app, None)?);
 
-    let typst_preview =
-        SubmenuBuilder::with_id(app, "view.typstPreview", "Typst Preview")
-            .item(&check("view.typstDocument", "Document", None)?)
-            .item(&check("view.typstPages", "Pages", None)?)
-            .build()?;
+    let typst_preview = SubmenuBuilder::with_id(app, "view.typstPreview", "Typst Preview")
+        .item(&check("view.typstDocument", "Document", None)?)
+        .item(&check("view.typstPages", "Pages", None)?)
+        .build()?;
 
     let sidebar = SubmenuBuilder::with_id(app, "view.sidebarPanel", "Sidebar")
         .item(&check(
@@ -1071,41 +1270,41 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             "Recent Files",
             Some("CmdOrCtrl+Shift+3"),
         )?)
+        .item(&check(
+            "view.explorer",
+            "Explorer",
+            Some("CmdOrCtrl+Shift+4"),
+        )?)
         .build()?;
 
-    let editor_text_size =
-        SubmenuBuilder::with_id(app, "view.editorTextSize", "Zoom")
-            .item(&item(
-                "view.zoomIn",
-                "Zoom In",
-                Some("CmdOrCtrl+Shift+="),
-            )?)
-            .item(&item(
-                "view.zoomOut",
-                "Zoom Out",
-                Some("CmdOrCtrl+Shift+-"),
-            )?)
-            .item(&item(
-                "view.zoomReset",
-                "Reset Zoom",
-                Some("CmdOrCtrl+Alt+0"),
-            )?)
-            .build()?;
+    let editor_text_size = SubmenuBuilder::with_id(app, "view.editorTextSize", "Zoom")
+        .item(&item("view.zoomIn", "Zoom In", Some("CmdOrCtrl+Shift+="))?)
+        .item(&item(
+            "view.zoomOut",
+            "Zoom Out",
+            Some("CmdOrCtrl+Shift+-"),
+        )?)
+        .item(&item(
+            "view.zoomReset",
+            "Reset Zoom",
+            Some("CmdOrCtrl+Alt+0"),
+        )?)
+        .build()?;
 
-    let interface_theme =
-        SubmenuBuilder::with_id(app, "view.interfaceTheme", "Interface Theme")
-            .item(&check("themes.system", "Follow System", None)?)
-            .item(&check("themes.light", "Light", None)?)
-            .item(&check("themes.dark", "Dark", None)?)
-            .build()?;
+    let interface_theme = SubmenuBuilder::with_id(app, "view.interfaceTheme", "Interface Theme")
+        .item(&check("themes.system", "Follow System", None)?)
+        .item(&check("themes.light", "Light", None)?)
+        .item(&check("themes.dark", "Dark", None)?)
+        .build()?;
 
-    let mut code_colors =
-        SubmenuBuilder::with_id(app, "view.codeColors", "Code Colors");
+    // The id keeps its historical `view.codeColors` spelling: it is a routing
+    // address for the submenu, not a label the reader sees.
+    let mut code_themes = SubmenuBuilder::with_id(app, "view.codeColors", "Code Themes");
     for (id, label) in SYNTAX_THEMES {
         let menu_id = format!("view.syntax.{id}");
-        code_colors = code_colors.item(&check(&menu_id, label, None)?);
+        code_themes = code_themes.item(&check(&menu_id, label, None)?);
     }
-    let code_colors = code_colors.build()?;
+    let code_themes = code_themes.build()?;
 
     let blocks = SubmenuBuilder::with_id(app, "view.blocks", "Blocks and Sections")
         .item(&item("view.foldCurrent", "Collapse Current", None)?)
@@ -1129,16 +1328,12 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&check("view.statusBar", "Status Bar", None)?)
         .separator()
         .item(&check("view.focus", "Focus Mode", Some("F8"))?)
-        .item(&check(
-            "view.typewriter",
-            "Typewriter Mode",
-            Some("F9"),
-        )?)
+        .item(&check("view.typewriter", "Typewriter Mode", Some("F9"))?)
         .item(&check("view.syncScroll", "Sync Scroll", None)?)
         .separator()
         .item(&editor_text_size)
         .item(&interface_theme)
-        .item(&code_colors)
+        .item(&code_themes)
         .item(&item("view.typography", "Fonts and Reading…", None)?)
         .item(&blocks)
         .separator()
@@ -1152,30 +1347,26 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             "Check Spelling While Typing",
             None,
         )?)
-        .item(&item(
-            "tools.spellLanguage",
-            "Spelling Language…",
-            None,
-        )?)
-        .item(&item(
-            "tools.statistics",
-            "Document Statistics…",
-            None,
-        )?)
+        .item(&item("tools.spellLanguage", "Spelling Language…", None)?)
+        .item(&item("tools.statistics", "Document Statistics…", None)?)
+        .item(&item("tools.encoding", "Encoding and Line Endings…", None)?)
         .separator()
+        .item(&item("tools.exportConfig", "Configure Export…", None)?)
+        // One setup surface. The export rows themselves are the contextual
+        // routes; a second “Install Pandoc” item here would be the duplication
+        // the menu information-architecture ADR removed.
+        .item(&item("tools.optionalTools", "Optional Tools…", None)?)
+        // The compile pair belongs beside the LaTeX toolchain row: every one of
+        // these is LaTeX-only, and the install row says which engine will run
+        // the compile the reader starts here.
         .item(&item(
-            "tools.exportConfig",
-            "Configure Export…",
-            None,
+            "view.latexCompile",
+            "Compile LaTeX",
+            Some("CmdOrCtrl+Shift+Enter"),
         )?)
-        .item(&item(
-            "tools.pandoc",
-            "Check or Install Pandoc…",
-            None,
-        )?)
-        .item(&item(
-            "tools.typst",
-            "Check or Install Typst…",
+        .item(&check(
+            "view.latexAutoCompile",
+            "Compile LaTeX Automatically",
             None,
         )?)
         .separator()
@@ -1189,9 +1380,15 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&item("help.reference", "Markdown Reference", None)?)
         .item(&item("help.asciidocReference", "AsciiDoc Reference", None)?)
         .item(&item("help.typstReference", "Typst Reference", None)?)
+        .item(&item("help.latexReference", "LaTeX Reference", None)?)
         .item(&item("help.shortcuts", "Keyboard Shortcuts", None)?)
         .separator()
-        .item(&item("help.licences", "Font Licences", None)?);
+        .item(&item("help.licences", "Font Licences", None)?)
+        .item(&item(
+            "help.latexLicenses",
+            "LaTeX Licences and Source",
+            None,
+        )?);
 
     #[cfg(not(target_os = "macos"))]
     let help = help
@@ -1247,10 +1444,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
 /// from the latest frontend report: rebuilding it from settings alone would lose
 /// the language, selection, tab position and tool state.
 pub fn rebuild<R: Runtime>(app: &AppHandle<R>, settings: &Settings) {
-    let cached = LAST_MENU_STATE
-        .lock()
-        .ok()
-        .and_then(|state| state.clone());
+    let cached = LAST_MENU_STATE.lock().ok().and_then(|state| state.clone());
     let mut menu_state = cached
         .unwrap_or_else(|| MenuState::from_settings(settings))
         .with_settings(settings);
@@ -1328,6 +1522,15 @@ pub fn sync<R: Runtime>(app: &AppHandle<R>, state: &MenuState) {
     if let Ok(items) = menu.items() {
         apply_context(items, state);
     }
+    // The configured export rows are owned by the tool report and the document
+    // language together, so `enabled_for` deliberately returns `None` for them.
+    // Applying them here is what makes a tab switch update them: the cached
+    // availability is unchanged, but the language is not.
+    let availability = app
+        .try_state::<AppState>()
+        .and_then(|state| state.export_availability.lock().ok().map(|slot| *slot))
+        .unwrap_or_default();
+    apply_export_rows(app, &state.document_language, availability);
 }
 
 /// Walk every custom item and apply its enabled state and conditional label.
@@ -1452,24 +1655,67 @@ pub fn set_export_availability<R: Runtime>(app: AppHandle<R>, pandoc: bool, typs
 }
 
 fn apply_export_availability<R: Runtime>(app: &AppHandle<R>, availability: ExportAvailability) {
+    let language = LAST_MENU_STATE
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|state| state.document_language.clone()))
+        .unwrap_or_else(|| "markdown".to_string());
+    apply_export_rows(app, &language, availability);
+}
+
+/// Write the configured export rows' labels and enabled states.
+///
+/// Called from both the tool report and every menu-state sync, so a language
+/// change and a tool change cannot disagree about the same row. The language is
+/// a parameter rather than read from the cached state so the sync path uses the
+/// state it is about to apply.
+fn apply_export_rows<R: Runtime>(
+    app: &AppHandle<R>,
+    language: &str,
+    availability: ExportAvailability,
+) {
     let Some(menu) = app.menu() else {
         return;
     };
-    for format in export_formats(app) {
-        let id = format!("{EXPORT_PREFIX}{}", format.id);
-        let Some(item) = find_item(&menu, &id) else {
-            continue;
-        };
-        let Some(menu_item) = item.as_menuitem() else {
-            continue;
-        };
-        if let Err(error) = menu_item.set_text(export_label(&format, availability)) {
-            eprintln!("[menu] could not set the label of {id}: {error}");
-        }
-        if let Err(error) = menu_item.set_enabled(export_enabled(&format, availability)) {
-            eprintln!("[menu] could not set the enabled state of {id}: {error}");
+    let formats = export_formats(app);
+    let Ok(items) = menu.items() else {
+        return;
+    };
+    // One walk for every row rather than a `find_item` per format: this runs on
+    // every menu-state sync, which includes cursor movement, and a tree walk per
+    // format would be a dozen of them per keystroke.
+    fn walk<R: Runtime>(
+        items: Vec<MenuItemKind<R>>,
+        formats: &[ExportFormat],
+        language: &str,
+        availability: ExportAvailability,
+    ) {
+        for item in items {
+            if let MenuItemKind::Submenu(submenu) = &item
+                && let Ok(children) = submenu.items()
+            {
+                walk(children, formats, language, availability);
+            }
+            let id = item.id().as_ref().to_string();
+            let Some(format) = id
+                .strip_prefix(EXPORT_PREFIX)
+                .and_then(|rest| formats.iter().find(|format| format.id == rest))
+            else {
+                continue;
+            };
+            let Some(menu_item) = item.as_menuitem() else {
+                continue;
+            };
+            if let Err(error) = menu_item.set_text(export_label(format, availability, language)) {
+                eprintln!("[menu] could not set the label of {id}: {error}");
+            }
+            let enabled = export_enabled_for(format, language);
+            if let Err(error) = menu_item.set_enabled(enabled) {
+                eprintln!("[menu] could not set the enabled state of {id}: {error}");
+            }
         }
     }
+    walk(items, &formats, language, availability);
 }
 
 #[derive(serde::Serialize)]
@@ -1634,6 +1880,26 @@ mod tests {
     use crate::settings::Settings;
 
     #[test]
+    fn web_source_disables_markup_and_preview_actions() {
+        for language in ["javascript", "css", "json"] {
+            let mut state = MenuState::from_settings(&Settings::default());
+            state.document_language = language.into();
+            for id in [
+                "format.bold",
+                "para.h1",
+                "insert.alerts",
+                "export.html",
+                "export.pdf",
+                "file.print",
+            ] {
+                assert_eq!(enabled_for(&state, id), Some(false), "{language}: {id}");
+            }
+            assert_eq!(enabled_for(&state, "file.save"), Some(true));
+            assert_eq!(enabled_for(&state, "tools.spellcheck"), Some(true));
+        }
+    }
+
+    #[test]
     fn check_state_tracks_settings() {
         let settings = Settings {
             view_mode: "preview".into(),
@@ -1703,6 +1969,244 @@ mod tests {
     }
 
     #[test]
+    fn latex_enables_the_markup_commands_it_implements() {
+        let mut state = MenuState {
+            document_language: "latex".into(),
+            has_selection: true,
+            ..MenuState::default()
+        };
+        // The commands LaTeX now implements: inline formatting, headings,
+        // lists, quotes, code, tables and math.
+        for id in [
+            "format.bold",
+            "format.italic",
+            "format.link",
+            "format.image",
+            "format.math",
+            "para.h1",
+            "para.paragraph",
+            "para.increaseHeading",
+            "para.quote",
+            "para.ul",
+            "para.ol",
+            "para.table",
+            "para.codeBlock",
+            "para.hr",
+            "para.toc",
+            "para.mathBlock",
+            "para.indent",
+            "para.outdent",
+            "para.insertBefore",
+            "para.insertAfter",
+        ] {
+            assert_eq!(enabled_for(&state, id), Some(true), "{id}");
+        }
+        // What LaTeX genuinely cannot do yet, each with a reason instead of a
+        // control that does nothing: the formatter (step 5), the native PDF row
+        // and every pandoc route (step 7), printing (D11), and the two markups
+        // LaTeX has no syntax for.
+        for id in [
+            "format.tasks",
+            "insert.alerts",
+            "para.task",
+            "para.alertNote",
+            "para.yaml",
+            // The **browser** PDF route re-renders the document to HTML and
+            // prints that, which would contradict the compiled PDF the preview
+            // shows. `export.pdf` writes the compiled bytes instead.
+            "export.pdf.browser",
+            "file.print",
+        ] {
+            assert_eq!(enabled_for(&state, id), Some(false), "{id}");
+        }
+        // These two used to be in the list above and no longer are:
+        //   - `format.document`, because tex-fmt is bundled now;
+        //   - `export.html`, because pandoc reads LaTeX with its own reader.
+        // `export.pdf` is *not* asserted here: it writes the compiled PDF, so it
+        // is available exactly while such a PDF exists, and this fixture has not
+        // compiled one. The assertion for it lives with the compiled-PDF test.
+        for id in ["format.document", "export.html", "export.markdown"] {
+            assert_eq!(enabled_for(&state, id), Some(true), "{id}");
+        }
+        // Plain editing keeps working, and comment toggling now does too: the
+        // stream grammar carries `commentTokens` for `%`.
+        for id in ["edit.delete", "edit.find", "file.save", "para.indent"] {
+            assert_eq!(enabled_for(&state, id), Some(true), "{id}");
+        }
+        state.has_comment_syntax = true;
+        assert_eq!(enabled_for(&state, "edit.comment"), Some(true));
+
+        // Folding has no mechanism in a stream grammar, so the menu says so
+        // rather than offering a control that cannot work.
+        state.can_fold = false;
+        assert_eq!(enabled_for(&state, "view.foldCurrent"), Some(false));
+
+        // The same commands come back for another language.
+        state.document_language = "markdown".into();
+        state.can_fold = true;
+        assert_eq!(enabled_for(&state, "format.bold"), Some(true));
+        assert_eq!(enabled_for(&state, "format.document"), Some(true));
+        assert_eq!(enabled_for(&state, "export.pdf"), Some(true));
+        assert_eq!(enabled_for(&state, "para.task"), Some(true));
+        // Markdown is the editor's own dialect, so its direct export row is the
+        // one that is disabled for a Markdown document and live for LaTeX.
+        assert_eq!(enabled_for(&state, "export.markdown"), Some(false));
+        assert_eq!(enabled_for(&state, "export.pandoc.more"), Some(false));
+    }
+
+    #[test]
+    fn the_pdf_row_follows_the_compiled_bytes_and_names_the_engine() {
+        // Typst: the Document view compiles HTML and holds no PDF, so the row is
+        // disabled with a reason; the Pages view has the bytes and enables it.
+        let mut state = MenuState {
+            document_language: "typst".into(),
+            ..MenuState::default()
+        };
+        assert_eq!(enabled_for(&state, "export.pdf"), Some(false));
+        assert_eq!(
+            label_for(&state, "export.pdf").as_deref(),
+            Some("PDF… (available in Pages view)")
+        );
+        state.pdf_preview_available = true;
+        assert_eq!(enabled_for(&state, "export.pdf"), Some(true));
+        assert_eq!(
+            label_for(&state, "export.pdf").as_deref(),
+            Some("PDF… (compiled by Typst)")
+        );
+        // Printing stays disabled for both PDF-rendered languages, and its label
+        // points at the row that does work.
+        assert_eq!(enabled_for(&state, "file.print"), Some(false));
+        assert_eq!(
+            label_for(&state, "file.print").as_deref(),
+            Some("Print… (use Export › PDF)")
+        );
+
+        // LaTeX: its preview *is* a compiled PDF, so a successful compile is
+        // enough; before one exists the row says what it is waiting for.
+        state.document_language = "latex".into();
+        state.pdf_preview_available = false;
+        assert_eq!(enabled_for(&state, "export.pdf"), Some(false));
+        assert_eq!(
+            label_for(&state, "export.pdf").as_deref(),
+            Some("PDF… (available after the preview compiles)")
+        );
+        state.pdf_preview_available = true;
+        assert_eq!(enabled_for(&state, "export.pdf"), Some(true));
+        // The row names the engine that produced the current PDF, which the
+        // installed distribution may have chosen per document.
+        for engine in ["LuaLaTeX", "pdfLaTeX", "XeLaTeX"] {
+            state.pdf_engine = engine.into();
+            assert_eq!(
+                label_for(&state, "export.pdf"),
+                Some(format!("PDF… (compiled by {engine})"))
+            );
+        }
+        state.pdf_engine.clear();
+        assert_eq!(
+            label_for(&state, "export.pdf").as_deref(),
+            Some("PDF… (compiled PDF)"),
+            "an unknown engine is not guessed"
+        );
+        // Print follows the same condition, because it prints those same bytes
+        // (ADR 2026-11-06-print-the-compiled-pdf). The label is the plain one:
+        // the row is a real Print row now, not a pointer at Export › PDF.
+        assert_eq!(enabled_for(&state, "file.print"), Some(true));
+        assert_eq!(label_for(&state, "file.print").as_deref(), Some("Print…"));
+
+        // Before a compile exists, Print says what it is waiting for — the same
+        // way the PDF row does, and for the same reason.
+        state.pdf_preview_available = false;
+        assert_eq!(enabled_for(&state, "file.print"), Some(false));
+        assert_eq!(
+            label_for(&state, "file.print").as_deref(),
+            Some("Print… (available after the preview compiles)")
+        );
+        state.pdf_preview_available = true;
+
+        // Every other language keeps the native print surface, and its PDF row
+        // is the article the preview builds rather than a compiled file. Both
+        // rows restate their plain label rather than returning `None`: the sync
+        // only writes what this function states, so `None` would leave the
+        // LaTeX document's reason on the next tab.
+        state.document_language = "markdown".into();
+        assert_eq!(enabled_for(&state, "export.pdf"), Some(true));
+        assert_eq!(label_for(&state, "export.pdf").as_deref(), Some("PDF…"));
+        assert_eq!(enabled_for(&state, "file.print"), Some(true));
+        assert_eq!(label_for(&state, "file.print").as_deref(), Some("Print…"));
+    }
+
+    #[test]
+    fn auto_compile_is_a_settings_backed_latex_check_item() {
+        let mut settings = crate::settings::Settings {
+            latex_auto_compile: false,
+            ..Default::default()
+        };
+        let mut state = MenuState::from_settings(&settings);
+        assert!(CHECK_IDS.contains(&"view.latexAutoCompile"));
+        assert!(!is_checked(&state, "view.latexAutoCompile"));
+        assert_eq!(enabled_for(&state, "view.latexAutoCompile"), Some(false));
+        state.document_language = "latex".into();
+        assert_eq!(enabled_for(&state, "view.latexAutoCompile"), Some(true));
+        settings.latex_auto_compile = true;
+        let rebuilt = state.with_settings(&settings);
+        assert!(is_checked(&rebuilt, "view.latexAutoCompile"));
+    }
+
+    /// The regression this pins: a `.tex` tab followed by an AsciiDoc one.
+    ///
+    /// `label_for` used to answer `None` for every language that had no special
+    /// arm, and `apply_context` reads `None` as "leave the label alone". The
+    /// LaTeX reason therefore survived the tab switch and told an AsciiDoc
+    /// author to wait for a preview compile that does not exist.
+    #[test]
+    fn a_language_specific_label_does_not_outlive_its_document() {
+        let mut state = MenuState {
+            document_language: "latex".into(),
+            pdf_preview_available: false,
+            ..MenuState::default()
+        };
+        assert_eq!(
+            label_for(&state, "export.pdf").as_deref(),
+            Some("PDF… (available after the preview compiles)")
+        );
+        assert_eq!(
+            label_for(&state, "file.print").as_deref(),
+            Some("Print… (available after the preview compiles)")
+        );
+
+        // The same menu, now showing an AsciiDoc document. Every row that the
+        // LaTeX state rewrote must state its own label again.
+        state.document_language = "asciidoc".into();
+        for (id, expected) in [
+            ("export.pdf", "PDF…"),
+            ("file.print", "Print…"),
+            ("export.markdown", "Markdown… (LaTeX documents)"),
+            (
+                "export.pandoc.more",
+                "More Pandoc Formats… (LaTeX documents)",
+            ),
+            ("view.typstPreview", "Typst Preview"),
+        ] {
+            assert_eq!(
+                label_for(&state, id).as_deref(),
+                Some(expected),
+                "{id} kept a stale label on an AsciiDoc document"
+            );
+        }
+
+        // And back again: the LaTeX labels are restored, not merely cleared.
+        state.document_language = "latex".into();
+        assert_eq!(
+            label_for(&state, "export.markdown").as_deref(),
+            Some("Markdown…")
+        );
+        assert_eq!(
+            label_for(&state, "export.pandoc.more").as_deref(),
+            Some("More Pandoc Formats…")
+        );
+    }
+
+    #[test]
     fn availability_follows_the_document_and_the_tab() {
         let mut state = MenuState {
             document_language: "typst".into(),
@@ -1728,6 +2232,7 @@ mod tests {
         assert_eq!(enabled_for(&state, "view.typstPreview"), Some(true));
         assert_eq!(enabled_for(&state, "view.zoomIn"), Some(true));
         assert_eq!(enabled_for(&state, "tools.statistics"), Some(true));
+        assert_eq!(enabled_for(&state, "tools.encoding"), Some(true));
 
         state.document_language = "html".into();
         state.link_kind = "file".into();
@@ -1759,7 +2264,10 @@ mod tests {
     #[test]
     fn conditional_labels_name_the_document_action() {
         let mut state = MenuState::default();
-        assert_eq!(label_for(&state, "file.favorite").as_deref(), Some("Add to Favorites"));
+        assert_eq!(
+            label_for(&state, "file.favorite").as_deref(),
+            Some("Add to Favorites")
+        );
         state.is_favorite = true;
         assert_eq!(
             label_for(&state, "file.favorite").as_deref(),
@@ -1767,7 +2275,10 @@ mod tests {
         );
 
         state.document_language = "markdown".into();
-        assert_eq!(label_for(&state, "para.yaml").as_deref(), Some("YAML Front Matter"));
+        assert_eq!(
+            label_for(&state, "para.yaml").as_deref(),
+            Some("YAML Front Matter")
+        );
         state.document_language = "asciidoc".into();
         assert_eq!(
             label_for(&state, "para.yaml").as_deref(),
@@ -1792,8 +2303,14 @@ mod tests {
         let checked = |ids: &[&str]| ids.iter().filter(|id| is_checked(&state, id)).count();
 
         assert_eq!(checked(&["view.source", "view.split", "view.preview"]), 1);
-        assert_eq!(checked(&["view.outline", "view.favorites", "view.recent"]), 1);
-        assert_eq!(checked(&["themes.system", "themes.light", "themes.dark"]), 1);
+        assert_eq!(
+            checked(&["view.outline", "view.favorites", "view.recent"]),
+            1
+        );
+        assert_eq!(
+            checked(&["themes.system", "themes.light", "themes.dark"]),
+            1
+        );
         assert_eq!(
             checked(&[
                 "view.syntax.auto",
@@ -1811,7 +2328,7 @@ mod tests {
     }
 
     #[test]
-    fn export_availability_disables_and_annotates() {
+    fn export_availability_labels_but_does_not_disable_a_missing_tool() {
         let docx = ExportFormat {
             id: "docx".into(),
             label: "Word (.docx)".into(),
@@ -1825,38 +2342,105 @@ mod tests {
         };
 
         let unknown = ExportAvailability::default();
-        assert!(export_enabled(&docx, unknown));
-        assert_eq!(export_label(&docx, unknown), "Word (.docx)…");
+        assert!(export_enabled_for(&docx, "markdown"));
+        assert_eq!(export_label(&docx, unknown, "markdown"), "Word (.docx)…");
 
         let custom = ExportFormat {
             id: "custom1".into(),
             label: "My Word Target".into(),
             ..ExportFormat::default()
         };
-        assert_eq!(export_label(&custom, unknown), "My Word Target");
+        assert_eq!(export_label(&custom, unknown, "markdown"), "My Word Target");
 
+        // The row stays clickable so its click can open the shared setup dialog;
+        // the suffix tells the reader what the click will ask for.
         let pandoc_missing = ExportAvailability {
             pandoc: Some(false),
             typst: Some(false),
         };
-        assert!(!export_enabled(&docx, pandoc_missing));
-        assert!(export_label(&docx, pandoc_missing).ends_with("— needs Pandoc"));
+        assert!(export_enabled_for(&docx, "markdown"));
+        assert!(export_label(&docx, pandoc_missing, "markdown").ends_with("— set up Pandoc"));
 
-        // Pandoc alone is enough for every target but PDF.
+        // Pandoc alone is enough for every target but PDF; Typst is the second
+        // step in that one chain, not a second disabled row.
         let typst_missing = ExportAvailability {
             pandoc: Some(true),
             typst: Some(false),
         };
-        assert!(export_enabled(&docx, typst_missing));
-        assert!(!export_enabled(&pdf, typst_missing));
-        assert!(export_label(&pdf, typst_missing).ends_with("— needs Typst"));
+        assert!(export_enabled_for(&docx, "markdown"));
+        assert!(export_enabled_for(&pdf, "markdown"));
+        assert!(export_label(&pdf, typst_missing, "markdown").ends_with("— set up Typst"));
 
         let installed = ExportAvailability {
             pandoc: Some(true),
             typst: Some(true),
         };
-        assert!(export_enabled(&pdf, installed));
-        assert_eq!(export_label(&pdf, installed), "PDF (via Typst)…");
+        assert!(export_enabled_for(&pdf, "markdown"));
+        assert_eq!(
+            export_label(&pdf, installed, "markdown"),
+            "PDF (via Typst)…"
+        );
+
+        // A source language the editor cannot convert is still disabled: no
+        // install would make `.css` a document format.
+        assert!(!export_enabled_for(&docx, "css"));
+    }
+
+    #[test]
+    fn every_pandoc_row_is_live_for_a_latex_document_but_the_typst_pdf() {
+        // The defect this pins: a `.tex` document had every pandoc row disabled
+        // by a comment claiming pandoc had no LaTeX reader, while the backend had
+        // one. The rule now lives in one place and answers for the language.
+        let installed = ExportAvailability {
+            pandoc: Some(true),
+            typst: Some(true),
+        };
+        let docx = ExportFormat {
+            id: "docx".into(),
+            label: "Word (.docx)".into(),
+            ..ExportFormat::default()
+        };
+        let epub = ExportFormat {
+            id: "epub".into(),
+            label: "EPUB".into(),
+            ..ExportFormat::default()
+        };
+        for format in [&docx, &epub] {
+            assert!(
+                export_enabled_for(format, "latex"),
+                "{} must run for LaTeX",
+                format.id
+            );
+            assert_eq!(
+                export_label(format, installed, "latex"),
+                export_label(format, installed, "markdown"),
+                "a working row keeps its own label"
+            );
+        }
+
+        // The built-in pandoc PDF is the one exception, and it says why rather
+        // than pretending Typst is missing.
+        let pdf = ExportFormat {
+            id: "pdf".into(),
+            label: "PDF (via Typst)".into(),
+            ..ExportFormat::default()
+        };
+        assert!(!export_enabled_for(&pdf, "latex"));
+        assert!(
+            export_label(&pdf, installed, "latex").ends_with("— use Export › PDF (compiled)"),
+            "{}",
+            export_label(&pdf, installed, "latex")
+        );
+        // Without pandoc the reason is still the LaTeX one: the row cannot run
+        // whatever the tools say, and a second explanation would be noise.
+        let missing = ExportAvailability {
+            pandoc: Some(false),
+            typst: Some(false),
+        };
+        assert!(export_label(&pdf, missing, "latex").ends_with("— use Export › PDF (compiled)"));
+        // Every other language keeps the row live and labels the missing step.
+        assert!(export_enabled_for(&pdf, "markdown"));
+        assert!(export_label(&pdf, missing, "markdown").ends_with("— set up Pandoc"));
     }
 
     #[test]
@@ -1866,7 +2450,10 @@ mod tests {
         // into the pandoc list.
         let formats = default_export_formats();
         assert_eq!(
-            formats.iter().filter(|format| is_pandoc_pdf(format)).count(),
+            formats
+                .iter()
+                .filter(|format| is_pandoc_pdf(format))
+                .count(),
             1,
             "exactly one default format is the pandoc PDF"
         );
@@ -1933,7 +2520,10 @@ mod tests {
         let label = recent_label(path);
 
         assert_eq!(label.chars().count(), RECENT_LABEL_MAX);
-        assert!(label.contains('…'), "the middle must be the part cut: {label}");
+        assert!(
+            label.contains('…'),
+            "the middle must be the part cut: {label}"
+        );
         assert!(
             label.ends_with("2026-10-18-open-recent-menu.md"),
             "the file name is the part a reader scans for: {label}"

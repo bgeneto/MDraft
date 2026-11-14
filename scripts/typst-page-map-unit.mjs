@@ -12,6 +12,10 @@
 // - a ligature or a soft hyphen must not break an otherwise exact word;
 // - generated text still maps to nothing.
 
+import { decodeRenderedTypstBinary } from "../src/api.ts";
+import { buildPdfWordAnchors } from "../src/pdf-page-build.ts";
+import { PdfPageMap } from "../src/pdf-page-map.ts";
+import { annotateTypstLines } from "../src/typst-map.ts";
 import { createTypstPageMap } from "../src/typst-page-map.ts";
 
 const checks = [];
@@ -254,6 +258,256 @@ console.log("\n=== bidirectional prose index ===");
       map.wordAt(3, 0)?.text === "delta" &&
       map.wordAt(1, 0)?.from !== map.wordAt(3, 0)?.from,
     "a repeated continuation word keeps its own line",
+  );
+}
+
+console.log("\n=== Phase 2 & 4: AST spanMap, multi-file UTF-16 & binary IPC ===");
+{
+  const ch1Source = [
+    "= Capítulo Um",
+    "",
+    "A partícula café oscila como pendulum aqui.",
+    "A partícula café oscila como pendulum aqui.",
+    "",
+  ].join("\n");
+  const mainSource = '= Índice\n\n#include "chapters/ch1.typ"\n';
+
+  const line3Start = ch1Source.indexOf("A partícula café");
+  const line3End = line3Start + "A partícula café oscila como pendulum aqui.".length;
+  const line4Start = ch1Source.indexOf("A partícula café", line3End);
+  const line4End = line4Start + "A partícula café oscila como pendulum aqui.".length;
+  const headingStart = ch1Source.indexOf("Capítulo Um");
+  const headingEnd = headingStart + "Capítulo Um".length;
+
+  const spanMap = [
+    {
+      file: "chapters/ch1.typ",
+      line: 1,
+      column: 3,
+      byteOffset: headingStart,
+      utf16Start: headingStart,
+      utf16End: headingEnd,
+      page: 1,
+      xPt: 72,
+      yPt: 40 - 18 * 0.85,
+      widthPt: 110,
+      heightPt: 18,
+    },
+    {
+      file: "chapters/ch1.typ",
+      line: 3,
+      column: 1,
+      byteOffset: line3Start,
+      utf16Start: line3Start,
+      utf16End: line3End,
+      page: 1,
+      xPt: 72,
+      yPt: 72 - 11 * 0.85,
+      widthPt: 260,
+      heightPt: 11,
+    },
+    {
+      file: "chapters/ch1.typ",
+      line: 4,
+      column: 1,
+      byteOffset: line4Start,
+      utf16Start: line4Start,
+      utf16End: line4End,
+      page: 1,
+      xPt: 72,
+      yPt: 92 - 11 * 0.85,
+      widthPt: 260,
+      heightPt: 11,
+    },
+  ];
+
+  const files = [
+    { path: "main.typ", source: mainSource },
+    { path: "chapters/ch1.typ", source: ch1Source },
+  ];
+  const pdfLines = [
+    {
+      text: "1 Capítulo Um",
+      region: "1:0:-1",
+      page: 1,
+      yPt: 40,
+      leftPt: 72,
+      rightPt: 182,
+      heightPt: 18,
+    },
+    {
+      text: "A partícula café oscila como pendulum aqui.",
+      region: "1:0:-1",
+      page: 1,
+      yPt: 72,
+      leftPt: 72,
+      rightPt: 332,
+      heightPt: 11,
+    },
+    {
+      text: "A partícula café oscila como pendulum aqui.",
+      region: "1:0:-1",
+      page: 1,
+      yPt: 92,
+      leftPt: 72,
+      rightPt: 332,
+      heightPt: 11,
+    },
+  ];
+
+  const anchors = await buildPdfWordAnchors("typst", files, pdfLines, spanMap);
+  const pdfMap = new PdfPageMap(pdfLines, anchors, false);
+
+  const cafeOffset = pdfLines[1].text.indexOf("café");
+  const wLine3 = pdfMap.wordAt(1, cafeOffset);
+  const wLine4 = pdfMap.wordAt(2, cafeOffset);
+  check(
+    wLine3?.file === "chapters/ch1.typ" &&
+      ch1Source.slice(wLine3.from, wLine3.to) === "café" &&
+      wLine3.from === ch1Source.indexOf("café"),
+    "spanMap anchors UTF-16 accented word into included chapter line 3",
+    JSON.stringify(wLine3),
+  );
+  check(
+    wLine4?.file === "chapters/ch1.typ" &&
+      ch1Source.slice(wLine4.from, wLine4.to) === "café" &&
+      wLine4.from === ch1Source.lastIndexOf("café") &&
+      wLine4.from > (wLine3?.to ?? 0),
+    "spanMap disambiguates identical repeated sentence onto chapter line 4",
+    JSON.stringify(wLine4),
+  );
+  const rev = wLine4 ? pdfMap.partsForSource("chapters/ch1.typ", wLine4.from, wLine4.to) : [];
+  check(
+    rev.length === 1 && rev[0].line === 2,
+    "reverse lookup on included chapter points strictly to visual line 2",
+    JSON.stringify(rev),
+  );
+
+  // Fail-safe check: compiler span pointing to #lorem(10) must NOT map "Lorem" word!
+  const loremSrc = "#lorem(10)";
+  const loremAnchors = await buildPdfWordAnchors(
+    "typst",
+    [{ path: "main.typ", source: loremSrc }],
+    [
+      {
+        text: "Lorem ipsum dolor sit amet",
+        region: "1:0:-1",
+        page: 1,
+        yPt: 60,
+        leftPt: 72,
+        rightPt: 250,
+        heightPt: 11,
+      },
+    ],
+    [
+      {
+        file: "main.typ",
+        line: 1,
+        column: 1,
+        byteOffset: 0,
+        utf16Start: 0,
+        utf16End: loremSrc.length,
+        page: 1,
+        xPt: 72,
+        yPt: 60 - 11 * 0.85,
+        widthPt: 178,
+        heightPt: 11,
+      },
+    ],
+  );
+  check(
+    loremAnchors.length === 0,
+    "compiler span targeting #lorem(...) stays unmapped rather than false-linking Lorem",
+    JSON.stringify(loremAnchors),
+  );
+
+  // CLI fallback parity when spanMap is omitted.
+  const cliFallback = await buildPdfWordAnchors(
+    "typst",
+    [{ path: "", source: ch1Source }],
+    [{ text: "A partícula café oscila como pendulum aqui.", region: "left" }],
+  );
+  check(
+    cliFallback.length === 0,
+    "CLI fallback without spanMap still withholds ambiguous repeated prose",
+  );
+
+  // Raw binary IPC header + PDF round-trip.
+  const metaJson = JSON.stringify({
+    compilerOutput: "",
+    compilerOutputTruncated: false,
+    kind: "pages",
+    html: null,
+    css: null,
+    pdf: null,
+    warnings: [],
+    ignored: [],
+    pageHashes: ["aaaa", "bbbb"],
+    firstChangedPage: 2,
+    changedPages: [2],
+    deps: [{ path: "chapters/ch1.typ", mtimeMs: 1234, size: 88 }],
+    spanMap,
+    backendKind: "service",
+    timings: { vfsSyncMs: 0.4, typstCompileMs: 2.1, pageHashMs: 0.2, exportMs: 3.0, totalMs: 5.7 },
+  });
+  const metaBytes = new TextEncoder().encode(metaJson);
+  const rawPdf = new TextEncoder().encode("%PDF-1.7\n%mock\n%%EOF");
+  const packet = new Uint8Array(4 + metaBytes.length + rawPdf.length);
+  new DataView(packet.buffer).setUint32(0, metaBytes.length, false);
+  packet.set(metaBytes, 4);
+  packet.set(rawPdf, 4 + metaBytes.length);
+  const decoded = decodeRenderedTypstBinary(packet.buffer);
+  check(
+    decoded.meta.backendKind === "service" &&
+      decoded.meta.pageHashes?.length === 2 &&
+      decoded.meta.spanMap?.length === 3 &&
+      decoded.pdfBytes !== undefined &&
+      new TextDecoder().decode(decoded.pdfBytes) === "%PDF-1.7\n%mock\n%%EOF",
+    "decodeRenderedTypstBinary parses big-endian frame & raw PDF bytes cleanly",
+  );
+
+  // DOM-stub test for annotateTypstLines with & without spanMap.
+  globalThis.Node ??= { TEXT_NODE: 3, ELEMENT_NODE: 1 };
+  const makeEl = (tagName, text) => {
+    const attrs = new Map();
+    return {
+      tagName,
+      dataset: {},
+      textContent: text,
+      childNodes: [{ nodeType: 3, textContent: text }],
+      setAttribute: (k, v) => attrs.set(k, v),
+      getAttribute: (k) => attrs.get(k) ?? null,
+    };
+  };
+  const docSource = ["= Título Principal", "", "#lorem(12)", "", "Parágrafo final com café."].join(
+    "\n",
+  );
+  const hEl = makeEl("H1", "Título Principal");
+  const lEl = makeEl("P", "Lorem ipsum dolor sit amet");
+  const pEl = makeEl("P", "Parágrafo final com café.");
+  const host = { children: [hEl, lEl, pEl] };
+  const pStart = docSource.indexOf("Parágrafo final");
+  const res = annotateTypstLines(host, docSource, [
+    {
+      file: "doc.typ",
+      line: 5,
+      column: 1,
+      byteOffset: pStart,
+      utf16Start: pStart,
+      utf16End: docSource.length,
+      page: 1,
+      xPt: 72,
+      yPt: 120,
+      widthPt: 200,
+      heightPt: 11,
+    },
+  ]);
+  check(
+    res.mapped === 2 &&
+      hEl.getAttribute("data-line") === "1" &&
+      lEl.getAttribute("data-line") === null &&
+      pEl.getAttribute("data-line") === "5",
+    "annotateTypstLines uses spanMap hints cleanly while leaving #lorem unmapped",
   );
 }
 

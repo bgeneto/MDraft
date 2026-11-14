@@ -48,6 +48,11 @@ export interface EditorMenuOptions {
   readAloud: (fromStart: boolean) => void | Promise<void>;
   /** Stop the reading in progress. */
   stopReading: () => void;
+  /**
+   * Capture the paste target before the clipboard read; the returned check
+   * says whether it is still the target once the read settles.
+   */
+  pasteTarget: () => () => boolean;
   toast: (text: string, ms?: number) => { dismiss: () => void };
 }
 
@@ -165,9 +170,16 @@ export function installEditorContextMenu(options: EditorMenuOptions): () => void
   };
 
   const paste = async (): Promise<void> => {
+    const stillTarget = options.pasteTarget();
     const data = await readClipboardData();
     if (!data) {
       options.toast("Could not read the clipboard.", 4200);
+      return;
+    }
+    // The clipboard still holds the data, so a target that changed during the
+    // read is a cancelled paste the reader can repeat, never another document.
+    if (!stillTarget()) {
+      options.toast("The document changed before the clipboard was read — paste again.", 4200);
       return;
     }
     view.focus();

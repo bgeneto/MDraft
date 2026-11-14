@@ -7,6 +7,7 @@
 
 import ASCIIDOC_REFERENCE_SOURCE from "../samples/asciidoc-reference.adoc?raw";
 import TYPST_REFERENCE_SOURCE from "../samples/typst-reference.typ?raw";
+import LATEX_REFERENCE_SOURCE from "../samples/latex-reference.tex?raw";
 
 const WELCOME_LINES: string[] = [
   "# Welcome to MDraft",
@@ -240,6 +241,7 @@ const SHORTCUTS_LINES: string[] = [
   "| --- | --- |",
   "| New document | `Ctrl+N` |",
   "| Open | `Ctrl+O` |",
+  "| Open Folder | `Ctrl+Shift+O` |",
   "| Save | `Ctrl+S` |",
   "| Save as | `Ctrl+Shift+S` |",
   "| Close tab | `Ctrl+W` |",
@@ -298,7 +300,7 @@ const SHORTCUTS_LINES: string[] = [
   "| --- | --- |",
   "| Source code mode | `Ctrl+/` |",
   "| Toggle sidebar | `Ctrl+Shift+L` |",
-  "| Outline / Favorites / Recent | `Ctrl+Shift+1` / `Ctrl+Shift+2` / `Ctrl+Shift+3` |",
+  "| Outline / Favorites / Recent / Explorer | `Ctrl+Shift+1` / `Ctrl+Shift+2` / `Ctrl+Shift+3` / `Ctrl+Shift+4` |",
   "| Focus mode | `F8` |",
   "| Typewriter mode | `F9` |",
   "| Zoom in / out / reset | `Ctrl+Shift+=` / `Ctrl+Shift+-` / `Ctrl+Alt+0` |",
@@ -315,6 +317,7 @@ export const WELCOME = WELCOME_LINES.join("\n");
 export const REFERENCE = REFERENCE_LINES.join("\n");
 export const ASCIIDOC_REFERENCE = ASCIIDOC_REFERENCE_SOURCE;
 export const TYPST_REFERENCE = TYPST_REFERENCE_SOURCE;
+export const LATEX_REFERENCE = LATEX_REFERENCE_SOURCE;
 export const SHORTCUTS = SHORTCUTS_LINES.join("\n");
 
 // ---------------------------------------------------------------------------

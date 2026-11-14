@@ -43,40 +43,16 @@
       "url": "https://github.com/adobe-fonts/source-sans/releases/download/3.052R/WOFF2-source-sans-3.052R.zip",
       "picks": [
         {
-          "entry": "WOFF2/TTF/SourceSans3-Regular.ttf.woff2",
-          "file": "SourceSans3-Regular.woff2",
+          "entry": "WOFF2/VF/SourceSans3VF-Upright.ttf.woff2",
+          "file": "SourceSans3-Variable.woff2",
           "style": "normal",
-          "weight": "400"
+          "weight": "200 900"
         },
         {
-          "entry": "WOFF2/TTF/SourceSans3-Semibold.ttf.woff2",
-          "file": "SourceSans3-Semibold.woff2",
-          "style": "normal",
-          "weight": "600"
-        },
-        {
-          "entry": "WOFF2/TTF/SourceSans3-Bold.ttf.woff2",
-          "file": "SourceSans3-Bold.woff2",
-          "style": "normal",
-          "weight": "700"
-        },
-        {
-          "entry": "WOFF2/TTF/SourceSans3-It.ttf.woff2",
-          "file": "SourceSans3-Italic.woff2",
+          "entry": "WOFF2/VF/SourceSans3VF-Italic.ttf.woff2",
+          "file": "SourceSans3-Variable-Italic.woff2",
           "style": "italic",
-          "weight": "400"
-        },
-        {
-          "entry": "WOFF2/TTF/SourceSans3-SemiboldIt.ttf.woff2",
-          "file": "SourceSans3-SemiboldItalic.woff2",
-          "style": "italic",
-          "weight": "600"
-        },
-        {
-          "entry": "WOFF2/TTF/SourceSans3-BoldIt.ttf.woff2",
-          "file": "SourceSans3-BoldItalic.woff2",
-          "style": "italic",
-          "weight": "700"
+          "weight": "200 900"
         }
       ]
     },

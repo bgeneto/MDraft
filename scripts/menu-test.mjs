@@ -211,12 +211,15 @@ try {
     ["file.favorite", "File"],
     ["file.print", "File"],
     ["themes.system", "Interface Theme"],
-    ["view.syntax.nord", "Code Colors"],
+    ["view.syntax.nord", "Code Themes"],
     ["navigate.openTarget", "Navigate"],
     ["file.preferences", "File"],
     ["tools.spellcheck", "Tools"],
     ["tools.statistics", "Tools"],
+    ["tools.encoding", "Tools"],
     ["tools.ai", "Tools"],
+    ["view.latexCompile", "Tools"],
+    ["view.latexAutoCompile", "Tools"],
     ["help.welcome", "Help"],
   ]) {
     check(parentOf(id) === parent, `${id} lives under ${parent}`, parentOf(id));
@@ -246,6 +249,10 @@ try {
     ["tools.spellcheck", "Check Spelling While Typing"],
     ["tools.spellLanguage", "Spelling Language…"],
     ["tools.statistics", "Document Statistics…"],
+    ["tools.encoding", "Encoding and Line Endings…"],
+    // One setup surface, not three per-tool rows. The export and preview rows
+    // that need a missing tool are the contextual routes to the same dialog.
+    ["tools.optionalTools", "Optional Tools…"],
     ["tools.ai", "AI Assistant"],
     ["edit.pastePlain", "Paste without Formatting"],
     ["edit.find", "Find"],
@@ -269,15 +276,38 @@ try {
     !textOf("edit.find").endsWith("…") && !textOf("edit.replace").endsWith("…"),
     "find and replace do not pretend to be dialogs",
   );
+  // The setup row is about the *application*, not the open document, so it is
+  // enabled whatever is on screen — including for a document whose own language
+  // has no preview at all.
+  check(
+    (await itemById("tools.optionalTools"))?.enabled === true,
+    "tools.optionalTools is always available",
+    String((await itemById("tools.optionalTools"))?.enabled),
+  );
   // The three PDF routes are one group at the foot of the submenu: the native
   // writer, the pandoc/Typst conversion, then the browser fallback. The pandoc
   // PDF is drawn from the stored format list, so this is also the check that
-  // its configured position does not scatter it back among Word and LaTeX.
-  const exportOrder = all.filter((item) => item.parent === "Export").map((item) => item.id);
+  // its configured position does not scatter it back among Word and LaTeX. The
+  // chooser row follows them, after a separator.
+  const exportOrder = all
+    .filter((item) => item.parent === "Export" && item.kind !== "predefined")
+    // A separator carries a generated numeric id; it is not a row a reader can
+    // click and it must not shift the positional assertions below.
+    .filter((item) => item.id.startsWith("export."))
+    .map((item) => item.id);
   check(
-    exportOrder.slice(-3).join(" ") === "export.pdf export.pandoc.pdf export.pdf.browser",
-    "the Export submenu ends with the three PDF routes in order",
-    exportOrder.slice(-3).join(" "),
+    exportOrder.slice(-4).join(" ") ===
+      "export.pdf export.pandoc.pdf export.pdf.browser export.pandoc.more",
+    "the Export submenu ends with the three PDF routes and the writer chooser",
+    exportOrder.slice(-4).join(" "),
+  );
+  // Markdown is a direct row, not a stored format: it is the editor's own
+  // dialect, so a Markdown document has nothing to convert.
+  check(
+    exportOrder.includes("export.markdown") &&
+      exportOrder.indexOf("export.markdown") < exportOrder.indexOf("export.pdf"),
+    "Markdown is a direct export row above the PDF group",
+    exportOrder.join(" "),
   );
 
   // -------------------------------------------------------------------------
@@ -297,6 +327,10 @@ try {
   check(
     (await itemById("view.typstPreview"))?.enabled === false,
     "Typst Preview is disabled for Markdown",
+  );
+  check(
+    (await itemById("view.latexCompile"))?.enabled === false,
+    "Compile LaTeX is disabled for Markdown",
   );
   check((await itemById("edit.delete"))?.enabled === false, "Delete Selection starts disabled");
   check((await itemById("navigate.openTarget"))?.enabled === false, "Open Target starts disabled");
@@ -562,12 +596,12 @@ try {
   );
 
   // -------------------------------------------------------------------------
-  // Code colours and zoom-only reset
+  // Code themes and zoom-only reset
   // -------------------------------------------------------------------------
   console.log("\n=== View state and document zoom ===");
   await emitMenu("view.syntax.nord");
   await sleep(650);
-  check((await settings()).syntaxTheme === "nord", "Code Colors writes the palette to settings");
+  check((await settings()).syntaxTheme === "nord", "Code Themes writes the palette to settings");
   check(
     (await menuState()).find((item) => item.id === "view.syntax.nord")?.checked === true,
     "the Nord menu item carries the check",
@@ -811,21 +845,53 @@ try {
   check((await itemById("view.blocks"))?.enabled === true, "Typst keeps folding");
   check((await itemById("file.print"))?.enabled === false, "Typst disables native printing");
   check(
-    (await itemById("file.print"))?.text === "Print… (use PDF via Typst)",
-    "the disabled print row names the Typst PDF route",
+    (await itemById("file.print"))?.text === "Print… (use Export › PDF)",
+    "the disabled print row points at Export › PDF",
     (await itemById("file.print"))?.text ?? "MISSING",
   );
-  check((await itemById("export.pdf"))?.enabled === false, "Typst disables the direct PDF writer");
+  // The Document view compiles HTML and holds no PDF, so the row is disabled and
+  // says where the PDF comes from.
+  check(
+    (await itemById("export.pdf"))?.enabled === false,
+    "Typst disables the PDF row in the Document view",
+  );
+  check(
+    (await itemById("export.pdf"))?.text === "PDF… (available in Pages view)",
+    "the disabled Typst PDF row names the Pages view",
+    (await itemById("export.pdf"))?.text ?? "MISSING",
+  );
   check(
     (await itemById("export.pdf.browser"))?.enabled === true,
     "Typst keeps the browser print route",
   );
+  // The enabled state in the Pages view is proven by the Rust unit test
+  // `the_pdf_row_follows_the_compiled_bytes_and_names_the_engine`: it needs a
+  // real Typst compile, which this suite does not run.
 
   await openPaths([join(repoRoot, "samples", "asciidoc-tour.adoc")]);
   check(
     (await itemById("para.yaml"))?.text === "Document Attributes",
     "AsciiDoc names document attributes",
     (await itemById("para.yaml"))?.text ?? "MISSING",
+  );
+  // The Typst tab before this one rewrote the PDF and Print rows with reasons
+  // about a compiler. Those must not survive the switch: an AsciiDoc document
+  // has no compiled PDF, and telling its author to wait for one is the same
+  // defect as the LaTeX label this suite pins below.
+  check(
+    (await itemById("export.pdf"))?.text === "PDF…",
+    "AsciiDoc restores the plain PDF label after a Typst tab",
+    (await itemById("export.pdf"))?.text ?? "MISSING",
+  );
+  check(
+    (await itemById("file.print"))?.text === "Print…",
+    "AsciiDoc restores the plain Print label after a Typst tab",
+    (await itemById("file.print"))?.text ?? "MISSING",
+  );
+  check(
+    (await itemById("export.markdown"))?.text === "Markdown… (LaTeX documents)",
+    "AsciiDoc explains that the direct Markdown row is a LaTeX conversion",
+    (await itemById("export.markdown"))?.text ?? "MISSING",
   );
   check((await itemById("format.document"))?.enabled === false, "AsciiDoc has no Format Document");
   check((await itemById("view.blocks"))?.enabled === false, "AsciiDoc has no folding commands");
@@ -839,13 +905,117 @@ try {
     "HTML disables an inserted table of contents",
   );
   check((await itemById("format.document"))?.enabled === true, "HTML keeps Format Document");
-  check((await itemById("tools.spellcheck"))?.enabled === false, "HTML disables spelling");
+  check((await itemById("tools.spellcheck"))?.enabled === true, "HTML enables spelling");
   check((await itemById("file.print"))?.enabled === true, "HTML keeps native printing");
   check((await itemById("export.pdf"))?.enabled === true, "HTML keeps the direct PDF writer");
   check(
     (await itemById("export.pdf.browser"))?.enabled === true,
     "HTML keeps the browser print route",
   );
+
+  // LaTeX: the commands it implements are live, and what it cannot do yet is
+  // disabled rather than offered as a control that only shows a toast.
+  await openPaths([join(repoRoot, "samples", "latex-project", "main.tex")]);
+  check(
+    (await itemById("view.latexCompile"))?.enabled === true,
+    "Compile LaTeX is enabled for LaTeX",
+  );
+  for (const [id, label] of [
+    ["format.bold", "bold"],
+    ["format.italic", "italic"],
+    ["format.link", "a link"],
+    ["format.image", "an image"],
+    ["format.math", "inline math"],
+    ["para.h1", "a heading"],
+    ["para.paragraph", "a paragraph"],
+    ["para.quote", "a quote"],
+    ["para.ul", "a bullet list"],
+    ["para.ol", "an ordered list"],
+    ["para.table", "a table"],
+    ["para.codeBlock", "a code block"],
+    ["para.hr", "a rule"],
+    ["para.toc", "a table of contents"],
+  ]) {
+    check((await itemById(id))?.enabled === true, `LaTeX keeps ${label}`);
+  }
+  // Format Document is enabled now that tex-fmt is behind `hasFormatter`. It was
+  // disabled in two places — this menu gate and `formatUnavailableReason` — and
+  // removing only one would have produced a row that is enabled and then refuses.
+  check(
+    (await itemById("format.document"))?.enabled === true,
+    "LaTeX enables Format Document now that tex-fmt is bundled",
+  );
+  check((await itemById("para.task"))?.enabled === false, "LaTeX has no task lists");
+  check((await itemById("para.yaml"))?.enabled === false, "LaTeX has no document metadata block");
+  // Print now prints the compiled PDF (ADR 2026-11-06-print-the-compiled-pdf),
+  // so it follows the same condition as the PDF row: available once a compile
+  // exists, and saying what it waits for before that. The fixture has not
+  // compiled, so the disabled label is the one to assert here.
+  check(
+    (await itemById("file.print"))?.enabled === false,
+    "LaTeX print waits for a compiled preview",
+  );
+  check(
+    (await itemById("file.print"))?.text === "Print… (available after the preview compiles)",
+    "the disabled LaTeX print row says what it waits for",
+    (await itemById("file.print"))?.text ?? "MISSING",
+  );
+  // The PDF row names the engine and is enabled only while a current PDF exists.
+  // This fixture has not been compiled in this run, so it is disabled with the
+  // reason rather than offering a row that would refuse.
+  check(
+    (await itemById("export.pdf"))?.enabled === false,
+    "LaTeX disables the PDF row before a compile",
+  );
+  check(
+    (await itemById("export.pdf"))?.text === "PDF… (available after the preview compiles)",
+    "the disabled LaTeX PDF row says what it waits for",
+    (await itemById("export.pdf"))?.text ?? "MISSING",
+  );
+  // HTML export goes through pandoc, which reads LaTeX with its own reader, so
+  // it is available now. DOCX, ODT and EPUB are formats LaTeX cannot write
+  // itself, and refusing them cost the reader real output.
+  check(
+    (await itemById("export.html"))?.enabled === true,
+    "LaTeX exports HTML through pandoc's LaTeX reader",
+  );
+  // The configured pandoc rows are live too. This is the defect the plan
+  // records: the menu disabled every one of them while the backend had a LaTeX
+  // reader, so a working conversion was unreachable.
+  for (const [id, label] of [
+    ["export.pandoc.docx", "Word"],
+    ["export.pandoc.odt", "OpenDocument"],
+    ["export.pandoc.epub", "EPUB"],
+    ["export.pandoc.rtf", "RTF"],
+  ]) {
+    check((await itemById(id))?.enabled === true, `LaTeX keeps the ${label} export`);
+  }
+  // Markdown is the editor's own dialect, so its direct row is the one that is
+  // live for LaTeX and disabled for Markdown.
+  check((await itemById("export.markdown"))?.enabled === true, "LaTeX exports Markdown directly");
+  check(
+    (await itemById("export.pandoc.more"))?.enabled === true,
+    "LaTeX offers the rest of the installed pandoc writers",
+  );
+  // The built-in pandoc PDF is the one exception, and it says why rather than
+  // pretending Typst is missing.
+  check(
+    (await itemById("export.pandoc.pdf"))?.enabled === false,
+    "LaTeX disables the Typst PDF route",
+  );
+  check(
+    (await itemById("export.pandoc.pdf"))?.text.endsWith("— use Export › PDF (compiled)"),
+    "the disabled Typst PDF row points at the compiled route",
+    (await itemById("export.pandoc.pdf"))?.text ?? "MISSING",
+  );
+  check(
+    (await itemById("export.pdf.browser"))?.enabled === false,
+    "LaTeX disables the browser print route",
+  );
+  // A stream grammar produces tokens and no tree, so folding has no mechanism.
+  check((await itemById("view.blocks"))?.enabled === false, "LaTeX has no folding commands");
+  check((await itemById("edit.comment"))?.enabled === true, "LaTeX toggles % comments");
+  check((await itemById("tools.spellcheck"))?.enabled === true, "LaTeX keeps spelling");
 } finally {
   rmSync(workDir, { recursive: true, force: true });
 }

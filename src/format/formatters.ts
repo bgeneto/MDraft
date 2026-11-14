@@ -14,7 +14,7 @@ import type { EditorState, TransactionSpec } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import type { Options, Plugin } from "prettier";
 import type { TypstyleConfig } from "@typstyle/typstyle-wasm-bundler/typstyle_wasm_bg.js";
-import type { DocumentLanguage } from "../api";
+import { texFmtWasm, type DocumentLanguage } from "../api.ts";
 import { analyzeMath } from "../math-delimiters.ts";
 
 export type FormatOutcome = "changed" | "unchanged" | "stale";
@@ -45,6 +45,61 @@ let htmlPlugin: Promise<typeof import("prettier/plugins/html")> | null = null;
 
 type TypstyleModule = typeof import("@typstyle/typstyle-wasm-bundler/typstyle_wasm_bg.js");
 let typstyleModule: Promise<TypstyleModule> | null = null;
+
+/**
+ * tex-fmt, the LaTeX formatter.
+ *
+ * Its npm entry imports the 1.66 MiB `.wasm` module, so importing the package
+ * would embed the formatter in every executable — including the sessions that
+ * never format a `.tex` file. The wasm-bindgen glue is 8 KiB and exposes
+ * `__wbg_set_wasm`, so the bytes are fetched from the backend on the first
+ * Format Document and instantiated here: the same shape as Typstyle, with the
+ * module arriving over IPC instead of from the bundle.
+ *
+ * The glue import is aliased in `vite.config.ts`; the package's exports map
+ * hides that subpath and the entry point would pull the wasm back in.
+ */
+type TexFmtGlue = {
+  main(text: string, config: string): { output?: string; logs?: string } | null;
+  __wbg_set_wasm(exports: WebAssembly.Exports): void;
+};
+
+type TexFmtModule = {
+  main(text: string, config: string): { output?: string; logs?: string } | null;
+  version(): string;
+};
+let texFmtModule: Promise<TexFmtModule> | null = null;
+let texFmtLoaderOverride: (() => Promise<TexFmtModule>) | null = null;
+
+/**
+ * Test seam for the app-free LaTeX formatting layer.
+ *
+ * `scripts/latex-format-unit.mjs` runs the formatter under Node, where there is
+ * no Tauri IPC to fetch the module from; it supplies a loader that reads the
+ * glue and the bytes from `node_modules` and instantiates them itself. The
+ * shipped application never calls this.
+ */
+export function setTexFmtLoaderForTests(loader: (() => Promise<TexFmtModule>) | null): void {
+  texFmtLoaderOverride = loader;
+  texFmtModule = null;
+}
+
+function loadTexFmt(): Promise<TexFmtModule> {
+  texFmtModule ??= (async () => {
+    if (texFmtLoaderOverride) return texFmtLoaderOverride();
+    // @ts-expect-error the subpath is not in the package's exports map; Vite aliases it.
+    const glue = (await import("tex-fmt/tex_fmt_bg.js")) as unknown as TexFmtGlue;
+    const bytes = await texFmtWasm();
+    const { instance } = await WebAssembly.instantiate(bytes, {
+      "./tex_fmt_bg.js": glue,
+    } as unknown as WebAssembly.Imports);
+    const exports = instance.exports as WebAssembly.Exports & { __wbindgen_start?: () => void };
+    glue.__wbg_set_wasm(exports);
+    exports.__wbindgen_start?.();
+    return { main: glue.main, version: () => "v0.5.7" };
+  })();
+  return texFmtModule;
+}
 
 function loadPrettier(): Promise<typeof import("prettier/standalone")> {
   return (prettierModule ??= import("prettier/standalone"));
@@ -171,7 +226,9 @@ async function formatWithPrettier(text: string, language: "markdown" | "html"): 
 
 /** Whether `language` has a formatter. AsciiDoc is deliberately excluded. */
 export function hasFormatter(language: DocumentLanguage): boolean {
-  return language === "markdown" || language === "html" || language === "typst";
+  return (
+    language === "markdown" || language === "html" || language === "typst" || language === "latex"
+  );
 }
 
 /**
@@ -192,7 +249,67 @@ export async function formatDocument(
     const typstyle = await loadTypstyle();
     return typstyle.format(text, TYPSTYLE_OPTIONS);
   }
+  if (language === "latex") {
+    const texfmt = await loadTexFmt();
+    // `wrap = false` is deliberate: tex-fmt's default reflows paragraphs, and
+    // reformatting a reader's prose is not what "Format Document" should do to a
+    // `.tex` file. Indentation and alignment are the whole job here.
+    //
+    // The literal regions are swapped out first. tex-fmt 0.5.7 rewrites tabs to
+    // spaces and collapses runs of blank lines **inside `verbatim`**, which
+    // changes what the document prints — measured, not assumed. Restoring them
+    // afterwards is the only way to keep "Format Document" safe on a document
+    // that contains code listings.
+    const { masked, restore } = maskLatexLiterals(text);
+    const result = texfmt.main(masked, "wrap = false\n");
+    const output = typeof result?.output === "string" ? result.output : null;
+    if (output === null) return null;
+    return restore(output);
+  }
   return null;
+}
+
+/**
+ * Replace the literal regions of a LaTeX document with placeholders.
+ *
+ * The placeholders are single tokens on their own lines, so tex-fmt indents them
+ * like any other line and the restore puts the original bytes back. A `verbatim`
+ * body, a `\verb` argument and a `lstlisting` body are all literal by definition:
+ * reindenting them changes the output of the document, not just its layout.
+ *
+ * This is the same masking idea `latex-references.ts` uses for the reference
+ * validator, for the same reason — a scanner that decides what a document *means*
+ * has to know which regions are text.
+ */
+function maskLatexLiterals(text: string): { masked: string; restore: (output: string) => string } {
+  const saved: string[] = [];
+  const token = (index: number) => `\\mdraftliteral{${index}}`;
+  let masked = text;
+
+  // The literal environments, bodies included. Longest name first so `verbatim*`
+  // is not matched as `verbatim`.
+  for (const name of ["verbatim*", "verbatim", "lstlisting", "minted", "alltt"]) {
+    const pattern = new RegExp(
+      `\\\\begin\\{${name.replace("*", "\\*")}\\}[\\s\\S]*?\\\\end\\{${name.replace("*", "\\*")}\\}`,
+      "g",
+    );
+    masked = masked.replace(pattern, (block) => {
+      saved.push(block);
+      return token(saved.length - 1);
+    });
+  }
+
+  // `\verb|…|` and `\verb*|…|`: the delimiter is the character after the name.
+  masked = masked.replace(/\\verb\*?([^a-zA-Z\s*])[\s\S]*?\1/g, (block) => {
+    saved.push(block);
+    return token(saved.length - 1);
+  });
+
+  return {
+    masked,
+    restore: (output) =>
+      output.replace(/\\mdraftliteral\{(\d+)\}/g, (_match, index) => saved[Number(index)] ?? ""),
+  };
 }
 
 /**

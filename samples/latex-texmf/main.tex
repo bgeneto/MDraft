@@ -1,0 +1,10 @@
+% A project whose class and packages come from a registered local library.
+% Nothing here is copied into the project: scripts/latex-texmf-test.mjs creates
+% the library in a temporary folder and registers it in Preferences > LaTeX >
+% Local packages and classes. Without that library this document does not
+% compile, which is the point of the sample.
+\documentclass{mdraftlib}
+\usepackage{mdraftlocal}
+\begin{document}
+Local library sample. \mdraftlocalmark{} \mdraftdepmark{} \mdraftextramark{}
+\end{document}

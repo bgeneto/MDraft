@@ -21,7 +21,7 @@ import zlib from "node:zlib";
 import { rankMostUsed } from "../src/ai/usage.ts";
 
 const port = process.argv[2] ?? "9222";
-const appIdentifier = process.env.MDRAFT_TEST_IDENTIFIER ?? "io.github.bernh.mdraft";
+const appIdentifier = process.env.MDRAFT_TEST_IDENTIFIER ?? "io.github.bgeneto.mdraft";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ---------------------------------------------------------------------------
@@ -182,6 +182,35 @@ const server = http.createServer(async (request, response) => {
           : { choices: [{ message: { role: "assistant", content: "OK" } }] },
       ),
     );
+    return;
+  }
+
+  // A provider that accepted the connection and never sends headers. Only the
+  // client closing the socket (Stop) or `release` ends it.
+  if (control.mode === "stallHeaders") {
+    let released = false;
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, 20_000);
+      control.release = () => {
+        released = true;
+        clearTimeout(timer);
+        resolve();
+      };
+      response.on("close", () => {
+        if (!released) control.cancelled += 1;
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    control.release = null;
+    if (!response.writableEnded) {
+      try {
+        response.writeHead(500, { "content-type": "application/json" });
+        response.end("{}");
+      } catch {
+        /* the client cancelled */
+      }
+    }
     return;
   }
 
@@ -854,6 +883,15 @@ async function editorText() {
   );
 }
 
+/**
+ * The whole document from the editor state. `editorText` reads only the lines
+ * CodeMirror has rendered, and that set moves with the scroll position, so it
+ * cannot compare a long document before and after an edit far from the caret.
+ */
+async function documentText() {
+  return evaluate(`document.querySelector('.cm-content').cmTile.root.view.state.doc.toString()`);
+}
+
 async function rectOf(word) {
   return evaluate(`(() => {
     const root = document.querySelector('#editor-pane');
@@ -1109,6 +1147,14 @@ try {
   check(
     "the AI section has no catch-all Status row",
     !prefsSection.labels.includes("Status"),
+    prefsSection.labels.join(", "),
+  );
+  // The Privacy paragraph explained the endpoint, the credential store and what
+  // leaves the machine. That is documentation, and it lives in the guide; the
+  // panel is a list of controls.
+  check(
+    "the AI section has no Privacy paragraph",
+    !prefsSection.labels.includes("Privacy"),
     prefsSection.labels.join(", "),
   );
   const contextLimit = await evaluate(`(() => {
@@ -3852,6 +3898,208 @@ try {
         .join("\n")
     : "";
   check("the recovery journal has no API key", !recoveryText.includes("sk-mock-"));
+  // -------------------------------------------------------------------------
+  // Request and anchor ownership (audit F4, F15)
+  // -------------------------------------------------------------------------
+
+  console.log("\nOwnership: a covered request still completes");
+  await closePanel();
+  await closeHistory();
+  // The prompt-reset checks above leave ai-prompts.md on screen.
+  check(
+    "the fixture tab is on screen for the ownership checks",
+    await evaluate(`(() => {
+      const tab = [...document.querySelectorAll('.doc-tab')].find(t => t.querySelector('.doc-tab-name')?.textContent === "feature-tour.md");
+      tab?.click();
+      return Boolean(tab);
+    })()`),
+  );
+  await sleep(200);
+  control.mode = "hold";
+  await clickEditorWord("Regular");
+  await chooseAction("Summarize");
+  await waitFor(`(document.querySelector('.ai-answer')?.textContent ?? '').length > 0`, 5000);
+  await openPalette();
+  control.release?.();
+  control.mode = "normal";
+  await sleep(1200);
+  await closePalette();
+  await openHistory();
+  const coveredRows = await historyRows();
+  check(
+    "a request covered by the palette completes into History",
+    coveredRows[0]?.title === "Summarize",
+    coveredRows[0]?.title,
+  );
+  await closeHistory();
+
+  console.log("\nOwnership: a new action abandons the old request");
+  control.mode = "hold";
+  const cancelledBeforeReplace = control.cancelled;
+  await clickEditorWord("Regular");
+  await chooseAction("Expand");
+  await waitFor(`(document.querySelector('.ai-answer')?.textContent ?? '').length > 0`, 5000);
+  control.mode = "normal";
+  await chooseAction("Shorten");
+  check(
+    "choosing another action cancels the abandoned request at the provider",
+    await (async () => {
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        if (control.cancelled > cancelledBeforeReplace) return true;
+        await sleep(80);
+      }
+      return false;
+    })(),
+    `${cancelledBeforeReplace} -> ${control.cancelled}`,
+  );
+  await waitPanelDone();
+  await closePanel();
+
+  console.log("\nOwnership: Stop before the provider sends headers");
+  control.mode = "stallHeaders";
+  const cancelledBeforeStall = control.cancelled;
+  await clickEditorWord("Regular");
+  await chooseAction("Expand");
+  await waitFor(
+    `[...document.querySelectorAll('.ai-panel .ai-footer-actions button')].some(b => b.textContent === 'Stop')`,
+    5000,
+  );
+  await sleep(400);
+  const stopClickedAt = Date.now();
+  await clickFooter("Stop");
+  const stalledStop = await waitFor(
+    `document.querySelector('.ai-status')?.textContent?.startsWith('Stopped')`,
+    6000,
+  );
+  check(
+    "Stop ends a request whose provider withholds headers",
+    stalledStop !== null && Date.now() - stopClickedAt < 6000,
+    await panelStatus(),
+  );
+  const closedAt = Date.now();
+  while (control.cancelled === cancelledBeforeStall && Date.now() - closedAt < 3000)
+    await sleep(80);
+  check(
+    "the stalled connection is closed",
+    control.cancelled > cancelledBeforeStall,
+    String(control.cancelled - cancelledBeforeStall),
+  );
+  const stalledFooter = await footerButtons();
+  check(
+    "an empty stopped answer cannot be copied",
+    stalledFooter.find((b) => b.text === "Copy")?.disabled === true,
+    JSON.stringify(stalledFooter),
+  );
+  control.release?.();
+  control.mode = "normal";
+  await closePanel();
+
+  console.log("\nOwnership: Insert below follows an edit above the passage");
+  const beforeAnchor = await documentText();
+  control.mode = "hold";
+  await clickEditorWord("Regular");
+  const anchorLine = await evaluate(
+    `[...document.querySelectorAll('.cm-line')].find(l => l.textContent.includes('Regular'))?.textContent ?? ''`,
+  );
+  await chooseAction("Improve writing");
+  await waitFor(`(document.querySelector('.ai-answer')?.textContent ?? '').length > 0`, 5000);
+  await evaluate(`document.querySelector('.cm-content').focus()`);
+  await pressCtrl("Home", "Home", 36);
+  await send("Input.insertText", { text: "Inserted lead paragraph.\n\n" });
+  await sleep(200);
+  control.release?.();
+  control.mode = "normal";
+  await waitPanelDone(10_000);
+  check("Insert below is still offered for a mappable target", await clickFooter("Insert below"));
+  const afterAnchor = (await editorText()).split("\n");
+  const answerIndex = afterAnchor.findIndex((line) =>
+    line.includes("Improved passage from the mock."),
+  );
+  // Insert below goes after the whole paragraph, so the block just above the
+  // answer must be the one that holds the line the request was made from.
+  let previous = answerIndex - 1;
+  while (previous >= 0 && afterAnchor[previous].trim() === "") previous -= 1;
+  const above = [];
+  while (previous >= 0 && afterAnchor[previous].trim() !== "") {
+    above.unshift(afterAnchor[previous]);
+    previous -= 1;
+  }
+  check(
+    "the answer lands below the paragraph it was requested for",
+    answerIndex > 0 && above.includes(anchorLine),
+    `${JSON.stringify(above)} vs ${JSON.stringify(anchorLine)}`,
+  );
+  await undo();
+  check(
+    "the mapped insertion undoes as one step",
+    !(await editorText()).includes("Improved passage from the mock.") &&
+      (await editorText()).startsWith("Inserted lead paragraph."),
+  );
+  await undo();
+  await closePanel();
+  check("the document is back to its text", (await documentText()) === beforeAnchor);
+
+  console.log("\nOwnership: a deleted target is not guessed");
+  control.mode = "hold";
+  await clickEditorWord("Regular");
+  await chooseAction("Improve writing");
+  await waitFor(`(document.querySelector('.ai-answer')?.textContent ?? '').length > 0`, 5000);
+  await evaluate(`document.querySelector('.cm-content').focus()`);
+  await pressCtrl("a", "KeyA", 65);
+  await send("Input.insertText", { text: "Everything was replaced." });
+  await sleep(200);
+  control.release?.();
+  control.mode = "normal";
+  await waitPanelDone(10_000);
+  await evaluate(`(() => {
+    const button = [...document.querySelectorAll('.ai-panel .ai-footer-actions button')].find(b => b.textContent === 'Insert below');
+    if (button && !button.disabled) button.click();
+  })()`);
+  await sleep(250);
+  check(
+    "Insert below refuses when its paragraph was deleted",
+    (await editorText()) === "Everything was replaced." &&
+      /deleted|is gone/.test(await panelStatus()),
+    await panelStatus(),
+  );
+  await closePanel();
+  // Closing the panel leaves focus on its frame, where Ctrl+Z does nothing.
+  await evaluate(`document.querySelector('.cm-content').focus()`);
+  await undo();
+  await sleep(200);
+  const restored = await documentText();
+  check(
+    "the replaced document is restored",
+    restored === beforeAnchor,
+    `${restored.length} vs ${beforeAnchor.length}: ${JSON.stringify(restored.slice(0, 80))}`,
+  );
+
+  console.log("\nOwnership: choosing the same target again keeps one history row");
+  await clickEditorWord("Regular");
+  await chooseAction("Translate…");
+  const setTarget = () =>
+    evaluate(
+      `(() => { const input = document.querySelector('.ai-params input[type=text]'); input.value = 'Portuguese'; input.dispatchEvent(new Event('input', { bubbles: true })); input.blur(); })()`,
+    );
+  await setTarget();
+  await sleep(100);
+  await evaluate(`document.querySelector('.ai-params .ai-generate').click()`);
+  await waitPanelDone();
+  await setTarget();
+  await sleep(100);
+  await clickRegenerate();
+  await waitPanelDone();
+  await closePanel();
+  await openHistory();
+  const sameTargetRows = await historyRows();
+  await closeHistory();
+  check(
+    "Regenerate after re-choosing the same target replaces its history row",
+    sameTargetRows[0]?.title === "Translate · Portuguese" &&
+      sameTargetRows[1]?.title !== "Translate · Portuguese",
+    JSON.stringify(sameTargetRows.slice(0, 3).map((row) => row.title)),
+  );
 } catch (error) {
   failed += 1;
   console.log(`  FAIL  the suite threw — ${error}`);

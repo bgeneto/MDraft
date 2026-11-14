@@ -81,10 +81,7 @@ mod tests {
     #[test]
     fn a_budget_is_clamped_at_both_ends() {
         assert_eq!(clamp_context_tokens(1), MIN_AI_CONTEXT_TOKENS);
-        assert_eq!(
-            clamp_context_tokens(usize::MAX),
-            MAX_AI_CONTEXT_TOKENS
-        );
+        assert_eq!(clamp_context_tokens(usize::MAX), MAX_AI_CONTEXT_TOKENS);
         assert_eq!(AiLimits::from_context_tokens(1).context, 1_024);
         assert_eq!(
             AiLimits::from_context_tokens(99_999).context,

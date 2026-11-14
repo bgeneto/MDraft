@@ -10,6 +10,9 @@
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
+    /* `emmet` ships typings, but its package.json `exports` has no `types`
+       condition, so bundler resolution cannot find them. */
+    "paths": { "emmet": ["./node_modules/emmet/dist/index.d.ts"] },
     "isolatedModules": true,
     "noEmit": true,
 

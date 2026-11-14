@@ -101,11 +101,19 @@ const a = path.join(work, "a.md"),
   exported = path.join(work, "exported.html");
 const pdf = path.join(work, "binary.pdf"),
   utf16 = path.join(work, "utf16.txt"),
+  legacy = path.join(work, "legacy.tex"),
   mixed = path.join(work, "mixed.md");
 fs.writeFileSync(a, "original A");
 fs.writeFileSync(b, "original B");
 fs.writeFileSync(pdf, Buffer.from("%PDF-1.7\noriginal\0bytes"));
-fs.writeFileSync(utf16, Buffer.from([255, 254, 104, 0, 105, 0]));
+fs.writeFileSync(utf16, Buffer.from("\uFEFFOlá, ação\r\n", "utf16le"));
+fs.writeFileSync(
+  legacy,
+  Buffer.from(
+    "Tese apresentada ao Instituto de F\xedsica da Universidade de Bras\xedlia.",
+    "latin1",
+  ),
+);
 fs.writeFileSync(mixed, "Safe document after a binary drop");
 let hooksInstalled = false;
 try {
@@ -357,13 +365,54 @@ try {
     refused.includes("Refusing to overwrite") && fs.readFileSync(pdf).includes(0),
     "binary destination refuses replacement without changing bytes",
   );
-  const encoding = await evaluate(
-    `window.__TAURI_INTERNALS__.invoke('read_document',{path:${JSON.stringify(utf16)}}).then(()=>'',e=>String(e))`,
+  const utf16Before = fs.readFileSync(utf16);
+  const utf16Stat = await invoke("stat_document", { path: utf16 });
+  await open(utf16);
+  check((await text()).includes("Olá, ação"), "UTF-16 text opens with its accents");
+  check(
+    (await evaluate(`document.getElementById('status-encoding')?.textContent ?? ''`)).includes(
+      "UTF-16 LE",
+    ),
+    "the status bar names the UTF-16 encoding",
+  );
+  await action("file.save");
+  await wait(
+    `window.__TAURI_INTERNALS__.invoke('stat_document',{path:${JSON.stringify(utf16)}}).then(s=>s.modifiedMs>${utf16Stat.modifiedMs})`,
   );
   check(
-    encoding.includes("UTF-16") && !encoding.includes("binary/non-text"),
-    "UTF-16 gets an encoding explanation before NUL classification",
+    fs.readFileSync(utf16).equals(utf16Before),
+    "saving an unedited UTF-16 file keeps every byte and its BOM",
   );
+  check(!(await dirty("utf16.txt")), "the UTF-16 save is clean");
+  await evaluate(`${tab("utf16.txt")}.querySelector('.doc-tab-close').click()`);
+  await wait(`!${tab("utf16.txt")}`);
+
+  const legacyBefore = fs.readFileSync(legacy);
+  const legacyStat = await invoke("stat_document", { path: legacy });
+  await open(legacy);
+  check(
+    (await text()).includes("Física") &&
+      (await text()).includes("Brasília") &&
+      (await text()).includes("Instituto"),
+    "a Windows-1252 document opens with its Portuguese accents",
+  );
+  check(
+    (await evaluate(`document.getElementById('status-encoding')?.textContent ?? ''`)).includes(
+      "Windows-1252",
+    ),
+    "the status bar names Windows-1252",
+  );
+  await action("file.save");
+  await wait(
+    `window.__TAURI_INTERNALS__.invoke('stat_document',{path:${JSON.stringify(legacy)}}).then(s=>s.modifiedMs>${legacyStat.modifiedMs})`,
+  );
+  check(
+    fs.readFileSync(legacy).equals(legacyBefore),
+    "saving an unedited Windows-1252 file keeps every byte",
+  );
+  check(!(await dirty("legacy.tex")), "the Windows-1252 save is clean");
+  await evaluate(`${tab("legacy.tex")}.querySelector('.doc-tab-close').click()`);
+  await wait(`!${tab("legacy.tex")}`);
   await invoke("plugin:event|emit", {
     event: "tauri://drag-drop",
     payload: { paths: [pdf, mixed], position: { x: 100, y: 100 } },

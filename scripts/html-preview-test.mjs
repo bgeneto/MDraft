@@ -801,6 +801,41 @@ check(
   await sourceMark(),
 );
 
+console.log("\n=== web source files ===");
+for (const [extension, content] of [
+  ["js", "const message = 'hello';"],
+  ["mjs", "export const message = 'hello';"],
+  ["cjs", "module.exports = 42;"],
+  ["css", "body { color: red; }"],
+  ["json", '{ "message": true }'],
+]) {
+  const sourceFile = path.join(syncDir, `source.${extension}`);
+  fs.writeFileSync(sourceFile, content);
+  await page.evaluate(
+    `window.__TAURI_INTERNALS__.invoke('plugin:event|emit', {event:'open-files',payload:[${JSON.stringify(sourceFile)}]})`,
+  );
+  let state;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    state = await page.evaluate(`(() => {
+      const warning = document.querySelector('.source-preview-warning');
+      const line = document.querySelector('.cm-line');
+      return { warning: warning?.textContent ?? '', text: line?.textContent ?? '',
+        highlighted: !!line?.querySelector('span[class]'),
+        htmlGuest: !!document.querySelector('.html-preview-frame.active') };
+    })()`);
+    if (state.text === content && state.highlighted && state.warning) break;
+    await sleep(100);
+  }
+  check(
+    `${extension}: highlighted source and unavailable preview`,
+    state.text === content &&
+      state.highlighted &&
+      state.warning.includes("Preview unavailable") &&
+      !state.htmlGuest,
+    JSON.stringify(state),
+  );
+}
+
 frame.close();
 page.close();
 fs.rmSync(syncDir, { recursive: true, force: true });

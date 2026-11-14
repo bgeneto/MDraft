@@ -12,6 +12,8 @@ export interface DocumentPayload {
   /** "\n" or "\r\n" */
   lineEnding: string;
   hadBom: boolean;
+  /** Canonical encoding the file was decoded from, e.g. "UTF-8" or "windows-1252". */
+  encoding: string;
   lossy: boolean;
   size: number;
   modifiedMs: number;
@@ -33,7 +35,7 @@ export interface SavedInfo {
  */
 export interface CheckedWrite {
   written: boolean;
-  change: "saved" | "modified" | "deleted";
+  change: "saved" | "modified" | "deleted" | "encoding";
   size: number;
   modifiedMs: number;
   sha256: string;
@@ -69,6 +71,8 @@ export interface RecoveryEntry {
   content: string;
   lineEnding: string;
   hadBom: boolean;
+  /** Canonical encoding the buffer was decoded from. Absent in old journals. */
+  encoding?: string | null;
   lossy: boolean;
   readOnly: boolean;
   baseModifiedMs: number;
@@ -81,7 +85,7 @@ export interface RecoveryEntry {
 
 export type ThemeMode = "system" | "light" | "dark";
 export type ViewMode = "source" | "split" | "preview";
-export type SidebarTab = "outline" | "favorites" | "recent";
+export type SidebarTab = "outline" | "favorites" | "recent" | "explorer";
 export type OnLaunch = "welcome" | "new" | "last" | "tabs";
 export type ImageRule = "assetsFolder" | "assetsDir" | "custom" | "keepOriginal";
 /** Spacing between source lines, as a named choice rather than a multiplier. */
@@ -145,6 +149,39 @@ export interface ExportRequest {
    * the document's folder and this one. Only a `.typ` export uses it.
    */
   imageRoot?: string | null;
+  /**
+   * The LaTeX project as the preview compiled it, unsaved buffers included.
+   *
+   * A `.tex` conversion reads this instead of the file on disk: the buffer on
+   * screen can be newer, and an `\input` chapter may never have been saved.
+   * Absent for every other language, and absent keeps the old behaviour.
+   */
+  snapshot?: ExportSnapshot | null;
+}
+
+/** The project files a LaTeX conversion reads, captured before any dialog. */
+export interface ExportSnapshot {
+  /** The absolute project directory the snapshot came from. */
+  root: string;
+  /** Project-relative, forward slashes. */
+  mainFile: string;
+  /** Base64, because an `\includegraphics` target is a PNG or a PDF. */
+  files: Array<{ path: string; data: string }>;
+}
+
+/** One writer the installed pandoc advertises. */
+export interface PandocWriter {
+  id: string;
+  label: string;
+  /** Without the dot, as the save dialog wants it. */
+  extension: string;
+  /**
+   * The writer emits citation data rather than a document.
+   *
+   * Pandoc's LaTeX reader does not carry the entries a `.bib` file holds, so
+   * these produce an empty result for a `.tex` source. The chooser says so.
+   */
+  bibliographyOnly: boolean;
 }
 
 export interface ExportOutcome {
@@ -263,6 +300,36 @@ export interface Settings {
    * page view cannot reflow or be read as text.
    */
   typstView: TypstView;
+  typstAutoCompile: boolean;
+  /** Whether `.typ` previews use the optional incremental compiler daemon when installed. */
+  typstIncrementalService: boolean;
+  /**
+   * Whether the reader has enabled the experimental LuaLaTeX engine.
+   *
+   * Stored in `settings.json` rather than in a marker file beside the cache, so
+   * a portable build and a settings backup carry it. Turning it off stops the
+   * `mdraft-tex` scheme from serving anything and leaves the cache inert.
+   */
+  latexEnabled: boolean;
+  latexAutoCompile: boolean;
+  /** The downloaded TeX package cache ceiling, in MiB. */
+  latexCacheLimitMb: number;
+  /**
+   * Whether the reader chose a TeX installation already on this computer.
+   *
+   * Separate from `latexEnabled`: the two engines are different trust
+   * boundaries, and turning one off must not disturb the other. Off by default;
+   * only a validated installation can be switched on.
+   */
+  latexNativeEnabled: boolean;
+  /** The validated engine directory, or null before the first validation. */
+  latexNativeRoot: string | null;
+  /** TeX Live inside WSL, when that is the native engine. Backend-owned. */
+  latexNativeWsl?: LatexWslInstallation | null;
+  /** Registered local TEXMF libraries in search order. Backend-owned. */
+  latexTexmfRoots?: LatexTexmfRoot[];
+  /** `auto`, `lualatex`, `pdflatex` or `xelatex`. */
+  latexNativeEngine: string;
   editorMaxWidth: number;
   /** Line spacing in the source pane. The preview keeps its own reading height. */
   editorLineHeight: EditorLineHeight;
@@ -275,6 +342,16 @@ export interface Settings {
    * by the backend, which refuses a new entry rather than evicting an old one.
    */
   favorites: string[];
+  /** The Explorer's folder (Track W); null when none is open. */
+  workspaceFolder?: string | null;
+  /** Show hidden, build and TeX auxiliary entries in the Explorer. */
+  explorerShowAll?: boolean;
+  /** Set as Main Document, per workspace folder (main-document rule 2). */
+  latexMainDocuments?: Array<{ folder: string; path: string }>;
+  /** Bundled engine default (stage 6.2): "lualatex", "pdflatex", "xelatex" or "auto". */
+  latexBundledEngine?: string;
+  /** Per-project bundled engine, keyed by main document; newest first. */
+  latexProjectEngines?: Array<{ main: string; engine: string }>;
   lastDirectory: string | null;
   /**
    * Paths of the tabs that were open when the window last closed, in order.
@@ -290,6 +367,15 @@ export interface Settings {
   defaultExtension: string;
   recordRecent: boolean;
   autoSave: boolean;
+  /**
+   * Whether the welcome document has already been shown once.
+   *
+   * Only the first launch of a profile shows it. `onLaunch` defaults to
+   * `"tabs"`, whose empty-set fallback is a blank tab on purpose so that
+   * **Close All Tabs** is not undone; this flag is what tells a brand-new
+   * install apart from a session the reader emptied deliberately.
+   */
+  welcomeSeen: boolean;
 
   enableMath: boolean;
   enableMermaid: boolean;
@@ -308,6 +394,9 @@ export interface Settings {
   spellcheckLanguage: string;
   /** Words ignored or added. Not written into the operating system's dictionary. */
   spellcheckWords: string[];
+  spellcheckStringMode: "human" | "all" | "off";
+  spellcheckIdentifiers: boolean;
+  spellcheckDocumentLanguages: Array<{ path: string; language: string }>;
 
   imageRule: ImageRule;
   imageCustomDir: string;
@@ -326,6 +415,21 @@ export interface Settings {
   autoClosePairs: boolean;
   /** Close an HTML tag when its opening `>` is typed. */
   autoCloseTags: boolean;
+  /**
+   * Offer completions while typing.
+   *
+   * The popup only opens on a construct — a backslash, a backtick, a brace
+   * argument — never on ordinary prose. Turning it off removes the extension and
+   * its Tab binding together.
+   */
+  completion: boolean;
+  /**
+   * Expand Emmet abbreviations with Tab in HTML and CSS documents.
+   *
+   * It acts only where an abbreviation is allowed, and Tab still indents
+   * everywhere else. Turning it off removes the Tab binding.
+   */
+  emmet: boolean;
 
   exportFormats: ExportFormat[];
 
@@ -416,6 +520,49 @@ export interface SavedImage {
 
 export const readDocument = (path: string) => invoke<DocumentPayload>("read_document", { path });
 
+/** Reopen `path` decoded strictly with a reader-chosen encoding (Reinterpret). */
+export const readDocumentAs = (path: string, encoding: string) =>
+  invoke<DocumentPayload>("read_document_as", { path, encoding });
+
+export interface LineEndingCounts {
+  crlf: number;
+  /** `\n` not preceded by `\r`. */
+  lf: number;
+  /** `\r` not followed by `\n`. */
+  cr: number;
+}
+
+export interface EncodingCandidate {
+  encoding: string;
+  valid: boolean;
+  error: string | null;
+  /** Lines with non-ASCII characters as this encoding reads them, 1-based. */
+  samples: { line: number; text: string }[];
+}
+
+export interface EncodingInspection {
+  /** What automatic detection picks, or null when it refuses the bytes. */
+  detected: string | null;
+  detectError: string | null;
+  hadBom: boolean;
+  lineEndings: LineEndingCounts;
+  candidates: EncodingCandidate[];
+}
+
+/** How the bytes on disk read under every offered encoding. */
+export const inspectDocumentEncoding = (path: string) =>
+  invoke<EncodingInspection>("inspect_document_encoding", { path });
+
+export interface EncodingFit {
+  unmappable: number;
+  firstChar: string | null;
+  /** UTF-16 offset of the first unmappable character in the editor text. */
+  firstOffset: number | null;
+}
+
+export const checkEncodingFit = (content: string, encoding: string) =>
+  invoke<EncodingFit>("check_encoding_fit", { content, encoding });
+
 /**
  * Approximate token count for a buffer.
  *
@@ -424,21 +571,47 @@ export const readDocument = (path: string) => invoke<DocumentPayload>("read_docu
  */
 export const countTokens = (text: string) => invoke<number>("count_tokens", { text });
 
-/** Languages the operating system can spell, as `en`, `en-GB`, `pt-BR`, `pt-PT`. */
+/** Compatible installed operating-system dictionary language tags. */
 export const spellcheckLanguages = () => invoke<string[]>("spellcheck_languages");
 
 /**
  * Indices of `words` the dictionary rejects.
  *
  * Tokens the backend declines to check — capitals, digits, CamelCase — are
- * never included. An unknown language returns an empty list.
+ * never included. An unavailable dictionary or engine failure rejects.
  */
 export const spellcheckCheck = (language: string, words: readonly string[]) =>
   invoke<number[]>("spellcheck_check", { language, words });
 
-/** Up to eight suggestions for one word. Empty when the language is not installed. */
+/** Up to eight suggestions for one word; engine and dictionary failures reject. */
 export const spellcheckSuggest = (language: string, word: string) =>
   invoke<string[]>("spellcheck_suggest", { language, word });
+
+// ---------------------------------------------------------------------------
+// Clipboard
+// ---------------------------------------------------------------------------
+
+/**
+ * Plain-text clipboard, the fallback behind the webview's Clipboard API.
+ *
+ * WebView2 gates `navigator.clipboard.readText()` behind a permission the
+ * application has no UI to request, so the menu's paste path needs a backend
+ * that is not subject to it. Images never travel through here: they arrive as
+ * `ClipboardEvent` data and go to `saveImage`, which is why the backend links
+ * no image decoder.
+ */
+export const clipboardReadText = () => invoke<string>("clipboard_read_text");
+
+/** Write `text`; fails only when the operating system clipboard cannot open. */
+export const clipboardWriteText = (text: string) => invoke<void>("clipboard_write_text", { text });
+
+/**
+ * Bytes of tex-fmt's WebAssembly module, downloaded and verified on first use.
+ *
+ * The module is too large to embed for a formatter most sessions never touch;
+ * the backend caches it after the first Format Document of a `.tex` file.
+ */
+export const texFmtWasm = () => invoke<ArrayBuffer>("tex_fmt_wasm");
 
 // ---------------------------------------------------------------------------
 // Read Aloud's Linux speech service
@@ -469,8 +642,13 @@ export const speechSpeak = (text: string, lang: string, voice: string, rate: num
 /** Stop the current sentence and clear anything already queued. */
 export const speechStop = () => invoke<void>("speech_stop");
 
-export const writeDocument = (path: string, content: string, lineEnding: string, hadBom: boolean) =>
-  invoke<SavedInfo>("write_document", { path, content, lineEnding, hadBom });
+export const writeDocument = (
+  path: string,
+  content: string,
+  lineEnding: string,
+  hadBom: boolean,
+  encoding = "UTF-8",
+) => invoke<SavedInfo>("write_document", { path, content, lineEnding, hadBom, encoding });
 
 /**
  * Save only if the raw bytes on disk still match the revision the buffer was
@@ -482,6 +660,7 @@ export const writeDocumentChecked = (
   lineEnding: string,
   hadBom: boolean,
   expectedSha256: string | null,
+  encoding = "UTF-8",
 ) =>
   invoke<CheckedWrite>("write_document_checked", {
     path,
@@ -489,6 +668,7 @@ export const writeDocumentChecked = (
     lineEnding,
     hadBom,
     expectedSha256,
+    encoding,
   });
 
 /** Read the current raw-byte digest without decoding the document. */
@@ -589,8 +769,36 @@ export const pandocStatus = () => invoke<PandocStatus>("pandoc_status");
  */
 export const openExternal = (path: string) => invoke<void>("open_external", { path });
 
+/**
+ * Open one of the application's own tool folders in the OS file manager.
+ *
+ * Preferences offers a button instead of printing the install path. The name is
+ * a whitelist entry (`"pandoc"`, `"typst"`, `"latex"`), never a path: Rust
+ * resolves it under the application data directory and creates it if needed.
+ */
+export type AppFolder = "pandoc" | "typst" | "latex";
+export const openAppFolder = (folder: AppFolder) => invoke<void>("open_app_folder", { folder });
+
 export const runExport = (request: ExportRequest) =>
   invoke<ExportOutcome>("run_export", { request });
+
+/**
+ * Every writer the installed pandoc advertises.
+ *
+ * Read-only, cached in Rust against the resolved binary and version. `pdf` is
+ * included: the chooser turns it into the compiled-PDF route rather than a
+ * conversion.
+ */
+export const pandocListWriters = () => invoke<PandocWriter[]>("pandoc_list_writers");
+
+/**
+ * Convert a LaTeX project with one writer the chooser picked.
+ *
+ * The writer is validated in Rust against the installed binary's own list, so a
+ * stale chooser or a writer a pandoc update removed fails with a named error.
+ */
+export const runPandocWriter = (request: ExportRequest, writer: string) =>
+  invoke<ExportOutcome>("run_pandoc_writer", { request, writer });
 
 /**
  * Run the global after-export options for a file the frontend wrote.
@@ -604,7 +812,302 @@ export const runAfterExport = (path: string) =>
 export const installPandoc = () => invoke<PandocStatus>("install_pandoc");
 
 /** Which markup the buffer holds. */
-export type DocumentLanguage = "markdown" | "typst" | "html" | "asciidoc";
+export type DocumentLanguage =
+  "markdown" | "typst" | "html" | "asciidoc" | "latex" | "javascript" | "css" | "json";
+
+export const isWebSource = (language: DocumentLanguage): boolean =>
+  language === "javascript" || language === "css" || language === "json";
+
+export interface LatexProjectSnapshot {
+  mainFile: string;
+  files: Array<{
+    path: string;
+    data: string;
+    /** Canonical encoding for a text source; omitted for images. */
+    encoding?: string;
+  }>;
+  /**
+   * Project-relative paths skipped because they are symlinks.
+   *
+   * The snapshot follows the references a document declares rather than walking
+   * the directory, so a symlink it would have read is reported here instead of
+   * aborting the project. The preview surfaces them so a later "File not found"
+   * from the compiler is explained rather than mysterious.
+   */
+  skipped: string[];
+  /**
+   * A key over the main file and the referenced set.
+   *
+   * An edit that does not change which files are read leaves it alone, so a
+   * finished PDF stays current; adding an `\input` changes it. It also covers
+   * the local library revision.
+   */
+  generation: string;
+  /**
+   * Enabled local libraries, captured apart from the project. Library files
+   * never become chapters, source-map candidates or project members.
+   */
+  texmf?: LatexTexmfSnapshot;
+}
+
+export type LatexTexmfLayout = "tds" | "packages";
+
+export interface LatexTexmfRoot {
+  id: string;
+  kind: "personal" | "folder";
+  path?: string;
+  layout: LatexTexmfLayout;
+  enabled: boolean;
+}
+
+export interface LatexTexmfRootView extends LatexTexmfRoot {
+  resolved: string;
+  label: string;
+}
+
+export interface LatexTexmfConfig {
+  roots: LatexTexmfRootView[];
+  personalPath: string;
+}
+
+export interface LatexTexmfIssue {
+  severity: "error" | "warning" | "info";
+  code: string;
+  message: string;
+  paths: string[];
+}
+
+export interface LatexTexmfReport {
+  id: string | null;
+  path: string;
+  label: string;
+  layout: LatexTexmfLayout;
+  detectedLayout: LatexTexmfLayout;
+  enabled: boolean;
+  status: "ok" | "empty" | "missing" | "unreadable" | "oversized" | "conflicting";
+  message: string | null;
+  files: number;
+  bytes: number;
+  issues: LatexTexmfIssue[];
+  names: { classes: string[]; packages: string[] };
+}
+
+export interface LatexTexmfSnapshot {
+  revision: string;
+  roots: Array<{ id: string; label: string; layout: LatexTexmfLayout; path: string }>;
+  /** `path` is TDS-relative; `origin` is the reader's own file, for messages. */
+  files: Array<{ root: number; path: string; origin: string; data: string }>;
+}
+
+export type LatexTexmfAction =
+  | { type: "addFolder"; path: string; layout?: LatexTexmfLayout }
+  | { type: "usePersonal" }
+  | { type: "setPrimary"; path?: string; layout?: LatexTexmfLayout }
+  | { type: "setEnabled"; id: string; enabled: boolean }
+  | { type: "setLayout"; id: string; layout: LatexTexmfLayout }
+  | { type: "move"; id: string; offset: -1 | 1 }
+  | { type: "remove"; id: string };
+
+export const latexTexmfList = () => invoke<LatexTexmfConfig>("latex_texmf_list");
+/** Remove only unregisters a folder; it never deletes files. */
+export const latexTexmfConfigure = (action: LatexTexmfAction) =>
+  invoke<LatexTexmfConfig>("latex_texmf_configure", { action });
+/** Reads files only; never compiles or downloads. */
+export const latexTexmfInspect = (options: {
+  ids?: string[];
+  candidate?: string;
+  layout?: LatexTexmfLayout;
+}) =>
+  invoke<LatexTexmfReport[]>("latex_texmf_inspect", {
+    ids: options.ids ?? null,
+    candidate: options.candidate ?? null,
+    layout: options.layout ?? null,
+  });
+export const latexTexmfOpen = (id: string) => invoke<void>("latex_texmf_open", { id });
+/** The enabled libraries' current revision, or null when none is enabled. */
+export const latexTexmfRevision = () => invoke<string | null>("latex_texmf_revision");
+
+export interface LatexWslInstallation {
+  distro: string;
+  bin: string;
+  engines: string[];
+  tools: string[];
+}
+
+export interface LatexWslDistribution {
+  name: string;
+  version: number;
+}
+
+export interface LatexWslCandidate {
+  distro: string;
+  bin: string;
+  engines: string[];
+}
+
+/** Registered WSL distributions, read from the registry; nothing starts. */
+export const latexNativeWslDistributions = () =>
+  invoke<LatexWslDistribution[]>("latex_native_wsl_distributions");
+/** Look inside one distribution for TeX. This starts its VM. */
+export const latexNativeWslLook = (distro: string) =>
+  invoke<LatexWslCandidate[]>("latex_native_wsl_look", { distro });
+/** Probe and commit a TeX Live inside WSL. */
+export const latexNativeWslValidate = (distro: string, bin: string) =>
+  invoke<LatexNativeCapabilities>("latex_native_wsl_validate", { distro, bin });
+
+export const latexStatus = () => invoke<boolean>("latex_status");
+/** Whether the production preview's engine and digest table are installed. */
+export const texpressoStatus = () => invoke<boolean>("texpresso_status");
+/** Download and verify the production preview engine. */
+export const installTexpresso = () => invoke<void>("install_texpresso");
+/** Whether the bundled engine can compile with `engine` now (stage 6.2). */
+export const latexEngineAvailable = (engine: string) =>
+  invoke<boolean>("latex_engine_available", { engine });
+/** Download one optional engine's verified files; the reader chose that engine. */
+export const installLatexEngine = (engine: string) =>
+  invoke<void>("install_latex_engine", { engine });
+export const installLatex = () => invoke<void>("install_latex");
+export const latexProjectSnapshot = (
+  path: string,
+  overlays: Array<{
+    path: string;
+    text: string;
+    encoding?: string;
+    hadBom?: boolean;
+    lineEnding?: string;
+  }>,
+  includeLibraries = true,
+) => invoke<LatexProjectSnapshot>("latex_project_snapshot", { path, overlays, includeLibraries });
+
+/** What Preferences reports about the downloaded TeX package cache. */
+export interface LatexCacheInfo {
+  bytes: number;
+  limitMb: number;
+  enabled: boolean;
+  /** The hidden WasmTex assets or the production preview are present. */
+  installed: boolean;
+  /** The production preview engine and digest table are present. */
+  previewInstalled: boolean;
+}
+
+export const latexCacheInfo = () => invoke<LatexCacheInfo>("latex_cache_info");
+/** Turn the engine off. Deletes nothing; Clear cache is the destructive action. */
+export const latexDisable = () => invoke<void>("latex_disable");
+/** Delete the downloaded package cache; returns the bytes freed. */
+export const latexClearCache = () => invoke<number>("latex_clear_cache");
+
+/** Which backend the preview must use for the open document. */
+export interface LatexEngineStatus {
+  backend: "native" | "bundled" | "none";
+  bundledEnabled: boolean;
+  /** The hidden WasmTex backend's assets (legacy; tests only). */
+  bundledInstalled: boolean;
+  /** The production preview engine and digest table are present. */
+  previewInstalled: boolean;
+  nativeEnabled: boolean;
+  nativeRoot: string | null;
+  nativeDistribution: string | null;
+  nativeEngine: string;
+  nativeEngines: string[];
+  /** The selected TeX Live inside WSL, when that is the native engine. */
+  nativeWsl: LatexWslInstallation | null;
+  /** Why the configured native installation cannot run, when it cannot. */
+  problem: string | null;
+}
+
+export interface LatexNativeCandidate {
+  directory: string;
+  root: string | null;
+  source: "path" | "standard";
+  /** A readable name: MiKTeX, TeX Live, MacTeX, TinyTeX. */
+  distribution: string;
+  engines: string[];
+}
+
+export interface LatexNativeTool {
+  id: string;
+  path: string;
+  version: string;
+}
+
+export interface LatexNativeCapabilities {
+  root: string;
+  bin: string;
+  distribution: string;
+  engines: LatexNativeTool[];
+  tools: LatexNativeTool[];
+}
+
+export interface LatexNativeDiagnostic {
+  file: string;
+  line: number;
+  severity: "error" | "warning";
+  message: string;
+  code: string;
+}
+
+/** The outcome of one native build. */
+export interface LatexNativeResult {
+  pdf: string | null;
+  partialPdf: string | null;
+  success: boolean;
+  cancelled: boolean;
+  timedOut: boolean;
+  engine: string;
+  distribution: string;
+  passes: number;
+  log: string;
+  logTruncated: boolean;
+  diagnostics: LatexNativeDiagnostic[];
+  warningsTruncated: boolean;
+  error: string | null;
+  elapsedMs: number;
+}
+
+export interface LatexNativeProgress {
+  job: string;
+  phase: "compiling" | "bibliography" | "starting-wsl";
+  detail: string | null;
+}
+
+export const latexEngineStatus = () => invoke<LatexEngineStatus>("latex_engine_status");
+/** Metadata-only discovery; it launches nothing. */
+export const latexNativeDiscover = () => invoke<LatexNativeCandidate[]>("latex_native_discover");
+/**
+ * Probe an installation and commit the directory.
+ *
+ * This is the only discovery call that executes external code.
+ */
+export const latexNativeValidate = (directory: string) =>
+  invoke<LatexNativeCapabilities>("latex_native_validate", { directory });
+export const latexNativeSetEnabled = (enabled: boolean) =>
+  invoke<LatexEngineStatus>("latex_native_set_enabled", { enabled });
+export const latexNativeSetEngine = (engine: string) =>
+  invoke<LatexEngineStatus>("latex_native_set_engine", { engine });
+export const latexNativeCompile = (request: {
+  job: string;
+  mainFile: string;
+  files: Array<{ path: string; data: string }>;
+  texmf?: LatexTexmfSnapshot;
+}) => invoke<LatexNativeResult>("latex_native_compile", { request });
+export const latexNativeCancel = (job: string) => invoke<void>("latex_native_cancel", { job });
+/**
+ * Write the PDF a document's own compiler produced.
+ *
+ * Shared by Typst's Pages view and a LaTeX project: both hand over the bytes
+ * their engine emitted, so the command is named for what it does rather than for
+ * the engine that happened to make them.
+ */
+export const saveCompiledPdf = (outputPath: string, data: string) =>
+  invoke<void>("save_compiled_pdf", { outputPath, data });
+/**
+ * Write the compiled PDF to a temporary file and open it to be printed.
+ *
+ * Prints the compiler's own bytes, never a re-render — see
+ * `docs/architecture.md`. Returns the path written.
+ */
+export const printCompiledPdf = (data: string, name: string) =>
+  invoke<string>("print_compiled_pdf", { data, name });
 
 /** One Typst installation, as the backend sees it. */
 export interface TypstStatus {
@@ -623,6 +1126,55 @@ export const typstStatus = () => invoke<TypstStatus>("typst_status");
 export const installTypst = () => invoke<TypstStatus>("install_typst");
 export const openTypstDownloadPage = () => invoke<void>("typst_download_page");
 
+/** Companion incremental Typst service status, as reported by the backend. */
+export interface TypstServiceStatus {
+  installed: boolean;
+  enabled: boolean;
+  active: boolean;
+  runningWorkers: number;
+  version: string | null;
+  typstVersion: string | null;
+  protocolVersion: number | null;
+  path: string | null;
+  canInstall: boolean;
+  manifestVersion: string;
+  hint: string;
+  rssBytes: number | null;
+  compileCount: number;
+}
+
+export const typstServiceStatus = () => invoke<TypstServiceStatus>("typst_service_status");
+export const installTypstService = () => invoke<TypstServiceStatus>("install_typst_service");
+export const typstClearCache = () => invoke<number>("typst_clear_cache");
+
+export interface TypstDependency {
+  path: string;
+  mtimeMs: number;
+  size: number;
+}
+
+export interface TypstSpanAnchor {
+  file: string;
+  line: number;
+  column: number;
+  byteOffset: number;
+  utf16Start: number;
+  utf16End: number;
+  page: number;
+  xPt: number;
+  yPt: number;
+  widthPt: number;
+  heightPt: number;
+}
+
+export interface TypstRenderTimings {
+  vfsSyncMs: number;
+  typstCompileMs: number;
+  exportMs: number;
+  pageHashMs: number;
+  totalMs: number;
+}
+
 /** How a Typst document is drawn in the preview. */
 export type TypstView = "document" | "pages";
 
@@ -634,13 +1186,44 @@ export type TypstView = "document" | "pages";
  * warnings, and `ignored` names the constructs the document view had to drop.
  */
 export interface RenderedTypst {
+  compilerOutput: string;
+  compilerOutputTruncated: boolean;
   kind: TypstView;
   html: string | null;
   css: string | null;
-  /** Base64 PDF, when `kind` is `"pages"`. */
+  /** Base64 PDF, when `kind` is `"pages"` (legacy JSON path). */
   pdf: string | null;
   warnings: string[];
   ignored: string[];
+  deps?: TypstDependency[];
+  pageHashes?: string[];
+  firstChangedPage?: number | null;
+  changedPages?: number[];
+  spanMap?: TypstSpanAnchor[];
+  timings?: TypstRenderTimings | null;
+  fellBackFromDocument?: boolean;
+  backendKind?: "cli" | "service" | string | null;
+}
+
+export interface RenderedTypstBinary {
+  meta: RenderedTypst;
+  pdfBytes?: Uint8Array;
+}
+
+const typstMetaDecoder = new TextDecoder();
+
+/**
+ * Unpack `[u32 BE metaLen][metaJson][rawPdfBytes]` emitted by `render_typst_binary`
+ * without Base64 encoding or copying the PDF buffer.
+ */
+export function decodeRenderedTypstBinary(frame: ArrayBuffer): RenderedTypstBinary {
+  const view = new DataView(frame);
+  const metaLen = view.getUint32(0, false);
+  const metaJson = typstMetaDecoder.decode(new Uint8Array(frame, 4, metaLen));
+  const meta = JSON.parse(metaJson) as RenderedTypst;
+  const bodyOffset = 4 + metaLen;
+  const pdfBytes = bodyOffset < frame.byteLength ? new Uint8Array(frame, bodyOffset) : undefined;
+  return { meta, pdfBytes };
 }
 
 /**
@@ -657,6 +1240,24 @@ export const renderTypst = (
   imageRoot: string | null = null,
   token?: number,
 ) => invoke<RenderedTypst>("render_typst", { path, source, mode, imageRoot, token: token ?? null });
+
+/** Compile a Typst preview via zero-copy raw binary IPC framing. */
+export async function renderTypstBinary(
+  path: string | null,
+  source: string,
+  mode: TypstView = "document",
+  imageRoot: string | null = null,
+  token?: number,
+): Promise<RenderedTypstBinary> {
+  const frame = await invoke<ArrayBuffer>("render_typst_binary", {
+    path,
+    source,
+    mode,
+    imageRoot,
+    token: token ?? null,
+  });
+  return decodeRenderedTypstBinary(frame);
+}
 
 /** Stop Typst preview jobs through this generation; exports remain independent. */
 export const cancelTypstPreview = (token: number) =>
@@ -705,6 +1306,8 @@ export interface MenuState {
   tabIndex: number;
   unchangedOtherTabs: number;
   hasPath: boolean;
+  /** A workspace folder is open in the Explorer (Close Folder is enabled). */
+  hasWorkspace: boolean;
   isFavorite: boolean;
   canFold: boolean;
   spellcheck: boolean;
@@ -713,6 +1316,23 @@ export interface MenuState {
   syntaxTheme: string;
   typstView: TypstView;
   typstAvailable: boolean;
+  /**
+   * Whether the preview currently holds a PDF the document's own compiler
+   * produced, so `Export › PDF` can write those exact bytes.
+   *
+   * Always true for a LaTeX document whose last compile succeeded; true for a
+   * Typst document only in the Pages view, because the Document view compiles
+   * HTML and holds no PDF at all. One flag rather than one per language, so the
+   * payload does not grow a field every time a PDF-rendered markup is added.
+   */
+  pdfPreviewAvailable: boolean;
+  /**
+   * The engine that produced the PDF the export row writes (`LuaLaTeX`,
+   * `pdfLaTeX`, `XeLaTeX`), or empty when there is none or it is unknown.
+   */
+  pdfEngine: string;
+  /** Whether a `.tex` preview recompiles after edits; drives a View check item. */
+  latexAutoCompile: boolean;
 }
 
 /** One row of Navigate › Open Tabs. */
@@ -1033,3 +1653,34 @@ export function aiComplete(
     channel,
   };
 }
+
+// --- Workspace (Track W) --------------------------------------------------------
+
+export interface WorkspaceInfo {
+  root: string;
+  name: string;
+}
+
+export interface WorkspaceEntry {
+  name: string;
+  kind: "dir" | "document" | "asset" | "other";
+  symlink: boolean;
+  size: number;
+}
+
+export interface WorkspaceListing {
+  relative: string;
+  entries: WorkspaceEntry[];
+  truncated: number;
+}
+
+/** Check a folder the reader chose; refuses files, drive roots and the home folder. */
+export const workspaceOpen = (path: string) => invoke<WorkspaceInfo>("workspace_open", { path });
+
+/** One directory of the workspace, never outside it, never following a symlink. */
+export const workspaceList = (root: string, relative: string, showAll: boolean) =>
+  invoke<WorkspaceListing>("workspace_list", { root, relative, showAll });
+
+/** Main documents in the workspace whose \input/\include closure contains `path`. */
+export const workspaceMainCandidates = (root: string, path: string) =>
+  invoke<string[]>("workspace_main_candidates", { root, path });

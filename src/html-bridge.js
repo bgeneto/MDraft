@@ -36,6 +36,9 @@
   var TOKEN = "__MDRAFT_TOKEN__";
   var BLINK_MS = 620;
   var SYNC_MARGIN = 12;
+  // Where the host's sync line crosses this viewport. It is SYNC_MARGIN until a
+  // pointer gesture levels the panes at another height; the host says where.
+  var probeY = SYNC_MARGIN;
   var SYMBOLS = {
     Equal: "=",
     Minus: "-",
@@ -307,7 +310,7 @@
   }
 
   function scrollProbe() {
-    for (var y of [SYNC_MARGIN + 2, SYNC_MARGIN + 14, SYNC_MARGIN + 28]) {
+    for (var y of [probeY + 2, probeY + 14, probeY + 28]) {
       for (var x of [32, window.innerWidth * 0.4, window.innerWidth * 0.7]) {
         var point = document.caretRangeFromPoint && document.caretRangeFromPoint(x, y);
         if (!point || point.startContainer.nodeType !== 3) continue;
@@ -423,6 +426,41 @@
       top: window.scrollY,
       points: points,
     });
+  }
+
+  // A pointer gesture: the height that was clicked and, when verified text is
+  // under it, that text's identity and the clicked character's row. The identity
+  // is a text-node index, never a source offset; the host owns the mapping.
+  function reportGesture(x, y) {
+    var message = { type: "gesture", y: y };
+    var point = document.caretRangeFromPoint && document.caretRangeFromPoint(x, y);
+    var node = point && point.startContainer.nodeType === 3 ? point.startContainer : null;
+    var entry = node ? textEntry(node) : null;
+    if (entry) {
+      for (var word of node.data.matchAll(/[\p{L}\p{M}\p{N}_]+/gu)) {
+        var start = word.index,
+          end = start + word[0].length;
+        if (point.startOffset < start || point.startOffset > end) continue;
+        var at = Math.min(point.startOffset, end - 1);
+        var glyph = document.createRange();
+        glyph.setStart(node, at);
+        glyph.setEnd(node, at + 1);
+        var box = glyph.getBoundingClientRect();
+        // Text found for a click in a margin is not the row that was clicked.
+        if (box.height && y >= box.top - box.height && y <= box.bottom + box.height) {
+          message.n = entry.n;
+          message.index = entry.index;
+          message.start = start;
+          message.end = end;
+          message.sample = word[0];
+          message.at = at - start;
+          message.top = box.top;
+          message.bottom = box.bottom;
+        }
+        break;
+      }
+    }
+    post(message);
   }
 
   function reportSelection(reveal) {
@@ -598,7 +636,10 @@
 
   document.addEventListener(
     "mouseup",
-    function () {
+    function (event) {
+      // The release, not the press: for a drag the row that matters is where it
+      // ended, and nothing may scroll while it is in progress.
+      if (event.button === 0) reportGesture(event.clientX, event.clientY);
       window.clearTimeout(selectionTimer);
       selectionTimer = window.setTimeout(function () {
         reportSelection(false);
@@ -676,6 +717,9 @@
       if (isFinite(top)) window.scrollTo(0, Math.max(0, top));
     } else if (data.type === "measureScroll") {
       measureScroll(data);
+    } else if (data.type === "probeAt") {
+      var height = Number(data.y);
+      if (isFinite(height)) probeY = Math.max(0, Math.min(window.innerHeight, height));
     } else if (data.type === "scrollToLine") {
       var anchor = anchorForLine(Number(data.line));
       if (anchor) window.scrollTo(0, Math.max(0, anchor.top - SYNC_MARGIN));

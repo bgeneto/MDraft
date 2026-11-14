@@ -287,18 +287,23 @@ check(
 //
 // The face has to exist before the CSS asking for 600 can use it. With only
 // 400 and 700 on disk the browser serves 700, so "Semibold" would silently be
-// the Bold it was meant to replace.
+// the Bold it was meant to replace. Since the static faces became variable ones
+// (`"200 900"`), a face covers 600 when 600 is inside its declared range.
 
 console.log("\n=== Semibold is a real face, and the preview asks for it ===");
 const semibold = await evaluate(`
   (async () => {
     const family = (f) => f.family.replace(/^"|"$/g, "");
+    const covers600 = (f) => {
+      const [low, high = low] = String(f.weight).split(/\\s+/).map(Number);
+      return low <= 600 && 600 <= high;
+    };
     const declared = [...document.fonts].filter((f) => family(f) === "Source Sans 3");
     let loaded = [];
     try { loaded = await document.fonts.load('600 36px "Source Sans 3"', "Ag0123"); } catch {}
     return {
-      sixHundred: declared.filter((f) => f.weight === "600").map((f) => f.style),
-      loaded: loaded.filter((f) => f.weight === "600").length,
+      sixHundred: declared.filter(covers600).map((f) => f.style),
+      loaded: loaded.filter(covers600).length,
     };
   })()
 `);

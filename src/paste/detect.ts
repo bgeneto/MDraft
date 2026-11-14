@@ -14,7 +14,7 @@ import type { DocumentLanguage } from "../api.ts";
 import { VOID_ELEMENTS } from "../tag-name.ts";
 import { hasInlineMath } from "../math-delimiters.ts";
 
-export type SourceFormat = "html" | "markdown" | "typst" | "asciidoc" | "plain";
+export type SourceFormat = "html" | "markdown" | "typst" | "asciidoc" | "latex" | "plain";
 
 export interface ClipboardPayload {
   html: string | null;
@@ -35,7 +35,7 @@ export interface ClipboardChoice {
 }
 
 export interface Detection {
-  language: DocumentLanguage;
+  language: Exclude<DocumentLanguage, "javascript" | "css" | "json">;
   score: number;
   runnerUp: number;
 }
@@ -117,6 +117,50 @@ export function scoreAsciidoc(raw: string): number {
   if (/^ {0,3}include::/m.test(text)) score += 4;
   if (/\bxref:/.test(text)) score += 2;
   if (/^ {0,3}\/\/.*$/m.test(text)) score += 1;
+  return score;
+}
+
+/**
+ * The LaTeX score.
+ *
+ * Every signal is anchored to the start of a line, because that is what
+ * separates a LaTeX *document* from prose that mentions LaTeX. A Markdown
+ * article saying "we used \LaTeX{} for this" has no line beginning with
+ * `\documentclass` or `\begin{document}`, so it scores 0 here and its Markdown
+ * score keeps it.
+ *
+ * `\begin{document}` is worth the most: it is the one command a LaTeX document
+ * cannot be written without, and it does not appear in a bare fragment. The
+ * preamble commands are next — a clipboard holding only a preamble is still
+ * LaTeX source. A `%` comment line is worth 1, the same as Typst's and
+ * AsciiDoc's comment signal, so it can never decide alone.
+ */
+export function scoreLatex(raw: string): number {
+  const text = raw;
+  let score = 0;
+  if (/^ {0,3}\\begin\s*\{document\}/m.test(text)) score += 6;
+  if (/^ {0,3}\\documentclass\b/m.test(text)) score += 5;
+  if (/^ {0,3}\\end\s*\{document\}/m.test(text)) score += 2;
+  if (count(text, /^ {0,3}\\(?:usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{/gm) > 0)
+    score += 4;
+  if (
+    count(
+      text,
+      /^ {0,3}\\(?:part|chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?\s*(?:\[[^\]]*\])?\s*\{/gm,
+    ) > 0
+  ) {
+    score += 4;
+  }
+  if (
+    count(text, /^ {0,3}\\(?:newcommand|renewcommand|providecommand|def|DeclareMathOperator)\b/gm) >
+    0
+  ) {
+    score += 4;
+  }
+  if (count(text, /^ {0,3}\\begin\s*\{(?!document\})[A-Za-z*]+\}/gm) > 0) score += 3;
+  if (/^ {0,3}\\(?:title|author|date)\s*\{/m.test(text)) score += 2;
+  if (/\\includegraphics\b/.test(text)) score += 2;
+  if (count(text, /^ {0,3}%.*$/gm) > 0) score += 1;
   return score;
 }
 
@@ -209,11 +253,13 @@ export function detectTextSyntax(
   const markdown = scoreMarkdown(raw);
   const typst = scoreTypst(raw);
   const asciidoc = scoreAsciidoc(raw);
-  const scores: Array<[DocumentLanguage, number]> = [
+  const latex = scoreLatex(raw);
+  const scores: Array<[Detection["language"], number]> = [
     ["html", html],
     ["markdown", markdown],
     ["typst", typst],
     ["asciidoc", asciidoc],
+    ["latex", latex],
   ];
   scores.sort((a, b) => b[1] - a[1]);
   const [language, score] = scores[0];
@@ -242,6 +288,23 @@ function carriesMarkdown(text: string): boolean {
   return scoreMarkdown(text) > 0 || /^ {0,3}(?:`{3,}|~{3,})/m.test(text);
 }
 
+/** Source editors may add an HTML flavour without changing the copied text. */
+function isLatexClipboardSource(text: string, html: string | null): boolean {
+  if (/\\(?:[A-Za-z@]+|[^\r\n])/.test(text)) return true;
+  if (/\${1,2}[^$\r\n]+\${1,2}/.test(text)) return true;
+  if (!html) return false;
+  // A token-only selection from a syntax highlighter may lack a `pre` wrapper
+  // and any command name. Keep its TeX punctuation when the HTML has no actual
+  // rich structure to convert.
+  if (/<(?:a|b|strong|em|i|u|s|del|h[1-6]|ul|ol|li|blockquote|table|tr|td|th)\b/i.test(html))
+    return false;
+  if (/[#$%&_^{}~]/.test(text)) return true;
+  return (
+    /^\s*(?:<meta\b[^>]*>\s*)*<(?:pre|code)\b/i.test(html) ||
+    /\bwhite-space\s*:\s*pre(?:-wrap)?\b/i.test(html)
+  );
+}
+
 /**
  * Which clipboard representation to use for `destination`.
  *
@@ -259,6 +322,9 @@ function carriesMarkdown(text: string): boolean {
  * converted (or sanitised, when the destination is HTML). Then the Markdown
  * representation, and finally plain text natively.
  *
+ * In LaTeX, text-only pastes and recognizable source with an HTML highlighting
+ * flavour stay native, even when a fragment resembles another markup language.
+ *
  * The destination decides the intent, and it has to: the same clipboard — an
  * `<p>…</p>` snippet — means "keep this markup" in an HTML document and
  * "convert this into my format" in a Markdown one. Keying the rule on the
@@ -270,10 +336,24 @@ export function chooseSource(
   destination: DocumentLanguage,
 ): ClipboardChoice {
   const text = payload.text ?? "";
+  // In a LaTeX editor a text-only clipboard is source: even a fragment without
+  // commands can be math or a partial edit. HTML from a source editor is just
+  // highlighting, so recognizable LaTeX and preformatted source stay native too.
+  if (
+    destination === "latex" &&
+    payload.text !== null &&
+    ((!payload.html?.trim() && !payload.markdown?.trim()) ||
+      isLatexClipboardSource(text, payload.html))
+  ) {
+    return { source: "latex", native: true, fromText: true };
+  }
   const typed = detectTextSyntax(text, "clipboard");
-  const detected: DocumentLanguage | null = isHtmlSource(text)
+  // The conservative document scorer is not a reliable LaTeX fragment reader.
+  // Other destinations retain their existing source-detection behavior.
+  const detected: Exclude<Detection["language"], "latex"> | null = isHtmlSource(text)
     ? "html"
-    : (typed?.language ?? (carriesMarkdown(text) ? "markdown" : null));
+    : ((typed?.language === "latex" ? null : typed?.language) ??
+      (carriesMarkdown(text) ? "markdown" : null));
 
   if (detected) {
     return { source: detected, native: detected === destination, fromText: true };

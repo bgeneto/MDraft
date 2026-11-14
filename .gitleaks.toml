@@ -1,0 +1,4 @@
+title = "MDraft publication scan"
+
+[extend]
+useDefault = true

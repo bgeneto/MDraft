@@ -263,6 +263,46 @@ try {
     );
   }
 
+  // A figure that cannot load is reported in the toast, not in a dialog: the PDF
+  // was written, so there is nothing to acknowledge. The old route opened a
+  // message box with an OK button after every such export.
+  const missingHtml = path.join(work, "missing-figure.html");
+  const missingPdf = path.join(work, "missing-figure.pdf");
+  fs.writeFileSync(
+    missingHtml,
+    [
+      "<!doctype html>",
+      '<html lang="en"><head><meta charset="utf-8">',
+      "<title>Missing Figure</title>",
+      "</head><body>",
+      "<h1>Missing Figure</h1>",
+      '<img src="not-there.png" alt="Absent figure">',
+      "</body></html>",
+    ].join("\n"),
+  );
+  await invoke("plugin:event|emit", { event: "open-files", payload: [missingHtml] });
+  await wait(`document.title.includes('missing-figure.html')`, 30000);
+  await sleep(700);
+  const dialogsBefore = await evaluate(`window.__pdfTest.messages.length`);
+  await evaluate(`window.__pdfTest.nextSave=${JSON.stringify(missingPdf)}`);
+  await action("export.pdf");
+  await wait(
+    `document.getElementById('toast').textContent.includes('did not load') || window.__pdfTest.messages.length > ${dialogsBefore}`,
+    120000,
+  );
+  const toastText = await evaluate(`document.getElementById('toast').textContent`);
+  check(fs.existsSync(missingPdf), "a document with a missing figure still writes its PDF");
+  check(
+    toastText.includes("not-there.png") && toastText.includes("Exported PDF"),
+    "the missing figure is named in the toast beside the success",
+    toastText,
+  );
+  check(
+    (await evaluate(`window.__pdfTest.messages.length`)) === dialogsBefore,
+    "the missing figure does not open a dialog that needs OK",
+    await evaluate(`JSON.stringify(window.__pdfTest.messages.slice(${dialogsBefore}))`),
+  );
+
   const scriptedHtml = path.resolve("samples/html-tour/index.html");
   const scriptedPdf = path.join(work, "scripted.pdf");
   await evaluate(`window.__pdfTest.answerAsk=true;window.__pdfTest.printCalls=0`);

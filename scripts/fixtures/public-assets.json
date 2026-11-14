@@ -1,0 +1,327 @@
+{
+  "version": 1,
+  "maxFileBytes": 2097152,
+  "environmentTemplates": [],
+  "rootFiles": [
+    ".git-blame-ignore-revs",
+    ".gitignore",
+    ".gitleaks.toml",
+    ".npmrc",
+    ".prettierignore",
+    ".prettierrc.json",
+    "AGENTS.md",
+    "CONTRIBUTING.md",
+    "LICENSE",
+    "README.md",
+    "eslint.config.mjs",
+    "index.html",
+    "knip.json",
+    "package-lock.json",
+    "package.json",
+    "tsconfig.json",
+    "vite.config.ts"
+  ],
+  "samples": {
+    "samples/asciidoc-include.adoc": "AsciiDoc relative include regression dependency",
+    "samples/asciidoc-reference.adoc": "Built-in AsciiDoc reference behavior and regression corpus",
+    "samples/asciidoc-tour.adoc": "AsciiDoc rendering/export/include UI regression corpus",
+    "samples/export-tour.adoc": "AsciiDoc native/browser/PDF export regression fixture",
+    "samples/export-tour.md": "Markdown native/browser/PDF export and zoom regression fixture",
+    "samples/feature-tour.md": "Markdown rendering, document lifecycle, paste and editor UI suites",
+    "samples/format-document.tex": "TeX formatter regression corpus",
+    "samples/html-tour/app.js": "HTML guest sandbox and relative script/module/data/image resources",
+    "samples/html-tour/data.json": "HTML guest sandbox and relative script/module/data/image resources",
+    "samples/html-tour/image.png": "HTML guest sandbox and relative script/module/data/image resources",
+    "samples/html-tour/index.html": "HTML guest sandbox and relative script/module/data/image resources",
+    "samples/html-tour/module.js": "HTML guest sandbox and relative script/module/data/image resources",
+    "samples/html-tour/style.css": "HTML guest sandbox and relative script/module/data/image resources",
+    "samples/latex-engines/magic-xe.tex": "LaTeX compilation/root/engine/library/project regression fixture and its include closure",
+    "samples/latex-engines/plain.tex": "LaTeX compilation/root/engine/library/project regression fixture and its include closure",
+    "samples/latex-perf/book-flat/figures/diagram.png": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/book-flat/main.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/book-flat/references.bib": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/book/chapters/ch01.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/book/chapters/ch02.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/book/chapters/ch03.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/book/chapters/ch04.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/book/chapters/ch05.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/book/chapters/ch06.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/book/chapters/ch07.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/book/chapters/ch08.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/book/chapters/ch09.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/book/chapters/ch10.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/book/chapters/ch11.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/book/chapters/ch12.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/book/figures/diagram.png": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/book/main.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/book/references.bib": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/huge/chapters/ch01.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/huge/chapters/ch02.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/huge/chapters/ch03.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/huge/chapters/ch04.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/huge/chapters/ch05.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/huge/chapters/ch06.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/huge/chapters/ch07.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/huge/chapters/ch08.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/huge/chapters/ch09.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/huge/chapters/ch10.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/huge/chapters/ch11.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/huge/chapters/ch12.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/huge/figures/diagram.png": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/huge/main.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/huge/references.bib": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/preamble.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/small.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/tikz-auto.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-perf/tikz.tex": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
+    "samples/latex-project/chapters/intro.tex": "LaTeX compilation/root/engine/library/project regression fixture and its include closure",
+    "samples/latex-project/figures/diagram.png": "LaTeX compilation/root/engine/library/project regression fixture and its include closure",
+    "samples/latex-project/main.tex": "LaTeX compilation/root/engine/library/project regression fixture and its include closure",
+    "samples/latex-project/references.bib": "LaTeX compilation/root/engine/library/project regression fixture and its include closure",
+    "samples/latex-reference.tex": "LaTeX compilation/root/engine/library/project regression fixture and its include closure",
+    "samples/latex-root/chapters/body.tex": "LaTeX compilation/root/engine/library/project regression fixture and its include closure",
+    "samples/latex-root/chapters/orphan.tex": "LaTeX compilation/root/engine/library/project regression fixture and its include closure",
+    "samples/latex-root/main.tex": "LaTeX compilation/root/engine/library/project regression fixture and its include closure",
+    "samples/latex-texmf/main.tex": "LaTeX compilation/root/engine/library/project regression fixture and its include closure",
+    "samples/latex-texmf/second/main.tex": "LaTeX compilation/root/engine/library/project regression fixture and its include closure",
+    "samples/latex-two-column.tex": "LaTeX compilation/root/engine/library/project regression fixture and its include closure",
+    "samples/math-render.md": "292 synthetic math cases for formatting, parser inventory, rendering and performance",
+    "samples/pdf-quality-blocks.png": "Colour/block raster dependency of the PDF quality fixture",
+    "samples/pdf-quality.md": "PDF layout, text, table, math and image quality assertions",
+    "samples/physics-sync.typ": "Synthetic accented PDF words for repeated bidirectional Typst selection",
+    "samples/raw-html-sync.md": "Synthetic raw HTML table/div correspondence and 70+ top-level source anchors",
+    "samples/scroll-sync/prose.adoc": "Cross-format scroll and word correspondence regression fixture",
+    "samples/scroll-sync/prose.html": "Cross-format scroll and word correspondence regression fixture",
+    "samples/scroll-sync/prose.md": "Cross-format scroll and word correspondence regression fixture",
+    "samples/scroll-sync/single-column.typ": "Cross-format scroll and word correspondence regression fixture",
+    "samples/scroll-sync/two-columns.typ": "Cross-format scroll and word correspondence regression fixture",
+    "samples/typst-pages.typ": "Compiled Typst PDF layout, word mapping, zoom and viewport regressions",
+    "samples/typst-reference.typ": "Typst reference behavior and syntax coverage",
+    "samples/typst-tour.typ": "Typst document rendering and built-in reference behavior",
+    "samples/word-sync.md": "Portuguese accented-word source/preview correspondence",
+    "samples/workspace-typst/chapters/one.typ": "Typst workspace-root include and Explorer regression fixture",
+    "samples/workspace-typst/template.typ": "Typst workspace-root include and Explorer regression fixture"
+  },
+  "images": {
+    "samples/html-tour/image.png": {
+      "purpose": "Test fixture image resource",
+      "sha256": "52dfdd76cce9407012f25e916534f2ffc15d691edc4d35a5906290af1f1d485d"
+    },
+    "samples/latex-perf/book-flat/figures/diagram.png": {
+      "purpose": "Test fixture image resource",
+      "sha256": "91b013513962ddca29ba4fdbc25798046e4dd131f902f2dcee0c1fcb52072ada"
+    },
+    "samples/latex-perf/book/figures/diagram.png": {
+      "purpose": "Test fixture image resource",
+      "sha256": "91b013513962ddca29ba4fdbc25798046e4dd131f902f2dcee0c1fcb52072ada"
+    },
+    "samples/latex-perf/huge/figures/diagram.png": {
+      "purpose": "Test fixture image resource",
+      "sha256": "91b013513962ddca29ba4fdbc25798046e4dd131f902f2dcee0c1fcb52072ada"
+    },
+    "samples/latex-project/figures/diagram.png": {
+      "purpose": "Test fixture image resource",
+      "sha256": "91b013513962ddca29ba4fdbc25798046e4dd131f902f2dcee0c1fcb52072ada"
+    },
+    "samples/pdf-quality-blocks.png": {
+      "purpose": "Test fixture image resource",
+      "sha256": "6edd21eace8eb5305b3d260e6f66fa1d5280a5e2e09b45a5fba6cfb5490a7f66"
+    },
+    "site/assets/img/ai-palette.webp": {
+      "purpose": "Canonical landing-page/README image",
+      "sha256": "b35c8ed262268e660bc8ac1429e4f1142689bedc13418dadf5c9a31a0fe30a9a"
+    },
+    "site/assets/img/html-editor.webp": {
+      "purpose": "Canonical landing-page/README image",
+      "sha256": "1b5e197ba0d8507addd4cefdf90f472f38664b21c2ec9f6bea6612a680942085"
+    },
+    "site/assets/img/math-dark.webp": {
+      "purpose": "Canonical landing-page/README image",
+      "sha256": "003f94243e8d1fdc8c386b28786737b8acfc406cc573401b95f693349d0469b9"
+    },
+    "site/assets/img/math-light.webp": {
+      "purpose": "Canonical landing-page/README image",
+      "sha256": "c4e90618a3b78ccd459b068e3f16bb5ccf7d3b11d18013d2b705e2fdc93807c6"
+    },
+    "site/assets/img/scroll-sync.webp": {
+      "purpose": "Canonical landing-page/README image",
+      "sha256": "cc63b81853a4403ddb389232ad2ad002531451bec59f46fae710670773ac4504"
+    },
+    "site/assets/img/statusbar-tokens.webp": {
+      "purpose": "Canonical landing-page/README image",
+      "sha256": "491ad03a6769aefc0354d48a2e8b6c8f1e96cd339293ca71ed55640d63e047a0"
+    },
+    "site/assets/img/sync-preview.webp": {
+      "purpose": "Canonical landing-page/README image",
+      "sha256": "5ac94c61c569382d05e8beb3fcb3fc49c7ba32e5eca00c16051a5253727ffd2b"
+    },
+    "site/assets/img/sync-source.webp": {
+      "purpose": "Canonical landing-page/README image",
+      "sha256": "a87f7c77a399a60924f733c17a5a8f48dd99f558365c619cce15673d24f7522b"
+    },
+    "site/assets/img/typography-presets.webp": {
+      "purpose": "Canonical landing-page/README image",
+      "sha256": "b6f7532a6fbdf6aecba7648d25760dcba341fcf41a68604069f795992ba96016"
+    },
+    "site/assets/img/typography-settings.webp": {
+      "purpose": "Canonical landing-page/README image",
+      "sha256": "3bb32fd286da7325285216859398d4f31aaa12937b9435d3e1e98c4e5cffc3a6"
+    },
+    "site/assets/img/typst-pages.webp": {
+      "purpose": "Canonical landing-page/README image",
+      "sha256": "fc7e2f1c57fb962409ea25e029d8270d08c5cbee108efc989d598949fc8e4c61"
+    },
+    "site/assets/og.png": {
+      "purpose": "Canonical landing-page/README image",
+      "sha256": "5b3bdced96eccbc72dce7b2cf45c5e713097029e0721625e923607be1dbdebbf"
+    },
+    "src-tauri/icons/128x128.png": {
+      "purpose": "Application installer/window/icon asset",
+      "sha256": "ce614b61191cc127b260cb9cd9ff3aeb95fafe16cbb7042d3de3fedcd7608e01"
+    },
+    "src-tauri/icons/128x128@2x.png": {
+      "purpose": "Application installer/window/icon asset",
+      "sha256": "14141b81c3dbf01a4aa166704b80fa2950c3a27bbc4ef6d3d8f810ccbd30d5d9"
+    },
+    "src-tauri/icons/256x256.png": {
+      "purpose": "Application installer/window/icon asset",
+      "sha256": "14141b81c3dbf01a4aa166704b80fa2950c3a27bbc4ef6d3d8f810ccbd30d5d9"
+    },
+    "src-tauri/icons/32x32.png": {
+      "purpose": "Application installer/window/icon asset",
+      "sha256": "9f7502047fc4e1c427aef30c029fba6dec85c6c5d983ceff937a2dc6f3a89b70"
+    },
+    "src-tauri/icons/512x512.png": {
+      "purpose": "Application installer/window/icon asset",
+      "sha256": "f34d3f3fd602b66cbcde1e0e01295307df7575dc019ef2c03b788fd559221a31"
+    },
+    "src-tauri/icons/64x64.png": {
+      "purpose": "Application installer/window/icon asset",
+      "sha256": "ced0630d6d105be7ee056ddbb356c03783afb3d2ad99a1a8f65f549e427e1eb7"
+    },
+    "src-tauri/icons/Square107x107Logo.png": {
+      "purpose": "Application installer/window/icon asset",
+      "sha256": "993b324939549b59129df1fa354bb8072eff7c7717c92194040fa454d902acfc"
+    },
+    "src-tauri/icons/Square142x142Logo.png": {
+      "purpose": "Application installer/window/icon asset",
+      "sha256": "a28b6230c34ffab0eed2794a116578db74f2087a36dd8915c2772ac1a38df286"
+    },
+    "src-tauri/icons/Square150x150Logo.png": {
+      "purpose": "Application installer/window/icon asset",
+      "sha256": "14591e74773ff4cde9e8d203101e048c2e32b169ef478e1943bd57d951adf71c"
+    },
+    "src-tauri/icons/Square284x284Logo.png": {
+      "purpose": "Application installer/window/icon asset",
+      "sha256": "ab90b4c3ce8141c3707462dc6ab82a52ad215698047ac20a6e6ab07d2f6916e0"
+    },
+    "src-tauri/icons/Square30x30Logo.png": {
+      "purpose": "Application installer/window/icon asset",
+      "sha256": "e2a46649acb37e7dd21a8f68a1e207f0334b4f81f6e290d01ee168d6f35107f2"
+    },
+    "src-tauri/icons/Square310x310Logo.png": {
+      "purpose": "Application installer/window/icon asset",
+      "sha256": "f5a57424de65f27bfaebcfa0a9dca4a65a9416be14e4be56b08bd9c615a9fd83"
+    },
+    "src-tauri/icons/Square44x44Logo.png": {
+      "purpose": "Application installer/window/icon asset",
+      "sha256": "dd4adc12b05f5b2c74883343fbc983ce8f432aa77c1cc98d5cd12b72b10a377c"
+    },
+    "src-tauri/icons/Square71x71Logo.png": {
+      "purpose": "Application installer/window/icon asset",
+      "sha256": "0f228a9e76223722661aa91eaf99be894c1d25a4bbe9373c572512b807776f9b"
+    },
+    "src-tauri/icons/Square89x89Logo.png": {
+      "purpose": "Application installer/window/icon asset",
+      "sha256": "c0be61dda1c5e10714e0a4e980c6f2029a33bb36b448b0f942811b6303b2c4c7"
+    },
+    "src-tauri/icons/StoreLogo.png": {
+      "purpose": "Application installer/window/icon asset",
+      "sha256": "d4cb7de2b08df2b65725438c202a5c9f4193920bfae044ae2afb78391c94a6e6"
+    },
+    "src-tauri/icons/icon.icns": {
+      "purpose": "Application installer/window/icon asset",
+      "sha256": "651dbd19f3333a6f277099153767363a4cf222329ba5e86ba157f5fee1cdf5bb"
+    },
+    "src-tauri/icons/icon.ico": {
+      "purpose": "Application installer/window/icon asset",
+      "sha256": "3fbce7554e1aad61327c29a63d439844f46ec4ad56c50befccc066866563a499"
+    },
+    "src-tauri/icons/icon.png": {
+      "purpose": "Application installer/window/icon asset",
+      "sha256": "ee8fe58bebf35d340600ba7102e9b11b4fbda8334581aa93adfd2bba6c1ccea2"
+    }
+  },
+  "documents": [
+    "AGENTS.md",
+    "CONTRIBUTING.md",
+    "README.md",
+    "docs/architecture.md",
+    "docs/export.md",
+    "docs/guide.md",
+    "docs/known-issues.md",
+    "docs/latex.md",
+    "docs/typography.md",
+    "scripts/README.md",
+    "site/robots.txt",
+    "src-tauri/texpresso-shell/README.md",
+    "src/assets/fonts/licenses/alegreya-OFL.txt",
+    "src/assets/fonts/licenses/archivo-OFL.txt",
+    "src/assets/fonts/licenses/azeret-mono-OFL.txt",
+    "src/assets/fonts/licenses/caveat-OFL.txt",
+    "src/assets/fonts/licenses/eb-garamond-OFL.txt",
+    "src/assets/fonts/licenses/fira-code-OFL.txt",
+    "src/assets/fonts/licenses/ibm-plex-mono-OFL.txt",
+    "src/assets/fonts/licenses/jetbrains-mono-OFL.txt",
+    "src/assets/fonts/licenses/jost-OFL.txt",
+    "src/assets/fonts/licenses/playfair-OFL.txt",
+    "src/assets/fonts/licenses/source-sans-OFL.txt",
+    "src/assets/fonts/licenses/source-serif-OFL.txt",
+    "src/assets/fonts/licenses/victor-mono-OFL.txt",
+    "src/assets/wasmtex-licenses/LICENSES/Apache-2.0.txt",
+    "src/assets/wasmtex-licenses/LICENSES/BibTeX.txt",
+    "src/assets/wasmtex-licenses/LICENSES/Emscripten-3.1.46.txt",
+    "src/assets/wasmtex-licenses/LICENSES/FreeType.txt",
+    "src/assets/wasmtex-licenses/LICENSES/GPL-2.0.txt",
+    "src/assets/wasmtex-licenses/LICENSES/GPL-3.0.txt",
+    "src/assets/wasmtex-licenses/LICENSES/Graphite2.txt",
+    "src/assets/wasmtex-licenses/LICENSES/HarfBuzz.txt",
+    "src/assets/wasmtex-licenses/LICENSES/ICU-68.2.txt",
+    "src/assets/wasmtex-licenses/LICENSES/LGPL-2.0.txt",
+    "src/assets/wasmtex-licenses/LICENSES/LGPL-2.1.txt",
+    "src/assets/wasmtex-licenses/LICENSES/LLVM-exception.txt",
+    "src/assets/wasmtex-licenses/LICENSES/Lua-5.3.txt",
+    "src/assets/wasmtex-licenses/LICENSES/LuaHBTeX-embedded.txt",
+    "src/assets/wasmtex-licenses/LICENSES/MakeIndex.txt",
+    "src/assets/wasmtex-licenses/LICENSES/Metafont.txt",
+    "src/assets/wasmtex-licenses/LICENSES/Monaco-Editor.txt",
+    "src/assets/wasmtex-licenses/LICENSES/SyncTeX.txt",
+    "src/assets/wasmtex-licenses/LICENSES/TECkit.txt",
+    "src/assets/wasmtex-licenses/LICENSES/TeXpresso-MIT.txt",
+    "src/assets/wasmtex-licenses/LICENSES/XeTeX.txt",
+    "src/assets/wasmtex-licenses/LICENSES/Xpdf-4.04-GPL-2.0.txt",
+    "src/assets/wasmtex-licenses/LICENSES/Xpdf-4.04-README.txt",
+    "src/assets/wasmtex-licenses/LICENSES/Xpdf-4.06-GPL-2.0.txt",
+    "src/assets/wasmtex-licenses/LICENSES/Xpdf-4.06-README.txt",
+    "src/assets/wasmtex-licenses/LICENSES/libpng.txt",
+    "src/assets/wasmtex-licenses/LICENSES/musl.txt",
+    "src/assets/wasmtex-licenses/LICENSES/pdf-lib.txt",
+    "src/assets/wasmtex-licenses/LICENSES/zlib.txt",
+    "src/assets/wasmtex-licenses/LICENSES/zziplib.txt",
+    "src/assets/wasmtex-licenses/THIRD_PARTY_NOTICES.md",
+    "src/assets/wasmtex-licenses/WasmTex-MIT.txt"
+  ],
+  "sourceRoots": [
+    ".github",
+    ".githooks",
+    ".vscode",
+    "docs",
+    "public",
+    "samples",
+    "scripts",
+    "site",
+    "src",
+    "src-tauri",
+    "tools"
+  ]
+}
