@@ -94,10 +94,21 @@ jobs:
           SITE_BASE_PATH: ${{ steps.pages.outputs.base_path }}
           SITE_VERSION: ${{ steps.release.outputs.version }}
 
+      # The Pages upload composite calls upload-artifact by mutable tag. Keep
+      # its archive format while pinning the action that handles the bytes.
+      - name: Archive the Pages artifact
+        run: >-
+          tar --dereference --hard-dereference --directory _site
+          --create --file "$RUNNER_TEMP/artifact.tar"
+          --exclude=.git --exclude=.github .
+
       - name: Upload the artifact
-        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          path: _site
+          name: github-pages
+          path: ${{ runner.temp }}/artifact.tar
+          retention-days: 1
+          if-no-files-found: error
 
       - name: Deploy
         id: deployment
