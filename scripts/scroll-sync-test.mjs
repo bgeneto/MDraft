@@ -329,7 +329,7 @@ async function scrollPreviewTo(word, mode) {
   return true;
 }
 
-// --- Gesture probe (docs/plans/2026-11-13-level-click-alignment.md) ----------
+// --- Gesture probe (docs/architecture.md) ----------
 // A real click on a word in one pane, then the vertical distance between that
 // word's row centre and its counterpart's row centre in the other pane. Row
 // centres, in screen pixels, because that is what "side by side" means when

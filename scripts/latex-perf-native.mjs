@@ -2,7 +2,7 @@
 //!
 //!   node scripts/latex-perf-native.mjs [--runs=5] [--engine=lualatex] [--out=dir]
 //!
-//! The competitive row of docs/plans/2026-11-12-latex-compile-cost.md: what a
+//! The competitive row of docs/architecture.md: what a
 //! desktop editor that runs latexmk on save makes the reader wait, without its
 //! viewer reload. Each fixture is copied to a scratch directory on the Linux
 //! side (inside WSL on Windows: /mnt/c is far too slow for TeX's many small

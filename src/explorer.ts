@@ -1,5 +1,5 @@
 //! The Explorer: the workspace folder as a lazy tree in the sidebar (Track W
-//! of docs/plans/2026-11-12-latex-compile-cost.md, GAP-006 slice 1).
+//! of docs/architecture.md, GAP-006 slice 1).
 //!
 //! Read-only. Each folder is listed one level at a time through
 //! `workspace_list`, only when it is expanded, so a large tree costs nothing

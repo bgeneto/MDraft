@@ -1,11 +1,11 @@
-//! Assemble docs/audits/latex-compile-baseline.json from probe runs.
+//! Assemble a temporary latex-compile-baseline.json from probe runs.
 //!
-//!   node scripts/latex-perf-baseline.mjs <runs-dir> [--out=docs/audits/latex-compile-baseline.json]
+//!   node scripts/latex-perf-baseline.mjs <runs-dir> [--out=path]
 //!
 //! <runs-dir> holds the JSON files written by latex-performance-test.mjs
 //! (MDRAFT_LATEX_PERF_OUT) and by latex-perf-native.mjs (--out). Each fixture
 //! needs two matrix launches: the noise band of
-//! docs/plans/2026-11-12-latex-compile-cost.md is
+//! docs/architecture.md is
 //! `max(|median launch 1 - median launch 2|, 2 x MAD of the pooled runs)`, per
 //! scenario and metric. The output keeps every raw run, so a later stage can be
 //! compared against the evidence, not against this script's summary.
@@ -15,8 +15,9 @@
 //! per-pass timings, so the fixed cost F (engine, format, preamble) and the
 //! per-page cost k come from the fixtures instead.
 
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 
 const args = process.argv.slice(2);
 const dir = args.find((arg) => !arg.startsWith("--"));
@@ -26,7 +27,8 @@ if (!dir) {
 }
 const out =
   args.find((arg) => arg.startsWith("--out="))?.slice(6) ??
-  join("docs", "audits", "latex-compile-baseline.json");
+  join(tmpdir(), "mdraft-qa", "latex-compile-baseline.json");
+mkdirSync(dirname(out), { recursive: true });
 
 const METRICS = [
   "e2p",
@@ -153,7 +155,7 @@ const first = app[0] ?? {};
 const baseline = {
   schema: 1,
   generatedAt: new Date().toISOString(),
-  plan: "docs/plans/2026-11-12-latex-compile-cost.md",
+  plan: "docs/architecture.md",
   method:
     "Probe: scripts/latex-performance-test.mjs, one fixture per launch, 1 warm-up + N measured edits per scenario. Noise band = max(|launch1 - launch2|, 2 x MAD of pooled runs). Times in ms from page performance marks.",
   environment: {

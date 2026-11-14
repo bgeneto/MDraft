@@ -26,7 +26,7 @@ assert.match(compile, /mainFile:\s*snapshot\.mainFile/);
 assert.match(readFileSync("samples/latex-project/main.tex", "utf8"), /\\usepackage\{fontspec\}/);
 
 // The TeX Live year is one pinned unit read from one file
-// (docs/adr/2026-11-12-engine-profile-config.md): `src-tauri/latex-engine.json` names the
+// (docs/architecture.md): `src-tauri/latex-engine.json` names the
 // active year and one profile per year. Rust derives its URLs from it, `latex-engine.ts`
 // hands the SDK the year, and each profile needs a `public/wasmtex/<year>/` folder of
 // identical shims that read their year from their own URL. The `mdraft-tex` URL carries

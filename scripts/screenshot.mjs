@@ -1,13 +1,19 @@
 // Capture a PNG of the running window over CDP.
 //
-//   node scripts/_shot.mjs 9222 <output.png> [setupExpression]
+//   node scripts/screenshot.mjs 9222 [output.png] [setupExpression]
 //
 // The screenshot covers the webview (the document and the Preferences panel).
 // The native menu bar and window frame live outside the page and are not part
 // of a DevTools screenshot.
-import { writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-const [port = "9222", out = "shot.png", setup = "1"] = process.argv.slice(2);
+const [
+  port = "9222",
+  out = join(mkdtempSync(join(tmpdir(), "mdraft-capture-")), "window.png"),
+  setup = "1",
+] = process.argv.slice(2);
 
 const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
 const page = list.find((t) => t.type === "page");

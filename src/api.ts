@@ -1104,7 +1104,7 @@ export const saveCompiledPdf = (outputPath: string, data: string) =>
  * Write the compiled PDF to a temporary file and open it to be printed.
  *
  * Prints the compiler's own bytes, never a re-render — see
- * `docs/adr/2026-11-06-print-the-compiled-pdf.md`. Returns the path written.
+ * `docs/architecture.md`. Returns the path written.
  */
 export const printCompiledPdf = (data: string, name: string) =>
   invoke<string>("print_compiled_pdf", { data, name });

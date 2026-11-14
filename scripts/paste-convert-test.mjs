@@ -1256,39 +1256,20 @@ for (const [file, baseline] of Object.entries(
   JSON.parse(readFileSync(new URL("./fixtures/math-inventory.json", import.meta.url), "utf8")),
 )) {
   const sourceUrl = new URL("../" + file, import.meta.url);
-  const optional = file.startsWith("docs/samples/");
-  const source =
-    existsSync(sourceUrl) && !(optional && process.argv.includes("--without-optional-corpus"))
-      ? readFileSync(sourceUrl, "utf8")
-      : null;
+  const source = readFileSync(sourceUrl, "utf8").replace(/\r\n/g, "\n");
   check(
-    source !== null
-      ? createHash("sha256").update(source).digest("hex") === baseline.sha256
-      : optional && baseline.entries.length === 292 && /^[a-f\d]{64}$/.test(baseline.sha256),
-    source !== null
-      ? "independent baseline source hash: " + file
-      : "optional local corpus absent; 292 pinned formula cases remain available",
+    createHash("sha256").update(source).digest("hex") === baseline.sha256,
+    "independent synthetic baseline source hash: " + file,
   );
-  const actual =
-    source !== null
-      ? analyzeMath(source).math.map(({ body, display, from, to }) => ({
-          body,
-          display,
-          src0: from,
-          src1: to,
-        }))
-      : null;
+  const actual = analyzeMath(source).math.map(({ body, display, from, to }) => ({
+    body,
+    display,
+    src0: from,
+    src1: to,
+  }));
   check(
-    actual !== null
-      ? JSON.stringify(actual) === JSON.stringify(baseline.entries)
-      : baseline.entries.every(({ body, display }) => {
-          const marker = display ? "$$" : "$";
-          const parsed = analyzeMath(marker + body + marker).math;
-          return parsed.length === 1 && parsed[0].body === body && parsed[0].display === display;
-        }),
-    actual !== null
-      ? "every baseline body/range/display kind: " + file
-      : "all recorded physics bodies/display kinds parse without the ignored source file",
+    JSON.stringify(actual) === JSON.stringify(baseline.entries),
+    "every baseline body/range/display kind: " + file,
   );
 }
 const malformed = "\\( ".repeat(20_000) + "$5 and ".repeat(15_000);

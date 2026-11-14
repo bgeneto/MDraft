@@ -1,5 +1,5 @@
 {
-  "note": "Set \"active\" to the TeX Live year the bundled engine installs and serves. Read by src-tauri/src/latex.rs and src/latex-engine.ts. Docs: docs/adr/2026-11-12-engine-profile-config.md.",
+  "note": "Set \"active\" to the TeX Live year the bundled engine installs and serves. Read by src-tauri/src/latex.rs and src/latex-engine.ts. Docs: docs/architecture.md.",
   "active": "2026",
   "profiles": {
     "2025": {

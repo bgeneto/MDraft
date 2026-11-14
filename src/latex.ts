@@ -237,7 +237,7 @@ export function compileDiagnostics(
 }
 
 /**
- * The warm engine (docs/adr/2026-11-12-latex-engine-lifetime.md).
+ * The warm engine (docs/architecture.md).
  *
  * One compiler stays alive between compiles of the same project, so an edit
  * pays only for the changed files and the typeset, not for booting the worker,
@@ -506,7 +506,7 @@ export async function compileLatex(
       const compiler = new WasmTexCompiler({
         engine: texEngine,
         // From `src-tauri/latex-engine.json`, the file the Rust side derives its asset
-        // root, mirror and digests from (docs/adr/2026-11-12-engine-profile-config.md).
+        // root, mirror and digests from (docs/architecture.md).
         texliveVersion: LATEX_ENGINE_YEAR,
         // A stable segment for the engine's lifetime: the transport keeps no
         // per-job state; downloads are attributed to the compile in flight.
@@ -872,7 +872,7 @@ function recordCost(key: string, lane: "preview" | "compile", ms: number): void 
  * a preview that costs most of a compile only delays the exact result.
  */
 export function interactiveLaneWorthwhile(key: string): boolean {
-  // Rejected twice by its gate (docs/plans/2026-11-12-latex-compile-cost.md,
+  // Rejected twice by its gate (docs/architecture.md,
   // stage 2.2): on both engines a preview plus the exact compile cost about
   // 1 s more E2C than the exact compile alone. Off until a cheaper preview
   // path is measured; the code stays for that evaluation.
@@ -904,7 +904,7 @@ const CHECKPOINT_BUDGET = { maxCheckpoints: 4, maxBytes: 128 * 1024 * 1024 };
  * TikZ externalization (stage 6.1). "document" is the SDK default: only a
  * document that calls `\tikzexternalize` gets its figures rendered by sibling
  * compilers and cached by MD5. "auto" would extend that to every TikZ document;
- * the decision and its measurement are in docs/plans/2026-11-12-latex-compile-cost.md.
+ * the decision and its measurement are in docs/architecture.md.
  */
 const TIKZ_EXTERNALIZATION = { mode: "document" as const };
 
@@ -914,7 +914,7 @@ const PREVIEW_TIMEOUT_MS = 30_000;
 /**
  * Typeset only the pages the reader is looking at, on the warm engine.
  *
- * The interactive lane of docs/plans/2026-11-12-latex-compile-cost.md (2.2):
+ * The interactive lane of docs/architecture.md (2.2):
  * the SDK's `previewPages(limit, { placement: true })` uses the last full
  * pass's references, typesets an edited `\include` chapter alone, and resumes
  * from a heap checkpoint when the engine has one. Returns null whenever the

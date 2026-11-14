@@ -1245,7 +1245,7 @@ const sync = await evaluate(`(async () => {
 
   // (4) click a column of source lines -> each leaves the source where it was
   //     and brings its block beside the clicked line
-  //     (docs/adr/2026-11-13-pointer-gesture-alignment.md). Until that ADR a
+  //     (docs/architecture.md). Until that ADR a
   //     source click moved nothing; before that it pulled the block to the top
   //     of the preview, which is the regression the "beside" half guards.
   //     The rendered preview is much taller than its markdown and the ratio

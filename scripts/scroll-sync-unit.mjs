@@ -138,7 +138,7 @@ check("unchanged snapshots preserve UTF-16 offsets", () =>
   assert.equal(mapScrollOffset("🚀 café", "🚀 café", 3), 3),
 );
 
-// Gesture alignment (docs/adr/2026-11-13-pointer-gesture-alignment.md).
+// Gesture alignment (docs/architecture.md).
 const word = (from, to, origin, target, region = "left") => ({ from, to, origin, target, region });
 check("a skewed reference pair shifts the correction by the skew", () => {
   const pairs = [pair(0, 100, 200), pair(10, 140, 280)];

@@ -1,5 +1,5 @@
 //! Selection and click correspondence for the TeXpresso frame, on the rules
-//! the PDF pages preview follows (docs/plans/2026-11-13-texpresso-backend.md,
+//! the PDF pages preview follows (docs/architecture.md,
 //! "Correspondence on MDraft's conventions").
 
 import { paragraphRangeAt } from "../typst-page-map.ts";

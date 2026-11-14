@@ -5558,7 +5558,7 @@ body {
   color: var(--muted);
 }
 
-/* The TeXpresso preview (docs/plans/2026-11-13-texpresso-backend.md). Like the
+/* The TeXpresso preview (docs/architecture.md). Like the
    HTML guest, the frame is a sibling of `#preview`: it fills the pane, which
    stops scrolling, and the shadow compile's #preview is never shown. */
 .texpresso-host {

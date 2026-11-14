@@ -84,7 +84,7 @@ and the typesetting:
 These are the reasons the engine download includes a second, checkpoint-capable
 engine build. In a fixture with 15 pages, a chapter edit appears in under 0.6 s;
 in one with 105 pages, in about 1.5 s. The measurements and their method are in
-[the live-preview plan](plans/2026-11-12-latex-compile-cost.md).
+[the live-preview plan](architecture.md).
 
 **The main document of a chapter.** A chapter opened on its own compiles through
 its main file when MDraft can tell which one that is. The first rule that
@@ -491,9 +491,9 @@ constant `DEFAULT_LATEX_PREVIEW_BACKEND` in `src/latex-backend.ts` and the
 hidden `view.latexBackend.texpresso` / `.wasmtex` menu events, not a Preference.
 WasmTex is disabled, not deleted: its code and hidden tests remain, but no
 reader-facing path installs or selects it. The decisions are recorded in
-[the production ADR](adr/2026-11-13-texpresso-production.md) and
-[the earlier two-backend ADR](adr/2026-11-13-latex-preview-backends.md); the work
-is in [the plan](plans/2026-11-13-texpresso-backend.md).
+[the production ADR](architecture.md) and
+[the earlier two-backend ADR](architecture.md); the work
+is in [the plan](architecture.md).
 
 Every engine file and every TeX Live byte is pinned in
 `src-tauri/texpresso.json` and verified on download and on every serve;

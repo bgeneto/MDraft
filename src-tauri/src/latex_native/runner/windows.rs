@@ -203,7 +203,7 @@ pub(super) fn run(spec: &RunSpec, cancel: &AtomicBool) -> Result<RunOutcome, Str
     // helpers they start inherit it). The child still gets a console, so the
     // redirected handles keep working. This is the one spawn site that cannot
     // use `export::quiet()`; see the console-flash entry in
-    // docs/agent-guide/traps/editor-and-ui.md.
+    // CONTRIBUTING.md.
     let flags = EXTENDED_STARTUPINFO_PRESENT
         | CREATE_SUSPENDED
         | CREATE_UNICODE_ENVIRONMENT

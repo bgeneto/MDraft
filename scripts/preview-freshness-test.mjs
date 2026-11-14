@@ -7,7 +7,7 @@
 // None of them changes any compiled output — PDFs go dark through a CSS filter,
 // code colours are a stylesheet, the HTML guest draws its own styles — yet each
 // one recompiled a whole LaTeX project and restarted an HTML document's
-// scripts. The plan is docs/plans/2026-11-11-preview-freshness-and-cache.md.
+// scripts. The plan is docs/architecture.md.
 //
 // Rebuilds are counted at the IPC boundary, where every one has to pass:
 // `latex_engine_status` opens every LaTeX render, `render_typst` is the Typst

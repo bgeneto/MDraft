@@ -13,7 +13,7 @@
 // Several --mount options may name the same prefix: the directories are tried
 // in order. That is how a file lost to a case collision is supplied from a
 // second folder without touching the first (see the trap in
-// docs/agent-guide/traps/latex-typst-asciidoc.md).
+// CONTRIBUTING.md).
 //
 // No dependencies, loopback only, read-only, GET and HEAD.
 import { createServer } from "node:http";

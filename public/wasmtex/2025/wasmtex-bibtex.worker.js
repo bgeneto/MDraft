@@ -3,7 +3,7 @@ const __mdraftBase =
     ? "mdraft-tex://localhost/"
     : `${self.location.protocol}//mdraft-tex.localhost/`;
 // The year is the folder this script was loaded from, so every profile's folder holds
-// the same file (docs/adr/2026-11-12-engine-profile-config.md).
+// the same file (docs/architecture.md).
 const __mdraftYear = /\/wasmtex\/(\d{4})\//.exec(self.location.pathname)?.[1];
 if (!__mdraftYear)
   throw new Error("The LaTeX worker cannot read its TeX Live year from " + self.location.href);

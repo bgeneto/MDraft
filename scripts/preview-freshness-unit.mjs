@@ -4,7 +4,7 @@
 //!
 //! A key that misses an input shows an old preview as current — the one failure
 //! the freshness plan treats as unacceptable — so every input listed in
-//! docs/plans/2026-11-11-preview-freshness-and-cache.md is changed one at a time
+//! docs/architecture.md is changed one at a time
 //! here and must change the key. The non-inputs (theme, palette, width, view
 //! mode) have no parameter in `src/preview-freshness.ts`; that is checked by the
 //! type signatures, not here.

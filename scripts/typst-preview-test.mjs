@@ -1176,13 +1176,13 @@ if (process.env.MDRAFT_TEST_SCREENSHOT) {
   fs.writeFileSync(process.env.MDRAFT_TEST_SCREENSHOT, Buffer.from(shot.result.data, "base64"));
 }
 
-// The ignored local exam is optional; the tracked fixture above always runs.
-const exam = path.resolve("docs/samples/prova-fisica.typ");
-if (fs.existsSync(exam)) {
+// The accented-word fixture is synthetic and required in every public checkout.
+const exam = path.resolve("samples/physics-sync.typ");
+{
   await evaluate(
     `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'open-files',payload:[${JSON.stringify(exam)}]})`,
   );
-  await waitFor(`document.title.includes('prova-fisica.typ')`);
+  await waitFor(`document.title.includes('physics-sync.typ')`);
   await switchView("Pages");
   await waitFor(`document.querySelector('.textLayer')?.textContent.includes('instante')`, 30000);
   await sleep(1200);
@@ -1192,7 +1192,7 @@ if (fs.existsSync(exam)) {
       await roundTrip(["instante", "velocidade", "partícula", "coordenadas", "centrípeta"][n % 5]),
     );
   check(
-    "physics exam survives fifty alternating gestures with exact words",
+    "synthetic accented fixture survives fifty alternating gestures with exact words",
     examCycles.every((r) => r.ok),
     JSON.stringify(examCycles.filter((r) => !r.ok)),
   );

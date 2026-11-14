@@ -3,7 +3,7 @@
 The page MDraft loads in the preview frame of the TeXpresso backend. Everything
 here is embedded in the executable and served by
 `src-tauri/src/latex_texpresso.rs` at `mdraft-tex://…/texpresso/`. Decision:
-[the production ADR](../../docs/adr/2026-11-13-texpresso-production.md).
+[the production ADR](../../docs/architecture.md).
 
 ## What is ours and what is not
 
@@ -37,4 +37,4 @@ for them.
   WasmTex engine.
 
 The licence gate is answered; the decision is recorded in
-[the production ADR](../../docs/adr/2026-11-13-texpresso-production.md).
+[the production ADR](../../docs/architecture.md).

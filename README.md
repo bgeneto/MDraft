@@ -14,7 +14,7 @@ live preview side by side, then export a document ready to share.
 
 **[Website](https://bgeneto.github.io/MDraft/) · [Download the latest release →](https://github.com/bgeneto/MDraft/releases/latest)**
 
-![MDraft in split view, with Markdown source on the left and a typeset preview on the right. The same phrase is highlighted in both panes.](docs/screenshots/auto-highlighting.webp)
+![MDraft in split view, with Markdown source on the left and a typeset preview on the right. The same phrase is highlighted in both panes.](site/assets/img/scroll-sync.webp)
 
 *Select text in either pane to find its match in the other.*
 
@@ -50,7 +50,7 @@ projects easy to navigate.
   tag, attribute, comment, script or selector, and can be turned off in
   *Preferences › HTML*.
 
-![A Typst conference paper in MDraft, showing source on the left and its compiled two-column PDF in Pages view on the right.](docs/screenshots/typst-ieee-conference-paper.webp)
+![A Typst conference paper in MDraft, showing source on the left and its compiled two-column PDF in Pages view on the right.](site/assets/img/typst-pages.webp)
 
 *Typst Pages view shows the compiled page while you edit its source.*
 
@@ -85,7 +85,7 @@ replace a selection, insert it, or open it in a new tab. You can also edit the
 prompts behind the actions.
 
 <p align="center">
-  <img src="docs/screenshots/builtin-ai-assistant.webp" width="340" alt="The AI Assistant palette, with a search field and actions for translating, converting, expanding and refining text.">
+  <img src="site/assets/img/ai-palette.webp" width="340" alt="The AI Assistant palette, with a search field and actions for translating, converting, expanding and refining text.">
 </p>
 
 Enable and configure it under **Preferences › AI Assistant**. Requests send
@@ -100,7 +100,7 @@ presets or your own combination of fonts. MDraft includes 13 typefaces and lets
 you choose installed fonts for the editor, body, headings and code. Math and
 code can be scaled independently of the surrounding text.
 
-![MDraft in dark mode, with the source and rendered equations of a physics paper shown side by side.](docs/screenshots/math-dark.png)
+![MDraft in dark mode, with the source and rendered equations of a physics paper shown side by side.](site/assets/img/math-dark.webp)
 
 *Dark theme, with mathematics rendered alongside the source.*
 

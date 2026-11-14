@@ -13,7 +13,7 @@
 //! Everything downloaded comes from one base URL, `origin` in `texpresso.json`.
 //! A byte is verified before it is cached and again when it is served; a file
 //! that does not verify is refused by name, never passed through.
-//! Decision: docs/adr/2026-11-13-texpresso-production.md.
+//! Decision: docs/architecture.md.
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};

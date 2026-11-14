@@ -586,7 +586,7 @@ console.log("\n=== word-level sync ===");
 
   // A source double-click is a gesture: its own pane holds still, and the
   // preview may move to bring the word level
-  // (docs/adr/2026-11-13-pointer-gesture-alignment.md). Until that ADR this
+  // (docs/architecture.md). Until that ADR this
   // asserted that the preview did not scroll; `npm run sync` measures how level.
   const beforeSource = await evaluate(`document.querySelector(".cm-scroller").scrollTop`);
   const point = await evaluate(`(() => {

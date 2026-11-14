@@ -7,7 +7,7 @@
 //! Asciidoctor already resolves all of that for the preview, so an export asks
 //! it for the same document as HTML and hands that to pandoc's mature HTML
 //! reader. The route is documented in
-//! `docs/adr/2026-10-19-asciidoc-pandoc-export.md`.
+//! `docs/architecture.md`.
 //!
 //! There is no DOM here on purpose: `scripts/asciidoc-export-unit.mjs` imports
 //! this module under Node, and the preview imports the same loader and include

@@ -415,7 +415,7 @@ const SUITES = [
     safeWithInstalledApp: true,
   },
   {
-    // The production preview (docs/plans/2026-11-13-texpresso-backend.md): its
+    // The production preview (docs/architecture.md): its
     // own frame on `mdraft-tex`, correspondence, its own PDF export, zoom,
     // themes, manual mode, privacy and the switch back. Opt-in because it needs
     // the local origin: `startTexpressoOrigin` serves `MDRAFT_TEXPRESSO_MIRROR`
@@ -464,7 +464,7 @@ const SUITES = [
     doc: "samples/latex-project/main.tex",
     safeWithInstalledApp: true,
   },
-  // The LaTeX live-preview probe of docs/plans/2026-11-12-latex-compile-cost.md:
+  // The LaTeX live-preview probe of docs/architecture.md:
   // one fixture per launch, selected by MDRAFT_LATEX_PERF_FIXTURE. Opt-in: they
   // take minutes, and a host without the engine has nothing to measure. Set
   // MDRAFT_LATEX_PERF_OUT to keep the run JSON outside the staging directory.
@@ -737,7 +737,7 @@ const SUITES = [
     id: "preview-compare",
     title: "Preview latency before/after comparison",
     kind: "cdp",
-    script: "../docs/audits/preview-native-compare.mjs",
+    script: "preview-native-compare.mjs",
     doc: "samples/feature-tour.md",
     optIn: true,
   },
@@ -880,7 +880,7 @@ const SUITES = [
     title: "Math rendering",
     kind: "cdp",
     script: "math-render-check.mjs",
-    doc: "docs/samples/physrevb_70_035307.md",
+    doc: "samples/math-render.md",
   },
   {
     id: "syntax",
@@ -1920,7 +1920,7 @@ async function launchApp(
 }
 
 /**
- * The local TeXpresso origin (docs/plans/2026-11-13-texpresso-backend.md).
+ * The local TeXpresso origin (docs/architecture.md).
  *
  * `scripts/texpresso-origin-server.mjs` serves `MDRAFT_TEXPRESSO_MIRROR` at the
  * pinned snapshot prefix and `MDRAFT_TEXPRESSO_ENGINE` at `/engine/`, exactly

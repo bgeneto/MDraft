@@ -418,7 +418,7 @@ console.log("\n=== real input ===");
       painted === "sanciona",
       `${painted} in ${elapsed} ms`,
     );
-    // docs/adr/2026-11-13-pointer-gesture-alignment.md: the gesture's own pane
+    // docs/architecture.md: the gesture's own pane
     // holds still, and the other pane brings the same word to the same height.
     // Until that ADR this check was "does not scroll when the word is visible".
     check("a double-click never scrolls the preview", before.preview === after.preview);

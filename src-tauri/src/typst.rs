@@ -893,7 +893,7 @@ fn run_typst_with_deps(opts: CliRunOptions<'_>) -> Result<(bool, String, Vec<Typ
     // the wrong folder ("path would escape the project root"). Then the saved
     // file itself is compiled when the buffer matches it, and only an unsaved
     // buffer goes through a hidden sibling file, removed afterwards
-    // (docs/adr/2026-11-13-typst-widened-root.md).
+    // (docs/architecture.md).
     let widened = opts
         .main_file
         .filter(|file| file.parent().is_some_and(|dir| dir != opts.root));

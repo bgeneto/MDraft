@@ -4,7 +4,6 @@
 //
 //   node scripts/format-document-test.mjs [port]
 //   node scripts/format-document-test.mjs --unit   (math regressions, no app)
-// Add --without-optional-corpus to exercise the recorded inventory fallback.
 //
 // The suite works on temporary copies of the fixtures, never on the repository's
 // own files: it saves after formatting and after undo so the comparison is the
@@ -30,18 +29,12 @@ import katex from "katex";
 import { formatDocument } from "../src/format/formatters.ts";
 import { analyzeMath } from "../src/math-delimiters.ts";
 
-const physicsPath = new URL("../docs/samples/physrevb_70_035307.md", import.meta.url);
+const physicsPath = new URL("../samples/math-render.md", import.meta.url);
 const recordedMath = JSON.parse(
   readFileSync(new URL("./fixtures/math-inventory.json", import.meta.url), "utf8"),
-)["docs/samples/physrevb_70_035307.md"].entries;
-// The paper is an ignored local file. A checkout without it still exercises
-// every recorded formula, rather than silently skipping the regression.
-const physicsSource =
-  !process.argv.includes("--without-optional-corpus") && existsSync(physicsPath)
-    ? readFileSync(physicsPath, "utf8")
-    : recordedMath
-        .map(({ body, display }) => (display ? `$$\n${body}\n$$` : `$${body}$`))
-        .join("\n\n");
+)["samples/math-render.md"].entries;
+// This corpus is public and synthetic; a missing fixture is a test failure.
+const physicsSource = readFileSync(physicsPath, "utf8").replace(/\r\n/g, "\n");
 
 function rawMath(source) {
   return analyzeMath(source).math.map(({ from, to }) => source.slice(from, to));
@@ -167,15 +160,15 @@ async function mathFormattingChecks() {
   const formattedPhysics = await formatDocument(physicsSource, "markdown");
   assert(
     JSON.stringify(rawMath(formattedPhysics)) === JSON.stringify(rawMath(physicsSource)),
-    "the complete physics corpus preserves every math source byte",
+    "the complete synthetic corpus preserves every math source byte",
   );
   assert(
     mathErrors(formattedPhysics) === mathErrors(physicsSource),
-    "formatting adds no KaTeX errors to the physics corpus",
+    "formatting adds no KaTeX errors to the synthetic corpus",
   );
   assert(
     (await formatDocument(formattedPhysics, "markdown")) === formattedPhysics,
-    "the complete physics corpus is stable on a second format",
+    "the complete synthetic corpus is stable on a second format",
   );
   return results;
 }

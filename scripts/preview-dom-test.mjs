@@ -244,15 +244,15 @@ try {
       const from=source.indexOf(needle);
       return from<0?null:sourceMap.rangesForSource(map,from,from+needle.length).map(r=>r.toString());
     };
-    const markup=source.indexOf('<div style="text-align: center;"><img src="SEI_');
+    const markup=source.indexOf('<div style="text-align: center;"><img src="html-tour/');
     return {
       linesMapped:result.linesMapped,
       anchors:host.querySelectorAll(':scope > [data-line]').length,
       children:host.children.length,
-      table:previewWord('Modalidade'),
-      div:previewWord('sei!'),
-      sourceTable:sourceRanges('Modalidade'),
-      sourceDiv:sourceRanges('sei!'),
+      table:previewWord('Calibration'),
+      div:previewWord('signal!'),
+      sourceTable:sourceRanges('Calibration'),
+      sourceDiv:sourceRanges('signal!'),
       sourceMarkup:markup<0?null:sourceMap.rangesForSource(map,markup,markup+80).map(r=>r.toString()),
     };
   })()`);
@@ -267,18 +267,18 @@ try {
   );
   check(
     "a raw HTML table cell maps preview to source",
-    rawSync.table === "Modalidade",
+    rawSync.table === "Calibration",
     String(rawSync.table),
   );
-  check("Markdown inside a raw HTML div maps preview to source", rawSync.div === "sei!");
+  check("Markdown inside a raw HTML div maps preview to source", rawSync.div === "signal!");
   check(
     "a raw HTML table cell maps source to preview",
-    JSON.stringify(rawSync.sourceTable) === JSON.stringify(["Modalidade"]),
+    JSON.stringify(rawSync.sourceTable) === JSON.stringify(["Calibration"]),
     JSON.stringify(rawSync.sourceTable),
   );
   check(
     "Markdown inside a raw HTML div maps source to preview",
-    JSON.stringify(rawSync.sourceDiv) === JSON.stringify(["sei!"]),
+    JSON.stringify(rawSync.sourceDiv) === JSON.stringify(["signal!"]),
     JSON.stringify(rawSync.sourceDiv),
   );
   check(

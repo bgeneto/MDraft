@@ -9,13 +9,10 @@ one.
 Open an issue before working on a refactor, an architectural change, a public
 command or settings-schema change, a new dependency, or anything that is hard
 to undo. [AGENTS.md](AGENTS.md) records the project's governance and the
-working rules; the detail behind each of its headings lives in
-[docs/agent-guide/](docs/agent-guide/) — the
-[workflow](docs/agent-guide/workflow.md), [architecture](docs/agent-guide/architecture.md),
-[development](docs/agent-guide/development.md), [testing](docs/agent-guide/testing.md)
-and [release](docs/agent-guide/releasing.md) guides, the
-[script catalogs](docs/agent-guide/scripts.md) and the
-[trap record](docs/agent-guide/traps.md).
+working rules. [docs/architecture.md](docs/architecture.md) explains the public
+architecture and [scripts/README.md](scripts/README.md) lists the commands.
+Owner plans, ADRs, audits and detailed research are maintained in separate private
+storage; contributors do not need that storage to build or test.
 
 For a focused bug, a typo, a CSS fix or a documentation correction, just make
 the change.
@@ -78,7 +75,7 @@ npm run dist           # build, bundle and stage into bin/<os>/<arch>/
 ```
 
 `npm test` takes a while. `--only`, `--skip` and `--no-build` narrow a run; see
-the command's help or [the testing guide](docs/agent-guide/testing.md) for the
+the command's help or [the script catalog](scripts/README.md) for the
 layers and their fixtures.
 The CDP-driven UI suites are Windows/WebView2 only; on Linux, `cargo test` plus
 a manual launch are the automated coverage. Close a running copy of the
@@ -103,8 +100,9 @@ frontend when Node is available, and stages the `.deb` and AppImage.
 When changing the UI, capture a new screenshot rather than describing it in the
 abstract. On Windows, `scripts/screenshot.mjs` drives a running window over the
 WebView2 DevTools protocol; the Linux WebKitGTK build has no CDP endpoint. The
-README images are in `docs/screenshots/`; the landing page uses optimized copies
-under `site/assets/img/`.
+README and landing-page images share reviewed canonical files under
+`site/assets/img/`. Raw captures and personal/manual samples belong outside this
+checkout; capture scripts default to the operating system temporary directory.
 
 ## Pull requests
 
@@ -115,7 +113,23 @@ under `site/assets/img/`.
   `npm run test:rust` is the first stop.
 - Update the affected documentation in the same change.
 - Do not commit `bin/`, `dist/`, `node_modules/` or captures from
-  `docs/screenshots/` that the README does not use.
+  a private record folder or captures that are not in the public asset inventory.
+
+## Publication checks
+
+Install the local safeguards once with `npm run security:hooks`. Stage the intended
+files, then run `npm run repo:hygiene` and `npm run security:scan`. The checks read
+the Git index and reject forced additions too. Pre-push checks every outgoing ref,
+including its reachable history. The pinned scanner downloads only when this
+explicit development command first needs it and verifies its SHA-256 on every run.
+
+Only reviewed fixtures, documentation and images belong in
+`scripts/fixtures/public-assets.json`; each entry states its purpose. Ignore rules
+are an accident-prevention aid, not access control. Do not put personal documents,
+private plans/audits, credentials, app state or source captures in this checkout.
+CI checks can report a bad push after it reaches GitHub; local scanning and
+GitHub push protection provide the preventive checks. Never bypass a failed check
+without owner review. History cleanup needs separately reviewed ref operations.
 
 ## License
 

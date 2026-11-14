@@ -119,7 +119,14 @@
     "site:images:check": "python scripts/optimize-site-images.py --check",
     "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml",
     "test": "node scripts/test-all.mjs",
-    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml"
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "repo:hygiene": "node scripts/repo-hygiene.mjs",
+    "repo:hygiene:history": "node scripts/repo-hygiene.mjs --history",
+    "repo:hygiene:test": "node scripts/repo-hygiene-test.mjs",
+    "security:scan": "node scripts/security-scan.mjs --staged",
+    "security:history": "node scripts/security-scan.mjs --history",
+    "security:self-test": "node scripts/security-scan.mjs --self-test",
+    "security:hooks": "node scripts/install-security-hooks.mjs"
   },
   "dependencies": {
     "@asciidoctor/core": "4.2.1",

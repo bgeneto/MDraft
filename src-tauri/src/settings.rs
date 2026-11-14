@@ -367,7 +367,7 @@ pub struct FolderMainDocument {
 pub const MAX_MAIN_DOCUMENTS: usize = 50;
 
 /// One LaTeX project's bundled engine, chosen from the status-bar engine chip
-/// (stage 6.2 of docs/plans/2026-11-12-latex-compile-cost.md). Keyed by the
+/// (stage 6.2 of docs/architecture.md). Keyed by the
 /// main document, so two projects in one workspace keep their own engines.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -536,7 +536,7 @@ pub struct Settings {
     #[serde(default)]
     pub favorites: Vec<String>,
     /// The folder the Explorer lists (Track W). A view and a default, never a
-    /// permission: see docs/adr/2026-11-12-workspace-boundary.md. A missing
+    /// permission: see docs/architecture.md. A missing
     /// folder is reported by the Explorer, not cleared silently.
     #[serde(default)]
     pub workspace_folder: Option<String>,

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Resize and encode the landing-page screenshots as WebP.
 
-`docs/screenshots/` is the source of truth. This script is run by hand when a
-capture changes; the site build and CI only verify the committed results, so
-they never need Pillow.
+Reviewed outputs in `site/assets/img/` are the public source of truth. Original
+captures live outside this checkout. Writing requires an explicit --source
+directory (or MDRAFT_CAPTURE_DIR) and Pillow; checking needs only Python.
 
     python scripts/optimize-site-images.py --write
     python scripts/optimize-site-images.py --check
@@ -15,20 +15,29 @@ WebP, has the wrong dimensions, or was upscaled from its source.
 from __future__ import annotations
 
 import argparse
+import os
+import struct
 import sys
 from pathlib import Path
 
-try:
-    from PIL import Image
-except ImportError:  # pragma: no cover - the message is the point
-    sys.exit(
-        "Pillow is required only for this script. Install it with:\n"
-        "    python -m pip install pillow"
-    )
+Image = None
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE = ROOT / "docs" / "screenshots"
+SOURCE = None
 OUTPUT = ROOT / "site" / "assets" / "img"
+EXPECTED_SIZES = {
+    "scroll-sync.webp": (1800, 1033),
+    "sync-source.webp": (920, 420),
+    "sync-preview.webp": (1020, 360),
+    "ai-palette.webp": (567, 946),
+    "typst-pages.webp": (2000, 867),
+    "html-editor.webp": (1800, 985),
+    "typography-presets.webp": (1500, 1160),
+    "typography-settings.webp": (1400, 1412),
+    "math-light.webp": (1400, 902),
+    "math-dark.webp": (1400, 902),
+    "statusbar-tokens.webp": (446, 46),
+}
 
 # width: target width in pixels. None keeps the native size. crop: left, top,
 # right, bottom in source pixels, applied before any resize. quality: WebP
@@ -157,33 +166,66 @@ def check(entry: dict) -> tuple[bool, str]:
     output_path = OUTPUT / entry["output"]
     if not output_path.exists():
         return False, f"missing output: {output_path}"
-    source_path = SOURCE / entry["source"]
-    if not source_path.exists():
-        return False, f"missing source: {source_path}"
-
-    with Image.open(source_path) as opened:
-        source = opened.convert("RGB")
-        cropped = source.crop(entry["crop"]) if entry.get("crop") else source
-        expected = expected_size(source, entry)
-        source_width = cropped.width
-
-    with Image.open(output_path) as image:
-        if image.format != "WEBP":
-            return False, f"{output_path.name}: format is {image.format}, not WEBP"
-        if image.size != expected:
-            return False, f"{output_path.name}: {image.size} != expected {expected}"
-
-    if entry.get("width") and entry["width"] > source_width:
-        return False, f"{output_path.name}: target is wider than the source"
+    data = output_path.read_bytes()
+    if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WEBP":
+        return False, f"{output_path.name}: not a WebP container"
+    if struct.unpack_from("<I", data, 4)[0] + 8 != len(data):
+        return False, f"{output_path.name}: incomplete WebP container"
+    size = None
+    offset = 12
+    while offset < len(data):
+        if offset + 8 > len(data):
+            return False, f"{output_path.name}: truncated chunk header"
+        kind = data[offset : offset + 4]
+        length = struct.unpack_from("<I", data, offset + 4)[0]
+        chunk = data[offset + 8 : offset + 8 + length]
+        if len(chunk) != length:
+            return False, f"{output_path.name}: truncated chunk"
+        if kind in (b"EXIF", b"XMP "):
+            return False, f"{output_path.name}: remove publication metadata"
+        if kind == b"VP8X" and length >= 10:
+            size = (int.from_bytes(chunk[4:7], "little") + 1, int.from_bytes(chunk[7:10], "little") + 1)
+        elif kind == b"VP8 " and length >= 10 and chunk[3:6] == b"\x9d\x01\x2a":
+            size = (int.from_bytes(chunk[6:8], "little") & 0x3FFF, int.from_bytes(chunk[8:10], "little") & 0x3FFF)
+        elif kind == b"VP8L" and length >= 5 and chunk[0] == 0x2F:
+            packed = int.from_bytes(chunk[1:5], "little")
+            size = ((packed & 0x3FFF) + 1, ((packed >> 14) & 0x3FFF) + 1)
+        offset += 8 + length + (length & 1)
+    expected = EXPECTED_SIZES[entry["output"]]
+    if offset != len(data) or size != expected:
+        return False, f"{output_path.name}: {size} != expected {expected}"
+    if SOURCE is not None:
+        source_path = SOURCE / entry["source"]
+        if not source_path.is_file():
+            return False, f"missing private original: {entry['source']}"
+        with Image.open(source_path) as opened:
+            source = opened.convert("RGB")
+            if expected_size(source, entry) != expected:
+                return False, f"{output_path.name}: original requires an inventory size update"
+            width = source.crop(entry["crop"]).width if entry.get("crop") else source.width
+            if entry.get("width") and entry["width"] > width:
+                return False, f"{output_path.name}: target is wider than the original"
     return True, f"{output_path.name}: {output_path.stat().st_size:,} bytes"
 
 
 def main() -> int:
+    global SOURCE, Image
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--write", action="store_true", help="regenerate every WebP")
     group.add_argument("--check", action="store_true", help="verify committed WebP files")
+    parser.add_argument("--source", type=Path, default=os.environ.get("MDRAFT_CAPTURE_DIR"), help="optional private original-capture directory")
     args = parser.parse_args()
+
+    SOURCE = Path(args.source).resolve() if args.source else None
+    if args.write and SOURCE is None:
+        parser.error("--write needs --source or MDRAFT_CAPTURE_DIR; raw captures belong outside this checkout")
+    if args.write or SOURCE is not None:
+        try:
+            from PIL import Image as PillowImage
+        except ImportError:
+            parser.error("Pillow is required only for writing or comparing private originals")
+        Image = PillowImage
 
     if args.write:
         total_before = total_after = 0

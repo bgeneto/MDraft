@@ -1,5 +1,5 @@
 // The TeXpresso backend's pure half (step 11 of
-// docs/plans/2026-11-13-texpresso-backend.md).
+// docs/architecture.md).
 //
 //   node scripts/texpresso-unit.mjs
 //
@@ -247,7 +247,7 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
 // --- no host of TeXpresso's own -----------------------------------------------
 {
   const offenders = [];
-  const allowed = new Set(["docs/plans/2026-11-13-texpresso-backend.md"]);
+  const allowed = new Set(["docs/architecture.md"]);
   // Built from parts: this file is one of the shipped scripts the check scans,
   // and a literal host in its source would make it report itself.
   const HOST = ["texpresso", "app"].join("\\.");

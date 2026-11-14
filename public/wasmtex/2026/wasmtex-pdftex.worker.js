@@ -3,12 +3,12 @@ const __mdraftBase =
     ? "mdraft-tex://localhost/"
     : `${self.location.protocol}//mdraft-tex.localhost/`;
 // The year is the folder this script was loaded from, so every profile's folder holds
-// the same file (docs/adr/2026-11-12-engine-profile-config.md).
+// the same file (docs/architecture.md).
 const __mdraftYear = /\/wasmtex\/(\d{4})\//.exec(self.location.pathname)?.[1];
 if (!__mdraftYear)
   throw new Error("The LaTeX worker cannot read its TeX Live year from " + self.location.href);
 const __mdraftRoot = new URL(`wasmtex/${__mdraftYear}/`, __mdraftBase).href;
-// pdfLaTeX (stage 6.2 of docs/plans/2026-11-12-latex-compile-cost.md), loaded the same
+// pdfLaTeX (stage 6.2 of docs/architecture.md), loaded the same
 // way as the Lua engine shim beside it.
 const __mdraftCheckpoint = (() => {
   try {
@@ -36,7 +36,7 @@ self.importScripts = (...urls) =>
   __mdraftImport(...urls.map((url) => new URL(url, __mdraftRoot).href));
 self.importScripts("wasmtex-pdftex.worker.js");
 
-// Local TEXMF libraries (docs/adr/2026-11-10-local-texmf-libraries.md). The host
+// Local TEXMF libraries (docs/architecture.md). The host
 // passes each captured library tree through the SDK's public `files` option as
 // /work/.mdraft-texmf/<n>/<TDS path>, plus a versioned manifest. kpathsea searches
 // MEMFS directories before the worker's mirror resolver, so a private name never

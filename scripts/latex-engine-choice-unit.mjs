@@ -1,5 +1,5 @@
 //! Stage 6.2: which bundled engine compiles a project, and why
-//! (docs/plans/2026-11-12-latex-compile-cost.md). App-free; Node 24 strips the types.
+//! (docs/architecture.md). App-free; Node 24 strips the types.
 import assert from "node:assert/strict";
 import {
   detectTexEngine,

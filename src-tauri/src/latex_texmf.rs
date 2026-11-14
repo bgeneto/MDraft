@@ -7,7 +7,7 @@
 //! immutable, content-addressed snapshot per compile. Both backends consume that
 //! snapshot — the bundled engine through MEMFS, an installed engine through a
 //! private staging directory — so neither ever reads the reader's tree while a
-//! compile runs. See docs/adr/2026-11-10-local-texmf-libraries.md.
+//! compile runs. See docs/architecture.md.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;

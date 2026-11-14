@@ -1,5 +1,5 @@
 // Measure the LaTeX live preview in the running application (Phase 0 of
-// docs/plans/2026-11-12-latex-compile-cost.md).
+// docs/architecture.md).
 //
 //   node scripts/latex-performance-test.mjs <port>
 //

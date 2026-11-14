@@ -1,6 +1,6 @@
 //! Main-document resolution for multi-file LaTeX projects (GAP-034).
 //!
-//! Rules 1, 3 and 5 of docs/plans/2026-11-12-latex-compile-cost.md: a
+//! Rules 1, 3 and 5 of docs/architecture.md: a
 //! `% !TeX root` magic comment names the main file; otherwise a file with its
 //! own `\documentclass` is a main file; otherwise the previously pinned project
 //! root is kept, and failing that the reader is told how to name one. Rules 2

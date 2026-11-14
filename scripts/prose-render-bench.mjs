@@ -279,7 +279,7 @@ function buildLargeAsciidoc(paragraphs = 2050) {
 
 async function createCorpus() {
   const samplesDir = path.join(REPO_ROOT, "samples");
-  const physrevPath = path.join(REPO_ROOT, "docs", "samples", "physrevb_70_035307.md");
+  const physrevPath = path.join(samplesDir, "math-render.md");
   const tourPath = path.join(samplesDir, "asciidoc-tour.adoc");
   const includeSamplePath = path.join(samplesDir, "asciidoc-include.adoc");
 
@@ -359,7 +359,7 @@ async function createCorpus() {
       kind: "markdown",
       source: physrevText,
       sourcePath: path.relative(REPO_ROOT, physrevPath).replace(/\\/g, "/"),
-      description: "docs/samples/physrevb_70_035307.md (~44.5 KB, ~300 eqs, raw HTML)",
+      description: "samples/math-render.md (292 synthetic equations and raw HTML)",
     },
     {
       id: "md-plain-prose",

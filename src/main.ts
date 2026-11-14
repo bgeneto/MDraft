@@ -632,7 +632,7 @@ const SYNC_MARGIN = 12;
  * The sync line as a pair of heights: content at `source` in the editor
  * corresponds to content at `preview` in the preview. Level at SYNC_MARGIN until
  * a pointer gesture calibrates it; see
- * docs/adr/2026-11-13-pointer-gesture-alignment.md. Any code that needs "the
+ * docs/architecture.md. Any code that needs "the
  * sync height" reads it through scrollReference(), never SYNC_MARGIN: a fixed
  * margin in the sync path is what makes the panes jump after a click.
  */
@@ -2173,7 +2173,7 @@ function renderDelay(): number {
   // LaTeX used a fixed 800 ms before the engine was kept warm and compiles
   // stopped being cancelled by typing. Now the compile starts on the first
   // pause longer than this reader's rhythm (60-200 ms), and continuous typing
-  // still compiles once every 1.5 s (docs/plans/2026-11-12-latex-compile-cost.md,
+  // still compiles once every 1.5 s (docs/architecture.md,
   // stage 1.5). Latest-wins keeps at most one compile running.
   // The frame follows every keystroke; the shadow compile waits for a pause.
   if (doc.language === "latex" && texpressoShowing()) return LATEX_SHADOW_IDLE_MS;
@@ -2881,7 +2881,7 @@ function scheduleReanchor(): void {
 }
 
 /**
- * Re-anchoring (stage 3.4 of docs/plans/2026-11-12-latex-compile-cost.md).
+ * Re-anchoring (stage 3.4 of docs/architecture.md).
  *
  * The warm engine resumes from heap checkpoints and keeps auxiliary files, so
  * its output is periodically compared, page text by page text, with a fresh
@@ -2966,7 +2966,7 @@ function latexBusy(): boolean {
  * Whether a finished result may be put on screen: it is current, or it is
  * newer than what is shown and still describes this document's project
  * (the same tab, an open root, no session rewound or renamed). See the result
- * router in docs/plans/2026-11-12-latex-compile-cost.md.
+ * router in docs/architecture.md.
  */
 function latexDisplayable(value: LatexPreview): boolean {
   // Through a plain boolean: the type guard would narrow `value` to never below.
@@ -4162,8 +4162,7 @@ interface LatexBuildRequest {
 
 /**
  * The shared prefix of every LaTeX build: engine status, main-document rules
- * 1–5 with the navigation pin, and the engine choice (docs/plans/
- * 2026-11-13-texpresso-backend.md, step 5). Both preview backends start here,
+ * 1–5 with the navigation pin, and the engine choice (docs/architecture.md, step 5). Both preview backends start here,
  * so a chapter tab resolves to the same main document whichever one draws it.
  *
  * Returns null when the build ends here: a failure this function reported, or
@@ -4343,7 +4342,7 @@ async function resolveLatexBuild(
   };
 }
 
-/* ---------- Incremental preview (docs/plans/2026-11-13-texpresso-backend.md) ---------- */
+/* ---------- Incremental preview (docs/architecture.md) ---------- */
 //
 // The frame draws the document and its own `xdvipdfmx` export produces the PDF
 // that export, print, the menu state and the authoritative Problems list read.
@@ -7926,7 +7925,7 @@ async function printCurrentDocument(): Promise<void> {
 
   // LaTeX prints the PDF its own compiler produced, never a re-render: a second
   // layout of the same document would contradict the preview beside it. See
-  // `docs/adr/2026-11-06-print-the-compiled-pdf.md`.
+  // `docs/architecture.md`.
   //
   // A stale preview is refused for the same reason `Export › PDF` refuses it, and
   // Print never starts a compile of its own — a multi-second LuaLaTeX run behind
@@ -9638,7 +9637,7 @@ function blinkAnchor(line: number): void {
 // The block anchors say *which block*; this says which characters. The map is
 // built by the renderer and bound after every render, so it always describes the
 // DOM that is on screen. Painting never mutates the DOM and never takes the
-// selection — see docs/adr/2026-10-18-word-level-sync.md.
+// selection — see docs/architecture.md.
 // ---------------------------------------------------------------------------
 
 interface HighlightRegistryLike {
@@ -10672,7 +10671,7 @@ function alignPagesScroll(direction: SyncPane, refined = false): void {
 // in the other pane to the same height, and then tells scroll sync where the two
 // rows ended up, so the next wheel tick continues from there. The pane the
 // gesture happened in is never scrolled. Two earlier attempts at moving a pane on
-// a click were reverted; docs/adr/2026-11-13-pointer-gesture-alignment.md records
+// a click were reverted; docs/architecture.md records
 // why this one is different, and the rule a new call site has to keep.
 // ---------------------------------------------------------------------------
 

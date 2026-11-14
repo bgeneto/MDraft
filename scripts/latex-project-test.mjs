@@ -174,7 +174,7 @@ try {
     return r ? {x:r.left,y:(r.top+r.bottom)/2} : null;
   })()`);
   // A source click marks its counterpart and may bring it level; what it never
-  // does is scroll the source (docs/adr/2026-11-13-pointer-gesture-alignment.md).
+  // does is scroll the source (docs/architecture.md).
   // Until that ADR this asserted that the preview did not scroll.
   const sourceScroll = await evaluate('document.querySelector(".cm-scroller").scrollTop');
   if (sourcePoint) {

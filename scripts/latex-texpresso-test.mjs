@@ -1,5 +1,5 @@
 // The TeXpresso preview backend, through the real application (step 11 of
-// docs/plans/2026-11-13-texpresso-backend.md).
+// docs/architecture.md).
 //
 //   node scripts/latex-texpresso-test.mjs <port>
 //
@@ -550,7 +550,7 @@ try {
       "a click in the preview does not move the caret",
       `${caretBefore.head} -> ${afterClick.head}`,
     );
-    // Gesture alignment (docs/adr/2026-11-13-pointer-gesture-alignment.md): the
+    // Gesture alignment (docs/architecture.md): the
     // clicked line's source comes to the clicked height. The engine's map is by
     // line, so the bound is one source row, not a pixel; at the start or end of
     // the editor's range the row only has to be in view.

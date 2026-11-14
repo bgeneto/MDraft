@@ -4,12 +4,14 @@
 //
 // Checks font loading, then the geometry that collapses when KaTeX's stylesheet
 // is absent: fraction bars, radicals and large delimiters.
-import { writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import katex from "katex";
 
 const baseline = JSON.parse(
   readFileSync(new URL("./fixtures/math-inventory.json", import.meta.url), "utf8"),
-)["docs/samples/physrevb_70_035307.md"].entries;
+)["samples/math-render.md"].entries;
 
 const PORT = Number(process.argv[2] ?? 9222);
 const list = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
@@ -221,8 +223,9 @@ const shoot = async (mode, file) => {
   console.log(`wrote ${file}`);
 };
 
-await shoot("dark", "docs/screenshots/math-dark.png");
-await shoot("light", "docs/screenshots/math-light.png");
+const captures = mkdtempSync(join(tmpdir(), "mdraft-math-captures-"));
+await shoot("dark", join(captures, "math-dark.png"));
+await shoot("light", join(captures, "math-light.png"));
 await evaluate(setTheme("system"));
 
 if (exceptions.length) {

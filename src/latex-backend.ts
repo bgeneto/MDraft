@@ -2,7 +2,7 @@
 //!
 //! TeXpresso is the production backend: it typesets incrementally into a frame
 //! of its own and its own exporter writes the PDF that export and print use.
-//! WasmTex is disabled, not deleted (docs/adr/2026-11-13-texpresso-production.md):
+//! WasmTex is disabled, not deleted (docs/architecture.md):
 //! its code and the hidden `view.latexBackend.wasmtex` test hook remain, but no
 //! install flow, default or reader-facing control selects it.
 //!

@@ -1,5 +1,5 @@
 // Per-project TeX engine in the running application (stage 6.2 of
-// docs/plans/2026-11-12-latex-compile-cost.md).
+// docs/architecture.md).
 //
 //   node scripts/latex-engine-choice-test.mjs <port>
 //

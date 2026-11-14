@@ -3,7 +3,7 @@
 // MDraft owns the editor, the project and every decision; this frame owns the
 // engine, its page canvases and the hidden TeXpresso editor that holds the
 // engine's source map. The host side and the message types are
-// src/texpresso/protocol.ts; the plan is docs/plans/2026-11-13-texpresso-backend.md.
+// src/texpresso/protocol.ts; the plan is docs/architecture.md.
 //
 // Only members of `window.texpresso` are used, never a minified name. The one
 // exception the page itself offers is the DOM the app renders into: `#pages`,

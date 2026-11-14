@@ -1,6 +1,6 @@
 //! Pure scheduling primitives for the LaTeX live preview.
 //!
-//! docs/adr/2026-11-12-latex-engine-lifetime.md: a running compile is never
+//! docs/architecture.md: a running compile is never
 //! aborted because the reader typed, since aborting means disposing the warm
 //! engine. The newest revision runs next and every revision in between is
 //! skipped. These pieces have no DOM and no engine, so

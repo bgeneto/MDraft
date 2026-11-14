@@ -342,7 +342,7 @@ export class TypstPdfPreview {
    * map starts when every page has its lines. Building every text layer up
    * front made the viewer's cost grow with the page count on every update:
    * 0.55-0.63 s at 105 pages in the Phase 0 baseline of
-   * docs/plans/2026-11-12-latex-compile-cost.md.
+   * docs/architecture.md.
    */
   private retainTask(task: PDFDocumentLoadingTask): void {
     this.taskRefs.set(task, (this.taskRefs.get(task) ?? 0) + 1);

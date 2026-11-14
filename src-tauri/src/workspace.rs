@@ -1,8 +1,8 @@
 //! The workspace folder behind the Explorer (Track W of
-//! docs/plans/2026-11-12-latex-compile-cost.md, GAP-006 slice 1).
+//! docs/architecture.md, GAP-006 slice 1).
 //!
 //! A workspace is a view and a default, never a permission
-//! (docs/adr/2026-11-12-workspace-boundary.md): these commands only *list*
+//! (docs/architecture.md): these commands only *list*
 //! directories, one level at a time, inside the folder the reader chose. They
 //! never read file contents, never follow a symlink, never write, and refuse a
 //! path that resolves outside the root. Opening a listed file goes through the

@@ -2,7 +2,7 @@
 //
 //   node scripts/latex-scheduler-unit.mjs
 //
-// Pins the contract of docs/adr/2026-11-12-latex-engine-lifetime.md: a running
+// Pins the contract of docs/architecture.md: a running
 // job is never aborted, the newest waiting revision replaces older waiters,
 // the interactive delay follows the reader's rhythm within its bounds, and the
 // staleness cap fires during continuous typing. Also pins the main-document

@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+node scripts/repo-hygiene.mjs
+node scripts/security-scan.mjs --staged

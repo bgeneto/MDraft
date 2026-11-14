@@ -1,6 +1,6 @@
 //! Optional companion Incremental Typst Compiler Service supervisor.
 //!
-//! Architecture & rationale: [`docs/adr/2026-11-13-typst-incremental-service.md`].
+//! Architecture & rationale: [`docs/architecture.md`].
 //!
 //! - Zero start-up network activity: reads an embedded pinned manifest
 //!   (`typst-service.json`), installs into `<app_data_dir>/typst/service/<version>/`

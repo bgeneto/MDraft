@@ -9,7 +9,7 @@
 //! The alternative, `codemirror-lang-latex`, is a real Lezer grammar and its
 //! AGPL licence is acceptable to this project; it was not taken because it costs
 //! about 60 KB gzip for the parser and its tables, against 3 KB here for the
-//! colouring this editor needs. See `docs/plans/2026-11-06-command-completion.md`
+//! colouring this editor needs. See `docs/architecture.md`
 //! for the measurement. A Lezer grammar remains the right answer if folding or
 //! structural context detection is ever wanted, and the cost is the number to
 //! beat.

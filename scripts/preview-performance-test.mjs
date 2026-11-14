@@ -14,7 +14,7 @@ import path from "node:path";
 import {
   installGroupPrototype,
   installGroupedChunksPrototype,
-} from "../docs/audits/preview-group-prototype.mjs";
+} from "./preview-group-prototype.mjs";
 
 const cliArgs = process.argv.slice(2);
 const port = cliArgs.find((arg) => !arg.startsWith("--")) ?? "9222";

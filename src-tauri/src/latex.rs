@@ -72,7 +72,7 @@ fn cache_limit_bytes() -> u64 {
 
 // The engine's TeX Live year, release, package mirror and pinned digests live in
 // `src-tauri/latex-engine.json`; its `active` line switches the year
-// (docs/adr/2026-11-12-engine-profile-config.md). The engine, its format, the worker
+// (docs/architecture.md). The engine, its format, the worker
 // shims in `public/wasmtex/<year>/`, the SDK year in `src/latex-engine.ts` and the
 // package mirror must all name the same year and snapshot, and the `mdraft-tex` URL
 // carries no year the SDK could check, so everything below is derived from that file
@@ -94,7 +94,7 @@ struct EngineProfile {
     /// bytes in another revision, so a flat cache would mix years.
     mirror_revision: String,
     assets: Vec<EngineAsset>,
-    /// Optional engines (stage 6.2 of docs/plans/2026-11-12-latex-compile-cost.md):
+    /// Optional engines (stage 6.2 of docs/architecture.md):
     /// "pdftex" and "xetex" asset groups, downloaded only when a project chooses
     /// that engine. They never decide whether the default engine is installed.
     #[serde(default)]
@@ -1736,7 +1736,7 @@ pub async fn save_compiled_pdf(output_path: String, data: String) -> Result<(), 
 /// to a temporary file and the viewer is asked to open it.
 ///
 /// This prints **the compiled PDF**, never a re-render — see
-/// `docs/adr/2026-11-06-print-the-compiled-pdf.md`. A second layout of the same
+/// `docs/architecture.md`. A second layout of the same
 /// document would contradict the preview sitting beside it.
 #[tauri::command]
 pub async fn print_compiled_pdf<R: tauri::Runtime>(

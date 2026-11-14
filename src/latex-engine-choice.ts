@@ -1,6 +1,6 @@
 /**
  * Which bundled TeX engine compiles a LaTeX project (stage 6.2 of
- * docs/plans/2026-11-12-latex-compile-cost.md, ADR 2026-11-13-per-project-tex-engine).
+ * docs/architecture.md, ADR 2026-11-13-per-project-tex-engine).
  *
  * The engine is a visible choice, never a silent switch. The first rule that
  * applies wins:

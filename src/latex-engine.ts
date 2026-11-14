@@ -1,7 +1,7 @@
 //! The bundled engine's TeX Live year, read from the same file the backend reads.
 //!
 //! `src-tauri/latex-engine.json` names the active year and one profile per year; its
-//! `active` line is the whole switch (docs/adr/2026-11-12-engine-profile-config.md).
+//! `active` line is the whole switch (docs/architecture.md).
 //! Rust derives the asset root, the mirror and the digests from it, and the worker
 //! shims in `public/wasmtex/<year>/` read their year from their own URL, so this
 //! module only has to hand the SDK the year and the reader the size of the download.

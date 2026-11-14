@@ -55,7 +55,7 @@ export const bytesPrint = (data: string): string => `b${data.length}:${textHash(
  * the project's own file. The frame also cannot be told a search path, so it
  * would never find the files under their library names either. The build
  * therefore reports the library by name and draws with WasmTex
- * (docs/plans/2026-11-13-texpresso-backend.md, open question 4).
+ * (docs/architecture.md, open question 4).
  */
 export function prepareProject(
   snapshot: api.LatexProjectSnapshot,

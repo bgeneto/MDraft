@@ -1,5 +1,5 @@
 {
-  "note": "Where the production LaTeX preview downloads from, and the SHA-256 of everything it may download. \"origin\" is the public bucket; MDRAFT_TEXPRESSO_ORIGIN (under the same https-or-loopback rule) points a launch at a local mirror instead. Read only by src-tauri/src/latex_texpresso.rs; checked against an origin by scripts/texpresso-origin-check.mjs. Docs: docs/adr/2026-11-13-texpresso-production.md.",
+  "note": "Where the production LaTeX preview downloads from, and the SHA-256 of everything it may download. \"origin\" is the public bucket; MDRAFT_TEXPRESSO_ORIGIN (under the same https-or-loopback rule) points a launch at a local mirror instead. Read only by src-tauri/src/latex_texpresso.rs; checked against an origin by scripts/texpresso-origin-check.mjs. Docs: docs/architecture.md.",
   "origin": "https://mdraft.webonly.app/",
   "appRelease": "release-0-133-g454f1bc",
   "snapshot": "tt2026-2026-11",
