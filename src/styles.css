@@ -5714,6 +5714,18 @@ label.optional-tools-row:hover {
   border-color: var(--compiled-accent-hover);
   border-left-color: color-mix(in srgb, light-dark(#ffffff, #152338) 45%, transparent);
 }
+/* A running build turns the main half into Cancel and disables the chevron.
+   The generic `button:disabled` opacity would fade only that half, so the split
+   control read as two different fills (two different blues in the light theme,
+   two dark greys in the dark one) and the hairline between them vanished. The
+   halves must stay one control: keep the accent fill at full strength and dim
+   only the glyph, which is the part that says "not available". */
+.compiled-toolbar .compiled-compile-more:disabled {
+  opacity: 1;
+}
+.compiled-toolbar .compiled-compile-more:disabled .compiled-icon {
+  opacity: 0.5;
+}
 .compiled-compile-more .compiled-button-label {
   display: none;
 }
