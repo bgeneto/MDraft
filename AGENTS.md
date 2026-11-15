@@ -5,6 +5,28 @@ no HTTP server or Node runtime in the shipped application. The frontend calls
 Rust filesystem commands through `src/api.ts`. See [architecture](docs/architecture.md),
 [contributing](CONTRIBUTING.md), and the [script catalog](scripts/README.md).
 
+## Branch policy
+
+`master` is protected and read-only for agents. Never edit or commit while
+`master` is checked out. Start every task that changes files from an up-to-date
+`origin/master`:
+
+```powershell
+git fetch origin
+git switch -c <type>/<short-slug> origin/master
+```
+
+Read-only investigation, builds and tests may run on `master`. "Implement
+directly" in this file means implement on a topic branch and open a pull
+request; it never authorises a commit on `master`. A task is not done until the
+work is on its own branch, pushed, and a PR is open (or the owner explicitly
+asked you not to push). If a command fails because `master` is protected, do
+not retry, force, or bypass it: move the changes to a new branch and continue
+there.
+
+A local `pre-commit` guard and an OpenCode branch-guard plugin enforce this. Do
+not use `--no-verify` or disable either to work around it.
+
 ## Scope and approval
 
 Obtain owner approval of a written plan before refactoring, architectural changes,
@@ -12,7 +34,8 @@ changes spanning more than three files, dependencies, public contracts, or work
 that is hard to undo. Public contracts include Tauri command names/arguments/results,
 API wrappers, existing settings compatibility, document dialects, menu events,
 and accelerator/menu-state payloads. Write no plan for an obvious local fix;
-implement it and run the cheapest meaningful check.
+implement it on a topic branch (see [Branch policy](#branch-policy)) and run the
+cheapest meaningful check.
 
 Owner records live in a separate private checkout. Owner sessions may load
 `AGENTS.md` from `MDRAFT_OWNER_DOCS`, or from the sibling `../MDraft-owner` when
@@ -66,8 +89,10 @@ the literal error and the incorrect conclusion the investigation ruled out.
 
 Before committing, run `npm run repo:hygiene` and `npm run security:scan` on the
 staged index. Install the local hooks with `npm run security:hooks`; pre-push
-checks every outgoing ref and its history. Ignore rules alone do not remove
-tracked files or protect against forced additions. Use NUL-delimited Git I/O.
+checks every outgoing ref and its history. Push only a topic branch and open a
+pull request; the local `pre-commit` guard refuses a commit on `master`. Ignore
+rules alone do not remove tracked files or protect against forced additions.
+Use NUL-delimited Git I/O.
 
 Never commit credentials, environment files, signing keys, app state, generated
 exports/profiles, private records, raw screenshots, or unapproved samples. A

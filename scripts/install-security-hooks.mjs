@@ -13,10 +13,17 @@ const current = spawnSync("git", ["config", "--get", "core.hooksPath"], {
 });
 if (current.error || ![0, 1].includes(current.status))
   throw new Error("Cannot read the existing hook configuration");
-if (current.stdout.trim() && current.stdout.trim() !== ".githooks")
-  throw new Error(
-    "A custom core.hooksPath is already configured; integrate the publication checks there",
+const configured = current.stdout.trim();
+if (configured && configured !== ".githooks") {
+  const resolved = path.resolve(root, configured);
+  if (existsSync(resolved))
+    throw new Error(
+      "A custom core.hooksPath is already configured; integrate the publication checks there",
+    );
+  console.warn(
+    `WARN replacing missing core.hooksPath (${configured}); the previous hook directory no longer exists`,
   );
+}
 for (const name of ["pre-commit", "pre-push"]) {
   const hook = path.join(root, ".githooks", name);
   if (!existsSync(hook)) throw new Error(`Missing checked-in ${name} hook`);

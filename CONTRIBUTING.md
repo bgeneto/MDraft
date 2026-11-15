@@ -15,7 +15,8 @@ Owner plans, ADRs, audits and detailed research are maintained in separate priva
 storage; contributors do not need that storage to build or test.
 
 For a focused bug, a typo, a CSS fix or a documentation correction, just make
-the change.
+the change on a topic branch and open a pull request. `master` is protected;
+direct pushes are rejected.
 
 ## Reporting a problem
 
@@ -106,6 +107,8 @@ checkout; capture scripts default to the operating system temporary directory.
 
 ## Pull requests
 
+- Open the PR from a topic branch, never from `master`; the remote rejects direct
+  pushes to `master`.
 - Keep the change scoped to one problem.
 - Add or update the test that would fail without it.
 - Run the cheapest layer that can catch the mistake. For a UI-only change,
