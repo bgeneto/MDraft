@@ -46,8 +46,8 @@
     },
     {
       "path": "ocaml-worker.js",
-      "bytes": 210530,
-      "sha256": "b15bee9aaba43a4199ded3d15dd88e7a5f447970389b9ae57f7c1a506582c081"
+      "bytes": 210951,
+      "sha256": "64fcf98925b4edb3e5b0f2b29de73506a61efa6b937e8b2f386841f804612db3"
     },
     {
       "path": "dluatex-bin-jspi.js",

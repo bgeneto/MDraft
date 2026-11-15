@@ -301,7 +301,10 @@ engine-specific directories (`tex/lualatex`, `tex/xelatex`) come before
 `tex/latex` and `tex/generic`, as in TeX Live. A folder that provides the same
 name as one above it is reported as shadowed, not blocked; two files with the
 same name inside one folder are a conflict you have to resolve, because which
-one TeX would load is arbitrary.
+one TeX would load is arbitrary. In the bundled preview, the Problems list also
+warns when a library file is loaded in place of a TeX Live file of the same name
+(it can change how every document looks), and when a project file replaces a
+library file.
 
 What a library may contain: classes, packages, `.def`/`.cfg`/`.fd` files and
 package data under `tex/`, Lua modules under `scripts/` or `tex/`, BibTeX styles
@@ -314,7 +317,7 @@ How each engine sees them — you set no `TEXMFHOME` or `TEXINPUTS` yourself:
 
 | Engine | How the folders are passed | Verified |
 | --- | --- | --- |
-| Bundled TeX | Through the engine's in-memory file system, searched before its package mirror | classes, packages, `.def`, Lua, fonts, BibTeX |
+| Bundled TeX (TeXpresso preview) | Copied into the preview's project under a reserved `.mdraft-texmf` folder, with a manifest of the names each file answers; the preview resolves a name after the project and before TeX Live, case-insensitively as a fallback | classes and their packages (LuaLaTeX); the preview runs no BibTeX |
 | TeX Live (Linux, macOS, Windows, WSL) | A private `TEXMFHOME` list in the job | TeX Live 2025: LuaLaTeX, pdfLaTeX; BibTeX |
 | MiKTeX | Private `TEXINPUTS`/`BSTINPUTS`/`BIBINPUTS`/`LUAINPUTS`/font paths in the job | MiKTeX 23.1: LuaLaTeX, pdfLaTeX, XeLaTeX; BibTeX |
 
@@ -325,9 +328,10 @@ unreadable or too large stops the compile with a message; turn it off to
 compile without it. Limits: 8 folders, 4,096 files and 64 MiB together, 32 MiB
 per file, 16 levels.
 
-With the bundled engine, a library `.bst` or `.bib` is found when the document
-or a class names it literally (`\bibliographystyle{house}`); a computed name is
-not. A project file of the same name always wins.
+The bundled preview runs no BibTeX, so a library `.bst` or `.bib` is not used
+there; an installed distribution runs BibTeX with them. The disabled WasmTex
+backend found them when the document or a class named them literally
+(`\bibliographystyle{house}`).
 
 Changing the list, or editing a library file in another program, marks the
 preview out of date when MDraft regains focus; auto-compile rebuilds, manual
@@ -518,10 +522,22 @@ origin is `https://mdraft.webonly.app/`; `scripts/texpresso-origin-server.mjs`
 serves the reader's mirror during development, and the test runner points a
 launch at it with `MDRAFT_TEXPRESSO_ORIGIN`.
 
+The pinned app resolves every file the engine opens by name — the project's
+files, then the TeX Live bundle — and has no search path to configure. MDraft
+therefore serves a **patched `ocaml-worker.js`**: `scripts/texpresso-patch-worker.mjs`
+turns the release's upstream file into the pinned one, inserting the local
+library between the project and the bundle in both the exact and the
+case-insensitive lookup. The library index itself is `src/texpresso/library.ts`
+(TeX Live's per-engine `TEXINPUTS`/`LUAINPUTS` order, roots in order, project
+files first) and travels as `.mdraft-texmf/index.json`; the frame's own
+`worker.js` reads it and reports a library file loaded in place of a bundle
+file. A new TeXpresso release means re-anchoring the two edits in the patch
+script, regenerating the file, re-pinning it and uploading it to the origin.
+
 The preview has no second bundled engine to fall back to. A WebView without
-JSPI, a project with a non-UTF-8 text file, a project that uses a registered
-local TEXMF library, and a frame that stops responding each stop the frame and
-name the reason in the status line; pdfLaTeX is not offered for the bundled
+JSPI, a project with a non-UTF-8 text file, a project file inside the reserved
+`.mdraft-texmf` folder, and a frame that stops responding each stop the frame
+and name the reason in the status line; pdfLaTeX is not offered for the bundled
 preview at all. An installed TeX distribution keeps its own compiler and keeps
 pdfLaTeX.
 

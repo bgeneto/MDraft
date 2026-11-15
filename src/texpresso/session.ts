@@ -60,6 +60,8 @@ export class TexpressoSession {
   /** The bridge's reading state; its paint signal can precede the final page. */
   busy = true;
   problems: TexpressoProblem[] = [];
+  /** TeX Live names the engine loaded from a local library instead. */
+  readonly libraryOverrides = new Set<string>();
   /** The edit sequence the last paint reflects, and when it was sent. */
   lastPainted = 0;
   readonly sentAt = new Map<number, number>();
@@ -68,6 +70,10 @@ export class TexpressoSession {
   private dirty = new Set<string>();
   private files = new Map<string, Held>();
   private project: PreparedProject | null = null;
+  /** The project last synced, whose library index the notices read. */
+  get prepared(): PreparedProject | null {
+    return this.project;
+  }
   private active: string | null = null;
   private outstanding = new Map<number, { at: number; file: string; expect: number }>();
   private recoveries = 0;
@@ -328,6 +334,9 @@ export class TexpressoSession {
         break;
       case "painted":
         this.lastPainted = Math.max(this.lastPainted, message.seq);
+        break;
+      case "library-override":
+        this.libraryOverrides.add(message.name);
         break;
       default:
         break;

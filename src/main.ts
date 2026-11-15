@@ -4743,7 +4743,11 @@ function texpressoSyncSnapshot(
   const session = texpresso;
   if (!session) return false;
   const directory = build.root.directory;
-  const prepared = prepareProject(snapshot, (path) => texpressoLiveText(directory, path));
+  const prepared = prepareProject(
+    snapshot,
+    (path) => texpressoLiveText(directory, path),
+    session.key.engine,
+  );
   if (prepared.nonUtf8) {
     texpressoFallbackTo("encoding", prepared.nonUtf8);
     return false;
@@ -4971,9 +4975,43 @@ function texpressoRefreshStatus(): void {
   setLatexStatus(latexStatusLast.message, latexStatusLast.state);
 }
 
+/**
+ * What the local libraries changed, as location-less warnings: a library file
+ * the engine loaded instead of TeX Live's copy (it can change the document's
+ * look), and a library file the project's own copy replaces. A library file
+ * is not a project source, so neither navigates.
+ */
+function texpressoLibraryNotes(session: TexpressoSession): LatexDiagnostic[] {
+  const library = session.prepared?.library;
+  if (!library) return [];
+  const note = (message: string): LatexDiagnostic => ({
+    file: "",
+    line: 0,
+    column: 0,
+    endColumn: 0,
+    severity: "warning",
+    code: "library",
+    message,
+    text: "",
+    lineText: "",
+    searched: [],
+  });
+  const notes: LatexDiagnostic[] = [];
+  for (const name of [...session.libraryOverrides].sort()) {
+    // An override from before the library changed is reported only while the
+    // library still answers that name.
+    const origin = library.origins.get(name);
+    if (origin) notes.push(note(`${name} comes from your local library (${origin}), not TeX Live`));
+  }
+  for (const { name, origin } of library.shadowed) {
+    notes.push(note(`The project's ${name} is used, not your local library's (${origin})`));
+  }
+  return notes;
+}
+
 /** The frame's problem list in the shape the editor and the panel use. */
 function texpressoDiagnostics(session: TexpressoSession, directory: string): LatexDiagnostic[] {
-  return session.problems.map((problem) => {
+  const problems = session.problems.map((problem): LatexDiagnostic => {
     const text = texpressoLiveText(directory, problem.file);
     const lineText =
       text !== null && problem.line > 0 ? (text.split("\n")[problem.line - 1] ?? "") : "";
@@ -4990,6 +5028,7 @@ function texpressoDiagnostics(session: TexpressoSession, directory: string): Lat
       searched: [],
     };
   });
+  return [...problems, ...texpressoLibraryNotes(session)];
 }
 
 /**
@@ -5065,6 +5104,10 @@ function texpressoMessage(session: TexpressoSession, message: FrameMessage): voi
       );
       if (message.problems) texpressoProblems(session);
       texpressoRefreshStatus();
+      break;
+    case "library-override":
+      perfMark("texpresso-library-override", { name: message.name });
+      texpressoProblems(session);
       break;
     case "trace":
       texpressoLogLine(`frame: ${message.text}`);

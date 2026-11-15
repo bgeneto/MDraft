@@ -56,7 +56,7 @@ export interface TexpressoInputs {
   jspi: boolean;
   /** A project text file that is not UTF-8, or null. */
   nonUtf8: string | null;
-  /** Whether local library files could not be placed in the frame's project. */
+  /** A project file inside the folder name reserved for local libraries, or null. */
   libraryConflict: string | null;
   /** The frame failed for this project and its restart failed too. */
   failed: boolean;
@@ -87,7 +87,7 @@ export function texpressoFallbackText(
     case "encoding":
       return `the preview reads UTF-8 only; ${detail.file ?? "a project file"} is not`;
     case "library":
-      return `a local library file cannot be placed in the preview's project${detail.file ? ` (${detail.file})` : ""}`;
+      return `${detail.file ?? "a project file"} is inside .mdraft-texmf, the folder name MDraft reserves for local libraries; rename it`;
     case "failed":
       return "the preview stopped responding and its restart failed";
   }

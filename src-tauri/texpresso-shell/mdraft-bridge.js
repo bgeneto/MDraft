@@ -40,6 +40,16 @@
       /* the frame is being torn down */
     }
   };
+  // A local library file the engine loaded in place of TeX Live's copy. The
+  // worker cannot post to this page directly (worker.js says why).
+  try {
+    new BroadcastChannel("mdraft-texmf").onmessage = (event) => {
+      const name = event.data?.type === "override" ? event.data.name : null;
+      if (typeof name === "string") post({ type: "library-override", name });
+    };
+  } catch {
+    /* without the channel the override goes unreported, never unloaded */
+  }
   const api = () => globalThis.texpresso;
   const pagesBox = () => document.getElementById("pages");
   // A tiny in-page trace the CDP layer can read at any time: console output

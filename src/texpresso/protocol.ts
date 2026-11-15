@@ -107,6 +107,8 @@ export type FrameMessage =
   | { type: "pdf"; seq: number; pdf: ArrayBuffer; ms: number }
   | { type: "error"; seq?: number; message: string }
   | { type: "disposed"; seq: number }
+  /** The engine loaded a local library file in place of TeX Live's `name`. */
+  | { type: "library-override"; name: string }
   /** One line of the bridge's compile activity, for Logs. */
   | { type: "trace"; text: string };
 
@@ -215,6 +217,10 @@ export function parseFrameMessage(data: unknown): FrameMessage | null {
         : null;
     case "disposed":
       return int(m.seq) ? { type: "disposed", seq: m.seq } : null;
+    case "library-override":
+      return str(m.name) && m.name.length > 0 && m.name.length <= 1024
+        ? { type: "library-override", name: m.name }
+        : null;
     case "trace":
       // Bounded: the text goes straight into the Logs panel.
       return str(m.text) && m.text.length <= 500 ? { type: "trace", text: m.text } : null;

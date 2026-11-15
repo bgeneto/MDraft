@@ -44,6 +44,7 @@ license files. Private records and source captures must remain outside this tree
 | `fetch-fonts.ps1` | Refresh pinned font assets; requires Python/fonttools/brotli and is not needed for ordinary builds |
 | `build-linux.sh` | Linux-only build/staging; runs in WSL/container/Linux, not cross-compilation from Windows |
 | `with-msvc.cmd`, `cargo-vcvars.cmd` | Load the Windows C++ toolchain before cargo or Tauri |
+| `texpresso-patch-worker.mjs` | `<upstream ocaml-worker.js> <output\|--check>`; produces the patched TeXpresso worker that resolves local TEXMF libraries (verifies the upstream hash, that each edit's anchor matches once and that the result parses); `--check` compares the result with the pin in `src-tauri/texpresso.json` |
 | `optional-tools-test.mjs` | `npm test -- --only optional-tools`; isolated first-run offer, context setup, background progress and the Preferences › Export pandoc button checks |
 | `typst-service-install-test.mjs` | `[port]`; opt-in isolated install test for the published Typst companion service (`MDRAFT_TYPST_SERVICE_E2E=1 npm test -- --only typst-service-install`); verifies the pinned release archive, unpacked binary and an in-process service compile |
 
