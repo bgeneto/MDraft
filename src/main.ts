@@ -4958,7 +4958,7 @@ function texpressoMessage(session: TexpressoSession, message: FrameMessage): voi
       clearCorrespondence();
       break;
     case "zoom-wheel":
-      setZoom(zoomLevel() + (message.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP));
+      zoomFromWheel(message.deltaY);
       break;
     case "error":
       perfMark("texpresso-error", { message: message.message });
@@ -9583,6 +9583,22 @@ function setZoom(level: number): void {
   toast(`Preview zoom ${settings.zoomLevel}%`);
 }
 
+/**
+ * Ctrl+wheel distance collected toward the next zoom step. A mouse notch is
+ * about 100 px, while a touchpad pinch sends many small deltas that must not
+ * each jump a whole step.
+ */
+let wheelZoomDelta = 0;
+const WHEEL_ZOOM_THRESHOLD = 50;
+
+function zoomFromWheel(deltaY: number): void {
+  wheelZoomDelta += deltaY;
+  if (Math.abs(wheelZoomDelta) < WHEEL_ZOOM_THRESHOLD) return;
+  const step = wheelZoomDelta < 0 ? ZOOM_STEP : -ZOOM_STEP;
+  wheelZoomDelta = 0;
+  setZoom(zoomLevel() + step);
+}
+
 // ---------------------------------------------------------------------------
 // Source <-> preview position sync
 //
@@ -12990,6 +13006,17 @@ function installChrome(): void {
     setTheme(isDark ? "light" : "dark"),
   );
   statusZoom.addEventListener("click", () => setZoom(DEFAULT_ZOOM));
+  // Ctrl+wheel zooms the preview only; the editor keeps its font size. The
+  // HTML and TeXpresso iframes forward their own Ctrl+wheel through the bridge.
+  previewShell.addEventListener(
+    "wheel",
+    (event) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      event.preventDefault();
+      zoomFromWheel(event.deltaY);
+    },
+    { passive: false },
+  );
   statusReading.addEventListener("click", stopReadAloud);
   // The counts are the visible summary of the document; either one opens the
   // same dialog as Tools › Document Statistics, through the same guard.
@@ -13375,6 +13402,7 @@ async function boot(): Promise<void> {
     onLink: (href, raw) => handleHtmlLink(href, raw),
     onAction: handleHtmlAction,
     onScroll: handleHtmlScroll,
+    onZoomWheel: zoomFromWheel,
     onScrollInput: (dragging) => {
       htmlScrollDragging = dragging;
       scrollOwnership.input();

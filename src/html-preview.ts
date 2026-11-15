@@ -79,6 +79,7 @@ export interface HtmlPreviewCallbacks {
   onReady(layout: HtmlLayout): void;
   onError(message: string): void;
   onScrollInput?(dragging: boolean): void;
+  onZoomWheel?(deltaY: number): void;
 }
 
 /**
@@ -621,6 +622,12 @@ export function createHtmlPreview(
     if (data.type === "scrollInput") {
       cancelScroll();
       callbacks.onScrollInput?.(data.dragging === true);
+      return;
+    }
+
+    if (data.type === "zoomWheel") {
+      if (typeof data.deltaY === "number" && Number.isFinite(data.deltaY))
+        callbacks.onZoomWheel?.(data.deltaY);
       return;
     }
 

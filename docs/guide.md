@@ -644,7 +644,8 @@ built from source, use `Cmd` where the application registers `CmdOrCtrl`.
 | Full screen | `F11` |
 
 Zoom applies to the preview only, in every format; the source keeps the Editor
-font size preference. In Source-only there is no preview, so zoom shortcuts
+font size preference. `Ctrl+wheel` over the preview zooms it too; over the
+editor it does nothing. In Source-only there is no preview, so zoom shortcuts
 show a note instead. Zoom scales text, images, diagrams and Typst/LaTeX pages
 together. Reset returns to 100% and leaves Content
 Width and the base editor/preview font sizes alone; the percentage appears in

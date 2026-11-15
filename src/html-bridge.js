@@ -341,6 +341,16 @@
     post({ type: "scrollInput", dragging: scrollDragging });
   }
   window.addEventListener("wheel", reportScrollInput, { capture: true, passive: true });
+  // Ctrl+wheel is the editor's preview zoom, not a scroll of this document.
+  window.addEventListener(
+    "wheel",
+    function (event) {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      event.preventDefault();
+      post({ type: "zoomWheel", deltaY: event.deltaY });
+    },
+    { capture: true, passive: false },
+  );
   window.addEventListener("touchstart", reportScrollInput, { capture: true, passive: true });
   window.addEventListener(
     "keydown",
