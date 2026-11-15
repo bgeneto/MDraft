@@ -6,7 +6,9 @@
 //! the frame's copies of the reader's files are.
 
 import type * as api from "../api";
-import { textHash } from "./protocol.ts";
+import { LIBRARY_PREFIX, reservedProjectPath } from "../latex-texmf.ts";
+import { LIBRARY_INDEX, type LibraryIndex, libraryIndex } from "./library.ts";
+import { type TexpressoEngine, textHash } from "./protocol.ts";
 
 /** A project text file, by extension or by a declared non-UTF-8 encoding. */
 const TEXT = /\.(?:tex|bib|sty|cls|bst|clo|def|cfg|lua|bbl|ltx|dtx|ins|txt)$/i;
@@ -22,8 +24,10 @@ export interface PreparedProject {
   files: Map<string, { text?: string; bytes?: Uint8Array; fingerprint: string }>;
   /** A project text file that is not UTF-8, or null. */
   nonUtf8: string | null;
-  /** A local library file that cannot be placed at the project's root, or null. */
+  /** A project file inside the name reserved for local libraries, or null. */
   libraryConflict: string | null;
+  /** Which library file answers each name, and what the project replaces. */
+  library: LibraryIndex;
 }
 
 export function decodeBase64(data: string): Uint8Array {
@@ -49,21 +53,26 @@ export const bytesPrint = (data: string): string => `b${data.length}:${textHash(
  * Decode a project snapshot for the frame. Text travels as LF-normalised
  * strings so offsets match the editor; images and fonts as bytes.
  *
- * A local TEXMF library is **not** flattened into the frame's project. Its
- * files are named by their basename there, and a library that ships an
- * `article.cls` or a `main.tex` would silently change the document or shadow
- * the project's own file. The frame also cannot be told a search path, so it
- * would never find the files under their library names either. The build
- * therefore reports the library by name and draws with WasmTex
- * (docs/architecture.md, open question 4).
+ * A local TEXMF library is **not** flattened into the frame's project, where a
+ * library `main.tex` would shadow the project's own file. Its files travel
+ * under the reserved `.mdraft-texmf/<root>/<TDS path>` with a manifest of the
+ * names they answer (library.ts); the frame's worker resolves a name the
+ * project does not hold against it before TeX Live. Only a project file inside
+ * that reserved prefix is a conflict.
  */
 export function prepareProject(
   snapshot: api.LatexProjectSnapshot,
   currentText: (path: string) => string | null,
+  engine: TexpressoEngine,
 ): PreparedProject {
   const files: PreparedProject["files"] = new Map();
   let nonUtf8: string | null = null;
+  let libraryConflict: string | null = null;
   for (const file of snapshot.files) {
+    if (reservedProjectPath(file.path)) {
+      libraryConflict ??= file.path;
+      continue;
+    }
     const text = TEXT.test(file.path) || file.encoding !== undefined;
     if (!text) {
       files.set(file.path, { bytes: decodeBase64(file.data), fingerprint: bytesPrint(file.data) });
@@ -88,11 +97,16 @@ export function prepareProject(
     }
     files.set(file.path, { text: source, fingerprint: textPrint(source) });
   }
-  const library = snapshot.texmf?.files?.[0]?.path ?? null;
-  return {
-    main: snapshot.mainFile,
-    files,
-    nonUtf8,
-    libraryConflict: library === null ? null : (library.split("/").pop() ?? library),
-  };
+  const library = libraryIndex(snapshot.texmf, engine, new Set(files.keys()));
+  if (snapshot.texmf?.files.length) {
+    for (const file of snapshot.texmf.files) {
+      files.set(`${LIBRARY_PREFIX}/${file.root}/${file.path}`, {
+        bytes: decodeBase64(file.data),
+        fingerprint: bytesPrint(file.data),
+      });
+    }
+    const manifest = JSON.stringify({ version: 1, names: library.names });
+    files.set(LIBRARY_INDEX, { text: manifest, fingerprint: textPrint(manifest) });
+  }
+  return { main: snapshot.mainFile, files, nonUtf8, libraryConflict, library };
 }

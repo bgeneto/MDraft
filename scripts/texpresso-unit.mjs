@@ -13,8 +13,9 @@
 //   - the hash both sides compute, so an acknowledgement means something;
 //   - the pins in src-tauri/texpresso.json, and the absence of any TeXpresso
 //     service host in shipped bytes;
-//   - project preparation: LF normalisation, non-UTF-8 detection and the
-//     local-library name rule;
+//   - project preparation: LF normalisation, non-UTF-8 detection, and how
+//     local libraries reach the frame (reserved folder, manifest, TeX Live's
+//     per-engine search order, project files first);
 //   - the scroll and selection mapping;
 //   - the bounded wait an export uses before it asks the frame for a PDF.
 
@@ -32,6 +33,7 @@ import {
   texpressoFallbackText,
 } from "../src/latex-backend.ts";
 import { parseFrameMessage, PROTOCOL_VERSION, textHash } from "../src/texpresso/protocol.ts";
+import { libraryIndex } from "../src/texpresso/library.ts";
 import { normaliseText, prepareProject } from "../src/texpresso/project.ts";
 import { editorLineAt, editorScrollFor } from "../src/texpresso/scroll.ts";
 import {
@@ -109,8 +111,8 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     "a non-UTF-8 text file is reported",
   );
   check(
-    texpressoFallback({ ...base, libraryConflict: "mystyle.sty" }) === "library",
-    "a local library that cannot be placed is reported",
+    texpressoFallback({ ...base, libraryConflict: ".mdraft-texmf/x.sty" }) === "library",
+    "a project file in the reserved library folder is reported",
   );
   // The order between the two project-level reasons: failed is reported first.
   check(
@@ -187,6 +189,7 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     { v: 1, type: "error", seq: 6, message: "boom" },
     { v: 1, type: "error", message: "boom" },
     { v: 1, type: "disposed", seq: 7 },
+    { v: 1, type: "library-override", name: "size10.clo" },
   ];
   for (const message of valid) {
     check(parseFrameMessage(message) !== null, `a valid ${message.type} message parses`);
@@ -212,6 +215,8 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     { v: 1, type: "viewport", scrollTop: "12", file: null, line: null, gesture: false },
     { v: 1, type: "source", file: "main.tex", from: 5, to: 2, detail: 1 },
     { v: 1, type: "pdf", seq: 1, pdf: [1, 2], ms: 10 },
+    { v: 1, type: "library-override", name: "" },
+    { v: 1, type: "library-override", name: 7 },
     { v: 1, type: "unknown" },
   ];
   for (const message of invalid) {
@@ -325,15 +330,22 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     ],
     texmf: {
       files: [
-        { path: "tex/latex/local/mystyle.sty", data: encode("\\NeedsTeXFormat{LaTeX2e}") },
         {
+          root: 0,
+          path: "tex/latex/local/mystyle.sty",
+          origin: "local/mystyle.sty",
+          data: encode("\\NeedsTeXFormat{LaTeX2e}"),
+        },
+        {
+          root: 0,
           path: "tex/latex/local/main.tex",
+          origin: "local/main.tex",
           data: encode("a library file that would shadow the project"),
         },
       ],
     },
   };
-  const prepared = prepareProject(snapshot, () => null);
+  const prepared = prepareProject(snapshot, () => null, "luatex");
   check(prepared.main === "main.tex", "the main document comes from the snapshot");
   check(
     prepared.files.get("main.tex")?.text ===
@@ -350,30 +362,147 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
   );
   check(!prepared.files.has("legacy.tex"), "a non-UTF-8 text file is not sent as UTF-8");
   check(
-    prepared.libraryConflict === "mystyle.sty",
-    "a local TEXMF library is reported by name, not flattened into the project",
+    prepared.libraryConflict === null,
+    "a local TEXMF library is not a conflict",
     String(prepared.libraryConflict),
   );
   check(
-    !prepared.files.has("mystyle.sty") && !prepared.files.has("main.tex.library"),
-    "no library file is placed in the frame's project",
+    prepared.files.get(".mdraft-texmf/0/tex/latex/local/mystyle.sty")?.bytes?.length === 24,
+    "a library file travels as bytes under the reserved prefix",
+  );
+  check(
+    !prepared.files.has("mystyle.sty") && !prepared.files.has("tex/latex/local/mystyle.sty"),
+    "no library file is flattened into the project's own names",
+  );
+  check(
+    prepareProject(
+      {
+        ...snapshot,
+        files: [...snapshot.files, { path: ".mdraft-texmf/notes.txt", data: encode("x") }],
+      },
+      () => null,
+      "luatex",
+    ).libraryConflict === ".mdraft-texmf/notes.txt",
+    "a project file inside the reserved prefix is reported as a conflict",
   );
   check(
     prepared.files.get("main.tex")?.text?.startsWith("\\documentclass"),
     "the project's own file is untouched by a library of the same name",
   );
+  const manifest = JSON.parse(prepared.files.get(".mdraft-texmf/index.json")?.text ?? "null");
+  const answers = new Map(manifest?.names ?? []);
   check(
-    prepareProject({ ...snapshot, texmf: undefined }, () => null).libraryConflict === null,
-    "a project without a library has no library fallback",
+    manifest?.version === 1 &&
+      answers.get("mystyle.sty") === ".mdraft-texmf/0/tex/latex/local/mystyle.sty" &&
+      answers.get("local/mystyle.sty") === ".mdraft-texmf/0/tex/latex/local/mystyle.sty",
+    "the manifest answers a library name and its path below tex/<format>/",
+    JSON.stringify(manifest),
+  );
+  check(
+    !answers.has("main.tex") &&
+      prepared.library.shadowed.length === 1 &&
+      prepared.library.shadowed[0].name === "main.tex" &&
+      prepared.library.shadowed[0].origin === "local/main.tex",
+    "a name the project holds is left to the project and reported",
+    JSON.stringify(prepared.library.shadowed),
+  );
+  const bare = prepareProject({ ...snapshot, texmf: undefined }, () => null, "luatex");
+  check(
+    bare.libraryConflict === null && !bare.files.has(".mdraft-texmf/index.json"),
+    "a project without a library has no library fallback and no manifest",
   );
 
-  const live = prepareProject(snapshot, (path) =>
-    path === "chapters/one.tex" ? "live text" : null,
+  const live = prepareProject(
+    snapshot,
+    (path) => (path === "chapters/one.tex" ? "live text" : null),
+    "luatex",
   );
   check(
     live.files.get("chapters/one.tex")?.text === "live text",
     "an open tab's unsaved buffer wins over the snapshot",
   );
+}
+
+// --- the local library index ----------------------------------------------------
+{
+  const file = (root, path) => ({ root, path, origin: `r${root}:${path}`, data: "" });
+  const snapshot = {
+    revision: "r",
+    roots: [],
+    files: [
+      file(0, "tex/latex/pkg/foo.sty"),
+      file(0, "tex/lualatex/pkg/foo.sty"),
+      file(0, "tex/xelatex/pkg/foo.sty"),
+      file(0, "tex/generic/both/two.sty"),
+      file(0, "tex/lualatex/both/two.sty"),
+      file(0, "tex/plain/misc/three.tex"),
+      file(0, "tex/generic/misc/three.tex"),
+      file(1, "tex/lualatex/x/bar.sty"),
+      file(0, "tex/generic/x/bar.sty"),
+      file(0, "tex/latex/mod/mod.lua"),
+      file(0, "scripts/mod/mod.lua"),
+      file(0, "fonts/opentype/vendor/Fam-Regular.otf"),
+      file(0, "bibtex/bst/abntex/abnt-alf.bst"),
+      file(0, "tex/latex/abntex/abnt.cls"),
+      file(0, "tex/latex/a/Case.sty"),
+      file(1, "tex/latex/b/case.sty"),
+    ],
+  };
+  const lua = libraryIndex(snapshot, "luatex", new Set());
+  const xe = libraryIndex(snapshot, "xetex", new Set());
+  const answer = (index, name) => new Map(index.names).get(name);
+  check(
+    answer(lua, "foo.sty") === ".mdraft-texmf/0/tex/lualatex/pkg/foo.sty" &&
+      answer(xe, "foo.sty") === ".mdraft-texmf/0/tex/xelatex/pkg/foo.sty",
+    "each engine finds its own format directory before tex/latex",
+  );
+  check(
+    answer(lua, "two.sty") === ".mdraft-texmf/0/tex/lualatex/both/two.sty" &&
+      answer(xe, "two.sty") === ".mdraft-texmf/0/tex/generic/both/two.sty",
+    "another engine's format directory comes after tex/generic",
+  );
+  check(
+    answer(lua, "three.tex") === ".mdraft-texmf/0/tex/generic/misc/three.tex",
+    "a directory outside the engine's formats is searched last",
+  );
+  check(
+    answer(lua, "bar.sty") === ".mdraft-texmf/0/tex/generic/x/bar.sty",
+    "an earlier root wins over a later one whatever the directory",
+  );
+  check(
+    answer(lua, "mod.lua") === ".mdraft-texmf/0/scripts/mod/mod.lua",
+    "a Lua file follows LUAINPUTS: scripts/ first",
+  );
+  check(
+    answer(lua, "Fam-Regular.otf") === ".mdraft-texmf/0/fonts/opentype/vendor/Fam-Regular.otf" &&
+      !answer(lua, "vendor/Fam-Regular.otf") &&
+      answer(lua, "abnt-alf.bst") === ".mdraft-texmf/0/bibtex/bst/abntex/abnt-alf.bst",
+    "fonts and BibTeX files answer their file name only",
+  );
+  check(
+    answer(lua, "abnt.cls") === answer(lua, "abntex/abnt.cls") &&
+      answer(lua, "latex/abntex/abnt.cls") === ".mdraft-texmf/0/tex/latex/abntex/abnt.cls",
+    "a class answers its name and every path below tex/",
+  );
+  const order = lua.names.map(([name]) => name);
+  check(
+    order.indexOf("Case.sty") >= 0 && order.indexOf("Case.sty") < order.indexOf("case.sty"),
+    "the manifest lists higher priority first, so a case-folded match takes the earlier root",
+  );
+  check(
+    lua.origins.get("abnt.cls") === "r0:tex/latex/abntex/abnt.cls",
+    "a name maps back to the reader's own file for messages",
+  );
+  const shadow = libraryIndex(snapshot, "luatex", new Set(["abnt.cls", "abntex/abnt.cls"]));
+  check(
+    !answer(shadow, "abnt.cls") &&
+      !answer(shadow, "abntex/abnt.cls") &&
+      shadow.shadowed.length === 1 &&
+      shadow.shadowed[0].name === "abnt.cls",
+    "project files are left out of the manifest and a shadowed file is reported once",
+    JSON.stringify(shadow.shadowed),
+  );
+  check(libraryIndex(undefined, "luatex", new Set()).names.length === 0, "no library, no names");
 }
 
 // --- scroll and selection mapping ---------------------------------------------

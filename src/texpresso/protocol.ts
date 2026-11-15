@@ -106,7 +106,9 @@ export type FrameMessage =
   | { type: "zoom-wheel"; deltaY: number }
   | { type: "pdf"; seq: number; pdf: ArrayBuffer; ms: number }
   | { type: "error"; seq?: number; message: string }
-  | { type: "disposed"; seq: number };
+  | { type: "disposed"; seq: number }
+  /** The engine loaded a local library file in place of TeX Live's `name`. */
+  | { type: "library-override"; name: string };
 
 /** FNV-1a over UTF-16 code units; the bridge computes the same. */
 export function textHash(text: string): number {
@@ -213,6 +215,10 @@ export function parseFrameMessage(data: unknown): FrameMessage | null {
         : null;
     case "disposed":
       return int(m.seq) ? { type: "disposed", seq: m.seq } : null;
+    case "library-override":
+      return str(m.name) && m.name.length > 0 && m.name.length <= 1024
+        ? { type: "library-override", name: m.name }
+        : null;
     default:
       return null;
   }
