@@ -298,6 +298,11 @@ fn create_window<R: Runtime>(
     .skip_taskbar(!dialog)
     .decorations(dialog)
     .resizable(dialog);
+    // Must match the main window, which shares this WebView2 profile.
+    #[cfg(windows)]
+    {
+        builder = builder.additional_browser_args(crate::html_preview::WEBVIEW2_BROWSER_ARGS);
+    }
     // A meta refresh or link must not navigate away from the protected article
     // to an unprotected document. Resource loading keeps its existing policy.
     builder =

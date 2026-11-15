@@ -36,6 +36,22 @@ export interface ScrollPair {
   origin: number;
   target: number;
   region: string;
+  /**
+   * The first verified word of its source line. Both panes agree where a source
+   * line starts, so a wrapped row that holds one is represented by it.
+   */
+  lineStart?: boolean;
+}
+
+/**
+ * Which anchors of an ascending run open a source line: the previous anchor is
+ * on an earlier line. The first one has no known predecessor and stays false.
+ */
+export function lineStarts(
+  froms: readonly number[],
+  lineOf: (offset: number) => number,
+): boolean[] {
+  return froms.map((from, i) => i > 0 && lineOf(from) !== lineOf(froms[i - 1]));
 }
 
 export function interpolate(
@@ -73,6 +89,10 @@ export function mapScrollOffset(before: string, after: string, offset: number): 
 /**
  * Corresponding screen Y at the origin's reference. Collapse a wrapped row to
  * its middle accepted word: different line widths cannot have a unique inverse.
+ * A row that opens a source line is represented by that line's first word
+ * instead. When the other pane is much narrower (a zoomed preview wraps one
+ * source row onto several), the middle word lies rows below where the line
+ * visibly starts, and the follow would be off by whole rows.
  * Never draw a continuous slope through a column reset or a reversed layout.
  *
  * `targetReference` is the height the corresponding content must reach in the
@@ -97,7 +117,10 @@ export function scrollCorrection(
       sorted[end].region === sorted[i].region
     )
       end++;
-    rows.push(sorted[i + Math.floor((end - i - 1) / 2)]);
+    const row = sorted.slice(i, end);
+    const starts = row.filter((p) => p.lineStart);
+    const pool = starts.length ? starts : row;
+    rows.push(pool[Math.floor((pool.length - 1) / 2)]);
     i = end;
   }
   let at = 0;

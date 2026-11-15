@@ -32,6 +32,22 @@ pub const SCHEME: &str = "mdraft-preview";
 const HOST_SUFFIX: &str = ".invalid";
 const MAX_ASSET_BYTES: u64 = 64 * 1024 * 1024;
 
+/// WebView2 arguments for every MDraft window.
+///
+/// The guest origin is a plain `http://…invalid` URL on Windows, so Chromium's
+/// own DNS client queries the configured resolver for it (A and HTTPS records)
+/// on each guest navigation, even though the scheme handler serves the request
+/// in-process and never uses the answer. Answering NXDOMAIN locally removes the
+/// network traffic without changing the origin: `.invalid` (RFC 6761) can only
+/// ever fail, and the preview already works with that failure.
+///
+/// Setting any arguments replaces wry's defaults, so they are repeated here.
+/// Every window sharing the WebView2 profile must use the same string, or the
+/// second environment fails to start.
+#[cfg(windows)]
+pub const WEBVIEW2_BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
+     --host-resolver-rules=\"MAP *.invalid ~NOTFOUND\"";
+
 /// The one preview currently allowed to load. A new document replaces the
 /// state; an old iframe with an old nonce then gets a 404.
 #[derive(Default)]

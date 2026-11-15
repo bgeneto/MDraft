@@ -68,6 +68,12 @@ pub fn run() {
             window.create = false;
         }
     }
+    // Kept in Rust rather than tauri.conf.json so the print surface reads the
+    // same string; see `html_preview::WEBVIEW2_BROWSER_ARGS`.
+    #[cfg(windows)]
+    for window in &mut context.config_mut().app.windows {
+        window.additional_browser_args = Some(html_preview::WEBVIEW2_BROWSER_ARGS.into());
+    }
 
     // Wayland has no window-icon property for GTK3 applications: the
     // compositor resolves the icon by matching the window's app id to a

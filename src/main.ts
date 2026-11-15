@@ -279,6 +279,7 @@ import {
 import { lineTextOf } from "./latex-references";
 import {
   clampScroll,
+  lineStarts,
   mapScrollOffset,
   rowCentre,
   scrollCorrection,
@@ -2780,8 +2781,11 @@ function setLatexStatus(message: string, state?: CompiledStatus): void {
   // With TeXpresso drawing, the line says both halves: the live preview, then
   // the PDF the shadow compile keeps for export.
   const live = texpressoShowing() ? texpressoLiveStatus() : "";
+  // While the frame itself is still working, the export only waits on it:
+  // naming both would say the same thing twice.
+  const both = live && !(message === TEXPRESSO_EXPORT_WAIT && texpressoWorking());
   compiledUi.status(
-    live ? `${live} · ${message}` : message,
+    both ? `${live} · ${message}` : live || message,
     latexInFlight,
     latexCurrent(latexPreview) || latexPartialCurrent(),
     state,
@@ -4491,6 +4495,100 @@ let latexShadowKey: string | null = null;
 let latexStatusLast: { message: string; state?: CompiledStatus } | null = null;
 let texpressoHost: HTMLElement | null = null;
 
+/**
+ * What the frame has been doing, for Logs › Compiler output. The engine keeps
+ * no TeX log the host can read, and a cold run that fetches hundreds of bundle
+ * files one by one otherwise shows a status line that never changes.
+ */
+const TEXPRESSO_LOG_LINES = 400;
+let texpressoLog: string[] = [];
+/** Bundle downloads since the current activity began; null before the first count. */
+let texpressoFetch: {
+  baseFiles: number;
+  baseBytes: number;
+  files: number;
+  bytes: number;
+  started: number;
+  loggedFiles: number;
+  loggedAt: number;
+} | null = null;
+let texpressoWatching = false;
+/** Exports waiting on the frame; the download count runs while any does. */
+let texpressoExporting = 0;
+const TEXPRESSO_FETCH_TICK_MS = 750;
+/** The export's own step: the frame has typeset and `xdvipdfmx` converts. */
+const TEXPRESSO_EXPORT_WAIT = "Preparing the PDF for export…";
+
+function texpressoLogText(): string {
+  return texpressoLog.join("\n");
+}
+
+function texpressoLogLine(text: string): void {
+  texpressoLog.push(`[${new Date().toTimeString().slice(0, 8)}] ${text}`);
+  if (texpressoLog.length > TEXPRESSO_LOG_LINES)
+    texpressoLog.splice(0, texpressoLog.length - TEXPRESSO_LOG_LINES);
+  if (texpressoShowing()) compiledUi.liveOutput(texpressoLogText());
+}
+
+function megabytes(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * Count bundle downloads while the frame typesets or exports. The counters are
+ * process-wide and carry no paths; a delta from the first reading is what this
+ * activity fetched.
+ */
+function texpressoWatchFetches(): void {
+  if (texpressoWatching) return;
+  texpressoWatching = true;
+  texpressoFetch = null;
+  const tick = async (): Promise<void> => {
+    const stats = await api.latexStats().catch(() => null);
+    const now = performance.now();
+    if (stats && !texpressoFetch) {
+      texpressoFetch = {
+        baseFiles: stats.texpressoMisses,
+        baseBytes: stats.texpressoVerifiedBytes,
+        files: 0,
+        bytes: 0,
+        started: now,
+        loggedFiles: 0,
+        loggedAt: now,
+      };
+    } else if (stats && texpressoFetch) {
+      const fetch = texpressoFetch;
+      const files = stats.texpressoMisses - fetch.baseFiles;
+      if (files !== fetch.files) {
+        fetch.files = files;
+        fetch.bytes = stats.texpressoVerifiedBytes - fetch.baseBytes;
+        if (files - fetch.loggedFiles >= 25 || now - fetch.loggedAt >= 5000) {
+          texpressoLogLine(`Downloading TeX files: ${files} so far, ${megabytes(fetch.bytes)}`);
+          fetch.loggedFiles = files;
+          fetch.loggedAt = now;
+        }
+        texpressoRefreshStatus();
+      }
+    }
+    const session = texpresso;
+    if (session && (session.busy || texpressoExporting > 0)) {
+      window.setTimeout(() => void tick(), TEXPRESSO_FETCH_TICK_MS);
+      return;
+    }
+    const done = texpressoFetch;
+    if (done && done.files > 0) {
+      const seconds = ((now - done.started) / 1000).toFixed(1);
+      texpressoLogLine(
+        `Downloaded ${done.files} TeX file${done.files === 1 ? "" : "s"}, ${megabytes(done.bytes)}, in ${seconds} s`,
+      );
+    }
+    texpressoFetch = null;
+    texpressoWatching = false;
+    texpressoRefreshStatus();
+  };
+  void tick();
+}
+
 function texpressoHostElement(): HTMLElement {
   if (!texpressoHost) {
     // A sibling of #preview, like the HTML guest: never inside a preview slot,
@@ -4617,6 +4715,9 @@ function texpressoPrepare(build: LatexBuildRequest, storeOnly: boolean): boolean
       texpressoHandlers,
     );
     texpresso.hold(settings.latexAutoCompile === false);
+    texpressoLog = [];
+    texpressoLogLine(`Preview starting (${ENGINE_LABELS[engine]})`);
+    texpressoWatchFetches();
     perfMark("texpresso-mount", { engine: frameEngine });
   }
   texpresso!.open(projectRelativePath(build.root.directory, doc.path, pathKey));
@@ -4699,9 +4800,21 @@ async function texpressoExportPdf(
     token: owner.token,
     files: snapshot.files.length,
   });
-  setLatexStatus("Typesetting the PDF…");
-  const reply = await session.exportPdf();
+  setLatexStatus(TEXPRESSO_EXPORT_WAIT);
+  texpressoExporting += 1;
+  texpressoWatchFetches();
+  let reply: Awaited<ReturnType<TexpressoSession["exportPdf"]>>;
+  try {
+    reply = await session.exportPdf();
+  } finally {
+    texpressoExporting -= 1;
+  }
   if (owner.token !== renderToken || doc.id !== owner.activeId || session !== texpresso) return;
+  texpressoLogLine(
+    reply
+      ? `PDF for export ready (${megabytes(reply.pdf.length)}, ${(reply.ms / 1000).toFixed(1)} s)`
+      : "The PDF for export could not be produced",
+  );
   if (!reply) {
     latexInFlight = false;
     setLatexStatus("The PDF for export could not be produced.");
@@ -4715,7 +4828,7 @@ async function texpressoExportPdf(
     sources: nativeSources(snapshot),
     files: new Set(snapshot.files.map((file) => file.path)),
     mainFile: snapshot.mainFile,
-    log: "",
+    log: texpressoLogText(),
     warnings,
     warningsTruncated: false,
     engine: ENGINE_LABELS[build.engineChoice?.engine ?? "lualatex"],
@@ -4835,8 +4948,25 @@ function texpressoLiveStatus(): string {
   if (!session) return "";
   if (!session.ready) return "Preview starting…";
   const errors = session.problems.filter((p) => p.severity === "error").length;
-  const state = session.held ? "Preview paused" : session.busy ? "Typesetting…" : "Preview live";
+  const fetch = texpressoFetch;
+  const state =
+    fetch && fetch.files > 0
+      ? `Downloading TeX files… · ${fetch.files} file${fetch.files === 1 ? "" : "s"}, ${megabytes(fetch.bytes)}`
+      : session.held
+        ? "Preview paused"
+        : session.busy
+          ? "Typesetting…"
+          : "Preview live";
   return errors ? `${state} · ${errors} error${errors === 1 ? "" : "s"}` : state;
+}
+
+/** The frame is starting, typesetting or fetching bundle files. */
+function texpressoWorking(): boolean {
+  const session = texpresso;
+  return (
+    session !== null &&
+    (!session.ready || session.busy || (texpressoFetch !== null && texpressoFetch.files > 0))
+  );
 }
 
 /** Redraw the status line with the frame's latest state. */
@@ -4921,7 +5051,7 @@ function texpressoProblems(session: TexpressoSession): void {
       ...(latexProject?.files ?? []),
     ]);
     panel.querySelector(".latex-log")?.remove();
-    compiledUi.details(panel, "", diagnostics.length, false);
+    compiledUi.details(panel, texpressoLogText(), diagnostics.length, false);
   }
 }
 
@@ -4966,12 +5096,21 @@ const texpressoHandlers = {
 function texpressoMessage(session: TexpressoSession, message: FrameMessage): void {
   switch (message.type) {
     case "status":
+      if (message.busy) texpressoWatchFetches();
+      texpressoLogLine(
+        message.busy
+          ? "Typesetting…"
+          : `Typeset${message.problems?.length ? ` · ${message.problems.length} problem${message.problems.length === 1 ? "" : "s"}` : ""}`,
+      );
       if (message.problems) texpressoProblems(session);
       texpressoRefreshStatus();
       break;
     case "library-override":
       perfMark("texpresso-library-override", { name: message.name });
       texpressoProblems(session);
+      break;
+    case "trace":
+      texpressoLogLine(`frame: ${message.text}`);
       break;
     case "painted": {
       const sent = session.sentAt.get(message.seq);
@@ -10541,6 +10680,10 @@ async function alignHtmlTextScroll(
   const region = near.reduce((a, b) =>
     Math.abs(a.from - offset) <= Math.abs(b.from - offset) ? a : b,
   ).region;
+  // Line starts are read before the region filter: each text node is its own
+  // region here, so its first word would otherwise have no predecessor.
+  const nearStarts = sourceLineStarts(near);
+  const starts = nearStarts.filter((_, i) => near[i].region === region);
   const anchors = near.filter((a) => a.region === region);
   const token = renderToken,
     epoch = scrollOwnership.epoch;
@@ -10573,6 +10716,7 @@ async function alignHtmlTextScroll(
     pairs.push({
       from: anchor.from,
       region,
+      lineStart: starts[point.at],
       origin: direction === "source" ? sourceY : previewY,
       target: direction === "source" ? previewY : sourceY,
     });
@@ -10627,6 +10771,15 @@ function previewScrollOffset(reference: number): number | null {
   return null;
 }
 
+/** Which of these ascending anchors open a line of the current source. */
+function sourceLineStarts(anchors: readonly { from: number }[]): boolean[] {
+  const text = editor.view.state.doc;
+  return lineStarts(
+    anchors.map((anchor) => anchor.from),
+    (offset) => text.lineAt(Math.min(offset, text.length)).number,
+  );
+}
+
 function alignDomTextScroll(direction: SyncPane, refined = false): boolean {
   if (compiledUi.logsOpen) return true;
   if (syncDragging || !wordMap || wordMap.source !== editor.getDoc()) return false;
@@ -10641,7 +10794,8 @@ function alignDomTextScroll(direction: SyncPane, refined = false): boolean {
   ).region;
   const pairs: ScrollPair[] = [];
   let estimated = false;
-  for (const anchor of near) {
+  const starts = sourceLineStarts(near);
+  for (const [i, anchor] of near.entries()) {
     if (anchor.region !== region || !anchor.node.isConnected) continue;
     const source = editor.scrollPoint(anchor.from);
     if (direction === "source" && !source.exact) continue;
@@ -10658,6 +10812,7 @@ function alignDomTextScroll(direction: SyncPane, refined = false): boolean {
       region,
       origin: direction === "source" ? sourceY : previewY,
       target: direction === "source" ? previewY : sourceY,
+      lineStart: starts[i],
     });
   }
   const measured = scrollCorrection(pairs, reference, scrollReference(otherPane(direction)));
