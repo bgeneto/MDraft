@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use tauri::Manager;
 
-use super::{JobDir, RunOutcome, RunSpec};
+use super::{JobDir, RunOutcome, RunSpec, SessionWorkspace};
 
 const POLL: Duration = Duration::from_millis(60);
 
@@ -47,6 +47,49 @@ pub(super) fn job_dir(app: &tauri::AppHandle, job: &str) -> Result<JobDir, Strin
     })
 }
 
+pub(super) fn workspace_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| format!("Cannot locate the LaTeX workspace directory: {error}"))?
+        .join("latex-jobs")
+        .join("session"))
+}
+
+pub(super) fn workspace_dir(app: &tauri::AppHandle, key: &str) -> Result<SessionWorkspace, String> {
+    let safe: String = key
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-')
+        .take(64)
+        .collect();
+    if safe.is_empty() || safe != key {
+        return Err("The LaTeX workspace key is invalid.".into());
+    }
+    let root = workspace_root(app)?;
+    std::fs::create_dir_all(&root).map_err(|error| {
+        format!(
+            "Cannot create the LaTeX workspace directory {}: {error}",
+            root.display()
+        )
+    })?;
+    let _ = std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700));
+    let path = root.join(&safe);
+    let created = !path.exists();
+    std::fs::create_dir_all(&path).map_err(|error| {
+        format!(
+            "Cannot create the LaTeX build workspace {}: {error}",
+            path.display()
+        )
+    })?;
+    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700));
+    Ok(SessionWorkspace { path, created })
+}
+
+pub(super) fn cleanup_workspaces(app: &tauri::AppHandle) {
+    if let Ok(root) = workspace_root(app) {
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
 pub(super) fn run(spec: &RunSpec, cancel: &AtomicBool) -> Result<RunOutcome, String> {
     let mut command = Command::new(&spec.program);
     command.args(&spec.args);

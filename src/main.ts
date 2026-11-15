@@ -166,7 +166,18 @@ import { createPreferences, type PreferencesHandle } from "./preferences";
 import { createAssistant, type AssistantHandle } from "./ai/assistant";
 import { captureContext, resolveAiLanguage } from "./ai/context";
 import { recordUsage as recordActionUsage } from "./ai/usage";
-import { createRecoveryScheduler } from "./recovery";
+import { createRecoveryScheduler, newRecoveryId } from "./recovery";
+import { createRecoveredScheduler } from "./recovered-documents";
+import { captureBackupDocuments, textFromString, type BackupDocument } from "./backup";
+import {
+  backupComplete,
+  backupOptions,
+  chooseRecoveredDocuments,
+  confirmRestore,
+  dataProgress,
+  restoreOptions,
+  showRestoreReport,
+} from "./data-dialog";
 import { createSessionStore, pathKey, type Session } from "./sessions";
 import { planRestore, rememberTabs, type RememberedTabs } from "./tab-restore";
 import { resolveDocumentLanguage as resolveLanguage } from "./language";
@@ -220,7 +231,13 @@ import {
   type LatexDiagnostic,
   type LatexResult,
 } from "./latex";
-import { KeyRhythm, LatestWinsGate, adaptiveDelay, staleBeyondCap } from "./latex-scheduler";
+import {
+  KeyRhythm,
+  LatestWinsGate,
+  adaptiveDelay,
+  nativeDelay,
+  staleBeyondCap,
+} from "./latex-scheduler";
 import { resolveMainDocument } from "./latex-root";
 import {
   ENGINE_LABELS,
@@ -386,11 +403,23 @@ let tabsUi: TabsUi | null = null;
  * The crash-recovery journal. The scheduler debounces per session and serialises
  * writes per id; the Rust store owns the files.
  */
-const recovery = createRecoveryScheduler({
+const ordinaryRecovery = createRecoveryScheduler({
   save: api.writeRecovery,
   remove: api.removeRecovery,
   notify: (message) => toast(message, 6200),
 });
+const recovery = createRecoveredScheduler(
+  ordinaryRecovery,
+  {
+    begin: api.beginRecoveredRevision,
+    append: api.appendRecoveredRevision,
+    finish: api.finishRecoveredRevision,
+    cancel: api.cancelRecoveredRevision,
+    forget: api.forgetRecoveredDocument,
+  },
+  (text) => toast(text, 6200),
+  newRecoveryId,
+);
 let closeCommitFocus: HTMLElement | null = null;
 /**
  * Assistant file names, remembered per session revision.
@@ -623,6 +652,8 @@ let allowClose = false;
  * clears the flag and leaves all files untouched.
  */
 let purgeAfterClose = false;
+let activeDataJob: { id: string; canceled: boolean } | null = null;
+let restoreAfterClose: string | null = null;
 let lastTitle = "";
 /**
  * Signature of the last remembered tab list that was written (or seeded from
@@ -2310,7 +2341,11 @@ function renderDelay(): number {
   if (doc.language === "latex") {
     const now = performance.now();
     if (staleBeyondCap(latexLastStart, latexUnrenderedSince, now)) return 0;
-    return adaptiveDelay(latexRhythm.intervals());
+    const delay = adaptiveDelay(latexRhythm.intervals());
+    // An installed engine is a batch compiler; its quiet period is longer than
+    // the warm bundled engine's. Before the first status arrives, use the
+    // bundled rhythm.
+    return latexEngine?.backend === "native" ? nativeDelay(delay) : delay;
   }
   if (doc.language === "html") return 300;
   if (doc.language === "asciidoc" || doc.language === "markdown") {
@@ -3938,7 +3973,7 @@ async function latexSavePdf(): Promise<void> {
 async function renderLatexPreview(
   source: string,
   token: number,
-  options: { storeOnly?: boolean } = {},
+  options: { storeOnly?: boolean; clean?: boolean } = {},
 ): Promise<void> {
   const storeOnly = options.storeOnly === true;
   const force = !storeOnly && forceNextBuild;
@@ -4057,6 +4092,9 @@ async function renderLatexPreview(
       // One installed-TeX process at a time, newest waiting revision first: an
       // edit no longer kills the running process (that starved the preview
       // exactly as it did the bundled engine). A Cancel still does.
+      if (nativeGate.holder !== null) {
+        setLatexStatus("Waiting for the previous LaTeX compile…");
+      }
       const release = await nativeGate.acquire(token);
       try {
         setLatexStatus(`Compiling with ${label}…`);
@@ -4074,6 +4112,7 @@ async function renderLatexPreview(
             root: build.root.directory,
             manifest: snapshot.manifest.files.map((file) => file.path),
             texmf: snapshot.texmf,
+            clean: options.clean === true,
           });
           if (doc.id !== activeId) return;
           buildEngine = native.engine;
@@ -4308,7 +4347,7 @@ async function renderLatexPreview(
         label: clean ? "Recompiled from scratch" : "PDF ready",
         severity: result.warnings.length ? "warning" : "success",
         detail: compiledUi.issueSummary,
-        engine: `${result.engine ?? "LaTeX"} · ${((result.elapsedMs ?? performance.now() - started) / 1000).toFixed(1)} s`,
+        engine: `${result.engine ?? "LaTeX"} · ${((result.elapsedMs ?? performance.now() - started) / 1000).toFixed(1)} s${result.passes ? ` · ${result.passes} pass${result.passes === 1 ? "" : "es"}` : ""}`,
       },
     );
     // Export › PDF and Print are enabled by this commit and name its engine.
@@ -4769,7 +4808,14 @@ function texpressoFallbackTo(reason: TexpressoFallback, file: string | null = nu
   texpressoChip();
   latexInFlight = false;
   const why = texpressoFallbackText(reason, { file });
-  setLatexStatus(`Preview unavailable: ${why}`, { label: "Preview", severity: "warning" });
+  // The reason must travel as `detail`: `status()` shows `state.label` and
+  // `state.detail`, so putting the explanation only in the message produced a
+  // bare "Preview" warning.
+  setLatexStatus("Preview unavailable", {
+    label: "Preview unavailable",
+    severity: "warning",
+    detail: why,
+  });
   syncMenuState(false);
   perfMark("texpresso-fallback", { reason, file });
 }
@@ -4805,6 +4851,14 @@ function texpressoPrepare(build: LatexBuildRequest, storeOnly: boolean): boolean
   texpressoFallbackReason = null;
   delete statusEngine.dataset.baseTitle;
   if (latexPreviewBackend() !== "texpresso") {
+    texpressoRelease();
+    texpressoChip();
+    return false;
+  }
+  // An installed distribution is a backend, not a TeXpresso fallback. Naming it
+  // as one produced a warning status on every native build, before the native
+  // compile even started.
+  if (build.engineStatus.backend !== "bundled") {
     texpressoRelease();
     texpressoChip();
     return false;
@@ -6323,7 +6377,9 @@ async function doRender(force = false): Promise<void> {
   const wantsMap = settings.viewMode === "split";
 
   if (doc.language === "latex") {
-    await renderLatexPreview(source, token);
+    await renderLatexPreview(source, token, {
+      clean: latexCleanBuildToken === token,
+    });
     return;
   }
 
@@ -12760,6 +12816,7 @@ function rememberedTabsNow(): RememberedTabs {
 function installTabMemory(): void {
   lastTabsSignature = JSON.stringify(rememberedTabsNow());
   window.setInterval(() => {
+    if (restoreAfterClose) return;
     const remembered = rememberedTabsNow();
     const signature = JSON.stringify(remembered);
     if (signature === lastTabsSignature) return;
@@ -12793,6 +12850,287 @@ async function flushRememberedTabs(): Promise<void> {
   await Promise.race([settingsQueue, new Promise((resolve) => window.setTimeout(resolve, 750))]);
 }
 
+function snapshotOpenDocuments(): { documents: BackupDocument[]; activeId: string | null } {
+  const documents: BackupDocument[] = [];
+  let activeId: string | null = null;
+  for (const session of sessions.list()) {
+    if (!session.dirty && session.path !== null) continue;
+    const text =
+      session === doc
+        ? editor.captureState().doc
+        : session.draft !== null
+          ? textFromString(session.draft)
+          : (session.editorState?.doc ?? textFromString(session.savedContent));
+    if (!session.dirty && session.path === null && session.savedContent === WELCOME) continue;
+    const id = session.recoveryId ?? newRecoveryId();
+    session.recoveryId = id;
+    if (session === doc) activeId = id;
+    documents.push({
+      metadata: {
+        id,
+        name: session.name,
+        language: session.language,
+        path: session.path,
+        lineEnding: session.lineEnding,
+        hadBom: session.hadBom,
+        encoding: session.encoding,
+        lossy: session.lossy,
+        readOnly: session.readOnly,
+        baseModifiedMs: session.modifiedMs,
+        baseSize: session.size,
+        baseSha256: session.sha256,
+      },
+      text,
+    });
+  }
+  return { documents, activeId };
+}
+
+async function snapshotSettings(): Promise<api.Settings> {
+  return queueSettings(async () => {
+    const remembered = rememberedTabsNow();
+    settings = { ...settings, lastTabs: remembered.tabs, lastActiveTab: remembered.active };
+    settings = await api.saveSettings(settings);
+    return settings;
+  });
+}
+
+function backupName(prefix: string): string {
+  const date = new Date();
+  const stamp = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}-${String(date.getHours()).padStart(2, "0")}${String(date.getMinutes()).padStart(2, "0")}${String(date.getSeconds()).padStart(2, "0")}`;
+  return `${prefix}-${stamp}.zip`;
+}
+
+async function transferBackupDocuments(
+  job: { id: string; canceled: boolean },
+  documents: BackupDocument[],
+): Promise<void> {
+  await captureBackupDocuments(
+    job.id,
+    documents,
+    {
+      begin: api.beginBackupBuffer,
+      append: api.appendBackupBuffer,
+      finish: api.finishBackupBuffer,
+    },
+    () => job.canceled,
+  );
+}
+
+async function backupAppData(): Promise<void> {
+  if (activeDataJob) {
+    toast("Another application-data operation is already running.", 4200);
+    return;
+  }
+  const includeDownloads = await backupOptions(api.estimateDataBackup());
+  if (includeDownloads === null) return;
+  const destination = await saveDialog({
+    title: "Save MDraft backup",
+    defaultPath: backupName("MDraft-backup"),
+    filters: [{ name: "ZIP archive", extensions: ["zip"] }],
+  });
+  if (!destination || Array.isArray(destination)) return;
+  const job = { id: crypto.randomUUID(), canceled: false };
+  activeDataJob = job;
+  const progress = dataProgress(() => {
+    job.canceled = true;
+    void api.cancelDataBackup(job.id).catch(() => undefined);
+  }, true);
+  try {
+    const snapshot = snapshotOpenDocuments();
+    const currentSettings = await snapshotSettings();
+    if (job.canceled) return;
+    await api.beginDataBackup(
+      job.id,
+      destination,
+      includeDownloads,
+      currentSettings,
+      snapshot.documents.length,
+      snapshot.activeId,
+      (event) => progress.update(event),
+    );
+    await transferBackupDocuments(job, snapshot.documents);
+    const result = await api.finishDataBackup(job.id);
+    progress.close();
+    if (await backupComplete(result))
+      await revealItemInDir(result.path).catch((error: unknown) => toast(String(error)));
+  } catch (error) {
+    progress.close();
+    if (!job.canceled)
+      await message(String(error), { title: "Could not create backup", kind: "error" });
+  } finally {
+    progress.close();
+    await api.cancelDataBackup(job.id).catch(() => undefined);
+    if (activeDataJob === job) activeDataJob = null;
+  }
+}
+
+async function restoreAppData(): Promise<void> {
+  if (activeDataJob) {
+    toast("Another application-data operation is already running.", 4200);
+    return;
+  }
+  const selected = await openDialog({
+    title: "Choose an MDraft backup",
+    multiple: false,
+    filters: [{ name: "ZIP archive", extensions: ["zip"] }],
+  });
+  if (!selected || Array.isArray(selected)) return;
+  const job = { id: crypto.randomUUID(), canceled: false };
+  activeDataJob = job;
+  let progress: ReturnType<typeof dataProgress> | null = dataProgress(() => {
+    job.canceled = true;
+    void api.cancelDataBackup(job.id).catch(() => undefined);
+  });
+  let handedOff = false;
+  try {
+    const preview = await api.inspectDataRestore(job.id, selected, (event) =>
+      progress?.update(event),
+    );
+    progress.close();
+    progress = null;
+    if (job.canceled) return;
+    const selection = await restoreOptions(preview);
+    if (!selection) return;
+    const destination = await saveDialog({
+      title: "Save a safety backup before restore",
+      defaultPath: backupName("MDraft-before-restore"),
+      filters: [{ name: "ZIP archive", extensions: ["zip"] }],
+    });
+    if (!destination || Array.isArray(destination)) return;
+    progress = dataProgress(() => {
+      job.canceled = true;
+      void api.cancelDataBackup(job.id).catch(() => undefined);
+    });
+    const snapshot = snapshotOpenDocuments();
+    const currentSettings = await snapshotSettings();
+    if (job.canceled) return;
+    await api.beginRestoreSafetyBackup(
+      job.id,
+      destination,
+      selection,
+      currentSettings,
+      snapshot.documents.length,
+      snapshot.activeId,
+    );
+    await transferBackupDocuments(job, snapshot.documents);
+    const review = await api.finishRestoreSafetyBackup(job.id);
+    progress.close();
+    progress = null;
+    if (job.canceled || !(await confirmRestore(selected, review))) return;
+    await api.releaseRestoreForClose(job.id);
+    restoreAfterClose = job.id;
+    preferences.close();
+    handedOff = true;
+    await getCurrentWindow().close();
+  } catch (error) {
+    handedOff = false;
+    restoreAfterClose = null;
+    progress?.close();
+    progress = null;
+    if (!job.canceled)
+      await message(String(error), { title: "Could not restore backup", kind: "error" });
+  } finally {
+    progress?.close();
+    if (!handedOff) {
+      await api.cancelDataBackup(job.id).catch(() => undefined);
+      if (activeDataJob === job) activeDataJob = null;
+    }
+  }
+}
+
+async function readRecoveredText(item: api.RecoveredItem): Promise<string> {
+  const transfer = newRecoveryId();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const parts: string[] = [];
+  await api.beginRecoveredRead(item.inboxId, item.document.id, transfer);
+  try {
+    for (;;) {
+      const chunk = await api.readRecoveredChunk(transfer);
+      parts.push(decoder.decode(new Uint8Array(chunk.bytes), { stream: !chunk.finished }));
+      if (chunk.finished) return parts.join("");
+    }
+  } finally {
+    await api.cancelRecoveredRead(transfer).catch(() => undefined);
+  }
+}
+
+async function showRecoveredDocuments(): Promise<void> {
+  try {
+    const items = await api.listRecoveredDocuments();
+    const choice = await chooseRecoveredDocuments(items);
+    if (!choice || choice.items.length === 0) return;
+    if (choice.items.some((item) => recovery.contains(item))) {
+      await message(
+        "One of these recovered documents is already open. Save or close that tab first.",
+        { title: "Recovered document already open", kind: "info" },
+      );
+      return;
+    }
+    if (choice.action === "discard") {
+      if (
+        !(await ask(
+          `Discard ${choice.items.length} recovered ${choice.items.length === 1 ? "copy" : "copies"}? This cannot be undone.`,
+          {
+            title: "Discard recovered copies?",
+            kind: "warning",
+            okLabel: "Discard",
+            cancelLabel: "Cancel",
+          },
+        ))
+      )
+        return;
+      for (const item of choice.items)
+        await api.forgetRecoveredDocument(item.inboxId, item.document.id, newRecoveryId());
+      toast("Recovered copies discarded.");
+      return;
+    }
+    if (choice.action === "save-all") {
+      const folder = await openDialog({
+        title: "Choose a folder for recovered UTF-8 copies",
+        directory: true,
+        multiple: false,
+      });
+      if (!folder || Array.isArray(folder)) return;
+      const result = await api.saveRecoveredCopies(
+        folder,
+        choice.items.map((item) => ({ inboxId: item.inboxId, documentId: item.document.id })),
+        newRecoveryId(),
+      );
+      await message(
+        `${result.saved.length} ${result.saved.length === 1 ? "copy was" : "copies were"} saved.${result.failed.length ? `\n\nSome copies were not cleared:\n${result.failed.join("\n")}` : ""}`,
+        { title: "Recovered copies", kind: result.failed.length ? "warning" : "info" },
+      );
+      return;
+    }
+    let first: Session | null = null;
+    for (const item of choice.items) {
+      const text = await readRecoveredText(item);
+      const session = sessions.create();
+      session.path = null;
+      session.name = item.document.name || sessions.untitledName();
+      session.language = recoveryLanguage(item.document.language);
+      session.savedContent = text === "" ? "\0" : "";
+      session.draft = text;
+      session.dirty = true;
+      session.lineEnding = item.document.lineEnding === "\r\n" ? "\r\n" : "\n";
+      session.hadBom = item.document.hadBom;
+      session.encoding = item.document.encoding ?? "UTF-8";
+      session.lossy = item.document.lossy;
+      session.readOnly = false;
+      session.recoveryId = newRecoveryId();
+      recovery.attach(session, item);
+      sessions.append(session);
+      first ??= session;
+    }
+    renderDocTabs();
+    if (first) await activateSession(first.id);
+    toast("Recovered copies opened. Use Save As to keep them as files.", 5200);
+  } catch (error) {
+    await message(String(error), { title: "Could not manage recovered documents", kind: "error" });
+  }
+}
+
 async function installCloseGuard(): Promise<void> {
   const win = getCurrentWindow();
   await win.onCloseRequested(async (event) => {
@@ -12805,11 +13143,32 @@ async function installCloseGuard(): Promise<void> {
     }
     try {
       stopReadAloud();
+      if (activeDataJob && !restoreAfterClose) {
+        activeDataJob.canceled = true;
+        await api.cancelDataBackup(activeDataJob.id);
+        activeDataJob = null;
+      }
       const closed = await lifecycle.close(
         [...sessions.list()],
         async (ready) => {
           await flushRememberedTabs();
           if (!ready()) return false;
+          if (restoreAfterClose) {
+            const restoreId = restoreAfterClose;
+            try {
+              await api.armDataRestore(restoreId);
+              restoreAfterClose = null;
+              activeDataJob = null;
+              allowClose = true;
+              return true;
+            } catch (error) {
+              await api.cancelDataBackup(restoreId).catch(() => undefined);
+              restoreAfterClose = null;
+              activeDataJob = null;
+              await message(String(error), { title: "Could not start restore", kind: "error" });
+              return false;
+            }
+          }
           if (purgeAfterClose) {
             try {
               void api.aiCancelAll().catch(() => undefined);
@@ -12842,8 +13201,20 @@ async function installCloseGuard(): Promise<void> {
       );
       // A cancelled save prompt never reaches the finalize callback, so the
       // purge flag must not survive into a later ordinary close.
-      if (!closed) purgeAfterClose = false;
+      if (!closed) {
+        purgeAfterClose = false;
+        if (restoreAfterClose) {
+          await api.cancelDataBackup(restoreAfterClose).catch(() => undefined);
+          restoreAfterClose = null;
+          activeDataJob = null;
+        }
+      }
     } catch (error) {
+      if (restoreAfterClose) {
+        await api.cancelDataBackup(restoreAfterClose).catch(() => undefined);
+        restoreAfterClose = null;
+        activeDataJob = null;
+      }
       await message(String(error), { title: "Could not close", kind: "error" });
     }
   });
@@ -13742,6 +14113,11 @@ async function boot(): Promise<void> {
   installBundledFonts();
 
   settings = await queueSettings(() => api.getSettings());
+  const restoreReport = await api.getRestoreReport().catch(() => null);
+  const deferredWorkspace = restoreReport?.restored ? (settings.workspaceFolder ?? null) : null;
+  if (restoreReport?.restored) {
+    settings = { ...settings, workspaceFolder: null, sidebarTab: "outline" };
+  }
   // Captured before the startup branch records `welcomeSeen`. This is the only
   // gate: a new default-false setting would re-prompt every existing profile
   // after an upgrade.
@@ -14185,6 +14561,9 @@ async function boot(): Promise<void> {
         toast(String(error), 5200);
       }
     },
+    backupAppData,
+    restoreAppData,
+    showRecoveredDocuments,
     deleteAllData: async () => {
       const confirmed = await ask(
         "Delete all MDraft settings and data?\n\n" +
@@ -14438,7 +14817,9 @@ async function boot(): Promise<void> {
 
   const startup = await api.startupFiles().catch(() => [] as string[]);
   let showedWelcome = false;
-  if (startup.length > 0) {
+  if (restoreReport?.restored) {
+    await loadUntitled("", defaultDocumentLanguage());
+  } else if (startup.length > 0) {
     // The first path that is read fills the window's blank session; the slot is
     // consumed once, so every later path becomes a tab.
     await openPaths(startup);
@@ -14471,6 +14852,28 @@ async function boot(): Promise<void> {
     persist();
   }
   await restoreRecovery();
+
+  if (restoreReport) {
+    const review = restoreReport.review;
+    const action = await showRestoreReport(
+      restoreReport,
+      deferredWorkspace,
+      settings.lastTabs.length > 0,
+    );
+    if (deferredWorkspace) {
+      settings.workspaceFolder = deferredWorkspace;
+      persist();
+    }
+    await api
+      .acknowledgeRestoreReport(restoreReport.id)
+      .catch((error) => toast(`Could not clear restore staging: ${String(error)}`, 6200));
+    if (action === "workspace") {
+      if (deferredWorkspace) await openWorkspaceFolder(deferredWorkspace);
+      if (settings.lastTabs.length > 0) await restoreLastTabs();
+    } else if (restoreReport.restored && review && action === "recovered") {
+      await showRecoveredDocuments();
+    }
+  }
 
   // The first-run offer belongs after the Welcome document has rendered and any
   // recovery notice has settled. `open` probes the tools locally and stays

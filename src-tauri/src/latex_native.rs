@@ -12,7 +12,7 @@ pub mod log;
 mod runner;
 pub mod wsl;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -153,6 +153,10 @@ pub struct NativeCompileRequest {
     /// Captured local libraries, staged beside the project, never inside it.
     #[serde(default)]
     texmf: Option<crate::latex_texmf::TexmfSnapshot>,
+    /// Recompile from scratch: discard this project's session workspace first.
+    /// Additive with a default, so an older frontend stays valid.
+    #[serde(default)]
+    clean: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -430,7 +434,7 @@ fn validate_wsl(app: &AppHandle, distro: &str, bin: &str) -> Result<Capabilities
     let job = runner::job_dir(app, "validate-wsl")?;
     let work = job.path.join("project");
     std::fs::create_dir_all(&work).map_err(|error| error.to_string())?;
-    let _ = base_environment(Path::new(bin), &work, "TeX Live");
+    let _ = base_environment(Path::new(bin), &job.path, "TeX Live");
     let linux = wsl::linux_path(distro, &job.path, &work)?;
     let env = wsl_environment(bin, &linux, "lualatex", 0);
     let probe = |program: &str| -> Result<Option<String>, String> {
@@ -580,7 +584,7 @@ fn validate(app: &AppHandle, directory: &str) -> Result<Capabilities, String> {
     let job = runner::job_dir(app, "validate")?;
     let temp = job.path.join("probe");
     std::fs::create_dir_all(&temp).map_err(|error| error.to_string())?;
-    let env = base_environment(&bin, &temp, &name);
+    let env = base_environment(&bin, &job.path, &name);
     let mut engine_info = Vec::new();
     let mut engine_errors = Vec::new();
     for engine in &engines {
@@ -705,6 +709,331 @@ fn probe_tool(program: &Path, cwd: &Path, env: &[(String, String)]) -> Result<St
     Ok(first.to_string())
 }
 
+/// Load this workspace's staging record, resetting it when it belongs to another
+/// project/engine or an older layout. A reset loses the warm caches and any
+/// auxiliary files, which is the correct response to an unreadable state.
+fn load_workspace(workspace: &Path, root: &Path, main_file: &str, engine: &str) -> WorkspaceState {
+    let path = workspace.join("workspace.json");
+    if let Ok(text) = std::fs::read_to_string(&path)
+        && let Ok(state) = serde_json::from_str::<WorkspaceState>(&text)
+        && state.version == WORKSPACE_VERSION
+        && state.root == root.to_string_lossy().as_ref()
+        && state.main_file == main_file
+        && state.engine == engine
+    {
+        return state;
+    }
+    let empty = std::fs::read_dir(workspace)
+        .map(|mut entries| entries.next().is_none())
+        .unwrap_or(false);
+    if !empty {
+        let _ = std::fs::remove_dir_all(workspace);
+        let _ = std::fs::create_dir_all(workspace);
+    }
+    WorkspaceState::new(root, main_file, engine)
+}
+
+fn save_workspace(workspace: &Path, state: &WorkspaceState) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(state)
+        .map_err(|error| format!("Cannot write the LaTeX workspace record: {error}"))?;
+    std::fs::write(workspace.join("workspace.json"), text)
+        .map_err(|error| format!("Cannot write the LaTeX workspace record: {error}"))
+}
+
+/// A stable, path-safe name for one project/engine workspace.
+fn workspace_key(root: &Path, main_file: &str, engine: &str) -> String {
+    let material = format!(
+        "{}\0{}\0{}",
+        root.display(),
+        main_file.replace('\\', "/"),
+        engine
+    );
+    crate::latex::digest(material.as_bytes())
+}
+
+/// The main file's magic comment, from the bytes the frontend sent, before any
+/// staging exists. The engine decides the workspace key, so it must be selected
+/// first; a non-UTF-8 main file falls back to Auto exactly as the file reader
+/// would.
+fn request_main_text(request: &NativeCompileRequest) -> Option<String> {
+    let main = request.main_file.replace('\\', "/");
+    let file = request
+        .files
+        .iter()
+        .find(|file| file.path.replace('\\', "/") == main)?;
+    let bytes = STANDARD.decode(&file.data).ok()?;
+    String::from_utf8(bytes).ok()
+}
+
+/// Keep the session's workspace count and size bounded. It runs only when a
+/// workspace is first created, so the walk is not on the typing path.
+fn prune_workspaces(root: &Path, keep: &Path) {
+    const SESSION_LIMIT: u64 = 1024 * 1024 * 1024;
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    let mut others: Vec<(std::time::SystemTime, PathBuf, u64)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path == keep || !path.is_dir() {
+            continue;
+        }
+        others.push((
+            workspace_last_used(&path),
+            path.clone(),
+            directory_size(&path),
+        ));
+    }
+    others.sort_by_key(|(last, _, _)| *last);
+    let mut total: u64 = others.iter().map(|(_, _, size)| *size).sum();
+    while others.len() > 3 || (total > SESSION_LIMIT && !others.is_empty()) {
+        let (_, path, size) = others.remove(0);
+        if std::fs::remove_dir_all(&path).is_ok() {
+            total = total.saturating_sub(size);
+        }
+    }
+}
+
+fn workspace_last_used(path: &Path) -> std::time::SystemTime {
+    std::fs::metadata(path.join("workspace.json"))
+        .or_else(|_| std::fs::metadata(path))
+        .and_then(|metadata| metadata.modified())
+        .unwrap_or(std::time::UNIX_EPOCH)
+}
+
+fn directory_size(path: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    let mut total = 0u64;
+    for entry in entries.flatten() {
+        let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        if metadata.is_dir() {
+            total = total.saturating_add(directory_size(&entry.path()));
+        } else if metadata.is_file() {
+            total = total.saturating_add(metadata.len());
+        }
+    }
+    total
+}
+
+/// Remove generated auxiliary files after a failed build, keeping the staged
+/// inputs, caches and `tmp/` (the Biber extraction). A project file that
+/// happens to have one of these names is staged again by the next build.
+fn remove_auxiliary(work: &Path) {
+    const EXTENSIONS: &[&str] = &[
+        "aux", "toc", "lof", "lot", "out", "bbl", "blg", "bcf", "idx", "ind", "ilg", "nav", "snm",
+        "vrb", "log",
+    ];
+    let mut pending = vec![work.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if metadata.is_dir() {
+                pending.push(path);
+            } else if metadata.is_file() {
+                let name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("");
+                let generated = name.ends_with(".run.xml")
+                    || path
+                        .extension()
+                        .and_then(|extension| extension.to_str())
+                        .is_some_and(|extension| EXTENSIONS.contains(&extension));
+                if generated {
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
+    }
+}
+
+/// Delete every session workspace. Startup and the app exit call this; a
+/// workspace is never reused across app sessions.
+/// The generated files whose content says whether another LaTeX pass is
+/// needed. `.bcf` is a bibliography input, not a page-layout output, so it is
+/// handled by the bibliography decision; `.log`, `.pdf` and `.blg` are not
+/// signals.
+const AUXILIARY_EXTENSIONS: &[&str] = &[
+    "aux", "toc", "lof", "lot", "out", "bbl", "idx", "ind", "nav", "snm", "vrb",
+];
+
+fn auxiliary_signature(work: &Path) -> String {
+    let mut entries = BTreeMap::new();
+    collect_auxiliary(work, work, &mut entries);
+    let material = entries
+        .iter()
+        .map(|(path, digest)| format!("{path}\0{digest}\n"))
+        .collect::<String>();
+    crate::latex::digest(material.as_bytes())
+}
+
+fn collect_auxiliary(root: &Path, dir: &Path, out: &mut BTreeMap<String, String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.is_dir() {
+            collect_auxiliary(root, &path, out);
+        } else if metadata.is_file()
+            && path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| AUXILIARY_EXTENSIONS.contains(&extension))
+        {
+            let relative = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            out.insert(relative, file_digest(&path));
+        }
+    }
+}
+
+fn file_digest(path: &Path) -> String {
+    std::fs::read(path)
+        .map(|bytes| crate::latex::digest(&bytes))
+        .unwrap_or_default()
+}
+
+/// The citation/bibliography control lines of every BibTeX `.aux` (a chapter
+/// `.aux` carries its own citations), without the label and page-number lines
+/// that change on ordinary edits.
+fn aux_control(work: &Path) -> String {
+    let mut entries = BTreeMap::new();
+    collect_aux_control(work, work, &mut entries);
+    let material = entries
+        .iter()
+        .map(|(path, control)| format!("{path}\0{control}\n"))
+        .collect::<String>();
+    crate::latex::digest(material.as_bytes())
+}
+
+fn collect_aux_control(root: &Path, dir: &Path, out: &mut BTreeMap<String, String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.is_dir() {
+            collect_aux_control(root, &path, out);
+        } else if metadata.is_file()
+            && path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("aux"))
+        {
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            let mut control = String::new();
+            for line in text.lines() {
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("\\citation{")
+                    || trimmed.starts_with("\\bibdata{")
+                    || trimmed.starts_with("\\bibstyle{")
+                {
+                    control.push_str(trimmed);
+                    control.push('\n');
+                }
+            }
+            let relative = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            out.insert(relative, crate::latex::digest(control.as_bytes()));
+        }
+    }
+}
+
+/// Every `.bib`/`.bst` file the workspace can give the bibliography tool. A
+/// changed content forces a tool run even when the citation controls did not
+/// change.
+fn bibliography_inputs(workspace: &Path) -> String {
+    let mut entries = BTreeMap::new();
+    for root in [workspace.join("project"), workspace.join("texmf")] {
+        collect_bibliography_inputs(&root, &root, &mut entries);
+    }
+    let material = entries
+        .iter()
+        .map(|(path, digest)| format!("{path}\0{digest}\n"))
+        .collect::<String>();
+    crate::latex::digest(material.as_bytes())
+}
+
+fn collect_bibliography_inputs(root: &Path, dir: &Path, out: &mut BTreeMap<String, String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.is_dir() {
+            collect_bibliography_inputs(root, &path, out);
+        } else if metadata.is_file()
+            && path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case("bib") || extension.eq_ignore_ascii_case("bst")
+                })
+        {
+            let relative = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            out.insert(relative, file_digest(&path));
+        }
+    }
+}
+
+/// Which bibliography tool, if any, this pass needs. The `.bbl` is the
+/// authority: re-running a tool cannot fix keys that are absent from the
+/// `.bib`, so an unchanged `.bcf`/`.bib` is trusted instead of a persistent
+/// log warning.
+fn decide_bibliography(
+    work: &Path,
+    stem: &str,
+    bcf_before: &str,
+    bcf_after: &str,
+    control_before: &str,
+    control_after: &str,
+    bib_changed: bool,
+) -> Bibliography {
+    let has_bbl = work.join(format!("{stem}.bbl")).is_file();
+    if work.join(format!("{stem}.bcf")).is_file() {
+        if !has_bbl || bcf_before != bcf_after || bib_changed {
+            return Bibliography::Biber;
+        }
+        return Bibliography::None;
+    }
+    if !control_after.is_empty() && (!has_bbl || control_before != control_after || bib_changed) {
+        return Bibliography::Bibtex;
+    }
+    Bibliography::None
+}
+pub fn cleanup_session(app: &AppHandle) {
+    runner::cleanup_workspaces(app);
+}
 fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompileResult, String> {
     let started = Instant::now();
     let state = app
@@ -718,19 +1047,78 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
     let name = target.distribution();
     let (token, registration) = register(&request.job)?;
 
-    let job = runner::job_dir(app, &request.job)?;
-    let work = job.path.join("project");
-    let staged = stage(&work, &request)?;
-    let roots = stage_texmf(&job.path.join("texmf"), request.texmf.as_ref())?;
-    let engine = select_engine_with(
+    let main_text = request_main_text(&request);
+    let engine = select_engine_text(
         &settings.latex_native_engine,
         &|engine| target.has_engine(engine),
-        &staged.main,
+        main_text.as_deref(),
     )?;
+    let identity = target.engine_identity(&engine);
+    let root = match request.root.as_deref() {
+        Some(root) => Some(
+            std::fs::canonicalize(root)
+                .map_err(|error| format!("Cannot read the project directory: {error}"))?,
+        ),
+        None => None,
+    };
+    // A request without a root (the direct command and its integration test)
+    // keeps the old fresh-directory behaviour: eager files are staged, no
+    // manifest, and nothing is reused. The shipped frontend always sends root.
+    let _temporary_job: Option<runner::JobDir>;
+    let workspace_path: PathBuf;
+    let workspace_created: bool;
+    match &root {
+        Some(root) => {
+            let key = workspace_key(root, &request.main_file, &identity);
+            if request.clean {
+                // Recompile from scratch: remove the workspace before anything
+                // reads its .aux, .bbl or caches.
+                let existing = runner::workspace_dir(app, &key)?;
+                let _ = std::fs::remove_dir_all(&existing.path);
+            }
+            let workspace = runner::workspace_dir(app, &key)?;
+            workspace_created = workspace.created;
+            workspace_path = workspace.path;
+            _temporary_job = None;
+        }
+        None => {
+            let job = runner::job_dir(app, &request.job)?;
+            workspace_path = job.path.clone();
+            workspace_created = true;
+            _temporary_job = Some(job);
+        }
+    }
+    if workspace_created
+        && root.is_some()
+        && let Ok(session_root) = runner::workspace_root(app)
+    {
+        prune_workspaces(&session_root, &workspace_path);
+    }
+    let work = workspace_path.join("project");
+    let main_file = request.main_file.replace('\\', "/");
+    let mut workspace_state = load_workspace(
+        &workspace_path,
+        root.as_deref().unwrap_or(Path::new("")),
+        &main_file,
+        &identity,
+    );
+    // The previous `.bib`/`.bst` content, before this request's files are
+    // staged. A content change forces the bibliography tool even when the
+    // citation controls themselves did not change.
+    let bib_before = bibliography_inputs(&workspace_path);
+    let staged = stage(&workspace_path, &request, &mut workspace_state)?;
+    let roots = stage_texmf(
+        &workspace_path.join("texmf"),
+        request.texmf.as_ref(),
+        &mut workspace_state,
+    )?;
+    let bib_after = bibliography_inputs(&workspace_path);
+    let bib_changed = bib_before != bib_after;
+    save_workspace(&workspace_path, &workspace_state)?;
     if matches!(target, Target::Wsl(_)) {
         emit(app, &request.job, "starting-wsl", None);
     }
-    let env = target.environment(&job.path, &work, &engine, roots)?;
+    let env = target.environment(&workspace_path, &work, &engine, roots)?;
     let main_name = staged
         .main
         .file_name()
@@ -744,6 +1132,7 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
         .strip_suffix(".tex")
         .unwrap_or(&main_name)
         .to_string();
+    let mut aux_before = auxiliary_signature(&work);
 
     let mut logs: Vec<String> = Vec::new();
     let mut passes = 0u32;
@@ -764,6 +1153,9 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
             cancelled = true;
             break;
         }
+        // The previous pass's bibliography state, before this pass rewrites it.
+        let bcf_before = file_digest(&work.join(format!("{stem}.bcf")));
+        let control_before = aux_control(&work);
         passes += 1;
         emit(app, &request.job, "compiling", Some(&engine));
         let args = engine_arguments(&engine, &main_argument);
@@ -783,16 +1175,28 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
             logs.push(log.clone());
         }
         let parsed = log::parse(&log, &staged.sources);
-        if parsed.bibliography != Bibliography::None && bibliography_run == Bibliography::None {
-            let tool = match parsed.bibliography {
+        let bcf_after = file_digest(&work.join(format!("{stem}.bcf")));
+        let control_after = aux_control(&work);
+        let bibliography = decide_bibliography(
+            &work,
+            &stem,
+            &bcf_before,
+            &bcf_after,
+            &control_before,
+            &control_after,
+            bib_changed,
+        );
+        if bibliography != Bibliography::None && bibliography_run == Bibliography::None {
+            let tool = match bibliography {
                 Bibliography::Bibtex => "bibtex",
                 Bibliography::Biber => "biber",
                 Bibliography::None => "",
             };
             if target.has_tool(tool) {
-                bibliography_run = parsed.bibliography;
+                bibliography_run = bibliography;
                 emit(app, &request.job, "bibliography", Some(tool));
                 let args = vec![OsString::from(stem.clone())];
+                let bbl_before = file_digest(&work.join(format!("{stem}.bbl")));
                 let helper = runner::run(
                     &target.spec(tool, args, &work, &env, PROBE_TIMEOUT * 3)?,
                     &token,
@@ -800,7 +1204,12 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
                 if !helper.console.trim().is_empty() {
                     logs.push(helper.console);
                 }
-                force_rerun = true;
+                // Only a changed .bbl requires another LaTeX pass. A tool run
+                // that produced identical output does not.
+                let bbl_after = file_digest(&work.join(format!("{stem}.bbl")));
+                if bbl_before != bbl_after {
+                    force_rerun = true;
+                }
             } else {
                 missing_tool = Some(format!(
                     "This document needs {tool}, but it is not part of the selected installation. Install it with the distribution\x27s own tools, then compile again."
@@ -810,7 +1219,10 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
         if cancelled || timed_out {
             break;
         }
-        if (!parsed.rerun && !force_rerun) || outcome.status != 0 {
+        let aux_after = auxiliary_signature(&work);
+        let aux_changed = aux_before != aux_after;
+        aux_before = aux_after;
+        if (!parsed.rerun && !aux_changed && !force_rerun) || outcome.status != 0 {
             break;
         }
         force_rerun = false;
@@ -879,6 +1291,12 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
             .diagnostics
             .iter()
             .any(|entry| entry.severity == Severity::Warning);
+    if !success {
+        // A failed or cancelled pass can leave a half-written .aux/.bcf. Keep
+        // the staged sources, caches and tmp/ (the Biber extraction), but let
+        // the next build start from clean outputs.
+        remove_auxiliary(&work);
+    }
     Ok(NativeCompileResult {
         pdf: if success {
             partial.as_ref().map(|bytes| STANDARD.encode(bytes))
@@ -918,22 +1336,78 @@ fn emit(app: &AppHandle, job: &str, phase: &str, detail: Option<&str>) {
     );
 }
 
+/// Bump when the staging record or layout changes; an older record is discarded.
+const WORKSPACE_VERSION: u32 = 1;
+
+/// What one staged project file was copied from.
+///
+/// Eager files (the main file and open buffers) use `digest`; manifest files
+/// use the source's size and modification stamp. A generated file with the same
+/// name is not in this record, so reusing the workspace never overwrites it
+/// just because the source is unchanged.
+#[derive(Serialize, Deserialize, Clone)]
+struct StagedFile {
+    size: u64,
+    modified: u64,
+    /// Non-empty for an eager file; empty for a manifest file.
+    digest: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct WorkspaceState {
+    version: u32,
+    root: String,
+    main_file: String,
+    engine: String,
+    texmf_revision: Option<String>,
+    staged: BTreeMap<String, StagedFile>,
+}
+
+impl WorkspaceState {
+    fn new(root: &Path, main_file: &str, engine: &str) -> Self {
+        WorkspaceState {
+            version: WORKSPACE_VERSION,
+            root: root.to_string_lossy().into_owned(),
+            main_file: main_file.to_string(),
+            engine: engine.to_string(),
+            texmf_revision: None,
+            staged: BTreeMap::new(),
+        }
+    }
+}
+
+fn file_stamp(metadata: &std::fs::Metadata) -> u64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|age| u64::try_from(age.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
 struct Staged {
     main: PathBuf,
     sources: BTreeMap<String, String>,
 }
 
-fn stage(work: &Path, request: &NativeCompileRequest) -> Result<Staged, String> {
+fn stage(
+    workspace: &Path,
+    request: &NativeCompileRequest,
+    state: &mut WorkspaceState,
+) -> Result<Staged, String> {
     if request.files.is_empty() {
         return Err("The LaTeX project has no files.".into());
     }
     if request.files.len() > MAX_FILES {
         return Err("The LaTeX project exceeds its file count limit.".into());
     }
-    std::fs::create_dir_all(work).map_err(|error| error.to_string())?;
+    let work = workspace.join("project");
+    std::fs::create_dir_all(&work).map_err(|error| error.to_string())?;
     let mut total = 0usize;
     let mut main = None;
     let mut sources = BTreeMap::new();
+    let mut desired = BTreeSet::new();
+    let main_relative = request.main_file.replace('\\', "/");
     for file in &request.files {
         let relative = safe_relative(&file.path)?;
         if is_executable(&relative) {
@@ -954,25 +1428,42 @@ fn stage(work: &Path, request: &NativeCompileRequest) -> Result<Staged, String> 
         if total > MAX_PROJECT {
             return Err("The LaTeX project exceeds 64 MiB.".into());
         }
+        desired.insert(relative.clone());
         let target = work.join(&relative);
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| {
-                format!(
-                    "Cannot create {} in the job directory: {error}",
-                    parent.display()
-                )
-            })?;
+        // The eager bytes win over every disk copy, including one the engine
+        // rewrote in the previous build. Compare the staged file, not the
+        // record, so a generated overwrite cannot hide the reader's buffer.
+        let same = target
+            .metadata()
+            .ok()
+            .filter(|metadata| metadata.is_file() && metadata.len() == bytes.len() as u64)
+            .is_some_and(|_| {
+                std::fs::read(&target)
+                    .ok()
+                    .is_some_and(|current| current == bytes)
+            });
+        if !same {
+            ensure_parent_dirs(&work, &relative)?;
+            remove_conflicting_path(&target)?;
+            std::fs::write(&target, &bytes)
+                .map_err(|error| format!("Cannot stage {}: {error}", file.path))?;
         }
-        std::fs::write(&target, &bytes)
-            .map_err(|error| format!("Cannot stage {}: {error}", file.path))?;
-        if relative == request.main_file {
-            main = Some(target);
+        if relative == main_relative {
+            main = Some(target.clone());
         }
         if relative.to_ascii_lowercase().ends_with(".tex")
-            && let Ok(text) = String::from_utf8(bytes)
+            && let Ok(text) = String::from_utf8(bytes.clone())
         {
-            sources.insert(relative.replace('\\', "/"), text);
+            sources.insert(relative.clone(), text);
         }
+        state.staged.insert(
+            relative,
+            StagedFile {
+                size: bytes.len() as u64,
+                modified: 0,
+                digest: crate::latex::digest(&bytes),
+            },
+        );
     }
     if let Some(root) = &request.root {
         let root = std::fs::canonicalize(root)
@@ -984,6 +1475,11 @@ fn stage(work: &Path, request: &NativeCompileRequest) -> Result<Staged, String> 
         }
         let mut manifest_total = 0u64;
         for relative in &request.manifest {
+            let target_relative = safe_relative(relative)?;
+            // An eager file (including an unsaved buffer's bytes) already won.
+            if desired.contains(&target_relative) {
+                continue;
+            }
             let (source, size) = crate::latex::project_file_in(&root, relative)?;
             if size > MAX_MANIFEST_FILE {
                 return Err(format!(
@@ -999,40 +1495,97 @@ fn stage(work: &Path, request: &NativeCompileRequest) -> Result<Staged, String> 
                         .into(),
                 );
             }
-            let target_relative = safe_relative(relative)?;
             if is_executable(&target_relative) {
                 return Err(format!(
                     "{relative} is an executable file; project executables are never staged."
                 ));
             }
+            let metadata = std::fs::metadata(&source)
+                .map_err(|error| format!("Cannot read {relative}: {error}"))?;
+            let stamp = file_stamp(&metadata);
             let target = work.join(&target_relative);
-            // An eager file (including an unsaved buffer's bytes) already won.
-            if target.exists() {
-                continue;
-            }
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent).map_err(|error| {
-                    format!(
-                        "Cannot create {} in the job directory: {error}",
-                        parent.display()
-                    )
-                })?;
-            }
-            if std::fs::hard_link(&source, &target).is_err() {
+            // A source that has not changed is left exactly as it is. This is
+            // what keeps a generated file (a PDF, .bbl, .aux) that happens to
+            // share a project name from being replaced on every compile.
+            let unchanged = state.staged.get(&target_relative).is_some_and(|previous| {
+                previous.size == size
+                    && previous.modified == stamp
+                    && previous.digest.is_empty()
+                    && target.is_file()
+            });
+            if !unchanged {
+                ensure_parent_dirs(&work, &target_relative)?;
+                remove_conflicting_path(&target)?;
+                // Copy, never hard-link: a committed main.pdf, main.bbl or
+                // main.aux must not be writable through the staged copy.
                 std::fs::copy(&source, &target)
                     .map_err(|error| format!("Cannot stage {relative}: {error}"))?;
             }
             if target_relative.to_ascii_lowercase().ends_with(".tex")
-                && let Ok(text) = std::fs::read_to_string(&source)
+                && let Ok(text) = std::fs::read_to_string(&target)
             {
-                sources.insert(target_relative.replace('\\', "/"), text);
+                sources.insert(target_relative.clone(), text);
             }
+            state.staged.insert(
+                target_relative.clone(),
+                StagedFile {
+                    size,
+                    modified: stamp,
+                    digest: String::new(),
+                },
+            );
+            desired.insert(target_relative);
         }
+    }
+    // Remove a staged copy whose project file disappeared. Generated files are
+    // not in `staged`, so a .aux, .bbl or PDF the engine wrote is never
+    // deleted here.
+    let obsolete: Vec<String> = state
+        .staged
+        .keys()
+        .filter(|relative| !desired.contains(*relative))
+        .cloned()
+        .collect();
+    for relative in obsolete {
+        let target = work.join(&relative);
+        if target.is_file() {
+            let _ = std::fs::remove_file(&target);
+        }
+        state.staged.remove(&relative);
     }
     let main = main.ok_or("The main .tex file is not part of the project snapshot.")?;
     Ok(Staged { main, sources })
 }
 
+/// Create every parent of a staged file, removing a stale file that now has to
+/// become a directory. A project rename can turn a file into a directory.
+fn ensure_parent_dirs(work: &Path, relative: &str) -> Result<(), String> {
+    let parts: Vec<&str> = relative.split('/').collect();
+    let mut path = work.to_path_buf();
+    for part in &parts[..parts.len().saturating_sub(1)] {
+        path.push(part);
+        if let Ok(metadata) = std::fs::symlink_metadata(&path)
+            && metadata.is_file()
+        {
+            std::fs::remove_file(&path)
+                .map_err(|error| format!("Cannot replace {}: {error}", path.display()))?;
+        }
+        std::fs::create_dir_all(&path)
+            .map_err(|error| format!("Cannot create {}: {error}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// A staged path that is currently a directory cannot also be a file.
+fn remove_conflicting_path(target: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(target) {
+        Ok(metadata) if metadata.is_dir() => std::fs::remove_dir_all(target)
+            .map_err(|error| format!("Cannot replace {}: {error}", target.display())),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("Cannot read {}: {error}", target.display())),
+    }
+}
 /// A project-relative path that cannot leave the job directory.
 ///
 /// Unicode is allowed, because a reader's folders are their own; what is refused
@@ -1073,10 +1626,22 @@ fn select_engine(requested: &str, bin: &Path, _work: &Path, main: &Path) -> Resu
     select_engine_with(requested, &|engine| has_engine(bin, engine), main)
 }
 
+#[cfg(test)]
 fn select_engine_with(
     requested: &str,
     has: &dyn Fn(&str) -> bool,
     main: &Path,
+) -> Result<String, String> {
+    let text = std::fs::read_to_string(main).ok();
+    select_engine_text(requested, has, text.as_deref())
+}
+
+/// The engine selection shared by the file reader (tests and probes) and the
+/// workspace path, which has the main file's bytes before staging exists.
+fn select_engine_text(
+    requested: &str,
+    has: &dyn Fn(&str) -> bool,
+    text: Option<&str>,
 ) -> Result<String, String> {
     if let Some(engine) = known_engine(requested) {
         if !has(engine) {
@@ -1088,7 +1653,7 @@ fn select_engine_with(
     }
     // Auto recognises only the documented `% !TEX program` allowlist; a value
     // outside it is ignored rather than executed.
-    if let Ok(text) = std::fs::read_to_string(main) {
+    if let Some(text) = text {
         for line in text.lines().take(30) {
             let trimmed = line.trim_start();
             let Some(rest) = trimmed
@@ -1115,7 +1680,6 @@ fn select_engine_with(
     }
     Err("The selected installation has no usable engine.".into())
 }
-
 /// Where a job runs: a host binary directory, or TeX Live inside WSL.
 enum Target {
     Path { bin: PathBuf, name: String },
@@ -1187,16 +1751,34 @@ impl Target {
         }
     }
 
+    /// What makes a build workspace specific to one engine binary. A
+    /// distribution update changes the stamp, so an old format/aux state is not
+    /// reused silently.
+    fn engine_identity(&self, engine: &str) -> String {
+        match self {
+            Target::Path { bin, .. } => {
+                let path = engine_path(bin, engine);
+                let stamp = std::fs::metadata(&path)
+                    .map(|metadata| format!("{}:{}", metadata.len(), file_stamp(&metadata)))
+                    .unwrap_or_default();
+                format!("path:{}:{}:{stamp}", bin.display(), engine)
+            }
+            Target::Wsl(selected) => {
+                format!("wsl:{}:{}:{engine}", selected.distro, selected.bin)
+            }
+        }
+    }
+
     fn environment(
         &self,
         job: &Path,
-        work: &Path,
+        _work: &Path,
         engine: &str,
         roots: usize,
     ) -> Result<Vec<(String, String)>, String> {
         match self {
             Target::Path { bin, name } => {
-                let mut env = base_environment(bin, work, name);
+                let mut env = base_environment(bin, job, name);
                 for (key, value) in library_environment(self.family(), engine, roots) {
                     set_env(&mut env, &key, value);
                 }
@@ -1204,7 +1786,7 @@ impl Target {
             }
             Target::Wsl(selected) => {
                 // Creates the private directories on the Windows side.
-                let _ = base_environment(Path::new(&selected.bin), work, "TeX Live");
+                let _ = base_environment(Path::new(&selected.bin), job, "TeX Live");
                 let linux = wsl_linux_path(&selected.distro, job)?;
                 Ok(wsl_environment(&selected.bin, &linux, engine, roots))
             }
@@ -1235,17 +1817,18 @@ impl Target {
 /// The exact Linux environment of a WSL job. `job` is the Linux form of the
 /// Windows job directory; everything writable stays inside it.
 fn wsl_environment(bin: &str, job: &str, engine: &str, roots: usize) -> Vec<(String, String)> {
-    let work = format!("{job}/project");
+    // Build state lives at the workspace root; `project` is the cwd only, so a
+    // project may have its own tmp/cache/data folder.
     let mut env = vec![
         // Not the Windows PATH that WSL interop appends.
         ("PATH".to_string(), format!("{bin}:/usr/bin:/bin")),
         ("LANG".to_string(), "C.UTF-8".to_string()),
         ("LC_ALL".to_string(), "C.UTF-8".to_string()),
-        ("HOME".to_string(), work.clone()),
-        ("TMPDIR".to_string(), format!("{work}/tmp")),
-        ("TEXMFVAR".to_string(), format!("{work}/data")),
-        ("TEXMFCONFIG".to_string(), format!("{work}/config")),
-        ("TEXMFHOME".to_string(), format!("{work}/home")),
+        ("HOME".to_string(), job.to_string()),
+        ("TMPDIR".to_string(), format!("{job}/tmp")),
+        ("TEXMFVAR".to_string(), format!("{job}/data")),
+        ("TEXMFCONFIG".to_string(), format!("{job}/config")),
+        ("TEXMFHOME".to_string(), format!("{job}/home")),
     ];
     for (key, value) in library_environment(Family::Kpathsea, engine, roots) {
         set_env(&mut env, &key, value);
@@ -1312,11 +1895,25 @@ fn library_environment(family: Family, engine: &str, roots: usize) -> Vec<(Strin
 fn stage_texmf(
     dir: &Path,
     snapshot: Option<&crate::latex_texmf::TexmfSnapshot>,
+    state: &mut WorkspaceState,
 ) -> Result<usize, String> {
     let Some(snapshot) = snapshot else {
+        state.texmf_revision = None;
         return Ok(0);
     };
     crate::latex_texmf::validate_snapshot(snapshot)?;
+    let roots_ready = (0..snapshot.roots.len()).all(|index| dir.join(index.to_string()).is_dir());
+    if state.texmf_revision.as_deref() == Some(snapshot.revision.as_str()) && roots_ready {
+        return Ok(snapshot.roots.len());
+    }
+    if dir.exists() {
+        std::fs::remove_dir_all(dir).map_err(|error| {
+            format!(
+                "Cannot replace the staged library folder {}: {error}",
+                dir.display()
+            )
+        })?;
+    }
     for index in 0..snapshot.roots.len() {
         std::fs::create_dir_all(dir.join(index.to_string())).map_err(|error| error.to_string())?;
     }
@@ -1334,9 +1931,9 @@ fn stage_texmf(
         std::fs::write(&target, &bytes)
             .map_err(|error| format!("Cannot stage the library file {}: {error}", file.path))?;
     }
+    state.texmf_revision = Some(snapshot.revision.clone());
     Ok(snapshot.roots.len())
 }
-
 fn wsl_distribution_name(distro: &str) -> String {
     format!("TeX Live (WSL: {distro})")
 }
@@ -1402,7 +1999,7 @@ fn set_env(env: &mut Vec<(String, String)>, key: &str, value: String) {
     env.push((key.to_string(), value));
 }
 
-fn base_environment(bin: &Path, work: &Path, distribution: &str) -> Vec<(String, String)> {
+fn base_environment(bin: &Path, state: &Path, distribution: &str) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = Vec::new();
     let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
     if cfg!(windows) {
@@ -1465,23 +2062,25 @@ fn base_environment(bin: &Path, work: &Path, distribution: &str) -> Vec<(String,
             std::env::var("LC_ALL").unwrap_or_else(|_| "C.UTF-8".into()),
         );
     }
-    let temp = work.join("tmp");
-    let cache = work.join("cache");
-    let config = work.join("config");
-    let data = work.join("data");
+    // Build state lives at the workspace root, not inside the project copy: a
+    // project may legitimately have a `tmp`, `cache` or `data` folder.
+    let temp = state.join("tmp");
+    let cache = state.join("cache");
+    let config = state.join("config");
+    let data = state.join("data");
     for directory in [&temp, &cache, &config, &data] {
         let _ = std::fs::create_dir_all(directory);
     }
     set_env(&mut env, "TEMP", temp.display().to_string());
     set_env(&mut env, "TMP", temp.display().to_string());
     set_env(&mut env, "TMPDIR", temp.display().to_string());
-    set_env(&mut env, "HOME", work.display().to_string());
+    set_env(&mut env, "HOME", state.display().to_string());
     set_env(&mut env, "TEXMFVAR", data.display().to_string());
     set_env(&mut env, "TEXMFCONFIG", config.display().to_string());
     set_env(
         &mut env,
         "TEXMFHOME",
-        work.join("home").display().to_string(),
+        state.join("home").display().to_string(),
     );
     // TeX Live's luaotfload treats a single TEXMFCACHE entry as an unusable
     // font cache and exits with "no writeable cache path"; its default list
@@ -1592,7 +2191,8 @@ mod tests {
         let base =
             std::env::temp_dir().join(format!("mdraft-native-manifest-{}", std::process::id()));
         let root = base.join("project");
-        let work = base.join("job");
+        let workspace = base.join("job");
+        let work = workspace.join("project");
         std::fs::create_dir_all(root.join("figures")).unwrap();
         std::fs::write(root.join("main.tex"), b"disk main").unwrap();
         std::fs::write(root.join("extra.tex"), b"manifest source").unwrap();
@@ -1611,8 +2211,10 @@ mod tests {
                 "figures/a.bin".into(),
             ],
             texmf: None,
+            clean: false,
         };
-        let staged = stage(&work, &request).unwrap();
+        let mut state = WorkspaceState::new(&root, "main.tex", "lualatex");
+        let staged = stage(&workspace, &request, &mut state).unwrap();
         assert_eq!(
             std::fs::read(work.join("main.tex")).unwrap(),
             b"open buffer"
@@ -1629,6 +2231,115 @@ mod tests {
         let _ = std::fs::remove_dir_all(base);
     }
 
+    #[test]
+    fn stage_copies_project_files_instead_of_linking_them() {
+        let base = std::env::temp_dir().join(format!("mdraft-native-copy-{}", std::process::id()));
+        let root = base.join("project");
+        let workspace = base.join("job");
+        std::fs::create_dir_all(&root).unwrap();
+        for (name, bytes) in [
+            ("main.tex", b"main".as_slice()),
+            ("main.pdf", b"project pdf".as_slice()),
+            ("main.bbl", b"project bbl".as_slice()),
+            ("main.aux", b"project aux".as_slice()),
+        ] {
+            std::fs::write(root.join(name), bytes).unwrap();
+        }
+        let request = NativeCompileRequest {
+            job: "copy".into(),
+            main_file: "main.tex".into(),
+            files: vec![NativeFile {
+                path: "main.tex".into(),
+                data: STANDARD.encode(b"open buffer"),
+            }],
+            root: Some(root.to_string_lossy().into_owned()),
+            manifest: vec![
+                "main.tex".into(),
+                "main.pdf".into(),
+                "main.bbl".into(),
+                "main.aux".into(),
+            ],
+            texmf: None,
+            clean: false,
+        };
+        let mut state = WorkspaceState::new(&root, "main.tex", "lualatex");
+        stage(&workspace, &request, &mut state).unwrap();
+        let work = workspace.join("project");
+        // The engine writes generated names in its own folder. A hard link
+        // would write through to the reader's project; a copy must not.
+        std::fs::write(work.join("main.pdf"), b"engine pdf").unwrap();
+        std::fs::write(work.join("main.bbl"), b"engine bbl").unwrap();
+        std::fs::write(work.join("main.aux"), b"engine aux").unwrap();
+        assert_eq!(
+            std::fs::read(root.join("main.pdf")).unwrap(),
+            b"project pdf"
+        );
+        assert_eq!(
+            std::fs::read(root.join("main.bbl")).unwrap(),
+            b"project bbl"
+        );
+        assert_eq!(
+            std::fs::read(root.join("main.aux")).unwrap(),
+            b"project aux"
+        );
+        assert_eq!(std::fs::read(work.join("main.pdf")).unwrap(), b"engine pdf");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn stage_reuses_unchanged_files_and_removes_deleted_ones() {
+        let base = std::env::temp_dir().join(format!("mdraft-native-sync-{}", std::process::id()));
+        let root = base.join("project");
+        let workspace = base.join("job");
+        std::fs::create_dir_all(root.join("figures")).unwrap();
+        std::fs::write(root.join("main.tex"), b"main").unwrap();
+        std::fs::write(root.join("extra.tex"), b"one").unwrap();
+        std::fs::write(root.join("figures/a.bin"), b"a").unwrap();
+        let request = |manifest: Vec<String>| NativeCompileRequest {
+            job: "sync".into(),
+            main_file: "main.tex".into(),
+            files: vec![NativeFile {
+                path: "main.tex".into(),
+                data: STANDARD.encode(b"main"),
+            }],
+            root: Some(root.to_string_lossy().into_owned()),
+            manifest,
+            texmf: None,
+            clean: false,
+        };
+        let mut state = WorkspaceState::new(&root, "main.tex", "lualatex");
+        stage(
+            &workspace,
+            &request(vec![
+                "main.tex".into(),
+                "extra.tex".into(),
+                "figures/a.bin".into(),
+            ]),
+            &mut state,
+        )
+        .unwrap();
+        let work = workspace.join("project");
+        assert_eq!(std::fs::read(work.join("extra.tex")).unwrap(), b"one");
+
+        std::fs::write(root.join("extra.tex"), b"two").unwrap();
+        std::fs::write(root.join("new.tex"), b"new").unwrap();
+        std::fs::remove_file(root.join("figures/a.bin")).unwrap();
+        stage(
+            &workspace,
+            &request(vec![
+                "main.tex".into(),
+                "extra.tex".into(),
+                "new.tex".into(),
+            ]),
+            &mut state,
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(work.join("extra.tex")).unwrap(), b"two");
+        assert_eq!(std::fs::read(work.join("new.tex")).unwrap(), b"new");
+        assert!(!work.join("figures/a.bin").exists());
+        assert_eq!(std::fs::read(work.join("main.tex")).unwrap(), b"main");
+        let _ = std::fs::remove_dir_all(base);
+    }
     #[test]
     fn an_executable_project_file_is_refused() {
         assert!(is_executable("tool.exe"));
@@ -1735,7 +2446,8 @@ mod tests {
     #[cfg(windows)]
     fn run_manifest_staging(target: &Target, base: &Path) {
         let project = base.join("project");
-        let work = base.join("work");
+        let workspace = base.join("job");
+        let work = workspace.join("project");
         std::fs::create_dir_all(project.join("figures")).unwrap();
         std::fs::write(
             project.join("main.tex"),
@@ -1756,8 +2468,10 @@ mod tests {
             root: Some(project.to_string_lossy().into_owned()),
             manifest: vec!["main.tex".into(), "figures/dot.png".into()],
             texmf: None,
+            clean: false,
         };
-        let staged = stage(&work, &request).unwrap();
+        let mut state = WorkspaceState::new(&project, "main.tex", "lualatex");
+        let staged = stage(&workspace, &request, &mut state).unwrap();
         assert!(
             work.join("figures/dot.png").is_file(),
             "the manifest image is staged"
@@ -1767,7 +2481,7 @@ mod tests {
                 eprintln!("{engine}: not installed (not run)");
                 continue;
             }
-            let env = target.environment(base, &work, engine, 0).unwrap();
+            let env = target.environment(&workspace, &work, engine, 0).unwrap();
             let outcome = runner::run(
                 &target
                     .spec(
@@ -2007,7 +2721,7 @@ mod tests {
             value(&env, "PATH"),
             Some("/usr/local/texlive/2025/bin/x86_64-linux:/usr/bin:/bin")
         );
-        assert_eq!(value(&env, "HOME"), Some("/mnt/c/jobs/a, b/project"));
+        assert_eq!(value(&env, "HOME"), Some("/mnt/c/jobs/a, b"));
         assert_eq!(value(&env, "TEXMFHOME"), Some("{../texmf/0}"));
         assert!(
             value(&env, "TEXMFVAR")
@@ -2015,10 +2729,7 @@ mod tests {
                 .starts_with("/mnt/c/jobs/a, b/")
         );
         let without = wsl_environment("/usr/bin", "/mnt/c/jobs/x", "pdflatex", 0);
-        assert_eq!(
-            value(&without, "TEXMFHOME"),
-            Some("/mnt/c/jobs/x/project/home")
-        );
+        assert_eq!(value(&without, "TEXMFHOME"), Some("/mnt/c/jobs/x/home"));
     }
 
     fn library_snapshot(
@@ -2064,7 +2775,11 @@ mod tests {
             ],
             3,
         );
-        assert_eq!(stage_texmf(&job.join("texmf"), Some(&snapshot)).unwrap(), 3);
+        let mut state = WorkspaceState::new(&job, "main.tex", "lualatex");
+        assert_eq!(
+            stage_texmf(&job.join("texmf"), Some(&snapshot), &mut state).unwrap(),
+            3
+        );
         assert_eq!(
             std::fs::read(job.join("texmf/0/tex/latex/a/a.sty")).unwrap(),
             b"x"
@@ -2075,8 +2790,8 @@ mod tests {
         );
         assert!(job.join("texmf/2").is_dir(), "an empty root still exists");
         let escaping = library_snapshot(&[(0, "tex/../../project/main.tex", b"x")], 1);
-        assert!(stage_texmf(&job.join("texmf2"), Some(&escaping)).is_err());
-        assert_eq!(stage_texmf(&job.join("none"), None).unwrap(), 0);
+        assert!(stage_texmf(&job.join("texmf2"), Some(&escaping), &mut state).is_err());
+        assert_eq!(stage_texmf(&job.join("none"), None, &mut state).unwrap(), 0);
         let _ = std::fs::remove_dir_all(job);
     }
 
@@ -2167,7 +2882,8 @@ mod tests {
         let job = std::env::temp_dir().join(format!("mdraft-texmf, real ü-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&job);
         let (snapshot, main) = library_fixture(&job);
-        let roots = stage_texmf(&job.join("texmf"), Some(&snapshot)).unwrap();
+        let mut state = WorkspaceState::new(&job, "main.tex", "lualatex");
+        let roots = stage_texmf(&job.join("texmf"), Some(&snapshot), &mut state).unwrap();
         let work = job.join("project");
         for engine in ["lualatex", "pdflatex", "xelatex"] {
             if !target.has_engine(engine) {
@@ -2222,7 +2938,8 @@ mod tests {
             .join(format!("wsl, job ü-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&job);
         let (snapshot, main) = library_fixture(&job);
-        let roots = stage_texmf(&job.join("texmf"), Some(&snapshot)).unwrap();
+        let mut state = WorkspaceState::new(&job, "main.tex", "lualatex");
+        let roots = stage_texmf(&job.join("texmf"), Some(&snapshot), &mut state).unwrap();
         let work = job.join("project");
         for engine in ["lualatex", "pdflatex"] {
             let env = target.environment(&job, &work, engine, roots).unwrap();
@@ -2288,5 +3005,115 @@ mod tests {
             survivors.console
         );
         let _ = std::fs::remove_dir_all(job);
+    }
+
+    fn temp_case(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "mdraft-native-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn the_auxiliary_signature_tracks_content_not_mtime() {
+        let work = temp_case("aux-signature");
+        std::fs::create_dir_all(work.join("chapters")).unwrap();
+        std::fs::write(work.join("main.aux"), b"\\newlabel{a}{{1}{1}}").unwrap();
+        std::fs::write(work.join("chapters/one.aux"), b"\\newlabel{b}{{2}{2}}").unwrap();
+        std::fs::write(work.join("main.log"), b"a log").unwrap();
+        let first = auxiliary_signature(&work);
+        // A no-op pass rewrites the same content.
+        std::fs::write(work.join("main.aux"), b"\\newlabel{a}{{1}{1}}").unwrap();
+        assert_eq!(first, auxiliary_signature(&work));
+        std::fs::write(work.join("chapters/one.aux"), b"\\newlabel{b}{{3}{3}}").unwrap();
+        assert_ne!(first, auxiliary_signature(&work));
+        let _ = std::fs::remove_dir_all(work);
+    }
+
+    #[test]
+    fn the_bibliography_decision_uses_bcf_bib_and_bbl_state() {
+        let work = temp_case("bib-decision");
+        let stem = "main";
+        assert_eq!(
+            decide_bibliography(&work, stem, "", "bcf", "", "", false),
+            Bibliography::None,
+            "no .bcf and no .aux control is not a bibliography"
+        );
+        std::fs::write(work.join("main.bcf"), b"bcf").unwrap();
+        assert_eq!(
+            decide_bibliography(&work, stem, "", "bcf", "", "", false),
+            Bibliography::Biber,
+            "no .bbl runs the tool"
+        );
+        std::fs::write(work.join("main.bbl"), b"bbl").unwrap();
+        assert_eq!(
+            decide_bibliography(&work, stem, "same", "same", "", "", false),
+            Bibliography::None,
+            "a current .bbl and unchanged inputs skip the tool"
+        );
+        assert_eq!(
+            decide_bibliography(&work, stem, "old", "new", "", "", false),
+            Bibliography::Biber,
+            "a changed .bcf runs Biber"
+        );
+        assert_eq!(
+            decide_bibliography(&work, stem, "same", "same", "", "", true),
+            Bibliography::Biber,
+            "a changed .bib runs Biber even when the .bcf is stable"
+        );
+        let _ = std::fs::remove_dir_all(work);
+    }
+
+    #[test]
+    fn the_bibtex_decision_ignores_page_and_label_changes() {
+        let work = temp_case("bibtex-decision");
+        std::fs::write(
+            work.join("main.aux"),
+            b"\\citation{a}\n\\bibdata{refs}\n\\bibstyle{plain}\n\\newlabel{x}{{1}{1}}\n",
+        )
+        .unwrap();
+        let control = aux_control(&work);
+        assert_eq!(control, aux_control(&work));
+        std::fs::write(
+            work.join("main.aux"),
+            b"\\citation{a}\n\\bibdata{refs}\n\\bibstyle{plain}\n\\newlabel{x}{{1}{2}}\n",
+        )
+        .unwrap();
+        assert_eq!(control, aux_control(&work));
+        std::fs::write(work.join("main.bbl"), b"bbl").unwrap();
+        assert_eq!(
+            decide_bibliography(&work, "main", "", "", &control, &control, false),
+            Bibliography::None
+        );
+        let changed = aux_control(&work);
+        std::fs::write(
+            work.join("main.aux"),
+            b"\\citation{a}\\citation{b}\n\\bibdata{refs}\n\\bibstyle{plain}\n",
+        )
+        .unwrap();
+        let changed_after = aux_control(&work);
+        assert_eq!(
+            decide_bibliography(&work, "main", "", "", &changed, &changed_after, false),
+            Bibliography::Bibtex
+        );
+        let _ = std::fs::remove_dir_all(work);
+    }
+
+    #[test]
+    fn the_bibliography_inputs_track_bib_content() {
+        let workspace = temp_case("bib-inputs");
+        std::fs::create_dir_all(workspace.join("project")).unwrap();
+        std::fs::write(workspace.join("project/refs.bib"), b"@book{a}").unwrap();
+        let first = bibliography_inputs(&workspace);
+        assert_eq!(first, bibliography_inputs(&workspace));
+        std::fs::write(workspace.join("project/refs.bib"), b"@book{b}").unwrap();
+        assert_ne!(first, bibliography_inputs(&workspace));
+        let _ = std::fs::remove_dir_all(workspace);
     }
 }

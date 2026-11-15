@@ -60,6 +60,31 @@ pub fn job_dir(app: &tauri::AppHandle, job: &str) -> Result<JobDir, String> {
     platform::job_dir(app, job)
 }
 
+/// A build workspace that lasts for the app session.
+///
+/// Unlike [`JobDir`], dropping it does not delete the tree: the caches, the
+/// auxiliary files and `tmp/` (where Biber extracts its runtime) are the point.
+/// [`cleanup_workspaces`] owns the session lifetime.
+pub struct SessionWorkspace {
+    pub path: PathBuf,
+    /// True when this call created the directory, so the caller can prune.
+    pub created: bool,
+}
+
+pub fn workspace_dir(app: &tauri::AppHandle, key: &str) -> Result<SessionWorkspace, String> {
+    platform::workspace_dir(app, key)
+}
+
+pub fn workspace_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    platform::workspace_root(app)
+}
+
+/// Delete every session workspace. This is the only cleanup; a workspace is
+/// never reused across app sessions.
+pub fn cleanup_workspaces(app: &tauri::AppHandle) {
+    platform::cleanup_workspaces(app);
+}
+
 /// Run one process, containing and cancelling its whole tree.
 pub fn run(spec: &RunSpec, cancel: &AtomicBool) -> Result<RunOutcome, String> {
     platform::run(spec, cancel)

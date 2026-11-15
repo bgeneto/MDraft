@@ -1935,6 +1935,7 @@ fn download_binary(
 static PANDOC_INSTALL: Mutex<()> = Mutex::new(());
 
 pub fn install<R: Runtime>(app: &AppHandle<R>) -> Result<PandocStatus, String> {
+    let _writer = crate::backup::gate::writer()?;
     // Two presses of Install must not write the same executable at once. The
     // second waits, then installs over a complete file. A poisoned lock only
     // means an earlier install panicked; the file write below is atomic.

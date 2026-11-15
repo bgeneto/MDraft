@@ -44,7 +44,11 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { otherTestHarnesses, ownsStagedExecutable } from "./test-harness-ownership.mjs";
+import {
+  otherTestHarnesses,
+  ownsStagedExecutable,
+  suspendTestProfileEngineLink,
+} from "./test-harness-ownership.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
@@ -128,6 +132,12 @@ const SUITES = [
     title: "P0 data safety (unit)",
     kind: "node",
     script: "p0-unit.mjs",
+  },
+  {
+    id: "backup-unit",
+    title: "Backup and recovered-document capture (unit)",
+    kind: "node",
+    script: "backup-unit.mjs",
   },
   {
     // The name the Save dialog pre-fills: title sources in four markups, the
@@ -697,6 +707,15 @@ const SUITES = [
     kind: "cdp",
     script: "dom-smoke.mjs",
     doc: "samples/feature-tour.md",
+  },
+  {
+    id: "backup",
+    title: "Backup and restore preparation",
+    kind: "cdp",
+    script: "backup-test.mjs",
+    doc: "samples/feature-tour.md",
+    skipEngine: true,
+    selfRestart: true,
   },
   {
     id: "sync",
@@ -2127,10 +2146,23 @@ async function runCdpSuite(suite, port, options, context) {
     await startTexpressoOrigin();
     resetTexmf();
   }
+  // Backups reject links, including an engine junction from another suite or
+  // an interrupted earlier run. Preserve that link while this suite runs.
+  const restoreEngineLink = suite.skipEngine ? suspendTestProfileEngineLink(appConfigDir()) : null;
   try {
     return await runCdpSuiteBody(suite, port, options, context);
   } finally {
-    if (suite.origin) await stopTexpressoOrigin();
+    try {
+      if (suite.origin) await stopTexpressoOrigin();
+    } finally {
+      try {
+        restoreEngineLink?.();
+      } catch (error) {
+        // A conflicting new entry must not be mistaken for our original link.
+        latexEngineLink = null;
+        throw error;
+      }
+    }
   }
 }
 
@@ -2205,6 +2237,12 @@ async function runCdpSuiteBody(suite, port, options, context) {
     return { ok, skipped: described.skipped, detail: described.detail, output };
   } finally {
     await stopApp(child);
+    if (suite.selfRestart) {
+      const restarted = (await listRunningInstances()).filter((instance) =>
+        ownsStagedExecutable(instance.path, context.staged),
+      );
+      await closeInstances(restarted);
+    }
     activeApp = null;
     fs.closeSync(outFd);
     fs.closeSync(errFd);
@@ -2408,7 +2446,7 @@ async function main() {
       );
 
       savedUserState = takeUserState(path.join(context.stage, "user-state"));
-      linkLatexEngine();
+      if (suites.some((suite) => !suite.skipEngine)) linkLatexEngine();
       fixtures = snapshotFixtures(suites);
     }
 

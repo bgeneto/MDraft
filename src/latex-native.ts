@@ -150,5 +150,6 @@ export function nativeToLatex(
     warningsTruncated: result.warningsTruncated,
     engine: latexEngineName(result.engine),
     elapsedMs: result.elapsedMs,
+    passes: result.passes,
   };
 }

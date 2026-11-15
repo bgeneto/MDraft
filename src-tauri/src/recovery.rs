@@ -211,6 +211,7 @@ pub fn list_recovery(app: AppHandle) -> Result<Vec<RecoveryEntry>, String> {
 
 #[tauri::command]
 pub fn write_recovery(app: AppHandle, entry: RecoveryEntry) -> Result<(), String> {
+    let _writer = crate::backup::gate::close_writer()?;
     let dir = store_dir(&app)?;
     write_entry(&dir, entry)?;
     Ok(())
@@ -218,6 +219,7 @@ pub fn write_recovery(app: AppHandle, entry: RecoveryEntry) -> Result<(), String
 
 #[tauri::command]
 pub fn remove_recovery(app: AppHandle, id: String) -> Result<(), String> {
+    let _writer = crate::backup::gate::close_writer()?;
     remove_entry(&store_dir(&app)?, &id)
 }
 

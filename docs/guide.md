@@ -415,6 +415,30 @@ Other editor features:
 MDraft keeps `settings.json`, AI prompt overrides in `ai-prompts.md`, recovery
 copies of unsaved buffers in `recovery/`, and downloaded tools in its
 application folder. **Preferences › Data › Open Settings Folder** opens it.
+
+**Back Up App Data…** saves one ZIP containing preferences, personal TeX
+packages, prompts and current unsaved writing. Downloaded tools and packages
+are included unless you uncheck that option. The ZIP is not encrypted and may
+contain private writing and paths; store it somewhere private. API keys and
+documents saved outside the application folders are not included. Choose a new
+file name: backups do not overwrite existing files. The size estimate covers
+saved data before compression; unsaved writing is added separately. After
+verification, you can show the finished ZIP in its folder.
+
+**Restore Backup…** checks the ZIP and lets you choose which available categories
+to restore. Before applying anything, MDraft asks where to save a verified safety
+backup of the current data. It then asks about unsaved documents and restarts.
+Unsaved writing from the archive becomes recovered copies, never overwrites its
+original file, and is available under **Recovered Documents…** until saved or
+discarded. Restored files do not reopen automatically: On Launch is set to New
+until you change it. Imported AI, post-export commands and native TeX settings
+stay off until reviewed. Downloaded files are retained for inspection and need trusted
+setup before use; restoring a backup does not download anything.
+
+Backups made by a newer, unsupported format need a compatible version of MDraft.
+The ZIP's `README.txt` and the [backup format reference](backup-format.md)
+describe manual recovery if the application cannot start.
+
 **Delete All MDraft Data…** asks for confirmation, handles unsaved documents
 through the usual Save/Discard/Cancel prompts, and restarts with default
 settings. It deletes those files and the WebView cache; API keys in the system
