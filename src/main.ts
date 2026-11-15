@@ -279,6 +279,7 @@ import {
 import { lineTextOf } from "./latex-references";
 import {
   clampScroll,
+  lineStarts,
   mapScrollOffset,
   rowCentre,
   scrollCorrection,
@@ -10482,6 +10483,10 @@ async function alignHtmlTextScroll(
   const region = near.reduce((a, b) =>
     Math.abs(a.from - offset) <= Math.abs(b.from - offset) ? a : b,
   ).region;
+  // Line starts are read before the region filter: each text node is its own
+  // region here, so its first word would otherwise have no predecessor.
+  const nearStarts = sourceLineStarts(near);
+  const starts = nearStarts.filter((_, i) => near[i].region === region);
   const anchors = near.filter((a) => a.region === region);
   const token = renderToken,
     epoch = scrollOwnership.epoch;
@@ -10514,6 +10519,7 @@ async function alignHtmlTextScroll(
     pairs.push({
       from: anchor.from,
       region,
+      lineStart: starts[point.at],
       origin: direction === "source" ? sourceY : previewY,
       target: direction === "source" ? previewY : sourceY,
     });
@@ -10568,6 +10574,15 @@ function previewScrollOffset(reference: number): number | null {
   return null;
 }
 
+/** Which of these ascending anchors open a line of the current source. */
+function sourceLineStarts(anchors: readonly { from: number }[]): boolean[] {
+  const text = editor.view.state.doc;
+  return lineStarts(
+    anchors.map((anchor) => anchor.from),
+    (offset) => text.lineAt(Math.min(offset, text.length)).number,
+  );
+}
+
 function alignDomTextScroll(direction: SyncPane, refined = false): boolean {
   if (compiledUi.logsOpen) return true;
   if (syncDragging || !wordMap || wordMap.source !== editor.getDoc()) return false;
@@ -10582,7 +10597,8 @@ function alignDomTextScroll(direction: SyncPane, refined = false): boolean {
   ).region;
   const pairs: ScrollPair[] = [];
   let estimated = false;
-  for (const anchor of near) {
+  const starts = sourceLineStarts(near);
+  for (const [i, anchor] of near.entries()) {
     if (anchor.region !== region || !anchor.node.isConnected) continue;
     const source = editor.scrollPoint(anchor.from);
     if (direction === "source" && !source.exact) continue;
@@ -10599,6 +10615,7 @@ function alignDomTextScroll(direction: SyncPane, refined = false): boolean {
       region,
       origin: direction === "source" ? sourceY : previewY,
       target: direction === "source" ? previewY : sourceY,
+      lineStart: starts[i],
     });
   }
   const measured = scrollCorrection(pairs, reference, scrollReference(otherPane(direction)));

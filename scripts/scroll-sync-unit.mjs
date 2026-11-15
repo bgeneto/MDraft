@@ -9,6 +9,7 @@ import {
   clampScroll,
   interpolate,
   levelStep,
+  lineStarts,
   mapScrollOffset,
   rowCentre,
   scrollCorrection,
@@ -52,6 +53,19 @@ check("tied wrapped rows have a stable representative", () =>
     20,
   ),
 );
+check("a wrapped row that opens a source line is represented by its first word", () => {
+  // One source row, three preview rows (a zoomed, narrow preview).
+  const start = { ...pair(0, 100, 100), lineStart: true };
+  assert.equal(scrollCorrection([start, pair(1, 100, 180), pair(2, 100, 260)], 100), 0);
+  // Two line starts in one row: the middle rule applies among them.
+  const second = { ...pair(2, 100, 260), lineStart: true };
+  assert.equal(scrollCorrection([start, pair(1, 100, 180), second], 100), 0);
+});
+check("line starts are the anchors whose predecessor is on an earlier line", () => {
+  const lineOf = (offset) => Math.floor(offset / 10);
+  assert.deepEqual(lineStarts([3, 5, 12, 14, 31], lineOf), [false, false, true, false, true]);
+  assert.deepEqual(lineStarts([], lineOf), []);
+});
 check("large source discontinuities are bounded", () =>
   assert.equal(scrollCorrection([pair(0, 100, 100), pair(10000, 120, 600)], 109), 0),
 );
