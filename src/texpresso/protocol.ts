@@ -106,7 +106,9 @@ export type FrameMessage =
   | { type: "zoom-wheel"; deltaY: number }
   | { type: "pdf"; seq: number; pdf: ArrayBuffer; ms: number }
   | { type: "error"; seq?: number; message: string }
-  | { type: "disposed"; seq: number };
+  | { type: "disposed"; seq: number }
+  /** One line of the bridge's compile activity, for Logs. */
+  | { type: "trace"; text: string };
 
 /** FNV-1a over UTF-16 code units; the bridge computes the same. */
 export function textHash(text: string): number {
@@ -213,6 +215,9 @@ export function parseFrameMessage(data: unknown): FrameMessage | null {
         : null;
     case "disposed":
       return int(m.seq) ? { type: "disposed", seq: m.seq } : null;
+    case "trace":
+      // Bounded: the text goes straight into the Logs panel.
+      return str(m.text) && m.text.length <= 500 ? { type: "trace", text: m.text } : null;
     default:
       return null;
   }

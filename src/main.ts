@@ -286,6 +286,8 @@ import {
   ScrollIndex,
   ScrollOwnership,
   SyncReference,
+  ABSORB_MIN_PX,
+  absorbResidual,
   blockCorrection,
   solveGesture,
   type BlockTop,
@@ -696,9 +698,22 @@ interface GesturePoint {
   offset: number | null;
   /** Row centre in screen pixels, in the pane the gesture happened in. */
   y: number;
+  /** Its own pane has already taken a leftover once; it never moves again. */
+  settled?: boolean;
 }
 /** Measure, write, measure again: a target that was not laid out is an estimate. */
 const GESTURE_PASSES = 3;
+/**
+ * How long a released click waits before its own pane takes the leftover the
+ * other pane could not. The second click of a double-click, or a triple-click,
+ * must land on the text it was aimed at, so nothing moves under the pointer
+ * until the click sequence has ended; any input in between cancels the move.
+ */
+const ABSORB_DELAY_MS = 400;
+/** Long enough for the eye to follow the clicked row to its new height. */
+const ABSORB_ANIMATION_MS = 180;
+let absorbTimer = 0;
+let absorbFrame = 0;
 /**
  * The last gesture, kept until the next input. A layout change after the
  * alignment (an image decodes, the deferred word map arrives) solves it again.
@@ -718,6 +733,7 @@ function resetSyncReference(): void {
   const moved = syncReference.source !== SYNC_MARGIN || syncReference.preview !== SYNC_MARGIN;
   syncReference.reset();
   gesturePin = null;
+  cancelGestureAbsorb();
   followTop.source = followTop.preview = null;
   // Only a pair that had moved was ever published; this also runs before the
   // sync section of the module exists.
@@ -4476,6 +4492,98 @@ let latexShadowKey: string | null = null;
 let latexStatusLast: { message: string; state?: CompiledStatus } | null = null;
 let texpressoHost: HTMLElement | null = null;
 
+/**
+ * What the frame has been doing, for Logs › Compiler output. The engine keeps
+ * no TeX log the host can read, and a cold run that fetches hundreds of bundle
+ * files one by one otherwise shows a status line that never changes.
+ */
+const TEXPRESSO_LOG_LINES = 400;
+let texpressoLog: string[] = [];
+/** Bundle downloads since the current activity began; null before the first count. */
+let texpressoFetch: {
+  baseFiles: number;
+  baseBytes: number;
+  files: number;
+  bytes: number;
+  started: number;
+  loggedFiles: number;
+  loggedAt: number;
+} | null = null;
+let texpressoWatching = false;
+/** Exports waiting on the frame; the download count runs while any does. */
+let texpressoExporting = 0;
+const TEXPRESSO_FETCH_TICK_MS = 750;
+
+function texpressoLogText(): string {
+  return texpressoLog.join("\n");
+}
+
+function texpressoLogLine(text: string): void {
+  texpressoLog.push(`[${new Date().toTimeString().slice(0, 8)}] ${text}`);
+  if (texpressoLog.length > TEXPRESSO_LOG_LINES)
+    texpressoLog.splice(0, texpressoLog.length - TEXPRESSO_LOG_LINES);
+  if (texpressoShowing()) compiledUi.liveOutput(texpressoLogText());
+}
+
+function megabytes(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * Count bundle downloads while the frame typesets or exports. The counters are
+ * process-wide and carry no paths; a delta from the first reading is what this
+ * activity fetched.
+ */
+function texpressoWatchFetches(): void {
+  if (texpressoWatching) return;
+  texpressoWatching = true;
+  texpressoFetch = null;
+  const tick = async (): Promise<void> => {
+    const stats = await api.latexStats().catch(() => null);
+    const now = performance.now();
+    if (stats && !texpressoFetch) {
+      texpressoFetch = {
+        baseFiles: stats.texpressoMisses,
+        baseBytes: stats.texpressoVerifiedBytes,
+        files: 0,
+        bytes: 0,
+        started: now,
+        loggedFiles: 0,
+        loggedAt: now,
+      };
+    } else if (stats && texpressoFetch) {
+      const fetch = texpressoFetch;
+      const files = stats.texpressoMisses - fetch.baseFiles;
+      if (files !== fetch.files) {
+        fetch.files = files;
+        fetch.bytes = stats.texpressoVerifiedBytes - fetch.baseBytes;
+        if (files - fetch.loggedFiles >= 25 || now - fetch.loggedAt >= 5000) {
+          texpressoLogLine(`Fetching TeX files: ${files} so far (${megabytes(fetch.bytes)})`);
+          fetch.loggedFiles = files;
+          fetch.loggedAt = now;
+        }
+        texpressoRefreshStatus();
+      }
+    }
+    const session = texpresso;
+    if (session && (session.busy || texpressoExporting > 0)) {
+      window.setTimeout(() => void tick(), TEXPRESSO_FETCH_TICK_MS);
+      return;
+    }
+    const done = texpressoFetch;
+    if (done && done.files > 0) {
+      const seconds = ((now - done.started) / 1000).toFixed(1);
+      texpressoLogLine(
+        `Fetched ${done.files} TeX file${done.files === 1 ? "" : "s"} (${megabytes(done.bytes)}) in ${seconds} s`,
+      );
+    }
+    texpressoFetch = null;
+    texpressoWatching = false;
+    texpressoRefreshStatus();
+  };
+  void tick();
+}
+
 function texpressoHostElement(): HTMLElement {
   if (!texpressoHost) {
     // A sibling of #preview, like the HTML guest: never inside a preview slot,
@@ -4602,6 +4710,9 @@ function texpressoPrepare(build: LatexBuildRequest, storeOnly: boolean): boolean
       texpressoHandlers,
     );
     texpresso.hold(settings.latexAutoCompile === false);
+    texpressoLog = [];
+    texpressoLogLine(`Preview starting (${ENGINE_LABELS[engine]})`);
+    texpressoWatchFetches();
     perfMark("texpresso-mount", { engine: frameEngine });
   }
   texpresso!.open(projectRelativePath(build.root.directory, doc.path, pathKey));
@@ -4681,8 +4792,20 @@ async function texpressoExportPdf(
     files: snapshot.files.length,
   });
   setLatexStatus("Typesetting the PDF…");
-  const reply = await session.exportPdf();
+  texpressoExporting += 1;
+  texpressoWatchFetches();
+  let reply: Awaited<ReturnType<TexpressoSession["exportPdf"]>>;
+  try {
+    reply = await session.exportPdf();
+  } finally {
+    texpressoExporting -= 1;
+  }
   if (owner.token !== renderToken || doc.id !== owner.activeId || session !== texpresso) return;
+  texpressoLogLine(
+    reply
+      ? `PDF for export ready (${megabytes(reply.pdf.length)}, ${(reply.ms / 1000).toFixed(1)} s)`
+      : "The PDF for export could not be produced",
+  );
   if (!reply) {
     latexInFlight = false;
     setLatexStatus("The PDF for export could not be produced.");
@@ -4696,7 +4819,7 @@ async function texpressoExportPdf(
     sources: nativeSources(snapshot),
     files: new Set(snapshot.files.map((file) => file.path)),
     mainFile: snapshot.mainFile,
-    log: "",
+    log: texpressoLogText(),
     warnings,
     warningsTruncated: false,
     engine: ENGINE_LABELS[build.engineChoice?.engine ?? "lualatex"],
@@ -4817,7 +4940,12 @@ function texpressoLiveStatus(): string {
   if (!session.ready) return "Preview starting…";
   const errors = session.problems.filter((p) => p.severity === "error").length;
   const state = session.held ? "Preview paused" : session.busy ? "Typesetting…" : "Preview live";
-  return errors ? `${state} · ${errors} error${errors === 1 ? "" : "s"}` : state;
+  const fetch = texpressoFetch;
+  const fetching =
+    fetch && fetch.files > 0
+      ? ` · Fetching TeX files: ${fetch.files} (${megabytes(fetch.bytes)})`
+      : "";
+  return `${state}${fetching}${errors ? ` · ${errors} error${errors === 1 ? "" : "s"}` : ""}`;
 }
 
 /** Redraw the status line with the frame's latest state. */
@@ -4867,7 +4995,7 @@ function texpressoProblems(session: TexpressoSession): void {
       ...(latexProject?.files ?? []),
     ]);
     panel.querySelector(".latex-log")?.remove();
-    compiledUi.details(panel, "", diagnostics.length, false);
+    compiledUi.details(panel, texpressoLogText(), diagnostics.length, false);
   }
 }
 
@@ -4912,8 +5040,17 @@ const texpressoHandlers = {
 function texpressoMessage(session: TexpressoSession, message: FrameMessage): void {
   switch (message.type) {
     case "status":
+      if (message.busy) texpressoWatchFetches();
+      texpressoLogLine(
+        message.busy
+          ? "Typesetting…"
+          : `Typeset${message.problems?.length ? ` · ${message.problems.length} problem${message.problems.length === 1 ? "" : "s"}` : ""}`,
+      );
       if (message.problems) texpressoProblems(session);
       texpressoRefreshStatus();
+      break;
+    case "trace":
+      texpressoLogLine(`frame: ${message.text}`);
       break;
     case "painted": {
       const sent = session.sentAt.get(message.seq);
@@ -10837,7 +10974,9 @@ function alignPagesScroll(direction: SyncPane, refined = false): void {
 // A click, a double-click or a settled drag in one pane brings its counterpart
 // in the other pane to the same height, and then tells scroll sync where the two
 // rows ended up, so the next wheel tick continues from there. The pane the
-// gesture happened in is never scrolled. Two earlier attempts at moving a pane on
+// gesture happened in is not scrolled while the gesture can still continue; it
+// only takes, afterwards, what the other pane could not (scheduleGestureAbsorb).
+// Two earlier attempts at moving a pane on
 // a click were reverted; docs/architecture.md records
 // why this one is different, and the rule a new call site has to keep.
 // ---------------------------------------------------------------------------
@@ -11026,6 +11165,7 @@ function levelDomGesture(point: GesturePoint, pass = 0): void {
   // What is left is where the counterpart really is: the pair is true at once,
   // even when the pane stopped at the end of its range.
   calibrateGesture(point, delta - moved);
+  scheduleGestureAbsorb(point, delta - moved);
   if (Math.abs(moved) >= 0.5 && pass + 1 < GESTURE_PASSES)
     afterGestureLayout(() => levelDomGesture(point, pass + 1));
 }
@@ -11046,6 +11186,83 @@ function writeGesture(pane: SyncPane, delta: number): number {
   }
   scrollOwnership.wrote(pane, paneScrollTop(pane), performance.now());
   return paneScrollTop(pane) - before;
+}
+
+function paneScrollMax(pane: SyncPane): number {
+  if (pane === "source") return editor.scrollMax();
+  return previewPane.scrollHeight - previewPane.clientHeight;
+}
+
+function cancelGestureAbsorb(): void {
+  window.clearTimeout(absorbTimer);
+  cancelAnimationFrame(absorbFrame);
+  absorbTimer = absorbFrame = 0;
+}
+
+/**
+ * Let the gesture's own pane take the leftover the other pane could not.
+ *
+ * The other pane stops at the end of its range: a source preamble of comments
+ * and settings renders to nothing, so a click near the top of the source has
+ * its counterpart far above, with the preview already at 0. Left as a skew, the
+ * pair only levels after the reader has scrolled several times that distance.
+ *
+ * Moving the clicked pane is what the earlier, reverted attempts got wrong, so
+ * this one keeps three rules: it waits until the click sequence has ended (a
+ * double- or triple-click still lands on its word), any input cancels it, and
+ * the row glides rather than jumps, so the eye stays on it. A small leftover is
+ * not worth that motion and stays with levelStep(). The HTML guest scrolls by
+ * message, so a gesture inside it never moves its own pane.
+ */
+function scheduleGestureAbsorb(point: GesturePoint, residual: number): void {
+  cancelGestureAbsorb();
+  if (point.settled || Math.abs(residual) < ABSORB_MIN_PX) return;
+  if (point.pane === "preview" && doc.language === "html") return;
+  const epoch = scrollOwnership.epoch,
+    token = renderToken,
+    source = editor.getDoc(),
+    from = paneScrollTop(point.pane);
+  absorbTimer = window.setTimeout(() => {
+    absorbTimer = 0;
+    if (
+      epoch !== scrollOwnership.epoch ||
+      token !== renderToken ||
+      source !== editor.getDoc() ||
+      !gestureSyncAvailable() ||
+      Math.abs(paneScrollTop(point.pane) - from) >= 1
+    )
+      return;
+    const shift = absorbResidual(residual, from, paneScrollMax(point.pane));
+    if (shift) animateGestureAbsorb(point, from, shift);
+  }, ABSORB_DELAY_MS);
+}
+
+function animateGestureAbsorb(point: GesturePoint, from: number, shift: number): void {
+  const epoch = scrollOwnership.epoch;
+  const instant = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+  const start = performance.now();
+  const step = (now: number): void => {
+    absorbFrame = 0;
+    // A wheel, key or press during the glide owns the panes from there.
+    if (epoch !== scrollOwnership.epoch || !gestureSyncAvailable()) return;
+    const t = instant ? 1 : Math.min(1, (now - start) / ABSORB_ANIMATION_MS);
+    const eased = 1 - (1 - t) ** 3;
+    writeGesture(point.pane, from + shift * eased - paneScrollTop(point.pane));
+    if (t < 1) {
+      absorbFrame = requestAnimationFrame(step);
+      return;
+    }
+    const moved = paneScrollTop(point.pane) - from;
+    const settled: GesturePoint = { ...point, y: point.y - moved, settled: true };
+    if (gesturePin?.point === point) {
+      gesturePin.point = settled;
+      gesturePin.ownTop = paneScrollTop(point.pane);
+    }
+    // Measure both rows where they now are, so the pair is calibrated level
+    // and the next wheel tick has no skew to work off.
+    afterGestureLayout(() => levelGesture(settled, GESTURE_PASSES - 1));
+  };
+  absorbFrame = requestAnimationFrame(step);
 }
 
 /**
@@ -11092,6 +11309,7 @@ function levelPagesGesture(point: GesturePoint, pass = 0): void {
     };
   const moved = writeGesture(otherPane(point.pane), solved.delta);
   calibrateGesture(point, solved.delta - moved);
+  scheduleGestureAbsorb(point, solved.delta - moved);
   if (pass + 1 >= GESTURE_PASSES || (Math.abs(moved) < 0.5 && !estimated)) return;
   if (!estimated) {
     afterGestureLayout(() => levelPagesGesture(point, pass + 1));
@@ -11207,6 +11425,7 @@ async function levelHtmlGesture(point: GesturePoint, pass = 0): Promise<void> {
     }
   }
   calibrateGesture(point, delta - moved);
+  scheduleGestureAbsorb(point, delta - moved);
   if (Math.abs(moved) >= 0.5 && pass + 1 < GESTURE_PASSES)
     afterGestureLayout(() => void levelHtmlGesture(point, pass + 1));
 }

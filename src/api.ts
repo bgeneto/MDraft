@@ -988,6 +988,19 @@ export const latexStatus = () => invoke<boolean>("latex_status");
 export const texpressoStatus = () => invoke<boolean>("texpresso_status");
 /** Download and verify the production preview engine. */
 export const installTexpresso = () => invoke<void>("install_texpresso");
+
+/** Aggregate LaTeX transport counters since start; no paths or content. */
+export interface LatexStats {
+  assetRequests: number;
+  cacheHits: number;
+  cacheMisses: number;
+  texpressoHits: number;
+  /** TeXpresso bundle files downloaded rather than served from the cache. */
+  texpressoMisses: number;
+  texpressoVerifiedBytes: number;
+  texpressoRefusals: number;
+}
+export const latexStats = () => invoke<LatexStats>("latex_stats");
 /** Whether the bundled engine can compile with `engine` now (stage 6.2). */
 export const latexEngineAvailable = (engine: string) =>
   invoke<boolean>("latex_engine_available", { engine });

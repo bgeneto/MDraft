@@ -51,6 +51,12 @@
     if (trace.length > 40) trace.shift();
     document.documentElement.dataset.mdraftTrace = trace.join(" | ");
   };
+  // A compile step the reader should see in Logs as well: a long first run
+  // otherwise shows a status line that never changes.
+  const step = (what) => {
+    note(what);
+    post({ type: "trace", text: String(what).slice(0, 500) });
+  };
 
   // FNV-1a over UTF-16 code units; src/texpresso/protocol.ts computes the same.
   const hash = (text) => {
@@ -271,10 +277,10 @@
    */
   const requestCompile = () => {
     if (!api()?.compile) {
-      note("compile unavailable");
+      step("compile unavailable");
       return;
     }
-    note("compile asked");
+    step("compile asked");
     const token = ++compileToken;
     let tries = 0;
     const attempt = () => {
@@ -283,8 +289,8 @@
       Promise.resolve()
         .then(() => api().compile())
         .then(
-          () => note(`compile accepted try=${tries}`),
-          (error) => note(`compile refused: ${error?.message ?? error}`),
+          () => step(`compile accepted try=${tries}`),
+          (error) => step(`compile refused: ${error?.message ?? error}`),
         );
       // The app refuses a run while it typesets its own example project, so a
       // request is retried until the first canvas appears; the watchdog gives
@@ -305,7 +311,7 @@
             attempt();
             return;
           }
-          note("paint timeout");
+          step("paint timeout");
           painted(true);
           return;
         }
@@ -335,12 +341,12 @@
     const started = performance.now();
     const tick = () => {
       if (document.querySelectorAll("#pages canvas").length > 0) {
-        note("engine alive");
+        step("engine alive");
         requestCompile();
         return;
       }
       if (performance.now() - started > 15_000) {
-        note("engine alive timeout");
+        step("engine alive timeout");
         requestCompile();
         return;
       }
@@ -359,7 +365,7 @@
       const now = performance.now();
       if (canvases === lastCount && canvases > 0) {
         if (now - stableSince >= 250) {
-          note(`paint pages=${pages} canvases=${canvases} after=${Math.round(now - started)}`);
+          step(`paint pages=${pages} canvases=${canvases} after=${Math.round(now - started)}`);
           painted(true);
           return;
         }
@@ -402,7 +408,7 @@
     if (message.active) ensureOpen(message.active);
     positions.clear();
     if (message.files.length || gone.length || message.compile) {
-      note(`project files=${message.files.length} compile=${message.compile} replace=${message.replace}`);
+      step(`project files=${message.files.length} compile=${message.compile} replace=${message.replace}`);
       editSeq = message.seq;
       busy(true);
       scheduleFirstCompile();
@@ -465,7 +471,7 @@
   const painted = (done) => {
     const seq = editSeq;
     positions.clear();
-    note(`painted done=${done} seq=${seq} pages=${document.querySelectorAll("#pages .page").length}`);
+    step(`painted done=${done} seq=${seq} pages=${document.querySelectorAll("#pages .page").length}`);
     // The status does not wait for a paint: a hidden frame gets no animation
     // frames, and its problems are still the reader's.
     if (done) busy(false);

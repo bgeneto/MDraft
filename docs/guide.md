@@ -242,6 +242,14 @@ are converted to host pixels, so a 150% or 300% document does not drift by the
 zoom factor. The source and preview still follow only vertical movement; there
 is no horizontal sync.
 
+A click or selection levels the other pane with the clicked row. When that pane
+is already at the end of its range (the comments and settings at the top of a
+Typst or LaTeX file render to nothing, so the first paragraph sits far lower in
+the source than in the preview), the clicked pane takes the rest: once the
+click sequence has ended, so a double- or triple-click still lands on its word,
+the clicked row glides to the height of its counterpart. Any wheel, key or
+click before then cancels it, and a leftover under 24 px is not moved.
+
 Scrolling changes offsets only. It never moves the caret, the selection or
 focus, and it does not paint correspondence; selecting text does that, and a
 pending follow is suspended during a pointer gesture. A re-render, zoom or fit

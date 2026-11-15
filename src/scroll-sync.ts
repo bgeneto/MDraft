@@ -265,6 +265,32 @@ export function levelStep(
   return step;
 }
 
+/**
+ * The smallest leftover worth moving the gesture's own pane for. Below it the
+ * skew is left to levelStep(), which removes it through the reader's scrolling;
+ * moving text under the pointer to win a row's height is not worth the motion.
+ */
+export const ABSORB_MIN_PX = 24;
+
+/**
+ * How far the gesture's own pane scrolls to take the part of a level that the
+ * other pane could not, because it stopped at the end of its range (a source
+ * preamble of comments and `#set` rules before the first rendered block is the
+ * common case). `residual` is the counterpart's height minus the gesture row's;
+ * scrolling the own pane by `-residual` brings the row level with it. Clamped
+ * to the own pane's range; 0 when the leftover is small or nothing can move.
+ */
+export function absorbResidual(
+  residual: number,
+  ownTop: number,
+  ownMax: number,
+  min = ABSORB_MIN_PX,
+): number {
+  if (!Number.isFinite(residual) || !Number.isFinite(ownTop) || Math.abs(residual) < min) return 0;
+  const shift = clampScroll(ownTop - residual, ownMax) - ownTop;
+  return Math.abs(shift) < 0.5 ? 0 : shift;
+}
+
 export interface ScrollRegion {
   key: string;
   top: number;
