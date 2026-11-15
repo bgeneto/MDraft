@@ -904,6 +904,15 @@ const SUITES = [
     optIn: true,
   },
   {
+    id: "typst-service-install",
+    title: "Typst service install (published release)",
+    kind: "cdp",
+    script: "typst-service-install-test.mjs",
+    doc: "samples/typst-pages.typ",
+    safeWithInstalledApp: true,
+    optIn: true,
+  },
+  {
     id: "math",
     title: "Math rendering",
     kind: "cdp",
@@ -1303,6 +1312,27 @@ function appConfigDir() {
     return path.join(os.homedir(), "Library", "Application Support", identifier);
   }
   return path.join(process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config"), identifier);
+}
+
+/**
+ * Tauri's `app_data_dir` for the isolated profile. On Windows and macOS this is
+ * the same directory as the config dir; on Linux it is `~/.local/share`, not
+ * `~/.config`, so the typst service lives somewhere else from settings.json.
+ */
+function appDataDir() {
+  if (isWindows) {
+    return path.join(
+      process.env.APPDATA ?? path.join(os.homedir(), "AppData", "Roaming"),
+      identifier,
+    );
+  }
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Application Support", identifier);
+  }
+  return path.join(
+    process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local", "share"),
+    identifier,
+  );
 }
 
 // Windows keeps a running executable locked, so a leftover instance makes the
@@ -2042,6 +2072,11 @@ async function runNodeSuite(suite, options) {
 
 async function runCdpSuite(suite, port, options, context) {
   resetAppState();
+  // The install suite must start without a managed service, so it exercises the
+  // published download instead of finding a previous run's copy.
+  if (suite.id === "typst-service-install") {
+    fs.rmSync(path.join(appDataDir(), "typst", "service"), { recursive: true, force: true });
+  }
   // `resetAppState` removed the switch with the settings file; put it back for
   // the layers that compile. The hidden WasmTex backend still needs its assets,
   // which `linkLatexEngine` exposed before the suites started.
