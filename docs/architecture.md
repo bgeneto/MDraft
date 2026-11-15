@@ -39,8 +39,11 @@ LaTeX projects resolve a root, includes, bibliography and local libraries throug
 Rust validation. Engine selection supports the configured browser engine and
 explicitly selected native distributions. TeXpresso runs in a separate frame
 served by Rust from the application origin; downloaded engine bytes are pinned
-by SHA-256. Shell escape and project executables remain disabled. Native tools
-are external programs running with the user's permissions.
+by SHA-256. A bounded project manifest lets the engine fetch a file it actually
+opens through a per-frame capability on the same origin, without predicting
+every package's file names; native builds stage that manifest from the project
+root. Shell escape and project executables remain disabled. Native tools are
+external programs running with the user's permissions.
 
 ## Preferences and external work
 

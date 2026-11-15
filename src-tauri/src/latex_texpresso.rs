@@ -23,7 +23,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, LazyLock, Mutex, OnceLock,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant, SystemTime},
 };
@@ -34,6 +34,15 @@ const CONFIG: &str = include_str!("../texpresso.json");
 
 const FRAME_PREFIX: &str = "/texpresso/";
 const DATA_PREFIX: &str = "/texpresso-data/";
+const PROJECT_PREFIX: &str = "/project/";
+/// A project file the frame may fetch on demand.
+const PROJECT_FILE_LIMIT: u64 = 128 * 1024 * 1024;
+/// Bytes held by one frame's project table. A refetch replaces its entry, so a
+/// changed file does not count twice.
+const PROJECT_HELD_LIMIT: u64 = 1024 * 1024 * 1024;
+/// Clear cache asks the next frame's boot to delete the luaotfload cache too:
+/// it lives in the webview profile, where the Rust cache walk cannot reach it.
+static CLEAR_FONT_CACHE: AtomicBool = AtomicBool::new(false);
 /// The largest pinned file is the 27 MB XeTeX format.
 const MAX_DOWNLOAD: u64 = 64 * 1024 * 1024;
 /// Ceiling of the evictable part of the cache: the bundle files under `files/`.
@@ -627,9 +636,180 @@ fn table(root: &Path) -> Result<Arc<Table>, String> {
     Ok(table)
 }
 
+/// One live preview session: its canonical project root and the bytes its
+/// frame has fetched so far.
+struct ProjectSession {
+    root: PathBuf,
+    served: HashMap<String, u64>,
+}
+
+static PROJECT_SESSIONS: LazyLock<Mutex<HashMap<String, ProjectSession>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static PROJECT_TOKEN_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// The capability for one project root. The frame presents it on every
+/// on-demand request; without it the route cannot name a directory at all.
+pub fn project_token(root: &Path) -> Result<String, String> {
+    let root = fs::canonicalize(root)
+        .map_err(|error| format!("Cannot read the project directory: {error}"))?;
+    let mut sessions = PROJECT_SESSIONS
+        .lock()
+        .map_err(|_| "The preview session registry is unavailable.".to_string())?;
+    if let Some((token, _)) = sessions.iter().find(|(_, session)| session.root == root) {
+        return Ok(token.clone());
+    }
+    // Native builds also ask for a snapshot; keep abandoned roots bounded.
+    if sessions.len() >= 64
+        && let Some(oldest) = sessions.keys().next().cloned()
+    {
+        sessions.remove(&oldest);
+    }
+    let token = random_token();
+    sessions.insert(
+        token.clone(),
+        ProjectSession {
+            root,
+            served: HashMap::new(),
+        },
+    );
+    Ok(token)
+}
+
+/// Forget a frame's capability. The next frame gets a new token.
+pub fn revoke_project_token(token: &str) {
+    if let Ok(mut sessions) = PROJECT_SESSIONS.lock() {
+        sessions.remove(token);
+    }
+}
+
+fn random_token() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let mut material = Vec::new();
+    for _ in 0..2 {
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        hasher.write_u64(PROJECT_TOKEN_SEQ.fetch_add(1, Ordering::Relaxed));
+        material.extend_from_slice(&hasher.finish().to_le_bytes());
+    }
+    let now = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    material.extend_from_slice(&now.as_nanos().to_le_bytes());
+    material.extend_from_slice(&std::process::id().to_le_bytes());
+    Sha256::digest(&material)[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn percent_decode(value: &str) -> Result<String, String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'%' {
+            let high = bytes.get(at + 1).and_then(|byte| hex_digit(*byte));
+            let low = bytes.get(at + 2).and_then(|byte| hex_digit(*byte));
+            let (Some(high), Some(low)) = (high, low) else {
+                return Err("The project path has an invalid percent escape.".into());
+            };
+            decoded.push(high << 4 | low);
+            at += 3;
+        } else {
+            decoded.push(bytes[at]);
+            at += 1;
+        }
+    }
+    String::from_utf8(decoded).map_err(|_| "Project paths must be valid Unicode.".into())
+}
+
+fn project_kind(name: &str) -> &'static str {
+    let extension = Path::new(name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "pdf" => "application/pdf",
+        "otf" => "font/otf",
+        "ttf" => "font/ttf",
+        "ttc" | "otc" => "font/collection",
+        "tex" | "ltx" | "sty" | "cls" | "bib" | "bst" | "cfg" | "def" | "txt" | "csv" => {
+            "text/plain; charset=utf-8"
+        }
+        _ => "application/octet-stream",
+    }
+}
+
+/// Serve one project file through the frame's capability.
+fn serve_project(rest: &str) -> Answer {
+    let (token, encoded) = rest
+        .split_once('/')
+        .ok_or("Unknown project file request.")?;
+    let relative = percent_decode(encoded)?;
+    let root = PROJECT_SESSIONS
+        .lock()
+        .map_err(|_| "The preview session registry is unavailable.".to_string())?
+        .get(token)
+        .map(|session| session.root.clone())
+        .ok_or("The preview project session has ended.")?;
+    let (path, size) = crate::latex::project_file_in(&root, &relative)?;
+    if size > PROJECT_FILE_LIMIT {
+        return Err(format!(
+            "{relative} exceeds the 128 MiB project-file limit; move it outside the project."
+        ));
+    }
+    let bytes = fs::read(&path).map_err(|error| format!("Cannot read {relative}: {error}"))?;
+    if bytes.len() as u64 > PROJECT_FILE_LIMIT {
+        return Err(format!(
+            "{relative} exceeds the 128 MiB project-file limit; move it outside the project."
+        ));
+    }
+    let mut sessions = PROJECT_SESSIONS
+        .lock()
+        .map_err(|_| "The preview session registry is unavailable.".to_string())?;
+    let session = sessions
+        .get_mut(token)
+        .ok_or("The preview project session has ended.")?;
+    let held: u64 = session.served.values().sum();
+    let previous = session.served.get(&relative).copied().unwrap_or(0);
+    let next = held
+        .saturating_sub(previous)
+        .saturating_add(bytes.len() as u64);
+    if next > PROJECT_HELD_LIMIT {
+        return Err(
+            "The preview has fetched more than 1 GiB of project files; Clear cache or split the project."
+                .into(),
+        );
+    }
+    session.served.insert(relative.clone(), bytes.len() as u64);
+    Ok((bytes, project_kind(&relative)))
+}
+
 type Answer = Result<(Vec<u8>, &'static str), String>;
 
 fn serve_frame(root: &Path, name: &str) -> Answer {
+    if name == "boot.json" {
+        let clear = CLEAR_FONT_CACHE.swap(false, Ordering::Relaxed);
+        return Ok((
+            format!("{{\"clearFontCache\":{clear}}}").into_bytes(),
+            "application/json",
+        ));
+    }
     if let Some((_, bytes, kind)) = SHELL.iter().find(|(shell, _, _)| *shell == name) {
         // The page is served `no-store`, so every new frame asks for it: that
         // starts the download budget of a new preview session.
@@ -693,6 +873,9 @@ fn serve_data(root: &Path, relative: &str) -> Answer {
 /// Answer a frame, engine or data request; `None` when the path is not ours.
 /// `root` is the LaTeX data directory. The caller has checked the switch.
 pub fn serve(root: &Path, path: &str) -> Option<Answer> {
+    if let Some(rest) = path.strip_prefix(PROJECT_PREFIX) {
+        return Some(serve_project(rest));
+    }
     if let Some(name) = path.strip_prefix(FRAME_PREFIX) {
         return Some(serve_frame(root, name));
     }
@@ -724,11 +907,7 @@ pub fn install_with_progress(
     cleanup_temp_files(&data_dir(root), false);
 
     let config = config();
-    let total = config
-        .assets
-        .iter()
-        .map(|pin| pin.bytes)
-        .sum::<u64>()
+    let total = config.assets.iter().map(|pin| pin.bytes).sum::<u64>()
         + config.digests.bytes
         + config.bundle.list.bytes;
     let mut done = 0u64;
@@ -778,10 +957,7 @@ fn cleanup_temp_files(dir: &Path, recursive: bool) {
             }
             continue;
         }
-        let is_temp = entry
-            .file_name()
-            .to_string_lossy()
-            .starts_with(".mdraft-")
+        let is_temp = entry.file_name().to_string_lossy().starts_with(".mdraft-")
             && path.extension().is_some_and(|extension| extension == "tmp");
         // Only a file older than the install budget is certainly stale. A
         // preview compiling while the install starts may legitimately be
@@ -821,6 +997,8 @@ pub fn cache_bytes(root: &Path) -> u64 {
 /// Delete the downloaded TeX Live data, of this snapshot and of older ones.
 /// The engine files and the digest table stay, like the WasmTex engine does.
 pub fn clear(root: &Path) -> Result<u64, String> {
+    // The next frame deletes texpresso-luatex-caches before the app starts.
+    CLEAR_FONT_CACHE.store(true, Ordering::Relaxed);
     let data = root.join("texpresso");
     let freed = crate::latex::cache_size(&data).unwrap_or(0);
     if data.exists() {
@@ -935,6 +1113,97 @@ mod tests {
         ] {
             assert!(!origin_allowed(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_boot_file_consumes_the_font_cache_clear_flag() {
+        let root = scratch("boot-flag");
+        clear(&root).unwrap();
+        let (first, kind) = serve(&root, "/texpresso/boot.json").unwrap().unwrap();
+        assert_eq!(kind, "application/json");
+        assert!(
+            String::from_utf8_lossy(&first).contains("\"clearFontCache\":true"),
+            "{}",
+            String::from_utf8_lossy(&first)
+        );
+        let (second, _) = serve(&root, "/texpresso/boot.json").unwrap().unwrap();
+        assert!(
+            String::from_utf8_lossy(&second).contains("\"clearFontCache\":false"),
+            "{}",
+            String::from_utf8_lossy(&second)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_project_route_serves_a_file_with_a_live_token() {
+        let root = scratch("project-route");
+        fs::write(root.join("hello world.tex"), b"project bytes").unwrap();
+        let token = project_token(&root).unwrap();
+        let (bytes, kind) = serve(&root, &format!("/project/{token}/hello%20world.tex"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(bytes, b"project bytes");
+        assert!(kind.starts_with("text/plain"), "{kind}");
+        revoke_project_token(&token);
+        assert!(
+            serve(&root, &format!("/project/{token}/hello%20world.tex"))
+                .unwrap()
+                .is_err(),
+            "a revoked token no longer names a root"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_project_route_refuses_traversal_and_encoded_traversal() {
+        let root = scratch("project-traversal");
+        fs::write(root.join("main.tex"), b"main").unwrap();
+        let token = project_token(&root).unwrap();
+        for path in [
+            format!("/project/{token}/../secret.tex"),
+            format!("/project/{token}/%2e%2e/secret.tex"),
+            format!("/project/{token}/a/%2e%2e/%2e%2e/secret.tex"),
+            format!("/project/{token}/%2fsecret.tex"),
+            format!("/project/{token}/a%5cb.tex"),
+        ] {
+            let answer = serve(&root, &path).unwrap();
+            assert!(answer.is_err(), "{path} was served: {answer:?}");
+        }
+        revoke_project_token(&token);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_project_route_refuses_a_link_and_an_oversized_file() {
+        let root = scratch("project-link");
+        let outside = scratch("project-link-outside");
+        fs::write(outside.join("secret.tex"), b"secret").unwrap();
+        fs::write(root.join("main.tex"), b"main").unwrap();
+        let token = project_token(&root).unwrap();
+
+        #[cfg(unix)]
+        let made =
+            std::os::unix::fs::symlink(outside.join("secret.tex"), root.join("linked.tex")).is_ok();
+        #[cfg(windows)]
+        let made =
+            std::os::windows::fs::symlink_file(outside.join("secret.tex"), root.join("linked.tex"))
+                .is_ok();
+        if made {
+            let answer = serve(&root, &format!("/project/{token}/linked.tex")).unwrap();
+            assert!(answer.is_err(), "a symlink was served");
+        }
+
+        let large = root.join("large.bin");
+        let file = fs::File::create(&large).unwrap();
+        file.set_len(PROJECT_FILE_LIMIT + 1).unwrap();
+        drop(file);
+        let answer = serve(&root, &format!("/project/{token}/large.bin")).unwrap();
+        assert!(answer.is_err(), "an oversized file was served");
+
+        revoke_project_token(&token);
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(outside);
     }
 
     #[test]

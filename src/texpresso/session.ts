@@ -45,6 +45,8 @@ export interface TexpressoHandlers {
   onRecovery(session: TexpressoSession, step: "resync" | "restart"): void;
   /** The live buffer of a project file, LF-normalised, or null when not open. */
   currentText(rootDirectory: string, path: string): string | null;
+  /** Forget a disposed frame's on-demand capability. */
+  revokeToken?(token: string): void;
   theme(): TexpressoTheme;
   zoom(): number;
   reference(): number;
@@ -62,6 +64,10 @@ export class TexpressoSession {
   problems: TexpressoProblem[] = [];
   /** TeX Live names the engine loaded from a local library instead. */
   readonly libraryOverrides = new Set<string>();
+  /** Project files the engine fetched on demand in this frame. */
+  readonly projectFetched = new Set<string>();
+  /** The manifest stamp each fetched file had when the frame received it. */
+  private fetchedStamps = new Map<string, { size: number; modified: number }>();
   /** The edit sequence the last paint reflects, and when it was sent. */
   lastPainted = 0;
   readonly sentAt = new Map<number, number>();
@@ -70,6 +76,7 @@ export class TexpressoSession {
   private dirty = new Set<string>();
   private files = new Map<string, Held>();
   private project: PreparedProject | null = null;
+  private projectToken: string | null = null;
   /** The project last synced, whose library index the notices read. */
   get prepared(): PreparedProject | null {
     return this.project;
@@ -169,6 +176,11 @@ export class TexpressoSession {
   }
 
   private sendProject(prepared: PreparedProject, replace: boolean): void {
+    this.projectToken = prepared.projectToken;
+    if (replace) {
+      this.projectFetched.clear();
+      this.fetchedStamps.clear();
+    }
     const files: SyncFile[] = [];
     const transfer: Transferable[] = [];
     for (const [path, file] of prepared.files) {
@@ -196,9 +208,22 @@ export class TexpressoSession {
       this.files.set(path, { fingerprint });
       this.dirty.delete(path);
     }
-    const remove = [...this.files.keys()].filter((path) => !prepared.files.has(path));
+    const remove = new Set([...this.files.keys()].filter((path) => !prepared.files.has(path)));
     for (const path of remove) this.files.delete(path);
-    if (!replace && !files.length && !remove.length) {
+    // A file the engine fetched earlier is not in `this.files`: a manifest
+    // stamp change or a disappearance has to remove it explicitly so the next
+    // lookup fetches the new bytes (or reports the file missing).
+    for (const path of this.projectFetched) {
+      const before = this.fetchedStamps.get(path);
+      const now = prepared.manifest.get(path);
+      if (before && now && before.size === now.size && before.modified === now.modified) continue;
+      remove.add(path);
+      remove.add(path.toLowerCase());
+      this.projectFetched.delete(path);
+      this.fetchedStamps.delete(path);
+    }
+    const gone = [...remove];
+    if (!replace && !files.length && !gone.length) {
       if (this.active) this.frame.post({ type: "open", file: this.active });
       return;
     }
@@ -207,7 +232,7 @@ export class TexpressoSession {
         type: "project",
         main: prepared.main,
         files,
-        remove,
+        remove: gone,
         replace,
         active: this.active,
         compile: replace,
@@ -338,6 +363,12 @@ export class TexpressoSession {
       case "library-override":
         this.libraryOverrides.add(message.name);
         break;
+      case "project-fetched": {
+        this.projectFetched.add(message.name);
+        const stamp = this.project?.manifest.get(message.name);
+        if (stamp) this.fetchedStamps.set(message.name, stamp);
+        break;
+      }
       default:
         break;
     }
@@ -371,6 +402,8 @@ export class TexpressoSession {
     const old = this.frame;
     this.info = null;
     this.files.clear();
+    this.projectFetched.clear();
+    this.fetchedStamps.clear();
     this.recoveries = 0;
     void old.dispose();
     this.frame = this.start();
@@ -387,5 +420,9 @@ export class TexpressoSession {
     this.broken = true;
     this.queued = [];
     await this.frame.dispose();
+    if (this.projectToken) {
+      this.handlers.revokeToken?.(this.projectToken);
+      this.projectToken = null;
+    }
   }
 }

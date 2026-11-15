@@ -848,8 +848,27 @@ export type DocumentLanguage =
 export const isWebSource = (language: DocumentLanguage): boolean =>
   language === "javascript" || language === "css" || language === "json";
 
+/** One name in the bounded project-tree manifest. */
+export interface LatexProjectManifestFile {
+  path: string;
+  size: number;
+  /** Milliseconds since the Unix epoch; 0 when the file system has no stamp. */
+  modified: number;
+}
+
+/** The project tree without its bytes, sent beside the eager snapshot files. */
+export interface LatexProjectManifest {
+  /** Bumped when the shape changes; the frame refuses an unknown version. */
+  version: number;
+  files: LatexProjectManifestFile[];
+  /** Changes when any name, size or stamp changes. */
+  digest: string;
+}
+
 export interface LatexProjectSnapshot {
   mainFile: string;
+  /** The capability the preview presents on /project/<token>/… . */
+  projectToken: string;
   files: Array<{
     path: string;
     data: string;
@@ -857,12 +876,19 @@ export interface LatexProjectSnapshot {
     encoding?: string;
   }>;
   /**
-   * Project-relative paths skipped because they are symlinks.
+   * The bounded project tree: names, sizes and stamps, no bytes. The frame
+   * resolves a name TeX opens against this table, then fetches that file on
+   * demand. Open buffers still win because they travel in `files` above.
+   */
+  manifest: LatexProjectManifest;
+  /**
+   * Project-relative paths skipped because they are links: symbolic links or
+   * Windows junctions, in the reference walk or the manifest walk.
    *
-   * The snapshot follows the references a document declares rather than walking
-   * the directory, so a symlink it would have read is reported here instead of
-   * aborting the project. The preview surfaces them so a later "File not found"
-   * from the compiler is explained rather than mysterious.
+   * The snapshot still follows the references a document declares for its eager
+   * files; the manifest walk covers the rest of the tree. A link is reported
+   * here instead of aborting the project, so a later "File not found" from the
+   * compiler is explained rather than mysterious.
    */
   skipped: string[];
   /**
@@ -1150,10 +1176,15 @@ export const latexNativeSetEnabled = (enabled: boolean) =>
   invoke<LatexEngineStatus>("latex_native_set_enabled", { enabled });
 export const latexNativeSetEngine = (engine: string) =>
   invoke<LatexEngineStatus>("latex_native_set_engine", { engine });
+/** Revoke a disposed TeXpresso frame's on-demand project capability. */
+export const latexTexpressoRevoke = (token: string) =>
+  invoke<void>("latex_texpresso_revoke", { token });
 export const latexNativeCompile = (request: {
   job: string;
   mainFile: string;
   files: Array<{ path: string; data: string }>;
+  root?: string;
+  manifest?: string[];
   texmf?: LatexTexmfSnapshot;
 }) => invoke<LatexNativeResult>("latex_native_compile", { request });
 export const latexNativeCancel = (job: string) => invoke<void>("latex_native_cancel", { job });

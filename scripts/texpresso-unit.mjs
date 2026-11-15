@@ -312,6 +312,16 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
   const encode = (text) => Buffer.from(text, "utf8").toString("base64");
   const snapshot = {
     mainFile: "main.tex",
+    projectToken: "test-token",
+    manifest: {
+      version: 1,
+      files: [
+        { path: "main.tex", size: 60, modified: 0 },
+        { path: "chapters/one.tex", size: 13, modified: 0 },
+        { path: "figures/plot.png", size: 4, modified: 0 },
+      ],
+      digest: "test-digest",
+    },
     files: [
       {
         path: "main.tex",
@@ -391,6 +401,15 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
   check(
     prepared.files.get("main.tex")?.text?.startsWith("\\documentclass"),
     "the project's own file is untouched by a library of the same name",
+  );
+  const onDemand = JSON.parse(prepared.files.get(".mdraft-project.json")?.text ?? "null");
+  check(
+    onDemand?.version === 1 &&
+      onDemand.token === "test-token" &&
+      onDemand.names.includes("main.tex") &&
+      onDemand.names.includes("figures/plot.png"),
+    "the project manifest reaches the frame with its capability",
+    JSON.stringify(onDemand),
   );
   const manifest = JSON.parse(prepared.files.get(".mdraft-texmf/index.json")?.text ?? "null");
   const answers = new Map(manifest?.names ?? []);
@@ -750,6 +769,52 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     const interrupted = session.exportPdf();
     session.broken = true;
     check((await interrupted) === null, "a broken session releases its waiting export");
+
+    // A file the worker fetched is not in the host's `files` map. A changed
+    // stamp or a disappearance must therefore be an explicit remove, or the
+    // worker keeps serving the old bytes forever.
+    const sent = [];
+    const invalidated = Object.assign(Object.create(TexpressoSession.prototype), {
+      files: new Map(),
+      dirty: new Set(),
+      held: false,
+      active: null,
+      projectToken: "token",
+      projectFetched: new Set(["changed.png", "gone.png", "same.png"]),
+      fetchedStamps: new Map([
+        ["changed.png", { size: 4, modified: 1 }],
+        ["gone.png", { size: 4, modified: 1 }],
+        ["same.png", { size: 4, modified: 1 }],
+      ]),
+      outstanding: new Map(),
+      frame: { post: (message) => (sent.push(message), sent.length) },
+    });
+    invalidated.sendProject(
+      {
+        main: "main.tex",
+        projectToken: "token",
+        files: new Map(),
+        manifest: new Map([
+          ["changed.png", { size: 5, modified: 2 }],
+          ["same.png", { size: 4, modified: 1 }],
+        ]),
+      },
+      false,
+    );
+    const update = sent.find((message) => message.type === "project");
+    check(
+      update?.remove.includes("changed.png") &&
+        update.remove.includes("gone.png") &&
+        !update.remove.includes("same.png"),
+      "a changed or vanished fetched file is removed for the next lookup",
+      JSON.stringify(update?.remove),
+    );
+    check(
+      !invalidated.projectFetched.has("changed.png") &&
+        !invalidated.projectFetched.has("gone.png") &&
+        invalidated.projectFetched.has("same.png"),
+      "the fetched-file set forgets only what was invalidated",
+    );
   } finally {
     if (previousWindow === undefined) delete globalThis.window;
     else globalThis.window = previousWindow;

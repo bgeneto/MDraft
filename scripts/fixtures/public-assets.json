@@ -100,7 +100,9 @@
     "samples/typst-tour.typ": "Typst document rendering and built-in reference behavior",
     "samples/word-sync.md": "Portuguese accented-word source/preview correspondence",
     "samples/workspace-typst/chapters/one.typ": "Typst workspace-root include and Explorer regression fixture",
-    "samples/workspace-typst/template.typ": "Typst workspace-root include and Explorer regression fixture"
+    "samples/workspace-typst/template.typ": "Typst workspace-root include and Explorer regression fixture",
+    "samples/latex-on-demand/main.tex": "On-demand project manifest: an image named through a macro is fetched after the engine opens it",
+    "samples/latex-on-demand/figures/dot.png": "On-demand project manifest: the image the synthetic fixture opens through a macro"
   },
   "images": {
     "samples/html-tour/image.png": {
@@ -250,6 +252,10 @@
     "src-tauri/icons/icon.png": {
       "purpose": "Application installer/window/icon asset",
       "sha256": "ee8fe58bebf35d340600ba7102e9b11b4fbda8334581aa93adfd2bba6c1ccea2"
+    },
+    "samples/latex-on-demand/figures/dot.png": {
+      "purpose": "On-demand project manifest: the image the synthetic fixture opens through a macro",
+      "sha256": "91b013513962ddca29ba4fdbc25798046e4dd131f902f2dcee0c1fcb52072ada"
     }
   },
   "documents": [

@@ -403,7 +403,11 @@ function prepareInputs(snapshot: LatexProjectSnapshot): PreparedInputs {
   }
   // Libraries resolve through the engine's search path; the check only needs to
   // know their names, so a library input is not reported as a missing file.
-  const known = new Set([...Object.keys(files), ...libraryLookupNames(snapshot.texmf)]);
+  const known = new Set([
+    ...Object.keys(files),
+    ...libraryLookupNames(snapshot.texmf),
+    ...snapshot.manifest.files.map((file) => file.path),
+  ]);
   const scan = collectLatexReferences(sources, known, snapshot.mainFile);
   if (scan.diagnostics.length) {
     throw new LatexBuildError(scan.diagnostics[0].message, scan.diagnostics, "", scan.truncated);

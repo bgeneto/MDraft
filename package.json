@@ -131,7 +131,8 @@
     "security:scan": "node scripts/security-scan.mjs --staged",
     "security:history": "node scripts/security-scan.mjs --history",
     "security:self-test": "node scripts/security-scan.mjs --self-test",
-    "security:hooks": "node scripts/install-security-hooks.mjs"
+    "security:hooks": "node scripts/install-security-hooks.mjs",
+    "latex:ondemand": "node scripts/latex-on-demand-test.mjs"
   },
   "dependencies": {
     "@asciidoctor/core": "4.2.1",

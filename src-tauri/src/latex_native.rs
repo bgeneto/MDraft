@@ -33,6 +33,12 @@ use crate::cancel_registry::{CancelRegistry, Ticket};
 const MAX_FILE: usize = 32 * 1024 * 1024;
 const MAX_PROJECT: usize = 64 * 1024 * 1024;
 const MAX_FILES: usize = 256;
+/// A manifest file is read from the project root, not sent over IPC.
+const MAX_MANIFEST_FILE: u64 = 128 * 1024 * 1024;
+/// The whole staged tree at most; the same ceiling as the preview's project table.
+const MAX_MANIFEST_TOTAL: u64 = 1024 * 1024 * 1024;
+/// The manifest itself is bounded by the snapshot; a hostile request is not.
+const MAX_MANIFEST_FILES: usize = 20_000;
 const COMPILE_TIMEOUT: Duration = Duration::from_secs(300);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -138,6 +144,12 @@ pub struct NativeCompileRequest {
     job: String,
     main_file: String,
     files: Vec<NativeFile>,
+    /// The project root, for the manifest files that are staged from disk.
+    #[serde(default)]
+    root: Option<String>,
+    /// Relative names from the snapshot manifest; eager files win over these.
+    #[serde(default)]
+    manifest: Vec<String>,
     /// Captured local libraries, staged beside the project, never inside it.
     #[serde(default)]
     texmf: Option<crate::latex_texmf::TexmfSnapshot>,
@@ -962,6 +974,61 @@ fn stage(work: &Path, request: &NativeCompileRequest) -> Result<Staged, String> 
             sources.insert(relative.replace('\\', "/"), text);
         }
     }
+    if let Some(root) = &request.root {
+        let root = std::fs::canonicalize(root)
+            .map_err(|error| format!("Cannot read the project directory: {error}"))?;
+        if request.manifest.len() > MAX_MANIFEST_FILES {
+            return Err(format!(
+                "The LaTeX project has more than {MAX_MANIFEST_FILES} files in its project manifest."
+            ));
+        }
+        let mut manifest_total = 0u64;
+        for relative in &request.manifest {
+            let (source, size) = crate::latex::project_file_in(&root, relative)?;
+            if size > MAX_MANIFEST_FILE {
+                return Err(format!(
+                    "{relative} exceeds the 128 MiB project-file limit; move it outside the project."
+                ));
+            }
+            manifest_total = manifest_total
+                .checked_add(size)
+                .ok_or("The LaTeX project size overflowed.")?;
+            if manifest_total > MAX_MANIFEST_TOTAL {
+                return Err(
+                    "The LaTeX project exceeds the 1 GiB staged-project limit; split the project."
+                        .into(),
+                );
+            }
+            let target_relative = safe_relative(relative)?;
+            if is_executable(&target_relative) {
+                return Err(format!(
+                    "{relative} is an executable file; project executables are never staged."
+                ));
+            }
+            let target = work.join(&target_relative);
+            // An eager file (including an unsaved buffer's bytes) already won.
+            if target.exists() {
+                continue;
+            }
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).map_err(|error| {
+                    format!(
+                        "Cannot create {} in the job directory: {error}",
+                        parent.display()
+                    )
+                })?;
+            }
+            if std::fs::hard_link(&source, &target).is_err() {
+                std::fs::copy(&source, &target)
+                    .map_err(|error| format!("Cannot stage {relative}: {error}"))?;
+            }
+            if target_relative.to_ascii_lowercase().ends_with(".tex")
+                && let Ok(text) = std::fs::read_to_string(&source)
+            {
+                sources.insert(target_relative.replace('\\', "/"), text);
+            }
+        }
+    }
     let main = main.ok_or("The main .tex file is not part of the project snapshot.")?;
     Ok(Staged { main, sources })
 }
@@ -1521,6 +1588,48 @@ mod tests {
     }
 
     #[test]
+    fn stage_stages_the_manifest_but_keeps_eager_bytes() {
+        let base =
+            std::env::temp_dir().join(format!("mdraft-native-manifest-{}", std::process::id()));
+        let root = base.join("project");
+        let work = base.join("job");
+        std::fs::create_dir_all(root.join("figures")).unwrap();
+        std::fs::write(root.join("main.tex"), b"disk main").unwrap();
+        std::fs::write(root.join("extra.tex"), b"manifest source").unwrap();
+        std::fs::write(root.join("figures/a.bin"), b"figure").unwrap();
+        let request = NativeCompileRequest {
+            job: "manifest".into(),
+            main_file: "main.tex".into(),
+            files: vec![NativeFile {
+                path: "main.tex".into(),
+                data: STANDARD.encode(b"open buffer"),
+            }],
+            root: Some(root.to_string_lossy().into_owned()),
+            manifest: vec![
+                "main.tex".into(),
+                "extra.tex".into(),
+                "figures/a.bin".into(),
+            ],
+            texmf: None,
+        };
+        let staged = stage(&work, &request).unwrap();
+        assert_eq!(
+            std::fs::read(work.join("main.tex")).unwrap(),
+            b"open buffer"
+        );
+        assert_eq!(
+            std::fs::read(work.join("extra.tex")).unwrap(),
+            b"manifest source"
+        );
+        assert_eq!(
+            std::fs::read(work.join("figures/a.bin")).unwrap(),
+            b"figure"
+        );
+        assert!(staged.sources.contains_key("extra.tex"));
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
     fn an_executable_project_file_is_refused() {
         assert!(is_executable("tool.exe"));
         assert!(is_executable("obj/Debug/helper.DLL"));
@@ -1621,6 +1730,109 @@ mod tests {
         let version = probe_tool(&engine_path(&bin, "lualatex"), &job, &env).unwrap();
         assert!(!version.is_empty(), "a version line");
         let _ = std::fs::remove_dir_all(job);
+    }
+
+    #[cfg(windows)]
+    fn run_manifest_staging(target: &Target, base: &Path) {
+        let project = base.join("project");
+        let work = base.join("work");
+        std::fs::create_dir_all(project.join("figures")).unwrap();
+        std::fs::write(
+            project.join("main.tex"),
+            b"\\documentclass{article}\n\\usepackage{graphicx}\n\\newcommand{\\fig}{figures/dot}\n\\begin{document}\n\\includegraphics[width=1cm]{\\fig}\nManifest staging probe.\n\\end{document}\n",
+        )
+        .unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../samples/latex-on-demand/figures/dot.png");
+        std::fs::copy(source, project.join("figures/dot.png")).unwrap();
+        let main = std::fs::read(project.join("main.tex")).unwrap();
+        let request = NativeCompileRequest {
+            job: "manifest-real".into(),
+            main_file: "main.tex".into(),
+            files: vec![NativeFile {
+                path: "main.tex".into(),
+                data: STANDARD.encode(main),
+            }],
+            root: Some(project.to_string_lossy().into_owned()),
+            manifest: vec!["main.tex".into(), "figures/dot.png".into()],
+            texmf: None,
+        };
+        let staged = stage(&work, &request).unwrap();
+        assert!(
+            work.join("figures/dot.png").is_file(),
+            "the manifest image is staged"
+        );
+        for engine in ["lualatex", "pdflatex", "xelatex"] {
+            if !target.has_engine(engine) {
+                eprintln!("{engine}: not installed (not run)");
+                continue;
+            }
+            let env = target.environment(base, &work, engine, 0).unwrap();
+            let outcome = runner::run(
+                &target
+                    .spec(
+                        engine,
+                        engine_arguments(engine, "main.tex"),
+                        &work,
+                        &env,
+                        Duration::from_secs(600),
+                    )
+                    .unwrap(),
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+            assert_eq!(
+                outcome.status, 0,
+                "{engine} failed with the staged manifest: {}",
+                outcome.console
+            );
+            let pdf = find_output(&work, "main", "pdf").expect("a PDF from the staged manifest");
+            assert!(pdf.starts_with(b"%PDF-"), "{engine}: not a PDF");
+            eprintln!("{engine}: manifest staging verified");
+        }
+        let _ = std::fs::remove_dir_all(base);
+        let _ = staged;
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires MDRAFT_TEST_TEX_BIN to name a real Windows TeX binary directory"]
+    fn a_real_windows_distribution_stages_the_manifest_for_every_engine() {
+        let Ok(bin) = std::env::var("MDRAFT_TEST_TEX_BIN") else {
+            eprintln!("MDRAFT_TEST_TEX_BIN is not set");
+            return;
+        };
+        let bin = PathBuf::from(bin);
+        let target = Target::Path {
+            name: distribution_name(&bin.display().to_string()),
+            bin,
+        };
+        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target/test-tmp")
+            .join(format!("manifest-real-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        run_manifest_staging(&target, &base);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires MDRAFT_TEST_WSL_DISTRO (and optionally MDRAFT_TEST_WSL_BIN)"]
+    fn a_wsl_distribution_stages_the_manifest_for_every_engine() {
+        let distro = std::env::var("MDRAFT_TEST_WSL_DISTRO").unwrap();
+        let bin = std::env::var("MDRAFT_TEST_WSL_BIN").unwrap_or_else(|_| "/usr/bin".into());
+        let target = Target::Wsl(wsl::WslInstallation {
+            distro,
+            bin,
+            engines: vec!["lualatex".into(), "pdflatex".into()],
+            tools: Vec::new(),
+        });
+        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target/test-tmp")
+            .join(format!("manifest-wsl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        run_manifest_staging(&target, &base);
     }
 
     #[cfg(windows)]
