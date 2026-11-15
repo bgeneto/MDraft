@@ -3783,7 +3783,7 @@ function latexEnableNote(status?: api.LatexEngineStatus | null): void {
   text.className = "typst-note-text";
   text.textContent = status?.bundledEnabled
     ? `Bundled TeX is on, but its preview files are missing or out of date. Press Retry setup to download the TeX Live ${TEXPRESSO_TEXLIVE_YEAR} preview engine (about ${TEXPRESSO_ENGINE_MIB} MiB); packages and fonts follow on demand.`
-    : "LaTeX compiles .tex documents locally. Enable bundled TeX, or choose a TeX distribution already on this computer in Preferences › LaTeX. Your document stays on this device.";
+    : "LaTeX compiles .tex documents locally. Enable bundled TeX, or choose a TeX distribution already on this computer in Preferences › LaTeX.";
   const button = document.createElement("button");
   button.type = "button";
   button.className = "typst-notebutton";

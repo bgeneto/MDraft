@@ -759,15 +759,15 @@ pub struct Settings {
     /// PDF (Print) is the one exception: the browser chooses where the PDF
     /// goes, so MDraft has no path to open.
     ///
-    /// Opening the exported file is on by default; revealing its folder and
-    /// running a command are not. A file the reader just asked to export is the
-    /// one thing they are most likely to want to look at, while a second window
-    /// in the file manager and an arbitrary shell command are choices to opt
-    /// into. An older profile that actually chose one of these keeps that
-    /// choice; see `parse_settings`.
-    #[serde(default)]
-    pub after_open_location: bool,
+    /// Revealing the exported file's folder is on by default; opening the file
+    /// and running a command are not. The folder shows where the result landed
+    /// without launching another application over the editor, while opening
+    /// the file and an arbitrary shell command stay opt-ins. An older profile
+    /// that actually chose one of these keeps that choice; see
+    /// `parse_settings`.
     #[serde(default = "default_true")]
+    pub after_open_location: bool,
+    #[serde(default)]
     pub after_open_file: bool,
     #[serde(default)]
     pub after_run_command: bool,
@@ -932,8 +932,8 @@ impl Default for Settings {
             emmet: true,
 
             export_formats: default_export_formats(),
-            after_open_location: false,
-            after_open_file: true,
+            after_open_location: true,
+            after_open_file: false,
             after_run_command: false,
             after_command: String::new(),
 
@@ -2473,19 +2473,19 @@ mod tests {
     }
 
     #[test]
-    fn after_export_defaults_open_the_file_only() {
-        // Opening the file the reader just exported is the useful default;
-        // a second file-manager window and an arbitrary command are opt-ins.
+    fn after_export_defaults_reveal_the_folder_only() {
+        // Revealing where the file landed is the useful default; launching the
+        // file in another application and an arbitrary command are opt-ins.
         let settings = Settings::default();
-        assert!(!settings.after_open_location);
-        assert!(settings.after_open_file);
+        assert!(settings.after_open_location);
+        assert!(!settings.after_open_file);
         assert!(!settings.after_run_command);
         assert!(settings.after_command.is_empty());
         // An older file that has no after-export keys at all gets the same
         // answers, not the struct's serde defaults by accident.
         let parsed = parse_settings(r#"{"theme":"dark"}"#).expect("old settings load");
-        assert!(!parsed.after_open_location);
-        assert!(parsed.after_open_file);
+        assert!(parsed.after_open_location);
+        assert!(!parsed.after_open_file);
         assert!(!parsed.after_run_command);
     }
 
@@ -2494,8 +2494,8 @@ mod tests {
         // This is the shape every release before the options became global
         // actually wrote: the flags are on each format, and a reader who never
         // touched them has all of them `false`. The presence of the keys must
-        // not be read as a choice, or upgrading would silently keep the file
-        // closed and deny the new default to every existing install.
+        // not be read as a choice, or upgrading would silently keep the folder
+        // unopened and deny the new default to every existing install.
         let untouched = r#"{
             "theme": "dark",
             "exportFormats": [
@@ -2509,11 +2509,11 @@ mod tests {
             ]
         }"#;
         let parsed = parse_settings(untouched).expect("an untouched old profile loads");
-        assert!(!parsed.after_open_location);
         assert!(
-            parsed.after_open_file,
+            parsed.after_open_location,
             "an untouched old profile must get the shipped default, not a false nobody chose"
         );
+        assert!(!parsed.after_open_file);
         assert!(!parsed.after_run_command);
         assert_eq!(parsed.after_command, "");
 
@@ -2524,15 +2524,15 @@ mod tests {
                     "id": "docx", "label": "Word (.docx)", "extension": "docx",
                     "arguments": "-s -o ${outputPath}", "extraArguments": "",
                     "styleReference": "",
-                    "afterOpenLocation": true, "afterOpenFile": false,
+                    "afterOpenLocation": false, "afterOpenFile": true,
                     "afterRunCommand": false, "afterCommand": ""
                 }
             ]
         }"#;
         let parsed = parse_settings(chose).expect("a profile with a choice loads");
-        assert!(parsed.after_open_location);
+        assert!(!parsed.after_open_location);
         assert!(
-            !parsed.after_open_file,
+            parsed.after_open_file,
             "an explicit choice is carried forward, not replaced by the new default"
         );
     }
