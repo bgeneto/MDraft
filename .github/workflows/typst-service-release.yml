@@ -204,7 +204,7 @@ jobs:
 
       - name: Test the service crate (Windows)
         if: runner.os == 'Windows'
-        run: .\scripts\with-msvc.cmd cargo test --locked --manifest-path tools\mdraft-typst-service\Cargo.toml
+        run: .\scripts\with-msvc.cmd cargo test --release --locked --manifest-path tools\mdraft-typst-service\Cargo.toml
 
       - name: Lint the service crate (Windows)
         if: runner.os == 'Windows'
@@ -264,7 +264,7 @@ jobs:
 
       - name: Test the service crate (Linux)
         if: runner.os == 'Linux'
-        run: cargo test --locked --manifest-path tools/mdraft-typst-service/Cargo.toml
+        run: cargo test --release --locked --manifest-path tools/mdraft-typst-service/Cargo.toml
 
       - name: Lint the service crate (Linux)
         if: runner.os == 'Linux'
