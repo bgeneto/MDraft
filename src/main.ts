@@ -11756,17 +11756,38 @@ function installPreviewClicks(): void {
 function installResizers(): void {
   let mode: "sidebar" | "split" | null = null;
 
-  const begin = (next: "sidebar" | "split") => (event: MouseEvent) => {
+  // The LaTeX and HTML previews are iframes. Without capture, a drag that
+  // crosses one delivers its moves and its release to the iframe's document,
+  // so the split could grow the preview but never shrink it back.
+  const begin = (next: "sidebar" | "split") => (event: PointerEvent) => {
+    if (event.button !== 0) return;
     mode = next;
     event.preventDefault();
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    document.body.classList.add("resizing");
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
   };
 
-  resizer.addEventListener("mousedown", begin("sidebar"));
-  splitter.addEventListener("mousedown", begin("split"));
+  const end = () => {
+    if (!mode) return;
+    mode = null;
+    document.body.classList.remove("resizing");
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+  };
 
-  window.addEventListener("mousemove", (event) => {
+  for (const [handle, next] of [
+    [resizer, "sidebar"],
+    [splitter, "split"],
+  ] as const) {
+    handle.addEventListener("pointerdown", begin(next));
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+    handle.addEventListener("lostpointercapture", end);
+  }
+
+  window.addEventListener("pointermove", (event) => {
     if (!mode) return;
 
     if (mode === "sidebar") {
@@ -11782,12 +11803,6 @@ function installResizers(): void {
     const offset = Math.min(Math.max(event.clientX - rect.left, 180), rect.width - 180);
     editorPane.style.flex = `0 0 ${offset}px`;
     previewShell.style.flex = "1 1 auto";
-  });
-
-  window.addEventListener("mouseup", () => {
-    mode = null;
-    document.body.style.cursor = "";
-    document.body.style.userSelect = "";
   });
 }
 
