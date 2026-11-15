@@ -1,4 +1,16 @@
 #!/bin/sh
 set -eu
+
+branch=$(git symbolic-ref --quiet --short HEAD || true)
+case "$branch" in
+  master|main)
+    echo "BLOCKED: '$branch' is protected; create a topic branch first." >&2
+    echo "  git fetch origin" >&2
+    echo "  git switch -c <type>/<short-slug> origin/$branch" >&2
+    echo "Your working-tree changes move with you. Read-only work and 'git switch' are allowed." >&2
+    exit 1
+    ;;
+esac
+
 node scripts/repo-hygiene.mjs
 node scripts/security-scan.mjs --staged
