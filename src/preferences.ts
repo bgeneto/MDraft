@@ -1125,7 +1125,7 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
     {
       kind: "number",
       label: "Cache limit (MiB)",
-      help: "The most disk the downloaded TeX packages may use. When a compile needs a new package and the cache is full, the least recently used files are deleted first. 32 to 4096 MiB.",
+      help: "The most disk the downloaded TeX packages may use. When a compile needs a new package and the cache is full, the least recently used files are deleted first, never one the open document is using. 32 to 4096 MiB; 512 by default.",
       min: 32,
       max: 4096,
       suffix: "MiB",

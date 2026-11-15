@@ -4534,6 +4534,67 @@ function megabytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** The download guard's question is on screen; it is asked once at a time. */
+let texpressoGuardAsking = false;
+/** This session's Stop, shown in the status line until a new frame starts. */
+let texpressoDownloadsStopped = false;
+/** The working-set notice was shown for the current overflow. */
+let texpressoOverflowNoted = false;
+
+const GUARD_REASONS: Record<
+  api.TexpressoHoldReason,
+  (held: NonNullable<api.TexpressoGuardReport["held"]>) => string
+> = {
+  fonts: (held) =>
+    `The preview has downloaded ${held.fonts} font files for this document, far more than a document uses. ` +
+    "This usually means a font the document names cannot be found, and the engine is reading every font in TeX Live to look for it. " +
+    "Name the font by its file (for example LibertinusMono-Regular.otf) to avoid the search.",
+  files: (held) =>
+    `The preview has downloaded ${held.files} TeX files (${megabytes(held.bytes)}) for this document.`,
+  bytes: (held) =>
+    `The preview has downloaded ${megabytes(held.bytes)} of TeX files (${held.files} files) for this document.`,
+};
+
+/**
+ * Act on the download guard's report (`src-tauri/src/texpresso_guard.rs`): ask
+ * about a held download, and say once when the document's own files are more
+ * than the cache limit.
+ */
+async function texpressoGuardCheck(report: api.TexpressoGuardReport): Promise<void> {
+  if (texpressoDownloadsStopped !== report.stopped) {
+    texpressoDownloadsStopped = report.stopped;
+    texpressoRefreshStatus();
+  }
+  if (report.cacheOverflow === null) texpressoOverflowNoted = false;
+  else if (!texpressoOverflowNoted) {
+    texpressoOverflowNoted = true;
+    const text =
+      `This document uses ${megabytes(report.cacheOverflow)} of TeX files, more than the LaTeX cache limit. ` +
+      "Raise it in Preferences › LaTeX, or they are downloaded again later.";
+    texpressoLogLine(text);
+    toast(text, 8000);
+  }
+  const held = report.held;
+  if (!held || texpressoGuardAsking) return;
+  texpressoGuardAsking = true;
+  try {
+    const why = GUARD_REASONS[held.reason](held);
+    texpressoLogLine(`Downloads paused: ${why}`);
+    // The download waits in the backend while the reader decides; Continue
+    // loses nothing, Stop ends this preview session's downloads.
+    const allow = await ask(`${why}\n\nContinue downloading?`, {
+      title: "Downloading TeX files",
+      kind: "warning",
+      okLabel: "Continue",
+      cancelLabel: "Stop downloads",
+    }).catch(() => false);
+    await api.texpressoDownloadDecision(allow).catch(() => false);
+    texpressoLogLine(allow ? "Downloads continued." : "Downloads stopped for this preview.");
+  } finally {
+    texpressoGuardAsking = false;
+  }
+}
+
 /**
  * Count bundle downloads while the frame typesets or exports. The counters are
  * process-wide and carry no paths; a delta from the first reading is what this
@@ -4546,10 +4607,11 @@ function texpressoWatchFetches(): void {
   const tick = async (): Promise<void> => {
     const stats = await api.latexStats().catch(() => null);
     const now = performance.now();
+    if (stats) void texpressoGuardCheck(stats.texpressoGuard);
     if (stats && !texpressoFetch) {
       texpressoFetch = {
         baseFiles: stats.texpressoMisses,
-        baseBytes: stats.texpressoVerifiedBytes,
+        baseBytes: stats.texpressoDownloadedBytes,
         files: 0,
         bytes: 0,
         started: now,
@@ -4561,7 +4623,7 @@ function texpressoWatchFetches(): void {
       const files = stats.texpressoMisses - fetch.baseFiles;
       if (files !== fetch.files) {
         fetch.files = files;
-        fetch.bytes = stats.texpressoVerifiedBytes - fetch.baseBytes;
+        fetch.bytes = stats.texpressoDownloadedBytes - fetch.baseBytes;
         if (files - fetch.loggedFiles >= 25 || now - fetch.loggedAt >= 5000) {
           texpressoLogLine(`Downloading TeX files: ${files} so far, ${megabytes(fetch.bytes)}`);
           fetch.loggedFiles = files;
@@ -4949,8 +5011,9 @@ function texpressoLiveStatus(): string {
   if (!session.ready) return "Preview starting…";
   const errors = session.problems.filter((p) => p.severity === "error").length;
   const fetch = texpressoFetch;
-  const state =
-    fetch && fetch.files > 0
+  const state = texpressoDownloadsStopped
+    ? "TeX file downloads stopped"
+    : fetch && fetch.files > 0
       ? `Downloading TeX files… · ${fetch.files} file${fetch.files === 1 ? "" : "s"}, ${megabytes(fetch.bytes)}`
       : session.held
         ? "Preview paused"

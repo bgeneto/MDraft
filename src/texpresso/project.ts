@@ -8,6 +8,7 @@
 import type * as api from "../api";
 import { LIBRARY_PREFIX, reservedProjectPath } from "../latex-texmf.ts";
 import { LIBRARY_INDEX, type LibraryIndex, libraryIndex } from "./library.ts";
+import { LUAOTFLOAD_CONFIG, luaotfloadConfig } from "./luaotfload.ts";
 import { type TexpressoEngine, textHash } from "./protocol.ts";
 
 /** A project text file, by extension or by a declared non-UTF-8 encoding. */
@@ -96,6 +97,10 @@ export function prepareProject(
       }
     }
     files.set(file.path, { text: source, fingerprint: textPrint(source) });
+  }
+  const fontConfig = luaotfloadConfig(engine, files.keys());
+  if (fontConfig !== null) {
+    files.set(LUAOTFLOAD_CONFIG, { text: fontConfig, fingerprint: textPrint(fontConfig) });
   }
   const library = libraryIndex(snapshot.texmf, engine, new Set(files.keys()));
   if (snapshot.texmf?.files.length) {

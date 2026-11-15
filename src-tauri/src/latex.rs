@@ -513,6 +513,14 @@ pub fn latex_status(app: AppHandle) -> Result<bool, String> {
 
 /// Whether the production preview's engine assets and digest table are on disk.
 ///
+/// The reader's answer to a TeXpresso download the guard is holding: `true`
+/// continues it (and doubles that budget), `false` stops this preview
+/// session's downloads. Returns whether a download was waiting.
+#[tauri::command]
+pub fn texpresso_download_decision(allow: bool) -> bool {
+    crate::texpresso_guard::decide(allow)
+}
+
 /// WasmTex's `latex_status` stays as the hidden backend's own check; this is
 /// what the install note and the default TeXpresso build read.
 #[tauri::command]
@@ -574,6 +582,11 @@ pub struct LatexStats {
     texpresso_misses: u64,
     texpresso_verified_bytes: u64,
     texpresso_refusals: u64,
+    /// Bytes that came from the origin; the download progress reads this.
+    texpresso_downloaded_bytes: u64,
+    /// The preview session's download guard: a held download, Stop, and a
+    /// working set larger than the cache limit.
+    texpresso_guard: crate::texpresso_guard::Report,
 }
 
 /// Aggregate transport counters, without document paths or content.
@@ -586,6 +599,8 @@ pub fn latex_stats() -> LatexStats {
         texpresso_misses,
         texpresso_verified_bytes,
         texpresso_refusals,
+        texpresso_downloaded_bytes: crate::latex_texpresso::downloaded_bytes(),
+        texpresso_guard: crate::texpresso_guard::report(),
         asset_requests: ASSET_REQUESTS.load(Ordering::Relaxed),
         cache_hits: CACHE_HITS.load(Ordering::Relaxed),
         cache_misses: CACHE_MISSES.load(Ordering::Relaxed),
@@ -813,6 +828,16 @@ pub(crate) fn cache_size(dir: &Path) -> Result<u64, String> {
 /// modification time is the recency signal, which is what the filesystem already
 /// records and what a reader's own file manager would show.
 pub(crate) fn evict_to_limit(dir: &Path, limit: u64) -> Result<u64, String> {
+    evict_to_limit_keeping(dir, limit, &|_| false)
+}
+
+/// [`evict_to_limit`], never removing a file `keep` names. The result can then
+/// stay above `limit`.
+pub(crate) fn evict_to_limit_keeping(
+    dir: &Path,
+    limit: u64,
+    keep: &dyn Fn(&Path) -> bool,
+) -> Result<u64, String> {
     if !dir.exists() {
         return Ok(0);
     }
@@ -826,6 +851,9 @@ pub(crate) fn evict_to_limit(dir: &Path, limit: u64) -> Result<u64, String> {
     for (path, size, _) in files {
         if total <= limit {
             break;
+        }
+        if keep(&path) {
+            continue;
         }
         if fs::remove_file(&path).is_ok() {
             total = total.saturating_sub(size);

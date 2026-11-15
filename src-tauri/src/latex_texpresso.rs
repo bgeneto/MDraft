@@ -58,6 +58,9 @@ static HITS: AtomicU64 = AtomicU64::new(0);
 static MISSES: AtomicU64 = AtomicU64::new(0);
 static VERIFIED_BYTES: AtomicU64 = AtomicU64::new(0);
 static REFUSALS: AtomicU64 = AtomicU64::new(0);
+/// Bytes that came from the origin. `VERIFIED_BYTES` also counts every cache
+/// read, so the download progress cannot be built from it.
+static DOWNLOADED_BYTES: AtomicU64 = AtomicU64::new(0);
 
 /// The frame's own policy: same-origin only, so no request can leave it.
 /// Inline styles stay allowed because the app positions its marks with them.
@@ -406,8 +409,9 @@ fn read_verified(cache: &Path, check: &Check, touch: bool) -> Option<Vec<u8>> {
 static FLIGHTS: LazyLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// The evictable directory last measured, and its size.
-static FILES_SIZE: Mutex<Option<(PathBuf, u64)>> = Mutex::new(None);
+/// The evictable directory last measured, its size, and the size an eviction
+/// could not go below because the current session uses those files.
+static FILES_SIZE: Mutex<Option<(PathBuf, u64, u64)>> = Mutex::new(None);
 
 /// Count `added` bytes into `dir` and evict the least recently used files when
 /// it passes `limit`.
@@ -416,19 +420,38 @@ static FILES_SIZE: Mutex<Option<(PathBuf, u64)>> = Mutex::new(None);
 /// a walk of ten thousand entries on every download would cost more than the
 /// download. Eviction goes to nine tenths of the limit so the next file does
 /// not start another one.
+///
+/// A file the current preview session read is never evicted: removing it only
+/// makes the next compile download it again, which is how a 256 MiB cache and
+/// a 1 GB font scan turned into the same downloads on every compile. When those
+/// files alone pass the limit, the preview says so, and the walk is not
+/// repeated until the cache grows by another tenth of the limit.
 fn account(dir: &Path, added: u64, limit: u64) {
     let Ok(mut state) = FILES_SIZE.lock() else {
         return;
     };
-    let mut total = match state.as_ref() {
-        Some((measured, total)) if measured == dir => total.saturating_add(added),
+    let (mut total, mut floor) = match state.as_ref() {
+        Some((measured, total, floor)) if measured == dir => (total.saturating_add(added), *floor),
         // The first measurement already sees the file just written.
-        _ => crate::latex::cache_size(dir).unwrap_or(0),
+        _ => (crate::latex::cache_size(dir).unwrap_or(0), 0),
     };
-    if total > limit {
-        total = crate::latex::evict_to_limit(dir, limit / 10 * 9).unwrap_or(total);
+    if total > limit && total > floor.saturating_add(limit / 10) {
+        let data = dir.parent().unwrap_or(dir);
+        let keep = |path: &Path| {
+            path.strip_prefix(data).is_ok_and(|relative| {
+                let key = relative
+                    .components()
+                    .map(|part| part.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                crate::texpresso_guard::working_contains(&key)
+            })
+        };
+        total = crate::latex::evict_to_limit_keeping(dir, limit / 10 * 9, &keep).unwrap_or(total);
+        floor = if total > limit { total } else { 0 };
+        crate::texpresso_guard::set_cache_overflow((total > limit).then_some(total));
     }
-    *state = Some((dir.to_path_buf(), total));
+    *state = Some((dir.to_path_buf(), total, floor));
 }
 
 /// The verified bytes of one file: from the cache, else from `fetch`.
@@ -461,8 +484,11 @@ fn obtain(
             HITS.fetch_add(1, Ordering::Relaxed);
             return Ok(bytes);
         }
-        MISSES.fetch_add(1, Ordering::Relaxed);
+        // Counted once the bytes arrived: a download the guard refused, or one
+        // that failed, downloaded nothing.
         let bytes = fetch().map_err(|error| format!("{name}: {error}"))?;
+        MISSES.fetch_add(1, Ordering::Relaxed);
+        DOWNLOADED_BYTES.fetch_add(bytes.len() as u64, Ordering::Relaxed);
         if !check.accepts(&bytes) {
             REFUSALS.fetch_add(1, Ordering::Relaxed);
             return Err(format!(
@@ -605,6 +631,11 @@ type Answer = Result<(Vec<u8>, &'static str), String>;
 
 fn serve_frame(root: &Path, name: &str) -> Answer {
     if let Some((_, bytes, kind)) = SHELL.iter().find(|(shell, _, _)| *shell == name) {
+        // The page is served `no-store`, so every new frame asks for it: that
+        // starts the download budget of a new preview session.
+        if name == "index.html" {
+            crate::texpresso_guard::reset();
+        }
         return Ok((bytes.to_vec(), kind));
     }
     let Some(pin) = config().assets.iter().find(|pin| pin.path == name) else {
@@ -648,8 +679,14 @@ fn serve_data(root: &Path, relative: &str) -> Answer {
         &Check::Prefix(digest),
         relative,
         Some(&data.join("files")),
-        &|| download(&data_url(relative), None),
+        &|| {
+            crate::texpresso_guard::admit(relative)?;
+            let bytes = download(&data_url(relative), None)?;
+            crate::texpresso_guard::record(relative, bytes.len() as u64);
+            Ok(bytes)
+        },
     )?;
+    crate::texpresso_guard::note_working(relative);
     Ok((bytes, kind(relative)))
 }
 
@@ -803,6 +840,11 @@ pub fn stats() -> (u64, u64, u64, u64) {
         VERIFIED_BYTES.load(Ordering::Relaxed),
         REFUSALS.load(Ordering::Relaxed),
     )
+}
+
+/// Bytes downloaded from the origin since start.
+pub fn downloaded_bytes() -> u64 {
+    DOWNLOADED_BYTES.load(Ordering::Relaxed)
 }
 
 #[cfg(test)]
