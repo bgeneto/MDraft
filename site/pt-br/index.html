@@ -193,7 +193,7 @@
                 "name": "Onde ficam minhas configurações?",
                 "acceptedAnswer": {
                   "@type": "Answer",
-                  "text": "No Windows, na pasta de dados de aplicativo de io.github.bgeneto.mdraft; no Linux, na pasta de configuração correspondente. A versão portátil do Windows mantém as configurações ao lado do executável. Os prompts de IA ficam em ai-prompts.md ao lado de settings.json."
+                  "text": "No Windows, na pasta de dados de aplicativo de io.github.bgeneto.mdraft; no Linux, na pasta de configuração correspondente. A versão portátil do Windows mantém as configurações ao lado do executável. Os prompts de IA ficam em ai-prompts.md ao lado de settings.json. Preferences › Data pode abrir a pasta ou excluir todos os dados armazenados do MDraft. O desinstalador NSIS também pode remover as pastas quando Delete the application data está marcado; o MSI não oferece essa opção."
                 }
               },
               {
@@ -1197,8 +1197,11 @@ image::figura.png[]</code></pre>
                 Windows
               </h3>
               <p>
-                Instale com o setup NSIS ou o MSI. O executável portátil mantém as configurações ao
-                lado de si, para viver em um pendrive.
+                Instale com o setup NSIS ou o MSI. O desinstalador NSIS pode excluir a pasta de
+                configurações quando você marca <strong>Delete the application data</strong>; o MSI
+                não oferece essa opção, então use <strong>Preferences › Data</strong> antes de
+                desinstalar. O executável portátil mantém as configurações ao lado de si, para viver
+                em um pendrive.
               </p>
               <a class="btn btn-primary" href="{{DOWNLOAD_URL}}/mdraft_{{VERSION}}_x64-setup.exe"
                 >Baixar para Windows</a
@@ -1354,7 +1357,10 @@ image::figura.png[]</code></pre>
                 No Windows, na pasta de dados de aplicativo de io.github.bgeneto.mdraft; no Linux,
                 na pasta de configuração correspondente. A versão portátil do Windows mantém as
                 configurações ao lado do executável. Os prompts de IA ficam em ai-prompts.md ao lado
-                de settings.json.
+                de settings.json. <strong>Preferences › Data</strong> pode abrir a pasta ou excluir
+                todos os dados armazenados do MDraft. O desinstalador NSIS também pode remover as
+                pastas quando <strong>Delete the application data</strong> está marcado; o MSI não
+                oferece essa opção.
               </p>
             </details>
             <details>

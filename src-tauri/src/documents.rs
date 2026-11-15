@@ -652,6 +652,24 @@ pub fn open_app_folder(app: tauri::AppHandle, folder: String) -> Result<(), Stri
         .map_err(|e| format!("Could not open {}: {e}", target.display()))
 }
 
+/// Open the folder that holds `settings.json` and the prompt overrides.
+///
+/// The Data section offers this before the destructive action, so a reader on
+/// an MSI install can inspect or remove the folder by hand. Creating it when it
+/// is missing matches `open_app_folder` and gives an answer after a fresh
+/// install rather than a "not found" error.
+#[tauri::command]
+pub fn open_settings_folder(app: tauri::AppHandle) -> Result<(), String> {
+    let target = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("Cannot locate the application settings folder: {e}"))?;
+    fs::create_dir_all(&target)
+        .map_err(|e| format!("Could not create {}: {e}", target.display()))?;
+    tauri_plugin_opener::open_path(&target, None::<&str>)
+        .map_err(|e| format!("Could not open {}: {e}", target.display()))
+}
+
 /// The file passed on the command line, if any (`mdraft notes.md`).
 #[tauri::command]
 pub fn startup_file() -> Option<String> {

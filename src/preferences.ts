@@ -59,6 +59,10 @@ export interface PreferencesHost extends TexmfPreferencesHost {
    * can look at what was downloaded without reading a `C:\…` line.
    */
   openAppFolder(folder: api.AppFolder): Promise<void>;
+  /** Open the folder holding settings.json, prompt overrides and recovery. */
+  openSettingsFolder(): Promise<void>;
+  /** Confirm and delete MDraft's own application data, then restart. */
+  deleteAllData(): Promise<void>;
   /** Last known pandoc status, or null before the first check. */
   pandocStatus(): api.PandocStatus | null;
   /** Last known Typst status, or null before the first check. */
@@ -2384,6 +2388,31 @@ function buildSections(
       id: "reading",
       title: "Read Aloud",
       rows: readAloudRows(host),
+    },
+    {
+      id: "data",
+      title: "Data",
+      rows: [
+        {
+          kind: "note",
+          label: "Application folder",
+          text: "MDraft keeps its settings, recovery copies of unsaved documents, AI prompt overrides and downloaded tools in one application folder. AI API keys use the system credential store separately.",
+        },
+        {
+          kind: "button",
+          label: "",
+          text: "Open Settings Folder",
+          help: "Shows settings.json, ai-prompts.md and the recovery journal in the system file manager.",
+          action: () => host.openSettingsFolder(),
+        },
+        {
+          kind: "button",
+          label: "",
+          text: "Delete All MDraft Data…",
+          help: "Deletes settings, recent files, favorites, saved tabs, prompt overrides, recovery copies of unsaved documents, downloaded tools and the WebView cache, then restarts MDraft with default settings. Documents you saved elsewhere, external tools and AI keys in the system credential store are not affected. This cannot be undone.",
+          action: () => host.deleteAllData(),
+        },
+      ],
     },
   ];
 }

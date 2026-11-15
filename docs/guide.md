@@ -402,6 +402,23 @@ Other editor features:
 - **Preferences** (**File › Preferences…**, `Ctrl+,`) does not show dead
   controls: every row writes a setting or performs the action it names.
 
+### Settings and application data
+
+MDraft keeps `settings.json`, AI prompt overrides in `ai-prompts.md`, recovery
+copies of unsaved buffers in `recovery/`, and downloaded tools in its
+application folder. **Preferences › Data › Open Settings Folder** opens it.
+**Delete All MDraft Data…** asks for confirmation, handles unsaved documents
+through the usual Save/Discard/Cancel prompts, and restarts with default
+settings. It deletes those files and the WebView cache; API keys in the system
+credential store are not removed.
+
+On Windows, the NSIS setup's uninstaller can remove the same folders: tick
+**Delete the application data**, which deletes
+`%APPDATA%\io.github.bgeneto.mdraft` and
+`%LOCALAPPDATA%\io.github.bgeneto.mdraft`. The MSI has no such option, so use
+the Preferences action before uninstalling. The portable build keeps its data
+in `app-data` beside the executable.
+
 ## AI Assistant
 
 The assistant is off by default. To set it up:

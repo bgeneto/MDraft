@@ -611,6 +611,14 @@ let isDark = false;
 /** Mirrors the window's fullscreen state, so the menu check can follow it. */
 let isFullscreen = false;
 let allowClose = false;
+/**
+ * Set by the Data section after its warning is accepted.
+ *
+ * The close guard writes the purge marker only after every unsaved document has
+ * been handled. Cancelling a save prompt, or failing to write the marker,
+ * clears the flag and leaves all files untouched.
+ */
+let purgeAfterClose = false;
 let lastTitle = "";
 /**
  * Signature of the last remembered tab list that was written (or seeded from
@@ -12288,11 +12296,29 @@ async function installCloseGuard(): Promise<void> {
     }
     try {
       stopReadAloud();
-      await lifecycle.close(
+      const closed = await lifecycle.close(
         [...sessions.list()],
         async (ready) => {
           await flushRememberedTabs();
           if (!ready()) return false;
+          if (purgeAfterClose) {
+            try {
+              void api.aiCancelAll().catch(() => undefined);
+              // The command marks the next start for the headless purge pass
+              // and restarts after this reply has had time to reach the window.
+              await api.requestDataPurge();
+              allowClose = true;
+              return true;
+            } catch (error) {
+              purgeAfterClose = false;
+              allowClose = false;
+              await message(String(error), {
+                title: "Could not delete MDraft data",
+                kind: "error",
+              });
+              return false;
+            }
+          }
           allowClose = true;
           try {
             void api.aiCancelAll().catch(() => undefined);
@@ -12305,11 +12331,39 @@ async function installCloseGuard(): Promise<void> {
         },
         true,
       );
+      // A cancelled save prompt never reaches the finalize callback, so the
+      // purge flag must not survive into a later ordinary close.
+      if (!closed) purgeAfterClose = false;
     } catch (error) {
       await message(String(error), { title: "Could not close", kind: "error" });
     }
   });
 }
+/**
+ * Show the result of the last headless purge pass.
+ *
+ * A locked file is the expected failure: the app was closed, no WebView existed,
+ * and some other program still held a handle. The message names the path so the
+ * reader can close that program and retry instead of assuming the delete worked.
+ */
+async function reportPurgeFailures(): Promise<void> {
+  let report: api.PurgeReport | null;
+  try {
+    report = await api.takePurgeReport();
+  } catch {
+    return;
+  }
+  if (!report || report.failed.length === 0) return;
+  const shown = report.failed.slice(0, 8).map((failure) => `${failure.path}\n${failure.error}`);
+  const remaining = report.failed.length - shown.length;
+  const more = remaining > 0 ? `\n\n…and ${remaining} more.` : "";
+  await message(
+    `MDraft could not delete all of its old data:\n\n${shown.join("\n\n")}${more}\n\n` +
+      "Close any program using those files and try again from Preferences › Data.",
+    { title: "Some MDraft data was not deleted", kind: "warning" },
+  );
+}
+
 function installDiskWatcher(): void {
   window.setInterval(() => {
     void reloadChangedSessions();
@@ -13603,6 +13657,40 @@ async function boot(): Promise<void> {
         toast(String(error), 5200);
       }
     },
+    openSettingsFolder: async () => {
+      try {
+        await api.openSettingsFolder();
+      } catch (error) {
+        toast(String(error), 5200);
+      }
+    },
+    deleteAllData: async () => {
+      const confirmed = await ask(
+        "Delete all MDraft settings and data?\n\n" +
+          "MDraft will close and restart with default settings. This deletes settings, " +
+          "recent files, favorites, saved tabs, AI prompt overrides, recovery copies of " +
+          "unsaved documents, downloaded pandoc, Typst and LaTeX files, and the WebView " +
+          "cache. Documents you saved elsewhere and external tools are not touched.\n\n" +
+          "API keys saved in the system credential store are not removed; remove them in " +
+          "AI Assistant first.\n\n" +
+          "You will be asked to save any unsaved documents. This cannot be undone.",
+        {
+          title: "Delete all MDraft data?",
+          kind: "warning",
+          okLabel: "Delete and Restart",
+          cancelLabel: "Cancel",
+        },
+      );
+      if (!confirmed) return;
+      purgeAfterClose = true;
+      preferences.close();
+      try {
+        await getCurrentWindow().close();
+      } catch (error) {
+        purgeAfterClose = false;
+        await message(String(error), { title: "Could not close", kind: "error" });
+      }
+    },
     pandocStatus: () => pandocCache,
     typstStatus: () => typstCache,
     setupPandoc: (options) =>
@@ -13804,6 +13892,10 @@ async function boot(): Promise<void> {
   installShortcuts(await api.shortcuts());
   await installDragDrop();
   await installCloseGuard();
+  // The purge pass restarts the app; this is the first ordinary start after it.
+  // Do not block the first paint on a warning the reader may need a moment to
+  // read, but do show it before the recovery notice or a document can bury it.
+  void reportPurgeFailures();
   // Look for pandoc and Typst in the background: nothing at start-up depends on
   // them, and the answers only matter once the Export menu or a `.typ` document
   // is used. The menu labels follow as soon as both answers are in.

@@ -781,6 +781,32 @@ export const openExternal = (path: string) => invoke<void>("open_external", { pa
 export type AppFolder = "pandoc" | "typst" | "latex";
 export const openAppFolder = (folder: AppFolder) => invoke<void>("open_app_folder", { folder });
 
+/** Open the folder holding `settings.json`, `ai-prompts.md` and the recovery journal. */
+export const openSettingsFolder = () => invoke<void>("open_settings_folder");
+
+/** One path the headless purge pass could not remove. */
+export interface PurgeFailure {
+  path: string;
+  error: string;
+}
+
+/** What the last headless purge pass managed to delete. */
+export interface PurgeReport {
+  deleted: string[];
+  failed: PurgeFailure[];
+}
+
+/**
+ * Write the purge marker and restart.
+ *
+ * The close guard has already handled unsaved documents. The next process opens
+ * no window, deletes MDraft's own directories, and restarts the ordinary app.
+ */
+export const requestDataPurge = () => invoke<void>("request_data_purge");
+
+/** Read and clear the purge report, if the last start had one. */
+export const takePurgeReport = () => invoke<PurgeReport | null>("take_purge_report");
+
 export const runExport = (request: ExportRequest) =>
   invoke<ExportOutcome>("run_export", { request });
 

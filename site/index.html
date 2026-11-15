@@ -192,7 +192,7 @@
                 "name": "Where are my settings stored?",
                 "acceptedAnswer": {
                   "@type": "Answer",
-                  "text": "On Windows, in the application data folder for io.github.bgeneto.mdraft; on Linux, in the corresponding configuration folder. The portable Windows build keeps settings beside the executable. AI prompt overrides live in ai-prompts.md beside settings.json."
+                  "text": "On Windows, in the application data folder for io.github.bgeneto.mdraft; on Linux, in the corresponding configuration folder. The portable Windows build keeps settings beside the executable. AI prompt overrides live in ai-prompts.md beside settings.json. Preferences › Data can open the folder or delete all stored MDraft data. The NSIS uninstaller can also remove the folders when Delete the application data is ticked; the MSI has no such option."
                 }
               },
               {
@@ -1179,8 +1179,10 @@ image::figure.png[]</code></pre>
                 Windows
               </h3>
               <p>
-                Install with the NSIS setup or the MSI. The portable executable keeps its settings
-                beside itself, so it can live on a USB stick.
+                Install with the NSIS setup or the MSI. The NSIS uninstaller can delete the settings
+                folder when you tick <strong>Delete the application data</strong>; the MSI does not,
+                so use <strong>Preferences › Data</strong> before uninstalling. The portable
+                executable keeps its settings beside itself, so it can live on a USB stick.
               </p>
               <a class="btn btn-primary" href="{{DOWNLOAD_URL}}/mdraft_{{VERSION}}_x64-setup.exe"
                 >Download for Windows</a
@@ -1334,7 +1336,9 @@ image::figure.png[]</code></pre>
                 On Windows, in the application data folder for io.github.bgeneto.mdraft; on Linux,
                 in the corresponding configuration folder. The portable Windows build keeps settings
                 beside the executable. AI prompt overrides live in ai-prompts.md beside
-                settings.json.
+                settings.json. <strong>Preferences › Data</strong> can open the folder or delete all
+                stored MDraft data. The NSIS uninstaller can also remove the folders when
+                <strong>Delete the application data</strong> is ticked; the MSI has no such option.
               </p>
             </details>
             <details>
