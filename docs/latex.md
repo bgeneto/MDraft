@@ -585,7 +585,12 @@ table, so later lookups answer synchronously. The library index itself is
 `src/texpresso/library.ts` (TeX Live's per-engine `TEXINPUTS`/`LUAINPUTS` order,
 roots in order, project files first) and travels as `.mdraft-texmf/index.json`;
 the frame's own `worker.js` reads it and reports a library file loaded in place
-of a bundle file. A new TeXpresso release means re-anchoring the three edits in
+of a bundle file. A fourth edit serves the export: `xdvipdfmx` shares the
+engine's lookup but never asks for the case-insensitive one, so a picture named
+`FIGURES/x.pdf` for a folder `figures/` was drawn in the preview and missing from
+Export › PDF. When a name it asks for matches nothing exactly, the export now
+takes the engine's case-insensitive answer, as MiKTeX does on NTFS; an exact
+match still wins. A new TeXpresso release means re-anchoring the four edits in
 the patch script, regenerating the file, re-pinning it and uploading it to the
 origin. `scripts/texpresso-origin-check.mjs` proves an origin serves exactly
 the pinned engine, bundle and digest table before a release.
@@ -599,7 +604,8 @@ byte for byte `pdfjs-dist` 6.4.299, so `scripts/texpresso-pdfjs-assets.mjs` take
 the rest from that package and pins it. Because the install downloads every
 pinned file, upload a changed `vendor/pdfjs/` to the origin and check it before
 the pins merge. Otherwise no build can install the engine. The opt-in
-`latex-pdf-image` layer proves the figure is drawn and exported.
+`latex-pdf-image` layer proves the figure is drawn and exported, also under
+a name in the wrong letter case.
 
 The preview has no second bundled engine to fall back to. A WebView without
 JSPI, a project with a non-UTF-8 text file, a project file inside the reserved

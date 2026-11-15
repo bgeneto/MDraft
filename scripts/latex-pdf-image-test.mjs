@@ -8,7 +8,10 @@
 // a frame. The fixture's figure is a magenta square with the word "PDF" in
 // Helvetica, which the PDF does not embed, so pdf.js also needs its standard
 // fonts. The frame's own export reads the PDF through xdvipdfmx instead, and
-// must carry the figure as well.
+// must carry the figure as well. The document includes it twice, the second
+// time as `FIGURES/swatch.pdf` for the folder `figures/`: the engine finds that
+// name case-insensitively, and the export must too (the worker patch's export
+// fallback), so the export's text holds "PDF" twice.
 
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -135,11 +138,7 @@ try {
 
   // The figure is decoded asynchronously after the page is first painted.
   let pixels = 0;
-  await waitFor(
-    async () => (pixels = await magenta()) > 1000,
-    60_000,
-    "the PDF figure's pixels",
-  );
+  await waitFor(async () => (pixels = await magenta()) > 1000, 60_000, "the PDF figure's pixels");
   const unloaded = frameLog.filter((line) => /renderer: (cannot load|missing) image/.test(line));
   check(unloaded.length === 0, "the renderer loads the PDF image", unloaded.join(" | "));
   check(pixels > 1000, "the PDF figure is drawn on the page", `${pixels} magenta pixels`);
@@ -162,10 +161,16 @@ try {
   const text = (await (await document.getPage(1)).getTextContent()).items
     .map((item) => item.str)
     .join(" ");
+  const figures = text.match(/\bPDF\b/g)?.length ?? 0;
   check(
-    /\bPDF\b/.test(text),
+    figures >= 1,
     "the frame's own export carries the PDF figure",
     `${pdf.length} bytes, saved to ${saved}`,
+  );
+  check(
+    figures >= 2,
+    "the export carries the figure named in the wrong letter case",
+    `${figures} of 2 figures`,
   );
 } finally {
   if (frame) frame.close?.();
