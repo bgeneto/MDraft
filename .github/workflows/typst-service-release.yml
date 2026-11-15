@@ -274,6 +274,11 @@ jobs:
         if: runner.os == 'Linux'
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+          # Ubuntu 22.04 ships musl 1.2.2, whose static-PIE loader
+          # (`_start_c`/`dlstart.c`) segfaults this binary before `main`;
+          # the same build runs on musl 1.2.5. A plain static executable
+          # avoids that loader entirely, and the service has no need for PIE.
+          RUSTFLAGS: "-C relocation-model=static -C link-arg=-no-pie"
         run: cargo build --release --locked --target x86_64-unknown-linux-musl --manifest-path tools/mdraft-typst-service/Cargo.toml
 
       - name: Verify, package and record the Linux asset
