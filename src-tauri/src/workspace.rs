@@ -276,6 +276,97 @@ pub fn list(root: &str, relative: &str, show_all: bool) -> Result<WorkspaceListi
     })
 }
 
+/// Bounds for the Explorer's name index. It reads names only, never contents,
+/// but a workspace on a slow share or with a stray dependency folder must not
+/// keep a worker busy: whichever bound is hit first ends the walk.
+pub const INDEX_MAX_ENTRIES: usize = 50_000;
+const INDEX_MAX_DEPTH: usize = 16;
+const INDEX_BUDGET: std::time::Duration = std::time::Duration::from_millis(1_500);
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexEntry {
+    /// Relative to the root, with `/` separators.
+    pub path: String,
+    /// The same kinds as `WorkspaceEntry`.
+    pub kind: &'static str,
+    pub symlink: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceIndex {
+    pub entries: Vec<IndexEntry>,
+    /// A bound (count, depth or time) stopped the walk before it saw everything.
+    pub truncated: bool,
+}
+
+/// Every entry name under `root`, for the Explorer's filter.
+///
+/// Breadth-first, so when a bound is hit the shallow entries a reader is most
+/// likely to look for are the ones kept. The rules are `list`'s: the skip list
+/// unless `show_all`, symlinks listed but never followed, nothing outside root.
+pub fn index(root: &str, show_all: bool) -> Result<WorkspaceIndex, String> {
+    let root =
+        fs::canonicalize(root).map_err(|e| format!("The workspace folder is unavailable: {e}"))?;
+    let started = std::time::Instant::now();
+    let mut entries = Vec::new();
+    let mut truncated = false;
+    let mut queue = std::collections::VecDeque::from([(root.clone(), String::new(), 0usize)]);
+    'walk: while let Some((dir, relative, depth)) = queue.pop_front() {
+        let Ok(read) = fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut level = Vec::new();
+        for entry in read.flatten() {
+            if started.elapsed() > INDEX_BUDGET {
+                truncated = true;
+                break 'walk;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let Ok(meta) = entry.path().symlink_metadata() else {
+                continue;
+            };
+            let symlink = meta.file_type().is_symlink();
+            let is_dir = !symlink && meta.is_dir();
+            if !show_all && skipped(&name, is_dir) {
+                continue;
+            }
+            level.push(WorkspaceEntry {
+                kind: classify(&name, is_dir),
+                name,
+                symlink,
+                size: 0,
+            });
+        }
+        level.sort_by(natural);
+        for entry in level {
+            if entries.len() >= INDEX_MAX_ENTRIES {
+                truncated = true;
+                break 'walk;
+            }
+            let path = if relative.is_empty() {
+                entry.name.clone()
+            } else {
+                format!("{relative}/{}", entry.name)
+            };
+            if entry.kind == "dir" {
+                if depth + 1 < INDEX_MAX_DEPTH {
+                    queue.push_back((dir.join(&entry.name), path.clone(), depth + 1));
+                } else {
+                    truncated = true;
+                }
+            }
+            entries.push(IndexEntry {
+                path,
+                kind: entry.kind,
+                symlink: entry.symlink,
+            });
+        }
+    }
+    Ok(WorkspaceIndex { entries, truncated })
+}
+
 /// Bounds for the main-document search: it reads `.tex` sources, so it stays
 /// small and never becomes a full-disk index.
 const SEARCH_MAX_FILES: usize = 4_000;
@@ -409,6 +500,14 @@ pub async fn workspace_list(
     show_all: bool,
 ) -> Result<WorkspaceListing, String> {
     tauri::async_runtime::spawn_blocking(move || list(&root, &relative, show_all))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Walks the whole (bounded) tree, so it runs off the async runtime's threads.
+#[tauri::command]
+pub async fn workspace_index(root: String, show_all: bool) -> Result<WorkspaceIndex, String> {
+    tauri::async_runtime::spawn_blocking(move || index(&root, show_all))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -550,6 +649,76 @@ mod tests {
         let link = listing.entries.iter().find(|e| e.name == "escape").unwrap();
         assert!(link.symlink && link.kind != "dir");
         assert!(list(dir.path().to_str().unwrap(), "escape", false).is_err());
+    }
+
+    fn paths(index: &WorkspaceIndex) -> Vec<&str> {
+        index.entries.iter().map(|e| e.path.as_str()).collect()
+    }
+
+    #[test]
+    fn index_walks_breadth_first_with_the_listing_rules() {
+        let dir = tree("index");
+        let found = index(dir.path().to_str().unwrap(), false).unwrap();
+        assert_eq!(
+            paths(&found),
+            [
+                "chapters",
+                "figures",
+                "main.tex",
+                "notes.bin",
+                "refs.bib",
+                "chapters/Ch1.tex",
+                "chapters/ch2.tex",
+                "chapters/ch10.tex",
+                "figures/ação.svg",
+                "figures/plot.png",
+            ]
+        );
+        assert!(!found.truncated);
+        assert_eq!(found.entries[0].kind, "dir");
+        let all = index(dir.path().to_str().unwrap(), true).unwrap();
+        for path in [".git", "node_modules", "main.aux", ".hidden.tex"] {
+            assert!(paths(&all).contains(&path), "{path} indexed with show_all");
+        }
+    }
+
+    #[test]
+    fn index_stops_at_its_depth_bound() {
+        let dir = Scratch::new("index-depth");
+        let mut deep = dir.path().to_path_buf();
+        for level in 0..(INDEX_MAX_DEPTH + 3) {
+            deep = deep.join(format!("d{level}"));
+        }
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("bottom.tex"), "").unwrap();
+        let found = index(dir.path().to_str().unwrap(), false).unwrap();
+        assert!(found.truncated);
+        assert!(
+            found
+                .entries
+                .iter()
+                .all(|e| !e.path.ends_with("bottom.tex"))
+        );
+        assert_eq!(found.entries.len(), INDEX_MAX_DEPTH);
+    }
+
+    #[test]
+    fn index_of_a_missing_folder_explains_itself() {
+        let error = index("Z:/definitely/missing/folder", false).unwrap_err();
+        assert!(error.contains("unavailable"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn index_does_not_follow_symlinks() {
+        let dir = tree("index-symlink");
+        let outside = Scratch::new("index-symlink-outside");
+        fs::write(outside.path().join("secret.tex"), "").unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("escape")).unwrap();
+        let found = index(dir.path().to_str().unwrap(), false).unwrap();
+        let link = found.entries.iter().find(|e| e.path == "escape").unwrap();
+        assert!(link.symlink && link.kind != "dir");
+        assert!(found.entries.iter().all(|e| !e.path.contains("secret")));
     }
 
     #[test]

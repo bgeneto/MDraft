@@ -5,8 +5,9 @@
 // The harness launches MDraft with samples/latex-perf/huge/main.tex. The native
 // folder picker is stubbed at the IPC transport (window.fetch), the same way
 // latex-preview stubs the save dialog; everything after it runs for real:
-// `workspace_open`, `workspace_list`, settings, the sidebar tab and the menu
-// state. Read-only: the fixture is never written.
+// `workspace_open`, `workspace_list`, `workspace_index` and the filter box,
+// settings, the sidebar tab and the menu state. Read-only: the fixture is never
+// written.
 
 import { join } from "node:path";
 import { openPage, sleep } from "./cdp-page.mjs";
@@ -160,6 +161,117 @@ try {
     `[...document.querySelectorAll("#sidebar-body .explorer-item")].every((e) => !/\\.(aux|log|synctex\\.gz)$/.test(e.textContent.trim()))`,
   );
   check("TeX auxiliary files are not listed by default", hidden);
+
+  // The filter box finds a file inside a collapsed folder.
+  const rows = `[...document.querySelectorAll("#sidebar-body .explorer-item")]`;
+  const row = (name) =>
+    `${rows}.find((e) => e.textContent.trim().endsWith(${JSON.stringify(name)}))`;
+  const typeFilter = (text) =>
+    evaluate(`(() => {
+      const field = document.querySelector("#sidebar-body .explorer-filter");
+      field.focus();
+      field.value = ${JSON.stringify(text)};
+      field.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    })()`);
+  const filterKey = (key) =>
+    evaluate(
+      `document.querySelector("#sidebar-body .explorer-filter").dispatchEvent(new KeyboardEvent("keydown", { key: ${JSON.stringify(key)}, bubbles: true, cancelable: true }))`,
+    );
+  check(
+    "the Explorer has a filter box",
+    await evaluate(`!!document.querySelector("#sidebar-body .explorer-filter[role=searchbox]")`),
+  );
+  check(
+    "figures starts collapsed",
+    await evaluate(`${row("figures")}?.getAttribute("aria-expanded") === "false"`),
+  );
+  await typeFilter("diag");
+  check(
+    "typing finds a file in a collapsed folder",
+    await waitFor(`!!${row("diagram.png")}`, 10_000, "the filtered match"),
+  );
+  check(
+    "the match's folder is shown open and the match is the best row",
+    await evaluate(
+      `${row("figures")}?.getAttribute("aria-expanded") === "true" && ${row("diagram.png")}?.classList.contains("best")`,
+    ),
+  );
+  check(
+    "the matched letters are highlighted",
+    await evaluate(`${row("diagram.png")}?.querySelector("mark")?.textContent === "diag"`),
+  );
+  check(
+    "only matches and their folders are listed",
+    await evaluate(`!${row("main.tex")} && !${row("ch01.tex")}`),
+  );
+  check(
+    "the field keeps focus while results redraw",
+    await evaluate(`document.activeElement?.classList.contains("explorer-filter")`),
+  );
+  check(
+    "the match count is announced",
+    await evaluate(
+      `/1 match/.test(document.querySelector("#sidebar-body .explorer-status[role=status]")?.textContent ?? "")`,
+    ),
+  );
+
+  await typeFilter("c11");
+  await filterKey("Enter");
+  check(
+    "Enter opens the best match",
+    await waitFor(
+      `document.querySelector("#sidebar-body .explorer-item.active")?.textContent.includes("ch11.tex") ?? false`,
+      10_000,
+      "ch11.tex to open",
+    ),
+  );
+
+  await typeFilter("zzqqxx");
+  check(
+    "no match explains itself",
+    await waitFor(
+      `/No file name matches/.test(document.getElementById("sidebar-body")?.textContent ?? "")`,
+      5000,
+      "the empty result",
+    ),
+  );
+
+  await filterKey("Escape");
+  check(
+    "Escape clears the filter and restores the tree",
+    await waitFor(
+      `!!${row("main.tex")} && ${row("figures")}?.getAttribute("aria-expanded") === "false" && !document.querySelector("#sidebar-body .explorer-item mark") && document.querySelector("#sidebar-body .explorer-filter").value === ""`,
+      5000,
+      "the full tree",
+    ),
+  );
+
+  const index = await evaluate(
+    `window.__TAURI_INTERNALS__.invoke("workspace_index", { root: ${JSON.stringify(project)}, showAll: false }).then(JSON.stringify)`,
+  ).then(JSON.parse);
+  const indexed = index.entries.map((entry) => entry.path);
+  check(
+    "the name index covers nested files and skips build output",
+    indexed.includes("chapters/ch01.tex") &&
+      indexed.includes("figures/diagram.png") &&
+      indexed.every((path) => !/\.(aux|log|synctex\.gz)$/.test(path)) &&
+      !index.truncated,
+    `${indexed.length} entries`,
+  );
+
+  // Type-ahead: letters typed in quick succession form one prefix.
+  await evaluate(`(() => {
+    ${row("main.tex")}.focus();
+    for (const key of ["r", "e"]) {
+      document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    }
+  })()`);
+  check(
+    "type-ahead jumps to the name starting with the typed letters",
+    await evaluate(
+      `document.activeElement?.textContent.trim().endsWith("references.bib") ?? false`,
+    ),
+  );
 
   // A path outside the workspace is refused by the command itself.
   const refused = await evaluate(

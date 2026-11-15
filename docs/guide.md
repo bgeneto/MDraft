@@ -549,14 +549,25 @@ sidebar's **Explorer** tab (`Ctrl+Shift+4`).
   highlighted.
 - Click or press Enter to open a document. Other files (PDFs, images) open
   with the system.
+- **Filter files** at the top of the Explorer finds a file anywhere in the
+  folder, including inside folders you have not opened. Type a few letters
+  of its name or path: `amb` finds `config/ambientes.tex`, `conf/tex` matches
+  a folder and then a name, several words must all match, and accents and
+  case are ignored. Matches are shown with their folders open and the typed
+  letters highlighted. Enter opens the best match, Down moves into the
+  results, and Escape clears the filter and restores the tree as it was. In
+  the tree, `/` or `Ctrl+F` returns to the filter box.
 - The tree is keyboard-operable: the arrow keys move, expand and collapse;
-  Home and End jump; a typed letter moves to the next name starting with it;
-  Shift+F10 or the context-menu key opens a row's menu.
+  Home and End jump; typing a name's first letters moves to it (one letter
+  pressed again moves to the next name starting with it); Shift+F10 or the
+  context-menu key opens a row's menu.
 - Hidden entries, version-control and build folders, and TeX auxiliary files
   (`.aux`, `.log`, `.synctex.gz`, …) are hidden until you choose **Show
   all**.
-- MDraft has no file watcher. The tree re-reads its folders when the window
-  regains focus, after you save, and when you press **Refresh**.
+- MDraft has no file watcher. The tree and the filter re-read the folder when
+  the window regains focus, after you save, and when you press **Refresh**.
+  The filter reads file names only, never their contents, and in a very large
+  folder it says when it could search only part of it.
 
 The folder is remembered until **File › Close Folder**. The Explorer only
 lists files: it never moves, renames, deletes or writes anything, and it never
