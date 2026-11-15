@@ -445,7 +445,7 @@ fn output_manifest(data: &CaptureData, completed_ms: u64) -> format::Manifest {
 }
 
 #[cfg(windows)]
-fn available_space(path: &Path) -> Result<u64, String> {
+pub(super) fn available_space(path: &Path) -> Result<u64, String> {
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
     use windows::core::PCWSTR;
@@ -458,7 +458,7 @@ fn available_space(path: &Path) -> Result<u64, String> {
 }
 
 #[cfg(unix)]
-fn available_space(path: &Path) -> Result<u64, String> {
+pub(super) fn available_space(path: &Path) -> Result<u64, String> {
     use std::os::unix::ffi::OsStrExt;
     let path = std::ffi::CString::new(path.as_os_str().as_bytes())
         .map_err(|_| "The backup folder has an invalid path.")?;

@@ -607,6 +607,15 @@ pub fn capture_with(
         }
     }
     let (sources, directories, mut categories) = collect(roots, include_downloads, progress)?;
+    // Unsaved buffers arrive later; check the known saved data before copying it.
+    let required = sources.iter().fold(settings.len() as u64, |total, source| {
+        total
+            .saturating_add(source.fingerprint.bytes)
+            .saturating_add(4096)
+    });
+    if super::jobs::available_space(staging)? < required {
+        return Err("There is not enough space to prepare the backup. Free space on the application data drive and try again.".into());
+    }
     let mut files = Vec::new();
     for source in &sources {
         progress(0)?;
