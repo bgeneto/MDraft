@@ -1094,10 +1094,10 @@ function updateZoomIndicator(): void {
   const zoomed = level !== DEFAULT_ZOOM;
   statusZoom.hidden = !zoomed;
   statusZoom.textContent = `${level}%`;
-  statusZoom.title = `Zoom ${level}% — click to reset to ${DEFAULT_ZOOM}%`;
+  statusZoom.title = `Preview zoom ${level}% — click to reset to ${DEFAULT_ZOOM}%`;
   statusZoom.setAttribute(
     "aria-label",
-    `Document zoom ${level} percent. Click to reset to ${DEFAULT_ZOOM} percent.`,
+    `Preview zoom ${level} percent. Click to reset to ${DEFAULT_ZOOM} percent.`,
   );
 }
 
@@ -1366,7 +1366,9 @@ function applyLayout(): void {
     EDITOR_LINE_HEIGHTS[DEFAULT_EDITOR_LINE_HEIGHT];
   document.documentElement.style.setProperty("--editor-line-height", String(lineHeight));
 
-  editor?.setFontSize(settings.editorFontSize * zoom);
+  // Zoom is a preview control. The source has its own size preference, and
+  // scaling it too would make one setting fight the other.
+  editor?.setFontSize(settings.editorFontSize);
   editor?.setFocusMode(settings.focusMode);
   editor?.setTypewriter(settings.typewriterMode);
   editor?.setCursorBlink(settings.cursorBlink !== false);
@@ -4956,7 +4958,7 @@ function texpressoMessage(session: TexpressoSession, message: FrameMessage): voi
       clearCorrespondence();
       break;
     case "zoom-wheel":
-      setZoom(zoomLevel() + (message.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP));
+      zoomFromWheel(message.deltaY);
       break;
     case "error":
       perfMark("texpresso-error", { message: message.message });
@@ -9567,13 +9569,34 @@ function setSidebarTab(tab: api.SidebarTab): void {
 }
 
 function setZoom(level: number): void {
+  // Source-only shows no preview, so a zoom change would be invisible.
+  if (settings.viewMode === "source") {
+    toast("Zoom applies to the preview. Use Editor font size for the source.");
+    return;
+  }
   settings.zoomLevel = Math.min(
     MAX_ZOOM,
     Math.max(MIN_ZOOM, Math.round(level / ZOOM_STEP) * ZOOM_STEP),
   );
   applyLayout();
   persist();
-  toast(`Zoom ${settings.zoomLevel}%`);
+  toast(`Preview zoom ${settings.zoomLevel}%`);
+}
+
+/**
+ * Ctrl+wheel distance collected toward the next zoom step. A mouse notch is
+ * about 100 px, while a touchpad pinch sends many small deltas that must not
+ * each jump a whole step.
+ */
+let wheelZoomDelta = 0;
+const WHEEL_ZOOM_THRESHOLD = 50;
+
+function zoomFromWheel(deltaY: number): void {
+  wheelZoomDelta += deltaY;
+  if (Math.abs(wheelZoomDelta) < WHEEL_ZOOM_THRESHOLD) return;
+  const step = wheelZoomDelta < 0 ? ZOOM_STEP : -ZOOM_STEP;
+  wheelZoomDelta = 0;
+  setZoom(zoomLevel() + step);
 }
 
 // ---------------------------------------------------------------------------
@@ -12998,6 +13021,17 @@ function installChrome(): void {
     setTheme(isDark ? "light" : "dark"),
   );
   statusZoom.addEventListener("click", () => setZoom(DEFAULT_ZOOM));
+  // Ctrl+wheel zooms the preview only; the editor keeps its font size. The
+  // HTML and TeXpresso iframes forward their own Ctrl+wheel through the bridge.
+  previewShell.addEventListener(
+    "wheel",
+    (event) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      event.preventDefault();
+      zoomFromWheel(event.deltaY);
+    },
+    { passive: false },
+  );
   statusReading.addEventListener("click", stopReadAloud);
   // The counts are the visible summary of the document; either one opens the
   // same dialog as Tools › Document Statistics, through the same guard.
@@ -13383,6 +13417,7 @@ async function boot(): Promise<void> {
     onLink: (href, raw) => handleHtmlLink(href, raw),
     onAction: handleHtmlAction,
     onScroll: handleHtmlScroll,
+    onZoomWheel: zoomFromWheel,
     onScrollInput: (dragging) => {
       htmlScrollDragging = dragging;
       scrollOwnership.input();
