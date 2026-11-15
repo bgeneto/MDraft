@@ -5686,6 +5686,74 @@ label.optional-tools-row:hover {
   background: var(--compiled-accent-hover);
   border-color: var(--compiled-accent-hover);
 }
+/* LaTeX's Compile is a split button: the main half compiles, the chevron opens
+   Compile / Recompile from scratch. Both halves keep the accent fill and read
+   as one control, parted by a hairline in the label colour. */
+.compiled-split {
+  display: inline-flex;
+  align-items: stretch;
+}
+.compiled-split-joined .compiled-compile {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.compiled-toolbar .compiled-compile-more {
+  min-width: 28px;
+  padding: 5px 6px;
+  margin-left: 0;
+  border-color: var(--compiled-accent);
+  border-left-color: color-mix(in srgb, light-dark(#ffffff, #152338) 45%, transparent);
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  background: var(--compiled-accent);
+  color: light-dark(#ffffff, #152338);
+}
+.compiled-toolbar .compiled-compile-more:hover:not(:disabled),
+.compiled-toolbar .compiled-compile-more[aria-expanded="true"] {
+  background: var(--compiled-accent-hover);
+  border-color: var(--compiled-accent-hover);
+  border-left-color: color-mix(in srgb, light-dark(#ffffff, #152338) 45%, transparent);
+}
+.compiled-compile-more .compiled-button-label {
+  display: none;
+}
+.compiled-compile-more .compiled-icon {
+  transition: transform 120ms ease;
+}
+.compiled-compile-more[aria-expanded="true"] .compiled-icon {
+  transform: rotate(180deg);
+}
+.compiled-compile-more[hidden] {
+  display: none;
+}
+.compiled-compile-menu {
+  min-width: 280px;
+}
+.compiled-compile-menu .compiled-compile-option {
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 7px 10px;
+  text-align: left;
+}
+.compiled-compile-option .compiled-icon {
+  color: var(--accent);
+}
+.compiled-option-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+.compiled-option-hint {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: normal;
+}
+@media (prefers-reduced-motion: reduce) {
+  .compiled-compile-more .compiled-icon {
+    transition: none;
+  }
+}
 .compiled-icon {
   flex: 0 0 auto;
   width: 15px;

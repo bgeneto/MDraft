@@ -16,10 +16,22 @@ type Icon =
   | "problem"
   | "warning"
   | "ready"
-  | "clock";
+  | "clock"
+  | "chevron"
+  | "restart";
+
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.userAgent);
 
 export class CompiledPreviewUi {
   private compile = this.button("Compile", "compiled-compile", "play");
+  // LaTeX only: the other half of a split button, listing Compile and
+  // Recompile from scratch. Typst compiles from source every time, so it has
+  // no stale build state for a second entry to clear.
+  private more = this.button("", "compiled-compile-more", "chevron");
+  private split = document.createElement("div");
+  private menu: HTMLElement | null = null;
+  private closeMenuListeners: (() => void) | null = null;
+  private compileClean: () => void;
   private auto = document.createElement("input");
   private toggle = this.button("Logs", "compiled-logs-toggle", "logs");
   // The visible label is short to leave the status beside it room; the
@@ -51,6 +63,7 @@ export class CompiledPreviewUi {
     private logs: HTMLElement,
     actions: {
       compile(): void;
+      compileClean(): void;
       cancel(): void;
       auto(on: boolean): void;
       save(): void;
@@ -94,7 +107,22 @@ export class CompiledPreviewUi {
     // The status shares the action row, right-aligned beside Logs and Save, so
     // the preview does not pay a whole extra line of height for it. It wraps to
     // a row of its own only when the pane is too narrow to hold both.
-    row.append(this.compile, label, this.modes, this.message, this.toggle, this.save);
+    this.compileClean = actions.compileClean;
+    this.split.className = "compiled-split";
+    this.split.setAttribute("role", "group");
+    this.split.setAttribute("aria-label", "Compile");
+    this.more.setAttribute("aria-label", "More compile options");
+    this.more.setAttribute("aria-haspopup", "menu");
+    this.more.setAttribute("aria-expanded", "false");
+    this.more.title = "More compile options";
+    this.more.addEventListener("click", () => (this.menu ? this.closeMenu(true) : this.openMenu()));
+    this.more.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowDown" || this.more.disabled) return;
+      event.preventDefault();
+      this.openMenu();
+    });
+    this.split.append(this.compile, this.more);
+    row.append(this.split, label, this.modes, this.message, this.toggle, this.save);
     header.append(row, this.notice);
     this.compile.addEventListener("click", () =>
       this.busy ? actions.cancel() : actions.compile(),
@@ -164,6 +192,8 @@ export class CompiledPreviewUi {
         '<path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14a2 2 0 0 0 1.7 3h16a2 2 0 0 0 1.7-3ZM12 9v4M12 17h.01"/>',
       ready: '<circle cx="12" cy="12" r="10"/><path d="m8 12 3 3 5-6"/>',
       clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+      chevron: '<path d="m6 9 6 6 6-6"/>',
+      restart: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
     };
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", "0 0 24 24");
@@ -211,6 +241,9 @@ export class CompiledPreviewUi {
     this.caption.textContent = fileName ? `${fileName} · Latest compilation` : "Latest compilation";
     this.save.classList.toggle("latex-save-pdf", format === "latex");
     this.modes.hidden = format !== "typst";
+    this.more.hidden = format !== "latex";
+    this.split.classList.toggle("compiled-split-joined", format === "latex");
+    if (format !== "latex") this.closeMenu();
     this.save.hidden = format === "typst" && mode !== "pages";
     for (const button of this.modes.querySelectorAll("button")) {
       button.setAttribute("aria-pressed", String(button.dataset.mode === mode));
@@ -236,6 +269,10 @@ export class CompiledPreviewUi {
     this.compile.querySelector(".compiled-button-label")!.textContent = busy ? "Cancel" : "Compile";
     this.compile.querySelector("svg")!.replaceWith(this.icon(busy ? "stop" : "play"));
     this.compile.classList.toggle("latex-cancel", busy);
+    // While a build runs the main half is Cancel; a second compile from the
+    // menu would only race it, so the menu waits for the build to end.
+    this.more.disabled = busy;
+    if (busy) this.closeMenu();
     this.save.disabled = busy || !saveable;
     this.save.title = saveable ? "Save the displayed PDF" : "Compile a current PDF before saving";
   }
@@ -285,6 +322,120 @@ export class CompiledPreviewUi {
     );
   }
 
+  /** Forget the previous build's problems and output, for a build from scratch. */
+  clearLogs(): void {
+    this.details(document.createElement("div"), "", 0, false);
+  }
+
+  private openMenu(): void {
+    if (this.menu || this.more.disabled) return;
+    const host = document.createElement("div");
+    host.className = "editor-menu compiled-compile-menu";
+    host.setAttribute("role", "menu");
+    host.setAttribute("aria-label", "Compile options");
+    host.tabIndex = -1;
+    const entry = (
+      icon: Icon,
+      text: string,
+      hint: string,
+      shortcut: string,
+      run: () => void,
+    ): HTMLButtonElement => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "editor-menu-item compiled-compile-option";
+      button.setAttribute("role", "menuitem");
+      const body = document.createElement("span");
+      body.className = "compiled-option-body";
+      const label = document.createElement("span");
+      label.className = "editor-menu-label";
+      label.textContent = text;
+      const detail = document.createElement("span");
+      detail.className = "compiled-option-hint";
+      detail.textContent = hint;
+      body.append(label, detail);
+      button.append(this.icon(icon), body);
+      if (shortcut) {
+        const keys = document.createElement("span");
+        keys.className = "editor-menu-shortcut";
+        keys.textContent = shortcut;
+        button.append(keys);
+      }
+      button.addEventListener("click", () => {
+        this.closeMenu(true);
+        run();
+      });
+      return button;
+    };
+    host.append(
+      entry(
+        "play",
+        "Compile",
+        "Update the preview from the current sources",
+        IS_MAC ? "\u21e7\u2318\u21a9" : "Ctrl+Shift+Enter",
+        () => this.compile.click(),
+      ),
+      entry(
+        "restart",
+        "Recompile from scratch",
+        "Discard cached build state and logs, then compile",
+        "",
+        () => this.compileClean(),
+      ),
+    );
+    document.body.append(host);
+    const anchor = this.split.getBoundingClientRect();
+    const width = host.offsetWidth;
+    host.style.top = `${Math.round(anchor.bottom + 4)}px`;
+    host.style.left = `${Math.round(Math.max(8, Math.min(anchor.left, window.innerWidth - width - 8)))}px`;
+    this.menu = host;
+    this.more.setAttribute("aria-expanded", "true");
+    host.querySelector<HTMLButtonElement>("button")?.focus({ preventScroll: true });
+
+    const onPointer = (event: MouseEvent): void => {
+      const target = event.target as Node;
+      if (host.contains(target) || this.more.contains(target)) return;
+      this.closeMenu();
+    };
+    const onKey = (event: KeyboardEvent): void => {
+      const items = [...host.querySelectorAll<HTMLButtonElement>("button")];
+      const at = items.indexOf(document.activeElement as HTMLButtonElement);
+      const move = (index: number): void => {
+        event.preventDefault();
+        items[(index + items.length) % items.length]?.focus();
+      };
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        this.closeMenu(true);
+      } else if (event.key === "Tab") this.closeMenu();
+      else if (event.key === "ArrowDown") move(at + 1);
+      else if (event.key === "ArrowUp") move(at - 1);
+      else if (event.key === "Home") move(0);
+      else if (event.key === "End") move(items.length - 1);
+    };
+    const onBlur = (): void => this.closeMenu();
+    document.addEventListener("mousedown", onPointer, true);
+    host.addEventListener("keydown", onKey);
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("resize", onBlur);
+    this.closeMenuListeners = () => {
+      document.removeEventListener("mousedown", onPointer, true);
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("resize", onBlur);
+    };
+  }
+
+  private closeMenu(restoreFocus = false): void {
+    if (!this.menu) return;
+    this.closeMenuListeners?.();
+    this.closeMenuListeners = null;
+    this.menu.remove();
+    this.menu = null;
+    this.more.setAttribute("aria-expanded", "false");
+    if (restoreFocus) this.more.focus({ preventScroll: true });
+  }
+
   /** Replace the Compiler output text while a compile runs; problems stay as they are. */
   liveOutput(output: string): void {
     this.log = output;
@@ -319,6 +470,7 @@ export class CompiledPreviewUi {
   }
 
   reset(): void {
+    this.closeMenu();
     this.explicitLogs = false;
     this.status("", false, false);
     this.showLogs(false, false);

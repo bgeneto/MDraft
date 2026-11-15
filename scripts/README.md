@@ -39,6 +39,7 @@ license files. Private records and source captures must remain outside this tree
 | `optimize-site-images.py` | `--check` validates canonical public WebP sizes/container metadata using Python only; `--write --source <private-captures>` needs Pillow; `MDRAFT_CAPTURE_DIR` can provide that explicit source |
 | `preview-group-prototype.mjs` | Test-only grouping helpers imported by the performance suite; never application code |
 | `preview-native-compare.mjs` | `[port]`; CDP/native preview comparison run by the isolated test harness |
+| `latex-texpresso-test.mjs` | `[port]`; opt-in isolated TeXpresso layer (needs `MDRAFT_TEXPRESSO_MIRROR` and `MDRAFT_TEXPRESSO_ENGINE`): frame boot, correspondence, export, the split Compile menu's Recompile from Scratch (new session, cleared logs, status), privacy and the switch back |
 | `latex-perf-baseline.mjs` | `<runs-dir> [--out=path]`; combines performance results, defaulting to an OS temporary output folder |
 | `build-icons.mjs` | `--source <master.png> [--out src-tauri/icons]`; regenerate public installer/window icons from an explicitly selected master |
 | `fetch-fonts.ps1` | Refresh pinned font assets; requires Python/fonttools/brotli and is not needed for ordinary builds |

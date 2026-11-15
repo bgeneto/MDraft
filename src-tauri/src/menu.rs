@@ -708,7 +708,9 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
         "view.syncScroll" => state.view_mode == "split",
         "view.sidebar" | "view.outline" | "view.favorites" | "view.recent" | "view.explorer"
         | "view.sidebarPanel" => !state.focus_mode,
-        "view.latexCompile" | "view.latexAutoCompile" => state.document_language == "latex",
+        "view.latexCompile" | "view.latexCompileClean" | "view.latexAutoCompile" => {
+            state.document_language == "latex"
+        }
         "view.typstPreview" | "view.typstDocument" | "view.typstPages" => {
             typst && state.typst_available
         }
@@ -1450,6 +1452,13 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             "view.latexCompile",
             "Compile LaTeX",
             Some("CmdOrCtrl+Shift+Enter"),
+        )?)
+        // Not the same build: the preview keeps aux files and checkpoints
+        // between runs, and this is the reader's way to discard them.
+        .item(&item(
+            "view.latexCompileClean",
+            "Recompile LaTeX from Scratch",
+            None,
         )?)
         .item(&check(
             "view.latexAutoCompile",
@@ -2249,8 +2258,10 @@ mod tests {
         assert!(CHECK_IDS.contains(&"view.latexAutoCompile"));
         assert!(!is_checked(&state, "view.latexAutoCompile"));
         assert_eq!(enabled_for(&state, "view.latexAutoCompile"), Some(false));
+        assert_eq!(enabled_for(&state, "view.latexCompileClean"), Some(false));
         state.document_language = "latex".into();
         assert_eq!(enabled_for(&state, "view.latexAutoCompile"), Some(true));
+        assert_eq!(enabled_for(&state, "view.latexCompileClean"), Some(true));
         settings.latex_auto_compile = true;
         let rebuilt = state.with_settings(&settings);
         assert!(is_checked(&rebuilt, "view.latexAutoCompile"));

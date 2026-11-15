@@ -227,6 +227,7 @@ try {
     ["tools.encoding", "Tools"],
     ["tools.ai", "Tools"],
     ["view.latexCompile", "Tools"],
+    ["view.latexCompileClean", "Tools"],
     ["view.latexAutoCompile", "Tools"],
     ["help.welcome", "Help"],
   ]) {
@@ -357,6 +358,10 @@ try {
   check(
     (await itemById("view.latexCompile"))?.enabled === false,
     "Compile LaTeX is disabled for Markdown",
+  );
+  check(
+    (await itemById("view.latexCompileClean"))?.enabled === false,
+    "Recompile LaTeX from Scratch is disabled for Markdown",
   );
   check((await itemById("edit.delete"))?.enabled === false, "Delete Selection starts disabled");
   check((await itemById("navigate.openTarget"))?.enabled === false, "Open Target starts disabled");
@@ -1112,6 +1117,10 @@ try {
   check(
     (await itemById("view.latexCompile"))?.enabled === true,
     "Compile LaTeX is enabled for LaTeX",
+  );
+  check(
+    (await itemById("view.latexCompileClean"))?.enabled === true,
+    "Recompile LaTeX from Scratch is enabled for LaTeX",
   );
   for (const [id, label] of [
     ["format.bold", "bold"],
