@@ -178,9 +178,10 @@ nothing is dropped entirely, which is what lets
 **Preferences › Export › After Export** can open the exported file's folder,
 open the file itself, or run a command with `${outputPath}` substituted. These
 are global: they run after every successful export that writes a file, not only
-for the format currently selected in the panel. The direct PDF, pandoc formats,
-Typst PDF and HTML export know their output path. **PDF (opens browser)** does
-not, because the browser owns the save path.
+for the format currently selected in the panel. Only the folder is revealed by
+default. The direct PDF, pandoc formats, Typst PDF and HTML export know their
+output path. **PDF (opens browser)** does not, because the browser owns the save
+path.
 
 ## Installing pandoc, Typst and the LaTeX engine
 
