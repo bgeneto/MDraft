@@ -102,7 +102,8 @@
     "samples/workspace-typst/chapters/one.typ": "Typst workspace-root include and Explorer regression fixture",
     "samples/workspace-typst/template.typ": "Typst workspace-root include and Explorer regression fixture",
     "samples/latex-on-demand/main.tex": "On-demand project manifest: an image named through a macro is fetched after the engine opens it",
-    "samples/latex-on-demand/figures/dot.png": "On-demand project manifest: the image the synthetic fixture opens through a macro"
+    "samples/latex-on-demand/figures/dot.png": "On-demand project manifest: the image the synthetic fixture opens through a macro",
+    "samples/latex-pdf-image/main.tex": "TeXpresso preview PDF images: includes the PDF figure that scripts/latex-pdf-image-fixture.mjs generates"
   },
   "images": {
     "samples/html-tour/image.png": {

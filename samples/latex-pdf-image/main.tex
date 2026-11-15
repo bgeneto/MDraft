@@ -1,0 +1,12 @@
+\documentclass{article}
+\usepackage{graphicx}
+
+% A synthetic PDF figure: a magenta square with the word "PDF" in Helvetica,
+% which the PDF does not embed. The preview draws PDF images with pdf.js, so
+% the square proves pdf.js loaded and the word needs its standard fonts.
+% scripts/latex-pdf-image-fixture.mjs writes figures/swatch.pdf before the
+% latex-pdf-image layer runs; the repository does not hold PDFs.
+\begin{document}
+\section{A figure}
+\includegraphics[width=4cm]{figures/swatch.pdf}
+\end{document}

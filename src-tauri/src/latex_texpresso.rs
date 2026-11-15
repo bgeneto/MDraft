@@ -1071,6 +1071,29 @@ mod tests {
     }
 
     #[test]
+    fn the_renderer_can_load_pdf_js() {
+        // `ocaml.js` draws a PDF image with pdf.js, loading these two names from
+        // `vendor/pdfjs/` (its data folders it passes as base URLs). An unpinned
+        // name is refused, and every PDF image would show only its file name.
+        let config = config();
+        for name in ["vendor/pdfjs/pdf.min.mjs", "vendor/pdfjs/pdf.worker.min.mjs"] {
+            assert!(
+                config.assets.iter().any(|pin| pin.path == name),
+                "{name} is not pinned"
+            );
+            assert!(safe(name), "{name}");
+            assert_eq!(kind(name), "text/javascript");
+        }
+        for folder in ["cmaps/", "standard_fonts/", "wasm/", "iccs/"] {
+            let prefix = format!("vendor/pdfjs/{folder}");
+            assert!(
+                config.assets.iter().any(|pin| pin.path.starts_with(&prefix)),
+                "nothing under {prefix} is pinned"
+            );
+        }
+    }
+
+    #[test]
     fn a_bad_config_is_refused() {
         let parse = |edit: &dyn Fn(&mut serde_json::Value)| {
             let mut value: serde_json::Value = serde_json::from_str(CONFIG).unwrap();
