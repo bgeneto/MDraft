@@ -2781,8 +2781,11 @@ function setLatexStatus(message: string, state?: CompiledStatus): void {
   // With TeXpresso drawing, the line says both halves: the live preview, then
   // the PDF the shadow compile keeps for export.
   const live = texpressoShowing() ? texpressoLiveStatus() : "";
+  // While the frame itself is still working, the export only waits on it:
+  // naming both would say the same thing twice.
+  const both = live && !(message === TEXPRESSO_EXPORT_WAIT && texpressoWorking());
   compiledUi.status(
-    live ? `${live} · ${message}` : message,
+    both ? `${live} · ${message}` : live || message,
     latexInFlight,
     latexCurrent(latexPreview) || latexPartialCurrent(),
     state,
@@ -4513,6 +4516,8 @@ let texpressoWatching = false;
 /** Exports waiting on the frame; the download count runs while any does. */
 let texpressoExporting = 0;
 const TEXPRESSO_FETCH_TICK_MS = 750;
+/** The export's own step: the frame has typeset and `xdvipdfmx` converts. */
+const TEXPRESSO_EXPORT_WAIT = "Preparing the PDF for export…";
 
 function texpressoLogText(): string {
   return texpressoLog.join("\n");
@@ -4558,7 +4563,7 @@ function texpressoWatchFetches(): void {
         fetch.files = files;
         fetch.bytes = stats.texpressoVerifiedBytes - fetch.baseBytes;
         if (files - fetch.loggedFiles >= 25 || now - fetch.loggedAt >= 5000) {
-          texpressoLogLine(`Fetching TeX files: ${files} so far (${megabytes(fetch.bytes)})`);
+          texpressoLogLine(`Downloading TeX files: ${files} so far, ${megabytes(fetch.bytes)}`);
           fetch.loggedFiles = files;
           fetch.loggedAt = now;
         }
@@ -4574,7 +4579,7 @@ function texpressoWatchFetches(): void {
     if (done && done.files > 0) {
       const seconds = ((now - done.started) / 1000).toFixed(1);
       texpressoLogLine(
-        `Fetched ${done.files} TeX file${done.files === 1 ? "" : "s"} (${megabytes(done.bytes)}) in ${seconds} s`,
+        `Downloaded ${done.files} TeX file${done.files === 1 ? "" : "s"}, ${megabytes(done.bytes)}, in ${seconds} s`,
       );
     }
     texpressoFetch = null;
@@ -4791,7 +4796,7 @@ async function texpressoExportPdf(
     token: owner.token,
     files: snapshot.files.length,
   });
-  setLatexStatus("Typesetting the PDF…");
+  setLatexStatus(TEXPRESSO_EXPORT_WAIT);
   texpressoExporting += 1;
   texpressoWatchFetches();
   let reply: Awaited<ReturnType<TexpressoSession["exportPdf"]>>;
@@ -4939,13 +4944,25 @@ function texpressoLiveStatus(): string {
   if (!session) return "";
   if (!session.ready) return "Preview starting…";
   const errors = session.problems.filter((p) => p.severity === "error").length;
-  const state = session.held ? "Preview paused" : session.busy ? "Typesetting…" : "Preview live";
   const fetch = texpressoFetch;
-  const fetching =
+  const state =
     fetch && fetch.files > 0
-      ? ` · Fetching TeX files: ${fetch.files} (${megabytes(fetch.bytes)})`
-      : "";
-  return `${state}${fetching}${errors ? ` · ${errors} error${errors === 1 ? "" : "s"}` : ""}`;
+      ? `Downloading TeX files… · ${fetch.files} file${fetch.files === 1 ? "" : "s"}, ${megabytes(fetch.bytes)}`
+      : session.held
+        ? "Preview paused"
+        : session.busy
+          ? "Typesetting…"
+          : "Preview live";
+  return errors ? `${state} · ${errors} error${errors === 1 ? "" : "s"}` : state;
+}
+
+/** The frame is starting, typesetting or fetching bundle files. */
+function texpressoWorking(): boolean {
+  const session = texpresso;
+  return (
+    session !== null &&
+    (!session.ready || session.busy || (texpressoFetch !== null && texpressoFetch.files > 0))
+  );
 }
 
 /** Redraw the status line with the frame's latest state. */
