@@ -16,7 +16,9 @@ const port = process.argv[2] ?? "9222";
 const page = await openPage(port);
 const evaluate = (expression) => page.evaluate(expression);
 let failed = 0;
+let total = 0;
 const check = (label, ok, detail = "") => {
+  total += 1;
   if (!ok) failed += 1;
   console.log(`${ok ? "PASS" : "FAIL"}  ${label}${detail ? ` — ${detail}` : ""}`);
 };
@@ -397,5 +399,6 @@ try {
   );
   page.close();
 }
-console.log(`\n${failed ? "some" : "all"} checks done; ${failed} failed`);
+// `N/M checks passed` is the summary line `test-all.mjs` counts.
+console.log(`\n${total - failed}/${total} checks passed`);
 process.exit(failed ? 1 : 0);
