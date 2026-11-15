@@ -83,6 +83,7 @@ here with its public purpose and, for owner sessions, to the private catalog.
 | `npm run emmet` | `node scripts/emmet-test.mjs` |
 | `npm run emmet:unit` | `node scripts/emmet-unit.mjs` |
 | `npm run autoclose:unit` | `node scripts/autoclose-unit.mjs` |
+| `npm run fuzzy:unit` | `node scripts/fuzzy-unit.mjs`; the Explorer filter's fuzzy path matcher: ranking, accents, highlight positions and a 50 000-path speed bound |
 | `npm run completion:unit` | `node scripts/completion-unit.mjs` |
 | `npm run completion:latex:unit` | `node scripts/completion-latex-unit.mjs` |
 | `npm run latex:references:unit` | `node scripts/latex-references-unit.mjs` |

@@ -214,6 +214,14 @@ const SUITES = [
     script: "autoclose-unit.mjs",
   },
   {
+    // The Explorer filter's fuzzy matcher: which paths match, their order and
+    // highlight positions. Pure, so no application and no build.
+    id: "fuzzy-unit",
+    title: "Explorer fuzzy matcher (unit)",
+    kind: "node",
+    script: "fuzzy-unit.mjs",
+  },
+  {
     // Where an Emmet abbreviation may expand, what it becomes, how the snippet
     // indents it and that the engine stays out of the main bundle. No application.
     id: "emmet-unit",
@@ -413,8 +421,8 @@ const SUITES = [
   },
   {
     // Track W / GAP-006 slice 1: Open Folder (picker stubbed at the IPC
-    // transport), lazy keyboard tree, open from the tree, confinement, Close
-    // Folder. Read-only fixture; no LaTeX engine needed.
+    // transport), lazy keyboard tree, the filter box and type-ahead, open from
+    // the tree, confinement, Close Folder. Read-only fixture; no LaTeX engine.
     id: "workspace-explorer",
     title: "Workspace Explorer",
     kind: "cdp",
