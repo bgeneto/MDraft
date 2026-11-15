@@ -1748,6 +1748,23 @@ export const workspaceOpen = (path: string) => invoke<WorkspaceInfo>("workspace_
 export const workspaceList = (root: string, relative: string, showAll: boolean) =>
   invoke<WorkspaceListing>("workspace_list", { root, relative, showAll });
 
+export interface WorkspaceIndexEntry {
+  /** Relative to the root, with `/` separators. */
+  path: string;
+  kind: WorkspaceEntry["kind"];
+  symlink: boolean;
+}
+
+export interface WorkspaceIndex {
+  entries: WorkspaceIndexEntry[];
+  /** A count, depth or time bound stopped the walk early. */
+  truncated: boolean;
+}
+
+/** Every entry name under the workspace (bounded, breadth-first), for the Explorer's filter. */
+export const workspaceIndex = (root: string, showAll: boolean) =>
+  invoke<WorkspaceIndex>("workspace_index", { root, showAll });
+
 /** Main documents in the workspace whose \input/\include closure contains `path`. */
 export const workspaceMainCandidates = (root: string, path: string) =>
   invoke<string[]>("workspace_main_candidates", { root, path });

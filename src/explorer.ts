@@ -4,10 +4,15 @@
 //! Read-only. Each folder is listed one level at a time through
 //! `workspace_list`, only when it is expanded, so a large tree costs nothing
 //! until it is opened. The tree follows the WAI-ARIA tree pattern: one tab
-//! stop, arrows move and expand, Enter opens, Home/End jump, and typing a
-//! letter moves to the next name that starts with it.
+//! stop, arrows move and expand, Enter opens, Home/End jump, and typing moves
+//! to the next name that starts with the typed letters.
+//!
+//! The filter box above the tree finds a file anywhere in the folder. Its first
+//! use reads a bounded name index (`workspace_index`); while it holds a query
+//! the tree shows the matches with their folders open, best match focused.
 
 import * as api from "./api";
+import { prepare, rank, type Prepared } from "./fuzzy";
 
 export interface ExplorerHandlers {
   /** Open a document in a tab (or activate its tab). */
@@ -94,6 +99,10 @@ interface Row {
   kind: api.WorkspaceEntry["kind"];
   symlink: boolean;
   depth: number;
+  /** Whether a folder row is shown open. */
+  open: boolean;
+  /** Indices into `name` to highlight (filter mode). */
+  marks?: number[];
 }
 
 /** Folders the reader expanded, per workspace root, for this session. */
@@ -101,8 +110,36 @@ const expandedByRoot = new Map<string, Set<string>>();
 /** Listings already read, so redraws do not re-read the disk. */
 const listingCache = new Map<string, api.WorkspaceListing>();
 
+/** The filter text per workspace root, for this session only. */
+const queryByRoot = new Map<string, string>();
+/**
+ * Folders the reader toggled while the current query is shown: a toggle flips
+ * the filter's default (open when it holds a match, closed otherwise). Reset
+ * whenever the query changes, so a new search starts from its own default.
+ */
+const filterToggled = new Set<string>();
+
+interface PreparedIndex {
+  index: api.WorkspaceIndex;
+  prepared: Prepared[];
+}
+/** Name indexes, built on first use of the filter, dropped with the listings. */
+const indexCache = new Map<string, Promise<PreparedIndex>>();
+
+/** At most this many matches are drawn; the rest are counted. */
+const FILTER_LIMIT = 300;
+/** Delay between the last keystroke and the redraw, so typing stays fluid. */
+const FILTER_DELAY_MS = 60;
+/** Type-ahead letters typed within this window form one prefix. */
+const TYPEAHEAD_MS = 600;
+
 function joinRelative(parent: string, name: string): string {
   return parent ? `${parent}/${name}` : name;
+}
+
+function parentOf(relative: string): string {
+  const slash = relative.lastIndexOf("/");
+  return slash < 0 ? "" : relative.slice(0, slash);
 }
 
 function absolute(root: string, relative: string): string {
@@ -114,9 +151,10 @@ function keyOf(root: string, relative: string, showAll: boolean): string {
   return `${root}\u0000${relative}\u0000${showAll}`;
 }
 
-/** Forget cached listings, so the next draw reads the disk (focus, save, Refresh). */
+/** Forget cached listings and name indexes, so the next draw reads the disk. */
 export function invalidateExplorer(): void {
   listingCache.clear();
+  indexCache.clear();
 }
 
 async function listing(
@@ -132,6 +170,21 @@ async function listing(
   return fresh;
 }
 
+function nameIndex(root: string, showAll: boolean): Promise<PreparedIndex> {
+  const key = keyOf(root, "", showAll);
+  let pending = indexCache.get(key);
+  if (!pending) {
+    pending = api.workspaceIndex(root, showAll).then((index) => ({
+      index,
+      prepared: index.entries.map((entry) => prepare(entry.path)),
+    }));
+    // A failed walk is not cached: the next keystroke tries again.
+    pending.catch(() => indexCache.delete(key));
+    indexCache.set(key, pending);
+  }
+  return pending;
+}
+
 function element<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className?: string,
@@ -143,7 +196,109 @@ function element<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
+/** `name` as text nodes with the characters at `marks` wrapped in `<mark>`. */
+function highlighted(name: string, marks: number[] | undefined): Node[] {
+  if (!marks?.length) return [document.createTextNode(name)];
+  const nodes: Node[] = [];
+  const set = new Set(marks);
+  let run = "";
+  let marked = false;
+  const flush = (): void => {
+    if (!run) return;
+    nodes.push(marked ? element("mark", undefined, run) : document.createTextNode(run));
+    run = "";
+  };
+  for (let i = 0; i < name.length; i += 1) {
+    const on = set.has(i);
+    if (on !== marked) {
+      flush();
+      marked = on;
+    }
+    run += name[i];
+  }
+  flush();
+  return nodes;
+}
+
+interface FilterResult {
+  rows: Row[];
+  /** The best-ranked match, focused and opened by Enter. */
+  best: string | null;
+  matches: number;
+  truncatedIndex: boolean;
+}
+
+/**
+ * The filtered tree: the best matches (up to `FILTER_LIMIT`), their folders,
+ * and the contents of any folder the reader opened, in tree order.
+ */
+function filterRows(prepared: PreparedIndex, query: string): FilterResult {
+  const { entries } = prepared.index;
+  const ranked = rank(
+    entries.map((_, order) => order),
+    (order) => prepared.prepared[order],
+    query,
+  );
+  const kept = ranked.slice(0, FILTER_LIMIT);
+  // Highlights per path, including the parts of a match that fall in a folder.
+  const marks = new Map<string, number[]>();
+  const holdsMatch = new Set<string>();
+  const visible = new Set<string>();
+  for (const hit of kept) {
+    const path = entries[hit.item].path;
+    visible.add(path);
+    let start = 0;
+    for (const segment of path.split("/")) {
+      const end = start + segment.length;
+      const own = hit.positions.filter((p) => p >= start && p < end).map((p) => p - start);
+      const at = path.slice(0, end);
+      if (own.length) marks.set(at, [...new Set([...(marks.get(at) ?? []), ...own])]);
+      start = end + 1;
+    }
+    for (let parent = parentOf(path); parent; parent = parentOf(parent)) {
+      visible.add(parent);
+      holdsMatch.add(parent);
+    }
+  }
+  const isOpen = (path: string): boolean => holdsMatch.has(path) !== filterToggled.has(path);
+  const children = new Map<string, api.WorkspaceIndexEntry[]>();
+  for (const entry of entries) {
+    const parent = parentOf(entry.path);
+    const list = children.get(parent) ?? [];
+    list.push(entry);
+    children.set(parent, list);
+  }
+  const rows: Row[] = [];
+  const walk = (parent: string, depth: number, showEvery: boolean): void => {
+    for (const entry of children.get(parent) ?? []) {
+      if (!showEvery && !visible.has(entry.path)) continue;
+      const open = entry.kind === "dir" && !entry.symlink && isOpen(entry.path);
+      rows.push({
+        relative: entry.path,
+        name: entry.path.slice(entry.path.lastIndexOf("/") + 1),
+        kind: entry.kind,
+        symlink: entry.symlink,
+        depth,
+        open,
+        marks: marks.get(entry.path),
+      });
+      // A folder opened because it holds matches shows only the matches; one
+      // the reader opened by hand shows everything in it.
+      if (open) walk(entry.path, depth + 1, showEvery || !holdsMatch.has(entry.path));
+    }
+  };
+  walk("", 0, false);
+  return {
+    rows,
+    best: kept.length ? entries[kept[0].item].path : null,
+    matches: ranked.length,
+    truncatedIndex: prepared.index.truncated,
+  };
+}
+
 let drawGeneration = 0;
+let filterTimer: ReturnType<typeof setTimeout> | undefined;
+let typeahead = { text: "", at: 0 };
 
 /**
  * Draw the Explorer into `container`.
@@ -177,8 +332,11 @@ export async function renderExplorer(
     container.replaceChildren(empty);
     return;
   }
+  const redraw = (): Promise<void> => renderExplorer(container, root, options, handlers);
   const expanded = expandedByRoot.get(root) ?? new Set<string>();
   expandedByRoot.set(root, expanded);
+  const isExpanded = (path: string): boolean =>
+    [...expanded].some((value) => value.toLowerCase() === path.toLowerCase());
   // Reveal the active document: expand the folders above it.
   const rootKey = options.pathKey(root) + "/";
   const activeKey = options.activePath ? options.pathKey(options.activePath) : null;
@@ -193,27 +351,34 @@ export async function renderExplorer(
     }
   }
 
-  const rows: Row[] = [];
+  const query = queryByRoot.get(root) ?? "";
+  const filtering = query.trim() !== "";
+  let rows: Row[] = [];
   let failure: string | null = null;
+  let filter: FilterResult | null = null;
   const truncatedAt = new Map<string, number>();
   const walk = async (relative: string, depth: number): Promise<void> => {
     const result = await listing(root, relative, options.showAll);
     if (result.truncated) truncatedAt.set(relative, result.truncated);
     for (const entry of result.entries) {
       const path = joinRelative(relative, entry.name);
+      const open = entry.kind === "dir" && isExpanded(path);
       rows.push({
         relative: path,
         name: entry.name,
         kind: entry.kind,
         symlink: entry.symlink,
         depth,
+        open,
       });
-      const open = [...expanded].some((value) => value.toLowerCase() === path.toLowerCase());
-      if (entry.kind === "dir" && open) await walk(path, depth + 1);
+      if (open) await walk(path, depth + 1);
     }
   };
   try {
-    await walk("", 0);
+    if (filtering) {
+      filter = filterRows(await nameIndex(root, options.showAll), query);
+      rows = filter.rows;
+    } else await walk("", 0);
   } catch (error) {
     failure = String(error);
   }
@@ -236,7 +401,7 @@ export async function renderExplorer(
   refresh.type = "button";
   refresh.addEventListener("click", () => {
     invalidateExplorer();
-    void renderExplorer(container, root, options, handlers);
+    void redraw();
   });
   const close = element("button", "explorer-action", "Close");
   close.type = "button";
@@ -258,7 +423,7 @@ export async function renderExplorer(
     headerBlock.append(main);
   }
 
-  if (failure) {
+  if (failure && !filtering) {
     const message = element(
       "div",
       "sidebar-empty explorer-empty",
@@ -273,10 +438,44 @@ export async function renderExplorer(
     return;
   }
 
+  // The filter box. Every draw replaces it, so focus and caret are carried over.
+  const previousField = container.querySelector<HTMLInputElement>(".explorer-filter");
+  const hadFocus = previousField !== null && document.activeElement === previousField;
+  const caret = hadFocus ? [previousField.selectionStart, previousField.selectionEnd] : null;
+  const field = element("input", "explorer-filter");
+  field.type = "search";
+  field.value = query;
+  field.placeholder = "Filter files (/)";
+  field.spellcheck = false;
+  field.autocomplete = "off";
+  field.setAttribute("role", "searchbox");
+  field.setAttribute("aria-label", "Filter files by name");
+  field.setAttribute("aria-controls", "explorer-tree");
+  // The same live region is moved into each draw: a screen reader announces a
+  // change to a region it already knows, not a freshly inserted one.
+  const status =
+    container.querySelector<HTMLDivElement>(".explorer-status") ??
+    element("div", "explorer-status");
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+  headerBlock.append(field, status);
+
+  const setQuery = (value: string): void => {
+    if (value === "") queryByRoot.delete(root);
+    else queryByRoot.set(root, value);
+    filterToggled.clear();
+  };
+
   const tree = element("div", "explorer-tree");
+  tree.id = "explorer-tree";
   tree.setAttribute("role", "tree");
   tree.setAttribute("aria-label", `Files in ${title.textContent}`);
   const items: HTMLElement[] = [];
+  const focusRow = (relative: string): void => {
+    (
+      container.querySelector(`[data-relative="${CSS.escape(relative)}"]`) as HTMLElement | null
+    )?.focus();
+  };
   for (const row of rows) {
     const item = element("div", `explorer-item explorer-${row.kind}`);
     item.setAttribute("role", "treeitem");
@@ -285,7 +484,7 @@ export async function renderExplorer(
     item.tabIndex = -1;
     item.style.paddingLeft = `${10 + row.depth * 14}px`;
     const isDir = row.kind === "dir";
-    const open = isDir && [...expanded].some((v) => v.toLowerCase() === row.relative.toLowerCase());
+    const open = row.open;
     if (isDir) item.setAttribute("aria-expanded", String(open));
     const icon = element(
       "span",
@@ -293,7 +492,8 @@ export async function renderExplorer(
       isDir ? (open ? "▾" : "▸") : row.symlink ? "↪" : row.kind === "document" ? "•" : "·",
     );
     icon.setAttribute("aria-hidden", "true");
-    const name = element("span", "name", row.name);
+    const name = element("span", "name");
+    name.append(...highlighted(row.name, row.marks));
     item.append(icon, name);
     const full = absolute(root, row.relative);
     item.title = row.symlink ? `${full} (symbolic link, not followed)` : full;
@@ -301,19 +501,21 @@ export async function renderExplorer(
       item.classList.add("active");
       item.setAttribute("aria-selected", "true");
     }
+    if (filter?.best === row.relative) item.classList.add("best");
     const activate = (): void => {
       if (row.symlink) return;
       if (isDir) {
-        const existing = [...expanded].find((v) => v.toLowerCase() === row.relative.toLowerCase());
-        if (existing) expanded.delete(existing);
-        else expanded.add(row.relative);
-        void renderExplorer(container, root, options, handlers).then(() => {
-          (
-            container.querySelector(
-              `[data-relative="${CSS.escape(row.relative)}"]`,
-            ) as HTMLElement | null
-          )?.focus();
-        });
+        if (filtering) {
+          if (filterToggled.has(row.relative)) filterToggled.delete(row.relative);
+          else filterToggled.add(row.relative);
+        } else {
+          const existing = [...expanded].find(
+            (v) => v.toLowerCase() === row.relative.toLowerCase(),
+          );
+          if (existing) expanded.delete(existing);
+          else expanded.add(row.relative);
+        }
+        void redraw().then(() => focusRow(row.relative));
         return;
       }
       if (row.kind === "document") handlers.openFile(full);
@@ -339,28 +541,43 @@ export async function renderExplorer(
         const target = items[Math.max(0, Math.min(items.length - 1, to))];
         target?.focus();
       };
+      const now = Date.now();
+      const typing = typeahead.text !== "" && now - typeahead.at <= TYPEAHEAD_MS;
+      const plain = !event.ctrlKey && !event.metaKey && !event.altKey;
       if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
         const box = item.getBoundingClientRect();
         openRowMenu(menuFor(), box.left + 24, box.bottom, item);
-      } else if (event.key === "Enter" || event.key === " ") activate();
+      } else if (event.key === "Enter" || (event.key === " " && !typing)) activate();
       else if (event.key === "ArrowDown") move(index + 1);
+      else if (event.key === "ArrowUp" && index === 0) field.focus();
       else if (event.key === "ArrowUp") move(index - 1);
       else if (event.key === "Home") move(0);
       else if (event.key === "End") move(items.length - 1);
       else if (event.key === "ArrowRight" && isDir && !open) activate();
       else if (event.key === "ArrowLeft" && isDir && open) activate();
-      else if (event.key === "ArrowLeft" && row.depth > 0) {
-        const parent = row.relative.slice(0, row.relative.lastIndexOf("/"));
-        (
-          container.querySelector(`[data-relative="${CSS.escape(parent)}"]`) as HTMLElement | null
-        )?.focus();
-      } else if (event.key.length === 1 && /\S/.test(event.key)) {
-        // Type-ahead: the next name starting with the typed character.
-        const letter = event.key.toLowerCase();
-        const after = items.slice(index + 1).concat(items.slice(0, index + 1));
-        after
+      else if (event.key === "ArrowLeft" && row.depth > 0) focusRow(parentOf(row.relative));
+      else if (
+        (event.key === "/" && plain && !typing) ||
+        (event.key.toLowerCase() === "f" && (event.ctrlKey || event.metaKey) && !event.altKey)
+      ) {
+        field.focus();
+        field.select();
+      } else if (event.key === "Escape" && filtering) {
+        setQuery("");
+        void redraw().then(() => focusRow(row.relative));
+      } else if (event.key.length === 1 && plain && (/\S/.test(event.key) || typing)) {
+        // Type-ahead (WAI-ARIA): letters typed in quick succession form one
+        // prefix; one letter pressed again moves on to the next name with it.
+        typeahead = { text: (typing ? typeahead.text : "") + event.key.toLowerCase(), at: now };
+        const repeated = [...typeahead.text].every((c) => c === typeahead.text[0]);
+        const prefix = repeated ? typeahead.text[0] : typeahead.text;
+        // A growing prefix may still fit the focused row; a repeat moves on.
+        const from = repeated ? index + 1 : index;
+        items
+          .slice(from)
+          .concat(items.slice(0, from))
           .find((candidate) =>
-            (candidate.textContent ?? "").trim().toLowerCase().startsWith(letter),
+            (candidate.querySelector(".name")?.textContent ?? "").toLowerCase().startsWith(prefix),
           )
           ?.focus();
       } else return;
@@ -375,20 +592,86 @@ export async function renderExplorer(
   }
   const rootMore = truncatedAt.get("");
   if (rootMore) tree.append(element("div", "explorer-more", `${rootMore} more entries not listed`));
-  // One tab stop: the active row, or the first.
-  const stop = items.find((item) => item.classList.contains("active")) ?? items[0];
+  // One tab stop: the best match while filtering, else the active row, else the first.
+  const stop =
+    items.find((item) => item.classList.contains("best")) ??
+    items.find((item) => item.classList.contains("active")) ??
+    items[0];
   if (stop) stop.tabIndex = 0;
+
+  field.addEventListener("input", (event) => {
+    // An IME composition ends with its own input event; draw only then.
+    if ((event as InputEvent).isComposing) return;
+    setQuery(field.value);
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(() => void redraw(), FILTER_DELAY_MS);
+  });
+  field.addEventListener("keydown", (event) => {
+    if (event.isComposing) return;
+    if (event.key === "ArrowDown") {
+      stop?.focus();
+    } else if (event.key === "Enter") {
+      // Draw a keystroke still waiting for its redraw, so Enter acts on what
+      // was typed rather than on the previous query's results.
+      clearTimeout(filterTimer);
+      const pending = (queryByRoot.get(root) ?? "") !== query;
+      void (pending ? redraw() : Promise.resolve()).then(() => {
+        const best = container.querySelector<HTMLElement>(".explorer-item.best");
+        if (best && !best.hasAttribute("aria-expanded")) best.click();
+        else best?.focus();
+      });
+    } else if (event.key === "Escape") {
+      if (field.value === "") {
+        stop?.focus();
+      } else {
+        field.value = "";
+        setQuery("");
+        clearTimeout(filterTimer);
+        void redraw();
+      }
+    } else return;
+    event.preventDefault();
+    event.stopPropagation();
+  });
+
+  if (filtering && filter) {
+    const shown = Math.min(filter.matches, FILTER_LIMIT);
+    status.textContent =
+      filter.matches === 0
+        ? ""
+        : filter.matches === 1
+          ? "1 match"
+          : filter.matches > shown
+            ? `Best ${shown} of ${filter.matches} matches`
+            : `${filter.matches} matches`;
+    if (filter.truncatedIndex) {
+      status.textContent += " · this folder is too large to search completely";
+    }
+  } else if (filtering && failure) {
+    status.textContent = `Cannot search this folder (${failure.replace(/^Error: /, "")}).`;
+  } else status.textContent = "";
+  status.hidden = status.textContent === "";
+
+  const restoreField = (): void => {
+    if (!hadFocus) return;
+    field.focus({ preventScroll: true });
+    if (caret) field.setSelectionRange(caret[0], caret[1]);
+  };
   if (rows.length === 0) {
-    container.replaceChildren(
-      header,
-      element(
-        "div",
-        "sidebar-empty",
-        options.showAll ? "This folder is empty." : "No documents here. Show all lists every file.",
-      ),
-    );
+    const hint = filtering
+      ? failure
+        ? ""
+        : `No file name matches “${query.trim()}”.${options.showAll ? "" : " Show all also searches hidden and build files."}`
+      : options.showAll
+        ? "This folder is empty."
+        : "No documents here. Show all lists every file.";
+    container.replaceChildren(headerBlock, element("div", "sidebar-empty", hint));
+    restoreField();
     return;
   }
   container.replaceChildren(headerBlock, tree);
-  container.querySelector(".explorer-item.active")?.scrollIntoView({ block: "nearest" });
+  restoreField();
+  container
+    .querySelector(filtering ? ".explorer-item.best" : ".explorer-item.active")
+    ?.scrollIntoView({ block: "nearest" });
 }

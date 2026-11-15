@@ -29,6 +29,7 @@
     "emmet": "node scripts/emmet-test.mjs",
     "emmet:unit": "node scripts/emmet-unit.mjs",
     "autoclose:unit": "node scripts/autoclose-unit.mjs",
+    "fuzzy:unit": "node scripts/fuzzy-unit.mjs",
     "completion:unit": "node scripts/completion-unit.mjs",
     "completion:latex:unit": "node scripts/completion-latex-unit.mjs",
     "latex:references:unit": "node scripts/latex-references-unit.mjs",

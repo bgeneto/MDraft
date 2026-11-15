@@ -6010,6 +6010,40 @@ label.optional-tools-row:hover {
   color: var(--muted);
 }
 
+.explorer-filter {
+  display: block;
+  width: calc(100% - 20px);
+  margin: 0 10px 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+}
+
+.explorer-filter:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.explorer-status {
+  padding: 0 12px 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.explorer-item mark {
+  background: transparent;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.explorer-item.best:not(:focus-visible) {
+  background: var(--accent-soft);
+}
+
 .explorer-more {
   padding: 3px 12px;
   color: var(--muted);

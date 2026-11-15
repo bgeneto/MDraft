@@ -203,6 +203,7 @@ pub fn run() {
             documents::path_exists,
             workspace::workspace_open,
             workspace::workspace_list,
+            workspace::workspace_index,
             workspace::workspace_main_candidates,
             latex::latex_engine_available,
             latex::install_latex_engine,
