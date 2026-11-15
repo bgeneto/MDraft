@@ -796,6 +796,7 @@ pub async fn latex_texmf_configure(
     action: TexmfAction,
 ) -> Result<TexmfConfig, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let _writer = crate::backup::gate::writer()?;
         let state = state(&app)?;
         let mut settings = state.snapshot()?;
         // Choosing the standard location must keep portable profiles relative
