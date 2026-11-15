@@ -1287,6 +1287,7 @@ impl AppState {
     }
 
     pub fn save(&self, mut next: Settings) -> Result<Settings, String> {
+        let _writer = crate::backup::gate::close_writer()?;
         // Every route that writes settings goes through here, including the
         // frontend's whole-object save. Keeping the cap here means a stale or
         // hand-built payload cannot grow the stored history without bound.

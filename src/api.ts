@@ -690,6 +690,201 @@ export const writeRecovery = (entry: RecoveryEntry) => invoke<void>("write_recov
 /** Remove one journal entry. A missing file is success. */
 export const removeRecovery = (id: string) => invoke<void>("remove_recovery", { id });
 
+/** Progress for an explicitly requested application-data operation. */
+export interface DataBackupProgress {
+  jobId: string;
+  phase: "checking" | "preparing-restore" | "preparing" | "compressing" | "verifying";
+  bytes: number;
+}
+
+export interface DataBackupResult {
+  path: string;
+  bytes: number;
+  capturedAtMs: number;
+  files: number;
+}
+
+/** Metadata only: the associated text is sent in bounded chunks. */
+export interface BackupBuffer {
+  id: string;
+  name: string;
+  language: DocumentLanguage;
+  path: string | null;
+  lineEnding: string;
+  hadBom: boolean;
+  encoding: string | null;
+  lossy: boolean;
+  readOnly: boolean;
+  baseModifiedMs: number;
+  baseSize: number;
+  baseSha256: string | null;
+}
+
+export function beginDataBackup(
+  jobId: string,
+  destination: string,
+  includeDownloads: boolean,
+  settings: Settings,
+  bufferCount: number,
+  activeId: string | null,
+  progress: (event: DataBackupProgress) => void,
+): Promise<string> {
+  const channel = new Channel<DataBackupProgress>();
+  channel.onmessage = progress;
+  return invoke<string>("begin_data_backup", {
+    jobId,
+    destination,
+    includeDownloads,
+    settings,
+    bufferCount,
+    activeId,
+    onProgress: channel,
+  });
+}
+
+export const beginBackupBuffer = (jobId: string, metadata: BackupBuffer) =>
+  invoke<void>("begin_backup_buffer", { jobId, metadata });
+
+export const appendBackupBuffer = (
+  jobId: string,
+  bufferId: string,
+  sequence: number,
+  bytes: Uint8Array,
+) =>
+  invoke<number>("append_backup_buffer", { jobId, bufferId, sequence, bytes: Array.from(bytes) });
+
+export const finishBackupBuffer = (
+  jobId: string,
+  bufferId: string,
+  sequences: number,
+  bytes: number,
+) => invoke<void>("finish_backup_buffer", { jobId, bufferId, sequences, bytes });
+
+export const finishDataBackup = (jobId: string) =>
+  invoke<DataBackupResult>("finish_data_backup", { jobId });
+
+export const cancelDataBackup = (jobId: string) => invoke<void>("cancel_data_backup", { jobId });
+
+export interface DataRestorePreview {
+  formatVersion: number;
+  appVersion: string;
+  createdAtMs: number;
+  sourceOs: string;
+  sourceArch: string;
+  portable: boolean;
+  totalBytes: number;
+  categories: Record<string, { included: boolean; present: boolean }>;
+  compatiblePlatform: boolean;
+}
+
+export interface DataRestoreSelection {
+  settings: boolean;
+  prompts: boolean;
+  personal: boolean;
+  recovery: boolean;
+  downloads: boolean;
+  window: boolean;
+}
+
+export interface DataRestoreReview {
+  backup: DataRestorePreview;
+  safetyBackup: DataBackupResult;
+  recoveredDocuments: number;
+  salvagedJournals: number;
+  quarantinedDownloads: number;
+  adjustments: string[];
+}
+
+export interface DataRestoreReport {
+  id: string;
+  restored: boolean;
+  message: string;
+  review: DataRestoreReview | null;
+}
+
+export function inspectDataRestore(
+  jobId: string,
+  source: string,
+  progress: (event: DataBackupProgress) => void,
+) {
+  const channel = new Channel<DataBackupProgress>();
+  channel.onmessage = progress;
+  return invoke<DataRestorePreview>("inspect_data_restore", { jobId, source, onProgress: channel });
+}
+
+export const beginRestoreSafetyBackup = (
+  jobId: string,
+  destination: string,
+  selection: DataRestoreSelection,
+  settings: Settings,
+  bufferCount: number,
+  activeId: string | null,
+) =>
+  invoke<void>("begin_restore_safety_backup", {
+    jobId,
+    destination,
+    selection,
+    settings,
+    bufferCount,
+    activeId,
+  });
+
+export const finishRestoreSafetyBackup = (jobId: string) =>
+  invoke<DataRestoreReview>("finish_restore_safety_backup", { jobId });
+export const releaseRestoreForClose = (jobId: string) =>
+  invoke<void>("release_restore_for_close", { jobId });
+export const armDataRestore = (jobId: string) => invoke<void>("arm_data_restore", { jobId });
+export const getRestoreReport = () => invoke<DataRestoreReport | null>("get_restore_report");
+export const acknowledgeRestoreReport = (id: string) =>
+  invoke<void>("acknowledge_restore_report", { id });
+
+export interface RecoveredDocument {
+  id: string;
+  originalId: string;
+  originalPath: string | null;
+  name: string;
+  language: string;
+  lineEnding: string;
+  hadBom: boolean;
+  encoding: string | null;
+  lossy: boolean;
+  readOnly: boolean;
+  baseModifiedMs: number;
+  baseSize: number;
+  baseSha256: string | null;
+  sha256: string;
+  bytes: number;
+}
+
+export interface RecoveredItem {
+  inboxId: string;
+  document: RecoveredDocument;
+}
+
+export const listRecoveredDocuments = () => invoke<RecoveredItem[]>("list_recovered_documents");
+export const beginRecoveredRead = (inboxId: string, documentId: string, transferId: string) =>
+  invoke<void>("begin_recovered_read", { inboxId, documentId, transferId });
+export const readRecoveredChunk = (transferId: string) =>
+  invoke<{ bytes: number[]; finished: boolean }>("read_recovered_chunk", { transferId });
+export const cancelRecoveredRead = (transferId: string) =>
+  invoke<void>("cancel_recovered_read", { transferId });
+export const beginRecoveredRevision = (inboxId: string, documentId: string, transferId: string) =>
+  invoke<void>("begin_recovered_revision", { inboxId, documentId, transferId });
+export const appendRecoveredRevision = (transferId: string, sequence: number, bytes: Uint8Array) =>
+  invoke<number>("append_recovered_revision", { transferId, sequence, bytes: Array.from(bytes) });
+export const finishRecoveredRevision = (transferId: string, sequences: number, bytes: number) =>
+  invoke<void>("finish_recovered_revision", { transferId, sequences, bytes });
+export const cancelRecoveredRevision = (transferId: string) =>
+  invoke<void>("cancel_recovered_revision", { transferId });
+export const forgetRecoveredDocument = (inboxId: string, documentId: string, token: string) =>
+  invoke<void>("forget_recovered_document", { inboxId, documentId, token });
+export const saveRecoveredCopies = (
+  folder: string,
+  items: { inboxId: string; documentId: string }[],
+  token: string,
+) =>
+  invoke<{ saved: string[]; failed: string[] }>("save_recovered_copies", { folder, items, token });
+
 export const pathExists = (path: string, documentPath: string | null = null) =>
   invoke<boolean>("path_exists", { path, documentPath });
 

@@ -130,6 +130,12 @@ const SUITES = [
     script: "p0-unit.mjs",
   },
   {
+    id: "backup-unit",
+    title: "Backup and recovered-document capture (unit)",
+    kind: "node",
+    script: "backup-unit.mjs",
+  },
+  {
     // The name the Save dialog pre-fills: title sources in four markups, the
     // cross-platform sanitiser and the cleaning of an assistant's answer. Pure
     // logic, no application; the UI layers prove the dialog wiring.
@@ -681,6 +687,15 @@ const SUITES = [
     kind: "cdp",
     script: "dom-smoke.mjs",
     doc: "samples/feature-tour.md",
+  },
+  {
+    id: "backup",
+    title: "Backup and restore preparation",
+    kind: "cdp",
+    script: "backup-test.mjs",
+    doc: "samples/feature-tour.md",
+    skipEngine: true,
+    selfRestart: true,
   },
   {
     id: "sync",
@@ -2189,6 +2204,12 @@ async function runCdpSuiteBody(suite, port, options, context) {
     return { ok, skipped: described.skipped, detail: described.detail, output };
   } finally {
     await stopApp(child);
+    if (suite.selfRestart) {
+      const restarted = (await listRunningInstances()).filter((instance) =>
+        ownsStagedExecutable(instance.path, context.staged),
+      );
+      await closeInstances(restarted);
+    }
     activeApp = null;
     fs.closeSync(outFd);
     fs.closeSync(errFd);
@@ -2392,7 +2413,7 @@ async function main() {
       );
 
       savedUserState = takeUserState(path.join(context.stage, "user-state"));
-      linkLatexEngine();
+      if (suites.some((suite) => !suite.skipEngine)) linkLatexEngine();
       fixtures = snapshotFixtures(suites);
     }
 

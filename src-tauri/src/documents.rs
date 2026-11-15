@@ -282,6 +282,7 @@ fn write_document_inner(
     encoding: Option<&str>,
     expected_sha256: Option<&str>,
 ) -> Result<CheckedWrite, String> {
+    let _writer = crate::backup::gate::close_writer()?;
     let path = p.display();
     let eol = line_ending.unwrap_or_else(|| "\n".to_string());
     let bom = had_bom.unwrap_or(false);

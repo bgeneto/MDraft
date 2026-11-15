@@ -474,6 +474,7 @@ fn obtain(
     evictable: Option<&Path>,
     fetch: &dyn Fn() -> Result<Vec<u8>, String>,
 ) -> Result<Vec<u8>, String> {
+    let _writer = crate::backup::gate::writer()?;
     if let Some(bytes) = read_verified(cache, check, evictable.is_some()) {
         HITS.fetch_add(1, Ordering::Relaxed);
         return Ok(bytes);
@@ -902,6 +903,7 @@ pub fn install_with_progress(
     root: &Path,
     mut progress: impl FnMut(u64, u64),
 ) -> Result<(), String> {
+    let _writer = crate::backup::gate::writer()?;
     let deadline = optional_tools::deadline();
     cleanup_temp_files(&engine_dir(root), true);
     cleanup_temp_files(&data_dir(root), false);
@@ -997,6 +999,7 @@ pub fn cache_bytes(root: &Path) -> u64 {
 /// Delete the downloaded TeX Live data, of this snapshot and of older ones.
 /// The engine files and the digest table stay, like the WasmTex engine does.
 pub fn clear(root: &Path) -> Result<u64, String> {
+    let _writer = crate::backup::gate::writer()?;
     // The next frame deletes texpresso-luatex-caches before the app starts.
     CLEAR_FONT_CACHE.store(true, Ordering::Relaxed);
     let data = root.join("texpresso");

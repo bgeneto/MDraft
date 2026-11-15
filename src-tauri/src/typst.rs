@@ -505,6 +505,7 @@ pub async fn install_typst<R: Runtime>(app: AppHandle<R>) -> Result<TypstStatus,
 static TYPST_INSTALL: Mutex<()> = Mutex::new(());
 
 fn install<R: Runtime>(app: &AppHandle<R>) -> Result<TypstStatus, String> {
+    let _writer = crate::backup::gate::writer()?;
     // A second Install waits for the first instead of writing the same file.
     let _install = TYPST_INSTALL
         .lock()
