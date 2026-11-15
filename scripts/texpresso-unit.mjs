@@ -187,6 +187,7 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     { v: 1, type: "error", seq: 6, message: "boom" },
     { v: 1, type: "error", message: "boom" },
     { v: 1, type: "disposed", seq: 7 },
+    { v: 1, type: "trace", text: "compile asked" },
   ];
   for (const message of valid) {
     check(parseFrameMessage(message) !== null, `a valid ${message.type} message parses`);
@@ -212,6 +213,8 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     { v: 1, type: "viewport", scrollTop: "12", file: null, line: null, gesture: false },
     { v: 1, type: "source", file: "main.tex", from: 5, to: 2, detail: 1 },
     { v: 1, type: "pdf", seq: 1, pdf: [1, 2], ms: 10 },
+    { v: 1, type: "trace", text: 7 },
+    { v: 1, type: "trace", text: "x".repeat(501) },
     { v: 1, type: "unknown" },
   ];
   for (const message of invalid) {
