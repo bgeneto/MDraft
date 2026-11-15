@@ -255,7 +255,7 @@
     },
     "samples/latex-on-demand/figures/dot.png": {
       "purpose": "On-demand project manifest: the image the synthetic fixture opens through a macro",
-      "sha256": "d126d616641d42ac8b0a07ec302c9fa1ec049f86200931a0a60c8f3080284b77"
+      "sha256": "91b013513962ddca29ba4fdbc25798046e4dd131f902f2dcee0c1fcb52072ada"
     }
   },
   "documents": [

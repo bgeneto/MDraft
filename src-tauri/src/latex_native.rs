@@ -1733,6 +1733,109 @@ mod tests {
     }
 
     #[cfg(windows)]
+    fn run_manifest_staging(target: &Target, base: &Path) {
+        let project = base.join("project");
+        let work = base.join("work");
+        std::fs::create_dir_all(project.join("figures")).unwrap();
+        std::fs::write(
+            project.join("main.tex"),
+            b"\\documentclass{article}\n\\usepackage{graphicx}\n\\newcommand{\\fig}{figures/dot}\n\\begin{document}\n\\includegraphics[width=1cm]{\\fig}\nManifest staging probe.\n\\end{document}\n",
+        )
+        .unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../samples/latex-on-demand/figures/dot.png");
+        std::fs::copy(source, project.join("figures/dot.png")).unwrap();
+        let main = std::fs::read(project.join("main.tex")).unwrap();
+        let request = NativeCompileRequest {
+            job: "manifest-real".into(),
+            main_file: "main.tex".into(),
+            files: vec![NativeFile {
+                path: "main.tex".into(),
+                data: STANDARD.encode(main),
+            }],
+            root: Some(project.to_string_lossy().into_owned()),
+            manifest: vec!["main.tex".into(), "figures/dot.png".into()],
+            texmf: None,
+        };
+        let staged = stage(&work, &request).unwrap();
+        assert!(
+            work.join("figures/dot.png").is_file(),
+            "the manifest image is staged"
+        );
+        for engine in ["lualatex", "pdflatex", "xelatex"] {
+            if !target.has_engine(engine) {
+                eprintln!("{engine}: not installed (not run)");
+                continue;
+            }
+            let env = target.environment(base, &work, engine, 0).unwrap();
+            let outcome = runner::run(
+                &target
+                    .spec(
+                        engine,
+                        engine_arguments(engine, "main.tex"),
+                        &work,
+                        &env,
+                        Duration::from_secs(600),
+                    )
+                    .unwrap(),
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+            assert_eq!(
+                outcome.status, 0,
+                "{engine} failed with the staged manifest: {}",
+                outcome.console
+            );
+            let pdf = find_output(&work, "main", "pdf").expect("a PDF from the staged manifest");
+            assert!(pdf.starts_with(b"%PDF-"), "{engine}: not a PDF");
+            eprintln!("{engine}: manifest staging verified");
+        }
+        let _ = std::fs::remove_dir_all(base);
+        let _ = staged;
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires MDRAFT_TEST_TEX_BIN to name a real Windows TeX binary directory"]
+    fn a_real_windows_distribution_stages_the_manifest_for_every_engine() {
+        let Ok(bin) = std::env::var("MDRAFT_TEST_TEX_BIN") else {
+            eprintln!("MDRAFT_TEST_TEX_BIN is not set");
+            return;
+        };
+        let bin = PathBuf::from(bin);
+        let target = Target::Path {
+            name: distribution_name(&bin.display().to_string()),
+            bin,
+        };
+        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target/test-tmp")
+            .join(format!("manifest-real-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        run_manifest_staging(&target, &base);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires MDRAFT_TEST_WSL_DISTRO (and optionally MDRAFT_TEST_WSL_BIN)"]
+    fn a_wsl_distribution_stages_the_manifest_for_every_engine() {
+        let distro = std::env::var("MDRAFT_TEST_WSL_DISTRO").unwrap();
+        let bin = std::env::var("MDRAFT_TEST_WSL_BIN").unwrap_or_else(|_| "/usr/bin".into());
+        let target = Target::Wsl(wsl::WslInstallation {
+            distro,
+            bin,
+            engines: vec!["lualatex".into(), "pdflatex".into()],
+            tools: Vec::new(),
+        });
+        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target/test-tmp")
+            .join(format!("manifest-wsl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        run_manifest_staging(&target, &base);
+    }
+
+    #[cfg(windows)]
     #[test]
     #[ignore = "requires MDRAFT_TEST_TEX_BIN to name a real Windows TeX binary directory"]
     fn a_real_windows_distribution_compiles() {
