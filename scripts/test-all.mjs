@@ -476,6 +476,21 @@ const SUITES = [
     ],
   },
   {
+    // The synthetic on-demand fixture names an image through a macro, so the
+    // predictor cannot send it; the frame must fetch it from the manifest.
+    id: "latex-on-demand",
+    title: "On-demand project manifest",
+    kind: "cdp",
+    script: "latex-on-demand-test.mjs",
+    doc: "samples/latex-on-demand/main.tex",
+    safeWithInstalledApp: true,
+    optIn: true,
+    origin: true,
+    reuseProfile: true,
+    writesDoc: false,
+    fixtures: ["samples/latex-on-demand/main.tex", "samples/latex-on-demand/figures/dot.png"],
+  },
+  {
     // Registers a private two-root library outside the project and proves,
     // through compiled PDF text, that the bundled engine resolved the class,
     // a transitive package, a .def and a Lua module from it in order. With

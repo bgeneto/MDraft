@@ -769,6 +769,52 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     const interrupted = session.exportPdf();
     session.broken = true;
     check((await interrupted) === null, "a broken session releases its waiting export");
+
+    // A file the worker fetched is not in the host's `files` map. A changed
+    // stamp or a disappearance must therefore be an explicit remove, or the
+    // worker keeps serving the old bytes forever.
+    const sent = [];
+    const invalidated = Object.assign(Object.create(TexpressoSession.prototype), {
+      files: new Map(),
+      dirty: new Set(),
+      held: false,
+      active: null,
+      projectToken: "token",
+      projectFetched: new Set(["changed.png", "gone.png", "same.png"]),
+      fetchedStamps: new Map([
+        ["changed.png", { size: 4, modified: 1 }],
+        ["gone.png", { size: 4, modified: 1 }],
+        ["same.png", { size: 4, modified: 1 }],
+      ]),
+      outstanding: new Map(),
+      frame: { post: (message) => (sent.push(message), sent.length) },
+    });
+    invalidated.sendProject(
+      {
+        main: "main.tex",
+        projectToken: "token",
+        files: new Map(),
+        manifest: new Map([
+          ["changed.png", { size: 5, modified: 2 }],
+          ["same.png", { size: 4, modified: 1 }],
+        ]),
+      },
+      false,
+    );
+    const update = sent.find((message) => message.type === "project");
+    check(
+      update?.remove.includes("changed.png") &&
+        update.remove.includes("gone.png") &&
+        !update.remove.includes("same.png"),
+      "a changed or vanished fetched file is removed for the next lookup",
+      JSON.stringify(update?.remove),
+    );
+    check(
+      !invalidated.projectFetched.has("changed.png") &&
+        !invalidated.projectFetched.has("gone.png") &&
+        invalidated.projectFetched.has("same.png"),
+      "the fetched-file set forgets only what was invalidated",
+    );
   } finally {
     if (previousWindow === undefined) delete globalThis.window;
     else globalThis.window = previousWindow;

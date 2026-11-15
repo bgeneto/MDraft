@@ -1,0 +1,15 @@
+\documentclass{article}
+\usepackage{graphicx}
+
+% The name is built through a macro, so collect_referenced cannot predict it.
+% The preview must fetch the image from the project manifest when graphicx
+% actually opens figures/dot.png.
+\newcommand{\ondemandfigure}{figures/dot}
+
+\begin{document}
+\section{On-demand project file}
+\includegraphics[width=1cm]{\ondemandfigure}
+
+The image above is not part of the eager snapshot; it arrives through the
+project route after the engine opens it.
+\end{document}

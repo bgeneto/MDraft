@@ -132,6 +132,7 @@ here with its public purpose and, for owner sessions, to the private catalog.
 | `npm run latex:sync:unit` | `node scripts/latex-sync-unit.mjs` |
 | `npm run latex:project` | `node scripts/latex-project-test.mjs` |
 | `npm run latex:native` | `node scripts/latex-native-test.mjs` |
+| `npm run latex:ondemand` | `node scripts/latex-on-demand-test.mjs` |
 | `npm run html:map:unit` | `node scripts/html-source-map-unit.mjs` |
 | `npm run block:map:unit` | `node scripts/block-map-unit.mjs` |
 | `npm run ai` | `node scripts/ai-assistant-test.mjs` |
