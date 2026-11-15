@@ -51,7 +51,9 @@ preferences are explanatory notes.
 
 The application performs no telemetry or startup network requests. Downloads and
 AI operations follow the explicit user actions and controls documented in the
-README. A document can load resources from its own markup. Repository security
+README. A document can load resources from its own markup. On Windows the HTML
+preview's reserved `.invalid` origin is answered inside WebView2, so opening an
+HTML document sends no DNS query for it. Repository security
 tools are development commands and are not shipped or run by the application.
 
 ## Public source and private records
