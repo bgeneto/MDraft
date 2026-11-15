@@ -36,7 +36,7 @@ export function lineRangeAt(source: string, offset: number): SourceRange {
  * verified wins:
  *
  * - a range (a drag, or the word of a double-click) is marked as whole words
- *   and the caret stays;
+ *   and the caret stays; a double-click without a range marks nothing;
  * - an "exact" click puts the caret on the answered character and marks its
  *   source line;
  * - a "line" click marks the line and puts the caret at its first character;
@@ -61,6 +61,9 @@ export function markForPreviewGesture(
       detail >= 2 ? { from, to: end } : (snapToWords(source, from, end) ?? { from, to: end });
     return { range, caret: null, unit: "range" };
   }
+  // A double-click names a word. Without one there is nothing to mark, and
+  // falling through would replace a word already marked with its paragraph.
+  if (detail >= 2) return null;
   if (precision !== "none") {
     const line = lineRangeAt(source, from);
     if (line.to > line.from) {
