@@ -270,7 +270,8 @@ const prefs = await evaluate(`(() => {
       name: button.textContent,
       heading: document.querySelector('.prefs-section-title')?.textContent ?? '',
       rows: rows.length,
-      labels: rows.map((r) => r.querySelector('.prefs-label')?.textContent?.replace('?', '').trim())
+      labels: rows.map((r) => r.querySelector('.prefs-label')?.textContent?.replace('?', '').trim()),
+      buttons: rows.map((r) => r.querySelector('.prefs-button')?.textContent?.trim()).filter(Boolean)
     };
   });
   sections[0].click();
@@ -314,11 +315,11 @@ for (const section of prefs.perSection) {
 
 check("preferences opens", prefs.open);
 check("preferences title", prefs.title === "Preferences");
-check("eleven sections", prefs.sectionNames.split(",").length === 11);
+check("twelve sections", prefs.sectionNames.split(",").length === 12);
 check(
   "sections named and ordered",
   prefs.sectionNames ===
-    "Files,Editor,Image,Markdown,HTML,LaTeX,Export,Appearance,Typography,AI Assistant,Read Aloud",
+    "Files,Editor,Image,Markdown,HTML,LaTeX,Export,Appearance,Typography,AI Assistant,Read Aloud,Data",
 );
 check(
   "first section selected",
@@ -327,6 +328,14 @@ check(
 check("every section has rows", prefs.emptySections === "");
 check("rows rendered", prefs.totalRows >= 24);
 check("controls present", prefs.selects >= 2 && prefs.checkboxes >= 2 && prefs.buttons >= 1);
+const dataSection = prefs.perSection.find((section) => section.name === "Data");
+check(
+  "Data offers the settings folder and the destructive reset",
+  Boolean(dataSection) &&
+    dataSection.labels.includes("Application folder") &&
+    dataSection.buttons.includes("Open Settings Folder") &&
+    dataSection.buttons.some((text) => text.startsWith("Delete All MDraft Data")),
+);
 check(
   "Typst offers an auto-compile preference",
   prefs.perSection.some((section) => section.labels.includes("Auto-compile Typst")),

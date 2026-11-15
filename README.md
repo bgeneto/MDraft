@@ -142,6 +142,14 @@ Linux. See the [export guide](docs/export.md) for formats and details.
      `.exe` keeps its settings beside the executable.
    - **Linux, x64:** choose the `.deb`, AppImage or standalone binary. Make an
      AppImage executable before opening it.
+
+   To remove MDraft completely on Windows, uninstall with the NSIS setup and
+   tick **Delete the application data**. That removes
+   `%APPDATA%\io.github.bgeneto.mdraft` and
+   `%LOCALAPPDATA%\io.github.bgeneto.mdraft`. The MSI has no such uninstaller
+   option, so use **File › Preferences › Data › Delete All MDraft Data…**
+   before uninstalling. The portable build keeps its data in `app-data` beside
+   the executable.
 2. Install or open MDraft, then create a document or open one with **File ›
    Open**. You can also drop a file into the window.
 3. Write in the source pane and watch the preview update. Try selecting a word

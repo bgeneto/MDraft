@@ -18,6 +18,7 @@ mod linux_webkit_env;
 mod menu;
 mod optional_tools;
 mod print;
+mod purge;
 mod recovery;
 mod settings;
 mod speech;
@@ -54,6 +55,17 @@ pub fn run() {
         for window in &mut context.config_mut().app.windows {
             window.visible = false;
             window.focus = false;
+        }
+    }
+
+    // A pending marker means the previous session asked for a data purge. No
+    // window may exist when that pass runs: WebView2 keeps its profile open and
+    // the window-state plugin writes `.window-state.json` on the ordinary exit
+    // path, both of which would recreate files just after the deletion.
+    let purge_pending = purge::pending_for(&context.config().identifier);
+    if purge_pending {
+        for window in &mut context.config_mut().app.windows {
+            window.create = false;
         }
     }
 
@@ -107,7 +119,10 @@ pub fn run() {
                 .build(),
         )
         .on_menu_event(menu::on_event)
-        .setup(|app| {
+        .setup(move |app| {
+            if purge_pending {
+                purge::run_and_restart(app.handle());
+            }
             let state = AppState::load(app.handle());
             // The menu is built after the state is managed so its check marks
             // start on the values the user persisted, not on all-unchecked. The
@@ -156,6 +171,8 @@ pub fn run() {
             settings::clear_recent,
             settings::add_favorite,
             settings::remove_favorite,
+            purge::request_data_purge,
+            purge::take_purge_report,
             ai::ai_status,
             ai::ai_set_key,
             ai::ai_clear_key,
@@ -184,6 +201,7 @@ pub fn run() {
             documents::resolve_legacy_local_image,
             documents::open_external,
             documents::open_app_folder,
+            documents::open_settings_folder,
             documents::startup_file,
             launch::startup_files,
             launch::take_forwarded_paths,
