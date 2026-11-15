@@ -329,7 +329,7 @@ export class OptionalToolsController {
     const note = node(
       "p",
       "optional-tools-note",
-      "Nothing is downloaded until you press Done. You can add these later from the Tools menu.",
+      "Nothing is downloaded until you press Download. You can add these later from the Tools menu.",
     );
     const trust = node(
       "p",
@@ -680,7 +680,7 @@ export class OptionalToolsController {
     this.secondary.textContent = "Not now";
     this.secondary.hidden = label === "Done";
     this.note.textContent =
-      "Nothing is downloaded until you press Done. You can add these later from the Tools menu.";
+      "Nothing is downloaded until you press Download. You can add these later from the Tools menu.";
   }
 
   // -------------------------------------------------------------------------

@@ -1,0 +1,436 @@
+# Build and publish the optional standalone Typst companion service.
+#
+# This is deliberately a separate release line from the application's `v*`
+# tags: the service has its own version, wire protocol and Typst pin. The app
+# pins the published archives by byte length and SHA-256 in
+# `src-tauri/typst-service.json`, so an archive must never be replaced in
+# place. Publish a new service tag instead.
+#
+# `workflow_dispatch` re-runs a tag that is already pushed, for when a build
+# failed and the tag must not move. It does not create or move the tag.
+
+name: Typst service release
+
+on:
+  push:
+    tags:
+      - "typst-service-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "An existing typst-service-v* tag to rebuild"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Fail in seconds if the tag, manifest, crate and Typst pin disagree.
+  # ---------------------------------------------------------------------------
+  prepare:
+    name: Validate the tag and manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+      version: ${{ steps.check.outputs.version }}
+      expected_version: ${{ steps.check.outputs.expected_version }}
+      matrix: ${{ steps.check.outputs.matrix }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - name: Install Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Check tag, manifest, crate and Typst pin agree
+        id: check
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+
+          const tag = process.env.INPUT_TAG || process.env.GITHUB_REF_NAME || "";
+          const manifest = JSON.parse(fs.readFileSync("src-tauri/typst-service.json", "utf8"));
+          const crate = fs.readFileSync("tools/mdraft-typst-service/Cargo.toml", "utf8");
+          const crateVersion = /^\s*version\s*=\s*"([^"]+)"/m.exec(crate)?.[1];
+          const lock = fs.readFileSync("tools/mdraft-typst-service/Cargo.lock", "utf8");
+          const lockTypst = /^name = "typst"\nversion = "([^"]+)"/m.exec(lock)?.[1];
+          const protocol = /PROTOCOL_VERSION:\s*u32\s*=\s*(\d+)/.exec(
+            fs.readFileSync("tools/mdraft-typst-service/src/protocol.rs", "utf8"),
+          )?.[1];
+          const engineTypst = /TYPST_CRATE_VERSION:\s*&str\s*=\s*"([^"]+)"/.exec(
+            fs.readFileSync("tools/mdraft-typst-service/src/engine.rs", "utf8"),
+          )?.[1];
+
+          const problems = [];
+          const prefix = "typst-service-v";
+          if (!tag.startsWith(prefix)) {
+            problems.push(`tag ${JSON.stringify(tag)} does not start with ${prefix}`);
+          }
+          const tagVersion = tag.startsWith(prefix) ? tag.slice(prefix.length) : "";
+          if (tagVersion !== manifest.version) {
+            problems.push(
+              `tag says ${JSON.stringify(tagVersion)} but typst-service.json says ${JSON.stringify(manifest.version)}`,
+            );
+          }
+          if (manifest.version !== crateVersion) {
+            problems.push(
+              `typst-service.json says ${JSON.stringify(manifest.version)} but Cargo.toml says ${JSON.stringify(crateVersion)}`,
+            );
+          }
+          if (manifest.protocolVersion !== Number(protocol)) {
+            problems.push(
+              `typst-service.json protocol ${manifest.protocolVersion} but protocol.rs says ${protocol}`,
+            );
+          }
+          if (manifest.typstVersion !== engineTypst) {
+            problems.push(
+              `typst-service.json Typst ${manifest.typstVersion} but engine.rs pins ${engineTypst}`,
+            );
+          }
+          if (manifest.typstVersion !== lockTypst) {
+            problems.push(
+              `typst-service.json Typst ${manifest.typstVersion} but Cargo.lock resolves ${lockTypst}`,
+            );
+          }
+
+          // Only the targets the application actually ships. The other manifest
+          // entries stay placeholders until those installers exist.
+          const targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-musl"];
+          const runners = {
+            "x86_64-pc-windows-msvc": {
+              os: "windows-latest",
+              label: "Windows x64",
+              archive: "zip",
+            },
+            "x86_64-unknown-linux-musl": {
+              os: "ubuntu-22.04",
+              label: "Linux x64 musl",
+              archive: "tar.xz",
+            },
+          };
+          const include = targets.map((target) => {
+            const asset = manifest.assets[target];
+            if (!asset) {
+              problems.push(`typst-service.json has no asset for ${target}`);
+              return null;
+            }
+            const runner = runners[target];
+            if (asset.archiveType !== runner.archive) {
+              problems.push(
+                `${target} uses ${asset.archiveType}, expected ${runner.archive}`,
+              );
+            }
+            return {
+              target,
+              os: runner.os,
+              label: runner.label,
+              asset: asset.assetName,
+              binary: asset.binaryName,
+              archive: asset.archiveType,
+            };
+          });
+
+          if (problems.length) {
+            for (const problem of problems) console.error(`- ${problem}`);
+            process.exit(1);
+          }
+
+          const expected = `mdraft-typst-service ${manifest.version} (typst ${manifest.typstVersion}, protocol ${manifest.protocolVersion})`;
+          const lines = [
+            `tag=${tag}`,
+            `version=${manifest.version}`,
+            `expected_version=${expected}`,
+            `matrix=${JSON.stringify({ include })}`,
+          ];
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, lines.join("\n") + "\n");
+          console.log(`Validated ${tag}: ${expected}`);
+          NODE
+
+  # ---------------------------------------------------------------------------
+  # Build, test and package one asset per platform.
+  # ---------------------------------------------------------------------------
+  build:
+    name: ${{ matrix.label }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+          persist-credentials: false
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy
+
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: tools/mdraft-typst-service -> target
+
+      - name: Install Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Install Linux packaging tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools xz-utils
+
+      # Windows -----------------------------------------------------------------
+
+      - name: Test the service crate (Windows)
+        if: runner.os == 'Windows'
+        run: .\scripts\with-msvc.cmd cargo test --locked --manifest-path tools\mdraft-typst-service\Cargo.toml
+
+      - name: Lint the service crate (Windows)
+        if: runner.os == 'Windows'
+        run: .\scripts\with-msvc.cmd cargo clippy --locked --manifest-path tools\mdraft-typst-service\Cargo.toml --all-targets -- -D warnings
+
+      - name: Build the service (Windows)
+        if: runner.os == 'Windows'
+        run: .\scripts\with-msvc.cmd cargo build --release --locked --manifest-path tools\mdraft-typst-service\Cargo.toml
+
+      - name: Verify, package and record the Windows asset
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = "tools\mdraft-typst-service\target\release\${{ matrix.binary }}"
+          if (-not (Test-Path -LiteralPath $exe)) { throw "missing $exe" }
+
+          $actual = ((& $exe --version) -join "`n").Trim()
+          $expected = "${{ needs.prepare.outputs.expected_version }}"
+          if ($actual -ne $expected) {
+            throw "version mismatch: expected '$expected', got '$actual'"
+          }
+
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $asset = Join-Path "dist" "${{ matrix.asset }}"
+          Compress-Archive -LiteralPath $exe -DestinationPath $asset -CompressionLevel Optimal -Force
+
+          $expanded = Join-Path $env:RUNNER_TEMP "typst-service-verify"
+          Remove-Item -Recurse -Force $expanded -ErrorAction SilentlyContinue
+          Expand-Archive -LiteralPath $asset -DestinationPath $expanded
+          $entries = @(Get-ChildItem -LiteralPath $expanded -File | ForEach-Object Name)
+          if ($entries.Count -ne 1 -or $entries[0] -ne "${{ matrix.binary }}") {
+            throw "archive must contain exactly ${{ matrix.binary }}, found: $($entries -join ', ')"
+          }
+
+          $bytes = (Get-Item -LiteralPath $asset).Length
+          $sha256 = (Get-FileHash -LiteralPath $asset -Algorithm SHA256).Hash.ToLowerInvariant()
+          $fragment = @{
+            assetName = "${{ matrix.asset }}"
+            bytes = $bytes
+            sha256 = $sha256
+          } | ConvertTo-Json -Compress
+          Set-Content -LiteralPath "dist/typst-service-fragment-${{ matrix.target }}.json" -Value $fragment -Encoding utf8
+          Write-Output "${{ matrix.asset }}: $bytes bytes, sha256 $sha256"
+
+      - name: Keep the Windows asset
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: typst-service-${{ matrix.target }}
+          path: |
+            dist/${{ matrix.asset }}
+            dist/typst-service-fragment-${{ matrix.target }}.json
+          if-no-files-found: error
+
+      # Linux -------------------------------------------------------------------
+
+      - name: Test the service crate (Linux)
+        if: runner.os == 'Linux'
+        run: cargo test --locked --manifest-path tools/mdraft-typst-service/Cargo.toml
+
+      - name: Lint the service crate (Linux)
+        if: runner.os == 'Linux'
+        run: cargo clippy --locked --manifest-path tools/mdraft-typst-service/Cargo.toml --all-targets -- -D warnings
+
+      - name: Build the service (Linux, musl)
+        if: runner.os == 'Linux'
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl --manifest-path tools/mdraft-typst-service/Cargo.toml
+
+      - name: Verify, package and record the Linux asset
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe="tools/mdraft-typst-service/target/x86_64-unknown-linux-musl/release/${{ matrix.binary }}"
+          test -x "$exe"
+
+          actual="$("$exe" --version)"
+          expected="${{ needs.prepare.outputs.expected_version }}"
+          if [ "$actual" != "$expected" ]; then
+            echo "version mismatch: expected '$expected', got '$actual'" >&2
+            exit 1
+          fi
+
+          mkdir -p dist
+          asset="dist/${{ matrix.asset }}"
+          tar -C "$(dirname "$exe")" -cJf "$asset" "${{ matrix.binary }}"
+
+          if ! tar -tJf "$asset" | grep -qx "${{ matrix.binary }}"; then
+            echo "archive must contain exactly ${{ matrix.binary }}" >&2
+            exit 1
+          fi
+
+          bytes="$(stat -c %s "$asset")"
+          sha256="$(sha256sum "$asset" | cut -d' ' -f1)"
+          jq -n \
+            --arg assetName "${{ matrix.asset }}" \
+            --argjson bytes "$bytes" \
+            --arg sha256 "$sha256" \
+            '{assetName: $assetName, bytes: $bytes, sha256: $sha256}' \
+            > "dist/typst-service-fragment-${{ matrix.target }}.json"
+          echo "${{ matrix.asset }}: $bytes bytes, sha256 $sha256"
+
+      # The notices are platform-independent and are generated from the pinned
+      # crate sources, so the Apache-2.0 text and font notices travel with the
+      # binary instead of relying on the repository alone.
+      - name: Generate third-party notices
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          node <<'NODE'
+          const { execFileSync } = require("node:child_process");
+          const fs = require("node:fs");
+          const path = require("node:path");
+
+          const metadata = JSON.parse(
+            execFileSync(
+              "cargo",
+              [
+                "metadata",
+                "--locked",
+                "--format-version",
+                "1",
+                "--manifest-path",
+                "tools/mdraft-typst-service/Cargo.toml",
+              ],
+              { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+            ),
+          );
+          const assets = metadata.packages.find((pkg) => pkg.name === "typst-assets");
+          if (!assets) throw new Error("typst-assets is not in the dependency graph");
+          const dir = path.dirname(assets.manifest_path);
+          const read = (name) => fs.readFileSync(path.join(dir, name), "utf8");
+
+          const text = [
+            "# Third-party notices for mdraft-typst-service",
+            "",
+            "This release contains the optional MDraft companion service built from",
+            "`tools/mdraft-typst-service`, linked with the Typst compiler crates and",
+            "the fonts and assets bundled by `typst-assets`.",
+            "",
+            "## MDraft",
+            "",
+            fs.readFileSync("LICENSE", "utf8").trim(),
+            "",
+            "## Typst and Typst crates",
+            "",
+            "Typst and its crates are licensed under the Apache License 2.0. The",
+            "Apache-2.0 text and the notices for the assets bundled by",
+            "`typst-assets` follow.",
+            "",
+            read("LICENSE").trim(),
+            "",
+            read("NOTICE").trim(),
+            "",
+          ].join("\n");
+
+          fs.mkdirSync("dist", { recursive: true });
+          fs.writeFileSync("dist/THIRD-PARTY-NOTICES-typst-service.md", text);
+          NODE
+
+      - name: Keep the Linux asset and notices
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: typst-service-${{ matrix.target }}
+          path: |
+            dist/${{ matrix.asset }}
+            dist/typst-service-fragment-${{ matrix.target }}.json
+            dist/THIRD-PARTY-NOTICES-typst-service.md
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Publish only after every platform built. `make_latest: false` keeps
+  # /releases/latest on the application's vX.Y.Z line, which the Pages
+  # workflow requires.
+  # ---------------------------------------------------------------------------
+  publish:
+    name: Publish the release
+    permissions:
+      contents: write
+    needs: [prepare, build]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Collect every asset
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: release
+          pattern: typst-service-*
+          merge-multiple: true
+
+      - name: Write the checksums file
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release
+          sha256sum ./*.zip ./*.tar.xz > SHA256SUMS-typst-service.txt
+          cat SHA256SUMS-typst-service.txt
+
+      - name: Create the release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: "Typst companion service ${{ needs.prepare.outputs.version }}"
+          body: |
+            Optional companion daemon for MDraft's warm incremental Typst previews.
+            It is not the MDraft application and is never downloaded automatically;
+            MDraft installs it only after an explicit action in
+            **Preferences › Export**, after verifying the archive against the
+            SHA-256 digest pinned in `src-tauri/typst-service.json`.
+
+            Stock Typst CLI remains the automatic fallback when the service is not
+            installed, disabled, or unhealthy.
+
+            This release includes Windows x64 (MSVC) and Linux x64 (musl) only.
+            The archive byte lengths and SHA-256 digests are listed in
+            `SHA256SUMS-typst-service.txt`; `THIRD-PARTY-NOTICES-typst-service.md`
+            carries the Typst/font notices for the standalone binary.
+          draft: false
+          prerelease: false
+          make_latest: false
+          files: |
+            release/*.zip
+            release/*.tar.xz
+            release/SHA256SUMS-typst-service.txt
+            release/THIRD-PARTY-NOTICES-typst-service.md
