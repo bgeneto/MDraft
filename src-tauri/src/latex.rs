@@ -1265,6 +1265,12 @@ fn mask_literal_regions(text: &str) -> String {
 /// The first `{…}` argument in `text`, after any optional `[…]`.
 fn first_brace_argument(text: &str) -> Option<String> {
     let chars: Vec<char> = text.chars().collect();
+    brace_argument_in(&chars)
+}
+
+/// `first_brace_argument` over a slice, so a caller scanning a whole file
+/// does not copy the rest of the file for every command it finds.
+fn brace_argument_in(chars: &[char]) -> Option<String> {
     let mut at = 0;
     while at < chars.len() && chars[at].is_whitespace() {
         at += 1;
@@ -1278,7 +1284,7 @@ fn first_brace_argument(text: &str) -> Option<String> {
             at += 1;
         }
     }
-    let end = brace_end(&chars, at)?;
+    let end = brace_end(chars, at)?;
     Some(chars[at + 1..end - 1].iter().collect())
 }
 
@@ -1307,44 +1313,51 @@ fn comment_start(line: &str) -> Option<usize> {
 pub(crate) fn declared_references(text: &str) -> Vec<(String, String)> {
     let masked = mask_literal_regions(text);
     let mut out = Vec::new();
-    for line in masked.split('\n') {
-        let code = &line[..comment_start(line).unwrap_or(line.len())];
-        let chars: Vec<char> = code.chars().collect();
-        // A class or package loads its own dependencies with the LaTeX2e
-        // kernel forms; without them a project-local class that needs a
-        // project-local package compiled with that package missing.
-        for (command, kind) in [
-            ("input", "input"),
-            ("include", "include"),
-            ("includegraphics", "includegraphics"),
-            ("bibliography", "bibliography"),
-            ("addbibresource", "addbibresource"),
-            ("documentclass", "documentclass"),
-            ("LoadClass", "documentclass"),
-            ("LoadClassWithOptions", "documentclass"),
-            ("usepackage", "usepackage"),
-            ("RequirePackage", "usepackage"),
-            ("RequirePackageWithOptions", "usepackage"),
-            ("bibliographystyle", "bibliographystyle"),
-        ] {
-            for (_, after) in matches_command(&chars, command) {
-                let rest: String = chars[after..].iter().collect();
-                let Some(argument) = first_brace_argument(&rest) else {
-                    continue;
-                };
-                let names: Vec<String> = if kind == "bibliography" || kind == "usepackage" {
-                    argument.split(',').map(str::to_string).collect()
-                } else {
-                    vec![argument]
-                };
-                for raw in names {
-                    let name = raw.trim().trim_start_matches("./").to_string();
-                    if !name.is_empty() {
-                        out.push((kind.to_string(), name));
-                    }
+    // Comments are removed line by line first, then the commands are read
+    // across lines: TeX takes an argument from the next line, and templates
+    // spread `\documentclass[` … `]{Class}` over several lines with a comment
+    // after each option. Reading one line at a time missed that class.
+    let code_lines: Vec<&str> = masked
+        .split('\n')
+        .map(|line| &line[..comment_start(line).unwrap_or(line.len())])
+        .collect();
+    let chars: Vec<char> = code_lines.join("\n").chars().collect();
+    // A class or package loads its own dependencies with the LaTeX2e
+    // kernel forms; without them a project-local class that needs a
+    // project-local package compiled with that package missing.
+    for (command, kind) in [
+        ("input", "input"),
+        ("include", "include"),
+        ("includegraphics", "includegraphics"),
+        ("bibliography", "bibliography"),
+        ("addbibresource", "addbibresource"),
+        ("documentclass", "documentclass"),
+        ("LoadClass", "documentclass"),
+        ("LoadClassWithOptions", "documentclass"),
+        ("usepackage", "usepackage"),
+        ("RequirePackage", "usepackage"),
+        ("RequirePackageWithOptions", "usepackage"),
+        ("bibliographystyle", "bibliographystyle"),
+    ] {
+        for (_, after) in matches_command(&chars, command) {
+            let Some(argument) = brace_argument_in(&chars[after..]) else {
+                continue;
+            };
+            let names: Vec<String> = if kind == "bibliography" || kind == "usepackage" {
+                argument.split(',').map(str::to_string).collect()
+            } else {
+                vec![argument]
+            };
+            for raw in names {
+                let name = raw.trim().trim_start_matches("./").to_string();
+                if !name.is_empty() {
+                    out.push((kind.to_string(), name));
                 }
             }
         }
+    }
+    for code in code_lines {
+        let chars: Vec<char> = code.chars().collect();
         // Custom classes accept assets through commands such as
         // `\qrcode{qrcode.png}` and constants such as `{ logo_unb_vert }`.
         // They are still literal names. Reuse the confined graphics resolver
@@ -2423,6 +2436,55 @@ mod tests {
         assert_eq!(declared_references("50\\% \\input{real}").len(), 1);
         // The `comment` environment is not read by the compiler either.
         assert!(declared_references("\\begin{comment}\n\\input{gone}\n\\end{comment}").is_empty());
+    }
+
+    /// The Legrand Orange Book template's preamble shape: one option per line,
+    /// each followed by a comment, and the class name on the closing line.
+    const SPREAD_CLASS: &str = "\\documentclass[\n\
+        \t11pt, % Default font size, select one of 10pt, 11pt or 12pt\n\
+        \tfleqn, % Left align equations ]{decoy}\n\
+        \ta4paper, % Paper size\n\
+        \t%oneside, % Uncomment for oneside mode\n\
+        ]{LegrandOrangeBook}\n";
+
+    #[test]
+    fn a_reference_whose_argument_starts_on_a_later_line_is_collected() {
+        assert_eq!(
+            declared_references(SPREAD_CLASS),
+            vec![("documentclass".to_string(), "LegrandOrangeBook".to_string())],
+            "the class is read across lines, and the `]{{decoy}}` in a comment is not"
+        );
+        let packages = declared_references("\\usepackage{\n  alpha, % first\n  beta\n}\n");
+        assert_eq!(
+            packages,
+            vec![
+                ("usepackage".to_string(), "alpha".to_string()),
+                ("usepackage".to_string(), "beta".to_string()),
+            ]
+        );
+        assert!(
+            declared_references("%\\documentclass[\n%  a4paper,\n%]{gone}\n").is_empty(),
+            "a class commented out line by line stays out"
+        );
+    }
+
+    #[test]
+    fn project_snapshot_collects_a_class_named_on_a_later_line() {
+        let root = scratch("latex-spread-class");
+        fs::write(
+            root.join("main.tex"),
+            format!("{SPREAD_CLASS}\\begin{{document}}x\\end{{document}}\n"),
+        )
+        .unwrap();
+        fs::write(root.join("LegrandOrangeBook.cls"), "% local class\n").unwrap();
+        let (files, _, _, _) = collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
+        assert!(
+            files
+                .iter()
+                .any(|(path, _)| path.ends_with("LegrandOrangeBook.cls")),
+            "the project-local class reaches the snapshot"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(unix)]
