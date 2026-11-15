@@ -5,12 +5,38 @@
 //! line that starts or ends inside something other than markup is protected.
 //! Content blocks are markup again, so the prose inside `#quote[…]` reflows.
 
-import { backtickSpans, delimitedSpans, escaped, indentOf, linesOf, type Dialect, type LineInfo } from "./reflow.ts";
+import {
+  backtickSpans,
+  delimitedSpans,
+  escaped,
+  indentOf,
+  linesOf,
+  type Dialect,
+  type LineInfo,
+} from "./reflow.ts";
 
 /** Functions that read as running text at the start of a line. */
 const INLINE_FUNCTIONS = new Set([
-  "emph", "strong", "link", "ref", "cite", "footnote", "text", "raw", "underline", "strike",
-  "highlight", "smallcaps", "sub", "super", "overline", "lorem", "h", "box", "sym", "emoji",
+  "emph",
+  "strong",
+  "link",
+  "ref",
+  "cite",
+  "footnote",
+  "text",
+  "raw",
+  "underline",
+  "strike",
+  "highlight",
+  "smallcaps",
+  "sub",
+  "super",
+  "overline",
+  "lorem",
+  "h",
+  "box",
+  "sym",
+  "emoji",
 ]);
 
 /** A list, enum or term marker at a line start; groups: indent, marker. */
@@ -19,7 +45,11 @@ const TERM = /^([ \t]*)\/[ \t]+[^:\n]*:[ \t]*/;
 
 function isStructural(line: string): boolean {
   const trimmed = line.trimStart();
-  if (/^(?:=+(?:[ \t]|$)|[-+](?:[ \t]|$)|\d+\.(?:[ \t]|$)|\/(?:[ \t]|$)|\/\/|\/\*|```|\]|\$(?:[ \t]|$)|<[\w:.-]+>)/.test(trimmed)) {
+  if (
+    /^(?:=+(?:[ \t]|$)|[-+](?:[ \t]|$)|\d+\.(?:[ \t]|$)|\/(?:[ \t]|$)|\/\/|\/\*|```|\]|\$(?:[ \t]|$)|<[\w:.-]+>)/.test(
+      trimmed,
+    )
+  ) {
     return true;
   }
   if (trimmed.startsWith("#")) {
@@ -140,7 +170,9 @@ function deepLines(text: string): Set<number> {
       const head = /^#[A-Za-z_][\w-]*(?:\.[A-Za-z_][\w-]*)*/.exec(text.slice(at));
       if (head) {
         at += head[0].length;
-        const keyword = /^#(?:let|set|show|import|include|if|else|for|while|return|context)\b/.test(head[0]);
+        const keyword = /^#(?:let|set|show|import|include|if|else|for|while|return|context)\b/.test(
+          head[0],
+        );
         if (keyword) {
           // A statement runs to the end of its line, plus any group it opens.
           stack.push("code");

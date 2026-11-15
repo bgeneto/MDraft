@@ -6,7 +6,14 @@
 //! tables, HTML, front matter and `$$` math stay byte-identical.
 
 import { markdownLanguage } from "@codemirror/lang-markdown";
-import { backtickSpans, delimitedSpans, escaped, linesOf, type Dialect, type LineInfo } from "./reflow.ts";
+import {
+  backtickSpans,
+  delimitedSpans,
+  escaped,
+  linesOf,
+  type Dialect,
+  type LineInfo,
+} from "./reflow.ts";
 
 /** A line that would open a block if a break put it at a line start. */
 const STRUCTURAL =
@@ -75,7 +82,14 @@ function classify(text: string): LineInfo[] {
       const body = lines.slice(first, last + 1);
       // `$$` display math is not part of the CommonMark grammar, so the parser
       // sees it as paragraph text. Such a paragraph is left alone.
-      if (body.some((line) => line.trimStart().replace(/^(?:>[ \t]?)*/, "").startsWith("$$"))) {
+      if (
+        body.some((line) =>
+          line
+            .trimStart()
+            .replace(/^(?:>[ \t]?)*/, "")
+            .startsWith("$$"),
+        )
+      ) {
         for (let index = first; index <= last; index += 1) {
           infos[index] = { kind: "protected", note: "display math is not prose" };
         }
@@ -83,7 +97,9 @@ function classify(text: string): LineInfo[] {
       }
       for (let index = first; index <= last; index += 1) {
         const prefixLen =
-          index === first ? contentFrom - starts[index] : (prefixPattern.exec(lines[index])?.[0].length ?? 0);
+          index === first
+            ? contentFrom - starts[index]
+            : (prefixPattern.exec(lines[index])?.[0].length ?? 0);
         const content = lines[index].slice(prefixLen);
         if (ALERT.test(content.trim())) {
           infos[index] = { kind: "protected" };

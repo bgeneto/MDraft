@@ -7,7 +7,14 @@
 //! the next line would comment that text out.
 
 import { commentStart, maskLiteralRegions } from "../latex-references.ts";
-import { delimitedSpans, escaped, indentOf, linesOf, type Dialect, type LineInfo } from "./reflow.ts";
+import {
+  delimitedSpans,
+  escaped,
+  indentOf,
+  linesOf,
+  type Dialect,
+  type LineInfo,
+} from "./reflow.ts";
 
 /** Environments whose body is running prose. Everything else is protected. */
 const PROSE_ENVIRONMENTS = new Set([
@@ -38,12 +45,55 @@ const PROSE_ENVIRONMENTS = new Set([
  * engine does not know) and is left alone.
  */
 const INLINE_COMMANDS = new Set([
-  "textbf", "textit", "texttt", "textsc", "textsf", "textrm", "textsl", "textup", "textmd",
-  "emph", "underline", "uline", "sout", "textsubscript", "textsuperscript", "textcolor",
-  "ref", "eqref", "pageref", "autoref", "cref", "Cref", "nameref",
-  "cite", "citep", "citet", "citeauthor", "citeyear", "parencite", "textcite",
-  "href", "url", "footnote", "verb", "lstinline", "mbox", "noindent",
-  "LaTeX", "TeX", "ldots", "dots", "enquote", "og", "fg", "S", "P", "(", ",", "@",
+  "textbf",
+  "textit",
+  "texttt",
+  "textsc",
+  "textsf",
+  "textrm",
+  "textsl",
+  "textup",
+  "textmd",
+  "emph",
+  "underline",
+  "uline",
+  "sout",
+  "textsubscript",
+  "textsuperscript",
+  "textcolor",
+  "ref",
+  "eqref",
+  "pageref",
+  "autoref",
+  "cref",
+  "Cref",
+  "nameref",
+  "cite",
+  "citep",
+  "citet",
+  "citeauthor",
+  "citeyear",
+  "parencite",
+  "textcite",
+  "href",
+  "url",
+  "footnote",
+  "verb",
+  "lstinline",
+  "mbox",
+  "noindent",
+  "LaTeX",
+  "TeX",
+  "ldots",
+  "dots",
+  "enquote",
+  "og",
+  "fg",
+  "S",
+  "P",
+  "(",
+  ",",
+  "@",
 ]);
 
 /** Text-formatting commands whose argument `maskLiteralRegions` blanks. */
@@ -73,7 +123,10 @@ function codeOf(masked: string): string {
 
 /** A line ends in `\\`, `\\*` or `\\[len]` — a forced line break. */
 function endsWithForcedBreak(code: string): boolean {
-  const trimmed = code.trimEnd().replace(/\[[^\]]*\]$/, "").replace(/\*$/, "");
+  const trimmed = code
+    .trimEnd()
+    .replace(/\[[^\]]*\]$/, "")
+    .replace(/\*$/, "");
   if (!trimmed.endsWith("\\\\")) return false;
   // `\\\\` is two breaks; `\\\` is a break then a control symbol. Only an even
   // run of backslashes ends in a break.
@@ -184,7 +237,9 @@ function unbreakable(segment: string): Array<[number, number]> {
   for (const match of segment.matchAll(/\\verb\*?([^a-zA-Z\s*])[^\n]*?\1/g)) {
     ranges.push([match.index, match.index + match[0].length]);
   }
-  for (const match of segment.matchAll(/\\lstinline\s*(?:\[[^\]]*\])?\s*([^a-zA-Z\s{])[^\n]*?\1/g)) {
+  for (const match of segment.matchAll(
+    /\\lstinline\s*(?:\[[^\]]*\])?\s*([^a-zA-Z\s{])[^\n]*?\1/g,
+  )) {
     ranges.push([match.index, match.index + match[0].length]);
   }
   ranges.push(...delimitedSpans(segment, "$"));

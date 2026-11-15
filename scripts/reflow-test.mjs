@@ -28,8 +28,7 @@ const setText = (text, caret = 0) =>
   evaluate(`(() => { const v = ${view};
     v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: ${JSON.stringify(text)} }, selection: { anchor: ${caret} } });
     v.focus(); })()`);
-const toastText = () =>
-  evaluate(`document.getElementById('toast')?.textContent ?? ''`);
+const toastText = () => evaluate(`document.getElementById('toast')?.textContent ?? ''`);
 
 async function pollFor(expression, timeout = 3000) {
   const deadline = Date.now() + timeout;
@@ -44,27 +43,50 @@ console.log("=== a new Markdown tab ===");
 await emitMenu(page, "file.new");
 await sleep(600);
 
-const wrapped = "This paragraph was\nwrapped by another\neditor at a narrow\ncolumn.\n\nSecond\nparagraph.\n";
+const wrapped =
+  "This paragraph was\nwrapped by another\neditor at a narrow\ncolumn.\n\nSecond\nparagraph.\n";
 await setText(wrapped, 3);
 
 console.log("\n=== Unwrap Paragraph from the menu ===");
 await emitMenu(page, "para.unwrap");
 await sleep(200);
 check(
-  (await docText()) === "This paragraph was wrapped by another editor at a narrow column.\n\nSecond\nparagraph.\n",
+  (await docText()) ===
+    "This paragraph was wrapped by another editor at a narrow column.\n\nSecond\nparagraph.\n",
   "the caret's paragraph is one line and the next paragraph is untouched",
   JSON.stringify(await docText()),
 );
-check(/Unwrapped 1 paragraph/.test(await toastText()), "the status says what changed", await toastText());
+check(
+  /Unwrapped 1 paragraph/.test(await toastText()),
+  "the status says what changed",
+  await toastText(),
+);
 
-await send("Input.dispatchKeyEvent", { type: "keyDown", key: "z", code: "KeyZ", modifiers: 2, windowsVirtualKeyCode: 90 });
-await send("Input.dispatchKeyEvent", { type: "keyUp", key: "z", code: "KeyZ", modifiers: 2, windowsVirtualKeyCode: 90 });
-check(await pollFor(`${view}.state.doc.toString() === ${JSON.stringify(wrapped)}`), "one Undo restores the original text");
+await send("Input.dispatchKeyEvent", {
+  type: "keyDown",
+  key: "z",
+  code: "KeyZ",
+  modifiers: 2,
+  windowsVirtualKeyCode: 90,
+});
+await send("Input.dispatchKeyEvent", {
+  type: "keyUp",
+  key: "z",
+  code: "KeyZ",
+  modifiers: 2,
+  windowsVirtualKeyCode: 90,
+});
+check(
+  await pollFor(`${view}.state.doc.toString() === ${JSON.stringify(wrapped)}`),
+  "one Undo restores the original text",
+);
 
 console.log("\n=== Wrap Paragraph honours the Wrap column ===");
 await setText("one two three four five six seven eight nine ten eleven twelve\n", 0);
 // The harness starts from first-run settings, so the column is the default.
-const savedColumn = await evaluate(`window.__TAURI_INTERNALS__.invoke("get_settings").then((s) => s.wrapColumn)`);
+const savedColumn = await evaluate(
+  `window.__TAURI_INTERNALS__.invoke("get_settings").then((s) => s.wrapColumn)`,
+);
 check(savedColumn === 80, "a first-run profile has a Wrap column of 80", String(savedColumn));
 await emitMenu(page, "para.wrap");
 await sleep(200);
@@ -98,7 +120,8 @@ await evaluate(`(() => {
     bubbles: true, cancelable: true, clientX: x, clientY: y, button: 2, buttons: 2 }));
 })()`);
 await sleep(200);
-const items = await evaluate(`[...document.querySelectorAll('.editor-menu .editor-menu-item')].map((b) => ({
+const items =
+  await evaluate(`[...document.querySelectorAll('.editor-menu .editor-menu-item')].map((b) => ({
   action: b.dataset.action, disabled: b.disabled,
   shortcut: b.querySelector('.editor-menu-shortcut')?.textContent ?? '' }))`);
 const order = items.map((item) => item.action);
@@ -111,10 +134,14 @@ check(
 const unwrapItem = items.find((item) => item.action === "unwrapParagraph");
 check(unwrapItem && !unwrapItem.disabled, "the items are enabled in a Markdown document");
 check(unwrapItem?.shortcut === "Shift+Alt+Q", "Unwrap shows its shortcut", unwrapItem?.shortcut);
-await evaluate(`document.querySelector('.editor-menu-item[data-action="unwrapParagraph"]').click()`);
+await evaluate(
+  `document.querySelector('.editor-menu-item[data-action="unwrapParagraph"]').click()`,
+);
 await sleep(200);
 check(
-  (await docText()).startsWith("This paragraph was wrapped by another editor at a narrow column.\n"),
+  (await docText()).startsWith(
+    "This paragraph was wrapped by another editor at a narrow column.\n",
+  ),
   "the right-click item unwraps the paragraph",
 );
 
@@ -125,7 +152,11 @@ await setText("```\ncode\nblock\n```\n", 5);
 await emitMenu(page, "para.unwrap");
 await sleep(200);
 check((await docText()) === "```\ncode\nblock\n```\n", "a fenced code block is left alone");
-check(/no paragraph of prose/.test(await toastText()), "the status says there is no paragraph", await toastText());
+check(
+  /no paragraph of prose/.test(await toastText()),
+  "the status says there is no paragraph",
+  await toastText(),
+);
 
 // Leave nothing dirty for the harness's shutdown.
 await setText("");

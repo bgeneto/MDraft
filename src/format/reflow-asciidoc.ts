@@ -14,8 +14,18 @@ import { backtickSpans, indentOf, linesOf, type Dialect, type LineInfo } from ".
 
 /** Paragraph styles whose text is still ordinary prose. */
 const PROSE_STYLES = new Set([
-  "", "normal", "quote", "abstract", "partintro", "sidebar", "example",
-  "note", "tip", "important", "warning", "caution",
+  "",
+  "normal",
+  "quote",
+  "abstract",
+  "partintro",
+  "sidebar",
+  "example",
+  "note",
+  "tip",
+  "important",
+  "warning",
+  "caution",
 ]);
 
 const LIST_ITEM = /^([ \t]*)(\*+|-|\.+|\d+\.|[a-zA-Z]\.|<\d+>)[ \t]+(?=\S)/;
@@ -109,7 +119,11 @@ function classify(text: string): LineInfo[] {
       const item = LIST_ITEM.exec(line);
       if (item) return pushItem(item);
       if (isStructural(line)) return protect();
-      return void infos.push({ kind: "text", prefixLen: indentOf(line).length, breakAfter: endsWithBreak(line) });
+      return void infos.push({
+        kind: "text",
+        prefixLen: indentOf(line).length,
+        breakAfter: endsWithBreak(line),
+      });
     }
 
     // A block attribute line styles whatever follows it.
@@ -149,7 +163,13 @@ function classify(text: string): LineInfo[] {
     }
     function pushStart(prefixLen: number, contPrefix: string) {
       paragraph = "prose";
-      infos.push({ kind: "text", start: true, prefixLen, contPrefix, breakAfter: endsWithBreak(line) });
+      infos.push({
+        kind: "text",
+        start: true,
+        prefixLen,
+        contPrefix,
+        breakAfter: endsWithBreak(line),
+      });
     }
   });
   return infos;

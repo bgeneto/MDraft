@@ -278,7 +278,12 @@ export function reflow(
   const result: ReflowResult = { changes: [], paragraphs: 0, changed: 0, skipped: [] };
   const reasons = new Set<string>();
   infos.forEach((info, index) => {
-    if (info.kind === "protected" && info.note && selected(index, index) && !reasons.has(info.note)) {
+    if (
+      info.kind === "protected" &&
+      info.note &&
+      selected(index, index) &&
+      !reasons.has(info.note)
+    ) {
       reasons.add(info.note);
       result.skipped.push({ line: index + 1, reason: info.note });
     }
