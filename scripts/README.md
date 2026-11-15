@@ -101,7 +101,7 @@ here with its public purpose and, for owner sessions, to the private catalog.
 | `npm run pdf:map-worker:unit` | `node scripts/pdf-page-worker-unit.mjs` |
 | `npm run pdf:map:perf` | `node scripts/pdf-map-performance.mjs` |
 | `npm run pdf:map:webview` | `node scripts/pdf-webview-performance.mjs` |
-| `npm run test:harness:unit` | `node scripts/test-harness-ownership-unit.mjs` |
+| `npm run test:harness:unit` | `node scripts/test-harness-ownership-unit.mjs`; test-process ownership and test-profile engine-link preservation |
 | `npm run latex:sdk:unit` | `node scripts/latex-sdk-unit.mjs` |
 | `npm run texpresso:unit` | `node scripts/texpresso-unit.mjs` |
 | `npm run latex:texmf:unit` | `node scripts/latex-texmf-unit.mjs` |
