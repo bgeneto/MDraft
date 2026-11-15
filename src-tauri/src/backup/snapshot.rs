@@ -544,6 +544,24 @@ fn collect(
     Ok((files, directories, categories))
 }
 
+/// Estimate saved data only; live editor buffers are captured separately.
+pub fn estimate(roots: &Roots) -> Result<(u64, u64), String> {
+    let (files, _, _) = collect(roots, true, &mut |_| Ok(()))?;
+    let mut saved = 0_u64;
+    let mut downloads = 0_u64;
+    for file in files {
+        let total = if file.category == "downloads" {
+            &mut downloads
+        } else {
+            &mut saved
+        };
+        *total = total
+            .checked_add(file.fingerprint.bytes)
+            .ok_or("The backup size estimate is too large.")?;
+    }
+    Ok((saved, downloads))
+}
+
 fn create_private(path: &Path) -> Result<File, String> {
     let parent = path.parent().ok_or("Invalid staging path.")?;
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -765,6 +783,19 @@ mod tests {
                 .iter()
                 .any(|directory| directory.path == "config/texmf/empty")
         );
+    }
+
+    #[test]
+    fn estimates_saved_and_downloaded_data_without_credentials() {
+        let temp = Scratch::new();
+        let config = temp.directory("config");
+        let data = temp.directory("data");
+        fs::write(config.join("settings.json"), b"{}").unwrap();
+        fs::write(config.join("ai-prompts.md"), b"hello").unwrap();
+        fs::write(config.join("ai-keys.json"), b"secret").unwrap();
+        fs::create_dir(data.join("pandoc")).unwrap();
+        fs::write(data.join("pandoc/tool.exe"), b"tool").unwrap();
+        assert_eq!(estimate(&Roots { config, data }).unwrap(), (7, 4));
     }
 
     #[test]

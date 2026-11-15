@@ -562,7 +562,12 @@ mod tests {
         .unwrap();
         assert_eq!(prepared.recovered_documents, 1);
         assert_eq!(prepared.quarantined_downloads, 1);
-        assert!(prepared.adjustments.iter().any(|item| item.contains("On Launch")));
+        assert!(
+            prepared
+                .adjustments
+                .iter()
+                .any(|item| item.contains("On Launch"))
+        );
         let roots = Roots {
             config: config.clone(),
             data: config.clone(),

@@ -170,6 +170,15 @@ fn sync_parent(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn prune_empty_transaction_base(roots: &Roots) -> Result<(), String> {
+    let base = roots.config.join("restore-transactions");
+    // Other transactions or a completion report may still need this folder.
+    if fs::remove_dir(&base).is_ok() {
+        sync_parent(&base)?;
+    }
+    Ok(())
+}
+
 fn create_private(path: &Path) -> Result<File, String> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -605,8 +614,7 @@ pub fn abandon_preparing(roots: &Roots, journal: &Journal) -> Result<(), String>
     }
     let hash = tree_digest(&dir)?.ok_or("The restore preparation disappeared.")?;
     remove_matching(&dir, &hash)?;
-    let _ = fs::remove_dir(roots.config.join("restore-transactions"));
-    Ok(())
+    prune_empty_transaction_base(roots)
 }
 
 /// Before the first journal checkpoint only empty staging directories and an
@@ -641,7 +649,7 @@ pub fn abandon_unjournaled(roots: &Roots, id: &str) -> Result<bool, String> {
     }
     let hash = tree_digest(&dir)?.ok_or("Restore preparation data disappeared.")?;
     remove_matching(&dir, &hash)?;
-    let _ = fs::remove_dir(roots.config.join("restore-transactions"));
+    prune_empty_transaction_base(roots)?;
     Ok(true)
 }
 
@@ -722,8 +730,8 @@ pub fn cleanup(roots: &Roots, journal: &Journal) -> Result<(), String> {
         }
     }
     fs::remove_dir(&dir).map_err(|error| error.to_string())?;
-    let _ = fs::remove_dir(roots.config.join("restore-transactions"));
-    sync_parent(&dir)
+    sync_parent(&dir)?;
+    prune_empty_transaction_base(roots)
 }
 
 #[cfg(test)]

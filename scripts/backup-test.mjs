@@ -8,6 +8,8 @@ const temporary = process.env.TEMP;
 if (!temporary || !path.isAbsolute(temporary))
   throw new Error("The isolated test temporary folder is missing.");
 const backupPath = path.join(temporary, "synthetic-mdraft-backup.zip");
+const uiBackupPath = path.join(temporary, "synthetic-mdraft-ui.zip");
+const uiSafetyPath = path.join(temporary, "synthetic-mdraft-ui-safety.zip");
 const safetyPath = path.join(temporary, "synthetic-mdraft-safety.zip");
 const restartSafetyPath = path.join(temporary, "synthetic-mdraft-before-restart.zip");
 const secondSafetyPath = path.join(temporary, "synthetic-mdraft-before-safety-restore.zip");
@@ -69,6 +71,15 @@ function check(label, value) {
     console.error(`FAIL ${label}`);
   }
 }
+async function waitFor(expression, description) {
+  const deadline = Date.now() + 30_000;
+  for (;;) {
+    const value = await evaluate(expression);
+    if (value) return value;
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${description}.`);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+}
 
 try {
   const deadline = Date.now() + 60_000;
@@ -99,6 +110,84 @@ try {
   );
   check("downloaded tools are selected by default", ui.included);
   check("cancel closes backup options", ui.canceled);
+
+  // Stub only native pickers and message boxes; the UI and backup commands run
+  // for real against the isolated profile and this run's temporary folder.
+  await evaluate(`(() => {
+    const state = window.__backupUiTest = { saves: [${JSON.stringify(uiBackupPath)}, ${JSON.stringify(uiSafetyPath)}], messages: [] };
+    const original = window.fetch;
+    window.fetch = async function(input, options) {
+      const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+      const command = decodeURIComponent(url.pathname.slice(1));
+      if (url.hostname !== 'ipc.localhost') return original.call(this, input, options);
+      const args = typeof options?.body === 'string' ? JSON.parse(options.body) : {};
+      const response = value => new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json', 'Tauri-Response': 'ok' } });
+      if (command === 'plugin:dialog|save') return response(state.saves.shift() ?? null);
+      if (command === 'plugin:dialog|open') return response(${JSON.stringify(uiBackupPath)});
+      if (command === 'plugin:dialog|message') { state.messages.push(args.message); return response('Ok'); }
+      return original.call(this, input, options);
+    };
+    [...document.querySelectorAll('.prefs-button')].find(entry => entry.textContent.includes('Back Up App Data')).click();
+    const dialog = document.querySelector('.data-dialog[aria-label="Back up MDraft data"]');
+    dialog.querySelector('input[type=checkbox]').checked = false;
+  })()`);
+  await waitFor(
+    "document.querySelector('.data-dialog[aria-label=\"Back up MDraft data\"]')?.textContent.includes('Estimated saved data before compression')",
+    "the backup size estimate",
+  );
+  check("the backup options show an estimated saved-data size", true);
+  await evaluate(`(() => {
+    const dialog = document.querySelector('.data-dialog[aria-label="Back up MDraft data"]');
+    [...dialog.querySelectorAll('button')].find(entry => entry.textContent === 'Choose Location…').click();
+  })()`);
+  await waitFor(
+    "Boolean(document.querySelector('.data-dialog[aria-label=\"Backup saved\"]'))",
+    "the backup completion dialog",
+  );
+  const uiMessage = await evaluate(`(() => {
+    const dialog = document.querySelector('.data-dialog[aria-label="Backup saved"]');
+    const result = { text: dialog.textContent, canReveal: [...dialog.querySelectorAll('button')].some(entry => entry.textContent === 'Show in Folder') };
+    [...dialog.querySelectorAll('button')].find(entry => entry.textContent === 'Close').click();
+    return result;
+  })()`);
+  check(
+    "the backup button creates a verified ZIP and offers to reveal it",
+    uiMessage.text.includes("Verified ZIP") && uiMessage.canReveal && fs.existsSync(uiBackupPath),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  const beforeUiRestore = await evaluate("window.__TAURI_INTERNALS__.invoke('get_settings')");
+  await evaluate(`(() => {
+    [...document.querySelectorAll('.prefs-button')].find(entry => entry.textContent.includes('Restore Backup')).click();
+  })()`);
+  await waitFor(
+    "Boolean(document.querySelector('.data-dialog[aria-label=\"Restore backup\"]'))",
+    "the restore preview",
+  );
+  const previewText = await evaluate(`(() => {
+    const dialog = document.querySelector('.data-dialog[aria-label="Restore backup"]');
+    const text = dialog.textContent;
+    [...dialog.querySelectorAll('button')].find(entry => entry.textContent === 'Continue…').click();
+    return text;
+  })()`);
+  check("the restore button previews the versioned ZIP", previewText.includes("backup format 1"));
+  await waitFor(
+    "Boolean(document.querySelector('.data-dialog[aria-label=\"Review restore\"]'))",
+    "the final restore review",
+  );
+  const uiReview = await evaluate(`(() => {
+    const dialog = document.querySelector('.data-dialog[aria-label="Review restore"]');
+    const text = dialog.textContent;
+    [...dialog.querySelectorAll('button')].find(entry => entry.textContent === 'Cancel').click();
+    return text;
+  })()`);
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  const afterUiRestore = await evaluate("window.__TAURI_INTERNALS__.invoke('get_settings')");
+  check(
+    "the restore review creates a safety ZIP and cancel preserves settings",
+    uiReview.includes("synthetic-mdraft-ui-safety.zip") &&
+      fs.existsSync(uiSafetyPath) &&
+      JSON.stringify(beforeUiRestore) === JSON.stringify(afterUiRestore),
+  );
 
   const result = await evaluate(`(async () => {
     const invoke = window.__TAURI_INTERNALS__.invoke;

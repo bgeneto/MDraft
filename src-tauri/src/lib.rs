@@ -168,6 +168,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            backup::jobs::estimate_data_backup,
             backup::jobs::begin_data_backup,
             backup::jobs::begin_backup_buffer,
             backup::jobs::append_backup_buffer,

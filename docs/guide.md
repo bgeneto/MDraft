@@ -421,7 +421,9 @@ packages, prompts and current unsaved writing. Downloaded tools and packages
 are included unless you uncheck that option. The ZIP is not encrypted and may
 contain private writing and paths; store it somewhere private. API keys and
 documents saved outside the application folders are not included. Choose a new
-file name: backups do not overwrite existing files.
+file name: backups do not overwrite existing files. The size estimate covers
+saved data before compression; unsaved writing is added separately. After
+verification, you can show the finished ZIP in its folder.
 
 **Restore Backup…** checks the ZIP and lets you choose which available categories
 to restore. Before applying anything, MDraft asks where to save a verified safety

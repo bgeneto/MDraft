@@ -1,5 +1,6 @@
 //! App-free checks for bounded capture of current unsaved text.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { captureBackupDocuments, textFromString } from "../src/backup.ts";
 import { createRecoveredScheduler } from "../src/recovered-documents.ts";
 
@@ -74,6 +75,61 @@ await check("captures an empty dirty buffer", async () => {
     () => false,
   );
   assert.deepEqual(output.completed, { sequences: 0, bytes: 0 });
+});
+
+await check("captures a dirty buffer beyond the recovery journal limit", async () => {
+  const text = `${"a".repeat(16 * 1024 * 1024)}🌎 end`;
+  const digest = createHash("sha256");
+  let received = 0;
+  let finished = 0;
+  await captureBackupDocuments(
+    "job",
+    [{ metadata, text: textFromString(text) }],
+    {
+      async begin() {},
+      async append(_job, _id, _sequence, bytes) {
+        digest.update(bytes);
+        received += bytes.length;
+        return received;
+      },
+      async finish(_job, _id, _sequences, bytes) {
+        finished = bytes;
+      },
+    },
+    () => false,
+  );
+  assert.equal(finished, Buffer.byteLength(text));
+  assert.equal(digest.digest("hex"), createHash("sha256").update(text).digest("hex"));
+});
+
+await check("captures more than 64 unsaved documents in order", async () => {
+  const documents = Array.from({ length: 70 }, (_, index) => ({
+    metadata: { ...metadata, id: `draft-${index}` },
+    text: textFromString(`draft ${index}`),
+  }));
+  const finished = [];
+  let received = 0;
+  await captureBackupDocuments(
+    "job",
+    documents,
+    {
+      async begin() {
+        received = 0;
+      },
+      async append(_job, _id, _sequence, bytes) {
+        received += bytes.length;
+        return received;
+      },
+      async finish(_job, id, _sequences, bytes) {
+        finished.push({ id, bytes });
+      },
+    },
+    () => false,
+  );
+  assert.deepEqual(
+    finished,
+    documents.map(({ metadata: item, text }) => ({ id: item.id, bytes: text.length })),
+  );
 });
 
 await check("rejects unpaired surrogates without replacement", async () => {

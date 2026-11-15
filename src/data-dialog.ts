@@ -1,6 +1,8 @@
 //! The user-facing backup, restore and recovered-document decisions.
 
 import type {
+  DataBackupEstimate,
+  DataBackupResult,
   DataBackupProgress,
   DataRestorePreview,
   DataRestoreReview,
@@ -38,10 +40,11 @@ function close(dialog: HTMLDialogElement, previous: Element | null): void {
     previous.focus({ preventScroll: true });
 }
 
-function paragraph(parent: HTMLElement, value: string): void {
+function paragraph(parent: HTMLElement, value: string): HTMLParagraphElement {
   const p = document.createElement("p");
   p.textContent = value;
   parent.append(p);
+  return p;
 }
 
 function button(
@@ -78,7 +81,7 @@ function checkbox(
   return input;
 }
 
-export function backupOptions(): Promise<boolean | null> {
+export function backupOptions(estimate: Promise<DataBackupEstimate>): Promise<boolean | null> {
   const { dialog, content, actions, previous } = shell("Back up MDraft data");
   paragraph(
     content,
@@ -87,6 +90,24 @@ export function backupOptions(): Promise<boolean | null> {
   paragraph(content, "The ZIP is not encrypted and may contain private writing and file paths.");
   paragraph(content, "Choose a new file name; existing files are not overwritten.");
   const downloads = checkbox(content, "Include downloaded tools and packages", true);
+  const size = paragraph(content, "Estimating saved data…");
+  let estimated: DataBackupEstimate | null = null;
+  const updateSize = () => {
+    if (!estimated) return;
+    const bytes = estimated.savedBytes + (downloads.checked ? estimated.downloadBytes : 0);
+    size.textContent = `Estimated saved data before compression: ${formatBytes(bytes)}. Unsaved writing is added separately.`;
+  };
+  downloads.addEventListener("change", updateSize);
+  void estimate.then(
+    (result) => {
+      estimated = result;
+      updateSize();
+    },
+    () => {
+      size.textContent =
+        "The size estimate is unavailable; MDraft will check the data when creating the backup.";
+    },
+  );
   paragraph(
     content,
     "If omitted, those tools and packages may need to be set up again after recovery.",
@@ -101,6 +122,29 @@ export function backupOptions(): Promise<boolean | null> {
     dialog.addEventListener("cancel", (event) => {
       event.preventDefault();
       finish(null);
+    });
+    dialog.showModal();
+  });
+}
+
+export function backupComplete(result: DataBackupResult): Promise<boolean> {
+  const { dialog, content, actions, previous } = shell("Backup saved");
+  paragraph(content, `Verified ZIP: ${result.path}`);
+  paragraph(
+    content,
+    `${formatBytes(result.bytes)} · ${result.files} files · captured ${new Date(result.capturedAtMs).toLocaleString()}`,
+  );
+  paragraph(content, "Keep this unencrypted ZIP somewhere private.");
+  return new Promise((resolve) => {
+    const finish = (reveal: boolean) => {
+      close(dialog, previous);
+      resolve(reveal);
+    };
+    button(actions, "Close", () => finish(false), true);
+    button(actions, "Show in Folder", () => finish(true));
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      finish(false);
     });
     dialog.showModal();
   });

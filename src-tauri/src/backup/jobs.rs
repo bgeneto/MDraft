@@ -444,6 +444,71 @@ fn output_manifest(data: &CaptureData, completed_ms: u64) -> format::Manifest {
     }
 }
 
+#[cfg(windows)]
+fn available_space(path: &Path) -> Result<u64, String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    use windows::core::PCWSTR;
+    let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut available = 0;
+    // The buffer is null-terminated and remains alive for the duration of the call.
+    unsafe { GetDiskFreeSpaceExW(PCWSTR(path.as_ptr()), Some(&mut available), None, None) }
+        .map_err(|error| format!("Could not check available backup space: {error}"))?;
+    Ok(available)
+}
+
+#[cfg(unix)]
+fn available_space(path: &Path) -> Result<u64, String> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| "The backup folder has an invalid path.")?;
+    let mut value = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // statvfs initializes the structure on success; the path is null-terminated.
+    if unsafe { libc::statvfs(path.as_ptr(), value.as_mut_ptr()) } != 0 {
+        return Err(format!(
+            "Could not check available backup space: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let value = unsafe { value.assume_init() };
+    Ok((value.f_bavail as u64).saturating_mul(value.f_frsize as u64))
+}
+
+fn archive_space_bound(
+    files: &[format::InputFile],
+    directories: &[format::Directory],
+) -> Result<u64, String> {
+    let mut bytes = 64 * 1024_u64;
+    for file in files {
+        let length = fs::metadata(&file.source)
+            .map_err(|error| format!("Could not inspect staged backup data: {error}"))?
+            .len();
+        // Deflate can expand incompressible data. Include room for ZIP records
+        // and both names and JSON-escaped manifest paths for each entry.
+        bytes = bytes
+            .saturating_add(length)
+            .saturating_add(length / 100)
+            .saturating_add(1024)
+            .saturating_add((file.path.len() as u64).saturating_mul(4));
+    }
+    for directory in directories {
+        bytes = bytes
+            .saturating_add(1024)
+            .saturating_add((directory.path.len() as u64).saturating_mul(4));
+    }
+    Ok(bytes)
+}
+
+fn require_archive_space(available: u64, required: u64) -> Result<(), String> {
+    if available < required {
+        return Err(
+            "There may not be enough space for the backup. Choose a folder with more free space or free space and try again."
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 fn finish_backup(
     job: &Arc<Job>,
     data: CaptureData,
@@ -483,6 +548,10 @@ fn finish_backup(
         .path
         .parent()
         .ok_or("Invalid backup destination.")?;
+    require_archive_space(
+        available_space(parent)?,
+        archive_space_bound(&captured.files, &manifest.directories)?,
+    )?;
     let temporary = parent.join(format!(".mdraft-backup-{}.partial", job.id));
     let output = private_file(&temporary)?;
     let result = (|| {
@@ -517,6 +586,31 @@ fn finish_backup(
         })?;
     }
     result.map(|result| (result, retained))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupEstimate {
+    saved_bytes: u64,
+    download_bytes: u64,
+}
+
+#[tauri::command]
+pub async fn estimate_data_backup(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<BackupEstimate, String> {
+    owner(&window)?;
+    let roots = roots(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let (saved_bytes, download_bytes) = snapshot::estimate(&roots)?;
+        Ok(BackupEstimate {
+            saved_bytes,
+            download_bytes,
+        })
+    })
+    .await
+    .unwrap_or_else(|error| Err(format!("Could not estimate backup size: {error}")))
 }
 
 #[tauri::command]
@@ -1210,6 +1304,25 @@ mod tests {
         assert!(format::verify_archive(&destination, None).is_ok());
         assert!(test_gate.writer().is_ok());
         remove_staging(&job).unwrap();
+    }
+
+    #[test]
+    fn checks_destination_space_before_writing_the_zip() {
+        let temp = Scratch::new();
+        let source = temp.0.join("source");
+        fs::write(&source, b"saved text").unwrap();
+        let files = [format::InputFile {
+            path: "config/settings.json".into(),
+            category: "settings".into(),
+            source,
+            executable: false,
+        }];
+        let required = archive_space_bound(&files, &[]).unwrap();
+        assert!(required > 10);
+        assert!(require_archive_space(required - 1, required).is_err());
+        assert!(require_archive_space(required, required).is_ok());
+        assert!(available_space(&temp.0).unwrap() > 0);
+        assert!(!temp.0.join("backup.zip").exists());
     }
 
     #[test]

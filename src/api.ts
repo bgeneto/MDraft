@@ -697,6 +697,13 @@ export interface DataBackupProgress {
   bytes: number;
 }
 
+export interface DataBackupEstimate {
+  savedBytes: number;
+  downloadBytes: number;
+}
+
+export const estimateDataBackup = () => invoke<DataBackupEstimate>("estimate_data_backup");
+
 export interface DataBackupResult {
   path: string;
   bytes: number;

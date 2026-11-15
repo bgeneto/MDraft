@@ -170,6 +170,7 @@ import { createRecoveryScheduler, newRecoveryId } from "./recovery";
 import { createRecoveredScheduler } from "./recovered-documents";
 import { captureBackupDocuments, textFromString, type BackupDocument } from "./backup";
 import {
+  backupComplete,
   backupOptions,
   chooseRecoveredDocuments,
   confirmRestore,
@@ -12890,7 +12891,7 @@ async function backupAppData(): Promise<void> {
     toast("Another application-data operation is already running.", 4200);
     return;
   }
-  const includeDownloads = await backupOptions();
+  const includeDownloads = await backupOptions(api.estimateDataBackup());
   if (includeDownloads === null) return;
   const destination = await saveDialog({
     title: "Save MDraft backup",
@@ -12920,10 +12921,8 @@ async function backupAppData(): Promise<void> {
     await transferBackupDocuments(job, snapshot.documents);
     const result = await api.finishDataBackup(job.id);
     progress.close();
-    await message(
-      `Backup saved and verified:\n${result.path}\n\n${result.files} files were included. Keep this unencrypted ZIP somewhere private.`,
-      { title: "Backup complete", kind: "info" },
-    );
+    if (await backupComplete(result))
+      await revealItemInDir(result.path).catch((error: unknown) => toast(String(error)));
   } catch (error) {
     progress.close();
     if (!job.canceled)
