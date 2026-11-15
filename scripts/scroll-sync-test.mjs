@@ -491,7 +491,9 @@ async function probeGestures(mode) {
       }
       const before = await paneState();
       await clickAt(Math.min(own.left + 6, (own.left + own.right) / 2), centre(own));
-      await sleep(400);
+      // Past the click-sequence delay and the glide in which the clicked pane
+      // takes what a clamped other pane could not (ABSORB_DELAY_MS + 180 ms).
+      await sleep(900);
       const after = await paneState();
       const state = onlyModes.length
         ? await page.evaluate(`window.__mdraftDebug?.syncState?.() ?? null`)
@@ -505,16 +507,21 @@ async function probeGestures(mode) {
       // One wheel tick in the clicked pane: the other pane may follow by the
       // local slope, and must not jump back to an older alignment.
       let tick = null;
-      if (i % 4 === 0) {
-        await clickAt(Math.min(own.left + 6, (own.left + own.right) / 2), centre(own));
-        await sleep(300);
+      // The clicked row may have glided; the repeat click aims where it is now.
+      const at = i % 4 === 0 ? (direction === "source" ? a : b) : null;
+      if (at) {
+        await clickAt(Math.min(at.left + 6, (at.left + at.right) / 2), centre(at));
+        await sleep(900);
         const again = await paneState();
-        repeatMoved = Math.abs(again[otherPane] - after[otherPane]);
-        const wheelX = Math.min(own.left + 6, (own.left + own.right) / 2);
+        repeatMoved = Math.max(
+          Math.abs(again[otherPane] - after[otherPane]),
+          Math.abs(again[direction] - after[direction]),
+        );
+        const wheelX = Math.min(at.left + 6, (at.left + at.right) / 2);
         await page.send("Input.dispatchMouseEvent", {
           type: "mouseWheel",
           x: wheelX,
-          y: centre(own),
+          y: centre(at),
           deltaX: 0,
           deltaY: 60,
         });
@@ -525,7 +532,7 @@ async function probeGestures(mode) {
         await page.send("Input.dispatchMouseEvent", {
           type: "mouseWheel",
           x: wheelX,
-          y: centre(own),
+          y: centre(at),
           deltaX: 0,
           deltaY: 60,
         });
@@ -566,7 +573,14 @@ async function probeGestures(mode) {
       p95: percentile(errors, 0.95),
       max: errors.length ? Math.max(...errors) : null,
       counterpartVisible: samples.filter((sample) => sample.visible).length,
-      ownPaneMoved: samples.filter((sample) => sample.ownMoved > 0.5).length,
+      // Only a clamped other pane lets the clicked pane move, and then it must
+      // have finished the level the other pane could not.
+      ownPaneMoved: samples.filter((sample) => !sample.clamped && sample.ownMoved > 0.5).length,
+      absorbed: samples.filter((sample) => sample.clamped && sample.ownMoved > 0.5).length,
+      absorbedUnlevel: samples.filter(
+        (sample) =>
+          sample.clamped && sample.ownMoved > 0.5 && (sample.error === null || sample.error > 1),
+      ).length,
       otherPaneMoved: samples.filter((sample) => sample.otherMoved > 0.5).length,
       repeatMoved: samples.filter((sample) => sample.repeatMoved > 0.5).length,
       // The first tick after a click must do what the next tick does: the
@@ -619,8 +633,13 @@ async function probeGestures(mode) {
     );
     check(
       summary.ownPaneMoved === 0,
-      `${label} never scrolls that pane`,
+      `${label} scrolls that pane only when the other one is clamped`,
       `${summary.ownPaneMoved}`,
+    );
+    check(
+      summary.absorbedUnlevel === 0,
+      `${label} that moved its own pane leaves the counterpart level (<= 1px)`,
+      JSON.stringify({ absorbed: summary.absorbed, unlevel: summary.absorbedUnlevel }),
     );
     check(
       summary.repeatMoved === 0,

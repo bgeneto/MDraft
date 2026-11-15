@@ -4,6 +4,7 @@ import {
   ScrollIndex,
   ScrollOwnership,
   SyncReference,
+  absorbResidual,
   blockCorrection,
   chooseScrollRegion,
   clampScroll,
@@ -208,6 +209,24 @@ check("levelling is bounded by the distance the reader scrolled", () => {
   assert.equal(levelStep(-4, 40, 30), -4);
   assert.equal(levelStep(-100, 0, 0), 0);
   assert.equal(levelStep(0, 40, 30), 0);
+});
+check("the gesture's own pane takes what the clamped other pane could not", () => {
+  // A source preamble: the preview is at its top and its counterpart is 314 px
+  // above the clicked row, so the source scrolls down by that much.
+  assert.equal(absorbResidual(-314, 0, 5000), 314);
+  // Near the end of the source the counterpart is below and the preview moves up.
+  assert.equal(absorbResidual(200, 900, 4000), -200);
+});
+check("absorbing is clamped to the own pane's range", () => {
+  assert.equal(absorbResidual(-314, 0, 100), 100);
+  assert.equal(absorbResidual(-314, 100, 100), 0);
+  assert.equal(absorbResidual(50, 20, 1000), -20);
+});
+check("a small or unmeasurable leftover never moves the gesture's pane", () => {
+  assert.equal(absorbResidual(-23, 0, 5000), 0);
+  assert.equal(absorbResidual(NaN, 0, 5000), 0);
+  assert.equal(absorbResidual(-100, NaN, 5000), 0);
+  assert.equal(absorbResidual(-30, 0, 5000, 40), 0);
 });
 check("levelling never turns the follower against the scroll direction", () => {
   assert.equal(levelStep(100, 40, 6), 6);
