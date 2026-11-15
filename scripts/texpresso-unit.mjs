@@ -409,6 +409,11 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     "a double-click marks the word it names and leaves the caret",
     JSON.stringify(word),
   );
+  check(
+    markForPreviewGesture(source, 3, 3, 2, "none") === null &&
+      markForPreviewGesture(source, 31, 31, 2, "exact") === null,
+    "a double-click without a word marks nothing, never its paragraph or line",
+  );
   const exact = markForPreviewGesture(source, 31, 31, 1, "exact");
   check(
     exact?.unit === "line" &&

@@ -746,6 +746,10 @@
   const installClicks = () => {
     const box = pagesBox();
     const arm = (event) => {
+      // `dblclick` fires after the second press, which may already have brought
+      // the word. Arming again would forward whatever the engine selects next
+      // (its caret, settling) as a second answer that replaces the word.
+      if (event.type === "dblclick" && !pendingClick) return;
       // The height that was clicked, below the pages' top edge: the same
       // coordinate `reveal` takes, so the host can level the source with it.
       clickY = event.clientY - box.getBoundingClientRect().top;
@@ -801,7 +805,11 @@
         return result;
       }
       if (pendingClick && performance.now() - pendingClick < 1500) {
-        if (clickDetail < 2 || range.to > range.from) pendingClick = 0;
+        // A double-click's answer is the word it names. A caret that arrives
+        // meanwhile (the first press's late lookup, or the engine collapsing
+        // its selection) is not an answer: sent, the host marks its paragraph.
+        if (clickDetail >= 2 && range.to === range.from) return result;
+        pendingClick = 0;
         if (clickDetail < 2 && range.to === range.from) {
           const started = performance.now();
           const hit = resolveClick(range.head, clickPoint);
