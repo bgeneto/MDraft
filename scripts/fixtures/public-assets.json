@@ -263,6 +263,7 @@
     "CONTRIBUTING.md",
     "README.md",
     "docs/architecture.md",
+    "docs/backup-format.md",
     "docs/export.md",
     "docs/guide.md",
     "docs/known-issues.md",

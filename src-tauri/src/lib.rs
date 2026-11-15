@@ -1,6 +1,7 @@
 //! MDraft — a Tauri 2 markdown editor.
 
 mod ai;
+mod backup;
 mod cancel_registry;
 mod clipboard;
 mod documents;
@@ -59,21 +60,20 @@ pub fn run() {
         }
     }
 
-    // A pending marker means the previous session asked for a data purge. No
-    // window may exist when that pass runs: WebView2 keeps its profile open and
-    // the window-state plugin writes `.window-state.json` on the ordinary exit
-    // path, both of which would recreate files just after the deletion.
+    // Purge and restore must resolve before any WebView or settings load. The
+    // configured windows are built in setup after the single-instance plugin
+    // has acquired its lock and any interrupted transaction has been resolved.
     let purge_pending = purge::pending_for(&context.config().identifier);
-    if purge_pending {
-        for window in &mut context.config_mut().app.windows {
-            window.create = false;
-        }
-    }
     // Kept in Rust rather than tauri.conf.json so the print surface reads the
     // same string; see `html_preview::WEBVIEW2_BROWSER_ARGS`.
     #[cfg(windows)]
     for window in &mut context.config_mut().app.windows {
         window.additional_browser_args = Some(html_preview::WEBVIEW2_BROWSER_ARGS.into());
+    }
+
+    let startup_windows = context.config().app.windows.clone();
+    for window in &mut context.config_mut().app.windows {
+        window.create = false;
     }
 
     // Wayland has no window-icon property for GTK3 applications: the
@@ -92,6 +92,8 @@ pub fn run() {
     }
 
     let app = tauri::Builder::default()
+        .manage(backup::jobs::Jobs::default())
+        .manage(backup::inbox_store::Transfers::default())
         .manage(html_preview::PreviewStore::default())
         .manage(clipboard::ClipboardStore::new())
         .manage(fonts::FontCatalog::default())
@@ -130,8 +132,26 @@ pub fn run() {
             if purge_pending {
                 purge::run_and_restart(app.handle());
             }
+            match backup::restart::recover_app(app.handle()) {
+                Ok(true) => {
+                    let env = app.handle().env();
+                    app.handle().cleanup_before_exit();
+                    tauri::process::restart(&env);
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+                    let handle = app.handle().clone();
+                    app.handle().dialog().message(format!(
+                        "MDraft could not safely complete or roll back a restore. Your existing files and safety backup were preserved.\n\n{error}\n\nOpen MDraft again to retry."
+                    )).title("Restore requires attention").kind(MessageDialogKind::Error)
+                        .show(move |_| handle.exit(1));
+                    return Ok(());
+                }
+            }
             // A crash leaves session workspaces behind; they are never reused
-            // across app sessions.
+            // across app sessions. Recovery may have restarted the app first,
+            // in which case the next startup removes them.
             latex_native::cleanup_session(app.handle());
             let state = AppState::load(app.handle());
             // The menu is built after the state is managed so its check marks
@@ -146,9 +166,36 @@ pub fn run() {
             app.manage(state);
             let menu = menu::build(app.handle(), &menu_state)?;
             app.set_menu(menu)?;
+            for config in startup_windows.iter().filter(|config| config.create) {
+                tauri::WebviewWindowBuilder::from_config(app.handle(), config)?.build()?;
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            backup::jobs::estimate_data_backup,
+            backup::jobs::begin_data_backup,
+            backup::jobs::begin_backup_buffer,
+            backup::jobs::append_backup_buffer,
+            backup::jobs::finish_backup_buffer,
+            backup::jobs::finish_data_backup,
+            backup::jobs::cancel_data_backup,
+            backup::jobs::inspect_data_restore,
+            backup::jobs::begin_restore_safety_backup,
+            backup::jobs::finish_restore_safety_backup,
+            backup::jobs::release_restore_for_close,
+            backup::jobs::arm_data_restore,
+            backup::restart::get_restore_report,
+            backup::restart::acknowledge_restore_report,
+            backup::inbox_store::list_recovered_documents,
+            backup::inbox_store::begin_recovered_read,
+            backup::inbox_store::read_recovered_chunk,
+            backup::inbox_store::cancel_recovered_read,
+            backup::inbox_store::begin_recovered_revision,
+            backup::inbox_store::append_recovered_revision,
+            backup::inbox_store::finish_recovered_revision,
+            backup::inbox_store::cancel_recovered_revision,
+            backup::inbox_store::forget_recovered_document,
+            backup::inbox_store::save_recovered_copies,
             latex::latex_status,
             latex::texpresso_status,
             latex::install_texpresso,

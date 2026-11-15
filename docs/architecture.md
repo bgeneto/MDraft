@@ -54,6 +54,15 @@ applied by the frontend. A working control needs both read and write behavior,
 and rendering/export paths must consume the setting consistently. Unsupported
 preferences are explanatory notes.
 
+Application backup and restore live in `src-tauri/src/backup/`. The source
+registry captures known stores and immutable editor buffers, and writes a
+versioned ZIP with per-file SHA-256 hashes. Restore validates into staging,
+creates a verified safety ZIP, and journals category replacements before a
+headless restart. Startup resolves interrupted transactions before constructing
+the main window or loading settings. Recovered writing is kept in an independent
+inbox with atomic revisions. The maintained archive contract and exclusions are
+described in [backup-format.md](backup-format.md).
+
 The application performs no telemetry or startup network requests. Downloads and
 AI operations follow the explicit user actions and controls documented in the
 README. A document can load resources from its own markup. On Windows the HTML

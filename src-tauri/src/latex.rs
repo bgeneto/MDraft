@@ -334,6 +334,7 @@ pub fn latex_engine_available(app: AppHandle, engine: String) -> Result<bool, St
 #[tauri::command]
 pub async fn install_latex_engine(app: AppHandle, engine: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let _writer = crate::backup::gate::writer()?;
         let _install = INSTALL_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -462,6 +463,36 @@ fn legacy_candidates(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(candidates)
 }
 
+/// Resolve the existing layout for a backup without migrating or downloading.
+pub(crate) fn backup_directory(
+    root: &Path,
+    keys: &crate::backup::snapshot::CredentialIds,
+) -> Result<PathBuf, String> {
+    use std::io::Read;
+    let target = root.join("latex");
+    let verify = |assets: &Path| {
+        config().profiles.values().any(|profile| {
+            profile.assets.iter().all(|asset| {
+                let Ok(mut file) = crate::backup::snapshot::open_regular(assets, Path::new(&asset.name)) else { return false; };
+                if crate::backup::snapshot::is_credential_file(&file, keys).unwrap_or(true) {
+                    return false;
+                }
+                let Ok(metadata) = file.metadata() else { return false; };
+                if metadata.len() > 64 * 1024 * 1024 { return false; }
+                let mut bytes = Vec::with_capacity(metadata.len() as usize);
+                Read::by_ref(&mut file).take(64 * 1024 * 1024 + 1).read_to_end(&mut bytes).is_ok()
+                    && bytes.len() <= 64 * 1024 * 1024
+                    && digest(&bytes) == asset.sha256
+            })
+        })
+    };
+    let candidates = legacy_candidates_matching(root, &verify)?;
+    if candidates.len() > 1 || (!candidates.is_empty() && target.exists()) {
+        return Err("Multiple LaTeX data directories exist. They were preserved; resolve the conflict before backing up.".into());
+    }
+    Ok(candidates.into_iter().next().unwrap_or(target))
+}
+
 fn migrate_directory_matching(
     root: &Path,
     verify: &impl Fn(&Path) -> bool,
@@ -483,6 +514,7 @@ fn migrate_directory_matching(
 }
 
 fn migrate_directory(root: &Path) -> Result<PathBuf, String> {
+    let _writer = crate::backup::gate::writer()?;
     // Check for recognizable but incomplete directories before making changes.
     legacy_candidates(root)?;
     migrate_directory_matching(root, &verified_legacy_assets)
@@ -543,6 +575,7 @@ pub fn texpresso_status(app: AppHandle) -> Result<bool, String> {
 #[tauri::command]
 pub async fn install_texpresso(app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let _writer = crate::backup::gate::writer()?;
         // A second download waits, then finds the verified files in place.
         let _install = INSTALL_LOCK
             .lock()
@@ -678,6 +711,7 @@ pub fn latex_texpresso_revoke(token: String) {
 
 #[tauri::command]
 pub fn latex_clear_cache(app: AppHandle) -> Result<u64, String> {
+    let _writer = crate::backup::gate::writer()?;
     let root = directory(&app)?;
     let mirror = root.join("mirror");
     let _guard = CACHE_LOCK
@@ -706,6 +740,7 @@ fn download(url: &str) -> Result<Vec<u8>, String> {
 }
 
 pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
+    let _writer = crate::backup::gate::writer()?;
     let parent = path.parent().ok_or("Invalid cache path")?;
     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let temp = parent.join(format!(
@@ -742,6 +777,7 @@ pub(crate) fn digest(data: &[u8]) -> String {
 #[tauri::command]
 pub async fn install_latex(app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let _writer = crate::backup::gate::writer()?;
         // A second Download waits and then finds the verified assets in place.
         let _install = INSTALL_LOCK
             .lock()
@@ -976,6 +1012,7 @@ pub fn serve(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeResp
                     }
                 }
                 CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
+                let _data_writer = crate::backup::gate::writer()?;
                 if let Some(job) = job {
                     let _ = app.emit("latex-package-download", (job, true));
                 }
