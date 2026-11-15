@@ -153,6 +153,24 @@ procedure for `.fmt` files distributed with an engine release remain part of tha
 release's evidence. See <https://tug.org/texlive/copying.html> and the scope in
 [`docs/licensing.md`](docs/licensing.md).
 
+## TeXpresso preview: PDF.js and its data
+
+The TeXpresso preview draws a PDF image with PDF.js 6.4.299, which MDraft
+downloads with the engine from its pinned origin into `vendor/pdfjs/`. The
+license files below travel in that folder beside the files they cover, and are
+pinned like the rest of the engine.
+
+| Component | License | Notice in `vendor/pdfjs/` |
+| --- | --- | --- |
+| PDF.js (`pdf.min.mjs`, `pdf.worker.min.mjs`) | Apache-2.0 | [`LICENSES/Apache-2.0.txt`](LICENSES/Apache-2.0.txt) |
+| Adobe CMaps (`cmaps/`) | BSD-3-Clause (Adobe) | `cmaps/LICENSE` |
+| Foxit standard fonts (`standard_fonts/Foxit*.pfb`) | BSD-3-Clause (PDFium Authors) | `standard_fonts/LICENSE_FOXIT` |
+| Liberation Sans (`standard_fonts/LiberationSans-*.ttf`) | GPL-2.0 with the Liberation font exception | `standard_fonts/LICENSE_LIBERATION`; [`LICENSES/GPL-2.0.txt`](LICENSES/GPL-2.0.txt) |
+| JBIG2 decoder (`wasm/jbig2*`) | BSD-3-Clause (PDFium Authors); PDF.js port Apache-2.0 | `wasm/LICENSE_JBIG2`, `wasm/LICENSE_PDFJS_JBIG2` |
+| OpenJPEG decoder (`wasm/openjpeg*`) | BSD-2-Clause; PDF.js port BSD-2-Clause | `wasm/LICENSE_OPENJPEG`, `wasm/LICENSE_PDFJS_OPENJPEG` |
+| QCMS colour management (`wasm/qcms_bg.wasm`) | MIT; PDF.js port MIT | `wasm/LICENSE_QCMS`, `wasm/LICENSE_PDFJS_QCMS` |
+| ICC profile (`iccs/`) | CC0-1.0 | `iccs/LICENSE` |
+
 ## Host-provided and optional peers
 
 The library build treats these packages as peer dependencies and does not copy them

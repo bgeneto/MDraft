@@ -491,6 +491,22 @@ const SUITES = [
     fixtures: ["samples/latex-on-demand/main.tex", "samples/latex-on-demand/figures/dot.png"],
   },
   {
+    // The preview draws a PDF image with pdf.js from the pinned engine's
+    // vendor/pdfjs/ folder; the export reads it through xdvipdfmx. The PDF
+    // itself is generated, because the repository refuses committed PDFs.
+    id: "latex-pdf-image",
+    title: "PDF images in the TeXpresso preview",
+    kind: "cdp",
+    script: "latex-pdf-image-test.mjs",
+    prepare: "latex-pdf-image-fixture.mjs",
+    doc: "samples/latex-pdf-image/main.tex",
+    safeWithInstalledApp: true,
+    optIn: true,
+    origin: true,
+    reuseProfile: true,
+    writesDoc: false,
+  },
+  {
     // Registers a private two-root library outside the project and proves,
     // through compiled PDF text, that the bundled engine resolved the class,
     // a transitive package, a .def and a Lua module from it in order. With
@@ -2402,12 +2418,23 @@ async function main() {
       const started = Date.now();
       process.stdout.write(`${suite.id.padEnd(10)} ... `);
       let result;
+      // A fixture the repository may not hold (a PDF) is generated before the
+      // layer's instance starts, so the first snapshot already contains it.
+      const prepared = suite.prepare
+        ? await run(process.execPath, [path.join("scripts", suite.prepare)])
+        : null;
       // A layer whose fixture is not in this checkout, or whose external tool is
       // not installed, could never pass; failing it would read as a regression.
       const missingFixture = suite.doc && !fs.existsSync(path.join(repoRoot, suite.doc));
       const missingTool =
         suite.requires === "pandoc" && (await run("pandoc", ["--version"])).code !== 0;
-      if (suite.kind === "close") {
+      if (prepared && prepared.code !== 0) {
+        result = {
+          ok: false,
+          detail: `${suite.prepare} exited ${prepared.code}`,
+          output: prepared.out + prepared.err,
+        };
+      } else if (suite.kind === "close") {
         result = {
           ok: true,
           skipped: true,

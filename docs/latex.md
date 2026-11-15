@@ -590,6 +590,17 @@ the patch script, regenerating the file, re-pinning it and uploading it to the
 origin. `scripts/texpresso-origin-check.mjs` proves an origin serves exactly
 the pinned engine, bundle and digest table before a release.
 
+The preview's renderer draws PNG and JPEG images itself, but a **PDF image goes
+through PDF.js**, loaded from `vendor/pdfjs/` next to `ocaml.js`. The release
+ships only `pdf.min.mjs`. Without the worker and the `cmaps/`, `standard_fonts/`,
+`wasm/` and `iccs/` data, every PDF figure showed its file name in a frame (the
+export never did: `xdvipdfmx` reads the PDF itself). That `pdf.min.mjs` is
+byte for byte `pdfjs-dist` 6.4.299, so `scripts/texpresso-pdfjs-assets.mjs` takes
+the rest from that package and pins it. Because the install downloads every
+pinned file, upload a changed `vendor/pdfjs/` to the origin and check it before
+the pins merge. Otherwise no build can install the engine. The opt-in
+`latex-pdf-image` layer proves the figure is drawn and exported.
+
 The preview has no second bundled engine to fall back to. A WebView without
 JSPI, a project with a non-UTF-8 text file, a project file inside the reserved
 `.mdraft-texmf` folder, and a frame that stops responding each stop the frame
