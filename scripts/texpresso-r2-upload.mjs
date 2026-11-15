@@ -28,6 +28,8 @@
 // right size, so an interrupted run is simply started again. Every file is
 // hashed before it leaves: the hash must equal the mirror's SHA256SUMS line,
 // and it is the signed payload hash, so R2 refuses a body damaged in transit.
+// An engine file pinned in src-tauri/texpresso.json must match its pin, and
+// --release must be the pinned release; otherwise nothing is sent.
 // No dependencies; credentials come from the environment only.
 import { createHash, createHmac } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
@@ -219,9 +221,34 @@ async function plan() {
     if (existsSync(digests)) items.push({ key: prefix + "digests.bin", file: digests });
   }
   if (engineRoot) {
+    // The application refuses an engine file that differs from its pin, so a
+    // pinned file is checked here, before anything is sent (also in a dry run).
+    // The patched ocaml-worker.js once stayed un-uploaded because nothing did.
+    const pins = JSON.parse(
+      await readFile(new URL("../src-tauri/texpresso.json", import.meta.url), "utf8"),
+    );
+    if (options.release !== pins.appRelease)
+      throw new Error(
+        `--release ${options.release} is not the pinned release ${pins.appRelease}; ` +
+          "update src-tauri/texpresso.json first.",
+      );
+    const pinned = new Map(pins.assets.map((asset) => [asset.path, asset]));
     const prefix = `engine/${options.release}/`;
-    for (const relative of await walk(engineRoot))
-      items.push({ key: prefix + relative, file: path.join(engineRoot, relative) });
+    for (const relative of await walk(engineRoot)) {
+      const file = path.join(engineRoot, relative);
+      const pin = pinned.get(relative);
+      if (pin) {
+        const bytes = await readFile(file);
+        const hash = sha256(bytes);
+        if (bytes.length !== pin.bytes || hash !== pin.sha256)
+          throw new Error(
+            `${relative} does not match its pin in src-tauri/texpresso.json ` +
+              `(${bytes.length} bytes, ${hash}; pinned ${pin.bytes} bytes, ${pin.sha256}). ` +
+              "For ocaml-worker.js, produce it with scripts/texpresso-patch-worker.mjs.",
+          );
+      } else console.log(`  note: ${relative} has no pin; the application never verifies it`);
+      items.push({ key: prefix + relative, file, sha256: pin?.sha256 });
+    }
   }
   return items;
 }
