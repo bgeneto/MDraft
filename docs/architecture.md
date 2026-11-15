@@ -41,9 +41,11 @@ explicitly selected native distributions. TeXpresso runs in a separate frame
 served by Rust from the application origin; downloaded engine bytes are pinned
 by SHA-256. A bounded project manifest lets the engine fetch a file it actually
 opens through a per-frame capability on the same origin, without predicting
-every package's file names; native builds stage that manifest from the project
-root. Shell escape and project executables remain disabled. Native tools are
-external programs running with the user's permissions.
+every package's file names; native builds copy that manifest into a session
+workspace, reuse its auxiliary files and caches, and decide another pass or a
+bibliography tool from the generated file state. Project files are copied, never
+hard-linked. Shell escape and project executables remain disabled. Native tools
+are external programs running with the user's permissions.
 
 ## Preferences and external work
 

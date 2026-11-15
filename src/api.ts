@@ -1186,6 +1186,8 @@ export const latexNativeCompile = (request: {
   root?: string;
   manifest?: string[];
   texmf?: LatexTexmfSnapshot;
+  /** Recompile from scratch: discard this project's session workspace first. */
+  clean?: boolean;
 }) => invoke<LatexNativeResult>("latex_native_compile", { request });
 export const latexNativeCancel = (job: string) => invoke<void>("latex_native_cancel", { job });
 /**

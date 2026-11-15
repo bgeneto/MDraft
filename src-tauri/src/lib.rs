@@ -130,6 +130,9 @@ pub fn run() {
             if purge_pending {
                 purge::run_and_restart(app.handle());
             }
+            // A crash leaves session workspaces behind; they are never reused
+            // across app sessions.
+            latex_native::cleanup_session(app.handle());
             let state = AppState::load(app.handle());
             // The menu is built after the state is managed so its check marks
             // start on the values the user persisted, not on all-unchecked. The
@@ -269,6 +272,7 @@ pub fn run() {
         // Shut down warm Typst service daemons gracefully on exit as well.
         if let tauri::RunEvent::Exit = event {
             typst::service::shutdown_all_services();
+            latex_native::cleanup_session(app_handle);
             app_handle.state::<clipboard::ClipboardStore>().release();
         }
 

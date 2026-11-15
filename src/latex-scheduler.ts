@@ -92,6 +92,18 @@ export interface DelayBounds {
 export const INTERACTIVE_DELAY: DelayBounds = { factor: 1.5, min: 60, max: 200 };
 
 /**
+ * The native backend starts a real compiler process and pays for a full build,
+ * so the bundled engine's 60-200 ms quiet period is too eager. Keep the
+ * reader's rhythm but never start sooner than `min`; continuous typing still
+ * uses the 1.5 s cap, and latest-wins keeps one build at a time.
+ */
+export const NATIVE_MIN_DELAY_MS = 300;
+
+export function nativeDelay(delay: number, min = NATIVE_MIN_DELAY_MS): number {
+  return Math.max(min, delay);
+}
+
+/**
  * The quiet period after the last key before a compile starts.
  *
  * A pause is "longer than this reader's rhythm": 1.5 x the median of the

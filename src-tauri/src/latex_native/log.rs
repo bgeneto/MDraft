@@ -53,8 +53,6 @@ pub struct ParsedLog {
     pub truncated: bool,
     /// The compiler asked for another pass.
     pub rerun: bool,
-    /// The bibliography tool should run after this pass.
-    pub bibliography: Bibliography,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -312,13 +310,25 @@ pub fn parse(log: &str, sources: &BTreeMap<String, String>) -> ParsedLog {
         }
     }
 
-    parsed.rerun = log.contains("Rerun to get")
-        || log.contains("Label(s) may have changed")
-        || log.contains("Please rerun LaTeX")
-        || log.contains("Please (re)run Biber")
-        || log.contains("rerunfilecheck");
-    parsed.bibliography = bibliography_needed(log);
+    parsed.rerun = rerun_requested(log);
     parsed
+}
+
+/// Whether TeX itself asked for another pass.
+///
+/// A log wraps long lines at the configured width, so the phrases are matched
+/// on collapsed whitespace. Package-loading lines are deliberately not
+/// evidence: `rerunfilecheck` is a hyperref dependency, and its name appears in
+/// every successful log without a rerun request.
+pub(crate) fn rerun_requested(log: &str) -> bool {
+    let normalised = log.split_whitespace().collect::<Vec<_>>().join(" ");
+    [
+        "Rerun to get",
+        "Label(s) may have changed",
+        "Please rerun LaTeX",
+    ]
+    .iter()
+    .any(|phrase| normalised.contains(phrase))
 }
 
 fn strip_severity_prefix(message: &str) -> &str {
@@ -378,19 +388,6 @@ fn box_warning(line: &str) -> Option<(u32, String)> {
         .unwrap_or(line)
         .trim_end_matches('.');
     Some((line_number, format!("{kind}: {head}")))
-}
-
-fn bibliography_needed(log: &str) -> Bibliography {
-    if log.contains("Please (re)run Biber") || log.contains("biblatex") && log.contains("biber") {
-        return Bibliography::Biber;
-    }
-    if log.contains("Please (re)run BibTeX")
-        || log.contains("There were undefined references")
-        || log.contains("Citation")
-    {
-        return Bibliography::Bibtex;
-    }
-    Bibliography::None
 }
 
 #[cfg(test)]
@@ -498,8 +495,17 @@ mod tests {
     }
 
     #[test]
-    fn a_citation_failure_asks_for_bibtex() {
-        let parsed = parse("LaTeX Warning: Citation `a' undefined\n", &sources());
-        assert_eq!(parsed.bibliography, Bibliography::Bibtex);
+    fn the_rerunfilecheck_package_line_is_not_a_rerun_request() {
+        let log = "(C:/tex/rerunfilecheck/rerunfilecheck.sty\nPackage: rerunfilecheck 2022-07-10 v1.10 Rerun checks for auxiliary files (HO)\n)\n";
+        assert!(!rerun_requested(log));
+        assert!(!parse(log, &sources()).rerun);
+    }
+
+    #[test]
+    fn a_wrapped_rerun_warning_is_a_request() {
+        let log =
+            "LaTeX Warning: Label(s) may have changed. Rerun to get cross-\nreferences right.\n";
+        assert!(rerun_requested(log));
+        assert!(parse(log, &sources()).rerun);
     }
 }
