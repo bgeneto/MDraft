@@ -44,7 +44,7 @@ license files. Private records and source captures must remain outside this tree
 | `fetch-fonts.ps1` | Refresh pinned font assets; requires Python/fonttools/brotli and is not needed for ordinary builds |
 | `build-linux.sh` | Linux-only build/staging; runs in WSL/container/Linux, not cross-compilation from Windows |
 | `with-msvc.cmd`, `cargo-vcvars.cmd` | Load the Windows C++ toolchain before cargo or Tauri |
-| `optional-tools-test.mjs` | `npm test -- --only optional-tools`; isolated first-run offer, context setup and background progress checks |
+| `optional-tools-test.mjs` | `npm test -- --only optional-tools`; isolated first-run offer, context setup, background progress and the Preferences › Export pandoc button checks |
 
 GUI/CDP tests require an isolated test app and the fixture the harness selects.
 They must not reset a user's settings/profile. Node's WebSocket CDP scripts enable

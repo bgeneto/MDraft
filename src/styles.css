@@ -2688,6 +2688,11 @@ label.optional-tools-row:hover {
   background: var(--accent-soft);
 }
 
+/* The row a Preferences button opened the dialog for. */
+.optional-tools-row.is-focused {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
 .optional-tools-row:has(input:focus-visible) {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
