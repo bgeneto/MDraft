@@ -17,7 +17,14 @@
 // scripts/texpresso-r2-upload.mjs.
 
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -69,7 +76,9 @@ const pins = ["pdf.min.mjs", ...files.map(([, to]) => to).sort()].map((name) => 
   return { path: `vendor/pdfjs/${name}`, bytes: bytes.length, sha256: sha256(bytes) };
 });
 const total = pins.reduce((sum, pin) => sum + pin.bytes, 0);
-console.log(`pdf.js ${VERSION}: ${pins.length} files, ${(total / 1048576).toFixed(1)} MiB in ${target}`);
+console.log(
+  `pdf.js ${VERSION}: ${pins.length} files, ${(total / 1048576).toFixed(1)} MiB in ${target}`,
+);
 
 if (flag === "--write") {
   const path = join(repo, "src-tauri", "texpresso.json");

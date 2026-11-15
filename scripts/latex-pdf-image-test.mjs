@@ -135,11 +135,7 @@ try {
 
   // The figure is decoded asynchronously after the page is first painted.
   let pixels = 0;
-  await waitFor(
-    async () => (pixels = await magenta()) > 1000,
-    60_000,
-    "the PDF figure's pixels",
-  );
+  await waitFor(async () => (pixels = await magenta()) > 1000, 60_000, "the PDF figure's pixels");
   const unloaded = frameLog.filter((line) => /renderer: (cannot load|missing) image/.test(line));
   check(unloaded.length === 0, "the renderer loads the PDF image", unloaded.join(" | "));
   check(pixels > 1000, "the PDF figure is drawn on the page", `${pixels} magenta pixels`);
