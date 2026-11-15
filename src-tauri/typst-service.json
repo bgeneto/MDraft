@@ -1,5 +1,5 @@
 {
-  "note": "Pinned manifest for MDraft's optional standalone Incremental Typst Compiler Service (`mdraft-typst-service`). Downloaded ONLY upon explicit user action (Preferences > Export > Install Typst service) into app_data_dir/typst/service/<version>/ and verified against SHA-256 before probing. Zero startup network requests.",
+  "note": "Pinned manifest for MDraft's optional standalone Incremental Typst Compiler Service (`mdraft-typst-service`). Downloaded ONLY upon explicit user action (Preferences > Export > Install Typst service) into app_data_dir/typst/service/<version>/ and verified against SHA-256 before probing. Zero startup network requests. Windows x64 and Linux x64 are published for 0.1.0; the ARM and macOS entries remain placeholders until those installers exist.",
   "version": "0.1.0",
   "typstVersion": "0.15.1",
   "protocolVersion": 1,
@@ -9,8 +9,8 @@
       "assetName": "mdraft-typst-service-x86_64-pc-windows-msvc.zip",
       "archiveType": "zip",
       "binaryName": "mdraft-typst-service.exe",
-      "bytes": 0,
-      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      "bytes": 21684158,
+      "sha256": "c01b5b7ef41024bc7d09b37314256a191cd180ae024edf4edb4376aa507a1e79"
     },
     "aarch64-pc-windows-msvc": {
       "assetName": "mdraft-typst-service-aarch64-pc-windows-msvc.zip",
@@ -23,8 +23,8 @@
       "assetName": "mdraft-typst-service-x86_64-unknown-linux-musl.tar.xz",
       "archiveType": "tar.xz",
       "binaryName": "mdraft-typst-service",
-      "bytes": 0,
-      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      "bytes": 14525344,
+      "sha256": "5f9ff6c82cee0f6809ed1a903a8f8b0c7af01ae62187aeb5494d33b9afb6087c"
     },
     "aarch64-unknown-linux-musl": {
       "assetName": "mdraft-typst-service-aarch64-unknown-linux-musl.tar.xz",
