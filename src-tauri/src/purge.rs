@@ -437,6 +437,11 @@ pub fn run_and_restart(app: &tauri::AppHandle) -> ! {
 
 #[tauri::command]
 pub fn request_data_purge(app: tauri::AppHandle) -> Result<(), String> {
+    if app.state::<crate::backup::jobs::Jobs>().is_active()? {
+        return Err(
+            "Finish the current backup or restore before deleting application data.".into(),
+        );
+    }
     write_pending(&app)?;
     // The close guard has already flushed settings and closed the documents.
     // Let the IPC reply reach the window before the restart tears it down; if

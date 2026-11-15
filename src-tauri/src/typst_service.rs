@@ -535,6 +535,7 @@ pub async fn install_typst_service<R: Runtime>(
 }
 
 fn install<R: Runtime>(app: &AppHandle<R>) -> Result<TypstServiceStatus, String> {
+    let _writer = crate::backup::gate::writer()?;
     let _guard = SERVICE_INSTALL
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -555,7 +556,10 @@ fn install<R: Runtime>(app: &AppHandle<R>) -> Result<TypstServiceStatus, String>
 
 #[tauri::command]
 pub async fn typst_clear_cache<R: Runtime>(app: AppHandle<R>) -> Result<u64, String> {
-    tauri::async_runtime::spawn_blocking(move || Ok(clear_cache(&app)))
+    tauri::async_runtime::spawn_blocking(move || {
+        let _writer = crate::backup::gate::writer()?;
+        Ok(clear_cache(&app))
+    })
         .await
         .map_err(|e| format!("The Typst cache clear task could not be started: {e}"))?
 }

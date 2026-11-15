@@ -96,6 +96,8 @@ chardetng = "1.0.0"
 # Pandoc archives are compressed. `rust_backend` keeps flate2 pure Rust, so no C
 # toolchain is needed on any platform.
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+# Application backups use the same ZIP reader/writer on every desktop target.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 # Checks the downloaded pandoc archive against the digest GitHub publishes for
 # that release asset. Fetching a 40 MB binary and then executing it without this
 # would be trusting the network with arbitrary code execution.
@@ -108,12 +110,8 @@ sha2 = "0.11"
 # falls back to an empty collection if it cannot be loaded.
 fontique = { version = "0.12", features = ["fontconfig-dlopen"] }
 
-# The two archive shapes pandoc ships: Windows and macOS get a .zip, Linux a
-# .tar.gz. Each platform therefore compiles only the reader it needs.
-[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
-zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
-
 [target.'cfg(target_os = "linux")'.dependencies]
+# Pandoc's Linux archive is a .tar.gz; backups also use the common ZIP crate.
 tar = "0.4.46"
 # Typst publishes its Linux build as a .tar.xz, unlike pandoc's .tar.gz.
 # `lzma-rs` is pure Rust, matching flate2's `rust_backend`, so the installer
@@ -140,6 +138,7 @@ libc = "0.2"
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_Globalization",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",

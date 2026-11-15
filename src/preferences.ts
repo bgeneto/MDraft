@@ -61,6 +61,9 @@ export interface PreferencesHost extends TexmfPreferencesHost {
   openAppFolder(folder: api.AppFolder): Promise<void>;
   /** Open the folder holding settings.json, prompt overrides and recovery. */
   openSettingsFolder(): Promise<void>;
+  backupAppData(): Promise<void>;
+  restoreAppData(): Promise<void>;
+  showRecoveredDocuments(): Promise<void>;
   /** Confirm and delete MDraft's own application data, then restart. */
   deleteAllData(): Promise<void>;
   /** Last known pandoc status, or null before the first check. */
@@ -2393,6 +2396,32 @@ function buildSections(
       id: "data",
       title: "Data",
       rows: [
+        {
+          kind: "note",
+          label: "Backup and restore",
+          text: "Save app settings and unsaved writing in one ZIP, or restore a previous backup. ZIP backups are not encrypted and do not contain API keys or documents saved outside MDraft.",
+        },
+        {
+          kind: "button",
+          label: "",
+          text: "Back Up App Data…",
+          help: "Choose where to save and verify a single backup ZIP.",
+          action: () => host.backupAppData(),
+        },
+        {
+          kind: "button",
+          label: "",
+          text: "Restore Backup…",
+          help: "Check a previous backup and create a safety copy before restoring selected data.",
+          action: () => host.restoreAppData(),
+        },
+        {
+          kind: "button",
+          label: "",
+          text: "Recovered Documents…",
+          help: "Open or save recovered writing as independent copies.",
+          action: () => host.showRecoveredDocuments(),
+        },
         {
           kind: "note",
           label: "Application folder",

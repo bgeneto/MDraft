@@ -86,6 +86,7 @@
     "read-aloud:unit": "node scripts/read-aloud-unit.mjs",
     "recent": "node scripts/recent-menu-test.mjs",
     "test:sessions": "node scripts/sessions-test.mjs",
+    "backup:unit": "node scripts/backup-unit.mjs",
     "p0:unit": "node scripts/p0-unit.mjs",
     "filename:unit": "node scripts/filename-unit.mjs",
     "p0:lifecycle": "node scripts/p0-lifecycle-test.mjs",

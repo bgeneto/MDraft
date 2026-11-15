@@ -162,8 +162,10 @@ MDraft then discards the engine's state, the kept results and the logs, and
 builds again from the sources alone. The first build afterwards takes as long as
 opening the project. Downloaded TeX Live packages and fonts are kept;
 *Preferences › LaTeX* clears that cache separately. An installed TeX
-distribution already starts every build in a fresh folder, so for it this
-command only clears the logs.
+distribution keeps a session workspace with its auxiliary files, font caches
+and Biber's extracted runtime; this command discards that workspace too. The
+next native build is cold (and its first Biber run extracts its runtime again),
+while the distribution's own packages are untouched.
 
 ## Choosing the engine
 
@@ -226,16 +228,26 @@ present. A missing individual tool is reported when it is needed; an otherwise
 usable installation is not rejected for lacking an unrelated one.
 
 A native build stages the same bounded project snapshot as the bundled engine
-into an app-owned private directory, and runs there. Generated files — the PDF,
-`.aux`, `.log`, `.bbl` and the font cache — never enter your project. MDraft
-runs the selected engine directly, reruns for cross-references, and runs BibTeX
-or Biber when the document asks for one and the tool is present. `latexmk` is
-not invoked: it builds its own command strings and starts helpers outside the
-flags MDraft controls, so the bounded direct runner is the controlled route.
-Shell escape is disabled. MiKTeX's package installer is left enabled: a missing
-package can be downloaded by MiKTeX itself during the compile. TeX Live's
-packages are managed by its own `tlmgr`, so a missing package produces TeX
-Live's own error until you install it with that tool.
+into an app-owned private workspace, and runs there. The workspace lasts for the
+app session and is reused by the next build, so its auxiliary files, font caches
+and Biber runtime are warm; **Recompile from scratch** discards it. Generated
+files — the PDF, `.aux`, `.log`, `.bbl` and the font cache — never enter your
+project. Staged project files are copied, never hard-linked, so a committed
+`main.pdf`, `.bbl` or `.aux` cannot be written through.
+
+MDraft runs the selected engine directly, compares the generated auxiliary
+files after each pass, and reruns only when they changed. BibTeX or Biber runs
+only when the `.bcf`/citation controls, a `.bib`/`.bst` input, or the `.bbl`
+itself says it is needed; the first Biber run in a new workspace extracts its
+runtime once, and later builds reuse it. An installed engine is a batch
+compiler: every build typesets the document from the start. The warm workspace
+removes repeated state, but it cannot resume mid-document like the bundled
+preview. `latexmk` is not invoked: it builds its own command strings and starts
+helpers outside the flags MDraft controls, so the bounded direct runner is the
+controlled route. Shell escape is disabled. MiKTeX's package installer is left
+enabled: a missing package can be downloaded by MiKTeX itself during the
+compile. TeX Live's packages are managed by its own `tlmgr`, so a missing
+package produces TeX Live's own error until you install it with that tool.
 
 **Network and trust.** The installed engine is a separate program that you
 chose. It runs with your operating-system permissions, and its package manager

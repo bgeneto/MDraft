@@ -32,6 +32,8 @@ export interface LatexResult {
   engine?: string;
   /** Wall-clock time the compile took, when the backend measured it. */
   elapsedMs?: number;
+  /** Build passes the installed engine needed, when measured. */
+  passes?: number;
 }
 
 /**

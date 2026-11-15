@@ -54,6 +54,7 @@ pub async fn tex_fmt_wasm(app: tauri::AppHandle) -> Result<tauri::ipc::Response,
         }
         // A cache file that fails verification is replaced, not trusted: the
         // checksum is the only thing that makes the download safe to execute.
+        let _writer = crate::backup::gate::writer()?;
         let bytes = fetch()?;
         if crate::latex::digest(&bytes) != SHA256 {
             return Err("The downloaded LaTeX formatter did not match its pinned checksum.".into());

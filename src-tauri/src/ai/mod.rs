@@ -193,6 +193,7 @@ pub fn ai_prompts_status(state: State<'_, AppState>) -> AiPromptsStatus {
 /// constants and never parses what it replaces.
 #[tauri::command]
 pub fn ai_export_prompts(state: State<'_, AppState>) -> Result<String, String> {
+    let _writer = crate::backup::gate::writer()?;
     let path = prompts_path(&state);
     prompts_file::write_defaults(&path)?;
     Ok(path.to_string_lossy().to_string())
@@ -301,6 +302,7 @@ pub async fn ai_set_key(
     base_url: String,
     key: String,
 ) -> Result<AiKeyStatus, String> {
+    let _writer = crate::backup::gate::writer()?;
     let base = provider::normalize_base_url(&base_url)?;
     let key = key.trim();
     if key.is_empty() {
@@ -318,6 +320,7 @@ pub async fn ai_clear_key(
     provider: String,
     base_url: String,
 ) -> Result<AiKeyStatus, String> {
+    let _writer = crate::backup::gate::writer()?;
     let base = provider::normalize_base_url(&base_url)?;
     let path = keys_path(&state);
     let mut warnings = Vec::new();

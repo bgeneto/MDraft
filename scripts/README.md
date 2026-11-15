@@ -53,6 +53,7 @@ license files. Private records and source captures must remain outside this tree
 | `texpresso-origin-check.mjs` | `[origin] [--all] [--sample <n>] [--concurrency <n>]`; read-only proof that an origin serves exactly the pinned engine, bundle and digest table (`--all` fetches all 163,011 bundle files, otherwise an evenly spread sample); one PASS/FAIL line per check, non-zero exit on any FAIL |
 | `texpresso-r2-upload.mjs` | `--bucket <name> [--data <mirror>] [--engine <dir>] [--snapshot <id>] [--release <id>] [--dry-run] [--verify] [--digests-only] [--force]`; uploads the mirror and engine files to Cloudflare R2 with `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`, skipping keys already there at the right size; `--verify` compares the bucket without uploading |
 | `optional-tools-test.mjs` | `npm test -- --only optional-tools`; isolated first-run offer, context setup, background progress and the Preferences › Export pandoc button checks |
+| `backup-test.mjs` | `npm test -- --only backup`; isolated Data controls, ZIP creation, safety backup, cancellation and headless restore/restart with synthetic text |
 | `typst-service-install-test.mjs` | `[port]`; opt-in isolated install test for the published Typst companion service (`MDRAFT_TYPST_SERVICE_E2E=1 npm test -- --only typst-service-install`); verifies the pinned release archive, unpacked binary and an in-process service compile |
 
 GUI/CDP tests require an isolated test app and the fixture the harness selects.
@@ -103,7 +104,7 @@ here with its public purpose and, for owner sessions, to the private catalog.
 | `npm run pdf:map-worker:unit` | `node scripts/pdf-page-worker-unit.mjs` |
 | `npm run pdf:map:perf` | `node scripts/pdf-map-performance.mjs` |
 | `npm run pdf:map:webview` | `node scripts/pdf-webview-performance.mjs` |
-| `npm run test:harness:unit` | `node scripts/test-harness-ownership-unit.mjs` |
+| `npm run test:harness:unit` | `node scripts/test-harness-ownership-unit.mjs`; test-process ownership and test-profile engine-link preservation |
 | `npm run latex:sdk:unit` | `node scripts/latex-sdk-unit.mjs` |
 | `npm run texpresso:unit` | `node scripts/texpresso-unit.mjs` |
 | `npm run latex:texmf:unit` | `node scripts/latex-texmf-unit.mjs` |
@@ -148,6 +149,7 @@ here with its public purpose and, for owner sessions, to the private catalog.
 | `npm run read-aloud:unit` | `node scripts/read-aloud-unit.mjs` |
 | `npm run recent` | `node scripts/recent-menu-test.mjs` |
 | `npm run test:sessions` | `node scripts/sessions-test.mjs` |
+| `npm run backup:unit` | `node scripts/backup-unit.mjs` — bounded capture, Unicode and acknowledgement checks for unsaved text. |
 | `npm run p0:unit` | `node scripts/p0-unit.mjs` |
 | `npm run filename:unit` | `node scripts/filename-unit.mjs` |
 | `npm run p0:lifecycle` | `node scripts/p0-lifecycle-test.mjs` |
