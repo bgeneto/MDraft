@@ -14,6 +14,16 @@ const PROTECTED_BRANCHES = new Set(["master", "main"]);
 const MUTATING_GIT =
   /(?:^|[;&|]\s*)(?:&\s*)?git(?:\.exe)?\s+(?:-[Cc]\s+\S+\s+)*(?:commit|merge|rebase|cherry-pick|revert|reset|push|pull|apply|am|stash\s+(?:drop|pop|clear)|branch\s+-[dD]|tag\s+-d)\b/i;
 
+// A branch-changing switch. `git checkout -- <path>` restores files and must
+// stay allowed, so the negative lookahead exempts the pathspec form.
+const SWITCH_GIT =
+  /(?:^|[;&|]\s*)(?:&\s*)?git(?:\.exe)?\s+(?:-[Cc]\s+\S+\s+)*(?:switch|checkout)\b(?!\s+--(?:\s|$))/i;
+
+// The recovery path for edits accidentally made on master: create a branch and
+// take them along. A dirty feature branch may not do this.
+const CREATE_BRANCH =
+  /(?:^|[;&|]\s*)(?:&\s*)?git(?:\.exe)?\s+(?:-[Cc]\s+\S+\s+)*(?:switch\s+(?:-[cC]|--create)\b|checkout\s+(?:-[bB]|--orphan)\b)/i;
+
 function normalized(value: string): string {
   return process.platform === "win32" ? value.toLowerCase() : value;
 }
@@ -63,26 +73,55 @@ export default {
       `git fetch origin && git switch -c <type>/<short-slug> origin/${branch}. ` +
       `Read-only work and 'git switch -c' are allowed.`;
 
-    await permission.hook("evaluate", async (event: any) => {
-      const branch = await currentBranch();
-      if (!PROTECTED_BRANCHES.has(branch)) return;
+    const dirtyDenial = (branch: string) =>
+      `BLOCKED: the working tree has uncommitted changes on '${branch}'. ` +
+      `Commit or stash them before switching, or use a separate worktree: ` +
+      `git worktree add ../MDraft-work/<short-slug> -b <type>/<short-slug> origin/master. ` +
+      `Do not carry another task's changes onto a new branch.`;
 
+    const workingTreeDirty = (): boolean => {
+      try {
+        return (
+          execFileSync("git", ["-C", root, "status", "--porcelain"], {
+            encoding: "utf8",
+            windowsHide: true,
+          }).trim() !== ""
+        );
+      } catch {
+        return false;
+      }
+    };
+
+    await permission.hook("evaluate", async (event: any) => {
+      if (event.action !== "edit" && event.action !== "shell") return;
+
+      const branch = await currentBranch();
+      const protectedBranch = PROTECTED_BRANCHES.has(branch);
       const resources: readonly string[] = event.resources ?? [];
 
       if (event.action === "edit") {
-        if (resources.some((resource) => isInside(root, resource))) {
+        if (protectedBranch && resources.some((resource) => isInside(root, resource))) {
           event.effect = "deny";
           event.message = denial(branch);
         }
         return;
       }
 
-      if (event.action === "shell") {
-        if (resources.some((command) => MUTATING_GIT.test(command))) {
-          event.effect = "deny";
-          event.message = denial(branch);
-        }
+      if (protectedBranch && resources.some((command) => MUTATING_GIT.test(command))) {
+        event.effect = "deny";
+        event.message = denial(branch);
+        return;
       }
+
+      const switches = resources.filter((command) => SWITCH_GIT.test(command));
+      if (!switches.length || !workingTreeDirty()) return;
+
+      // Edits were already made on master; creating a topic branch is the
+      // recovery path. Every other dirty switch can contaminate another task.
+      if (protectedBranch && switches.some((command) => CREATE_BRANCH.test(command))) return;
+
+      event.effect = "deny";
+      event.message = dirtyDenial(branch);
     });
   },
 };

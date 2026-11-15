@@ -109,6 +109,9 @@ checkout; capture scripts default to the operating system temporary directory.
 
 - Open the PR from a topic branch, never from `master`; the remote rejects direct
   pushes to `master`.
+- Keep the working tree clean before switching branches. Uncommitted changes
+  follow the checkout, not the branch; give each concurrent task its own
+  worktree.
 - Keep the change scoped to one problem.
 - Add or update the test that would fail without it.
 - Run the cheapest layer that can catch the mistake. For a UI-only change,
