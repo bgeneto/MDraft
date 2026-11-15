@@ -312,6 +312,16 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
   const encode = (text) => Buffer.from(text, "utf8").toString("base64");
   const snapshot = {
     mainFile: "main.tex",
+    projectToken: "test-token",
+    manifest: {
+      version: 1,
+      files: [
+        { path: "main.tex", size: 60, modified: 0 },
+        { path: "chapters/one.tex", size: 13, modified: 0 },
+        { path: "figures/plot.png", size: 4, modified: 0 },
+      ],
+      digest: "test-digest",
+    },
     files: [
       {
         path: "main.tex",
@@ -391,6 +401,15 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
   check(
     prepared.files.get("main.tex")?.text?.startsWith("\\documentclass"),
     "the project's own file is untouched by a library of the same name",
+  );
+  const onDemand = JSON.parse(prepared.files.get(".mdraft-project.json")?.text ?? "null");
+  check(
+    onDemand?.version === 1 &&
+      onDemand.token === "test-token" &&
+      onDemand.names.includes("main.tex") &&
+      onDemand.names.includes("figures/plot.png"),
+    "the project manifest reaches the frame with its capability",
+    JSON.stringify(onDemand),
   );
   const manifest = JSON.parse(prepared.files.get(".mdraft-texmf/index.json")?.text ?? "null");
   const answers = new Map(manifest?.names ?? []);

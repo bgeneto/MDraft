@@ -50,7 +50,97 @@
   } catch {
     /* without the channel the override goes unreported, never unloaded */
   }
+  // The worker fetches a manifest name and broadcasts the bytes here. The
+  // main-thread renderer reads the project table, not the worker's, so the
+  // bytes are pushed after the compile that fetched them and the project is
+  // typeset once more; the next render then has every image and font.
+  let projectPending = new Map();
+  let projectFetchedSincePaint = false;
+  const projectFonts = new Set();
+  try {
+    new BroadcastChannel("mdraft-project").onmessage = (event) => {
+      const data = event.data;
+      if (
+        data?.type !== "fetched" ||
+        typeof data.name !== "string" ||
+        !(data.bytes instanceof Uint8Array)
+      )
+        return;
+      projectPending.set(data.name, data.bytes);
+      projectFetchedSincePaint = true;
+      if (/\.(?:otf|ttf|ttc|otc|pfb)$/i.test(data.name)) projectFonts.add(data.name);
+      post({ type: "project-fetched", name: data.name });
+    };
+  } catch {
+    /* without the channel the renderer keeps the eager files only */
+  }
   const api = () => globalThis.texpresso;
+  const flushProjectFiles = () => {
+    if (!projectPending.size) return false;
+    const t = api();
+    for (const [name, bytes] of projectPending) {
+      t.project.put(name, bytes);
+      // Windows resolves an image's case-insensitive spelling; the renderer
+      // looks the document's literal name up on its own table. Keep the alias
+      // only in the frame: the next project sync removes it.
+      const lower = name.toLowerCase();
+      if (lower !== name) t.project.put(lower, bytes);
+    }
+    t.project.flush?.();
+    projectPending = new Map();
+    return true;
+  };
+  /** Remove luaotfload's per-font cache entries for the project fonts we served. */
+  const forgetProjectFonts = (names) => {
+    if (!names.length) return;
+    const norm = (value) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const wanted = names.map((name) =>
+      norm((name.split("/").pop() ?? name).replace(/\.[^.]+$/, "")),
+    );
+    // Do not create the database: opening it just to delete a key would leave
+    // an empty version-1 database the worker cannot upgrade.
+    const open = () =>
+      new Promise((resolve) => {
+        const request = indexedDB.open("texpresso-luatex-caches", 1);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => resolve(null);
+        request.onblocked = () => resolve(null);
+      });
+    const exists = () =>
+      typeof indexedDB.databases === "function"
+        ? indexedDB.databases().then(
+            (list) => list.some((db) => db.name === "texpresso-luatex-caches"),
+            () => false,
+          )
+        : Promise.resolve(false);
+    void exists().then((there) => (there ? open() : null)).then((db) => {
+      if (!db?.objectStoreNames.contains("files")) {
+        db?.close();
+        return;
+      }
+      try {
+        const tx = db.transaction("files", "readwrite");
+        const store = tx.objectStore("files");
+        const keys = store.getAllKeys();
+        keys.onsuccess = () => {
+          let removed = 0;
+          for (const key of keys.result) {
+            const text = String(key).toLowerCase();
+            if (!text.endsWith(".luc")) continue;
+            const base = norm(text.split("/").pop().replace(/\.luc$/, ""));
+            if (!wanted.some((name) => base === name || base.startsWith(name))) continue;
+            store.delete(key);
+            removed += 1;
+          }
+          if (removed) note("forgot project font caches=" + removed);
+        };
+        tx.oncomplete = () => db.close();
+        tx.onerror = () => db.close();
+      } catch {
+        db.close();
+      }
+    });
+  };
   const pagesBox = () => document.getElementById("pages");
   // A tiny in-page trace the CDP layer can read at any time: console output
   // emitted before a test attaches is lost, and a paint that never arrives has
@@ -404,6 +494,10 @@
   };
   const applyProject = async (message) => {
     const t = api();
+    if (message.replace) {
+      projectPending = new Map();
+      projectFetchedSincePaint = false;
+    }
     const known = new Set(t.project.paths());
     // The first sync replaces everything, including the example the app
     // creates for a new project.
@@ -485,6 +579,15 @@
     // The status does not wait for a paint: a hidden frame gets no animation
     // frames, and its problems are still the reader's.
     if (done) busy(false);
+    if (done) {
+      if (flushProjectFiles() || projectFetchedSincePaint) {
+        projectFetchedSincePaint = false;
+        step("project files fetched; typesetting again");
+        scheduleCompile();
+      } else if (projectFonts.size) {
+        forgetProjectFonts([...projectFonts]);
+      }
+    }
     if (zoomPending && api()) applyZoom(zoom);
     // Two animation frames promise the pixels are in the canvas. A window that
     // is hidden, minimised or occluded gets no frames at all, so the report
@@ -908,6 +1011,7 @@
     dispose(message) {
       // The project held copies of the reader's files; the next start deletes
       // the database too (mdraft-boot.js), this removes them now.
+      projectPending = new Map();
       try {
         const t = api();
         for (const path of t.project.paths()) t.project.remove(path);

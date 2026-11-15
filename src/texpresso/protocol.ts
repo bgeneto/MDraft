@@ -109,6 +109,8 @@ export type FrameMessage =
   | { type: "disposed"; seq: number }
   /** The engine loaded a local library file in place of TeX Live's `name`. */
   | { type: "library-override"; name: string }
+  /** The engine fetched a project file the snapshot had not sent eagerly. */
+  | { type: "project-fetched"; name: string }
   /** One line of the bridge's compile activity, for Logs. */
   | { type: "trace"; text: string };
 
@@ -220,6 +222,10 @@ export function parseFrameMessage(data: unknown): FrameMessage | null {
     case "library-override":
       return str(m.name) && m.name.length > 0 && m.name.length <= 1024
         ? { type: "library-override", name: m.name }
+        : null;
+    case "project-fetched":
+      return str(m.name) && m.name.length > 0 && m.name.length <= 4096
+        ? { type: "project-fetched", name: m.name }
         : null;
     case "trace":
       // Bounded: the text goes straight into the Logs panel.

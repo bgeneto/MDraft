@@ -14,6 +14,9 @@ import { type TexpressoEngine, textHash } from "./protocol.ts";
 /** A project text file, by extension or by a declared non-UTF-8 encoding. */
 const TEXT = /\.(?:tex|bib|sty|cls|bst|clo|def|cfg|lua|bbl|ltx|dtx|ins|txt)$/i;
 
+/** The special project file the frame's worker reads for on-demand names. */
+export const PROJECT_INDEX = ".mdraft-project.json";
+
 /** What the frame holds for one file. */
 export interface Held {
   fingerprint: string;
@@ -22,6 +25,10 @@ export interface Held {
 /** A snapshot decoded for the frame. */
 export interface PreparedProject {
   main: string;
+  /** The capability the frame presents on its on-demand route. */
+  projectToken: string;
+  /** Names, sizes and stamps the frame may fetch on demand. */
+  manifest: Map<string, { size: number; modified: number }>;
   files: Map<string, { text?: string; bytes?: Uint8Array; fingerprint: string }>;
   /** A project text file that is not UTF-8, or null. */
   nonUtf8: string | null;
@@ -102,6 +109,14 @@ export function prepareProject(
   if (fontConfig !== null) {
     files.set(LUAOTFLOAD_CONFIG, { text: fontConfig, fingerprint: textPrint(fontConfig) });
   }
+  // The worker's membership table and capability. It is a project file so the
+  // existing put/remove/ack protocol carries it; TeX never asks for the name.
+  const project = JSON.stringify({
+    version: 1,
+    token: snapshot.projectToken,
+    names: snapshot.manifest.files.map((file) => file.path),
+  });
+  files.set(PROJECT_INDEX, { text: project, fingerprint: textPrint(project) });
   const library = libraryIndex(snapshot.texmf, engine, new Set(files.keys()));
   if (snapshot.texmf?.files.length) {
     for (const file of snapshot.texmf.files) {
@@ -113,5 +128,18 @@ export function prepareProject(
     const manifest = JSON.stringify({ version: 1, names: library.names });
     files.set(LIBRARY_INDEX, { text: manifest, fingerprint: textPrint(manifest) });
   }
-  return { main: snapshot.mainFile, files, nonUtf8, libraryConflict, library };
+  return {
+    main: snapshot.mainFile,
+    projectToken: snapshot.projectToken,
+    manifest: new Map(
+      snapshot.manifest.files.map((file) => [
+        file.path,
+        { size: file.size, modified: file.modified },
+      ]),
+    ),
+    files,
+    nonUtf8,
+    libraryConflict,
+    library,
+  };
 }

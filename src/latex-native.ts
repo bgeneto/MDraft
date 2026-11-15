@@ -140,7 +140,10 @@ export function nativeToLatex(
   return {
     pdf: decodeBase64Data(result.pdf),
     sources,
-    files: new Set(snapshot.files.map((file) => file.path)),
+    files: new Set([
+      ...snapshot.files.map((file) => file.path),
+      ...snapshot.manifest.files.map((file) => file.path),
+    ]),
     mainFile: snapshot.mainFile,
     log: result.log,
     warnings,

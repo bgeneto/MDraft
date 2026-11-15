@@ -5,21 +5,32 @@
 // before the app opens, so no document outlives the frame that showed it
 // (mdraft-bridge.js empties the project on dispose as well). The engine's own
 // font cache, `texpresso-luatex-caches`, holds no document and is kept: it
-// saves seconds on every start.
+// saves seconds on every start. Clear cache sets a flag on the next boot.json,
+// which also deletes it: project-font entries must not outlive that action.
 //
 // The worker takes its Wasm binary, format and font cache from the project's
 // engine, and a new project takes DEFAULT_ENGINE from config.js, which reads
 // this global; an engine change is therefore a new frame, never a setting.
 const engine = new URLSearchParams(location.search).get("engine") === "xetex" ? "xetex" : "luatex";
 globalThis.__TEXPRESSO_ENGINE__ = engine;
-await new Promise((resolve) => {
-  try {
-    const request = indexedDB.deleteDatabase("texstation");
-    request.onsuccess = request.onerror = request.onblocked = () => resolve();
-  } catch {
-    resolve();
-  }
-});
+let clearFontCache = false;
+try {
+  const response = await fetch("/texpresso/boot.json", { cache: "no-store" });
+  clearFontCache = (await response.json())?.clearFontCache === true;
+} catch {
+  /* no flag means keep the cache, as every build before this one did */
+}
+const forget = (name) =>
+  new Promise((resolve) => {
+    try {
+      const request = indexedDB.deleteDatabase(name);
+      request.onsuccess = request.onerror = request.onblocked = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+await forget("texstation");
+if (clearFontCache) await forget("texpresso-luatex-caches");
 try {
   localStorage.clear();
   localStorage.setItem("texpresso.welcomed", "1");

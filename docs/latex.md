@@ -372,6 +372,21 @@ The snapshot is bounded: 256 files, 32 MiB per file, 64 MiB total and 12
 directory levels. Hidden directories are skipped. A symlink is skipped with a
 named warning instead of aborting the project.
 
+The TeXpresso preview also receives a **bounded project manifest**: names, sizes
+and modification stamps for up to 20,000 files, at most 12 directory levels,
+skipping `.git`, `.hg`, `.svn`, `node_modules`, the reserved
+`.mdraft-texmf` library folder and links. When the engine opens a name the
+eager snapshot did not carry, the frame fetches that one file from the same
+`mdraft-tex` origin through a per-frame capability
+(`/project/<token>/...`); the route rejects traversal, links, files outside the
+root and files above 128 MiB, and holds at most 1 GiB per session. This is what
+makes fontspec `Path=` fonts, `\subfile`, `\includepdf`,
+`\lstinputlisting`, pgfplots tables and files a local class loads work without
+extending the predictor. The eager snapshot remains the preload hint for
+SyncTeX and the outline. Installed TeX stages the same manifest from the project
+root, using hard links where the volume allows and copies otherwise; an open
+buffer's bytes still win.
+
 Real BibTeX runs in the bundled engine. **Biber and the full `biblatex` feature
 set are not available there**; `biblatex-lite` covers the common cases, and the
 limitation is documented rather than silently producing a wrong bibliography. An

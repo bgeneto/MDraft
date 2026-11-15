@@ -3994,7 +3994,10 @@ async function renderLatexPreview(
       libraries: snapshot.texmf?.files.length ?? 0,
     });
     if (token !== renderToken || doc.id !== activeId) return;
-    snapshotFiles = snapshot.files.map((file) => file.path);
+    snapshotFiles = [
+      ...snapshot.files.map((file) => file.path),
+      ...snapshot.manifest.files.map((file) => file.path),
+    ];
     // The library revision is part of what this compile read. A later focus
     // check compares against it; completion follows the latest capture.
     latexLibraryRevision = snapshot.texmf?.revision ?? null;
@@ -4068,6 +4071,8 @@ async function renderLatexPreview(
             job,
             mainFile: snapshot.mainFile,
             files: snapshot.files,
+            root: build.root.directory,
+            manifest: snapshot.manifest.files.map((file) => file.path),
             texmf: snapshot.texmf,
           });
           if (doc.id !== activeId) return;
@@ -4886,13 +4891,19 @@ function texpressoSyncSnapshot(
   latexProject = {
     rootId: build.root.id,
     rootDirectory: directory,
-    files: new Set(snapshot.files.map((file) => file.path)),
+    files: new Set([
+      ...snapshot.files.map((file) => file.path),
+      ...snapshot.manifest.files.map((file) => file.path),
+    ]),
   };
   // The frame is this project's content: the pane is owned, the wait is over.
   commitPreview(
     projectOwner(
       build.root,
-      snapshot.files.map((file) => pathKey(joinDir(directory, file.path))),
+      [
+        ...snapshot.files.map((file) => file.path),
+        ...snapshot.manifest.files.map((file) => file.path),
+      ].map((path) => pathKey(joinDir(directory, path))),
     ),
     null,
   );
@@ -4950,7 +4961,10 @@ async function texpressoExportPdf(
   const result: LatexResult = {
     pdf: reply.pdf,
     sources: nativeSources(snapshot),
-    files: new Set(snapshot.files.map((file) => file.path)),
+    files: new Set([
+      ...snapshot.files.map((file) => file.path),
+      ...snapshot.manifest.files.map((file) => file.path),
+    ]),
     mainFile: snapshot.mainFile,
     log: texpressoLogText(),
     warnings,
@@ -5239,6 +5253,9 @@ const texpressoHandlers = {
       toast("The preview stopped answering; restarting it.", 4200);
   },
   currentText: texpressoLiveText,
+  revokeToken: (token: string) => {
+    void api.latexTexpressoRevoke(token).catch(() => {});
+  },
   theme: texpressoTheme,
   zoom: () => zoomFactor(),
   reference: () => texpressoReference(),

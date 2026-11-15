@@ -153,6 +153,7 @@ pub fn run() {
             latex::texpresso_download_decision,
             latex::install_latex,
             latex::latex_project_snapshot,
+            latex::latex_texpresso_revoke,
             latex::save_compiled_pdf,
             latex::print_compiled_pdf,
             latex::latex_cache_info,

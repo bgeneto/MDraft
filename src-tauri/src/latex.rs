@@ -32,6 +32,14 @@ const RELEASE_MARKER: &str = ".release";
 const MAX_FILE: usize = 32 * 1024 * 1024;
 const MAX_PROJECT: usize = 64 * 1024 * 1024;
 const MAX_FILES: usize = 256;
+/// The project-tree manifest is a lookup table, not a second copy: these caps
+/// keep one huge folder from turning every compile into an unbounded walk.
+const MANIFEST_MAX_DEPTH: usize = 12;
+const MANIFEST_MAX_NAMES: usize = 20_000;
+/// Trees TeX must not see through the manifest. The VCS folders and
+/// node_modules are tool state; .mdraft-texmf is MDraft's reserved library
+/// namespace. A native job's build folder lives outside the project root.
+const MANIFEST_SKIPPED_DIRS: [&str; 5] = [".git", ".hg", ".svn", "node_modules", ".mdraft-texmf"];
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 static CACHE_LOCK: Mutex<()> = Mutex::new(());
 /// One engine installation at a time; Pandoc and Typst have their own locks.
@@ -662,6 +670,12 @@ pub fn latex_disable(app: AppHandle) -> Result<(), String> {
 /// The only destructive LaTeX action, and it is the reader's: nothing here is
 /// called automatically. The engine assets are kept, so a compile after clearing
 /// re-downloads packages but does not reinstall the engine.
+/// Revoke the capability a disposed preview frame presented on /project/.
+#[tauri::command]
+pub fn latex_texpresso_revoke(token: String) {
+    crate::latex_texpresso::revoke_project_token(&token);
+}
+
 #[tauri::command]
 pub fn latex_clear_cache(app: AppHandle) -> Result<u64, String> {
     let root = directory(&app)?;
@@ -1040,12 +1054,42 @@ pub struct ProjectFile {
     encoding: Option<String>,
 }
 
+/// One name in the bounded project-tree manifest.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestFile {
+    path: String,
+    size: u64,
+    /// Milliseconds since the Unix epoch; 0 when the file system has no stamp.
+    modified: u64,
+}
+
+/// The project tree without its bytes: the frame resolves a name TeX opens
+/// against this table, then fetches that file from the mdraft-tex origin.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectManifest {
+    /// Bumped when the shape changes; the frame refuses an unknown version.
+    version: u32,
+    files: Vec<ManifestFile>,
+    /// Changes when any name, size or stamp changes.
+    digest: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSnapshot {
     main_file: String,
+    /// The capability the frame presents on /project/<token>/…. It names the
+    /// live session root and is revoked when the frame is disposed.
+    project_token: String,
     files: Vec<ProjectFile>,
-    /// Paths skipped because they are symlinks.
+    /// The bounded project tree: relative names, sizes and modification
+    /// stamps, never bytes. The frame uses it as a membership table for files
+    /// the predictor did not name, then fetches a hit on demand.
+    manifest: ProjectManifest,
+    /// Paths skipped because they are links (symbolic links or junctions) in
+    /// the reference walk or the manifest walk.
     ///
     /// Reported instead of aborting the project: one odd entry must not make a
     /// document uncompilable, and the reader is told which file was left out so a
@@ -1477,6 +1521,175 @@ fn relative_to(root: &Path, path: &Path) -> Result<String, String> {
     Ok(text.replace('\\', "/"))
 }
 
+/// A link the walk must not follow: a symbolic link, or a Windows junction.
+///
+/// Windows reports both through FileType::is_symlink: a junction is a reparse
+/// point whose tag carries the name-surrogate bit. Cloud placeholders do not,
+/// so a hydrated OneDrive project is not mistaken for a link.
+fn is_link(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
+/// The stamp the manifest reports for one file. Milliseconds are enough to
+/// invalidate a changed file without exposing a platform-specific SystemTime
+/// shape to the frame.
+fn file_stamp(metadata: &fs::Metadata) -> u64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|age| u64::try_from(age.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
+/// Walk the project tree once and return its bounded manifest.
+///
+/// The walk never follows a link and never reads a file: the frame gets names,
+/// sizes and stamps, then asks for the bytes of a name TeX actually opens. The
+/// skipped names are returned separately so the snapshot can report them with
+/// the reference walk's skips.
+fn project_manifest(root: &Path) -> Result<(ProjectManifest, Vec<String>), String> {
+    project_manifest_with(root, MANIFEST_MAX_DEPTH, MANIFEST_MAX_NAMES)
+}
+
+fn project_manifest_with(
+    root: &Path,
+    max_depth: usize,
+    max_names: usize,
+) -> Result<(ProjectManifest, Vec<String>), String> {
+    let root = &fs::canonicalize(root).map_err(|e| e.to_string())?;
+    let mut files: Vec<ManifestFile> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    let mut pending = vec![(root.to_path_buf(), 0usize)];
+
+    while let Some((dir, depth)) = pending.pop() {
+        if depth > max_depth {
+            return Err(format!(
+                "The LaTeX project is nested deeper than {max_depth} directory levels. Move the project into a folder of its own."
+            ));
+        }
+        let entries = fs::read_dir(&dir).map_err(|error| {
+            format!(
+                "Cannot list {} for the project manifest: {error}",
+                dir.display()
+            )
+        })?;
+        // Directory enumeration order is not stable; the digest and the tests
+        // must not depend on it.
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|entry| entry.file_name());
+
+        for entry in entries {
+            let path = entry.path();
+            let relative = relative_to(root, &path)?;
+            let name = entry.file_name();
+            if name
+                .to_str()
+                .is_some_and(|name| MANIFEST_SKIPPED_DIRS.contains(&name))
+            {
+                continue;
+            }
+            let metadata = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+            if is_link(&metadata) {
+                skipped.push(relative);
+                continue;
+            }
+            if metadata.is_dir() {
+                pending.push((path, depth + 1));
+                continue;
+            }
+            if !metadata.is_file() {
+                continue; // a device or socket is not project content
+            }
+            if files.len() >= max_names {
+                return Err(format!(
+                    "The LaTeX project has more than {max_names} files in its project manifest. Move the project into a folder of its own."
+                ));
+            }
+            files.push(ManifestFile {
+                path: relative,
+                size: metadata.len(),
+                modified: file_stamp(&metadata),
+            });
+        }
+    }
+
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    skipped.sort();
+    skipped.dedup();
+    let mut key = String::new();
+    for file in &files {
+        key.push_str(&file.path);
+        key.push('\u{0}');
+        key.push_str(&file.size.to_string());
+        key.push('\u{0}');
+        key.push_str(&file.modified.to_string());
+        key.push('\n');
+    }
+    Ok((
+        ProjectManifest {
+            version: 1,
+            files,
+            digest: digest(key.as_bytes()),
+        },
+        skipped,
+    ))
+}
+
+/// The components of a project-relative path, or an error.
+///
+/// This is the confinement gate shared by the on-demand route and native
+/// staging. It accepts the names the manifest may hold (Unicode, spaces) but no
+/// empty, dot, dot-dot, drive/alternate-stream or backslash component. The
+/// caller still checks links and canonicalizes the joined path.
+pub(crate) fn project_components(relative: &str) -> Result<Vec<&str>, String> {
+    if relative.is_empty()
+        || relative.len() > 4096
+        || relative.starts_with('/')
+        || relative.contains('\\')
+        || relative.contains('\0')
+    {
+        return Err("The project path is not a safe relative path.".into());
+    }
+    let mut parts = Vec::new();
+    for part in relative.split('/') {
+        if part.is_empty() || part == "." || part == ".." || part.contains(':') {
+            return Err("The project path is not a safe relative path.".into());
+        }
+        parts.push(part);
+    }
+    Ok(parts)
+}
+
+/// Resolve one project file without following a link or leaving the root.
+///
+/// Returns the canonical path and its size. The route and native staging both
+/// call this: a new reader of project bytes must not re-implement the checks.
+/// Resolve one project file when the caller already canonicalized the root.
+pub(crate) fn project_file_in(root: &Path, relative: &str) -> Result<(PathBuf, u64), String> {
+    let parts = project_components(relative)?;
+    let mut path = root.to_path_buf();
+    for part in parts {
+        path.push(part);
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| format!("Cannot read {relative}: {error}"))?;
+        if is_link(&metadata) {
+            return Err(format!(
+                "{relative} is a link; project links are never read."
+            ));
+        }
+    }
+    let full = fs::canonicalize(&path).map_err(|e| format!("Cannot read {relative}: {e}"))?;
+    if !full.starts_with(root) {
+        return Err(format!("{relative} resolves outside the project."));
+    }
+    let metadata = fs::metadata(&full).map_err(|e| format!("Cannot read {relative}: {e}"))?;
+    if !metadata.is_file() {
+        return Err(format!("{relative} is not a file."));
+    }
+    Ok((full, metadata.len()))
+}
+
 /// Collect the files a document actually reads, following its references.
 ///
 /// Replaces the directory walk. The old collector copied every supported file
@@ -1561,7 +1774,7 @@ fn collect_referenced(
             }
             None => {
                 let meta = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
-                if meta.file_type().is_symlink() {
+                if is_link(&meta) {
                     skipped.push(named);
                     continue;
                 }
@@ -1633,7 +1846,7 @@ fn collect_referenced(
                         for component in relative.components() {
                             component_path.push(component);
                             if fs::symlink_metadata(&component_path)
-                                .is_ok_and(|meta| meta.file_type().is_symlink())
+                                .is_ok_and(|meta| is_link(&meta))
                             {
                                 skipped.push(relative_to(root, &component_path)?);
                                 link = true;
@@ -1684,8 +1897,8 @@ pub async fn latex_project_snapshot(
         let requested = Path::new(&path);
         let metadata = fs::symlink_metadata(requested)
             .map_err(|e| format!("Cannot read the main LaTeX file: {e}"))?;
-        if metadata.file_type().is_symlink() {
-            return Err("A symbolic link cannot be the main LaTeX file.".into());
+        if is_link(&metadata) {
+            return Err("A symbolic link or junction cannot be the main LaTeX file.".into());
         }
         let parent = requested
             .parent()
@@ -1703,6 +1916,7 @@ pub async fn latex_project_snapshot(
         {
             return Err("Choose a saved .tex file as the LaTeX project root.".into());
         }
+        let project_token = crate::latex_texpresso::project_token(&root)?;
         let mut files = Vec::new();
         let mut skipped = Vec::new();
         let mut generation = String::new();
@@ -1711,6 +1925,16 @@ pub async fn latex_project_snapshot(
         files.extend(collected);
         skipped.extend(skipped_paths);
         generation.push_str(&key);
+
+        // The manifest is the frame's membership table. Its digest travels
+        // with it; the generation key stays tied to the files TeX actually
+        // reads so an unrelated draft does not invalidate a finished PDF.
+        let (manifest, manifest_skipped) = project_manifest(&root)?;
+        skipped.extend(manifest_skipped);
+        skipped.sort();
+        skipped.dedup();
+        generation.push_str("\nmanifest:");
+        generation.push_str(&manifest.digest);
         let main_file = relative_to(&root, &main)?;
         let files = files
             .into_iter()
@@ -1737,7 +1961,9 @@ texmf:",
         }
         Ok(ProjectSnapshot {
             main_file,
+            project_token,
             files,
+            manifest,
             skipped,
             generation,
             texmf,
@@ -1834,8 +2060,9 @@ pub async fn print_compiled_pdf<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_PROJECT, Overlay, cache_size, collect_referenced, declared_references, evict_to_limit,
-        mask_literal_regions, remove_if_present, safe_relative,
+        MANIFEST_MAX_DEPTH, MANIFEST_MAX_NAMES, MANIFEST_SKIPPED_DIRS, MAX_PROJECT, Overlay,
+        cache_size, collect_referenced, declared_references, evict_to_limit, mask_literal_regions,
+        project_manifest, project_manifest_with, remove_if_present, safe_relative,
     };
 
     #[test]
@@ -2503,6 +2730,184 @@ mod tests {
         assert_eq!(skipped.len(), 1, "the symlink is reported: {skipped:?}");
         assert!(skipped[0].contains("linked.tex"));
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn manifest_lists_names_sizes_and_tracks_changes() {
+        let root = scratch("manifest");
+        fs::create_dir_all(root.join("chapters")).unwrap();
+        fs::write(root.join("main.tex"), b"main").unwrap();
+        fs::write(root.join("chapters/one.tex"), b"chapter").unwrap();
+
+        let (first, skipped) = project_manifest(&root).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        assert_eq!(first.version, 1);
+        assert_eq!(
+            first
+                .files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            ["chapters/one.tex", "main.tex"]
+        );
+        assert_eq!(
+            first
+                .files
+                .iter()
+                .find(|file| file.path == "main.tex")
+                .map(|file| file.size),
+            Some(4)
+        );
+
+        fs::write(root.join("chapters/one.tex"), b"a longer chapter").unwrap();
+        let (second, _) = project_manifest(&root).unwrap();
+        assert_ne!(
+            first.digest, second.digest,
+            "a changed size changes the digest"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn manifest_skips_and_reports_links_without_following_them() {
+        let root = scratch("manifest-links");
+        let outside = scratch("manifest-links-outside");
+        fs::write(root.join("main.tex"), b"main").unwrap();
+        fs::write(outside.join("secret.tex"), b"secret").unwrap();
+        fs::create_dir_all(outside.join("dir")).unwrap();
+        fs::write(outside.join("dir/secret.tex"), b"secret").unwrap();
+
+        #[cfg(unix)]
+        let (file_link, dir_link) = {
+            use std::os::unix::fs::symlink;
+            (
+                symlink(outside.join("secret.tex"), root.join("linked.tex")).is_ok(),
+                symlink(outside.join("dir"), root.join("linked-dir")).is_ok(),
+            )
+        };
+        #[cfg(windows)]
+        let (file_link, dir_link) = {
+            use std::os::windows::fs::{symlink_dir, symlink_file};
+            (
+                symlink_file(outside.join("secret.tex"), root.join("linked.tex")).is_ok(),
+                symlink_dir(outside.join("dir"), root.join("linked-dir")).is_ok(),
+            )
+        };
+        if !(file_link && dir_link) {
+            // Creating a symlink needs a privilege on Windows; without it there
+            // is nothing to test. The junction test below covers that host.
+            let _ = fs::remove_dir_all(&root);
+            let _ = fs::remove_dir_all(&outside);
+            return;
+        }
+
+        let (manifest, skipped) = project_manifest(&root).unwrap();
+        assert_eq!(
+            manifest
+                .files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            ["main.tex"]
+        );
+        assert_eq!(skipped, ["linked-dir", "linked.tex"]);
+        fs::remove_dir_all(&root).unwrap();
+        fs::remove_dir_all(&outside).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn manifest_skips_and_reports_a_junction() {
+        let root = scratch("manifest-junction");
+        let outside = scratch("manifest-junction-outside");
+        fs::write(root.join("main.tex"), b"main").unwrap();
+        fs::write(outside.join("secret.tex"), b"secret").unwrap();
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(root.join("escape"))
+            .arg(&outside)
+            .output()
+            .unwrap();
+        if !status.status.success() {
+            let _ = fs::remove_dir_all(&root);
+            let _ = fs::remove_dir_all(&outside);
+            return; // mklink unavailable in this environment
+        }
+
+        let (manifest, skipped) = project_manifest(&root).unwrap();
+        assert_eq!(
+            manifest
+                .files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            ["main.tex"]
+        );
+        assert_eq!(skipped, ["escape"]);
+        let _ = fs::remove_dir(root.join("escape"));
+        fs::remove_dir_all(&root).unwrap();
+        fs::remove_dir_all(&outside).unwrap();
+    }
+
+    #[test]
+    fn manifest_refuses_the_name_and_depth_caps_with_a_named_error() {
+        let root = scratch("manifest-caps");
+        fs::write(root.join("main.tex"), b"main").unwrap();
+        for name in ["a.tex", "b.tex", "c.tex"] {
+            fs::write(root.join(name), b"x").unwrap();
+        }
+        let error = project_manifest_with(&root, MANIFEST_MAX_DEPTH, 3).unwrap_err();
+        assert!(error.contains("3 files"), "{error}");
+        assert!(error.contains("manifest"), "{error}");
+
+        let deep = scratch("manifest-depth");
+        let mut dir = deep.clone();
+        for _ in 0..3 {
+            dir.push("level");
+            fs::create_dir_all(&dir).unwrap();
+        }
+        fs::write(dir.join("main.tex"), b"x").unwrap();
+        let error = project_manifest_with(&deep, 2, MANIFEST_MAX_NAMES).unwrap_err();
+        assert!(error.contains("deeper than 2"), "{error}");
+        assert!(error.contains("directory levels"), "{error}");
+
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(deep).unwrap();
+    }
+
+    #[test]
+    fn manifest_skips_tool_and_library_folders() {
+        let root = scratch("manifest-skipped-dirs");
+        for dir in MANIFEST_SKIPPED_DIRS {
+            let path = root.join(dir);
+            fs::create_dir_all(&path).unwrap();
+            fs::write(path.join("hidden.tex"), b"x").unwrap();
+        }
+        fs::write(root.join("main.tex"), b"main").unwrap();
+
+        let (manifest, skipped) = project_manifest(&root).unwrap();
+        assert_eq!(
+            manifest
+                .files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            ["main.tex"]
+        );
+        assert!(skipped.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manifest_refuses_a_name_that_is_not_unicode() {
+        use std::os::unix::ffi::OsStringExt;
+        let root = scratch("manifest-non-unicode");
+        let name = std::ffi::OsString::from_vec(vec![b'b', b'a', b'd', 0xff]);
+        fs::write(root.join(&name), b"x").unwrap();
+        let error = project_manifest(&root).unwrap_err();
+        assert!(error.contains("valid Unicode"), "{error}");
+        fs::remove_dir_all(root).unwrap();
     }
 
     /// A scratch directory the test process can actually write to.
