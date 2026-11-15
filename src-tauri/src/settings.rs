@@ -147,11 +147,30 @@ fn default_typst_view() -> String {
 
 /// The LaTeX package cache ceiling, in MiB.
 ///
-/// 256 MiB is what the experiment used as a hard limit and is enough for a paper
-/// with a handful of packages and fonts; the reader can lower or raise it in
+/// 512 MiB holds a long book's packages and fonts with room to spare; 256 MiB,
+/// the experiment's figure, was the default until 2026-11 and evicted files a
+/// book needed again on the next compile. The reader can lower or raise it in
 /// Preferences.
 fn default_latex_cache_limit() -> u32 {
-    256
+    512
+}
+
+/// The default before 2026-11, raised once by [`raise_old_cache_default`].
+const OLD_LATEX_CACHE_DEFAULT_MB: u32 = 256;
+
+/// Raise a cache ceiling still at the old default, once.
+///
+/// A stored 256 is almost always the old default written back, not a choice,
+/// and it is too small for a book. `latex_cache_default_raised` records that
+/// the raise ran, so a reader who sets 256 again afterwards keeps it.
+fn raise_old_cache_default(settings: &mut Settings) {
+    if settings.latex_cache_default_raised {
+        return;
+    }
+    if settings.latex_cache_limit_mb == OLD_LATEX_CACHE_DEFAULT_MB {
+        settings.latex_cache_limit_mb = default_latex_cache_limit();
+    }
+    settings.latex_cache_default_raised = true;
 }
 
 /// The installed backend's default engine choice.
@@ -605,6 +624,11 @@ pub struct Settings {
     #[serde(default = "default_latex_cache_limit")]
     pub latex_cache_limit_mb: u32,
 
+    /// Whether the one-time raise of the old 256 MiB default has run. Absent
+    /// from a file written before it existed, which is what triggers it.
+    #[serde(default)]
+    pub latex_cache_default_raised: bool,
+
     /// Whether the reader chose an installed TeX distribution.
     ///
     /// Separate from [`Self::latex_enabled`] on purpose: the bundled engine and a
@@ -894,6 +918,7 @@ impl Default for Settings {
             latex_enabled: false,
             latex_auto_compile: true,
             latex_cache_limit_mb: default_latex_cache_limit(),
+            latex_cache_default_raised: true,
             latex_native_enabled: false,
             latex_native_root: None,
             latex_native_engine: default_native_engine(),
@@ -1171,6 +1196,7 @@ fn parse_settings(raw: &str) -> Option<Settings> {
         settings.spellcheck_string_mode = default_spellcheck_string_mode();
     }
     settings.ai_context_tokens = clamp_context_tokens(settings.ai_context_tokens);
+    raise_old_cache_default(&mut settings);
     settings.latex_cache_limit_mb = clamp_latex_cache_limit(settings.latex_cache_limit_mb);
     settings.wrap_column = clamp_wrap_column(settings.wrap_column);
     // The Files panel was replaced by Favorites. An older file that was last
@@ -1645,10 +1671,11 @@ mod tests {
     }
 
     #[test]
-    fn the_latex_cache_ceiling_is_clamped_and_defaults_to_256() {
+    fn the_latex_cache_ceiling_is_clamped_and_defaults_to_512() {
         // A zero ceiling would make every compile re-download, and an enormous
         // one would turn the cache into a second document folder.
-        assert_eq!(Settings::default().latex_cache_limit_mb, 256);
+        assert_eq!(Settings::default().latex_cache_limit_mb, 512);
+        assert!(Settings::default().latex_cache_default_raised);
         assert_eq!(clamp_latex_cache_limit(0), LATEX_CACHE_MIN_MB);
         assert_eq!(clamp_latex_cache_limit(1), LATEX_CACHE_MIN_MB);
         assert_eq!(clamp_latex_cache_limit(256), 256);
@@ -1704,12 +1731,25 @@ mod tests {
         assert!(loaded.latex_auto_compile);
         assert!(loaded.typst_auto_compile);
         assert!(!loaded.typst_incremental_service);
-        assert_eq!(loaded.latex_cache_limit_mb, 256);
+        assert_eq!(loaded.latex_cache_limit_mb, 512);
         // A file from before installed distributions existed must not opt the
         // reader into one, and must not break loading.
         assert!(!loaded.latex_native_enabled);
         assert!(loaded.latex_native_root.is_none());
         assert_eq!(loaded.latex_native_engine, "auto");
+
+        // The old default, stored, is raised once; a reader who sets it again
+        // after the raise keeps it, and any other value is left alone.
+        let old = parse_settings(r#"{"latexCacheLimitMb":256}"#).unwrap();
+        assert_eq!(old.latex_cache_limit_mb, 512);
+        assert!(old.latex_cache_default_raised);
+        let chosen =
+            parse_settings(r#"{"latexCacheLimitMb":256,"latexCacheDefaultRaised":true}"#).unwrap();
+        assert_eq!(chosen.latex_cache_limit_mb, 256);
+        let small = parse_settings(r#"{"latexCacheLimitMb":128}"#).unwrap();
+        assert_eq!(small.latex_cache_limit_mb, 128);
+        let saved = serde_json::to_value(&old).unwrap();
+        assert_eq!(saved["latexCacheDefaultRaised"], true);
 
         let enabled = r#"{"latexEnabled":true,"latexCacheLimitMb":512}"#;
         let loaded = parse_settings(enabled).expect("the new keys load");

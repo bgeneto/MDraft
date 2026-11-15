@@ -314,6 +314,8 @@ export interface Settings {
   latexAutoCompile: boolean;
   /** The downloaded TeX package cache ceiling, in MiB. */
   latexCacheLimitMb: number;
+  /** Whether the one-time raise of the old 256 MiB default has run. */
+  latexCacheDefaultRaised?: boolean;
   /**
    * Whether the reader chose a TeX installation already on this computer.
    *
@@ -997,10 +999,33 @@ export interface LatexStats {
   texpressoHits: number;
   /** TeXpresso bundle files downloaded rather than served from the cache. */
   texpressoMisses: number;
+  /** Bytes verified, including every cache read: not a download count. */
   texpressoVerifiedBytes: number;
   texpressoRefusals: number;
+  /** Bytes that came from the origin. */
+  texpressoDownloadedBytes: number;
+  texpressoGuard: TexpressoGuardReport;
 }
 export const latexStats = () => invoke<LatexStats>("latex_stats");
+
+/** Why the preview's download guard is holding a download. */
+export type TexpressoHoldReason = "fonts" | "files" | "bytes";
+
+/** The preview session's download guard (`src-tauri/src/texpresso_guard.rs`). */
+export interface TexpressoGuardReport {
+  /** A download waiting for the reader, with this session's totals so far. */
+  held: { reason: TexpressoHoldReason; fonts: number; files: number; bytes: number } | null;
+  /** The reader stopped this session's downloads. */
+  stopped: boolean;
+  /** Bytes the session's own files occupy when that alone passes the cache limit. */
+  cacheOverflow: number | null;
+}
+/**
+ * Answer a held download: `true` continues it and doubles that budget, `false`
+ * stops this preview session's downloads. Resolves to whether one was waiting.
+ */
+export const texpressoDownloadDecision = (allow: boolean) =>
+  invoke<boolean>("texpresso_download_decision", { allow });
 /** Whether the bundled engine can compile with `engine` now (stage 6.2). */
 export const latexEngineAvailable = (engine: string) =>
   invoke<boolean>("latex_engine_available", { engine });

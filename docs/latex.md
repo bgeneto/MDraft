@@ -479,9 +479,31 @@ feature off, which removes the Tab binding with it.
 
 Downloaded TeX packages live in the application's data directory and are evicted
 least-recently-used when the cache reaches its ceiling. *Preferences › LaTeX*
-reports the size, lets you change the ceiling (default 256 MiB), clears the
+reports the size, lets you change the ceiling (default 512 MiB), clears the
 cache and opens the folder. Clearing deletes only downloaded packages: the engine
-is kept, and your documents are never touched.
+is kept, and your documents are never touched. A ceiling still at the old
+256 MiB default is raised to 512 MiB once; set it again afterwards and it stays.
+
+The preview never evicts a file the open document is using: evicting it would
+only make the next compile download it again. When one document alone needs
+more than the ceiling, the preview says so and suggests raising it.
+
+### Missing fonts and runaway downloads
+
+With LuaLaTeX, a font that cannot be found used to make luaotfload rebuild its
+font index by reading every font in TeX Live: about 3,300 downloads and 1 GB,
+repeated on every compile. The preview turns that rebuild off (it adds a
+`luaotfload.conf` with `update-live = false` to its own copy of the project,
+unless the project has one), so a missing font now fails at once with
+fontspec's "cannot be found" error. Fonts that are part of TeX Live are still
+found by family name. Fonts of your own are found by file name, from a local
+library or the project.
+
+As a backstop, the preview pauses a download that would pass 100 font files,
+1,500 files or 750 MB in one session and asks whether to continue. Continue
+lets it go on (and asks again only after twice as much); *Stop downloads* ends
+this preview session's downloads, and the status line says so until the
+preview restarts.
 
 Turning the switch off stops the engine from serving anything and leaves the
 cache inert. It deletes nothing.

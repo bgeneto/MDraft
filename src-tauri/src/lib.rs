@@ -24,6 +24,7 @@ mod settings;
 mod speech;
 mod spellcheck;
 mod tex_fmt;
+mod texpresso_guard;
 mod text_encoding;
 mod tokens;
 mod typst;
@@ -149,6 +150,7 @@ pub fn run() {
             latex::texpresso_status,
             latex::install_texpresso,
             latex::latex_stats,
+            latex::texpresso_download_decision,
             latex::install_latex,
             latex::latex_project_snapshot,
             latex::save_compiled_pdf,

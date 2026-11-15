@@ -424,6 +424,30 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     live.files.get("chapters/one.tex")?.text === "live text",
     "an open tab's unsaved buffer wins over the snapshot",
   );
+
+  // A missing font must not make luaotfload rebuild its index from every
+  // bundle font (2026-11-15: ~1 GB per compile for one missing font).
+  const conf = prepared.files.get("luaotfload.conf")?.text ?? "";
+  check(
+    /^\[db\]$/m.test(conf) && /^update-live = false$/m.test(conf),
+    "a LuaLaTeX project turns luaotfload's live font-index rebuild off",
+  );
+  check(
+    !prepareProject(snapshot, () => null, "xetex").files.has("luaotfload.conf"),
+    "a XeLaTeX project gets no luaotfload configuration",
+  );
+  const own = prepareProject(
+    {
+      ...snapshot,
+      files: [...snapshot.files, { path: "luaotfloadrc", data: encode("[run]\nlog-level = 1\n") }],
+    },
+    () => null,
+    "luatex",
+  );
+  check(
+    !own.files.has("luaotfload.conf") && own.files.has("luaotfloadrc"),
+    "a project's own luaotfload configuration is kept and not overridden",
+  );
 }
 
 // --- the local library index ----------------------------------------------------
