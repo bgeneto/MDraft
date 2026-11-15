@@ -13693,7 +13693,30 @@ async function boot(): Promise<void> {
     },
     pandocStatus: () => pandocCache,
     typstStatus: () => typstCache,
-    setupPandoc: () => optionalTools.open("manage"),
+    setupPandoc: (options) =>
+      optionalTools.open("manage", {
+        focus: "pandoc",
+        select: ["pandoc"],
+        returnFocus: options?.returnFocus,
+      }),
+    recheckPandoc: async () => {
+      let status: api.PandocStatus;
+      try {
+        status = await api.pandocStatus();
+      } catch (error) {
+        toast(`Could not check for pandoc: ${String(error)}`, 5200);
+        return;
+      }
+      pandocCache = status;
+      await syncExportAvailability();
+      preferences?.refresh();
+      toast(
+        status.found
+          ? `Found pandoc ${status.version ?? ""}`.trim() + "."
+          : "Pandoc was not found.",
+        3200,
+      );
+    },
     chooseStyleReference: async (current) => {
       const chosen = await openDialog({
         title: "Choose a Style Reference",

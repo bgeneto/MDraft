@@ -446,19 +446,57 @@ fn managed_root<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     app.path().app_data_dir().ok().map(|d| d.join("pandoc"))
 }
 
-/// Find a pandoc we installed earlier. Any version directory will do; if several
-/// exist, the lexicographically last one wins, which is the newest for the
-/// numeric tags GitHub uses.
+/// Order pandoc release tags by their numeric parts.
+///
+/// A plain string sort puts `3.9` after `3.14`, which made an updated copy lose
+/// to the older folder it was meant to replace. A non-numeric part compares as
+/// zero, so an odd folder name still sorts deterministically instead of failing.
+fn version_key(tag: &str) -> Vec<u64> {
+    tag.trim_start_matches(['v', 'V'])
+        .split(['.', '-'])
+        .map(|part| part.parse().unwrap_or(0))
+        .collect()
+}
+
+/// Every managed version folder that holds a pandoc executable, oldest first.
+fn managed_versions(root: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut dirs: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|dir| dir.join(pandoc_exe()).is_file())
+        .collect();
+    dirs.sort_by_cached_key(|dir| {
+        let name = dir.file_name().map(|n| n.to_string_lossy().into_owned());
+        let name = name.unwrap_or_default();
+        (version_key(&name), name)
+    });
+    dirs
+}
+
+/// Find a pandoc we installed earlier; the numerically newest version wins.
 fn managed_pandoc<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     let root = managed_root(app)?;
-    let mut candidates: Vec<PathBuf> = std::fs::read_dir(&root)
-        .ok()?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path().join(pandoc_exe()))
-        .filter(|path| path.is_file())
-        .collect();
-    candidates.sort();
-    candidates.pop()
+    managed_versions(&root)
+        .pop()
+        .map(|dir| dir.join(pandoc_exe()))
+}
+
+/// Remove every managed version folder except `keep`.
+///
+/// Called only after the new copy has run, so a failed update never leaves the
+/// reader without a working pandoc. Only folders directly under our own managed
+/// root are touched; a pandoc on `PATH` is the reader's and is never modified.
+/// A folder that cannot be removed (an export may be running it on Windows) is
+/// left for the next update: it is older, so it is not the one that is used.
+fn prune_managed_versions(root: &Path, keep: &Path) {
+    for dir in managed_versions(root) {
+        if dir != keep {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
 }
 
 /// Resolve an executable through `PATH`.
@@ -1934,6 +1972,8 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> Result<PandocStatus, String> {
         );
     }
 
+    prune_managed_versions(&root, &dir);
+
     optional_tools::emit(
         app,
         Progress {
@@ -2088,6 +2128,32 @@ pub fn run_after_export<R: Runtime>(app: AppHandle<R>, path: String) -> AfterExp
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_versions_sort_numerically_not_lexically() {
+        let root = std::env::temp_dir().join(format!("mdraft-pandoc-order-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for tag in ["3.9", "3.14", "3.1.11", "notes"] {
+            let dir = root.join(tag);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(pandoc_exe()), b"").unwrap();
+        }
+        // A folder without the executable is not a version.
+        std::fs::create_dir_all(root.join("4.0")).unwrap();
+
+        let names: Vec<String> = managed_versions(&root)
+            .iter()
+            .map(|dir| dir.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["notes", "3.1.11", "3.9", "3.14"]);
+
+        prune_managed_versions(&root, &root.join("3.14"));
+        let left: Vec<PathBuf> = managed_versions(&root);
+        assert_eq!(left, [root.join("3.14")]);
+        // Pruning removes only version folders, never an unrelated directory.
+        assert!(root.join("4.0").is_dir());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     fn format_with(arguments: &str, extra: &str) -> ExportFormat {
         ExportFormat {
