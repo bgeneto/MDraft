@@ -577,14 +577,18 @@ launch at it with `MDRAFT_TEXPRESSO_ORIGIN`.
 The pinned app resolves every file the engine opens by name — the project's
 files, then the TeX Live bundle — and has no search path to configure. MDraft
 therefore serves a **patched `ocaml-worker.js`**: `scripts/texpresso-patch-worker.mjs`
-turns the release's upstream file into the pinned one, inserting the local
-library between the project and the bundle in both the exact and the
-case-insensitive lookup. The library index itself is `src/texpresso/library.ts`
-(TeX Live's per-engine `TEXINPUTS`/`LUAINPUTS` order, roots in order, project
-files first) and travels as `.mdraft-texmf/index.json`; the frame's own
-`worker.js` reads it and reports a library file loaded in place of a bundle
-file. A new TeXpresso release means re-anchoring the two edits in the patch
-script, regenerating the file, re-pinning it and uploading it to the origin.
+turns the release's upstream file into the pinned one. Three edits put the
+on-demand project manifest, then the local library, between the project table
+and the bundle, in both the exact and the case-insensitive lookup; a manifest
+hit is fetched through the frame's capability and inserted into the project
+table, so later lookups answer synchronously. The library index itself is
+`src/texpresso/library.ts` (TeX Live's per-engine `TEXINPUTS`/`LUAINPUTS` order,
+roots in order, project files first) and travels as `.mdraft-texmf/index.json`;
+the frame's own `worker.js` reads it and reports a library file loaded in place
+of a bundle file. A new TeXpresso release means re-anchoring the three edits in
+the patch script, regenerating the file, re-pinning it and uploading it to the
+origin. `scripts/texpresso-origin-check.mjs` proves an origin serves exactly
+the pinned engine, bundle and digest table before a release.
 
 The preview has no second bundled engine to fall back to. A WebView without
 JSPI, a project with a non-UTF-8 text file, a project file inside the reserved
