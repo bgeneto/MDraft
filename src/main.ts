@@ -1094,10 +1094,10 @@ function updateZoomIndicator(): void {
   const zoomed = level !== DEFAULT_ZOOM;
   statusZoom.hidden = !zoomed;
   statusZoom.textContent = `${level}%`;
-  statusZoom.title = `Zoom ${level}% — click to reset to ${DEFAULT_ZOOM}%`;
+  statusZoom.title = `Preview zoom ${level}% — click to reset to ${DEFAULT_ZOOM}%`;
   statusZoom.setAttribute(
     "aria-label",
-    `Document zoom ${level} percent. Click to reset to ${DEFAULT_ZOOM} percent.`,
+    `Preview zoom ${level} percent. Click to reset to ${DEFAULT_ZOOM} percent.`,
   );
 }
 
@@ -1366,7 +1366,9 @@ function applyLayout(): void {
     EDITOR_LINE_HEIGHTS[DEFAULT_EDITOR_LINE_HEIGHT];
   document.documentElement.style.setProperty("--editor-line-height", String(lineHeight));
 
-  editor?.setFontSize(settings.editorFontSize * zoom);
+  // Zoom is a preview control. The source has its own size preference, and
+  // scaling it too would make one setting fight the other.
+  editor?.setFontSize(settings.editorFontSize);
   editor?.setFocusMode(settings.focusMode);
   editor?.setTypewriter(settings.typewriterMode);
   editor?.setCursorBlink(settings.cursorBlink !== false);
@@ -9567,13 +9569,18 @@ function setSidebarTab(tab: api.SidebarTab): void {
 }
 
 function setZoom(level: number): void {
+  // Source-only shows no preview, so a zoom change would be invisible.
+  if (settings.viewMode === "source") {
+    toast("Zoom applies to the preview. Use Editor font size for the source.");
+    return;
+  }
   settings.zoomLevel = Math.min(
     MAX_ZOOM,
     Math.max(MIN_ZOOM, Math.round(level / ZOOM_STEP) * ZOOM_STEP),
   );
   applyLayout();
   persist();
-  toast(`Zoom ${settings.zoomLevel}%`);
+  toast(`Preview zoom ${settings.zoomLevel}%`);
 }
 
 // ---------------------------------------------------------------------------

@@ -643,9 +643,10 @@ built from source, use `Cmd` where the application registers `CmdOrCtrl`.
 | Zoom in / out / reset | `Ctrl+Shift+=` / `Ctrl+Shift+-` / `Ctrl+Alt+0` |
 | Full screen | `F11` |
 
-Zoom applies to the whole document view: the source in Source-only, both panes
-in Split, and the rendered document in Preview-only. It scales text, images,
-diagrams and Typst pages together. Reset returns to 100% and leaves Content
+Zoom applies to the preview only, in every format; the source keeps the Editor
+font size preference. In Source-only there is no preview, so zoom shortcuts
+show a note instead. Zoom scales text, images, diagrams and Typst/LaTeX pages
+together. Reset returns to 100% and leaves Content
 Width and the base editor/preview font sizes alone; the percentage appears in
 the status bar while it differs from 100%.
 
