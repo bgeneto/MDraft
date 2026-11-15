@@ -285,6 +285,12 @@ export class CompiledPreviewUi {
     );
   }
 
+  /** Replace the Compiler output text while a compile runs; problems stay as they are. */
+  liveOutput(output: string): void {
+    this.log = output;
+    this.raw.textContent = output || "The compiler reported no messages.";
+  }
+
   note(node: HTMLElement | null): void {
     this.notice.replaceChildren(...(node ? [node] : []));
     this.notice.hidden = !node;
