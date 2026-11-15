@@ -333,6 +333,8 @@ export interface Settings {
   editorMaxWidth: number;
   /** Line spacing in the source pane. The preview keeps its own reading height. */
   editorLineHeight: EditorLineHeight;
+  /** Column Wrap Paragraph fills to (20–200; the backend clamps it). */
+  wrapColumn: number;
   syntaxTheme: string;
   recentFiles: string[];
   /**
@@ -1482,7 +1484,8 @@ export type AiActionId =
   | "keyPoints"
   | "critique"
   | "table"
-  | "convert";
+  | "convert"
+  | "fixSyntax";
 
 /**
  * One palette action's usage weight, as persisted in `aiActionUsage`.

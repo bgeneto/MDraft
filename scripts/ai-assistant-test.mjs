@@ -42,6 +42,7 @@ const TAGS = {
   "mdraft-critique": "critique",
   "mdraft-table": "table",
   "mdraft-converted": "convert",
+  "mdraft-fixed": "fixSyntax",
 };
 
 // A model that ignores the wrapper protocol: the preamble and the change
@@ -64,6 +65,7 @@ const ANSWERS = {
   critique: "The mock finds the argument clear but the ending abrupt.",
   table: "| A | B |\n| --- | --- |\n| one | two |",
   convert: "# Converted by the mock",
+  fixSyntax: "Syntax repaired by the mock.",
 };
 
 const control = {
@@ -1274,8 +1276,8 @@ try {
     JSON.stringify(palette.sections[0]?.labels),
   );
   check(
-    "the catalog renders fourteen actions plus three shortcuts",
-    palette.rows.length === 17,
+    "the catalog renders fifteen actions plus three shortcuts",
+    palette.rows.length === 18,
     String(palette.rows.length),
   );
   check(
@@ -2369,14 +2371,27 @@ try {
     "Ask offers a Source toggle",
     await evaluate(`Boolean(document.querySelector('.ai-chat .ai-chat-source summary'))`),
   );
+  const askFooter = await footerButtons();
   check(
-    "Ask offers Copy and Insert below",
-    (await footerButtons()).some((b) => b.text === "Copy") &&
-      (await footerButtons()).some((b) => b.text === "Insert below"),
+    "Ask with a selection offers the rewrite footer in order",
+    askFooter.map((b) => b.text).join("|") === "Replace selection|Insert below|New tab|Copy",
+    JSON.stringify(askFooter),
   );
   check(
-    "Ask offers New tab",
-    (await footerButtons()).some((b) => b.text === "New tab" && !b.disabled),
+    "Ask with a selection makes Replace primary",
+    (await evaluate(
+      `document.querySelector('.ai-panel .ai-footer-actions .ai-action.is-primary')?.textContent ?? ''`,
+    )) === "Replace selection",
+  );
+  check(
+    "Ask no longer offers New conversation",
+    !askFooter.some((b) => b.text === "New conversation"),
+    JSON.stringify(askFooter),
+  );
+  check(
+    "Ask offers Replace and New tab",
+    askFooter.some((b) => b.text === "Replace selection" && !b.disabled) &&
+      askFooter.some((b) => b.text === "New tab" && !b.disabled),
   );
   check("Ask Insert below places the answer", await clickFooter("Insert below"));
   check(
@@ -2387,7 +2402,7 @@ try {
 
   console.log("\nAsk multi-turn");
   await clickEditorWord("Regular");
-  await selectToLineEnd();
+  const multiSelection = await selectToLineEnd();
   await chooseAction("Ask AI…");
   await evaluate(
     `(() => { const input = document.querySelector('.ai-ask-input'); input.value = 'First question'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`,
@@ -2410,6 +2425,22 @@ try {
     "the passage is not duplicated in the second turn",
     secondAsk?.body?.messages?.filter((m) => m.role === "user" && m.content.includes("<passage>"))
       .length === 1,
+  );
+  check(
+    "a later Ask turn still offers Replace",
+    (await footerButtons()).some((b) => b.text === "Replace selection" && !b.disabled),
+  );
+  check("Ask Replace applies the latest answer", await clickFooter("Replace selection"));
+  check(
+    "Ask Replace writes the answer in place of the selected passage",
+    (await editorText()).includes("The mock says **this file is a feature tour**"),
+  );
+  await evaluate(`document.querySelector('.cm-content').focus()`);
+  await undo();
+  await sleep(200);
+  check(
+    "one undo restores the replaced passage",
+    (await editorText()).includes(multiSelection.trim()),
   );
   await closePanel();
 
@@ -3778,7 +3809,7 @@ try {
     );
     check(
       "the note counts the customised prompt",
-      String(counted ?? "").includes("1 of 16"),
+      String(counted ?? "").includes("1 of 17"),
       String(counted),
     );
     check("Reset is enabled for a clean file", (await resetDisabled()) === false);
@@ -4100,6 +4131,43 @@ try {
       sameTargetRows[1]?.title !== "Translate · Portuguese",
     JSON.stringify(sameTargetRows.slice(0, 3).map((row) => row.title)),
   );
+
+  console.log("\nAsk without a selection");
+  await clickEditorWord("Regular");
+  await chooseAction("Ask AI…");
+  const noSelectionContext = await evaluate(
+    `document.querySelector('.ai-panel .ai-context-summary')?.textContent ?? ''`,
+  );
+  check(
+    "Ask without a selection captures no document context",
+    noSelectionContext.includes("No document context"),
+    noSelectionContext,
+  );
+  await evaluate(
+    `(() => { const input = document.querySelector('.ai-ask-input'); input.value = 'What is MDraft?'; input.dispatchEvent(new Event('input', { bubbles: true })); })()`,
+  );
+  await evaluate(`document.querySelector('.ai-ask-row .ai-generate').click()`);
+  await waitPanelDone();
+  const noSelectionFooter = await footerButtons();
+  check(
+    "Ask without a selection does not offer Replace",
+    !noSelectionFooter.some((b) => b.text === "Replace selection"),
+    JSON.stringify(noSelectionFooter),
+  );
+  check(
+    "Ask without a selection keeps Copy, Insert below and New tab",
+    noSelectionFooter.map((b) => b.text).join("|") === "Copy|Insert below|New tab",
+    JSON.stringify(noSelectionFooter),
+  );
+  const noSelectionPrimary = await evaluate(
+    `document.querySelector('.ai-panel .ai-footer-actions .ai-action.is-primary')?.textContent ?? ''`,
+  );
+  check(
+    "Ask without a selection keeps Copy primary",
+    noSelectionPrimary === "Copy",
+    noSelectionPrimary,
+  );
+  await closePanel();
 } catch (error) {
   failed += 1;
   console.log(`  FAIL  the suite threw — ${error}`);

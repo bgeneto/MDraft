@@ -66,6 +66,7 @@ import {
   formattedTransaction,
   hasFormatter,
 } from "./format/formatters";
+import { canReflow, reflowView } from "./format/reflow-command";
 import {
   DEFAULT_EDITOR_LINE_HEIGHT,
   EDITOR_LINE_HEIGHTS,
@@ -6958,6 +6959,28 @@ function setDirty(next: boolean): void {
   renderDocTabs();
 }
 
+/** Why Unwrap/Wrap Paragraph cannot run for `session`, or null when they can. */
+function reflowUnavailableReason(session: Session): string | null {
+  if (session.readOnly) return "This document is read-only.";
+  if (!canReflow(session.language)) {
+    return "Paragraph wrapping works in Markdown, LaTeX, Typst and AsciiDoc documents.";
+  }
+  return null;
+}
+
+/**
+ * Unwrap or wrap the paragraphs at the active selection. Only ever on request:
+ * a window resize changes how lines are drawn, never what the file contains.
+ */
+function reflowCommand(mode: "unwrap" | "wrap"): void {
+  const reason = reflowUnavailableReason(doc);
+  if (reason) {
+    toast(reason);
+    return;
+  }
+  toast(reflowView(editor.view, doc.language, mode, settings.wrapColumn ?? 80), 3600);
+}
+
 /** Why Format Document cannot run for `session`, or null when it can. */
 function formatUnavailableReason(session: Session): string | null {
   if (session.readOnly) return "This document is read-only.";
@@ -9340,6 +9363,8 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "format.math": () => inlineCommand("math"),
   "format.displayMath": () => displayMathCommand(),
   "format.document": () => void formatSession(doc.id),
+  "para.unwrap": () => reflowCommand("unwrap"),
+  "para.wrap": () => reflowCommand("wrap"),
 
   "themes.system": () => setTheme("system"),
   "themes.light": () => setTheme("light"),
@@ -9452,7 +9477,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
         "MDraft",
         `Version ${APP_VERSION}`,
         "",
-        "Live-preview editor for Markdown,\nAsciidoc, Typst and HTML",
+        "Live-preview editor for Markdown,\nAsciidoc, Typst, LaTeX and HTML",
         "",
         "Conceived by Bernhard Enders",
         "Coded by DeepSeek Flash v4.1",
@@ -13258,6 +13283,8 @@ async function boot(): Promise<void> {
     readOnly: () => doc.readOnly,
     format: () => formatSession(doc.id),
     formatBlocked: () => formatUnavailableReason(doc),
+    reflow: (mode) => reflowCommand(mode),
+    reflowBlocked: () => reflowUnavailableReason(doc),
     favoriteBlocked: () => (doc.path ? null : "Save the document first."),
     isFavorite: () => doc.path !== null && isFavoritePath(doc.path),
     favorite: () => {

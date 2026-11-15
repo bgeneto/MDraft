@@ -105,8 +105,8 @@ const document = [
 // ---------------------------------------------------------------------------
 
 console.log("\nCatalog");
-equal("fourteen actions", ACTIONS.length, 14);
-equal("every action id is unique", new Set(ACTIONS.map((action) => action.id)).size, 14);
+equal("fifteen actions", ACTIONS.length, 15);
+equal("every action id is unique", new Set(ACTIONS.map((action) => action.id)).size, 15);
 equal(
   "the catalog covers the four real groups",
   [...new Set(ACTIONS.map((action) => action.group))].sort(),
@@ -127,10 +127,22 @@ equal("the cold-start shortcuts are the three the palette used to pin", DEFAULT_
 equal("Continue writing belongs to Write", actionById("continue")?.group, "write");
 equal("Improve writing belongs to Refine", actionById("improve")?.group, "refine");
 equal("Ask AI belongs to Understand", actionById("ask")?.group, "understand");
+equal("Fix errors belongs to Transform", actionById("fixSyntax")?.group, "transform");
+equal("Fix errors replaces the passage", actionById("fixSyntax")?.apply, "replace");
 equal(
   "rewrite actions can replace",
   ACTIONS.filter((action) => action.apply === "replace").map((action) => action.id),
-  ["improve", "expand", "shorten", "simplify", "tone", "translate", "table", "convert"],
+  [
+    "improve",
+    "expand",
+    "shorten",
+    "simplify",
+    "tone",
+    "translate",
+    "table",
+    "convert",
+    "fixSyntax",
+  ],
 );
 equal(
   "understand actions only insert a block",
@@ -148,7 +160,7 @@ equal(
 // ---------------------------------------------------------------------------
 
 console.log("\nPalette search");
-equal("an empty query returns everything", searchActions("").length, 14);
+equal("an empty query returns everything", searchActions("").length, 15);
 equal(
   "translate finds Translate",
   searchActions("translate").map((a) => a.id),
@@ -168,6 +180,11 @@ equal(
   "table finds Convert to table",
   searchActions("table").map((a) => a.id),
   ["table"],
+);
+equal(
+  "latex finds Fix errors and Convert",
+  searchActions("latex").map((a) => a.id),
+  ["convert", "fixSyntax"],
 );
 equal(
   "the Understand group finds all five actions",
@@ -344,15 +361,17 @@ check(
   !parameterIsValid("convert", "markdown", "markdown"),
 );
 check("converting to another markup is accepted", parameterIsValid("convert", "typst", "markdown"));
+check("LaTeX is a convert target", parameterIsValid("convert", "latex", "markdown"));
+check("converting LaTeX to LaTeX is refused", !parameterIsValid("convert", "latex", "latex"));
 equal(
   "the first convert target is the first other markup",
   defaultParameter("convert", "markdown"),
   "typst",
 );
 equal(
-  "convert offers the three languages other than the document's own",
+  "convert offers the four languages other than the document's own",
   convertTargets("typst").map((markup) => markup.id),
-  ["markdown", "html", "asciidoc"],
+  ["markdown", "html", "asciidoc", "latex"],
 );
 equal("the default tone is Professional", defaultParameter("tone", "markdown"), "Professional");
 equal("translate starts empty", defaultParameter("translate", "markdown"), "");
@@ -364,6 +383,7 @@ equal("translate starts empty", defaultParameter("translate", "markdown"), "");
 console.log("\nAnswer language");
 equal("Convert opens its target markup", answerLanguage("convert", "typst", "markdown"), "typst");
 equal("Convert from AsciiDoc opens HTML", answerLanguage("convert", "html", "asciidoc"), "html");
+equal("Convert to LaTeX opens LaTeX", answerLanguage("convert", "latex", "markdown"), "latex");
 equal(
   "a missing parameter falls back to the source",
   answerLanguage("convert", null, "markdown"),
@@ -371,7 +391,7 @@ equal(
 );
 equal(
   "an unknown markup falls back to the source",
-  answerLanguage("convert", "latex", "typst"),
+  answerLanguage("convert", "rst", "typst"),
   "typst",
 );
 equal(
@@ -877,6 +897,15 @@ equal(
   "an unsaved Markdown buffer is detected from its text",
   resolveAiLanguage(false, "typst", "# Title\n\n**bold** and [link](https://example.com)"),
   "markdown",
+);
+equal(
+  "an unsaved LaTeX buffer is detected from its text",
+  resolveAiLanguage(
+    false,
+    "markdown",
+    "\\documentclass{article}\n\\begin{document}\nHello\n\\end{document}",
+  ),
+  "latex",
 );
 equal(
   "an ambiguous unsaved buffer keeps the editor's language",

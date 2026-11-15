@@ -1749,6 +1749,35 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     const blockedReason = readOnly ? "The document is read-only." : isStale ? staleReason() : "";
 
     if (spec.apply === "answer") {
+      // Ask is commentary, not a rewrite, so Copy stays the default outcome
+      // when the question had no target. A selected passage is a deliberate
+      // replace target, and then Ask follows the rewrite footer. A whitespace-
+      // only selection trims to an empty passage and is not a target.
+      if (capture?.hasSelection && capture.selection.length > 0) {
+        footerActions.appendChild(
+          actionButton(
+            "Replace selection",
+            true,
+            () => applyAnswer("replace"),
+            !canApply() || isStale,
+            blockedReason || REPLACE_TITLE,
+          ),
+        );
+        footerActions.appendChild(
+          actionButton(
+            "Insert below",
+            false,
+            () => applyAnswer("below"),
+            !canApply(),
+            blockedReason || INSERT_BELOW_TITLE,
+          ),
+        );
+        footerActions.appendChild(newTabButton());
+        footerActions.appendChild(
+          actionButton("Copy", false, () => void copyAnswer(), !answerText.trim()),
+        );
+        return;
+      }
       footerActions.appendChild(
         actionButton("Copy", true, () => void copyAnswer(), !answerText.trim()),
       );
@@ -1762,7 +1791,6 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
         ),
       );
       footerActions.appendChild(newTabButton());
-      footerActions.appendChild(actionButton("New conversation", false, newConversation));
       return;
     }
 
@@ -2080,31 +2108,6 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     if (state !== "running" || !requestId) return;
     void api.aiCancel(requestId).catch(() => undefined);
     setStatus("Stopping…");
-  }
-
-  function newConversation(): void {
-    askHistory = [];
-    pendingQuestion = "";
-    answerText = "";
-    notes = "";
-    errorMessage = "";
-    startedInfo = null;
-    state = "idle";
-    entryId = null;
-    requestContext = null;
-    capture = host.capture();
-    trackAnchors(capture);
-    target = {
-      sessionId: host.sessionId(),
-      revision: host.revision(),
-      from: capture.selectionFrom,
-      to: capture.selectionTo,
-      text: capture.text.slice(capture.selectionFrom, capture.selectionTo),
-    };
-    askInput.value = "";
-    renderContext();
-    renderPanel();
-    askInput.focus();
   }
 
   function close(): void {

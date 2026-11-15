@@ -82,7 +82,7 @@ function lineEnd(text: string, position: number): number {
  * The paragraph around a position, or the block a selection spans.
  *
  * A paragraph is a run of non-blank lines, which is what a reader means by
- * "this paragraph" in all four markup languages. The offsets are trimmed so a
+ * "this paragraph" in every AI markup language. The offsets are trimmed so a
  * replacement leaves the surrounding indentation and blank lines alone.
  */
 export function paragraphRange(

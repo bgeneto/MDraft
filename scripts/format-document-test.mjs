@@ -585,6 +585,10 @@ try {
     "Duplicate Line",
     "Move Line Up",
     "Move Line Down",
+    // Paragraph reflow sits directly above Format Document: all three rewrite
+    // layout without changing what the document renders.
+    "Unwrap Paragraph",
+    "Wrap Paragraph",
     "Format Document",
     // Read Aloud sits between formatting and Favorites: all three act on the
     // document rather than on the selection above them.

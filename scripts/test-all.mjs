@@ -274,6 +274,15 @@ const SUITES = [
     script: "latex-outline-unit.mjs",
   },
   {
+    // Unwrap/Wrap Paragraph must never change what a document renders. Named
+    // hazards per language, then every shipped sample through Lezer, the LaTeX
+    // token stream and Asciidoctor's HTML.
+    id: "reflow-unit",
+    title: "Paragraph reflow (unit)",
+    kind: "node",
+    script: "reflow-unit.mjs",
+  },
+  {
     id: "latex-word-map-unit",
     title: "LaTeX prose candidates (unit)",
     kind: "node",
@@ -931,6 +940,16 @@ const SUITES = [
     title: "Format Document",
     kind: "cdp",
     script: "format-document-test.mjs",
+    doc: "samples/feature-tour.md",
+  },
+  {
+    // Unwrap/Wrap Paragraph through the menu events and the right-click menu:
+    // one undo step, the Wrap column default, and the protected-paragraph note.
+    // It works in its own untitled tab and empties it before finishing.
+    id: "reflow",
+    title: "Paragraph reflow",
+    kind: "cdp",
+    script: "reflow-test.mjs",
     doc: "samples/feature-tour.md",
   },
   {

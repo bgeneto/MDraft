@@ -2,14 +2,11 @@
 :toc:
 :stem: latexmath
 
-This document is a live sample. Everything shown below is processed by the
-same Asciidoctor.js preview that renders your own `.adoc` files, so the examples
-are the syntax the application actually honours.
+This document is a live sample. Everything shown below is processed by the same Asciidoctor.js preview that renders your own `.adoc` files, so the examples are the syntax the application actually honours.
 
 == Document header and sections
 
-A document starts with a level-0 title. Sections use `==`, subsections `===`,
-and so on:
+A document starts with a level-0 title. Sections use `==`, subsections `===`, and so on:
 
 [source,asciidoc]
 ----
@@ -21,14 +18,11 @@ and so on:
 === Subsection
 ----
 
-The preview understands `:toc:` and `:stem:` at the top of the document. The
-`toc` attribute places a table of contents after the title.
+The preview understands `:toc:` and `:stem:` at the top of the document. The `toc` attribute places a table of contents after the title.
 
 == Text formatting
 
-*strong*, _emphasis_, `inline code`, ^superscript^, ~subscript~, and a
-https://example.com[link]. Line breaks can be forced with ` +` at the end of a
-line. A line starting with `//` is a comment and is not rendered.
+*strong*, _emphasis_, `inline code`, ^superscript^, ~subscript~, and a https://example.com[link]. Line breaks can be forced with ` +` at the end of a line. A line starting with `//` is a comment and is not rendered.
 
 [source,asciidoc]
 ----
@@ -66,8 +60,7 @@ MDraft:: An editor that previews it in the webview.
 | Nested markup | inline code and links | supported
 |===
 
-Tables support header rows, column spans and nested inline markup. The table
-above is a live delimiter block.
+Tables support header rows, column spans and nested inline markup. The table above is a live delimiter block.
 
 == Admonitions
 
@@ -86,8 +79,7 @@ Admonitions can also be blocks with a title:
 [WARNING]
 .Before you save
 ====
-A title alone is not enough: keep a body line inside the block, or Asciidoctor
-drops the admonition from the output.
+A title alone is not enough: keep a body line inside the block, or Asciidoctor drops the admonition from the output.
 ====
 
 == Quotes and rules
@@ -118,8 +110,7 @@ A literal block preserves its text without highlighting:
   indentation is kept
 ....
 
-An image and an include are shown here as source, because a built-in document
-has no folder of its own to resolve them against:
+An image and an include are shown here as source, because a built-in document has no folder of its own to resolve them against:
 
 [source,asciidoc]
 ----
@@ -127,10 +118,7 @@ image::picture.png[Alt text]
 include::chapter.adoc[]
 ----
 
-Local images resolve against the folder of the document being edited. Includes
-are read through the application's file commands, only from the document's own
-folder; absolute paths, URLs and `..` escapes are refused. Include attributes
-such as `lines`, `tag` and `leveloffset` are not applied.
+Local images resolve against the folder of the document being edited. Includes are read through the application's file commands, only from the document's own folder; absolute paths, URLs and `..` escapes are refused. Include attributes such as `lines`, `tag` and `leveloffset` are not applied.
 
 == Diagrams
 
@@ -167,9 +155,7 @@ And as a block:
 [[a,b],[c,d]]((n),(k))
 ++++
 
-`stem:[…]` follows the document's `:stem:` setting. To mix dialects, use
-`asciimath:[…]` or `[asciimath]` for AsciiMath, and `latexmath:[…]` or
-`[latexmath]` for LaTeX.
+`stem:[…]` follows the document's `:stem:` setting. To mix dialects, use `asciimath:[…]` or `[asciimath]` for AsciiMath, and `latexmath:[…]` or `[latexmath]` for LaTeX.
 
 An equation environment gets a number from KaTeX:
 
@@ -180,8 +166,7 @@ x = y^2
 \end{equation}
 ++++
 
-The `:eqnums:` attribute does not number ordinary `[stem]` blocks; only
-`\begin{equation}` does.
+The `:eqnums:` attribute does not number ordinary `[stem]` blocks; only `\begin{equation}` does.
 
 == Links
 
@@ -199,11 +184,8 @@ Relative links and anchors are kept as local links in the preview.
 
 == What the preview does not do
 
-* `include::` accepts only local files inside the document's folder, and does
-  not apply `lines`, `tag` or `leveloffset`.
+* `include::` accepts only local files inside the document's folder, and does not apply `lines`, `tag` or `leveloffset`.
 * `:eqnums:` does not number ordinary stems; use `\begin{equation}`.
-* `stem:[…]` under `:stem: latexmath` is LaTeX. AsciiMath written there is
-  typeset as TeX symbols, not as a radical or matrix.
+* `stem:[…]` under `:stem: latexmath` is LaTeX. AsciiMath written there is typeset as TeX symbols, not as a radical or matrix.
 * `.asc` and `.ad` are not recognised as AsciiDoc.
-* HTML and PDF exports reuse this preview; a Pandoc export receives the
-  original AsciiDoc source and may resolve includes differently.
+* HTML and PDF exports reuse this preview; a Pandoc export receives the original AsciiDoc source and may resolve includes differently.

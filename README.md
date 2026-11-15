@@ -85,10 +85,10 @@ MDraft's AI Assistant is **off by default**. If you enable it, you can use a
 local server such as Ollama or LM Studio, an OpenAI-compatible endpoint, or
 Anthropic. You choose the provider and model; provider charges may apply.
 
-Choose from 14 actions to improve, continue, summarize, translate or convert
-your writing, among other tasks. Review the streamed answer, then copy it,
-replace a selection, insert it, or open it in a new tab. You can also edit the
-prompts behind the actions.
+Choose from 15 actions to improve, continue, summarize, translate, repair
+markup or convert your writing, among other tasks. Review the streamed answer,
+then copy it, replace a selection, insert it, or open it in a new tab. You can
+also edit the prompts behind the actions.
 
 <p align="center">
   <img src="site/assets/img/ai-palette.webp" width="340" alt="The AI Assistant palette, with a search field and actions for translating, converting, expanding and refining text.">

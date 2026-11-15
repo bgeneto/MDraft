@@ -36,6 +36,8 @@
     "latex:native:unit": "node scripts/latex-native-unit.mjs",
     "latex:outline:unit": "node scripts/latex-outline-unit.mjs",
     "latex:word-map:unit": "node scripts/latex-word-map-unit.mjs",
+    "reflow:unit": "node scripts/reflow-unit.mjs",
+    "reflow": "node scripts/reflow-test.mjs",
     "pdf:map-worker:unit": "node scripts/pdf-page-worker-unit.mjs",
     "pdf:map:perf": "node scripts/pdf-map-performance.mjs",
     "pdf:map:webview": "node scripts/pdf-webview-performance.mjs",
