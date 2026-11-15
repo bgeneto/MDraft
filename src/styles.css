@@ -947,6 +947,12 @@ body {
   opacity: 0.35;
 }
 
+/* A preview iframe (LaTeX, HTML) receives the pointer events of its own
+   document, so a drag crossing it would stop reaching the resizer. */
+body.resizing iframe {
+  pointer-events: none;
+}
+
 /* --------------------------------------------------------------------------
    Panes
    -------------------------------------------------------------------------- */
