@@ -1376,21 +1376,78 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
-        let embedded = load_manifest().unwrap();
         let target = current_target_triple().unwrap_or("x86_64-pc-windows-msvc");
-        let err = install_with_manifest_into(&embedded, target, &tmp, false, |_| None).unwrap_err();
+
+        // The embedded manifest is pinned now that the release exists. Zero the
+        // current target explicitly so this test still proves the refusal happens
+        // before any download instead of depending on an unpublished placeholder.
+        let mut placeholder = load_manifest().unwrap();
+        let asset = placeholder
+            .assets
+            .get_mut(target)
+            .expect("the manifest must define the current target");
+        asset.bytes = 0;
+        asset.sha256 = "0".repeat(64);
+
+        let err =
+            install_with_manifest_into(&placeholder, target, &tmp, false, |_| None).unwrap_err();
         assert!(
             err.contains("not yet published"),
             "unexpected error for placeholder digest: {err}"
         );
 
-        let mut evil = embedded;
+        let mut evil = placeholder;
         evil.release_url = "https://evil.example/downloads/".into();
         let origin_err =
             install_with_manifest_into(&evil, target, &tmp, false, |_| None).unwrap_err();
         assert!(origin_err.contains("untrusted origin"));
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn published_digest_validation_is_strict() {
+        assert!(is_valid_published_digest(&"a".repeat(64)));
+        assert!(is_valid_published_digest(&"A".repeat(64)));
+        assert!(!is_valid_published_digest(&"0".repeat(64)));
+        assert!(!is_valid_published_digest(&"a".repeat(63)));
+        assert!(!is_valid_published_digest(&format!("g{}", "a".repeat(63))));
+    }
+
+    #[test]
+    fn manifest_assets_are_placeholders_or_pinned_with_a_size() {
+        let manifest = load_manifest().unwrap();
+        for (target, asset) in &manifest.assets {
+            if is_valid_published_digest(&asset.sha256) {
+                assert!(
+                    asset.bytes > 0,
+                    "{target} pins a digest but not its byte length"
+                );
+            } else {
+                assert_eq!(
+                    asset.sha256,
+                    "0".repeat(64),
+                    "{target} has an invalid digest"
+                );
+                assert_eq!(asset.bytes, 0, "{target} has bytes without a valid digest");
+            }
+        }
+    }
+
+    #[test]
+    fn shipped_x64_targets_have_published_digests() {
+        let manifest = load_manifest().unwrap();
+        for target in ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-musl"] {
+            let asset = manifest
+                .assets
+                .get(target)
+                .expect("the manifest must define both shipped x64 targets");
+            assert!(
+                is_valid_published_digest(&asset.sha256),
+                "{target} has no published digest"
+            );
+            assert!(asset.bytes > 0, "{target} has no published byte length");
+        }
     }
 
     #[cfg(any(target_os = "windows", target_os = "macos"))]
