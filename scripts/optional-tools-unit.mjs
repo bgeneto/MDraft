@@ -15,6 +15,7 @@ import {
   isInstallable,
   normalizeStatuses,
   progressPercent,
+  readyAction,
 } from "../src/optional-tools-state.ts";
 
 const checks = [];
@@ -168,6 +169,27 @@ equal(
   broken.latex.kind === "blocked" ? broken.latex.action : "",
   "latex-preferences",
   "a broken native TeX points at Preferences",
+);
+
+console.log("\n=== ready-row actions ===");
+const managedPandoc = normalizeStatuses({
+  pandoc: pandoc(true, "managed"),
+  typst: typst(true),
+  latex: latex({ previewInstalled: true, bundledEnabled: true }),
+});
+equal(readyAction("pandoc", managedPandoc.pandoc), "update", "MDraft's Pandoc can be updated");
+equal(
+  readyAction("pandoc", installed.pandoc),
+  "add-managed",
+  "a PATH Pandoc offers a private copy",
+);
+equal(readyAction("pandoc", missing.pandoc), null, "a missing Pandoc has no ready action");
+equal(readyAction("typst", installed.typst), null, "Typst has no ready action");
+equal(readyAction("latex", managedPandoc.latex), null, "bundled TeX has no ready action");
+equal(
+  downloadLabel(["pandoc"], managedPandoc),
+  "Done",
+  "an updatable Pandoc is not counted as a download by the selection",
 );
 
 const failed = checks.filter((entry) => !entry.ok).length;

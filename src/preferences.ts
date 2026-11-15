@@ -65,8 +65,14 @@ export interface PreferencesHost extends TexmfPreferencesHost {
   typstStatus(): api.TypstStatus | null;
   /** Optional host-cached companion Typst service status. */
   typstServiceStatus?(): api.TypstServiceStatus | null;
-  /** Check for pandoc and offer to install it if it is missing. */
-  setupPandoc(): Promise<void>;
+  /**
+   * Open Optional tools at the Pandoc row: pre-checked when it is missing, with
+   * Update or repair when MDraft installed it. `returnFocus` puts focus back on
+   * the redrawn Preferences button when the dialog closes.
+   */
+  setupPandoc(options?: { returnFocus?: () => boolean }): Promise<void>;
+  /** Probe for pandoc again and report what was found, without a dialog. */
+  recheckPandoc(): Promise<void>;
   /** Check for Typst and offer to install it if it is missing. */
   setupTypst(): Promise<void>;
   /** Optional host override to install/check the companion Typst service. */
@@ -244,6 +250,8 @@ export type Row =
     };
 
 interface Section {
+      /** A stable key so focus can find this button again after a redraw. */
+      focusKey?: string;
   id: string;
   title: string;
   rows: Row[];
@@ -1152,20 +1160,48 @@ function exportRows(
     {
       kind: "note",
       label: "Pandoc",
-      text: status
-        ? status.found
-          ? `${status.version ?? "Found"}${
-              status.source === "managed" ? " (installed by MDraft)" : ""
-            }`
-          : "Not installed. Word, EPUB and the other Pandoc formats need it."
-        : "Checking…",
+  // Three situations, three honest actions. MDraft's own copy can be updated in
+  // place. A pandoc the reader installed is theirs: MDraft never replaces it, so
+  // the button only looks again (the Optional tools dialog can still add a
+  // private copy). With none found, the dialog opens with Pandoc checked.
+  const managed = status?.found === true && status.source === "managed";
+  const ownPandoc = status?.found === true && !managed;
+  const pandocFocus = "pandoc-setup";
+  const returnFocus = (): boolean => {
+    const target = document.querySelector<HTMLElement>(
+      `.prefs-overlay [data-prefs-focus="${pandocFocus}"]`,
+    );
+    if (!target || target.matches(":disabled")) return false;
+    target.focus({ preventScroll: true });
+    return true;
+  };
+      text: !status
+        ? "Checking…"
+        : !status.found
+          ? "Not installed. Word, EPUB and the other Pandoc formats need it."
+          : managed
+            ? `${status.version ?? "Found"} (installed by MDraft)`
+            : `${status.version ?? "Found"} (your own installation). MDraft does not change it; update it with the tool you installed it with.`,
     },
-    {
-      kind: "button",
-      label: "",
-      text: status?.found ? "Reinstall or update pandoc" : "Find or install pandoc",
-      action: () => host.setupPandoc(),
-    },
+    ownPandoc
+      ? {
+          kind: "button",
+          label: "",
+          text: "Check again",
+          help: "Looks for pandoc again, for example after you updated or removed it.",
+          focusKey: pandocFocus,
+          action: () => host.recheckPandoc(),
+        }
+      : {
+          kind: "button",
+          label: "",
+          text: managed ? "Update or repair pandoc…" : "Install pandoc…",
+          help: managed
+            ? "Opens Optional tools, where Update or repair downloads the latest Pandoc release."
+            : "Opens Optional tools with Pandoc selected. Nothing is downloaded until you confirm.",
+          focusKey: pandocFocus,
+          action: () => host.setupPandoc({ returnFocus }),
+        },
     {
       kind: "button",
       label: "",
@@ -2876,6 +2912,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
     }
     activeId = section.id;
 
+      if (row.focusKey) button.dataset.prefsFocus = row.focusKey;
     if (section.id === "ai") {
       const settings = host.settings();
       const endpoint = `${settings.aiProvider}|${settings.aiBaseUrl}`;

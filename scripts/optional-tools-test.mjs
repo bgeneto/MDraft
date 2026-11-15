@@ -211,6 +211,102 @@ if (opened) {
   await sleep(400);
 }
 
+console.log("\n=== Preferences › Export pandoc button ===");
+
+// The pandoc button used to be inert: the dialog refused to open while the
+// Preferences overlay was visible. Which button is shown depends on the host's
+// pandoc, so each of the three cases is asserted against what it should do.
+async function pressEscape() {
+  for (const type of ["keyDown", "keyUp"]) {
+    await send("Input.dispatchKeyEvent", {
+      type,
+      key: "Escape",
+      code: "Escape",
+      windowsVirtualKeyCode: 27,
+    });
+  }
+  await sleep(300);
+}
+
+await evaluate(`
+  window.__TAURI_INTERNALS__.invoke("plugin:event|emit", {
+    event: "menu",
+    payload: "tools.exportConfig",
+  })
+`);
+let pandocButton = null;
+for (let attempt = 0; attempt < 40; attempt += 1) {
+  pandocButton = await evaluate(`
+    (() => {
+      const button = document.querySelector(
+        '.prefs-overlay:not([hidden]) [data-prefs-focus="pandoc-setup"]',
+      );
+      return button ? button.textContent : null;
+    })()
+  `);
+  if (pandocButton && pandocButton !== "Checking…") break;
+  await sleep(150);
+}
+check(pandocButton !== null, "Preferences › Export shows a pandoc button", pandocButton ?? "");
+
+if (pandocButton === "Check again") {
+  // The reader's own pandoc: MDraft looks again and never opens an installer.
+  await evaluate(
+    `document.querySelector('.prefs-overlay [data-prefs-focus="pandoc-setup"]').click()`,
+  );
+  await sleep(800);
+  check(
+    (await evaluate(`Boolean(document.querySelector(".optional-tools-dialog[open]"))`)) === false,
+    "Check again re-probes without opening the installer",
+  );
+} else if (pandocButton !== null) {
+  await evaluate(
+    `document.querySelector('.prefs-overlay [data-prefs-focus="pandoc-setup"]').click()`,
+  );
+  let row = null;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    row = await evaluate(`
+      (() => {
+        const row = document.querySelector(
+          '.optional-tools-dialog[open] .optional-tools-row[data-tool="pandoc"]',
+        );
+        if (!row) return null;
+        return {
+          focused: row.classList.contains("is-focused"),
+          checked: row.querySelector("input")?.checked ?? null,
+          link: row.querySelector(".optional-tools-link")?.textContent ?? null,
+          prefsOpen: Boolean(document.querySelector(".prefs-overlay:not([hidden])")),
+        };
+      })()
+    `);
+    if (row) break;
+    await sleep(150);
+  }
+  check(row !== null, `"${pandocButton}" opens Optional tools over Preferences`);
+  check(row?.focused === true, "the dialog marks the Pandoc row", JSON.stringify(row));
+  if (pandocButton === "Install pandoc…") {
+    check(row?.checked === true, "a missing Pandoc starts checked", JSON.stringify(row));
+  } else {
+    check(
+      row?.link === "Update or repair",
+      "MDraft's Pandoc offers Update or repair",
+      JSON.stringify(row),
+    );
+  }
+  check(row?.prefsOpen === true, "Preferences stays open underneath");
+  // Close only the dialog; nothing may download.
+  await pressEscape();
+  check(
+    (await evaluate(`Boolean(document.querySelector(".optional-tools-dialog[open]"))`)) === false,
+    "Escape closes the dialog without a download",
+  );
+  check(
+    (await evaluate(`Boolean(document.querySelector(".prefs-overlay:not([hidden])"))`)) === true,
+    "Preferences is still open after the dialog closes",
+  );
+}
+await pressEscape();
+
 check(
   (await evaluate(`Boolean(document.querySelector(".cm-content"))`)) === true,
   "the editor is usable afterwards",

@@ -20,6 +20,7 @@ import {
   isReady,
   normalizeStatuses,
   progressPercent,
+  readyAction,
   type OptionalTool,
   type OptionalToolPhase,
   type OptionalToolRuntime,
@@ -65,13 +66,26 @@ export interface OptionalToolsHost {
 
 export type InstallOutcome = "ready" | "declined" | "failed";
 
-interface OpenOptions {
+export interface OpenOptions {
   /** The full sentence above the rows in context mode. */
   context?: string;
   /** The tools the blocked action needs. */
   required?: readonly OptionalTool[];
   /** Skip the host probe when the caller already has the raw answers. */
   statuses?: RawOptionalToolsStatuses;
+  /** The row the caller is about: scrolled to, highlighted and focused. */
+  focus?: OptionalTool;
+  /**
+   * Pre-check these tools in manage mode when they are missing. A ready tool is
+   * ignored, so a caller can pass it without first reading the status.
+   */
+  select?: readonly OptionalTool[];
+  /**
+   * Put focus back where the caller wants it when the element that had focus
+   * is gone, typically a Preferences button the panel redrew while the dialog
+   * was open. Returns false when it found nothing to focus.
+   */
+  returnFocus?: () => boolean;
 }
 
 interface RowRefs {
@@ -147,6 +161,9 @@ export class OptionalToolsController {
     latex: { kind: "idle" },
   };
   private selected = new Set<OptionalTool>();
+  private select: readonly OptionalTool[] = [];
+  private focusTool: OptionalTool | null = null;
+  private returnFocus: (() => boolean) | null = null;
   private locked = new Set<OptionalTool>();
   private required = new Set<OptionalTool>();
   private queue: OptionalTool[] = [];
@@ -186,14 +203,25 @@ export class OptionalToolsController {
         this.mode = mode;
         this.contextText = options.context ?? null;
         this.required = new Set(options.required ?? []);
+        this.select = options.select ?? [];
         this.applyDefaultSelection();
       }
+      this.focusTool = options.focus ?? null;
       this.render();
-      this.dialog.focus();
+      if (!this.focusRequestedRow()) this.dialog.focus();
       return;
     }
     if (this.opening) return;
-    if (document.querySelector("dialog[open], .prefs-overlay:not([hidden])")) return;
+    // Only the unprompted first-run offer stays out of the way of other UI.
+    // An explicit open has a reader waiting for it, often from a Preferences
+    // button: refusing silently there made those buttons do nothing. The modal
+    // dialog sits in the top layer, above the Preferences overlay.
+    if (
+      mode === "first-run" &&
+      document.querySelector("dialog[open], .prefs-overlay:not([hidden])")
+    ) {
+      return;
+    }
 
     this.opening = true;
     try {
@@ -203,9 +231,12 @@ export class OptionalToolsController {
         this.mode = mode;
         this.contextText = options.context ?? null;
         this.required = new Set(options.required ?? []);
+        this.select = options.select ?? [];
         this.applyDefaultSelection();
       }
       if (this.mode === "first-run" && !this.hasMissingTool()) return;
+      this.focusTool = options.focus ?? null;
+      this.returnFocus = options.returnFocus ?? null;
       this.buildDialog();
     } catch (error) {
       // A first-run probe failure must not greet the reader with an error. An
@@ -246,7 +277,12 @@ export class OptionalToolsController {
     this.mode = "context";
     this.contextText = context;
     this.required = new Set(unique);
+    this.select = [];
     this.applyDefaultSelection();
+    if (!this.dialog) {
+      this.focusTool = null;
+      this.returnFocus = null;
+    }
     this.showDialog();
 
     if (unique.some((tool) => statuses[tool].kind === "blocked")) {
@@ -274,6 +310,11 @@ export class OptionalToolsController {
   private applyDefaultSelection(): void {
     if (!this.statuses) return;
     this.selected = new Set(defaultSelection(this.mode, this.statuses, [...this.required]));
+    if (this.mode === "manage") {
+      for (const tool of this.select) {
+        if (isInstallable(this.statuses[tool])) this.selected.add(tool);
+      }
+    }
     this.locked = new Set(
       this.mode === "context"
         ? [...this.required].filter((tool) => isInstallable(this.statuses![tool]))
@@ -381,8 +422,23 @@ export class OptionalToolsController {
       this.close("declined");
       return;
     }
-    this.focusFirstRow();
+    if (!this.focusRequestedRow()) this.focusFirstRow();
     this.updateIndicator();
+  }
+
+  /** Scroll to, mark and focus the row the caller asked about, once. */
+  private focusRequestedRow(): boolean {
+    const tool = this.focusTool;
+    this.focusTool = null;
+    if (!tool || !this.list) return false;
+    const row = this.list.querySelector<HTMLElement>(`.optional-tools-row[data-tool="${tool}"]`);
+    if (!row) return false;
+    row.classList.add("is-focused");
+    row.scrollIntoView({ block: "nearest" });
+    const target = row.querySelector<HTMLElement>("input:not(:disabled), button:not(:disabled)");
+    if (!target) return false;
+    target.focus();
+    return true;
   }
 
   private focusFirstRow(): void {
@@ -425,7 +481,9 @@ export class OptionalToolsController {
 
   private restoreFocus(): void {
     const previous = this.previousFocus;
+    const returnFocus = this.returnFocus;
     this.previousFocus = null;
+    this.returnFocus = null;
     if (
       previous &&
       previous !== document.body &&
@@ -434,7 +492,7 @@ export class OptionalToolsController {
       previous.getClientRects().length > 0
     ) {
       previous.focus({ preventScroll: true });
-    } else {
+    } else if (!returnFocus?.()) {
       this.host.focusEditor();
     }
   }
@@ -530,11 +588,32 @@ export class OptionalToolsController {
     const row = node("div", "optional-tools-row is-ready");
     row.dataset.tool = tool;
     const body = node("span", "optional-tools-row-body");
+    const state = node("span", "optional-tools-state is-ready", sourceLabel(status));
     body.append(
       node("span", "optional-tools-row-title", meta.title),
       node("span", "optional-tools-row-hint", meta.hint),
-      node("span", "optional-tools-state is-ready", sourceLabel(status)),
+      state,
     );
+    const action = readyAction(tool, status);
+    if (action) {
+      // A link, not a checkbox: the selection and its download total are for
+      // tools that are missing. This starts at once, like Retry, and runs
+      // through the same queue, progress row and status-bar indicator.
+      const link = button(
+        action === "update" ? "Update or repair" : "Install MDraft's own copy",
+        "optional-tools-link",
+      );
+      link.disabled = this.busy;
+      link.title =
+        action === "update"
+          ? `Downloads the latest ${OPTIONAL_TOOL_NAME[tool]} release (about ${meta.sizeMb} MB) and replaces MDraft's copy.`
+          : `Downloads ${OPTIONAL_TOOL_NAME[tool]} (about ${meta.sizeMb} MB) into MDraft's own folder. MDraft then uses that copy instead of the one on PATH, which is left untouched.`;
+      link.addEventListener("click", () => void this.installReady(tool));
+      state.append(" · ", link);
+      if (action === "add-managed") {
+        appendExtraHint(body, "This copy is yours; update it with the tool you installed it with.");
+      }
+    }
     row.append(node("span", "optional-tools-check", "✓"), body);
     return row;
   }
@@ -687,10 +766,12 @@ export class OptionalToolsController {
   // Installs
   // -------------------------------------------------------------------------
 
-  private async start(): Promise<void> {
+  /** `forced` names ready tools to install anyway: an update or a managed copy. */
+  private async start(forced: readonly OptionalTool[] = []): Promise<void> {
     if (this.busy || !this.statuses) return;
     const installable = META_ORDER.filter(
-      (tool) => this.selected.has(tool) && isInstallable(this.statuses![tool]),
+      (tool) =>
+        forced.includes(tool) || (this.selected.has(tool) && isInstallable(this.statuses![tool])),
     );
     if (installable.length === 0) return;
 
@@ -760,12 +841,29 @@ export class OptionalToolsController {
 
   private async retry(tool: OptionalTool): Promise<void> {
     if (this.busy || !this.statuses) return;
+    // A failed update leaves the old copy ready; Retry repeats the update.
+    if (readyAction(tool, this.statuses[tool])) {
+      await this.installReady(tool);
+      return;
+    }
     if (!isInstallable(this.statuses[tool])) {
+      this.runtime[tool] = { kind: "idle" };
       this.render();
       return;
     }
     this.selected = new Set([tool]);
     await this.start();
+  }
+
+  /** Reinstall, or add MDraft's own copy of, a tool that is already usable. */
+  private async installReady(tool: OptionalTool): Promise<void> {
+    if (this.busy || !this.statuses) return;
+    if (!readyAction(tool, this.statuses[tool])) {
+      this.render();
+      return;
+    }
+    this.selected = new Set();
+    await this.start([tool]);
   }
 
   private async enableTool(tool: OptionalTool): Promise<void> {

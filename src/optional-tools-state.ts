@@ -140,6 +140,24 @@ export function isReady(status: OptionalToolStatus): boolean {
 }
 
 /**
+ * What a ready row may offer besides its ✓.
+ *
+ * `update` re-downloads MDraft's own copy: the installer always fetches the
+ * latest release, so the same action is an update or, at the same version, a
+ * repair. `add-managed` installs MDraft's own copy beside one the reader put on
+ * PATH. That copy then takes priority, so the row must say so; the reader's own
+ * pandoc is never touched. Only Pandoc has these routes.
+ */
+export type ReadyAction = "update" | "add-managed";
+
+export function readyAction(tool: OptionalTool, status: OptionalToolStatus): ReadyAction | null {
+  if (tool !== "pandoc" || status.kind !== "ready") return null;
+  if (status.source === "managed") return "update";
+  if (status.source === "path") return "add-managed";
+  return null;
+}
+
+/**
  * What starts checked.
  *
  * First run suggests Pandoc because it unlocks the most formats. Context mode
