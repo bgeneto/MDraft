@@ -246,12 +246,12 @@ export type Row =
       disabled?: () => boolean;
       /** Why it is disabled; the preset rows' sentence when omitted. */
       disabledTitle?: string;
+      /** A stable key so focus can find this button again after a redraw. */
+      focusKey?: string;
       action: () => void | Promise<void>;
     };
 
 interface Section {
-      /** A stable key so focus can find this button again after a redraw. */
-      focusKey?: string;
   id: string;
   title: string;
   rows: Row[];
@@ -1156,10 +1156,6 @@ function exportRows(
   // printed: it is long, it is not a setting, and the reader who wants to look
   // at the files has the button. The explanation of what each tool is lives in
   // the guide and in docs/export.md, not in a preferences panel.
-  const rows: Row[] = [
-    {
-      kind: "note",
-      label: "Pandoc",
   // Three situations, three honest actions. MDraft's own copy can be updated in
   // place. A pandoc the reader installed is theirs: MDraft never replaces it, so
   // the button only looks again (the Optional tools dialog can still add a
@@ -1175,6 +1171,10 @@ function exportRows(
     target.focus({ preventScroll: true });
     return true;
   };
+  const rows: Row[] = [
+    {
+      kind: "note",
+      label: "Pandoc",
       text: !status
         ? "Checking…"
         : !status.found
@@ -2883,6 +2883,7 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
       button.type = "button";
       button.className = "prefs-button";
       button.textContent = row.text;
+      if (row.focusKey) button.dataset.prefsFocus = row.focusKey;
       if (row.help) button.title = row.help;
       if (row.disabled?.()) {
         button.disabled = true;
@@ -2912,7 +2913,6 @@ export function createPreferences(host: PreferencesHost): PreferencesHandle {
     }
     activeId = section.id;
 
-      if (row.focusKey) button.dataset.prefsFocus = row.focusKey;
     if (section.id === "ai") {
       const settings = host.settings();
       const endpoint = `${settings.aiProvider}|${settings.aiBaseUrl}`;
