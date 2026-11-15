@@ -54,8 +54,7 @@ const EDITS = [
   },
   {
     what: "the async lookup: manifest before the library and the bundle",
-    from:
-      "if(c12)a11=c12[1];else for(c12=0;;){if(c12===b11)b11=0;else{if(d11=as(B2,r(a11,c12)[c12+1]),!d11){c12=c12+1|0;continue}f10[1]=[j,d11[1]],b11=[j,[b4,b11+c12|0]]}if(b11){a11=b11[1];break}a11=k10(a11,0);break}",
+    from: "if(c12)a11=c12[1];else for(c12=0;;){if(c12===b11)b11=0;else{if(d11=as(B2,r(a11,c12)[c12+1]),!d11){c12=c12+1|0;continue}f10[1]=[j,d11[1]],b11=[j,[b4,b11+c12|0]]}if(b11){a11=b11[1];break}a11=k10(a11,0);break}",
     to:
       "if(c12)a11=c12[1];else{" +
       "var mdH=globalThis.__mdraftProjectHas;" +
@@ -122,9 +121,7 @@ if (target === "--check") {
   const pins = JSON.parse(readFileSync(join(repo, "src-tauri", "texpresso.json"), "utf8"));
   const pin = pins.assets.find((asset) => asset.path === "ocaml-worker.js");
   const ok = pin && pin.bytes === result.bytes && pin.sha256 === result.sha256;
-  console.log(
-    `  ${ok ? "PASS" : "FAIL"}  src-tauri/texpresso.json pins the patched worker`,
-  );
+  console.log(`  ${ok ? "PASS" : "FAIL"}  src-tauri/texpresso.json pins the patched worker`);
   process.exit(ok ? 0 : 1);
 }
 writeFileSync(target, patched);
