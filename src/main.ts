@@ -315,6 +315,7 @@ const preview = el<HTMLElement>("preview");
 const previewShell = el<HTMLElement>("preview-shell");
 const compiledUi = new CompiledPreviewUi(previewShell, previewPane, el("compiler-logs"), {
   compile: compileCurrentDocument,
+  compileClean: compileCurrentLatexClean,
   cancel: () => (doc.language === "latex" ? cancelLatexBuild() : cancelTypstBuild()),
   auto: (on) =>
     doc.language === "latex"
@@ -1884,6 +1885,15 @@ function latexResultBytes(result: LatexResult): number {
  */
 let forceNextBuild = false;
 
+/**
+ * The render token a Recompile from Scratch started, so that build's final
+ * status names the action instead of "Compiled in …". A later token does not
+ * match, so an abandoned or failed clean build cannot label a normal one.
+ */
+let latexCleanBuildToken: number | null = null;
+/** The next render is the one a Recompile from Scratch asked for. */
+let latexCleanCompilePending = false;
+
 /** Starts of the compilers, for the freshness suite. Never read by the shell. */
 let compileCount = 0;
 function countCompile(): void {
@@ -2679,11 +2689,13 @@ function setTypstStatus(message: string, saveable = false, state?: CompiledStatu
   }
 }
 
-function compileCurrentLatex(): void {
+function compileCurrentLatex(clean = false): void {
   if (doc.language !== "latex") return;
   texpresso?.flush();
   // Compile is also the reader's retry after a frame failure.
   texpressoFailed.clear();
+  // A failure note describes the build being replaced; any Compile clears it.
+  compiledUi.note(null);
   // Compile always builds: the reader may be retrying a flaky engine or a
   // package fetch, and an unchanged key must not turn the button into a no-op.
   committedKey = null;
@@ -2694,6 +2706,7 @@ function compileCurrentLatex(): void {
   }
   window.clearTimeout(renderTimer);
   renderToken += 1;
+  latexCleanCompilePending = clean;
   // Not cancelLatex(): disposing would cold-boot the engine on every manual
   // Compile. `forceNextBuild` bypasses the result store; a crashed or hung
   // engine is replaced by the watchdog and the circuit breaker in latex.ts.
@@ -2701,6 +2714,44 @@ function compileCurrentLatex(): void {
   if (settings.viewMode === "source") setViewMode("split");
   window.clearTimeout(renderTimer);
   void doRender();
+}
+
+/**
+ * Recompile from scratch: Compile, but on engines that remember nothing.
+ *
+ * The reader's folder holds no build files (every backend compiles a snapshot),
+ * so the state that outlives a build lives here: the TeXpresso frame keeps its
+ * auxiliary files and checkpoints between runs, and the hidden WasmTex engine
+ * does the same. Dropping both, with the kept results and the logs that
+ * described them, makes the next build start from the sources alone. The
+ * downloaded TeX Live and font caches are not build state and stay.
+ */
+function compileCurrentLatexClean(): void {
+  if (doc.language !== "latex") return;
+  // The toolbar's split button is disabled while a build runs, but the menu
+  // item is not: disposing the frame under an export would lose that PDF.
+  if (texpressoExporting > 0) {
+    toast("Wait for the PDF export before recompiling from scratch.");
+    return;
+  }
+  window.clearTimeout(renderTimer);
+  renderToken += 1;
+  cancelLatex();
+  latexInFlight = false;
+  texpressoRelease();
+  texpressoFallbackReason = null;
+  texpressoLog = [];
+  latexStore.clear();
+  // The old build's marks and list describe work this command discards. The
+  // rebuild repopulates them from its own result.
+  latexProblems = [];
+  latexProblemRoot = null;
+  latexProblemFiles = new Set();
+  selectedLatexProblem = null;
+  editor.clearDiagnostics();
+  compiledUi.clearLogs();
+  perfMark("latex-clean-compile");
+  compileCurrentLatex(true);
 }
 
 /**
@@ -4239,10 +4290,17 @@ async function renderLatexPreview(
     }
     // A project outline is built from this result's sources.
     if (outlineScope === "project" && settings.sidebarTab === "outline") refreshOutline();
+    const clean = latexCleanBuildToken === token;
+    if (clean) latexCleanBuildToken = null;
+    const label = clean
+      ? "Recompiled from scratch"
+      : stored
+        ? "Up to date"
+        : `Compiled in ${((result.elapsedMs ?? performance.now() - started) / 1000).toFixed(1)} s`;
     setLatexStatus(
-      `${stored ? "Up to date" : `Compiled in ${((result.elapsedMs ?? performance.now() - started) / 1000).toFixed(1)} s`} · ${result.engine ?? "LaTeX"}${result.warnings.length ? ` · ${result.warnings.length}${result.warningsTruncated ? "+" : ""} warning${result.warnings.length === 1 && !result.warningsTruncated ? "" : "s"}` : ""}`,
+      `${label} · ${result.engine ?? "LaTeX"}${result.warnings.length ? ` · ${result.warnings.length}${result.warningsTruncated ? "+" : ""} warning${result.warnings.length === 1 && !result.warningsTruncated ? "" : "s"}` : ""}`,
       {
-        label: "PDF ready",
+        label: clean ? "Recompiled from scratch" : "PDF ready",
         severity: result.warnings.length ? "warning" : "success",
         detail: compiledUi.issueSummary,
         engine: `${result.engine ?? "LaTeX"} · ${((result.elapsedMs ?? performance.now() - started) / 1000).toFixed(1)} s`,
@@ -4515,6 +4573,8 @@ let texpressoFetch: {
 let texpressoWatching = false;
 /** Exports waiting on the frame; the download count runs while any does. */
 let texpressoExporting = 0;
+/** Frames this window has mounted; the CDP suites read a remount from it. */
+let texpressoSessionCount = 0;
 const TEXPRESSO_FETCH_TICK_MS = 750;
 /** The export's own step: the frame has typeset and `xdvipdfmx` converts. */
 const TEXPRESSO_EXPORT_WAIT = "Preparing the PDF for export…";
@@ -4776,6 +4836,8 @@ function texpressoPrepare(build: LatexBuildRequest, storeOnly: boolean): boolean
       build.root.directory,
       texpressoHandlers,
     );
+    texpressoSessionCount += 1;
+    preview.dataset.texpressoSession = String(texpressoSessionCount);
     texpresso.hold(settings.latexAutoCompile === false);
     texpressoLog = [];
     texpressoLogLine(`Preview starting (${ENGINE_LABELS[engine]})`);
@@ -4995,12 +5057,17 @@ function commitLatexShadow(
   const warnings = result.warnings.length
     ? ` · ${result.warnings.length}${result.warningsTruncated ? "+" : ""} warning${result.warnings.length === 1 && !result.warningsTruncated ? "" : "s"}`
     : "";
-  setLatexStatus(`PDF for export up to date · ${result.engine ?? "LaTeX"}${warnings}`, {
-    label: "PDF ready",
-    severity: result.warnings.length ? "warning" : "success",
-    detail: compiledUi.issueSummary,
-    engine: `${result.engine ?? "LaTeX"} · ${seconds} s`,
-  });
+  const clean = latexCleanBuildToken === value.token;
+  if (clean) latexCleanBuildToken = null;
+  setLatexStatus(
+    `${clean ? "Recompiled from scratch" : "PDF for export up to date"} · ${result.engine ?? "LaTeX"}${warnings}`,
+    {
+      label: clean ? "Recompiled from scratch" : "PDF ready",
+      severity: result.warnings.length ? "warning" : "success",
+      detail: compiledUi.issueSummary,
+      engine: `${result.engine ?? "LaTeX"} · ${seconds} s`,
+    },
+  );
   syncMenuState(false);
 }
 
@@ -5118,6 +5185,26 @@ function texpressoProblems(session: TexpressoSession): void {
   }
 }
 
+/**
+ * The frame failed after its own restart. The retry that helps is not another
+ * Compile on the same frame: it is a new frame from the sources.
+ */
+function texpressoFailureNote(): HTMLElement {
+  const note = document.createElement("div");
+  note.className = "typst-note";
+  const text = document.createElement("span");
+  text.className = "typst-note-text";
+  text.textContent =
+    "The preview stopped responding and its restart failed. Recompile from scratch to start it again from the sources.";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "typst-notebutton";
+  button.textContent = "Recompile from scratch";
+  button.addEventListener("click", compileCurrentLatexClean);
+  note.append(text, button);
+  return note;
+}
+
 const texpressoHandlers = {
   onReady(session: TexpressoSession, info: { missing: string[]; jspi: boolean }): void {
     if (session !== texpresso) return;
@@ -5142,8 +5229,9 @@ const texpressoHandlers = {
   onBroken(session: TexpressoSession, reason: string): void {
     texpressoFailed.add(pathKey(session.key.rootPath));
     if (session !== texpresso) return;
-    toast(`${reason} Compile again to retry.`, 6200);
+    toast(reason, 6200);
     texpressoFallbackTo("failed");
+    compiledUi.note(texpressoFailureNote());
   },
   onRecovery(session: TexpressoSession, step: "resync" | "restart"): void {
     perfMark("texpresso-recovery", { step });
@@ -6174,6 +6262,12 @@ function htmlInputs(): { baseDir: string | null; name: string; scripts: boolean;
 
 async function doRender(force = false): Promise<void> {
   const token = ++renderToken;
+  // Compile marked this render before calling in; the token the commit reads
+  // is only known here.
+  if (latexCleanCompilePending) {
+    latexCleanBuildToken = token;
+    latexCleanCompilePending = false;
+  }
   if (!force && settings.viewMode === "source") {
     previewStale = true;
     previewSyncReady = false;
@@ -9653,6 +9747,7 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "view.source": () => setViewMode("source"),
   "view.split": () => setViewMode("split"),
   "view.latexCompile": compileCurrentLatex,
+  "view.latexCompileClean": compileCurrentLatexClean,
   // No menu item: the differential test triggers a re-anchoring compare.
   "view.latexReanchor": () => reanchorLatex("command"),
   // No menu item either: tests force a blue/green engine swap.

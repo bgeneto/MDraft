@@ -823,6 +823,94 @@ try {
     `${pathsBeforeSwitch} -> ${pathsAfterSwitch}`,
   );
 
+  console.log("=== recompile from scratch ===");
+  const more = ".compiled-toolbar .compiled-compile-more";
+  check(
+    await waitFor(
+      `(() => { const b=document.querySelector(${JSON.stringify(more)}); return !!b && !b.hidden && !b.disabled && b.getAttribute("aria-haspopup")==="menu"; })()`,
+      60_000,
+      "the split Compile button",
+    ),
+    "LaTeX's Compile is a split button with a dropdown half",
+  );
+  await evaluate(`document.querySelector(${JSON.stringify(more)}).click()`);
+  const options = await evaluate(
+    `JSON.stringify([...document.querySelectorAll(".compiled-compile-menu [role=menuitem] .editor-menu-label")].map(n=>n.textContent))`,
+  ).then(JSON.parse);
+  check(
+    JSON.stringify(options) === JSON.stringify(["Compile", "Recompile from scratch"]),
+    "the dropdown lists Compile and Recompile from scratch",
+    JSON.stringify(options),
+  );
+  check(
+    (await evaluate(
+      `document.querySelector(${JSON.stringify(more)}).getAttribute("aria-expanded")`,
+    )) === "true",
+    "the open dropdown is announced as expanded",
+  );
+  await evaluate(
+    `document.querySelector(".compiled-compile-menu").dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}))`,
+  );
+  check(
+    await evaluate(
+      `!document.querySelector(".compiled-compile-menu") && document.activeElement===document.querySelector(${JSON.stringify(more)})`,
+    ),
+    "Escape closes the dropdown and returns focus to the chevron",
+  );
+
+  // The session number and the log are read in the click's own turn: the
+  // command must already have dropped the old frame and its output.
+  const sessionBefore = Number((await dataset("texpressoSession")) ?? "0");
+  const cleanStartLog = await evaluate(`(() => {
+    document.querySelector(${JSON.stringify(more)}).click();
+    [...document.querySelectorAll(".compiled-compile-menu [role=menuitem]")]
+      .find(b => b.textContent.includes("Recompile from scratch")).click();
+    return document.querySelector(".compiler-output")?.textContent ?? "";
+  })()`);
+  check(
+    cleanStartLog === "The compiler reported no messages.",
+    "Recompile from scratch drops the old build's logs before it starts",
+    cleanStartLog.slice(0, 60),
+  );
+  check(
+    await waitFor(
+      `Number(document.querySelector("#preview")?.dataset.texpressoSession ?? 0) > ${sessionBefore}`,
+      120_000,
+      "a new TeXpresso session",
+    ),
+    "Recompile from scratch mounts a new TeXpresso session",
+  );
+  check(
+    await waitFor(
+      `document.querySelector(".compiled-toolbar .compiled-state-label")?.textContent === "Recompiled from scratch" && !document.querySelector(".compiled-toolbar .compiled-compile").classList.contains("latex-cancel")`,
+      300_000,
+      "the clean build's status",
+    ),
+    "the status names the build from scratch",
+  );
+  check(
+    (await evaluate(
+      `(document.querySelector(".compiler-output")?.textContent.match(/Preview starting/g) ?? []).length`,
+    )) === 1,
+    "the log holds only the new run",
+  );
+  check(
+    (await evaluate(`document.querySelector("#compiler-problems")?.textContent ?? ""`)) ===
+      "No problems reported.",
+    "the problems list holds only the new build",
+  );
+
+  const menuSessionBefore = Number((await dataset("texpressoSession")) ?? "0");
+  await emitMenu(page, "view.latexCompileClean");
+  check(
+    await waitFor(
+      `Number(document.querySelector("#preview")?.dataset.texpressoSession ?? 0) > ${menuSessionBefore} && document.querySelector(".compiled-toolbar .compiled-state-label")?.textContent === "Recompiled from scratch" && !document.querySelector(".compiled-toolbar .compiled-compile").classList.contains("latex-cancel")`,
+      300_000,
+      "the menu command's clean build",
+    ),
+    "the Tools menu command runs the same action",
+  );
+
   console.log("=== engines and fallbacks ===");
   // XeLaTeX restarts the frame with `xetex`: the app's engine is part of the
   // frame's URL, so a second target with `engine=xetex` is the proof.

@@ -150,6 +150,21 @@ match the PDF on screen, the preview says **Up to date** instead of compiling.
 That covers saving a file the preview already showed, undoing an edit, and moving
 between chapters of the same project. **Compile** always builds.
 
+### Recompile from scratch
+
+MDraft never writes `.aux`, `.log` or other build files into your project
+folder: every build compiles a private copy of the sources. The preview engine
+keeps a warm, incremental state between builds, so that the next build is fast.
+If the preview seems stuck on an old failure after you fixed the source, or you
+want to rule that state out, open the arrow beside **Compile** and choose
+**Recompile from scratch**, or use **Tools › Recompile LaTeX from Scratch**.
+MDraft then discards the engine's state, the kept results and the logs, and
+builds again from the sources alone. The first build afterwards takes as long as
+opening the project. Downloaded TeX Live packages and fonts are kept;
+*Preferences › LaTeX* clears that cache separately. An installed TeX
+distribution already starts every build in a fresh folder, so for it this
+command only clears the logs.
+
 ## Choosing the engine
 
 The bundled distribution compiles with **LuaLaTeX** unless a project asks for
