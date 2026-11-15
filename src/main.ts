@@ -285,6 +285,8 @@ import {
   ScrollIndex,
   ScrollOwnership,
   SyncReference,
+  ABSORB_MIN_PX,
+  absorbResidual,
   blockCorrection,
   solveGesture,
   type BlockTop,
@@ -695,9 +697,22 @@ interface GesturePoint {
   offset: number | null;
   /** Row centre in screen pixels, in the pane the gesture happened in. */
   y: number;
+  /** Its own pane has already taken a leftover once; it never moves again. */
+  settled?: boolean;
 }
 /** Measure, write, measure again: a target that was not laid out is an estimate. */
 const GESTURE_PASSES = 3;
+/**
+ * How long a released click waits before its own pane takes the leftover the
+ * other pane could not. The second click of a double-click, or a triple-click,
+ * must land on the text it was aimed at, so nothing moves under the pointer
+ * until the click sequence has ended; any input in between cancels the move.
+ */
+const ABSORB_DELAY_MS = 400;
+/** Long enough for the eye to follow the clicked row to its new height. */
+const ABSORB_ANIMATION_MS = 180;
+let absorbTimer = 0;
+let absorbFrame = 0;
 /**
  * The last gesture, kept until the next input. A layout change after the
  * alignment (an image decodes, the deferred word map arrives) solves it again.
@@ -717,6 +732,7 @@ function resetSyncReference(): void {
   const moved = syncReference.source !== SYNC_MARGIN || syncReference.preview !== SYNC_MARGIN;
   syncReference.reset();
   gesturePin = null;
+  cancelGestureAbsorb();
   followTop.source = followTop.preview = null;
   // Only a pair that had moved was ever published; this also runs before the
   // sync section of the module exists.
@@ -10820,7 +10836,9 @@ function alignPagesScroll(direction: SyncPane, refined = false): void {
 // A click, a double-click or a settled drag in one pane brings its counterpart
 // in the other pane to the same height, and then tells scroll sync where the two
 // rows ended up, so the next wheel tick continues from there. The pane the
-// gesture happened in is never scrolled. Two earlier attempts at moving a pane on
+// gesture happened in is not scrolled while the gesture can still continue; it
+// only takes, afterwards, what the other pane could not (scheduleGestureAbsorb).
+// Two earlier attempts at moving a pane on
 // a click were reverted; docs/architecture.md records
 // why this one is different, and the rule a new call site has to keep.
 // ---------------------------------------------------------------------------
@@ -11009,6 +11027,7 @@ function levelDomGesture(point: GesturePoint, pass = 0): void {
   // What is left is where the counterpart really is: the pair is true at once,
   // even when the pane stopped at the end of its range.
   calibrateGesture(point, delta - moved);
+  scheduleGestureAbsorb(point, delta - moved);
   if (Math.abs(moved) >= 0.5 && pass + 1 < GESTURE_PASSES)
     afterGestureLayout(() => levelDomGesture(point, pass + 1));
 }
@@ -11029,6 +11048,83 @@ function writeGesture(pane: SyncPane, delta: number): number {
   }
   scrollOwnership.wrote(pane, paneScrollTop(pane), performance.now());
   return paneScrollTop(pane) - before;
+}
+
+function paneScrollMax(pane: SyncPane): number {
+  if (pane === "source") return editor.scrollMax();
+  return previewPane.scrollHeight - previewPane.clientHeight;
+}
+
+function cancelGestureAbsorb(): void {
+  window.clearTimeout(absorbTimer);
+  cancelAnimationFrame(absorbFrame);
+  absorbTimer = absorbFrame = 0;
+}
+
+/**
+ * Let the gesture's own pane take the leftover the other pane could not.
+ *
+ * The other pane stops at the end of its range: a source preamble of comments
+ * and settings renders to nothing, so a click near the top of the source has
+ * its counterpart far above, with the preview already at 0. Left as a skew, the
+ * pair only levels after the reader has scrolled several times that distance.
+ *
+ * Moving the clicked pane is what the earlier, reverted attempts got wrong, so
+ * this one keeps three rules: it waits until the click sequence has ended (a
+ * double- or triple-click still lands on its word), any input cancels it, and
+ * the row glides rather than jumps, so the eye stays on it. A small leftover is
+ * not worth that motion and stays with levelStep(). The HTML guest scrolls by
+ * message, so a gesture inside it never moves its own pane.
+ */
+function scheduleGestureAbsorb(point: GesturePoint, residual: number): void {
+  cancelGestureAbsorb();
+  if (point.settled || Math.abs(residual) < ABSORB_MIN_PX) return;
+  if (point.pane === "preview" && doc.language === "html") return;
+  const epoch = scrollOwnership.epoch,
+    token = renderToken,
+    source = editor.getDoc(),
+    from = paneScrollTop(point.pane);
+  absorbTimer = window.setTimeout(() => {
+    absorbTimer = 0;
+    if (
+      epoch !== scrollOwnership.epoch ||
+      token !== renderToken ||
+      source !== editor.getDoc() ||
+      !gestureSyncAvailable() ||
+      Math.abs(paneScrollTop(point.pane) - from) >= 1
+    )
+      return;
+    const shift = absorbResidual(residual, from, paneScrollMax(point.pane));
+    if (shift) animateGestureAbsorb(point, from, shift);
+  }, ABSORB_DELAY_MS);
+}
+
+function animateGestureAbsorb(point: GesturePoint, from: number, shift: number): void {
+  const epoch = scrollOwnership.epoch;
+  const instant = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+  const start = performance.now();
+  const step = (now: number): void => {
+    absorbFrame = 0;
+    // A wheel, key or press during the glide owns the panes from there.
+    if (epoch !== scrollOwnership.epoch || !gestureSyncAvailable()) return;
+    const t = instant ? 1 : Math.min(1, (now - start) / ABSORB_ANIMATION_MS);
+    const eased = 1 - (1 - t) ** 3;
+    writeGesture(point.pane, from + shift * eased - paneScrollTop(point.pane));
+    if (t < 1) {
+      absorbFrame = requestAnimationFrame(step);
+      return;
+    }
+    const moved = paneScrollTop(point.pane) - from;
+    const settled: GesturePoint = { ...point, y: point.y - moved, settled: true };
+    if (gesturePin?.point === point) {
+      gesturePin.point = settled;
+      gesturePin.ownTop = paneScrollTop(point.pane);
+    }
+    // Measure both rows where they now are, so the pair is calibrated level
+    // and the next wheel tick has no skew to work off.
+    afterGestureLayout(() => levelGesture(settled, GESTURE_PASSES - 1));
+  };
+  absorbFrame = requestAnimationFrame(step);
 }
 
 /**
@@ -11075,6 +11171,7 @@ function levelPagesGesture(point: GesturePoint, pass = 0): void {
     };
   const moved = writeGesture(otherPane(point.pane), solved.delta);
   calibrateGesture(point, solved.delta - moved);
+  scheduleGestureAbsorb(point, solved.delta - moved);
   if (pass + 1 >= GESTURE_PASSES || (Math.abs(moved) < 0.5 && !estimated)) return;
   if (!estimated) {
     afterGestureLayout(() => levelPagesGesture(point, pass + 1));
@@ -11190,6 +11287,7 @@ async function levelHtmlGesture(point: GesturePoint, pass = 0): Promise<void> {
     }
   }
   calibrateGesture(point, delta - moved);
+  scheduleGestureAbsorb(point, delta - moved);
   if (Math.abs(moved) >= 0.5 && pass + 1 < GESTURE_PASSES)
     afterGestureLayout(() => void levelHtmlGesture(point, pass + 1));
 }
