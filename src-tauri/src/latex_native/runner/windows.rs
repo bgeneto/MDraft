@@ -10,7 +10,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Read;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::AsRawHandle;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -31,7 +31,7 @@ use windows::Win32::System::Threading::{
     STARTUPINFOEXW, UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
-use super::{JobDir, RunOutcome, RunSpec};
+use super::{JobDir, RunOutcome, RunSpec, SessionWorkspace};
 
 static JOB_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -122,6 +122,47 @@ pub(super) fn job_dir(app: &tauri::AppHandle, job: &str) -> Result<JobDir, Strin
     })
 }
 
+pub(super) fn workspace_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| format!("Cannot locate the LaTeX workspace directory: {error}"))?
+        .join("latex-jobs")
+        .join("session"))
+}
+
+pub(super) fn workspace_dir(app: &tauri::AppHandle, key: &str) -> Result<SessionWorkspace, String> {
+    let safe: String = key
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-')
+        .take(64)
+        .collect();
+    if safe.is_empty() || safe != key {
+        return Err("The LaTeX workspace key is invalid.".into());
+    }
+    let root = workspace_root(app)?;
+    std::fs::create_dir_all(&root).map_err(|error| {
+        format!(
+            "Cannot create the LaTeX workspace directory {}: {error}",
+            root.display()
+        )
+    })?;
+    let path = root.join(&safe);
+    let created = !path.exists();
+    std::fs::create_dir_all(&path).map_err(|error| {
+        format!(
+            "Cannot create the LaTeX build workspace {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(SessionWorkspace { path, created })
+}
+
+pub(super) fn cleanup_workspaces(app: &tauri::AppHandle) {
+    if let Ok(root) = workspace_root(app) {
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
 pub(super) fn run(spec: &RunSpec, cancel: &AtomicBool) -> Result<RunOutcome, String> {
     let console = OpenOptions::new()
         .create(true)

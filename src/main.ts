@@ -231,7 +231,13 @@ import {
   type LatexDiagnostic,
   type LatexResult,
 } from "./latex";
-import { KeyRhythm, LatestWinsGate, adaptiveDelay, staleBeyondCap } from "./latex-scheduler";
+import {
+  KeyRhythm,
+  LatestWinsGate,
+  adaptiveDelay,
+  nativeDelay,
+  staleBeyondCap,
+} from "./latex-scheduler";
 import { resolveMainDocument } from "./latex-root";
 import {
   ENGINE_LABELS,
@@ -2335,7 +2341,11 @@ function renderDelay(): number {
   if (doc.language === "latex") {
     const now = performance.now();
     if (staleBeyondCap(latexLastStart, latexUnrenderedSince, now)) return 0;
-    return adaptiveDelay(latexRhythm.intervals());
+    const delay = adaptiveDelay(latexRhythm.intervals());
+    // An installed engine is a batch compiler; its quiet period is longer than
+    // the warm bundled engine's. Before the first status arrives, use the
+    // bundled rhythm.
+    return latexEngine?.backend === "native" ? nativeDelay(delay) : delay;
   }
   if (doc.language === "html") return 300;
   if (doc.language === "asciidoc" || doc.language === "markdown") {
@@ -3963,7 +3973,7 @@ async function latexSavePdf(): Promise<void> {
 async function renderLatexPreview(
   source: string,
   token: number,
-  options: { storeOnly?: boolean } = {},
+  options: { storeOnly?: boolean; clean?: boolean } = {},
 ): Promise<void> {
   const storeOnly = options.storeOnly === true;
   const force = !storeOnly && forceNextBuild;
@@ -4082,6 +4092,9 @@ async function renderLatexPreview(
       // One installed-TeX process at a time, newest waiting revision first: an
       // edit no longer kills the running process (that starved the preview
       // exactly as it did the bundled engine). A Cancel still does.
+      if (nativeGate.holder !== null) {
+        setLatexStatus("Waiting for the previous LaTeX compile…");
+      }
       const release = await nativeGate.acquire(token);
       try {
         setLatexStatus(`Compiling with ${label}…`);
@@ -4099,6 +4112,7 @@ async function renderLatexPreview(
             root: build.root.directory,
             manifest: snapshot.manifest.files.map((file) => file.path),
             texmf: snapshot.texmf,
+            clean: options.clean === true,
           });
           if (doc.id !== activeId) return;
           buildEngine = native.engine;
@@ -4333,7 +4347,7 @@ async function renderLatexPreview(
         label: clean ? "Recompiled from scratch" : "PDF ready",
         severity: result.warnings.length ? "warning" : "success",
         detail: compiledUi.issueSummary,
-        engine: `${result.engine ?? "LaTeX"} · ${((result.elapsedMs ?? performance.now() - started) / 1000).toFixed(1)} s`,
+        engine: `${result.engine ?? "LaTeX"} · ${((result.elapsedMs ?? performance.now() - started) / 1000).toFixed(1)} s${result.passes ? ` · ${result.passes} pass${result.passes === 1 ? "" : "es"}` : ""}`,
       },
     );
     // Export › PDF and Print are enabled by this commit and name its engine.
@@ -4794,7 +4808,14 @@ function texpressoFallbackTo(reason: TexpressoFallback, file: string | null = nu
   texpressoChip();
   latexInFlight = false;
   const why = texpressoFallbackText(reason, { file });
-  setLatexStatus(`Preview unavailable: ${why}`, { label: "Preview", severity: "warning" });
+  // The reason must travel as `detail`: `status()` shows `state.label` and
+  // `state.detail`, so putting the explanation only in the message produced a
+  // bare "Preview" warning.
+  setLatexStatus("Preview unavailable", {
+    label: "Preview unavailable",
+    severity: "warning",
+    detail: why,
+  });
   syncMenuState(false);
   perfMark("texpresso-fallback", { reason, file });
 }
@@ -4830,6 +4851,14 @@ function texpressoPrepare(build: LatexBuildRequest, storeOnly: boolean): boolean
   texpressoFallbackReason = null;
   delete statusEngine.dataset.baseTitle;
   if (latexPreviewBackend() !== "texpresso") {
+    texpressoRelease();
+    texpressoChip();
+    return false;
+  }
+  // An installed distribution is a backend, not a TeXpresso fallback. Naming it
+  // as one produced a warning status on every native build, before the native
+  // compile even started.
+  if (build.engineStatus.backend !== "bundled") {
     texpressoRelease();
     texpressoChip();
     return false;
@@ -6348,7 +6377,9 @@ async function doRender(force = false): Promise<void> {
   const wantsMap = settings.viewMode === "split";
 
   if (doc.language === "latex") {
-    await renderLatexPreview(source, token);
+    await renderLatexPreview(source, token, {
+      clean: latexCleanBuildToken === token,
+    });
     return;
   }
 
