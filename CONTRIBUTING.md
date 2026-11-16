@@ -123,6 +123,9 @@ checkout; capture scripts default to the operating system temporary directory.
 
 ## Publication checks
 
+For version bumps, release tags, CI artifacts and publication retries, follow
+the [release guide](docs/releasing.md).
+
 Install the local safeguards once with `npm run security:hooks`. Stage the intended
 files, then run `npm run repo:hygiene` and `npm run security:scan`. The checks read
 the Git index and reject forced additions too. Pre-push checks every outgoing ref,
