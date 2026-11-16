@@ -10,7 +10,9 @@
 // index between the project table and the bundle, in both lookups. A manifest
 // hit is fetched through the frame's capability and inserted into the project
 // table, so later lookups answer synchronously and the main-thread renderer
-// receives the bytes through the bridge.
+// receives the bytes through the bridge. A fourth edit gives the export's
+// xdvipdfmx, which shares the lookup but never asks for the case-insensitive
+// one, the engine's case-insensitive fallback after an exact miss.
 //
 // The input must be the release's upstream file, byte for byte; each edit must
 // match exactly once; the result must parse. `--check` writes nothing and
@@ -71,6 +73,25 @@ const EDITS = [
       "if(!c12){var mdL=globalThis.__mdraftTexmfLookupNocase;" +
       "if(mdL)for(var mdI=1;mdI<b11.length;mdI++){var mdN=mdL(m(b11[mdI]));if(mdN){c12=[j,n(mdN)];break}}}" +
       "if(c12)b11=[j,c12[1]];else{if(c12=ar2[1],c12)",
+  },
+  {
+    // The export's xdvipdfmx shares this host (with no session, `c11` 0) but
+    // its WebAssembly never imports `fs_lookup_nocase`, so an image the engine
+    // found under another letter case would be missing from Export › PDF.
+    // `mdQ` is true when no candidate name matches exactly anywhere: project
+    // table, manifest, library index, loaded bundle, or bundle index. Only then
+    // does the export take the host's own case-insensitive answer, so an exact
+    // match still wins, as it does for TeX. TeX's host has a session and is
+    // unchanged.
+    what: "the export's lookup: the engine's case-insensitive fallback",
+    from: "return{lookup:S(2,function(a11,b11){b11=bY(f$,b11),f10[1]=0,a11=aq2(n(a11),b11)",
+    to:
+      "function mdQ(mdA,mdE){var mdC=aq2(n(mdA),bY(f$,mdE)),mdQh=globalThis.__mdraftProjectHas,mdQt=globalThis.__mdraftTexmfLookup;" +
+      "for(var mdI=1;mdI<mdC.length;mdI++){var mdN=mdC[mdI];" +
+      "if(i10(mdN)||mdQh&&mdQh(m(mdN))||mdQt&&mdQt(m(mdN))||as(B2,mdN)||l10&&at(l10[1],mdN))return 0}return 1}" +
+      "var mdX;return mdX={lookup:S(2,function(a11,b11){" +
+      'if(!c11&&mdQ(a11,b11)){var mdS=mdX.lookupNocase(a11,b11);if(typeof mdS==="string"){a11=mdS;b11=[]}}' +
+      "b11=bY(f$,b11),f10[1]=0,a11=aq2(n(a11),b11)",
   },
 ];
 

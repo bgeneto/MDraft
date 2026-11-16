@@ -6,7 +6,12 @@
 % the square proves pdf.js loaded and the word needs its standard fonts.
 % scripts/latex-pdf-image-fixture.mjs writes figures/swatch.pdf before the
 % latex-pdf-image layer runs; the repository does not hold PDFs.
+%
+% The second include spells the folder in the wrong letter case, as the Legrand
+% Orange Book's images/background.pdf does for an Images/ folder. MiKTeX on
+% NTFS finds it; so must the preview and the frame's own export.
 \begin{document}
 \section{A figure}
 \includegraphics[width=4cm]{figures/swatch.pdf}
+\includegraphics[width=4cm]{FIGURES/swatch.pdf}
 \end{document}

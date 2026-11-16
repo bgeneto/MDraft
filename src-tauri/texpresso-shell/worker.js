@@ -11,7 +11,8 @@
 //
 // The pinned ocaml-worker.js is patched (scripts/texpresso-patch-worker.mjs) to
 // ask these hooks for a name the project itself does not hold, before the TeX
-// Live bundle:
+// Live bundle (the export's xdvipdfmx reaches the case-insensitive ones through
+// the patch's own fallback, since its WebAssembly never asks for them):
 //   __mdraftProjectHas(name)        → true when the manifest holds the name;
 //   __mdraftProjectHasNocase(name)  → the on-disk spelling, or null;
 //   __mdraftProjectFetch(name)      → a Promise<Uint8Array|null>;
