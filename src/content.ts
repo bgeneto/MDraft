@@ -266,7 +266,7 @@ const SHORTCUTS_LINES: string[] = [
   "| --- | --- |",
   "| Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` |",
   "| Move focused tab left / right | `Alt+Shift+Left` / `Alt+Shift+Right` |",
-  "| Go to line | `Ctrl+Alt+G` |",
+  "| Go to line / heading | `Ctrl+Alt+G` / `Ctrl+Alt+H` |",
   "",
   "## Insert",
   "",

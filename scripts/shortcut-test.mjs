@@ -125,6 +125,7 @@ for (const [id, expected] of [
   ["file.nextTab", "CmdOrCtrl+Tab"],
   ["file.prevTab", "CmdOrCtrl+Shift+Tab"],
   ["edit.find", "CmdOrCtrl+F"],
+  ["navigate.gotoLine", "CmdOrCtrl+Alt+G"],
   ["navigate.gotoHeading", "CmdOrCtrl+Alt+H"],
   ["file.print", "CmdOrCtrl+P"],
   ["view.source", "CmdOrCtrl+/"],
