@@ -362,6 +362,8 @@ Other editor features:
 - **Reopen Closed Tab** (`Ctrl+Shift+T`) restores the most recently closed tab,
   with its caret and undo history. A clean saved file is read from disk again;
   an untitled or discarded buffer comes back as dirty, so no text is lost.
+- **Go to Line** (**Navigate › Go to Line…**, `Ctrl+Alt+G`) jumps to a line
+  number in the active document. Type the number and press Enter.
 - **Go to Heading** (**Navigate › Go to Heading…**, `Ctrl+Alt+H`) opens a
   keyboard-first list of the active document's headings. Type to filter by title,
   level or line; Enter jumps and Escape returns to the editor.

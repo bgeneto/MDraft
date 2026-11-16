@@ -1296,7 +1296,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     };
 
     let navigate = SubmenuBuilder::new(app, "Navigate")
-        .item(&item("navigate.gotoLine", "Go to Line…", None)?)
+        .item(&item(
+            "navigate.gotoLine",
+            "Go to Line…",
+            Some("CmdOrCtrl+Alt+G"),
+        )?)
         .item(&item(
             "navigate.gotoHeading",
             "Go to Heading…",
