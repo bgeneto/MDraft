@@ -1,7 +1,9 @@
-// Deny writes and history-changing Git commands while master/main is checked
-// out. The pre-commit hook is the tool-agnostic backstop; this plugin catches
-// the common agent path at edit time and explains the remedy before any file
-// changes.
+// Deny writes and history-changing Git commands while a protected branch is
+// checked out, and deny branch switches from a dirty working tree.
+//
+// During active development master accepts direct commits, so no branch is
+// protected and only the dirty-switch guard is active. Add "master" back to
+// PROTECTED_BRANCHES to restore the topic-branch-only workflow.
 //
 // Deliberately no dependency on the plugin package: a plain { id, setup }
 // object keeps this working across OpenCode builds whose plugin API differs.
@@ -9,7 +11,7 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 
-const PROTECTED_BRANCHES = new Set(["master", "main"]);
+const PROTECTED_BRANCHES = new Set<string>();
 
 const MUTATING_GIT =
   /(?:^|[;&|]\s*)(?:&\s*)?git(?:\.exe)?\s+(?:-[Cc]\s+\S+\s+)*(?:commit|merge|rebase|cherry-pick|revert|reset|push|pull|apply|am|stash\s+(?:drop|pop|clear)|branch\s+-[dD]|tag\s+-d)\b/i;

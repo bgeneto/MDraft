@@ -15,8 +15,7 @@ Owner plans, ADRs, audits and detailed research are maintained in separate priva
 storage; contributors do not need that storage to build or test.
 
 For a focused bug, a typo, a CSS fix or a documentation correction, just make
-the change on a topic branch and open a pull request. `master` is protected;
-direct pushes are rejected.
+the change on a topic branch and open a pull request.
 
 ## Reporting a problem
 
@@ -107,8 +106,7 @@ checkout; capture scripts default to the operating system temporary directory.
 
 ## Pull requests
 
-- Open the PR from a topic branch, never from `master`; the remote rejects direct
-  pushes to `master`.
+- Open the PR from a topic branch, never from `master`.
 - Keep the working tree clean before switching branches. Uncommitted changes
   follow the checkout, not the branch; give each concurrent task its own
   worktree.
