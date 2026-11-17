@@ -926,6 +926,27 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         }
     };
 
+    // An item whose shortcut the webview already handles. The accelerator only
+    // labels the item: it is left out of ACCELERATORS, so the frontend does not
+    // bind it, and it is drawn on Windows only, where the native menu never
+    // translates accelerators. On macOS and GTK the menu would take the key
+    // itself and run the command in place of (or beside) the webview's own.
+    let shown = |id: &str, label: &str, accel: &str| -> tauri::Result<MenuItem<R>> {
+        let plain = || MenuItemBuilder::with_id(id, label).build(app);
+        if !cfg!(windows) {
+            return plain();
+        }
+        MenuItemBuilder::with_id(id, label)
+            .accelerator(accel)
+            .build(app)
+            .or_else(|error| {
+                eprintln!(
+                    "[menu] accelerator {accel:?} for {id} was rejected ({error}); registering without it"
+                );
+                plain()
+            })
+    };
+
     // The same shape as `item`, plus a check state. The accelerator must still be
     // recorded in ACCELERATORS: F8, F9 and the sidebar and tab shortcuts are
     // carried by check items, and losing them here would silently kill the
@@ -1030,13 +1051,22 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             Some("CmdOrCtrl+Shift+O"),
         )?)
         .item(&recent)
-        .item(&item("file.closeFolder", "Close Folder", None)?)
+        // Reopen Closed Tab is an open command, and Close Folder a close one:
+        // each sits in the group that matches what it does, not its pair.
+        .item(&item(
+            "file.reopenClosed",
+            "Reopen Closed Tab",
+            Some("CmdOrCtrl+Shift+T"),
+        )?)
         .separator()
         .item(&item("file.save", "Save", Some("CmdOrCtrl+S"))?)
         .item(&item("file.saveAs", "Save As…", Some("CmdOrCtrl+Shift+S"))?)
         .item(&item("file.saveAll", "Save All", Some("CmdOrCtrl+Alt+S"))?)
         .item(&check("file.autoSave", "Auto Save", None)?)
         .item(&item("file.reload", "Reload from Disk", None)?)
+        // Encoding and line endings are properties of the file on disk: the
+        // dialog reinterprets, converts and saves it, like the rows above.
+        .item(&item("tools.encoding", "Encoding and Line Endings…", None)?)
         .separator()
         .item(&item("file.print", "Print…", Some("CmdOrCtrl+P"))?)
         .item(&export)
@@ -1044,15 +1074,15 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&item("file.reveal", "Show in Folder", None)?)
         .item(&item("file.favorite", "Add to Favorites", None)?)
         .separator()
-        .item(&item(
-            "file.reopenClosed",
-            "Reopen Closed Tab",
-            Some("CmdOrCtrl+Shift+T"),
-        )?)
         .item(&item("file.close", "Close Tab", Some("CmdOrCtrl+W"))?)
         .item(&close_tabs)
-        .separator()
-        .item(&PredefinedMenuItem::close_window(app, None)?);
+        .item(&item("file.closeFolder", "Close Folder", None)?)
+        // The predefined label is a bare "Close", which reads as a sibling of
+        // Close Tab; name the window so the three close scopes are distinct.
+        .item(&PredefinedMenuItem::close_window(
+            app,
+            Some("Close Window"),
+        )?);
 
     // Preferences is a File-menu command on Windows and Linux; macOS keeps its
     // own application-menu item. The id and the CmdOrCtrl+, accelerator do not
@@ -1073,15 +1103,31 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     // them natively; the rest are custom because the editor owns them.
     let select_occurrences =
         SubmenuBuilder::with_id(app, "edit.selectOccurrences", "Multiple Cursors")
-            .item(&item("edit.selectNext", "Select Next Occurrence", None)?)
+            // The shortcuts in this submenu and in Lines, and F3 for Find Next,
+            // are CodeMirror's own keymap. They are named here so the menu shows
+            // them; the frontend runs them only while the editor has focus (see
+            // EDITOR_KEY_IDS in main.ts), as the editor's keymap always did.
+            .item(&item(
+                "edit.selectNext",
+                "Select Next Occurrence",
+                Some("CmdOrCtrl+D"),
+            )?)
             .item(&item(
                 "edit.selectAllOccurrences",
                 "Select All Occurrences",
                 None,
             )?)
             .separator()
-            .item(&item("edit.addCursorAbove", "Add Cursor Above", None)?)
-            .item(&item("edit.addCursorBelow", "Add Cursor Below", None)?)
+            .item(&item(
+                "edit.addCursorAbove",
+                "Add Cursor Above",
+                Some("CmdOrCtrl+Alt+ArrowUp"),
+            )?)
+            .item(&item(
+                "edit.addCursorBelow",
+                "Add Cursor Below",
+                Some("CmdOrCtrl+Alt+ArrowDown"),
+            )?)
             .build()?;
 
     let convert_selection =
@@ -1092,9 +1138,22 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             .build()?;
 
     let lines = SubmenuBuilder::with_id(app, "edit.lines", "Lines")
-        .item(&item("edit.duplicateLine", "Duplicate Line", None)?)
-        .item(&item("edit.moveLineUp", "Move Line Up", None)?)
-        .item(&item("edit.moveLineDown", "Move Line Down", None)?)
+        .item(&item(
+            "edit.duplicateLine",
+            "Duplicate Line",
+            Some("Alt+Shift+ArrowDown"),
+        )?)
+        .item(&item(
+            "edit.moveLineUp",
+            "Move Line Up",
+            Some("Alt+ArrowUp"),
+        )?)
+        .item(&item(
+            "edit.moveLineDown",
+            "Move Line Down",
+            Some("Alt+ArrowDown"),
+        )?)
+        .item(&item("edit.deleteLine", "Delete Line", None)?)
         .separator()
         .item(&item("edit.sortAsc", "Sort Ascending", None)?)
         .item(&item("edit.sortDesc", "Sort Descending", None)?)
@@ -1103,7 +1162,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             "Remove Duplicate Lines",
             None,
         )?)
-        .item(&item("edit.deleteLine", "Delete Line", None)?)
         .build()?;
 
     // Whitespace and indentation cleanup. The labels match the reviewed
@@ -1140,9 +1198,19 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&PredefinedMenuItem::cut(app, None)?)
         .item(&PredefinedMenuItem::copy(app, None)?)
         .item(&PredefinedMenuItem::paste(app, None)?)
-        .item(&item("edit.pastePlain", "Paste without Formatting", None)?)
+        // Chromium performs the plain paste for Ctrl+Shift+V, and the paste
+        // handler in main.ts reads that as a request to skip rich conversion.
+        .item(&shown(
+            "edit.pastePlain",
+            "Paste without Formatting",
+            "CmdOrCtrl+Shift+V",
+        )?)
         .item(&item("edit.delete", "Delete Selection", None)?)
+        .separator()
+        // Selecting is its own group: Select All is not a clipboard command, and
+        // multiple cursors are a kind of selection, not a kind of search.
         .item(&PredefinedMenuItem::select_all(app, None)?)
+        .item(&select_occurrences)
         .separator()
         .item(&item("edit.find", "Find", Some("CmdOrCtrl+F"))?)
         .item(&item(
@@ -1150,9 +1218,12 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             "Find and Replace",
             Some("CmdOrCtrl+H"),
         )?)
-        .item(&item("edit.findNext", "Find Next", None)?)
-        .item(&item("edit.findPrevious", "Find Previous", None)?)
-        .item(&select_occurrences)
+        .item(&item("edit.findNext", "Find Next", Some("F3"))?)
+        .item(&item(
+            "edit.findPrevious",
+            "Find Previous",
+            Some("Shift+F3"),
+        )?)
         .separator()
         .item(&convert_selection)
         .item(&lines)
@@ -1179,7 +1250,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             "Code Block",
             Some("CmdOrCtrl+Shift+K"),
         )?)
-        .item(&item("format.math", "Inline Equation", None)?)
         .item(&item(
             "para.mathBlock",
             "Block Equation",
@@ -1240,6 +1310,9 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             "Inline Code",
             Some("CmdOrCtrl+Shift+`"),
         )?)
+        // An inline mark like Inline Code beside it; Block Equation, which
+        // inserts a block, stays in Insert.
+        .item(&item("format.math", "Inline Equation", None)?)
         .separator()
         .item(&paragraph_style)
         .item(&item(
@@ -1413,26 +1486,29 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     let view = SubmenuBuilder::new(app, "View")
         .item(&check(
             "view.source",
-            "Source Code Mode",
+            // Named like its siblings: the three are one exclusive layout choice.
+            "Source Only",
             Some("CmdOrCtrl+/"),
         )?)
         .item(&check("view.split", "Split View", None)?)
         .item(&check("view.preview", "Preview Only", None)?)
+        // Sync Scroll only means something between the panes of a layout.
+        .item(&check("view.syncScroll", "Sync Scroll", None)?)
         .separator()
         .item(&typst_preview)
         .separator()
         .item(&sidebar)
         .item(&check("view.statusBar", "Status Bar", None)?)
         .separator()
+        // How the editor shows the text: focus, typewriter scrolling, folding.
         .item(&check("view.focus", "Focus Mode", Some("F8"))?)
         .item(&check("view.typewriter", "Typewriter Mode", Some("F9"))?)
-        .item(&check("view.syncScroll", "Sync Scroll", None)?)
+        .item(&blocks)
         .separator()
         .item(&editor_text_size)
         .item(&interface_theme)
         .item(&code_themes)
         .item(&item("view.typography", "Fonts and Reading…", None)?)
-        .item(&blocks)
         .separator()
         .item(fullscreen.as_ref())
         .build()?;
@@ -1446,16 +1522,16 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         )?)
         .item(&item("tools.spellLanguage", "Spelling Language…", None)?)
         .item(&item("tools.statistics", "Document Statistics…", None)?)
-        .item(&item("tools.encoding", "Encoding and Line Endings…", None)?)
         .separator()
         .item(&item("tools.exportConfig", "Configure Export…", None)?)
         // One setup surface. The export rows themselves are the contextual
         // routes; a second “Install Pandoc” item here would be the duplication
         // the menu information-architecture ADR removed.
         .item(&item("tools.optionalTools", "Optional Tools…", None)?)
-        // The compile pair belongs beside the LaTeX toolchain row: every one of
-        // these is LaTeX-only, and the install row says which engine will run
-        // the compile the reader starts here.
+        // The compile commands stay directly below the toolchain row, which
+        // says which engine they run, but in a group of their own: they act on
+        // the open LaTeX document, while the rows above configure the app.
+        .separator()
         .item(&item(
             "view.latexCompile",
             "Compile LaTeX",

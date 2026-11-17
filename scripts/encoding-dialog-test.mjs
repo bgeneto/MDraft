@@ -1,4 +1,4 @@
-// Tools › Encoding and Line Endings, through the real application.
+// File › Encoding and Line Endings, through the real application.
 //
 // Run through test-all for an owned profile, or:
 //   node scripts/encoding-dialog-test.mjs [port]
@@ -224,7 +224,7 @@ try {
   await closeDialog();
 
   await openByMenu();
-  check(true, "Tools › Encoding and Line Endings opens the dialog");
+  check(true, "File › Encoding and Line Endings opens the dialog");
   await waitInspected();
   await click(tabButton(1));
   await click('[data-encoding="windows-1252"]');
