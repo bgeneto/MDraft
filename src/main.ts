@@ -12346,8 +12346,32 @@ function installResizers(): void {
  * keystroke would otherwise run the command twice: two tables inserted for one
  * Ctrl+T, two links for one Ctrl+K. Suppressing a repeat *of the same id* within
  * 250 ms is enough, because no one presses the same shortcut twice that fast.
+ *
+ * The editor's own keys are the exception: Ctrl+D, F3 and Alt+Down are pressed
+ * in quick runs or held down, so only a repeat from the *other* route is a
+ * duplicate for them.
  */
-const lastActionAt = new Map<string, number>();
+const lastActionAt = new Map<string, { at: number; route: MenuRoute }>();
+
+type MenuRoute = "menu" | "key";
+
+/**
+ * Menu shortcuts that CodeMirror's keymap owned before the menu named them.
+ *
+ * They act only while the editor has focus, as the keymap did: Alt+Up in a text
+ * field or F3 over the explorer must keep doing what it does there. They also
+ * repeat while held, which a menu shortcut otherwise does not.
+ */
+const EDITOR_KEY_IDS = new Set([
+  "edit.findNext",
+  "edit.findPrevious",
+  "edit.selectNext",
+  "edit.addCursorAbove",
+  "edit.addCursorBelow",
+  "edit.duplicateLine",
+  "edit.moveLineUp",
+  "edit.moveLineDown",
+]);
 
 /**
  * A menu command that has no implementation for the document on screen.
@@ -12372,7 +12396,7 @@ function commandRefusedReason(_id: string): string | null {
   return null;
 }
 
-function runMenuAction(id: string): void {
+function runMenuAction(id: string, route: MenuRoute = "menu"): void {
   if (
     lifecycle.committing ||
     document.querySelector(".unsaved-dialog[open]") ||
@@ -12389,9 +12413,14 @@ function runMenuAction(id: string): void {
     return;
   }
   const now = performance.now();
-  const previous = lastActionAt.get(id) ?? 0;
-  if (now - previous < 250) return;
-  lastActionAt.set(id, now);
+  const previous = lastActionAt.get(id);
+  if (
+    previous &&
+    now - previous.at < 250 &&
+    (previous.route !== route || !EDITOR_KEY_IDS.has(id))
+  )
+    return;
+  lastActionAt.set(id, { at: now, route });
 
   // The chooser and the direct Markdown row are not stored formats: one comes
   // from the installed pandoc, the other is the editor's own dialect, so neither
@@ -12603,7 +12632,10 @@ function installShortcuts(shortcuts: api.Shortcut[]): void {
   }
 
   knownAcceleratorIds = new Set(shortcuts.map((entry) => entry.id));
-  const guestTable: HtmlAccelerator[] = parsed.map((entry) => ({
+  // The HTML guest is never the editor, so it does not forward the editor's keys.
+  const guestTable: HtmlAccelerator[] = parsed
+    .filter((entry) => !EDITOR_KEY_IDS.has(entry.id))
+    .map((entry) => ({
     id: entry.id,
     ctrl: entry.ctrl,
     alt: entry.alt,
@@ -12620,8 +12652,12 @@ function installShortcuts(shortcuts: api.Shortcut[]): void {
       if (event.isComposing || event.keyCode === 229) return;
       const hit = parsed.find((candidate) => matchesAccelerator(candidate, event));
       if (!hit) return;
+      if (EDITOR_KEY_IDS.has(hit.id)) {
+        const target = event.target as Node | null;
+        if (!target || !editor.view.dom.contains(target)) return;
+      }
       event.preventDefault();
-      runMenuAction(hit.id);
+      runMenuAction(hit.id, "key");
     },
     true,
   );
@@ -12752,8 +12788,8 @@ function handleHtmlLink(href: string, raw?: string): void {
 }
 
 function handleHtmlAction(id: string): void {
-  if (!knownAcceleratorIds.has(id)) return;
-  runMenuAction(id);
+  if (!knownAcceleratorIds.has(id) || EDITOR_KEY_IDS.has(id)) return;
+  runMenuAction(id, "key");
 }
 
 function handleHtmlReady(layout: HtmlLayout): void {

@@ -1076,15 +1076,31 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     // them natively; the rest are custom because the editor owns them.
     let select_occurrences =
         SubmenuBuilder::with_id(app, "edit.selectOccurrences", "Multiple Cursors")
-            .item(&item("edit.selectNext", "Select Next Occurrence", None)?)
+            // The shortcuts in this submenu and in Lines, and F3 for Find Next,
+            // are CodeMirror's own keymap. They are named here so the menu shows
+            // them; the frontend runs them only while the editor has focus (see
+            // EDITOR_KEY_IDS in main.ts), as the editor's keymap always did.
+            .item(&item(
+                "edit.selectNext",
+                "Select Next Occurrence",
+                Some("CmdOrCtrl+D"),
+            )?)
             .item(&item(
                 "edit.selectAllOccurrences",
                 "Select All Occurrences",
                 None,
             )?)
             .separator()
-            .item(&item("edit.addCursorAbove", "Add Cursor Above", None)?)
-            .item(&item("edit.addCursorBelow", "Add Cursor Below", None)?)
+            .item(&item(
+                "edit.addCursorAbove",
+                "Add Cursor Above",
+                Some("CmdOrCtrl+Alt+ArrowUp"),
+            )?)
+            .item(&item(
+                "edit.addCursorBelow",
+                "Add Cursor Below",
+                Some("CmdOrCtrl+Alt+ArrowDown"),
+            )?)
             .build()?;
 
     let convert_selection =
@@ -1095,9 +1111,17 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             .build()?;
 
     let lines = SubmenuBuilder::with_id(app, "edit.lines", "Lines")
-        .item(&item("edit.duplicateLine", "Duplicate Line", None)?)
-        .item(&item("edit.moveLineUp", "Move Line Up", None)?)
-        .item(&item("edit.moveLineDown", "Move Line Down", None)?)
+        .item(&item(
+            "edit.duplicateLine",
+            "Duplicate Line",
+            Some("Alt+Shift+ArrowDown"),
+        )?)
+        .item(&item("edit.moveLineUp", "Move Line Up", Some("Alt+ArrowUp"))?)
+        .item(&item(
+            "edit.moveLineDown",
+            "Move Line Down",
+            Some("Alt+ArrowDown"),
+        )?)
         .separator()
         .item(&item("edit.sortAsc", "Sort Ascending", None)?)
         .item(&item("edit.sortDesc", "Sort Descending", None)?)
@@ -1153,8 +1177,8 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             "Find and Replace",
             Some("CmdOrCtrl+H"),
         )?)
-        .item(&item("edit.findNext", "Find Next", None)?)
-        .item(&item("edit.findPrevious", "Find Previous", None)?)
+        .item(&item("edit.findNext", "Find Next", Some("F3"))?)
+        .item(&item("edit.findPrevious", "Find Previous", Some("Shift+F3"))?)
         .item(&select_occurrences)
         .separator()
         .item(&convert_selection)
