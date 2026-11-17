@@ -57,8 +57,9 @@ substitute for checking release installers on supported platforms.
 
 Stage only the intended files, run `npm run repo:hygiene` and
 `npm run security:scan`, commit with a descriptive message, push the topic branch,
-and open a PR into `master`. Merge it after the required checks and review pass.
-Do not commit or push changes directly to `master`, or bypass branch guards.
+and open a PR into `master`. Merge it after Quality passes and the review is
+done. Release changes always go through a PR, even while small fixes may be
+pushed directly to `master`.
 
 ## 2. Tag the merged release commit
 
