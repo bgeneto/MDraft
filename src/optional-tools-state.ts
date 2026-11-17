@@ -43,8 +43,10 @@ export const OPTIONAL_TOOL_META: Record<OptionalTool, OptionalToolMeta> = {
   latex: {
     tool: "latex",
     title: "LaTeX documents",
-    hint: "Bundled TeX · about 20 MB + packages on demand · preview and compile .tex",
-    sizeMb: 20,
+    hint: "Bundled TeX · about 25 MB + packages on demand · preview and compile .tex",
+    // The two install archives: engine files, and the list, digest table and
+    // formats (80 MB unpacked).
+    sizeMb: 25,
     recommended: false,
   },
 };

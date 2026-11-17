@@ -4,7 +4,13 @@
 //   texlive/<snapshot>/tt2026/…      the five format and metadata files
 //   texlive/<snapshot>/files/…       the bundle files
 //   texlive/<snapshot>/SHA256SUMS    (and digests.bin once it exists)
+//   texlive/<snapshot>/install/…     the pinned data install archive
 //   engine/<release>/…               the TeXpresso app and engine files
+//   engine/<release>/install/…       the pinned engine install archive
+//
+// The install archives are built by scripts/texpresso-archive.mjs into the
+// `install/` folder of --engine and --data; only the ones pinned in
+// src-tauri/texpresso.json are sent, and each must match its pin.
 //
 // The mirror is uploaded as it lies; no folder needs rearranging. Run it on a
 // case-sensitive filesystem (Linux, WSL's own disk): the index has two names
@@ -16,12 +22,15 @@
 //     [--engine <dir with ocaml.js, *.wasm, vendor/…>] \
 //     [--snapshot tt2026-2026-11] [--release release-0-133-g454f1bc] \
 //     [--concurrency 32] [--dry-run] [--verify] [--force] [--digests-only]
+//     [--archives-only]
 //
 //   --dry-run      list what would be uploaded; needs no credentials
 //   --verify       upload nothing; compare the bucket with the local files
 //   --force        upload even when the bucket already has the key at that size
 //   --digests-only upload just texlive/<snapshot>/digests.bin (the one object a
 //                  bucket built before the table existed is missing)
+//   --archives-only upload just the pinned install archives found under the
+//                  `install/` folder of --engine and/or --data
 //   --self-test    check the request signer against AWS's published example
 //
 // Resumable: it lists the bucket first and skips keys already there with the
@@ -123,7 +132,8 @@ const flags = new Set();
 const args = process.argv.slice(2);
 for (let i = 0; i < args.length; i += 1) {
   const name = args[i].replace(/^--/, "");
-  if (["dry-run", "verify", "force", "self-test", "digests-only"].includes(name)) flags.add(name);
+  if (["dry-run", "verify", "force", "self-test", "digests-only", "archives-only"].includes(name))
+    flags.add(name);
   else if (name in options) options[name] = args[++i];
   else throw new Error(`Unknown option ${args[i]}`);
 }
@@ -153,6 +163,7 @@ const TYPES = {
   ".wasm": "application/wasm",
   ".lst": "text/plain; charset=utf-8",
   ".deps": "text/plain; charset=utf-8",
+  ".zip": "application/zip",
 };
 const IMMUTABLE = "public, max-age=31536000, immutable";
 
@@ -166,9 +177,45 @@ async function walk(root, relative = "") {
   return out;
 }
 
+/**
+ * The pinned install archives under `install/` of --engine and --data. With
+ * --archives-only a missing archive is an error; otherwise it is skipped,
+ * because a mirror upload does not need one.
+ */
+async function archiveItems(pins) {
+  const items = [];
+  for (const archive of pins.archives ?? []) {
+    const root = archive.base === "engine" ? engineRoot : dataRoot;
+    if (!root) continue;
+    const prefix =
+      archive.base === "engine" ? `engine/${options.release}/` : `texlive/${options.snapshot}/`;
+    const file = path.join(root, archive.path);
+    if (!existsSync(file)) {
+      if (flags.has("archives-only"))
+        throw new Error(`${file} is missing; build it with scripts/texpresso-archive.mjs.`);
+      console.log(`  note: ${archive.path} is not built; skipped`);
+      continue;
+    }
+    const bytes = await readFile(file);
+    if (bytes.length !== archive.bytes || sha256(bytes) !== archive.sha256)
+      throw new Error(`${file} does not match its pin in src-tauri/texpresso.json.`);
+    items.push({ key: prefix + archive.path, file, sha256: archive.sha256 });
+  }
+  return items;
+}
+
 /** What to upload: { key, file, sha256? } for every object. */
 async function plan() {
   const items = [];
+  if (flags.has("archives-only")) {
+    if (!dataRoot && !engineRoot) throw new Error("--archives-only needs --engine and/or --data.");
+    const pins = JSON.parse(
+      await readFile(new URL("../src-tauri/texpresso.json", import.meta.url), "utf8"),
+    );
+    const archives = await archiveItems(pins);
+    if (!archives.length) throw new Error("src-tauri/texpresso.json pins no install archive.");
+    return archives;
+  }
   if (flags.has("digests-only")) {
     if (!dataRoot) throw new Error("--digests-only needs --data <mirror>.");
     const table = path.join(dataRoot, "digests.bin");
@@ -235,6 +282,8 @@ async function plan() {
     const pinned = new Map(pins.assets.map((asset) => [asset.path, asset]));
     const prefix = `engine/${options.release}/`;
     for (const relative of await walk(engineRoot)) {
+      // Archives are checked against their own pins below.
+      if (relative.startsWith("install/")) continue;
       const file = path.join(engineRoot, relative);
       const pin = pinned.get(relative);
       if (pin) {
@@ -250,6 +299,10 @@ async function plan() {
       items.push({ key: prefix + relative, file, sha256: pin?.sha256 });
     }
   }
+  const pins = JSON.parse(
+    await readFile(new URL("../src-tauri/texpresso.json", import.meta.url), "utf8"),
+  );
+  items.push(...(await archiveItems(pins)));
   return items;
 }
 
@@ -354,10 +407,12 @@ if (flags.has("verify")) {
     (item) => remote.has(item.key) && remote.get(item.key) !== sizes.get(item.key),
   );
   const wanted = new Set(items.map((item) => item.key));
-  // A digests-only run touches one key; the rest of the prefix is expected.
-  const extra = flags.has("digests-only")
-    ? []
-    : [...remote.keys()].filter((key) => !wanted.has(key));
+  // A digests-only or archives-only run touches a few keys; the rest of the
+  // prefix is expected.
+  const extra =
+    flags.has("digests-only") || flags.has("archives-only")
+      ? []
+      : [...remote.keys()].filter((key) => !wanted.has(key));
   console.log(`bucket: ${remote.size} objects under these prefixes`);
   console.log(
     `${missing.length === 0 ? "PASS" : "FAIL"} every local object is in the bucket (${missing.length} missing)`,

@@ -9,8 +9,11 @@ explicitly selected.
 
 LaTeX is **opt-in**. Open a saved `.tex` file and choose **Enable bundled TeX** in
 the preview, or tick the switch in *Preferences › LaTeX*. That action downloads
-about 20 MiB of TeX Live 2026 engine files, each verified against a pinned SHA-256
-digest. The TeX packages and fonts a document needs are fetched on demand from a
+about 25 MB: the TeX Live 2026 engine files and the LuaLaTeX and XeLaTeX format
+files (about 80 MB unpacked), in two compressed archives. Each file is verified
+against its own pinned SHA-256 digest before it is kept. If an archive cannot be
+used, the same files are fetched one by one instead, a few at a time. The TeX
+packages and fonts a document needs are fetched on demand from a
 pinned TeX Live 2026 package snapshot and cached locally, in a folder named for
 that snapshot. Nothing about your document or bibliography leaves this device.
 

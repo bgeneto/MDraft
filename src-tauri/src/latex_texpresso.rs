@@ -13,6 +13,12 @@
 //! Everything downloaded comes from one base URL, `origin` in `texpresso.json`.
 //! A byte is verified before it is cached and again when it is served; a file
 //! that does not verify is refused by name, never passed through.
+//!
+//! The install fetches the pinned files in two zip archives, one per base,
+//! when `texpresso.json` pins them: a few hundred requests in a row cost more
+//! time than their bytes. An archive is only transport. Each member is checked
+//! against its own pin, and whatever an archive does not supply is fetched
+//! file by file.
 //! Decision: docs/architecture.md.
 
 use serde::Deserialize;
@@ -45,6 +51,13 @@ const PROJECT_HELD_LIMIT: u64 = 1024 * 1024 * 1024;
 static CLEAR_FONT_CACHE: AtomicBool = AtomicBool::new(false);
 /// The largest pinned file is the 27 MB XeTeX format.
 const MAX_DOWNLOAD: u64 = 64 * 1024 * 1024;
+/// An install archive: the formats compress to about 16 MB, and the whole data
+/// group to about 19 MB.
+const MAX_ARCHIVE: u64 = 96 * 1024 * 1024;
+/// Files fetched at once when the install falls back to single files. The
+/// agent keeps as many connections, and each request mostly waits for the
+/// origin's first byte.
+const PARALLEL_DOWNLOADS: usize = 8;
 /// Ceiling of the evictable part of the cache: the bundle files under `files/`.
 /// The list, the formats and the font-cache archive are needed by every
 /// compile and are never evicted. Preferences sets it; 512 MiB is the fallback
@@ -140,6 +153,29 @@ struct Config {
     bundle: Bundle,
     digests: Digests,
     assets: Vec<Pin>,
+    /// Install archives, at most one per base. Without one, that base is
+    /// installed file by file.
+    #[serde(default)]
+    archives: Vec<Archive>,
+}
+
+/// Which pins an archive carries, and which prefix of the origin serves it.
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "lowercase")]
+enum Base {
+    /// The engine files (`assets`), under `engine/<appRelease>/`.
+    Engine,
+    /// The list, the digest table and the format files, under
+    /// `texlive/<snapshot>/`.
+    Data,
+}
+
+#[derive(Deserialize)]
+struct Archive {
+    path: String,
+    bytes: u64,
+    sha256: String,
+    base: Base,
 }
 
 #[derive(Deserialize)]
@@ -149,7 +185,7 @@ struct Bundle {
     files: Vec<Pin>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct Pin {
     path: String,
     bytes: u64,
@@ -277,6 +313,33 @@ fn validate(config: &Config) -> Result<(), String> {
     if config.digests.entries == 0 || config.digests.bytes != config.digests.entries as u64 * 16 {
         return Err("digests.bytes is not 16 bytes per entry".into());
     }
+    let mut bases = Vec::new();
+    for archive in &config.archives {
+        // `install/` holds nothing else, so an archive can never shadow a pin
+        // or a bundle file.
+        if !safe(&archive.path)
+            || !archive.path.starts_with("install/")
+            || !archive.path.ends_with(".zip")
+        {
+            return Err(format!(
+                "archives: \"{}\" is not an install/*.zip path",
+                archive.path
+            ));
+        }
+        if !hex(&archive.sha256) {
+            return Err(format!(
+                "archives: {} has no 64-digit lowercase SHA-256",
+                archive.path
+            ));
+        }
+        if archive.bytes == 0 || archive.bytes > MAX_ARCHIVE {
+            return Err(format!("archives: {} has an impossible size", archive.path));
+        }
+        if bases.contains(&archive.base) {
+            return Err(format!("archives: two archives for {:?}", archive.base));
+        }
+        bases.push(archive.base);
+    }
     Ok(())
 }
 
@@ -364,6 +427,20 @@ impl Check<'_> {
 /// which is a new connection, and for `https` a new handshake, per file; a
 /// cold compile asks for a few hundred.
 fn download(url: &str, deadline: Option<Instant>) -> Result<Vec<u8>, String> {
+    fetch(url, MAX_DOWNLOAD, deadline, |_| {})
+}
+
+/// `download` with a size cap and a byte callback.
+///
+/// A request with a deadline may run until that deadline: at 1 Mbit/s the
+/// 27 MB XeTeX format or the data archive takes longer than the agent's two
+/// minutes, which suits on-demand files only.
+fn fetch(
+    url: &str,
+    cap: u64,
+    deadline: Option<Instant>,
+    on_bytes: impl FnMut(u64),
+) -> Result<Vec<u8>, String> {
     if std::env::var_os("MDRAFT_WASMTEX_OFFLINE").is_some() {
         return Err("The LaTeX network is disabled.".into());
     }
@@ -371,17 +448,27 @@ fn download(url: &str, deadline: Option<Instant>) -> Result<Vec<u8>, String> {
     let agent = AGENT.get_or_init(|| {
         ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(120)))
-            .max_idle_connections_per_host(8)
+            .max_idle_connections_per_host(PARALLEL_DOWNLOADS)
             .build()
             .new_agent()
     });
-    let mut response = agent
-        .get(url)
-        .call()
-        .map_err(|e| format!("Download failed: {e}"))?;
+    let request = agent.get(url);
+    let mut response = match deadline {
+        Some(deadline) => request
+            .config()
+            .timeout_global(Some(
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .max(Duration::from_secs(1)),
+            ))
+            .build()
+            .call(),
+        None => request.call(),
+    }
+    .map_err(|e| format!("Download failed: {e}"))?;
     let limit = deadline.unwrap_or_else(|| Instant::now() + Duration::from_secs(120));
     let mut reader = response.body_mut().as_reader();
-    optional_tools::read_to_vec_bounded(&mut reader, MAX_DOWNLOAD, limit, |_| {})
+    optional_tools::read_to_vec_bounded(&mut reader, cap, limit, on_bytes)
 }
 
 /// The cached file, if it is a regular file that still verifies.
@@ -884,60 +971,344 @@ pub fn serve(root: &Path, path: &str) -> Option<Answer> {
     Some(serve_data(root, relative))
 }
 
-/// Download and verify what the backend needs before its frame can start: the
-/// engine files, the digest table and the list.
+/// Download and verify what the backend needs: the engine files, the digest
+/// table, the list and the format files of both engines.
 ///
 /// A file already present and intact is not downloaded again, so this is also
-/// the repair. The formats and bundle files follow on demand, through `serve`.
+/// the repair. The bundle files follow on demand, through `serve`; so do the
+/// formats again after Clear cache, which removes them.
 pub fn install(root: &Path) -> Result<(), String> {
     install_with_progress(root, |_, _| {})
 }
 
-/// The same install, reporting cumulative bytes before and after each asset.
+/// The same install, reporting cumulative bytes as they arrive.
 ///
-/// The overall deadline is threaded into the per-file reader, so a stalled
-/// connection cannot keep the install alive past ten minutes. Progress is
-/// coarse — one step per pinned asset — because the small files are not worth a
-/// second event contract.
-pub fn install_with_progress(
-    root: &Path,
-    mut progress: impl FnMut(u64, u64),
-) -> Result<(), String> {
+/// The overall deadline is threaded into every request, so a stalled
+/// connection cannot keep the install alive past ten minutes.
+pub fn install_with_progress(root: &Path, progress: impl FnMut(u64, u64)) -> Result<(), String> {
     let _writer = crate::backup::gate::writer()?;
     let deadline = optional_tools::deadline();
     cleanup_temp_files(&engine_dir(root), true);
     cleanup_temp_files(&data_dir(root), false);
-
     let config = config();
-    let total = config.assets.iter().map(|pin| pin.bytes).sum::<u64>()
-        + config.digests.bytes
-        + config.bundle.list.bytes;
-    let mut done = 0u64;
-    progress(0, total);
-
-    for pin in &config.assets {
-        optional_tools::check_deadline(deadline)?;
-        obtain(
-            &engine_dir(root).join(&pin.path),
-            &Check::Full(pin),
-            &pin.path,
-            None,
-            &|| download(&engine_url(&pin.path), Some(deadline)),
-        )?;
-        done += pin.bytes;
-        progress(done, total);
+    // The formats are written one level down, `tt2026/`, which the walk above
+    // does not enter.
+    let mut format_dirs: Vec<PathBuf> = config
+        .bundle
+        .files
+        .iter()
+        .filter_map(|pin| {
+            data_dir(root)
+                .join(&pin.path)
+                .parent()
+                .map(Path::to_path_buf)
+        })
+        .collect();
+    format_dirs.dedup();
+    for dir in format_dirs {
+        cleanup_temp_files(&dir, false);
     }
 
-    optional_tools::check_deadline(deadline)?;
-    digest_bytes(root, Some(deadline))?;
-    done += config.digests.bytes;
-    progress(done, total);
+    install_from(
+        &members(root),
+        &config.archives,
+        deadline,
+        &|archive, on_bytes| {
+            let url = match archive.base {
+                Base::Engine => engine_url(&archive.path),
+                Base::Data => data_url(&archive.path),
+            };
+            fetch(&url, MAX_ARCHIVE, Some(deadline), on_bytes)
+        },
+        &|member| {
+            let url = match member.base {
+                Base::Engine => engine_url(&member.pin.path),
+                Base::Data => data_url(&member.pin.path),
+            };
+            download(&url, Some(deadline))
+        },
+        Throttle::new(progress),
+    )
+}
 
-    optional_tools::check_deadline(deadline)?;
-    list_bytes(root, Some(deadline))?;
-    done += config.bundle.list.bytes;
-    progress(done, total);
-    Ok(())
+/// One pinned file of the install and where it is cached.
+#[derive(Clone)]
+struct Member {
+    pin: Pin,
+    base: Base,
+    target: PathBuf,
+}
+
+/// Everything the install puts in place. The digest table's name in the data
+/// archive and at the origin is `digests.path`; it is cached with the engine.
+fn members(root: &Path) -> Vec<Member> {
+    let config = config();
+    let engine = config.assets.iter().map(|pin| Member {
+        pin: pin.clone(),
+        base: Base::Engine,
+        target: engine_dir(root).join(&pin.path),
+    });
+    let digests = Member {
+        pin: Pin {
+            path: config.digests.path.clone(),
+            bytes: config.digests.bytes,
+            sha256: config.digests.sha256.clone(),
+        },
+        base: Base::Data,
+        target: digests_file(root),
+    };
+    let data = std::iter::once(&config.bundle.list)
+        .chain(&config.bundle.files)
+        .map(|pin| Member {
+            pin: pin.clone(),
+            base: Base::Data,
+            target: data_dir(root).join(&pin.path),
+        });
+    engine.chain(std::iter::once(digests)).chain(data).collect()
+}
+
+/// Progress events at most every half percent: an archive arrives 64 KB at a
+/// time, which would be hundreds of events for one bar.
+struct Throttle<F: FnMut(u64, u64)> {
+    report: F,
+    last: Option<(u64, u64)>,
+}
+
+impl<F: FnMut(u64, u64)> Throttle<F> {
+    fn new(report: F) -> Self {
+        Self { report, last: None }
+    }
+
+    fn report(&mut self, done: u64, total: u64) {
+        let due = match self.last {
+            None => true,
+            Some((last, last_total)) => {
+                total != last_total || done >= total || done >= last + (total / 200).max(1)
+            }
+        };
+        if due {
+            self.last = Some((done, total));
+            (self.report)(done, total);
+        }
+    }
+}
+
+/// Fetches one install archive, reporting the bytes received so far.
+type GetArchive<'a> = dyn Fn(&Archive, &mut dyn FnMut(u64)) -> Result<Vec<u8>, String> + 'a;
+
+/// The install with its two transports passed in, so tests need no origin.
+///
+/// The members that are missing or damaged are fetched; an archive is tried
+/// for every base that has one. A refused, missing or damaged archive costs
+/// only time: what it did not supply is then fetched file by file.
+fn install_from<F: FnMut(u64, u64)>(
+    members: &[Member],
+    archives: &[Archive],
+    deadline: Instant,
+    get_archive: &GetArchive<'_>,
+    get_file: &(dyn Fn(&Member) -> Result<Vec<u8>, String> + Sync),
+    mut progress: Throttle<F>,
+) -> Result<(), String> {
+    let mut missing: Vec<&Member> = members
+        .iter()
+        .filter(|member| read_verified(&member.target, &Check::Full(&member.pin), false).is_none())
+        .collect();
+    let needed: Vec<&Archive> = archives
+        .iter()
+        .filter(|archive| missing.iter().any(|member| member.base == archive.base))
+        .collect();
+    let by_file = |missing: &[&Member], base: Base| {
+        missing
+            .iter()
+            .filter(|member| member.base == base)
+            .map(|member| member.pin.bytes)
+            .sum::<u64>()
+    };
+    let mut total = needed.iter().map(|archive| archive.bytes).sum::<u64>()
+        + missing
+            .iter()
+            .filter(|member| !needed.iter().any(|archive| archive.base == member.base))
+            .map(|member| member.pin.bytes)
+            .sum::<u64>();
+    let mut done = 0u64;
+    progress.report(done, total);
+
+    let mut archive_error = None;
+    for archive in needed {
+        optional_tools::check_deadline(deadline)?;
+        let start = done;
+        let result = get_archive(archive, &mut |received| {
+            progress.report(start + received.min(archive.bytes), total)
+        })
+        .and_then(|bytes| {
+            let pin = Pin {
+                path: archive.path.clone(),
+                bytes: archive.bytes,
+                sha256: archive.sha256.clone(),
+            };
+            if !Check::Full(&pin).accepts(&bytes) {
+                REFUSALS.fetch_add(1, Ordering::Relaxed);
+                return Err("failed SHA-256 verification and was refused.".into());
+            }
+            DOWNLOADED_BYTES.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+            let known: Vec<&Member> = members
+                .iter()
+                .filter(|member| member.base == archive.base)
+                .collect();
+            let wanted: Vec<&str> = missing
+                .iter()
+                .filter(|member| member.base == archive.base)
+                .map(|member| member.pin.path.as_str())
+                .collect();
+            extract(&bytes, &known, &wanted)
+        });
+        done = start + archive.bytes;
+        match result {
+            Ok(written) => missing.retain(|member| {
+                member.base != archive.base || !written.contains(member.pin.path.as_str())
+            }),
+            Err(error) => archive_error = Some(format!("{}: {error}", archive.path)),
+        }
+        // Whatever the archive left out is now fetched one file at a time.
+        total =
+            done + by_file(&missing, archive.base) + total.saturating_sub(start + archive.bytes);
+        progress.report(done, total);
+    }
+
+    let remaining: u64 = missing.iter().map(|member| member.pin.bytes).sum();
+    total = done + remaining;
+    progress.report(done, total);
+    fetch_files(&missing, deadline, get_file, |bytes| {
+        done += bytes;
+        progress.report(done, total);
+    })
+    .map_err(|error| match archive_error {
+        // The archive's failure is what the reader most needs when the
+        // fallback failed too.
+        Some(first) => format!("{error} (The install archive failed first: {first})"),
+        None => error,
+    })
+}
+
+/// Fetch `files` through `obtain`, a few at a time, and report each one's
+/// size on the calling thread as it is cached.
+fn fetch_files(
+    files: &[&Member],
+    deadline: Instant,
+    get_file: &(dyn Fn(&Member) -> Result<Vec<u8>, String> + Sync),
+    mut finished: impl FnMut(u64),
+) -> Result<(), String> {
+    if files.is_empty() {
+        return Ok(());
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let failed = AtomicBool::new(false);
+    let (sender, receiver) = std::sync::mpsc::channel::<Result<u64, String>>();
+    std::thread::scope(|scope| {
+        for _ in 0..PARALLEL_DOWNLOADS.min(files.len()) {
+            let sender = sender.clone();
+            let (next, failed) = (&next, &failed);
+            scope.spawn(move || {
+                loop {
+                    let at = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(member) = files.get(at) else {
+                        break;
+                    };
+                    if failed.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let result = optional_tools::check_deadline(deadline).and_then(|()| {
+                        obtain(
+                            &member.target,
+                            &Check::Full(&member.pin),
+                            &member.pin.path,
+                            None,
+                            &|| get_file(member),
+                        )
+                    });
+                    if result.is_err() {
+                        failed.store(true, Ordering::Relaxed);
+                    }
+                    if sender.send(result.map(|_| member.pin.bytes)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(sender);
+        let mut first_error = None;
+        for result in receiver {
+            match result {
+                Ok(bytes) => finished(bytes),
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    })
+}
+
+/// Write the `wanted` members of a verified archive into place.
+///
+/// Every entry must be a plain file named exactly like one of `known`, once.
+/// Each wanted member is read up to its pinned size plus one byte, checked
+/// against its full pin, and written atomically; a member already in place is
+/// skipped unread. Anything else refuses the rest of the archive. Returns the
+/// names written.
+fn extract<'a>(
+    archive: &[u8],
+    known: &[&'a Member],
+    wanted: &[&str],
+) -> Result<std::collections::HashSet<&'a str>, String> {
+    use std::io::Read;
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(archive))
+        .map_err(|e| format!("is not a readable zip: {e}"))?;
+    let mut seen = std::collections::HashSet::new();
+    let mut written = std::collections::HashSet::new();
+    for index in 0..zip.len() {
+        let mut entry = zip
+            .by_index(index)
+            .map_err(|e| format!("entry {index} is unreadable: {e}"))?;
+        let name = entry
+            .name()
+            .map_err(|e| format!("entry {index} has no readable name: {e}"))?
+            .into_owned();
+        let Some(member) = known.iter().find(|member| member.pin.path == name) else {
+            return Err(format!("holds {name}, which is not pinned."));
+        };
+        if !seen.insert(name.clone()) {
+            return Err(format!("holds {name} twice."));
+        }
+        if entry.is_dir()
+            || entry.is_symlink()
+            || entry.encrypted()
+            || !matches!(
+                entry.compression(),
+                zip::CompressionMethod::Stored | zip::CompressionMethod::Deflated
+            )
+        {
+            return Err(format!(
+                "holds {name} as something other than a plain file."
+            ));
+        }
+        if !wanted.contains(&name.as_str()) {
+            continue;
+        }
+        let mut bytes = Vec::with_capacity(member.pin.bytes as usize);
+        (&mut entry)
+            .take(member.pin.bytes + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| format!("could not unpack {name}: {e}"))?;
+        if !Check::Full(&member.pin).accepts(&bytes) {
+            REFUSALS.fetch_add(1, Ordering::Relaxed);
+            return Err(format!("holds a {name} that does not match its pin."));
+        }
+        VERIFIED_BYTES.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+        crate::latex::write_atomic(&member.target, &bytes)?;
+        written.insert(member.pin.path.as_str());
+    }
+    Ok(written)
 }
 
 /// Remove temporary files a killed process left behind. Verified assets are
@@ -1118,6 +1489,47 @@ mod tests {
             parse(&|v| v["bundle"]["files"][0]["path"] = "files/tt2026/v1/a~h".into()).is_err()
         );
         assert!(parse(&|v| v["digests"]["bytes"] = 17.into()).is_err());
+    }
+
+    #[test]
+    fn a_bad_archive_pin_is_refused() {
+        let good = || {
+            serde_json::json!({
+                "path": "install/engine-0123456789abcdef.zip",
+                "bytes": 1000,
+                "sha256": "a".repeat(64),
+                "base": "engine",
+            })
+        };
+        let parse = |archives: serde_json::Value| {
+            let mut value: serde_json::Value = serde_json::from_str(CONFIG).unwrap();
+            value["archives"] = archives;
+            validate(&serde_json::from_value::<Config>(value).unwrap())
+        };
+        assert!(parse(serde_json::json!([good()])).is_ok());
+        let mut data = good();
+        data["base"] = "data".into();
+        data["path"] = "install/core.zip".into();
+        assert!(parse(serde_json::json!([good(), data])).is_ok());
+        assert!(
+            parse(serde_json::json!([good(), good()])).is_err(),
+            "two per base"
+        );
+        for (field, bad) in [
+            ("path", serde_json::json!("files/a.zip")),
+            ("path", serde_json::json!("install/../ocaml.js")),
+            ("path", serde_json::json!("install/engine.tar")),
+            ("sha256", serde_json::json!("ABC")),
+            ("bytes", serde_json::json!(0)),
+            ("bytes", serde_json::json!(MAX_ARCHIVE + 1)),
+        ] {
+            let mut archive = good();
+            archive[field] = bad.clone();
+            assert!(
+                parse(serde_json::json!([archive])).is_err(),
+                "{field} {bad}"
+            );
+        }
     }
 
     #[test]
@@ -1491,5 +1903,344 @@ mod tests {
         assert_eq!(cache_bytes(&root), 0);
         assert!(available(&root));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Needs `scripts/texpresso-origin-server.mjs` serving the install files
+    /// (the archives and the single files) on `MDRAFT_TEXPRESSO_ORIGIN`; the
+    /// bundle files are not needed. With `--fail install/=404` on the server it
+    /// measures the single-file fallback instead.
+    #[test]
+    #[ignore = "needs the local TeXpresso origin server"]
+    fn the_local_origin_installs_the_formats() {
+        let root = scratch("origin-install");
+        let started = Instant::now();
+        let mut events = 0;
+        install_with_progress(&root, |_, _| events += 1).unwrap();
+        eprintln!(
+            "cold install: {:.1} s, {events} progress events, {} bytes downloaded",
+            started.elapsed().as_secs_f64(),
+            downloaded_bytes()
+        );
+        assert!(available(&root));
+        for pin in &config().bundle.files {
+            let path = data_dir(&root).join(&pin.path);
+            assert_eq!(
+                fs::metadata(&path).unwrap().len(),
+                pin.bytes,
+                "{}",
+                pin.path
+            );
+        }
+        // Installed: the repair downloads nothing.
+        let before = downloaded_bytes();
+        install(&root).unwrap();
+        assert_eq!(downloaded_bytes(), before);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Three engine files and one data file under `root`, with their contents.
+    fn install_set(root: &Path) -> Vec<(Member, Vec<u8>)> {
+        [
+            ("ocaml.js", Base::Engine, b"engine one".to_vec()),
+            ("vendor/pdfjs/cmaps/a.bcmap", Base::Engine, b"cmap".to_vec()),
+            ("vendor/pdfjs/wasm/b.wasm", Base::Engine, vec![7u8; 5000]),
+            ("tt2026/v3.fmt", Base::Data, vec![1u8; 20000]),
+        ]
+        .into_iter()
+        .map(|(path, base, bytes)| {
+            let member = Member {
+                pin: pin_of(path, &bytes),
+                base,
+                target: root.join(format!("{base:?}")).join(path),
+            };
+            (member, bytes)
+        })
+        .collect()
+    }
+
+    /// A zip of `entries`, deflated, and the archive pin it would get.
+    fn zip_of(base: Base, entries: &[(&str, &[u8])]) -> (Archive, Vec<u8>) {
+        use std::io::Write;
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buffer);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            for (name, bytes) in entries {
+                zip.start_file(*name, options).unwrap();
+                zip.write_all(bytes).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        let bytes = buffer.into_inner();
+        let archive = Archive {
+            path: format!("install/{base:?}.zip"),
+            bytes: bytes.len() as u64,
+            sha256: crate::latex::digest(&bytes),
+            base,
+        };
+        (archive, bytes)
+    }
+
+    /// The result, the archive paths and file paths requested, and the
+    /// progress events of one `run_install`.
+    type InstallRun = (
+        Result<(), String>,
+        Vec<String>,
+        Vec<String>,
+        Vec<(u64, u64)>,
+    );
+
+    /// Run `install_from` against in-memory transports. Returns the archive
+    /// paths and the file paths that were requested, and the progress events.
+    fn run_install(
+        members: &[Member],
+        archives: &[(Archive, Vec<u8>)],
+        files: &HashMap<String, Vec<u8>>,
+    ) -> InstallRun {
+        let archive_requests = Mutex::new(Vec::new());
+        let file_requests = Mutex::new(Vec::new());
+        let mut events = Vec::new();
+        let pins: Vec<Archive> = archives
+            .iter()
+            .map(|(archive, _)| Archive {
+                path: archive.path.clone(),
+                bytes: archive.bytes,
+                sha256: archive.sha256.clone(),
+                base: archive.base,
+            })
+            .collect();
+        let result = install_from(
+            members,
+            &pins,
+            Instant::now() + Duration::from_secs(60),
+            &|archive, on_bytes| {
+                archive_requests.lock().unwrap().push(archive.path.clone());
+                let (_, bytes) = archives
+                    .iter()
+                    .find(|(pin, _)| pin.path == archive.path)
+                    .unwrap();
+                on_bytes(bytes.len() as u64 / 2);
+                on_bytes(bytes.len() as u64);
+                Ok(bytes.clone())
+            },
+            &|member| {
+                file_requests.lock().unwrap().push(member.pin.path.clone());
+                files
+                    .get(&member.pin.path)
+                    .cloned()
+                    .ok_or_else(|| "404".to_string())
+            },
+            Throttle::new(|done, total| events.push((done, total))),
+        );
+        let mut files = file_requests.into_inner().unwrap();
+        files.sort();
+        (
+            result,
+            archive_requests.into_inner().unwrap(),
+            files,
+            events,
+        )
+    }
+
+    fn all_files(set: &[(Member, Vec<u8>)]) -> HashMap<String, Vec<u8>> {
+        set.iter()
+            .map(|(member, bytes)| (member.pin.path.clone(), bytes.clone()))
+            .collect()
+    }
+
+    fn assert_installed(set: &[(Member, Vec<u8>)]) {
+        for (member, bytes) in set {
+            assert_eq!(
+                &fs::read(&member.target).unwrap(),
+                bytes,
+                "{}",
+                member.pin.path
+            );
+        }
+    }
+
+    #[test]
+    fn the_archives_install_everything_without_single_files() {
+        let root = scratch("archive-install");
+        let set = install_set(&root);
+        let members: Vec<Member> = set.iter().map(|(member, _)| member.clone()).collect();
+        let engine: Vec<(&str, &[u8])> = set
+            .iter()
+            .filter(|(member, _)| member.base == Base::Engine)
+            .map(|(member, bytes)| (member.pin.path.as_str(), bytes.as_slice()))
+            .collect();
+        let archives = [
+            zip_of(Base::Engine, &engine),
+            zip_of(Base::Data, &[("tt2026/v3.fmt", &set[3].1)]),
+        ];
+        let (result, asked, files, events) = run_install(&members, &archives, &HashMap::new());
+        result.unwrap();
+        assert_eq!(asked.len(), 2);
+        assert!(files.is_empty(), "{files:?}");
+        assert_installed(&set);
+        // Progress counts the archives' bytes and ends at its total.
+        let total = archives[0].0.bytes + archives[1].0.bytes;
+        assert_eq!(events.first(), Some(&(0, total)));
+        assert_eq!(events.last(), Some(&(total, total)));
+        assert!(events.windows(2).all(|pair| pair[0].0 <= pair[1].0));
+
+        // Installed and intact: the repair downloads nothing.
+        let (result, asked, files, _) = run_install(&members, &archives, &HashMap::new());
+        result.unwrap();
+        assert!(asked.is_empty() && files.is_empty());
+
+        // One damaged file: its archive is fetched again, and only that file
+        // is rewritten.
+        fs::write(&set[1].0.target, b"damaged").unwrap();
+        let (result, asked, files, _) = run_install(&members, &archives, &HashMap::new());
+        result.unwrap();
+        assert_eq!(asked, vec![archives[0].0.path.clone()]);
+        assert!(files.is_empty());
+        assert_installed(&set);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn without_an_archive_every_file_is_fetched_singly() {
+        let root = scratch("archive-none");
+        let set = install_set(&root);
+        let members: Vec<Member> = set.iter().map(|(member, _)| member.clone()).collect();
+        let (result, asked, files, events) = run_install(&members, &[], &all_files(&set));
+        result.unwrap();
+        assert!(asked.is_empty());
+        assert_eq!(files.len(), set.len());
+        assert_installed(&set);
+        let total: u64 = set.iter().map(|(member, _)| member.pin.bytes).sum();
+        assert_eq!(events.last(), Some(&(total, total)));
+
+        // A file the origin does not have fails the install by name.
+        let root = scratch("archive-none-missing");
+        let set = install_set(&root);
+        let members: Vec<Member> = set.iter().map(|(member, _)| member.clone()).collect();
+        let mut files = all_files(&set);
+        files.remove("ocaml.js");
+        let (result, _, _, _) = run_install(&members, &[], &files);
+        assert!(result.unwrap_err().contains("ocaml.js"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_bad_archive_falls_back_to_single_files() {
+        let fmt: &[u8] = &[1u8; 20000];
+        type Case<'a> = (&'a str, Vec<(&'a str, Vec<u8>)>);
+        let cases: Vec<Case> = vec![
+            // First, so that no verified member is written before the refusal.
+            (
+                "unknown member",
+                vec![("evil.js", b"x".to_vec()), ("tt2026/v3.fmt", fmt.to_vec())],
+            ),
+            ("traversal", vec![("../tt2026/v3.fmt", fmt.to_vec())]),
+            (
+                "member over its pin",
+                vec![("tt2026/v3.fmt", vec![1u8; 20001])],
+            ),
+            (
+                "member off its pin",
+                vec![("tt2026/v3.fmt", vec![2u8; 20000])],
+            ),
+        ];
+        for (case, entries) in cases {
+            let root = scratch("archive-bad");
+            let set = install_set(&root);
+            let members: Vec<Member> = set.iter().map(|(member, _)| member.clone()).collect();
+            let entries: Vec<(&str, &[u8])> = entries
+                .iter()
+                .map(|(name, bytes)| (*name, bytes.as_slice()))
+                .collect();
+            let archives = [zip_of(Base::Data, &entries)];
+            let (result, asked, files, _) = run_install(&members, &archives, &all_files(&set));
+            result.unwrap_or_else(|error| panic!("{case}: {error}"));
+            assert_eq!(asked.len(), 1, "{case}");
+            assert!(
+                files.contains(&"tt2026/v3.fmt".to_string()),
+                "{case}: {files:?}"
+            );
+            assert_installed(&set);
+            fs::remove_dir_all(root).unwrap();
+        }
+
+        // An archive whose bytes do not match its pin is never opened.
+        let root = scratch("archive-bad-pin");
+        let set = install_set(&root);
+        let members: Vec<Member> = set.iter().map(|(member, _)| member.clone()).collect();
+        let (mut archive, bytes) = zip_of(Base::Data, &[("tt2026/v3.fmt", fmt)]);
+        archive.sha256 = "0".repeat(64);
+        let (result, _, files, _) = run_install(&members, &[(archive, bytes)], &all_files(&set));
+        result.unwrap();
+        assert!(files.contains(&"tt2026/v3.fmt".to_string()));
+        assert_installed(&set);
+
+        // When the fallback fails too, the error names both.
+        let root = scratch("archive-bad-both");
+        let set = install_set(&root);
+        let members: Vec<Member> = set.iter().map(|(member, _)| member.clone()).collect();
+        let (archive, bytes) = zip_of(Base::Data, &[("evil.js", b"x")]);
+        let mut files = all_files(&set);
+        files.remove("tt2026/v3.fmt");
+        let (result, _, _, _) = run_install(&members, &[(archive, bytes)], &files);
+        let error = result.unwrap_err();
+        assert!(
+            error.contains("tt2026/v3.fmt") && error.contains("evil.js"),
+            "{error}"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_link_or_a_duplicate_in_an_archive_is_refused() {
+        let root = scratch("archive-shapes");
+        let set = install_set(&root);
+        let known: Vec<&Member> = set.iter().map(|(member, _)| member).collect();
+        let wanted = ["ocaml.js"];
+
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buffer);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.add_symlink("ocaml.js", "../../outside", options)
+                .unwrap();
+            zip.finish().unwrap();
+        }
+        let error = extract(buffer.get_ref(), &known, &wanted).unwrap_err();
+        assert!(error.contains("plain file"), "{error}");
+        assert!(!set[0].0.target.exists());
+
+        let error = extract(b"not a zip", &known, &wanted).unwrap_err();
+        assert!(error.contains("zip"), "{error}");
+
+        // A member already in place is skipped unread; one that is not
+        // wanted is never written.
+        let (_, bytes) = zip_of(
+            Base::Engine,
+            &[
+                ("ocaml.js", &set[0].1),
+                ("vendor/pdfjs/cmaps/a.bcmap", &set[1].1),
+            ],
+        );
+        let written = extract(&bytes, &known, &wanted).unwrap();
+        assert_eq!(written.into_iter().collect::<Vec<_>>(), vec!["ocaml.js"]);
+        assert!(!set[1].0.target.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn progress_is_throttled_but_reaches_its_end() {
+        let mut events = Vec::new();
+        let mut throttle = Throttle::new(|done, total| events.push((done, total)));
+        for done in 0..=1000 {
+            throttle.report(done, 1000);
+        }
+        throttle.report(1000, 1000);
+        throttle.report(1000, 1500);
+        assert!(events.len() <= 205, "{}", events.len());
+        assert_eq!(events.first(), Some(&(0, 1000)));
+        assert!(events.contains(&(1000, 1000)));
+        assert_eq!(events.last(), Some(&(1000, 1500)));
     }
 }

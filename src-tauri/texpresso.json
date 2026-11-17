@@ -1099,5 +1099,19 @@
       "bytes": 96589,
       "sha256": "663d86126d5f5fcb1c61490f94353e2a8375660b8c5498ab3ebab5a34b08800e"
     }
+  ],
+  "archives": [
+    {
+      "path": "install/engine-0b8041d1aa3fd108.zip",
+      "bytes": 6622258,
+      "sha256": "0b8041d1aa3fd10832b6f3bd838fb0cb331c940779541a9c7ee12332a316a8ce",
+      "base": "engine"
+    },
+    {
+      "path": "install/core-68afb66dac635189.zip",
+      "bytes": 18720925,
+      "sha256": "68afb66dac635189b81ad5ff4dbc8623ddb3f42147d9e4143685b9772b33d4f6",
+      "base": "data"
+    }
   ]
 }
