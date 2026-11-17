@@ -926,6 +926,27 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         }
     };
 
+    // An item whose shortcut the webview already handles. The accelerator only
+    // labels the item: it is left out of ACCELERATORS, so the frontend does not
+    // bind it, and it is drawn on Windows only, where the native menu never
+    // translates accelerators. On macOS and GTK the menu would take the key
+    // itself and run the command in place of (or beside) the webview's own.
+    let shown = |id: &str, label: &str, accel: &str| -> tauri::Result<MenuItem<R>> {
+        let plain = || MenuItemBuilder::with_id(id, label).build(app);
+        if !cfg!(windows) {
+            return plain();
+        }
+        MenuItemBuilder::with_id(id, label)
+            .accelerator(accel)
+            .build(app)
+            .or_else(|error| {
+                eprintln!(
+                    "[menu] accelerator {accel:?} for {id} was rejected ({error}); registering without it"
+                );
+                plain()
+            })
+    };
+
     // The same shape as `item`, plus a check state. The accelerator must still be
     // recorded in ACCELERATORS: F8, F9 and the sidebar and tab shortcuts are
     // carried by check items, and losing them here would silently kill the
@@ -1167,7 +1188,13 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&PredefinedMenuItem::cut(app, None)?)
         .item(&PredefinedMenuItem::copy(app, None)?)
         .item(&PredefinedMenuItem::paste(app, None)?)
-        .item(&item("edit.pastePlain", "Paste without Formatting", None)?)
+        // Chromium performs the plain paste for Ctrl+Shift+V, and the paste
+        // handler in main.ts reads that as a request to skip rich conversion.
+        .item(&shown(
+            "edit.pastePlain",
+            "Paste without Formatting",
+            "CmdOrCtrl+Shift+V",
+        )?)
         .item(&item("edit.delete", "Delete Selection", None)?)
         .item(&PredefinedMenuItem::select_all(app, None)?)
         .separator()
