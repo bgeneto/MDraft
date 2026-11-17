@@ -243,25 +243,30 @@ export function isHtmlSource(text: string): boolean {
   return elements > 0 && (depth === 0 || endsWithOpenTag === true);
 }
 
+type RankedSyntax = Array<[Detection["language"], number]>;
+
+/** Every markup score, highest first; ties keep the order below. */
+function rankTextSyntax(raw: string, mode: "clipboard" | "document"): RankedSyntax {
+  const scores: RankedSyntax = [
+    ["html", scoreHtml(raw, mode)],
+    ["markdown", scoreMarkdown(raw)],
+    ["typst", scoreTypst(raw)],
+    ["asciidoc", scoreAsciidoc(raw)],
+    ["latex", scoreLatex(raw)],
+  ];
+  return scores.sort((a, b) => b[1] - a[1]);
+}
+
 /** The confident syntax of a text, or null when the evidence is too thin. */
 export function detectTextSyntax(
   raw: string,
   mode: "clipboard" | "document" = "clipboard",
 ): Detection | null {
   if (raw.trim() === "") return null;
-  const html = scoreHtml(raw, mode);
-  const markdown = scoreMarkdown(raw);
-  const typst = scoreTypst(raw);
-  const asciidoc = scoreAsciidoc(raw);
-  const latex = scoreLatex(raw);
-  const scores: Array<[Detection["language"], number]> = [
-    ["html", html],
-    ["markdown", markdown],
-    ["typst", typst],
-    ["asciidoc", asciidoc],
-    ["latex", latex],
-  ];
-  scores.sort((a, b) => b[1] - a[1]);
+  return pickTextSyntax(rankTextSyntax(raw, mode));
+}
+
+function pickTextSyntax(scores: RankedSyntax): Detection | null {
   const [language, score] = scores[0];
   const runnerUp = scores[1][1];
   // Typst and AsciiDoc both use `= ` for a title. When that shared signal is
@@ -277,6 +282,212 @@ export function detectTextSyntax(
   }
   if (score < 4 || score - runnerUp < 2) return null;
   return { language, score, runnerUp };
+}
+
+/** A document classification, including the web-source languages. */
+export interface DocumentDetection {
+  language: DocumentLanguage;
+  score: number;
+  runnerUp: number;
+}
+
+const JSON_OBJECT_START = /^(?:\[\s*)?\{\s*"(?:[^"\\\n]|\\.)*"\s*:/;
+
+/**
+ * The buffer is a JSON document.
+ *
+ * A complete document is decided by the parser, which no heuristic can beat.
+ * Only an object or an array counts: `42` and `"text"` are valid JSON and also
+ * ordinary prose. While the reader is still typing — or past the detection
+ * sample, where the text is cut mid-value — the parse fails, so an object that
+ * opens with a quoted key (`{ "name":`) is enough. A Markdown reference
+ * (`[1]: https://…`) or task list (`[ ] item`) has neither.
+ */
+export function isJsonDocument(raw: string): boolean {
+  // `trim` removes a byte-order mark too: U+FEFF is JavaScript whitespace.
+  const text = raw.trim();
+  if (!/^[[{]/.test(text)) return false;
+  try {
+    const value: unknown = JSON.parse(text);
+    if (typeof value === "object" && value !== null) return true;
+  } catch {
+    // Incomplete, cut by the sample, or JSON with comments: the prefix decides.
+  }
+  return JSON_OBJECT_START.test(text);
+}
+
+/**
+ * Remove `/* … *\/` comments in one pass.
+ *
+ * A lazy regular expression rescans to the end of the text for every opener
+ * without a closer, and prose such as `src/*.md` has many of those.
+ */
+function stripBlockComments(text: string): string {
+  let out = "";
+  let index = 0;
+  for (;;) {
+    const open = text.indexOf("/*", index);
+    if (open === -1) break;
+    const close = text.indexOf("*/", open + 2);
+    if (close === -1) break;
+    out += `${text.slice(index, open)} `;
+    index = close + 2;
+  }
+  return out + text.slice(index);
+}
+
+/**
+ * The text a stylesheet or script scorer may read, or null for markup.
+ *
+ * `stripNoise` removes Markdown fences and AsciiDoc listings, so an article
+ * *about* CSS keeps its prose and loses its code samples. Block comments go
+ * too: JSDoc and licence headers are prose. A text that starts with a tag is
+ * HTML, and its inline `<style>` and `<script>` must not outvote it.
+ */
+function webSourceText(raw: string): string | null {
+  const text = stripBlockComments(stripNoise(raw));
+  return /^\s*</.test(text) ? null : text;
+}
+
+/** A selector and a `{…}` body without nested braces; minified rules follow `}` or `;`. */
+const CSS_RULE = /(?:^|(?<=[{};]))([^{}\n;]+)\{([^{}]*)\}/gm;
+const CSS_DECLARATION = /^(?:--[\w-]+|-?[a-z][a-z-]*)\s*:\s*[^\s:]/;
+const CSS_AT_RULE =
+  /^[ \t]*@(?:media|import|font-face|keyframes|-webkit-keyframes|supports|layer|charset|namespace|page|container|property|counter-style|font-feature-values|tailwind)\b/m;
+const SCRIPT_KEYWORD =
+  /^(?:if|for|while|switch|else|do|try|catch|finally|function|class|return|const|let|var|export|import|async|await|new|typeof|case|default)\b/;
+
+/**
+ * The selector of a CSS rule, as opposed to a block that only looks like one.
+ *
+ * Pseudo-class arguments (`:not(.a)`, `:nth-child(2n)`) and attribute
+ * selectors (`[type="text"]`) are the only places a selector holds parentheses,
+ * quotes or `=`. Whatever is left after removing them is a call, an assignment,
+ * an arrow or a TeX command — `if (x) {`, `#let f(x) = {`, `\section{`.
+ */
+function isCssSelector(selector: string): boolean {
+  const text = selector.trim();
+  if (text === "" || SCRIPT_KEYWORD.test(text) || /^#\s/.test(text)) return false;
+  const bare = text.replace(/::?[\w-]+\([^()]*\)/g, "").replace(/\[[^\]]*\]/g, "");
+  return !/[()=$?!"'`\\%@]/.test(bare);
+}
+
+function cssDeclarations(body: string): number {
+  let found = 0;
+  for (const part of body.split(";")) if (CSS_DECLARATION.test(part.trim())) found += 1;
+  return found;
+}
+
+function cssScoreOf(text: string): number {
+  let rules = 0;
+  let declarations = 0;
+  CSS_RULE.lastIndex = 0;
+  for (let match = CSS_RULE.exec(text); match !== null; match = CSS_RULE.exec(text)) {
+    if (!isCssSelector(match[1])) continue;
+    const found = cssDeclarations(match[2]);
+    if (found === 0) continue;
+    rules += 1;
+    declarations += found;
+    if (rules >= 20) break;
+  }
+  // A stylesheet is made of rules. An at-rule or a `key: value;` line alone is
+  // as likely to be a YAML list or a sentence.
+  if (rules === 0) return 0;
+  let score = 4;
+  if (rules >= 3) score += 2;
+  if (declarations >= 2) score += 2;
+  if (CSS_AT_RULE.test(text)) score += 3;
+  if (/^[ \t]*:root\b/m.test(text) || /(?:^|[\s{;])--[\w-]+\s*:/.test(text)) score += 2;
+  return score;
+}
+
+/**
+ * The CSS score: rules whose body holds `property: value` declarations, plus
+ * the at-rules and custom properties no other format writes.
+ */
+export function scoreCss(raw: string): number {
+  const text = webSourceText(raw);
+  return text === null ? 0 : cssScoreOf(text);
+}
+
+const JS_MODULE =
+  /^[ \t]*(?:import\s+(?:[\w$*{][^;\n]*?\s+from\s+)?["'][^"'\n]+["']|export\s+(?:default\b|const\b|let\b|var\b|function\b|class\b|async\b|\{|\*))/m;
+const JS_COMMONJS =
+  /\brequire\s*\(\s*["'][^"'\n]+["']\s*\)|\bmodule\.exports\b|^[ \t]*exports\.[\w$]+\s*=/m;
+const JS_FUNCTION =
+  /^[ \t]*(?:export\s+(?:default\s+)?)?(?:async\s+)?function\b\s*\*?\s*[\w$]*\s*\(/m;
+const JS_BINDING =
+  /^[ \t]*(?:export\s+)?(?:const|let|var)\s+(?:[\w$]+|\{[^}\n]*\}|\[[^\]\n]*\])\s*=(?!=)/gm;
+const JS_CLASS =
+  /^[ \t]*(?:export\s+(?:default\s+)?)?class\s+[\w$]+(?:\s+extends\s+[\w$.]+)?\s*\{/m;
+const JS_ARROW = /(?:\)|\b[\w$]+)\s*=>\s*[{(\w$"'`[!-]/;
+const JS_GLOBALS =
+  /\b(?:console\.(?:log|error|warn|info|debug)|document\.(?:getElementById|querySelector(?:All)?|createElement)|JSON\.(?:parse|stringify)|[\w$]\.addEventListener)\s*\(/;
+
+/**
+ * The JavaScript score.
+ *
+ * Statements are anchored to the start of a line, which is what separates a
+ * script from prose that mentions one: `const` and `let` are English words,
+ * and Typst's `#let` starts with `#`. A Typst arrow (`it => {`) is worth 2 here
+ * and cannot decide alone.
+ */
+function javascriptScoreOf(text: string, raw: string): number {
+  let score = 0;
+  if (JS_MODULE.test(text)) score += 5;
+  if (JS_COMMONJS.test(text)) score += 3;
+  if (JS_FUNCTION.test(text)) score += 4;
+  const bindings = count(text, JS_BINDING);
+  if (bindings > 0) score += 3;
+  if (bindings >= 2) score += 1;
+  if (bindings >= 4) score += 1;
+  if (JS_CLASS.test(text)) score += 3;
+  if (JS_ARROW.test(text)) score += 2;
+  if (/^\s*(["'])use strict\1;?\s*$/m.test(text) || /^#!.*\bnode\b/.test(raw)) score += 4;
+  if (JS_GLOBALS.test(text)) score += 2;
+  if (count(text, /;[ \t]*$/gm) >= 3) score += 1;
+  return score;
+}
+
+export function scoreJavascript(raw: string): number {
+  const text = webSourceText(raw);
+  return text === null ? 0 : javascriptScoreOf(text, raw);
+}
+
+/** A decided JSON document scores this: it is a parse, not a vote. */
+const JSON_SCORE = 10;
+
+/** The least a stylesheet or a script must score to name a buffer. */
+const MIN_WEB_SCORE = 6;
+
+/**
+ * The confident language of a whole buffer, web sources included.
+ *
+ * This is the classifier behind Save As and the status-bar type of an untitled
+ * buffer. JSON is decided first, by the parser. A stylesheet or a script then
+ * has to clear `MIN_WEB_SCORE` and lead every other score, markup included, by
+ * the same two points the markup classifier demands; otherwise the answer is
+ * exactly `detectTextSyntax(raw, "document")`, so a markup document is never
+ * reclassified by the new scorers. The clipboard and paste paths keep calling
+ * `detectTextSyntax`: a paste into a buffer that merely looks like JSON must
+ * not change how the clipboard is converted.
+ */
+export function detectDocumentSyntax(raw: string): DocumentDetection | null {
+  if (raw.trim() === "") return null;
+  if (isJsonDocument(raw)) return { language: "json", score: JSON_SCORE, runnerUp: 0 };
+  const markup = rankTextSyntax(raw, "document");
+  const text = webSourceText(raw);
+  if (text !== null) {
+    const web: Array<["css" | "javascript", number]> = [
+      ["css", cssScoreOf(text)],
+      ["javascript", javascriptScoreOf(text, raw)],
+    ];
+    web.sort((a, b) => b[1] - a[1]);
+    const [language, score] = web[0];
+    const runnerUp = Math.max(web[1][1], markup[0][1]);
+    if (score >= MIN_WEB_SCORE && score - runnerUp >= 2) return { language, score, runnerUp };
+  }
+  return pickTextSyntax(markup);
 }
 
 /**
