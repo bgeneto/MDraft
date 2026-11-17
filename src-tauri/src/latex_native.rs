@@ -89,9 +89,11 @@ pub struct EngineStatus {
     /// `native`, `bundled` or `none`.
     pub backend: String,
     pub bundled_enabled: bool,
-    /// The hidden WasmTex backend's assets, kept for its regression layer.
-    pub bundled_installed: bool,
-    /// The production preview engine and digest table are present.
+    /// TeXpresso's engine and digest table are present.
+    pub texpresso_installed: bool,
+    /// PhiTeX's engine and digest table are present.
+    pub phitex_installed: bool,
+    /// Either preview engine is present.
     pub preview_installed: bool,
     pub native_enabled: bool,
     pub native_root: Option<String>,
@@ -199,9 +201,12 @@ pub fn latex_engine_status(app: AppHandle) -> Result<EngineStatus, String> {
         .try_state::<crate::settings::AppState>()
         .ok_or("The settings store is unavailable.")?;
     let settings = state.snapshot()?;
-    let bundled_installed = crate::latex::latex_status(app.clone()).unwrap_or(false);
-    let preview_installed =
-        crate::latex::directory(&app).is_ok_and(|root| crate::latex_texpresso::available(&root));
+    let root = crate::latex::directory(&app).ok();
+    let texpresso_installed = root
+        .as_deref()
+        .is_some_and(crate::latex_texpresso::available);
+    let phitex_installed = root.as_deref().is_some_and(crate::latex_phitex::available);
+    let preview_installed = texpresso_installed || phitex_installed;
     let native_root = settings.latex_native_root.clone();
     let native_wsl = settings.latex_native_wsl.clone();
     let mut native_engines = native_root
@@ -251,7 +256,8 @@ pub fn latex_engine_status(app: AppHandle) -> Result<EngineStatus, String> {
     Ok(EngineStatus {
         backend: backend.into(),
         bundled_enabled: settings.latex_enabled,
-        bundled_installed,
+        texpresso_installed,
+        phitex_installed,
         preview_installed,
         native_enabled: settings.latex_native_enabled,
         native_distribution: match &native_wsl {

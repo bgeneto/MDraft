@@ -10,7 +10,7 @@
 //! be dragged and resized without leaving the webview.
 
 import * as api from "./api";
-import { TEXPRESSO_ENGINE_MIB, TEXPRESSO_TEXLIVE_YEAR } from "./latex-backend";
+import { BUNDLED_TEXLIVE_YEAR, latexPreviewBackend, previewEngineMib } from "./latex-backend";
 import {
   renderTexmfControl,
   texmfRows,
@@ -1094,13 +1094,13 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
       text:
         host.latexCacheError() ??
         (latex
-          ? latex.previewInstalled
+          ? (latexPreviewBackend() === "phitex" ? latex.phitexInstalled : latex.texpressoInstalled)
             ? latex.enabled
               ? "Installed and enabled."
               : "Installed, but the switch is off."
             : latex.enabled
-              ? `Enabled, but the preview files are missing or out of date. Toggle the switch off and on to download the TeX Live ${TEXPRESSO_TEXLIVE_YEAR} preview engine (about ${TEXPRESSO_ENGINE_MIB} MiB).`
-              : `Not installed. Turn the switch on to download about ${TEXPRESSO_ENGINE_MIB} MiB of verified engine files; packages and fonts follow on demand.`
+              ? `Enabled, but the preview files are missing or out of date. Toggle the switch off and on to download the TeX Live ${BUNDLED_TEXLIVE_YEAR} preview engine (about ${previewEngineMib(latexPreviewBackend())} MiB).`
+              : `Not installed. Turn the switch on to download about ${previewEngineMib(latexPreviewBackend())} MiB of verified engine files; packages and fonts follow on demand.`
           : "Checking…"),
     },
     {

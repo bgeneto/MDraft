@@ -68,8 +68,10 @@ const artifactName =
   /\.(?:log|har|etl|prof|cpuprofile|heapsnapshot|dmp|pdf|docx?|xlsx?|zip|7z|tar|gz|exe|dll|msi|so|dylib|AppImage|deb|rpm|bak|backup)$|\.(?:sqlite\d*|db)(?:-(?:wal|shm))?$/i;
 const stateName = /(?:^|\/)(?:settings\.json|ai-prompts\.md|\.window-state\.json|\.mdraft\.json)$/i;
 const imageName = /\.(?:png|jpe?g|webp|gif|bmp|svg|ico|icns)$/i;
+// Pyodide's virtual file system uses `/home/pyodide` and `/home/web_user`;
+// they are environment paths, not personal user directories.
 const safeUser =
-  /^(?:reader|writer|user|username|name|alice|bob|ana|me|x|u|test(?:[-_].*)?|example|demo|dev|runner|runneradmin|public|default|…|\{[^}]+\})$/i;
+  /^(?:reader|writer|user|username|name|alice|bob|ana|me|x|u|test(?:[-_].*)?|example|demo|dev|runner|runneradmin|public|default|pyodide|web_user|…|\{[^}]+\})$/i;
 
 export function personalPaths(text) {
   const decoded = text.replace(/(?:%[a-f\d]{2})+/gi, (encoded) => {

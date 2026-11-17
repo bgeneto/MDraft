@@ -4,7 +4,7 @@
 //! branch. Conditional bodies are excluded independently, including nested
 //! conditionals, so a rendered macro cannot claim text in a false branch.
 
-import { createLatexSyntaxService } from "wasmtex/syntax";
+import { createLatexSyntaxService } from "./vendor/latex-syntax/syntax.js";
 import { tokenizeWords, type SourceWord } from "./typst-page-map.ts";
 
 interface Span {

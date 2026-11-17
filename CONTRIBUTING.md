@@ -140,5 +140,6 @@ without owner review. History cleanup needs separately reviewed ref operations.
 
 ## License
 
-MDraft is released under the MIT License. By contributing, you agree that your
-contribution can be distributed under the same terms. See [LICENSE](LICENSE).
+MDraft is released under the GNU Affero General Public License v3.0
+(AGPL-3.0-only). By contributing, you agree that your contribution can be
+distributed under the same terms. See [LICENSE](LICENSE).

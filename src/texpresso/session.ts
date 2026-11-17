@@ -14,6 +14,7 @@ import {
   type FrameMessage,
   type HostMessage,
   type SyncFile,
+  type TexpressoBackend,
   type TexpressoEngine,
   type TexpressoProblem,
   type TexpressoTheme,
@@ -34,6 +35,7 @@ const TYPESET_BUDGET_MS = 360_000;
 export interface TexpressoProjectKey {
   rootPath: string;
   engine: TexpressoEngine;
+  backend: TexpressoBackend;
 }
 
 export interface TexpressoHandlers {
@@ -102,7 +104,7 @@ export class TexpressoSession {
   }
 
   private start(): TexpressoFrame {
-    const frame = new TexpressoFrame(this.host, this.key.engine, (message) =>
+    const frame = new TexpressoFrame(this.host, this.key.engine, this.key.backend, (message) =>
       this.receive(frame, message),
     );
     frame.ready.then(
@@ -375,7 +377,7 @@ export class TexpressoSession {
     this.handlers.onMessage(this, message);
   }
 
-  /** The watchdog: resync, then restart once, then give up for WasmTex. */
+  /** The watchdog: resync, then restart once, then give up for this frame. */
   private check(): void {
     if (this.broken || !this.ready) return;
     const now = performance.now();

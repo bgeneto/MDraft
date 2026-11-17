@@ -14,3 +14,6 @@ LICENSE
 
 # Google Search Console verification files are plain text, not HTML.
 site/google*.html
+
+# Vendored upstream source, kept verbatim (see src/vendor/latex-syntax/README.md)
+src/vendor/

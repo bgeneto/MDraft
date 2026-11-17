@@ -108,11 +108,11 @@ here with its public purpose and, for owner sessions, to the private catalog.
 | `npm run pdf:map:perf` | `node scripts/pdf-map-performance.mjs` |
 | `npm run pdf:map:webview` | `node scripts/pdf-webview-performance.mjs` |
 | `npm run test:harness:unit` | `node scripts/test-harness-ownership-unit.mjs`; test-process ownership and test-profile engine-link preservation |
-| `npm run latex:sdk:unit` | `node scripts/latex-sdk-unit.mjs` |
-| `npm run texpresso:unit` | `node scripts/texpresso-unit.mjs` |
+| `npm run texpresso:unit` | `node scripts/texpresso-unit.mjs`; selection, fallbacks, protocol, pins and local libraries |
+| `npm run build:phitex` | rebuild `src-tauri/phitex-shell/bundles/` from the vendored viewer and a pinned `engine-worker.js` |
+| `npm run phitex:frame` | Linux-only WebKitWebDriver check of the PhiTeX frame: install files, page, gestures, marks, logs and PDF |
 | `npm run latex:texmf:unit` | `node scripts/latex-texmf-unit.mjs` |
 | `npm run latex:correspondence:unit` | `node scripts/latex-correspondence-unit.mjs` |
-| `npm run latex:preview` | `node scripts/latex-preview-test.mjs` |
 | `npm run latex:perf` | `node scripts/latex-performance-test.mjs` |
 | `npm run latex:perf:baseline` | `node scripts/latex-perf-baseline.mjs` |
 | `npm run latex:perf:book` | `node scripts/latex-perf-book.mjs` |
@@ -140,7 +140,6 @@ here with its public purpose and, for owner sessions, to the private catalog.
 | `npm run tabs:restore:unit` | `node scripts/tabs-restore-unit.mjs` |
 | `npm run typst:map:unit` | `node scripts/typst-page-map-unit.mjs` |
 | `npm run latex:sync:unit` | `node scripts/latex-sync-unit.mjs` |
-| `npm run latex:project` | `node scripts/latex-project-test.mjs` |
 | `npm run latex:native` | `node scripts/latex-native-test.mjs` |
 | `npm run latex:ondemand` | `node scripts/latex-on-demand-test.mjs` |
 | `npm run html:map:unit` | `node scripts/html-source-map-unit.mjs` |

@@ -29,12 +29,13 @@ for them.
 
 - `let-def/texpresso`, the native tool, is MIT licensed (Frédéric Bour). The
   author confirmed that the web build is MIT as well, under the same terms.
-  The notice is `src/assets/wasmtex-licenses/LICENSES/TeXpresso-MIT.txt`.
+  The notice is on the repository's licence page and upstream at
+  `let-def/texpresso`.
 - The engines are modified XeTeX and LuaTeX. Upstream LuaTeX and `xdvipdfmx`
   are GPL (version 2 or later) and upstream XeTeX carries an MIT-style licence;
   the GPL source offer and the component notices stay with the distribution.
 - The TeX Live files of the bundle keep their own licences, as they do for the
-  WasmTex engine.
+  compatibility preview engine.
 
 The licence gate is answered; the decision is recorded in
 [the production ADR](../../docs/architecture.md).

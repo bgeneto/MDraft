@@ -1,0 +1,18 @@
+{
+  "release": "phitex-1.0.1-engine870e9ac",
+  "origin": "https://mdraft.webonly.app/phitex/",
+  "archive": {
+    "path": "phitex-1.0.1-engine870e9ac.zip",
+    "sha256": "b5710f768cfc5dd1972d957c8bb4ee131ba149671c168a7e1b00ae6f7fd16ae8",
+    "bytes": 27285136
+  },
+  "shelf": {
+    "release": "tl2026.9",
+    "hosts": [
+      "https://v1.shelf.phitex.org/tl2026/",
+      "https://shelf-phitex-v1.pages.dev/tl2026/"
+    ],
+    "packTable": "shelf-packs.tsv.gzdata",
+    "releaseJson": "shelf-release.json"
+  }
+}

@@ -1,12 +1,10 @@
-//! The hidden WasmTex assets, the bounded project snapshot, and the PDF/print
-//! commands shared with the production preview.
+//! The shared LaTeX transport: the `mdraft-tex` scheme, the bounded project
+//! snapshot, the PDF/print commands, and the two bundled preview engines'
+//! status/install/cache wrappers.
 //!
-//! WasmTex is disabled as a reader-facing backend; its install and serve paths
-//! stay because its hidden regression layer still exercises them. TeXpresso's
-//! own handler and cache live in `latex_texpresso.rs`.
-//!
-//! The WebView never talks to the TeX mirror directly. Its synchronous worker
-//! requests use this fixed-origin scheme; source files never enter the URL.
+//! The WebView never talks to an engine origin directly. TeXpresso and PhiTeX
+//! are served from this origin by `latex_texpresso.rs` and `latex_phitex.rs`;
+//! the project snapshot and the PDF/print commands are shared by every backend.
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -15,565 +13,166 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{
-        Mutex, OnceLock,
+        Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 use tauri::{
-    AppHandle, Emitter, Manager, UriSchemeResponder,
+    AppHandle, Manager, UriSchemeResponder,
     http::{Request, Response, header},
 };
 
 use crate::text_encoding;
 
 pub const SCHEME: &str = "mdraft-tex";
-/// Written last by `install_latex`: names the engine release whose files are all there.
-const RELEASE_MARKER: &str = ".release";
 const MAX_FILE: usize = 32 * 1024 * 1024;
 const MAX_PROJECT: usize = 64 * 1024 * 1024;
 const MAX_FILES: usize = 256;
-/// The project-tree manifest is a lookup table, not a second copy: these caps
-/// keep one huge folder from turning every compile into an unbounded walk.
 const MANIFEST_MAX_DEPTH: usize = 12;
 const MANIFEST_MAX_NAMES: usize = 20_000;
-/// Trees TeX must not see through the manifest. The VCS folders and
-/// node_modules are tool state; .mdraft-texmf is MDraft's reserved library
-/// namespace. A native job's build folder lives outside the project root.
 const MANIFEST_SKIPPED_DIRS: [&str; 5] = [".git", ".hg", ".svn", "node_modules", ".mdraft-texmf"];
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 static CACHE_LOCK: Mutex<()> = Mutex::new(());
 /// One engine installation at a time; Pandoc and Typst have their own locks.
 static INSTALL_LOCK: Mutex<()> = Mutex::new(());
-static MIGRATION_LOCK: Mutex<()> = Mutex::new(());
-static ASSET_REQUESTS: AtomicU64 = AtomicU64::new(0);
-static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
-static CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
 
 /// The switch and the cache ceiling, mirrored in memory.
-///
-/// The `mdraft-tex` scheme handler is synchronous and runs for every package a
-/// compile requests, so it cannot parse `settings.json` per request. `AppState`
-/// writes this mirror whenever settings are loaded or saved, and the handler
-/// reads it. `None` means "not read yet", which is treated as disabled: an
-/// engine that has not been switched on must never serve assets.
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static CACHE_LIMIT_MB: AtomicU64 = AtomicU64::new(256);
 
-/// Mirror the settings the scheme handler needs. Called on load and on save.
 pub fn apply_settings(settings: &crate::settings::Settings) {
     ENABLED.store(settings.latex_enabled, Ordering::Relaxed);
     CACHE_LIMIT_MB.store(settings.latex_cache_limit_mb as u64, Ordering::Relaxed);
     crate::latex_texpresso::set_cache_limit(
         u64::from(settings.latex_cache_limit_mb).saturating_mul(1024 * 1024),
     );
+    crate::latex_phitex::set_cache_limit(
+        u64::from(settings.latex_cache_limit_mb).saturating_mul(1024 * 1024),
+    );
 }
 
-fn enabled() -> bool {
+pub(crate) fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
 
-fn cache_limit_bytes() -> u64 {
-    CACHE_LIMIT_MB
-        .load(Ordering::Relaxed)
-        .saturating_mul(1024 * 1024)
-}
-
-// The engine's TeX Live year, release, package mirror and pinned digests live in
-// `src-tauri/latex-engine.json`; its `active` line switches the year
-// (docs/architecture.md). The engine, its format, the worker
-// shims in `public/wasmtex/<year>/`, the SDK year in `src/latex-engine.ts` and the
-// package mirror must all name the same year and snapshot, and the `mdraft-tex` URL
-// carries no year the SDK could check, so everything below is derived from that file
-// and `scripts/latex-sdk-unit.mjs` checks the shims against it.
-const ENGINE_CONFIG: &str = include_str!("../latex-engine.json");
-
-#[derive(Deserialize)]
-struct EngineConfig {
-    active: String,
-    profiles: BTreeMap<String, EngineProfile>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct EngineProfile {
-    /// The engine release the digests were pinned from; `assets/.release` names it.
-    release: String,
-    /// Names the mirror's cache directory: the same relative path holds different
-    /// bytes in another revision, so a flat cache would mix years.
-    mirror_revision: String,
-    assets: Vec<EngineAsset>,
-    /// Optional engines (stage 6.2 of docs/architecture.md):
-    /// "pdftex" and "xetex" asset groups, downloaded only when a project chooses
-    /// that engine. They never decide whether the default engine is installed.
-    #[serde(default)]
-    engines: BTreeMap<String, Vec<EngineAsset>>,
-}
-
-#[derive(Deserialize)]
-struct EngineAsset {
-    name: String,
-    sha256: String,
-}
-
-/// The profile this build installs and serves, with every URL derived from it.
-struct ActiveEngine {
-    release: &'static str,
-    mirror_revision: &'static str,
-    assets: &'static [EngineAsset],
-    engines: &'static BTreeMap<String, Vec<EngineAsset>>,
-    /// `https://corca-ai.github.io/wasmtex/wasmtex/<year>/`
-    asset_root: String,
-    /// `/wasmtex/<year>/`: where the worker shims and the SDK request assets.
-    asset_prefix: String,
-    /// `https://texlive.corca.ai/snapshots/<revision>/<year>/`
-    mirror: String,
-}
-
-/// Reject a file that would make the engine inconsistent before it is used.
-///
-/// Only a developer edits the file, so this panics with a message instead of
-/// returning an error nobody could act on; `engine_config_is_valid` runs it in
-/// `cargo test`.
-fn validate_engine_config(config: &EngineConfig) -> Result<(), String> {
-    let segment = |value: &str| {
-        !value.is_empty()
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
-    };
-    if !config.profiles.contains_key(&config.active) {
-        return Err(format!(
-            "\"active\" is {}, which has no profile",
-            config.active
-        ));
-    }
-    let names = |profile: &EngineProfile| -> Vec<String> {
-        profile
-            .assets
-            .iter()
-            .map(|asset| asset.name.clone())
-            .collect()
-    };
-    let expected = names(config.profiles.values().next().ok_or("no profiles")?);
-    let groups = |profile: &EngineProfile| -> Vec<(String, Vec<String>)> {
-        profile
-            .engines
-            .iter()
-            .map(|(engine, assets)| {
-                (
-                    engine.clone(),
-                    assets.iter().map(|asset| asset.name.clone()).collect(),
-                )
-            })
-            .collect()
-    };
-    let expected_groups = groups(config.profiles.values().next().ok_or("no profiles")?);
-    for (year, profile) in &config.profiles {
-        if year.len() != 4 || !year.bytes().all(|byte| byte.is_ascii_digit()) {
-            return Err(format!("profile \"{year}\" is not a four-digit year"));
-        }
-        for (what, value) in [
-            ("release", &profile.release),
-            ("mirrorRevision", &profile.mirror_revision),
-        ] {
-            if !segment(value) || !value.starts_with(&format!("{year}-")) {
-                return Err(format!(
-                    "{year}: {what} \"{value}\" does not start with the year"
-                ));
-            }
-        }
-        if profile.assets.is_empty() {
-            return Err(format!("{year}: no assets"));
-        }
-        // The files live in one flat `assets/` folder and are migrated by name, so
-        // every year must ship the same set.
-        if names(profile) != expected {
-            return Err(format!(
-                "{year}: the asset names differ from the other profiles"
-            ));
-        }
-        if groups(profile) != expected_groups {
-            return Err(format!(
-                "{year}: the optional engines differ from the other profiles"
-            ));
-        }
-        for engine in profile.engines.keys() {
-            if !matches!(engine.as_str(), "pdftex" | "xetex") {
-                return Err(format!("{year}: unknown optional engine \"{engine}\""));
-            }
-        }
-        for asset in profile
-            .assets
-            .iter()
-            .chain(profile.engines.values().flatten())
-        {
-            if !segment(&asset.name) {
-                return Err(format!(
-                    "{year}: asset name \"{}\" is not a file name",
-                    asset.name
-                ));
-            }
-            let hex = asset.sha256.len() == 64
-                && asset
-                    .sha256
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
-            if !hex {
-                return Err(format!(
-                    "{year}: {} has no 64-digit lowercase SHA-256",
-                    asset.name
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn config() -> &'static EngineConfig {
-    static CONFIG: OnceLock<EngineConfig> = OnceLock::new();
-    CONFIG.get_or_init(|| {
-        let config: EngineConfig = serde_json::from_str(ENGINE_CONFIG)
-            .expect("src-tauri/latex-engine.json does not match the engine config shape");
-        if let Err(problem) = validate_engine_config(&config) {
-            panic!("src-tauri/latex-engine.json: {problem}");
-        }
-        config
-    })
-}
-
-/// The profile for `year`, with its URLs derived from the year and the revision.
-fn engine_for(year: &str) -> Option<ActiveEngine> {
-    let (year, profile) = config().profiles.get_key_value(year)?;
-    Some(ActiveEngine {
-        release: &profile.release,
-        mirror_revision: &profile.mirror_revision,
-        assets: &profile.assets,
-        engines: &profile.engines,
-        asset_root: format!("https://corca-ai.github.io/wasmtex/wasmtex/{year}/"),
-        asset_prefix: format!("/wasmtex/{year}/"),
-        mirror: format!(
-            "https://texlive.corca.ai/snapshots/{}/{year}/",
-            profile.mirror_revision
-        ),
-    })
-}
-
-/// The engine this build installs and serves: the config's `active` year.
-fn engine() -> &'static ActiveEngine {
-    static ACTIVE: OnceLock<ActiveEngine> = OnceLock::new();
-    ACTIVE.get_or_init(|| engine_for(&config().active).expect("validated with the config"))
-}
-
-/// Whether `assets` holds every file of `set`, byte for byte.
-fn assets_match(assets: &Path, set: &[EngineAsset]) -> bool {
-    set.iter().all(|expected| {
-        let asset = assets.join(&expected.name);
-        fs::symlink_metadata(&asset).is_ok_and(|meta| meta.file_type().is_file())
-            && fs::read(&asset).is_ok_and(|bytes| digest(&bytes) == expected.sha256)
-    })
-}
-
-/// The pinned asset named `name`: a core file or one of an optional engine's.
-fn pinned_asset(name: &str) -> Option<&'static EngineAsset> {
-    engine()
-        .assets
-        .iter()
-        .chain(engine().engines.values().flatten())
-        .find(|asset| asset.name == name)
-}
-
-/// The asset group of a TeX engine: the core set for LuaLaTeX, else the
-/// optional group. None for an engine this build does not offer.
-fn engine_assets(engine_name: &str) -> Option<&'static [EngineAsset]> {
-    match engine_name {
-        "lualatex" => Some(engine().assets),
-        "pdflatex" => engine().engines.get("pdftex").map(Vec::as_slice),
-        "xelatex" => engine().engines.get("xetex").map(Vec::as_slice),
-        _ => None,
-    }
-}
-
-/// Whether an engine's files are all present and match the active release.
-///
-/// When `latex-engine.json` switches years, `install_latex` updates the core
-/// set and overwrites `.release` while older optional engine files stay on
-/// disk; verifying the optional group's digests refuses stale files so the
-/// reader is offered the active release's download instead of failing on serve.
-fn engine_group_installed(assets: &Path, engine_name: &str) -> bool {
-    if engine_name == "lualatex" {
-        return engine_assets(engine_name).is_some_and(|group| {
-            group.iter().all(|asset| {
-                fs::symlink_metadata(assets.join(&asset.name))
-                    .is_ok_and(|meta| meta.file_type().is_file())
-            })
-        });
-    }
-    engine_assets(engine_name).is_some_and(|group| assets_match(assets, group))
-}
-
-/// Whether the bundled engine can compile with `engine` right now:
-/// "lualatex" (the default set) or an optional "pdflatex"/"xelatex" group.
-#[tauri::command]
-pub fn latex_engine_available(app: AppHandle, engine: String) -> Result<bool, String> {
-    if !enabled() {
-        return Ok(false);
-    }
-    // "texpresso" is the preview backend's own file set, not a TeX engine group.
-    if engine == "texpresso" {
-        return Ok(crate::latex_texpresso::available(&directory(&app)?));
-    }
-    let assets = directory(&app)?.join("assets");
-    Ok(engine_installed(&assets) && engine_group_installed(&assets, &engine))
-}
-
-/// Download one optional engine's verified files (pdfLaTeX or XeLaTeX).
-///
-/// The reader asked for it by choosing that engine for a project; nothing is
-/// fetched otherwise. Same rules as the default engine's install: every file
-/// verified against its pinned SHA-256 before it is written.
-#[tauri::command]
-pub async fn install_latex_engine(app: AppHandle, engine: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let _writer = crate::backup::gate::writer()?;
-        let _install = INSTALL_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if engine == "texpresso" {
-            // The same condition as every other LaTeX download: only after the
-            // reader has enabled bundled TeX.
-            if !enabled() {
-                return Err("Bundled TeX is not enabled.".into());
-            }
-            return crate::latex_texpresso::install(&directory(&app)?);
-        }
-        let group = engine_assets(&engine)
-            .ok_or_else(|| format!("This build does not offer the {engine} engine."))?;
-        let assets = directory(&app)?.join("assets");
-        fs::create_dir_all(&assets).map_err(|e| e.to_string())?;
-        for asset in group {
-            let path = assets.join(&asset.name);
-            if fs::read(&path).is_ok_and(|bytes| digest(&bytes) == asset.sha256) {
-                continue;
-            }
-            let bytes = download(&format!("{}{}", self::engine().asset_root, asset.name))?;
-            if digest(&bytes) != asset.sha256 {
-                return Err(format!(
-                    "The downloaded {} failed SHA-256 verification.",
-                    asset.name
-                ));
-            }
-            remove_if_present(&path)?;
-            write_atomic(&path, &bytes)?;
-        }
-        Ok(())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-/// Whether `assets` holds the pinned engine release.
-///
-/// The marker is written last by `install_latex`, so it names a release only
-/// when every file was verified. This checks that the files still exist, not
-/// their hashes: the scheme handler verifies the SHA-256 of everything it serves,
-/// and hashing 12 MB for each status call would answer nothing a marker does not.
-/// An engine from an earlier release has no marker or the wrong one, so it reads
-/// as not installed instead of as working and then failing every compile.
-fn engine_installed(assets: &Path) -> bool {
-    fs::read_to_string(assets.join(RELEASE_MARKER))
-        .is_ok_and(|text| text.trim() == engine().release)
-        && engine().assets.iter().all(|asset| {
-            fs::symlink_metadata(assets.join(&asset.name))
-                .is_ok_and(|meta| meta.file_type().is_file())
-        })
-}
-
-/// Where the mirror caches `relative`: namespaced by the pinned revision.
-fn cache_path(root: &Path, relative: &str) -> PathBuf {
-    root.join("mirror")
-        .join(engine().mirror_revision)
-        .join(relative)
-}
-
-fn legacy_candidates_matching(
-    root: &Path,
-    verify: &impl Fn(&Path) -> bool,
-) -> Result<Vec<PathBuf>, String> {
-    let entries = match fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(format!("Cannot inspect the LaTeX data directory: {error}")),
-    };
-    let mut candidates = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|error| error.to_string())?;
-        if entry.file_name() == "latex" || !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-            continue;
-        }
-        let assets = entry.path().join("assets");
-        if !fs::symlink_metadata(&assets).is_ok_and(|meta| meta.file_type().is_dir()) {
-            continue;
-        }
-        if verify(&assets) {
-            candidates.push(entry.path());
-        }
-    }
-    Ok(candidates)
-}
-
-/// Whether `assets` holds every file of at least one of `sets`.
-fn assets_match_any<'a>(assets: &Path, mut sets: impl Iterator<Item = &'a [EngineAsset]>) -> bool {
-    sets.any(|set| assets_match(assets, set))
-}
-
-/// A directory from before `latex/` counts when it holds any profile's files, so
-/// switching the active year never strands one that was installed under the other.
-fn verified_legacy_assets(assets: &Path) -> bool {
-    assets_match_any(
-        assets,
-        config()
-            .profiles
-            .values()
-            .map(|profile| profile.assets.as_slice()),
-    )
-}
-
-fn legacy_candidates(root: &Path) -> Result<Vec<PathBuf>, String> {
-    let candidates = legacy_candidates_matching(root, &verified_legacy_assets)?;
-    if let Ok(entries) = fs::read_dir(root) {
-        for entry in entries {
-            let entry = entry.map_err(|error| error.to_string())?;
-            if entry.file_name() == "latex" || !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                continue;
-            }
-            let assets = entry.path().join("assets");
-            if !fs::symlink_metadata(&assets).is_ok_and(|meta| meta.file_type().is_dir()) {
-                continue;
-            }
-            if engine()
-                .assets
-                .iter()
-                .any(|asset| assets.join(&asset.name).exists())
-                && !candidates.contains(&entry.path())
-            {
-                return Err("An incomplete or damaged LaTeX engine directory was preserved. Repair it before migrating the bundled engine.".into());
-            }
-        }
-    }
-    Ok(candidates)
-}
-
-/// Resolve the existing layout for a backup without migrating or downloading.
+/// The data directory a settings backup must include.
 pub(crate) fn backup_directory(
     root: &Path,
-    keys: &crate::backup::snapshot::CredentialIds,
+    _keys: &crate::backup::snapshot::CredentialIds,
 ) -> Result<PathBuf, String> {
-    use std::io::Read;
-    let target = root.join("latex");
-    let verify = |assets: &Path| {
-        config().profiles.values().any(|profile| {
-            profile.assets.iter().all(|asset| {
-                let Ok(mut file) =
-                    crate::backup::snapshot::open_regular(assets, Path::new(&asset.name))
-                else {
-                    return false;
-                };
-                if crate::backup::snapshot::is_credential_file(&file, keys).unwrap_or(true) {
-                    return false;
-                }
-                let Ok(metadata) = file.metadata() else {
-                    return false;
-                };
-                if metadata.len() > 64 * 1024 * 1024 {
-                    return false;
-                }
-                let mut bytes = Vec::with_capacity(metadata.len() as usize);
-                Read::by_ref(&mut file)
-                    .take(64 * 1024 * 1024 + 1)
-                    .read_to_end(&mut bytes)
-                    .is_ok()
-                    && bytes.len() <= 64 * 1024 * 1024
-                    && digest(&bytes) == asset.sha256
-            })
-        })
-    };
-    let candidates = legacy_candidates_matching(root, &verify)?;
-    if candidates.len() > 1 || (!candidates.is_empty() && target.exists()) {
-        return Err("Multiple LaTeX data directories exist. They were preserved; resolve the conflict before backing up.".into());
-    }
-    Ok(candidates.into_iter().next().unwrap_or(target))
+    Ok(root.join("latex"))
 }
 
-fn migrate_directory_matching(
-    root: &Path,
-    verify: &impl Fn(&Path) -> bool,
-) -> Result<PathBuf, String> {
-    let _guard = MIGRATION_LOCK
-        .lock()
-        .map_err(|_| "LaTeX migration is unavailable.")?;
-    let target = root.join("latex");
-    let candidates = legacy_candidates_matching(root, verify)?;
-    if candidates.len() > 1 || (!candidates.is_empty() && target.exists()) {
-        return Err("Multiple LaTeX data directories exist. They were preserved; resolve the conflict before using the bundled engine.".into());
-    }
-    if let Some(source) = candidates.first() {
-        fs::rename(source, &target).map_err(|error| {
-            format!("Could not move the existing LaTeX data; the original was preserved: {error}")
-        })?;
-    }
-    Ok(target)
+/// The pre-settings engine marker no longer enables anything. Kept as a
+/// one-line compatibility answer for settings load; the switch is the only
+/// source of truth now.
+pub fn legacy_marker_present<R: tauri::Runtime>(_app: &AppHandle<R>) -> bool {
+    false
 }
 
-fn migrate_directory(root: &Path) -> Result<PathBuf, String> {
-    let _writer = crate::backup::gate::writer()?;
-    // Check for recognizable but incomplete directories before making changes.
-    legacy_candidates(root)?;
-    migrate_directory_matching(root, &verified_legacy_assets)
-}
-
+/// The bundled engines' data directory. Older releases kept theirs in a sibling
+/// directory; those files are inert now and are not migrated into this one.
 pub(crate) fn directory(app: &AppHandle) -> Result<PathBuf, String> {
     let root = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("Cannot locate the LaTeX data directory: {e}"))?;
-    if enabled() {
-        return migrate_directory(&root);
-    }
-    let target = root.join("latex");
-    let candidates = legacy_candidates(&root)?;
-    if candidates.len() > 1 || (!candidates.is_empty() && target.exists()) {
-        return Err("Multiple LaTeX data directories exist. They were preserved; resolve the conflict before using the bundled engine.".into());
-    }
-    Ok(candidates.into_iter().next().unwrap_or(target))
+    Ok(root.join("latex"))
 }
 
-/// Whether the reader has enabled the engine.
-///
-/// Settings-backed, so a portable build and a settings backup carry the switch.
-/// The asset files themselves are a separate question: `latex_status` is true
-/// only when the switch is on *and* the pinned release is installed, because a
-/// switch that promises an engine it cannot run is the dead UI this project
-/// refuses. An engine from an earlier release does not count.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LatexStats {
+    /// TeXpresso: files served from disk, files downloaded, bytes verified,
+    /// refusals, and the preview session's download guard.
+    texpresso_hits: u64,
+    texpresso_misses: u64,
+    texpresso_verified_bytes: u64,
+    texpresso_refusals: u64,
+    texpresso_downloaded_bytes: u64,
+    texpresso_guard: crate::texpresso_guard::Report,
+    /// PhiTeX: the same counters for its pack and asset transport.
+    phitex_hits: u64,
+    phitex_misses: u64,
+    phitex_verified_bytes: u64,
+    phitex_refusals: u64,
+    phitex_downloaded_bytes: u64,
+}
+
 #[tauri::command]
-pub fn latex_status(app: AppHandle) -> Result<bool, String> {
-    if !enabled() {
-        return Ok(false);
+pub fn latex_stats() -> LatexStats {
+    let (texpresso_hits, texpresso_misses, texpresso_verified_bytes, texpresso_refusals) =
+        crate::latex_texpresso::stats();
+    let (phitex_hits, phitex_misses, phitex_verified_bytes, phitex_refusals) =
+        crate::latex_phitex::stats();
+    LatexStats {
+        texpresso_hits,
+        texpresso_misses,
+        texpresso_verified_bytes,
+        texpresso_refusals,
+        texpresso_downloaded_bytes: crate::latex_texpresso::downloaded_bytes(),
+        texpresso_guard: crate::texpresso_guard::report(),
+        phitex_hits,
+        phitex_misses,
+        phitex_verified_bytes,
+        phitex_refusals,
+        phitex_downloaded_bytes: crate::latex_phitex::downloaded_bytes(),
     }
-    Ok(engine_installed(&directory(&app)?.join("assets")))
 }
 
-/// Whether the production preview's engine assets and digest table are on disk.
-///
-/// The reader's answer to a TeXpresso download the guard is holding: `true`
-/// continues it (and doubles that budget), `false` stops this preview
-/// session's downloads. Returns whether a download was waiting.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LatexCacheInfo {
+    bytes: u64,
+    limit_mb: u32,
+    enabled: bool,
+    installed: bool,
+    preview_installed: bool,
+    texpresso_installed: bool,
+    phitex_installed: bool,
+}
+
+#[tauri::command]
+pub fn latex_cache_info(app: AppHandle) -> Result<LatexCacheInfo, String> {
+    let root = directory(&app)?;
+    let limit_mb = CACHE_LIMIT_MB.load(Ordering::Relaxed).min(u32::MAX as u64) as u32;
+    let texpresso_installed = crate::latex_texpresso::available(&root);
+    let phitex_installed = crate::latex_phitex::available(&root);
+    Ok(LatexCacheInfo {
+        bytes: cache_size(&root.join("mirror"))
+            .unwrap_or(0)
+            .saturating_add(crate::latex_texpresso::cache_bytes(&root))
+            .saturating_add(crate::latex_phitex::cache_bytes(&root)),
+        limit_mb,
+        enabled: enabled(),
+        installed: texpresso_installed || phitex_installed,
+        preview_installed: texpresso_installed || phitex_installed,
+        texpresso_installed,
+        phitex_installed,
+    })
+}
+
+#[tauri::command]
+pub fn latex_disable(app: AppHandle) -> Result<(), String> {
+    let state = app
+        .try_state::<crate::settings::AppState>()
+        .ok_or("The settings store is unavailable.")?;
+    let mut settings = state.snapshot()?;
+    settings.latex_enabled = false;
+    state.save(settings)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn latex_texpresso_revoke(token: String) {
+    crate::latex_texpresso::revoke_project_token(&token);
+}
+
 #[tauri::command]
 pub fn texpresso_download_decision(allow: bool) -> bool {
     crate::texpresso_guard::decide(allow)
 }
 
-/// WasmTex's `latex_status` stays as the hidden backend's own check; this is
-/// what the install note and the default TeXpresso build read.
 #[tauri::command]
 pub fn texpresso_status(app: AppHandle) -> Result<bool, String> {
     if !enabled() {
@@ -582,12 +181,10 @@ pub fn texpresso_status(app: AppHandle) -> Result<bool, String> {
     Ok(crate::latex_texpresso::available(&directory(&app)?))
 }
 
-/// Download and verify the TeXpresso app and its digest table.
 #[tauri::command]
 pub async fn install_texpresso(app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let _writer = crate::backup::gate::writer()?;
-        // A second download waits, then finds the verified files in place.
         let _install = INSTALL_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -607,117 +204,35 @@ pub async fn install_texpresso(app: AppHandle) -> Result<(), String> {
     .map_err(|error| error.to_string())?
 }
 
-/// Whether the pre-settings marker file exists, for the one-time migration.
-///
-/// The old engine stored enablement beside its verified assets. Settings load
-/// adopts the marker only when the settings file has no explicit switch.
-pub fn legacy_marker_present<R: tauri::Runtime>(app: &AppHandle<R>) -> bool {
-    app.path().app_data_dir().is_ok_and(|dir| {
-        (dir.join("latex").join("enabled").is_file()
-            && verified_legacy_assets(&dir.join("latex").join("assets")))
-            || legacy_candidates(&dir).is_ok_and(|candidates| {
-                candidates.len() == 1 && candidates[0].join("enabled").is_file()
-            })
-    })
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LatexStats {
-    asset_requests: u64,
-    cache_hits: u64,
-    cache_misses: u64,
-    /// The TeXpresso backend's cache: files served from disk, files downloaded,
-    /// bytes that passed SHA-256 verification, and requests refused because a
-    /// file failed it or is not pinned.
-    texpresso_hits: u64,
-    texpresso_misses: u64,
-    texpresso_verified_bytes: u64,
-    texpresso_refusals: u64,
-    /// Bytes that came from the origin; the download progress reads this.
-    texpresso_downloaded_bytes: u64,
-    /// The preview session's download guard: a held download, Stop, and a
-    /// working set larger than the cache limit.
-    texpresso_guard: crate::texpresso_guard::Report,
-}
-
-/// Aggregate transport counters, without document paths or content.
 #[tauri::command]
-pub fn latex_stats() -> LatexStats {
-    let (texpresso_hits, texpresso_misses, texpresso_verified_bytes, texpresso_refusals) =
-        crate::latex_texpresso::stats();
-    LatexStats {
-        texpresso_hits,
-        texpresso_misses,
-        texpresso_verified_bytes,
-        texpresso_refusals,
-        texpresso_downloaded_bytes: crate::latex_texpresso::downloaded_bytes(),
-        texpresso_guard: crate::texpresso_guard::report(),
-        asset_requests: ASSET_REQUESTS.load(Ordering::Relaxed),
-        cache_hits: CACHE_HITS.load(Ordering::Relaxed),
-        cache_misses: CACHE_MISSES.load(Ordering::Relaxed),
+pub fn phitex_status(app: AppHandle) -> Result<bool, String> {
+    if !enabled() {
+        return Ok(false);
     }
+    Ok(crate::latex_phitex::available(&directory(&app)?))
 }
 
-/// What Preferences reports about the downloaded package cache.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LatexCacheInfo {
-    /// The bytes currently on disk.
-    bytes: u64,
-    /// The reader's ceiling, in MiB.
-    limit_mb: u32,
-    /// Whether the engine switch is on.
-    enabled: bool,
-    /// Whether the hidden WasmTex assets or the production preview are present.
-    installed: bool,
-    /// Whether the production preview engine and digest table are present.
-    preview_installed: bool,
-}
-
-/// Report the cache size and the switch, for the Preferences row.
 #[tauri::command]
-pub fn latex_cache_info(app: AppHandle) -> Result<LatexCacheInfo, String> {
-    let root = directory(&app)?;
-    let limit_mb = CACHE_LIMIT_MB.load(Ordering::Relaxed).min(u32::MAX as u64) as u32;
-    Ok(LatexCacheInfo {
-        bytes: cache_size(&root.join("mirror"))
-            .unwrap_or(0)
-            .saturating_add(crate::latex_texpresso::cache_bytes(&root)),
-        limit_mb,
-        enabled: enabled(),
-        installed: engine_installed(&root.join("assets"))
-            || crate::latex_texpresso::available(&root),
-        preview_installed: crate::latex_texpresso::available(&root),
+pub async fn install_phitex(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _writer = crate::backup::gate::writer()?;
+        let _install = INSTALL_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        crate::latex_phitex::install_with_progress(&directory(&app)?, |phase, received, total| {
+            crate::optional_tools::emit(
+                &app,
+                crate::optional_tools::Progress {
+                    tool: crate::optional_tools::Tool::Latex,
+                    phase,
+                    received,
+                    total,
+                },
+            );
+        })
     })
-}
-
-/// Turn the engine off.
-///
-/// Deletes nothing: the reader's cache stays where it is, inert, and Clear cache
-/// remains the only destructive action (decision D14). Turning the switch off
-/// stops the `mdraft-tex` scheme from serving anything, so a compile that is
-/// already running fails closed rather than continuing to read assets.
-#[tauri::command]
-pub fn latex_disable(app: AppHandle) -> Result<(), String> {
-    let state = app
-        .try_state::<crate::settings::AppState>()
-        .ok_or("The settings store is unavailable.")?;
-    let mut settings = state.snapshot()?;
-    settings.latex_enabled = false;
-    state.save(settings)?;
-    Ok(())
-}
-
-/// Delete the downloaded TeX package cache.
-///
-/// The only destructive LaTeX action, and it is the reader's: nothing here is
-/// called automatically. The engine assets are kept, so a compile after clearing
-/// re-downloads packages but does not reinstall the engine.
-/// Revoke the capability a disposed preview frame presented on /project/.
-#[tauri::command]
-pub fn latex_texpresso_revoke(token: String) {
-    crate::latex_texpresso::revoke_project_token(&token);
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -732,22 +247,9 @@ pub fn latex_clear_cache(app: AppHandle) -> Result<u64, String> {
     if mirror.exists() {
         fs::remove_dir_all(&mirror).map_err(|e| e.to_string())?;
     }
-    Ok(freed.saturating_add(crate::latex_texpresso::clear(&root)?))
-}
-
-fn download(url: &str) -> Result<Vec<u8>, String> {
-    if std::env::var_os("MDRAFT_WASMTEX_OFFLINE").is_some() {
-        return Err("The experimental LaTeX network is disabled.".into());
-    }
-    let mut response = ureq::get(url)
-        .call()
-        .map_err(|e| format!("Download failed: {e}"))?;
-    response
-        .body_mut()
-        .with_config()
-        .limit(MAX_FILE as u64)
-        .read_to_vec()
-        .map_err(|e| format!("Cannot read download: {e}"))
+    Ok(freed
+        .saturating_add(crate::latex_texpresso::clear(&root)?)
+        .saturating_add(crate::latex_phitex::clear(&root)?))
 }
 
 pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
@@ -780,64 +282,8 @@ pub(crate) fn digest(data: &[u8]) -> String {
         .collect()
 }
 
-/// Called only by the explicit experimental setup action.
-///
-/// Downloads and verifies the engine assets, then turns the settings switch on.
-/// The switch lives in `settings.json` (decision D2) so a portable build and a
-/// settings backup carry it; the cache directory holds downloaded bytes only.
-#[tauri::command]
-pub async fn install_latex(app: AppHandle) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let _writer = crate::backup::gate::writer()?;
-        // A second Download waits and then finds the verified assets in place.
-        let _install = INSTALL_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let data_root = app
-            .path()
-            .app_data_dir()
-            .map_err(|error| format!("Cannot locate the LaTeX data directory: {error}"))?;
-        let root = migrate_directory(&data_root)?;
-        let assets = root.join("assets");
-        // Retire the marker first: a directory that is part-way between two
-        // releases must never claim either one.
-        remove_if_present(&assets.join(RELEASE_MARKER))?;
-        let engine = engine();
-        for asset in engine.assets {
-            let path = assets.join(&asset.name);
-            if fs::read(&path).is_ok_and(|bytes| digest(&bytes) == asset.sha256) {
-                continue;
-            }
-            let bytes = download(&format!("{}{}", engine.asset_root, asset.name))?;
-            if digest(&bytes) != asset.sha256 {
-                return Err(format!(
-                    "The downloaded {} failed SHA-256 verification.",
-                    asset.name
-                ));
-            }
-            // A corrupt old file must not win the atomic-install race.
-            remove_if_present(&path)?;
-            write_atomic(&path, &bytes)?;
-        }
-        // Every file is verified, so the release can be claimed. Written last.
-        write_atomic(&assets.join(RELEASE_MARKER), engine.release.as_bytes())?;
-        // The switch is settings-backed, so it is written through `AppState`
-        // rather than as a marker file beside the cache.
-        if let Some(state) = app.try_state::<crate::settings::AppState>() {
-            let mut settings = state.snapshot()?;
-            settings.latex_enabled = true;
-            state.save(settings)?;
-        } else {
-            return Err("The settings store is unavailable.".into());
-        }
-        Ok(())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-/// Remove `path`; a file that is already gone is the outcome that was wanted.
-fn remove_if_present(path: &Path) -> Result<(), String> {
+#[cfg(test)]
+pub(crate) fn remove_if_present(path: &Path) -> Result<(), String> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -845,7 +291,7 @@ fn remove_if_present(path: &Path) -> Result<(), String> {
     }
 }
 
-fn safe_relative(path: &str) -> bool {
+pub(crate) fn safe_relative(path: &str) -> bool {
     !path.is_empty()
         && path.len() <= 512
         && path
@@ -865,9 +311,6 @@ pub(crate) fn cache_size(dir: &Path) -> Result<u64, String> {
         let entry = entry.map_err(|e| e.to_string())?;
         let metadata = fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
         if metadata.file_type().is_symlink() {
-            // A symlink in the cache is skipped and reported rather than aborting
-            // the whole measurement: one odd entry must not make Preferences
-            // unable to show a size, and it must never be followed.
             continue;
         }
         let size = if metadata.is_dir() {
@@ -882,18 +325,11 @@ pub(crate) fn cache_size(dir: &Path) -> Result<u64, String> {
     Ok(total)
 }
 
-/// Delete the least-recently-used cache files until the total fits `limit`.
-///
-/// Runs *before* a download rather than after it: a cold compile that fills the
-/// cache and then fails is worse than one that spends a moment making room. The
-/// modification time is the recency signal, which is what the filesystem already
-/// records and what a reader's own file manager would show.
+#[cfg(test)]
 pub(crate) fn evict_to_limit(dir: &Path, limit: u64) -> Result<u64, String> {
     evict_to_limit_keeping(dir, limit, &|_| false)
 }
 
-/// [`evict_to_limit`], never removing a file `keep` names. The result can then
-/// stay above `limit`.
 pub(crate) fn evict_to_limit_keeping(
     dir: &Path,
     limit: u64,
@@ -943,18 +379,6 @@ fn collect_cache_files(
     Ok(())
 }
 
-fn mirror_request(path: &str) -> Option<(Option<&str>, &str)> {
-    if let Some(relative) = path.strip_prefix("/mirror/") {
-        return Some((None, relative));
-    }
-    let rest = path.strip_prefix("/jobs/")?;
-    let (job, relative) = rest.split_once("/mirror/")?;
-    if job.is_empty() || job.len() > 20 || !job.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    Some((Some(job), relative))
-}
-
 pub fn serve(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeResponder) {
     tauri::async_runtime::spawn_blocking(move || {
         let origin = request
@@ -976,75 +400,14 @@ pub fn serve(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeResp
             }
             let root = directory(&app)?;
             if !enabled() {
-                return Err("LuaLaTeX is not enabled.".into());
+                return Err("Bundled TeX is not enabled.".into());
             }
             let path = request.uri().path();
             if let Some(answer) = crate::latex_texpresso::serve(&root, path) {
                 return answer;
             }
-            if let Some(name) = path.strip_prefix(engine().asset_prefix.as_str()) {
-                let Some(asset) = pinned_asset(name) else {
-                    return Err("Unknown asset".into());
-                };
-                ASSET_REQUESTS.fetch_add(1, Ordering::Relaxed);
-                let bytes = fs::read(root.join("assets").join(name)).map_err(|e| e.to_string())?;
-                if digest(&bytes) != asset.sha256 {
-                    return Err(
-                        "Engine asset failed SHA-256 verification; reinstall bundled TeX (turn it off and on in Preferences › LaTeX).".into(),
-                    );
-                }
-                let kind = if name.ends_with(".js") {
-                    "text/javascript"
-                } else if name.ends_with(".wasm") {
-                    "application/wasm"
-                } else {
-                    "application/octet-stream"
-                };
-                return Ok((bytes, kind));
-            }
-            if let Some((job, relative)) = mirror_request(path) {
-                if !safe_relative(relative) {
-                    return Err("Invalid package path".into());
-                }
-                let cache = cache_path(&root, relative);
-                // The hit path holds the lock only for the read. The miss path
-                // releases it around the download, because holding a global lock
-                // across a network request serialises every package a compile
-                // asks for and makes a slow mirror look like a hang.
-                {
-                    let _guard = CACHE_LOCK
-                        .lock()
-                        .map_err(|_| "The LaTeX cache is unavailable.")?;
-                    if fs::metadata(&cache).is_ok_and(|meta| meta.len() <= MAX_FILE as u64)
-                        && let Ok(bytes) = fs::read(&cache)
-                    {
-                        CACHE_HITS.fetch_add(1, Ordering::Relaxed);
-                        return Ok((bytes, "application/octet-stream"));
-                    }
-                }
-                CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
-                let _data_writer = crate::backup::gate::writer()?;
-                if let Some(job) = job {
-                    let _ = app.emit("latex-package-download", (job, true));
-                }
-                let result = download(&format!("{}{relative}", engine().mirror));
-                if let Some(job) = job {
-                    let _ = app.emit("latex-package-download", (job, false));
-                }
-                let bytes = result?;
-                if bytes.len() > MAX_FILE {
-                    return Err("A package is larger than the 32 MiB limit.".into());
-                }
-                let _guard = CACHE_LOCK
-                    .lock()
-                    .map_err(|_| "The LaTeX cache is unavailable.")?;
-                // Make room *before* writing, so a full cache does not turn a
-                // cold compile into an opaque failure.
-                let limit = cache_limit_bytes();
-                let mirror = root.join("mirror");
-                evict_to_limit(&mirror, limit.saturating_sub(bytes.len() as u64))?;
-                write_atomic(&cache, &bytes)?;
-                return Ok((bytes, "application/octet-stream"));
+            if let Some(answer) = crate::latex_phitex::serve(&root, path) {
+                return answer;
             }
             Err("Unknown resource".into())
         })();
@@ -2110,7 +1473,7 @@ mod tests {
     use super::{
         MANIFEST_MAX_DEPTH, MANIFEST_MAX_NAMES, MANIFEST_SKIPPED_DIRS, MAX_PROJECT, Overlay,
         cache_size, collect_referenced, declared_references, evict_to_limit, mask_literal_regions,
-        project_manifest, project_manifest_with, remove_if_present, safe_relative,
+        project_manifest, project_manifest_with, remove_if_present,
     };
 
     #[test]
@@ -2125,275 +1488,15 @@ mod tests {
     use std::{fs, path::Path};
 
     #[test]
-    fn migration_preserves_data_and_refuses_collisions() {
-        let root = scratch("latex-migration");
-        let old = root.join("former-engine");
-        fs::create_dir_all(old.join("assets")).unwrap();
-        fs::create_dir_all(old.join("mirror")).unwrap();
-        fs::write(old.join("assets/identity"), b"verified").unwrap();
-        fs::write(old.join("mirror/package"), b"cached").unwrap();
-        let verify =
-            |assets: &Path| fs::read(assets.join("identity")).is_ok_and(|v| v == b"verified");
-        let target = super::migrate_directory_matching(&root, &verify).unwrap();
-        assert_eq!(fs::read(target.join("mirror/package")).unwrap(), b"cached");
-        assert!(!old.exists());
-        assert_eq!(
-            super::migrate_directory_matching(&root, &verify).unwrap(),
-            target
-        );
-        fs::create_dir_all(old.join("assets")).unwrap();
-        fs::write(old.join("assets/identity"), b"verified").unwrap();
-        assert!(super::migrate_directory_matching(&root, &verify).is_err());
-        assert!(old.exists() && target.exists());
-        fs::remove_dir_all(root).unwrap();
-    }
-
     #[test]
-    fn migration_preserves_incomplete_and_unrelated_directories() {
-        let root = scratch("latex-migration-incomplete");
-        let unrelated = root.join("other-tool").join("assets");
-        fs::create_dir_all(&unrelated).unwrap();
-        fs::write(unrelated.join("identity"), b"unrelated").unwrap();
-        assert!(super::legacy_candidates(&root).unwrap().is_empty());
-        let incomplete = root.join("former-engine").join("assets");
-        fs::create_dir_all(&incomplete).unwrap();
-        fs::write(incomplete.join(&super::engine().assets[0].name), b"damaged").unwrap();
-        assert!(super::migrate_directory(&root).is_err());
-        assert!(incomplete.exists() && unrelated.exists());
-        assert!(!root.join("latex").exists());
-        fs::remove_dir_all(root).unwrap();
-    }
-
     #[test]
-    fn engine_config_is_valid() {
-        // The real file: `config()` panics on a malformed or inconsistent one, so a
-        // bad edit of `src-tauri/latex-engine.json` fails here and not at first use.
-        let config = super::config();
-        super::validate_engine_config(config).unwrap();
-        assert!(config.profiles.contains_key(&config.active));
-        assert!(config.profiles.len() >= 2, "both years stay switchable");
-    }
-
     #[test]
-    fn every_profile_derives_one_consistent_year() {
-        // The `mdraft-tex` URL carries no year the SDK could check, so each derived
-        // value is compared with the year it came from. `scripts/latex-sdk-unit.mjs`
-        // covers the TypeScript side and the worker shims.
-        for year in super::config().profiles.keys() {
-            let engine = super::engine_for(year).unwrap();
-            assert_eq!(engine.asset_prefix, format!("/wasmtex/{year}/"));
-            assert_eq!(
-                engine.asset_root,
-                format!("https://corca-ai.github.io/wasmtex/wasmtex/{year}/")
-            );
-            assert!(engine.mirror_revision.starts_with(&format!("{year}-")));
-            assert_eq!(
-                engine.mirror,
-                format!(
-                    "https://texlive.corca.ai/snapshots/{}/{year}/",
-                    engine.mirror_revision
-                )
-            );
-            assert!(engine.release.starts_with(&format!("{year}-")));
-        }
-        let active = &super::config().active;
-        assert!(super::engine().asset_prefix.contains(active.as_str()));
-    }
-
     #[test]
-    fn profiles_ship_the_same_files_with_different_bytes() {
-        // Switching the year replaces files in one flat `assets/` folder, so the
-        // names must match and at least one digest must differ.
-        let mut profiles = super::config().profiles.values();
-        let first = profiles.next().unwrap();
-        for other in profiles {
-            assert_ne!(first.release, other.release);
-            assert_ne!(first.mirror_revision, other.mirror_revision);
-            assert_eq!(first.assets.len(), other.assets.len());
-            for (a, b) in first.assets.iter().zip(&other.assets) {
-                assert_eq!(a.name, b.name, "the same files in the same order");
-            }
-            assert!(
-                first
-                    .assets
-                    .iter()
-                    .zip(&other.assets)
-                    .any(|(a, b)| a.sha256 != b.sha256)
-            );
-        }
-    }
-
     #[test]
-    fn validation_rejects_an_inconsistent_config() {
-        let edited = |edit: &dyn Fn(&mut super::EngineConfig)| {
-            let mut config: super::EngineConfig =
-                serde_json::from_str(super::ENGINE_CONFIG).unwrap();
-            edit(&mut config);
-            super::validate_engine_config(&config)
-        };
-        assert!(edited(&|_| {}).is_ok());
-        assert!(
-            edited(&|config| config.active = "1999".into()).is_err(),
-            "an active year with no profile"
-        );
-        assert!(
-            edited(&|config| {
-                config.profiles.values_mut().next().unwrap().release = "9999-x".into();
-            })
-            .is_err(),
-            "a release that does not start with its year"
-        );
-        assert!(
-            edited(&|config| {
-                config.profiles.values_mut().next().unwrap().assets[0].sha256 = "ABC".into();
-            })
-            .is_err(),
-            "a digest that is not 64 lowercase hex digits"
-        );
-        assert!(
-            edited(&|config| {
-                config.profiles.values_mut().next().unwrap().assets[0].name = "../x".into();
-            })
-            .is_err(),
-            "an asset name that is not a file name"
-        );
-        assert!(
-            edited(&|config| {
-                config.profiles.values_mut().next().unwrap().assets.pop();
-            })
-            .is_err(),
-            "a profile that ships a different set of files"
-        );
-    }
-
     #[test]
-    fn engine_installed_needs_the_release_marker_and_every_file() {
-        let root = scratch("latex-engine-installed");
-        let assets = root.join("assets");
-        fs::create_dir_all(&assets).unwrap();
-        assert!(!super::engine_installed(&assets), "an empty directory");
-        for asset in super::engine().assets {
-            fs::write(assets.join(&asset.name), b"x").unwrap();
-        }
-        assert!(
-            !super::engine_installed(&assets),
-            "files with no marker are an earlier release"
-        );
-        fs::write(assets.join(super::RELEASE_MARKER), "1999-0000000000000000").unwrap();
-        assert!(
-            !super::engine_installed(&assets),
-            "another release's marker"
-        );
-        fs::write(
-            assets.join(super::RELEASE_MARKER),
-            format!("{}\n", super::engine().release),
-        )
-        .unwrap();
-        assert!(super::engine_installed(&assets));
-        fs::remove_file(assets.join(&super::engine().assets[3].name)).unwrap();
-        assert!(!super::engine_installed(&assets), "a missing file");
-        fs::remove_dir_all(root).unwrap();
-    }
-
     #[test]
-    fn engine_group_installed_rejects_stale_release_files() {
-        let root = scratch("latex-group-installed");
-        let assets = root.join("assets");
-        fs::create_dir_all(&assets).unwrap();
-        for asset in super::engine_assets("pdflatex").unwrap() {
-            fs::write(assets.join(&asset.name), b"stale-2025-bytes").unwrap();
-        }
-        assert!(
-            !super::engine_group_installed(&assets, "pdflatex"),
-            "stale optional engine files must not pass as the active release"
-        );
-        assert!(!super::engine_group_installed(&assets, "unknown"));
-        fs::remove_dir_all(root).unwrap();
-    }
-
     #[test]
-    fn assets_match_compares_bytes_and_ignores_names_it_was_not_asked_about() {
-        let root = scratch("latex-assets-match");
-        let set = |one: &[u8], two: &[u8]| {
-            vec![
-                super::EngineAsset {
-                    name: "a".into(),
-                    sha256: super::digest(one),
-                },
-                super::EngineAsset {
-                    name: "b".into(),
-                    sha256: super::digest(two),
-                },
-            ]
-        };
-        let wanted = set(b"one", b"two");
-        assert!(!super::assets_match(&root, &wanted), "files are missing");
-        fs::write(root.join("a"), b"one").unwrap();
-        fs::write(root.join("b"), b"two").unwrap();
-        fs::write(root.join("extra"), b"other").unwrap();
-        assert!(super::assets_match(&root, &wanted));
-        // A directory that holds either profile's files is recognised, so
-        // switching the active year never strands one installed under the other.
-        let other = set(b"one", b"changed");
-        assert!(super::assets_match_any(
-            &root,
-            [other.as_slice(), wanted.as_slice()].into_iter()
-        ));
-        assert!(!super::assets_match_any(
-            &root,
-            [other.as_slice()].into_iter()
-        ));
-        fs::write(root.join("b"), b"changed").unwrap();
-        assert!(!super::assets_match(&root, &wanted), "one file differs");
-        fs::remove_dir_all(root).unwrap();
-    }
-
     #[test]
-    fn cache_is_namespaced_by_mirror_revision() {
-        let root = Path::new("root");
-        let path = super::cache_path(root, "pdftex/26/article.cls");
-        assert_eq!(
-            path,
-            root.join("mirror")
-                .join(super::engine().mirror_revision)
-                .join("pdftex/26/article.cls")
-        );
-        assert_ne!(
-            path,
-            root.join("mirror").join("pdftex/26/article.cls"),
-            "an entry from before the namespace is a different file"
-        );
-    }
-
-    #[test]
-    fn mirror_paths_cannot_escape_or_change_host() {
-        assert_eq!(
-            super::mirror_request("/jobs/12/mirror/a.sty"),
-            Some((Some("12"), "a.sty"))
-        );
-        assert_eq!(
-            super::mirror_request("/mirror/a.sty"),
-            Some((None, "a.sty"))
-        );
-        assert_eq!(super::mirror_request("/jobs/bad/mirror/a.sty"), None);
-        assert_eq!(super::mirror_request("/jobs/1/other/a.sty"), None);
-        for good in ["tex/latex/base/article.cls", "fonts/a-b.1"] {
-            assert!(safe_relative(good));
-        }
-        for bad in [
-            "",
-            "../a",
-            "tex/../../etc",
-            "/absolute",
-            "a//b",
-            "https://example.com",
-            "x%2f..",
-            "x?y",
-        ] {
-            assert!(!safe_relative(bad));
-        }
-    }
-
     /// The print command must refuse anything that is not a PDF.
     ///
     /// The validation is the same one `save_compiled_pdf` applies, and it matters

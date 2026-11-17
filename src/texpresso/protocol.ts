@@ -11,6 +11,9 @@ export const PROTOCOL_VERSION = 1;
 /** TeXpresso's two engines; it has no pdfTeX. */
 export type TexpressoEngine = "luatex" | "xetex";
 
+/** The frame payload: TeXpresso's JSPI app, or PhiTeX's single-thread app. */
+export type TexpressoBackend = "texpresso" | "phitex";
+
 export interface TexpressoTheme {
   dark: boolean;
   /** `--word-sync` and `--word-sync-peak`: the correspondence colours. */
@@ -72,7 +75,14 @@ export interface TexpressoProblem {
 }
 
 export type FrameMessage =
-  | { type: "ready"; engine: TexpressoEngine; jspi: boolean; missing: string[] }
+  | {
+      type: "ready";
+      engine: TexpressoEngine;
+      jspi: boolean;
+      missing: string[];
+      /** Only the PhiTeX shell sends it; the pinned TeXpresso shell does not. */
+      backend?: TexpressoBackend;
+    }
   /** `length` is -1 when the frame cannot read the file back (not open). */
   | { type: "ack"; seq: number; file: string; length: number; hash: number }
   | { type: "status"; busy: boolean; problems: TexpressoProblem[] | null }
@@ -161,9 +171,16 @@ export function parseFrameMessage(data: unknown): FrameMessage | null {
     case "ready":
       return (m.engine === "luatex" || m.engine === "xetex") &&
         typeof m.jspi === "boolean" &&
+        (m.backend === undefined || m.backend === "texpresso" || m.backend === "phitex") &&
         Array.isArray(m.missing) &&
         m.missing.every(str)
-        ? { type: "ready", engine: m.engine, jspi: m.jspi, missing: m.missing }
+        ? {
+            type: "ready",
+            engine: m.engine,
+            jspi: m.jspi,
+            missing: m.missing,
+            backend: m.backend as TexpressoBackend | undefined,
+          }
         : null;
     case "ack":
       return int(m.seq) && str(m.file) && int(m.length) && int(m.hash)

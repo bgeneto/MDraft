@@ -22,18 +22,15 @@
 //   4. the freshness key: an edit undone before the debounce runs leaves the
 //      Markdown DOM in place (the marker survives, the diagram stays drawn)
 //      and installs no new HTML guest;
-//   5. with a LaTeX engine only: an edit undone, and a save of the compiled
-//      buffer, start no compile (`#preview[data-compile-count]`); Compile
-//      always does. Skipped cleanly when no engine is enabled.
 //
-// No engine is needed for 1-4: without one, a LaTeX render still asks
+// No engine is needed: without one, a LaTeX render still asks
 // `latex_engine_status` and commits the "not enabled" note, and a Typst render
 // still calls `render_typst`. Fixtures live in a temporary directory.
 
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { emitMenu, openPage, sleep, useWasmTex } from "./cdp-page.mjs";
+import { emitMenu, openPage, sleep } from "./cdp-page.mjs";
 
 const port = process.argv[2] ?? "9222";
 const page = await openPage(port);
@@ -51,7 +48,6 @@ for (let attempt = 0; attempt < 240; attempt += 1) {
   if (await page.evaluate(`Boolean(document.querySelector(".cm-content"))`)) break;
   await sleep(250);
 }
-await useWasmTex(page);
 
 const COUNTED = ["latex_engine_status", "render_typst", "render_typst_binary", "set_html_preview"];
 const counts = Object.fromEntries(COUNTED.map((command) => [command, 0]));
@@ -412,96 +408,6 @@ try {
         ),
         "fresh.typ: the restored preview's toolbar says it is compiled",
         await page.evaluate(`document.querySelector(".compiled-message")?.textContent ?? "(none)"`),
-      );
-    }
-  }
-
-  // 5. LaTeX with an engine: undone edits and saves skip; Compile builds.
-  // A fresh profile has the bundled engine switched off even when the harness
-  // linked it; the Preferences checkbox is the route that updates both copies
-  // of the setting (see latex-preview-test.mjs).
-  await page.evaluate(`
-    (async () => {
-      const current = await window.__TAURI_INTERNALS__.invoke("get_settings");
-      if (current.latexEnabled) return;
-      const open = document.getElementById("btn-prefs");
-      open?.click();
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      [...document.querySelectorAll(".prefs-section")]
-        .find((node) => node.textContent.trim() === "LaTeX")?.click();
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      const row = [...document.querySelectorAll(".prefs-row")]
-        .find((node) => /Enable bundled TeX/i.test(node.querySelector(".prefs-label")?.textContent ?? ""));
-      const box = row?.querySelector("input[type=checkbox]");
-      if (box && !box.checked) box.click();
-      await new Promise((resolve) => setTimeout(resolve, 900));
-      open?.click();
-    })().catch(() => {})
-  `);
-  // `latex_status` is true only when the enabled engine can actually run; the
-  // harness links the developer's installed engine when there is one.
-  const usable = await page.evaluate(
-    `window.__TAURI_INTERNALS__.invoke("latex_status").then(String).catch(() => "false")`,
-  );
-  if (usable !== "true") {
-    console.log("  SKIP  LaTeX freshness — no LaTeX engine is enabled on this host");
-  } else {
-    await activate("fresh.tex");
-    const compiled = await settleCompile();
-    if (!compiled) {
-      check(false, "fresh.tex: the first build produces a PDF", "no PDF within 180 s");
-    } else {
-      step = "edit undone (tex)";
-      let before = await compiles();
-      await typeAndUndo(1800);
-      check((await compiles()) === before, "fresh.tex: an edit undone starts no compile");
-      step = "save (tex)";
-      before = await compiles();
-      await emitMenu(page, "file.save");
-      await sleep(1500);
-      await settle();
-      check(
-        (await compiles()) === before,
-        "fresh.tex: saving the compiled buffer starts no compile",
-      );
-      step = "compile (tex)";
-      before = await compiles();
-      await page.evaluate(`document.querySelector(".compiled-compile")?.click(); 1`);
-      await sleep(1500);
-      await settleCompile();
-      check((await compiles()) > before, "fresh.tex: Compile always builds");
-
-      step = "return (tex)";
-      await activate("fresh.md");
-      before = await compiles();
-      const started = Date.now();
-      await activate("fresh.tex");
-      const current = await settleCompile(20000);
-      check(
-        current && (await compiles()) === before,
-        "fresh.tex: returning to an unchanged project shows its PDF without compiling",
-        `${Date.now() - started} ms including the settle wait`,
-      );
-      check(
-        await page.evaluate(`Boolean(document.querySelector("#preview .typst-page canvas"))`),
-        "fresh.tex: the returned PDF is on screen",
-      );
-
-      // A disk change while away must rebuild: the key is the content, not the tab.
-      step = "return after disk change (tex)";
-      await activate("fresh.md");
-      writeFileSync(
-        tex,
-        "\\documentclass{article}\n\\begin{document}\nFreshness probe, changed on disk.\n\\end{document}\n",
-      );
-      // The disk watcher polls every 2.5 s and reloads an unmodified buffer.
-      await sleep(3500);
-      before = await compiles();
-      await activate("fresh.tex");
-      await settleCompile();
-      check(
-        (await compiles()) > before,
-        "fresh.tex: a file changed on disk while away is compiled on return",
       );
     }
   }

@@ -1,0 +1,57 @@
+PhiTeX Instant for Overleaf (unofficial)
+Copyright (C) 2026 Ammar Seliaman
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU Affero General Public License as published by the
+Free Software Foundation, version 3 of the License only
+(SPDX-License-Identifier: AGPL-3.0-only). See LICENSE.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License
+for more details.
+
+This is an UNOFFICIAL extension. It is not made, endorsed or supported by
+Overleaf, and "Overleaf" is used only to say which site it works with.
+
+Third-party material:
+
+- dist/core.wasm: the PhiTeX engine (phitex: a pdfTeX-compatible
+  engine, and PhiTeX's SSA crates), by the copyright holder above, and the
+  Rust crates miniz_oxide (MIT OR Zlib OR Apache-2.0) and adler2 (0BSD OR
+  MIT OR Apache-2.0).
+- dist/assets.bin.gzdata, read by the core:
+  - pdflatex.fmt: a LaTeX format built from TeX Live 2026's LaTeX kernel
+    (LaTeX Project Public License 1.3c) and Knuth's and TeX Live's
+    hyphenation patterns, under their own terms.
+  - .tfm/.vf/.enc and pdftex.map: TeX Live 2026's font metrics, virtual
+    fonts, encodings and font map, unmodified, each under its own license
+    (Computer Modern and AMS metrics: Knuth's and AMS's terms; others mostly
+    LPPL, OFL or GPL with the font exception).
+  - Type 1 fonts (.pfb), unmodified: Computer Modern (cm*, AMS/Blue Sky,
+    SIL Open Font License 1.1), Latin Modern (lmr) and TeX Gyre Termes (qtmr)
+    (GUST Font License), Linux Libertine (LinLibertine*, GPL-2.0 with the
+    font exception, or OFL 1.1), CM-Super (sfrm, GPL-2.0-or-later with the
+    font exception), Nimbus Roman (ztmr, URW, AGPL-3.0 with the font
+    exception).
+  - TeX Live 2026's LaTeX packages that common documents read (see texmf/
+    below), unmodified.
+- fonts/*.otf (common/fonts/): Latin Modern and Latin Modern Math (GUST e-foundry),
+  GUST Font License, unmodified.
+- dist/pdfjs/: pdf.js (pdfjs-dist 5.7.284), Copyright Mozilla
+  Foundation, Apache-2.0 (its LICENSE ships beside it).
+- common/src/panel.ts: approximateFraction, ported from pdf.js
+  (pdfjs-dist, web/pdf_viewer.mjs), Copyright Mozilla Foundation,
+  Apache-2.0.
+- common/src/panel.ts: icon paths from Google's Material Icons,
+  Apache-2.0.
+- The toolbar and popover markup the extension adds to Overleaf's page
+  follows Overleaf's own (overleaf/overleaf, services/web/frontend),
+  AGPL-3.0.
+
+texmf/ (shipped as texmf/ in each package): LaTeX packages from TeX Live 2026
+(the LaTeX kernel and classes, l3kernel, graphics, tools, amsmath, hyperref,
+...; texmf/MANIFEST.tsv lists each package and revision), unmodified, each
+under its own license as stated in its files, mostly the LaTeX Project
+Public License 1.3c. Packages not bundled are downloaded as needed from
+Shelf (shelf-phitex.pages.dev), which serves TeX Live's files unmodified.

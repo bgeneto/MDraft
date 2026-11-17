@@ -33,13 +33,11 @@ const root = process.cwd();
 const fixtureName = process.env.MDRAFT_LATEX_PERF_FIXTURE ?? "small";
 const mode = process.env.MDRAFT_LATEX_PERF_MODE ?? "matrix";
 /**
- * Which preview backend is measured.
- *
- * `wasmtex` measures the hidden backend's full compile to PDF.js. `texpresso`
- * measures the production frame's own edit-to-paint and its `xdvipdfmx` export.
- * The comparison the plan requires runs both against the same fixtures.
+ * The production frame's own edit-to-paint and its `xdvipdfmx` export. The
+ * fallback engine uses the same frame protocol, so the host-side measurements
+ * are the same; the engine label in the row says which one ran.
  */
-const backend = process.env.MDRAFT_LATEX_PERF_BACKEND === "texpresso" ? "texpresso" : "wasmtex";
+const backend = "texpresso";
 const runs = Math.max(1, Number.parseInt(process.env.MDRAFT_LATEX_PERF_RUNS ?? "5", 10) || 5);
 const outDir = process.env.MDRAFT_LATEX_PERF_OUT ?? null;
 const base = join(root, "samples", "latex-perf");
@@ -92,7 +90,7 @@ const FIXTURES = {
     doc: "../latex-engines/plain.tex",
     hash: ["../latex-engines/plain.tex"],
     needle: "\\documentclass",
-    // No "performance probe paragraph" marker, so WasmTex cannot locate the
+    // No "performance probe paragraph" marker, so this engine cannot locate the
     // painted page; E2P is unavailable by design and E2C is still measured.
     noPaint: true,
     scenarios: [{ id: "P1", file: "../latex-engines/plain.tex", position: 0.5 }],
@@ -146,7 +144,7 @@ async function diagnostics() {
   };
   return {
     stage,
-    latexStatus: await safe(() => invoke("latex_status")),
+    latexStatus: await safe(() => invoke("latex_engine_status")),
     engine: await safe(() => invoke("latex_engine_status")),
     preview: await safe(() =>
       evaluate(`JSON.stringify({
@@ -289,15 +287,7 @@ async function main() {
     }
 
     stage = "engine";
-    if (backend === "wasmtex") {
-      // The production default is the incremental preview; this layer measures
-      // the hidden WasmTex backend on purpose.
-      await evaluate(
-        `window.__TAURI_INTERNALS__.invoke("plugin:event|emit",{event:"menu",payload:"view.latexBackend.wasmtex"})`,
-      );
-      await sleep(200);
-    }
-    if ((await invoke("latex_status")) !== true) {
+    if ((await invoke("latex_engine_status")).previewInstalled !== true) {
       log("enabling the bundled engine in Preferences");
       await evaluate(`(async () => {
       const open = document.getElementById("btn-prefs");
@@ -315,7 +305,7 @@ async function main() {
     })()`);
       await sleep(1000);
     }
-    if ((await invoke("latex_status")) !== true) {
+    if ((await invoke("latex_engine_status")).previewInstalled !== true) {
       const engine = await invoke("latex_engine_status");
       if (engine.bundledEnabled && !engine.bundledInstalled) {
         // The installed files are missing or belong to another engine year. The
@@ -333,13 +323,16 @@ async function main() {
           `[...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Retry setup").click()`,
         );
         const deadline = Date.now() + 900_000;
-        while (Date.now() < deadline && (await invoke("latex_status")) !== true) {
+        while (
+          Date.now() < deadline &&
+          (await invoke("latex_engine_status")).previewInstalled !== true
+        ) {
           await sleep(5000);
           log(`installing: ${(await diagnostics()).preview?.note ?? "…"}`);
         }
       }
     }
-    if ((await invoke("latex_status")) !== true)
+    if ((await invoke("latex_engine_status")).previewInstalled !== true)
       throw new Error("the bundled engine is not available");
 
     if (backend === "texpresso") {
@@ -648,9 +641,8 @@ async function measuredEdit(scenario, tag) {
 /**
  * The TeXpresso matrix: the same fixtures and edits, measured on the frame.
  *
- * WasmTex's E2P is the page paint after a full compile; TeXpresso's is its own
- * `data-texpresso-e2p`, which the host starts when the edit leaves the editor
- * and stops at the frame's paint. The authoritative PDF is produced separately,
+ * The frame's E2P is its `data-texpresso-e2p`, which the host starts when the
+ * edit leaves the editor and stops at the frame's paint. The authoritative PDF is produced separately,
  * at idle, and is measured by `texpressoFidelity`.
  */
 async function texpressoMatrix() {

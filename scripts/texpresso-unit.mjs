@@ -25,9 +25,10 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
 import {
-  DEFAULT_LATEX_PREVIEW_BACKEND,
+  BUNDLED_TEXLIVE_YEAR,
   latexPreviewBackend,
-  setLatexPreviewBackend,
+  previewEngineFor,
+  selectLatexPreviewBackend,
   texpressoEngineFor,
   texpressoFallback,
   texpressoFallbackText,
@@ -57,38 +58,52 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
 // --- the backend and its fallback rules ---------------------------------------
 {
   check(
-    DEFAULT_LATEX_PREVIEW_BACKEND === "texpresso",
-    "the default backend is the incremental preview",
-    DEFAULT_LATEX_PREVIEW_BACKEND,
+    selectLatexPreviewBackend({ linux: false, jspi: false, phitex: true }) === "texpresso",
+    "Windows/macOS keep TeXpresso even without JSPI",
   );
   check(
-    DEFAULT_LATEX_PREVIEW_BACKEND !== "texpresso" || config.origin.startsWith("https://"),
+    selectLatexPreviewBackend({ linux: true, jspi: false, phitex: true }) === "phitex",
+    "a Linux webview without JSPI selects the compatibility engine",
+  );
+  check(
+    selectLatexPreviewBackend({ linux: true, jspi: true, phitex: true }) === "texpresso",
+    "a Linux webview with JSPI keeps TeXpresso",
+  );
+  check(
+    selectLatexPreviewBackend({ linux: true, jspi: false, phitex: false }) === "texpresso",
+    "a webview without the compatibility engine keeps the honest TeXpresso fallback",
+  );
+  check(
+    latexPreviewBackend() === "texpresso" || latexPreviewBackend() === "phitex",
+    "a backend is selected",
+  );
+  check(
+    latexPreviewBackend() !== "texpresso" || config.origin.startsWith("https://"),
     "a release whose default is incremental serves over https, never loopback",
     config.origin,
   );
 
-  const before = latexPreviewBackend();
-  check(setLatexPreviewBackend("wasmtex") === true, "the hidden hook switches");
-  check(setLatexPreviewBackend("wasmtex") === false, "switching to the same backend is a no-op");
-  check(latexPreviewBackend() === "wasmtex", "the switch is remembered");
-  setLatexPreviewBackend(before);
-
   check(texpressoEngineFor("lualatex") === "luatex", "LuaLaTeX maps to TeXpresso's luatex");
   check(texpressoEngineFor("xelatex") === "xetex", "XeLaTeX maps to TeXpresso's xetex");
   check(texpressoEngineFor("pdflatex") === null, "pdfLaTeX has no TeXpresso engine");
+  check(
+    previewEngineFor("phitex", "xelatex") === "xetex",
+    "PhiTeX's XeLaTeX maps to the xetex frame engine",
+  );
+  check(previewEngineFor("phitex", "lualatex") === null, "PhiTeX has no LuaLaTeX frame engine");
 
   const base = {
     backend: "bundled",
+    preview: "texpresso",
     engine: "lualatex",
-    year: "2026",
+    year: BUNDLED_TEXLIVE_YEAR,
     jspi: true,
+    phitex: true,
     nonUtf8: null,
     libraryConflict: null,
     failed: false,
   };
   check(texpressoFallback(base) === null, "a healthy project draws with TeXpresso");
-  // Precedence: an installed distribution wins over every other reason, and an
-  // engine change is reported before a stale watchdog verdict.
   check(
     texpressoFallback({ ...base, backend: "native" }) === "native",
     "an installed TeX keeps its own compiler",
@@ -103,7 +118,19 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
   );
   check(
     texpressoFallback({ ...base, jspi: false }) === "jspi",
-    "a webview without JSPI is reported",
+    "a TeXpresso webview without JSPI is reported",
+  );
+  check(
+    texpressoFallback({ ...base, preview: "phitex", engine: "xelatex", jspi: false }) === null,
+    "PhiTeX needs no JSPI",
+  );
+  check(
+    texpressoFallback({ ...base, preview: "phitex", engine: "lualatex" }) === "lua",
+    "PhiTeX names LuaLaTeX as unavailable",
+  );
+  check(
+    texpressoFallback({ ...base, preview: "phitex", phitex: false }) === "jspi",
+    "a webview without the compatibility engine is reported",
   );
   check(texpressoFallback({ ...base, failed: true }) === "failed", "a failed frame is reported");
   check(
@@ -114,13 +141,12 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     texpressoFallback({ ...base, libraryConflict: ".mdraft-texmf/x.sty" }) === "library",
     "a project file in the reserved library folder is reported",
   );
-  // The order between the two project-level reasons: failed is reported first.
   check(
     texpressoFallback({ ...base, failed: true, nonUtf8: "x.tex" }) === "failed",
     "a broken frame outranks a project-level reason",
   );
 
-  const reasons = ["native", "year", "jspi", "encoding", "library", "failed"];
+  const reasons = ["native", "year", "jspi", "lua", "encoding", "library", "failed"];
   const sentences = reasons.map((reason) =>
     texpressoFallbackText(reason, { file: "chapters/one.tex" }),
   );

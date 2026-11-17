@@ -60,11 +60,12 @@ install it for you on Windows and Linux. An optional companion service
 verified/downloaded on demand from the pinned release manifest for warm
 incremental previews; stock Typst CLI remains the automatic fallback.
 
-LaTeX is opt-in: enabling bundled TeX downloads about 20 MiB of verified
-engine files, and the TeX packages a document needs are fetched on demand and
-cached locally. Your own classes and packages can live in folders registered
-once under *Preferences › LaTeX › Local packages* and are found by
-every project, with either engine. *Preferences › LaTeX* can instead use a TeX
+LaTeX is opt-in: enabling bundled TeX downloads about 15 MB of verified engine
+files for TeXpresso, or about 26 MB for the PhiTeX compatibility engine on Linux,
+and the TeX packages a document needs are fetched on demand and cached locally.
+Your own classes and packages can live in folders registered once under
+*Preferences › LaTeX › Local packages* and are found by every project, with the
+bundled or the installed engine. *Preferences › LaTeX* can instead use a TeX
 distribution already on the computer — including TeX Live inside a WSL
 distribution on Windows — after MDraft has validated it; that engine runs with the
 reader's permissions; it may use the network to install its own packages, while
@@ -159,7 +160,10 @@ Linux. See the [export guide](docs/export.md) for formats and details.
    in either pane, or use the status bar to switch views.
 
 Windows needs the WebView2 runtime, included with Windows 11. Linux needs
-WebKitGTK 4.1 and GTK 3; the `.deb` and `.rpm` declare their dependencies. macOS builds
+WebKitGTK 4.1 and GTK 3; the `.deb` and `.rpm` declare their dependencies. The
+bundled LaTeX preview uses TeXpresso on WebKitGTK 2.54+ and the PhiTeX
+compatibility engine on older WebKitGTK (Ubuntu 26.04/26.10 ship 2.52.6); the
+compatibility engine compiles XeLaTeX and does not run LuaLaTeX. macOS builds
 are not currently published.
 
 To work with Typst files, choose **Tools › Check or Install Typst…**. For
@@ -185,8 +189,9 @@ neither controls nor monitors that traffic.
 
 The [LaTeX engine](docs/latex.md) downloads its files only after explicit
 enablement and then retrieves missing TeX packages and fonts on demand from
-MDraft's pinned public origin (`https://mdraft.webonly.app/`). The document and
-bibliography contents stay local. The first time you format a
+MDraft's pinned public origin (`https://mdraft.webonly.app/`); PhiTeX's packs
+come from its pinned Shelf release through the same local cache. The document
+and bibliography contents stay local. The first time you format a
 `.tex` document, MDraft downloads the LaTeX formatter (about 1.7 MB, verified
 against its pinned checksum and cached); later formats work offline.
 
@@ -199,4 +204,4 @@ against its pinned checksum and cached); later formats work offline.
 - [Contributing](CONTRIBUTING.md) — report a problem, build MDraft or contribute.
 - [Issues](https://github.com/bgeneto/MDraft/issues) — bug reports and feature requests.
 
-MDraft is open source under the [MIT License](LICENSE).
+MDraft is open source under the [GNU Affero General Public License v3.0](LICENSE).

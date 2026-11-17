@@ -1,11 +1,11 @@
 [package]
 name = "mdraft"
-version = "0.9.4"
+version = "0.9.5"
 description = "A Tauri 2 Markdown, Typst, HTML and AsciiDoc editor"
 authors = ["bgeneto"]
 edition = "2024"
 rust-version = "1.91"
-license = "MIT"
+license = "AGPL-3.0-only"
 
 [lib]
 # The `_lib` suffix keeps the lib name unique and avoids a Windows bin/lib clash.

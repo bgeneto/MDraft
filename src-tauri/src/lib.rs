@@ -11,6 +11,7 @@ mod html_preview;
 mod images;
 mod latex;
 mod latex_native;
+mod latex_phitex;
 mod latex_texmf;
 mod latex_texpresso;
 mod launch;
@@ -203,12 +204,12 @@ pub fn run() {
             backup::inbox_store::cancel_recovered_revision,
             backup::inbox_store::forget_recovered_document,
             backup::inbox_store::save_recovered_copies,
-            latex::latex_status,
             latex::texpresso_status,
             latex::install_texpresso,
+            latex::phitex_status,
+            latex::install_phitex,
             latex::latex_stats,
             latex::texpresso_download_decision,
-            latex::install_latex,
             latex::latex_project_snapshot,
             latex::latex_texpresso_revoke,
             latex::save_compiled_pdf,
@@ -263,8 +264,6 @@ pub fn run() {
             workspace::workspace_list,
             workspace::workspace_index,
             workspace::workspace_main_candidates,
-            latex::latex_engine_available,
-            latex::install_latex_engine,
             documents::resolve_legacy_local_image,
             documents::open_external,
             documents::open_app_folder,
