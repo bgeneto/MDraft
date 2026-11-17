@@ -1308,7 +1308,9 @@ export class TypstPdfPreview {
               ? args[3]
               : null;
       const y =
-        typeof top === "number" ? Math.max(0, target.viewport.convertToViewportPoint(0, top)[1]) : 0;
+        typeof top === "number"
+          ? Math.max(0, target.viewport.convertToViewportPoint(0, top)[1])
+          : 0;
       this.inputEpoch++;
       this.scrollToPagePosition(target.number, y);
     } catch (error) {
