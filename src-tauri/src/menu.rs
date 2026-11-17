@@ -1064,6 +1064,9 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&item("file.saveAll", "Save All", Some("CmdOrCtrl+Alt+S"))?)
         .item(&check("file.autoSave", "Auto Save", None)?)
         .item(&item("file.reload", "Reload from Disk", None)?)
+        // Encoding and line endings are properties of the file on disk: the
+        // dialog reinterprets, converts and saves it, like the rows above.
+        .item(&item("tools.encoding", "Encoding and Line Endings…", None)?)
         .separator()
         .item(&item("file.print", "Print…", Some("CmdOrCtrl+P"))?)
         .item(&export)
@@ -1143,6 +1146,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             "Move Line Down",
             Some("Alt+ArrowDown"),
         )?)
+        .item(&item("edit.deleteLine", "Delete Line", None)?)
         .separator()
         .item(&item("edit.sortAsc", "Sort Ascending", None)?)
         .item(&item("edit.sortDesc", "Sort Descending", None)?)
@@ -1151,7 +1155,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             "Remove Duplicate Lines",
             None,
         )?)
-        .item(&item("edit.deleteLine", "Delete Line", None)?)
         .build()?;
 
     // Whitespace and indentation cleanup. The labels match the reviewed
@@ -1196,7 +1199,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             "CmdOrCtrl+Shift+V",
         )?)
         .item(&item("edit.delete", "Delete Selection", None)?)
+        .separator()
+        // Selecting is its own group: Select All is not a clipboard command, and
+        // multiple cursors are a kind of selection, not a kind of search.
         .item(&PredefinedMenuItem::select_all(app, None)?)
+        .item(&select_occurrences)
         .separator()
         .item(&item("edit.find", "Find", Some("CmdOrCtrl+F"))?)
         .item(&item(
@@ -1206,7 +1213,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         )?)
         .item(&item("edit.findNext", "Find Next", Some("F3"))?)
         .item(&item("edit.findPrevious", "Find Previous", Some("Shift+F3"))?)
-        .item(&select_occurrences)
         .separator()
         .item(&convert_selection)
         .item(&lines)
@@ -1233,7 +1239,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             "Code Block",
             Some("CmdOrCtrl+Shift+K"),
         )?)
-        .item(&item("format.math", "Inline Equation", None)?)
         .item(&item(
             "para.mathBlock",
             "Block Equation",
@@ -1294,6 +1299,9 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             "Inline Code",
             Some("CmdOrCtrl+Shift+`"),
         )?)
+        // An inline mark like Inline Code beside it; Block Equation, which
+        // inserts a block, stays in Insert.
+        .item(&item("format.math", "Inline Equation", None)?)
         .separator()
         .item(&paragraph_style)
         .item(&item(
@@ -1467,26 +1475,29 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     let view = SubmenuBuilder::new(app, "View")
         .item(&check(
             "view.source",
-            "Source Code Mode",
+            // Named like its siblings: the three are one exclusive layout choice.
+            "Source Only",
             Some("CmdOrCtrl+/"),
         )?)
         .item(&check("view.split", "Split View", None)?)
         .item(&check("view.preview", "Preview Only", None)?)
+        // Sync Scroll only means something between the panes of a layout.
+        .item(&check("view.syncScroll", "Sync Scroll", None)?)
         .separator()
         .item(&typst_preview)
         .separator()
         .item(&sidebar)
         .item(&check("view.statusBar", "Status Bar", None)?)
         .separator()
+        // How the editor shows the text: focus, typewriter scrolling, folding.
         .item(&check("view.focus", "Focus Mode", Some("F8"))?)
         .item(&check("view.typewriter", "Typewriter Mode", Some("F9"))?)
-        .item(&check("view.syncScroll", "Sync Scroll", None)?)
+        .item(&blocks)
         .separator()
         .item(&editor_text_size)
         .item(&interface_theme)
         .item(&code_themes)
         .item(&item("view.typography", "Fonts and Reading…", None)?)
-        .item(&blocks)
         .separator()
         .item(fullscreen.as_ref())
         .build()?;
@@ -1500,16 +1511,16 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         )?)
         .item(&item("tools.spellLanguage", "Spelling Language…", None)?)
         .item(&item("tools.statistics", "Document Statistics…", None)?)
-        .item(&item("tools.encoding", "Encoding and Line Endings…", None)?)
         .separator()
         .item(&item("tools.exportConfig", "Configure Export…", None)?)
         // One setup surface. The export rows themselves are the contextual
         // routes; a second “Install Pandoc” item here would be the duplication
         // the menu information-architecture ADR removed.
         .item(&item("tools.optionalTools", "Optional Tools…", None)?)
-        // The compile pair belongs beside the LaTeX toolchain row: every one of
-        // these is LaTeX-only, and the install row says which engine will run
-        // the compile the reader starts here.
+        // The compile commands stay directly below the toolchain row, which
+        // says which engine they run, but in a group of their own: they act on
+        // the open LaTeX document, while the rows above configure the app.
+        .separator()
         .item(&item(
             "view.latexCompile",
             "Compile LaTeX",

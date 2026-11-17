@@ -7704,7 +7704,7 @@ function clearConflict(session: Session): void {
 }
 
 /**
- * Tools › Encoding and Line Endings, for the active document.
+ * File › Encoding and Line Endings, for the active document.
  *
  * The dialog is modal and receives one text snapshot; the actions re-check that
  * the same session is still active and its text unchanged before applying an
