@@ -955,7 +955,7 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
   const candidates = host.nativeCandidates();
   const mb = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
   const engineNames: Record<string, string> = {
-    auto: "Auto (% !TEX program, then LuaLaTeX)",
+    auto: `Auto (% !TEX program, then ${s().latexNativePrefersXelatex ? "XeLaTeX" : "LuaLaTeX"})`,
     lualatex: "LuaLaTeX",
     pdflatex: "pdfLaTeX",
     xelatex: "XeLaTeX",
@@ -987,13 +987,13 @@ function latexRows(host: PreferencesHost, refresh: () => void): Row[] {
     {
       kind: "select",
       label: "Default engine",
-      help: "Used when the main file has no % !TeX program line and the project has no engine of its own (the engine chip in the status bar). The bundled preview typesets with LuaLaTeX or XeLaTeX; pdfLaTeX is available only through an installed TeX distribution.",
+      help: "Used when the main file has no % !TeX program line and the project has no engine of its own (the engine chip in the status bar). The bundled preview typesets with XeLaTeX or LuaLaTeX; pdfLaTeX is available only through an installed TeX distribution.",
       options: [
         ["lualatex", "LuaLaTeX"],
         ["xelatex", "XeLaTeX"],
         ["auto", "Auto (from the preamble)"],
       ],
-      get: () => s().latexBundledEngine ?? "lualatex",
+      get: () => s().latexBundledEngine ?? "xelatex",
       set: (value) => host.update({ latexBundledEngine: value }),
     },
 

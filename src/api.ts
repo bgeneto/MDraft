@@ -332,6 +332,8 @@ export interface Settings {
   latexTexmfRoots?: LatexTexmfRoot[];
   /** `auto`, `lualatex`, `pdflatex` or `xelatex`. */
   latexNativeEngine: string;
+  /** Whether `auto` falls back to XeLaTeX (a new install) before LuaLaTeX. Backend-owned. */
+  latexNativePrefersXelatex?: boolean;
   editorMaxWidth: number;
   /** Line spacing in the source pane. The preview keeps its own reading height. */
   editorLineHeight: EditorLineHeight;
@@ -352,7 +354,7 @@ export interface Settings {
   explorerShowAll?: boolean;
   /** Set as Main Document, per workspace folder (main-document rule 2). */
   latexMainDocuments?: Array<{ folder: string; path: string }>;
-  /** Bundled engine default (stage 6.2): "lualatex", "pdflatex", "xelatex" or "auto". */
+  /** Bundled engine default: "xelatex" (new installs), "lualatex", "pdflatex" or "auto". */
   latexBundledEngine?: string;
   /** Per-project bundled engine, keyed by main document; newest first. */
   latexProjectEngines?: Array<{ main: string; engine: string }>;

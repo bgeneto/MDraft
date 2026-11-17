@@ -5051,7 +5051,7 @@ function texpressoPrepare(build: LatexBuildRequest, storeOnly: boolean): boolean
     texpressoChip();
     return false;
   }
-  const engine = build.engineChoice?.engine ?? "lualatex";
+  const engine = build.engineChoice?.engine ?? "xelatex";
   const rootKey = pathKey(build.root.path);
   const reason = texpressoFallback({
     backend: build.engineStatus.backend,
@@ -5222,7 +5222,7 @@ async function texpressoExportPdf(
     log: texpressoLogText(),
     warnings,
     warningsTruncated: false,
-    engine: ENGINE_LABELS[build.engineChoice?.engine ?? "lualatex"],
+    engine: ENGINE_LABELS[build.engineChoice?.engine ?? "xelatex"],
     elapsedMs: reply.ms,
   };
   perfMeasure("typeset", mark, {

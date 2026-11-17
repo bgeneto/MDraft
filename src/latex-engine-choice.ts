@@ -10,7 +10,7 @@
  * 2. The project's own choice, made from the status-bar engine chip and stored
  *    per main document.
  * 3. The Preferences default. "auto" detects from the preamble: Lua intent →
- *    LuaLaTeX, XeTeX-only or Unicode packages → XeLaTeX, otherwise LuaLaTeX.
+ *    LuaLaTeX, otherwise XeLaTeX.
  *    pdfLaTeX is not offered: the bundled preview engine has no pdfTeX. An
  *    installed TeX distribution keeps its own engine choice in Preferences.
  *
@@ -53,12 +53,12 @@ export function magicProgram(source: string): TexEngine | null {
 /**
  * The bundled engine actually used. A magic comment, a project choice written
  * before pdfLaTeX left the menu, or an old Preferences default may still name
- * it; the incremental preview has no pdfTeX, so LuaLaTeX draws it and the chip
+ * it; the incremental preview has no pdfTeX, so XeLaTeX draws it and the chip
  * says why.
  */
 function bundledEngine(engine: TexEngine): { engine: TexEngine; reason: string | null } {
   return engine === "pdflatex"
-    ? { engine: "lualatex", reason: "pdfLaTeX is not available; LuaLaTeX used" }
+    ? { engine: "xelatex", reason: "pdfLaTeX is not available; XeLaTeX used" }
     : { engine, reason: null };
 }
 
@@ -128,8 +128,8 @@ export function detectTexEngine(source: string): { engine: TexEngine; reason: st
     return { engine: "lualatex", reason: "Lua code" };
   if (XETEX_ONLY.test(head)) return { engine: "xelatex", reason: "XeTeX-only package" };
   if (UNICODE_ENGINE.test(head)) return { engine: "xelatex", reason: "fontspec" };
-  // The bundled preview is LuaTeX-only besides XeTeX; there is no pdfTeX.
-  return { engine: "lualatex", reason: "no Unicode packages" };
+  // The bundled preview has only LuaTeX and XeTeX; XeTeX starts faster.
+  return { engine: "xelatex", reason: "no Lua code" };
 }
 
 /**

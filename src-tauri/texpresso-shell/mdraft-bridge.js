@@ -1079,7 +1079,7 @@
     if (!missing.includes("editor")) installClicks();
     post({
       type: "ready",
-      engine: params.get("engine") === "xetex" ? "xetex" : "luatex",
+      engine: params.get("engine") === "luatex" ? "luatex" : "xetex",
       jspi: typeof WebAssembly.Suspending === "function",
       missing,
     });

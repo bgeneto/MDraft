@@ -221,7 +221,7 @@ try {
     `JSON.stringify((() => { const c = document.getElementById("status-latex-engine"); return { text: c.textContent, title: c.title, backend: c.dataset.previewBackend }; })())`,
   ).then(JSON.parse);
   check(
-    chip.text === "LuaLaTeX" && chip.backend === "texpresso",
+    chip.text === "XeLaTeX" && chip.backend === "texpresso",
     "the engine chip names the engine, not the backend",
     JSON.stringify(chip),
   );
@@ -977,18 +977,19 @@ try {
   );
 
   console.log("=== engines and fallbacks ===");
-  // XeLaTeX restarts the frame with `xetex`: the app's engine is part of the
-  // frame's URL, so a second target with `engine=xetex` is the proof.
-  const xe = `${process.env.MDRAFT_REPO}\\samples\\latex-engines\\magic-xe.tex`;
+  // LuaLaTeX restarts the frame with `luatex`: the app's engine is part of the
+  // frame's URL, so a second target with `engine=luatex` is the proof (the
+  // first frame ran XeLaTeX, the default).
+  const lua = `${process.env.MDRAFT_REPO}\\samples\\latex-engines\\magic-lua.tex`;
   await evaluate(
-    `window.__TAURI_INTERNALS__.invoke("plugin:event|emit", { event: "open-files", payload: ${JSON.stringify([xe])} })`,
+    `window.__TAURI_INTERNALS__.invoke("plugin:event|emit", { event: "open-files", payload: ${JSON.stringify([lua])} })`,
   );
-  const xeFrame = await (async () => {
+  const luaFrame = await (async () => {
     const deadline = Date.now() + 90_000;
     while (Date.now() < deadline) {
       const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
       const hit = list.find((entry) => /mdraft-tex\.localhost\/texpresso\//.test(entry.url));
-      if (hit && /engine=xetex/.test(hit.url)) return hit;
+      if (hit && /engine=luatex/.test(hit.url)) return hit;
       const chipTitle = await evaluate(
         `document.getElementById("status-latex-engine")?.title ?? ""`,
       );
@@ -998,19 +999,19 @@ try {
     return null;
   })();
   check(
-    Boolean(xeFrame),
-    "XeLaTeX restarts the frame with xetex",
-    xeFrame?.url ?? "no xetex frame",
+    Boolean(luaFrame),
+    "LuaLaTeX restarts the frame with luatex",
+    luaFrame?.url ?? "no luatex frame",
   );
-  if (xeFrame) {
-    frame = await openPage(port, { type: "iframe", match: /engine=xetex/ });
+  if (luaFrame) {
+    frame = await openPage(port, { type: "iframe", match: /engine=luatex/ });
     check(
       await waitFor(
         `document.querySelector("#preview")?.dataset.texpressoPainted ?? ""`,
         120_000,
-        "the xetex paint",
+        "the luatex paint",
       ),
-      "the xetex frame typesets the document",
+      "the luatex frame typesets the document",
     );
   }
 

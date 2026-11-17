@@ -12,7 +12,7 @@ explicit about which of them need an extra program.
 | AsciiDoc | Asciidoctor.js | HTML, PDF, Print | same list | browser for the explicit fallback; pandoc; Typst for PDF (via Typst) |
 | HTML | Sandboxed guest | HTML copy, PDF, Print (static documents) | same list | browser for scripted HTML and the explicit fallback; pandoc; Typst for PDF (via Typst) |
 | Typst | Typst compiler | PDF (direct, via Typst) | DOCX, ODT, EPUB, LaTeX, reStructuredText, AsciiDoc, RTF, Textile, MediaWiki, OPML | Typst for preview and PDF; pandoc for the other formats |
-| LaTeX | LuaLaTeX compiler | PDF (direct, compiled), Print | HTML, Markdown, DOCX, ODT, EPUB, RTF, LaTeX, reStructuredText, AsciiDoc, and every other writer the installed pandoc advertises | the optional bundled TeX for the preview and PDF; pandoc for the other formats |
+| LaTeX | XeLaTeX or LuaLaTeX compiler | PDF (direct, compiled), Print | HTML, Markdown, DOCX, ODT, EPUB, RTF, LaTeX, reStructuredText, AsciiDoc, and every other writer the installed pandoc advertises | the optional bundled TeX for the preview and PDF; pandoc for the other formats |
 
 The native **PDF** and **Print** commands cover Markdown, AsciiDoc and static
 HTML. They do not cover Typst documents; use **PDF (via Typst)** for a `.typ`

@@ -131,6 +131,7 @@ Thumbs.db
 !/samples/html-tour/index.html
 !/samples/html-tour/module.js
 !/samples/html-tour/style.css
+!/samples/latex-engines/magic-lua.tex
 !/samples/latex-engines/magic-xe.tex
 !/samples/latex-engines/plain.tex
 !/samples/latex-pdf-image/main.tex

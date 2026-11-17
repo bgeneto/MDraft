@@ -11,7 +11,8 @@
 // The worker takes its Wasm binary, format and font cache from the project's
 // engine, and a new project takes DEFAULT_ENGINE from config.js, which reads
 // this global; an engine change is therefore a new frame, never a setting.
-const engine = new URLSearchParams(location.search).get("engine") === "xetex" ? "xetex" : "luatex";
+// XeTeX, MDraft's default engine, when the host names none.
+const engine = new URLSearchParams(location.search).get("engine") === "luatex" ? "luatex" : "xetex";
 globalThis.__TEXPRESSO_ENGINE__ = engine;
 let clearFontCache = false;
 try {

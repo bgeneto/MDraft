@@ -176,7 +176,8 @@ fn raise_old_cache_default(settings: &mut Settings) {
 /// The installed backend's default engine choice.
 ///
 /// `auto` reads only the `% !TEX program` allowlist and otherwise prefers
-/// LuaLaTeX, which is the engine the bundled backend uses too.
+/// XeLaTeX on a new install, or LuaLaTeX for a settings file written before
+/// that change (see [`Settings::latex_native_prefers_xelatex`]).
 fn default_native_engine() -> String {
     "auto".into()
 }
@@ -413,7 +414,17 @@ pub struct ProjectEngine {
 /// Projects whose engine is remembered; newest first, the oldest is dropped.
 pub const MAX_PROJECT_ENGINES: usize = 50;
 
+/// The bundled engine on a new install. XeLaTeX starts faster and its format
+/// is smaller than LuaLaTeX's.
 fn default_bundled_engine() -> String {
+    "xelatex".into()
+}
+
+/// The bundled engine for a settings file written before the field existed.
+///
+/// LuaLaTeX was the only engine then, so those documents keep compiling with
+/// it; only a new install starts on [`default_bundled_engine`].
+fn legacy_bundled_engine() -> String {
     "lualatex".into()
 }
 
@@ -585,9 +596,10 @@ pub struct Settings {
     #[serde(default)]
     pub latex_main_documents: Vec<FolderMainDocument>,
     /// The bundled engine when neither a magic comment nor the project names
-    /// one: "lualatex" (the default, so existing documents do not change),
-    /// "pdflatex", "xelatex" or "auto" (the SDK's detector).
-    #[serde(default = "default_bundled_engine")]
+    /// one: "xelatex" (the default on a new install), "lualatex" (kept by a
+    /// file written before the field existed, so its documents do not change),
+    /// "pdflatex" or "auto" (the preamble detector).
+    #[serde(default = "legacy_bundled_engine")]
     pub latex_bundled_engine: String,
     /// Per-project engine choices; at most [`MAX_PROJECT_ENGINES`].
     #[serde(default)]
@@ -648,6 +660,12 @@ pub struct Settings {
     /// always wins and is verified again when a job starts.
     #[serde(default = "default_native_engine")]
     pub latex_native_engine: String,
+    /// Whether `auto` falls back to XeLaTeX before LuaLaTeX.
+    ///
+    /// True on a new install. Absent from a file written before XeLaTeX became
+    /// the default, which keeps that reader's LuaLaTeX fallback.
+    #[serde(default)]
+    pub latex_native_prefers_xelatex: bool,
     /// A TeX Live installation inside a WSL distribution, when that is the
     /// selected native engine (Windows only). Exclusive with
     /// [`Self::latex_native_root`]: a validation of one clears the other.
@@ -922,6 +940,7 @@ impl Default for Settings {
             latex_native_enabled: false,
             latex_native_root: None,
             latex_native_engine: default_native_engine(),
+            latex_native_prefers_xelatex: true,
             latex_native_wsl: None,
             latex_texmf_roots: Vec::new(),
 
@@ -1364,6 +1383,9 @@ pub fn save_settings<R: Runtime>(
         let current = state.settings.lock().map_err(|e| e.to_string())?;
         settings.latex_texmf_roots = current.latex_texmf_roots.clone();
         settings.latex_native_wsl = current.latex_native_wsl.clone();
+        // Set only by install age; a payload without it must not flip a new
+        // install back to the LuaLaTeX fallback.
+        settings.latex_native_prefers_xelatex = current.latex_native_prefers_xelatex;
     }
     let saved = state.save(settings)?;
 
@@ -2286,8 +2308,12 @@ mod tests {
 
     #[test]
     fn engine_choices_load_old_files_keep_lualatex_and_unknown_names_are_dropped() {
+        let fresh = Settings::default();
+        assert_eq!(fresh.latex_bundled_engine, "xelatex");
+        assert!(fresh.latex_native_prefers_xelatex);
         let old = parse_settings(r#"{"theme":"dark"}"#).expect("old settings load");
         assert_eq!(old.latex_bundled_engine, "lualatex");
+        assert!(!old.latex_native_prefers_xelatex);
         assert!(old.latex_project_engines.is_empty());
         let parsed = parse_settings(
             r#"{"latexBundledEngine":"auto","latexProjectEngines":[
@@ -2306,7 +2332,7 @@ mod tests {
         );
         let unknown =
             parse_settings(r#"{"latexBundledEngine":"tectonic"}"#).expect("settings load");
-        assert_eq!(unknown.latex_bundled_engine, "lualatex");
+        assert_eq!(unknown.latex_bundled_engine, "xelatex");
     }
 
     #[test]
