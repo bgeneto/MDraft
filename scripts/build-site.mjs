@@ -149,6 +149,7 @@ async function resolveVersion() {
 
 function artifacts(version) {
   return [
+    `mdraft_${version}_x64-setup.exe`,
     `mdraft_${version}_x64_en-us.msi`,
     `mdraft_${version}_x64-portable.exe`,
     `mdraft_${version}_amd64.deb`,
@@ -374,7 +375,7 @@ async function validatePage(file, page, options) {
               visibleText(link) === expected[index]
             );
           }),
-        `${label}: all five artifact names and links match v${options.version}`,
+        `${label}: all six artifact names and links match v${options.version}`,
       );
       const downloads = [
         ...html.matchAll(
@@ -383,7 +384,7 @@ async function validatePage(file, page, options) {
       ];
       const available = [...expected, "SHA256SUMS-windows-amd64.txt", "SHA256SUMS-linux-amd64.txt"];
       check(
-        downloads.length === 9 &&
+        downloads.length === 10 &&
           downloads.every(([, url]) =>
             available.some(
               (name) => url === `${RELEASE_ROOT}/download/v${options.version}/${name}`,
