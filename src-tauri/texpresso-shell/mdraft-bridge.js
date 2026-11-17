@@ -203,6 +203,11 @@
     ownScroll = { top: now, until: performance.now() + 200 };
     return now;
   };
+  // A followed link is the one write of the app's that is kept (see
+  // `followLink`): until `linkScroll` passes, its first write goes through, and
+  // `linkLanding` tells `reportViewport` that the reader did not scroll.
+  let linkScroll = 0;
+  let linkLanding = null;
   const guardScroll = (box) => {
     if (box.__mdraftGuarded) return;
     box.__mdraftGuarded = true;
@@ -211,8 +216,12 @@
       get() {
         return scrollTopOf.get.call(this);
       },
-      set() {
-        /* the app's caret-follow; see above */
+      set(value) {
+        // Otherwise the app's caret-follow; see above. A probe's caret is never a link's.
+        if (internal !== 0 || performance.now() >= linkScroll) return;
+        linkScroll = 0;
+        scrollTopOf.set.call(this, Math.max(0, Number(value) || 0));
+        linkLanding = { top: scrollTopOf.get.call(this), until: performance.now() + 400 };
       },
     });
   };
@@ -708,8 +717,11 @@
   let lastInput = 0;
   let clickDetail = 1;
   let reference = 24;
-  const gesture = () => {
+  const gesture = (event) => {
     lastInput = performance.now();
+    // The reader scrolls or types: a link still on its way must not yank the
+    // pages. A press may be the second half of the double-click that followed it.
+    if (event?.type !== "pointerdown") linkScroll = 0;
     post({ type: "input" });
   };
   const installInput = () => {
@@ -746,13 +758,17 @@
     const own = ownScroll && performance.now() < ownScroll.until && Math.abs(ownScroll.top - top) <= 2;
     if (own) return;
     const line = withProbes(() => lineAtY(top + reference));
+    // A followed link leaves the source where it is, as a link in the PDF view does.
+    const landed =
+      linkLanding && performance.now() < linkLanding.until && Math.abs(linkLanding.top - top) <= 2;
+    if (landed) linkLanding = null;
     note(`viewport line=${line === null ? "null" : Math.round(line)} file=${openName()}`);
     post({
       type: "viewport",
       scrollTop: top,
       file: openName(),
       line,
-      gesture: performance.now() - lastInput < 800,
+      gesture: !landed && performance.now() - lastInput < 800,
     });
   };
   const installScroll = (box) => {
@@ -889,6 +905,8 @@
   const installClicks = () => {
     const box = pagesBox();
     const arm = (event) => {
+      // The double-click `followLink` replays is the app's link, not a lookup.
+      if (replaying) return;
       // `dblclick` fires after the second press, which may already have brought
       // the word. Arming again would forward whatever the engine selects next
       // (its caret, settling) as a second answer that replaces the word.
@@ -967,6 +985,125 @@
       }
       return result;
     };
+  };
+
+  // ---------------------------------------------------------------------
+  // Links. The app follows a link only on a double-click, and both of its ways
+  // out are closed in MDraft: a destination writes `#pages.scrollTop`, which the
+  // guard above drops, and a web address calls `window.open`, which the main
+  // window refuses. A single click on a link was therefore one more source
+  // lookup. As in the PDF view, a press on a link now belongs to the link: the
+  // source map never sees it, the app follows a destination with its one scroll
+  // let through, and a web address goes to the host, which vets it and hands it
+  // to the system.
+  const LINK_SCROLL_MS = 3000;
+  let linkPress = null;
+  let replaying = false;
+  /** The followable link under a viewport point, `{ uri }` or `{ dest }`, or null. */
+  const linkAt = (x, y) => {
+    try {
+      const action = api()?.preview?.linkAt?.(x, y)?.action;
+      return action && typeof action === "object" && ("uri" in action || "dest" in action)
+        ? action
+        : null;
+    } catch {
+      return null;
+    }
+  };
+  const sameLink = (a, b) =>
+    Boolean(a && b) &&
+    String(a.uri ?? "") === String(b.uri ?? "") &&
+    String(a.dest ?? "") === String(b.dest ?? "");
+  const followLink = (action, x, y) => {
+    if ("uri" in action) {
+      note("link uri");
+      post({ type: "link", uri: String(action.uri) });
+      return;
+    }
+    // Only the app knows where a destination is, and its own double-click
+    // follows one. The replay reaches the app's handler on the pages; `arm` and
+    // the capture below let it pass.
+    const box = pagesBox();
+    if (!box) return;
+    const at = document.elementFromPoint(x, y);
+    note("link dest");
+    linkScroll = performance.now() + LINK_SCROLL_MS;
+    replaying = true;
+    try {
+      (at && box.contains(at) ? at : box).dispatchEvent(
+        new MouseEvent("dblclick", {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          detail: 2,
+          clientX: x,
+          clientY: y,
+        }),
+      );
+    } finally {
+      replaying = false;
+    }
+  };
+  const installLinks = () => {
+    addEventListener(
+      "pointerdown",
+      (event) => {
+        linkPress = null;
+        if (event.button !== 0 || !event.isPrimary) return;
+        const action = linkAt(event.clientX, event.clientY);
+        if (!action) return;
+        linkPress = action;
+        // The app starts its source lookup from this press on the pages, and a
+        // cancelled press sends no `mousedown` for `arm`.
+        event.stopPropagation();
+        event.preventDefault();
+      },
+      true,
+    );
+    addEventListener(
+      "mousedown",
+      (event) => {
+        if (linkPress) event.stopPropagation();
+      },
+      true,
+    );
+    addEventListener(
+      "click",
+      (event) => {
+        const press = linkPress;
+        linkPress = null;
+        if (!press) return;
+        event.stopPropagation();
+        event.preventDefault();
+        // The second click of a double-click: the first one followed the link.
+        if (event.detail > 1) return;
+        // A press released off its link follows nothing.
+        const action = linkAt(event.clientX, event.clientY);
+        if (sameLink(action, press)) followLink(action, event.clientX, event.clientY);
+      },
+      true,
+    );
+    // The app's own double-click would follow the link again, its own way, and
+    // `arm` would wait for a source answer.
+    addEventListener(
+      "dblclick",
+      (event) => {
+        if (replaying || !linkAt(event.clientX, event.clientY)) return;
+        event.stopPropagation();
+        event.preventDefault();
+      },
+      true,
+    );
+    // The app titles a link "… (double-click to open)" or "Double-click to
+    // follow". One click follows it here, so the title is the PDF view's: the
+    // address of a web link, nothing for a destination. This runs after the
+    // app's own handler on the pages, which leaves the title empty off a link.
+    addEventListener("mousemove", (event) => {
+      const box = pagesBox();
+      if (!box?.title) return;
+      const action = linkAt(event.clientX, event.clientY);
+      if (action) box.title = "uri" in action ? String(action.uri) : "";
+    });
   };
 
   // MDraft keeps the keyboard in its own editor. The hidden editor focuses
@@ -1077,6 +1214,7 @@
     installScroll(box);
     installInput();
     if (!missing.includes("editor")) installClicks();
+    installLinks();
     post({
       type: "ready",
       engine: params.get("engine") === "luatex" ? "luatex" : "xetex",

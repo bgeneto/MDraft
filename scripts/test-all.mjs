@@ -477,12 +477,14 @@ const SUITES = [
     origin: true,
     reuseProfile: true,
     // The layer types into the real editor, and the application saves those
-    // buffers on close; the harness puts both fixtures back afterwards.
+    // buffers on close; the harness puts the fixtures back afterwards. The
+    // XeLaTeX sample becomes the link probe.
     writesDoc: true,
     fixtures: [
       "samples/latex-perf/book/main.tex",
       "samples/latex-perf/book/chapters/ch06.tex",
       "samples/latex-perf/book/chapters/ch01.tex",
+      "samples/latex-engines/magic-xe.tex",
     ],
   },
   {
