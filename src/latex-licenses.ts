@@ -12,7 +12,7 @@ const notices = import.meta.glob("./assets/wasmtex-licenses/LICENSES/*.txt", {
 export const LATEX_LICENSES = [
   "# LaTeX preview: licences and source",
   "",
-  "The incremental preview engine (TeXpresso) is MIT licensed; the author confirmed that the web build carries the same licence as the native tool. Its LuaTeX and XeTeX engines and `xdvipdfmx` are GPL (version 2 or later), and the TeX Live files keep their own terms.",
+  "The incremental preview engine (TeXpresso) is MIT licensed; Its LuaTeX and XeTeX engines and `xdvipdfmx` are GPL (version 2 or later), and the TeX Live files keep their own terms.",
   "",
   "The hidden WasmTex backend remains in the source for its regression layer; its SDK and engine notices are included below.",
   "",
