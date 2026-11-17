@@ -473,14 +473,25 @@ pub(crate) fn backup_directory(
     let verify = |assets: &Path| {
         config().profiles.values().any(|profile| {
             profile.assets.iter().all(|asset| {
-                let Ok(mut file) = crate::backup::snapshot::open_regular(assets, Path::new(&asset.name)) else { return false; };
+                let Ok(mut file) =
+                    crate::backup::snapshot::open_regular(assets, Path::new(&asset.name))
+                else {
+                    return false;
+                };
                 if crate::backup::snapshot::is_credential_file(&file, keys).unwrap_or(true) {
                     return false;
                 }
-                let Ok(metadata) = file.metadata() else { return false; };
-                if metadata.len() > 64 * 1024 * 1024 { return false; }
+                let Ok(metadata) = file.metadata() else {
+                    return false;
+                };
+                if metadata.len() > 64 * 1024 * 1024 {
+                    return false;
+                }
                 let mut bytes = Vec::with_capacity(metadata.len() as usize);
-                Read::by_ref(&mut file).take(64 * 1024 * 1024 + 1).read_to_end(&mut bytes).is_ok()
+                Read::by_ref(&mut file)
+                    .take(64 * 1024 * 1024 + 1)
+                    .read_to_end(&mut bytes)
+                    .is_ok()
                     && bytes.len() <= 64 * 1024 * 1024
                     && digest(&bytes) == asset.sha256
             })

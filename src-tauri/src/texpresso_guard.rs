@@ -128,7 +128,10 @@ static GUARD: LazyLock<(Mutex<Guard>, Condvar)> =
     LazyLock::new(|| (Mutex::new(Guard::new(0)), Condvar::new()));
 
 fn guard() -> MutexGuard<'static, Guard> {
-    GUARD.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    GUARD
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// The font formats luaotfload and XeTeX scan.
@@ -241,7 +244,9 @@ mod tests {
     static SERIAL: Mutex<()> = Mutex::new(());
 
     fn serial() -> MutexGuard<'static, ()> {
-        SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn font(n: usize) -> String {
@@ -305,7 +310,10 @@ mod tests {
         assert!(decide(false));
         assert_eq!(waiting.join().unwrap().unwrap_err(), STOPPED);
         assert!(report().stopped);
-        assert_eq!(admit("files/tt2026/v1/fontspec.sty~h").unwrap_err(), STOPPED);
+        assert_eq!(
+            admit("files/tt2026/v1/fontspec.sty~h").unwrap_err(),
+            STOPPED
+        );
 
         // A new frame starts with a clean slate.
         reset();

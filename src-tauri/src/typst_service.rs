@@ -216,7 +216,10 @@ fn write_packet<W: Write>(writer: &mut W, header: &[u8], payload: &[u8]) -> std:
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "service header too large")
     })?;
     let p_len = u32::try_from(payload.len()).map_err(|_| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "service payload too large")
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "service payload too large",
+        )
     })?;
     writer.write_all(&h_len.to_be_bytes())?;
     writer.write_all(header)?;
@@ -291,7 +294,10 @@ fn managed_service_in_dir(root: &Path) -> Option<PathBuf> {
 }
 
 fn probe_service(path: &Path) -> Option<ProbeInfo> {
-    let output = quiet(&mut Command::new(path)).arg("--version").output().ok()?;
+    let output = quiet(&mut Command::new(path))
+        .arg("--version")
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -334,7 +340,13 @@ fn find_service<R: Runtime>(app: &AppHandle<R>) -> Option<(PathBuf, ProbeInfo)> 
 
 fn is_enabled<R: Runtime>(app: &AppHandle<R>) -> bool {
     app.try_state::<crate::settings::AppState>()
-        .and_then(|state| state.settings.lock().ok().map(|s| s.typst_incremental_service))
+        .and_then(|state| {
+            state
+                .settings
+                .lock()
+                .ok()
+                .map(|s| s.typst_incremental_service)
+        })
         .unwrap_or(false)
 }
 
@@ -541,7 +553,8 @@ fn install<R: Runtime>(app: &AppHandle<R>) -> Result<TypstServiceStatus, String>
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let manifest = load_manifest()?;
     let target_triple = current_target_triple().ok_or_else(|| {
-        "The incremental Typst companion service has no prebuilt binary for this platform.".to_string()
+        "The incremental Typst companion service has no prebuilt binary for this platform."
+            .to_string()
     })?;
     let root = service_root(app).ok_or_else(|| {
         "The application could not determine app_data_dir for the Typst service.".to_string()
@@ -560,8 +573,8 @@ pub async fn typst_clear_cache<R: Runtime>(app: AppHandle<R>) -> Result<u64, Str
         let _writer = crate::backup::gate::writer()?;
         Ok(clear_cache(&app))
     })
-        .await
-        .map_err(|e| format!("The Typst cache clear task could not be started: {e}"))?
+    .await
+    .map_err(|e| format!("The Typst cache clear task could not be started: {e}"))?
 }
 
 fn clear_cache<R: Runtime>(app: &AppHandle<R>) -> u64 {
@@ -766,9 +779,7 @@ impl WorkerProcess {
             let (lock, cvar) = &*done_signal;
             let mut aborted_reason: Option<String> = None;
             {
-                let mut guard = lock
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 while !*guard {
                     if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
                         aborted_reason = Some(PREVIEW_SUPERSEDED.to_string());
@@ -1157,14 +1168,13 @@ impl ServiceSupervisor {
                         .error
                         .unwrap_or_else(|| "Typst service fallback failed.".into()));
                 }
-                let mut fb_compile = fb_resp
-                    .compile
-                    .ok_or_else(|| "Typst service fallback omitted compile metadata.".to_string())?;
+                let mut fb_compile = fb_resp.compile.ok_or_else(|| {
+                    "Typst service fallback omitted compile metadata.".to_string()
+                })?;
                 fb_compile.fell_back_from_document = true;
-                fb_compile.warnings.insert(
-                    0,
-                    format!("The document view was unavailable ({reason})."),
-                );
+                fb_compile
+                    .warnings
+                    .insert(0, format!("The document view was unavailable ({reason})."));
                 return compiled_from_wire(fb_compile, fb_payload, Some(binary));
             }
 
@@ -1180,13 +1190,14 @@ impl ServiceSupervisor {
                         .error
                         .unwrap_or_else(|| "Typst service fallback failed.".into()));
                 }
-                let mut fb_compile = fb_resp
-                    .compile
-                    .ok_or_else(|| "Typst service fallback omitted compile metadata.".to_string())?;
+                let mut fb_compile = fb_resp.compile.ok_or_else(|| {
+                    "Typst service fallback omitted compile metadata.".to_string()
+                })?;
                 fb_compile.fell_back_from_document = true;
                 fb_compile.warnings.insert(
                     0,
-                    "The document view was unavailable (The rendered document had no body.).".into(),
+                    "The document view was unavailable (The rendered document had no body.)."
+                        .into(),
                 );
                 return compiled_from_wire(fb_compile, fb_payload, Some(binary));
             };
@@ -1615,18 +1626,29 @@ mod tests {
             .expect("warm daemon compile 1 must succeed");
         assert_eq!(res1.rendered.kind, "pages");
         assert_eq!(res1.rendered.page_hashes.len(), 2);
-        assert!(!res1.rendered.deps.is_empty(), "deps must record shared.typ");
+        assert!(
+            !res1.rendered.deps.is_empty(),
+            "deps must record shared.typ"
+        );
         assert!(
             !res1.rendered.span_map.is_empty(),
             "span_map must include AST span anchors"
         );
-        assert!(res1.pdf_bytes.as_ref().is_some_and(|b| b.starts_with(b"%PDF")));
+        assert!(
+            res1.pdf_bytes
+                .as_ref()
+                .is_some_and(|b| b.starts_with(b"%PDF"))
+        );
         // Zero `.mdraft-preview-*` temp files written beside ch1.typ!
-        let has_preview_temp = std::fs::read_dir(&chapters)
-            .unwrap()
-            .flatten()
-            .any(|e| e.file_name().to_string_lossy().starts_with(".mdraft-preview-"));
-        assert!(!has_preview_temp, "service must never write .mdraft-preview-* to disk");
+        let has_preview_temp = std::fs::read_dir(&chapters).unwrap().flatten().any(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with(".mdraft-preview-")
+        });
+        assert!(
+            !has_preview_temp,
+            "service must never write .mdraft-preview-* to disk"
+        );
 
         // Second compile only mutating page 2 preserves page 1 hash!
         let unsaved_v2 = "#import \"../shared.typ\": greet\n= Chapter 1\n#greet(\"MDraft\")\n#pagebreak()\n= Page 2\nTail line edited.";

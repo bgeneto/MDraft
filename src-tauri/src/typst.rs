@@ -452,22 +452,17 @@ fn download_binary(
     let mut last = Instant::now();
     let archive = {
         let mut reader = response.body_mut().as_reader();
-        optional_tools::read_to_vec_bounded(
-            &mut reader,
-            256 * 1024 * 1024,
-            deadline,
-            |received| {
-                if last.elapsed() >= Duration::from_millis(100) {
-                    last = Instant::now();
-                    progress(Progress {
-                        tool: Tool::Typst,
-                        phase: Phase::Downloading,
-                        received,
-                        total,
-                    });
-                }
-            },
-        )
+        optional_tools::read_to_vec_bounded(&mut reader, 256 * 1024 * 1024, deadline, |received| {
+            if last.elapsed() >= Duration::from_millis(100) {
+                last = Instant::now();
+                progress(Progress {
+                    tool: Tool::Typst,
+                    phase: Phase::Downloading,
+                    received,
+                    total,
+                });
+            }
+        })
         .map_err(|error| format!("Could not read the download: {error}"))?
     };
 
@@ -491,7 +486,10 @@ fn download_binary(
         received: archive.len() as u64,
         total,
     });
-    Ok((release.tag_name, extract_named_binary(&archive, typst_exe())?))
+    Ok((
+        release.tag_name,
+        extract_named_binary(&archive, typst_exe())?,
+    ))
 }
 
 #[tauri::command]
@@ -581,9 +579,7 @@ pub(crate) fn extract_named_binary(archive: &[u8], exe_name: &str) -> Result<Vec
     }
 
     let (index, name) = found.ok_or_else(|| {
-        format!(
-            "The downloaded archive did not contain {exe_name}. Its layout may have changed."
-        )
+        format!("The downloaded archive did not contain {exe_name}. Its layout may have changed.")
     })?;
     let mut entry = zip
         .by_index(index)
@@ -925,7 +921,9 @@ struct CliRunOptions<'a> {
 /// Run Typst once, feeding the document on stdin when compiling from root.
 ///
 /// Returns `(succeeded, stderr, deps)`.
-fn run_typst_with_deps(opts: CliRunOptions<'_>) -> Result<(bool, String, Vec<TypstDependency>), String> {
+fn run_typst_with_deps(
+    opts: CliRunOptions<'_>,
+) -> Result<(bool, String, Vec<TypstDependency>), String> {
     let mut command = std::process::Command::new(opts.binary);
     quiet(&mut command)
         .arg("compile")
@@ -938,7 +936,11 @@ fn run_typst_with_deps(opts: CliRunOptions<'_>) -> Result<(bool, String, Vec<Typ
         .filter(|_| supports_cli_version(opts.version, 0, 13))
         .map(DepsGuard::new);
     if let Some(guard) = &deps_guard {
-        command.arg("--deps").arg(&guard.path).arg("--deps-format").arg("json");
+        command
+            .arg("--deps")
+            .arg(&guard.path)
+            .arg("--deps-format")
+            .arg("json");
     }
 
     // Typst places a document read from stdin at the root, so its relative
@@ -1149,9 +1151,7 @@ fn run_typst_command(
         let deadline = Instant::now() + timeout;
         let outcome: Result<(), String> = {
             let (lock, cvar) = &*wake_signal;
-            let mut guard = lock
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             loop {
                 if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
                     break Err(PREVIEW_SUPERSEDED.to_string());
@@ -1569,8 +1569,7 @@ fn render<R: Runtime>(
             }
             // The document view is experimental and refuses some documents
             // outright. Falling back keeps the pane useful, and says why.
-            let mut fallback =
-                render_pages(&typst, &root, main_file, &dir, source, cancel, true)?;
+            let mut fallback = render_pages(&typst, &root, main_file, &dir, source, cancel, true)?;
             fallback
                 .rendered
                 .warnings
@@ -1861,7 +1860,10 @@ mod tests {
         let mut xz = Vec::new();
         lzma_rs::xz_compress(&mut std::io::Cursor::new(&tar_bytes), &mut xz).unwrap();
 
-        assert_eq!(extract_named_binary(&xz, "typst").unwrap(), payload.to_vec());
+        assert_eq!(
+            extract_named_binary(&xz, "typst").unwrap(),
+            payload.to_vec()
+        );
     }
 
     #[test]
