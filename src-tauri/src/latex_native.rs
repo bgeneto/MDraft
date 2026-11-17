@@ -1376,6 +1376,13 @@ impl WorkspaceState {
     }
 }
 
+/// A modification time this close to the staging clock cannot prove a later
+/// same-size edit is absent: filesystems record mtimes at a coarse tick (the
+/// kernel tick on ext4, two seconds on FAT), so a rewrite in the same tick
+/// keeps the old stamp. Such a file is recorded as unproven (stamp 0) and
+/// copied again on the next compile, as Git does with "racily clean" entries.
+const RACY_STAMP_WINDOW: Duration = Duration::from_secs(3);
+
 fn file_stamp(metadata: &std::fs::Metadata) -> u64 {
     metadata
         .modified()
@@ -1383,6 +1390,19 @@ fn file_stamp(metadata: &std::fs::Metadata) -> u64 {
         .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|age| u64::try_from(age.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0)
+}
+
+/// The stamp that may prove a staged copy current: the source's stamp, or 0
+/// when it is unknown or too recent to rule out a later same-size edit (see
+/// `RACY_STAMP_WINDOW`). A future mtime (clock skew) is as unprovable as a
+/// recent one.
+fn settled_stamp(metadata: &std::fs::Metadata, staged_at: std::time::SystemTime) -> u64 {
+    let settled = metadata.modified().is_ok_and(|modified| {
+        staged_at
+            .duration_since(modified)
+            .is_ok_and(|age| age >= RACY_STAMP_WINDOW)
+    });
+    if settled { file_stamp(metadata) } else { 0 }
 }
 
 struct Staged {
@@ -1403,6 +1423,7 @@ fn stage(
     }
     let work = workspace.join("project");
     std::fs::create_dir_all(&work).map_err(|error| error.to_string())?;
+    let staged_at = std::time::SystemTime::now();
     let mut total = 0usize;
     let mut main = None;
     let mut sources = BTreeMap::new();
@@ -1502,13 +1523,14 @@ fn stage(
             }
             let metadata = std::fs::metadata(&source)
                 .map_err(|error| format!("Cannot read {relative}: {error}"))?;
-            let stamp = file_stamp(&metadata);
+            let stamp = settled_stamp(&metadata, staged_at);
             let target = work.join(&target_relative);
             // A source that has not changed is left exactly as it is. This is
             // what keeps a generated file (a PDF, .bbl, .aux) that happens to
             // share a project name from being replaced on every compile.
             let unchanged = state.staged.get(&target_relative).is_some_and(|previous| {
                 previous.size == size
+                    && previous.modified != 0
                     && previous.modified == stamp
                     && previous.digest.is_empty()
                     && target.is_file()
@@ -2339,6 +2361,27 @@ mod tests {
         assert!(!work.join("figures/a.bin").exists());
         assert_eq!(std::fs::read(work.join("main.tex")).unwrap(), b"main");
         let _ = std::fs::remove_dir_all(base);
+    }
+    #[test]
+    fn a_recent_stamp_cannot_prove_a_file_unchanged() {
+        let path = std::env::temp_dir().join(format!("mdraft-racy-{}", std::process::id()));
+        std::fs::write(&path, b"one").unwrap();
+        let now = std::time::SystemTime::now();
+        // Written just now: a same-size rewrite in this tick would keep the stamp.
+        assert_eq!(settled_stamp(&std::fs::metadata(&path).unwrap(), now), 0);
+        let old = now - Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let metadata = std::fs::metadata(&path).unwrap();
+        assert_ne!(settled_stamp(&metadata, now), 0);
+        assert_eq!(settled_stamp(&metadata, now), file_stamp(&metadata));
+        // A stamp ahead of the staging clock is not trusted either.
+        assert_eq!(settled_stamp(&metadata, old - Duration::from_secs(60)), 0);
+        let _ = std::fs::remove_file(path);
     }
     #[test]
     fn an_executable_project_file_is_refused() {
