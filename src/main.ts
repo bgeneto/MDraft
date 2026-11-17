@@ -12414,11 +12414,7 @@ function runMenuAction(id: string, route: MenuRoute = "menu"): void {
   }
   const now = performance.now();
   const previous = lastActionAt.get(id);
-  if (
-    previous &&
-    now - previous.at < 250 &&
-    (previous.route !== route || !EDITOR_KEY_IDS.has(id))
-  )
+  if (previous && now - previous.at < 250 && (previous.route !== route || !EDITOR_KEY_IDS.has(id)))
     return;
   lastActionAt.set(id, { at: now, route });
 
@@ -12636,13 +12632,13 @@ function installShortcuts(shortcuts: api.Shortcut[]): void {
   const guestTable: HtmlAccelerator[] = parsed
     .filter((entry) => !EDITOR_KEY_IDS.has(entry.id))
     .map((entry) => ({
-    id: entry.id,
-    ctrl: entry.ctrl,
-    alt: entry.alt,
-    shift: entry.shift,
-    meta: entry.meta,
-    keys: [entry.key],
-  }));
+      id: entry.id,
+      ctrl: entry.ctrl,
+      alt: entry.alt,
+      shift: entry.shift,
+      meta: entry.meta,
+      keys: [entry.key],
+    }));
   htmlPreview?.setAccelerators(guestTable);
 
   window.addEventListener(

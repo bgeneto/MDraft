@@ -1079,7 +1079,10 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&item("file.closeFolder", "Close Folder", None)?)
         // The predefined label is a bare "Close", which reads as a sibling of
         // Close Tab; name the window so the three close scopes are distinct.
-        .item(&PredefinedMenuItem::close_window(app, Some("Close Window"))?);
+        .item(&PredefinedMenuItem::close_window(
+            app,
+            Some("Close Window"),
+        )?);
 
     // Preferences is a File-menu command on Windows and Linux; macOS keeps its
     // own application-menu item. The id and the CmdOrCtrl+, accelerator do not
@@ -1140,7 +1143,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             "Duplicate Line",
             Some("Alt+Shift+ArrowDown"),
         )?)
-        .item(&item("edit.moveLineUp", "Move Line Up", Some("Alt+ArrowUp"))?)
+        .item(&item(
+            "edit.moveLineUp",
+            "Move Line Up",
+            Some("Alt+ArrowUp"),
+        )?)
         .item(&item(
             "edit.moveLineDown",
             "Move Line Down",
@@ -1212,7 +1219,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             Some("CmdOrCtrl+H"),
         )?)
         .item(&item("edit.findNext", "Find Next", Some("F3"))?)
-        .item(&item("edit.findPrevious", "Find Previous", Some("Shift+F3"))?)
+        .item(&item(
+            "edit.findPrevious",
+            "Find Previous",
+            Some("Shift+F3"),
+        )?)
         .separator()
         .item(&convert_selection)
         .item(&lines)
