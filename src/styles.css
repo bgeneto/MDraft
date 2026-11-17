@@ -1143,6 +1143,23 @@ body.resizing iframe {
   text-overflow: ellipsis;
 }
 
+/* The document type follows the file name behind a thin rule. It never
+   shrinks: a long name truncates first, because the type is short and cannot
+   be read back from a truncated name. A type detected from an untitled
+   buffer's content is italic, the one label that can still change as the
+   reader types. */
+.status-type {
+  flex: none;
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+}
+.status-type:empty {
+  display: none;
+}
+.status-type[data-origin="content"] {
+  font-style: italic;
+}
+
 /* The word and token counts are quiet buttons: no surface until hover, but a
    real focus ring and cursor, because clicking either one opens the document
    statistics dialog. The negative margin keeps the text spacing unchanged. */

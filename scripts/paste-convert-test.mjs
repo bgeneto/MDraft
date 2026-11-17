@@ -13,13 +13,20 @@
 import {
   chooseSource,
   isHtmlSource,
+  detectDocumentSyntax,
   detectTextSyntax,
+  isJsonDocument,
+  scoreCss,
+  scoreJavascript,
   scoreLatex,
   scoreTypst,
 } from "../src/paste/detect.ts";
 import {
   CANONICAL_EXTENSION,
+  DETECTION_SAMPLE,
   LANGUAGE_EXTENSIONS,
+  LANGUAGE_LABEL,
+  documentType,
   languageForExtension,
   resolvePasteDestination,
   suggestSave,
@@ -1642,6 +1649,220 @@ console.log("\n=== LaTeX: unknown markup survives as text ===");
   const markdown = renderMarkdown(blocks);
   check(markdown.includes("\\alpha"), "an unknown command survives", markdown.slice(0, 80));
   check(markdown.includes("knuth"), "a citation key survives");
+}
+
+// Buffers shared by the document-type sections below.
+const TYPE_SAMPLES = {
+  json: '{\n  "name": "mdraft",\n  "version": "1.0.0",\n  "private": true\n}\n',
+  jsonArray: '[{ "id": 1 }, { "id": 2 }]',
+  jsonTyping: '{\n  "name": "mdr',
+  css: "body {\n  margin: 0;\n  font-family: sans-serif;\n}\n",
+  cssMinified: "a{color:red}b{margin:0;padding:0}",
+  cssAtRules:
+    "@media (max-width: 600px) {\n  .nav:not(.open) { display: none; }\n}\n:root {\n  --accent: #06c;\n}\n",
+  javascript: "function hello(name) {\n  console.log(`hi ${name}`);\n}\n",
+  module: 'import { a } from "./a.js";\n\nexport const b = () => a + 1;\n',
+  // Calls with object arguments and `default:` labels look like CSS rules and
+  // declarations; the selector check must leave them to JavaScript.
+  callsAndSwitch:
+    "const app = create({ debug: true });\n" +
+    "function route(kind) {\n  switch (kind) {\n    case 1: return a();\n    default: return b();\n  }\n}\n" +
+    "app.use({ port: 8080; host: x });\n",
+  markdownWithCode:
+    "# Notes\n\nSome **bold** text and a [link](https://example.com).\n\n" +
+    "```js\nconst a = 1;\nfunction f() { return a; }\n```\n\n" +
+    "```css\nbody { margin: 0; padding: 0; }\n```\n",
+  typst: "= Title\n\n#let x = 5\n#show heading: it => { it }\n\nSome text.\n",
+  latex: String.raw`\documentclass{article}
+\usepackage{amsmath}
+\begin{document}
+\section{Intro}
+Hello {\bf world: yes}.
+\end{document}
+`,
+  html: "<!doctype html>\n<html><head><style>body { margin: 0; color: red; }</style><script>const a = 1;\nfunction f() { console.log(a); }</script></head><body><p>Hi</p></body></html>",
+  asciidoc: "= Document\n:toc: left\n\nNOTE: a note.\n",
+  prose: "This is a sentence; and another one;\nlet me explain: nothing here;\nok;\n",
+  markdownReference: "[1]: https://example.com\n\nSee [the site][1].\n",
+};
+
+console.log("\n=== document type: JSON, CSS and JavaScript ===");
+{
+  const language = (text) => detectDocumentSyntax(text)?.language ?? null;
+  check(language(TYPE_SAMPLES.json) === "json", "a JSON object is JSON");
+  check(language(TYPE_SAMPLES.jsonArray) === "json", "a JSON array is JSON");
+  check(
+    language(TYPE_SAMPLES.jsonTyping) === "json",
+    "an object still being typed is JSON from its first quoted key",
+  );
+  check(
+    !isJsonDocument("42") && !isJsonDocument('"text"'),
+    "a JSON scalar is not a JSON document: prose can be one too",
+  );
+  check(
+    !isJsonDocument(TYPE_SAMPLES.markdownReference) && !isJsonDocument("[ ] buy milk\n"),
+    "a Markdown reference or task list is not JSON",
+  );
+  check(
+    language(TYPE_SAMPLES.css) === "css",
+    "a stylesheet is CSS",
+    String(scoreCss(TYPE_SAMPLES.css)),
+  );
+  check(language(TYPE_SAMPLES.cssMinified) === "css", "a minified stylesheet is CSS");
+  check(language(TYPE_SAMPLES.cssAtRules) === "css", "at-rules, pseudo-classes and :root are CSS");
+  check(
+    language(TYPE_SAMPLES.javascript) === "javascript",
+    "a function declaration with console output is JavaScript",
+    String(scoreJavascript(TYPE_SAMPLES.javascript)),
+  );
+  check(language(TYPE_SAMPLES.module) === "javascript", "an ES module is JavaScript");
+  check(
+    language(TYPE_SAMPLES.callsAndSwitch) === "javascript" &&
+      scoreCss(TYPE_SAMPLES.callsAndSwitch) === 0,
+    "object arguments and switch labels are not CSS rules",
+    `css ${scoreCss(TYPE_SAMPLES.callsAndSwitch)}`,
+  );
+  check(language("const x = 1;\n") === null, "one binding is too thin to name a script");
+}
+
+console.log("\n=== document type: markup is never reclassified ===");
+{
+  const expected = {
+    markdownWithCode: "markdown",
+    typst: "typst",
+    latex: "latex",
+    html: "html",
+    asciidoc: "asciidoc",
+    prose: null,
+    markdownReference: null,
+  };
+  for (const [name, language] of Object.entries(expected)) {
+    const found = detectDocumentSyntax(TYPE_SAMPLES[name]);
+    check(
+      (found?.language ?? null) === language,
+      `${name} stays ${language ?? "undetected"}`,
+      String(found?.language ?? null),
+    );
+  }
+  // Every markup answer is the paste classifier's own, score and lead included.
+  const corpus = [
+    "# Title\n\nSome **bold** text.\n",
+    "= Title\n\nPlain text.\n",
+    "= Title\n:toc: left\n",
+    "<div><p>Hi</p></div>",
+    "\\documentclass{article}\n\\begin{document}\nx\n\\end{document}\n",
+    "- first\n- second\n\n@ref <label>\n\n$ 5 $",
+    "Just a sentence.",
+  ];
+  const same = corpus.every(
+    (text) =>
+      JSON.stringify(detectDocumentSyntax(text)) ===
+      JSON.stringify(detectTextSyntax(text, "document")),
+  );
+  check(same, "a markup buffer gets exactly the document-mode markup answer");
+  // A lazy comment pattern rescans to the end of the text for every opener
+  // without a closer; glob-like prose is full of them.
+  const globs = "Copy src/*.md and docs/*.txt here. ".repeat(Math.ceil(DETECTION_SAMPLE / 35));
+  const started = performance.now();
+  detectDocumentSyntax(globs.slice(0, DETECTION_SAMPLE));
+  const elapsed = performance.now() - started;
+  check(elapsed < 1000, "unclosed comment openers are scanned once", `${elapsed.toFixed(1)} ms`);
+}
+
+console.log("\n=== Save As offers the detected web source ===");
+{
+  const suggest = (buffer) =>
+    suggestSave({
+      path: null,
+      language: "markdown",
+      buffer,
+      defaultExtension: "md",
+      defaultLanguage: "markdown",
+    });
+  const json = suggest(TYPE_SAMPLES.json);
+  check(json.language === "json" && json.extension === "json", "untitled JSON is saved as .json");
+  const css = suggest(TYPE_SAMPLES.css);
+  check(css.language === "css" && css.extension === "css", "untitled CSS is saved as .css");
+  const js = suggest(TYPE_SAMPLES.module);
+  check(
+    js.language === "javascript" && js.extension === "js",
+    "untitled JavaScript is saved as .js",
+  );
+  const saved = suggestSave({
+    path: "C:/notes/today.md",
+    language: "markdown",
+    buffer: TYPE_SAMPLES.json,
+    defaultExtension: "md",
+    defaultLanguage: "markdown",
+  });
+  check(
+    saved.language === "markdown" && saved.extension === null,
+    "a saved file keeps its own language whatever it contains",
+  );
+}
+
+console.log("\n=== status-bar document type ===");
+{
+  const base = { buffer: "", defaultExtension: "md", defaultLanguage: "markdown" };
+  const saved = (path, language, buffer = "") => documentType({ ...base, path, language, buffer });
+  const typ = saved("C:/books/orange-book.typ", "typst");
+  check(
+    typ.label === "Typst" && typ.origin === "extension" && typ.detail.includes(".typ"),
+    "a .typ file is Typst, from its extension",
+    JSON.stringify(typ),
+  );
+  const txt = saved("notes.txt", "markdown");
+  check(
+    txt.label === "Plain Text" && txt.detail.includes("Markdown"),
+    "a .txt file is Plain Text, edited as Markdown",
+    JSON.stringify(txt),
+  );
+  check(saved("pkg.sty", "latex").label === "LaTeX", "a .sty package is LaTeX");
+  const unknown = saved("script.py", "markdown");
+  check(
+    unknown.label === "Markdown" && unknown.detail.includes("not a recognised type"),
+    "an unrecognised extension says it is edited as Markdown",
+    unknown.detail,
+  );
+  check(
+    saved("C:/dir.v2/README", "markdown").detail.startsWith("No extension"),
+    "a dot in a folder name is not an extension",
+  );
+  check(
+    saved("C:/notes/today.md", "markdown", TYPE_SAMPLES.json).label === "Markdown",
+    "a saved file's contents are never scanned",
+  );
+
+  const untitled = (buffer, overrides = {}) =>
+    documentType({ ...base, path: null, language: "markdown", buffer, ...overrides });
+  const json = untitled(TYPE_SAMPLES.json);
+  check(
+    json.label === "JSON" && json.origin === "content" && json.detail.includes(".json"),
+    "untitled JSON is named from its content, with the extension Save As offers",
+    JSON.stringify(json),
+  );
+  const empty = untitled("");
+  check(
+    empty.label === "Markdown" && empty.origin === "default",
+    "an empty buffer is the editor language",
+  );
+  const plain = untitled("hello", { defaultExtension: "txt" });
+  check(
+    plain.label === "Plain Text" && plain.origin === "default",
+    "an undetected buffer under a .txt default is Plain Text",
+  );
+  const typst = untitled(TYPE_SAMPLES.typst, { language: "typst" });
+  check(
+    typst.label === "Typst" && typst.origin === "content" && !typst.detail.includes("until"),
+    "detection that agrees with the editor says nothing about switching",
+    typst.detail,
+  );
+  const agree = Object.values(TYPE_SAMPLES).every((buffer) => {
+    const type = untitled(buffer);
+    const offered = suggestSave({ ...base, path: null, language: "markdown", buffer });
+    return type.origin !== "content" || type.label === LANGUAGE_LABEL[offered.language];
+  });
+  check(agree, "the status bar names the language Save As offers");
 }
 
 console.log(`\n${passed}/${total} checks passed`);

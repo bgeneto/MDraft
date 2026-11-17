@@ -98,6 +98,8 @@ import { imageSyntaxFor, needsRelativePath } from "./image-syntax";
 import { linkAt, type LinkTarget } from "./links";
 import { chooseSource, type ClipboardPayload } from "./paste/detect";
 import {
+  DETECTION_SAMPLE,
+  documentType,
   LANGUAGE_EXTENSIONS,
   languageForExtension,
   resolvePasteDestination,
@@ -350,6 +352,7 @@ const compiledUi = new CompiledPreviewUi(previewShell, previewPane, el("compiler
   },
 });
 const statusFile = el<HTMLSpanElement>("status-file");
+const statusType = el<HTMLSpanElement>("status-type");
 const statusTokens = el<HTMLButtonElement>("status-tokens");
 const statusWords = el<HTMLButtonElement>("status-words");
 const statusCursor = el<HTMLSpanElement>("status-cursor");
@@ -1615,6 +1618,8 @@ function applySettingsPatch(
   // who turns it off does not have to reopen the document.
   if (patch.completion !== undefined) editor.setCompletion(settings.completion !== false);
   if (patch.emmet !== undefined) editor.setEmmet(settings.emmet !== false);
+  // An untitled buffer's type names the extension Save As will offer.
+  if (patch.defaultExtension !== undefined) requestStatusRefresh();
 
   if (patch.latexAutoCompile !== undefined) {
     // Manual mode holds the edit stream too; Compile sends what was held.
@@ -1749,32 +1754,133 @@ function scheduleTokenCount(text: string, immediate = false): void {
   tokenCountTimer = window.setTimeout(run, immediate ? 0 : TOKEN_COUNT_DELAY_MS);
 }
 
+/** Assigning an equal string still replaces the text node and dirties layout. */
+function setStatusText(element: HTMLElement, text: string): void {
+  if (element.textContent !== text) element.textContent = text;
+}
+
+function setStatusTitle(element: HTMLElement, title: string): void {
+  if (element.title !== title) element.title = title;
+}
+
+let statusRefreshQueued = false;
+
+/**
+ * Refresh the status bar once for everything the current task changed.
+ *
+ * One keystroke reaches the status bar three ways — the document change, the
+ * dirty flag flipping on the first edit, and the caret moving — and each used
+ * to rebuild it. A microtask runs after the editor's update listener returns
+ * and before the next paint, so no count is ever drawn stale. A frame callback
+ * would coalesce too, but a hidden webview pauses frame callbacks.
+ */
+function requestStatusRefresh(): void {
+  if (statusRefreshQueued) return;
+  statusRefreshQueued = true;
+  queueMicrotask(() => {
+    if (statusRefreshQueued) refreshStatus();
+  });
+}
+
 function refreshStatus(): void {
+  // A direct refresh answers a request that is still queued.
+  statusRefreshQueued = false;
   const cursor = editor.cursorInfo();
   const { words, lines, chars } = editor.metrics();
 
   const wordsText = formatCount(words);
-  statusFile.textContent = `${doc.dirty ? "• " : ""}${doc.name ?? "Untitled"}`;
-  statusWords.textContent = `${wordsText} ${words === 1 ? "word" : "words"}`;
-  statusWords.title =
+  setStatusText(statusFile, `${doc.dirty ? "• " : ""}${doc.name ?? "Untitled"}`);
+  setStatusText(statusWords, `${wordsText} ${words === 1 ? "word" : "words"}`);
+  setStatusTitle(
+    statusWords,
     `${wordsText} words · ${formatCount(chars)} characters · ${formatCount(lines)} lines` +
-    " · Click for document statistics";
+      " · Click for document statistics",
+  );
   // The engine chip belongs to LaTeX documents compiled by the bundled engine.
-  if (doc.language !== "latex" || !engineChipChoice) statusEngine.hidden = true;
-  statusCursor.textContent = `Ln ${cursor.line}, Col ${cursor.column}${
-    cursor.selectionLength > 0
-      ? ` (${cursor.selectionLength} selected${
-          cursor.selectionLines > 1 ? `, ${cursor.selectionLines} lines` : ""
-        })`
-      : ""
-  }`;
+  if ((doc.language !== "latex" || !engineChipChoice) && !statusEngine.hidden) {
+    statusEngine.hidden = true;
+  }
+  setStatusText(
+    statusCursor,
+    `Ln ${cursor.line}, Col ${cursor.column}${
+      cursor.selectionLength > 0
+        ? ` (${cursor.selectionLength} selected${
+            cursor.selectionLines > 1 ? `, ${cursor.selectionLines} lines` : ""
+          })`
+        : ""
+    }`,
+  );
 
   const eol = doc.lineEnding === "\r\n" ? "CRLF" : "LF";
   const format = `${displayEncoding(doc.encoding)}${doc.hadBom ? " BOM" : ""} · ${eol}`;
-  statusEncoding.textContent = doc.path
-    ? `${format}${doc.readOnly ? " · read-only" : ""}`
-    : `${format} · not saved`;
-  statusEncoding.title = `${format} — click to convert or reinterpret`;
+  setStatusText(
+    statusEncoding,
+    doc.path ? `${format}${doc.readOnly ? " · read-only" : ""}` : `${format} · not saved`,
+  );
+  setStatusTitle(statusEncoding, `${format} — click to convert or reinterpret`);
+  refreshDocumentType();
+}
+
+/**
+ * How long an untitled buffer's type waits for typing to pause. Detection
+ * costs about 0.2 ms on 4 KiB but 8 ms on the full 256 KiB sample, half a
+ * frame, which is too much to spend on every keystroke.
+ */
+const DOCUMENT_TYPE_DELAY_MS = 400;
+let documentTypeTimer = 0;
+/** The inputs the indicator was last computed from, other than the text. */
+let documentTypeKey = "";
+/** The `doc.revision` the indicator describes, and the one a timer will. */
+let documentTypeRevision = -1;
+let documentTypePendingRevision = -1;
+
+function documentTypeInputs(): string {
+  return [
+    doc.id,
+    doc.path ?? "",
+    editorLanguageFor(doc),
+    doc.path ? "" : settings.defaultExtension,
+  ].join("\u0000");
+}
+
+function showDocumentType(): void {
+  window.clearTimeout(documentTypeTimer);
+  documentTypeKey = documentTypeInputs();
+  documentTypeRevision = doc.revision;
+  documentTypePendingRevision = -1;
+  const type = documentType({
+    path: doc.path,
+    language: editorLanguageFor(doc),
+    // Only the sample is read, so a large buffer is not copied whole.
+    buffer: doc.path ? "" : editor.view.state.doc.sliceString(0, DETECTION_SAMPLE),
+    defaultExtension: settings.defaultExtension,
+    defaultLanguage: defaultDocumentLanguage(),
+  });
+  setStatusText(statusType, type.label);
+  setStatusTitle(statusType, type.detail);
+  if (statusType.dataset.origin !== type.origin) statusType.dataset.origin = type.origin;
+}
+
+/**
+ * Keep the document type current without scanning on every keystroke.
+ *
+ * A saved file's type changes only with its path or parser, so it is computed
+ * when those change. An untitled buffer is scanned at once when it comes into
+ * view and again once typing pauses; a caret move is not an edit, so it neither
+ * repeats nor postpones the scan.
+ */
+function refreshDocumentType(): void {
+  if (documentTypeInputs() !== documentTypeKey) {
+    showDocumentType();
+    return;
+  }
+  if (doc.path) return;
+  if (doc.revision === documentTypeRevision || doc.revision === documentTypePendingRevision) {
+    return;
+  }
+  documentTypePendingRevision = doc.revision;
+  window.clearTimeout(documentTypeTimer);
+  documentTypeTimer = window.setTimeout(showDocumentType, DOCUMENT_TYPE_DELAY_MS);
 }
 
 /**
@@ -7393,7 +7499,7 @@ function setDirty(next: boolean): void {
   if (doc.dirty === next) return;
   doc.dirty = next;
   void refreshTitle();
-  refreshStatus();
+  requestStatusRefresh();
   renderDocTabs();
 }
 
@@ -11856,7 +11962,7 @@ function installPaneSync(): void {
   editor.onCursor((info) => {
     wordSyncDismissed = false;
     dismissedWordSelection = null;
-    refreshStatus();
+    requestStatusRefresh();
     updateActiveOutline();
     syncPreviewFromSource();
     scheduleMenuStateSync();
@@ -14227,14 +14333,14 @@ async function boot(): Promise<void> {
     setDirty(text !== doc.savedContent);
     if (text === doc.savedContent) void recovery.forget(doc);
     else recovery.schedule(doc, text);
-    refreshStatus();
+    requestStatusRefresh();
     scheduleTokenCount(text);
     scheduleRender();
     scheduleOutlineRefresh(text);
     clearPreviewWords();
   });
   editor.onCursor(() => {
-    refreshStatus();
+    requestStatusRefresh();
     updateActiveOutline();
   });
   // Ubuntu's WebKitGTK has no `speechSynthesis` at all. When the webview
