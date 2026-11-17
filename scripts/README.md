@@ -110,7 +110,7 @@ here with its public purpose and, for owner sessions, to the private catalog.
 | `npm run test:harness:unit` | `node scripts/test-harness-ownership-unit.mjs`; test-process ownership and test-profile engine-link preservation |
 | `npm run texpresso:unit` | `node scripts/texpresso-unit.mjs`; selection, fallbacks, protocol, pins and local libraries |
 | `npm run build:phitex` | rebuild `src-tauri/phitex-shell/bundles/` from the vendored viewer and a pinned `engine-worker.js` |
-| `npm run phitex:frame` | Linux-only WebKitWebDriver check of the PhiTeX frame: install files, page, gestures, marks, logs and PDF |
+| `npm run phitex:frame` | Linux-only WebKitWebDriver check of the PhiTeX frame: page, gestures, marks, logs and PDF; set `MDRAFT_PHITEX_TEST_TEX`/`MDRAFT_PHITEX_SKIP_GESTURES`/`MDRAFT_PHITEX_PDF_OUT` for a link or minted fixture |
 | `npm run latex:texmf:unit` | `node scripts/latex-texmf-unit.mjs` |
 | `npm run latex:correspondence:unit` | `node scripts/latex-correspondence-unit.mjs` |
 | `npm run latex:perf` | `node scripts/latex-performance-test.mjs` |

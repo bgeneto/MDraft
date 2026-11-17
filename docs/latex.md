@@ -578,8 +578,8 @@ files, then the local library, then the TeX Live bundle — through the patched
 (Debian 13, WebKitGTK 2.54) is the tested TeXpresso path.
 
 **PhiTeX** is pinned as one archive in `src-tauri/phitex.json`: `core1.wasm`,
-the XeLaTeX format, the TeX Live kernel files, fonts, shims, the Shelf index
-and release table. `src-tauri/src/latex_phitex.rs` downloads the archive once,
+the XeLaTeX format, the TeX Live kernel files, fonts, shims, the `minted`
+Pyodide runtime and wheels, the Shelf index and release table. `src-tauri/src/latex_phitex.rs` downloads the archive once,
 verifies the whole SHA-256, extracts it under the app data directory and serves
 `/phitex/` from the same origin. The shell (`src-tauri/phitex-shell/`) is
 embedded: `index.html`, the bridge `main.js` and the single-thread
