@@ -5723,9 +5723,14 @@ label.optional-tools-row:hover {
 .logs-open .compiler-logs {
   visibility: visible;
   pointer-events: auto;
+  z-index: 1;
 }
+/* The logs cover the preview rather than hiding it: a frame under
+   `visibility: hidden` stops drawing, so TeXpresso never creates its page
+   canvases and a compile started with the logs open looks stuck. The pane's
+   own stacking context keeps its positioned children under the logs. */
 .logs-open .preview-pane {
-  visibility: hidden;
+  z-index: 0;
   pointer-events: none;
 }
 .compiled-preview .preview-pane {

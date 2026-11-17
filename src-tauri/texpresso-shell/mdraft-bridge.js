@@ -383,27 +383,50 @@
     step("compile asked");
     const token = ++compileToken;
     let tries = 0;
+    // Animation frames stop while the host is not drawing this frame (hidden
+    // behind another view). Such a frame never creates its page canvases, so a
+    // missing canvas then says nothing about an accepted run.
+    let watching = true;
+    let lastFrame = performance.now();
+    const frameClock = () => {
+      if (token !== compileToken || !watching) return;
+      lastFrame = performance.now();
+      requestAnimationFrame(frameClock);
+    };
+    requestAnimationFrame(frameClock);
     const attempt = () => {
       if (token !== compileToken) return;
       tries += 1;
+      let refused = false;
       Promise.resolve()
         .then(() => api().compile())
         .then(
           () => step(`compile accepted try=${tries}`),
-          (error) => step(`compile refused: ${error?.message ?? error}`),
+          (error) => {
+            refused = true;
+            step(`compile refused: ${error?.message ?? error}`);
+          },
         );
       // The app refuses a run while it typesets its own example project, so a
       // request is retried until the first canvas appears; the watchdog gives
       // up after its budget and reports, so the host can fall back.
-      const started = performance.now();
+      let started = performance.now();
       const watch = () => {
         if (token !== compileToken) return;
         const canvases = document.querySelectorAll("#pages canvas").length;
         if (canvases > 0) {
+          watching = false;
           awaitStable(token, started);
           return;
         }
         if (performance.now() - started > 4000) {
+          // Asking again restarts an accepted run, so an undrawn frame waits
+          // for frames instead of spending a try.
+          if (!refused && performance.now() - lastFrame > 1000) {
+            started = performance.now();
+            setTimeout(watch, 100);
+            return;
+          }
           // The first run on a fresh profile rebuilds the engine's font cache
           // from the bundle; that is minutes, not milliseconds, so the budget
           // is generous and the host's own watchdog is the outer bound.
@@ -411,6 +434,7 @@
             attempt();
             return;
           }
+          watching = false;
           step("paint timeout");
           painted(true);
           return;
