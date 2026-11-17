@@ -111,9 +111,12 @@ New scripts must be described in `scripts/README.md` and the optional private
 catalog. Record non-obvious recurring traps in private owner records, including
 the literal error and the incorrect conclusion the investigation ruled out.
 
-Before committing, run `npm run repo:hygiene` and `npm run security:scan` on the
-staged index. Install the local hooks with `npm run security:hooks`; pre-push
-checks every outgoing ref and its history. Push only a topic branch and open a
+Before committing, run `npm run repo:hygiene`, `npm run security:scan` and
+`npm run format:staged` on the staged index. Before pushing, also run the other
+checks CI's Quality workflow runs for the layers you touched: `npm run lint` and
+`npm run knip` for TypeScript, clippy with `-D warnings` for Rust; `npm run build`
+alone does not check formatting. Install the local hooks with
+`npm run security:hooks`; pre-push checks every outgoing ref and its history. Push only a topic branch and open a
 pull request; the local `pre-commit` guard refuses a commit on `master`. Ignore
 rules alone do not remove tracked files or protect against forced additions.
 Use NUL-delimited Git I/O.

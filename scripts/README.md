@@ -17,6 +17,7 @@ already-built isolated binary. On Windows invoke every cargo/Tauri command throu
 | `npm run security:history` | Scan the staged snapshot, complete reachable text blobs, diffs and commit/tag metadata |
 | `npm run security:self-test` | Confirm that a temporary synthetic credential is rejected |
 | `npm run security:hooks` | Install pre-commit/pre-push without replacing a custom hook configuration |
+| `npm run format:staged` | Prettier and rustfmt checks on the staged files; pre-commit runs it so a formatting-only CI failure cannot be committed |
 
 The scanner is downloaded to the OS cache only by an explicit development check,
 verified before extraction and verified again as an executable on every run. Git
@@ -73,6 +74,7 @@ here with its public purpose and, for owner sessions, to the private catalog.
 | `npm run build` | `tsc --noEmit && vite build` |
 | `npm run format` | `prettier --write "src/**/*.{ts,js,css}" "site/**/*.{html,css,js}" "scripts/**/*.mjs" "*.{json,ts,html}"` |
 | `npm run format:check` | `prettier --check "src/**/*.{ts,js,css}" "site/**/*.{html,css,js}" "scripts/**/*.mjs" "*.{json,ts,html}"` |
+| `npm run format:staged` | `node scripts/format-staged.mjs` |
 | `npm run lint` | `eslint src` |
 | `npm run knip` | `knip --include dependencies,unlisted` |
 | `npm run preview` | `vite preview` |
