@@ -1091,6 +1091,12 @@ body.resizing iframe {
   background: #fff;
 }
 
+/* The wait shows before any guest exists; on the guest's white backdrop the
+   theme's text colours would vanish in dark mode. */
+.app.document-html .preview-pane > .preview-pending {
+  background: var(--bg);
+}
+
 .app.document-html #preview {
   display: none;
 }
@@ -3470,6 +3476,12 @@ label.optional-tools-row:hover {
 
 .preview-pending[data-state="idle"] .preview-pending-spinner {
   display: none;
+}
+
+/* The surface lets pointer events through to the pane; its one action does not. */
+.preview-pending-action {
+  margin-top: 4px;
+  pointer-events: auto;
 }
 
 .preview-pending-title {
@@ -6249,6 +6261,12 @@ label.optional-tools-row:hover {
   padding: 0;
 }
 .app.latex-texpresso #preview,
-.app.latex-texpresso .preview-pane > .preview-pending {
+/* Once the frame has drawn a page it is the content, and nothing sits on it. */
+.app.latex-texpresso.texpresso-painted .preview-pane > .preview-pending {
   display: none;
+}
+/* Before its first page the frame is blank or still shows the engine's own
+   start-up canvas; the wait covers it instead of printing over it. */
+.app.latex-texpresso .preview-pane > .preview-pending {
+  background: var(--bg);
 }

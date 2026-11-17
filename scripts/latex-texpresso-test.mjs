@@ -166,6 +166,33 @@ try {
   })()`);
   const statusLog = () =>
     evaluate(`JSON.stringify(window.__mdraftStatusLog ?? [])`).then(JSON.parse);
+  // Every state of the waiting surface, with the paint count at that moment:
+  // a cold frame owns the pane for minutes before its first page, and the
+  // surface is the only thing that says so in the pane itself.
+  await evaluate(`(() => {
+    const pane = document.getElementById("preview-pane");
+    window.__mdraftWaitLog = [];
+    if (!pane) return false;
+    const read = () => {
+      const node = pane.querySelector(":scope > .preview-pending");
+      const text = node
+        ? [node.dataset.state, getComputedStyle(node).display,
+           node.querySelector(".preview-pending-phase")?.textContent ?? ""].join("|")
+        : "none";
+      const log = window.__mdraftWaitLog;
+      if (log.length < 400 && log.at(-1)?.text !== text)
+        log.push({ at: Math.round(performance.now()), text,
+          painted: document.querySelector("#preview")?.dataset.texpressoPainted ?? "" });
+    };
+    new MutationObserver(read).observe(pane, {
+      childList: true, characterData: true, subtree: true,
+      attributes: true, attributeFilter: ["data-state"],
+    });
+    read();
+    return true;
+  })()`);
+  const waitLog = () => evaluate(`JSON.stringify(window.__mdraftWaitLog ?? [])`).then(JSON.parse);
+  const shownWaits = (log) => log.filter((entry) => /^pending\|(?!none)/.test(entry.text));
 
   if (!(await invoke("latex_engine_status")).previewInstalled) {
     console.log("installing the preview engine from the local origin…");
@@ -209,6 +236,27 @@ try {
     await frame
       .evaluate(`document.documentElement.dataset.mdraftTrace ?? "(no trace)"`)
       .catch(() => "(no trace)"),
+  );
+  const bootWaits = await waitLog();
+  const bootShown = shownWaits(bootWaits);
+  const bootSummary = bootWaits.map((entry) => `${entry.at} ${entry.text}`).join(" | ");
+  check(
+    bootShown.length > 0,
+    "the pane shows the waiting surface while the frame has no page",
+    bootSummary,
+  );
+  check(
+    bootWaits.every((entry) => !/export/i.test(entry.text)),
+    "the waiting surface names the frame's work, never the export step",
+    bootSummary,
+  );
+  check(
+    await waitFor(
+      `!document.querySelector("#preview-pane > .preview-pending") && Number(document.querySelector("#preview")?.dataset.texpressoPages ?? "0") > 0`,
+      10_000,
+      "the surface to leave once a page is drawn",
+    ),
+    "the frame's first page removes the waiting surface",
   );
 
   const paths = await frameEval(
@@ -861,6 +909,7 @@ try {
   // The session number and the log are read in the click's own turn: the
   // command must already have dropped the old frame and its output.
   const sessionBefore = Number((await dataset("texpressoSession")) ?? "0");
+  await evaluate(`window.__mdraftWaitLog = []`);
   const cleanStartLog = await evaluate(`(() => {
     document.querySelector(${JSON.stringify(more)}).click();
     [...document.querySelectorAll(".compiled-compile-menu [role=menuitem]")]
@@ -887,6 +936,22 @@ try {
       "the clean build's status",
     ),
     "the status names the build from scratch",
+  );
+  // The old frame was disposed but the project still owns the pane; the new
+  // frame is blank until it draws, and that wait must be visible too.
+  const cleanWaits = await waitLog();
+  check(
+    shownWaits(cleanWaits).length > 0,
+    "Recompile from scratch shows the waiting surface until the new frame draws",
+    cleanWaits.map((entry) => `${entry.at} ${entry.text}`).join(" | "),
+  );
+  check(
+    await waitFor(
+      `!document.querySelector("#preview-pane > .preview-pending")`,
+      30_000,
+      "the clean frame's first page",
+    ),
+    "the clean frame's first page removes the waiting surface",
   );
   check(
     (await evaluate(

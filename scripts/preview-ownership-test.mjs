@@ -19,7 +19,8 @@
 //      previous document;
 //   7. five rapid switches among four languages never name the wrong document;
 //   8. a manual-compile .tex tab shows an idle surface, not a spinner;
-//   9. HTML keeps its own guest and never gets the waiting surface.
+//   9. HTML keeps its own guest; a slow first build shows the waiting surface
+//      ("Loading HTML preview…") and the guest's promotion removes it.
 //
 // The LaTeX and Typst waits are held at `latex_engine_status` and
 // `render_typst`, which the render awaits before it can commit, so the
@@ -152,6 +153,7 @@ await page.send("Fetch.enable", {
     { urlPattern: "http://ipc.localhost/latex_engine_status", requestStage: "Request" },
     { urlPattern: "http://ipc.localhost/render_typst", requestStage: "Request" },
     { urlPattern: "http://ipc.localhost/render_typst_binary", requestStage: "Request" },
+    { urlPattern: "http://ipc.localhost/set_html_preview", requestStage: "Request" },
   ],
 });
 
@@ -909,12 +911,26 @@ try {
     `(document.getElementById("preview")?.textContent ?? "").includes("OWNER-MARKER-MD-A")`,
     10000,
   );
+  // The guest's URL is the build's last IPC step; holding it is a slow first load.
+  hold("set_html_preview");
   await clickTab("a.html", MARKERS);
+  const htmlWait = await waitForPending(2500);
   check(
-    await waitFor(`Boolean(document.querySelector(".html-preview-frame"))`, 15000),
+    htmlWait?.state === "pending" && htmlWait.phase === "Loading HTML preview…",
+    "a slow HTML guest shows the waiting surface",
+    JSON.stringify(htmlWait),
+  );
+  check(
+    htmlWait?.title === "a.html",
+    "the HTML wait names the file",
+    htmlWait?.title ?? "no surface",
+  );
+  await release("set_html_preview");
+  check(
+    await waitFor(`Boolean(document.querySelector(".html-preview-frame.active"))`, 15000),
     "the HTML guest appears",
   );
-  check(!(await hasPending()), "an HTML tab never gets the waiting surface");
+  check(!(await hasPending()), "the guest's promotion removes the waiting surface");
   await clickTab("a.md", MD);
   await waitFor(
     `(document.getElementById("preview")?.textContent ?? "").includes("OWNER-MARKER-MD-A")`,

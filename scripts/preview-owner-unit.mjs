@@ -7,6 +7,8 @@ import {
   ELAPSED_AFTER_MS,
   ELAPSED_AFTER_REDUCED_MS,
   formatElapsed,
+  frameWaitPhase,
+  paneBlank,
   PENDING_GRACE_MS,
   pendingPhase,
   projectOwner,
@@ -122,5 +124,42 @@ check("the waiting phase names what is being built", () => {
   assert.equal(pendingPhase("asciidoc"), "Rendering AsciiDoc…");
   assert.equal(pendingPhase("typst"), "Compiling Typst…");
   assert.equal(pendingPhase("latex"), "Preparing LaTeX compilation…");
-  assert.equal(pendingPhase("html"), "");
+  assert.equal(pendingPhase("html"), "Loading HTML preview…");
+});
+
+check("the live preview's wait names what stands before the first page", () => {
+  const wait = { ready: true, stopped: false, files: 0, bytes: 0 };
+  assert.equal(frameWaitPhase({ ...wait, ready: false }), "Starting the LaTeX preview…");
+  assert.equal(frameWaitPhase({ ...wait, ready: false, files: 9 }), "Starting the LaTeX preview…");
+  assert.equal(frameWaitPhase({ ...wait, stopped: true, files: 9 }), "TeX file downloads stopped");
+  assert.equal(
+    frameWaitPhase({ ...wait, files: 19, bytes: 0.1 * 1024 * 1024 }),
+    "Downloading TeX files… 19 files, 0.1 MB",
+  );
+  assert.equal(
+    frameWaitPhase({ ...wait, files: 1, bytes: 2048 }),
+    "Downloading TeX files… 1 file, 0.0 MB",
+  );
+  assert.equal(frameWaitPhase(wait), "Typesetting…");
+  for (const state of [wait, { ...wait, files: 3 }, { ...wait, ready: false }]) {
+    assert.doesNotMatch(frameWaitPhase(state), /export/i);
+  }
+});
+
+check("the pane is blank until something of the document is drawn", () => {
+  const probe = { owned: true, frameShown: false, framePages: false, frameStoppedEmpty: false };
+  assert.equal(paneBlank({ ...probe, owned: false }), true);
+  assert.equal(paneBlank(probe), false, "a commit into #preview is content");
+  assert.equal(paneBlank({ ...probe, frameShown: true }), true, "an owning frame with no page");
+  assert.equal(paneBlank({ ...probe, frameShown: true, framePages: true }), false);
+  assert.equal(
+    paneBlank({ ...probe, frameStoppedEmpty: true }),
+    true,
+    "a stopped frame left nothing",
+  );
+  assert.equal(
+    paneBlank({ ...probe, frameShown: true, framePages: true, frameStoppedEmpty: true }),
+    false,
+    "a frame on screen is judged by its pages",
+  );
 });
