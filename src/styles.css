@@ -5722,11 +5722,8 @@ label.optional-tools-row:hover {
   white-space: nowrap;
   cursor: pointer;
 }
-/* A disabled button must not react to hover: the generic fill would otherwise
-   outrank the accent of the split Compile button's chevron, which is disabled
-   while a build runs, and paint it pale grey beside the blue Cancel. */
-.compiled-toolbar button:hover:not(:disabled),
-.compiler-tabs button:hover:not(:disabled) {
+.compiled-toolbar button:hover,
+.compiler-tabs button:hover {
   background: var(--compiled-soft);
 }
 .compiled-toolbar button:disabled {
@@ -5782,8 +5779,14 @@ label.optional-tools-row:hover {
    two dark greys in the dark one) and the hairline between them vanished. The
    halves must stay one control: keep the accent fill at full strength and dim
    only the glyph, which is the part that says "not available". */
+/* The fill is restated here because the generic toolbar hover outranks the
+   base chevron rule; without it, hovering the disabled chevron while a build
+   runs painted that half pale grey beside the blue Cancel. */
 .compiled-toolbar .compiled-compile-more:disabled {
   opacity: 1;
+  background: var(--compiled-accent);
+  border-color: var(--compiled-accent);
+  border-left-color: color-mix(in srgb, light-dark(#ffffff, #152338) 45%, transparent);
 }
 .compiled-toolbar .compiled-compile-more:disabled .compiled-icon {
   opacity: 0.5;
