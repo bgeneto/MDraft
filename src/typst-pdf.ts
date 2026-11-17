@@ -28,6 +28,18 @@ import { selectionEndpoints } from "./source-map";
 import { PdfPageMap, type PdfSourceFile, type PdfWordAnchor } from "./pdf-page-map";
 import { ScrollIndex, chooseScrollRegion, type ScrollRegion } from "./scroll-sync";
 
+/**
+ * A link URL the preview may hand to the OS, or null.
+ *
+ * PDF link targets are document content; only web and mail links are opened,
+ * never `file:`, `javascript:` or an OS-specific scheme.
+ */
+export function externalUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const url = value.trim();
+  return /^(?:https?:\/\/|mailto:)/i.test(url) && !/[\s\u0000-\u001f]/.test(url) ? url : null;
+}
+
 function toPdfBytes(pdf: Uint8Array | ArrayBuffer): Uint8Array {
   return pdf instanceof Uint8Array ? pdf : new Uint8Array(pdf);
 }
@@ -72,6 +84,8 @@ interface PdfPage {
   pageEl: HTMLDivElement;
   canvas: HTMLCanvasElement;
   textLayer: HTMLDivElement;
+  /** The page's link annotations, over the text layer; rebuilt with it. */
+  linkLayer: HTMLDivElement;
   viewport: PageViewport;
   rendered: boolean;
   rendering: boolean;
@@ -261,6 +275,8 @@ export class TypstPdfPreview {
   private readonly click = (event: MouseEvent): void => {
     if (this.disposed) return;
     if (!this.host.contains(event.target as Node)) return;
+    // A link is navigation inside the PDF, not a request to find its source.
+    if ((event.target as Element).closest?.(".linkLayer")) return;
     const selection = window.getSelection();
     if (!selection || !selection.isCollapsed) return;
     const x = event.clientX;
@@ -283,6 +299,7 @@ export class TypstPdfPreview {
 
   private readonly mouseUp = (event: MouseEvent): void => {
     if (this.disposed || !this.host.contains(event.target as Node)) return;
+    if ((event.target as Element).closest?.(".linkLayer")) return;
     this.selectionDismissed = false;
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed || !this.selectionInside(selection)) return;
@@ -310,6 +327,8 @@ export class TypstPdfPreview {
       detached?: boolean;
       spanMap?: readonly TypstSpanAnchor[];
       onReady?: () => void;
+      /** Opens an http(s) or mailto link the reader clicked on a page. */
+      onExternalLink?: (url: string) => void;
     },
   ) {
     this.activeFile = mapOptions?.activeFile ?? "";
@@ -1153,7 +1172,10 @@ export class TypstPdfPreview {
     const textLayer = document.createElement("div");
     textLayer.className = "textLayer";
 
-    pageEl.append(canvas, textLayer);
+    const linkLayer = document.createElement("div");
+    linkLayer.className = "linkLayer";
+
+    pageEl.append(canvas, textLayer, linkLayer);
     shell.append(pageEl);
     this.host.append(shell);
 
@@ -1164,6 +1186,7 @@ export class TypstPdfPreview {
       pageEl,
       canvas,
       textLayer,
+      linkLayer,
       viewport,
       rendered: false,
       rendering: false,
@@ -1178,6 +1201,7 @@ export class TypstPdfPreview {
   private async buildText(pdfjs: typeof import("pdfjs-dist"), page: PdfPage): Promise<void> {
     if (page.textReady || this.disposed) return;
     page.textReady = true;
+    void this.buildLinks(page);
     const text = await page.page.getTextContent({
       includeMarkedContent: true,
       disableNormalization: true,
@@ -1200,6 +1224,96 @@ export class TypstPdfPreview {
       layer.textDivs,
       page.viewport,
     );
+  }
+
+  /**
+   * Lay the page's link annotations over the text layer.
+   *
+   * The canvas draws links as plain text and the text layer's clicks belong to
+   * source sync, so without this layer a table of contents or a URL is inert.
+   * Internal destinations scroll this view; external targets go to the host,
+   * and only the schemes it can open safely are offered.
+   */
+  private async buildLinks(page: PdfPage): Promise<void> {
+    const proxy = page.page;
+    const viewport = page.viewport;
+    page.linkLayer.replaceChildren();
+    let annotations: Array<Record<string, unknown>>;
+    try {
+      annotations = await proxy.getAnnotations({ intent: "display" });
+    } catch {
+      return;
+    }
+    // A splice can replace the slot's page while the annotations load.
+    if (this.disposed || page.page !== proxy) return;
+    page.linkLayer.style.width = `${viewport.width}px`;
+    page.linkLayer.style.height = `${viewport.height}px`;
+    for (const annotation of annotations) {
+      if (annotation.subtype !== "Link" || !Array.isArray(annotation.rect)) continue;
+      const dest = annotation.dest as string | unknown[] | undefined;
+      const url = externalUrl(annotation.url) ?? externalUrl(annotation.unsafeUrl);
+      if (!dest && !url) continue;
+      const rect = annotation.rect as [number, number, number, number];
+      const [x1, y1] = viewport.convertToViewportPoint(rect[0], rect[1]);
+      const [x2, y2] = viewport.convertToViewportPoint(rect[2], rect[3]);
+      const link = document.createElement("a");
+      link.className = "pdf-link";
+      link.style.left = `${Math.min(x1, x2)}px`;
+      link.style.top = `${Math.min(y1, y2)}px`;
+      link.style.width = `${Math.abs(x2 - x1)}px`;
+      link.style.height = `${Math.abs(y2 - y1)}px`;
+      link.draggable = false;
+      if (url) {
+        link.href = url;
+        link.title = url;
+      } else {
+        link.href = "#";
+      }
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (url) this.mapOptions?.onExternalLink?.(url);
+        else if (dest) void this.followDestination(page, dest);
+      });
+      page.linkLayer.append(link);
+    }
+  }
+
+  /** Scroll to an internal PDF destination: a named one or an explicit array. */
+  private async followDestination(from: PdfPage, dest: string | unknown[]): Promise<void> {
+    try {
+      const doc = await from.ownerTask.promise;
+      const explicit = typeof dest === "string" ? await doc.getDestination(dest) : dest;
+      if (this.disposed || !Array.isArray(explicit) || explicit.length < 2) return;
+      const ref = explicit[0];
+      const index =
+        typeof ref === "number"
+          ? ref
+          : await doc.getPageIndex(ref as Parameters<typeof doc.getPageIndex>[0]);
+      if (this.disposed) return;
+      // Spliced pages come from their own document; prefer a slot of the same
+      // document, then fall back to the page number of the full PDF.
+      const target =
+        this.pages.find((p) => p.ownerTask === from.ownerTask && p.page.pageNumber === index + 1) ??
+        this.pages.find((p) => p.number === index + 1);
+      if (!target) return;
+      const kind = (explicit[1] as { name?: string } | null)?.name;
+      const args = explicit.slice(2) as Array<number | null>;
+      const top =
+        kind === "XYZ"
+          ? args[1]
+          : kind === "FitH" || kind === "FitBH"
+            ? args[0]
+            : kind === "FitR"
+              ? args[3]
+              : null;
+      const y =
+        typeof top === "number" ? Math.max(0, target.viewport.convertToViewportPoint(0, top)[1]) : 0;
+      this.inputEpoch++;
+      this.scrollToPagePosition(target.number, y);
+    } catch (error) {
+      console.warn("PDF link destination could not be resolved", error);
+    }
   }
 
   private applyFit(): void {
