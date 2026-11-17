@@ -735,7 +735,7 @@ const SUITES = [
     doc: "samples/feature-tour.md",
   },
   {
-    // Tools › Encoding and Line Endings and the status-bar button: reinterpret
+    // File › Encoding and Line Endings and the status-bar button: reinterpret
     // with preview, Convert and Save with the inputenc update, the fit check,
     // mixed line endings, a disk conflict and an untitled buffer. Fixtures live
     // in the suite's own temp folder.

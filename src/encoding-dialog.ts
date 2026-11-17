@@ -1,4 +1,4 @@
-//! Tools › Encoding and Line Endings: reinterpret, convert, save.
+//! File › Encoding and Line Endings: reinterpret, convert, save.
 //!
 //! The shell owns the document and every byte decision (Rust decodes, encodes
 //! and checks the fit); this module presents a snapshot and reports the

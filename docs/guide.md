@@ -329,7 +329,7 @@ Other editor features:
   buffer keeps its text, pauses Auto Save and offers the same copy route; the
   original is protected.
 - **Encoding and line endings.** Click the encoding in the status bar (for
-  example `Windows-1252 · CRLF`) or choose **Tools › Encoding and Line
+  example `Windows-1252 · CRLF`) or choose **File › Encoding and Line
   Endings…**.
   - **Convert** keeps the text and changes what is written: UTF-8 (recommended),
     UTF-8 with BOM, UTF-16 LE/BE, the current encoding, or any legacy encoding,
@@ -670,7 +670,7 @@ built from source, use `Cmd` where the application registers `CmdOrCtrl`.
 | Select next occurrence | `Ctrl+D` |
 | Go to line / heading | `Ctrl+Alt+G` / `Ctrl+Alt+H` |
 | Paste without formatting | `Ctrl+Shift+V` |
-| Source code mode | `Ctrl+/` |
+| Source only | `Ctrl+/` |
 | Toggle sidebar | `Ctrl+Shift+L` |
 | Outline / Favorites / Recent / Explorer | `Ctrl+Shift+1` / `Ctrl+Shift+2` / `Ctrl+Shift+3` / `Ctrl+Shift+4` |
 | Open Folder | `Ctrl+Shift+O` |
