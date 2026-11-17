@@ -5739,8 +5739,11 @@ label.optional-tools-row:hover {
   white-space: nowrap;
   cursor: pointer;
 }
-.compiled-toolbar button:hover,
-.compiler-tabs button:hover {
+/* A disabled button must not react to hover: the generic fill would otherwise
+   outrank the accent of the split Compile button's chevron, which is disabled
+   while a build runs, and paint it pale grey beside the blue Cancel. */
+.compiled-toolbar button:hover:not(:disabled),
+.compiler-tabs button:hover:not(:disabled) {
   background: var(--compiled-soft);
 }
 .compiled-toolbar button:disabled {
@@ -5933,10 +5936,61 @@ label.optional-tools-row:hover {
   padding: 6px 0;
   font: inherit;
 }
-.compiler-logs h2 {
+.compiler-logs-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   margin: 0 0 12px;
+}
+.compiler-logs h2 {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
   font-size: 15px;
   font-weight: 600;
+}
+/* A quiet ghost control: it should be findable, not compete with the title. */
+.compiler-logs .compiler-logs-close {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin: -4px -6px -4px 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--compiled-muted);
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+.compiler-logs .compiler-logs-close:hover {
+  background: var(--compiled-soft);
+  color: var(--compiled-fg);
+}
+.compiler-logs .compiler-logs-close:active {
+  background: var(--compiled-selected);
+  color: var(--compiled-accent);
+}
+.compiler-logs .compiler-logs-close:focus-visible {
+  outline: 2px solid var(--compiled-accent);
+  outline-offset: 1px;
+}
+.compiler-logs-close .compiled-button-label {
+  display: none;
+}
+.compiler-logs-close .compiled-icon {
+  width: 16px;
+  height: 16px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .compiler-logs .compiler-logs-close {
+    transition: none;
+  }
 }
 .compiler-log-caption {
   margin: 0 0 12px;

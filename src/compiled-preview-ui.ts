@@ -18,7 +18,8 @@ type Icon =
   | "ready"
   | "clock"
   | "chevron"
-  | "restart";
+  | "restart"
+  | "close";
 
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.userAgent);
 
@@ -172,7 +173,19 @@ export class CompiledPreviewUi {
     }
     choices.append(this.problemTab, this.outputTab);
     tabs.append(choices, copy);
-    logs.append(this.title, this.caption, tabs, this.problems, this.raw);
+    // Logs is a toggle, which is easy to miss: the panel also offers its own
+    // way back to the preview, returning focus to the toggle it came from.
+    const close = this.button("", "compiler-logs-close", "close");
+    close.setAttribute("aria-label", "Close logs");
+    close.title = "Hide logs and return to preview";
+    close.addEventListener("click", () => {
+      this.showLogs(false);
+      this.toggle.focus();
+    });
+    const head = document.createElement("div");
+    head.className = "compiler-logs-head";
+    head.append(this.title, close);
+    logs.append(head, this.caption, tabs, this.problems, this.raw);
     this.selectLog(false);
     this.reset();
   }
@@ -194,6 +207,7 @@ export class CompiledPreviewUi {
       clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
       chevron: '<path d="m6 9 6 6 6-6"/>',
       restart: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
+      close: '<path d="M18 6 6 18M6 6l12 12"/>',
     };
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", "0 0 24 24");
