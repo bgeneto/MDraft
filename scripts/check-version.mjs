@@ -45,8 +45,13 @@ const cargoVersion = /^\s*version\s*=\s*"([^"]+)"/m.exec(
 )?.[1];
 
 // An explicit argument wins; otherwise fall back to what GitHub Actions
-// provides, so the same command works locally and in the workflow.
-const tag = process.argv[2] ?? process.env.GITHUB_REF_NAME ?? "";
+// provides, so the same command works locally and in the workflow. The ref name
+// is only a tag when GITHUB_REF_TYPE says so: a manual dispatch on a branch sets
+// it to the branch name, which must not be checked as a release tag.
+const tag =
+  process.argv[2] ??
+  (process.env.GITHUB_REF_TYPE === "tag" ? process.env.GITHUB_REF_NAME : undefined) ??
+  "";
 
 const problems = [];
 
