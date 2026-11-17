@@ -102,6 +102,11 @@ export type FrameMessage =
       precision: ClickPrecision;
     }
   | { type: "input" }
+  /**
+   * A link to a URI the reader clicked on a page. It is the document's own
+   * target, unvetted: the host decides whether it may leave the app.
+   */
+  | { type: "link"; uri: string }
   | { type: "key"; key: "Escape" }
   | { type: "zoom-wheel"; deltaY: number }
   | { type: "pdf"; seq: number; pdf: ArrayBuffer; ms: number }
@@ -205,6 +210,10 @@ export function parseFrameMessage(data: unknown): FrameMessage | null {
         : null;
     case "input":
       return { type: "input" };
+    case "link":
+      return str(m.uri) && m.uri.length > 0 && m.uri.length <= 8192
+        ? { type: "link", uri: m.uri }
+        : null;
     case "key":
       return m.key === "Escape" ? { type: "key", key: "Escape" } : null;
     case "zoom-wheel":

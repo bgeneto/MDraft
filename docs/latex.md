@@ -67,6 +67,10 @@ Each click is checked against the point that was clicked: when the engine can
 only name the line (text a macro produced, for example), the line is marked and
 the caret goes to its start, and when it cannot name even that, the paragraph is
 marked and the caret stays. A click in the source blinks that line on the page.
+A click on a link follows the link instead, as it does in a PDF: a table of
+contents entry, a `\ref` or a `\cite` scrolls the preview to its target, and a
+web or mail address (`\href`, `\url`) opens outside MDraft. The source stays
+where it is.
 
 MDraft does not request or consume SyncTeX for this correspondence. If the
 document explicitly enables SyncTeX, LuaLaTeX may still create it in its

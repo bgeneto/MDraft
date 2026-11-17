@@ -219,7 +219,7 @@ import {
 } from "./latex-commands";
 import { annotateTypstLines } from "./typst-map";
 import { paragraphRangeAt } from "./typst-page-map";
-import { pdfPageTexts, TypstPdfPreview, type TypstPageContext } from "./typst-pdf";
+import { externalUrl, pdfPageTexts, TypstPdfPreview, type TypstPageContext } from "./typst-pdf";
 import {
   cancelLatex as cancelBundledLatex,
   compileFresh,
@@ -5668,6 +5668,12 @@ function texpressoMessage(session: TexpressoSession, message: FrameMessage): voi
         message.precision,
       );
       break;
+    case "link": {
+      // Only a web or mail address leaves the app, as from the PDF view.
+      const url = externalUrl(message.uri);
+      if (url) openPdfLink(url);
+      break;
+    }
     case "key":
       clearCorrespondence();
       break;
@@ -12494,7 +12500,7 @@ function revealPreviewId(id: string, attempt = 0): void {
   if (attempt < 20) window.setTimeout(() => revealPreviewId(id, attempt + 1), 50);
 }
 
-/** A web or mail link clicked in the Pages view; the view has already vetted the scheme. */
+/** A web or mail link clicked on a page; the caller has already vetted it with `externalUrl`. */
 function openPdfLink(url: string): void {
   openLinkTarget({ href: url, kind: "external" });
 }

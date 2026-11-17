@@ -18,7 +18,9 @@
 //   7. zoom, both themes and manual mode reach the frame;
 //   8. the frame registers no service worker and requests nothing off-origin;
 //   9. another tab hides the frame instead of restarting the engine;
-//  10. switching back to WasmTex disposes the frame and restores its preview.
+//  10. a click on a link follows it, never the source map: a destination scrolls
+//      the preview, a web address goes to the (stubbed) system opener;
+//  11. switching back to WasmTex disposes the frame and restores its preview.
 
 import { openPage, emitMenu, sleep } from "./cdp-page.mjs";
 
@@ -1052,6 +1054,281 @@ try {
     ),
     "the Tools menu command runs the same action",
   );
+
+  console.log("=== a link in the preview is followed, not mapped ===");
+  // XeLaTeX whatever the profile's default, through the file's magic comment:
+  // hyperref's xetex driver writes the `pdf:` link specials that the engine
+  // draws and the export's xdvipdfmx reads. The links are typed, so they need
+  // no auxiliary file (an unresolved `\ref` is no link at all), and the target
+  // is two pages on. The harness puts the file back.
+  const webUrl = "https://example.com/mdraft-link-probe";
+  const probe = [
+    "% !TeX program = xelatex",
+    "\\documentclass{article}",
+    "\\usepackage{fontspec}",
+    "\\usepackage{hyperref}",
+    "\\begin{document}",
+    `\\hyperlink{mdraftlinkprobe}{LinkProbeJump} and \\href{${webUrl}}{LinkProbeWeb}.`,
+    "\\newpage",
+    // Source lines enough to scroll the editor: a link that moved the source
+    // with the preview would take it to the target's line, far below.
+    ...Array.from({ length: 80 }, (_, n) => `A line between the link and its target, ${n + 1}.`),
+    "\\newpage",
+    "\\hypertarget{mdraftlinkprobe}{LinkProbeTarget} closes the probe.",
+    "\\end{document}",
+    "",
+  ].join("\n");
+  frame?.close();
+  frame = null;
+  await openFile("samples/latex-engines/magic-xe.tex");
+  const xetexFrame = await (async () => {
+    const deadline = Date.now() + 120_000;
+    while (Date.now() < deadline) {
+      const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+      if (list.some((entry) => /mdraft-tex\.localhost\/texpresso\/.*engine=xetex/.test(entry.url)))
+        return true;
+      await sleep(500);
+    }
+    return false;
+  })();
+  check(xetexFrame, "the link probe runs in a XeLaTeX frame");
+  if (!xetexFrame) throw new Error("no XeLaTeX frame for the link probe");
+  frame = await openPage(port, { type: "iframe", match: /engine=xetex/ });
+  await editor(
+    `view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: ${JSON.stringify(probe)} } });`,
+  );
+  const probePainted = await (async () => {
+    const deadline = Date.now() + 180_000;
+    while (Date.now() < deadline) {
+      try {
+        if (await frameEval(`document.querySelectorAll("#pages .page").length >= 3`)) return true;
+      } catch {
+        // The frame may still be booting.
+      }
+      await sleep(500);
+    }
+    return false;
+  })();
+  check(probePainted, "the typed links are painted, three pages");
+  await sleep(1500);
+  const pagesTop = () => frameEval(`document.getElementById("pages")?.scrollTop ?? 0`);
+  /** The editor's selection and scroll, and the source marks a click paints. */
+  const hostState = () =>
+    editor(`const s = view.state.selection.main;
+      const d = view.scrollDOM;
+      return { anchor: s.anchor, head: s.head, scroll: Math.round(d.scrollTop),
+        max: Math.round(d.scrollHeight - d.clientHeight),
+        words: document.querySelectorAll(".cm-sync-word").length };`);
+  /** Bridge trace entries after frame time `t0` that contain `needle`. */
+  const traceSince = async (t0, needle) =>
+    (await frameEval(`document.documentElement.dataset.mdraftTrace ?? ""`))
+      .split(" | ")
+      .filter((entry) => Number(entry.split(" ")[0]) >= t0 && entry.includes(needle));
+  /**
+   * The engine's mark for `text`, selected in the editor: the only geometry the
+   * test has for a typed word. `reveal` scrolls it to the middle of the frame.
+   */
+  const markFor = async (text, reveal) => {
+    const before = await traceSelectMarks();
+    const found = await editor(`
+      const at = view.state.doc.toString().indexOf(${JSON.stringify(text)});
+      if (at < 0) return false;
+      view.dispatch({ selection: { anchor: at, head: at + ${text.length} } });
+      return true;
+    `);
+    if (!found) return null;
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const now = await traceSelectMarks();
+      if (now !== before && now > 0) break;
+      await sleep(150);
+    }
+    const mark = await frameEval(
+      `JSON.stringify((() => {
+        const pages = document.getElementById("pages");
+        const mark = pages.querySelector(".cursor-mark.selection");
+        if (!mark) return null;
+        if (${reveal}) mark.scrollIntoView({ block: "center" });
+        const r = mark.getBoundingClientRect();
+        const box = pages.getBoundingClientRect();
+        const x = r.left + r.width / 2;
+        const y = r.top + r.height / 2;
+        return { x, y, top: r.top, bottom: r.bottom, viewTop: box.top, viewBottom: box.bottom,
+          inside: Boolean(document.elementFromPoint(x, y)?.closest("#pages")) };
+      })())`,
+    ).then(JSON.parse);
+    // Let the reveal's own viewport report go out before anything is measured.
+    if (reveal) await sleep(1000);
+    return mark;
+  };
+  const linkUnder = (point) =>
+    frameEval(
+      `JSON.stringify(globalThis.texpresso?.preview?.linkAt?.(${point.x}, ${point.y})?.action ?? null)`,
+    ).then((text) => JSON.parse(text ?? "null"));
+  let pointerTarget = frame;
+  let frameOffset = { x: 0, y: 0 };
+  const mouse = (type, point, extra = {}) =>
+    pointerTarget.send("Input.dispatchMouseEvent", {
+      type,
+      x: point.x + frameOffset.x,
+      y: point.y + frameOffset.y,
+      pointerType: "mouse",
+      ...extra,
+    });
+  const click = async (point) => {
+    await mouse("mouseMoved", point);
+    await mouse("mousePressed", point, { button: "left", buttons: 1, clickCount: 1 });
+    await mouse("mouseReleased", point, { button: "left", buttons: 0, clickCount: 1 });
+  };
+  /**
+   * Click a link and wait for the bridge to take it. The frame's own session is
+   * tried first; the page's session routes a press into the child frame.
+   */
+  const clickLink = async (point) => {
+    for (const via of ["frame", "page"]) {
+      pointerTarget = via === "frame" ? frame : page;
+      frameOffset =
+        via === "frame"
+          ? { x: 0, y: 0 }
+          : await evaluate(
+              `JSON.stringify((() => { const r = document.querySelector(".texpresso-frame").getBoundingClientRect(); return { x: r.left, y: r.top }; })())`,
+            ).then(JSON.parse);
+      const t0 = await frameEval(`performance.now()`);
+      await click(point);
+      const deadline = Date.now() + 4_000;
+      while (Date.now() < deadline) {
+        if ((await traceSince(t0, " link ")).length) return { via, t0 };
+        await sleep(150);
+      }
+    }
+    return null;
+  };
+
+  const jump = await markFor("LinkProbeJump", true);
+  const jumpAction = jump ? await linkUnder(jump) : null;
+  check(
+    jump?.inside === true && Boolean(jumpAction) && "dest" in jumpAction,
+    "the engine reports the typed \\hyperlink as a destination link",
+    JSON.stringify({ jump, jumpAction }),
+  );
+  if (jump?.inside && jumpAction) {
+    await mouse("mouseMoved", jump);
+    await sleep(300);
+    const jumpTitle = await frameEval(`document.getElementById("pages")?.title ?? ""`);
+    check(jumpTitle === "", "a destination link carries no double-click hint", jumpTitle);
+    const hostBefore = await hostState();
+    const topBefore = await pagesTop();
+    const taken = await clickLink(jump);
+    check(Boolean(taken), "the bridge takes a click on a link", JSON.stringify({ taken }));
+    if (taken) {
+      let topAfter = topBefore;
+      const deadline = Date.now() + 8_000;
+      while (Date.now() < deadline) {
+        topAfter = await pagesTop();
+        if (topAfter > topBefore + 100) break;
+        await sleep(150);
+      }
+      check(
+        topAfter > topBefore + 100,
+        "a click on an internal link scrolls the preview towards its target",
+        `${topBefore} -> ${topAfter} via ${taken.via}`,
+      );
+      // Long enough for any late source answer and the landing's viewport report.
+      await sleep(1500);
+      const sourced = await traceSince(taken.t0, " source ");
+      const hostAfter = await hostState();
+      check(
+        sourced.length === 0 &&
+          hostAfter.anchor === hostBefore.anchor &&
+          hostAfter.head === hostBefore.head &&
+          hostAfter.words === hostBefore.words,
+        "a click on a link asks the source map nothing",
+        JSON.stringify({ sourced, hostBefore, hostAfter }),
+      );
+      check(
+        // The editor could have moved: the target's line is below its view.
+        hostBefore.max > 100 && Math.abs(hostAfter.scroll - hostBefore.scroll) <= 1,
+        "the source stays where it is when a link moves the preview",
+        `${hostBefore.scroll} -> ${hostAfter.scroll} of ${hostBefore.max}`,
+      );
+      // Selecting the target in the editor paints its mark and moves nothing.
+      const landed = await markFor("LinkProbeTarget", false);
+      check(
+        landed !== null &&
+          landed.top >= landed.viewTop - 2 &&
+          landed.bottom <= landed.viewBottom + 2,
+        "the link lands with its target in view",
+        JSON.stringify(landed),
+      );
+    }
+  }
+
+  // The web link: the opener command is answered here, so nothing leaves the
+  // machine. Tauri's own `invoke` cannot be replaced, but its IPC posts every
+  // command through the global `fetch`. A command this layer sends first proves
+  // that route, or the click is skipped rather than open a browser.
+  const stubbed = await evaluate(`(async () => {
+    const realFetch = window.fetch;
+    const seen = [];
+    window.__mdraftOpened = [];
+    window.__mdraftRestoreFetch = () => { window.fetch = realFetch; };
+    window.fetch = function (input, init) {
+      const url = String(input?.url ?? input);
+      if (url.includes("plugin%3Aopener%7Copen_url")) {
+        let body = null;
+        try { body = JSON.parse(init?.body ?? "null"); } catch { body = null; }
+        window.__mdraftOpened.push(body?.url ?? null);
+        return Promise.resolve(new Response("null", {
+          headers: { "Tauri-Response": "ok", "Content-Type": "application/json" },
+        }));
+      }
+      if (url.includes("latex_status")) seen.push(url);
+      return realFetch.call(this, input, init);
+    };
+    await window.__TAURI_INTERNALS__.invoke("latex_status");
+    return seen.length > 0;
+  })()`);
+  const web = await markFor("LinkProbeWeb", true);
+  const webAction = web ? await linkUnder(web) : null;
+  check(
+    web?.inside === true && webAction?.uri === webUrl,
+    "the engine reports the typed \\href as a web link",
+    JSON.stringify({ web, webAction }),
+  );
+  if (!stubbed) {
+    console.log("  SKIP  commands do not travel through fetch, so the web link is not clicked");
+  } else if (web?.inside && webAction) {
+    await mouse("mouseMoved", web);
+    await sleep(300);
+    check(
+      (await frameEval(`document.getElementById("pages")?.title ?? ""`)) === webUrl,
+      "a web link's title is its address, with no double-click hint",
+    );
+    const hostBefore = await hostState();
+    const taken = await clickLink(web);
+    let opened = [];
+    const deadline = Date.now() + 5_000;
+    while (taken && Date.now() < deadline) {
+      opened = await evaluate(`JSON.stringify(window.__mdraftOpened ?? [])`).then(JSON.parse);
+      if (opened.length) break;
+      await sleep(150);
+    }
+    check(
+      opened.length === 1 && opened[0] === webUrl,
+      "a click on a web link hands its address to the system once",
+      JSON.stringify({ opened, via: taken?.via }),
+    );
+    await sleep(800);
+    const sourced = taken ? await traceSince(taken.t0, " source ") : ["(not taken)"];
+    const hostAfter = await hostState();
+    check(
+      sourced.length === 0 &&
+        hostAfter.anchor === hostBefore.anchor &&
+        hostAfter.head === hostBefore.head,
+      "a click on a web link asks the source map nothing",
+      JSON.stringify({ sourced, hostBefore, hostAfter }),
+    );
+  }
+  await evaluate(`window.__mdraftRestoreFetch?.()`);
 
   console.log("=== engines and fallbacks ===");
   // LuaLaTeX restarts the frame with `luatex`: the app's engine is part of the
