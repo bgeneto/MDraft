@@ -899,7 +899,9 @@ try {
   );
   const returnSession = Number((await dataset("texpressoSession")) ?? "0");
   const waitsBeforeReturn = (await waitLog()).length;
-  await openFile("samples/latex-perf/book/main.tex");
+  // The chapter, not the main file: it has no `% !TeX root`, so it must find
+  // the book again although another project was built since.
+  await openFile("samples/latex-perf/book/chapters/ch06.tex");
   check(
     await waitFor(
       `document.querySelectorAll("#preview .typst-page").length > 0`,
@@ -941,9 +943,6 @@ try {
     "the return never shows the waiting surface",
     JSON.stringify(returnWaits.slice(0, 3)),
   );
-  // The sections below were written against the chapter tab; it belongs to the
-  // same project, so the frame stays.
-  await openFile("samples/latex-perf/book/chapters/ch06.tex");
 
   console.log("=== recompile from scratch ===");
   const more = ".compiled-toolbar .compiled-compile-more";
