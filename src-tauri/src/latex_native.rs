@@ -1052,6 +1052,7 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
         &settings.latex_native_engine,
         &|engine| target.has_engine(engine),
         main_text.as_deref(),
+        settings.latex_native_prefers_xelatex,
     )?;
     let identity = target.engine_identity(&engine);
     let root = match request.root.as_deref() {
@@ -1645,7 +1646,7 @@ fn is_executable(path: &str) -> bool {
 
 #[cfg(test)]
 fn select_engine(requested: &str, bin: &Path, _work: &Path, main: &Path) -> Result<String, String> {
-    select_engine_with(requested, &|engine| has_engine(bin, engine), main)
+    select_engine_with(requested, &|engine| has_engine(bin, engine), main, false)
 }
 
 #[cfg(test)]
@@ -1653,17 +1654,22 @@ fn select_engine_with(
     requested: &str,
     has: &dyn Fn(&str) -> bool,
     main: &Path,
+    prefer_xelatex: bool,
 ) -> Result<String, String> {
     let text = std::fs::read_to_string(main).ok();
-    select_engine_text(requested, has, text.as_deref())
+    select_engine_text(requested, has, text.as_deref(), prefer_xelatex)
 }
 
 /// The engine selection shared by the file reader (tests and probes) and the
 /// workspace path, which has the main file's bytes before staging exists.
+///
+/// Without a usable magic comment, auto takes the first installed engine:
+/// XeLaTeX first when `prefer_xelatex` (a new install), else [`ENGINES`] order.
 fn select_engine_text(
     requested: &str,
     has: &dyn Fn(&str) -> bool,
     text: Option<&str>,
+    prefer_xelatex: bool,
 ) -> Result<String, String> {
     if let Some(engine) = known_engine(requested) {
         if !has(engine) {
@@ -1694,6 +1700,9 @@ fn select_engine_text(
                 return Ok(engine.to_string());
             }
         }
+    }
+    if prefer_xelatex && has("xelatex") {
+        return Ok("xelatex".into());
     }
     for engine in ENGINES {
         if has(engine) {
@@ -2409,6 +2418,17 @@ mod tests {
         std::fs::write(&main, "% !TEX program = sh\n").unwrap();
         assert_eq!(
             select_engine("auto", &bin, &root, &main).unwrap(),
+            "lualatex"
+        );
+        // A new install falls back to XeLaTeX; a magic comment still wins.
+        let has = |engine: &str| has_engine(&bin, engine);
+        assert_eq!(
+            select_engine_with("auto", &has, &main, true).unwrap(),
+            "xelatex"
+        );
+        std::fs::write(&main, "% !TEX program = lualatex\n").unwrap();
+        assert_eq!(
+            select_engine_with("auto", &has, &main, true).unwrap(),
             "lualatex"
         );
         std::fs::write(&main, "% !TEX program = xelatex\n").unwrap();

@@ -3,9 +3,11 @@
 //
 //   node scripts/latex-engine-choice-test.mjs <port>
 //
-// Launched with samples/latex-engines/plain.tex. Proves, through the compiled
-// PDF and the compile's own perf record, that:
-//   - the chip names the default engine (LuaLaTeX) and why;
+// Launched with samples/latex-engines/plain.tex. The layer sets the Preferences
+// default to LuaLaTeX first (a new install starts on XeLaTeX, which WasmTex
+// downloads only on demand). Proves, through the compiled PDF and the
+// compile's own perf record, that:
+//   - the chip names the Preferences default engine (LuaLaTeX) and why;
 //   - the menu offers LuaLaTeX and XeLaTeX and no pdfLaTeX (the bundled preview
 //     has no pdfTeX), remembers XeLaTeX for this main document and compiles
 //     with XeTeX;
@@ -155,6 +157,30 @@ try {
     page.close();
     process.exit(0);
   }
+  // WasmTex's core engine is LuaLaTeX; the new-install default is XeLaTeX.
+  // Choose LuaLaTeX in Preferences the way a reader does.
+  const picked = await evaluate(`(async () => {
+    document.getElementById("btn-prefs")?.click();
+    await new Promise((r) => setTimeout(r, 500));
+    [...document.querySelectorAll(".prefs-section")]
+      .find((node) => node.textContent.trim() === "LaTeX")?.click();
+    await new Promise((r) => setTimeout(r, 400));
+    const row = [...document.querySelectorAll(".prefs-row")].find((node) =>
+      /^Default engine$/.test(node.querySelector(".prefs-label")?.textContent?.trim() ?? ""));
+    const select = row?.querySelector("select");
+    if (!select) return false;
+    select.value = "lualatex";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 500));
+    document.getElementById("btn-prefs")?.click();
+    return true;
+  })()`);
+  check("the Preferences default is set to LuaLaTeX", picked === true);
+  await waitFor(
+    `window.__TAURI_INTERNALS__.invoke("get_settings").then((s) => s.latexBundledEngine === "lualatex")`,
+    5000,
+    "the saved LuaLaTeX default",
+  );
   if ((await evaluate(`document.querySelector("#preview")?.dataset.latexCurrent ?? ""`)) === "")
     await evaluate(
       `window.__TAURI_INTERNALS__.invoke("plugin:event|emit",{event:"menu",payload:"view.latexCompile"})`,
@@ -163,7 +189,7 @@ try {
   // 1. The default engine, and the chip that says so.
   const first = await compiledWith(0, "lualatex", "/Engine marker sentence/", "the LuaLaTeX PDF");
   check(
-    "the default engine is LuaLaTeX",
+    "the Preferences default engine is LuaLaTeX",
     first?.engine === "lualatex" && first.success === true,
     JSON.stringify(first),
   );

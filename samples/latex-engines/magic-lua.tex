@@ -1,0 +1,7 @@
+% !TeX program = lualatex
+% Engine fixture: the magic comment decides the engine, whatever the
+% project or the Preferences default (XeLaTeX on a new install) say.
+\documentclass{article}
+\begin{document}
+LuaTeX marker sentence: \directlua{tex.print("printed by Lua")}.
+\end{document}

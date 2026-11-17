@@ -3,13 +3,13 @@
 MDraft edits `.tex` documents as a first-class language: syntax colouring, `%`
 comments, an outline read from the sectioning commands, LaTeX-aware spelling
 skips, `\includegraphics` on image paste, and the compiled PDF in the preview.
-Compilation runs either in the **bundled TeX distribution** (LuaLaTeX, or pdfLaTeX
-and XeLaTeX on request, compiled to WebAssembly), which needs no TeX installation, or in a TeX distribution the reader has already installed and
+Compilation runs either in the **bundled TeX distribution** (XeLaTeX, or LuaLaTeX
+on request, compiled to WebAssembly), which needs no TeX installation, or in a TeX distribution the reader has already installed and
 explicitly selected.
 
 LaTeX is **opt-in**. Open a saved `.tex` file and choose **Enable bundled TeX** in
 the preview, or tick the switch in *Preferences › LaTeX*. That action downloads
-about 25 MB: the TeX Live 2026 engine files and the LuaLaTeX and XeLaTeX format
+about 25 MB: the TeX Live 2026 engine files and the XeLaTeX and LuaLaTeX format
 files (about 80 MB unpacked), in two compressed archives. Each file is verified
 against its own pinned SHA-256 digest before it is kept. If an archive cannot be
 used, the same files are fetched one by one instead, a few at a time. The TeX
@@ -172,9 +172,10 @@ while the distribution's own packages are untouched.
 
 ## Choosing the engine
 
-The bundled distribution compiles with **LuaLaTeX** unless a project asks for
-another engine. It can also compile with **pdfLaTeX** and **XeLaTeX**. The
-first rule that applies decides:
+The bundled distribution compiles with **XeLaTeX** unless a project asks for
+another engine; XeLaTeX starts faster and its format is smaller. It can also
+compile with **LuaLaTeX**. Settings from before XeLaTeX became the default
+keep LuaLaTeX. The first rule that applies decides:
 
 1. A magic comment in the main file, such as `% !TeX program = pdflatex`.
    TeXstudio and LaTeX Workshop read the same line.
@@ -182,27 +183,22 @@ first rule that applies decides:
    shows while a LaTeX document is open) and pick an engine. The choice is
    remembered for that main document. **Use the Preferences default**
    forgets it.
-3. *Preferences › LaTeX › Default engine*: LuaLaTeX (the default), pdfLaTeX,
-   XeLaTeX, or Auto. Auto reads the preamble:
+3. *Preferences › LaTeX › Default engine*: XeLaTeX (the default), LuaLaTeX,
+   or Auto. Auto reads the preamble:
    - Lua code → LuaLaTeX;
-   - `fontspec`, `unicode-math` or XeTeX-only packages → XeLaTeX;
-   - anything else → pdfLaTeX.
+   - anything else → XeLaTeX.
+
+   A document that asks for pdfLaTeX compiles with XeLaTeX, and the chip says
+   so: the bundled preview has no pdfTeX.
 
 The status-bar chip always names the engine in use and, in its tooltip, why.
 When a magic comment decided, the chip offers no choice; if the engine it
 names has not been downloaded yet, the chip offers that download.
 
-pdfLaTeX (about 8 MB) and XeLaTeX (about 9 MB, with its dvipdfmx converter) download the first time a
-project chooses them. They come from the same pinned release as LuaLaTeX and
-are verified against SHA-256 digests in the same way. MDraft never compiles
-with an engine other than the one shown. If the chosen engine has not been
-downloaded, the preview says so, and the chip downloads it. If the document
-needs something the chosen engine lacks, such as Lua code under pdfLaTeX, the
-status line says so.
-
-LuaLaTeX alone resumes from heap checkpoints, so it has the fastest live
-preview on long documents. pdfLaTeX and XeLaTeX use the engine's own
-incremental compile.
+XeLaTeX and LuaLaTeX arrive together with the bundled TeX download, so
+switching between them downloads nothing more. MDraft never compiles with an
+engine other than the one shown. If the document needs something the chosen
+engine lacks, such as Lua code under XeLaTeX, the status line says so.
 
 **TikZ figures.** A document that calls `\tikzexternalize` has its figures
 rendered once and reused while you edit the text. To get the same for a
@@ -226,7 +222,8 @@ folder picker for a portable installation. Neither step starts an engine.
 
 The selected directory must contain `lualatex`, `pdflatex` or `xelatex`. The
 engine choice offers **Auto** (which recognises only the `% !TEX program` values
-LuaLaTeX, pdfLaTeX and XeLaTeX, then prefers LuaLaTeX) and the engines actually
+LuaLaTeX, pdfLaTeX and XeLaTeX, then prefers XeLaTeX on a new install and
+LuaLaTeX for settings from before that change) and the engines actually
 present. A missing individual tool is reported when it is needed; an otherwise
 usable installation is not rejected for lacking an unrelated one.
 

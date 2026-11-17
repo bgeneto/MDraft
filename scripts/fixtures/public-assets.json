@@ -35,6 +35,7 @@
     "samples/html-tour/index.html": "HTML guest sandbox and relative script/module/data/image resources",
     "samples/html-tour/module.js": "HTML guest sandbox and relative script/module/data/image resources",
     "samples/html-tour/style.css": "HTML guest sandbox and relative script/module/data/image resources",
+    "samples/latex-engines/magic-lua.tex": "LaTeX compilation/root/engine/library/project regression fixture and its include closure",
     "samples/latex-engines/magic-xe.tex": "LaTeX compilation/root/engine/library/project regression fixture and its include closure",
     "samples/latex-engines/plain.tex": "LaTeX compilation/root/engine/library/project regression fixture and its include closure",
     "samples/latex-perf/book-flat/figures/diagram.png": "LaTeX cold/warm performance matrix, chapter include closure, bibliography and figure dependencies",
