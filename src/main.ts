@@ -3760,6 +3760,7 @@ async function latexFailure(
         activeFile: "",
         enabled: false,
         detached: true,
+        onExternalLink: openPdfLink,
       },
     );
     stagedPdf = { view, host };
@@ -4402,6 +4403,7 @@ async function renderLatexPreview(
       activeFile: latexRelative(value, doc.path) ?? "",
       enabled: settings.viewMode === "split",
       detached: true,
+      onExternalLink: openPdfLink,
       // The committed token, not this build's: a freshness rebind hands the view
       // to a newer render, and its map may finish after that.
       onReady: () => pdfMapReady(view, typstPdfToken),
@@ -6308,6 +6310,7 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
       activeFile: "",
       enabled: wantsMap,
       detached: true,
+      onExternalLink: openPdfLink,
       spanMap: rendered.spanMap,
       onReady: () => pdfMapReady(view, token),
     });
@@ -12419,6 +12422,11 @@ function revealPreviewId(id: string, attempt = 0): void {
     return;
   }
   if (attempt < 20) window.setTimeout(() => revealPreviewId(id, attempt + 1), 50);
+}
+
+/** A web or mail link clicked in the Pages view; the view has already vetted the scheme. */
+function openPdfLink(url: string): void {
+  openLinkTarget({ href: url, kind: "external" });
 }
 
 /**
