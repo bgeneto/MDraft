@@ -1487,16 +1487,6 @@ mod tests {
     }
     use std::{fs, path::Path};
 
-    #[test]
-    #[test]
-    #[test]
-    #[test]
-    #[test]
-    #[test]
-    #[test]
-    #[test]
-    #[test]
-    #[test]
     /// The print command must refuse anything that is not a PDF.
     ///
     /// The validation is the same one `save_compiled_pdf` applies, and it matters

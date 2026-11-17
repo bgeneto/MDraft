@@ -902,6 +902,7 @@ mod engine {
     }
 
     #[cfg(test)]
+    #[allow(clippy::items_after_test_module)] // the module sits beside the code it exercises
     mod tests {
         use super::utf8_aff;
 
