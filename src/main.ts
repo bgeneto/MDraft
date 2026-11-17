@@ -5289,7 +5289,9 @@ async function texpressoExportPdf(
     warnings,
     warningsTruncated: false,
     engine: ENGINE_LABELS[build.engineChoice?.engine ?? "xelatex"],
-    elapsedMs: reply.ms,
+    // The build, not the export: `reply.ms` times only the final xdvipdfmx
+    // conversion, so a from-scratch build that typeset for seconds read 0.2 s.
+    elapsedMs: performance.now() - started,
   };
   perfMeasure("typeset", mark, {
     bytes: reply.pdf.length,
