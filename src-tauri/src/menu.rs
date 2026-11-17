@@ -1030,7 +1030,13 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             Some("CmdOrCtrl+Shift+O"),
         )?)
         .item(&recent)
-        .item(&item("file.closeFolder", "Close Folder", None)?)
+        // Reopen Closed Tab is an open command, and Close Folder a close one:
+        // each sits in the group that matches what it does, not its pair.
+        .item(&item(
+            "file.reopenClosed",
+            "Reopen Closed Tab",
+            Some("CmdOrCtrl+Shift+T"),
+        )?)
         .separator()
         .item(&item("file.save", "Save", Some("CmdOrCtrl+S"))?)
         .item(&item("file.saveAs", "Save As…", Some("CmdOrCtrl+Shift+S"))?)
@@ -1044,15 +1050,12 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .item(&item("file.reveal", "Show in Folder", None)?)
         .item(&item("file.favorite", "Add to Favorites", None)?)
         .separator()
-        .item(&item(
-            "file.reopenClosed",
-            "Reopen Closed Tab",
-            Some("CmdOrCtrl+Shift+T"),
-        )?)
         .item(&item("file.close", "Close Tab", Some("CmdOrCtrl+W"))?)
         .item(&close_tabs)
-        .separator()
-        .item(&PredefinedMenuItem::close_window(app, None)?);
+        .item(&item("file.closeFolder", "Close Folder", None)?)
+        // The predefined label is a bare "Close", which reads as a sibling of
+        // Close Tab; name the window so the three close scopes are distinct.
+        .item(&PredefinedMenuItem::close_window(app, Some("Close Window"))?);
 
     // Preferences is a File-menu command on Windows and Linux; macOS keeps its
     // own application-menu item. The id and the CmdOrCtrl+, accelerator do not
