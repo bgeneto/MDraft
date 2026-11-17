@@ -10,6 +10,7 @@
     "build": "tsc --noEmit && vite build",
     "format": "prettier --write \"src/**/*.{ts,js,css}\" \"site/**/*.{html,css,js}\" \"scripts/**/*.mjs\" \"*.{json,ts,html}\"",
     "format:check": "prettier --check \"src/**/*.{ts,js,css}\" \"site/**/*.{html,css,js}\" \"scripts/**/*.mjs\" \"*.{json,ts,html}\"",
+    "format:staged": "node scripts/format-staged.mjs",
     "lint": "eslint src",
     "knip": "knip --include dependencies,unlisted",
     "preview": "vite preview",

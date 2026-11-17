@@ -14,3 +14,4 @@ esac
 
 node scripts/repo-hygiene.mjs
 node scripts/security-scan.mjs --staged
+node scripts/format-staged.mjs
