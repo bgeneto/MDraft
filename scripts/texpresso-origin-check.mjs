@@ -9,7 +9,8 @@
 // bucket that fails here is a preview that cannot start.
 //
 // Checked: every engine file, the list and the four format and metadata
-// files (full SHA-256 and size), the digest table (full SHA-256), and bundle
+// files (full SHA-256 and size), the digest table (full SHA-256), each install
+// archive (its pin, then every member against its own pin), and bundle
 // files against the table. Without --all that is an evenly spread sample
 // (500 unless --sample says otherwise) plus every name that differs from
 // another only by case, which is what a case-insensitive disk gets wrong.
@@ -18,6 +19,7 @@
 // Reads only. One PASS or FAIL line per check, non-zero exit on any FAIL.
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { inflateRawSync } from "node:zlib";
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(name);
@@ -100,6 +102,69 @@ const table = await pinned(
   config.digests,
   `digest table ${config.digests.path}`,
 );
+
+// The install archives: the archive against its pin, then every member
+// against its own pin, and every pin of its base present exactly once. The
+// application falls back to single files when an archive fails, so a failure
+// here is a slow install, not a broken one; it still fails the check.
+const memberPins = {
+  engine: config.assets,
+  data: [config.bundle.list, config.digests, ...config.bundle.files],
+};
+for (const archive of config.archives ?? []) {
+  const base = archive.base === "engine" ? engine : data;
+  const got = await pinned(base + archive.path, archive, `archive ${archive.path}`);
+  if (!got) continue;
+  const expected = new Map(memberPins[archive.base].map((pin) => [pin.path, pin]));
+  const problems = [];
+  const seen = new Set();
+  for (const [name, bytes] of unzip(got.bytes, problems)) {
+    const pin = expected.get(name);
+    if (!pin) problems.push(`${name} is not pinned`);
+    else if (seen.has(name)) problems.push(`${name} appears twice`);
+    else if (bytes.length !== pin.bytes || sha256(bytes).toString("hex") !== pin.sha256)
+      problems.push(`${name} does not match its pin`);
+    seen.add(name);
+  }
+  for (const name of expected.keys()) if (!seen.has(name)) problems.push(`${name} is missing`);
+  for (const line of problems.slice(0, 20)) console.log(`  ${line}`);
+  check(
+    problems.length === 0,
+    `archive ${archive.path} holds exactly its base's pins`,
+    `${seen.size}/${expected.size} members`,
+  );
+}
+
+/** [name, bytes] of each entry of a zip, read through its central directory. */
+function unzip(zip, problems) {
+  const out = [];
+  const end = zip.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  if (end < 0) {
+    problems.push("no end-of-central-directory record");
+    return out;
+  }
+  const count = zip.readUInt16LE(end + 10);
+  let at = zip.readUInt32LE(end + 16);
+  for (let index = 0; index < count; index += 1) {
+    if (zip.readUInt32LE(at) !== 0x02014b50) {
+      problems.push(`central entry ${index} is malformed`);
+      break;
+    }
+    const method = zip.readUInt16LE(at + 10);
+    const size = zip.readUInt32LE(at + 20);
+    const nameLength = zip.readUInt16LE(at + 28);
+    const skip = nameLength + zip.readUInt16LE(at + 30) + zip.readUInt16LE(at + 32);
+    const local = zip.readUInt32LE(at + 42);
+    const name = zip.toString("ascii", at + 46, at + 46 + nameLength);
+    at += 46 + skip;
+    const start = local + 30 + zip.readUInt16LE(local + 26) + zip.readUInt16LE(local + 28);
+    const body = zip.subarray(start, start + size);
+    if (method === 0) out.push([name, body]);
+    else if (method === 8) out.push([name, inflateRawSync(body)]);
+    else problems.push(`${name} uses compression method ${method}`);
+  }
+  return out;
+}
 
 // What the bucket should say about itself. A wrong type on a .wasm stops
 // streaming compilation; the rest is advice, because Rust re-serves the bytes
