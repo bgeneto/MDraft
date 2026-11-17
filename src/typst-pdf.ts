@@ -37,6 +37,7 @@ import { ScrollIndex, chooseScrollRegion, type ScrollRegion } from "./scroll-syn
 export function externalUrl(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const url = value.trim();
+  // eslint-disable-next-line no-control-regex -- Reject control characters smuggled into a link target.
   return /^(?:https?:\/\/|mailto:)/i.test(url) && !/[\s\u0000-\u001f]/.test(url) ? url : null;
 }
 
