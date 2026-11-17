@@ -3755,6 +3755,28 @@ label.optional-tools-row:hover {
   background: transparent;
 }
 
+/* PDF link annotations sit above the text layer so a click follows the link
+   instead of syncing the source. The layer itself lets other clicks through. */
+.typst-page .linkLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.typst-page .linkLayer .pdf-link {
+  position: absolute;
+  pointer-events: auto;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.typst-page .linkLayer .pdf-link:hover,
+.typst-page .linkLayer .pdf-link:focus-visible {
+  background: color-mix(in srgb, var(--accent, #4a8cff) 14%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--accent, #4a8cff) 45%, transparent);
+}
+
 .typst-error {
   margin: 0;
   padding: 16px 18px;

@@ -3760,6 +3760,7 @@ async function latexFailure(
         activeFile: "",
         enabled: false,
         detached: true,
+        onExternalLink: openPdfLink,
       },
     );
     stagedPdf = { view, host };
@@ -4402,6 +4403,7 @@ async function renderLatexPreview(
       activeFile: latexRelative(value, doc.path) ?? "",
       enabled: settings.viewMode === "split",
       detached: true,
+      onExternalLink: openPdfLink,
       // The committed token, not this build's: a freshness rebind hands the view
       // to a newer render, and its map may finish after that.
       onReady: () => pdfMapReady(view, typstPdfToken),
@@ -6235,6 +6237,7 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
     // headings, code, tables and quotes applies to this document too.
     host.className = "markdown-body typst-document";
     host.innerHTML = rendered.html ?? "";
+    disarmPreviewLinks(host);
     preview.appendChild(host);
     // Feed compiler AST spans when available so text-normalized fallback keeps
     // blocks aligned when dynamic content diverges from literal source text.
@@ -6308,6 +6311,7 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
       activeFile: "",
       enabled: wantsMap,
       detached: true,
+      onExternalLink: openPdfLink,
       spanMap: rendered.spanMap,
       onReady: () => pdfMapReady(view, token),
     });
@@ -12421,6 +12425,11 @@ function revealPreviewId(id: string, attempt = 0): void {
   if (attempt < 20) window.setTimeout(() => revealPreviewId(id, attempt + 1), 50);
 }
 
+/** A web or mail link clicked in the Pages view; the view has already vetted the scheme. */
+function openPdfLink(url: string): void {
+  openLinkTarget({ href: url, kind: "external" });
+}
+
 /**
  * Follow one link or image reference.
  *
@@ -12469,6 +12478,20 @@ function openLinkTarget(target: LinkTarget): void {
   void api.openExternal(path).catch((error) => toast(String(error), 5200));
 }
 
+/**
+ * Move compiler-emitted link targets into `data-href`, as the Markdown renderer
+ * does, so no click, Enter or modifier-click can navigate the app window.
+ */
+function disarmPreviewLinks(host: HTMLElement): void {
+  for (const anchor of Array.from(host.querySelectorAll("a[href]"))) {
+    const href = anchor.getAttribute("href") ?? "";
+    anchor.setAttribute("data-href", href);
+    if (/^(?:https?|mailto|tel):/i.test(href)) anchor.classList.add("external-link");
+    else if (!href.startsWith("#")) anchor.classList.add("local-link");
+    anchor.removeAttribute("href");
+  }
+}
+
 function installPreviewClicks(): void {
   preview.addEventListener("click", (event) => {
     const element = event.target as HTMLElement;
@@ -12487,7 +12510,11 @@ function installPreviewClicks(): void {
 
     const target = element.closest("a, .local-link, .external-link");
     if (!target) return;
-    const href = target.getAttribute("data-href") ?? "";
+    // A live `href` the renderer did not rewrite would navigate the whole app
+    // window away; once that happens neither the menus nor the close guard can
+    // answer. Every link in the preview goes through `openLinkTarget` instead.
+    const href = (target.getAttribute("data-href") ?? target.getAttribute("href") ?? "").trim();
+    if (target.hasAttribute("href")) event.preventDefault();
     if (!href) return;
 
     event.preventDefault();
