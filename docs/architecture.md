@@ -18,6 +18,12 @@ generation. Stale work must not overwrite the active document. Switching format
 or tab invalidates the previous surface and its selection map. Worker results
 are committed only after confirming that they still own the current view.
 
+While the pane shows nothing of the active document, a centred waiting surface
+names the file and what is being done; once something readable is on screen,
+progress belongs to the compiled toolbar. Ownership is not the test for
+"something readable": the TeXpresso frame owns the pane before it has drawn a
+page, so the surface stays over it until the first page.
+
 ## Rendering and correspondence
 
 Markdown and AsciiDoc rendering separate parsing/chunk preparation from DOM work.

@@ -91,5 +91,61 @@ export function pendingPhase(language: DocumentLanguage): string {
   if (language === "asciidoc") return "Rendering AsciiDoc…";
   if (language === "typst") return "Compiling Typst…";
   if (language === "latex") return "Preparing LaTeX compilation…";
+  if (language === "html") return "Loading HTML preview…";
   return "";
+}
+
+/** The live LaTeX preview before it has drawn a page, as the waiting surface sees it. */
+export interface FrameWait {
+  /** The frame's engine has booted. */
+  ready: boolean;
+  /** The reader stopped this preview's TeX file downloads. */
+  stopped: boolean;
+  /** TeX files fetched since the current activity began. */
+  files: number;
+  bytes: number;
+}
+
+/**
+ * The waiting surface's sentence while the live LaTeX preview has no page.
+ *
+ * It names only what stands between the reader and the first page. The PDF the
+ * shadow export prepares is the toolbar's business: a reader looking at an
+ * empty pane is not waiting for an export.
+ */
+export function frameWaitPhase(state: FrameWait): string {
+  if (!state.ready) return "Starting the LaTeX preview…";
+  if (state.stopped) return "TeX file downloads stopped";
+  if (state.files > 0) {
+    const megabytes = (state.bytes / (1024 * 1024)).toFixed(1);
+    return `Downloading TeX files… ${state.files} file${state.files === 1 ? "" : "s"}, ${megabytes} MB`;
+  }
+  return "Typesetting…";
+}
+
+/** What decides whether the pane shows anything of the active document. */
+export interface PaneProbe {
+  /** Content stamped for the active document is committed. */
+  owned: boolean;
+  /** The live LaTeX frame is the pane's content for this tab. */
+  frameShown: boolean;
+  /** That frame has drawn at least one page since it was mounted. */
+  framePages: boolean;
+  /** The live preview was stopped for this tab and nothing drew in its place. */
+  frameStoppedEmpty: boolean;
+}
+
+/**
+ * True when the pane shows nothing of the active document.
+ *
+ * Ownership alone used to answer this, and for every renderer that draws into
+ * `#preview` it still does: a commit is content. The live LaTeX frame is the
+ * exception. It owns the pane as soon as it holds the project, which is before
+ * it has typeset a page, and a cold start spends minutes fetching TeX files in
+ * that state; the pane must say so instead of staying blank.
+ */
+export function paneBlank(probe: PaneProbe): boolean {
+  if (!probe.owned) return true;
+  if (probe.frameShown) return !probe.framePages;
+  return probe.frameStoppedEmpty;
 }
