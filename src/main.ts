@@ -133,6 +133,8 @@ import {
   ELAPSED_AFTER_MS,
   ELAPSED_AFTER_REDUCED_MS,
   formatElapsed,
+  frameWaitPhase,
+  paneBlank as paneBlankFor,
   PENDING_GRACE_MS,
   pendingPhase,
   projectOwner,
@@ -1947,14 +1949,33 @@ function probeOf(session: Session): OwnerProbe {
  *
  * Every renderer swaps its result in and then calls this, after its token and
  * document guards. The pending surface belongs to the wait, not to the result,
- * so it is cleared here rather than by each renderer.
+ * so it is cleared here rather than by each renderer — unless the owner is the
+ * live LaTeX frame and it has drawn no page yet, when the wait goes on.
  */
 function commitPreview(owner: PreviewOwner, key: string | null = null): void {
   previewStale = false;
   previewOwner = owner;
   committedKey = key;
   committedDoc = { id: doc.id, incarnation: doc.incarnation };
-  clearPending();
+  if (paneBlank()) armPending();
+  else clearPending();
+}
+
+/** True when the pane shows nothing of the active document (see `paneBlankFor`). */
+function paneBlank(): boolean {
+  const latex = doc.language === "latex";
+  return paneBlankFor({
+    owned: previewOwner !== null,
+    frameShown: latex && texpressoShowing(),
+    framePages: texpressoHasPages,
+    // A stopped frame leaves `#preview` empty unless a note or a PDF took its place.
+    frameStoppedEmpty: latex && texpressoFallbackReason !== null && !preview.firstChild,
+  });
+}
+
+/** The frame owns this tab's pane but has not drawn a page. */
+function texpressoAwaitingPages(): boolean {
+  return texpressoShowing() && !texpressoHasPages;
 }
 
 /**
@@ -2148,9 +2169,27 @@ function updatePendingElapsed(entry: NonNullable<typeof pending>): void {
   label.textContent = elapsed >= threshold ? formatElapsed(elapsed) : "";
 }
 
+/**
+ * The surface's sentence for a LaTeX wait. While the live frame owns the pane
+ * without a page, it names what the frame is doing rather than `message`, which
+ * may be the shadow export's step.
+ */
+function latexWaitPhase(message: string): string {
+  if (!texpressoAwaitingPages()) return message;
+  return frameWaitPhase({
+    ready: texpresso?.ready ?? false,
+    stopped: texpressoDownloadsStopped,
+    files: texpressoFetch?.files ?? 0,
+    bytes: texpressoFetch?.bytes ?? 0,
+  });
+}
+
 function showPending(entry: NonNullable<typeof pending>): void {
   if (pending !== entry) return;
-  if (previewOwner !== null || settings.viewMode === "source") {
+  // A surface shown early (an idle message, an immediate arm) must not be
+  // drawn a second time when the grace timer fires.
+  if (entry.node) return;
+  if (!paneBlank() || settings.viewMode === "source") {
     clearPending();
     return;
   }
@@ -2177,7 +2216,7 @@ function showPending(entry: NonNullable<typeof pending>): void {
   phase.textContent = idle
     ? "Not compiled yet — select Compile."
     : doc.language === "latex"
-      ? currentLatexPhase() || pendingPhase(doc.language)
+      ? latexWaitPhase(currentLatexPhase() || pendingPhase(doc.language))
       : pendingPhase(doc.language);
   const elapsed = document.createElement("div");
   elapsed.className = "preview-pending-elapsed";
@@ -2196,12 +2235,17 @@ function clearPending(): void {
   pending = null;
 }
 
-/** Turn a visible surface idle without starting a new wait. */
-function showPendingIdle(message: string): void {
+/**
+ * Turn the surface idle without starting a new wait: nothing more happens
+ * until the reader acts. `action` is the one control that helps, if any; the
+ * surface otherwise lets pointer events through to the pane.
+ */
+function showPendingIdle(message: string, action?: { label: string; run: () => void }): void {
   const entry = pending;
   if (!entry) return;
   if (!entry.node) showPending(entry);
   if (!entry.node) return;
+  window.clearTimeout(entry.graceTimer);
   window.clearInterval(entry.tick);
   entry.tick = 0;
   entry.node.dataset.state = "idle";
@@ -2209,6 +2253,28 @@ function showPendingIdle(message: string): void {
   if (phase) phase.textContent = message;
   const elapsed = entry.node.querySelector<HTMLElement>(".preview-pending-elapsed");
   if (elapsed) elapsed.textContent = "";
+  entry.node.querySelector(".preview-pending-action")?.remove();
+  if (action) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "typst-notebutton preview-pending-action";
+    button.textContent = action.label;
+    button.addEventListener("click", action.run);
+    entry.node.append(button);
+  }
+}
+
+/** A build started after all: the idle surface spins again, its counter from zero. */
+function revivePending(message?: string): void {
+  const entry = pending;
+  if (!entry?.node || entry.node.dataset.state !== "idle") return;
+  entry.node.dataset.state = "pending";
+  entry.node.querySelector(".preview-pending-action")?.remove();
+  const phase = entry.node.querySelector<HTMLElement>(".preview-pending-phase");
+  if (phase && message !== undefined) phase.textContent = message;
+  entry.startedAt = performance.now();
+  window.clearInterval(entry.tick);
+  entry.tick = window.setInterval(() => updatePendingElapsed(entry), 1000);
 }
 
 /**
@@ -2219,7 +2285,7 @@ function showPendingIdle(message: string): void {
  * each restart the counter.
  */
 function armPending(opts: { immediate?: boolean } = {}): void {
-  if (doc.language === "html" || previewOwner !== null) return;
+  if (!paneBlank()) return;
   if (settings.viewMode === "source") return;
   if (pending && pending.sessionId === doc.id && pending.incarnation === doc.incarnation) return;
   clearPending();
@@ -2712,16 +2778,7 @@ function setTypstStatus(message: string, saveable = false, state?: CompiledStatu
   syncMenuState(false);
   const phase = pending?.node?.querySelector<HTMLElement>(".preview-pending-phase");
   if (phase) phase.textContent = message;
-  if (
-    pending?.node &&
-    (latexInFlight || typstInFlight !== null) &&
-    pending.node.dataset.state === "idle"
-  ) {
-    pending.node.dataset.state = "pending";
-    pending.startedAt = performance.now();
-    const entry = pending;
-    entry.tick = window.setInterval(() => updatePendingElapsed(entry), 1000);
-  }
+  if (latexInFlight || typstInFlight !== null) revivePending();
 }
 
 function compileCurrentLatex(clean = false): void {
@@ -2876,18 +2933,15 @@ function setLatexStatus(message: string, state?: CompiledStatus): void {
     latexCurrent(latexPreview) || latexPartialCurrent(),
     state,
   );
-  const phase = pending?.node?.querySelector<HTMLElement>(".preview-pending-phase");
-  if (phase) phase.textContent = message;
-  if (
-    pending?.node &&
-    (latexInFlight || typstInFlight !== null) &&
-    pending.node.dataset.state === "idle"
-  ) {
-    pending.node.dataset.state = "pending";
-    pending.startedAt = performance.now();
-    const entry = pending;
-    entry.tick = window.setInterval(() => updatePendingElapsed(entry), 1000);
-  }
+  const node = pending?.node;
+  if (!node) return;
+  if (latexInFlight || typstInFlight !== null) revivePending();
+  // An idle surface keeps its own sentence ("Not compiled yet", a stopped
+  // preview, no pages) until a build starts: a later status line, such as the
+  // live frame's refresh, must not make it read as work in progress.
+  if (node.dataset.state === "idle") return;
+  const phase = node.querySelector<HTMLElement>(".preview-pending-phase");
+  if (phase) phase.textContent = latexWaitPhase(message);
 }
 
 function showLatexWarnings(result: LatexResult, root: { path: string; directory: string }): void {
@@ -3666,6 +3720,8 @@ async function latexFailure(
       ? projectOwner(failureRoot, [...latexProblemFiles, pathKey(failureRootPath)])
       : documentOwner(doc),
   );
+  // A frame that never drew a page leaves nothing for Logs to sit beside.
+  if (live && texpresso) texpressoSettleWait(texpresso);
   if (root) {
     applyLatexMarks(problems, root, doc.path, true);
   } else {
@@ -4589,6 +4645,11 @@ const texpressoFailed = new Set<string>();
 let texpressoFallbackReason: { reason: TexpressoFallback; file?: string | null } | null = null;
 /** The frame is on screen for the active tab. */
 let texpressoShown = false;
+/**
+ * The current frame has drawn a page since it was mounted. Until then it owns
+ * the pane but shows nothing, and the waiting surface stays over it.
+ */
+let texpressoHasPages = false;
 /** The frame's own scroll offset, as it last reported it. */
 let texpressoScrollTop = 0;
 /** The key of the exported result, which never commits to the pane. */
@@ -4795,7 +4856,14 @@ function texpressoRelease(): void {
   if (!texpresso) return;
   void texpresso.dispose();
   texpresso = null;
+  texpressoSetPages(false);
   texpressoShow(false);
+}
+
+/** Record whether the frame has a page; the stylesheet keeps the surface off a drawn page. */
+function texpressoSetPages(on: boolean): void {
+  texpressoHasPages = on;
+  app.classList.toggle("texpresso-painted", on);
 }
 
 /**
@@ -4816,6 +4884,18 @@ function texpressoFallbackTo(reason: TexpressoFallback, file: string | null = nu
     severity: "warning",
     detail: why,
   });
+  // The frame was the pane's content; with it gone the pane is empty unless a
+  // PDF or a note sits in `#preview`. The reason belongs in the middle of the
+  // pane then, not only in the toolbar, and a broken frame offers its fix.
+  if (doc.language === "latex" && settings.viewMode !== "source" && paneBlank()) {
+    armPending({ immediate: true });
+    showPendingIdle(
+      `Preview unavailable: ${why}.`,
+      reason === "failed"
+        ? { label: "Recompile from scratch", run: compileCurrentLatexClean }
+        : undefined,
+    );
+  }
   syncMenuState(false);
   perfMark("texpresso-fallback", { reason, file });
 }
@@ -4895,6 +4975,7 @@ function texpressoPrepare(build: LatexBuildRequest, storeOnly: boolean): boolean
       build.root.directory,
       texpressoHandlers,
     );
+    texpressoSetPages(false);
     texpressoSessionCount += 1;
     preview.dataset.texpressoSession = String(texpressoSessionCount);
     texpresso.hold(settings.latexAutoCompile === false);
@@ -4906,6 +4987,15 @@ function texpressoPrepare(build: LatexBuildRequest, storeOnly: boolean): boolean
   texpresso!.open(projectRelativePath(build.root.directory, doc.path, pathKey));
   texpressoShow(settings.viewMode !== "source");
   texpressoChip();
+  // A new frame (first open, another project, an engine change, Recompile from
+  // scratch) is blank for seconds to minutes even though the pane still has an
+  // owner, so the wait is armed here rather than by the owner test alone. A
+  // build that starts over an idle "no pages" or "unavailable" surface spins it
+  // again.
+  if (texpressoAwaitingPages()) {
+    armPending();
+    if (!storeOnly) revivePending(latexWaitPhase(""));
+  }
   return true;
 }
 
@@ -5009,6 +5099,7 @@ async function texpressoExportPdf(
     setLatexStatus("The PDF for export could not be produced.");
     toast("The preview could not produce a PDF. Compile again to retry.", 6200);
     syncMenuState(false);
+    texpressoSettleWait(session);
     return;
   }
   const warnings = texpressoDiagnostics(session, build.root.directory);
@@ -5037,6 +5128,26 @@ async function texpressoExportPdf(
     started,
     backend: build.engineStatus,
   });
+  texpressoSettleWait(session);
+}
+
+/** Longer than the bridge's 250 ms paint floor, so a page reported late still counts. */
+const TEXPRESSO_SETTLE_MS = 600;
+
+/**
+ * An export has ended, so the frame has finished typesetting. If it still has
+ * not drawn a page once its paint report has had time to arrive, the wait is
+ * over without one: the pane says so instead of spinning on.
+ */
+function texpressoSettleWait(session: TexpressoSession): void {
+  window.setTimeout(() => {
+    if (session !== texpresso || !texpressoAwaitingPages() || session.busy || !session.ready)
+      return;
+    // A newer build is on its way and will settle for itself.
+    if (latexInFlight || settings.viewMode === "source") return;
+    armPending({ immediate: true });
+    showPendingIdle("No pages produced. Open Logs for the compilation problems.");
+  }, TEXPRESSO_SETTLE_MS);
 }
 
 /** Hand the exported result on screen to this render when its inputs are unchanged. */
@@ -5299,7 +5410,8 @@ const texpressoHandlers = {
     if (session !== texpresso) return;
     toast(reason, 6200);
     texpressoFallbackTo("failed");
-    compiledUi.note(texpressoFailureNote());
+    // The empty pane already says this, with the same button, in its middle.
+    if (!pending?.node) compiledUi.note(texpressoFailureNote());
   },
   onRecovery(session: TexpressoSession, step: "resync" | "restart"): void {
     perfMark("texpresso-recovery", { step });
@@ -5344,6 +5456,11 @@ function texpressoMessage(session: TexpressoSession, message: FrameMessage): voi
       }
       preview.dataset.texpressoPainted = String(message.seq);
       preview.dataset.texpressoPages = String(message.pages);
+      // The first page is the end of the wait: the frame is content now.
+      if (message.pages > 0 && !texpressoHasPages) {
+        texpressoSetPages(true);
+        if (texpressoShowing()) clearPending();
+      }
       if (message.done) syncPreviewFromSource();
       break;
     }
@@ -6367,10 +6484,11 @@ async function doRender(force = false): Promise<void> {
     previewSyncReady = false;
     return;
   }
-  // A render is now on its way for whatever document is active. If no content
-  // has committed for it, the pane shows the wait rather than a foreign tab's
-  // output. Repeated calls for the same wait are ignored by `armPending`.
-  if (previewOwner === null) armPending();
+  // A render is now on its way for whatever document is active. If nothing of
+  // it is on screen (no commit, or a live LaTeX frame without a page), the pane
+  // shows the wait rather than a foreign tab's output or a blank frame.
+  // Repeated calls for the same wait are ignored by `armPending`.
+  armPending();
   const source = editor.getDoc();
   // Capture the mode once: a mermaid/Asciidoctor await may span a mode switch,
   // and the map the render produced must match the map the split pane expects.
@@ -6402,6 +6520,9 @@ async function doRender(force = false): Promise<void> {
     }
     wordMap = null;
     clearPreviewWords();
+    // An edit after a failed first load is another attempt: the idle surface
+    // spins again until this build promotes a guest or fails in turn.
+    revivePending(pendingPhase("html"));
     const current = await renderHtmlPreview(source, token);
     if (token !== renderToken || !current) return;
     // The guest stamps its word nodes while building the copy, so Split can use
@@ -14271,7 +14392,12 @@ async function boot(): Promise<void> {
       suppressPreviewScrollUntil = 0;
     },
     onReady: handleHtmlReady,
-    onError: (message) => toast(message, 6200),
+    // With no guest of this document on screen the pane is empty, so the
+    // failure is said there; over a working guest a toast leaves it readable.
+    onError: (message) => {
+      if (doc.language === "html" && previewOwner === null && pending) showPendingIdle(message);
+      else toast(message, 6200);
+    },
   });
 
   // After the editor exists: a tab gesture that arrives during the first paint
