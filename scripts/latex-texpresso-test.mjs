@@ -115,7 +115,8 @@ async function openFile(relative) {
 const enableAndCompile = () => {
   // The switch is a Preferences row, which also updates the frontend's copy.
   return evaluate(`(async () => {
-    if (await window.__TAURI_INTERNALS__.invoke("latex_status")) return "already on";
+    const status = await window.__TAURI_INTERNALS__.invoke("latex_engine_status");
+    if (status.bundledEnabled && status.previewInstalled) return "already on";
     const open = document.getElementById("btn-prefs");
     open?.click();
     await new Promise((r) => setTimeout(r, 500));
@@ -1280,10 +1281,10 @@ try {
           headers: { "Tauri-Response": "ok", "Content-Type": "application/json" },
         }));
       }
-      if (url.includes("latex_status")) seen.push(url);
+      if (url.includes("latex_engine_status")) seen.push(url);
       return realFetch.call(this, input, init);
     };
-    await window.__TAURI_INTERNALS__.invoke("latex_status");
+    await window.__TAURI_INTERNALS__.invoke("latex_engine_status");
     return seen.length > 0;
   })()`);
   const web = await markFor("LinkProbeWeb", true);

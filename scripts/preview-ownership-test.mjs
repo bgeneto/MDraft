@@ -419,9 +419,9 @@ try {
   );
 
   const engine = await page.evaluate(
-    `window.__TAURI_INTERNALS__.invoke("latex_status").then(String).catch(() => "error")`,
+    `window.__TAURI_INTERNALS__.invoke("latex_engine_status").then((s) => s.previewInstalled === true).catch(() => false)`,
   );
-  const hasEngine = engine === "true";
+  const hasEngine = engine === true;
   const typstViewBefore = await page.evaluate(
     `window.__TAURI_INTERNALS__.invoke("get_settings").then((s) => s.typstView ?? "document")`,
   );
