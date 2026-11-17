@@ -6332,6 +6332,17 @@ label.optional-tools-row:hover {
 .texpresso-host[hidden] {
   display: none;
 }
+/* A new frame warming up under the stored PDF keeps its full size, so it lays
+   out and paints as usual, but is transparent and lets every pointer event
+   through to the PDF. `display: none` or `visibility: hidden` would leave it
+   unsized or throttled. */
+.app.texpresso-covered .preview-pane {
+  position: relative;
+}
+.app.texpresso-covered .texpresso-host {
+  opacity: 0;
+  pointer-events: none;
+}
 .texpresso-frame {
   display: block;
   width: 100%;
