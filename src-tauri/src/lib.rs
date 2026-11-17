@@ -34,6 +34,8 @@ mod typst;
 mod workspace;
 
 use settings::{AppState, Settings};
+#[cfg(debug_assertions)]
+use tauri::Emitter;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -176,6 +178,21 @@ pub fn run() {
             for config in startup_windows.iter().filter(|config| config.create) {
                 let builder = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?;
                 navigation::guard(builder, dev_url.clone()).build()?;
+            }
+            // Test-only: emit one menu action after the document has had time to
+            // compile, so a headless run can exercise the real menu path (for
+            // example `file.print`) without scripting the native menu.
+            #[cfg(debug_assertions)]
+            if let Ok(event) = std::env::var("MDRAFT_TEST_MENU") {
+                let handle = app.handle().clone();
+                let delay = std::env::var("MDRAFT_TEST_MENU_DELAY_MS")
+                    .ok()
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or(12_000);
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(delay));
+                    let _ = handle.emit("menu", event);
+                });
             }
             Ok(())
         })
