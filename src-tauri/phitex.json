@@ -2,9 +2,9 @@
   "release": "phitex-1.0.1-engine870e9ac",
   "origin": "https://mdraft.webonly.app/phitex/",
   "archive": {
-    "path": "phitex-1.0.1-engine870e9ac.zip",
-    "sha256": "b5710f768cfc5dd1972d957c8bb4ee131ba149671c168a7e1b00ae6f7fd16ae8",
-    "bytes": 27285136
+    "path": "phitex-1.0.1-engine870e9ac-minted.zip",
+    "sha256": "2b2f3173a510629a40547b13f8988866aebb6f5eed7190ebfa698e2bdb6acc99",
+    "bytes": 34635149
   },
   "shelf": {
     "release": "tl2026.9",

@@ -248,6 +248,8 @@ fn kind(path: &str) -> &'static str {
         "js" => "text/javascript; charset=utf-8",
         "wasm" => "application/wasm",
         "json" => "application/json",
+        "mjs" => "text/javascript; charset=utf-8",
+        "data" => "application/octet-stream",
         "txt" => "text/plain; charset=utf-8",
         "sty" | "cls" | "def" | "cfg" | "bst" | "tex" | "bib" => "text/plain; charset=utf-8",
         "otf" => "font/otf",

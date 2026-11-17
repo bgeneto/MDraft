@@ -17,7 +17,7 @@ export type LatexPreviewBackend = "texpresso" | "phitex";
 /** The engine download, for the reader's message. */
 export const PREVIEW_ENGINE_MIB: Record<LatexPreviewBackend, number> = {
   texpresso: 15,
-  phitex: 26,
+  phitex: 33,
 };
 /** The only TeX Live snapshot either pinned preview has. */
 export const BUNDLED_TEXLIVE_YEAR = "2026";

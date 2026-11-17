@@ -35,8 +35,8 @@ The script bundles `main.ts` with esbuild, copies the pinned
 them only when the pinned viewer/worker changes.
 
 The engine and its data are not here: `src-tauri/phitex.json` pins the archive
-(`core1.wasm`, the XeLaTeX format, TeX Live 2026 kernel, fonts, shims, Shelf
-index and pack table) and `src-tauri/src/latex_phitex.rs` installs, serves and
+(`core1.wasm`, the XeLaTeX format, TeX Live 2026 kernel, fonts, shims, the
+`minted` Pyodide wheels and runtime, Shelf index and pack table) and `src-tauri/src/latex_phitex.rs` installs, serves and
 caches it. The archive's whole SHA-256 is the trust root; the core checks each
 Shelf pack against the release table again.
 

@@ -23,7 +23,7 @@ installed-TeX route.
 
 LaTeX is **opt-in**. Open a saved `.tex` file and choose **Enable bundled TeX** in
 the preview, or tick the switch in *Preferences › LaTeX*. That action downloads
-about 15 MB for TeXpresso or 26 MB for PhiTeX: the pinned engine, its formats,
+about 15 MB for TeXpresso or 33 MB for PhiTeX: the pinned engine, its formats,
 the TeX Live 2026 kernel, fonts and the package index. Every file is verified
 against its pinned SHA-256 before it is kept. The TeX packages and fonts a
 document needs are fetched on demand from the pinned origin and cached locally.
@@ -602,18 +602,18 @@ the same named reasons as TeXpresso.
 engine. `latex_engine_status` reports both installations; the host reads the one
 the webview can run. The package cache is shared by the two engines' transports,
 is bounded by *Preferences › LaTeX › Cache limit* and is cleared by **Clear
-package cache**. The PhiTeX archive is `phitex-1.0.1-engine870e9ac.zip`
+package cache**. The PhiTeX archive is `phitex-1.0.1-engine870e9ac-minted.zip`
 (release `2026`); the pinned viewer source is the public frontends revision in
 `src-tauri/phitex-shell/vendor/README.md`, and the engine source is the pinned
 PhiTeX revision recorded in the plan and ADR. The source offer and the PhiTeX
 AGPL notices are in *Licences and source*.
 
-**What the fallback does not do.** PhiTeX's own alpha limits apply: LuaLaTeX is
-absent; biber/xindy, `microtype` font expansion, XeLaTeX text colour and
-`minted` are not available. A document that needs one fails with a named
-message, never a silently wrong PDF; an installed TeX distribution is the
-route. TeXpresso keeps its full engine and remains the default wherever JSPI
-exists.
+**What the fallback does not do.** LuaLaTeX is absent from the compatibility
+engine, and `biber`/`xindy` are not available. A document that needs one fails
+with a named message, never a silently wrong PDF; an installed TeX
+distribution is the route. `minted` is available through the bundled Pyodide
+runner, and XeLaTeX colour and microtype run in the engine. TeXpresso keeps
+its full engine and remains the default wherever JSPI exists.
 
 To exercise it:
 

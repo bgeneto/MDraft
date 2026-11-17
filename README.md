@@ -61,7 +61,7 @@ verified/downloaded on demand from the pinned release manifest for warm
 incremental previews; stock Typst CLI remains the automatic fallback.
 
 LaTeX is opt-in: enabling bundled TeX downloads about 15 MB of verified engine
-files for TeXpresso, or about 26 MB for the PhiTeX compatibility engine on Linux,
+files for TeXpresso, or about 33 MB for the PhiTeX compatibility engine on Linux,
 and the TeX packages a document needs are fetched on demand and cached locally.
 Your own classes and packages can live in folders registered once under
 *Preferences › LaTeX › Local packages* and are found by every project, with the
