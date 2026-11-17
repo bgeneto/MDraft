@@ -1,4 +1,5 @@
-# Build installers for Windows and Linux, and attach them to a GitHub release.
+# Build installers for Windows and Linux (.deb, .rpm, AppImage), and attach them
+# to a GitHub release.
 #
 # Triggered by pushing a tag like `v0.1.0`. The tag is checked against the
 # versions in package.json and tauri.conf.json before anything is built, so a
@@ -51,7 +52,6 @@ jobs:
             label: Linux x64
             folder: linux/amd64
             artifact: mdraft-linux-amd64
-
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -133,13 +133,79 @@ jobs:
           if-no-files-found: warn
 
   # ---------------------------------------------------------------------------
+  # Install the RPM on the distributions it targets.
+  #
+  # The RPM is built on Ubuntu, where nothing resolves its Requires. A missing
+  # or misspelt dependency would only surface on a user's machine, so install it
+  # from each distribution's own repositories and check that every shared
+  # library the binary links resolves. Requires are declared by soname in
+  # tauri.linux.conf.json because Fedora and openSUSE name the packages
+  # differently (webkit2gtk4.1 vs libwebkit2gtk-4_1-0) but both provide sonames.
+  # ---------------------------------------------------------------------------
+  rpm-install:
+    name: RPM install on ${{ matrix.label }}
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Fedora
+            image: fedora:latest
+            install: dnf -y install
+          - label: openSUSE Tumbleweed
+            image: opensuse/tumbleweed:latest
+            install: zypper --non-interactive install --allow-unsigned-rpm
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - name: Fetch the Linux artefacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: mdraft-linux-amd64
+          path: linux
+
+      - name: Install the package and check it
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          rpms=(linux/*.rpm)
+          if [ "${#rpms[@]}" -ne 1 ]; then
+            echo "Expected exactly one .rpm, found ${#rpms[@]}:" >&2
+            ls -la linux >&2
+            exit 1
+          fi
+          ${{ matrix.install }} "./${rpms[0]}"
+          rpm -qi mdraft
+          echo "Requires:"
+          rpm -qR mdraft
+
+          bin=$(rpm -ql mdraft | grep -E '^/usr/bin/' | head -n 1)
+          test -x "$bin"
+          missing=$(ldd "$bin" | grep 'not found' || true)
+          if [ -n "$missing" ]; then
+            echo "Unresolved libraries in $bin:" >&2
+            echo "$missing" >&2
+            exit 1
+          fi
+          echo "PASS: every library $bin links resolves"
+
+          desktop=$(rpm -ql mdraft | grep -E '^/usr/share/applications/.*\.desktop$')
+          test -f "$desktop"
+          echo "PASS: $desktop installed"
+
+          rpm -e mdraft
+          echo "PASS: package removes cleanly"
+
+  # ---------------------------------------------------------------------------
   # Publish, once, after every platform has built.
   # ---------------------------------------------------------------------------
   release:
     name: Publish the release
     permissions:
       contents: write
-    needs: build
+    needs: [build, rpm-install]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-22.04
     steps:

@@ -140,8 +140,11 @@ Linux. See the [export guide](docs/export.md) for formats and details.
    your computer:
    - **Windows 10/11, x64:** choose the setup `.exe` or `.msi`. The portable
      `.exe` keeps its settings beside the executable.
-   - **Linux, x64:** choose the `.deb`, AppImage or standalone binary. Make an
-     AppImage executable before opening it.
+   - **Linux, x64:** choose the `.deb` (Debian, Ubuntu), the `.rpm` (Fedora,
+     openSUSE), the AppImage or the standalone binary. Make an AppImage
+     executable before opening it. Install the `.rpm` with
+     `sudo dnf install ./mdraft-*.rpm` or
+     `sudo zypper install --allow-unsigned-rpm ./mdraft-*.rpm`.
 
    To remove MDraft completely on Windows, uninstall with the NSIS setup and
    tick **Delete the application data**. That removes
@@ -156,7 +159,7 @@ Linux. See the [export guide](docs/export.md) for formats and details.
    in either pane, or use the status bar to switch views.
 
 Windows needs the WebView2 runtime, included with Windows 11. Linux needs
-WebKitGTK 4.1 and GTK 3; the `.deb` declares its dependencies. macOS builds
+WebKitGTK 4.1 and GTK 3; the `.deb` and `.rpm` declare their dependencies. macOS builds
 are not currently published.
 
 To work with Typst files, choose **Tools › Check or Install Typst…**. For

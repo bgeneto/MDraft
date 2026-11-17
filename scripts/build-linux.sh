@@ -3,7 +3,7 @@
 # Build the Linux bundles of this project. Run it from inside Linux — WSL2, a
 # container, or a bare machine.
 #
-#   bash scripts/build-linux.sh              # deb + AppImage
+#   bash scripts/build-linux.sh              # deb + rpm + AppImage
 #   bash scripts/build-linux.sh --bundles deb
 #
 # Why a script instead of just `npm run dist`:

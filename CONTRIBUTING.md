@@ -84,7 +84,7 @@ executable cargo has to replace.
 
 Linux builds have to run on Linux: WSL2, a container or a Linux machine.
 `scripts/build-linux.sh` copies the sources to the Linux filesystem, builds the
-frontend when Node is available, and stages the `.deb` and AppImage.
+frontend when Node is available, and stages the `.deb`, `.rpm` and AppImage.
 
 ## Code and documentation
 
