@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.9.4",
   "type": "module",
-  "description": "A native Markdown, AsciiDoc, Typst and HTML editor with live preview and an optional AI assistant",
+  "description": "A native Markdown, AsciiDoc, Typst, LaTeX and HTML editor with live preview and an optional AI assistant",
   "license": "MIT",
   "scripts": {
     "dev": "vite",
