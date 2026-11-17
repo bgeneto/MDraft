@@ -301,6 +301,14 @@ Other editor features:
   or **Wide** (1.8×), under **Preferences › Editor**. The preview keeps its own
   reading line height.
 - **Auto Save** is opt-in and writes dirty files in place every 20 seconds.
+- **Document type.** The status bar names the type after the file name, for
+  example `orange-book.typ | Typst`. A saved file is named by its extension:
+  `.sty` and `.cls` are LaTeX, and a `.txt` file reads **Plain Text** although
+  MDraft edits and previews it as Markdown. An untitled tab is named from its
+  content — Markdown, Typst, AsciiDoc, LaTeX, HTML, JSON, CSS or JavaScript — in
+  italics, and **Save As** offers that type's extension. Detection waits for a
+  pause in typing and never changes how the editor reads the text; hover the
+  type to see where it came from.
 - **Crash recovery.** Every dirty buffer, including an untitled one, is written
   to a journal beside `settings.json` while you type. If MDraft closes
   unexpectedly, the next launch restores those buffers as dirty tabs and shows a

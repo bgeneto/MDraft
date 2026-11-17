@@ -4,10 +4,13 @@
 //! choose any extension, and the user may type another markup before saving.
 //! This module resolves the paste destination without touching the editor's
 //! parser, and recommends the extension Save As should offer; the caller shows a
-//! notice when detection disagrees with the editor's language.
+//! notice when detection disagrees with the editor's language. The status bar's
+//! document type reads the same recommendation, so the bar and the Save As
+//! dialog cannot name different types for one buffer.
 
 import type { DocumentLanguage } from "../api.ts";
 import {
+  detectDocumentSyntax,
   detectTextSyntax,
   stripNoise,
   scoreAsciidoc,
@@ -176,18 +179,139 @@ export interface SaveSuggestion {
  */
 export function suggestSave(input: SaveSuggestionInput): SaveSuggestion {
   if (input.path) return { language: input.language, extension: null };
-  const found = resolvePasteDestination({
-    saved: false,
-    language: input.language,
-    buffer: input.buffer,
-  });
-  const language = found.detected && found.score > found.runnerUp ? found.language : input.language;
+  const language = detectedLanguage(input.buffer) ?? input.language;
+  return { language, extension: saveExtension(language, input) };
+}
+
+/**
+ * The language an untitled buffer's content names, or null.
+ *
+ * `detectDocumentSyntax` also knows JSON, CSS and JavaScript, which the paste
+ * classifier deliberately does not; for markup its answer is the paste
+ * classifier's own.
+ */
+function detectedLanguage(buffer: string): DocumentLanguage | null {
+  const found = detectDocumentSyntax(buffer.slice(0, DETECTION_SAMPLE));
+  return found && found.score > found.runnerUp ? found.language : null;
+}
+
+/**
+ * The extension Save As offers an untitled buffer of `language`.
+ *
+ * A restored Typst buffer in an untitled tab keeps Typst even when the
+ * preference says Markdown: the language the text is already parsed as wins
+ * over a preference meant for new documents.
+ */
+function saveExtension(
+  language: DocumentLanguage,
+  input: Pick<SaveSuggestionInput, "defaultExtension" | "defaultLanguage">,
+): string {
+  return language === input.defaultLanguage
+    ? input.defaultExtension
+    : CANONICAL_EXTENSION[language];
+}
+
+/** The name the status bar gives each language; the file dialog filters use the same words. */
+export const LANGUAGE_LABEL: Record<DocumentLanguage, string> = {
+  markdown: "Markdown",
+  typst: "Typst",
+  html: "HTML",
+  asciidoc: "AsciiDoc",
+  latex: "LaTeX",
+  javascript: "JavaScript",
+  css: "CSS",
+  json: "JSON",
+};
+
+/** `.txt` is opened as Markdown, but the reader chose a plain-text file. */
+const PLAIN_TEXT_LABEL = "Plain Text";
+
+export interface DocumentTypeInput {
+  path: string | null;
+  /** The language the editor parses the buffer as (`.sty` and `.cls` are LaTeX). */
+  language: DocumentLanguage;
+  /** The buffer's beginning; only read while `path` is null. */
+  buffer: string;
+  /** The reader's Default File Extension preference. */
+  defaultExtension: string;
+  /** The language that preference starts a new document in. */
+  defaultLanguage: DocumentLanguage;
+}
+
+/**
+ * Where the type came from. `content` is the only one that can still change
+ * while the reader types, which is why the status bar marks it.
+ */
+export type DocumentTypeOrigin = "extension" | "content" | "default";
+
+export interface DocumentType {
+  label: string;
+  origin: DocumentTypeOrigin;
+  /** The tooltip: the evidence, and how the editor reads the text. */
+  detail: string;
+}
+
+/**
+ * The status bar's document type.
+ *
+ * A saved file is named by its extension, like `languageFor` names its parser:
+ * the bar describes the file the reader has, not a guess about its text. An
+ * untitled buffer is named by what Save As will offer — the content when the
+ * detector is confident, the editor language otherwise — so the bar never
+ * promises one extension while the dialog offers another. Detection never
+ * switches the editor's parser; the tooltip says so when the two differ.
+ */
+export function documentType(input: DocumentTypeInput): DocumentType {
+  const parsedAs = LANGUAGE_LABEL[input.language];
+  if (input.path) {
+    const extension = extensionOf(input.path);
+    if (extension === null) {
+      return {
+        label: parsedAs,
+        origin: "extension",
+        detail: `No extension — edited as ${parsedAs}`,
+      };
+    }
+    if (extension === "txt") {
+      return {
+        label: PLAIN_TEXT_LABEL,
+        origin: "extension",
+        detail: `Plain text (.txt) — edited and previewed as ${parsedAs}`,
+      };
+    }
+    if (input.language === "markdown" && !LANGUAGE_EXTENSIONS.markdown.includes(extension)) {
+      return {
+        label: parsedAs,
+        origin: "extension",
+        detail: `.${extension} is not a recognised type — edited as ${parsedAs}`,
+      };
+    }
+    return {
+      label: parsedAs,
+      origin: "extension",
+      detail: `${parsedAs} — from the .${extension} extension`,
+    };
+  }
+
+  const detected = detectedLanguage(input.buffer);
+  const language = detected ?? input.language;
+  const extension = saveExtension(language, input);
+  if (detected) {
+    const label = LANGUAGE_LABEL[detected];
+    return {
+      label,
+      origin: "content",
+      detail:
+        detected === input.language
+          ? `${label} — detected from the content; not saved yet`
+          : `${label} — detected from the content; not saved yet. ` +
+            `The editor reads it as ${parsedAs} until it is saved as .${extension}`,
+    };
+  }
+  const label = extension === "txt" ? PLAIN_TEXT_LABEL : parsedAs;
   return {
-    language,
-    // A restored Typst buffer in an untitled tab keeps Typst even when the
-    // preference says Markdown: the language the text is already parsed as wins
-    // over a preference meant for new documents.
-    extension:
-      language === input.defaultLanguage ? input.defaultExtension : CANONICAL_EXTENSION[language],
+    label,
+    origin: "default",
+    detail: `${label} — not saved yet, and nothing in the text names another type`,
   };
 }
