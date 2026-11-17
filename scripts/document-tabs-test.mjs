@@ -694,6 +694,83 @@ try {
   check((await tabCount()) === 2, "the edited tab is closed again", String(await tabCount()));
 
   // -------------------------------------------------------------------------
+  // The status bar names each tab's document type
+  // -------------------------------------------------------------------------
+  console.log("\n=== the status-bar document type ===");
+  const documentType = () =>
+    json(`(() => {
+      const e = document.getElementById("status-type");
+      return { text: e?.textContent ?? "", origin: e?.dataset.origin ?? "", title: e?.title ?? "" };
+    })()`);
+  await clickTab("feature-tour.md");
+  await sleep(600);
+  const markdownType = await documentType();
+  check(
+    markdownType.text === "Markdown" && markdownType.origin === "extension",
+    "a .md file is Markdown, from its extension",
+    JSON.stringify(markdownType),
+  );
+  await clickTab("typst-tour.typ");
+  await sleep(600);
+  const typstType = await documentType();
+  check(
+    typstType.text === "Typst" && typstType.title.includes(".typ"),
+    "switching tabs names the .typ file Typst at once",
+    JSON.stringify(typstType),
+  );
+
+  await press({ code: "KeyN", key: "n", ctrl: true });
+  await sleep(1000);
+  const untitledType = await documentType();
+  check(
+    untitledType.text === "Markdown" && untitledType.origin === "default",
+    "an empty untitled tab shows the language it starts in",
+    JSON.stringify(untitledType),
+  );
+
+  // One keystroke reaches the status bar through the edit, the dirty flag and
+  // the caret; the caret position must still be written exactly once.
+  await evaluate(`document.querySelector(".cm-content").focus()`);
+  await evaluate(`(() => {
+    window.__statusWrites = 0;
+    window.__statusObserver = new MutationObserver((records) => {
+      window.__statusWrites += records.length;
+    });
+    window.__statusObserver.observe(document.getElementById("status-cursor"), {
+      childList: true, characterData: true, subtree: true,
+    });
+    return true;
+  })()`);
+  await send("Input.insertText", { text: "x" });
+  await sleep(300);
+  const cursorWrites = await evaluate(
+    `(() => { window.__statusObserver.disconnect(); return window.__statusWrites; })()`,
+  );
+  check(cursorWrites === 1, "one keystroke writes the caret position once", String(cursorWrites));
+
+  await press({ code: "KeyA", key: "a", ctrl: true });
+  await send("Input.insertText", { text: '{\n  "name": "mdraft",\n  "private": true\n}\n' });
+  const detected = await pollFor(
+    `document.getElementById("status-type")?.textContent === "JSON"`,
+    4000,
+  );
+  const jsonType = await documentType();
+  check(
+    detected && jsonType.origin === "content" && jsonType.title.includes(".json"),
+    "typing JSON into an untitled tab names it JSON once typing pauses",
+    JSON.stringify(jsonType),
+  );
+
+  for (let i = 0; i < 6 && (await dirtyCount()) > 0; i += 1) {
+    await press({ code: "KeyZ", key: "z", ctrl: true });
+    await sleep(250);
+  }
+  check((await dirtyCount()) === 0, "undo leaves the probe tab clean", String(await dirtyCount()));
+  await clickClose("Untitled");
+  await sleep(800);
+  check((await tabCount()) === 2, "the probe tab is closed again", String(await tabCount()));
+
+  // -------------------------------------------------------------------------
   // Close buttons
   // -------------------------------------------------------------------------
   console.log("\n=== the × button ===");
