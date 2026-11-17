@@ -671,7 +671,11 @@ fn enabled_for(state: &MenuState, id: &str) -> Option<bool> {
         "format.document" => state.can_format,
         // The four languages with a paragraph classifier; HTML and code have none.
         "para.unwrap" | "para.wrap" => {
-            writable && matches!(state.document_language.as_str(), "markdown" | "latex" | "typst" | "asciidoc")
+            writable
+                && matches!(
+                    state.document_language.as_str(),
+                    "markdown" | "latex" | "typst" | "asciidoc"
+                )
         }
         "format.bold" | "format.italic" | "format.strike" | "format.code" | "format.link"
         | "format.image" => writable,
@@ -2163,7 +2167,11 @@ mod tests {
         }
         for language in ["html", "javascript", "css", "json"] {
             state.document_language = language.into();
-            assert_eq!(enabled_for(&state, "para.wrap"), Some(false), "para.wrap in {language}");
+            assert_eq!(
+                enabled_for(&state, "para.wrap"),
+                Some(false),
+                "para.wrap in {language}"
+            );
         }
         state.document_language = "markdown".into();
         state.read_only = true;

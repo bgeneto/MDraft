@@ -1689,9 +1689,20 @@ mod tests {
         // value outside 20–200 is pulled back into range.
         let legacy = parse_settings(r#"{"viewMode":"split"}"#).expect("a legacy file loads");
         assert_eq!(legacy.wrap_column, 80);
-        assert_eq!(parse_settings(r#"{"wrapColumn":3}"#).unwrap().wrap_column, WRAP_COLUMN_MIN);
-        assert_eq!(parse_settings(r#"{"wrapColumn":9999}"#).unwrap().wrap_column, WRAP_COLUMN_MAX);
-        assert_eq!(parse_settings(r#"{"wrapColumn":72}"#).unwrap().wrap_column, 72);
+        assert_eq!(
+            parse_settings(r#"{"wrapColumn":3}"#).unwrap().wrap_column,
+            WRAP_COLUMN_MIN
+        );
+        assert_eq!(
+            parse_settings(r#"{"wrapColumn":9999}"#)
+                .unwrap()
+                .wrap_column,
+            WRAP_COLUMN_MAX
+        );
+        assert_eq!(
+            parse_settings(r#"{"wrapColumn":72}"#).unwrap().wrap_column,
+            72
+        );
     }
 
     #[test]

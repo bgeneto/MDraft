@@ -1076,7 +1076,10 @@ mod tests {
         // `vendor/pdfjs/` (its data folders it passes as base URLs). An unpinned
         // name is refused, and every PDF image would show only its file name.
         let config = config();
-        for name in ["vendor/pdfjs/pdf.min.mjs", "vendor/pdfjs/pdf.worker.min.mjs"] {
+        for name in [
+            "vendor/pdfjs/pdf.min.mjs",
+            "vendor/pdfjs/pdf.worker.min.mjs",
+        ] {
             assert!(
                 config.assets.iter().any(|pin| pin.path == name),
                 "{name} is not pinned"
@@ -1087,7 +1090,10 @@ mod tests {
         for folder in ["cmaps/", "standard_fonts/", "wasm/", "iccs/"] {
             let prefix = format!("vendor/pdfjs/{folder}");
             assert!(
-                config.assets.iter().any(|pin| pin.path.starts_with(&prefix)),
+                config
+                    .assets
+                    .iter()
+                    .any(|pin| pin.path.starts_with(&prefix)),
                 "nothing under {prefix} is pinned"
             );
         }
