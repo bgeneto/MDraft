@@ -1749,6 +1749,16 @@ export class TypstPdfPreview {
     // stays, so selection across a freed page still works.
     page.canvas.width = 0;
     page.canvas.height = 0;
+    // PDF.js draws through an opaque (`alpha: false`) context, and resizing a
+    // canvas that has one clears it to opaque black. The next paint sizes the
+    // canvas before PDF.js has filled the paper, so a reused canvas showed a
+    // black page (white once the dark theme inverts it) on every return to a
+    // parked tab. A fresh element has no context and stays transparent until
+    // PDF.js draws, so the shell's --bg shows instead.
+    const fresh = document.createElement("canvas");
+    fresh.setAttribute("aria-hidden", "true");
+    page.canvas.replaceWith(fresh);
+    page.canvas = fresh;
   }
 
   /**
