@@ -871,6 +871,80 @@ try {
     `${pathsBeforeSwitch} -> ${pathsAfterSwitch}`,
   );
 
+  console.log("=== a return to another project shows its stored PDF ===");
+  // Each project has its own frame, so a switch between two main documents
+  // mounts a new one. With the exact PDF stored, that PDF is drawn at once and
+  // the new frame warms up under it instead of behind "Typesetting…".
+  const appClass = (name) =>
+    evaluate(`document.querySelector(".app")?.classList.contains(${JSON.stringify(name)})`);
+  const exportCurrent = `(() => {
+    const d = document.querySelector("#preview")?.dataset;
+    return Boolean(d?.latexShadow) && d.latexShadow === d.latexCurrent;
+  })()`;
+  check(
+    await waitFor(exportCurrent, 180_000, "the book's export for the current text"),
+    "the book's export matches its current text before the switch",
+  );
+  const otherSession = Number((await dataset("texpressoSession")) ?? "0");
+  // A main document in a folder of its own: one directly in samples/ would
+  // make every sample, the book included, part of its project.
+  await openFile("samples/latex-engines/plain.tex");
+  check(
+    await waitFor(
+      `Number(document.querySelector("#preview")?.dataset.texpressoSession ?? 0) > ${otherSession} && ${exportCurrent}`,
+      180_000,
+      "the second project's own frame and export",
+    ),
+    "another project mounts its own frame and exports",
+  );
+  const returnSession = Number((await dataset("texpressoSession")) ?? "0");
+  const waitsBeforeReturn = (await waitLog()).length;
+  await openFile("samples/latex-perf/book/main.tex");
+  check(
+    await waitFor(
+      `document.querySelectorAll("#preview .typst-page").length > 0`,
+      5_000,
+      "the stored PDF",
+    ),
+    "the return draws the stored PDF within seconds",
+    await evaluate(`JSON.stringify({
+      status: document.getElementById("status-file")?.textContent,
+      app: document.querySelector(".app")?.className,
+      label: document.querySelector(".compiled-toolbar .compiled-state-label")?.textContent,
+      data: { ...document.querySelector("#preview")?.dataset },
+      pending: document.querySelector(".preview-pending .preview-pending-phase")?.textContent ?? null,
+    })`),
+  );
+  check(
+    Number((await dataset("texpressoSession")) ?? "0") > returnSession,
+    "the return mounted a new frame for the book",
+  );
+  check(
+    (await appClass("texpresso-covered")) || (await appClass("texpresso-painted")),
+    "the new frame warms up covered (or has already taken over)",
+  );
+  check(
+    await waitFor(
+      `document.querySelector(".app")?.classList.contains("latex-texpresso") && !document.querySelector(".app")?.classList.contains("texpresso-covered") && document.querySelector(".app")?.classList.contains("texpresso-painted")`,
+      300_000,
+      "the frame to take over",
+    ),
+    "the frame takes over once it has typeset",
+  );
+  check(
+    (await evaluate(`document.querySelectorAll("#preview .typst-page").length`)) === 0,
+    "the handover drops the stored PDF's view",
+  );
+  const returnWaits = shownWaits((await waitLog()).slice(waitsBeforeReturn));
+  check(
+    returnWaits.length === 0,
+    "the return never shows the waiting surface",
+    JSON.stringify(returnWaits.slice(0, 3)),
+  );
+  // The sections below were written against the chapter tab; it belongs to the
+  // same project, so the frame stays.
+  await openFile("samples/latex-perf/book/chapters/ch06.tex");
+
   console.log("=== recompile from scratch ===");
   const more = ".compiled-toolbar .compiled-compile-more";
   check(
@@ -963,6 +1037,9 @@ try {
     (await evaluate(`document.querySelector("#compiler-problems")?.textContent ?? ""`)) ===
       "No problems reported.",
     "the problems list holds only the new build",
+    await evaluate(
+      `(document.querySelector("#compiler-problems")?.textContent ?? "").slice(0, 300)`,
+    ),
   );
 
   const menuSessionBefore = Number((await dataset("texpressoSession")) ?? "0");

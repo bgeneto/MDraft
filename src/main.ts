@@ -4166,7 +4166,8 @@ async function renderLatexPreview(
   const { engineStatus, root, revisions, overlays, engineChoice } = build;
   // TeXpresso is the only bundled preview. WasmTex is disabled: its code and
   // hidden test backend remain, but no build falls back to it.
-  const shadow = texpressoPrepare(build, storeOnly);
+  // Recompile from scratch and a clean build are asked to rebuild: never covered.
+  const shadow = texpressoPrepare(build, storeOnly, !force && options.clean !== true);
   if (latexPreviewBackend() === "texpresso" && engineStatus.backend === "bundled" && !shadow) {
     if (storeOnly) latexInFlight = false;
     return;
@@ -4201,17 +4202,30 @@ async function renderLatexPreview(
     latexLibraryRevision = snapshot.texmf?.revision ?? null;
     // Completion follows the latest capture, in this editor state only.
     editor.view.dispatch({ effects: setLocalLatexNames.of(libraryNames(snapshot.texmf)) });
+    const key = latexKey(root, snapshot.generation, {
+      ...latexEngineIdentity(engineStatus),
+      bundledEngine: engineChoice?.engine ?? null,
+    });
+    // A covered frame is drawn over by the stored PDF of exactly these inputs.
+    // After an edit it stays covered while this project's PDF is still on
+    // screen (labelled out of date); with neither, the frame is the content.
+    const coverHit =
+      shadow && texpressoCovered && !force && !storeOnly ? latexStore.get(key) : undefined;
+    if (
+      shadow &&
+      texpressoCovered &&
+      !coverHit &&
+      !(typstPdf !== null && latexPreview?.rootId === root.id)
+    ) {
+      texpressoUncover(storeOnly);
+    }
     // The live preview takes the same capture: its project follows every
     // render, so a file added to the project reaches it without an edit.
     if (shadow && !texpressoSyncSnapshot(build, snapshot)) {
       if (!storeOnly) latexInFlight = false;
       return;
     }
-    const key = latexKey(root, snapshot.generation, {
-      ...latexEngineIdentity(engineStatus),
-      bundledEngine: engineChoice?.engine ?? null,
-    });
-    if (shadow) {
+    if (shadow && !coverHit) {
       // The frame's own exporter is the authority for export, print, the menu
       // state and the Problems list; nothing is drawn from it.
       if (storeOnly) return;
@@ -4385,7 +4399,7 @@ async function renderLatexPreview(
     // made continuous typing show nothing at all.
     if (!latexDisplayable(value)) return;
     if (!stored) latexStore.set(key, result, latexResultBytes(result));
-    if (shadow) {
+    if (shadow && !coverHit) {
       perfMeasure("post", postStarted, { sources: result.sources.length });
       commitLatexShadow(value, key, { stored: Boolean(stored), started, backend: engineStatus });
       return;
@@ -4459,6 +4473,9 @@ async function renderLatexPreview(
       ),
       key,
     );
+    // The drawn PDF is the frame's export too: an unchanged later render
+    // rebinds it instead of exporting again.
+    if (coverHit) latexShadowKey = key;
     previewSyncReady = true;
     // A successful compile is the only authority that clears a problem list.
     latexProblems = result.warnings;
@@ -4758,6 +4775,15 @@ let texpressoShown = false;
  * the pane but shows nothing, and the waiting surface stays over it.
  */
 let texpressoHasPages = false;
+/**
+ * A new frame is warming up under the PDF the store already held for this
+ * project, instead of showing the wait over a blank frame. It stays laid out
+ * (transparent, under `#preview`) so it typesets and paints as usual, and takes
+ * over on its first finished page. Without this, a tab switch between two
+ * projects retypeset from scratch behind "Typesetting…" although the exact PDF
+ * was stored.
+ */
+let texpressoCovered = false;
 /** The frame's own scroll offset, as it last reported it. */
 let texpressoScrollTop = 0;
 /** The key of the exported result, which never commits to the pane. */
@@ -4942,11 +4968,47 @@ function texpressoShowing(): boolean {
 }
 
 function texpressoShow(visible: boolean): void {
-  texpressoShown = visible;
+  // Hiding the frame ends a cover: whatever comes back for it later is a
+  // return to a live frame, not a warm-up.
+  if (!visible) texpressoCovered = false;
+  texpressoShown = visible && !texpressoCovered;
   texpressoHostElement().hidden = !visible;
-  app.classList.toggle("latex-texpresso", visible);
-  if (visible) preview.dataset.latexBackend = "texpresso";
+  app.classList.toggle("latex-texpresso", texpressoShown);
+  app.classList.toggle("texpresso-covered", visible && texpressoCovered);
+  if (texpressoShown) preview.dataset.latexBackend = "texpresso";
   else delete preview.dataset.latexBackend;
+}
+
+/** The frame is this tab's content again; arm the wait if it has no page yet. */
+function texpressoUncover(storeOnly: boolean): void {
+  if (!texpressoCovered) return;
+  texpressoCovered = false;
+  texpressoShow(settings.viewMode !== "source");
+  texpressoArmWait(storeOnly);
+}
+
+/** A frame without a page owns the pane but shows nothing: the wait covers it. */
+function texpressoArmWait(storeOnly: boolean): void {
+  if (!texpressoAwaitingPages()) return;
+  armPending();
+  if (!storeOnly) revivePending(latexWaitPhase(""));
+}
+
+/**
+ * The covered frame has finished typesetting: it replaces the stored PDF. The
+ * PDF view goes, so a hidden copy does not keep its canvases and map worker.
+ */
+function texpressoHandOver(): void {
+  if (!texpressoCovered) return;
+  texpressoCovered = false;
+  discardStagedPdf();
+  disposeTypstPdf();
+  typstPdfToken = -1;
+  preview.replaceChildren();
+  texpressoFollowTab();
+  if (texpressoShowing()) clearPending();
+  syncPreviewFromSource();
+  perfMark("texpresso-handover");
 }
 
 /** Show the frame again for a tab of its project, or hide it for any other. */
@@ -5035,7 +5097,11 @@ function texpressoChip(): void {
  * or reuse it. Returns true when it does: the build is then the frame's own
  * export for the PDF, print and Problems.
  */
-function texpressoPrepare(build: LatexBuildRequest, storeOnly: boolean): boolean {
+function texpressoPrepare(
+  build: LatexBuildRequest,
+  storeOnly: boolean,
+  coverable: boolean,
+): boolean {
   texpressoFallbackReason = null;
   delete statusEngine.dataset.baseTitle;
   if (latexPreviewBackend() !== "texpresso") {
@@ -5091,6 +5157,9 @@ function texpressoPrepare(build: LatexBuildRequest, storeOnly: boolean): boolean
     texpressoLogLine(`Preview starting (${ENGINE_LABELS[engine]})`);
     texpressoWatchFetches();
     perfMark("texpresso-mount", { engine: frameEngine });
+    // Until the snapshot says whether the store holds this project's PDF, the
+    // new frame warms up covered; a miss uncovers it before anything shows.
+    texpressoCovered = coverable;
   }
   texpresso!.open(projectRelativePath(build.root.directory, doc.path, pathKey));
   texpressoShow(settings.viewMode !== "source");
@@ -5100,10 +5169,7 @@ function texpressoPrepare(build: LatexBuildRequest, storeOnly: boolean): boolean
   // owner, so the wait is armed here rather than by the owner test alone. A
   // build that starts over an idle "no pages" or "unavailable" surface spins it
   // again.
-  if (texpressoAwaitingPages()) {
-    armPending();
-    if (!storeOnly) revivePending(latexWaitPhase(""));
-  }
+  texpressoArmWait(storeOnly);
   return true;
 }
 
@@ -5569,7 +5635,10 @@ function texpressoMessage(session: TexpressoSession, message: FrameMessage): voi
         texpressoSetPages(true);
         if (texpressoShowing()) clearPending();
       }
-      if (message.done) syncPreviewFromSource();
+      // A finished page, not the first one: a half-typeset document must not
+      // replace the complete stored PDF.
+      if (message.done && message.pages > 0 && texpressoCovered) texpressoHandOver();
+      else if (message.done) syncPreviewFromSource();
       break;
     }
     case "viewport":
