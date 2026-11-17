@@ -9,7 +9,8 @@ Rust filesystem commands through `src/api.ts`. See [architecture](docs/architect
 
 One agent works in one checkout at a time. Never run two agents in the same
 working tree, and never switch branches in a checkout another agent is using.
-For every task that changes files, use a dedicated worktree:
+When agents work in parallel, or a task needs a topic branch (see [Branch
+policy](#branch-policy)), use a dedicated worktree:
 
 ```powershell
 git fetch origin
@@ -30,26 +31,33 @@ decision.
 
 ## Branch policy
 
-`master` is protected and read-only for agents. Never edit or commit while
-`master` is checked out. Start every task that changes files on a topic branch
-created from an up-to-date `origin/master`, in a clean checkout (see [Workspace
-isolation](#workspace-isolation)):
+MDraft is in active pre-release development, and `master` accepts direct
+commits. Commit small, focused fixes (a bug, a typo, CSS, docs, a test) directly
+on an up-to-date `master` after the cheapest meaningful check, then push:
+
+```powershell
+git pull --ff-only
+# edit, check, commit
+git push
+```
+
+Use a topic branch and a pull request instead for refactors, architectural
+changes, dependency changes, public contracts, release or CI changes, anything
+the owner wants reviewed, and anything that should be reverted as one unit:
 
 ```powershell
 git fetch origin
 git switch -c <type>/<short-slug> origin/master
 ```
 
-Read-only investigation, builds and tests may run on `master`. "Implement
-directly" in this file means implement on a topic branch and open a pull
-request; it never authorises a commit on `master`. A task is not done until the
-work is on its own branch, pushed, a PR is open, and `git status` is clean (or
-the owner explicitly asked you not to push). If a command fails because
-`master` is protected, do not retry, force, or bypass it: move the changes to a
-new branch and continue there.
+A task is done when its commits are pushed (to `master`, or to a topic branch
+with an open PR) and `git status` is clean, unless the owner asked you not to
+push. Never force-push `master` or rewrite its history. If a push is rejected
+because `master` moved, `git pull --rebase` and push again; if it is rejected
+for any other reason, stop and report it.
 
-A local `pre-commit` guard and an OpenCode branch-guard plugin enforce this. Do
-not use `--no-verify` or disable either to work around it.
+Quality CI still runs on every push to `master`. A red run on `master` is the
+next task: fix it before starting other work.
 
 ## Scope and approval
 
@@ -58,8 +66,8 @@ changes spanning more than three files, dependencies, public contracts, or work
 that is hard to undo. Public contracts include Tauri command names/arguments/results,
 API wrappers, existing settings compatibility, document dialects, menu events,
 and accelerator/menu-state payloads. Write no plan for an obvious local fix;
-implement it on a topic branch (see [Branch policy](#branch-policy)) and run the
-cheapest meaningful check.
+implement it directly on `master` (see [Branch policy](#branch-policy)) and run
+the cheapest meaningful check.
 
 Owner records live in a separate private checkout. Owner sessions may load
 `AGENTS.md` from `MDRAFT_OWNER_DOCS`, or from the sibling `../MDraft-owner` when
@@ -116,9 +124,9 @@ Before committing, run `npm run repo:hygiene`, `npm run security:scan` and
 checks CI's Quality workflow runs for the layers you touched: `npm run lint` and
 `npm run knip` for TypeScript, clippy with `-D warnings` for Rust; `npm run build`
 alone does not check formatting. Install the local hooks with
-`npm run security:hooks`; pre-push checks every outgoing ref and its history. Push only a topic branch and open a
-pull request; the local `pre-commit` guard refuses a commit on `master`. Ignore
-rules alone do not remove tracked files or protect against forced additions.
+`npm run security:hooks`; pre-push checks every outgoing ref and its history,
+then runs the typecheck, Prettier, ESLint and knip. Do not use `--no-verify` to
+skip a hook. Ignore rules alone do not remove tracked files or protect against forced additions.
 Use NUL-delimited Git I/O.
 
 Never commit credentials, environment files, signing keys, app state, generated

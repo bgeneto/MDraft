@@ -1,3 +1,11 @@
 #!/bin/sh
 set -eu
 node scripts/repo-hygiene.mjs --pre-push
+
+# Direct pushes to master are allowed during active development, so run the
+# fast frontend checks CI's Quality workflow would otherwise catch after the
+# fact. Rust formatting is already checked per staged file at commit time.
+npx --no-install tsc --noEmit
+npm run --silent format:check
+npm run --silent lint
+npm run --silent knip
