@@ -17,6 +17,7 @@ mod launch;
 #[cfg(target_os = "linux")]
 mod linux_webkit_env;
 mod menu;
+mod navigation;
 mod optional_tools;
 mod print;
 mod purge;
@@ -166,8 +167,14 @@ pub fn run() {
             app.manage(state);
             let menu = menu::build(app.handle(), &menu_state)?;
             app.set_menu(menu)?;
+            // The dev server is an application origin only in debug builds.
+            #[cfg(debug_assertions)]
+            let dev_url = app.config().build.dev_url.clone();
+            #[cfg(not(debug_assertions))]
+            let dev_url = None;
             for config in startup_windows.iter().filter(|config| config.create) {
-                tauri::WebviewWindowBuilder::from_config(app.handle(), config)?.build()?;
+                let builder = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?;
+                navigation::guard(builder, dev_url.clone()).build()?;
             }
             Ok(())
         })
