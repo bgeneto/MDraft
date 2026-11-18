@@ -40,6 +40,44 @@
       /* the frame is being torn down */
     }
   };
+  const ENGINE = params.get("engine") === "luatex" ? "luatex" : "xetex";
+  // The renderer leaves out the text of a font it cannot load and says so only
+  // on the console: `renderer: missing font file ptmr8t.pfb` for a TeX font
+  // with no Type 1 file (under XeLaTeX, a virtual font such as T1 Times or
+  // Charter), `renderer: missing native font …` for an OpenType one. The app
+  // calls `console.warn` by name at each use, so wrapping it before the
+  // reader's project arrives sees every line; the names become problems.
+  const missingFonts = new Map();
+  let onMissingFont = () => {};
+  try {
+    const warn = console.warn;
+    console.warn = function (...args) {
+      try {
+        const text = args.map(String).join(" ");
+        const match = /^renderer: missing (font file|native font) (\S{1,200})/.exec(text);
+        const name = match?.[2].replace(/\.pfb$/i, "");
+        if (name && !missingFonts.has(name) && missingFonts.size < 50) {
+          missingFonts.set(name, match[1] === "font file" ? "type1" : "native");
+          onMissingFont();
+        }
+      } catch {
+        /* the console keeps working whatever the line holds */
+      }
+      return warn.apply(this, args);
+    };
+  } catch {
+    /* without the wrapper a missing font goes unreported, as before */
+  }
+  const fontProblem = (name, kind) => ({
+    file: "",
+    line: 0,
+    column: 0,
+    severity: "warning",
+    message:
+      kind === "type1" && ENGINE === "xetex"
+        ? `The XeLaTeX preview cannot draw the font ${name}: it has no Type 1 file, so it is probably a virtual font. Text in it is blank in the preview; the exported PDF has it, and LuaLaTeX previews it.`
+        : `The preview cannot load the font ${name}. Text in it is blank in the preview.`,
+  });
   // A local library file the engine loaded in place of TeX Live's copy. The
   // worker cannot post to this page directly (worker.js says why).
   try {
@@ -593,17 +631,55 @@
     post({ type: "status", busy: value, problems: value ? null : problems() });
   };
   const problems = () => {
+    const fonts = [...missingFonts].map(([name, kind]) => fontProblem(name, kind));
     try {
-      return (api().problems() ?? []).slice(0, 200).map((p) => ({
-        file: String(p.file ?? ""),
-        line: Number(p.line) || 0,
-        column: Number(p.column) || 0,
-        severity: p.severity === "warning" ? "warning" : "error",
-        message: String(p.message ?? ""),
-      }));
+      return (api().problems() ?? [])
+        .slice(0, 200)
+        .map((p) => ({
+          file: String(p.file ?? ""),
+          line: Number(p.line) || 0,
+          column: Number(p.column) || 0,
+          severity: p.severity === "warning" ? "warning" : "error",
+          message: String(p.message ?? ""),
+        }))
+        .concat(fonts);
     } catch {
-      return [];
+      return fonts;
     }
+  };
+  // A font is first drawn, and found missing, after the paint that cleared
+  // `busy`; the host's problem list must still hear of it before its export.
+  onMissingFont = () => {
+    if (!isBusy) post({ type: "status", busy: false, problems: problems() });
+  };
+  /**
+   * The app's own verdict on the run an export just converted. When the worker
+   * gives up (out of memory, after its one restart from scratch) the status
+   * reads `Failed after N ms: <reason>`, and the export still returns the pages
+   * typeset before that; nothing else tells them from a finished document. The
+   * title can precede the end of the `busy` state by about 1.5 s, so the answer
+   * waits for it, bounded. Errors in the document are not this: they read
+   * `… with errors: …` or `Stopped after …` and are the problem list's.
+   */
+  const engineVerdict = async () => {
+    const status = document.getElementById("status");
+    if (!status) {
+      note("no #status: an engine failure cannot be reported");
+      return null;
+    }
+    const failed = () => status.title.startsWith("Failed after ");
+    const deadline = performance.now() + 3000;
+    while (!failed() && status.classList.contains("busy") && performance.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    const match = /^Failed after [^:]*: ([\s\S]+)$/.exec(status.title);
+    if (!match) return null;
+    const message = match[1].trim().slice(0, 200);
+    return {
+      reason: /out of memory/i.test(message) ? "memory" : "engine",
+      message,
+      pages: document.querySelectorAll("#pages .page").length,
+    };
   };
   const painted = (done) => {
     const seq = editSeq;
@@ -1162,9 +1238,13 @@
       try {
         const out = await api().exportPdf({ download: false });
         const pdf = new Uint8Array(out.pdf);
-        post({ type: "pdf", seq: message.seq, pdf: pdf.buffer, ms: performance.now() - started }, [
-          pdf.buffer,
-        ]);
+        const ms = performance.now() - started;
+        const failure = await engineVerdict();
+        if (failure) step(`engine failed: ${failure.message} pages=${failure.pages}`);
+        post(
+          { type: "pdf", seq: message.seq, pdf: pdf.buffer, ms, ...(failure ? { failure } : {}) },
+          [pdf.buffer],
+        );
       } catch (error) {
         post({ type: "error", seq: message.seq, message: String(error?.message ?? error) });
       }
@@ -1217,7 +1297,7 @@
     installLinks();
     post({
       type: "ready",
-      engine: params.get("engine") === "luatex" ? "luatex" : "xetex",
+      engine: ENGINE,
       jspi: typeof WebAssembly.Suspending === "function",
       missing,
     });

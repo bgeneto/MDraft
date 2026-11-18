@@ -465,6 +465,22 @@ const SUITES = [
     fixtures: ["samples/latex-on-demand/main.tex", "samples/latex-on-demand/figures/dot.png"],
   },
   {
+    // What the preview cannot do reaches the reader: a font its renderer
+    // cannot draw becomes a Logs warning, and a build the engine abandons
+    // (out of memory) reads PDF with errors with a partial PDF, never PDF ready.
+    id: "latex-texpresso-limits",
+    title: "TeXpresso preview limits",
+    kind: "cdp",
+    script: "latex-texpresso-limits-test.mjs",
+    doc: "samples/latex-texpresso-limits/vf.tex",
+    safeWithInstalledApp: true,
+    optIn: true,
+    origin: true,
+    reuseProfile: true,
+    writesDoc: false,
+    fixtures: ["samples/latex-texpresso-limits/vf.tex"],
+  },
+  {
     // The preview draws a PDF image with pdf.js from the pinned engine's
     // vendor/pdfjs/ folder; the export reads it through xdvipdfmx. The PDF
     // itself is generated, because the repository refuses committed PDFs.

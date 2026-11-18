@@ -25,6 +25,24 @@ on 2026-11-12 and compared, byte for byte, with the files the release serves
 `vendor/pdfjs/pdf.min.mjs` are not pinned: the embedded preview never asked
 for them.
 
+## What the bridge reads from the app
+
+Besides `window.texpresso`, `mdraft-bridge.js` relies on two things the pinned
+app shows but does not expose as API. A new release must be checked for both
+(`scripts/latex-texpresso-limits-test.mjs` fails when either changes):
+
+- **The status title of `#status`.** When the worker gives up (out of memory,
+  after its one restart from scratch) it reads
+  `Failed after <time>: The engine ran out of memory`, and the export still
+  returns the pages typeset before that. The bridge reads it after each export
+  and sends it as the `pdf` message's `failure`. Errors in the document read
+  `… with errors: …` or `Stopped after …; waiting for an edit`; those are not
+  a failure verdict.
+- **The renderer's console lines.** `renderer: missing font file <name>.pfb`
+  (under XeLaTeX, a virtual font) and `renderer: missing native font <name>`
+  are written with `console.warn`, which the app calls by name at each use. The
+  bridge wraps it and reports each font as a warning problem.
+
 ## Licence
 
 - `let-def/texpresso`, the native tool, is MIT licensed (Frédéric Bour). The

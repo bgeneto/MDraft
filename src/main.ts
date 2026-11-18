@@ -241,6 +241,7 @@ import { projectLatexOutline, type ProjectHeading } from "./latex-outline";
 import { nativeSources, nativeToLatex } from "./latex-native";
 import {
   BUNDLED_TEXLIVE_YEAR,
+  engineFailureText,
   latexPreviewBackend,
   phitexCapable,
   previewEngineFor,
@@ -251,7 +252,12 @@ import {
   type TexpressoFallback,
 } from "./latex-backend";
 import { normaliseText, prepareProject, TexpressoSession } from "./texpresso/session";
-import type { ClickPrecision, FrameMessage, TexpressoTheme } from "./texpresso/protocol";
+import type {
+  ClickPrecision,
+  EngineFailure,
+  FrameMessage,
+  TexpressoTheme,
+} from "./texpresso/protocol";
 import { editorLineAt, editorScrollFor, type EditorScrollGeometry } from "./texpresso/scroll";
 import {
   lineRangeAt,
@@ -3540,6 +3546,25 @@ function latexPartialCurrent(): boolean {
   );
 }
 
+/** The Logs entry of a build the preview engine abandoned part-way. */
+const ENGINE_FAILURE_CODE = "engine-stopped";
+
+function engineFailureDiagnostic(failure: EngineFailure): LatexDiagnostic {
+  const text = engineFailureText(failure);
+  return {
+    file: "",
+    line: 0,
+    column: 0,
+    endColumn: 0,
+    severity: "error",
+    code: ENGINE_FAILURE_CODE,
+    message: `${text.status} ${text.detail}`,
+    text: "",
+    lineText: "",
+    searched: [],
+  };
+}
+
 async function latexFailure(
   error: unknown,
   root: { path: string; directory: string } | null = null,
@@ -3570,7 +3595,18 @@ async function latexFailure(
     manage.addEventListener("click", () => focusLocalLibraries());
     panel.prepend(manage);
   }
+  // The preview engine gave up part-way; the route without its memory limit is
+  // an installed distribution.
+  if (issues.some((issue) => issue.code === ENGINE_FAILURE_CODE)) {
+    const installed = document.createElement("button");
+    installed.type = "button";
+    installed.className = "typst-notebutton latex-installed-tex";
+    installed.textContent = "Installed TeX distribution…";
+    installed.addEventListener("click", () => focusLatexPreferences("Installed TeX distribution"));
+    panel.prepend(installed);
+  }
   const partial = error instanceof LatexBuildError ? error.partialPdf : null;
+  const readable = Boolean(partial && new TextDecoder().decode(partial.subarray(0, 5)) === "%PDF-");
   const token = renderToken;
   const activeId = doc.id;
   const revision = doc.revision;
@@ -3578,7 +3614,20 @@ async function latexFailure(
     attempt?.revisions ?? sessions.list().map(({ id, revision, path }) => ({ id, revision, path }));
   let shownPartial = false;
   const live = texpressoShowing();
-  if (!live && partial && new TextDecoder().decode(partial.subarray(0, 5)) === "%PDF-") {
+  if (live && partial && readable) {
+    // The frame already draws these pages; they become the partial PDF that
+    // Save PDF offers, without a second rendering over the frame.
+    latexPartial = {
+      pdf: partial.slice(),
+      token,
+      activeId,
+      revision,
+      revisions,
+      rootPath: root?.path ?? doc.path ?? "document.tex",
+    };
+    preview.dataset.latexPartial = String(token);
+    shownPartial = true;
+  } else if (!live && partial && readable) {
     latexInFlight = true;
     setLatexStatus("Rendering PDF with errors…");
     const host = stagedPdfHost();
@@ -3672,7 +3721,9 @@ async function latexFailure(
   }
   setLatexStatus(
     live
-      ? "PDF for export failed · See Logs."
+      ? shownPartial && error instanceof Error
+        ? `PDF with errors · ${error.message}`
+        : "PDF for export failed · See Logs."
       : shownPartial
         ? "PDF with errors · Compilation reported problems; see Logs."
         : typstPdf
@@ -3719,11 +3770,15 @@ function latexLibrariesChanged(reason: string): void {
 
 /** Open Preferences › LaTeX on the local library group, focused for the keyboard. */
 function focusLocalLibraries(): void {
+  focusLatexPreferences("Local packages");
+}
+
+/** Open Preferences › LaTeX on the group titled `group`, focused for the keyboard. */
+function focusLatexPreferences(group: string): void {
   preferences.openAt("latex");
   window.setTimeout(() => {
     const heading = [...document.querySelectorAll<HTMLElement>(".prefs-panel *")].find(
-      (element) =>
-        element.children.length === 0 && element.textContent?.trim() === "Local packages",
+      (element) => element.children.length === 0 && element.textContent?.trim() === group,
     );
     if (!heading) return;
     heading.scrollIntoView({ block: "start" });
@@ -5027,6 +5082,35 @@ async function texpressoExportPdf(
     return;
   }
   const warnings = texpressoDiagnostics(session, build.root.directory);
+  if (reply.failure) {
+    // The engine gave up part-way: these bytes are the pages before that, not
+    // the document. They are offered as a partial PDF, never stored as a
+    // result, so nothing later can commit them as "PDF ready".
+    const text = engineFailureText(reply.failure);
+    texpressoLogLine(`The engine stopped: ${reply.failure.message}`);
+    perfMark("texpresso-engine-failed", {
+      reason: reply.failure.reason,
+      pages: reply.failure.pages,
+    });
+    await latexFailure(
+      new LatexBuildError(
+        text.status,
+        [engineFailureDiagnostic(reply.failure), ...warnings],
+        texpressoLogText(),
+        false,
+        reply.pdf,
+      ),
+      { path: build.root.path, directory: build.root.directory },
+      [...snapshot.files.map((file) => file.path), ...snapshot.manifest.files.map((f) => f.path)],
+      owner,
+      {
+        engine: ENGINE_LABELS[build.engineChoice?.engine ?? "xelatex"],
+        elapsedMs: performance.now() - started,
+      },
+    );
+    texpressoSettleWait(session);
+    return;
+  }
   const result: LatexResult = {
     pdf: reply.pdf,
     sources: nativeSources(snapshot),

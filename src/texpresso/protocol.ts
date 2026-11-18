@@ -74,6 +74,18 @@ export interface TexpressoProblem {
   message: string;
 }
 
+/**
+ * The engine gave up before the end of the document: the pages of the PDF it
+ * came with stop there. `memory` when it ran out of memory (the WASM heap is
+ * capped at 2 GiB), `engine` for any other abandoned run. `pages`: how many the
+ * frame drew.
+ */
+export interface EngineFailure {
+  reason: "memory" | "engine";
+  message: string;
+  pages: number;
+}
+
 export type FrameMessage =
   | {
       type: "ready";
@@ -119,7 +131,8 @@ export type FrameMessage =
   | { type: "link"; uri: string }
   | { type: "key"; key: "Escape" }
   | { type: "zoom-wheel"; deltaY: number }
-  | { type: "pdf"; seq: number; pdf: ArrayBuffer; ms: number }
+  /** `failure`: the export holds only what was typeset before the engine gave up. */
+  | { type: "pdf"; seq: number; pdf: ArrayBuffer; ms: number; failure?: EngineFailure }
   | { type: "error"; seq?: number; message: string }
   | { type: "disposed"; seq: number }
   /** The engine loaded a local library file in place of TeX Live's `name`. */
@@ -147,6 +160,18 @@ const int = (value: unknown): value is number => Number.isInteger(value);
 const str = (value: unknown): value is string => typeof value === "string";
 const nullable = <T>(value: unknown, test: (v: unknown) => v is T): value is T | null =>
   value === null || test(value);
+
+function engineFailure(value: unknown): value is EngineFailure {
+  return (
+    isObject(value) &&
+    (value.reason === "memory" || value.reason === "engine") &&
+    str(value.message) &&
+    value.message.length > 0 &&
+    value.message.length <= 200 &&
+    int(value.pages) &&
+    value.pages >= 0
+  );
+}
 
 function problem(value: unknown): value is TexpressoProblem {
   return (
@@ -236,8 +261,20 @@ export function parseFrameMessage(data: unknown): FrameMessage | null {
     case "zoom-wheel":
       return num(m.deltaY) ? { type: "zoom-wheel", deltaY: m.deltaY } : null;
     case "pdf":
-      return int(m.seq) && m.pdf instanceof ArrayBuffer && num(m.ms)
-        ? { type: "pdf", seq: m.seq, pdf: m.pdf, ms: m.ms }
+      if (!int(m.seq) || !(m.pdf instanceof ArrayBuffer) || !num(m.ms)) return null;
+      if (m.failure === undefined) return { type: "pdf", seq: m.seq, pdf: m.pdf, ms: m.ms };
+      return engineFailure(m.failure)
+        ? {
+            type: "pdf",
+            seq: m.seq,
+            pdf: m.pdf,
+            ms: m.ms,
+            failure: {
+              reason: m.failure.reason,
+              message: m.failure.message,
+              pages: m.failure.pages,
+            },
+          }
         : null;
     case "error":
       return str(m.message) && (m.seq === undefined || int(m.seq))

@@ -10,7 +10,7 @@
 //! suite can import it.
 
 import type { TexEngine } from "./latex-engine-choice";
-import type { TexpressoEngine } from "./texpresso/protocol";
+import type { EngineFailure, TexpressoEngine } from "./texpresso/protocol";
 
 export type LatexPreviewBackend = "texpresso" | "phitex";
 
@@ -159,4 +159,27 @@ export function texpressoFallbackText(
     case "failed":
       return "the preview stopped responding and its restart failed";
   }
+}
+
+/**
+ * The reader's account of a build the preview engine abandoned part-way. The
+ * first sentence is the status line's; the rest goes to Logs. An out-of-memory
+ * stop is the engine's 2 GiB limit, not the document's fault, and long
+ * documents reach it (a 592-page book stops near page 210), so the advice is
+ * the route without that limit.
+ */
+export function engineFailureText(failure: EngineFailure): { status: string; detail: string } {
+  const after = failure.pages > 0 ? ` after page ${failure.pages}` : "";
+  if (failure.reason === "memory") {
+    return {
+      status: `The preview engine ran out of memory${after}.`,
+      detail:
+        "The pages after that, the table of contents and anything else LaTeX writes at the end of the document are missing, and Save PDF keeps only the pages shown. The bundled engine is limited to 2 GiB of memory, which long documents can reach; an installed TeX distribution (Preferences › LaTeX) compiles the whole document.",
+    };
+  }
+  return {
+    status: `The preview engine stopped${after}: ${failure.message}`,
+    detail:
+      "The pages after that are missing, and Save PDF keeps only the pages shown. Recompile from scratch to try again, or compile with an installed TeX distribution (Preferences › LaTeX).",
+  };
 }
