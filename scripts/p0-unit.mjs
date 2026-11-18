@@ -1846,6 +1846,8 @@ for (const autoCompile of [false, true]) {
     // The engine change also empties the compiled-output store and the key.
     latexStore: { clear() {} },
     committedKey: "k",
+    // A project held after the engine ran out of memory: another engine may fit.
+    texpressoMemoryHold: { rootPath: "C:/book/main.tex", files: new Set() },
     window: { clearTimeout() {} },
     cancelLatex() {},
     discardStagedPdf() {},
@@ -1864,6 +1866,10 @@ for (const autoCompile of [false, true]) {
       !("latexCurrent" in h.context.preview.dataset) &&
       compiles === 0,
     `an engine change makes the PDF stale without compiling (auto-compile ${autoCompile ? "on" : "off"})`,
+  );
+  check(
+    h.context.texpressoMemoryHold === null,
+    `an engine change lifts the hold after an out-of-memory verdict (auto-compile ${autoCompile ? "on" : "off"})`,
   );
   check(
     autoCompile ? statuses.length === 0 : statuses.some((text) => text.includes("engine changed")),
