@@ -198,7 +198,17 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
       ],
     },
     { v: 1, type: "painted", seq: 4, done: true, pages: 12 },
-    { v: 1, type: "viewport", scrollTop: 12.5, file: "main.tex", line: 3.25, gesture: false },
+    {
+      v: 1,
+      type: "viewport",
+      scrollTop: 12.5,
+      page: 2,
+      file: "main.tex",
+      line: 3.25,
+      gesture: false,
+    },
+    // A frame with no page laid out still reports its scroll position.
+    { v: 1, type: "viewport", scrollTop: 0, page: null, file: null, line: null, gesture: true },
     { v: 1, type: "scrolled", seq: 5, scrollTop: null },
     { v: 1, type: "source", file: null, from: 0, to: 0, detail: 1 },
     {
@@ -245,6 +255,9 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     },
     { v: 1, type: "painted", seq: 1, done: true },
     { v: 1, type: "viewport", scrollTop: "12", file: null, line: null, gesture: false },
+    { v: 1, type: "viewport", scrollTop: 0, page: 0, file: null, line: null, gesture: false },
+    { v: 1, type: "viewport", scrollTop: 0, page: 1.5, file: null, line: null, gesture: false },
+    { v: 1, type: "viewport", scrollTop: 0, page: "2", file: null, line: null, gesture: false },
     { v: 1, type: "source", file: "main.tex", from: 5, to: 2, detail: 1 },
     { v: 1, type: "pdf", seq: 1, pdf: [1, 2], ms: 10 },
     { v: 1, type: "link" },
@@ -263,6 +276,23 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
       `a malformed message is dropped: ${JSON.stringify(message)?.slice(0, 60)}`,
     );
   }
+  const pageViewport = parseFrameMessage(valid.find((message) => message.page === 2));
+  check(
+    pageViewport?.type === "viewport" && pageViewport.page === 2,
+    "a viewport page number survives the frame boundary",
+  );
+  const legacyViewport = parseFrameMessage({
+    v: 1,
+    type: "viewport",
+    scrollTop: 1,
+    file: null,
+    line: null,
+    gesture: false,
+  });
+  check(
+    legacyViewport?.type === "viewport" && legacyViewport.page === null,
+    "a viewport from before the page field parses without it",
+  );
 }
 
 // --- an export the engine abandoned -------------------------------------------

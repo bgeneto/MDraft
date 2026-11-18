@@ -823,6 +823,27 @@
     );
   };
   let viewportFrame = 0;
+  /** The host's page jump asks for source sync just as a reader scroll does. */
+  let pageJump = false;
+  /**
+   * The 1-based page at the top of the visible area.
+   *
+   * Page tops are in document order, so a binary search avoids reading every
+   * page rectangle on each scroll frame of a long paper.
+   */
+  const pageAtTop = (box) => {
+    const pages = [...document.querySelectorAll("#pages .page")];
+    if (!pages.length) return null;
+    const y = box.getBoundingClientRect().top + reference;
+    let lo = 0;
+    let hi = pages.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (pages[mid].getBoundingClientRect().top <= y) lo = mid + 1;
+      else hi = mid;
+    }
+    return Math.max(1, lo);
+  };
   const reportViewport = () => {
     viewportFrame = 0;
     const box = pagesBox();
@@ -835,13 +856,16 @@
     const landed =
       linkLanding && performance.now() < linkLanding.until && Math.abs(linkLanding.top - top) <= 2;
     if (landed) linkLanding = null;
+    const jumped = pageJump;
+    pageJump = false;
     note(`viewport line=${line === null ? "null" : Math.round(line)} file=${openName()}`);
     post({
       type: "viewport",
       scrollTop: top,
+      page: pageAtTop(box),
       file: openName(),
       line,
-      gesture: !landed && performance.now() - lastInput < 800,
+      gesture: jumped || (!landed && performance.now() - lastInput < 800),
     });
   };
   const installScroll = (box) => {
@@ -1223,6 +1247,21 @@
       const max = box ? box.scrollHeight - box.clientHeight : 0;
       const top = y === null ? null : writeScroll(Math.min(max, y - message.y));
       post({ type: "scrolled", seq: message.seq, scrollTop: top });
+    },
+    page(message) {
+      const box = pagesBox();
+      const pages = [...document.querySelectorAll("#pages .page")];
+      const requested = Math.floor(Number(message.page));
+      if (!box || !pages.length || !Number.isFinite(requested) || requested < 1) return;
+      const page = pages[Math.min(pages.length, requested) - 1];
+      if (!page) return;
+      // This is the host's gesture, not the app's caret-follow: bypass the
+      // scroll guard, report the landing, and let source sync follow it.
+      ownScroll = null;
+      pageJump = true;
+      const top = pageTopInBox(page, box) - reference;
+      scrollTopOf.set.call(box, Math.max(0, Math.min(box.scrollHeight - box.clientHeight, top)));
+      if (!viewportFrame) viewportFrame = requestAnimationFrame(reportViewport);
     },
     zoom(message) {
       applyZoom(message.factor);

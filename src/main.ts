@@ -338,6 +338,7 @@ const compiledUi = new CompiledPreviewUi(previewShell, previewPane, el("compiler
     void (doc.language === "latex" ? latexSavePdf() : saveTypstPagesPdf());
   },
   mode: chooseTypstView,
+  goToPage: goToPreviewPage,
   copy: (text) => {
     void api.clipboardWriteText(text).then(
       () => toast("Copied compiler output"),
@@ -1454,6 +1455,7 @@ function applyLayout(): void {
   updateZoomIndicator();
   syncMenuState();
   assistant?.onViewMode(settings.viewMode);
+  updatePageChrome();
 }
 
 /**
@@ -2224,6 +2226,7 @@ function restorePreview(): boolean {
   suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
   previewPane.scrollTop = pendingPreviewScroll ?? slot.scrollTop;
   previewPane.scrollLeft = slot.scrollLeft;
+  updatePageChrome();
   rebuildAnchors();
   preview.dataset.restored = String((Number(preview.dataset.restored ?? 0) || 0) + 1);
   return true;
@@ -2537,6 +2540,10 @@ function renderDelay(): number {
 let typstPdf: TypstPdfPreview | null = null;
 let typstPdfToken = -1;
 let typstPdfBytes: Uint8Array | null = null;
+/** The live LaTeX frame's top page and page count, 1-based; 0 before a report. */
+let texpressoPage = 1;
+let texpressoPageCount = 0;
+let pageChromeFrame = 0;
 /**
  * What the last successful Typst compile was for. A mode switch or a view
  * switch must reuse it instead of starting another compiler process. `key` is
@@ -2672,6 +2679,7 @@ function commitPdfHost(host: HTMLElement, view: TypstPdfPreview, token: number):
   else previewPane.scrollTop = top;
   preview.style.minHeight = "";
   previewPane.scrollLeft = left;
+  updatePageChrome();
   if (!hadPendingScroll && !followTail && bookmark && mapped !== null) {
     pendingPdfBookmark = {
       view,
@@ -2846,6 +2854,64 @@ async function installOptionalToolsProgressListener(): Promise<void> {
   });
 }
 
+/** The paged surface the reader is looking at, if any. */
+function pageChromeState(): { page: number; total: number } | null {
+  if (settings.viewMode === "source") return null;
+  if (doc.language === "latex" && texpressoShowing()) {
+    if (texpressoPageCount <= 0) return null;
+    return {
+      page: Math.min(texpressoPageCount, Math.max(1, texpressoPage)),
+      total: texpressoPageCount,
+    };
+  }
+  if (doc.language !== "latex" && doc.language !== "typst") return null;
+  if (doc.language === "typst" && settings.typstView !== "pages") return null;
+  if (!typstPdf || typstPdf.isDisposed) return null;
+  const total = typstPdf.pageCount();
+  if (total <= 0) return null;
+  return { page: typstPdf.visiblePage(), total };
+}
+
+/** Redraw the toolbar's page strip from whichever paged surface is on screen. */
+function updatePageChrome(): void {
+  const state = pageChromeState();
+  compiledUi.pageInfo(state?.page ?? 0, state?.total ?? 0);
+}
+
+/** Scroll events run per frame; the page strip only needs the last one. */
+function schedulePageChrome(): void {
+  if (pageChromeFrame) return;
+  pageChromeFrame = requestAnimationFrame(() => {
+    pageChromeFrame = 0;
+    updatePageChrome();
+  });
+}
+
+/**
+ * Jump a paged preview to a page as a reader gesture.
+ *
+ * The PDF view scrolls its own pane; the live LaTeX frame owns its scroll, so
+ * the protocol carries the request and reports the landing page back.
+ */
+function goToPreviewPage(page: number): void {
+  if (!Number.isFinite(page)) return;
+  scrollOwnership.input();
+  suppressPreviewScrollUntil = 0;
+  suppressEditorScrollUntil = 0;
+  if (doc.language === "latex" && texpressoShowing()) {
+    const target = Math.min(Math.max(1, texpressoPageCount), Math.max(1, Math.round(page)));
+    texpresso?.post({ type: "page", page: target });
+    texpressoPage = target;
+    updatePageChrome();
+    return;
+  }
+  const view = typstPdf;
+  if (!view || view.isDisposed) return;
+  const target = Math.min(Math.max(1, view.pageCount()), Math.max(1, Math.round(page)));
+  view.goToPage(target);
+  updatePageChrome();
+}
+
 function configureCompiledUi(): void {
   const fileName = doc.path ? basename(doc.path) : "Untitled";
   if (doc.language === "latex")
@@ -2858,6 +2924,7 @@ function configureCompiledUi(): void {
       fileName,
     );
   else compiledUi.reset();
+  updatePageChrome();
 }
 
 function compileCurrentDocument(): void {
@@ -4823,6 +4890,7 @@ function texpressoShow(visible: boolean): void {
   app.classList.toggle("texpresso-covered", visible && texpressoCovered);
   if (texpressoShown) preview.dataset.latexBackend = "texpresso";
   else delete preview.dataset.latexBackend;
+  updatePageChrome();
 }
 
 /** The frame is this tab's content again; arm the wait if it has no page yet. */
@@ -4879,6 +4947,11 @@ function texpressoRelease(): void {
 function texpressoSetPages(on: boolean): void {
   texpressoHasPages = on;
   app.classList.toggle("texpresso-painted", on);
+  if (!on) {
+    texpressoPage = 1;
+    texpressoPageCount = 0;
+  }
+  updatePageChrome();
 }
 
 /**
@@ -5514,6 +5587,9 @@ function texpressoMessage(session: TexpressoSession, message: FrameMessage): voi
       }
       preview.dataset.texpressoPainted = String(message.seq);
       preview.dataset.texpressoPages = String(message.pages);
+      texpressoPageCount = message.pages;
+      texpressoPage = message.pages > 0 ? Math.min(message.pages, Math.max(1, texpressoPage)) : 1;
+      updatePageChrome();
       // The first page is the end of the wait: the frame is content now.
       if (message.pages > 0 && !texpressoHasPages) {
         texpressoSetPages(true);
@@ -5527,6 +5603,8 @@ function texpressoMessage(session: TexpressoSession, message: FrameMessage): voi
     }
     case "viewport":
       texpressoScrollTop = message.scrollTop;
+      if (message.page !== null) texpressoPage = message.page;
+      updatePageChrome();
       if (message.gesture) texpressoAlignSource(message.line, message.file);
       break;
     case "scrolled":
@@ -6243,6 +6321,7 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
     typstPdfToken = token;
     latexLastSourceScroll = null;
     typstPdfBytes = pdfBytes;
+    updatePageChrome();
     if (targetView.mapReady()) pdfMapReady(targetView, token);
   } else {
     const host = stagedPdfHost();
@@ -12231,6 +12310,7 @@ function installPaneSync(): void {
   // document inside it. The HTML guest scrolls internally and reports through
   // the bridge instead.
   previewPane.addEventListener("scroll", () => {
+    schedulePageChrome();
     if (doc.language === "html") return;
     if (!settings.syncScroll || settings.viewMode !== "split") return;
     if (performance.now() < suppressPreviewScrollUntil) return;

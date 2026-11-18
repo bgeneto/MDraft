@@ -235,6 +235,11 @@ try {
       "a scroll reported its source line",
       JSON.stringify((result?.viewport ?? []).slice(-2)),
     );
+    check(
+      (result?.viewport ?? []).some((v) => Number.isInteger(v.page) && v.page >= 1),
+      "a viewport reported its page number",
+      JSON.stringify((result?.viewport ?? []).slice(-2)),
+    );
   }
   check(
     (result?.result?.pdf ?? 0) > 1000,

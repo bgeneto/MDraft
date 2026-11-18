@@ -5901,6 +5901,77 @@ label.optional-tools-row:hover {
   border-color: transparent;
   padding: 6px 8px;
 }
+/* Page navigation belongs to a paged surface, never to the compile actions
+   alone: it appears in LaTeX and Typst Pages, and hides while a non-paged
+   preview is on screen. */
+.compiled-pages {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 2px;
+}
+.compiled-toolbar .compiled-page-step {
+  min-width: 30px;
+  padding: 5px 6px;
+  border-color: transparent;
+  background: transparent;
+}
+.compiled-toolbar .compiled-page-step:hover:not(:disabled) {
+  background: var(--compiled-soft);
+}
+.compiled-page-step .compiled-button-label {
+  display: none;
+}
+.compiled-page-step .compiled-icon {
+  width: 14px;
+  height: 14px;
+}
+.compiled-page-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  box-sizing: border-box;
+  min-height: 32px;
+  padding: 0 7px;
+  border: 1px solid var(--compiled-line);
+  border-radius: 5px;
+  background: var(--compiled-bg);
+  color: var(--compiled-fg);
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+.compiled-page-box:focus-within {
+  border-color: var(--compiled-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--compiled-accent) 22%, transparent);
+}
+.compiled-page-field {
+  box-sizing: border-box;
+  width: calc(var(--page-digits, 2) * 1ch + 0.6ch);
+  min-width: 2ch;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.compiled-page-total {
+  min-width: 2.4em;
+  color: var(--compiled-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.compiled-pages.is-muted {
+  opacity: 0.45;
+}
+@media (prefers-reduced-motion: reduce) {
+  .compiled-page-box {
+    transition: none;
+  }
+}
 .compiled-toolbar .compiled-logs-toggle {
   border-color: transparent;
   background: transparent;

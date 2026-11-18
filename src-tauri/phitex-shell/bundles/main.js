@@ -11707,7 +11707,14 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
     {
       onPage: (page) => {
         pageCount = Math.max(pageCount, page + 1);
-        post({ type: "viewport", scrollTop: stage()?.scrollTop ?? 0, file: null, line: null, gesture: false });
+        post({
+          type: "viewport",
+          scrollTop: stage()?.scrollTop ?? 0,
+          page: null,
+          file: null,
+          line: null,
+          gesture: false
+        });
       },
       onNeed: (page) => void session?.fetch(page),
       onPdf: () => void exportPdf(),
@@ -12038,6 +12045,14 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
       }
       case "reference":
         break;
+      case "page": {
+        const target = Math.floor(Number(message.page));
+        if (Number.isFinite(target) && target >= 1) {
+          panel.goPage(target - 1);
+          scheduleViewport();
+        }
+        break;
+      }
       case "zoom":
         if (typeof message.factor === "number" && message.factor > 0)
           panel.zoomTo(message.factor === 1 ? "fit" : String(message.factor));
@@ -12084,17 +12099,14 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
     }
   }
   stage()?.addEventListener("pointerdown", () => post({ type: "input" }));
-  stage()?.addEventListener(
-    "scroll",
-    () => {
-      if (viewportTimer) return;
-      viewportTimer = window.setTimeout(() => {
-        viewportTimer = 0;
-        void reportViewport();
-      }, 120);
-    },
-    { passive: true }
-  );
+  function scheduleViewport() {
+    if (viewportTimer) return;
+    viewportTimer = window.setTimeout(() => {
+      viewportTimer = 0;
+      void reportViewport();
+    }, 120);
+  }
+  stage()?.addEventListener("scroll", scheduleViewport, { passive: true });
   stage()?.addEventListener("click", (event) => {
     if (event.detail !== 1) return;
     if (performance.now() - selectionAt < 250) return;
@@ -12116,8 +12128,16 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
       fraction = Math.max(0, view[1]);
       break;
     }
+    const current2 = page < 0 ? null : page + 1;
     if (page < 0) {
-      post({ type: "viewport", scrollTop: area.scrollTop, file: null, line: null, gesture: true });
+      post({
+        type: "viewport",
+        scrollTop: area.scrollTop,
+        page: current2,
+        file: null,
+        line: null,
+        gesture: true
+      });
       return;
     }
     const size2 = pageSizes.get(page);
@@ -12129,7 +12149,14 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
         { k: page, rects: [[0, y, size2.w * 0.8, Math.max(24, size2.h * 0.08)]] }
       ]);
       if (!source) {
-        post({ type: "viewport", scrollTop: area.scrollTop, file: null, line: null, gesture: true });
+        post({
+          type: "viewport",
+          scrollTop: area.scrollTop,
+          page: current2,
+          file: null,
+          line: null,
+          gesture: true
+        });
         return;
       }
       const text = texts.get(source.file);
@@ -12139,6 +12166,7 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
       post({
         type: "viewport",
         scrollTop: area.scrollTop,
+        page: current2,
         file: source.file,
         line,
         gesture: true

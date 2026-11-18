@@ -1111,6 +1111,47 @@ try {
   })();
   check(probePainted, "the typed links are painted, three pages");
   await sleep(1500);
+  if (probePainted) {
+    const hostPageStrip = () =>
+      evaluate(`(() => {
+        const group=document.querySelector('.compiled-pages');
+        const field=group?.querySelector('.compiled-page-field');
+        const total=group?.querySelector('.compiled-page-total');
+        if (!group || !field || !total) return null;
+        return { hidden: group.hidden, value: field.value, total: total.textContent };
+      })()`);
+    const liveStrip = await hostPageStrip();
+    check(
+      "the live LaTeX preview reports its page count",
+      liveStrip !== null &&
+        !liveStrip.hidden &&
+        liveStrip.value === "1" &&
+        /\b3\b/.test(liveStrip.total),
+      JSON.stringify(liveStrip),
+    );
+    await evaluate(`document.querySelector('.compiled-pages [aria-label="Last page"]').click()`);
+    await sleep(1500);
+    const lastPage = {
+      field: (await hostPageStrip())?.value,
+      top: await frameEval(`document.getElementById("pages")?.scrollTop ?? 0`),
+    };
+    check(
+      "Last page moves the live frame and the page field",
+      lastPage.top > 0 && lastPage.field === "3",
+      JSON.stringify(lastPage),
+    );
+    await evaluate(`document.querySelector('.compiled-pages [aria-label="First page"]').click()`);
+    await sleep(1500);
+    const firstPage = {
+      field: (await hostPageStrip())?.value,
+      top: await frameEval(`document.getElementById("pages")?.scrollTop ?? 0`),
+    };
+    check(
+      "First page returns the live frame to the top",
+      firstPage.top < 2 && firstPage.field === "1",
+      JSON.stringify(firstPage),
+    );
+  }
   const pagesTop = () => frameEval(`document.getElementById("pages")?.scrollTop ?? 0`);
   /** The editor's selection and scroll, and the source marks a click paints. */
   const hostState = () =>

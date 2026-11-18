@@ -39,7 +39,10 @@ follows, so selection and alignment do not feed back into each other.
 
 Typst supports document and compiled PDF page views. Compilation, page text maps,
 selection, zoom and viewport ownership must be coordinated; PDF text positions
-are bound to the same source revision as the compiled output.
+are bound to the same source revision as the compiled output. Both paged
+surfaces expose the same toolbar page strip: the PDF viewer derives the page at
+the top from its laid-out shells, while the live LaTeX frame reports that page
+in `viewport` and accepts a `page` request from the host.
 
 LaTeX projects resolve a root, includes, bibliography and local libraries through
 Rust validation. Engine selection supports the configured browser capability and
