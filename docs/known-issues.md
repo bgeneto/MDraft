@@ -62,3 +62,13 @@ its table of contents, written at the end of the document, stays empty. A
 smaller snapshot budget did not move the last wall. MDraft labels such a build
 **PDF with errors** with the page where it stopped and offers only
 `<root>-partial.pdf`; an installed TeX distribution compiles the whole document.
+
+The engine's memory is not all the preview uses. Measured on 2026-11-18
+(Windows 11, WebView2), the process that hosts the preview reached a working
+set of about 7 GB on that textbook, with either engine: the engine's 3.5–3.7 GB,
+the preview's page index (0.9 GB kept, 1.2–2.7 GB while typesetting) and the
+browser's own share. Until 2026-11-18 the engine also restarted from scratch
+after running out of memory, stopped at the same page, and kept the first
+engine's memory meanwhile: 11.1 GB at peak with XeLaTeX. MDraft now reports the
+failure at once, then releases the engine and holds the document. Edits wait
+for Compile, since each build would stop at the same page again.

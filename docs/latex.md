@@ -131,7 +131,19 @@ with LuaLaTeX. MDraft then labels the result
 that the later pages, the table of contents and anything else LaTeX writes at
 the end of the document are missing, and offers the installed-distribution
 settings. Save PDF offers the pages typeset so far as `<root>-partial.pdf`;
-Export › PDF and Print stay off. An [installed TeX
+Export › PDF and Print stay off.
+
+Such a document also costs memory while it typesets. The preview's process
+(`mdraft-tex.localhost` in Task Manager) holds the engine's memory, up to
+4 GiB, and the preview's index of the pages: about 7 GB at peak on that
+textbook. When the engine runs out of memory, MDraft releases it and shows the
+pages typeset so far in its own PDF view, without the live preview. On that
+textbook the preview's process, which still held about 5 GB, exits within
+seconds, and the PDF view of its 452 pages takes about 2 GB. Edits to that
+document then mark the preview out of date instead of starting a build, because
+every build would start again from page 1 and stop at the same place.
+**Compile** or **Recompile from scratch** tries again; after another engine or
+an installed distribution is chosen, edits build again. An [installed TeX
 distribution](#installed-tex-distributions) has no such limit.
 
 The preview shows whether its result is out of date and whether LaTeX is

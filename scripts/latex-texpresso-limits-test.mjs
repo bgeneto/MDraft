@@ -13,11 +13,15 @@
 //      of it and warned for both);
 //   2. a build the engine abandons is never "PDF ready": with the frame's own
 //      verdict `Failed after …: The engine ran out of memory` (forced at the
-//      export, because a real out-of-memory run takes a 200-page book and a
-//      minute), the status reads "PDF with errors", the frame's pages are the
+//      export, because a real out-of-memory run takes a 400-page book and a
+//      minute), the status reads "PDF with errors", the pages typeset are the
 //      partial PDF (Save PDF on, Export › PDF and Print off), and Logs offers
 //      the installed-distribution route;
-//   3. the next finished build reads "PDF ready" again.
+//   3. that verdict releases the frame, whose engine is dead weight by then,
+//      and the partial PDF is drawn with PDF.js; an edit then starts no build,
+//      because every build of that project would stop at the same place;
+//   4. Compile starts a new frame and reads "PDF ready" again, and edits build
+//      again.
 
 import { openPage, sleep } from "./cdp-page.mjs";
 
@@ -58,6 +62,25 @@ async function waitFor(expression, timeout, label) {
 
 let frame = null;
 const frameEval = (expression) => frame.evaluate(expression);
+const dataset = (name) =>
+  evaluate(`document.querySelector("#preview")?.dataset[${JSON.stringify(name)}] ?? null`);
+const editor = (body) =>
+  evaluate(`(() => {
+    const view = document.querySelector(".cm-content").cmTile.root.view;
+    ${body}
+  })()`);
+// A comment line typed at the end and removed again, so the fixture's buffer
+// ends equal to the file (and clean) whatever the checks find.
+const EDIT = "\n% limits: an edit after the verdict\n";
+let edited = false;
+async function undoEdit() {
+  await editor(`
+    const text = view.state.doc.toString();
+    const at = text.lastIndexOf(${JSON.stringify(EDIT)});
+    if (at >= 0) view.dispatch({ changes: { from: at, to: at + ${EDIT.length} } });
+  `);
+  edited = false;
+}
 const toolbar = () =>
   evaluate(`(document.querySelector(".compiled-toolbar")?.innerText ?? "").replace(/\\s+/g, " ")`);
 const logRows = () =>
@@ -149,27 +172,29 @@ try {
   );
 
   console.log("=== a build the engine abandons ===");
-  // The app writes its status only when it typesets, so the forced verdict is
-  // undone with the title it replaced: a Compile with unchanged inputs would
-  // otherwise, rightly, keep reporting the frame's output as abandoned.
+  // The memory verdict releases this frame, so the wrapper goes with it and the
+  // next frame exports unmodified.
   const wrapped = await frameEval(`(() => {
     const t = globalThis.texpresso;
-    if (!t.__limitsExport) {
-      t.__limitsExport = t.exportPdf;
-      t.__limitsTitle = document.getElementById("status")?.title ?? "";
-    }
+    const original = t.exportPdf;
     t.exportPdf = async function (...args) {
-      const out = await t.__limitsExport.apply(this, args);
+      const out = await original.apply(this, args);
       const status = document.getElementById("status");
       if (status) status.title = "Failed after 51234 ms: The engine ran out of memory";
       return out;
     };
-    return t.exportPdf !== t.__limitsExport;
+    return t.exportPdf !== original;
   })()`);
   check(wrapped, "the frame's export can be made to end in the app's failure verdict");
+  const sessionBefore = await dataset("texpressoSession");
   await compile();
+  // Not "Rendering PDF with errors…", the step that draws the partial PDF once
+  // the frame is gone.
   const failed = await waitFor(
-    `/PDF with errors/.test(document.querySelector(".compiled-toolbar")?.innerText ?? "")`,
+    `(() => {
+      const text = document.querySelector(".compiled-toolbar")?.innerText ?? "";
+      return /PDF with errors/.test(text) && !/Rendering/.test(text);
+    })()`,
     120_000,
     "the abandoned build's status",
   );
@@ -179,8 +204,27 @@ try {
   ).then(JSON.parse);
   check(
     status.partial !== null && status.current === null,
-    "the frame's pages are the partial PDF, not the current result",
+    "the pages typeset are the partial PDF, not the current result",
     JSON.stringify(status),
+  );
+  // Out of memory releases the frame (its engine held about 5 GB on a long
+  // book) and draws the partial PDF with PDF.js instead.
+  check(
+    await waitFor(
+      `document.querySelectorAll("iframe.texpresso-frame").length === 0`,
+      10_000,
+      "the frame's release",
+    ),
+    "the out-of-memory verdict releases the preview frame",
+  );
+  check(
+    await waitFor(
+      `document.querySelectorAll("#preview .typst-page").length > 0`,
+      20_000,
+      "the partial PDF's pages",
+    ),
+    "the partial PDF is drawn without the frame",
+    await evaluate(`String(document.querySelectorAll("#preview .typst-page").length)`),
   );
   check(await saveEnabled(), "Save PDF stays available for the partial PDF");
   check(
@@ -189,41 +233,84 @@ try {
   );
   const failureRows = (await logRows()).filter((row) => /ran out of memory/.test(row));
   check(
-    failureRows.some((row) => /after page \d+/.test(row) && /installed TeX distribution/.test(row)),
-    "Logs says the engine ran out of memory after which page, and the way out",
+    failureRows.some(
+      (row) =>
+        /after page \d+/.test(row) &&
+        /installed TeX distribution/.test(row) &&
+        /select Compile/.test(row),
+    ),
+    "Logs says the engine ran out of memory after which page, the way out, and that edits wait for Compile",
     JSON.stringify(failureRows.slice(0, 1)),
   );
   check(
     (await evaluate(`Boolean(document.querySelector(".latex-installed-tex"))`)) === true,
     "Logs offers the installed-distribution preferences",
   );
-  check(
-    (await frameEval(`document.querySelectorAll("#pages .page").length`)) > 0,
-    "the frame keeps showing the pages it typeset",
+
+  console.log("=== an edit after the memory verdict ===");
+  // Every build of that project would start again from page 1 and stop at the
+  // same place, so an edit marks the preview out of date and starts none. The
+  // edit is undone afterwards, which leaves the fixture's buffer clean.
+  await editor(
+    `view.dispatch({ changes: { from: view.state.doc.length, insert: ${JSON.stringify(EDIT)} } });`,
   );
+  edited = true;
+  // Longer than auto-compile's debounce.
+  await sleep(4000);
+  const held = await evaluate(
+    `JSON.stringify({ toolbar: (document.querySelector(".compiled-toolbar")?.innerText ?? "").replace(/\\s+/g, " "), busy: Boolean(document.querySelector(".compiled-toolbar .compiled-compile.latex-cancel")), frames: document.querySelectorAll("iframe.texpresso-frame").length, session: document.querySelector("#preview")?.dataset.texpressoSession ?? null })`,
+  ).then(JSON.parse);
+  check(
+    !held.busy && held.frames === 0 && held.session === sessionBefore,
+    "an edit after the memory verdict starts no build and no frame",
+    JSON.stringify(held),
+  );
+  check(
+    /Out of date/.test(held.toolbar) && /select Compile/.test(held.toolbar),
+    "the status says the preview is out of date and that Compile retries",
+    held.toolbar,
+  );
+  await undoEdit();
 
   console.log("=== the next finished build ===");
-  await frameEval(`(() => {
-    const t = globalThis.texpresso;
-    if (t.__limitsExport) t.exportPdf = t.__limitsExport;
-    const status = document.getElementById("status");
-    if (status && t.__limitsTitle !== undefined) status.title = t.__limitsTitle;
-    delete t.__limitsExport;
-    delete t.__limitsTitle;
-    return true;
-  })()`);
   await compile();
   const recovered = await waitFor(
     `/PDF ready/.test(document.querySelector(".compiled-toolbar")?.innerText ?? "")`,
     120_000,
     "a finished build after the failure",
   );
-  check(recovered, "the next finished build reads PDF ready again", await toolbar());
+  check(recovered, "Compile starts a new frame and reads PDF ready again", await toolbar());
+  check(
+    (await dataset("texpressoSession")) !== sessionBefore &&
+      (await evaluate(`document.querySelectorAll("iframe.texpresso-frame").length`)) === 1,
+    "the build ran in a new frame",
+  );
   check(
     (await menuEnabled("export.pdf")) && (await menuEnabled("file.print")),
     "Export › PDF and Print return with it",
   );
+  // Compile lifted the hold: an edit builds again.
+  await editor(
+    `view.dispatch({ changes: { from: view.state.doc.length, insert: ${JSON.stringify(EDIT)} } });`,
+  );
+  edited = true;
+  check(
+    await waitFor(
+      `Boolean(document.querySelector(".compiled-toolbar .compiled-compile.latex-cancel")) || !/PDF ready/.test(document.querySelector(".compiled-toolbar")?.innerText ?? "")`,
+      10_000,
+      "a build after the edit",
+    ),
+    "after Compile, an edit starts a build again",
+    await toolbar(),
+  );
+  await undoEdit();
+  await waitFor(
+    `/PDF ready/.test(document.querySelector(".compiled-toolbar")?.innerText ?? "")`,
+    120_000,
+    "the build of the restored text",
+  );
 } finally {
+  if (edited) await undoEdit().catch(() => {});
   if (frame) frame.close?.();
 }
 
