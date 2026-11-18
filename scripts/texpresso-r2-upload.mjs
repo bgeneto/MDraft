@@ -26,7 +26,9 @@
 //     [--archives-only] [--phitex <archive>]
 //
 //   --dry-run      list what would be uploaded; needs no credentials
-//   --verify       upload nothing; compare the bucket with the local files
+//   --verify       upload nothing; compare the bucket with the local files.
+//                  Pinned install archives are expected; other objects under
+//                  texlive/<snapshot>/ are listed as kept for earlier releases
 //   --force        upload even when the bucket already has the key at that size
 //   --digests-only upload just the pinned digest table, texlive/<snapshot>/<its
 //                  pinned path>, read from that name in --data
@@ -434,12 +436,30 @@ if (flags.has("verify")) {
     (item) => remote.has(item.key) && remote.get(item.key) !== sizes.get(item.key),
   );
   const wanted = new Set(items.map((item) => item.key));
+  // A pinned install archive belongs under its prefix even when this run was
+  // not given the folder it was built in (the engine files are verified from
+  // `served/`, the archive from the release folder above it).
+  const archivePins = JSON.parse(
+    await readFile(new URL("../src-tauri/texpresso.json", import.meta.url), "utf8"),
+  );
+  for (const archive of archivePins.archives ?? [])
+    wanted.add(
+      (archive.base === "engine" ? `engine/${options.release}/` : `texlive/${options.snapshot}/`) +
+        archive.path,
+    );
   // A digests-only or archives-only run touches a few keys; the rest of the
   // prefix is expected.
-  const extra =
+  const unlisted =
     flags.has("digests-only") || flags.has("archives-only") || options.phitex
       ? []
       : [...remote.keys()].filter((key) => !wanted.has(key));
+  // Every release shares the snapshot prefix and an upload only adds keys, so
+  // an earlier release's digest table and data archive stay there for the
+  // application versions that pin them. Only an engine prefix belongs to a
+  // single release and must hold nothing else.
+  const snapshotPrefix = `texlive/${options.snapshot}/`;
+  const kept = unlisted.filter((key) => key.startsWith(snapshotPrefix));
+  const extra = unlisted.filter((key) => !key.startsWith(snapshotPrefix));
   console.log(`bucket: ${remote.size} objects under these prefixes`);
   console.log(
     `${missing.length === 0 ? "PASS" : "FAIL"} every local object is in the bucket (${missing.length} missing)`,
@@ -448,10 +468,15 @@ if (flags.has("verify")) {
     `${wrong.length === 0 ? "PASS" : "FAIL"} every size matches (${wrong.length} differ)`,
   );
   console.log(
-    `${extra.length === 0 ? "PASS" : "FAIL"} the bucket holds nothing else under these prefixes (${extra.length} extra)`,
+    `${extra.length === 0 ? "PASS" : "FAIL"} the bucket holds nothing unexpected under these prefixes (${extra.length} extra)`,
   );
   for (const item of [...missing, ...wrong].slice(0, 10)) console.log(`  ${item.key}`);
   for (const key of extra.slice(0, 10)) console.log(`  extra: ${key}`);
+  if (kept.length)
+    console.log(
+      `NOTE ${kept.length} object(s) under ${snapshotPrefix} are not in this mirror; kept for earlier releases:`,
+    );
+  for (const key of kept.slice(0, 10)) console.log(`  kept: ${key}`);
   process.exit(missing.length || wrong.length || extra.length ? 1 : 0);
 }
 
