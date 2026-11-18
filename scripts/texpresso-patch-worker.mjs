@@ -19,6 +19,10 @@
 //   - the export's xdvipdfmx, which shares the lookup but never asks for the
 //     case-insensitive one, gets the engine's case-insensitive answer after an
 //     exact miss everywhere.
+// One more edit is about memory, not files:
+//   - after `retcon_trail: the arena is full` the worker reports the failure
+//     instead of restarting from scratch, a retry that stops at the same page
+//     while the first engine's memory is still held.
 //
 // The input must be the release's upstream file, byte for byte; each edit must
 // match exactly once; the result must parse. `--check` writes nothing and
@@ -97,6 +101,34 @@ const EDITS = [
       "if(!c12){var mdL=globalThis.__mdraftTexmfLookupNocase;" +
       "if(mdL)for(var mdI=1;mdI<a11.length;mdI++){var mdN=mdL(n(a11[mdI]));if(mdN){c12=[k,o(mdN)];break}}}" +
       "if(c12)return[k,c12[1]];if(c12=af2[1],c12)",
+  },
+  {
+    // Names inside the engine's failure handler: `B2` the queue of the
+    // engine's last console lines (`[length, first cell]`, a cell is
+    // `[0, line, next]`), `a22` the `^retcon_trail: (out of memory|the arena is
+    // full)` pattern, `O2` true on the run that is already the retry, `cR` the
+    // worker's log, `I2(1, …)` the restart from scratch.
+    //
+    // The trail arena is a fixed build setting, so the retry after it fills
+    // stops at the same page (every run measured on infdesc, both engines).
+    // Meanwhile the first engine's memory, up to 4 GiB, is garbage V8 does
+    // not collect while the worker runs WebAssembly, and the frame's process
+    // holds two engine heaps: 11.1 GB at peak instead of 7.4 GB, with the
+    // verdict after about 115 s instead of 55 s. Out of memory at the heap cap
+    // still retries once.
+    what: "no restart from scratch after the trail arena fills",
+    from:
+      "for(p11=0,m11=B2[2];m11;){var q11=m11[2],m11=m11[1];p11||(p11=a8(a22,m11)),m11=q11}" +
+      'if(m11=1048576,m11=w3[0]&i?kW(w3[1],"heapLength",[0])/m11|0:w3[1].HEAPU8.length/m11|0,' +
+      "p11&&!O2)return cR(j(t(r8),m11)),I2(1,b11,c11,d11);",
+    to:
+      "var mdArena=0;" +
+      "for(p11=0,m11=B2[2];m11;){var q11=m11[2],m11=m11[1];p11||(p11=a8(a22,m11))," +
+      "mdArena||(mdArena=/^retcon_trail: the arena is full/.test(m11)?1:0),m11=q11}" +
+      'if(m11=1048576,m11=w3[0]&i?kW(w3[1],"heapLength",[0])/m11|0:w3[1].HEAPU8.length/m11|0,' +
+      "p11&&!O2&&(!mdArena||(cR(" +
+      '"Worker: the trail arena is full; a restart from scratch would stop at the same page"' +
+      "),0)))return cR(j(t(r8),m11)),I2(1,b11,c11,d11);",
   },
 ];
 
