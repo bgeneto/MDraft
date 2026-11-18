@@ -42,12 +42,12 @@
   };
   const ENGINE = params.get("engine") === "luatex" ? "luatex" : "xetex";
   // The renderer leaves out the text of a font it cannot load and says so only
-  // on the console: `renderer: missing font file ptmr8t.pfb` for a TeX font
-  // with no Type 1 file (under XeLaTeX, a virtual font such as T1 Times or
-  // Charter), `renderer: missing native font …` for an OpenType one. The app
+  // on the console: `renderer: missing font file <name>.pfb` for a TeX font
+  // with no Type 1 file, `renderer: missing native font …` for an OpenType
+  // one. (Before release 0.2 this was every virtual font under XeLaTeX.) The app
   // calls `console.warn` by name at each use, so wrapping it before the
   // reader's project arrives sees every line; the names become problems.
-  const missingFonts = new Map();
+  const missingFonts = new Set();
   let onMissingFont = () => {};
   try {
     const warn = console.warn;
@@ -57,7 +57,7 @@
         const match = /^renderer: missing (font file|native font) (\S{1,200})/.exec(text);
         const name = match?.[2].replace(/\.pfb$/i, "");
         if (name && !missingFonts.has(name) && missingFonts.size < 50) {
-          missingFonts.set(name, match[1] === "font file" ? "type1" : "native");
+          missingFonts.add(name);
           onMissingFont();
         }
       } catch {
@@ -68,15 +68,12 @@
   } catch {
     /* without the wrapper a missing font goes unreported, as before */
   }
-  const fontProblem = (name, kind) => ({
+  const fontProblem = (name) => ({
     file: "",
     line: 0,
     column: 0,
     severity: "warning",
-    message:
-      kind === "type1" && ENGINE === "xetex"
-        ? `The XeLaTeX preview cannot draw the font ${name}: it has no Type 1 file, so it is probably a virtual font. Text in it is blank in the preview; the exported PDF has it, and LuaLaTeX previews it.`
-        : `The preview cannot load the font ${name}. Text in it is blank in the preview.`,
+    message: `The preview cannot load the font ${name}. Text in it is blank in the preview.`,
   });
   // A local library file the engine loaded in place of TeX Live's copy. The
   // worker cannot post to this page directly (worker.js says why).
@@ -631,7 +628,7 @@
     post({ type: "status", busy: value, problems: value ? null : problems() });
   };
   const problems = () => {
-    const fonts = [...missingFonts].map(([name, kind]) => fontProblem(name, kind));
+    const fonts = [...missingFonts].map(fontProblem);
     try {
       return (api().problems() ?? [])
         .slice(0, 200)

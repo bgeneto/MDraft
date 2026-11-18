@@ -1,13 +1,13 @@
 {
   "note": "Where the production LaTeX preview downloads from, and the SHA-256 of everything it may download. \"origin\" is the public bucket; MDRAFT_TEXPRESSO_ORIGIN (under the same https-or-loopback rule) points a launch at a local mirror instead. Read only by src-tauri/src/latex_texpresso.rs; checked against an origin by scripts/texpresso-origin-check.mjs. Docs: docs/architecture.md.",
   "origin": "https://mdraft.webonly.app/",
-  "appRelease": "release-0-133-g454f1bc",
+  "appRelease": "release-0.2-13-g6a91b6a",
   "snapshot": "tt2026-2026-11",
   "bundle": {
     "list": {
-      "path": "tt2026/v3.lst",
-      "bytes": 3877910,
-      "sha256": "cecf22b8241330f350d883f327f3553f874186f8683d1e7106998fe80889861c"
+      "path": "tt2026/v4.lst",
+      "bytes": 4208509,
+      "sha256": "d9045626a4d5aedc6fc7b1154515a781085f2398b05af0b180419e5eb604e9ad"
     },
     "files": [
       {
@@ -21,9 +21,9 @@
         "sha256": "3f7cdba0ab1f137988d31493f6a6a33bf881c4e0f27fa53b0ab956a5ea65db99"
       },
       {
-        "path": "tt2026/v3-d094cf86958dd603.luatex.fmt",
-        "bytes": 6866549,
-        "sha256": "d094cf86958dd60374354a722dd6c3085e92f24bfb3497f317768619840e0649"
+        "path": "tt2026/v4-ae556f6e119c85f7.luatex.fmt",
+        "bytes": 6866845,
+        "sha256": "ae556f6e119c85f7d6897c0d15b5c417b2c6706d4c742c41d03f103eb830a5a7"
       },
       {
         "path": "tt2026/v3-33a89a90d6d9c9e4.luatex-cache.tar",
@@ -33,51 +33,51 @@
     ]
   },
   "digests": {
-    "path": "digests.bin",
+    "path": "digests-v4.bin",
     "entries": 163011,
     "bytes": 2608176,
-    "sha256": "b6539b89a37a28580f4c09239610fc99faea41f5e9f186c1204eae6e1d7be000"
+    "sha256": "ab553ed419e0b8f789ddba220c260d05eec75c3b4ac524dfda1d8fbbf48c486b"
   },
   "assets": [
     {
       "path": "ocaml.js",
-      "bytes": 806308,
-      "sha256": "55d1b7a0f5b7083bec1772215558b32c37cbeda239acfdbe07148f7e20ed5234"
+      "bytes": 926360,
+      "sha256": "e0d25580065811f039cda4dfb2cb2e79ded46236b80a6037acdc5a47904dc9ff"
     },
     {
       "path": "ocaml-worker.js",
-      "bytes": 211954,
-      "sha256": "d5676f62ece45b7fac8f1ff8c2fedbf07f98c376cad431903b813694a24f0017"
+      "bytes": 235815,
+      "sha256": "601435f73f22c85a9c065db0bbc06f94fff5535fe4c3a5c47b665975b90a2fc0"
     },
     {
       "path": "dluatex-bin-jspi.js",
-      "bytes": 116167,
-      "sha256": "5b3ebab77b71f56e7a24f37c7c4bd567461691bf53a35bdecd4fd403beb1c288"
+      "bytes": 120094,
+      "sha256": "1e67be28c212f7966713ee421138707f9c752decbfa881f7b4b906efa857a784"
     },
     {
       "path": "dluatex-bin-jspi.wasm",
-      "bytes": 8270998,
-      "sha256": "cbe52cfdf529c8922fb0c880907c80e76c81c185f2c49a4d998ff7707db1a0fa"
+      "bytes": 8356416,
+      "sha256": "3cf1b62da6d474e6d6213a3cc9b99515fd3f724db7a4d4021aff4d7171c02f93"
     },
     {
       "path": "dxetex-bin-jspi.js",
-      "bytes": 93716,
-      "sha256": "4af44ecd15f92bc3b8f7ec70a19598dde93ef4c9746d735379eba597a1456834"
+      "bytes": 97074,
+      "sha256": "f7b823264636126d245ec9d45e9067d18c8fcaff59eeaa99274ab55d65db4f4f"
     },
     {
       "path": "dxetex-bin-jspi.wasm",
-      "bytes": 3767682,
-      "sha256": "0c459c0f32f35376ed161cea709cdc598245dbe1c7bfac06f0a6b87050135c0c"
+      "bytes": 3788767,
+      "sha256": "ea259131072c23df5b674089e041270f595ec3db3fbd7de38c1eb90e3b807d0e"
     },
     {
       "path": "xdvipdfmx.js",
-      "bytes": 79369,
-      "sha256": "9d61def67ef2a6fba9f9cc376bc7b5248329667b6c9c183f0482902c4d17e784"
+      "bytes": 80866,
+      "sha256": "fa8c157374d5257ad481835ce0268c71292e851d6cb77c261dfe186747be7d9e"
     },
     {
       "path": "xdvipdfmx.wasm",
-      "bytes": 632148,
-      "sha256": "016b5815f4344eca313c442ba6d9c0d2942e32d35c373bc22a8bf1ae9c5f60b2"
+      "bytes": 632097,
+      "sha256": "a185da2ef6ac023c2ca08dc9525d0d766517e62dd51e0049434231dd865e9f17"
     },
     {
       "path": "vendor/fzstd.mjs",
@@ -1102,15 +1102,15 @@
   ],
   "archives": [
     {
-      "path": "install/engine-0b8041d1aa3fd108.zip",
-      "bytes": 6622258,
-      "sha256": "0b8041d1aa3fd10832b6f3bd838fb0cb331c940779541a9c7ee12332a316a8ce",
+      "path": "install/engine-08227381f7458ac1.zip",
+      "bytes": 6675941,
+      "sha256": "08227381f7458ac1906b34b0f3ccedc13823b0857714633a522e309f620e3f27",
       "base": "engine"
     },
     {
-      "path": "install/core-68afb66dac635189.zip",
-      "bytes": 18720925,
-      "sha256": "68afb66dac635189b81ad5ff4dbc8623ddb3f42147d9e4143685b9772b33d4f6",
+      "path": "install/core-00186073daea73b0.zip",
+      "bytes": 18786563,
+      "sha256": "00186073daea73b094dfca6ff541cc11eac0629197df578d300706c0eb778a1b",
       "base": "data"
     }
   ]

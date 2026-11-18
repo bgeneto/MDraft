@@ -309,7 +309,7 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
   );
   check(
     /table of contents/.test(oom.detail) &&
-      /2 GiB/.test(oom.detail) &&
+      /memory is limited/.test(oom.detail) &&
       /installed TeX distribution/.test(oom.detail),
     "its detail says what is missing, why, and the way out",
   );
