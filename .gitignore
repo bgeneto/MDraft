@@ -135,6 +135,7 @@ Thumbs.db
 !/samples/latex-engines/magic-xe.tex
 !/samples/latex-engines/plain.tex
 !/samples/latex-pdf-image/main.tex
+!/samples/latex-texpresso-limits/vf.tex
 !/samples/latex-perf/book-flat/figures/diagram.png
 !/samples/latex-perf/book-flat/main.tex
 !/samples/latex-perf/book-flat/references.bib

@@ -11,6 +11,7 @@ import { textPrint, type Held, type PreparedProject } from "./project";
 import {
   textHash,
   type EditChange,
+  type EngineFailure,
   type FrameMessage,
   type HostMessage,
   type SyncFile,
@@ -322,8 +323,16 @@ export class TexpressoSession {
    * The frame's own `xdvipdfmx` conversion, the authority for Export, Save PDF
    * and Print. Null when the frame is not ready, produced nothing in its
    * budget, or a later call replaced this one.
+   *
+   * The frame's export waits for the compile still running, so its budget is
+   * the compile's: the bridge's paint signal can come minutes before the end of
+   * a long document, and an engine that runs out of memory restarts once before
+   * it gives up (a 592-page book under LuaLaTeX: 158 s), and that failure is
+   * what this export must report.
    */
-  async exportPdf(ms = 120_000): Promise<{ pdf: Uint8Array; ms: number } | null> {
+  async exportPdf(
+    ms = TYPESET_BUDGET_MS,
+  ): Promise<{ pdf: Uint8Array; ms: number; failure: EngineFailure | null } | null> {
     // The first build reaches here while the frame is still booting, and before
     // it has typeset a page: an export asked then finds nothing and nothing
     // asks again. Every render during a long first compile waits here too, so
@@ -333,7 +342,7 @@ export class TexpressoSession {
     if (!(await this.whenTypeset(TYPESET_BUDGET_MS, () => mine !== this.exports))) return null;
     const reply = await this.request({ type: "export" }, ms);
     if (!reply || reply.type !== "pdf") return null;
-    return { pdf: new Uint8Array(reply.pdf), ms: reply.ms };
+    return { pdf: new Uint8Array(reply.pdf), ms: reply.ms, failure: reply.failure ?? null };
   }
 
   private receive(frame: TexpressoFrame, message: FrameMessage): void {

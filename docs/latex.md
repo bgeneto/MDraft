@@ -123,6 +123,16 @@ PDF export, printing or source correspondence. If no new PDF can be read, the
 same project's previous PDF remains visible and is labelled as previous output.
 Without usable output, Logs opens to explain the failure.
 
+The bundled preview can also give up part-way through a long document. Its
+engine has at most 2 GiB of memory; a 592-page textbook ran out at page 218
+with XeLaTeX and at page 204 with LuaLaTeX. MDraft then labels the result
+**PDF with errors** and names the page where the engine stopped. Logs explains
+that the later pages, the table of contents and anything else LaTeX writes at
+the end of the document are missing, and offers the installed-distribution
+settings. Save PDF offers the pages typeset so far as `<root>-partial.pdf`;
+Export › PDF and Print stay off. An [installed TeX
+distribution](#installed-tex-distributions) has no such limit.
+
 The preview shows whether its result is out of date and whether LaTeX is
 preparing, resolving packages, compiling, or rendering the PDF. **Compile**
 starts a build immediately; **Cancel** stops the active compiler. A package
@@ -540,6 +550,16 @@ preview restarts.
 
 Turning the switch off stops the engine from serving anything and leaves the
 cache inert. It deletes nothing.
+
+### Fonts the preview cannot draw
+
+The XeLaTeX preview on the TeXpresso path cannot draw *virtual fonts*: the
+families pdfLaTeX-era documents select through `fontenc`, such as T1 Times
+(`mathptmx`, `times`) and Charter (`\fontfamily{bch}`), which a driver reaches
+through a `.vf` file. Text set in them is blank in the preview, and Logs names
+each such font. The exported PDF contains the text, and the LuaLaTeX preview
+draws it. OpenType fonts loaded with `fontspec`, and Computer Modern, Latin
+Modern and cm-super, are not affected.
 
 ## Trying it
 

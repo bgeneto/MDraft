@@ -26,6 +26,7 @@ import ts from "typescript";
 
 import {
   BUNDLED_TEXLIVE_YEAR,
+  engineFailureText,
   latexPreviewBackend,
   previewEngineFor,
   selectLatexPreviewBackend,
@@ -261,6 +262,97 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
       `a malformed message is dropped: ${JSON.stringify(message)?.slice(0, 60)}`,
     );
   }
+}
+
+// --- an export the engine abandoned -------------------------------------------
+{
+  const pdf = (failure) => ({ v: 1, type: "pdf", seq: 9, pdf: new ArrayBuffer(4), ms: 3, failure });
+  const memory = { reason: "memory", message: "The engine ran out of memory", pages: 218 };
+  const plain = parseFrameMessage(pdf(undefined));
+  check(
+    plain?.type === "pdf" && plain.failure === undefined,
+    "a pdf without a verdict is a finished export",
+  );
+  const failed = parseFrameMessage(pdf(memory));
+  check(
+    failed?.type === "pdf" &&
+      failed.failure?.reason === "memory" &&
+      failed.failure.pages === 218 &&
+      failed.failure.message === memory.message,
+    "a pdf carries the engine's failure verdict",
+  );
+  check(
+    parseFrameMessage(pdf({ ...memory, extra: "<b>" }))?.failure?.extra === undefined,
+    "only the verdict's known fields reach the host",
+  );
+  for (const failure of [
+    null,
+    { ...memory, reason: "oom" },
+    { ...memory, message: "" },
+    { ...memory, message: "x".repeat(201) },
+    { ...memory, message: 7 },
+    { ...memory, pages: -1 },
+    { ...memory, pages: 1.5 },
+    { reason: "engine", message: "stopped" },
+  ]) {
+    check(
+      parseFrameMessage(pdf(failure)) === null,
+      `a pdf with a malformed verdict is dropped whole: ${JSON.stringify(failure)?.slice(0, 50)}`,
+    );
+  }
+
+  const oom = engineFailureText(memory);
+  check(
+    oom.status === "The preview engine ran out of memory after page 218.",
+    "an out-of-memory stop names the last page in the status",
+    oom.status,
+  );
+  check(
+    /table of contents/.test(oom.detail) &&
+      /2 GiB/.test(oom.detail) &&
+      /installed TeX distribution/.test(oom.detail),
+    "its detail says what is missing, why, and the way out",
+  );
+  check(
+    engineFailureText({ ...memory, pages: 0 }).status === "The preview engine ran out of memory.",
+    "no page count is invented when the frame drew none",
+  );
+  const other = engineFailureText({ reason: "engine", message: "Worker crashed", pages: 3 });
+  check(
+    other.status === "The preview engine stopped after page 3: Worker crashed" &&
+      /Recompile from scratch/.test(other.detail),
+    "any other abandoned build quotes the engine and offers a fresh start",
+    other.status,
+  );
+}
+
+// --- the bridge's verdict and font tap ----------------------------------------
+{
+  const bridge = read("src-tauri/texpresso-shell/mdraft-bridge.js");
+  // The app's status titles, captured from the pinned release (2026-11-17).
+  const titles = {
+    failed: "Failed after 55223 ms: The engine ran out of memory",
+    done: "1 page(s) in 378 ms",
+    errors: "1 page(s) in 378 ms, with errors: Undefined control sequence (line 5)",
+    stopped:
+      "Stopped after 369 ms: LaTeX Error: File `x.tex' not found. (line 5); waiting for an edit",
+  };
+  const verdict = /\/\^Failed after \[\^:\]\*: \(\[\\s\\S\]\+\)\$\//.test(bridge)
+    ? /^Failed after [^:]*: ([\s\S]+)$/
+    : null;
+  check(verdict !== null, "the bridge reads the app's `Failed after …:` status title");
+  check(
+    verdict?.exec(titles.failed)?.[1] === "The engine ran out of memory" &&
+      !verdict.test(titles.done) &&
+      !verdict.test(titles.errors) &&
+      !verdict.test(titles.stopped),
+    "only an abandoned run is a failure; document errors and stops stay problems",
+  );
+  check(
+    /\^renderer: missing \(font file\|native font\)/.test(bridge) &&
+      /warn\.apply\(this, args\)/.test(bridge),
+    "the bridge's console tap matches the renderer's missing-font lines and forwards every call",
+  );
 }
 
 // --- the pins -----------------------------------------------------------------
