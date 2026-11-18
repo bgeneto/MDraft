@@ -222,6 +222,8 @@ export class TypstPdfPreview {
   /** Set by `splice`: the word map is withheld for the rest of this view's life. */
   private mapWithheld = false;
   private pages: PdfPage[] = [];
+  /** Content-space top of each page shell, for the page indicator. */
+  private pageTops: number[] = [];
   private readonly linesByPage = new Map<number, TextLine[]>();
   private observer: IntersectionObserver | null = null;
   private resizeObserver: ResizeObserver | null = null;
@@ -396,6 +398,7 @@ export class TypstPdfPreview {
       page.canvas.height = 0;
     }
     this.pages = [];
+    this.pageTops = [];
     this.pageHashes = [];
     this.linesByPage.clear();
     this.allLines = [];
@@ -495,6 +498,7 @@ export class TypstPdfPreview {
       this.pages.reduce((max, page) => Math.max(max, page.viewport.width), 0),
     );
     this.applyFit();
+    this.measurePageTops();
     this.observePages();
     void this.completeText(pdfjs, first, generation);
   }
@@ -559,6 +563,7 @@ export class TypstPdfPreview {
       }
       if (epoch === this.inputEpoch && this.pane.scrollTop !== scrollTop)
         this.pane.scrollTop = scrollTop;
+      if (replaced > 0) this.measurePageTops();
       // The map describes the previous text of these pages: withhold it until the
       // next full render replaces this view. No correspondence beats a wrong one.
       if (replaced > 0) {
@@ -786,6 +791,7 @@ export class TypstPdfPreview {
         this.pages.reduce((max, page) => Math.max(max, page.viewport.width), 0),
       );
       this.applyFit();
+      this.measurePageTops();
       if (epoch === this.inputEpoch && this.pane.scrollTop !== scrollTop) {
         this.pane.scrollTop = scrollTop;
       }
@@ -1055,6 +1061,57 @@ export class TypstPdfPreview {
     return this.pages.length;
   }
 
+  /** The 1-based page at the top of the reading area, or 0 before pages exist. */
+  visiblePage(): number {
+    if (this.disposed || this.pages.length === 0) return 0;
+    if (this.pageTops.length !== this.pages.length) this.measurePageTops();
+    const top = this.pane.scrollTop + 12;
+    let lo = 0;
+    let hi = this.pageTops.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (this.pageTops[mid] <= top) lo = mid + 1;
+      else hi = mid;
+    }
+    return this.pages[Math.max(0, lo - 1)]?.number ?? 0;
+  }
+
+  /**
+   * Bring a page to the top of the reading area.
+   *
+   * This is a reader gesture, not a layout correction, so it deliberately does
+   * not set `layoutScrollUntil`: the ordinary scroll path may sync the source.
+   */
+  goToPage(page: number): void {
+    if (this.disposed || this.pages.length === 0) return;
+    const wanted = Math.min(this.pages.length, Math.max(1, Math.round(page)));
+    const target = this.pages.find((item) => item.number === wanted);
+    if (!target) return;
+    this.cancelScrollRestore();
+    // The first page's natural position is the top of the pane: scrolling to
+    // its shell would cut into the document's own top margin.
+    if (wanted === 1) {
+      this.pane.scrollTop = 0;
+      return;
+    }
+    const box = target.shell.getBoundingClientRect();
+    const pane = this.pane.getBoundingClientRect();
+    this.pane.scrollTop = Math.max(0, box.top - pane.top + this.pane.scrollTop - 12);
+  }
+
+  /** Cache page tops in the pane's content coordinates; scroll-independent. */
+  private measurePageTops(): void {
+    if (this.disposed || this.pages.length === 0) {
+      this.pageTops = [];
+      return;
+    }
+    const pane = this.pane.getBoundingClientRect();
+    const scroll = this.pane.scrollTop;
+    this.pageTops = this.pages.map(
+      (page) => scroll + page.shell.getBoundingClientRect().top - pane.top,
+    );
+  }
+
   atEnd(): boolean {
     const last = this.pages[this.pages.length - 1];
     return (
@@ -1111,6 +1168,7 @@ export class TypstPdfPreview {
       page.task = null;
     }
     this.pages = [];
+    this.pageTops = [];
     this.pageHashes = [];
     this.linesByPage.clear();
     this.allLines = [];
@@ -1367,6 +1425,7 @@ export class TypstPdfPreview {
       const r = p.shell.getBoundingClientRect();
       return { top: this.pane.scrollTop + r.top - pane.top, left: r.left - pane.left };
     });
+    this.pageTops = origins.map((origin) => origin.top);
     const regions = new Map<string, ScrollRegion & { anchors: PdfScrollAnchor[] }>();
     const byLine = new Map<number, PdfScrollAnchor[]>();
     const anchors = this.scrollIndex.anchors;

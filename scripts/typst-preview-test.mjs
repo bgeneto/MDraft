@@ -668,11 +668,109 @@ check(
   pageGap ? pageGap.shadow : "no page",
 );
 
+console.log("\n=== Page navigation ===");
+const pageStrip = () =>
+  evaluate(`(() => {
+    const group=document.querySelector('.compiled-pages');
+    const field=group?.querySelector('.compiled-page-field');
+    const total=group?.querySelector('.compiled-page-total');
+    if (!group || !field || !total) return null;
+    return {
+      hidden: group.hidden,
+      value: field.value,
+      total: total.textContent,
+      first: group.querySelector('[aria-label="First page"]')?.disabled,
+      last: group.querySelector('[aria-label="Last page"]')?.disabled,
+    };
+  })()`);
+const initialStrip = await pageStrip();
+check(
+  "Pages shows page 1 of 2",
+  initialStrip !== null &&
+    !initialStrip.hidden &&
+    initialStrip.value === "1" &&
+    initialStrip.total.includes("2"),
+  JSON.stringify(initialStrip),
+);
+await evaluate(
+  `document.getElementById('preview-pane').scrollTop=document.getElementById('preview-pane').scrollHeight`,
+);
+await sleep(300);
+const endStrip = await pageStrip();
+check(
+  "scrolling to the end reports the last page",
+  endStrip?.value === "2",
+  JSON.stringify(endStrip),
+);
+await evaluate(`document.querySelector('.compiled-pages [aria-label="First page"]').click()`);
+await sleep(350);
+const firstPage = await evaluate(`(() => {
+  const pane=document.getElementById('preview-pane');
+  return { top:pane.scrollTop, value:document.querySelector('.compiled-page-field')?.value };
+})()`);
+check(
+  "First page returns to the top and page 1",
+  firstPage.top < 2 && firstPage.value === "1",
+  JSON.stringify(firstPage),
+);
+await evaluate(`document.querySelector('.compiled-pages [aria-label="Next page"]').click()`);
+await sleep(350);
+const nextPage = await evaluate(`(() => {
+  const pane=document.getElementById('preview-pane');
+  return { top:pane.scrollTop, value:document.querySelector('.compiled-page-field')?.value };
+})()`);
+check(
+  "Next page moves to page 2",
+  nextPage.top > 0 && nextPage.value === "2",
+  JSON.stringify(nextPage),
+);
+await evaluate(`(() => {
+  const field=document.querySelector('.compiled-page-field');
+  field.focus();
+  field.value='1';
+  field.dispatchEvent(new Event('input',{bubbles:true}));
+  field.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+})()`);
+await sleep(350);
+const typedPage = await evaluate(`(() => {
+  const pane=document.getElementById('preview-pane');
+  return { top:pane.scrollTop, value:document.querySelector('.compiled-page-field')?.value };
+})()`);
+check(
+  "typing a page and Enter jumps there",
+  typedPage.top < 2 && typedPage.value === "1",
+  JSON.stringify(typedPage),
+);
+await evaluate(`(() => {
+  const field=document.querySelector('.compiled-page-field');
+  field.focus();
+  field.value='99';
+  field.dispatchEvent(new Event('input',{bubbles:true}));
+  field.blur();
+})()`);
+await sleep(350);
+const clampedPage = await evaluate(`(() => {
+  const pane=document.getElementById('preview-pane');
+  return { top:pane.scrollTop, value:document.querySelector('.compiled-page-field')?.value };
+})()`);
+check(
+  "an out-of-range page clamps to the last page",
+  clampedPage.top > 0 && clampedPage.value === "2",
+  JSON.stringify(clampedPage),
+);
+await evaluate(`document.querySelector('.compiled-pages [aria-label="First page"]').click()`);
+await sleep(350);
+
 const logsToggleProbe = await evaluate(`(() => {
  const pane=document.getElementById('preview-pane'), button=document.querySelector('.compiled-logs-toggle');
+ const logs=document.querySelector('.compiler-logs');
  const canvas=document.querySelector('#preview canvas'), before=pane.scrollTop;
  button.click();
- const opened=button.getAttribute('aria-pressed')==='true' && pane.inert && getComputedStyle(pane).visibility==='hidden';
+ // The logs cover the preview instead of hiding it: a hidden frame stops
+ // drawing and TeXpresso never creates its page canvases.
+ const opened=button.getAttribute('aria-pressed')==='true' && pane.inert &&
+   getComputedStyle(pane).visibility!=='hidden' && getComputedStyle(logs).visibility==='visible' &&
+   getComputedStyle(pane).pointerEvents==='none';
  button.click();
  return opened && !pane.inert && Math.abs(pane.scrollTop-before)<1 && document.querySelector('#preview canvas')===canvas;
 })()`);
@@ -708,7 +806,7 @@ for (const width of [320, 480, 900]) {
   const geometry = await evaluate(`(() => {
     const bar=document.querySelector('.compiled-toolbar'), pane=document.getElementById('preview-pane');
     const toolbar=bar.getBoundingClientRect(), viewport=pane.getBoundingClientRect();
-    const controls=[...bar.querySelectorAll('button,label')].filter(node=>node.getClientRects().length);
+    const controls=[...bar.querySelectorAll('button,label,input')].filter(node=>node.getClientRects().length);
     return {reserved:viewport.top>=toolbar.bottom-1,reachable:controls.every(node=>{const box=node.getBoundingClientRect();return box.left>=toolbar.left-1 && box.right<=toolbar.right+1 && box.bottom<=toolbar.bottom+1;}),width:viewport.width};
   })()`);
   check(
@@ -887,6 +985,10 @@ const backReady = await waitFor(`Boolean(document.querySelector(".typst-document
 check("Document returns after Pages", backReady);
 const pagesGone = await evaluate(`document.querySelectorAll(".typst-page-shell").length`);
 check("the PDF page view is disposed", pagesGone === 0, String(pagesGone));
+const documentStripHidden = await evaluate(
+  `document.querySelector('.compiled-pages')?.hidden === true`,
+);
+check("Document view hides the page strip", documentStripHidden);
 check(
   "Document still maps its blocks after the switch",
   (await evaluate(`document.querySelectorAll(".typst-document [data-b]").length`)) >= 8,
@@ -1368,6 +1470,17 @@ console.log("\n=== Typst Pages list word sync ===");
     40000,
   );
   check("a small Typst document renders its list in Pages", ready);
+  const listStrip = await pageStrip();
+  check(
+    "a one-page Pages document reports 1 of 1 with no page to step to",
+    listStrip !== null &&
+      !listStrip.hidden &&
+      listStrip.value === "1" &&
+      /\b1\b/.test(listStrip.total) &&
+      listStrip.first === true &&
+      listStrip.last === true,
+    JSON.stringify(listStrip),
+  );
   const point = await evaluate(`(async () => {
     const layer = document.querySelector(".typst-page .textLayer");
     if (!layer) return null;

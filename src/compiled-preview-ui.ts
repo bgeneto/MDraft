@@ -19,7 +19,11 @@ type Icon =
   | "clock"
   | "chevron"
   | "restart"
-  | "close";
+  | "close"
+  | "first"
+  | "previous"
+  | "next"
+  | "last";
 
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.userAgent);
 
@@ -39,6 +43,18 @@ export class CompiledPreviewUi {
   // accessible name (set in the constructor) stays the full "Save PDF".
   private save = this.button("PDF", "compiled-save-pdf", "download");
   private modes = document.createElement("div");
+  private pages = document.createElement("div");
+  private pageFirst = this.button("", "compiled-page-step", "first");
+  private pagePrevious = this.button("", "compiled-page-step", "previous");
+  private pageField = document.createElement("input");
+  private pageTotal = document.createElement("span");
+  private pageNext = this.button("", "compiled-page-step", "next");
+  private pageLast = this.button("", "compiled-page-step", "last");
+  private pageAllowed = false;
+  private pageTotalCount = 0;
+  private currentPage = 1;
+  private pageEditing = false;
+  private readonly goToPage: (page: number) => void;
   private message = document.createElement("span");
   private condition = document.createElement("span");
   private stateLabel = document.createElement("span");
@@ -69,9 +85,12 @@ export class CompiledPreviewUi {
       auto(on: boolean): void;
       save(): void;
       mode(mode: "document" | "pages"): void;
+      /** Jump a paged preview to a 1-based page. */
+      goToPage(page: number): void;
       copy(text: string): void;
     },
   ) {
+    this.goToPage = actions.goToPage;
     const header = shell.querySelector<HTMLElement>("#compiled-controls")!;
     header.className = "compiled-toolbar";
     const row = document.createElement("div");
@@ -90,6 +109,62 @@ export class CompiledPreviewUi {
       button.addEventListener("click", () => actions.mode(mode));
       this.modes.append(button);
     }
+    this.pages.className = "compiled-pages";
+    this.pages.setAttribute("role", "group");
+    this.pages.setAttribute("aria-label", "Page navigation");
+    this.pages.hidden = true;
+    const pageSteps: Array<[HTMLButtonElement, string]> = [
+      [this.pageFirst, "First page"],
+      [this.pagePrevious, "Previous page"],
+      [this.pageNext, "Next page"],
+      [this.pageLast, "Last page"],
+    ];
+    for (const [button, label] of pageSteps) {
+      button.setAttribute("aria-label", label);
+      button.title = label;
+    }
+    const pageBox = document.createElement("div");
+    pageBox.className = "compiled-page-box";
+    this.pageField.type = "text";
+    this.pageField.className = "compiled-page-field";
+    this.pageField.inputMode = "numeric";
+    this.pageField.autocomplete = "off";
+    this.pageField.spellcheck = false;
+    this.pageField.setAttribute("aria-label", "Page number");
+    this.pageTotal.className = "compiled-page-total";
+    pageBox.append(this.pageField, this.pageTotal);
+    this.pages.append(this.pageFirst, this.pagePrevious, pageBox, this.pageNext, this.pageLast);
+    this.pageFirst.addEventListener("click", () => this.requestPage(1));
+    this.pagePrevious.addEventListener("click", () => this.requestPage(this.pageBase() - 1));
+    this.pageNext.addEventListener("click", () => this.requestPage(this.pageBase() + 1));
+    this.pageLast.addEventListener("click", () => this.requestPage(this.pageTotalCount));
+    this.pageField.addEventListener("focus", () => {
+      this.pageEditing = false;
+      this.pageField.select();
+    });
+    this.pageField.addEventListener("input", () => {
+      this.pageEditing = true;
+    });
+    this.pageField.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        event.stopPropagation();
+        this.commitPageEdit();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        this.pageEditing = false;
+        this.showCurrentPage();
+        this.pageField.blur();
+      }
+    });
+    this.pageField.addEventListener("blur", (event) => {
+      // A page button receives the focus before its click; committing the field
+      // first would jump twice. The button uses the typed page as its base.
+      if (event.relatedTarget instanceof Node && this.pages.contains(event.relatedTarget)) return;
+      if (this.pageEditing) this.commitPageEdit();
+      else this.showCurrentPage();
+    });
     this.toggle.setAttribute("aria-controls", logs.id);
     this.toggle.setAttribute("aria-pressed", "false");
     this.count.className = "compiled-issue-count";
@@ -123,7 +198,7 @@ export class CompiledPreviewUi {
       this.openMenu();
     });
     this.split.append(this.compile, this.more);
-    row.append(this.split, label, this.modes, this.message, this.toggle, this.save);
+    row.append(this.split, label, this.modes, this.pages, this.message, this.toggle, this.save);
     header.append(row, this.notice);
     this.compile.addEventListener("click", () =>
       this.busy ? actions.cancel() : actions.compile(),
@@ -190,6 +265,84 @@ export class CompiledPreviewUi {
     this.reset();
   }
 
+  /**
+   * Show the reading page and the page total for a paged preview.
+   *
+   * `total` 0 hides the strip, which is what every non-paged surface reports.
+   * While the reader is typing, the field keeps their text: a compile status
+   * update must not overwrite a half-typed page number.
+   */
+  pageInfo(page: number, total: number): void {
+    this.pageTotalCount = Number.isFinite(total) && total > 0 ? Math.floor(total) : 0;
+    if (this.pageTotalCount > 0) {
+      const wanted = Number.isFinite(page) ? Math.round(page) : 1;
+      this.currentPage = Math.min(this.pageTotalCount, Math.max(1, wanted));
+    } else {
+      this.currentPage = 1;
+      this.pageEditing = false;
+    }
+    this.syncPageVisibility();
+  }
+
+  private syncPageVisibility(): void {
+    const show = this.pageAllowed && this.pageTotalCount > 0;
+    this.pages.hidden = !show;
+    if (!show) {
+      this.pageEditing = false;
+      return;
+    }
+    this.pageField.style.setProperty(
+      "--page-digits",
+      String(Math.max(1, String(this.pageTotalCount).length)),
+    );
+    if (!this.pageEditing) this.showCurrentPage();
+    this.updatePageButtons();
+  }
+
+  private showCurrentPage(): void {
+    this.pageField.value = String(this.currentPage);
+    this.pageTotal.textContent = this.pageTotalCount > 0 ? `/ ${this.pageTotalCount}` : "";
+  }
+
+  private updatePageButtons(): void {
+    const atStart = this.currentPage <= 1;
+    const atEnd = this.currentPage >= this.pageTotalCount;
+    this.pageFirst.disabled = atStart;
+    this.pagePrevious.disabled = atStart;
+    this.pageNext.disabled = atEnd;
+    this.pageLast.disabled = atEnd;
+  }
+
+  /** The page a step button should move from, including a typed page. */
+  private pageBase(): number {
+    if (!this.pageEditing) return this.currentPage;
+    return this.readPage() ?? this.currentPage;
+  }
+
+  private readPage(): number | null {
+    const text = this.pageField.value.trim();
+    if (!/^\d+$/.test(text)) return null;
+    const page = Number.parseInt(text, 10);
+    return Number.isFinite(page) ? page : null;
+  }
+
+  private commitPageEdit(): void {
+    const page = this.readPage();
+    this.pageEditing = false;
+    if (page === null) this.showCurrentPage();
+    else this.requestPage(page);
+  }
+
+  private requestPage(page: number): void {
+    if (this.pageTotalCount <= 0 || !Number.isFinite(page)) return;
+    const target = Math.min(this.pageTotalCount, Math.max(1, Math.round(page)));
+    this.pageEditing = false;
+    this.currentPage = target;
+    this.showCurrentPage();
+    this.updatePageButtons();
+    this.goToPage(target);
+  }
+
   private icon(name: Icon): SVGSVGElement {
     const paths: Record<Icon, string> = {
       play: '<path d="m9 5 12 7-12 7a1 1 0 0 1-1.5-.9V5.9A1 1 0 0 1 9 5Z"/>',
@@ -208,6 +361,10 @@ export class CompiledPreviewUi {
       chevron: '<path d="m6 9 6 6 6-6"/>',
       restart: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
       close: '<path d="M18 6 6 18M6 6l12 12"/>',
+      first: '<path d="M5 5v14"/><path d="m19 5-10 7 10 7V5Z"/>',
+      previous: '<path d="m15 5-7 7 7 7"/>',
+      next: '<path d="m9 5 7 7-7 7"/>',
+      last: '<path d="M19 5v14"/><path d="M5 5l10 7-10 7V5Z"/>',
     };
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", "0 0 24 24");
@@ -255,6 +412,7 @@ export class CompiledPreviewUi {
     this.caption.textContent = fileName ? `${fileName} · Latest compilation` : "Latest compilation";
     this.save.classList.toggle("latex-save-pdf", format === "latex");
     this.modes.hidden = format !== "typst";
+    this.pageAllowed = format === "latex" || mode === "pages";
     this.more.hidden = format !== "latex";
     this.split.classList.toggle("compiled-split-joined", format === "latex");
     if (format !== "latex") this.closeMenu();
@@ -262,6 +420,7 @@ export class CompiledPreviewUi {
     for (const button of this.modes.querySelectorAll("button")) {
       button.setAttribute("aria-pressed", String(button.dataset.mode === mode));
     }
+    this.syncPageVisibility();
   }
 
   status(message: string, busy = false, saveable = false, state?: CompiledStatus): void {
@@ -469,6 +628,8 @@ export class CompiledPreviewUi {
     if (explicit) this.explicitLogs = on;
     this.toggle.setAttribute("aria-pressed", String(on));
     this.toggle.title = on ? "Hide logs and return to preview" : "Show compiler logs";
+    this.pages.inert = on;
+    this.pages.classList.toggle("is-muted", on);
     this.shell.classList.toggle("logs-open", on);
     this.pane.inert = on;
     this.pane.setAttribute("aria-hidden", String(on));
@@ -486,6 +647,12 @@ export class CompiledPreviewUi {
   reset(): void {
     this.closeMenu();
     this.explicitLogs = false;
+    this.pageAllowed = false;
+    this.pageTotalCount = 0;
+    this.pageEditing = false;
+    this.pages.hidden = true;
+    this.pageField.value = "";
+    this.pageTotal.textContent = "";
     this.status("", false, false);
     this.showLogs(false, false);
     this.shell.classList.remove("compiled-preview");

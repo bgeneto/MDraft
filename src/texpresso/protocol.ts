@@ -55,6 +55,8 @@ export type HostMessage =
   | { type: "reveal"; file: string; line: number; y: number }
   /** The sync line is now `y` pixels below the frame's top; nothing scrolls. */
   | { type: "reference"; y: number }
+  /** Bring 1-based `page` to the top of the frame; the frame reports the landing. */
+  | { type: "page"; page: number }
   | { type: "zoom"; factor: number }
   | { type: "theme"; theme: TexpressoTheme }
   | { type: "export" }
@@ -102,8 +104,11 @@ export type FrameMessage =
   | {
       type: "viewport";
       scrollTop: number;
+      /** The 1-based page at the top of the frame, or null before a page is laid out. */
+      page: number | null;
       file: string | null;
       line: number | null;
+      /** A host page jump asks for source sync just as a reader gesture does. */
       gesture: boolean;
     }
   | { type: "scrolled"; seq: number; scrollTop: number | null }
@@ -220,7 +225,15 @@ export function parseFrameMessage(data: unknown): FrameMessage | null {
       return int(m.seq) && typeof m.done === "boolean" && int(m.pages)
         ? { type: "painted", seq: m.seq, done: m.done, pages: m.pages }
         : null;
-    case "viewport":
+    case "viewport": {
+      // Older frames predate `page`; their reports stay usable without it.
+      const page =
+        m.page === undefined || m.page === null
+          ? null
+          : int(m.page) && m.page >= 1
+            ? m.page
+            : undefined;
+      if (page === undefined) return null;
       return num(m.scrollTop) &&
         nullable(m.file, str) &&
         nullable(m.line, num) &&
@@ -228,11 +241,13 @@ export function parseFrameMessage(data: unknown): FrameMessage | null {
         ? {
             type: "viewport",
             scrollTop: m.scrollTop,
+            page,
             file: m.file,
             line: m.line,
             gesture: m.gesture,
           }
         : null;
+    }
     case "scrolled":
       return int(m.seq) && nullable(m.scrollTop, num)
         ? { type: "scrolled", seq: m.seq, scrollTop: m.scrollTop }
