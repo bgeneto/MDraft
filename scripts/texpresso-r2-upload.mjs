@@ -3,7 +3,8 @@
 //
 //   texlive/<snapshot>/tt2026/…      the five format and metadata files
 //   texlive/<snapshot>/files/…       the bundle files
-//   texlive/<snapshot>/SHA256SUMS    (and digests.bin once it exists)
+//   texlive/<snapshot>/SHA256SUMS    (and the pinned digest table, by its pinned
+//                                     name: digests-v4.bin, digests.bin before)
 //   texlive/<snapshot>/install/…     the pinned data install archive
 //   engine/<release>/…               the TeXpresso app and engine files
 //   engine/<release>/install/…       the pinned engine install archive
@@ -27,8 +28,8 @@
 //   --dry-run      list what would be uploaded; needs no credentials
 //   --verify       upload nothing; compare the bucket with the local files
 //   --force        upload even when the bucket already has the key at that size
-//   --digests-only upload just texlive/<snapshot>/digests.bin (the one object a
-//                  bucket built before the table existed is missing)
+//   --digests-only upload just the pinned digest table, texlive/<snapshot>/<its
+//                  pinned path>, read from that name in --data
 //   --archives-only upload just the pinned install archives found under the
 //                  `install/` folder of --engine and/or --data
 //   --phitex       upload one pinned PhiTeX archive to phitex/<archive.path>;
@@ -231,12 +232,14 @@ async function plan() {
   }
   if (flags.has("digests-only")) {
     if (!dataRoot) throw new Error("--digests-only needs --data <mirror>.");
-    const table = path.join(dataRoot, "digests.bin");
-    if (!existsSync(table))
-      throw new Error(`${table} is missing; run scripts/texpresso-digest-table.mjs first.`);
     const pins = JSON.parse(
       await readFile(new URL("../src-tauri/texpresso.json", import.meta.url), "utf8"),
     );
+    // The table is read from the name it is pinned and served under, so a
+    // mirror holding an older table under another name cannot send it.
+    const table = path.join(dataRoot, pins.digests.path);
+    if (!existsSync(table))
+      throw new Error(`${table} is missing; run scripts/texpresso-digest-table.mjs first.`);
     return [
       {
         key: `texlive/${options.snapshot}/${pins.digests.path}`,
@@ -277,8 +280,16 @@ async function plan() {
           "On a case-insensitive filesystem this is the Cherokee.tfm/cherokee.tfm collision.",
       );
     items.push({ key: prefix + "SHA256SUMS", file: sumsPath, mutable: true });
-    const digests = path.join(dataRoot, "digests.bin");
-    if (existsSync(digests)) items.push({ key: prefix + "digests.bin", file: digests });
+    const tablePins = JSON.parse(
+      await readFile(new URL("../src-tauri/texpresso.json", import.meta.url), "utf8"),
+    );
+    const digests = path.join(dataRoot, tablePins.digests.path);
+    if (existsSync(digests))
+      items.push({
+        key: prefix + tablePins.digests.path,
+        file: digests,
+        sha256: tablePins.digests.sha256,
+      });
   }
   if (engineRoot) {
     // The application refuses an engine file that differs from its pin, so a

@@ -45,15 +45,17 @@ app shows but does not expose as API. A new release must be checked for both
 
 ## Licence
 
-- `let-def/texpresso`, the native tool, is MIT licensed (Frédéric Bour). The
-  author confirmed that the web build is MIT as well, under the same terms.
-  The notice is on the repository's licence page and upstream at
-  `let-def/texpresso`.
+- The TeXpresso web application, release `release-0.2-13-g6a91b6a` (Frédéric
+  Bour), is licensed under the **GNU AGPL v3**, as its author confirmed on
+  2026-11-18. The earlier `release-0-133-g454f1bc` was MIT; those terms do not
+  carry over. MDraft modifies only `ocaml-worker.js`, through
+  `scripts/texpresso-patch-worker.mjs`.
+- `let-def/texpresso`, the native tool, is MIT licensed.
 - The engines are modified XeTeX and LuaTeX. Upstream LuaTeX and `xdvipdfmx`
   are GPL (version 2 or later) and upstream XeTeX carries an MIT-style licence;
   the GPL source offer and the component notices stay with the distribution.
 - The TeX Live files of the bundle keep their own licences, as they do for the
   compatibility preview engine.
 
-The licence gate is answered; the decision is recorded in
-[the production ADR](../../docs/architecture.md).
+Its AGPLv3 terms require the corresponding source of the web application to
+accompany a distribution of MDraft that includes it.
