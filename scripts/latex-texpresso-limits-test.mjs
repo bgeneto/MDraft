@@ -7,9 +7,10 @@
 // `MDRAFT_TEXPRESSO_ENGINE` are set; otherwise it prints one SKIP line.
 //
 // What it proves, in order:
-//   1. a font the renderer cannot draw reaches Logs as a warning naming it,
-//      and a finished build still reads "PDF ready" (on the pinned release the
-//      fixture's T1 Times is the virtual font ptmr8t, blank under XeLaTeX);
+//   1. the XeLaTeX preview draws virtual fonts: the fixture's T1 Times and
+//      Charter (ptmr8t, bchr8t) put text on the page canvas and no "cannot
+//      draw the font" warning reaches Logs (release-0-133-g454f1bc drew none
+//      of it and warned for both);
 //   2. a build the engine abandons is never "PDF ready": with the frame's own
 //      verdict `Failed after …: The engine ran out of memory` (forced at the
 //      export, because a real out-of-memory run takes a 200-page book and a
@@ -110,7 +111,7 @@ try {
   if (!booted) throw new Error("the TeXpresso frame did not boot");
   frame = await openPage(port, { type: "iframe", match: /mdraft-tex\.localhost/ });
 
-  console.log("=== a font the renderer cannot draw ===");
+  console.log("=== virtual fonts under XeLaTeX ===");
   const ready = await waitFor(
     `/PDF ready/.test(document.querySelector(".compiled-toolbar")?.innerText ?? "")`,
     360_000,
@@ -122,19 +123,29 @@ try {
       "XeLaTeX",
     "the magic comment selects XeLaTeX",
   );
-  const fontRows = (await logRows()).filter((row) => /cannot draw the font/.test(row));
+  const fontRows = (await logRows()).filter((row) => /cannot (draw|load) the font/.test(row));
   check(
-    fontRows.some((row) => /\bptmr8t\b/.test(row) && /virtual font/.test(row)),
-    "Logs names the virtual font ptmr8t the XeLaTeX preview leaves blank",
+    fontRows.length === 0,
+    "no font of the fixture is reported as undrawable",
     JSON.stringify(fontRows.slice(0, 3)),
   );
-  check(
-    fontRows.some((row) => /\bbchr8t\b/.test(row)),
-    "Logs names the Charter font bchr8t too",
-  );
+  // Every glyph of the fixture is in a virtual font, the formula included.
+  // Measured on 2026-11-17: release-0-133-g454f1bc drew 0 inked pixels, the
+  // VF-capable release-0.2-13-g6a91b6a 1,039 (anti-aliased, mean channel
+  // below 200).
+  const ink = await frameEval(`(() => {
+    const canvas = document.querySelector("#pages .page canvas");
+    if (!canvas) return -1;
+    const data = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+    let inked = 0;
+    for (let i = 0; i < data.length; i += 4)
+      if (data[i + 3] > 0 && data[i] + data[i + 1] + data[i + 2] < 600) inked += 1;
+    return inked;
+  })()`);
+  check(ink > 300, "the virtual-font text is drawn on the page canvas", `${ink} inked pixels`);
   check(
     (await menuEnabled("export.pdf")) && (await menuEnabled("file.print")),
-    "a finished build with a font warning still enables Export › PDF and Print",
+    "a finished build enables Export › PDF and Print",
   );
 
   console.log("=== a build the engine abandons ===");

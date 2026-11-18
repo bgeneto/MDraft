@@ -76,8 +76,8 @@ export interface TexpressoProblem {
 
 /**
  * The engine gave up before the end of the document: the pages of the PDF it
- * came with stop there. `memory` when it ran out of memory (the WASM heap is
- * capped at 2 GiB), `engine` for any other abandoned run. `pages`: how many the
+ * came with stop there. `memory` when it ran out of memory (its WebAssembly
+ * heap and its rollback record are bounded), `engine` for any other abandoned run. `pages`: how many the
  * frame drew.
  */
 export interface EngineFailure {

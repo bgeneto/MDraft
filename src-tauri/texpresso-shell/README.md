@@ -9,7 +9,7 @@ here is embedded in the executable and served by
 
 | File | Origin |
 | --- | --- |
-| `index.html`, `texpresso.css`, `theme.js` | The markup, styles and theme script of the TeXpresso web application's page, release `release-0-133-g454f1bc`. The inline scripts and styles were moved into files so the frame's Content-Security-Policy needs no `'unsafe-inline'` for scripts. |
+| `index.html`, `texpresso.css`, `theme.js` | The markup, styles and theme script of the TeXpresso web application's page, release `release-0.2-13-g6a91b6a`. The inline scripts and styles were moved into files so the frame's Content-Security-Policy needs no `'unsafe-inline'` for scripts. |
 | `config.js` | TeXpresso's `config.js`, rewritten: the `tt2026` bundle only, data from `/texpresso-data/`, and every optional service (`feedback`, `crashes`, `mailbox`, `dropbox`, `github`, `movedFrom`, ICE servers) switched off. |
 | `worker.js` | TeXpresso's worker entry, reduced to the two imports it needs. |
 | `mdraft-pre.js`, `mdraft-boot.js`, `mdraft-bridge.js`, `mdraft-embedded.css` | MDraft's: dialog suppression and the service-worker shadow, engine selection before start, the `postMessage` bridge, and the styles that hide the application's own editor and toolbar. |

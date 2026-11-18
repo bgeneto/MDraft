@@ -47,29 +47,18 @@ Then verify a fix by checking that the menu background and its lower edge stay
 consistent through repeated restore cycles, with both light and dark editor
 themes.
 
-## The XeLaTeX preview leaves virtual-font text blank
-
-**Status:** Cause confirmed; fix waits for a newer TeXpresso release
-**Reported:** 2026-11-17 · Windows 11, TeXpresso `release-0-133-g454f1bc`
-**Area:** Bundled LaTeX preview (TeXpresso), XeLaTeX
-
-Documents written for pdfLaTeX that select T1 Times (`mathptmx`) or Charter
-(`\fontfamily{bch}`) show rules, figures and boxes but no text in the XeLaTeX
-preview. Those fonts are virtual fonts (`ptmr8t`, `bchr8t`, …), and the pinned
-renderer has no virtual-font support: it finds no Type 1 file for them and
-skips their glyphs. Logs now names each such font. The exported PDF and the
-LuaLaTeX preview have the text; switch the project to LuaLaTeX to preview it.
-
 ## Long documents stop part-way in the bundled preview
 
 **Status:** Cause confirmed; limit belongs to the engine build
-**Reported:** 2026-11-17 · Windows 11, TeXpresso `release-0-133-g454f1bc`
+**Reported:** 2026-11-17 · Windows 11, TeXpresso `release-0-133-g454f1bc`; remeasured on `release-0.2-13-g6a91b6a`
 **Area:** Bundled LaTeX preview (TeXpresso), XeLaTeX and LuaLaTeX
 
-The preview engine has at most 2 GiB of WebAssembly memory and keeps snapshots
-for fast edits within it. A 592-page textbook ran out at page 218 (XeLaTeX) and
-204 (LuaLaTeX), so its table of contents, written at the end of the document,
-stayed empty. MDraft labels such a build **PDF with errors** with the page
-where it stopped and offers only `<root>-partial.pdf`. A smaller snapshot
-budget reached page ~452 in an experiment but no setting reached the end; an
-installed TeX distribution compiles the whole document.
+The preview engine keeps snapshots and a rollback record for fast edits inside
+its WebAssembly memory, and both are bounded. A 592-page textbook stopped at
+page 218 (XeLaTeX) and 204 (LuaLaTeX) on the 2 GiB engines of
+`release-0-133-g454f1bc`, and at about page 452 and 428 on the 4 GiB engines of
+`release-0.2-13-g6a91b6a`, each time with `retcon_trail: the arena is full`, so
+its table of contents, written at the end of the document, stays empty. A
+smaller snapshot budget did not move the last wall. MDraft labels such a build
+**PDF with errors** with the page where it stopped and offers only
+`<root>-partial.pdf`; an installed TeX distribution compiles the whole document.
