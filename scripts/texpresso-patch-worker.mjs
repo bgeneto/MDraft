@@ -5,14 +5,20 @@
 //   node scripts/texpresso-patch-worker.mjs <upstream ocaml-worker.js> --check
 //
 // The upstream worker resolves every file the engine opens by name: the
-// project's files, then the TeX Live bundle. It has no search path. These edits
-// insert, in TeX's order, the project manifest (worker.js) and MDraft's library
-// index between the project table and the bundle, in both lookups. A manifest
-// hit is fetched through the frame's capability and inserted into the project
-// table, so later lookups answer synchronously and the main-thread renderer
-// receives the bytes through the bridge. A fourth edit gives the export's
-// xdvipdfmx, which shares the lookup but never asks for the case-insensitive
-// one, the engine's case-insensitive fallback after an exact miss.
+// project's files, then the TeX Live bundle. Since release 0.2 it also asks
+// `globalThis.texpresso_project_file(names)` for a name the project misses,
+// and keeps what it answers in the project table; MDraft's worker.js answers
+// from the project manifest, so on-demand project files need no edit of their
+// own. These edits add what the hook does not cover:
+//   - a name the current manifest holds is always offered to the hook, even
+//     after an earlier miss (upstream remembers misses until the name is put);
+//   - the local TEXMF libraries, after the project and the manifest and before
+//     the bundle, in TeX's order, reporting a library file that replaces a
+//     TeX Live one;
+//   - the manifest, then the libraries, in the case-insensitive lookup;
+//   - the export's xdvipdfmx, which shares the lookup but never asks for the
+//     case-insensitive one, gets the engine's case-insensitive answer after an
+//     exact miss everywhere.
 //
 // The input must be the release's upstream file, byte for byte; each edit must
 // match exactly once; the result must parse. `--check` writes nothing and
@@ -28,70 +34,69 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const UPSTREAM = {
-  release: "release-0-133-g454f1bc",
-  bytes: 210530,
-  sha256: "b15bee9aaba43a4199ded3d15dd88e7a5f447970389b9ae57f7c1a506582c081",
+  release: "release-0.2-13-g6a91b6a",
+  bytes: 234715,
+  sha256: "f30c189f6e88e951605eb2920b1a146e5aa02f83c0087df1a397140574c88630",
 };
 
-// Names: `i10` is the lookup's project probe inside the host object; `cA`/`bz`
-// the project table; `mdT` the TEXMF probe; `as`/`at` hashtable find/member;
-// `n`/`m` JS string to and from an OCaml string; `j` the `Some` tag; `f10` the
-// pending bytes; `pt` the "not found" answer; `b4` the project-class index.
-// The `md*` locals avoid every name the surrounding minified code uses.
-const PROBE =
-  "function i10(a11){if(!c11)return cA(bz,a11);var b11=as(c11[1][11],a11);return b11?[j,b11[1]]:cA(bz,a11)}";
-
+// Names inside the host table builder `ak2(u2,l10,c11)`: `c11` the session (0
+// for the export's xdvipdfmx), `l10` the bundle index (`l10[1]` its table),
+// `h10` the project probe, `d11` the pending bytes, `bs` the project table,
+// `M2` the bundle files already loaded, `hD` the names the hook already
+// missed; `cS`/`ah` table find, `ar` table member, `k` the `Some` tag, `bU` a
+// hit by candidate index, `o`/`n` a JS string to and from an OCaml one. The
+// `md*` locals avoid every name the surrounding minified code uses.
 const EDITS = [
   {
-    what: "exact lookup: project, then manifest, then library",
-    from: PROBE,
+    what: "the project hook: a name the manifest holds is always asked",
+    from: "var g10=bD(function(a13){return 1-ar(hD,a13)},e0(c12)),a11=qF(0);",
     to:
-      "function md10(mdN,mdI){return gz(pd({fut:globalThis.__mdraftProjectFetch(m(mdN)).then(function(mdB){if(!mdB)return 0;eP(bz,mdN,mdB);return[j,mdB]})}),function(a11){return a11?(f10[1]=[j,a11[1]],[b4,mdI]):pt})}" +
-      "function mdT(a11){var mdG=globalThis.__mdraftTexmfLookup,mdP=mdG&&mdG(m(a11));if(!mdP)return 0;" +
-      "var mdH=cA(bz,n(mdP));" +
-      "if(mdH&&l10&&at(l10[1],a11)&&globalThis.__mdraftTexmfOverride)globalThis.__mdraftTexmfOverride(m(a11));" +
-      "return mdH}" +
-      "function i10(a11){return i10o(a11)}" +
-      PROBE.replace("function i10(", "function i10o("),
+      "var g10=bD(function(a13){var mdH=globalThis.__mdraftProjectHas;" +
+      "return 1-ar(hD,a13)||(mdH&&mdH(n(a13))?1:0)},e0(c12)),a11=qF(0);",
   },
   {
-    what: "the async lookup: manifest before the library and the bundle",
-    from: "if(c12)a11=c12[1];else for(c12=0;;){if(c12===b11)b11=0;else{if(d11=as(B2,r(a11,c12)[c12+1]),!d11){c12=c12+1|0;continue}f10[1]=[j,d11[1]],b11=[j,[b4,b11+c12|0]]}if(b11){a11=b11[1];break}a11=k10(a11,0);break}",
-    to:
-      "if(c12)a11=c12[1];else{" +
-      "var mdH=globalThis.__mdraftProjectHas;" +
-      "if(mdH)for(var mdI=0;mdI<b11;mdI++){var mdN=r(a11,mdI)[mdI+1];if(mdH(m(mdN)))return j0(md10(mdN,mdI))}" +
-      "for(var mdJ=0;mdJ<b11;mdJ++){var mdTv=mdT(r(a11,mdJ)[mdJ+1]);if(mdTv){f10[1]=[j,mdTv[1]];return j0([b4,mdJ])}}" +
-      "for(c12=0;;){if(c12===b11)b11=0;else{if(d11=as(B2,r(a11,c12)[c12+1]),!d11){c12=c12+1|0;continue}f10[1]=[j,d11[1]],b11=[j,[b4,b11+c12|0]]}if(b11){a11=b11[1];break}a11=k10(a11,0);break}}",
+    what: "exact lookup: the libraries after the project and manifest, before the bundle",
+    from: "function e11(a13){for(a13=0;;){if(a13===f11)a13=0;else{var b12=ah(M2,",
+    to: "function e11(a13){var mdV=mdLib(c12,f11);if(mdV)return mdV;for(a13=0;;){if(a13===f11)a13=0;else{var b12=ah(M2,",
   },
   {
-    what: "case-insensitive lookup: project, then manifest, then library",
-    from: "if(c12)b11=[j,c12[1]];else{if(c12=ar2[1],c12)",
+    // `mdLib` answers a library file from the project table, where MDraft
+    // stores it under `.mdraft-texmf/`. `mdQ` is true when no candidate name
+    // matches exactly anywhere: project table, manifest, library index,
+    // loaded bundle, or bundle index. Only then does the export take the
+    // case-insensitive answer (`mdNC`, the record's second function), so an
+    // exact match still wins, as it does for TeX. TeX's own lookups have a
+    // session and are unchanged.
+    what: "the export's lookup: the engine's case-insensitive fallback",
+    from: "return[481420544,function(a11,b11){d11[1]=0;var c12=ac2(a11,b11),f11=c12.length-1;",
+    to:
+      "function mdLib(mdC,mdF){var mdG=globalThis.__mdraftTexmfLookup;if(!mdG)return 0;" +
+      "for(var mdI=0;mdI<mdF;mdI++){var mdN=mdC[mdI+1],mdP=mdG(n(mdN));if(!mdP)continue;" +
+      "var mdH=cS(bs,o(mdP));if(!mdH)continue;" +
+      "if(l10&&ar(l10[1],mdN)&&globalThis.__mdraftTexmfOverride)globalThis.__mdraftTexmfOverride(n(mdN));" +
+      "d11[1]=[k,mdH[1]];return[bU,mdI]}return 0}" +
+      "function mdQ(mdC){var mdQh=globalThis.__mdraftProjectHas,mdQt=globalThis.__mdraftTexmfLookup;" +
+      "for(var mdI=1;mdI<mdC.length;mdI++){var mdN=mdC[mdI],mdS=n(mdN);" +
+      "if(h10(mdN)||mdQh&&mdQh(mdS)||mdQt&&mdQt(mdS)||ah(M2,mdN)||l10&&ar(l10[1],mdN))return 0}return 1}" +
+      "var mdNC;" +
+      "return[481420544,function(a11,b11){" +
+      "if(!c11&&mdNC&&mdQ(ac2(a11,b11))){var mdS=mdNC(a11,b11);if(mdS){a11=mdS[1];b11=[0]}}" +
+      "d11[1]=0;var c12=ac2(a11,b11),f11=c12.length-1;",
+  },
+  {
+    what: "the case-insensitive lookup, named for the export's fallback",
+    from: "},function(a11,b11){a11=eZ(X2,ac2(a11,b11)),b11=ag(ad,16);",
+    to: "},mdNC=function(a11,b11){a11=eZ(X2,ac2(a11,b11)),b11=ag(ad,16);",
+  },
+  {
+    what: "case-insensitive lookup: project, then manifest, then libraries",
+    from: "if(c12)return[k,c12[1]];if(c12=af2[1],c12)",
     to:
       "if(!c12){var mdJ=globalThis.__mdraftProjectHasNocase;" +
-      "if(mdJ)for(var mdI=1;mdI<b11.length;mdI++){var mdN=mdJ(m(b11[mdI]));if(mdN){c12=[j,n(mdN)];break}}}" +
+      "if(mdJ)for(var mdI=1;mdI<a11.length;mdI++){var mdN=mdJ(n(a11[mdI]));if(mdN){c12=[k,o(mdN)];break}}}" +
       "if(!c12){var mdL=globalThis.__mdraftTexmfLookupNocase;" +
-      "if(mdL)for(var mdI=1;mdI<b11.length;mdI++){var mdN=mdL(m(b11[mdI]));if(mdN){c12=[j,n(mdN)];break}}}" +
-      "if(c12)b11=[j,c12[1]];else{if(c12=ar2[1],c12)",
-  },
-  {
-    // The export's xdvipdfmx shares this host (with no session, `c11` 0) but
-    // its WebAssembly never imports `fs_lookup_nocase`, so an image the engine
-    // found under another letter case would be missing from Export › PDF.
-    // `mdQ` is true when no candidate name matches exactly anywhere: project
-    // table, manifest, library index, loaded bundle, or bundle index. Only then
-    // does the export take the host's own case-insensitive answer, so an exact
-    // match still wins, as it does for TeX. TeX's host has a session and is
-    // unchanged.
-    what: "the export's lookup: the engine's case-insensitive fallback",
-    from: "return{lookup:S(2,function(a11,b11){b11=bY(f$,b11),f10[1]=0,a11=aq2(n(a11),b11)",
-    to:
-      "function mdQ(mdA,mdE){var mdC=aq2(n(mdA),bY(f$,mdE)),mdQh=globalThis.__mdraftProjectHas,mdQt=globalThis.__mdraftTexmfLookup;" +
-      "for(var mdI=1;mdI<mdC.length;mdI++){var mdN=mdC[mdI];" +
-      "if(i10(mdN)||mdQh&&mdQh(m(mdN))||mdQt&&mdQt(m(mdN))||as(B2,mdN)||l10&&at(l10[1],mdN))return 0}return 1}" +
-      "var mdX;return mdX={lookup:S(2,function(a11,b11){" +
-      'if(!c11&&mdQ(a11,b11)){var mdS=mdX.lookupNocase(a11,b11);if(typeof mdS==="string"){a11=mdS;b11=[]}}' +
-      "b11=bY(f$,b11),f10[1]=0,a11=aq2(n(a11),b11)",
+      "if(mdL)for(var mdI=1;mdI<a11.length;mdI++){var mdN=mdL(n(a11[mdI]));if(mdN){c12=[k,o(mdN)];break}}}" +
+      "if(c12)return[k,c12[1]];if(c12=af2[1],c12)",
   },
 ];
 

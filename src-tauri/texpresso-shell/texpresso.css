@@ -7,7 +7,7 @@
     color-scheme: light;
   }
   /* Dark theme (see settings): the pages of the document too, unless
-     darkPages is off (ocaml/src/color.ml dark_palette) */
+     darkPages is off (ocaml/src/shared/color.ml dark_palette) */
   :root[data-theme=dark] {
     --border: #3b3f45; --muted: #9aa0a8; --bar: #25272b; --hover: #2d3746; --active: #2b4263;
     --error: #ef6461; --warning: #f0b450; --info: #6d97d8;
@@ -17,7 +17,7 @@
     color-scheme: dark;
   }
   /* The page is an app: fingers scroll the panes, and do not zoom, move or
-     reload the page (pinch zooms the preview, see ocaml/src/preview.ml) */
+     reload the page (pinch zooms the preview, see ocaml/src/shared/preview.ml) */
   html { height: 100%; overflow: hidden; overscroll-behavior: none; touch-action: pan-x pan-y; }
   body { overflow: hidden; overscroll-behavior: none; }
   .cm-scroller, #files, #problems, #stdout, #pages, #binary { overscroll-behavior: contain; }
@@ -85,6 +85,17 @@
   #welcome-dialog .welcome-choices button.primary span { color: inherit; opacity: .85; }
   #welcome-dialog .dlg-note { margin: 1rem 0 0; }
   #projects-dialog .dlg-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+  #projects-dialog .dlg-actions { display: flex; gap: .4rem; flex-wrap: wrap; justify-content: flex-end; }
+  #project-current { border-bottom: 1px solid var(--border); padding-bottom: .6rem; margin-bottom: .8rem; }
+  #project-current .choices { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1.2rem; }
+  @media (max-width: 34rem) { #project-current .choices { grid-template-columns: 1fr; } }
+  #project-current label.row { display: flex; align-items: center; gap: .5rem; margin: .4rem 0 0; }
+  #project-current label.row select { flex: 1; min-width: 0; }
+  #project-current .hint { color: var(--muted); font-size: .8rem; margin: .15rem 0 .2rem; }
+  #project-links { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; margin-top: .5rem; }
+  #project-links span { margin-right: .2rem; }
+  #project-links button[aria-pressed=true] { background: var(--active); }
+  #project-links button[aria-pressed=true]::before { content: "✓ "; }
   #projects-list { list-style: none; margin: .6rem 0; padding: 0; max-height: min(26rem, 60vh); overflow-y: auto;
                    border: 1px solid var(--border); border-radius: 6px; }
   #projects-list li { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: .1rem .8rem;
@@ -143,6 +154,7 @@
 
   /* The engine of the project, a menu; suggest: the document seems to need
      the other one */
+  #passes-menu .menu-trigger { font-size: .7rem; color: var(--muted); padding: .05rem .2rem; margin-left: -.15rem; }
   #engine-menu .menu-trigger { font-size: .8rem; color: var(--muted); border: 1px solid var(--border); padding: .05rem .45rem; }
   #engine-menu.suggest .menu-trigger { color: var(--warning); border-color: var(--warning); }
   #problems li.engine-fix { align-items: center; background: var(--beta); border-bottom: 1px solid var(--beta-edge); }
@@ -155,6 +167,8 @@
   #sidebar > .bar { gap: 0; }
   #sidebar > .bar .title { flex: 1 0 auto; margin-right: .2rem; }
   #sidebar > .bar button.icon { padding: .1rem .25rem; }
+  #sidebar > .bar [id^=link-][aria-pressed=false] { display: none; }
+  #add-menu .menu-trigger { color: var(--muted); padding: .1rem .35rem; font-size: 1.05rem; line-height: 1; }
   #files { list-style: none; margin: 0; padding: .25rem 0; overflow: auto; flex: 1; }
   #files li { display: flex; align-items: center; padding: .1rem .4rem; white-space: nowrap; min-height: 1.5rem; }
   #files li.file { cursor: pointer; }
@@ -175,7 +189,7 @@
   #files li .update { color: var(--warning); }
   #files li .kind { width: 1.8rem; color: var(--muted); font-size: .75rem; flex: none; }
   #sidebar .hint { color: var(--muted); font-size: .8rem; padding: .4rem .6rem; border-top: 1px solid var(--border); }
-  /* Files or the outline of the document (ocaml/src/outline.ml) */
+  /* Files or the outline of the document (ocaml/src/shared/outline.ml) */
   #sidebar > .bar .side-tabs { display: flex; gap: .1rem; }
   #sidebar > .bar .side-tab { font: inherit; font-weight: 600; font-size: .85rem; background: none; border: none; padding: .1rem .3rem;
     border-radius: 4px; color: var(--muted); cursor: pointer; }
@@ -311,6 +325,7 @@
     white-space: pre-wrap; overflow-wrap: anywhere; }
   #feedback-dialog .msg.them { align-self: flex-start; background: var(--hover); border-bottom-left-radius: 3px; }
   #feedback-dialog .msg.me { align-self: flex-end; background: var(--info); color: white; border-bottom-right-radius: 3px; }
+  #feedback-dialog .msg.news .who, #feedback-dialog .msg.reply .who { color: var(--info); }
   #feedback-dialog .msg.me.failed { background: none; color: inherit; border: 1px dashed var(--error); }
   #feedback-dialog .meta { display: block; font-size: .7rem; opacity: .75; text-align: right; margin-top: .15rem; }
   #feedback-dialog .meta button { font-size: inherit; padding: 0 .3rem; margin-left: .3rem; }
@@ -445,7 +460,7 @@
   /* Preview */
   #preview { display: flex; flex-direction: column; min-height: 0; }
   #preview .bar input { width: 2.5rem; text-align: right; }
-  /* positioned: the offsetTop of the pages is in its content (ocaml/src/preview.ml) */
+  /* positioned: the offsetTop of the pages is in its content (ocaml/src/shared/preview.ml) */
   #pages { position: relative; flex: 1; overflow: auto; background: var(--pages); padding: 16px; display: flex; flex-direction: column; align-items: safe center; gap: 16px; }
   #pages .page { flex: none; position: relative; background: white; box-shadow: 0 1px 4px rgba(0,0,0,.3); user-select: none; }
   #pages.dark-pages .page { background: var(--bg); box-shadow: 0 1px 4px rgba(0,0,0,.6); }
@@ -480,6 +495,8 @@
   #settings-dialog summary { cursor: pointer; padding: .45rem 0; font-weight: 600; user-select: none; }
   #settings-dialog details[open] { padding-bottom: .5rem; }
   #settings-dialog fieldset { border: none; margin: 0; padding: 0; }
+  #settings-dialog fieldset.theme { margin-top: .5rem; }
+  #settings-dialog fieldset.theme legend { padding: 0; margin-bottom: .15rem; }
   #settings-dialog fieldset label { display: inline-flex; margin-right: .8rem; }
   /* a field with its name before it */
   #settings-dialog label.row { display: flex; align-items: center; gap: .5rem; margin: .2rem 0; }
@@ -490,7 +507,7 @@
   #settings-dialog .hint { color: var(--muted); font-size: .8rem; margin: -.2rem 0 .3rem 1.6rem; }
   /* an option of the one above it: grayed out while that one is off */
   #settings-dialog .sub-option { margin-left: 1.6rem; }
-  #settings-dialog .sub-option:has(input:disabled) { opacity: .5; }
+  #settings-dialog .sub-option:has(> label input:disabled) { opacity: .5; }
   /* (a list of its own height: the rest of the settings stays in view) */
   #spell-dicts { max-height: 10rem; overflow-y: auto; overscroll-behavior: contain; margin: .2rem 0 .3rem;
                  border: 1px solid var(--border); border-radius: 4px; padding: .1rem .5rem; }
@@ -504,6 +521,14 @@
   #author-tip { position: fixed; z-index: 30; pointer-events: none; padding: .15rem .45rem; border-radius: 4px;
                 background: var(--author); color: #111; font-size: .85rem; box-shadow: 0 1px 4px rgba(0,0,0,.3);
                 white-space: nowrap; transform: translate(-50%, -100%); }
+  /* The colors of the users (collab.ml) are bright, made for dark
+     backgrounds: in the light theme, darker shades of them (the same hue),
+     where the app sets them; the cursors of the others in the editor have
+     theirs inline (y-codemirror): darkened */
+  :root[data-theme=light] #share-users .user::before,
+  :root[data-theme=light] #feedback-dialog .msg .who { color: oklch(from var(--color) min(l, 0.6) c h); }
+  :root[data-theme=light] .cm-author { text-decoration-color: oklch(from var(--author) min(l, 0.62) c h); }
+  :root[data-theme=light] .cm-ySelectionCaret { filter: brightness(.7) saturate(1.3); }
   #pages:focus { outline: none; }
   /* Slides: one page at a time */
   #pages.single { justify-content: safe center; background: var(--slides); }

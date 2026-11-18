@@ -164,9 +164,9 @@ export function texpressoFallbackText(
 /**
  * The reader's account of a build the preview engine abandoned part-way. The
  * first sentence is the status line's; the rest goes to Logs. An out-of-memory
- * stop is the engine's 2 GiB limit, not the document's fault, and long
- * documents reach it (a 592-page book stops near page 210), so the advice is
- * the route without that limit.
+ * stop is the engine's limit, not the document's fault, and long documents
+ * reach it (a 592-page book stops near page 450), so the advice is the route
+ * without that limit.
  */
 export function engineFailureText(failure: EngineFailure): { status: string; detail: string } {
   const after = failure.pages > 0 ? ` after page ${failure.pages}` : "";
@@ -174,7 +174,7 @@ export function engineFailureText(failure: EngineFailure): { status: string; det
     return {
       status: `The preview engine ran out of memory${after}.`,
       detail:
-        "The pages after that, the table of contents and anything else LaTeX writes at the end of the document are missing, and Save PDF keeps only the pages shown. The bundled engine is limited to 2 GiB of memory, which long documents can reach; an installed TeX distribution (Preferences › LaTeX) compiles the whole document.",
+        "The pages after that, the table of contents and anything else LaTeX writes at the end of the document are missing, and Save PDF keeps only the pages shown. The bundled engine's memory is limited, and long documents can reach that limit; an installed TeX distribution (Preferences › LaTeX) compiles the whole document.",
     };
   }
   return {

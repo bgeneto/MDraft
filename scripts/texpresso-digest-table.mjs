@@ -43,7 +43,8 @@ function listedFiles(text) {
   const files = [];
   let folder = null;
   for (const line of lines.slice(1)) {
-    if (line === "") continue;
+    // From the v4 lists on, `=` lines (prefetch groups) follow the names.
+    if (line === "" || line.startsWith("=")) continue;
     if (line.startsWith("@")) folder = line.slice(1);
     else if (folder === null) throw new Error(`"${line}" comes before any @folder line.`);
     else files.push(`files/${folder}/${line}${suffix}`);

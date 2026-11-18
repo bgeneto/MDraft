@@ -609,8 +609,10 @@ fn obtain(
 /// in the list's order, and return how many there were.
 ///
 /// The format is TeXpresso's: the first line is `# <bundle> <hash> <suffix>`,
-/// an `@folder` line names the folder of the names after it.
-/// `scripts/texpresso-digest-table.mjs` reads it the same way.
+/// an `@folder` line names the folder of the names after it. From the `v4`
+/// lists on, lines starting with `=` follow the names: the app's prefetch
+/// groups, which name no file. `scripts/texpresso-digest-table.mjs` reads it
+/// the same way.
 fn listed_files(list: &str, mut each: impl FnMut(usize, &str)) -> Result<usize, String> {
     let mut lines = list.split('\n');
     let suffix = lines
@@ -623,7 +625,7 @@ fn listed_files(list: &str, mut each: impl FnMut(usize, &str)) -> Result<usize, 
     let mut path = String::new();
     let mut count = 0;
     for line in lines {
-        if line.is_empty() {
+        if line.is_empty() || line.starts_with('=') {
             continue;
         }
         if let Some(name) = line.strip_prefix('@') {
@@ -1759,6 +1761,14 @@ mod tests {
         assert!(Table::build(list.as_bytes(), digests[..32].to_vec()).is_err());
         assert!(Table::build(b"@tt2026/v3\na\n", digests[..16].to_vec()).is_err());
         assert!(Table::build(b"# b h ~h\nname\n", digests[..16].to_vec()).is_err());
+        // A v4 list's trailing prefetch groups name no file.
+        let v4 = format!("{list}=0 1 2\n=17 3 4\n");
+        let table = Table::build(v4.as_bytes(), digests.clone()).unwrap();
+        assert_eq!(
+            table.digest("files/tt2022/v1/cherokee.tfm~h"),
+            Some(prefix_of(b"three"))
+        );
+        assert_eq!(table.digest("files/tt2022/v1/=0 1 2~h"), None);
     }
 
     #[test]
