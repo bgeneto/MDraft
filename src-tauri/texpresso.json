@@ -46,8 +46,8 @@
     },
     {
       "path": "ocaml-worker.js",
-      "bytes": 235815,
-      "sha256": "601435f73f22c85a9c065db0bbc06f94fff5535fe4c3a5c47b665975b90a2fc0"
+      "bytes": 236004,
+      "sha256": "b79cc71eb79bc1873083e85c5ae7abdeb1648be55f6c5c59cf70ad1288c85676"
     },
     {
       "path": "dluatex-bin-jspi.js",
@@ -1102,9 +1102,9 @@
   ],
   "archives": [
     {
-      "path": "install/engine-08227381f7458ac1.zip",
-      "bytes": 6675941,
-      "sha256": "08227381f7458ac1906b34b0f3ccedc13823b0857714633a522e309f620e3f27",
+      "path": "install/engine-a858efcc2cb9701b.zip",
+      "bytes": 6676015,
+      "sha256": "a858efcc2cb9701b797218c2371e73ae8f6a90fc3c87dc5209cb096d981723d8",
       "base": "engine"
     },
     {

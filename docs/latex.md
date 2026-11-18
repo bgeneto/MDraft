@@ -600,14 +600,19 @@ The pinned web release is `release-0.2-13-g6a91b6a`. It asks its own hook,
 `texpresso_project_file`, for a project file the snapshot did not send, and the
 shell's `worker.js` answers it from the project manifest.
 `scripts/texpresso-patch-worker.mjs` turns the release's `ocaml-worker.js` into
-the pinned one with five anchored edits:
+the pinned one with six anchored edits:
 
 - a name the current manifest holds is always offered to that hook;
 - the local libraries answer after the project and the manifest and before the
   bundle, and report a library file that replaces a TeX Live one;
 - the case-insensitive lookup checks the manifest, then the libraries;
 - the export's `xdvipdfmx`, which never asks for that lookup, gets its answer
-  after an exact miss everywhere.
+  after an exact miss everywhere;
+- after `retcon_trail: the arena is full` the worker reports the failure
+  instead of restarting from scratch. The retry stopped at the same page every
+  time, and while it ran the frame's process held the first engine's memory as
+  well: on a 452-page book, 11.1 GB at peak instead of 7.4 GB. Out of memory at
+  the heap cap still retries once.
 
 A new release means re-anchoring the edits, re-pinning, and uploading under its
 own `engine/<appRelease>/` keys. The bundle list `tt2026/v4.lst` names the same
