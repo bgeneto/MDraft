@@ -9,10 +9,13 @@
 // hit is fetched from the same origin and inserted into the project table, so
 // the engine waits for it exactly as it waits for a bundle download.
 //
-// The pinned ocaml-worker.js is patched (scripts/texpresso-patch-worker.mjs) to
-// ask these hooks for a name the project itself does not hold, before the TeX
-// Live bundle (the export's xdvipdfmx reaches the case-insensitive ones through
-// the patch's own fallback, since its WebAssembly never asks for them):
+// The app asks `texpresso_project_file(names)` for names its project misses
+// and keeps the answer in the project table; it is defined below from the
+// manifest. The pinned ocaml-worker.js is patched
+// (scripts/texpresso-patch-worker.mjs) to ask the other hooks for a name the
+// project itself does not hold, before the TeX Live bundle (the export's
+// xdvipdfmx reaches the case-insensitive ones through the patch's own
+// fallback, since its WebAssembly never asks for them):
 //   __mdraftProjectHas(name)        → true when the manifest holds the name;
 //   __mdraftProjectHasNocase(name)  → the on-disk spelling, or null;
 //   __mdraftProjectFetch(name)      → a Promise<Uint8Array|null>;
@@ -133,6 +136,16 @@ globalThis.__mdraftProjectFetch = async (name) => {
   } catch {
     return null;
   }
+};
+
+// The app's own on-demand hook: the first candidate the manifest holds, fetched.
+globalThis.texpresso_project_file = async (names) => {
+  for (const name of names) {
+    if (!globalThis.__mdraftProjectHas(name)) continue;
+    const data = await globalThis.__mdraftProjectFetch(name);
+    if (data) return { path: name, data };
+  }
+  return null;
 };
 
 // The data base is same-origin, so config.js needs no global set first.

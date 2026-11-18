@@ -24,7 +24,9 @@
   <button id="run" class="secondary in-menu" disabled title="Compile again from scratch, with empty auxiliary files (.aux, .toc…). Edits are compiled as you type.">Rebuild</button>
   <button id="export-pdf" class="in-menu" title="Download the PDF of the document (made with xdvipdfmx)">Export PDF</button>
   <button id="share" title="Edit this project with others">Share</button>
-  <span id="engine-menu" class="secondary"></span>
+  <span id="engine-menu" class="secondary"></span><button class="icon secondary" id="converge" aria-pressed="true" aria-label="Passes"
+    title="Passes: at the end of the document, compile again while the auxiliary files (.aux, .toc…) change, at most 4 times. Pressed while they run: push it to run them now, or to stop them. ▾: when they run by themselves.">↻</button><span id="passes-menu" class="secondary"></span><button class="icon secondary" id="engine-pause" aria-pressed="false"
+    title="Pause the engine: edits are shown at once, not compiled">⏸</button>
   <span id="status" role="status" title="Loading…" aria-label="Loading…">⋯</span>
   <span id="downloads" hidden></span>
   <span id="notice" aria-live="polite"></span>
@@ -47,12 +49,16 @@
       <span class="title side-tabs" role="tablist">
         <button class="side-tab" role="tab" data-side="files" aria-selected="true">Files</button>
         <button class="side-tab" role="tab" data-side="outline" aria-selected="false" title="The parts, chapters, sections and frames of the document, as TeX ran them">Outline</button></span>
-      <button class="icon" id="new-file" title="New file">+</button>
+      <span id="add-menu"></span>
+      <!-- (the actions of + and of the File menu) -->
+      <button class="icon" id="new-file" hidden title="New file">+</button>
       <button class="icon" id="upload" hidden title="Upload files, or a project as .zip or .tar.gz">⇪</button>
-      <button class="icon" id="upload-folder" title="Upload a folder"><span>📁</span></button>
+      <button class="icon" id="upload-folder" hidden title="Upload a folder"><span>📁</span></button>
       <input type="file" id="upload-input" multiple hidden>
       <input type="file" id="upload-folder-input" webkitdirectory hidden>
-      <button class="icon" id="download" title="Download the project (.zip)">⇩</button>
+      <button class="icon" id="download" hidden title="Download the project (.zip)">⇩</button>
+      <!-- (the links: hidden when not offered here; shown in this bar
+           only while linked, as their state: else in the File menu) -->
       <button class="icon" id="link-folder" title="Sync the project with a folder on disk, both ways" aria-pressed="false" hidden>⇄</button>
       <button class="icon" id="link-dropbox" title="Sync the project with a folder of your Dropbox, both ways" aria-pressed="false" hidden>☁</button>
       <button class="icon" id="link-github" title="Commit the project to a GitHub repository, and pull from it" aria-pressed="false" aria-label="GitHub" hidden><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="4.5" cy="3.25" r="1.75"/><circle cx="4.5" cy="12.75" r="1.75"/><circle cx="11.5" cy="5.25" r="1.75"/><path d="M4.5 5v6M11.5 7c0 2.5-2.5 2.5-5.5 4.25"/></svg></button>
@@ -170,14 +176,30 @@
       <button type="button" id="welcome-open"><b>Open my files</b>
         <span>.tex files, a .zip, or the sources of an arXiv paper (.tar.gz); or drop them on the page</span></button>
     </div>
-    <p class="dlg-note">TeXpresso is in beta: tell us what works and what does not with Send feedback.
+    <p class="dlg-note">TeXpresso is in beta: tell us what works and what does not in Feedback, at the bottom left: we answer there.
       The <a href="manual.html" target="_blank">manual</a> is behind the <b>?</b> at the top right.</p>
   </form>
 </dialog>
 <dialog id="projects-dialog" aria-labelledby="projects-title">
   <form method="dialog">
+    <section id="project-current" aria-labelledby="project-current-title">
+      <div class="dlg-head"><p class="dlg-title" id="project-current-title">This project</p>
+        <button type="button" id="project-share">Share…</button></div>
+      <div class="choices">
+        <div><label class="row">Compiled with <select id="project-bundle"></select></label>
+          <p class="hint" id="bundle-hint"></p></div>
+        <div><label class="row">Engine <select id="project-engine"></select></label>
+          <p class="hint" id="engine-hint"></p></div>
+      </div>
+      <!-- (those of the bar of the files: offered, linked or not) -->
+      <div id="project-links"><span>Synced with</span>
+        <button type="button" data-link="link-folder" aria-pressed="false">A folder…</button>
+        <button type="button" data-link="link-dropbox" aria-pressed="false">Dropbox…</button>
+        <button type="button" data-link="link-github" aria-pressed="false">GitHub…</button></div>
+    </section>
     <div class="dlg-head"><p class="dlg-title" id="projects-title">Projects</p>
-      <button type="button" class="primary" id="projects-new">New project…</button></div>
+      <span class="dlg-actions"><button type="button" id="projects-join">Join a shared project…</button>
+      <button type="button" class="primary" id="projects-new">New project…</button></span></div>
     <p class="dlg-note">Kept in this browser.</p>
     <ul id="projects-list"></ul>
     <div class="buttons"><button value="close">Close</button></div>
@@ -193,28 +215,22 @@
   <form method="dialog">
     <p class="dlg-title">Settings</p>
     <p class="dlg-note">Kept in this browser.</p>
-    <details data-topic="project">
-      <summary>This project</summary>
-      <label class="row">Compiled with <select name="bundle"></select></label>
-      <p class="hint" id="bundle-hint"></p>
-      <label class="row">Engine <select name="engine"></select></label>
-      <p class="hint" id="engine-hint"></p>
-    </details>
     <details data-topic="editor">
       <summary>Editor and preview</summary>
       <label><input type="checkbox" name="cursor"> Show the cursor in the preview</label>
       <p class="hint">The preview scrolls to keep it in view.</p>
       <div class="sub-option">
         <label><input type="checkbox" name="predict"> Show typing immediately</label>
-        <p class="hint">Before the engine catches up, without kerning.</p>
+        <p class="hint">Before the engine catches up.</p>
+        <div class="sub-option">
+          <label><input type="checkbox" name="justify"> Keep the width of the line</label>
+          <p class="hint">Its spaces stretch or shrink, as if the lines were broken at the same places; else the rest of the line moves.</p>
+        </div>
       </div>
       <label><input type="checkbox" name="swap"> Preview on the left</label>
       <label><input type="checkbox" name="vim"> Vim keys</label>
       <p class="hint">In the editor: Esc for normal mode, <kbd>:w</kbd> saves.</p>
-    </details>
-    <details data-topic="theme">
-      <summary>Theme</summary>
-      <fieldset>
+      <fieldset class="theme"><legend>Theme</legend>
         <label><input type="radio" name="theme" value="auto"> Auto</label>
         <label><input type="radio" name="theme" value="light"> Light</label>
         <label><input type="radio" name="theme" value="dark"> Dark</label>
@@ -346,10 +362,10 @@
 <dialog id="engine-unsupported-dialog">
   <form method="dialog">
     <p class="dlg-title">Please update your browser</p>
-    <p class="dlg-note">This version cannot run TeX: the engine needs WebAssembly's JavaScript Promise
-      Integration, in Chrome, Edge, Opera and Brave from version 137, Firefox from 153 and Safari from 27
-      (on iPhone and iPad, with iOS 27). Update your browser, or open the app in another one, to
-      compile; meanwhile your projects can still be edited.</p>
+    <p class="dlg-note">This browser cannot run TeX: it is too old, or its service workers are turned
+      off (as in some private windows). Chrome, Edge, Opera, Brave, Firefox and Safari of the last few
+      years can. Update your browser, or open the app in another one, to compile; meanwhile your
+      projects can still be edited.</p>
     <div class="buttons"><button value="ok" class="primary">OK</button></div>
   </form>
 </dialog>

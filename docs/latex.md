@@ -124,8 +124,9 @@ same project's previous PDF remains visible and is labelled as previous output.
 Without usable output, Logs opens to explain the failure.
 
 The bundled preview can also give up part-way through a long document. Its
-engine has at most 2 GiB of memory; a 592-page textbook ran out at page 218
-with XeLaTeX and at page 204 with LuaLaTeX. MDraft then labels the result
+engine's memory is limited, including the record it keeps to resume edits
+quickly; a 592-page textbook ran out at about page 452 with XeLaTeX and 428
+with LuaLaTeX. MDraft then labels the result
 **PDF with errors** and names the page where the engine stopped. Logs explains
 that the later pages, the table of contents and anything else LaTeX writes at
 the end of the document are missing, and offers the installed-distribution
@@ -551,15 +552,13 @@ preview restarts.
 Turning the switch off stops the engine from serving anything and leaves the
 cache inert. It deletes nothing.
 
-### Fonts the preview cannot draw
+### Fonts the preview cannot load
 
-The XeLaTeX preview on the TeXpresso path cannot draw *virtual fonts*: the
-families pdfLaTeX-era documents select through `fontenc`, such as T1 Times
-(`mathptmx`, `times`) and Charter (`\fontfamily{bch}`), which a driver reaches
-through a `.vf` file. Text set in them is blank in the preview, and Logs names
-each such font. The exported PDF contains the text, and the LuaLaTeX preview
-draws it. OpenType fonts loaded with `fontspec`, and Computer Modern, Latin
-Modern and cm-super, are not affected.
+When the preview's renderer cannot load a font, the text set in it is blank in
+the preview, and Logs names the font in a warning. The XeLaTeX preview draws
+*virtual fonts* — the families pdfLaTeX-era documents select through `fontenc`,
+such as T1 Times (`mathptmx`, `times`) and Charter (`\fontfamily{bch}`) — since
+MDraft moved to TeXpresso release 0.2; earlier builds left their text blank.
 
 ## Trying it
 
@@ -594,8 +593,28 @@ and served by `src-tauri/src/latex_texpresso.rs`; the production origin is
 `https://mdraft.webonly.app/`. Every file is verified on download and on every
 serve. The frame resolves every file the engine opens by name — the project's
 files, then the local library, then the TeX Live bundle — through the patched
-`ocaml-worker.js` described in the previous section. The Linux JSPI row
-(Debian 13, WebKitGTK 2.54) is the tested TeXpresso path.
+`ocaml-worker.js` described below. The Linux JSPI row (Debian 13, WebKitGTK
+2.54) is the tested TeXpresso path.
+
+The pinned web release is `release-0.2-13-g6a91b6a`. It asks its own hook,
+`texpresso_project_file`, for a project file the snapshot did not send, and the
+shell's `worker.js` answers it from the project manifest.
+`scripts/texpresso-patch-worker.mjs` turns the release's `ocaml-worker.js` into
+the pinned one with five anchored edits:
+
+- a name the current manifest holds is always offered to that hook;
+- the local libraries answer after the project and the manifest and before the
+  bundle, and report a library file that replaces a TeX Live one;
+- the case-insensitive lookup checks the manifest, then the libraries;
+- the export's `xdvipdfmx`, which never asks for that lookup, gets its answer
+  after an exact miss everywhere.
+
+A new release means re-anchoring the edits, re-pinning, and uploading under its
+own `engine/<appRelease>/` keys. The bundle list `tt2026/v4.lst` names the same
+163,011 files as `v3`, in another order, so its digest table has a key of its
+own, `digests-v4.bin`. Both readers of the list skip the `=` prefetch lines that
+v4 appends after the names. The release's prefetch packs (`files/packs/…`) are
+not mirrored; the engine then fetches each file alone, as before.
 
 **PhiTeX** is pinned as one archive in `src-tauri/phitex.json`: `core1.wasm`,
 the XeLaTeX format, the TeX Live kernel files, fonts, shims, the `minted`

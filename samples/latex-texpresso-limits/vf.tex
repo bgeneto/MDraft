@@ -2,8 +2,8 @@
 % A synthetic fixture for the latex-texpresso-limits layer. T1-encoded Times
 % (mathptmx) and Charter are virtual fonts: XeTeX names ptmr8t and bchr8t in
 % its output, and a driver has to read their .vf files to reach the Type 1
-% fonts. The pinned TeXpresso renderer cannot, so their text is blank in the
-% XeLaTeX preview while the exported PDF has it.
+% fonts. TeXpresso before release 0.2 could not, and left their text blank in
+% the XeLaTeX preview; the layer checks the preview now draws it.
 \documentclass{article}
 \usepackage[T1]{fontenc}
 \usepackage{mathptmx}
