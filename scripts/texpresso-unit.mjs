@@ -26,6 +26,7 @@ import ts from "typescript";
 
 import {
   BUNDLED_TEXLIVE_YEAR,
+  engineFailureHolds,
   engineFailureText,
   latexPreviewBackend,
   previewEngineFor,
@@ -312,6 +313,15 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
       /memory is limited/.test(oom.detail) &&
       /installed TeX distribution/.test(oom.detail),
     "its detail says what is missing, why, and the way out",
+  );
+  check(
+    /no longer start a build/.test(oom.detail) && /select Compile/.test(oom.detail),
+    "its detail says edits wait for Compile",
+  );
+  check(
+    engineFailureHolds(memory) &&
+      !engineFailureHolds({ reason: "engine", message: "Worker crashed", pages: 3 }),
+    "only running out of memory releases the frame and holds the project",
   );
   check(
     engineFailureText({ ...memory, pages: 0 }).status === "The preview engine ran out of memory.",

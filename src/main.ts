@@ -241,6 +241,7 @@ import { projectLatexOutline, type ProjectHeading } from "./latex-outline";
 import { nativeSources, nativeToLatex } from "./latex-native";
 import {
   BUNDLED_TEXLIVE_YEAR,
+  engineFailureHolds,
   engineFailureText,
   latexPreviewBackend,
   phitexCapable,
@@ -1592,6 +1593,9 @@ function applySettingsPatch(
   const affectsLayoutOnly = patch.editorMaxWidth !== undefined;
 
   settings = { ...settings, ...patch };
+  // Another engine may fit where the last one ran out of memory.
+  if (patch.latexBundledEngine !== undefined || patch.latexProjectEngines !== undefined)
+    texpressoMemoryHold = null;
   if (effects) {
     applyTheme();
     applyLayout();
@@ -2433,8 +2437,15 @@ function scheduleRender(immediate = false): void {
     }
     return;
   }
-  if (doc.language === "latex" && settings.latexAutoCompile === false) {
-    if (previewStale) setLatexStatus("Out of date · Select Compile to update the preview.");
+  // A project held after a memory verdict waits for Compile as manual mode does.
+  const held = doc.language === "latex" && settings.latexAutoCompile !== false && texpressoHeld();
+  if (doc.language === "latex" && (settings.latexAutoCompile === false || held)) {
+    if (previewStale)
+      setLatexStatus(
+        held
+          ? "Out of date · The preview engine ran out of memory on this document; select Compile to try again."
+          : "Out of date · Select Compile to update the preview.",
+      );
     // Nothing will render here until the reader presses Compile. If the pane
     // has no content for this file, say so at once instead of leaving an empty
     // pane or, worse, another tab's preview.
@@ -2889,8 +2900,10 @@ function setTypstStatus(message: string, saveable = false, state?: CompiledStatu
 function compileCurrentLatex(clean = false): void {
   if (doc.language !== "latex") return;
   texpresso?.flush();
-  // Compile is also the reader's retry after a frame failure.
+  // Compile is also the reader's retry after a frame failure, and after the
+  // engine ran out of memory.
   texpressoFailed.clear();
+  texpressoMemoryHold = null;
   // A failure note describes the build being replaced; any Compile clears it.
   compiledUi.note(null);
   // Compile always builds: the reader may be retrying a flaky engine or a
@@ -2965,6 +2978,9 @@ function invalidateLatexBuild(
   // Kept PDFs were built by the previous engine or libraries. Their keys would
   // no longer match, but they would still hold memory.
   latexStore.clear();
+  // Another engine, backend or library set may fit where the last one ran out
+  // of memory: with auto-compile on, the next edit may try it.
+  texpressoMemoryHold = null;
   if (doc.language !== "latex") return;
   // The engine or a library is part of the key, but a library edit can keep a
   // revision string while its files change; the next build must not be skipped.
@@ -4570,6 +4586,28 @@ async function resolveLatexBuild(
 let texpresso: TexpressoSession | null = null;
 /** Main documents whose frame failed twice: Compile retries them. */
 const texpressoFailed = new Set<string>();
+/**
+ * The project whose preview engine last ran out of memory, and its files.
+ *
+ * Its frame is released at that verdict: the engine is dead weight by then (an
+ * idle frame kept about 5 GB for a 452-page book), and the partial PDF is drawn
+ * without it. Edits then mark the preview out of date instead of starting a
+ * build, because the engine has released its history by the time it fails, so
+ * every build of that project starts again from page 1 and stops at the same
+ * place, for minutes at several gigabytes. Compile, Recompile from scratch and
+ * an engine or backend change clear it. Not persisted.
+ */
+let texpressoMemoryHold: { rootPath: string; files: Set<string> } | null = null;
+
+/** The active document belongs to the project held after a memory verdict. */
+function texpressoHeld(): boolean {
+  const hold = texpressoMemoryHold;
+  return (
+    hold !== null &&
+    doc.language === "latex" &&
+    latexProjectMember(doc.path, hold.rootPath, [...hold.files], pathKey)
+  );
+}
 /** Why the last build did not draw, for the chip. */
 let texpressoFallbackReason: { reason: TexpressoFallback; file?: string | null } | null = null;
 /** The frame is on screen for the active tab. */
@@ -5092,6 +5130,20 @@ async function texpressoExportPdf(
       reason: reply.failure.reason,
       pages: reply.failure.pages,
     });
+    const files = [
+      ...snapshot.files.map((file) => file.path),
+      ...snapshot.manifest.files.map((f) => f.path),
+    ];
+    if (engineFailureHolds(reply.failure)) {
+      // See `texpressoMemoryHold`. With the frame released, `latexFailure`
+      // draws the partial PDF with PDF.js, as for an installed distribution.
+      texpressoMemoryHold = {
+        rootPath: build.root.path,
+        files: new Set(files.map((file) => pathKey(joinDir(build.root.directory, file)))),
+      };
+      texpressoLogLine("Preview engine released; edits wait for Compile");
+      texpressoRelease();
+    }
     await latexFailure(
       new LatexBuildError(
         text.status,
@@ -5101,7 +5153,7 @@ async function texpressoExportPdf(
         reply.pdf,
       ),
       { path: build.root.path, directory: build.root.directory },
-      [...snapshot.files.map((file) => file.path), ...snapshot.manifest.files.map((f) => f.path)],
+      files,
       owner,
       {
         engine: ENGINE_LABELS[build.engineChoice?.engine ?? "xelatex"],

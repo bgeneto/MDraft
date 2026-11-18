@@ -174,7 +174,7 @@ export function engineFailureText(failure: EngineFailure): { status: string; det
     return {
       status: `The preview engine ran out of memory${after}.`,
       detail:
-        "The pages after that, the table of contents and anything else LaTeX writes at the end of the document are missing, and Save PDF keeps only the pages shown. The bundled engine's memory is limited, and long documents can reach that limit; an installed TeX distribution (Preferences › LaTeX) compiles the whole document.",
+        "The pages after that, the table of contents and anything else LaTeX writes at the end of the document are missing, and Save PDF keeps only the pages shown. The bundled engine's memory is limited, and long documents can reach that limit; an installed TeX distribution (Preferences › LaTeX) compiles the whole document. Edits to this document no longer start a build, because each would stop at the same place; select Compile to try again.",
     };
   }
   return {
@@ -182,4 +182,16 @@ export function engineFailureText(failure: EngineFailure): { status: string; det
     detail:
       "The pages after that are missing, and Save PDF keeps only the pages shown. Recompile from scratch to try again, or compile with an installed TeX distribution (Preferences › LaTeX).",
   };
+}
+
+/**
+ * Whether the host releases the frame and holds the project after this
+ * failure. Only running out of memory qualifies: the engine has released its
+ * history by then, so the next build starts again from page 1 and stops at the
+ * same place (measured on a 592-page book: two minutes at 7–11 GB per build),
+ * and the frame's idle engine still holds about 5 GB. Any other stop may be a
+ * one-off, and the frame stays for the reader's retry.
+ */
+export function engineFailureHolds(failure: EngineFailure): boolean {
+  return failure.reason === "memory";
 }
